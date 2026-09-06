@@ -47,6 +47,10 @@ V4L2_CAP_VIDEO_CAPTURE = 0x00000001
 V4L2_CAP_VIDEO_OUTPUT = 0x00000002
 V4L2_BUF_FLAG_TIMESTAMP_COPY = 0x00004000
 YUYV = struct.unpack("<I", b"YUYV")[0]
+V4L2_COLORSPACE_SRGB = 8
+V4L2_XFER_FUNC_SRGB = 2
+V4L2_YCBCR_ENC_601 = 1
+V4L2_QUANTIZATION_FULL_RANGE = 1
 
 # `struct v4l2_capability`: driver[16] card[32] bus_info[32] version caps device_caps reserved[3].
 CAPABILITY_FORMAT = "16s32s32sIII3I"
@@ -198,7 +202,8 @@ def read_yuyv_frames(video_node: Path, count: int):
     """Capture `count` frames the way any V4L2 application would: negotiate
     the format the writer set, map the device's buffers, stream, dequeue.
 
-    Returns `(width, height, [(timestamp_ns, flags, bytesused)])`.
+    Returns `(width, height, sizeimage, (colorspace, ycbcr_enc, quantization,
+    xfer_func), [(timestamp_ns, flags, bytesused, first_8_bytes)])`.
     """
     fd = os.open(video_node, os.O_RDWR | os.O_NONBLOCK)
     try:
@@ -211,6 +216,10 @@ def read_yuyv_frames(video_node: Path, count: int):
         width, height, pixelformat, _field, _bytesperline, sizeimage = struct.unpack_from(
             "IIIIII", fmt, 8
         )
+        colorspace, _priv, _flags, ycbcr_enc, quantization, xfer_func = struct.unpack_from(
+            "IIIIII", fmt, 32
+        )
+        signalled_color = (colorspace, ycbcr_enc, quantization, xfer_func)
         assert pixelformat == YUYV, f"the device set {pixelformat:#x}, not YUYV"
 
         request = bytearray(struct.pack("IIII4s", 4, V4L2_BUF_TYPE_VIDEO_CAPTURE, V4L2_MEMORY_MMAP, 0, b""))
@@ -251,7 +260,7 @@ def read_yuyv_frames(video_node: Path, count: int):
             fcntl.ioctl(fd, VIDIOC_STREAMOFF, struct.pack("i", V4L2_BUF_TYPE_VIDEO_CAPTURE))
             for mapping in mappings:
                 mapping.close()
-        return width, height, sizeimage, frames
+        return width, height, sizeimage, signalled_color, frames
     finally:
         os.close(fd)
 
@@ -352,8 +361,21 @@ def test_frames_reach_the_loopback_device_and_read_back_as_yuyv(start_app_under_
     await_capture_capability(node, app)
 
     read_started_ns = time.monotonic_ns()
-    got_width, got_height, sizeimage, frames = read_yuyv_frames(node, FRAMES_TO_READ)
+    got_width, got_height, sizeimage, signalled_color, frames = read_yuyv_frames(
+        node, FRAMES_TO_READ
+    )
     read_finished_ns = time.monotonic_ns()
+
+    # The test pattern publishes sRGB primaries and transfer at full range; the
+    # kernel encodes with that resolved description and the device must say
+    # so on every axis — a reader that derives limited range from the
+    # colorspace would stretch the picture.
+    assert signalled_color == (
+        V4L2_COLORSPACE_SRGB,
+        V4L2_YCBCR_ENC_601,
+        V4L2_QUANTIZATION_FULL_RANGE,
+        V4L2_XFER_FUNC_SRGB,
+    ), f"the device signals {signalled_color}"
 
     assert (got_width, got_height) == (width, height), "the device format is the frame's extent"
     assert sizeimage == width * height * 2, "YUYV: two bytes a pixel"
@@ -370,7 +392,11 @@ def test_frames_reach_the_loopback_device_and_read_back_as_yuyv(start_app_under_
         assert read_started_ns - 5_000_000_000 < stamp < read_finished_ns + 5_000_000_000, (
             f"stamp {stamp} is not in the monotonic epoch this process reads"
         )
-        assert any(head), "a picture, not an unwritten buffer"
+        # The pattern's left-most bar is white: at full range that is Y = 255
+        # with neutral chroma, so the first macropixel is a known value.
+        y0, u, y1, v = head[0], head[1], head[2], head[3]
+        assert y0 >= 250 and y1 >= 250, f"white bar luma {y0},{y1}"
+        assert abs(u - 128) <= 3 and abs(v - 128) <= 3, f"white bar chroma {u},{v}"
 
     app.interrupt()
     app.await_clean_exit()

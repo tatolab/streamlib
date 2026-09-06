@@ -23,7 +23,7 @@ use std::os::fd::RawFd;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use streamlib::sdk::color::ColorSpaceKind;
+use streamlib::sdk::color::{ColorSpaceKind, ResolvedColorInfo};
 use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
 use streamlib::sdk::engine::host_rhi::{
     HostMappingWrittenByGpu, RhiCommandRecorder, VulkanAccess, VulkanStage,
@@ -33,7 +33,7 @@ use streamlib::sdk::processors::ReactiveProcessor;
 use streamlib::sdk::rhi::{PixelFormat, RhiColorConverter, VulkanLayout};
 
 use crate::cumulative_count_report_threshold::CumulativeCountReportThreshold;
-use crate::v4l2_color::color_info_to_v4l2_color;
+use crate::v4l2_color::resolved_color_to_v4l2_color;
 use crate::video_frame::{ColorInfo, VideoFrame};
 
 /// The name every log line and refusal carries.
@@ -44,6 +44,10 @@ pub(crate) const V4L2LOOPBACK_CONTROL_NODE_PATH: &str = "/dev/v4l2loopback";
 
 /// The one-time command that grants the loopback door.
 pub(crate) const ENABLE_VIRTUAL_CAMERA_VERB: &str = "streamlib enable-virtual-camera";
+
+/// Set by the CLI launcher to the app's anchor directory, so an unnamed
+/// camera's id is the app's rather than the shell's working directory.
+pub(crate) const APP_DIRECTORY_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_APP_DIRECTORY";
 
 /// What an unnamed camera is called, before its stable id.
 const DEFAULT_CAMERA_NAME_PREFIX: &str = "StreamLib Camera";
@@ -74,6 +78,15 @@ const V4L2_FIELD_NONE: u32 = 1;
 
 /// `V4L2_BUF_TYPE_VIDEO_OUTPUT` as the `v4l` crate spells it.
 const OUTPUT_BUFFER_TYPE: u32 = v4l::buffer::Type::VideoOutput as u32;
+
+/// The V4L2 core zeroes `v4l2_pix_format`'s `flags`, `ycbcr_enc`,
+/// `quantization` and `xfer_func` on `S_FMT` unless `priv` carries this
+/// value — an application that does not know the extended fields exist
+/// leaves stack garbage there, and the magic is how one says it does.
+const V4L2_PIX_FMT_PRIV_MAGIC: u32 = v4l::v4l_sys::V4L2_PIX_FMT_PRIV_MAGIC;
+
+/// How many write failures pass between one warning and the next.
+const WRITE_FAILURE_REPORT_STEP: u64 = 300;
 
 /// Which door a [`VirtualCameraSink`] takes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -149,6 +162,10 @@ impl V4l2LoopbackConfig {
             announce_all_caps: 0,
             ..Self::zeroed()
         };
+        debug_assert!(
+            label.len() <= CARD_LABEL_CAPACITY_BYTES,
+            "a camera label is capped where it is minted, in camera_name_for"
+        );
         let bytes = label.as_bytes();
         let copied = bytes.len().min(CARD_LABEL_CAPACITY_BYTES);
         config.card_label[..copied].copy_from_slice(&bytes[..copied]);
@@ -588,7 +605,9 @@ struct StreamingOutputFormat {
     sizeimage: u32,
     buffers: Vec<MappedOutputBuffer>,
     next_buffer_index: usize,
-    color_info: Option<ColorInfo>,
+    /// The description the device was told at `S_FMT`; every frame is
+    /// encoded with it, so readers decode the pixels that were written.
+    resolved_color: ResolvedColorInfo,
 }
 
 impl StreamingOutputFormat {
@@ -650,13 +669,20 @@ pub struct VirtualCameraSink {
     frames_written: u64,
     frames_dropped_every_buffer_queued: u64,
     frames_dropped_under_refusal: u64,
+    frames_that_failed_to_write: u64,
     dropped_frame_report: Option<CumulativeCountReportThreshold>,
+    write_failure_report: Option<CumulativeCountReportThreshold>,
     tier_logged: bool,
 }
 
 impl ReactiveProcessor for VirtualCameraSink::Processor {
     fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        let app_directory = std::env::current_dir().unwrap_or_default();
+        // `streamlib run` / `dev` name the app's anchor directory; a hand-run
+        // script's directory is its working directory.
+        let app_directory = std::env::var_os(APP_DIRECTORY_ENVIRONMENT_VARIABLE)
+            .map(PathBuf::from)
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_default();
         let processor_display_name = ctx
             .processor_display_name()
             .or_else(|| ctx.processor_id())
@@ -668,6 +694,9 @@ impl ReactiveProcessor for VirtualCameraSink::Processor {
         );
         self.dropped_frame_report = Some(CumulativeCountReportThreshold::reporting_every(
             DROPPED_FRAME_REPORT_STEP,
+        ));
+        self.write_failure_report = Some(CumulativeCountReportThreshold::reporting_every(
+            WRITE_FAILURE_REPORT_STEP,
         ));
 
         let node = LoopbackControlNodeOnDisk;
@@ -788,6 +817,7 @@ impl ReactiveProcessor for VirtualCameraSink::Processor {
                 frames_written = self.frames_written,
                 frames_dropped_every_buffer_queued = self.frames_dropped_every_buffer_queued,
                 frames_dropped_under_refusal = self.frames_dropped_under_refusal,
+                frames_that_failed_to_write = self.frames_that_failed_to_write,
                 "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME}: teardown — camera removed"
             ),
             Err(e) if e.raw_os_error() == Some(libc::EBUSY) => tracing::warn!(
@@ -874,19 +904,20 @@ impl VirtualCameraSink::Processor {
             return Ok(());
         };
 
-        match write_frame_into_buffer(gpu_side, streaming, buffer_index, frame) {
-            Ok(()) => {}
-            Err(e) => {
+        let written = write_frame_into_buffer(gpu_side, streaming, buffer_index, frame)
+            .and_then(|()| queue_buffer(device, streaming, buffer_index, frame.timestamp_ns));
+        if let Err(e) = written {
+            self.frames_that_failed_to_write += 1;
+            if self.write_failure_report.as_mut().is_some_and(|report| {
+                report.count_is_worth_reporting(self.frames_that_failed_to_write)
+            }) {
                 tracing::warn!(
                     camera = %self.camera_name,
+                    frames_that_failed_to_write = self.frames_that_failed_to_write,
                     error = %e,
-                    "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME}: a frame could not be written"
+                    "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME}: a frame could not be written to the camera"
                 );
-                return Ok(());
             }
-        }
-        if let Err(e) = queue_buffer(device, streaming, buffer_index, frame.timestamp_ns) {
-            tracing::warn!(camera = %self.camera_name, error = %e, "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME}: QBUF failed");
             return Ok(());
         }
 
@@ -962,8 +993,12 @@ fn negotiate_output_format_and_start_streaming(
     camera_name: &str,
 ) -> Result<StreamingOutputFormat> {
     let yuyv = u32::from_le_bytes(*b"YUYV");
-    let color_fields =
-        color_info_to_v4l2_color(frame.color_info.as_ref().unwrap_or(&ColorInfo::default()));
+    let resolved_color = frame
+        .color_info
+        .clone()
+        .unwrap_or_default()
+        .resolve_defaults(ColorSpaceKind::Yuv);
+    let color_fields = resolved_color_to_v4l2_color(&resolved_color);
 
     let mut format: v4l::v4l_sys::v4l2_format = unsafe { std::mem::zeroed() };
     format.type_ = OUTPUT_BUFFER_TYPE;
@@ -971,6 +1006,7 @@ fn negotiate_output_format_and_start_streaming(
     format.fmt.pix.height = frame.height;
     format.fmt.pix.pixelformat = yuyv;
     format.fmt.pix.field = V4L2_FIELD_NONE;
+    format.fmt.pix.priv_ = V4L2_PIX_FMT_PRIV_MAGIC;
     format.fmt.pix.bytesperline = frame.width * 2;
     format.fmt.pix.sizeimage = frame.width * 2 * frame.height;
     format.fmt.pix.colorspace = color_fields.colorspace;
@@ -1094,7 +1130,7 @@ fn negotiate_output_format_and_start_streaming(
         sizeimage,
         buffers,
         next_buffer_index: 0,
-        color_info: frame.color_info.clone(),
+        resolved_color,
     })
 }
 
@@ -1181,13 +1217,7 @@ fn write_frame_into_buffer(
             VulkanLayout::SHADER_READ_ONLY_OPTIMAL.0
         )));
     }
-    let resolved_color = frame
-        .color_info
-        .as_ref()
-        .or(streaming.color_info.as_ref())
-        .cloned()
-        .unwrap_or_default()
-        .resolve_defaults(ColorSpaceKind::Yuv);
+    let resolved_color = streaming.resolved_color;
     let bytesperline = streaming.bytesperline;
     let buffer = &mut streaming.buffers[buffer_index];
     let kernel = gpu_side.converter.prepare_image_to_yuyv_buffer(
@@ -1539,7 +1569,10 @@ mod tests {
         assert_eq!(config.max_buffers, 4, "Chrome asks for four");
         assert_eq!(config.announce_all_caps, 0, "capture-only to readers");
         assert_eq!(config.label(), "Desk cam");
-        let long = V4l2LoopbackConfig::for_new_camera(&"x".repeat(40));
-        assert_eq!(long.label().len(), 31, "a label keeps its NUL");
+        // A name is capped where it is minted, so the module's field always
+        // has room for its NUL and the stored label is the name searched for.
+        let capped = camera_name_for(Some(&"x".repeat(40)), Path::new("/apps/desk"), "x");
+        assert_eq!(capped.len(), 31);
+        assert_eq!(V4l2LoopbackConfig::for_new_camera(&capped).label(), capped);
     }
 }

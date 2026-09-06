@@ -60,6 +60,7 @@ __all__ = ["main"]
 
 DEFAULT_APP_ENTRY_FILE_NAME = "app.py"
 APP_SETUP_FUNCTION_NAME = "setup"
+APP_DIRECTORY_ENVIRONMENT_VARIABLE = "STREAMLIB_APP_DIRECTORY"
 
 DEFAULT_CONTROL_PLANE_BIND_HOST = "0.0.0.0"
 DEFAULT_CONTROL_PLANE_BIND_PORT = 9000
@@ -221,6 +222,9 @@ def launch_app_node(
     """Boot the app's node and own its run loop until the user interrupts it."""
     anchor_directory = resolve_app_anchor_directory(requested_anchor_directory)
     entry_file = resolve_app_entry_file(verb, anchor_directory, requested_entry_file)
+    # A built-in that names itself to the machine — a virtual camera's default
+    # label — keys on the app, not on the shell it was launched from.
+    os.environ[APP_DIRECTORY_ENVIRONMENT_VARIABLE] = str(anchor_directory)
 
     try:
         entry_namespace = execute_app_entry_file(entry_file)
@@ -623,7 +627,7 @@ def render_virtual_camera_grant() -> str:
         "# ---- then, as root ----\n"
         f"modprobe {VIRTUAL_CAMERA_MODULE_NAME} devices=0\n"
         "udevadm control --reload\n"
-        f"udevadm trigger --subsystem-match=misc --attr-match=name={VIRTUAL_CAMERA_MODULE_NAME}\n"
+        f"udevadm trigger --subsystem-match=misc --sysname-match={VIRTUAL_CAMERA_MODULE_NAME}\n"
     )
     return "\n".join(blocks)
 
@@ -636,7 +640,7 @@ def virtual_camera_privileged_script() -> str:
         lines.append(f"cat > {destination} <<'STREAMLIB_EOF'\n{contents}STREAMLIB_EOF")
     lines.append(f"modprobe {VIRTUAL_CAMERA_MODULE_NAME} devices=0")
     lines.append("udevadm control --reload")
-    lines.append(f"udevadm trigger --subsystem-match=misc --attr-match=name={VIRTUAL_CAMERA_MODULE_NAME}")
+    lines.append(f"udevadm trigger --subsystem-match=misc --sysname-match={VIRTUAL_CAMERA_MODULE_NAME}")
     lines.append("udevadm settle || true")
     return "\n".join(lines) + "\n"
 

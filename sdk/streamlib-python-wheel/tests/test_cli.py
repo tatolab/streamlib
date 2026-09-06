@@ -12,6 +12,7 @@ lives in `test_cli_launch.py`.
 
 import argparse
 import ast
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -585,6 +586,9 @@ def test_enable_virtual_camera_print_writes_the_three_files_and_runs_nothing(
     assert 'KERNEL=="v4l2loopback", SUBSYSTEM=="misc", TAG+="uaccess"' in printed.out
     assert "modprobe v4l2loopback devices=0" in printed.out
     assert "udevadm control --reload" in printed.out
+    # The trigger must select the control node, or a rule written after the
+    # module loaded never applies; `--attr-match=name=` once matched nothing.
+    assert "udevadm trigger --subsystem-match=misc --sysname-match=v4l2loopback" in printed.out
     assert printed.err == ""
 
 
@@ -656,4 +660,52 @@ def test_the_control_node_probe_opens_a_character_device_without_seeking(tmp_pat
 
     assert cli.control_node_is_writable_by_this_user(fifo) is True
     assert cli.control_node_is_writable_by_this_user(tmp_path / "absent") is False
+
+
+def _v4l2loopback_is_loaded() -> bool:
+    try:
+        return "v4l2loopback" in Path("/proc/modules").read_text()
+    except OSError:
+        return False
+
+
+@pytest.mark.skipif(not _v4l2loopback_is_loaded(), reason="v4l2loopback is not loaded here")
+def test_the_udev_trigger_selects_the_control_node():
+    """The re-trigger the verb runs must name the module's misc device, so the
+    freshly written `uaccess` rule is applied to a node that already exists.
+    `--dry-run --verbose` prints what would be triggered and touches nothing."""
+    script = cli.virtual_camera_privileged_script()
+    trigger = next(line for line in script.splitlines() if line.startswith("udevadm trigger"))
+    words = trigger.split()
+
+    listed = subprocess.run(
+        [*words[:2], "--dry-run", "--verbose", *words[2:]],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert "/sys/devices/virtual/misc/v4l2loopback" in listed.stdout, (
+        f"the trigger selects nothing; command: {trigger}; output: {listed.stdout!r}"
+    )
+
+
+@pytest.mark.skipif(
+    os.environ.get("STREAMLIB_RUN_PRIVILEGED_VERB") != "1",
+    reason=(
+        "runs the privileged verb (a password prompt); set "
+        "STREAMLIB_RUN_PRIVILEGED_VERB=1 in a terminal to opt in"
+    ),
+)
+def test_enable_virtual_camera_makes_the_control_node_writable():
+    """The rig check: the verb, run for real, leaves the control node openable
+    read-write by this user in this same session — no re-login."""
+    finished = subprocess.run(
+        [sys.executable, "-m", "streamlib.cli", "enable-virtual-camera"],
+        text=True,
+        timeout=180,
+    )
+
+    assert finished.returncode == 0
+    assert cli.control_node_is_writable_by_this_user() is True
 
