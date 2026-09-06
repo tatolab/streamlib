@@ -196,6 +196,36 @@ def test_display_name_defaults_to_the_type_name():
         runtime.shutdown()
 
 
+# ---- without the permission: a refusal by name, and the runtime keeps running
+
+
+@pytest.mark.requires_gpu
+@pytest.mark.skipif(
+    control_node_is_writable(),
+    reason=f"{CONTROL_NODE} is writable here, so the loopback door opens rather than refusing",
+)
+def test_without_the_permission_the_sink_refuses_naming_the_verb_and_the_runtime_keeps_running(
+    start_app_under_test,
+):
+    """The complement of the camera tests: on a machine that has not run the
+    verb, a sink forced onto the loopback door never reaches Running, the
+    readiness wait raises with the sink's own text naming the verb, and the
+    engine — still hosting the source — shuts down cleanly rather than dying."""
+    app = start_app_under_test(VIRTUAL_CAMERA_SINK_APP, "--name", "Refused cam")
+
+    app.await_output_containing("MARKER:NOT_EVERY_PROCESSOR_RUNNING", "the readiness refusal")
+    refusal = next(
+        line for line in app.output.splitlines() if "MARKER:NOT_EVERY_PROCESSOR_RUNNING" in line
+    )
+    assert "VirtualCameraSink" in refusal
+    assert "no permission to create a v4l2loopback camera" in refusal, refusal
+    assert "/dev/v4l2loopback is absent" in refusal or "not writable by this user" in refusal, refusal
+    assert "streamlib enable-virtual-camera" in refusal, "the refusal names the one-time verb"
+
+    app.await_clean_exit()
+    assert "MARKER:EVERY_PROCESSOR_RUNNING" not in app.output
+
+
 # ---- a camera other applications see (GPU + the loopback permission) -------
 
 
