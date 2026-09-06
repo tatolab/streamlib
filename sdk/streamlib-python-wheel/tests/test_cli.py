@@ -552,3 +552,84 @@ def test_new_refuses_to_overwrite_an_existing_app(tmp_path: Path):
     assert not (app_directory / "pyproject.toml").exists(), (
         "nothing may be written before the whole scaffold is known to be safe"
     )
+
+
+# ---------------------------------------------------------------------------
+# `enable-virtual-camera` — the one machine-setup verb
+# ---------------------------------------------------------------------------
+
+
+def test_enable_virtual_camera_print_writes_the_three_files_and_runs_nothing(monkeypatch):
+    """`--print` is the hand-install path: every file, its destination, the
+    commands — and no process, no privilege, no change to the machine."""
+
+    def refuse_to_run(*_arguments, **_keywords):
+        raise AssertionError("--print must run nothing")
+
+    monkeypatch.setattr(cli.subprocess, "run", refuse_to_run)
+
+    printed = run_cli("enable-virtual-camera", "--print")
+
+    assert printed.returncode == 0, printed.stderr
+    for destination in (
+        "/etc/modules-load.d/streamlib-virtual-camera.conf",
+        "/etc/modprobe.d/streamlib-virtual-camera.conf",
+        "/etc/udev/rules.d/70-streamlib-virtual-camera.rules",
+    ):
+        assert destination in printed.stdout, f"{destination} missing from:\n{printed.stdout}"
+    assert "options v4l2loopback devices=0" in printed.stdout
+    assert 'KERNEL=="v4l2loopback", SUBSYSTEM=="misc", TAG+="uaccess"' in printed.stdout
+    assert "modprobe v4l2loopback devices=0" in printed.stdout
+    assert "udevadm control --reload" in printed.stdout
+    assert printed.stderr == ""
+
+
+def test_enable_virtual_camera_refuses_by_name_without_pkexec_or_sudo(monkeypatch):
+    """Where neither helper exists the verb names both, offers `--print`, and
+    changes nothing — a machine it cannot ask for privilege on is told so."""
+    monkeypatch.setattr(cli.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(cli, "virtual_camera_module_is_installed", lambda _release: True)
+    monkeypatch.setattr(cli.shutil, "which", lambda _name: None)
+
+    def refuse_to_run(*_arguments, **_keywords):
+        raise AssertionError("with no helper nothing may run")
+
+    monkeypatch.setattr(cli.subprocess, "run", refuse_to_run)
+
+    with pytest.raises(cli.MachineSetupError) as refusal:
+        cli.enable_virtual_camera(print_only=False)
+
+    message = str(refusal.value)
+    assert "pkexec" in message and "sudo" in message
+    assert "--print" in message, "the hand-install path is offered"
+
+
+def test_enable_virtual_camera_refuses_by_name_off_linux(monkeypatch):
+    monkeypatch.setattr(cli.platform, "system", lambda: "Darwin")
+
+    with pytest.raises(cli.MachineSetupError, match="Linux-only"):
+        cli.enable_virtual_camera(print_only=False)
+
+
+def test_enable_virtual_camera_names_the_package_when_the_module_is_not_installed(
+    monkeypatch,
+):
+    monkeypatch.setattr(cli.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(cli.platform, "release", lambda: "9.9.9-test")
+    monkeypatch.setattr(cli, "virtual_camera_module_is_installed", lambda _release: False)
+
+    with pytest.raises(cli.MachineSetupError) as refusal:
+        cli.enable_virtual_camera(print_only=False)
+
+    assert "linux-modules-9.9.9-test" in str(refusal.value)
+
+
+def test_the_privilege_helper_prefers_pkexec_under_a_session_and_sudo_without_one():
+    available = {"pkexec": "/usr/bin/pkexec", "sudo": "/usr/bin/sudo"}
+    which = lambda name: available.get(name)  # noqa: E731
+
+    assert cli.choose_privilege_helper(which, {"DISPLAY": ":1"}) == ["pkexec"]
+    assert cli.choose_privilege_helper(which, {}) == ["sudo"]
+    assert cli.choose_privilege_helper(lambda name: available.get(name) if name == "pkexec" else None, {}) == ["pkexec"]
+    assert cli.choose_privilege_helper(lambda _name: None, {"DISPLAY": ":1"}) is None
+

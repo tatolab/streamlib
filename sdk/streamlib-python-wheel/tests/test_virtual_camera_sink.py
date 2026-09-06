@@ -1,0 +1,268 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+"""`VirtualCameraSink` from Python: marker class to a camera other programs see.
+
+The marker tests are pure Python and run in CI. The camera tests start a graph,
+so they carry `requires_gpu` like every other graph test here — and they need
+the one-time permission the sink itself never takes: the v4l2loopback module
+loaded with its control node writable, which `streamlib enable-virtual-camera`
+installs. Without it they skip naming the verb, since the refusal path is what
+the engine's own unit tests already prove and a skipped test says why.
+
+The reader side is a few V4L2 ioctls over `fcntl`, not a tool: what an
+application sees is a `/dev/video*` node whose `card` is the configured name,
+answering `VIDIOC_QUERYCAP` with capture, and handing back YUYV frames at the
+frame's extent carrying the frame's own stamp. That is the whole contract, so
+the test speaks it directly.
+"""
+
+import fcntl
+import mmap
+import os
+import struct
+import time
+from pathlib import Path
+
+import pytest
+
+import streamlib
+from streamlib import VirtualCameraSink
+
+VIRTUAL_CAMERA_SINK_APP = Path(__file__).parent / "virtual_camera_sink_app.py"
+CONTROL_NODE = Path("/dev/v4l2loopback")
+
+# <linux/videodev2.h>: the ioctl numbers and struct layouts the reader speaks.
+VIDIOC_QUERYCAP = 0x80685600
+VIDIOC_S_FMT = 0xC0D05605
+VIDIOC_REQBUFS = 0xC0145608
+VIDIOC_QUERYBUF = 0xC0585609
+VIDIOC_QBUF = 0xC058560F
+VIDIOC_DQBUF = 0xC0585611
+VIDIOC_STREAMON = 0x40045612
+VIDIOC_STREAMOFF = 0x40045613
+V4L2_BUF_TYPE_VIDEO_CAPTURE = 1
+V4L2_MEMORY_MMAP = 1
+V4L2_CAP_VIDEO_CAPTURE = 0x00000001
+V4L2_CAP_VIDEO_OUTPUT = 0x00000002
+V4L2_BUF_FLAG_TIMESTAMP_COPY = 0x00004000
+YUYV = struct.unpack("<I", b"YUYV")[0]
+
+# `struct v4l2_capability`: driver[16] card[32] bus_info[32] version caps device_caps reserved[3].
+CAPABILITY_FORMAT = "16s32s32sIII3I"
+# `struct v4l2_buffer` on 64-bit: index type bytesused flags field | timeval(2×q) | timecode(4I+8s) sequence memory | m(8) length reserved2 request_fd.
+BUFFER_FORMAT = "IIIII" + "qq" + "IIII8s" + "II" + "Q" + "II"
+
+# A camera that exists must appear within the sink's setup; one that was
+# removed must be gone once the process has exited.
+CAMERA_APPEARS_TIMEOUT_SECONDS = 30.0
+CAMERA_POLL_INTERVAL_SECONDS = 0.25
+FRAMES_TO_READ = 5
+READ_TIMEOUT_SECONDS = 10.0
+
+
+def control_node_is_writable() -> bool:
+    return CONTROL_NODE.exists() and os.access(CONTROL_NODE, os.W_OK)
+
+
+needs_the_loopback_permission = pytest.mark.skipif(
+    not control_node_is_writable(),
+    reason=(
+        f"{CONTROL_NODE} is {'not writable by this user' if CONTROL_NODE.exists() else 'absent'}; "
+        "run `streamlib enable-virtual-camera` once on this machine"
+    ),
+)
+
+
+def query_capability(video_node: Path):
+    """`(driver, card, capabilities)` of a V4L2 node, or `None` if it will not answer."""
+    try:
+        fd = os.open(video_node, os.O_RDWR | os.O_NONBLOCK)
+    except OSError:
+        return None
+    try:
+        raw = bytearray(struct.calcsize(CAPABILITY_FORMAT))
+        fcntl.ioctl(fd, VIDIOC_QUERYCAP, raw)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    driver, card, _bus, _version, capabilities, device_caps, *_ = struct.unpack(
+        CAPABILITY_FORMAT, raw
+    )
+    return (
+        driver.split(b"\0", 1)[0].decode(),
+        card.split(b"\0", 1)[0].decode(),
+        device_caps or capabilities,
+    )
+
+
+def video_nodes_named(camera_name: str) -> list[Path]:
+    return [
+        node
+        for node in sorted(Path("/dev").glob("video*"))
+        if (answer := query_capability(node)) is not None and answer[1] == camera_name
+    ]
+
+
+def await_camera(camera_name: str, present: bool, app) -> list[Path]:
+    deadline = time.monotonic() + CAMERA_APPEARS_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        nodes = video_nodes_named(camera_name)
+        if bool(nodes) == present:
+            return nodes
+        time.sleep(CAMERA_POLL_INTERVAL_SECONDS)
+    raise AssertionError(
+        f"camera {camera_name!r} {'never appeared' if present else 'is still present'}; "
+        f"app output:\n{app.output}"
+    )
+
+
+def read_yuyv_frames(video_node: Path, count: int):
+    """Capture `count` frames the way any V4L2 application would: negotiate
+    the format the writer set, map the device's buffers, stream, dequeue.
+
+    Returns `(width, height, [(timestamp_ns, flags, bytesused)])`.
+    """
+    fd = os.open(video_node, os.O_RDWR | os.O_NONBLOCK)
+    try:
+        # `struct v4l2_format` is 208 bytes; the pix union starts at offset 8:
+        # width height pixelformat field bytesperline sizeimage colorspace priv flags | ycbcr_enc quantization xfer_func.
+        fmt = bytearray(208)
+        struct.pack_into("I", fmt, 0, V4L2_BUF_TYPE_VIDEO_CAPTURE)
+        struct.pack_into("III", fmt, 8, 0, 0, YUYV)
+        fcntl.ioctl(fd, VIDIOC_S_FMT, fmt)
+        width, height, pixelformat, _field, _bytesperline, sizeimage = struct.unpack_from(
+            "IIIIII", fmt, 8
+        )
+        assert pixelformat == YUYV, f"the device set {pixelformat:#x}, not YUYV"
+
+        request = bytearray(struct.pack("IIII4s", 4, V4L2_BUF_TYPE_VIDEO_CAPTURE, V4L2_MEMORY_MMAP, 0, b""))
+        fcntl.ioctl(fd, VIDIOC_REQBUFS, request)
+        (granted,) = struct.unpack_from("I", request, 0)
+        assert granted > 0, "the device granted no capture buffers"
+
+        mappings = []
+        for index in range(granted):
+            described = bytearray(struct.calcsize(BUFFER_FORMAT))
+            struct.pack_into("IIII", described, 0, index, V4L2_BUF_TYPE_VIDEO_CAPTURE, 0, 0)
+            struct.pack_into("I", described, struct.calcsize("IIIIIqqIIII8sI"), V4L2_MEMORY_MMAP)
+            fcntl.ioctl(fd, VIDIOC_QUERYBUF, described)
+            offset, length = struct.unpack_from("QI", described, struct.calcsize("IIIIIqqIIII8sII"))
+            mappings.append(mmap.mmap(fd, length, mmap.MAP_SHARED, mmap.PROT_READ, offset=offset & 0xFFFFFFFF))
+            fcntl.ioctl(fd, VIDIOC_QBUF, described)
+        fcntl.ioctl(fd, VIDIOC_STREAMON, struct.pack("i", V4L2_BUF_TYPE_VIDEO_CAPTURE))
+
+        frames = []
+        deadline = time.monotonic() + READ_TIMEOUT_SECONDS
+        try:
+            while len(frames) < count and time.monotonic() < deadline:
+                dequeued = bytearray(struct.calcsize(BUFFER_FORMAT))
+                struct.pack_into("II", dequeued, 4, V4L2_BUF_TYPE_VIDEO_CAPTURE, 0)
+                struct.pack_into("I", dequeued, struct.calcsize("IIIIIqqIIII8sI"), V4L2_MEMORY_MMAP)
+                try:
+                    fcntl.ioctl(fd, VIDIOC_DQBUF, dequeued)
+                except BlockingIOError:
+                    time.sleep(0.005)
+                    continue
+                index, _type, bytesused, flags, _field, tv_sec, tv_usec = struct.unpack_from(
+                    "IIIIIqq", dequeued, 0
+                )
+                frames.append((tv_sec * 1_000_000_000 + tv_usec * 1_000, flags, bytesused, bytes(mappings[index][:8])))
+                fcntl.ioctl(fd, VIDIOC_QBUF, dequeued)
+        finally:
+            fcntl.ioctl(fd, VIDIOC_STREAMOFF, struct.pack("i", V4L2_BUF_TYPE_VIDEO_CAPTURE))
+            for mapping in mappings:
+                mapping.close()
+        return width, height, sizeimage, frames
+    finally:
+        os.close(fd)
+
+
+# ---- marker semantics (no GPU) ---------------------------------------------
+
+
+def test_the_marker_class_cannot_be_instantiated():
+    with pytest.raises(TypeError):
+        VirtualCameraSink()
+
+
+def test_display_name_defaults_to_the_type_name():
+    runtime = streamlib.Runtime()
+    try:
+        sink = runtime.add(VirtualCameraSink)
+        assert sink.display_name == "VirtualCameraSink"
+    finally:
+        runtime.shutdown()
+
+
+# ---- a camera other applications see (GPU + the loopback permission) -------
+
+
+@pytest.mark.requires_gpu
+@needs_the_loopback_permission
+def test_a_camera_appears_while_the_graph_runs_and_is_gone_after_shutdown(
+    start_app_under_test,
+):
+    camera_name = f"StreamLib test {os.getpid()}"
+    second_name = f"{camera_name} B"
+    assert not video_nodes_named(camera_name), "a stale camera carries this run's name"
+
+    app = start_app_under_test(
+        VIRTUAL_CAMERA_SINK_APP, "--name", camera_name, "--second-name", second_name
+    )
+    app.await_marker("MARKER:EVERY_PROCESSOR_RUNNING")
+    first = await_camera(camera_name, present=True, app=app)
+    second = await_camera(second_name, present=True, app=app)
+    assert len(first) == 1 and len(second) == 1, "two sinks are exactly two cameras"
+    assert first != second
+
+    driver, card, capabilities = query_capability(first[0])
+    assert driver == "v4l2 loopback"
+    assert card == camera_name
+    assert capabilities & V4L2_CAP_VIDEO_CAPTURE, "readers see a capture device"
+    assert not capabilities & V4L2_CAP_VIDEO_OUTPUT, (
+        "capture-only to readers — the mode Chromium's enumerator lists"
+    )
+
+    app.interrupt()
+    app.await_clean_exit()
+    assert not video_nodes_named(camera_name), f"the camera outlived its processor:\n{app.output}"
+    assert not video_nodes_named(second_name)
+
+
+@pytest.mark.requires_gpu
+@needs_the_loopback_permission
+def test_frames_reach_the_loopback_device_and_read_back_as_yuyv(start_app_under_test):
+    camera_name = f"StreamLib frames {os.getpid()}"
+    width, height = 640, 360
+    app = start_app_under_test(
+        VIRTUAL_CAMERA_SINK_APP,
+        "--name", camera_name, "--width", str(width), "--height", str(height),
+    )
+    app.await_marker("MARKER:EVERY_PROCESSOR_RUNNING")
+    (node,) = await_camera(camera_name, present=True, app=app)
+
+    read_started_ns = time.monotonic_ns()
+    got_width, got_height, sizeimage, frames = read_yuyv_frames(node, FRAMES_TO_READ)
+    read_finished_ns = time.monotonic_ns()
+
+    assert (got_width, got_height) == (width, height), "the device format is the frame's extent"
+    assert sizeimage == width * height * 2, "YUYV: two bytes a pixel"
+    assert len(frames) == FRAMES_TO_READ, f"read {len(frames)} frames; app output:\n{app.output}"
+    stamps = [stamp for stamp, _flags, _used, _head in frames]
+    assert stamps == sorted(stamps) and len(set(stamps)) == len(stamps), (
+        f"frame stamps advance: {stamps}"
+    )
+    for stamp, flags, bytesused, head in frames:
+        assert flags & V4L2_BUF_FLAG_TIMESTAMP_COPY, "the writer's stamp is passed through"
+        assert bytesused == sizeimage, "every frame is a whole picture"
+        # Monotonic and current: the stamp names an instant inside this read,
+        # give or take the source's publishing lead.
+        assert read_started_ns - 5_000_000_000 < stamp < read_finished_ns + 5_000_000_000, (
+            f"stamp {stamp} is not in the monotonic epoch this process reads"
+        )
+        assert any(head), "a picture, not an unwritten buffer"
+
+    app.interrupt()
+    app.await_clean_exit()

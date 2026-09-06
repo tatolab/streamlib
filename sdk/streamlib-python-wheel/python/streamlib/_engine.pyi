@@ -62,6 +62,7 @@ __all__ = [
     "RuntimeContextLimitedAccess",
     "SpeakerSink",
     "TestPatternSource",
+    "VirtualCameraSink",
     "TestBagCollector",
     "TestBagFeeder",
     "await_test_harness_bag",
@@ -393,6 +394,39 @@ class TestPatternSource:
 
     # Keeps pytest from collecting the `Test*`-named class in user suites.
     __test__: Literal[False]
+
+@final
+class VirtualCameraSink:
+    """Native built-in block: video frames to a virtual camera any Linux
+    application can select. Each instance is one camera that exists while its
+    processor runs — created at setup, removed at teardown, like a USB camera
+    plugged in and pulled out — showing whatever the graph writes into it.
+
+    A marker type — pass the class itself to `Runtime.add`
+    (`rt.add(VirtualCameraSink, config={"name": "Desk cam"})`); it is never
+    instantiated and its per-frame path never enters the interpreter.
+
+    One input, `video` (`newest`), and no output. Add as many instances as the
+    graph needs; each is its own camera.
+
+    Config keys: `name`, the camera's name in every picker, defaulting to
+    "StreamLib Camera" plus a short id that is unique per instance and app and
+    stable across runs; `door`, "auto" (default), "v4l2loopback", or "pipewire".
+    Under "auto" the sink creates a v4l2loopback device when the module's
+    control node is writable — the door every application sees — and otherwise
+    registers a PipeWire camera node, which needs no module and no root. The
+    door is logged at setup; without permission to create a loopback camera
+    the log names `streamlib enable-virtual-camera`, the one-time command
+    that grants it behind your desktop's password prompt. "v4l2loopback"
+    refuses by name at `setup()` in that case, and the runtime keeps running.
+    The engine never loads a module or asks for elevation. Until the PipeWire
+    door lands, "auto" without that permission refuses the same way and says so.
+
+    A loopback device a reader still holds at teardown is left in place and
+    reclaimed by name at the next setup. Frames are stamped with their
+    monotonic timestamp on both doors; the format follows the first frame's
+    extent (YUYV, an even width) and an extent change re-negotiates it.
+    """
 
 @final
 class TestBagFeeder:
