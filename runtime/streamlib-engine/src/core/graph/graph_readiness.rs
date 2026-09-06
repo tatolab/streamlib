@@ -36,7 +36,8 @@ impl ObservableGraphReadiness {
     /// failure is reported when the wait reaches it rather than the instant it
     /// happens. Whichever processor ends the wait, the error names the state
     /// every processor was in, so a failure behind a slow one is still in the
-    /// report.
+    /// report — and a processor whose `setup()` refused carries that refusal's
+    /// own text, so the caller reads why rather than only that.
     pub fn wait_until_every_processor_is_running(&self, timeout: Duration) -> Result<()> {
         let deadline = Instant::now() + timeout;
 
@@ -52,8 +53,13 @@ impl ObservableGraphReadiness {
                     self.describe_every_processor()
                 )
             } else {
+                let reason = observable_state
+                    .failure_reason()
+                    .map(|reason| format!(": {reason}"))
+                    .unwrap_or_default();
                 format!(
-                    "[{processor_id}] is {settled} rather than Running; every processor: {}",
+                    "[{processor_id}] is {settled} rather than Running{reason}; every \
+                     processor: {}",
                     self.describe_every_processor()
                 )
             }));
@@ -73,5 +79,62 @@ impl ObservableGraphReadiness {
             })
             .collect::<Vec<_>>()
             .join(", ")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The caller who asked whether the graph is up is told, in the refusing
+    /// processor's own words, why it is not — the state alone would send them
+    /// to the logs for what the error already knows.
+    #[test]
+    fn a_failed_processors_reason_rides_the_readiness_error() {
+        let running = Arc::new(ObservableProcessorState::new(ProcessorState::Running));
+        let refused = Arc::new(ObservableProcessorState::new(ProcessorState::Pending));
+        refused.fail_with(
+            "setup failed: VirtualCameraSink \"Desk cam\": no permission to create a \
+             v4l2loopback camera",
+        );
+        let readiness = ObservableGraphReadiness::new(vec![
+            (ProcessorUniqueId::from("Psource"), running),
+            (ProcessorUniqueId::from("Psink"), refused),
+        ]);
+
+        let reported = readiness
+            .wait_until_every_processor_is_running(Duration::from_millis(50))
+            .expect_err("a refused processor is not running")
+            .to_string();
+
+        assert!(
+            reported.contains(
+                "[Psink] is Error rather than Running: setup failed: \
+            VirtualCameraSink \"Desk cam\": no permission to create a v4l2loopback camera"
+            ),
+            "{reported}"
+        );
+        assert!(reported.contains("Psource=Running"), "{reported}");
+        assert!(reported.contains("Psink=Error"), "{reported}");
+    }
+
+    /// A processor that failed without a reason still reads as before: the
+    /// state, and nothing invented after it.
+    #[test]
+    fn a_failure_without_a_reason_reports_the_state_alone() {
+        let failed = Arc::new(ObservableProcessorState::new(ProcessorState::Pending));
+        failed.transition_to(ProcessorState::Error);
+        let readiness =
+            ObservableGraphReadiness::new(vec![(ProcessorUniqueId::from("Pquiet"), failed)]);
+
+        let reported = readiness
+            .wait_until_every_processor_is_running(Duration::from_millis(50))
+            .expect_err("failed")
+            .to_string();
+
+        assert!(
+            reported.contains("[Pquiet] is Error rather than Running; every processor"),
+            "{reported}"
+        );
     }
 }

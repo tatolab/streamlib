@@ -373,7 +373,7 @@ fn spawn_dedicated_thread(
                 });
                 if let Err(e) = setup_result {
                     tracing::error!("[{}] Setup failed: {}", proc_id_clone, e);
-                    state_arc.transition_to(ProcessorState::Error);
+                    state_arc.fail_with(format!("setup failed: {e}"));
                     return;
                 }
 
@@ -388,7 +388,7 @@ fn spawn_dedicated_thread(
                     &processor_type,
                 ) {
                     tracing::error!("[{}] Setup failed: {}", proc_id_clone, e);
-                    state_arc.transition_to(ProcessorState::Error);
+                    state_arc.fail_with(format!("setup failed: {e}"));
                     return;
                 }
 
@@ -483,7 +483,11 @@ fn full_access_grant_or_mark_untrusted_error(
                 processor_id,
                 isolation_tier.as_str(),
             );
-            state_arc.transition_to(ProcessorState::Error);
+            state_arc.fail_with(format!(
+                "refused: untrusted isolation tier {} — privileged setup() belongs behind the \
+                 subprocess sandbox",
+                isolation_tier.as_str()
+            ));
             None
         }
     }

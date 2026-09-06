@@ -19,6 +19,10 @@ use crate::core::processors::ProcessorState;
 pub struct ObservableProcessorState {
     current: Mutex<ProcessorState>,
     changed: Condvar,
+    /// Why the processor is in `Error`, in the words of whatever refused it —
+    /// a `setup()` that returned an error carries that error's text, so a
+    /// caller waiting for the graph is told the reason and not just the state.
+    failure_reason: Mutex<Option<String>>,
 }
 
 impl ObservableProcessorState {
@@ -27,6 +31,7 @@ impl ObservableProcessorState {
         Self {
             current: Mutex::new(initial),
             changed: Condvar::new(),
+            failure_reason: Mutex::new(None),
         }
     }
 
@@ -39,6 +44,20 @@ impl ObservableProcessorState {
     pub fn transition_to(&self, state: ProcessorState) {
         *self.current.lock() = state;
         self.changed.notify_all();
+    }
+
+    /// Move the processor to `Error`, keeping `reason` for whoever asks why,
+    /// and wake everything waiting on it.
+    pub fn fail_with(&self, reason: impl Into<String>) {
+        let mut current = self.current.lock();
+        *self.failure_reason.lock() = Some(reason.into());
+        *current = ProcessorState::Error;
+        self.changed.notify_all();
+    }
+
+    /// Why the processor failed, when it failed through [`Self::fail_with`].
+    pub fn failure_reason(&self) -> Option<String> {
+        self.failure_reason.lock().clone()
     }
 
     /// Move the processor to `state`, unless it has already failed.
@@ -92,6 +111,11 @@ impl StateComponent {
     /// Move the processor to `state` and wake everything waiting on it.
     pub fn transition_to(&self, state: ProcessorState) {
         self.0.transition_to(state);
+    }
+
+    /// Move the processor to `Error` with the reason kept for whoever asks.
+    pub fn fail_with(&self, reason: impl Into<String>) {
+        self.0.fail_with(reason);
     }
 
     /// Share the state with a thread that will drive or observe it.
@@ -177,6 +201,29 @@ mod tests {
         assert_eq!(
             state.wait_until_setup_resolved(Instant::now() + UNREACHABLE_DEADLINE),
             ProcessorState::Running
+        );
+    }
+
+    /// A failure carries its own words: the state alone says a processor is
+    /// broken, the reason says what refused it, and the thread that unwinds
+    /// afterwards leaves both in place.
+    #[test]
+    fn a_failure_keeps_the_reason_it_failed_for() {
+        let state = ObservableProcessorState::new(ProcessorState::Pending);
+        assert_eq!(state.failure_reason(), None);
+
+        state.fail_with("setup failed: no permission to create a camera");
+        state.transition_to_unless_already_failed(ProcessorState::Stopped);
+
+        assert_eq!(state.current(), ProcessorState::Error);
+        assert_eq!(
+            state.failure_reason().as_deref(),
+            Some("setup failed: no permission to create a camera")
+        );
+        assert_eq!(
+            state.wait_until_setup_resolved(Instant::now() + UNREACHABLE_DEADLINE),
+            ProcessorState::Error,
+            "a failure with a reason ends the wait like one without"
         );
     }
 

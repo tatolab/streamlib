@@ -496,6 +496,11 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "vulkan::rhi::vulkan_host_mapping_imported_as_buffer::tests::a_host_mapping_takes_the_imported_tier_when_the_device_allows_it",
                 "vulkan::rhi::vulkan_host_mapping_imported_as_buffer::tests::a_refused_import_falls_back_to_host_cached_staging_and_says_why",
                 "vulkan::rhi::vulkan_color_converter::image_to_yuyv_buffer_tests::the_yuyv_pass_writes_every_pixel_of_the_target_range",
+                // A setup refusal's own words ride the readiness error, so a
+                // caller learns why a graph is not up rather than only that.
+                "core::graph::components::state_component::tests::a_failure_keeps_the_reason_it_failed_for",
+                "core::graph::graph_readiness::tests::a_failed_processors_reason_rides_the_readiness_error",
+                "core::graph::graph_readiness::tests::a_failure_without_a_reason_reports_the_state_alone",
             ],
         ),
         // The rig-tier integration binary that drives the two `match_device`
