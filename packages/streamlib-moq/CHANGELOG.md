@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.4](https://github.com/tatolab/streamlib/compare/streamlib-moq-v0.1.3...streamlib-moq-v0.1.4) (2026-09-06)
+
+
+### Features
+
+* **extension:** streamlib-moq publishes data tracks — classification by bitstream, the envelope, track_names, the cmaf refusal and the time backstop ([#2183](https://github.com/tatolab/streamlib/issues/2183)) ([2d80f11](https://github.com/tatolab/streamlib/commit/2d80f115eb1b3de165096f1e4f1f81ed29dd5fd6))
+
 ## [0.1.3](https://github.com/tatolab/streamlib/compare/streamlib-moq-v0.1.2...streamlib-moq-v0.1.3) (2026-09-05)
 
 
