@@ -559,7 +559,9 @@ def test_new_refuses_to_overwrite_an_existing_app(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_enable_virtual_camera_print_writes_the_three_files_and_runs_nothing(monkeypatch):
+def test_enable_virtual_camera_print_writes_the_three_files_and_runs_nothing(
+    monkeypatch, capsys
+):
     """`--print` is the hand-install path: every file, its destination, the
     commands — and no process, no privilege, no change to the machine."""
 
@@ -568,20 +570,27 @@ def test_enable_virtual_camera_print_writes_the_three_files_and_runs_nothing(mon
 
     monkeypatch.setattr(cli.subprocess, "run", refuse_to_run)
 
-    printed = run_cli("enable-virtual-camera", "--print")
+    assert cli.enable_virtual_camera(print_only=True) == 0
 
-    assert printed.returncode == 0, printed.stderr
+    printed = capsys.readouterr()
     for destination in (
         "/etc/modules-load.d/streamlib-virtual-camera.conf",
         "/etc/modprobe.d/streamlib-virtual-camera.conf",
         "/etc/udev/rules.d/70-streamlib-virtual-camera.rules",
     ):
-        assert destination in printed.stdout, f"{destination} missing from:\n{printed.stdout}"
-    assert "options v4l2loopback devices=0" in printed.stdout
-    assert 'KERNEL=="v4l2loopback", SUBSYSTEM=="misc", TAG+="uaccess"' in printed.stdout
-    assert "modprobe v4l2loopback devices=0" in printed.stdout
-    assert "udevadm control --reload" in printed.stdout
-    assert printed.stderr == ""
+        assert destination in printed.out, f"{destination} missing from:\n{printed.out}"
+    assert "options v4l2loopback devices=0" in printed.out
+    assert 'KERNEL=="v4l2loopback", SUBSYSTEM=="misc", TAG+="uaccess"' in printed.out
+    assert "modprobe v4l2loopback devices=0" in printed.out
+    assert "udevadm control --reload" in printed.out
+    assert printed.err == ""
+
+
+def test_the_shipped_entry_point_carries_the_setup_verb():
+    printed = run_cli("enable-virtual-camera", "--print")
+
+    assert printed.returncode == 0, printed.stderr
+    assert "70-streamlib-virtual-camera.rules" in printed.stdout
 
 
 def test_enable_virtual_camera_refuses_by_name_without_pkexec_or_sudo(monkeypatch):

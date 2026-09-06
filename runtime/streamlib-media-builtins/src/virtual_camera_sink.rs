@@ -1030,13 +1030,25 @@ fn write_frame_into_buffer(
         &resolved_color,
     )?;
 
-    let found_layout = registration.current_layout();
+    // A published frame arrives sampled-ready; the encoder built-in holds the
+    // same line. A transition from an unknown layout would discard the
+    // picture, so a frame in any other layout is refused rather than bridged.
+    let source_layout = registration.current_layout();
+    if source_layout != VulkanLayout::SHADER_READ_ONLY_OPTIMAL {
+        return Err(Error::Runtime(format!(
+            "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME}: frame {} is in layout {} rather than \
+             SHADER_READ_ONLY_OPTIMAL ({})",
+            frame.surface_id,
+            source_layout.0,
+            VulkanLayout::SHADER_READ_ONLY_OPTIMAL.0
+        )));
+    }
     let recorder = &mut gpu_side.recorder;
     recorder.begin()?;
     recorder.record_image_barrier(
         registration.texture(),
-        found_layout,
-        VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+        source_layout,
+        source_layout,
         VulkanStage::ALL_COMMANDS,
         VulkanStage::COMPUTE_SHADER,
         VulkanAccess::MEMORY_WRITE,
@@ -1050,19 +1062,6 @@ fn write_frame_into_buffer(
         1,
     )?;
     buffer.written_by_gpu.record_release_to_host(recorder)?;
-    if found_layout != VulkanLayout::UNDEFINED && found_layout != VulkanLayout::SHADER_READ_ONLY_OPTIMAL {
-        recorder.record_image_barrier(
-            registration.texture(),
-            VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
-            found_layout,
-            VulkanStage::COMPUTE_SHADER,
-            VulkanStage::ALL_COMMANDS,
-            VulkanAccess::SHADER_SAMPLED_READ,
-            VulkanAccess::MEMORY_READ,
-        )?;
-    } else if found_layout == VulkanLayout::UNDEFINED {
-        registration.update_layout(VulkanLayout::SHADER_READ_ONLY_OPTIMAL);
-    }
     recorder.submit_and_wait()?;
     buffer.written_by_gpu.publish_to_host();
     Ok(())

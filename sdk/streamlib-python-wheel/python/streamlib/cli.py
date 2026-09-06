@@ -33,6 +33,7 @@ asserted here is an open question for `/propose-rule`.
 from __future__ import annotations
 
 import argparse
+import os
 import platform
 import re
 import runpy
@@ -646,7 +647,7 @@ def virtual_camera_module_is_installed(kernel_release: str) -> bool:
 
 
 def choose_privilege_helper(
-    which: "Callable[[str], Optional[str]]" = shutil.which,
+    which: "Optional[Callable[[str], Optional[str]]]" = None,
     environ: "Optional[dict[str, str]]" = None,
 ) -> "Optional[list[str]]":
     """`pkexec` under a desktop session, `sudo` in a headless shell, else `None`.
@@ -655,7 +656,9 @@ def choose_privilege_helper(
     session has and an SSH shell does not; `sudo` prompts wherever there is a
     terminal.
     """
-    environment = environ if environ is not None else dict(__import__("os").environ)
+    if which is None:
+        which = shutil.which
+    environment = environ if environ is not None else dict(os.environ)
     has_session = bool(environment.get("DISPLAY") or environment.get("WAYLAND_DISPLAY"))
     if has_session and which("pkexec"):
         return ["pkexec"]
