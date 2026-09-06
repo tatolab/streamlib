@@ -58,6 +58,12 @@ const DROPPED_FRAME_REPORT_STEP: u64 = 300;
 /// Written-frame log cadence, in frames.
 const WRITTEN_FRAME_LOG_INTERVAL: u64 = 300;
 
+/// How long a freshly created device is given to become openable. The
+/// node's `uaccess` ACL is written by udev after the add event, not by the
+/// module at `CTL_ADD`, so the first open can land before the grant does.
+const UDEV_GRANT_DEADLINE: std::time::Duration = std::time::Duration::from_secs(3);
+const UDEV_GRANT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
+
 /// `V4L2_FIELD_NONE` from `<linux/videodev2.h>`: progressive frames.
 const V4L2_FIELD_NONE: u32 = 1;
 
@@ -618,13 +624,30 @@ impl ReactiveProcessor for VirtualCameraSink::Processor {
                 (number, false)
             }
         };
-        let device = OpenedLoopbackDevice::open(device_number).map_err(|e| {
-            Error::Runtime(format!(
-                "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME} \"{}\": /dev/video{device_number} was \
-                 created but could not be opened: {e}",
-                self.camera_name
-            ))
-        })?;
+        let device = match open_device_awaiting_udev_grant(device_number) {
+            Ok(device) => device,
+            Err(open_failure) => {
+                if !reclaimed {
+                    // Nothing holds a device this sink created a moment ago, so
+                    // it is removed rather than left for the next run to find.
+                    if let Err(remove_failure) = node.remove_device(device_number) {
+                        tracing::warn!(
+                            camera = %self.camera_name,
+                            device_number,
+                            error = %remove_failure,
+                            "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME}: the device that could not be \
+                             opened could not be removed either; the next setup reclaims it by label"
+                        );
+                    }
+                }
+                return Err(Error::Runtime(format!(
+                    "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME} \"{}\": /dev/video{device_number} was \
+                     created but could not be opened within {UDEV_GRANT_DEADLINE:?}: \
+                     {open_failure}",
+                    self.camera_name
+                )));
+            }
+        };
         let module_version = node
             .module_version()
             .map(|(major, minor, bugfix)| format!("{major}.{minor}.{bugfix}"));
@@ -832,6 +855,25 @@ impl VirtualCameraSink::Processor {
             );
         }
         Ok(())
+    }
+}
+
+/// Open `/dev/video<N>` read-write, retrying a permission refusal until
+/// udev has applied the node's `uaccess` ACL or the deadline passes. Any
+/// other refusal is final.
+fn open_device_awaiting_udev_grant(device_number: u32) -> std::io::Result<OpenedLoopbackDevice> {
+    let deadline = std::time::Instant::now() + UDEV_GRANT_DEADLINE;
+    loop {
+        match OpenedLoopbackDevice::open(device_number) {
+            Ok(device) => return Ok(device),
+            Err(refusal)
+                if refusal.kind() == std::io::ErrorKind::PermissionDenied
+                    && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(UDEV_GRANT_POLL_INTERVAL);
+            }
+            Err(refusal) => return Err(refusal),
+        }
     }
 }
 

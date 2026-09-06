@@ -644,3 +644,16 @@ def test_the_privilege_helper_prefers_pkexec_under_a_session_and_sudo_without_on
     assert cli.choose_privilege_helper(lambda name: available.get(name) if name == "pkexec" else None, {}) == ["pkexec"]
     assert cli.choose_privilege_helper(lambda _name: None, {"DISPLAY": ":1"}) is None
 
+
+def test_the_control_node_probe_opens_a_character_device_without_seeking(tmp_path: Path):
+    """The node is a character device: a buffered `open` seeks it and raises
+    `UnsupportedOperation` — which is what the verb once crashed with after a
+    successful install. A FIFO is the non-seekable stand-in a test can make."""
+    import os
+
+    fifo = tmp_path / "not-seekable"
+    os.mkfifo(fifo)
+
+    assert cli.control_node_is_writable_by_this_user(fifo) is True
+    assert cli.control_node_is_writable_by_this_user(tmp_path / "absent") is False
+

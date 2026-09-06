@@ -641,6 +641,18 @@ def virtual_camera_privileged_script() -> str:
     return "\n".join(lines) + "\n"
 
 
+def control_node_is_writable_by_this_user(control_node: Path = VIRTUAL_CAMERA_CONTROL_NODE) -> bool:
+    """Whether this user can open the module's control node read-write — the
+    same probe the sink makes at `setup()`. A raw descriptor, because the node
+    is a character device and Python's buffered `open` would try to seek it."""
+    try:
+        descriptor = os.open(control_node, os.O_RDWR)
+    except OSError:
+        return False
+    os.close(descriptor)
+    return True
+
+
 def virtual_camera_module_is_installed(kernel_release: str) -> bool:
     modules_root = Path("/lib/modules") / kernel_release
     return any(modules_root.rglob(f"{VIRTUAL_CAMERA_MODULE_NAME}.ko*"))
@@ -712,16 +724,13 @@ def enable_virtual_camera(*, print_only: bool) -> int:
             f"{VIRTUAL_CAMERA_CONTROL_NODE} did not appear after loading the module — "
             f"`modinfo {VIRTUAL_CAMERA_MODULE_NAME}` and `dmesg` say why."
         )
-    try:
-        with open(VIRTUAL_CAMERA_CONTROL_NODE, "r+b"):
-            pass
-    except PermissionError:
+    if not control_node_is_writable_by_this_user():
         raise MachineSetupError(
             f"{VIRTUAL_CAMERA_CONTROL_NODE} exists but this user still cannot open it "
             "read-write. The udev rule tags it `uaccess`, which logind applies to the "
             "active seat: log out and back in, or if this is an SSH session, run a graph "
             "from the desktop."
-        ) from None
+        )
     print(
         f"Done: {VIRTUAL_CAMERA_CONTROL_NODE} is writable by this user. A VirtualCameraSink "
         "now creates its own camera; re-running this command is harmless.",
