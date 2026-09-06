@@ -77,6 +77,38 @@ DECIDED and applied.
 
 ---
 
+## RECORDED — the drop-policy rulings this fold carries (owner, 2026-09-05)
+
+Two owner rulings taken in the #2159 session and shipped since, recorded here as
+facts for the §Networking fold — they are derivable from #2159's comments, #2180's
+body and the two PRs, and this section adds no decision to them:
+
+- **The delivery deadline and the priority ladder (#2159, PR #2181).**
+  `MoqBroadcastPublisher` takes `delivery_deadline_ms`; a media bag older than it
+  by its own monotonic stamp is never written and the rest of its group is shed
+  with it, ending at the next sync point; a sync point is always written; every
+  Opus packet is one, so audio is never shed; a data object is never shed.
+  `MEDIA_TRACK_PRIORITY` split into `AUDIO_MEDIA_TRACK_PRIORITY = 126` and
+  `VIDEO_MEDIA_TRACK_PRIORITY = 127`, read in draft-16 §10.4.2's direction and
+  unchecked against a relay; a data track rides video's rung as a placeholder.
+  Absent, the publisher is the shipped baseline.
+- **The congestion lever (#2180).** `moq-transport` 0.16.2 is vendored into the
+  MoQ wheel at `packages/streamlib-moq/vendor/moq-transport` as a path dependency
+  on the vulkanalia precedent, MIT OR Apache-2.0, pinned by
+  `cargo xtask check-vendored-trees`, with two recorded patches
+  (`docs/architecture/vendored-moq-transport.md`): `SubgroupWriter::abandon`
+  honoured ahead of buffered objects and raced by the forwarder against every
+  chunk write, resetting with a draft-16 code (`DeliveryTimeout` reachable), and
+  the forwarder's cursor in shared state so the writer reads how many objects
+  have not left. The deadline fires on the oldest unforwarded object's stamp as
+  well as on the bag's own; a cut abandons the superseded group of every media
+  track — video and audio, never data, never the open group — whose backlog is
+  past the deadline; the QUIC send window is bounded to 512 KiB so the cursor
+  can fall behind at all; both are counted per link and said with the QUIC
+  path's readings. Ruled vendored rather than patched from git because a path
+  dependency reaches the manylinux release build and the draft-16 line is
+  frozen upstream.
+
 ## DECIDED (owner, 2026-09-05) — what a late joiner sees: A + C
 
 A MoQ subscriber that joins mid-group receives that group from its first object. For

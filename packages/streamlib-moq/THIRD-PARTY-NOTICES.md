@@ -3376,11 +3376,11 @@ SOFTWARE.
 
 Used by:
 
+- [moq-transport 0.16.2](https://github.com/cloudflare/moq-rs)
 - [jni-macros 0.22.4](https://github.com/jni-rs/jni-rs)
 - [jni-sys-macros 0.4.1](https://github.com/jni-rs/jni-sys)
 - [jni 0.22.4](https://github.com/jni-rs/jni-rs)
 - [libm 0.2.16](https://github.com/rust-lang/compiler-builtins)
-- [moq-transport 0.16.2](https://github.com/cloudflare/moq-rs)
 - [r-efi 6.0.0](https://github.com/r-efi/r-efi)
 - [rustls-platform-verifier-android 0.1.1](https://github.com/rustls/rustls-platform-verifier)
 - [siphasher 1.0.3](https://github.com/jedisct1/rust-siphash)

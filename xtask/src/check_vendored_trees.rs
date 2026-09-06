@@ -1,12 +1,13 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Drift trip-wire for the vendored vulkanalia fork trees
-//! (`vendor/tatolab-vulkanalia{,-sys,-vma}`).
+//! Drift trip-wire for the vendored third-party trees: the vulkanalia fork
+//! (`vendor/tatolab-vulkanalia{,-sys,-vma}`) and the MoQ wheel's
+//! `moq-transport` (`packages/streamlib-moq/vendor/moq-transport`).
 //!
-//! The vendored sources are a verbatim copy of a pinned fork rev plus a
-//! short, documented local-patch list (see
-//! `docs/architecture/vendored-vulkanalia.md`). Nothing in-tree may edit
+//! Each vendored tree is a verbatim copy of a pinned upstream plus a short,
+//! documented local-patch list (`docs/architecture/vendored-vulkanalia.md`,
+//! `docs/architecture/vendored-moq-transport.md`). Nothing in-tree may edit
 //! them casually, and prose alone can't stop that, so this check pins one
 //! deterministic content hash per vendored crate dir, in a content-hash
 //! trip-wire style: any byte change (edit, reformat,
@@ -15,13 +16,13 @@
 //! The trees are rustfmt-clean as vendored, so `cargo fmt --all` is a no-op
 //! over them and needs no exclusion — no stable exclusion exists anyway
 //! (`rustfmt.toml`'s `ignore` is nightly-only). What keeps rustfmt off the
-//! codegen output is upstream's own `#[rustfmt::skip]` on each generated
-//! `vk` / sys module declaration; a re-vendor must preserve those.
+//! vulkanalia codegen output is upstream's own `#[rustfmt::skip]` on each
+//! generated `vk` / sys module declaration; a re-vendor must preserve those.
 //!
 //! When it trips on a DELIBERATE re-vendor or documented local patch:
-//! follow the update recipe in `docs/architecture/vendored-vulkanalia.md`
-//! and update the recorded hashes below in the same commit — the hash
-//! change in the diff is the loud signal the vendored tree was touched.
+//! follow the update recipe in the tree's provenance doc and update the
+//! recorded hashes below in the same commit — the hash change in the diff is
+//! the loud signal the vendored tree was touched.
 
 use anyhow::{Context, Result};
 use std::path::Path;
@@ -33,6 +34,10 @@ const VENDORED_TREES: &[(&str, u64)] = &[
     ("vendor/tatolab-vulkanalia", 0x7508_cfa2_9c2b_b9c7),
     ("vendor/tatolab-vulkanalia-sys", 0xef46_fa14_69b6_8757),
     ("vendor/tatolab-vulkanalia-vma", 0x765e_4ed7_3be3_2585),
+    (
+        "packages/streamlib-moq/vendor/moq-transport",
+        0xefe1_10d9_befd_75b6,
+    ),
 ];
 
 /// FNV-1a 64 — deterministic (platform/version-stable).
@@ -110,15 +115,15 @@ pub fn run(project_root: &Path) -> Result<()> {
     if drifted.is_empty() {
         tracing::info!(
             trees = VENDORED_TREES.len(),
-            "check-vendored-vulkanalia: all vendored trees match their recorded hashes"
+            "check-vendored-trees: all vendored trees match their recorded hashes"
         );
         return Ok(());
     }
     let mut msg = String::from(
-        "check-vendored-vulkanalia: vendored vulkanalia tree(s) DRIFTED from the recorded \
-         hash — the vendored fork sources are verbatim-by-contract and must not be edited \
-         or reformatted in place (a workspace `cargo fmt --all` sweep is the classic \
-         accidental cause; fmt sweeps must exclude vendor/tatolab-vulkanalia*).\n",
+        "check-vendored-trees: vendored tree(s) DRIFTED from the recorded hash — vendored \
+         third-party sources are verbatim-by-contract plus their recorded patches and must \
+         not be edited or reformatted in place (a workspace `cargo fmt --all` sweep is the \
+         classic accidental cause).\n",
     );
     for d in &drifted {
         msg.push_str(&format!(
@@ -128,9 +133,10 @@ pub fn run(project_root: &Path) -> Result<()> {
     }
     msg.push_str(
         "If this change is a DELIBERATE re-vendor or a documented local patch, follow the \
-         update recipe in docs/architecture/vendored-vulkanalia.md and update the recorded \
-         hashes in xtask/src/check_vendored_vulkanalia.rs (VENDORED_TREES) in the SAME \
-         commit, using the `found` values above. Otherwise revert the vendored-tree edit.",
+         update recipe in the tree's provenance doc (docs/architecture/vendored-vulkanalia.md \
+         or docs/architecture/vendored-moq-transport.md) and update the recorded hashes in \
+         xtask/src/check_vendored_trees.rs (VENDORED_TREES) in the SAME commit, using the \
+         `found` values above. Otherwise revert the vendored-tree edit.",
     );
     anyhow::bail!(msg)
 }

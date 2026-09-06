@@ -31,9 +31,10 @@
 //! left alone: it cannot be published, but it always resolves, so it is not
 //! this gate's business. A pin onto a crate that states its own version —  the
 //! vendored vulkanalia trees at `0.35.0` / `0.9.0` — is likewise untouched,
-//! because the target does not inherit the workspace version. `vendor/` is
-//! excluded from the walk outright, so no rewrite can reach sources the
-//! licensing rules forbid reformatting.
+//! because the target does not inherit the workspace version. Every vendored
+//! tree — any path with a `vendor/` segment — is excluded from the walk
+//! outright, so no rewrite can reach sources the licensing rules forbid
+//! reformatting.
 
 use anyhow::{Context, Result};
 use std::collections::HashMap;
@@ -408,18 +409,24 @@ pub fn scan_manifest_version_pins(
     })
 }
 
-/// Every tracked `Cargo.toml` outside `vendor/`.
+/// Every tracked `Cargo.toml` outside a vendored tree.
 fn list_scanned_manifest_repo_relative_paths(workspace_root: &Path) -> Result<Vec<String>> {
     Ok(list_repository_files_under(workspace_root, ".")?
         .into_iter()
         .filter(|repo_relative_path| {
             repo_relative_path == "Cargo.toml" || repo_relative_path.ends_with("/Cargo.toml")
         })
-        // The vendored vulkanalia fork stays byte-identical to its upstream
-        // rev; nothing in it may be rewritten, and none of its pins name a
-        // workspace-versioned crate anyway.
-        .filter(|repo_relative_path| !repo_relative_path.starts_with("vendor/"))
+        // A vendored tree — the vulkanalia fork at the root, the MoQ wheel's
+        // moq-transport under the wheel — is verbatim plus its recorded
+        // patches; nothing in it may be rewritten, and none of its pins name
+        // a workspace-versioned crate anyway.
+        .filter(|repo_relative_path| !is_inside_a_vendored_tree(repo_relative_path))
         .collect())
+}
+
+/// Whether a repo-relative path has a `vendor/` segment anywhere in it.
+fn is_inside_a_vendored_tree(repo_relative_path: &str) -> bool {
+    repo_relative_path.starts_with("vendor/") || repo_relative_path.contains("/vendor/")
 }
 
 /// Answers "does this path dependency's target inherit the workspace version?",

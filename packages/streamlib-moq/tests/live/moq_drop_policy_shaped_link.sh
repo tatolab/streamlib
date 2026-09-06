@@ -23,13 +23,16 @@
 # bound stops it — which is a measurement of the hold, not of the policy.
 #
 # WHAT THIS MEASURES, and what it does not. It reports what the publisher shed
-# and what reached the decoder. Read the policy arm knowing what the deadline
-# sees: a bag's age at the publisher's input. `moq-transport`'s writer never
-# blocks, so a congested uplink does not age a bag on its way out, and a
-# policy arm that sheds nothing here is the transport's lack of back pressure
-# showing, not proof the link was fine. What the shape does expose is the
-# baseline's decoder counts under a ceiling — how far a reliable transport
-# falls behind — and whether the deadline fires at all under it.
+# and abandoned, what the uplink was behind by, and what reached the decoder.
+# The deadline reads two things: a bag's age at the publisher's input, and the
+# uplink backlog — the vendored `moq-transport`'s forwarder cursor, which says
+# how many of a group's objects have not left the QUIC send window. A policy
+# arm whose teardown line counts sheds "begun on the backlog" and "groups
+# abandoned" is the link falling behind, seen from the publisher; the QUIC
+# path's rtt, cwnd and loss counters ride the same line. The baseline arm's
+# decoder counts under a ceiling are how far a reliable transport falls
+# behind, and its "undelivered at teardown" is the backlog the policy arm has
+# instead of.
 # Glass-to-glass latency is NOT measured here: under `cmaf` a received bag's
 # stamp is the fragment's decode time on the subscriber's own clock rather than
 # the producer's, so the two ends share no epoch to subtract. Measuring it
@@ -210,6 +213,8 @@ report_one_arm policy
 
 echo
 say "Both arms ran. The numbers above are the deliverable — read frames_decoded"
-say "against frames_encoded, and read frames_lost_to_gaps and"
-say "frames_discarded_awaiting_a_sync_point as the decodability of what arrived."
+say "against frames_encoded, read frames_lost_to_gaps and"
+say "frames_discarded_awaiting_a_sync_point as the decodability of what arrived,"
+say "and read the policy arm's 'sheds begun on the backlog' and 'groups"
+say "abandoned' as the uplink falling behind, seen from the publisher."
 say "Logs: $OUTPUT_DIR"

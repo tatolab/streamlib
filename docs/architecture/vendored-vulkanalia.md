@@ -23,9 +23,9 @@ other workspace member.
 
 ## Drift guard — no in-place edits
 
-`cargo xtask check-vendored-vulkanalia` pins one deterministic content
+`cargo xtask check-vendored-trees` pins one deterministic content
 hash per vendored crate dir (recorded in
-`xtask/src/check_vendored_vulkanalia.rs`, run by the check-boundaries CI
+`xtask/src/check_vendored_trees.rs`, run by the check-boundaries CI
 workflow and by `cargo test -p xtask`). Any byte change — an edit, a
 reformat, an added/removed/renamed file — fails with a message naming
 the drifted dir. This is the enforcement behind the verbatim-copy
@@ -155,9 +155,9 @@ mechanical:
    dep rewrites — diff against the previous vendored manifests).
 4. Record the new rev + submodule SHAs in the Provenance section above.
 5. Re-capture the drift-guard hashes: run
-   `cargo xtask check-vendored-vulkanalia` — it fails printing the new
+   `cargo xtask check-vendored-trees` — it fails printing the new
    per-dir hashes — and update `VENDORED_TREES` in
-   `xtask/src/check_vendored_vulkanalia.rs` with them **in the same
+   `xtask/src/check_vendored_trees.rs` with them **in the same
    commit** as the re-vendor.
 6. `cargo check -p tatolab-vulkanalia-vma` (catches no_std breakage
    standalone builds hit that workspace builds mask), then the workspace

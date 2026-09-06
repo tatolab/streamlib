@@ -170,6 +170,70 @@ def describe_what_the_delivery_deadline_shed(
     return f"the delivery deadline shed {per_link}"
 
 
+class UplinkBacklogOnOneTrack(Protocol):
+    """What the native session reports for one inbound link's uplink backlog."""
+
+    @property
+    def inbound_link_name(self) -> str: ...
+    @property
+    def unforwarded_objects(self) -> "int | None": ...
+    @property
+    def sheds_the_backlog_began(self) -> int: ...
+    @property
+    def groups_abandoned(self) -> int: ...
+    @property
+    def objects_abandoned(self) -> int: ...
+    @property
+    def bytes_abandoned(self) -> int: ...
+
+
+class QuicUplinkReadings(Protocol):
+    """What the native session reports about the QUIC path under it."""
+
+    @property
+    def round_trip_time_ms(self) -> float: ...
+    @property
+    def congestion_window_bytes(self) -> int: ...
+    @property
+    def lost_packets(self) -> int: ...
+    @property
+    def congestion_events(self) -> int: ...
+
+
+def describe_the_uplink_backlog(
+    backlog_by_inbound_link: Sequence[UplinkBacklogOnOneTrack],
+    quic_readings: "QuicUplinkReadings | None",
+) -> str:
+    """What a publisher says about its uplink: the QUIC path as it stands, and
+    per link what is unforwarded now and what the backlog has cost.
+
+    Every link is named, a zero included — the backlog's absence is what an
+    operator most wants to read — and a link nothing is forwarding says so
+    rather than reading as caught up.
+    """
+    if quic_readings is None:
+        return "the uplink is not connected"
+    path = (
+        f"the uplink reads rtt={quic_readings.round_trip_time_ms:.1f} ms "
+        f"cwnd={quic_readings.congestion_window_bytes} bytes "
+        f"lost_packets={quic_readings.lost_packets} "
+        f"congestion_events={quic_readings.congestion_events}"
+    )
+    per_link = ", ".join(
+        f"{track.inbound_link_name}: "
+        + (
+            "no forwarder"
+            if track.unforwarded_objects is None
+            else f"{track.unforwarded_objects} objects unforwarded"
+        )
+        + f", {track.sheds_the_backlog_began} sheds begun on the backlog, "
+        f"{track.groups_abandoned} groups abandoned "
+        f"({track.objects_abandoned} objects/{track.bytes_abandoned} bytes)"
+        for track in backlog_by_inbound_link
+    )
+    return f"{path}; {per_link}" if per_link else path
+
+
 def _required_relay_url(relay_url: Any, processor_name: str) -> str:
     if not isinstance(relay_url, str) or not relay_url:
         raise ValueError(
@@ -505,14 +569,28 @@ class MoqBroadcastPublisher:
     until the encoder's next IDR, and a stream that emits no further sync
     point stays shed until it ends — the deadline is only meaningful beside
     the encoder's keyframe interval. A sync point is published however late it
-    is, which is what keeps audio out of the policy's reach — every Opus packet
-    is one.
+    is, which is what keeps audio out of the shed's reach — every Opus packet
+    is one. The shed decides what is written; a superseded audio group the
+    uplink is behind on is still abandoned at the cut, like video's.
 
-    The stamp ages on the way to this publisher — capture, encode, the link
-    into the helper — and not on the way out: the transport's writer never
-    blocks, so a congested uplink leaves the stamp untouched and this deadline
-    does not fire on it. Absent is the shipped behaviour and the baseline a
-    measurement is read against: every bag is written however late it is.
+    The deadline reads two things. The stamp ages on the way to this
+    publisher — capture, encode, the link into the helper. The uplink backlog
+    says how far the transport is behind: the wheel's vendored `moq-transport`
+    keeps the forwarder's cursor where the writer can read it, so a frame on
+    time by its own stamp is still shed while the forwarder is stuck on an
+    object of its group older than the deadline, and a sync point's cut
+    abandons the superseded group the uplink is behind on with a stream reset
+    the relay sees, rather than finishing it. A data track is never abandoned.
+    Both are counted per link and said at the progress cadence and at
+    teardown, beside the QUIC path's round trip, congestion window and loss
+    counters. Absent is the shipped behaviour and the baseline a measurement
+    is read against: every bag is written however late it is, and no group is
+    ever abandoned.
+
+    Deadline or not, the session bounds its QUIC send window to 512 KiB — a
+    few round trips of a 1080p stream — because a backlog the transport
+    absorbs silently is one the publisher cannot read. That is a ceiling on
+    throughput of about 40 Mbit/s at a 100 ms round trip to the relay.
     """
 
     def __init__(
@@ -621,15 +699,22 @@ class MoqBroadcastPublisher:
     def teardown(self, ctx: RuntimeContextFullAccess) -> None:
         del ctx
         shed = "the delivery deadline shed nothing"
+        uplink = "the uplink is not connected"
         if self._session is not None:
             shed = self._what_the_delivery_deadline_shed()
+            # Read before the close: an abandon's count survives it, but the
+            # QUIC path's readings do not.
+            uplink = self._describe_the_uplink_backlog()
             # The wheel's Rust reaches no `tracing` dispatcher in a helper, so
             # media it discarded is only on the record if it is said here.
             discarded = self._session.close()
             if discarded is not None:
                 log.warn(f"MoqBroadcastPublisher: {discarded}")
             self._session = None
-        log.info(f"MoqBroadcastPublisher: teardown, {self._describe_what_was_published()}, {shed}")
+        log.info(
+            f"MoqBroadcastPublisher: teardown, {self._describe_what_was_published()}, "
+            f"{shed}, {uplink}"
+        )
 
     def _record_one_bag(self, reaches_the_transport: bool, is_a_data_object: bool) -> None:
         # The cadence counts every bag handed over, or a run shedding
@@ -648,7 +733,8 @@ class MoqBroadcastPublisher:
         if self._bags_handed_over % BAGS_BETWEEN_PROGRESS_REPORTS == 0:
             log.info(
                 f"MoqBroadcastPublisher: {self._describe_what_was_published()}, "
-                f"{self._what_the_delivery_deadline_shed()}"
+                f"{self._what_the_delivery_deadline_shed()}, "
+                f"{self._describe_the_uplink_backlog()}"
             )
 
     def _describe_what_was_published(self) -> str:
@@ -670,6 +756,12 @@ class MoqBroadcastPublisher:
     def _what_the_delivery_deadline_shed(self) -> str:
         return describe_what_the_delivery_deadline_shed(
             self._declared_session().objects_the_delivery_deadline_shed()
+        )
+
+    def _describe_the_uplink_backlog(self) -> str:
+        session = self._declared_session()
+        return describe_the_uplink_backlog(
+            session.uplink_backlog_by_track(), session.quic_uplink_readings()
         )
 
     def _track_kind_of(self, bag: "Mapping[str, Any]", inbound_link: str) -> str:
