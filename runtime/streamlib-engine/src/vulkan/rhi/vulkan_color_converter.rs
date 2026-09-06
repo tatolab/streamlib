@@ -867,3 +867,201 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod image_to_yuyv_buffer_tests {
+    use super::*;
+    use crate::core::color::{MatrixId, PrimariesId, RangeId, rgb_to_yuv_matrix};
+    use crate::core::context::GpuContext;
+    use crate::core::rhi::VulkanLayout;
+    use crate::vulkan::rhi::{VulkanAccess, VulkanStage};
+
+    /// A page-aligned anonymous mapping, released on drop.
+    struct PageAlignedHostRange {
+        ptr: *mut u8,
+        byte_len: usize,
+    }
+
+    impl PageAlignedHostRange {
+        fn new(byte_len: usize) -> Self {
+            let ptr = unsafe {
+                libc::mmap(
+                    std::ptr::null_mut(),
+                    byte_len,
+                    libc::PROT_READ | libc::PROT_WRITE,
+                    libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                    -1,
+                    0,
+                )
+            };
+            assert_ne!(ptr, libc::MAP_FAILED, "mmap failed");
+            Self {
+                ptr: ptr.cast(),
+                byte_len,
+            }
+        }
+
+        fn as_slice(&self) -> &[u8] {
+            unsafe { std::slice::from_raw_parts(self.ptr, self.byte_len) }
+        }
+    }
+
+    impl Drop for PageAlignedHostRange {
+        fn drop(&mut self) {
+            unsafe { libc::munmap(self.ptr.cast(), self.byte_len) };
+        }
+    }
+
+    /// The CPU reference: the same matrix table the kernel is pushed, one
+    /// macropixel at a time, chroma averaged across the pair.
+    fn yuyv_reference(rgba: &[u8], width: u32, height: u32, info: &ResolvedColorInfo) -> Vec<u8> {
+        let d = rgb_to_yuv_matrix(info.matrix, info.range);
+        let m = d.matrix_row_major;
+        let ycbcr = |x: u32, y: u32| -> [f32; 3] {
+            let i = ((y * width + x) * 4) as usize;
+            let (r, g, b) = (rgba[i] as f32, rgba[i + 1] as f32, rgba[i + 2] as f32);
+            [
+                (m[0] * r + m[1] * g + m[2] * b + d.offset[0]).clamp(0.0, 255.0),
+                (m[3] * r + m[4] * g + m[5] * b + d.offset[1]).clamp(0.0, 255.0),
+                (m[6] * r + m[7] * g + m[8] * b + d.offset[2]).clamp(0.0, 255.0),
+            ]
+        };
+        let mut out = vec![0u8; (width * 2 * height) as usize];
+        for y in 0..height {
+            for pair in 0..width.div_ceil(2) {
+                let x0 = pair * 2;
+                let x1 = (x0 + 1).min(width - 1);
+                let (l, r) = (ycbcr(x0, y), ycbcr(x1, y));
+                let o = ((y * width * 2) + pair * 4) as usize;
+                out[o] = l[0].round() as u8;
+                out[o + 1] = (0.5 * (l[1] + r[1])).round() as u8;
+                out[o + 2] = r[0].round() as u8;
+                out[o + 3] = (0.5 * (l[2] + r[2])).round() as u8;
+            }
+        }
+        out
+    }
+
+    /// Synthetic RGBA against the CPU conversion: every macropixel of the
+    /// target range is written, to within one step of rounding, on
+    /// whichever tier the driver takes — and the tier is reported.
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — needs a Vulkan device; see docs/testing-hardware.md"
+    )]
+    #[test]
+    fn the_yuyv_pass_writes_every_pixel_of_the_target_range() {
+        let gpu = match GpuContext::init_for_platform() {
+            Ok(gpu) => gpu,
+            Err(e) => {
+                tracing::warn!("skipping — no GPU device: {e}");
+                return;
+            }
+        };
+        // A width that is not a workgroup multiple, and a stride with V4L2's
+        // rounding on top of it: the guard band past the frame stays untouched.
+        let (width, height) = (34u32, 7u32);
+        let stride_bytes = width * 2;
+        let mut rgba = vec![0u8; (width * height * 4) as usize];
+        for (i, px) in rgba.chunks_exact_mut(4).enumerate() {
+            let x = (i as u32) % width;
+            let y = (i as u32) / width;
+            px[0] = (x * 7 + y * 3) as u8;
+            px[1] = (255 - x * 5) as u8;
+            px[2] = (y * 37 + 11) as u8;
+            px[3] = 255;
+        }
+        let (published, pixel_buffer) = gpu
+            .acquire_pixel_buffer(width, height, PixelFormat::Rgba32)
+            .expect("pixel buffer");
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                rgba.as_ptr(),
+                pixel_buffer.plane_base_address(0).cast::<u8>(),
+                rgba.len(),
+            );
+        }
+        let surface_id = published.to_string();
+        gpu.upload_pixel_buffer_as_texture(&surface_id, &pixel_buffer, width, height)
+            .expect("upload");
+        let registration = gpu
+            .resolve_texture_registration_by_surface_id(&surface_id, None, width, height)
+            .expect("registration");
+
+        let info = ResolvedColorInfo {
+            primaries: PrimariesId::Bt709,
+            transfer: TransferId::Srgb,
+            matrix: MatrixId::Smpte170m,
+            range: RangeId::Limited,
+        };
+        let converter = gpu
+            .color_converter(PixelFormat::Rgba32, PixelFormat::Yuyv422)
+            .expect("RGBA→YUYV converter");
+
+        // Page-rounded like a V4L2 mapping; the pass writes only the frame.
+        let range =
+            PageAlignedHostRange::new(((stride_bytes * height) as usize).next_multiple_of(4096));
+        let mapping = gpu
+            .import_host_mapping_for_gpu_writes(range.ptr, range.byte_len)
+            .expect("host mapping");
+        tracing::info!(
+            tier = mapping.tier().as_str(),
+            reason = ?mapping.fallback_reason(),
+            "host mapping tier"
+        );
+
+        let kernel = converter
+            .prepare_image_to_yuyv_buffer(
+                registration.texture(),
+                mapping.storage_buffer(),
+                stride_bytes,
+                &info,
+            )
+            .expect("prepare");
+        let mut recorder = gpu
+            .create_command_recorder("yuyv_pass_test")
+            .expect("recorder");
+        recorder.begin().expect("begin");
+        recorder
+            .record_image_barrier(
+                registration.texture(),
+                registration.current_layout(),
+                VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+                VulkanStage::ALL_COMMANDS,
+                VulkanStage::COMPUTE_SHADER,
+                VulkanAccess::MEMORY_WRITE,
+                VulkanAccess::SHADER_SAMPLED_READ,
+            )
+            .expect("image barrier");
+        recorder
+            .record_dispatch(
+                &kernel,
+                width.div_ceil(2).div_ceil(COLOR_CONVERTER_WORKGROUP_SIZE),
+                height.div_ceil(COLOR_CONVERTER_WORKGROUP_SIZE),
+                1,
+            )
+            .expect("dispatch");
+        mapping
+            .record_release_to_host(&mut recorder)
+            .expect("release");
+        recorder.submit_and_wait().expect("submit");
+        mapping.publish_to_host();
+
+        let expected = yuyv_reference(&rgba, width, height, &info);
+        let written = &range.as_slice()[..expected.len()];
+        let mut worst = 0u8;
+        for (i, (&got, &want)) in written.iter().zip(&expected).enumerate() {
+            let diff = got.abs_diff(want);
+            assert!(diff <= 1, "byte {i}: GPU {got} vs CPU {want}");
+            worst = worst.max(diff);
+        }
+        assert!(
+            range.as_slice()[expected.len()..].iter().all(|&b| b == 0),
+            "nothing past the frame is written"
+        );
+        tracing::info!(
+            worst_byte_difference = worst,
+            "YUYV pass matches the CPU reference"
+        );
+    }
+}
