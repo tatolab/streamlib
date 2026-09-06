@@ -372,7 +372,18 @@ jobs:
             vulkan::video::decode::decoded_picture_display_window::tests::h264_field_coding_doubles_the_rows_an_offset_takes \
             vulkan::video::decode::decoded_picture_display_window::tests::h264_separate_colour_planes_crop_in_monochrome_units \
             vulkan::video::decode::decoded_picture_display_window::tests::an_h264_window_cropping_past_the_coded_picture_is_refused_too \
-            core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_disconnected_link_does_not_count_against_a_windowed_ports_one_inbound_link
+            core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_disconnected_link_does_not_count_against_a_windowed_ports_one_inbound_link \
+            core::color::matrix::tests::rgb_to_yuv_is_the_inverse_of_yuv_to_rgb_for_every_matrix_and_range \
+            core::color::matrix::tests::bt601_limited_maps_white_to_235_and_black_to_16_with_neutral_chroma \
+            core::rhi::color_converter::tests::from_resolved_for_rgb_to_ycbcr_carries_the_encoding_table_and_the_destination_stride \
+            vulkan::rhi::vulkan_host_mapping_imported_as_buffer::tests::a_host_mapping_takes_the_imported_tier_when_the_device_allows_it \
+            vulkan::rhi::vulkan_host_mapping_imported_as_buffer::tests::a_refused_import_falls_back_to_host_cached_staging_and_says_why \
+            vulkan::rhi::vulkan_color_converter::image_to_yuyv_buffer_tests::the_yuyv_pass_writes_every_pixel_of_the_target_range \
+            core::graph::components::state_component::tests::a_failure_keeps_the_reason_it_failed_for \
+            core::graph::graph_readiness::tests::a_failed_processors_reason_rides_the_readiness_error \
+            core::graph::graph_readiness::tests::a_failure_without_a_reason_reports_the_state_alone \
+            core::context::gpu_context::tests::an_owned_color_converter_shares_no_kernel_with_the_cached_one \
+            core::color::matrix::tests::identity_rgb_to_yuv_is_a_pass_through
           # The two arms' own liveness tests are named one by one rather than
           # by module: their modules also hold tests that dlopen libasound and
           # walk a real PCM, which this runner has no `/dev/snd` for. These

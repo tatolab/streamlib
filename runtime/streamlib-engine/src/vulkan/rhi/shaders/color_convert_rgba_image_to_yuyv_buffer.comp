@@ -1,0 +1,87 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+//
+// RGBA sampled-texture source → YUYV buffer dest color converter, the
+// reverse of `color_convert_yuyv_buffer_to_rgba.comp`.
+//
+// YUYV (a.k.a. YUY2): 4:2:2 subsampling with `[Y0, U, Y1, V]` macro-
+// pixels packed into uint32. One thread writes one macropixel — two
+// horizontally-adjacent pixels sharing the average of their (Cb, Cr).
+// Honors destination-side row stride padding via `plane0_stride_bytes`,
+// which is the V4L2 `bytesperline` and must be a multiple of 4.
+//
+// Bindings:
+//   0 — `sampler2D rgba_input` (fetched by integer texel, never filtered).
+//   1 — `writeonly buffer YUYVOutput` (uint32-per-macropixel).
+//
+// Push constants — `core::rhi::color_converter::ColorConverterPushConstants`
+// built by `from_resolved_for_rgb_to_ycbcr`: the matrix rows are RGB→YCbCr
+// and `range_offset` is added after the multiply.
+
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+#include "color_convert_common.glsl"
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 0) uniform sampler2D rgba_input;
+
+layout(set = 0, binding = 1) writeonly buffer YUYVOutput {
+    uint data[];
+} yuyv_output;
+
+layout(push_constant, std430) uniform PushConstants {
+    vec4 matrix_row0;
+    vec4 matrix_row1;
+    vec4 matrix_row2;
+    vec4 range_offset;
+    uint width;
+    uint height;
+    uint transfer_in;
+    uint transfer_out;
+    uint flags;
+    uint plane0_stride_bytes; // destination row stride in bytes (multiple of 4)
+    uint plane1_stride_bytes; // unused for YUYV
+    uint plane1_offset_bytes; // unused for YUYV
+} pc;
+
+// One pixel's byte-domain (Y, Cb, Cr) from its normalized RGB.
+vec3 ycbcr_bytes_of(vec3 rgb) {
+    if ((pc.flags & FLAG_APPLY_TRANSFER) != 0u) {
+        rgb.r = transfer_from_linear(pc.transfer_out, transfer_to_linear(pc.transfer_in, rgb.r));
+        rgb.g = transfer_from_linear(pc.transfer_out, transfer_to_linear(pc.transfer_in, rgb.g));
+        rgb.b = transfer_from_linear(pc.transfer_out, transfer_to_linear(pc.transfer_in, rgb.b));
+    }
+    vec3 rgb_byte = clamp(rgb, 0.0, 1.0) * 255.0;
+    vec3 ycbcr = vec3(
+        dot(pc.matrix_row0.xyz, rgb_byte),
+        dot(pc.matrix_row1.xyz, rgb_byte),
+        dot(pc.matrix_row2.xyz, rgb_byte)
+    ) + pc.range_offset.xyz;
+    return clamp(ycbcr, 0.0, 255.0);
+}
+
+void main() {
+    uvec2 macro_pos = gl_GlobalInvocationID.xy;
+    uint x0 = macro_pos.x * 2u;
+    if (x0 >= pc.width || macro_pos.y >= pc.height) return;
+    // An odd width's last macropixel repeats its only pixel.
+    uint x1 = min(x0 + 1u, pc.width - 1u);
+
+    vec3 left = ycbcr_bytes_of(texelFetch(rgba_input, ivec2(int(x0), int(macro_pos.y)), 0).rgb);
+    vec3 right = ycbcr_bytes_of(texelFetch(rgba_input, ivec2(int(x1), int(macro_pos.y)), 0).rgb);
+
+    uint y0 = uint(round(left.x));
+    uint y1 = uint(round(right.x));
+    uint cb = uint(round(0.5 * (left.y + right.y)));
+    uint cr = uint(round(0.5 * (left.z + right.z)));
+
+    uint macro_pixel = (y0 & 0xFFu)
+        | ((cb & 0xFFu) << 8u)
+        | ((y1 & 0xFFu) << 16u)
+        | ((cr & 0xFFu) << 24u);
+
+    uint macro_uint_stride = pc.plane0_stride_bytes >> 2u;
+    yuyv_output.data[macro_pos.y * macro_uint_stride + macro_pos.x] = macro_pixel;
+}

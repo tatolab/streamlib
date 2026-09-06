@@ -3,7 +3,7 @@
 
 #![cfg(target_os = "linux")]
 
-//! V4L2 colorspace → [`ColorInfo`] translation.
+//! V4L2 colorspace ↔ [`ColorInfo`] translation.
 //!
 //! Mirrors FFmpeg's `libavcodec/v4l2_buffers.c` mapping plus the
 //! V4L2 `*_DEFAULT` resolution rules from `<linux/videodev2.h>`. V4L2
@@ -15,6 +15,13 @@
 //! Each axis returns `Option<T>` — `None` is the canonical "unknown"
 //! representation. `V4L2_COLORSPACE_DEFAULT` and any unrecognized
 //! enumerant propagate as `None`.
+//!
+//! The inverse, [`resolved_color_to_v4l2_color`], is what a V4L2 *output*
+//! device is told at `S_FMT`: the fully resolved description the engine's
+//! kernel encodes with, every axis explicit, so readers decode the pixels
+//! that were written rather than a default derived from the colorspace.
+
+use streamlib::sdk::color::{MatrixId, PrimariesId, RangeId, ResolvedColorInfo, TransferId};
 
 use crate::video_frame::{ColorInfo, Matrix, Primaries, Range, Transfer};
 
@@ -71,6 +78,59 @@ pub fn v4l2_color_to_color_info(
         transfer: transfer_from_v4l2(xfer_func, colorspace),
         matrix: matrix_from_v4l2(ycbcr_enc, colorspace),
         range: range_from_v4l2(quantization, colorspace),
+    }
+}
+
+/// The four `v4l2_pix_format` colour fields a writer sets at `S_FMT`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct V4l2PixFormatColorFields {
+    pub colorspace: u32,
+    pub xfer_func: u32,
+    pub ycbcr_enc: u32,
+    pub quantization: u32,
+}
+
+/// Translate the resolved description the engine's kernel encodes with to
+/// the V4L2 fields a reader will see — every axis explicit. The colorspace
+/// enumerant follows the primaries (and sRGB's transfer under BT.709
+/// primaries, which V4L2 spells as its own colorspace); a primaries value
+/// V4L2 cannot name leaves `V4L2_COLORSPACE_DEFAULT`, which the loopback
+/// module reports as sRGB, and the three explicit axes still hold.
+pub fn resolved_color_to_v4l2_color(info: &ResolvedColorInfo) -> V4l2PixFormatColorFields {
+    V4l2PixFormatColorFields {
+        colorspace: match info.primaries {
+            PrimariesId::Smpte170m => V4L2_COLORSPACE_SMPTE170M,
+            PrimariesId::Smpte240m => V4L2_COLORSPACE_SMPTE240M,
+            PrimariesId::Bt709 => match info.transfer {
+                TransferId::Srgb => V4L2_COLORSPACE_SRGB,
+                _ => V4L2_COLORSPACE_REC709,
+            },
+            PrimariesId::Bt470M => V4L2_COLORSPACE_470_SYSTEM_M,
+            PrimariesId::Bt470Bg => V4L2_COLORSPACE_470_SYSTEM_BG,
+            PrimariesId::Bt2020 => V4L2_COLORSPACE_BT2020,
+            PrimariesId::Smpte431 => V4L2_COLORSPACE_DCI_P3,
+            _ => V4L2_COLORSPACE_DEFAULT,
+        },
+        xfer_func: match info.transfer {
+            TransferId::Bt709 => V4L2_XFER_FUNC_709,
+            TransferId::Srgb => V4L2_XFER_FUNC_SRGB,
+            TransferId::Linear => V4L2_XFER_FUNC_NONE,
+            TransferId::Pq => V4L2_XFER_FUNC_SMPTE2084,
+            // V4L2 has no HLG enumerant; the reader derives from the colorspace.
+            TransferId::Hlg => V4L2_XFER_FUNC_DEFAULT,
+        },
+        ycbcr_enc: match info.matrix {
+            MatrixId::Smpte170m | MatrixId::Bt470Bg | MatrixId::Fcc => V4L2_YCBCR_ENC_601,
+            MatrixId::Bt709 => V4L2_YCBCR_ENC_709,
+            MatrixId::Bt2020Ncl => V4L2_YCBCR_ENC_BT2020,
+            MatrixId::Bt2020Cl => V4L2_YCBCR_ENC_BT2020_CONST_LUM,
+            MatrixId::Smpte240m => V4L2_YCBCR_ENC_SMPTE240M,
+            _ => V4L2_YCBCR_ENC_DEFAULT,
+        },
+        quantization: match info.range {
+            RangeId::Full => V4L2_QUANTIZATION_FULL_RANGE,
+            RangeId::Limited => V4L2_QUANTIZATION_LIM_RANGE,
+        },
     }
 }
 
@@ -298,5 +358,74 @@ mod tests {
         assert_eq!(info.transfer, None);
         assert_eq!(info.matrix, None);
         assert_eq!(info.range, None);
+    }
+
+    /// The inverse map round-trips through the forward one for every
+    /// description both sides can name: what the sink signals at `S_FMT` is
+    /// what a StreamLib camera reading that device resolves back to.
+    #[test]
+    fn resolved_color_to_v4l2_round_trips_through_the_forward_map() {
+        use streamlib::sdk::color::ColorSpaceKind;
+        let cases = [
+            ResolvedColorInfo {
+                primaries: PrimariesId::Bt709,
+                transfer: TransferId::Srgb,
+                matrix: MatrixId::Smpte170m,
+                range: RangeId::Full,
+            },
+            ResolvedColorInfo {
+                primaries: PrimariesId::Bt709,
+                transfer: TransferId::Bt709,
+                matrix: MatrixId::Bt709,
+                range: RangeId::Limited,
+            },
+            ResolvedColorInfo {
+                primaries: PrimariesId::Smpte170m,
+                transfer: TransferId::Bt709,
+                matrix: MatrixId::Smpte170m,
+                range: RangeId::Full,
+            },
+            ResolvedColorInfo {
+                primaries: PrimariesId::Bt2020,
+                transfer: TransferId::Pq,
+                matrix: MatrixId::Bt2020Ncl,
+                range: RangeId::Limited,
+            },
+        ];
+        for info in cases {
+            let fields = resolved_color_to_v4l2_color(&info);
+            let back = v4l2_color_to_color_info(
+                fields.colorspace,
+                fields.xfer_func,
+                fields.ycbcr_enc,
+                fields.quantization,
+            )
+            .resolve_defaults(ColorSpaceKind::Yuv);
+            assert_eq!(back, info, "round trip through {fields:?}");
+        }
+    }
+
+    /// The test pattern's own description — sRGB primaries and transfer,
+    /// full range, the YUV default matrix — reaches the device with every
+    /// axis explicit, so a reader decodes full range rather than deriving
+    /// limited from the colorspace.
+    #[test]
+    fn a_full_range_srgb_source_signals_every_axis_explicitly() {
+        let fields = resolved_color_to_v4l2_color(&ResolvedColorInfo {
+            primaries: PrimariesId::Bt709,
+            transfer: TransferId::Srgb,
+            matrix: MatrixId::Smpte170m,
+            range: RangeId::Full,
+        });
+        assert_eq!(
+            fields,
+            V4l2PixFormatColorFields {
+                colorspace: V4L2_COLORSPACE_SRGB,
+                xfer_func: V4L2_XFER_FUNC_SRGB,
+                ycbcr_enc: V4L2_YCBCR_ENC_601,
+                quantization: V4L2_QUANTIZATION_FULL_RANGE,
+            }
+        );
+        assert_ne!(fields.quantization, V4L2_QUANTIZATION_DEFAULT);
     }
 }

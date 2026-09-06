@@ -268,7 +268,14 @@ fn spawn_dedicated_thread(
             );
 
             // === PHASE 3: Extract components for setup and loop ===
-            let (state_arc, shutdown_rx, shutdown_eventfd, pause_gate_inner, exec_config) = {
+            let (
+                state_arc,
+                shutdown_rx,
+                shutdown_eventfd,
+                pause_gate_inner,
+                exec_config,
+                processor_display_name,
+            ) = {
                 let mut graph = graph_arc_clone.write();
                 let node = match graph.traversal_mut().v(&proc_id_clone).first_mut() {
                     Some(n) => n,
@@ -277,6 +284,7 @@ fn spawn_dedicated_thread(
                         return;
                     }
                 };
+                let processor_display_name = node.display_name.clone();
 
                 let state = match node.get::<StateComponent>() {
                     Some(s) => s.clone_inner(),
@@ -324,6 +332,7 @@ fn spawn_dedicated_thread(
                     shutdown_eventfd,
                     pause_gate_inner,
                     exec_config,
+                    processor_display_name,
                 )
             }; // Lock released here
 
@@ -331,6 +340,7 @@ fn spawn_dedicated_thread(
             // Create processor-specific context with both processor ID and pause gate
             let processor_context = runtime_ctx_clone
                 .with_processor_id(proc_id_clone.clone())
+                .with_processor_display_name(processor_display_name)
                 .with_pause_gate(pause_gate_inner.clone());
             {
                 let tokio_handle = runtime_ctx_clone.tokio_handle();
@@ -363,7 +373,7 @@ fn spawn_dedicated_thread(
                 });
                 if let Err(e) = setup_result {
                     tracing::error!("[{}] Setup failed: {}", proc_id_clone, e);
-                    state_arc.transition_to(ProcessorState::Error);
+                    state_arc.fail_with(format!("setup failed: {e}"));
                     return;
                 }
 
@@ -378,7 +388,7 @@ fn spawn_dedicated_thread(
                     &processor_type,
                 ) {
                     tracing::error!("[{}] Setup failed: {}", proc_id_clone, e);
-                    state_arc.transition_to(ProcessorState::Error);
+                    state_arc.fail_with(format!("setup failed: {e}"));
                     return;
                 }
 
@@ -473,7 +483,11 @@ fn full_access_grant_or_mark_untrusted_error(
                 processor_id,
                 isolation_tier.as_str(),
             );
-            state_arc.transition_to(ProcessorState::Error);
+            state_arc.fail_with(format!(
+                "refused: untrusted isolation tier {} — privileged setup() belongs behind the \
+                 subprocess sandbox",
+                isolation_tier.as_str()
+            ));
             None
         }
     }

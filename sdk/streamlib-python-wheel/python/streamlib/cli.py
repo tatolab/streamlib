@@ -1,12 +1,19 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The `streamlib` console script: `new`, `run`, `dev`, and the observation verbs.
+"""The `streamlib` console script: `new`, `run`, `dev`, the observation verbs, and
+the one machine-setup verb, `enable-virtual-camera`.
 
 `nodes`, `graph`, `tap`, `logs`, and `exchange` observe nodes that are already
 running — `nodes` off the on-disk registry, the rest as clients of a node's
 control plane. None of them mutates a graph: a node's graph is defined by its
 code, and the edit loop is re-running `dev`.
+
+`enable-virtual-camera` touches no node and speaks no control plane: it installs
+the standard udev grant the virtual camera's loopback door needs — the module
+loaded with no devices and its control node tagged `uaccess` — as one
+privileged step behind the desktop's own password prompt. The engine never
+runs it; a sink without the permission names it and refuses.
 
 `run` and `dev` are a thin runner over the engine this wheel already exposes.
 They resolve the app's entry file, execute it as `python app.py` would, call its
@@ -26,8 +33,12 @@ asserted here is an open question for `/propose-rule`.
 from __future__ import annotations
 
 import argparse
+import os
+import platform
 import re
 import runpy
+import shutil
+import subprocess
 import sys
 import traceback
 from pathlib import Path
@@ -49,6 +60,7 @@ __all__ = ["main"]
 
 DEFAULT_APP_ENTRY_FILE_NAME = "app.py"
 APP_SETUP_FUNCTION_NAME = "setup"
+APP_DIRECTORY_ENVIRONMENT_VARIABLE = "STREAMLIB_APP_DIRECTORY"
 
 DEFAULT_CONTROL_PLANE_BIND_HOST = "0.0.0.0"
 DEFAULT_CONTROL_PLANE_BIND_PORT = 9000
@@ -210,6 +222,9 @@ def launch_app_node(
     """Boot the app's node and own its run loop until the user interrupts it."""
     anchor_directory = resolve_app_anchor_directory(requested_anchor_directory)
     entry_file = resolve_app_entry_file(verb, anchor_directory, requested_entry_file)
+    # A built-in that names itself to the machine — a virtual camera's default
+    # label — keys on the app, not on the shell it was launched from.
+    os.environ[APP_DIRECTORY_ENVIRONMENT_VARIABLE] = str(anchor_directory)
 
     try:
         entry_namespace = execute_app_entry_file(entry_file)
@@ -571,6 +586,164 @@ def render_runtime_logs(
     return 0
 
 
+# ---------------------------------------------------------------------------
+# `enable-virtual-camera` — the one-time grant behind the loopback door
+# ---------------------------------------------------------------------------
+
+VIRTUAL_CAMERA_MODULE_NAME = "v4l2loopback"
+VIRTUAL_CAMERA_CONTROL_NODE = Path("/dev/v4l2loopback")
+
+# The three files the grant is, keyed by their destination. `modules-load.d`
+# loads the module at boot, `modprobe.d` keeps it device-less so each sink
+# creates its own, and the udev rule hands the seat's user the control node.
+VIRTUAL_CAMERA_GRANT_FILES: "dict[Path, str]" = {
+    Path("/etc/modules-load.d/streamlib-virtual-camera.conf"): (
+        "# Installed by `streamlib enable-virtual-camera`: load the loopback module at boot.\n"
+        f"{VIRTUAL_CAMERA_MODULE_NAME}\n"
+    ),
+    Path("/etc/modprobe.d/streamlib-virtual-camera.conf"): (
+        "# Installed by `streamlib enable-virtual-camera`: no pre-made devices — each\n"
+        "# StreamLib VirtualCameraSink creates and removes its own.\n"
+        f"options {VIRTUAL_CAMERA_MODULE_NAME} devices=0\n"
+    ),
+    Path("/etc/udev/rules.d/70-streamlib-virtual-camera.rules"): (
+        "# Installed by `streamlib enable-virtual-camera`: the logged-in seat user may\n"
+        "# open the loopback control node, so a StreamLib graph can add a camera.\n"
+        f'KERNEL=="{VIRTUAL_CAMERA_MODULE_NAME}", SUBSYSTEM=="misc", TAG+="uaccess"\n'
+    ),
+}
+
+
+class MachineSetupError(Exception):
+    """A setup verb that could not do its one job, with the reason shaped for a terminal."""
+
+
+def render_virtual_camera_grant() -> str:
+    """The three files as one printable block, for a user placing them by hand."""
+    blocks = []
+    for destination, contents in VIRTUAL_CAMERA_GRANT_FILES.items():
+        blocks.append(f"# ---- {destination} ----\n{contents}")
+    blocks.append(
+        "# ---- then, as root ----\n"
+        f"modprobe {VIRTUAL_CAMERA_MODULE_NAME} devices=0\n"
+        "udevadm control --reload\n"
+        f"udevadm trigger --subsystem-match=misc --sysname-match={VIRTUAL_CAMERA_MODULE_NAME}\n"
+    )
+    return "\n".join(blocks)
+
+
+def virtual_camera_privileged_script() -> str:
+    """One shell script that writes the files and reloads, run once with privilege."""
+    lines = ["set -eu"]
+    for destination, contents in VIRTUAL_CAMERA_GRANT_FILES.items():
+        lines.append(f"mkdir -p {destination.parent}")
+        lines.append(f"cat > {destination} <<'STREAMLIB_EOF'\n{contents}STREAMLIB_EOF")
+    lines.append(f"modprobe {VIRTUAL_CAMERA_MODULE_NAME} devices=0")
+    lines.append("udevadm control --reload")
+    lines.append(f"udevadm trigger --subsystem-match=misc --sysname-match={VIRTUAL_CAMERA_MODULE_NAME}")
+    lines.append("udevadm settle || true")
+    return "\n".join(lines) + "\n"
+
+
+def control_node_is_writable_by_this_user(control_node: Path = VIRTUAL_CAMERA_CONTROL_NODE) -> bool:
+    """Whether this user can open the module's control node read-write — the
+    same probe the sink makes at `setup()`. A raw descriptor, because the node
+    is a character device and Python's buffered `open` would try to seek it."""
+    try:
+        descriptor = os.open(control_node, os.O_RDWR)
+    except OSError:
+        return False
+    os.close(descriptor)
+    return True
+
+
+def virtual_camera_module_is_installed(kernel_release: str) -> bool:
+    modules_root = Path("/lib/modules") / kernel_release
+    return any(modules_root.rglob(f"{VIRTUAL_CAMERA_MODULE_NAME}.ko*"))
+
+
+def choose_privilege_helper(
+    which: "Optional[Callable[[str], Optional[str]]]" = None,
+    environ: "Optional[dict[str, str]]" = None,
+) -> "Optional[list[str]]":
+    """`pkexec` under a desktop session, `sudo` in a headless shell, else `None`.
+
+    `pkexec` needs a polkit agent to put a password dialog on screen, which a
+    session has and an SSH shell does not; `sudo` prompts wherever there is a
+    terminal.
+    """
+    if which is None:
+        which = shutil.which
+    environment = environ if environ is not None else dict(os.environ)
+    has_session = bool(environment.get("DISPLAY") or environment.get("WAYLAND_DISPLAY"))
+    if has_session and which("pkexec"):
+        return ["pkexec"]
+    if which("sudo"):
+        return ["sudo"]
+    if which("pkexec"):
+        return ["pkexec"]
+    return None
+
+
+def enable_virtual_camera(*, print_only: bool) -> int:
+    """Install the loopback grant once, or print it for a hand install."""
+    if print_only:
+        print(render_virtual_camera_grant(), end="")
+        return 0
+    if platform.system() != "Linux":
+        raise MachineSetupError(
+            f"`streamlib enable-virtual-camera` is Linux-only: the virtual camera is a "
+            f"v4l2loopback device, and this is {platform.system()}."
+        )
+    kernel_release = platform.release()
+    if not virtual_camera_module_is_installed(kernel_release):
+        raise MachineSetupError(
+            f"the {VIRTUAL_CAMERA_MODULE_NAME} module is not installed for kernel "
+            f"{kernel_release}. Install `v4l2loopback-dkms` (Debian/Ubuntu; it builds "
+            f"against the running kernel), or on a kernel that ships the module, "
+            f"`linux-modules-{kernel_release}` — then re-run."
+        )
+    helper = choose_privilege_helper()
+    if helper is None:
+        raise MachineSetupError(
+            "neither `pkexec` nor `sudo` is available to run the one privileged step. "
+            "Place the files by hand instead: `streamlib enable-virtual-camera --print` "
+            "writes them and the commands to run as root."
+        )
+    print(
+        f"Installing the virtual camera permission via {helper[0]} — this is the one "
+        "privileged step, and it asks for your password.",
+        flush=True,
+    )
+    completed = subprocess.run(
+        [*helper, "sh", "-c", virtual_camera_privileged_script()],
+        text=True,
+    )
+    if completed.returncode != 0:
+        raise MachineSetupError(
+            f"{helper[0]} did not complete the privileged step (exit {completed.returncode}). "
+            "Nothing else was changed; `--print` shows what it would have written."
+        )
+    if not VIRTUAL_CAMERA_CONTROL_NODE.exists():
+        raise MachineSetupError(
+            f"{VIRTUAL_CAMERA_CONTROL_NODE} did not appear after loading the module — "
+            f"`modinfo {VIRTUAL_CAMERA_MODULE_NAME}` and `dmesg` say why."
+        )
+    if not control_node_is_writable_by_this_user():
+        raise MachineSetupError(
+            f"{VIRTUAL_CAMERA_CONTROL_NODE} exists but this user still cannot open it "
+            "read-write. The udev rule tags it `uaccess`, which logind applies to the "
+            "active seat: log out and back in, or if this is an SSH session, run a graph "
+            "from the desktop."
+        )
+    print(
+        f"Done: {VIRTUAL_CAMERA_CONTROL_NODE} is writable by this user. A VirtualCameraSink "
+        "now creates its own camera; re-running this command is harmless.",
+        flush=True,
+    )
+    return 0
+
+
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="streamlib",
@@ -596,6 +769,23 @@ def build_argument_parser() -> argparse.ArgumentParser:
             "Wire the built-in test pattern instead of the camera, so the app "
             "runs on a machine with no capture device."
         ),
+    )
+
+    enable_virtual_camera_command = subcommands.add_parser(
+        "enable-virtual-camera",
+        help="Grant this machine's users the permission a VirtualCameraSink needs, once.",
+        description=(
+            "Install the standard grant behind the virtual camera's loopback door: load "
+            "v4l2loopback with no devices (persisted in modules-load.d and modprobe.d) "
+            "and tag its control node `uaccess` for the logged-in user. One privileged "
+            "step through pkexec (sudo in a headless shell); the engine never runs it."
+        ),
+    )
+    enable_virtual_camera_command.add_argument(
+        "--print",
+        dest="print_only",
+        action="store_true",
+        help="Write the three files' contents and the commands to stdout and change nothing.",
     )
 
     for launch_verb, summary in (
@@ -1023,6 +1213,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             )
         if arguments.verb == "nodes":
             return print_discovered_nodes()
+        if arguments.verb == "enable-virtual-camera":
+            return enable_virtual_camera(print_only=arguments.print_only)
         if arguments.verb == "graph":
             return call_observation_tool(
                 "graph",
@@ -1053,7 +1245,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             bind_port=arguments.bind_port,
             node_name=arguments.node_name,
         )
-    except (AppLaunchError, ObservationVerbUsageError, ControlPlaneError) as failure:
+    except (
+        AppLaunchError,
+        ObservationVerbUsageError,
+        ControlPlaneError,
+        MachineSetupError,
+    ) as failure:
         print(f"error: {failure}", file=sys.stderr)
         return 1
 

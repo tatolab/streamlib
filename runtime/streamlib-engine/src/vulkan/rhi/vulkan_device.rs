@@ -162,6 +162,16 @@ pub struct HostVulkanDevice {
     /// available; this acquire-side extension is the only meaningful
     /// gate.
     has_acquire_unmodified: bool,
+    /// Whether `VK_EXT_external_memory_host` was enabled at device
+    /// creation. Gates the host-pointer import tier of
+    /// [`super::HostMappingWrittenByGpu`]: a caller-owned mapping — a
+    /// V4L2 output buffer — becomes a `VkBuffer` the GPU writes directly.
+    has_external_memory_host: bool,
+    /// `VkPhysicalDeviceExternalMemoryHostPropertiesEXT::minImportedHostPointerAlignment`
+    /// snapshotted at construction when [`Self::has_external_memory_host`]
+    /// is true; a page on every driver seen so far. Zero when the
+    /// extension is absent.
+    min_imported_host_pointer_alignment: u64,
     /// Whether `VK_EXT_hdr_metadata` was enabled at device creation.
     /// Gates `vkSetHdrMetadataEXT`, the per-swapchain HDR static metadata
     /// (mastering display + content light) attachment that drives the
@@ -825,6 +835,8 @@ impl HostVulkanDevice {
         #[cfg(target_os = "linux")]
         let mut has_acquire_unmodified = false;
         #[cfg(target_os = "linux")]
+        let mut has_external_memory_host = false;
+        #[cfg(target_os = "linux")]
         let has_external_memory = {
             let external_memory_ext = c"VK_KHR_external_memory";
             let external_memory_fd_ext = c"VK_KHR_external_memory_fd";
@@ -878,6 +890,15 @@ impl HostVulkanDevice {
                     device_extensions.push(acquire_unmodified_ext.as_ptr());
                     has_acquire_unmodified = true;
                     tracing::info!("VK_EXT_external_memory_acquire_unmodified available");
+                }
+
+                // Optional: import a host-owned mapping as device memory, so a
+                // compute pass can write another driver's buffer in place.
+                let external_memory_host_ext = c"VK_EXT_external_memory_host";
+                if available_device_ext_names.contains(&external_memory_host_ext) {
+                    device_extensions.push(external_memory_host_ext.as_ptr());
+                    has_external_memory_host = true;
+                    tracing::info!("VK_EXT_external_memory_host available");
                 }
 
                 tracing::info!("Vulkan external memory extensions enabled");
@@ -1058,6 +1079,10 @@ impl HostVulkanDevice {
 
         #[cfg(not(target_os = "linux"))]
         let has_acquire_unmodified = false;
+        #[cfg(not(target_os = "linux"))]
+        let has_external_memory_host = false;
+        #[cfg(not(target_os = "linux"))]
+        let min_imported_host_pointer_alignment: u64 = 0;
 
         // Snapshot the RT pipeline properties (SBT alignment + handle
         // size + max recursion depth) before device creation. The query
@@ -1088,6 +1113,26 @@ impl HostVulkanDevice {
         };
         #[cfg(not(target_os = "linux"))]
         let ray_tracing_properties: Option<RayTracingPipelineProperties> = None;
+
+        // The host-pointer import alignment is a physical-device property;
+        // well-defined to chain once the extension is advertised.
+        #[cfg(target_os = "linux")]
+        let min_imported_host_pointer_alignment: u64 = if has_external_memory_host {
+            let mut host_props =
+                vk::PhysicalDeviceExternalMemoryHostPropertiesEXT::builder().build();
+            let mut props2 = vk::PhysicalDeviceProperties2::builder()
+                .push_next(&mut host_props)
+                .build();
+            unsafe { instance.get_physical_device_properties2(physical_device, &mut props2) };
+            tracing::info!(
+                min_imported_host_pointer_alignment =
+                    host_props.min_imported_host_pointer_alignment,
+                "VK_EXT_external_memory_host: host-pointer import alignment"
+            );
+            host_props.min_imported_host_pointer_alignment
+        } else {
+            0
+        };
 
         #[cfg(target_os = "linux")]
         let supports_video_encode = has_video_encode;
@@ -1452,6 +1497,8 @@ impl HostVulkanDevice {
             third_party_gpu_capabilities,
             supports_cross_device_dma_buf_probe,
             has_acquire_unmodified,
+            has_external_memory_host,
+            min_imported_host_pointer_alignment,
             has_hdr_metadata,
             has_ray_tracing_pipeline,
             ray_tracing_properties,
@@ -3357,6 +3404,20 @@ impl HostVulkanDevice {
         self.has_acquire_unmodified
     }
 
+    /// Whether `VK_EXT_external_memory_host` was enabled at device
+    /// construction — the imported tier of
+    /// [`super::HostMappingWrittenByGpu`] is reachable only then.
+    pub fn supports_host_pointer_import(&self) -> bool {
+        self.has_external_memory_host
+    }
+
+    /// The alignment every imported host range must start and end on
+    /// (`minImportedHostPointerAlignment`); zero when
+    /// [`Self::supports_host_pointer_import`] is false.
+    pub fn min_imported_host_pointer_alignment(&self) -> u64 {
+        self.min_imported_host_pointer_alignment
+    }
+
     /// Whether `VK_EXT_hdr_metadata` was enabled at device construction.
     /// Gates `vkSetHdrMetadataEXT` — the per-swapchain HDR static metadata
     /// (mastering display + content light) attachment that signals
@@ -3603,6 +3664,63 @@ impl HostVulkanDevice {
             count
         );
 
+        Ok(memory)
+    }
+
+    /// Import a caller-owned host range as device memory through
+    /// `VK_EXT_external_memory_host`, raw `vkAllocateMemory` like the
+    /// DMA-BUF import above. `memory_type_bits` is the intersection of the
+    /// buffer's requirements and what `vkGetMemoryHostPointerPropertiesEXT`
+    /// reported for the range; a HOST_CACHED type wins when one qualifies,
+    /// since the caller is going to read the range back on the CPU.
+    #[cfg(target_os = "linux")]
+    pub fn import_host_pointer_memory(
+        &self,
+        host_ptr: *mut u8,
+        byte_len: vk::DeviceSize,
+        memory_type_bits: u32,
+    ) -> Result<vk::DeviceMemory> {
+        let host_visible =
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
+        let memory_type_index = self
+            .find_memory_type(
+                memory_type_bits,
+                host_visible | vk::MemoryPropertyFlags::HOST_CACHED,
+            )
+            .or_else(|_| self.find_memory_type(memory_type_bits, host_visible))
+            .map_err(|_| {
+                Error::GpuError(format!(
+                    "import_host_pointer_memory: no host-visible memory type accepts the host \
+                     range (memory_type_bits = {memory_type_bits:#x})"
+                ))
+            })?;
+
+        let mut import_info = vk::ImportMemoryHostPointerInfoEXT::builder()
+            .handle_type(vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT)
+            .build();
+        import_info.host_pointer = host_ptr.cast();
+        let alloc_info = vk::MemoryAllocateInfo::builder()
+            .allocation_size(byte_len)
+            .memory_type_index(memory_type_index)
+            .push_next(&mut import_info)
+            .build();
+
+        let memory = unsafe { self.device.allocate_memory(&alloc_info, None) }.map_err(|e| {
+            Error::GpuError(format!(
+                "import_host_pointer_memory: the driver refused to import the host range \
+                 {host_ptr:p}+{byte_len}: {e}"
+            ))
+        })?;
+
+        let count = self.live_allocation_count.fetch_add(1, Ordering::Relaxed) + 1;
+        tracing::debug!(
+            byte_len,
+            memory_type_index,
+            host_cached =
+                memory_type_index_is_host_cached(&self.memory_properties, memory_type_index),
+            live = count,
+            "HostVulkanDevice: host pointer imported as device memory"
+        );
         Ok(memory)
     }
 

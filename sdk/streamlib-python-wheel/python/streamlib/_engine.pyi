@@ -62,6 +62,7 @@ __all__ = [
     "RuntimeContextLimitedAccess",
     "SpeakerSink",
     "TestPatternSource",
+    "VirtualCameraSink",
     "TestBagCollector",
     "TestBagFeeder",
     "await_test_harness_bag",
@@ -395,6 +396,39 @@ class TestPatternSource:
     __test__: Literal[False]
 
 @final
+class VirtualCameraSink:
+    """Native built-in block: video frames to a virtual camera any Linux
+    application can select. Each instance is one camera that exists while its
+    processor runs — created at setup, removed at teardown, like a USB camera
+    plugged in and pulled out — showing whatever the graph writes into it.
+
+    A marker type — pass the class itself to `Runtime.add`
+    (`rt.add(VirtualCameraSink, config={"name": "Desk cam"})`); it is never
+    instantiated and its per-frame path never enters the interpreter.
+
+    One input, `video` (`newest`), and no output. Add as many instances as the
+    graph needs; each is its own camera.
+
+    Config keys: `name`, the camera's name in every picker, defaulting to
+    "StreamLib Camera" plus a short id that is unique per instance and app and
+    stable across runs; `door`, "auto" (default) or "v4l2loopback" — "pipewire"
+    is reserved for the PipeWire camera door, which is not built yet and
+    refuses by name today. Under "auto" the sink creates a v4l2loopback device
+    when the module's control node is writable — the door every application
+    sees. The door is logged at setup; without permission to create a loopback
+    camera the log names `streamlib enable-virtual-camera`, the one-time
+    command that grants it behind your desktop's password prompt.
+    "v4l2loopback" refuses by name at `setup()` in that case, and so does
+    "auto" until the PipeWire door lands — saying so — and the runtime keeps
+    running. The engine never loads a module or asks for elevation.
+
+    A loopback device a reader still holds at teardown is left in place and
+    reclaimed by name at the next setup. Frames are stamped with their
+    monotonic timestamp on both doors; the format follows the first frame's
+    extent (YUYV, an even width) and an extent change re-negotiates it.
+    """
+
+@final
 class TestBagFeeder:
     """`streamlib.testing`'s feeder endpoint: publishes bags a test queued.
 
@@ -460,9 +494,10 @@ class Runtime:
         processor is running once its helper process has registered and wired
         its ports; anything published into the graph before that is dropped by
         the link. Raises `RuntimeError` if a processor failed instead of
-        starting, if `timeout` elapses, or if this runtime has already been
-        shut down; and `ValueError` for a `timeout` that is negative, NaN, or
-        too large to be a duration.
+        starting — carrying that processor's own refusal text, so a built-in
+        that refused at setup is read by name — if `timeout` elapses, or if
+        this runtime has already been shut down; and `ValueError` for a
+        `timeout` that is negative, NaN, or too large to be a duration.
         """
 
     def shutdown(self) -> None:

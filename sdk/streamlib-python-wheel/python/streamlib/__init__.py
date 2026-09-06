@@ -50,6 +50,7 @@ from ._engine import SpeakerSink as SpeakerSink
 from ._engine import RuntimeContextFullAccess as RuntimeContextFullAccess
 from ._engine import RuntimeContextLimitedAccess as RuntimeContextLimitedAccess
 from ._engine import TestPatternSource as TestPatternSource
+from ._engine import VirtualCameraSink as VirtualCameraSink
 from ._engine import (
     decode_msgpack_bytes_to_python_object as decode_msgpack_bytes_to_python_object,
 )
@@ -124,6 +125,7 @@ __all__ = [
     "SpeakerSink",
     "TestPatternSource",
     "VideoFrame",
+    "VirtualCameraSink",
     "clock",
     "decode_msgpack_bytes_to_python_object",
     "encode_bag_to_msgpack_bytes",

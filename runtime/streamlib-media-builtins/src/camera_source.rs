@@ -611,7 +611,10 @@ fn capture_thread_loop(
         let caps = full.gpu_capabilities()?;
         let vulkan_device_name = caps.device_name.clone();
 
-        let color_converter = full.color_converter(src_pixel_format, PixelFormat::Rgba32)?;
+        // This camera's own converter: two cameras of one source format each
+        // dispatch from their own capture thread, and the cached converter's
+        // kernel stages bindings that both would race.
+        let color_converter = full.create_color_converter(src_pixel_format, PixelFormat::Rgba32)?;
         let recorder = full.create_command_recorder("camera_capture")?;
 
         // Host-readback / display-wait timeline. Exportable so cross-process

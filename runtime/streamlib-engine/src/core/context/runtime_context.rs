@@ -27,6 +27,11 @@ pub struct RuntimeContext {
     runtime_id: Arc<RuntimeUniqueId>,
     /// Unique identifier for this processor (None for shared/global context).
     processor_id: Option<ProcessorUniqueId>,
+    /// The processor's disambiguated display name — the one string `add`
+    /// reports, `graph` renders and the log prefix carries — so a processor
+    /// that has to name itself to the outside world names itself the way
+    /// every other surface does. `None` for the shared/global context.
+    processor_display_name: Option<String>,
     /// Pause gate for this processor (None for shared/global context).
     pause_gate: Option<Arc<AtomicBool>>,
     /// Runtime operations interface for graph mutations.
@@ -61,6 +66,7 @@ impl RuntimeContext {
             time,
             runtime_id,
             processor_id: None,
+            processor_display_name: None,
             pause_gate: None,
             runtime_ops,
             tokio_handle,
@@ -121,6 +127,12 @@ impl RuntimeContext {
         self.processor_id.as_ref()
     }
 
+    /// The processor's disambiguated display name (None for the
+    /// shared/global context).
+    pub fn processor_display_name(&self) -> Option<&str> {
+        self.processor_display_name.as_deref()
+    }
+
     /// Access runtime operations for graph mutations.
     ///
     /// Returns the runtime operations interface, allowing processors to add/remove
@@ -166,6 +178,7 @@ impl RuntimeContext {
             time: Arc::clone(&self.time),
             runtime_id: Arc::clone(&self.runtime_id),
             processor_id: Some(processor_id),
+            processor_display_name: self.processor_display_name.clone(),
             pause_gate: self.pause_gate.clone(),
             runtime_ops: Arc::clone(&self.runtime_ops),
             tokio_handle: self.tokio_handle.clone(),
@@ -183,6 +196,7 @@ impl RuntimeContext {
             time: Arc::clone(&self.time),
             runtime_id: Arc::clone(&self.runtime_id),
             processor_id: self.processor_id.clone(),
+            processor_display_name: self.processor_display_name.clone(),
             pause_gate: Some(pause_gate),
             runtime_ops: Arc::clone(&self.runtime_ops),
             tokio_handle: self.tokio_handle.clone(),
@@ -190,6 +204,15 @@ impl RuntimeContext {
             audio_clock: Arc::clone(&self.audio_clock),
             #[cfg(target_os = "linux")]
             surface_socket_path: self.surface_socket_path.clone(),
+        }
+    }
+
+    /// Create a processor-specific context carrying the processor's
+    /// disambiguated display name.
+    pub fn with_processor_display_name(&self, processor_display_name: String) -> Self {
+        Self {
+            processor_display_name: Some(processor_display_name),
+            ..self.clone()
         }
     }
 
@@ -696,6 +719,12 @@ impl<'a> RuntimeContextFullAccess<'a> {
         self.host_base().processor_id().map(|id| id.to_string())
     }
 
+    /// The processor's disambiguated display name, or `None` for the
+    /// shared/global context.
+    pub fn processor_display_name(&self) -> Option<String> {
+        self.host_base().processor_display_name().map(str::to_owned)
+    }
+
     /// Whether this processor is currently paused.
     pub fn is_paused(&self) -> bool {
         self.host_base().is_paused()
@@ -777,6 +806,12 @@ impl<'a> RuntimeContextLimitedAccess<'a> {
 
     pub fn processor_id(&self) -> Option<String> {
         self.host_base().processor_id().map(|id| id.to_string())
+    }
+
+    /// The processor's disambiguated display name, or `None` for the
+    /// shared/global context.
+    pub fn processor_display_name(&self) -> Option<String> {
+        self.host_base().processor_display_name().map(str::to_owned)
     }
 
     pub fn is_paused(&self) -> bool {
