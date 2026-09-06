@@ -15,14 +15,14 @@ name = "streamlib_adapter_opengl"
 path = "src/lib.rs"
 
 [dependencies]
-streamlib-surface-adapter = { path = "../streamlib-surface-adapter", version = "0.18.54" }
+streamlib-surface-adapter = { path = "../streamlib-surface-adapter", version = "0.18.55" }
 parking_lot = "0.12"
 thiserror.workspace = true
 tracing.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
-streamlib-consumer-rhi = { path = "../../runtime/streamlib-consumer-rhi", version = "0.18.54" }
-streamlib-surface-client = { path = "../../runtime/streamlib-surface-client", version = "0.18.54" }
+streamlib-consumer-rhi = { path = "../../runtime/streamlib-consumer-rhi", version = "0.18.55" }
+streamlib-surface-client = { path = "../../runtime/streamlib-surface-client", version = "0.18.55" }
 khronos-egl = { version = "6.0", features = ["dynamic"] }
 gl = "0.14"
 libc.workspace = true
