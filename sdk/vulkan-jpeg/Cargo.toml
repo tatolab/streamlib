@@ -17,7 +17,7 @@ bytemuck = { version = "1.16", features = ["derive"] }
 # backend builds against (VulkanComputeKernel, StorageBuffer, TextureRing,
 # ComputeKernelDescriptor, the color-math types, and the GpuContextFullAccess
 # view) under `streamlib::sdk::*` and its `sdk::engine::host_rhi` tier.
-streamlib = { path = "../streamlib-sdk", version = "0.18.58" }
+streamlib = { path = "../streamlib-sdk", version = "0.18.59" }
 
 [dev-dependencies]
 jpeg-encoder = "0.6"

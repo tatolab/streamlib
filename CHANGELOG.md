@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.59](https://github.com/tatolab/streamlib/compare/v0.18.58...v0.18.59) (2026-09-07)
+
+
+### Features
+
+* **engine:** VirtualCameraSink — the PipeWire door, the shim's video half and a camera node over the sink's DMA-BUF ring ([#2201](https://github.com/tatolab/streamlib/issues/2201)) ([5c0b504](https://github.com/tatolab/streamlib/commit/5c0b5042e0361e10a4560bb663918d546a52a6fc))
+
 ## [0.18.58](https://github.com/tatolab/streamlib/compare/v0.18.57...v0.18.58) (2026-09-06)
 
 

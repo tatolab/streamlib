@@ -10,7 +10,7 @@ name = "streamlib"
 # Tracks [workspace.package].version in the root Cargo.toml — the plan's "two
 # artifacts, one version, released together". release-please bumps this file
 # through its `extra-files` list, so the wheel and the crate never drift.
-version = "0.18.58"
+version = "0.18.59"
 description = "StreamLib — a realtime streaming engine with Python authoring"
 # abi3-py310 in Cargo.toml is the binding half of this floor; the two move
 # together or the wheel claims interpreters its ABI tag does not cover.
