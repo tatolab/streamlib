@@ -78,7 +78,6 @@ struct StreamLibPipeWireVideoSource {
     struct StreamLibPipeWireVideoOfferedFormat offered_format;
     struct StreamLibPipeWireVideoDmaBufPlane planes[STREAMLIB_PIPEWIRE_VIDEO_MAX_BUFFERS];
     uint32_t plane_count;
-    bool an_extent_was_offered;
 
     uint32_t negotiated_buffer_kind;
     struct StreamLibPipeWireVideoBufferSlot slots[STREAMLIB_PIPEWIRE_VIDEO_MAX_BUFFERS];
@@ -552,7 +551,8 @@ static void destroy_video_source(struct StreamLibPipeWireVideoSource *video_sour
         video_source->entry_points.pw_thread_loop_destroy(video_source->thread_loop);
         video_source->thread_loop = NULL;
     }
-    release_every_slot_buffer(video_source);
+    // The buffers went with the stream above; the extent's shared memory is
+    // this source's alone and goes last.
     release_every_slot_shared_memory(video_source);
     free(video_source);
 }
@@ -690,7 +690,6 @@ int streamlib_pipewire_video_source_set_extent(
     };
     memcpy(video_source->planes, planes, plane_count * sizeof(*planes));
     video_source->plane_count = plane_count;
-    video_source->an_extent_was_offered = true;
     video_source->negotiated_buffer_kind = STREAMLIB_PIPEWIRE_VIDEO_BUFFER_KIND_NONE;
 
     const struct spa_pod *params[2] = {
@@ -736,16 +735,32 @@ int32_t streamlib_pipewire_video_source_dequeue_slot(
 {
     const struct StreamLibPipeWireEntryPoints *resolved = &video_source->entry_points;
     resolved->pw_thread_loop_lock(video_source->thread_loop);
-    struct pw_buffer *buffer = resolved->pw_stream_dequeue_buffer(video_source->stream);
+
+    // A slot an earlier frame took and could not fill is still ours, so it is
+    // handed out again rather than a fresh one being taken. There is no way to
+    // give an output buffer back unpublished — `pw_stream_queue_buffer` submits
+    // it — so holding it is the only way a failed frame does not become the
+    // previous picture republished under a new consumer's eyes.
     int32_t slot = -1;
-    if (buffer != NULL) {
-        slot = slot_index_of(buffer);
-        if (slot < 0) {
-            // A buffer the shim never gave memory to cannot be filled, so it
-            // goes straight back rather than being published empty.
-            resolved->pw_stream_queue_buffer(video_source->stream, buffer);
-        } else {
-            video_source->slots[slot].dequeued_buffer = buffer;
+    for (uint32_t index = 0; index < video_source->plane_count; index++) {
+        if (video_source->slots[index].dequeued_buffer != NULL) {
+            slot = (int32_t)index;
+            break;
+        }
+    }
+    if (slot < 0) {
+        struct pw_buffer *buffer = resolved->pw_stream_dequeue_buffer(video_source->stream);
+        if (buffer != NULL) {
+            slot = slot_index_of(buffer);
+            if (slot < 0) {
+                // A buffer the shim never gave memory to names no picture, and
+                // publishing it would hand the consumer whatever the mapping
+                // last held. It is kept and the stream is failed by name.
+                record_stream_failure(video_source,
+                                      "PipeWire handed back a buffer this camera never filled");
+            } else {
+                video_source->slots[slot].dequeued_buffer = buffer;
+            }
         }
     }
     resolved->pw_thread_loop_unlock(video_source->thread_loop);
@@ -785,8 +800,6 @@ int streamlib_pipewire_video_source_queue_slot(struct StreamLibPipeWireVideoSour
         resolved->pw_thread_loop_unlock(video_source->thread_loop);
         return -1;
     }
-    video_source->slots[slot].dequeued_buffer = NULL;
-
     struct spa_data *block = &buffer->buffer->datas[0];
     if (block->chunk != NULL) {
         // Rewritten every cycle: a recycled buffer keeps the chunk the last one
@@ -802,14 +815,24 @@ int streamlib_pipewire_video_source_queue_slot(struct StreamLibPipeWireVideoSour
 
     struct spa_meta_header *header =
         spa_buffer_find_meta_data(buffer->buffer, SPA_META_Header, sizeof(*header));
-    if (header != NULL) {
-        header->flags = 0;
-        header->offset = 0;
-        header->seq = sequence;
-        header->pts = timestamp_ns;
-        header->dts_offset = 0;
+    if (header == NULL) {
+        // The stamp is what a consumer joins this camera to anything else by,
+        // and the header meta is the only place it travels. A buffer without
+        // one is failed by name rather than published looking fine and
+        // carrying no time at all. The slot stays held, so nothing republishes.
+        record_stream_failure(video_source,
+                              "PipeWire allocated buffers with no header metadata, so a frame's "
+                              "timestamp has nowhere to travel");
+        resolved->pw_thread_loop_unlock(video_source->thread_loop);
+        return -1;
     }
+    header->flags = 0;
+    header->offset = 0;
+    header->seq = sequence;
+    header->pts = timestamp_ns;
+    header->dts_offset = 0;
 
+    video_source->slots[slot].dequeued_buffer = NULL;
     int queue_result = resolved->pw_stream_queue_buffer(video_source->stream, buffer);
     if (queue_result >= 0) {
         // The stream is the graph's driver, so nothing runs a cycle until this
@@ -818,21 +841,6 @@ int streamlib_pipewire_video_source_queue_slot(struct StreamLibPipeWireVideoSour
     }
     resolved->pw_thread_loop_unlock(video_source->thread_loop);
     return queue_result >= 0 ? 0 : -1;
-}
-
-void streamlib_pipewire_video_source_recycle_slot(
-    struct StreamLibPipeWireVideoSource *video_source, int32_t slot)
-{
-    if (slot < 0 || slot >= STREAMLIB_PIPEWIRE_VIDEO_MAX_BUFFERS)
-        return;
-    const struct StreamLibPipeWireEntryPoints *resolved = &video_source->entry_points;
-    resolved->pw_thread_loop_lock(video_source->thread_loop);
-    struct pw_buffer *buffer = video_source->slots[slot].dequeued_buffer;
-    if (buffer != NULL) {
-        video_source->slots[slot].dequeued_buffer = NULL;
-        resolved->pw_stream_queue_buffer(video_source->stream, buffer);
-    }
-    resolved->pw_thread_loop_unlock(video_source->thread_loop);
 }
 
 const char *streamlib_pipewire_video_source_failure(

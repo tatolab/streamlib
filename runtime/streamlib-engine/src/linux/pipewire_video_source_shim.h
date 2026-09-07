@@ -160,6 +160,11 @@ uint32_t streamlib_pipewire_video_source_negotiated_buffer_kind(
 ///
 /// A slot names the caller's own plane at the same index, so a dequeued slot
 /// tells the caller which texture to write without a second table.
+///
+/// A slot an earlier frame took and never published is handed out again rather
+/// than a fresh one being taken: there is no way to return an output buffer
+/// unpublished — `pw_stream_queue_buffer` submits it — so a caller that fails
+/// mid-frame simply tries the same slot next time.
 int32_t streamlib_pipewire_video_source_dequeue_slot(
     struct StreamLibPipeWireVideoSource *video_source);
 
@@ -173,7 +178,8 @@ uint8_t *streamlib_pipewire_video_source_slot_shared_memory(
     uint32_t *byte_size_out);
 
 /// Publish slot `slot`, stamped `timestamp_ns` in its header metadata, and
-/// drive a graph cycle.
+/// drive a graph cycle. The slot is released only once the buffer is on its
+/// way, so a refused publish leaves it held for the next frame.
 ///
 /// The stamp travels in `SPA_META_Header.pts` rather than `pw_buffer.time`:
 /// `pw_buffer` is allocated by the host's libpipewire and only grew a `time`
@@ -183,11 +189,6 @@ uint8_t *streamlib_pipewire_video_source_slot_shared_memory(
 int streamlib_pipewire_video_source_queue_slot(struct StreamLibPipeWireVideoSource *video_source,
                                                int32_t slot, int64_t timestamp_ns,
                                                uint64_t sequence);
-
-/// Hand a dequeued slot back without publishing it, for a frame the caller
-/// could not write after all.
-void streamlib_pipewire_video_source_recycle_slot(
-    struct StreamLibPipeWireVideoSource *video_source, int32_t slot);
 
 /// The reason the stream failed after it was opened, or NULL while it is
 /// healthy. Valid until the next call on this source.

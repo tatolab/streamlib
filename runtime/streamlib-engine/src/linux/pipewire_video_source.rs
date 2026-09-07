@@ -107,10 +107,6 @@ mod video_shim {
             timestamp_ns: i64,
             sequence: u64,
         ) -> c_int;
-        pub fn streamlib_pipewire_video_source_recycle_slot(
-            video_source: *mut VideoSource,
-            slot: i32,
-        );
         pub fn streamlib_pipewire_video_source_failure(
             video_source: *mut VideoSource,
         ) -> *const c_char;
@@ -144,10 +140,10 @@ mod video_shim {
         pub both_formats_were_built: bool,
     }
 
-    /// The `node.name` a camera registers under, the property dict it
-    /// announces itself with, and what its offered formats actually say. The
-    /// shim calls the first two on every open; Rust only ever calls them to
-    /// hold the composition in a test, which is why they are declared there.
+    // The `node.name` a camera registers under, the property dict it announces
+    // itself with, and what its offered formats actually say. The shim calls
+    // the first two on every open; Rust only ever calls them to hold the
+    // composition in a test, which is why they are declared there.
     #[cfg(test)]
     unsafe extern "C" {
         pub fn streamlib_pipewire_video_source_describe_offer(
@@ -567,18 +563,10 @@ impl PipeWireCameraNode {
                 self.published_frame_count += 1;
                 Ok(PipeWireCameraFramePresentation::Published(buffer_kind))
             }
-            Err(failure) => {
-                // A slot this call cannot fill goes back rather than being
-                // published with the last frame's picture in it.
-                // SAFETY: the source is live and `slot` is the one just dequeued.
-                unsafe {
-                    video_shim::streamlib_pipewire_video_source_recycle_slot(
-                        self.video_source.0,
-                        slot,
-                    )
-                };
-                Err(failure)
-            }
+            // A slot this call could not fill stays held by the shim and is
+            // handed back on the next frame, because queueing an output buffer
+            // publishes it — there is no way to give one back unpublished.
+            Err(failure) => Err(failure),
         }
     }
 

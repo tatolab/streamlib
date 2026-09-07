@@ -212,7 +212,16 @@ and one live probe.
   disconnects and destroys the stream, and the node is gone with it.
 - Per frame: copy the resolved texture into the ring's next slot on the GPU (a blit; the
   frame's own surface is another processor's to recycle), publish the slot's buffer with
-  the frame's stamp in `pw_buffer`'s time. Dispatch returns retired, so implicit sync holds.
+  the frame's stamp in `SPA_META_Header.pts`. Dispatch returns retired, so implicit sync
+  holds.
+
+  > ~~publish the slot's buffer with the frame's stamp in `pw_buffer`'s time.~~ —
+  > Superseded 2026-09-06 by `vendor/pipewire-headers/include/pipewire/stream.h:208`,
+  > where `pw_buffer.time` is the trailing field and dates to PipeWire 1.0.5, against this
+  > arm's stated 0.3.50 floor. `pw_buffer` is allocated by the *host's* libpipewire, so on
+  > a 0.3.x host that store lands past the struct; the header meta is also the only place
+  > a consumer reads a stamp from. The decision is unchanged — §Media I/O still says "the
+  > frame's stamp on every buffer" — only the mechanism named here was wrong.
 - Extent change re-negotiates the format; consumers reconnect.
 
 ### §Graphics (RHI / GPU) — one primitive, two tiers
