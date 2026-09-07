@@ -31,7 +31,7 @@ const SHIM_FAILURE_TEXT_CAPACITY: usize = 512;
 /// The entry-point list and the process-global init, owned by the audio shim's
 /// translation unit and shared by every arm that calls into libpipewire.
 mod shim {
-    use std::ffi::{c_char, c_void};
+    use std::ffi::{c_char, c_int, c_void};
 
     unsafe extern "C" {
         pub fn streamlib_pipewire_entry_point_count() -> usize;
@@ -40,6 +40,11 @@ mod shim {
         pub fn streamlib_pipewire_loaded_library_version(
             entry_points: *const *mut c_void,
         ) -> *const c_char;
+        pub fn streamlib_pipewire_daemon_answers(
+            entry_points: *const *mut c_void,
+            failure_text: *mut c_char,
+            failure_text_capacity: usize,
+        ) -> c_int;
     }
 }
 
@@ -132,6 +137,31 @@ impl PipeWireLibraryEntryPoints {
     /// The filled table, as every shim entry point takes it.
     pub(crate) fn as_ptr(&self) -> *const *mut c_void {
         self.resolved_addresses.as_ptr()
+    }
+
+    /// Whether a PipeWire daemon actually answers, by connecting a core and
+    /// disconnecting it.
+    ///
+    /// An arm is chosen by opening rather than by loading: `libpipewire`
+    /// present with no daemon behind it is the common container case, and it
+    /// has to demote — or refuse by name — exactly as a missing library does.
+    pub(crate) fn daemon_answers(&self) -> std::result::Result<(), String> {
+        let mut failure_text = ShimFailureText::new();
+        let (failure_text_ptr, failure_text_capacity) = failure_text.as_shim_out_parameters();
+        // SAFETY: the table is fully resolved, and the out-buffer's pointer and
+        // capacity come from the buffer itself, which outlives the call.
+        let answered = unsafe {
+            shim::streamlib_pipewire_daemon_answers(
+                self.as_ptr(),
+                failure_text_ptr,
+                failure_text_capacity,
+            )
+        } == 0;
+        if answered {
+            Ok(())
+        } else {
+            Err(failure_text.read())
+        }
     }
 
     /// The version string of the libpipewire that was actually loaded, which is

@@ -68,11 +68,6 @@ mod audio_shim {
         unsafe extern "C" fn(hand_off_context: *mut c_void, reason: *const c_char);
 
     unsafe extern "C" {
-        pub fn streamlib_pipewire_daemon_answers(
-            entry_points: *const *mut c_void,
-            failure_text: *mut c_char,
-            failure_text_capacity: usize,
-        ) -> c_int;
         pub fn streamlib_pipewire_audio_stream_open(
             entry_points: *const *mut c_void,
             direction: c_int,
@@ -165,22 +160,9 @@ impl PipeWireAudioDeviceBackend {
         let entry_points = PipeWireLibraryEntryPoints::loaded_once_per_process()
             .map_err(|reason| AudioDeviceBackendArmUnavailableReason::of(reason.to_string()))?;
 
-        let mut failure_text = ShimFailureText::new();
-        let (failure_text_ptr, failure_text_capacity) = failure_text.as_shim_out_parameters();
-        // SAFETY: the table is fully resolved, and the out-buffer's pointer and
-        // capacity come from the buffer itself, which outlives the call.
-        let daemon_answered = unsafe {
-            audio_shim::streamlib_pipewire_daemon_answers(
-                entry_points.as_ptr(),
-                failure_text_ptr,
-                failure_text_capacity,
-            )
-        } == 0;
-        if !daemon_answered {
-            return Err(AudioDeviceBackendArmUnavailableReason::of(
-                failure_text.read(),
-            ));
-        }
+        entry_points
+            .daemon_answers()
+            .map_err(AudioDeviceBackendArmUnavailableReason::of)?;
 
         tracing::debug!(
             version = %entry_points.loaded_library_version(),

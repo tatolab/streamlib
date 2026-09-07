@@ -4116,6 +4116,25 @@ impl GpuContextFullAccess {
             .acquire_render_target_dma_buf_image(width, height, format)
     }
 
+    /// Register a PipeWire `Video/Source` node with `media.role = Camera`, so
+    /// a portal-based application can select this graph as a camera.
+    ///
+    /// The door built-ins reach the PipeWire arm through: a virtual camera
+    /// needs the engine's DMA-BUF textures to offer, so the node is minted
+    /// where those are, and no built-in holds raw PipeWire.
+    #[cfg(target_os = "linux")]
+    pub fn open_pipewire_camera_node(
+        &self,
+        camera_name: &str,
+    ) -> Result<crate::linux::pipewire_video_source::PipeWireCameraNode> {
+        tracing::debug!(
+            rhi_op = "open_pipewire_camera_node",
+            camera_name,
+            "GpuContextFullAccess::open_pipewire_camera_node"
+        );
+        crate::linux::pipewire_video_source::PipeWireCameraNode::open(self, camera_name)
+    }
+
     /// Get a pixel buffer by its published surface id.
     pub fn get_pixel_buffer(&self, surface_id: &str) -> Result<PixelBuffer> {
         self.host_inner().get_pixel_buffer(surface_id)
