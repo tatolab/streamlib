@@ -117,14 +117,26 @@ maturin develop --manifest-path ../../sdk/streamlib-python-wheel/Cargo.toml
 The cameras are the output, so the first place to look is another application.
 Both appear by name in any picker: Chrome's `chrome://settings/content/camera`
 or a video call's device list, OBS's "Video Capture Device" source, GNOME's
-Camera app. From a terminal:
+Camera app.
+
+From a terminal, which door the sinks took decides what can see them — the log
+line at setup says which it was. **On the v4l2loopback door** they are ordinary
+video nodes:
 
 ```bash
 v4l2-ctl --list-devices        # both by name, beside the real capture devices
 ffplay /dev/videoN             # whichever number the list gave you
 ```
 
-Run `v4l2-ctl --list-devices` again after Ctrl-C and neither is there.
+**On the PipeWire door** there is no `/dev/video*` entry to find, so those two
+commands will not show them. Ask PipeWire instead:
+
+```bash
+pw-dump | grep -A2 node.description   # both by name, among the graph's nodes
+pw-cli ls Node                        # the same, node by node
+```
+
+Either way, run the listing again after Ctrl-C and neither camera is there.
 
 The running app is also a node, and the usual verbs work from another terminal:
 
@@ -175,9 +187,10 @@ cameras present the same picture under the same time.
 
 A name is what every picker shows, on either door. The loopback device's label
 field holds 31 bytes, so a longer name is cut to fit — pick one that reads whole
-in a list. Leaving a name unset entirely is also fine: the sink falls back to
-`StreamLib Camera` plus a short id derived from the app's directory and the
-processor's name, distinct per instance and per app and the same on every run.
+in a list. Leaving either variable unset gives that row's default, above; this
+app always passes a `name`, so the sink's own unnamed fallback — `StreamLib
+Camera` plus a short id derived from the app's directory and the processor's
+name — is what a graph that omits the key gets, not what you see here.
 
 Naming `v4l2loopback` explicitly turns the fallback off: without the permission
 the sink refuses at `setup()` by name, saying it cannot create a camera and
