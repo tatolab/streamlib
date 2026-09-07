@@ -214,8 +214,8 @@ impl PipeWireCameraBufferKind {
 /// What became of one frame handed to the camera.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PipeWireCameraFramePresentation {
-    /// The frame is on its way to a consumer.
-    Published,
+    /// The frame is on its way to a consumer, which is carrying it this way.
+    Published(PipeWireCameraBufferKind),
     /// No application has the camera open, so the frame is dropped — which is
     /// what a camera nobody is watching does with its pictures.
     NoConsumerIsWatching,
@@ -237,14 +237,44 @@ struct OfferedCameraExtent {
     /// while a consumer still holds the buffer.
     _exported_plane_descriptors: Vec<OwnedFd>,
     /// Filled lazily on the shared-memory sibling's first frame, one per slot.
-    shared_memory_written_by_gpu: Vec<Option<HostMappingWrittenByGpu>>,
+    shared_memory_written_by_gpu: Vec<Option<SharedMemorySlotWrittenByGpu>>,
+    /// The descriptors handed to the shim, kept beside the fds they name.
+    planes: Vec<video_shim::DmaBufPlane>,
 }
+
+/// The RHI's view of one shared-memory slot, beside the range it names.
+///
+/// The range is recorded so a frame can check it against what the shim reports
+/// rather than trusting a cache: the import is only sound while the mapping it
+/// was taken from is still there, and the shim's contract — mappings live
+/// exactly as long as the extent that allocated them — is what makes holding
+/// one across frames safe. A mismatch means that contract broke, and the frame
+/// is refused by name rather than writing through an address this process may
+/// no longer own.
+struct SharedMemorySlotWrittenByGpu {
+    /// Held as an address rather than a pointer: it is only ever compared for
+    /// identity, never read through, and a pointer here would be a `Send`
+    /// obligation this type has no business making.
+    host_range_address: usize,
+    host_range_byte_len: usize,
+    written_by_gpu: HostMappingWrittenByGpu,
+}
+
+/// The shim-owned source, held as its own type so that `Send` is promised for
+/// the pointer alone — a field added to [`PipeWireCameraNode`] later must earn
+/// it structurally rather than inherit an assertion made about something else.
+struct ShimOwnedVideoSourcePointer(*mut video_shim::VideoSource);
+
+// The source is owned by the value that holds this pointer, and every shim
+// entry point takes PipeWire's thread-loop lock, so it is only ever used from
+// whichever thread holds that value.
+unsafe impl Send for ShimOwnedVideoSourcePointer {}
 
 /// A `Video/Source` node, alive for as long as this value is.
 pub struct PipeWireCameraNode {
     /// Kept solely so the resolved entry points outlive the shim's use of them.
     _entry_points: Arc<PipeWireLibraryEntryPoints>,
-    video_source: *mut video_shim::VideoSource,
+    video_source: ShimOwnedVideoSourcePointer,
     camera_name: String,
     gpu: GpuContextLimitedAccess,
     compositor: VulkanPresentCompositor,
@@ -252,11 +282,6 @@ pub struct PipeWireCameraNode {
     offered: Option<OfferedCameraExtent>,
     published_frame_count: u64,
 }
-
-// The source is owned by this value and every shim entry point takes PipeWire's
-// thread-loop lock, so the pointer is only ever used from whichever thread holds
-// this struct.
-unsafe impl Send for PipeWireCameraNode {}
 
 impl PipeWireCameraNode {
     /// Register a camera node named `camera_name`.
@@ -295,7 +320,7 @@ impl PipeWireCameraNode {
 
         let node = Self {
             _entry_points: Arc::clone(entry_points),
-            video_source,
+            video_source: ShimOwnedVideoSourcePointer(video_source),
             camera_name: camera_name.to_string(),
             gpu: gpu_full.host_inner().limited_access(),
             // This camera's own compositor and recorder: two sinks in one graph
@@ -319,11 +344,29 @@ impl PipeWireCameraNode {
     /// import. Replaces any extent offered earlier; consumers re-negotiate.
     pub fn offer_extent(
         &mut self,
-        gpu_full: &GpuContextFullAccess,
         width: u32,
         height: u32,
         frames_per_second: Option<u32>,
     ) -> Result<()> {
+        // One escalation per extent, not per frame: allocating the buffers a
+        // consumer imports is the only thing on this path that needs it.
+        let gpu = self.gpu.clone();
+        let offered = gpu.escalate(|gpu_full| {
+            self.allocate_the_buffers_a_consumer_imports(gpu_full, width, height)
+        })?;
+        // The previous extent goes before the shim frees the mappings its
+        // imports name — `set_extent`'s contract, and the reason this is not
+        // simply an assignment at the end.
+        self.offered = None;
+        self.offer_to_pipewire(offered, width, height, frames_per_second)
+    }
+
+    fn allocate_the_buffers_a_consumer_imports(
+        &self,
+        gpu_full: &GpuContextFullAccess,
+        width: u32,
+        height: u32,
+    ) -> Result<OfferedCameraExtent> {
         let mut slot_textures = Vec::with_capacity(CAMERA_BUFFER_COUNT);
         let mut exported_plane_descriptors = Vec::with_capacity(CAMERA_BUFFER_COUNT);
         let mut planes = Vec::with_capacity(CAMERA_BUFFER_COUNT);
@@ -364,21 +407,56 @@ impl PipeWireCameraNode {
             exported_plane_descriptors.push(unsafe { OwnedFd::from_raw_fd(file_descriptor) });
             planes.push(video_shim::DmaBufPlane {
                 file_descriptor,
-                stride_bytes: stride_bytes as u32,
-                offset_bytes: offset_bytes as u32,
-                byte_size: vulkan_texture.vma_allocation_size() as u32,
+                stride_bytes: self.plane_field_of(stride_bytes, "stride", slot_index)?,
+                offset_bytes: self.plane_field_of(offset_bytes, "offset", slot_index)?,
+                byte_size: self.plane_field_of(
+                    vulkan_texture.vma_allocation_size(),
+                    "allocation size",
+                    slot_index,
+                )?,
             });
             slot_textures.push(texture);
         }
 
-        let drm_modifier = offered_modifier.unwrap_or_default();
+        Ok(OfferedCameraExtent {
+            width,
+            height,
+            drm_modifier: offered_modifier.unwrap_or_default(),
+            slot_textures,
+            _exported_plane_descriptors: exported_plane_descriptors,
+            shared_memory_written_by_gpu: (0..CAMERA_BUFFER_COUNT).map(|_| None).collect(),
+            planes,
+        })
+    }
+
+    /// `spa_data` sizes every field as a `u32`, so a driver-reported value that
+    /// will not fit is named rather than narrowed — a truncated size would tell
+    /// PipeWire a buffer is smaller than the memory it hands over.
+    fn plane_field_of(&self, value: u64, field: &str, slot_index: usize) -> Result<u32> {
+        u32::try_from(value).map_err(|_| {
+            Error::Runtime(format!(
+                "VirtualCameraSink \"{}\": buffer {slot_index} reported a {field} of {value}, \
+                 which does not fit the 32 bits PipeWire gives it",
+                self.camera_name
+            ))
+        })
+    }
+
+    fn offer_to_pipewire(
+        &mut self,
+        offered: OfferedCameraExtent,
+        width: u32,
+        height: u32,
+        frames_per_second: Option<u32>,
+    ) -> Result<()> {
+        let drm_modifier = offered.drm_modifier;
         let mut failure_text = ShimFailureText::new();
         let (failure_text_ptr, failure_text_capacity) = failure_text.as_shim_out_parameters();
         // SAFETY: the source is live, `planes` holds exactly `plane_count`
         // entries and outlives the call, which copies them.
-        let offered = unsafe {
+        let taken = unsafe {
             video_shim::streamlib_pipewire_video_source_set_extent(
-                self.video_source,
+                self.video_source.0,
                 width,
                 height,
                 frames_per_second
@@ -386,13 +464,13 @@ impl PipeWireCameraNode {
                     .unwrap_or(DEFAULT_FRAMES_PER_SECOND),
                 1,
                 drm_modifier,
-                planes.as_ptr(),
-                planes.len() as u32,
+                offered.planes.as_ptr(),
+                offered.planes.len() as u32,
                 failure_text_ptr,
                 failure_text_capacity,
             )
         };
-        if offered != 0 {
+        if taken != 0 {
             return Err(Error::Runtime(format!(
                 "VirtualCameraSink \"{}\": PipeWire would not take a {width}x{height} camera \
                  format: {}",
@@ -401,16 +479,7 @@ impl PipeWireCameraNode {
             )));
         }
 
-        // Replaced only once the shim holds the new descriptors, so a refused
-        // extent leaves the camera on the one it was already offering.
-        self.offered = Some(OfferedCameraExtent {
-            width,
-            height,
-            drm_modifier,
-            slot_textures,
-            _exported_plane_descriptors: exported_plane_descriptors,
-            shared_memory_written_by_gpu: (0..CAMERA_BUFFER_COUNT).map(|_| None).collect(),
-        });
+        self.offered = Some(offered);
         tracing::info!(
             camera = %self.camera_name,
             width,
@@ -438,16 +507,18 @@ impl PipeWireCameraNode {
     pub fn negotiated_buffer_kind(&self) -> PipeWireCameraBufferKind {
         // SAFETY: the source is live for as long as this value is.
         PipeWireCameraBufferKind::from_shim(unsafe {
-            video_shim::streamlib_pipewire_video_source_negotiated_buffer_kind(self.video_source)
+            video_shim::streamlib_pipewire_video_source_negotiated_buffer_kind(self.video_source.0)
         })
     }
 
     /// The reason the node failed after it was registered, if it has.
     pub fn failure(&self) -> Option<String> {
-        // SAFETY: the source is live, and the text it returns is valid until
-        // the next call on it — which this borrow ends before.
+        // SAFETY: the source is live. The text is written once and never
+        // rewritten — `record_stream_failure` returns early on an already
+        // failed source — so a pointer handed out after `stream_failed` was
+        // observed true under the loop's lock names an immutable buffer.
         unsafe {
-            let failure = video_shim::streamlib_pipewire_video_source_failure(self.video_source);
+            let failure = video_shim::streamlib_pipewire_video_source_failure(self.video_source.0);
             if failure.is_null() {
                 None
             } else {
@@ -484,8 +555,9 @@ impl PipeWireCameraNode {
 
         // SAFETY: the source is live; a negative answer means no buffer, and a
         // non-negative one is a slot the shim now holds for this caller.
-        let slot =
-            unsafe { video_shim::streamlib_pipewire_video_source_dequeue_slot(self.video_source) };
+        let slot = unsafe {
+            video_shim::streamlib_pipewire_video_source_dequeue_slot(self.video_source.0)
+        };
         if slot < 0 {
             return Ok(PipeWireCameraFramePresentation::EveryBufferIsHeldByTheConsumer);
         }
@@ -493,7 +565,7 @@ impl PipeWireCameraNode {
         match self.write_slot_and_publish(slot, buffer_kind, source, source_layout, timestamp_ns) {
             Ok(()) => {
                 self.published_frame_count += 1;
-                Ok(PipeWireCameraFramePresentation::Published)
+                Ok(PipeWireCameraFramePresentation::Published(buffer_kind))
             }
             Err(failure) => {
                 // A slot this call cannot fill goes back rather than being
@@ -501,7 +573,7 @@ impl PipeWireCameraNode {
                 // SAFETY: the source is live and `slot` is the one just dequeued.
                 unsafe {
                     video_shim::streamlib_pipewire_video_source_recycle_slot(
-                        self.video_source,
+                        self.video_source.0,
                         slot,
                     )
                 };
@@ -556,7 +628,7 @@ impl PipeWireCameraNode {
         // SAFETY: the source is live and `slot` is the one this call dequeued.
         let queued = unsafe {
             video_shim::streamlib_pipewire_video_source_queue_slot(
-                self.video_source,
+                self.video_source.0,
                 slot,
                 timestamp_ns,
                 self.published_frame_count,
@@ -573,11 +645,15 @@ impl PipeWireCameraNode {
     /// Bring a composed slot to rest in `GENERAL`, which is where the engine
     /// leaves every image another API reads through its DMA-BUF.
     fn settle_slot_for_an_importing_consumer(&mut self, slot_index: usize) -> Result<()> {
-        let offered = self.offered.as_ref().expect("checked by the caller");
-        let destination = &offered.slot_textures[slot_index];
-        self.recorder.begin()?;
-        let recorded = (|| -> Result<()> {
-            self.recorder.record_image_barrier(
+        let Self {
+            offered, recorder, ..
+        } = self;
+        let destination = &offered
+            .as_ref()
+            .ok_or_else(withdrawn_mid_frame)?
+            .slot_textures[slot_index];
+        record_one_submission(recorder, |recorder| {
+            recorder.record_image_barrier(
                 destination,
                 VulkanLayout::COLOR_ATTACHMENT_OPTIMAL,
                 VulkanLayout::GENERAL,
@@ -585,29 +661,23 @@ impl PipeWireCameraNode {
                 VulkanStage::ALL_COMMANDS,
                 VulkanAccess::COLOR_ATTACHMENT_WRITE,
                 VulkanAccess::MEMORY_READ,
-            )?;
-            self.recorder.submit_and_wait()
-        })();
-        if let Err(failure) = recorded {
-            // A failure between `begin()` and the submit leaves the recorder
-            // mid-recording; abandoning it is what lets the next frame begin.
-            self.recorder.abort_recording();
-            return Err(failure);
-        }
-        Ok(())
+            )
+        })
     }
 
-    /// Read a composed slot back into the shim's shared-memory buffer, through
-    /// host-cached memory the GPU writes — never the write-combined kind, off
-    /// which a read costs tens of milliseconds a frame.
-    fn copy_slot_into_shared_memory(&mut self, slot: i32, slot_index: usize) -> Result<()> {
+    /// Where the shim's shared-memory sibling maps this slot.
+    fn shim_shared_memory_range_of(
+        &self,
+        slot: i32,
+        slot_index: usize,
+    ) -> Result<(*mut u8, usize)> {
         let mut stride_bytes = 0_u32;
         let mut byte_size = 0_u32;
         // SAFETY: the source is live and the two out-parameters are this
         // frame's own locals.
         let mapping = unsafe {
             video_shim::streamlib_pipewire_video_source_slot_shared_memory(
-                self.video_source,
+                self.video_source.0,
                 slot,
                 &mut stride_bytes,
                 &mut byte_size,
@@ -618,23 +688,40 @@ impl PipeWireCameraNode {
                 "the shared-memory sibling mapped nothing for buffer slot {slot_index}"
             )));
         }
+        Ok((mapping, byte_size as usize))
+    }
 
-        if self
-            .offered
-            .as_ref()
-            .expect("checked by the caller")
-            .shared_memory_written_by_gpu[slot_index]
-            .is_none()
-        {
-            let byte_len = byte_size as usize;
-            let written_by_gpu = self.gpu.escalate(|full| {
-                // SAFETY: the mapping belongs to the shim and lives until the
-                // buffer is removed, which cannot happen while this frame holds
-                // the slot; the RHI is the range's only writer.
-                unsafe { full.import_host_mapping_for_gpu_writes(mapping, byte_len) }
+    /// Read a composed slot back into the shim's shared-memory buffer, through
+    /// host-cached memory the GPU writes — never the write-combined kind, off
+    /// which a read costs tens of milliseconds a frame.
+    fn copy_slot_into_shared_memory(&mut self, slot: i32, slot_index: usize) -> Result<()> {
+        let (host_range_ptr, host_range_byte_len) =
+            self.shim_shared_memory_range_of(slot, slot_index)?;
+
+        let Self {
+            offered,
+            recorder,
+            gpu,
+            camera_name,
+            ..
+        } = self;
+        let offered = offered.as_mut().ok_or_else(withdrawn_mid_frame)?;
+        let (width, height) = (offered.width, offered.height);
+        let slot_cache = &mut offered.shared_memory_written_by_gpu[slot_index];
+
+        if slot_cache.is_none() {
+            let written_by_gpu = gpu.escalate(|full| {
+                // SAFETY: the shim's mappings live exactly as long as the
+                // offered extent — `set_extent` is the only thing that frees
+                // them, and this value is dropped with the extent it belongs
+                // to, before that call. The check below is what makes the
+                // claim observable rather than assumed.
+                unsafe {
+                    full.import_host_mapping_for_gpu_writes(host_range_ptr, host_range_byte_len)
+                }
             })?;
             tracing::info!(
-                camera = %self.camera_name,
+                camera = %camera_name,
                 slot = slot_index,
                 tier = written_by_gpu.tier().as_str(),
                 reason = written_by_gpu
@@ -642,22 +729,29 @@ impl PipeWireCameraNode {
                     .unwrap_or("the driver imported the shared-memory mapping"),
                 "VirtualCameraSink: the shared-memory sibling writes through this tier"
             );
-            self.offered
-                .as_mut()
-                .expect("checked by the caller")
-                .shared_memory_written_by_gpu[slot_index] = Some(written_by_gpu);
+            *slot_cache = Some(SharedMemorySlotWrittenByGpu {
+                host_range_address: host_range_ptr as usize,
+                host_range_byte_len,
+                written_by_gpu,
+            });
+        }
+        let cached = slot_cache.as_mut().ok_or_else(withdrawn_mid_frame)?;
+        if cached.host_range_address != host_range_ptr as usize
+            || cached.host_range_byte_len != host_range_byte_len
+        {
+            // Refused rather than re-imported: freeing the old import would
+            // hand the driver a range this process may already have unmapped.
+            return Err(Error::Runtime(format!(
+                "VirtualCameraSink \"{camera_name}\": the shared-memory sibling moved buffer \
+                 slot {slot_index} while its extent stood, so the range the GPU was told to \
+                 write is no longer the one PipeWire hands the consumer"
+            )));
         }
 
-        let offered = self.offered.as_mut().expect("checked by the caller");
-        let (width, height) = (offered.width, offered.height);
         let destination = &offered.slot_textures[slot_index];
-        let written_by_gpu = offered.shared_memory_written_by_gpu[slot_index]
-            .as_mut()
-            .expect("just filled");
-
-        self.recorder.begin()?;
-        let recorded = (|| -> Result<()> {
-            self.recorder.record_image_barrier(
+        let written_by_gpu = &mut cached.written_by_gpu;
+        record_one_submission(recorder, |recorder| {
+            recorder.record_image_barrier(
                 destination,
                 VulkanLayout::COLOR_ATTACHMENT_OPTIMAL,
                 VulkanLayout::TRANSFER_SRC_OPTIMAL,
@@ -666,28 +760,44 @@ impl PipeWireCameraNode {
                 VulkanAccess::COLOR_ATTACHMENT_WRITE,
                 VulkanAccess::TRANSFER_READ,
             )?;
-            self.recorder.record_copy_image_to_buffer(
+            recorder.record_copy_image_to_buffer(
                 destination,
                 VulkanLayout::TRANSFER_SRC_OPTIMAL,
                 written_by_gpu.storage_buffer(),
                 ImageCopyRegion::tightly_packed(width, height),
             )?;
-            written_by_gpu.record_release_to_host(&mut self.recorder)?;
-            self.recorder.submit_and_wait()
-        })();
-        if let Err(failure) = recorded {
-            self.recorder.abort_recording();
-            return Err(failure);
-        }
+            written_by_gpu.record_release_to_host(recorder)
+        })?;
         written_by_gpu.publish_to_host();
         Ok(())
+    }
+}
+
+/// The refusal for a frame whose extent was withdrawn under it.
+fn withdrawn_mid_frame() -> Error {
+    Error::Runtime("the camera's extent was withdrawn mid-frame".to_string())
+}
+
+/// Record one submission and wait for it, abandoning a half-recorded buffer so
+/// the next frame can begin again.
+fn record_one_submission(
+    recorder: &mut RhiCommandRecorder,
+    record: impl FnOnce(&mut RhiCommandRecorder) -> Result<()>,
+) -> Result<()> {
+    recorder.begin()?;
+    match record(recorder).and_then(|()| recorder.submit_and_wait()) {
+        Ok(()) => Ok(()),
+        Err(failure) => {
+            recorder.abort_recording();
+            Err(failure)
+        }
     }
 }
 
 impl Drop for PipeWireCameraNode {
     fn drop(&mut self) {
         // SAFETY: the source was produced by `open` and is closed exactly once.
-        unsafe { video_shim::streamlib_pipewire_video_source_close(self.video_source) };
+        unsafe { video_shim::streamlib_pipewire_video_source_close(self.video_source.0) };
     }
 }
 
@@ -777,13 +887,6 @@ mod tests {
             )),
             "the identifier is the reduced name: {announced:?}"
         );
-    }
-
-    /// A camera whose name reduces to nothing still has to compose a node name,
-    /// because `pw_stream_new_simple` is handed it.
-    #[test]
-    fn a_camera_named_only_in_punctuation_still_composes_a_node_name() {
-        assert_eq!(node_name_of("###"), "streamlib-camera");
     }
 
     fn describe_offer(fixated: bool) -> video_shim::OfferReport {

@@ -941,22 +941,22 @@ impl VirtualCameraSink::Processor {
             return Ok(());
         };
 
-        if camera.offered_extent() != Some((frame.width, frame.height)) {
-            if let Some((width, height)) = camera.offered_extent() {
-                tracing::info!(
-                    camera = %self.camera_name,
-                    from = format!("{width}x{height}"),
-                    to = format!("{}x{}", frame.width, frame.height),
-                    "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME}: upstream extent changed — \
-                     re-negotiating the camera format; consumers reconnect"
-                );
+        match camera.offered_extent() {
+            Some(extent) if extent == (frame.width, frame.height) => {}
+            already_offered => {
+                if let Some((width, height)) = already_offered {
+                    tracing::info!(
+                        camera = %self.camera_name,
+                        from = format!("{width}x{height}"),
+                        to = format!("{}x{}", frame.width, frame.height),
+                        "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME}: upstream extent changed — \
+                         re-negotiating the camera format; consumers reconnect"
+                    );
+                }
+                camera
+                    .offer_extent(frame.width, frame.height, frame.fps)
+                    .map_err(|e| LatchedRefusal::DeviceConfiguration(e.to_string()))?;
             }
-            // One escalation per extent, not per frame: the buffers a consumer
-            // imports are allocated here, and nothing else on this path needs
-            // full access.
-            let (width, height, fps) = (frame.width, frame.height, frame.fps);
-            gpu.escalate(|full| camera.offer_extent(full, width, height, fps))
-                .map_err(|e| LatchedRefusal::DeviceConfiguration(e.to_string()))?;
         }
 
         let registration = resolve_frame_to_a_sampled_texture(gpu, frame)
@@ -968,10 +968,9 @@ impl VirtualCameraSink::Processor {
         );
         // Read while the camera is still borrowed; the counters below take the
         // sink itself.
-        let buffer_path = camera.negotiated_buffer_kind();
         let drm_modifier = camera.offered_drm_modifier();
         match presented {
-            Ok(PipeWireCameraFramePresentation::Published) => {
+            Ok(PipeWireCameraFramePresentation::Published(buffer_path)) => {
                 self.count_a_written_frame(frame);
                 if self.frames_written == 1 && !self.tier_logged {
                     tracing::info!(
@@ -1420,7 +1419,6 @@ fn write_frame_into_buffer(
         bytesperline,
         &resolved_color,
     )?;
-    let source_layout = VulkanLayout::SHADER_READ_ONLY_OPTIMAL;
     let recorder = &mut gpu_side.recorder;
     recorder.begin()?;
     // A failure between `begin()` and the submit leaves the recorder mid-
@@ -1428,8 +1426,8 @@ fn write_frame_into_buffer(
     let recorded = (|| -> Result<()> {
         recorder.record_image_barrier(
             registration.texture(),
-            source_layout,
-            source_layout,
+            VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+            VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
             VulkanStage::ALL_COMMANDS,
             VulkanStage::COMPUTE_SHADER,
             VulkanAccess::MEMORY_WRITE,

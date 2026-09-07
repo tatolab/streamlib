@@ -137,8 +137,13 @@ struct StreamLibPipeWireVideoSource *streamlib_pipewire_video_source_open(
 /// `drm_modifier`, beside a shared-memory sibling the consumer may take
 /// instead. Activates the stream, and replaces any extent offered earlier.
 ///
-/// The descriptors are borrowed for the source's life, not duplicated: the
-/// caller's textures own them and must outlive the source or the next call.
+/// The shim duplicates each descriptor, so the caller's textures may close
+/// theirs whenever they like.
+///
+/// This frees the previous extent's shared-memory sibling, so a caller holding
+/// an RHI import of it must drop that import *before* calling — the shim's
+/// mappings live exactly as long as the extent that allocated them, which is
+/// what makes such an import safe to hold across frames at all.
 int streamlib_pipewire_video_source_set_extent(
     struct StreamLibPipeWireVideoSource *video_source, uint32_t width, uint32_t height,
     uint32_t framerate_numerator, uint32_t framerate_denominator, uint64_t drm_modifier,
@@ -160,6 +165,9 @@ int32_t streamlib_pipewire_video_source_dequeue_slot(
 
 /// Where slot `slot` maps on the shared-memory sibling, or NULL on the DMA-BUF
 /// path where the consumer imports the caller's texture instead.
+///
+/// Stable for the offered extent's whole life: a consumer disconnecting and
+/// reconnecting retires PipeWire's buffers but not this mapping.
 uint8_t *streamlib_pipewire_video_source_slot_shared_memory(
     struct StreamLibPipeWireVideoSource *video_source, int32_t slot, uint32_t *stride_bytes_out,
     uint32_t *byte_size_out);

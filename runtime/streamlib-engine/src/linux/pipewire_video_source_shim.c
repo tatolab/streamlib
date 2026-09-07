@@ -3,6 +3,7 @@
 
 #include "pipewire_video_source_shim.h"
 
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -42,13 +43,23 @@
 /// away in `pw-dump` whatever the user called it.
 #define STREAMLIB_PIPEWIRE_VIDEO_NODE_NAME_PREFIX "streamlib-camera-"
 
-/// One negotiated buffer: the consumer's, filled by whichever path won.
+/// One negotiated buffer, in two lifetimes.
+///
+/// The first three live with PipeWire's buffer set — added and removed as
+/// consumers come and go. The shared-memory allocation lives with the *offered
+/// extent* instead, and is deliberately not freed when a buffer is removed: the
+/// caller imports that mapping into the RHI for the extent's whole life, and a
+/// mapping that came and went under a consumer reconnect would leave the GPU
+/// writing an address this process no longer owns.
 struct StreamLibPipeWireVideoBufferSlot {
     struct pw_buffer *pipewire_buffer;
     /// Held between dequeue and queue, and NULL otherwise.
     struct pw_buffer *dequeued_buffer;
-    /// The shared-memory sibling's own allocation; -1 and NULL on the DMA-BUF
-    /// path, where the caller's texture is the memory.
+    /// The shim's own copy of the caller's exported descriptor, so each side
+    /// closes what it opened; -1 on the shared-memory sibling.
+    int dma_buf_fd;
+    /// The shared-memory sibling's own allocation; -1 and NULL until a consumer
+    /// takes that sibling, and then stable until the extent is replaced.
     int shared_memory_fd;
     uint8_t *shared_memory;
     size_t shared_memory_byte_size;
@@ -71,7 +82,6 @@ struct StreamLibPipeWireVideoSource {
 
     uint32_t negotiated_buffer_kind;
     struct StreamLibPipeWireVideoBufferSlot slots[STREAMLIB_PIPEWIRE_VIDEO_MAX_BUFFERS];
-    uint32_t slot_count;
 
     bool stream_failed;
     char stream_failure_text[256];
@@ -268,27 +278,40 @@ static uint32_t offered_byte_size(const struct StreamLibPipeWireVideoSource *vid
     return offered_stride_bytes(video_source) * video_source->offered_format.height;
 }
 
-/// Release whatever the shared-memory sibling allocated for one slot.
-static void release_slot(struct StreamLibPipeWireVideoBufferSlot *slot)
+/// Give up one buffer of PipeWire's set, leaving the extent's shared memory
+/// where it is.
+static void release_slot_buffer(struct StreamLibPipeWireVideoBufferSlot *slot)
 {
-    if (slot->shared_memory != NULL) {
-        munmap(slot->shared_memory, slot->shared_memory_byte_size);
-        slot->shared_memory = NULL;
+    if (slot->dma_buf_fd >= 0) {
+        close(slot->dma_buf_fd);
+        slot->dma_buf_fd = -1;
     }
-    if (slot->shared_memory_fd >= 0) {
-        close(slot->shared_memory_fd);
-        slot->shared_memory_fd = -1;
-    }
-    slot->shared_memory_byte_size = 0;
     slot->pipewire_buffer = NULL;
     slot->dequeued_buffer = NULL;
 }
 
-static void release_every_slot(struct StreamLibPipeWireVideoSource *video_source)
+static void release_every_slot_buffer(struct StreamLibPipeWireVideoSource *video_source)
 {
     for (uint32_t index = 0; index < STREAMLIB_PIPEWIRE_VIDEO_MAX_BUFFERS; index++)
-        release_slot(&video_source->slots[index]);
-    video_source->slot_count = 0;
+        release_slot_buffer(&video_source->slots[index]);
+}
+
+/// Give up the extent's shared memory. Only a replaced extent or a closing
+/// source may do this, because the caller's RHI import names these addresses.
+static void release_every_slot_shared_memory(struct StreamLibPipeWireVideoSource *video_source)
+{
+    for (uint32_t index = 0; index < STREAMLIB_PIPEWIRE_VIDEO_MAX_BUFFERS; index++) {
+        struct StreamLibPipeWireVideoBufferSlot *slot = &video_source->slots[index];
+        if (slot->shared_memory != NULL) {
+            munmap(slot->shared_memory, slot->shared_memory_byte_size);
+            slot->shared_memory = NULL;
+        }
+        if (slot->shared_memory_fd >= 0) {
+            close(slot->shared_memory_fd);
+            slot->shared_memory_fd = -1;
+        }
+        slot->shared_memory_byte_size = 0;
+    }
 }
 
 /// Answer PipeWire's format offer.
@@ -369,23 +392,58 @@ static void on_stream_param_changed(void *data, uint32_t id, const struct spa_po
 /// On the DMA-BUF path the memory is the caller's texture and this only writes
 /// the descriptor down; on the shared-memory sibling the shim allocates, since
 /// `PW_STREAM_FLAG_ALLOC_BUFFERS` makes every block the client's to provide.
+/// The slot a newly added buffer takes: the first one PipeWire is not already
+/// holding.
+///
+/// First-free rather than a running count, because `remove_buffer` can retire
+/// buffers in any order — a counter would hand the next `add_buffer` a slot
+/// still in use, and the slot index *is* which of the caller's textures the
+/// buffer names.
+static int32_t first_free_slot(const struct StreamLibPipeWireVideoSource *video_source)
+{
+    for (uint32_t index = 0; index < video_source->plane_count; index++) {
+        if (video_source->slots[index].pipewire_buffer == NULL)
+            return (int32_t)index;
+    }
+    return -1;
+}
+
+/// Give one allocated PipeWire buffer its memory.
+///
+/// On the DMA-BUF path the memory is the caller's texture and this writes down
+/// its own duplicate of the descriptor; on the shared-memory sibling the shim
+/// allocates, since `PW_STREAM_FLAG_ALLOC_BUFFERS` makes every block the
+/// client's to provide. That allocation happens at most once per offered
+/// extent — see `struct StreamLibPipeWireVideoBufferSlot`.
 static void on_stream_add_buffer(void *data, struct pw_buffer *buffer)
 {
     struct StreamLibPipeWireVideoSource *video_source = data;
     struct spa_data *block = &buffer->buffer->datas[0];
 
-    if (video_source->slot_count >= video_source->plane_count) {
+    int32_t slot_index = first_free_slot(video_source);
+    if (slot_index < 0) {
         record_stream_failure(video_source,
                               "PipeWire allocated more buffers than the source exported");
         return;
     }
-    uint32_t slot_index = video_source->slot_count;
     struct StreamLibPipeWireVideoBufferSlot *slot = &video_source->slots[slot_index];
 
     if (block->type == SPA_DATA_DmaBuf) {
         const struct StreamLibPipeWireVideoDmaBufPlane *plane = &video_source->planes[slot_index];
+        // Duplicated rather than borrowed: the caller's texture owns the
+        // descriptor it exported and may close it the moment it offers a new
+        // extent, while PipeWire still names this buffer. Each side closing
+        // only what it opened is what keeps that from becoming a reused
+        // descriptor pointing at someone else's file.
+        int duplicated = fcntl(plane->file_descriptor, F_DUPFD_CLOEXEC, 0);
+        if (duplicated < 0) {
+            record_stream_failure(video_source,
+                                  "the camera's exported DMA-BUF could not be duplicated");
+            return;
+        }
+        slot->dma_buf_fd = duplicated;
         block->flags = SPA_DATA_FLAG_READABLE;
-        block->fd = plane->file_descriptor;
+        block->fd = duplicated;
         block->mapoffset = plane->offset_bytes;
         block->maxsize = plane->byte_size;
         block->data = NULL;
@@ -393,47 +451,48 @@ static void on_stream_add_buffer(void *data, struct pw_buffer *buffer)
         block->chunk->stride = (int32_t)plane->stride_bytes;
         block->chunk->size = plane->byte_size;
     } else {
-        size_t byte_size = offered_byte_size(video_source);
-        int shared_memory_fd = memfd_create("streamlib-camera", MFD_CLOEXEC);
-        if (shared_memory_fd < 0) {
-            record_stream_failure(video_source,
-                                  "the shared-memory sibling could not create a memfd");
-            return;
+        if (slot->shared_memory == NULL) {
+            size_t byte_size = offered_byte_size(video_source);
+            int shared_memory_fd = memfd_create("streamlib-camera", MFD_CLOEXEC);
+            if (shared_memory_fd < 0) {
+                record_stream_failure(video_source,
+                                      "the shared-memory sibling could not create a memfd");
+                return;
+            }
+            if (ftruncate(shared_memory_fd, (off_t)byte_size) < 0) {
+                close(shared_memory_fd);
+                record_stream_failure(video_source,
+                                      "the shared-memory sibling could not size its memfd");
+                return;
+            }
+            void *mapping = mmap(NULL, byte_size, PROT_READ | PROT_WRITE, MAP_SHARED,
+                                 shared_memory_fd, 0);
+            if (mapping == MAP_FAILED) {
+                close(shared_memory_fd);
+                record_stream_failure(video_source,
+                                      "the shared-memory sibling could not map its memfd");
+                return;
+            }
+            slot->shared_memory_fd = shared_memory_fd;
+            slot->shared_memory = mapping;
+            slot->shared_memory_byte_size = byte_size;
         }
-        if (ftruncate(shared_memory_fd, (off_t)byte_size) < 0) {
-            close(shared_memory_fd);
-            record_stream_failure(video_source,
-                                  "the shared-memory sibling could not size its memfd");
-            return;
-        }
-        void *mapping = mmap(NULL, byte_size, PROT_READ | PROT_WRITE, MAP_SHARED, shared_memory_fd,
-                             0);
-        if (mapping == MAP_FAILED) {
-            close(shared_memory_fd);
-            record_stream_failure(video_source, "the shared-memory sibling could not map its "
-                                                "memfd");
-            return;
-        }
-        slot->shared_memory_fd = shared_memory_fd;
-        slot->shared_memory = mapping;
-        slot->shared_memory_byte_size = byte_size;
 
         block->type = SPA_DATA_MemFd;
         block->flags = SPA_DATA_FLAG_READABLE;
-        block->fd = shared_memory_fd;
+        block->fd = slot->shared_memory_fd;
         block->mapoffset = 0;
-        block->maxsize = (uint32_t)byte_size;
-        block->data = mapping;
+        block->maxsize = (uint32_t)slot->shared_memory_byte_size;
+        block->data = slot->shared_memory;
         block->chunk->offset = 0;
         block->chunk->stride = (int32_t)offered_stride_bytes(video_source);
-        block->chunk->size = (uint32_t)byte_size;
+        block->chunk->size = (uint32_t)slot->shared_memory_byte_size;
     }
 
     slot->pipewire_buffer = buffer;
     // The slot index is how a dequeued buffer names the caller's plane at the
     // same index, so it has to survive the round trip through PipeWire.
     buffer->user_data = (void *)(uintptr_t)(slot_index + 1);
-    video_source->slot_count++;
 }
 
 static void on_stream_remove_buffer(void *data, struct pw_buffer *buffer)
@@ -442,12 +501,7 @@ static void on_stream_remove_buffer(void *data, struct pw_buffer *buffer)
     for (uint32_t index = 0; index < STREAMLIB_PIPEWIRE_VIDEO_MAX_BUFFERS; index++) {
         if (video_source->slots[index].pipewire_buffer != buffer)
             continue;
-        release_slot(&video_source->slots[index]);
-        // The slots are filled in add order and torn down as a set, so the
-        // count follows the last one removed rather than being decremented
-        // out of order.
-        if (index < video_source->slot_count)
-            video_source->slot_count = index;
+        release_slot_buffer(&video_source->slots[index]);
         return;
     }
 }
@@ -490,7 +544,7 @@ static void destroy_video_source(struct StreamLibPipeWireVideoSource *video_sour
         video_source->entry_points.pw_stream_disconnect(video_source->stream);
         video_source->entry_points.pw_stream_destroy(video_source->stream);
         video_source->stream = NULL;
-        release_every_slot(video_source);
+        release_every_slot_buffer(video_source);
         video_source->entry_points.pw_thread_loop_unlock(video_source->thread_loop);
     }
     if (video_source->thread_loop != NULL) {
@@ -498,7 +552,8 @@ static void destroy_video_source(struct StreamLibPipeWireVideoSource *video_sour
         video_source->entry_points.pw_thread_loop_destroy(video_source->thread_loop);
         video_source->thread_loop = NULL;
     }
-    release_every_slot(video_source);
+    release_every_slot_buffer(video_source);
+    release_every_slot_shared_memory(video_source);
     free(video_source);
 }
 
@@ -524,8 +579,10 @@ struct StreamLibPipeWireVideoSource *streamlib_pipewire_video_source_open(
     }
     streamlib_pipewire_copy_entry_points(&video_source->entry_points, entry_points);
     const struct StreamLibPipeWireEntryPoints *resolved = &video_source->entry_points;
-    for (uint32_t index = 0; index < STREAMLIB_PIPEWIRE_VIDEO_MAX_BUFFERS; index++)
+    for (uint32_t index = 0; index < STREAMLIB_PIPEWIRE_VIDEO_MAX_BUFFERS; index++) {
+        video_source->slots[index].dma_buf_fd = -1;
         video_source->slots[index].shared_memory_fd = -1;
+    }
 
     uint32_t property_count = streamlib_pipewire_video_source_properties(
         composed_properties, STREAMLIB_PIPEWIRE_VIDEO_SOURCE_PROPERTY_COUNT, camera_name,
@@ -617,6 +674,12 @@ int streamlib_pipewire_video_source_set_extent(
 
     const struct StreamLibPipeWireEntryPoints *resolved = &video_source->entry_points;
     resolved->pw_thread_loop_lock(video_source->thread_loop);
+
+    // The previous extent's shared memory goes here and nowhere else. The
+    // caller has already dropped whatever imported it — see this function's
+    // contract — and a consumer that still holds a buffer reads through its
+    // own mapping of the memfd, not this address space's.
+    release_every_slot_shared_memory(video_source);
 
     video_source->offered_format = (struct StreamLibPipeWireVideoOfferedFormat){
         .width = width,
