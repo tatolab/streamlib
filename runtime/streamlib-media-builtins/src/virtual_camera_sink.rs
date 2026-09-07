@@ -70,6 +70,14 @@ const CARD_LABEL_CAPACITY_BYTES: usize = 31;
 /// device's count, so four is what every reader can have.
 const LOOPBACK_DEVICE_BUFFER_COUNT: u32 = 4;
 
+/// The layout both doors barrier a frame's texture into before sampling it.
+/// Every sampled descriptor this crate binds declares it — the compute
+/// kernel's `VkDescriptorImageInfo` (`vulkan_compute_kernel.rs`) and the
+/// present compositor's draw alike — and a descriptor read through an image
+/// in any other layout is undefined.
+const LAYOUT_EVERY_SAMPLED_DESCRIPTOR_DECLARES: VulkanLayout =
+    VulkanLayout::SHADER_READ_ONLY_OPTIMAL;
+
 /// Dropped-frame log cadence, in frames.
 const DROPPED_FRAME_REPORT_STEP: u64 = 300;
 
@@ -959,13 +967,9 @@ impl VirtualCameraSink::Processor {
             }
         }
 
-        let registration = resolve_frame_to_a_sampled_texture(gpu, frame)
+        let resolved = resolve_frame_to_a_sampled_texture(gpu, frame)
             .map_err(|e| LatchedRefusal::DeviceConfiguration(e.to_string()))?;
-        let presented = camera.present_texture(
-            registration.texture(),
-            VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
-            frame.timestamp_ns,
-        );
+        let presented = camera.present_texture(&resolved.registration, frame.timestamp_ns);
         // Read while the camera is still borrowed; the counters below take the
         // sink itself.
         let drm_modifier = camera.offered_drm_modifier();
@@ -1118,35 +1122,47 @@ impl VirtualCameraSink::Processor {
     }
 }
 
-/// Resolve a published frame to the GPU texture behind it, refusing a frame
-/// that is not sampled-ready.
+/// Whether a barrier out of this layout keeps the picture.
 ///
-/// A published frame arrives in `SHADER_READ_ONLY_OPTIMAL`; the encoder
-/// built-in holds the same line. Both doors sample the picture rather than
-/// transitioning another processor's surface, and a transition from an unknown
-/// layout would discard it — so a frame in any other layout is refused by name
-/// rather than bridged.
+/// A transition out of `UNDEFINED` is permitted to discard the image, and a
+/// resolve hands `UNDEFINED` back for a surface no producer has published a
+/// layout for. Every other layout carries its content across.
+fn a_barrier_out_of_this_layout_keeps_the_picture(layout: VulkanLayout) -> bool {
+    layout != VulkanLayout::UNDEFINED
+}
+
+/// A resolved frame and the layout its texture was observed in, taken together
+/// so the barrier a door records cannot disagree with the check that admitted
+/// the frame — the registration's layout cell is shared and moves under both.
+struct ResolvedFrameTextureInItsObservedLayout {
+    registration: streamlib::sdk::context::TextureRegistration,
+    observed_layout: VulkanLayout,
+}
+
+/// Resolve a published frame to the GPU texture behind it, refusing one whose
+/// layout a barrier cannot carry.
 fn resolve_frame_to_a_sampled_texture(
     gpu: &GpuContextLimitedAccess,
     frame: &VideoFrame,
-) -> Result<streamlib::sdk::context::TextureRegistration> {
+) -> Result<ResolvedFrameTextureInItsObservedLayout> {
     let registration = gpu.resolve_texture_registration_by_surface_id(
         &frame.surface_id,
         frame.texture_layout,
         frame.width,
         frame.height,
     )?;
-    let source_layout = registration.current_layout();
-    if source_layout != VulkanLayout::SHADER_READ_ONLY_OPTIMAL {
+    let observed_layout = registration.current_layout();
+    if !a_barrier_out_of_this_layout_keeps_the_picture(observed_layout) {
         return Err(Error::Runtime(format!(
-            "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME}: frame {} is in layout {} rather than \
-             SHADER_READ_ONLY_OPTIMAL ({})",
-            frame.surface_id,
-            source_layout.0,
-            VulkanLayout::SHADER_READ_ONLY_OPTIMAL.0
+            "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME}: frame {} resolved in layout {}, which a \
+             transition is free to discard — no producer published a layout for this surface",
+            frame.surface_id, observed_layout.0
         )));
     }
-    Ok(registration)
+    Ok(ResolvedFrameTextureInItsObservedLayout {
+        registration,
+        observed_layout,
+    })
 }
 
 /// Open `/dev/video<N>` read-write, retrying a permission refusal until
@@ -1409,7 +1425,8 @@ fn write_frame_into_buffer(
     buffer_index: usize,
     frame: &VideoFrame,
 ) -> Result<()> {
-    let registration = resolve_frame_to_a_sampled_texture(gpu, frame)?;
+    let resolved = resolve_frame_to_a_sampled_texture(gpu, frame)?;
+    let registration = &resolved.registration;
     let resolved_color = streaming.resolved_color;
     let bytesperline = streaming.bytesperline;
     let buffer = &mut streaming.buffers[buffer_index];
@@ -1426,8 +1443,8 @@ fn write_frame_into_buffer(
     let recorded = (|| -> Result<()> {
         recorder.record_image_barrier(
             registration.texture(),
-            VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
-            VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+            resolved.observed_layout,
+            LAYOUT_EVERY_SAMPLED_DESCRIPTOR_DECLARES,
             VulkanStage::ALL_COMMANDS,
             VulkanStage::COMPUTE_SHADER,
             VulkanAccess::MEMORY_WRITE,
@@ -1447,6 +1464,7 @@ fn write_frame_into_buffer(
         recorder.abort_recording();
         return Err(failure);
     }
+    registration.update_layout(LAYOUT_EVERY_SAMPLED_DESCRIPTOR_DECLARES);
     buffer.written_by_gpu.publish_to_host();
     Ok(())
 }
@@ -1796,5 +1814,42 @@ mod tests {
         let capped = camera_name_for(Some(&"x".repeat(40)), Path::new("/apps/desk"), "x");
         assert_eq!(capped.len(), 31);
         assert_eq!(V4l2LoopbackConfig::for_new_camera(&capped).label(), capped);
+    }
+
+    /// Only an unpublished layout is refused. A helper-placed producer — a
+    /// Python processor publishing from a texture it acquired and wrote
+    /// through the CPU door — resolves in `GENERAL`, and a door that refused
+    /// anything but `SHADER_READ_ONLY_OPTIMAL` showed nothing for every graph
+    /// with a Python effect in it.
+    #[test]
+    fn every_published_layout_is_admitted_and_only_an_unpublished_one_is_refused() {
+        assert!(!a_barrier_out_of_this_layout_keeps_the_picture(
+            VulkanLayout::UNDEFINED
+        ));
+        for published in [
+            VulkanLayout::GENERAL,
+            VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+            VulkanLayout::COLOR_ATTACHMENT_OPTIMAL,
+            VulkanLayout::TRANSFER_DST_OPTIMAL,
+            VulkanLayout::TRANSFER_SRC_OPTIMAL,
+        ] {
+            assert!(
+                a_barrier_out_of_this_layout_keeps_the_picture(published),
+                "a barrier out of layout {} carries the picture, so a frame in it is \
+                 the doors' to transition rather than to refuse",
+                published.0
+            );
+        }
+    }
+
+    /// The barrier target is the layout the sampled descriptor declares, not a
+    /// layout the door picked: reading a descriptor through an image in any
+    /// other layout is undefined, however tolerant a driver happens to be.
+    #[test]
+    fn both_doors_barrier_into_the_layout_a_sampled_descriptor_declares() {
+        assert_eq!(
+            LAYOUT_EVERY_SAMPLED_DESCRIPTOR_DECLARES,
+            VulkanLayout::SHADER_READ_ONLY_OPTIMAL
+        );
     }
 }
