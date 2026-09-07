@@ -5,9 +5,10 @@
 
 `TestPatternSource -> VirtualCameraSink`, and a second sink on the same source
 when `--second-name` is given: two cameras from one graph is a second
-`rt.add` and a second `rt.connect`, nothing more. The sink is forced onto the
-loopback door so a machine without the permission refuses by name rather than
-quietly taking another door, which is what the test wants to observe.
+`rt.add` and a second `rt.connect`, nothing more. `--door` is passed straight
+through, and defaults to `v4l2loopback` so a machine without the permission
+refuses by name rather than quietly taking the other door — which is what the
+loopback tests want to observe. The PipeWire test names its door instead.
 
 Readiness is reported as a marker either way: a refusal at `setup()` reaches
 the test as `MARKER:NOT_EVERY_PROCESSOR_RUNNING` with the sink's own text.
@@ -25,6 +26,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--name", required=True, help="the first camera's name")
     parser.add_argument("--second-name", help="a second camera's name, for two from one graph")
+    parser.add_argument(
+        "--door",
+        default="v4l2loopback",
+        choices=("auto", "v4l2loopback", "pipewire"),
+        help="which door the sinks take",
+    )
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=360)
     arguments = parser.parse_args()
@@ -40,7 +47,7 @@ def main() -> None:
     for camera_name in camera_names:
         sink = runtime.add(
             streamlib.VirtualCameraSink,
-            config={"name": camera_name, "door": "v4l2loopback"},
+            config={"name": camera_name, "door": arguments.door},
         )
         runtime.connect(pattern.output("video"), sink.input("video"))
 

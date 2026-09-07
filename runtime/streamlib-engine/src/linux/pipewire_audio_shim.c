@@ -25,30 +25,6 @@
 // call to the exported `pw_log_logt`. Diagnostics here go into the caller's
 // `failure_text` buffer, and the Rust side emits them through `tracing`.
 
-/// The typed view of the pointer array Rust fills.
-struct StreamLibPipeWireEntryPoints {
-#define STREAMLIB_PIPEWIRE_DECLARE_ENTRY_POINT(name, return_type, parameters)                      \
-    return_type (*name) parameters;
-    STREAMLIB_PIPEWIRE_ENTRY_POINTS(STREAMLIB_PIPEWIRE_DECLARE_ENTRY_POINT)
-#undef STREAMLIB_PIPEWIRE_DECLARE_ENTRY_POINT
-};
-
-static const char *const kEntryPointNames[] = {
-#define STREAMLIB_PIPEWIRE_NAME_ENTRY_POINT(name, return_type, parameters) #name,
-    STREAMLIB_PIPEWIRE_ENTRY_POINTS(STREAMLIB_PIPEWIRE_NAME_ENTRY_POINT)
-#undef STREAMLIB_PIPEWIRE_NAME_ENTRY_POINT
-};
-
-// Rust writes the table as a flat array of `dlsym` results and never names a
-// field, so "one pointer per name, in order" is the whole contract between the
-// two halves — and `copy_entry_points` memcpy's `sizeof(struct)` bytes out of
-// that array. This is what pins the two to the same length: padding, or a
-// compiler that sized a member differently, would make that read run past the
-// end of what Rust allocated.
-_Static_assert(sizeof(struct StreamLibPipeWireEntryPoints) ==
-                   sizeof(kEntryPointNames) / sizeof(kEntryPointNames[0]) * sizeof(void (*)(void)),
-               "the entry-point struct must be exactly one function pointer per resolved name");
-
 /// The device's own sample rate and channel count are what a stream settles on
 /// in either direction: rate and channel conversion belong to the read-side
 /// window stage at a consuming port, which converts to what that port declared,
@@ -101,19 +77,6 @@ struct StreamLibPipeWireAudioStream {
 static const char *stream_direction_word(enum StreamLibPipeWireStreamDirection direction)
 {
     return direction == STREAMLIB_PIPEWIRE_STREAM_DIRECTION_PLAYBACK ? "playback" : "capture";
-}
-
-static void copy_failure_text(char *failure_text, size_t failure_text_capacity, const char *text)
-{
-    if (failure_text == NULL || failure_text_capacity == 0)
-        return;
-    snprintf(failure_text, failure_text_capacity, "%s", text);
-}
-
-static void copy_entry_points(struct StreamLibPipeWireEntryPoints *into,
-                              const void *const *entry_points)
-{
-    memcpy(into, entry_points, sizeof(*into));
 }
 
 /// Bytes one scalar of a wire dtype occupies.
@@ -484,74 +447,6 @@ static const struct pw_stream_events *stream_events_for(
                                                                      : &kCaptureStreamEvents;
 }
 
-size_t streamlib_pipewire_entry_point_count(void)
-{
-    return sizeof(kEntryPointNames) / sizeof(kEntryPointNames[0]);
-}
-
-const char *const *streamlib_pipewire_entry_point_names(void)
-{
-    return kEntryPointNames;
-}
-
-void streamlib_pipewire_initialize(const void *const *entry_points)
-{
-    struct StreamLibPipeWireEntryPoints resolved;
-    copy_entry_points(&resolved, entry_points);
-    resolved.pw_init(NULL, NULL);
-}
-
-const char *streamlib_pipewire_loaded_library_version(const void *const *entry_points)
-{
-    struct StreamLibPipeWireEntryPoints resolved;
-    copy_entry_points(&resolved, entry_points);
-    return resolved.pw_get_library_version();
-}
-
-int streamlib_pipewire_daemon_answers(const void *const *entry_points, char *failure_text,
-                                      size_t failure_text_capacity)
-{
-    struct StreamLibPipeWireEntryPoints resolved;
-    copy_entry_points(&resolved, entry_points);
-
-    struct pw_thread_loop *thread_loop = resolved.pw_thread_loop_new("streamlib-audio-probe", NULL);
-    if (thread_loop == NULL) {
-        copy_failure_text(failure_text, failure_text_capacity,
-                          "libpipewire loaded but would not create a thread loop");
-        return 1;
-    }
-
-    int verdict = 0;
-    resolved.pw_thread_loop_lock(thread_loop);
-    if (resolved.pw_thread_loop_start(thread_loop) < 0) {
-        copy_failure_text(failure_text, failure_text_capacity,
-                          "libpipewire loaded but its thread loop would not start");
-        verdict = 1;
-    } else {
-        struct pw_context *context =
-            resolved.pw_context_new(resolved.pw_thread_loop_get_loop(thread_loop), NULL, 0);
-        if (context == NULL) {
-            copy_failure_text(failure_text, failure_text_capacity,
-                              "libpipewire loaded but would not create a context");
-            verdict = 1;
-        } else {
-            struct pw_core *core = resolved.pw_context_connect(context, NULL, 0);
-            if (core == NULL) {
-                copy_failure_text(failure_text, failure_text_capacity,
-                                  "libpipewire loaded but no PipeWire daemon answered");
-                verdict = 1;
-            } else {
-                resolved.pw_core_disconnect(core);
-            }
-            resolved.pw_context_destroy(context);
-        }
-    }
-    resolved.pw_thread_loop_unlock(thread_loop);
-    resolved.pw_thread_loop_stop(thread_loop);
-    resolved.pw_thread_loop_destroy(thread_loop);
-    return verdict;
-}
-
 /// Free everything the stream holds. The caller must not hold the thread loop's
 /// lock — this takes it, and stopping the loop joins its thread.
 ///
@@ -705,10 +600,10 @@ struct StreamLibPipeWireAudioStream *streamlib_pipewire_audio_stream_open(
     if (audio_stream == NULL) {
         snprintf(open_failure_reason, sizeof(open_failure_reason),
                  "out of memory opening a PipeWire %s stream", direction_word);
-        copy_failure_text(failure_text, failure_text_capacity, open_failure_reason);
+        streamlib_pipewire_copy_failure_text(failure_text, failure_text_capacity, open_failure_reason);
         return NULL;
     }
-    copy_entry_points(&audio_stream->entry_points, entry_points);
+    streamlib_pipewire_copy_entry_points(&audio_stream->entry_points, entry_points);
     audio_stream->direction = direction;
     resolved = &audio_stream->entry_points;
 
@@ -805,7 +700,7 @@ struct StreamLibPipeWireAudioStream *streamlib_pipewire_audio_stream_open(
 fail:
     // Copied before the teardown, because the reason may live in the struct the
     // teardown is about to free.
-    copy_failure_text(failure_text, failure_text_capacity, failure_reason);
+    streamlib_pipewire_copy_failure_text(failure_text, failure_text_capacity, failure_reason);
     if (thread_loop_is_locked)
         resolved->pw_thread_loop_unlock(audio_stream->thread_loop);
     destroy_audio_stream(audio_stream);

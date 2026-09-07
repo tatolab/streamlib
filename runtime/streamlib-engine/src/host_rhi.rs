@@ -51,6 +51,13 @@
 
 use std::sync::Arc;
 
+/// The virtual camera's PipeWire door, minted through
+/// [`crate::core::context::GpuContextFullAccess::open_pipewire_camera_node`].
+#[cfg(target_os = "linux")]
+pub use crate::linux::pipewire_video_source::{
+    PipeWireCameraBufferKind, PipeWireCameraFramePresentation, PipeWireCameraNode,
+};
+
 pub use crate::vulkan::rhi::{
     AccelerationStructureKind, HostMarker, HostVulkanBuffer, HostVulkanDevice, HostVulkanTexture,
     HostVulkanTimelineSemaphore, IDENTITY_TRANSFORM, ImageCopyRegion, OffscreenColorTarget,

@@ -8,7 +8,7 @@
 //! ships (`vulkan/rhi/shaders/*.{comp,vert,frag,rgen,rmiss,rchit}`) to
 //! SPIR-V via `glslc` and stages the artifacts in `OUT_DIR` for
 //! `include_bytes!` to consume at compile time, and compiles the PipeWire
-//! audio shim against the vendored PipeWire/SPA headers.
+//! shims against the vendored PipeWire/SPA headers.
 
 fn main() {
     // Link Metal framework on macOS for MP4 writer
@@ -25,23 +25,33 @@ fn main() {
     // Apple path from Linux (`cargo check --target aarch64-apple-darwin`) would
     // otherwise hand this file's sources to a cross toolchain that is not there.
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
-        compile_pipewire_audio_shim();
+        compile_pipewire_shims();
     }
 }
 
-/// Compile the header-only half of the PipeWire audio arm.
+/// Compile the header-only half of every PipeWire arm.
 ///
 /// SPA's pod builders and parsers are `static inline` C with no shared object
 /// behind them, so `dlopen` cannot reach them and they have to be compiled in.
-/// The shim calls libpipewire only through pointers Rust filled with `dlsym`,
+/// The shims call libpipewire only through pointers Rust filled with `dlsym`,
 /// so this adds no `DT_NEEDED` entry — the invariant
 /// `sdk/streamlib-python-wheel/tests/test_wheel_portability.py` enforces.
-fn compile_pipewire_audio_shim() {
-    const SHIM_SOURCE: &str = "src/linux/pipewire_audio_shim.c";
+fn compile_pipewire_shims() {
+    const SHIM_SOURCES: &[&str] = &[
+        "src/linux/pipewire_entry_points.c",
+        "src/linux/pipewire_audio_shim.c",
+        "src/linux/pipewire_video_source_shim.c",
+    ];
+    const SHIM_HEADERS: &[&str] = &[
+        "src/linux/pipewire_entry_points.h",
+        "src/linux/pipewire_audio_shim.h",
+        "src/linux/pipewire_video_source_shim.h",
+    ];
     const VENDORED_HEADERS: &str = "../../vendor/pipewire-headers/include";
 
-    println!("cargo:rerun-if-changed={SHIM_SOURCE}");
-    println!("cargo:rerun-if-changed=src/linux/pipewire_audio_shim.h");
+    for source in SHIM_SOURCES.iter().chain(SHIM_HEADERS) {
+        println!("cargo:rerun-if-changed={source}");
+    }
     println!("cargo:rerun-if-changed={VENDORED_HEADERS}");
 
     let mut build = cc::Build::new();
@@ -52,7 +62,7 @@ fn compile_pipewire_audio_shim() {
         build.define("NDEBUG", None);
     }
     build
-        .file(SHIM_SOURCE)
+        .files(SHIM_SOURCES)
         .include(VENDORED_HEADERS)
         .include("src/linux")
         .std("c11")
@@ -60,7 +70,7 @@ fn compile_pipewire_audio_shim() {
         // which `-std=c11` (rather than `gnu11`) would otherwise hide.
         .define("_GNU_SOURCE", None)
         .warnings(true)
-        .compile("streamlib_pipewire_audio_shim");
+        .compile("streamlib_pipewire_shims");
 }
 
 /// `glslc -O` strips every `OpName`, and a binding with no reflected name
