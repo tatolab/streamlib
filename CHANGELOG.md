@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.18.60](https://github.com/tatolab/streamlib/compare/v0.18.59...v0.18.60) (2026-09-07)
+
+
+### Features
+
+* **examples:** camera-virtual-camera — two cameras from one graph, the showcase ([#2203](https://github.com/tatolab/streamlib/issues/2203)) ([ae34e85](https://github.com/tatolab/streamlib/commit/ae34e856d6e124b0ceb6cd6f2e124c4ca17b7405))
+
 ## [0.18.59](https://github.com/tatolab/streamlib/compare/v0.18.58...v0.18.59) (2026-09-07)
 
 
