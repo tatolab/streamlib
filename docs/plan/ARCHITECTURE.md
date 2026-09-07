@@ -359,7 +359,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   `cuda-fisheye-detection`) rewritten in Python, `camera-compute-kernel` (was
   `camera-plugin-sdk-compute`) and `camera-halftone` (mined from the retired Deno
   example) rebuilt as kernel examples, and `tokio-integration` rewritten as a plain cargo
-  project. `examples/` now stands at thirteen converted beside two held: the two
+  project. `examples/` now stands at fourteen converted beside two held: the two
   vulkan-video examples left the held column into the proof rig,
   `camera-codec-roundtrip` joined the converted one as the codec blocks' showcase — a
   showcase authored in the current idiom is an ordinary addition under the convention
@@ -373,11 +373,16 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   `examples/webrtc-cloudflare-stream` was replaced by `examples/camera-webrtc-publish`
   (camera and microphone through the codec blocks to `WhipPublisher`, credentials from the
   environment), and `examples/whep-player` — a printed deferral at HEAD — was deleted
-  outright.
+  outright. `examples/camera-virtual-camera` then joined the converted column as the
+  virtual camera's showcase, a showcase in the current idiom under the same convention:
+  one `CameraSource` fanned to a `VirtualCameraSink` and to a Python effect feeding a
+  second one, so a graph appears as two named cameras in any other application on the
+  machine and both are gone at Ctrl-C.
   [consumer-tree-disposition — SHIPPED #2053, #2054, #2055, #2056, #2057, #2058, #2059;
   the count restated at codec-roundtrip-reproof #2087, python-codec-block-api #2108,
-  opus-mp4-recording-rung #2129 and networking-extension-wheels #2153]
-  <!-- verify: git ls-files examples/camera-halftone examples/camera-compute-kernel examples/fisheye-object-detection examples/camera-codec-roundtrip -->
+  opus-mp4-recording-rung #2129, networking-extension-wheels #2153 and
+  virtual-camera-sink #2198]
+  <!-- verify: git ls-files examples/camera-halftone examples/camera-compute-kernel examples/fisheye-object-detection examples/camera-codec-roundtrip examples/camera-virtual-camera -->
   <!-- verify: git ls-files examples/camera-audio-recorder/app.py examples/camera-audio-recorder/pyproject.toml -->
 - **DECIDED** — Retired in one sweep, superseded by deleted machinery or shipped pivots:
   `examples/pipelines`, `examples/camera-deno-subprocess` (its halftone effect rebuilt as

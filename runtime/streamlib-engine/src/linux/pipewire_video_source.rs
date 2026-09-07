@@ -23,7 +23,7 @@ use std::ffi::{CStr, CString};
 use std::os::fd::{FromRawFd, OwnedFd};
 use std::sync::Arc;
 
-use crate::core::context::{GpuContextFullAccess, GpuContextLimitedAccess};
+use crate::core::context::{GpuContextFullAccess, GpuContextLimitedAccess, TextureRegistration};
 use crate::core::rhi::{Texture, TextureFormat, VulkanLayout};
 use crate::core::{Error, Result};
 use crate::host_rhi::HostTextureExt;
@@ -529,13 +529,14 @@ impl PipeWireCameraNode {
     /// Write `source` into the next free buffer and publish it, stamped
     /// `timestamp_ns`.
     ///
-    /// `source` is another processor's surface and comes back in the layout it
-    /// was found in: the picture is sampled onto the camera's own texture, never
-    /// transitioned in place.
+    /// `source` is another processor's surface, sampled onto the camera's own
+    /// texture. A frame that is composed comes back in
+    /// `SHADER_READ_ONLY_OPTIMAL` — the layout the compositor's sampled
+    /// descriptor declares — and its registration is republished there; a frame
+    /// no consumer was waiting for is not touched at all.
     pub fn present_texture(
         &mut self,
-        source: &Texture,
-        source_layout: VulkanLayout,
+        source: &TextureRegistration,
         timestamp_ns: i64,
     ) -> Result<PipeWireCameraFramePresentation> {
         if let Some(reason) = self.failure() {
@@ -571,7 +572,7 @@ impl PipeWireCameraNode {
             );
         }
 
-        match self.write_slot_and_publish(slot, buffer_kind, source, source_layout, timestamp_ns) {
+        match self.write_slot_and_publish(slot, buffer_kind, source, timestamp_ns) {
             Ok(()) => {
                 self.published_frame_count += 1;
                 Ok(PipeWireCameraFramePresentation::Published(buffer_kind))
@@ -587,8 +588,7 @@ impl PipeWireCameraNode {
         &mut self,
         slot: i32,
         buffer_kind: PipeWireCameraBufferKind,
-        source: &Texture,
-        source_layout: VulkanLayout,
+        source: &TextureRegistration,
         timestamp_ns: i64,
     ) -> Result<()> {
         let slot_index = slot as usize;
@@ -608,13 +608,17 @@ impl PipeWireCameraNode {
         self.compositor.compose_to_offscreen_texture(
             ONLY_DESCRIPTOR_RING_SLOT,
             destination,
-            source,
-            source_layout,
+            source.texture(),
+            source.current_layout(),
             // The camera's buffers are allocated at the frame's own extent, so
             // every mode is the identity; naming one keeps a later extent race
             // from silently cropping.
             PresentScalingMode::Fit,
         )?;
+        // The compose leaves the source sampled-ready whatever it arrived in,
+        // and the registration is the cell every other consumer of this surface
+        // barriers out of, so it has to learn where the compose left it.
+        source.update_layout(VulkanLayout::SHADER_READ_ONLY_OPTIMAL);
 
         match buffer_kind {
             PipeWireCameraBufferKind::DmaBufImportedByTheConsumer => {

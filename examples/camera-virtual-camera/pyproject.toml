@@ -1,0 +1,18 @@
+[project]
+name = "camera-virtual-camera"
+version = "0.1.0"
+requires-python = ">=3.12"
+# Both doors ship from 0.18.59, but a sink only takes a Python processor's
+# frames from 0.18.60 — which is this example's second camera. The index
+# serves it once the release that follows this example lands.
+dependencies = ["streamlib>=0.18.60", "numpy>=2.1"]
+
+# streamlib is served from its own simple index until the PyPI publication that
+# follows the project rename; everything else resolves from PyPI as usual.
+[[tool.uv.index]]
+name = "streamlib"
+url = "https://tatolab.github.io/streamlib/simple/"
+explicit = true
+
+[tool.uv.sources]
+streamlib = { index = "streamlib" }
