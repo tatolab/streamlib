@@ -295,6 +295,24 @@ static void release_every_slot_buffer(struct StreamLibPipeWireVideoSource *video
         release_slot_buffer(&video_source->slots[index]);
 }
 
+/// Give up the extent's own copies of the caller's exported descriptors.
+///
+/// The shim duplicates on the way in rather than borrowing: between the caller
+/// dropping one extent's descriptors and handing over the next, the numbers
+/// sitting in `planes` would otherwise be closed — and the loop thread can run
+/// `add_buffer` in that window and duplicate a reused descriptor, handing a
+/// consumer an unrelated file as its camera.
+static void release_every_plane_descriptor(struct StreamLibPipeWireVideoSource *video_source)
+{
+    for (uint32_t index = 0; index < video_source->plane_count; index++) {
+        if (video_source->planes[index].file_descriptor >= 0) {
+            close(video_source->planes[index].file_descriptor);
+            video_source->planes[index].file_descriptor = -1;
+        }
+    }
+    video_source->plane_count = 0;
+}
+
 /// Give up the extent's shared memory. Only a replaced extent or a closing
 /// source may do this, because the caller's RHI import names these addresses.
 static void release_every_slot_shared_memory(struct StreamLibPipeWireVideoSource *video_source)
@@ -429,11 +447,11 @@ static void on_stream_add_buffer(void *data, struct pw_buffer *buffer)
 
     if (block->type == SPA_DATA_DmaBuf) {
         const struct StreamLibPipeWireVideoDmaBufPlane *plane = &video_source->planes[slot_index];
-        // Duplicated rather than borrowed: the caller's texture owns the
-        // descriptor it exported and may close it the moment it offers a new
-        // extent, while PipeWire still names this buffer. Each side closing
-        // only what it opened is what keeps that from becoming a reused
-        // descriptor pointing at someone else's file.
+        // Duplicated again, per buffer: `planes` holds the extent's copy,
+        // which `set_extent` closes when the extent is replaced, while this
+        // one lives exactly as long as the buffer PipeWire named it in. One
+        // owner per lifetime is what keeps a descriptor from being closed
+        // while something still reads it.
         int duplicated = fcntl(plane->file_descriptor, F_DUPFD_CLOEXEC, 0);
         if (duplicated < 0) {
             record_stream_failure(video_source,
@@ -554,6 +572,7 @@ static void destroy_video_source(struct StreamLibPipeWireVideoSource *video_sour
     // The buffers went with the stream above; the extent's shared memory is
     // this source's alone and goes last.
     release_every_slot_shared_memory(video_source);
+    release_every_plane_descriptor(video_source);
     free(video_source);
 }
 
@@ -582,6 +601,7 @@ struct StreamLibPipeWireVideoSource *streamlib_pipewire_video_source_open(
     for (uint32_t index = 0; index < STREAMLIB_PIPEWIRE_VIDEO_MAX_BUFFERS; index++) {
         video_source->slots[index].dma_buf_fd = -1;
         video_source->slots[index].shared_memory_fd = -1;
+        video_source->planes[index].file_descriptor = -1;
     }
 
     uint32_t property_count = streamlib_pipewire_video_source_properties(
@@ -680,6 +700,7 @@ int streamlib_pipewire_video_source_set_extent(
     // contract — and a consumer that still holds a buffer reads through its
     // own mapping of the memfd, not this address space's.
     release_every_slot_shared_memory(video_source);
+    release_every_plane_descriptor(video_source);
 
     video_source->offered_format = (struct StreamLibPipeWireVideoOfferedFormat){
         .width = width,
@@ -688,7 +709,20 @@ int streamlib_pipewire_video_source_set_extent(
         .framerate_denominator = framerate_denominator,
         .drm_modifier = drm_modifier,
     };
-    memcpy(video_source->planes, planes, plane_count * sizeof(*planes));
+    for (uint32_t index = 0; index < plane_count; index++) {
+        video_source->planes[index] = planes[index];
+        video_source->planes[index].file_descriptor =
+            fcntl(planes[index].file_descriptor, F_DUPFD_CLOEXEC, 0);
+        if (video_source->planes[index].file_descriptor < 0) {
+            video_source->plane_count = index;
+            release_every_plane_descriptor(video_source);
+            resolved->pw_thread_loop_unlock(video_source->thread_loop);
+            streamlib_pipewire_copy_failure_text(
+                failure_text, failure_text_capacity,
+                "an exported camera buffer's descriptor could not be duplicated");
+            return -1;
+        }
+    }
     video_source->plane_count = plane_count;
     video_source->negotiated_buffer_kind = STREAMLIB_PIPEWIRE_VIDEO_BUFFER_KIND_NONE;
 
@@ -731,10 +765,16 @@ static int32_t slot_index_of(struct pw_buffer *buffer)
 }
 
 int32_t streamlib_pipewire_video_source_dequeue_slot(
-    struct StreamLibPipeWireVideoSource *video_source)
+    struct StreamLibPipeWireVideoSource *video_source, uint32_t *buffer_kind_out)
 {
     const struct StreamLibPipeWireEntryPoints *resolved = &video_source->entry_points;
     resolved->pw_thread_loop_lock(video_source->thread_loop);
+
+    // Read under the same lock as the dequeue: a renegotiation between two
+    // separate calls would hand back a slot allocated for one buffer kind
+    // while the caller still believed the other, and fill it the wrong way.
+    if (buffer_kind_out != NULL)
+        *buffer_kind_out = video_source->negotiated_buffer_kind;
 
     // A slot an earlier frame took and could not fill is still ours, so it is
     // handed out again rather than a fresh one being taken. There is no way to
@@ -832,9 +872,12 @@ int streamlib_pipewire_video_source_queue_slot(struct StreamLibPipeWireVideoSour
     header->pts = timestamp_ns;
     header->dts_offset = 0;
 
-    video_source->slots[slot].dequeued_buffer = NULL;
     int queue_result = resolved->pw_stream_queue_buffer(video_source->stream, buffer);
     if (queue_result >= 0) {
+        // Released only once PipeWire has taken it: a refused queue leaves the
+        // buffer under this caller's control, and forgetting it here would
+        // drop it out of circulation for the stream's whole life.
+        video_source->slots[slot].dequeued_buffer = NULL;
         // The stream is the graph's driver, so nothing runs a cycle until this
         // says one is due.
         resolved->pw_stream_trigger_process(video_source->stream);

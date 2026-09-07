@@ -94,7 +94,10 @@ mod video_shim {
         pub fn streamlib_pipewire_video_source_negotiated_buffer_kind(
             video_source: *mut VideoSource,
         ) -> u32;
-        pub fn streamlib_pipewire_video_source_dequeue_slot(video_source: *mut VideoSource) -> i32;
+        pub fn streamlib_pipewire_video_source_dequeue_slot(
+            video_source: *mut VideoSource,
+            buffer_kind_out: *mut u32,
+        ) -> i32;
         pub fn streamlib_pipewire_video_source_slot_shared_memory(
             video_source: *mut VideoSource,
             slot: i32,
@@ -544,18 +547,28 @@ impl PipeWireCameraNode {
         if self.offered.is_none() {
             return Ok(PipeWireCameraFramePresentation::NoConsumerIsWatching);
         }
-        let buffer_kind = self.negotiated_buffer_kind();
-        if buffer_kind == PipeWireCameraBufferKind::NothingNegotiated {
-            return Ok(PipeWireCameraFramePresentation::NoConsumerIsWatching);
-        }
-
-        // SAFETY: the source is live; a negative answer means no buffer, and a
-        // non-negative one is a slot the shim now holds for this caller.
+        // The kind comes back with the slot, out of one locked call: reading it
+        // separately would let a renegotiation land between the two and leave
+        // this frame filling the slot the wrong way.
+        let mut negotiated_kind = 0_u32;
+        // SAFETY: the source is live and the out-parameter is this frame's own
+        // local; a negative answer means no buffer, and a non-negative one is a
+        // slot the shim now holds for this caller.
         let slot = unsafe {
-            video_shim::streamlib_pipewire_video_source_dequeue_slot(self.video_source.0)
+            video_shim::streamlib_pipewire_video_source_dequeue_slot(
+                self.video_source.0,
+                &mut negotiated_kind,
+            )
         };
+        let buffer_kind = PipeWireCameraBufferKind::from_shim(negotiated_kind);
         if slot < 0 {
-            return Ok(PipeWireCameraFramePresentation::EveryBufferIsHeldByTheConsumer);
+            return Ok(
+                if buffer_kind == PipeWireCameraBufferKind::NothingNegotiated {
+                    PipeWireCameraFramePresentation::NoConsumerIsWatching
+                } else {
+                    PipeWireCameraFramePresentation::EveryBufferIsHeldByTheConsumer
+                },
+            );
         }
 
         match self.write_slot_and_publish(slot, buffer_kind, source, source_layout, timestamp_ns) {
@@ -679,6 +692,19 @@ impl PipeWireCameraNode {
         Ok((mapping, byte_size as usize))
     }
 
+    /// Bytes `ImageCopyRegion::tightly_packed` will write for this extent.
+    ///
+    /// Computed in 64 bits and compared against what the shim mapped, because
+    /// the shim sizes its buffer in `uint32_t`: an extent whose packed size
+    /// wrapped would map less than the copy writes, and the overrun would be a
+    /// device-side write past the mapping rather than a refused frame.
+    fn tightly_packed_byte_len(width: u32, height: u32) -> Option<usize> {
+        u64::from(width)
+            .checked_mul(u64::from(height))
+            .and_then(|pixels| pixels.checked_mul(4))
+            .and_then(|bytes| usize::try_from(bytes).ok())
+    }
+
     /// Read a composed slot back into the shim's shared-memory buffer, through
     /// host-cached memory the GPU writes — never the write-combined kind, off
     /// which a read costs tens of milliseconds a frame.
@@ -695,6 +721,15 @@ impl PipeWireCameraNode {
         } = self;
         let offered = offered.as_mut().ok_or_else(withdrawn_mid_frame)?;
         let (width, height) = (offered.width, offered.height);
+        if Self::tightly_packed_byte_len(width, height)
+            .is_none_or(|needed| needed > host_range_byte_len)
+        {
+            return Err(Error::Runtime(format!(
+                "VirtualCameraSink \"{camera_name}\": the shared-memory sibling mapped \
+                 {host_range_byte_len} bytes for buffer slot {slot_index}, less than a tightly \
+                 packed {width}x{height} RGBA picture writes"
+            )));
+        }
         let slot_cache = &mut offered.shared_memory_written_by_gpu[slot_index];
 
         if slot_cache.is_none() {

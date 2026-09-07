@@ -165,8 +165,12 @@ uint32_t streamlib_pipewire_video_source_negotiated_buffer_kind(
 /// than a fresh one being taken: there is no way to return an output buffer
 /// unpublished — `pw_stream_queue_buffer` submits it — so a caller that fails
 /// mid-frame simply tries the same slot next time.
+///
+/// `buffer_kind_out` reports what a consumer settled on, read under the same
+/// lock as the dequeue so that a renegotiation cannot leave the caller filling
+/// a slot the wrong way.
 int32_t streamlib_pipewire_video_source_dequeue_slot(
-    struct StreamLibPipeWireVideoSource *video_source);
+    struct StreamLibPipeWireVideoSource *video_source, uint32_t *buffer_kind_out);
 
 /// Where slot `slot` maps on the shared-memory sibling, or NULL on the DMA-BUF
 /// path where the consumer imports the caller's texture instead.

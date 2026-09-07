@@ -140,10 +140,18 @@ def leave_no_camera_behind():
 
 
 def pipewire_camera_nodes_named(camera_name: str) -> list[dict]:
-    """Every `Video/Source` node in the session graph carrying `camera_name`."""
-    dump = subprocess.run(
-        ["pw-dump", "Node"], capture_output=True, text=True, timeout=20, check=False
-    )
+    """Every `Video/Source` node in the session graph carrying `camera_name`.
+
+    A session that is absent, stalled or answering nonsense reads as "no such
+    camera" rather than erroring: this is a probe, and the assertions that use
+    it already say what they expected to find.
+    """
+    try:
+        dump = subprocess.run(
+            ["pw-dump", "Node"], capture_output=True, text=True, timeout=20, check=False
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return []
     if dump.returncode != 0:
         return []
     try:
@@ -177,9 +185,12 @@ def await_pipewire_camera(camera_name: str, present: bool, app) -> list[dict]:
 def a_pipewire_session_answers() -> bool:
     if shutil.which("pw-dump") is None:
         return False
-    probe = subprocess.run(
-        ["pw-dump", "Core"], capture_output=True, text=True, timeout=20, check=False
-    )
+    try:
+        probe = subprocess.run(
+            ["pw-dump", "Core"], capture_output=True, text=True, timeout=20, check=False
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return False
     return probe.returncode == 0
 
 
