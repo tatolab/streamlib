@@ -15,12 +15,22 @@ application sees is a `/dev/video*` node whose `card` is the configured name,
 answering `VIDIOC_QUERYCAP` with capture, and handing back YUYV frames at the
 frame's extent carrying the frame's own stamp. That is the whole contract, so
 the test speaks it directly.
+
+The PipeWire door's own test is the mirror of the first camera test on the
+other door: with the door named, a `Video/Source` node carrying the configured
+name and `media.role = Camera` — the two properties a portal's access rule
+grants a camera client — is in the session graph while the app runs and gone
+once it has exited. It reads the graph through `pw-dump`, which is what any
+operator would reach for, and skips where no session answers.
 """
 
 import fcntl
+import json
 import mmap
 import os
+import shutil
 import struct
+import subprocess
 import time
 from pathlib import Path
 
@@ -127,6 +137,56 @@ def remove_loopback_devices_labelled_by_this_suite() -> None:
 def leave_no_camera_behind():
     yield
     remove_loopback_devices_labelled_by_this_suite()
+
+
+def pipewire_camera_nodes_named(camera_name: str) -> list[dict]:
+    """Every `Video/Source` node in the session graph carrying `camera_name`."""
+    dump = subprocess.run(
+        ["pw-dump", "Node"], capture_output=True, text=True, timeout=20, check=False
+    )
+    if dump.returncode != 0:
+        return []
+    try:
+        objects = json.loads(dump.stdout or "[]")
+    except json.JSONDecodeError:
+        return []
+    matched = []
+    for entry in objects:
+        properties = (entry.get("info") or {}).get("props") or {}
+        if properties.get("node.description") != camera_name:
+            continue
+        matched.append(properties)
+    return matched
+
+
+def await_pipewire_camera(camera_name: str, present: bool, app) -> list[dict]:
+    deadline = time.monotonic() + CAMERA_APPEARS_TIMEOUT_SECONDS
+    while True:
+        found = pipewire_camera_nodes_named(camera_name)
+        if bool(found) == present:
+            return found
+        if time.monotonic() >= deadline:
+            raise AssertionError(
+                f"PipeWire node {camera_name!r} "
+                f"{'never appeared' if present else 'outlived its processor'}"
+                f"; app output:\n{app.output}"
+            )
+        time.sleep(CAMERA_POLL_INTERVAL_SECONDS)
+
+
+def a_pipewire_session_answers() -> bool:
+    if shutil.which("pw-dump") is None:
+        return False
+    probe = subprocess.run(
+        ["pw-dump", "Core"], capture_output=True, text=True, timeout=20, check=False
+    )
+    return probe.returncode == 0
+
+
+needs_a_pipewire_session = pytest.mark.skipif(
+    not a_pipewire_session_answers(),
+    reason="no PipeWire session answers here, so the PipeWire door has nothing to register with",
+)
 
 
 needs_the_loopback_permission = pytest.mark.skipif(
@@ -309,6 +369,36 @@ def test_without_the_permission_the_sink_refuses_naming_the_verb_and_the_runtime
 
     app.await_clean_exit()
     assert "MARKER:EVERY_PROCESSOR_RUNNING" not in app.output
+
+
+# ---- the door a machine with no permission gets ---------------------------
+
+
+@pytest.mark.requires_gpu
+@needs_a_pipewire_session
+def test_without_the_control_node_a_pipewire_camera_node_appears(start_app_under_test):
+    """The second door, proven the way the first one is: a camera named in the
+    config is in the session graph while the graph runs and gone after it.
+
+    `media.class` and `media.role` are asserted rather than merely the name,
+    because WirePlumber's portal access rule grants camera clients exactly the
+    nodes carrying that pair — a node missing one is in `pw-dump` and in no
+    picker a user can see, which is the failure that looks like success."""
+    camera_name = f"StreamLib pipewire {os.getpid()}"
+    assert not pipewire_camera_nodes_named(camera_name), "a stale node carries this run's name"
+
+    app = start_app_under_test(
+        VIRTUAL_CAMERA_SINK_APP, "--name", camera_name, "--door", "pipewire"
+    )
+    app.await_marker("EVERY_PROCESSOR_RUNNING")
+    (node,) = await_pipewire_camera(camera_name, present=True, app=app)
+    assert node.get("media.class") == "Video/Source", node
+    assert node.get("media.role") == "Camera", node
+    assert node.get("node.name") == "streamlib-camera-streamlib-pipewire-" + str(os.getpid()), node
+
+    app.interrupt()
+    app.await_clean_exit()
+    await_pipewire_camera(camera_name, present=False, app=app)
 
 
 # ---- a camera other applications see (GPU + the loopback permission) -------
