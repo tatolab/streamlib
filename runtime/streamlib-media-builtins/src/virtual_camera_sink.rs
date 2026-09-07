@@ -7,16 +7,24 @@
 //! can select out.
 //!
 //! Each instance is one camera that exists only while its processor runs —
-//! created through the v4l2loopback module's control node at `setup()` and
-//! removed at `teardown()`, a USB camera plugged in and pulled out from every
-//! other application's point of view. The loopback device's buffers are
-//! memory-mapped once and handed to the RHI, so the RGBA→YUYV pass writes
-//! them straight from the GPU (or through one host-cached copy where the
-//! driver declines the import); no CPU touches a pixel.
+//! created at `setup()` and removed at `teardown()`, a USB camera plugged in
+//! and pulled out from every other application's point of view.
+//!
+//! One instance takes one of two doors, never both, since a session manager
+//! mirrors every V4L2 capture device into the portal's camera set and a sink
+//! on both would list the same camera twice. The **v4l2loopback** door creates
+//! its own device through the module's control node: the device's buffers are
+//! memory-mapped once and handed to the RHI, so the RGBA→YUYV pass writes them
+//! straight from the GPU (or through one host-cached copy where the driver
+//! declines the import); no CPU touches a pixel. It is the door every
+//! application sees. The **PipeWire** door registers a `Video/Source` node
+//! with `media.role = Camera` and offers the engine's own DMA-BUF textures; it
+//! needs no module and no root, which is what a fresh install gets.
 //!
 //! The engine never loads the module, never writes a udev rule and never
-//! asks for elevation. Without the one-time permission the sink refuses at
-//! `setup()` by name and the runtime keeps running.
+//! asks for elevation. Without the one-time permission `auto` takes the
+//! PipeWire door and says so, and `door = "v4l2loopback"` refuses at `setup()`
+//! by name while the runtime keeps running.
 
 use std::ffi::{CStr, c_ulong};
 use std::os::fd::RawFd;
@@ -26,7 +34,8 @@ use serde::{Deserialize, Serialize};
 use streamlib::sdk::color::{ColorSpaceKind, ResolvedColorInfo};
 use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
 use streamlib::sdk::engine::host_rhi::{
-    HostMappingWrittenByGpu, RhiCommandRecorder, VulkanAccess, VulkanStage,
+    HostMappingWrittenByGpu, PipeWireCameraFramePresentation, PipeWireCameraNode,
+    RhiCommandRecorder, VulkanAccess, VulkanStage,
 };
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ReactiveProcessor;
@@ -362,51 +371,66 @@ impl LoopbackControlNode for LoopbackControlNodeOnDisk {
 pub(crate) enum DoorDecision {
     /// Create or reclaim a loopback device.
     Loopback,
+    /// Register a PipeWire camera node, for this reason.
+    PipeWire(PipeWireDoorReason),
     /// Refuse at `setup()` with this message.
     Refused(String),
 }
 
-/// The refusal text for a loopback door with no permission behind it.
-fn no_permission_refusal(
-    camera_name: &str,
-    access: ControlNodeAccess,
-    door: VirtualCameraDoor,
-) -> String {
-    let mut message = format!(
-        "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME} \"{camera_name}\": no permission to create a \
-         v4l2loopback camera: {V4L2LOOPBACK_CONTROL_NODE_PATH} is {}. Run \
-         `{ENABLE_VIRTUAL_CAMERA_VERB}` once (it asks for your password), then re-run",
-        access.describe()
-    );
-    match door {
-        VirtualCameraDoor::Auto => message.push_str(
-            "; the PipeWire door `auto` falls back to is not built yet, so `auto` refuses the \
-             same way `v4l2loopback` does for now.",
-        ),
-        VirtualCameraDoor::V4l2Loopback | VirtualCameraDoor::PipeWire => message.push('.'),
-    }
-    message
+/// Why an instance is on the PipeWire door, which is what its one log line
+/// has to say — a user who expected the loopback door needs to read why they
+/// did not get it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PipeWireDoorReason {
+    /// `auto` found no permission to create a loopback camera.
+    TheLoopbackDoorHasNoPermission(ControlNodeAccess),
+    /// The config named this door.
+    TheDoorWasNamedInTheConfig,
 }
 
-/// Choose the door for one instance. The PipeWire door is not built yet,
-/// so `auto` without permission refuses like `v4l2loopback`, saying so,
-/// and `pipewire` refuses by name.
+/// The refusal text for a loopback door with no permission behind it.
+fn no_permission_refusal(camera_name: &str, access: ControlNodeAccess) -> String {
+    format!(
+        "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME} \"{camera_name}\": no permission to create a \
+         v4l2loopback camera: {V4L2LOOPBACK_CONTROL_NODE_PATH} is {}. Run \
+         `{ENABLE_VIRTUAL_CAMERA_VERB}` once (it asks for your password), then re-run; or set \
+         door=\"auto\" to use the PipeWire door meanwhile.",
+        access.describe()
+    )
+}
+
+/// What `auto` says when it falls back — naming the verb, because the door it
+/// took is not the one every application sees.
+fn pipewire_fallback_notice(camera_name: &str) -> String {
+    format!(
+        "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME} \"{camera_name}\": using the PipeWire camera door \
+         — this machine has no permission to create v4l2loopback cameras (the door every \
+         application sees). Run `{ENABLE_VIRTUAL_CAMERA_VERB}` once to grant it."
+    )
+}
+
+/// Choose the door for one instance. Never both: a session manager mirrors
+/// every V4L2 capture device into the portal's camera set, so an instance on
+/// both doors would list the same camera twice.
 pub(crate) fn decide_door(
     door: VirtualCameraDoor,
     camera_name: &str,
     access: ControlNodeAccess,
 ) -> DoorDecision {
-    match door {
-        VirtualCameraDoor::PipeWire => DoorDecision::Refused(format!(
-            "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME} \"{camera_name}\": the PipeWire door is not \
-             built yet; set door=\"auto\" or door=\"v4l2loopback\""
-        )),
-        VirtualCameraDoor::Auto | VirtualCameraDoor::V4l2Loopback => match access {
-            ControlNodeAccess::Writable => DoorDecision::Loopback,
-            absent_or_locked => {
-                DoorDecision::Refused(no_permission_refusal(camera_name, absent_or_locked, door))
-            }
-        },
+    match (door, access) {
+        (VirtualCameraDoor::PipeWire, _) => {
+            DoorDecision::PipeWire(PipeWireDoorReason::TheDoorWasNamedInTheConfig)
+        }
+        (
+            VirtualCameraDoor::Auto | VirtualCameraDoor::V4l2Loopback,
+            ControlNodeAccess::Writable,
+        ) => DoorDecision::Loopback,
+        (VirtualCameraDoor::Auto, absent_or_locked) => DoorDecision::PipeWire(
+            PipeWireDoorReason::TheLoopbackDoorHasNoPermission(absent_or_locked),
+        ),
+        (VirtualCameraDoor::V4l2Loopback, absent_or_locked) => {
+            DoorDecision::Refused(no_permission_refusal(camera_name, absent_or_locked))
+        }
     }
 }
 
@@ -616,9 +640,10 @@ impl StreamingOutputFormat {
     }
 }
 
-/// The GPU side of one sink: minted at `setup()`, used every frame.
-struct GpuSide {
-    gpu: GpuContextLimitedAccess,
+/// The loopback door's own GPU side: minted at `setup()`, used every frame.
+/// The PipeWire door needs neither — its node owns the pass that fills its
+/// buffers.
+struct LoopbackDoorGpuSide {
     converter: RhiColorConverter,
     recorder: RhiCommandRecorder,
 }
@@ -662,9 +687,14 @@ impl std::fmt::Display for LatchedRefusal {
 )]
 pub struct VirtualCameraSink {
     camera_name: String,
+    /// Both doors resolve a published frame to a texture through this.
+    gpu: Option<GpuContextLimitedAccess>,
     device: Option<OpenedLoopbackDevice>,
     streaming: Option<StreamingOutputFormat>,
-    gpu_side: Option<GpuSide>,
+    loopback_gpu_side: Option<LoopbackDoorGpuSide>,
+    /// The PipeWire door's node; the camera is gone when this drops.
+    pipewire_camera: Option<PipeWireCameraNode>,
+    frames_dropped_with_no_consumer_watching: u64,
     latched_refusal: Option<LatchedRefusal>,
     frames_written: u64,
     frames_dropped_every_buffer_queued: u64,
@@ -699,10 +729,13 @@ impl ReactiveProcessor for VirtualCameraSink::Processor {
             WRITE_FAILURE_REPORT_STEP,
         ));
 
+        self.gpu = Some(ctx.gpu_limited_access().clone());
+
         let node = LoopbackControlNodeOnDisk;
         let access = node.access();
         match decide_door(self.config.door, &self.camera_name, access) {
             DoorDecision::Loopback => {}
+            DoorDecision::PipeWire(reason) => return self.open_the_pipewire_door(ctx, reason),
             DoorDecision::Refused(message) => {
                 tracing::error!(
                     camera = %self.camera_name,
@@ -715,7 +748,7 @@ impl ReactiveProcessor for VirtualCameraSink::Processor {
         }
 
         let camera_name = self.camera_name.clone();
-        let (device, gpu_side) =
+        let (device, loopback_gpu_side) =
             create_or_reclaim_device_then(&node, &camera_name, |device_number, reclaimed| {
                 let device = open_device_awaiting_udev_grant(device_number).map_err(|e| {
                     Error::Runtime(format!(
@@ -762,14 +795,13 @@ impl ReactiveProcessor for VirtualCameraSink::Processor {
                     })?;
                 Ok((
                     device,
-                    GpuSide {
-                        gpu: ctx.gpu_limited_access().clone(),
+                    LoopbackDoorGpuSide {
                         converter,
                         recorder,
                     },
                 ))
             })?;
-        self.gpu_side = Some(gpu_side);
+        self.loopback_gpu_side = Some(loopback_gpu_side);
         self.device = Some(device);
         Ok(())
     }
@@ -800,10 +832,23 @@ impl ReactiveProcessor for VirtualCameraSink::Processor {
     }
 
     fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        if self.pipewire_camera.take().is_some() {
+            tracing::info!(
+                camera = %self.camera_name,
+                door = "pipewire",
+                frames_written = self.frames_written,
+                frames_dropped_with_no_consumer_watching =
+                    self.frames_dropped_with_no_consumer_watching,
+                frames_dropped_every_buffer_queued = self.frames_dropped_every_buffer_queued,
+                frames_that_failed_to_write = self.frames_that_failed_to_write,
+                "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME}: teardown — camera node destroyed"
+            );
+            return Ok(());
+        }
         if let (Some(device), Some(mut streaming)) = (self.device.as_ref(), self.streaming.take()) {
             let _ = stop_streaming_and_release_buffers(device, &mut streaming);
         }
-        self.gpu_side.take();
+        self.loopback_gpu_side.take();
         let Some(device) = self.device.take() else {
             return Ok(());
         };
@@ -840,6 +885,173 @@ impl ReactiveProcessor for VirtualCameraSink::Processor {
 
 impl VirtualCameraSink::Processor {
     fn present_one_frame(&mut self, frame: &VideoFrame) -> std::result::Result<(), LatchedRefusal> {
+        if self.pipewire_camera.is_some() {
+            return self.present_one_frame_through_the_pipewire_door(frame);
+        }
+        self.present_one_frame_through_the_loopback_door(frame)
+    }
+
+    /// Register the camera node this instance is, and say why this door.
+    fn open_the_pipewire_door(
+        &mut self,
+        ctx: &RuntimeContextFullAccess<'_>,
+        reason: PipeWireDoorReason,
+    ) -> Result<()> {
+        let camera = ctx
+            .gpu_full_access()
+            .open_pipewire_camera_node(&self.camera_name)
+            .map_err(|refusal| {
+                tracing::error!(
+                    camera = %self.camera_name,
+                    door = "pipewire",
+                    "{refusal}"
+                );
+                refusal
+            })?;
+        match reason {
+            PipeWireDoorReason::TheLoopbackDoorHasNoPermission(access) => tracing::info!(
+                camera = %self.camera_name,
+                door = "pipewire",
+                control_node = access.describe(),
+                "{}",
+                pipewire_fallback_notice(&self.camera_name)
+            ),
+            PipeWireDoorReason::TheDoorWasNamedInTheConfig => tracing::info!(
+                camera = %self.camera_name,
+                door = "pipewire",
+                reason = "the config named this door",
+                "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME}: camera node registered"
+            ),
+        }
+        self.pipewire_camera = Some(camera);
+        Ok(())
+    }
+
+    fn present_one_frame_through_the_pipewire_door(
+        &mut self,
+        frame: &VideoFrame,
+    ) -> std::result::Result<(), LatchedRefusal> {
+        if frame.width == 0 || frame.height == 0 {
+            return Err(LatchedRefusal::UnusableExtent {
+                width: frame.width,
+                height: frame.height,
+            });
+        }
+        let (Some(gpu), Some(camera)) = (self.gpu.as_ref(), self.pipewire_camera.as_mut()) else {
+            return Ok(());
+        };
+
+        if camera.offered_extent() != Some((frame.width, frame.height)) {
+            if let Some((width, height)) = camera.offered_extent() {
+                tracing::info!(
+                    camera = %self.camera_name,
+                    from = format!("{width}x{height}"),
+                    to = format!("{}x{}", frame.width, frame.height),
+                    "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME}: upstream extent changed — \
+                     re-negotiating the camera format; consumers reconnect"
+                );
+            }
+            // One escalation per extent, not per frame: the buffers a consumer
+            // imports are allocated here, and nothing else on this path needs
+            // full access.
+            let (width, height, fps) = (frame.width, frame.height, frame.fps);
+            gpu.escalate(|full| camera.offer_extent(full, width, height, fps))
+                .map_err(|e| LatchedRefusal::DeviceConfiguration(e.to_string()))?;
+        }
+
+        let registration = resolve_frame_to_a_sampled_texture(gpu, frame)
+            .map_err(|e| LatchedRefusal::DeviceConfiguration(e.to_string()))?;
+        let presented = camera.present_texture(
+            registration.texture(),
+            VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+            frame.timestamp_ns,
+        );
+        // Read while the camera is still borrowed; the counters below take the
+        // sink itself.
+        let buffer_path = camera.negotiated_buffer_kind();
+        let drm_modifier = camera.offered_drm_modifier();
+        match presented {
+            Ok(PipeWireCameraFramePresentation::Published) => {
+                self.count_a_written_frame(frame);
+                if self.frames_written == 1 && !self.tier_logged {
+                    tracing::info!(
+                        camera = %self.camera_name,
+                        buffers = buffer_path.as_str(),
+                        drm_modifier = drm_modifier
+                            .map(|modifier| format!("{modifier:#x}"))
+                            .unwrap_or_else(|| "-".to_string()),
+                        "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME}: the consumer took this buffer path"
+                    );
+                    self.tier_logged = true;
+                }
+            }
+            Ok(PipeWireCameraFramePresentation::NoConsumerIsWatching) => {
+                self.frames_dropped_with_no_consumer_watching += 1;
+            }
+            Ok(PipeWireCameraFramePresentation::EveryBufferIsHeldByTheConsumer) => {
+                self.count_a_frame_dropped_with_every_buffer_taken();
+            }
+            Err(e) => self.count_a_frame_that_would_not_write(&e),
+        }
+        Ok(())
+    }
+
+    /// One written frame, and the progress line both doors share.
+    fn count_a_written_frame(&mut self, frame: &VideoFrame) {
+        self.frames_written += 1;
+        if self.frames_written == 1 {
+            tracing::info!(
+                camera = %self.camera_name,
+                width = frame.width,
+                height = frame.height,
+                "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME}: first frame presented"
+            );
+        } else if self
+            .frames_written
+            .is_multiple_of(WRITTEN_FRAME_LOG_INTERVAL)
+        {
+            tracing::info!(
+                camera = %self.camera_name,
+                frames_written = self.frames_written,
+                frames_dropped_every_buffer_queued = self.frames_dropped_every_buffer_queued,
+                "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME}: progress"
+            );
+        }
+    }
+
+    fn count_a_frame_dropped_with_every_buffer_taken(&mut self) {
+        self.frames_dropped_every_buffer_queued += 1;
+        if self.dropped_frame_report.as_mut().is_some_and(|report| {
+            report.count_is_worth_reporting(self.frames_dropped_every_buffer_queued)
+        }) {
+            tracing::warn!(
+                camera = %self.camera_name,
+                frames_dropped_every_buffer_queued = self.frames_dropped_every_buffer_queued,
+                "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME}: a frame arrived with every buffer queued"
+            );
+        }
+    }
+
+    fn count_a_frame_that_would_not_write(&mut self, failure: &Error) {
+        self.frames_that_failed_to_write += 1;
+        if self
+            .write_failure_report
+            .as_mut()
+            .is_some_and(|report| report.count_is_worth_reporting(self.frames_that_failed_to_write))
+        {
+            tracing::warn!(
+                camera = %self.camera_name,
+                frames_that_failed_to_write = self.frames_that_failed_to_write,
+                error = %failure,
+                "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME}: a frame could not be written to the camera"
+            );
+        }
+    }
+
+    fn present_one_frame_through_the_loopback_door(
+        &mut self,
+        frame: &VideoFrame,
+    ) -> std::result::Result<(), LatchedRefusal> {
         let yuyv_bytes = u64::from(frame.width) * 2 * u64::from(frame.height);
         if !frame.width.is_multiple_of(2) || yuyv_bytes == 0 || yuyv_bytes > u64::from(u32::MAX) {
             return Err(LatchedRefusal::UnusableExtent {
@@ -847,7 +1059,11 @@ impl VirtualCameraSink::Processor {
                 height: frame.height,
             });
         }
-        let (Some(device), Some(gpu_side)) = (self.device.as_ref(), self.gpu_side.as_mut()) else {
+        let (Some(device), Some(gpu), Some(gpu_side)) = (
+            self.device.as_ref(),
+            self.gpu.as_ref(),
+            self.loopback_gpu_side.as_mut(),
+        ) else {
             return Ok(());
         };
 
@@ -864,13 +1080,9 @@ impl VirtualCameraSink::Processor {
             }
         }
         if self.streaming.is_none() {
-            let streaming = negotiate_output_format_and_start_streaming(
-                device,
-                &gpu_side.gpu,
-                frame,
-                &self.camera_name,
-            )
-            .map_err(|e| LatchedRefusal::DeviceConfiguration(e.to_string()))?;
+            let streaming =
+                negotiate_output_format_and_start_streaming(device, gpu, frame, &self.camera_name)
+                    .map_err(|e| LatchedRefusal::DeviceConfiguration(e.to_string()))?;
             if !self.tier_logged {
                 if let Some(first) = streaming.buffers.first() {
                     tracing::info!(
@@ -891,57 +1103,51 @@ impl VirtualCameraSink::Processor {
 
         reclaim_dequeued_buffers(device, streaming);
         let Some(buffer_index) = next_free_buffer(streaming) else {
-            self.frames_dropped_every_buffer_queued += 1;
-            if self.dropped_frame_report.as_mut().is_some_and(|report| {
-                report.count_is_worth_reporting(self.frames_dropped_every_buffer_queued)
-            }) {
-                tracing::warn!(
-                    camera = %self.camera_name,
-                    frames_dropped_every_buffer_queued = self.frames_dropped_every_buffer_queued,
-                    "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME}: a frame arrived with every buffer queued"
-                );
-            }
+            self.count_a_frame_dropped_with_every_buffer_taken();
             return Ok(());
         };
 
-        let written = write_frame_into_buffer(gpu_side, streaming, buffer_index, frame)
+        let written = write_frame_into_buffer(gpu, gpu_side, streaming, buffer_index, frame)
             .and_then(|()| queue_buffer(device, streaming, buffer_index, frame.timestamp_ns));
         if let Err(e) = written {
-            self.frames_that_failed_to_write += 1;
-            if self.write_failure_report.as_mut().is_some_and(|report| {
-                report.count_is_worth_reporting(self.frames_that_failed_to_write)
-            }) {
-                tracing::warn!(
-                    camera = %self.camera_name,
-                    frames_that_failed_to_write = self.frames_that_failed_to_write,
-                    error = %e,
-                    "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME}: a frame could not be written to the camera"
-                );
-            }
+            self.count_a_frame_that_would_not_write(&e);
             return Ok(());
         }
 
-        self.frames_written += 1;
-        if self.frames_written == 1 {
-            tracing::info!(
-                camera = %self.camera_name,
-                width = frame.width,
-                height = frame.height,
-                "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME}: first frame presented"
-            );
-        } else if self
-            .frames_written
-            .is_multiple_of(WRITTEN_FRAME_LOG_INTERVAL)
-        {
-            tracing::info!(
-                camera = %self.camera_name,
-                frames_written = self.frames_written,
-                frames_dropped_every_buffer_queued = self.frames_dropped_every_buffer_queued,
-                "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME}: progress"
-            );
-        }
+        self.count_a_written_frame(frame);
         Ok(())
     }
+}
+
+/// Resolve a published frame to the GPU texture behind it, refusing a frame
+/// that is not sampled-ready.
+///
+/// A published frame arrives in `SHADER_READ_ONLY_OPTIMAL`; the encoder
+/// built-in holds the same line. Both doors sample the picture rather than
+/// transitioning another processor's surface, and a transition from an unknown
+/// layout would discard it — so a frame in any other layout is refused by name
+/// rather than bridged.
+fn resolve_frame_to_a_sampled_texture(
+    gpu: &GpuContextLimitedAccess,
+    frame: &VideoFrame,
+) -> Result<streamlib::sdk::context::TextureRegistration> {
+    let registration = gpu.resolve_texture_registration_by_surface_id(
+        &frame.surface_id,
+        frame.texture_layout,
+        frame.width,
+        frame.height,
+    )?;
+    let source_layout = registration.current_layout();
+    if source_layout != VulkanLayout::SHADER_READ_ONLY_OPTIMAL {
+        return Err(Error::Runtime(format!(
+            "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME}: frame {} is in layout {} rather than \
+             SHADER_READ_ONLY_OPTIMAL ({})",
+            frame.surface_id,
+            source_layout.0,
+            VulkanLayout::SHADER_READ_ONLY_OPTIMAL.0
+        )));
+    }
+    Ok(registration)
 }
 
 /// Open `/dev/video<N>` read-write, retrying a permission refusal until
@@ -1198,30 +1404,13 @@ fn next_free_buffer(streaming: &mut StreamingOutputFormat) -> Option<usize> {
 /// buffer's mapping as the kernel's output, leaving the texture in the
 /// layout it was found in.
 fn write_frame_into_buffer(
-    gpu_side: &mut GpuSide,
+    gpu: &GpuContextLimitedAccess,
+    gpu_side: &mut LoopbackDoorGpuSide,
     streaming: &mut StreamingOutputFormat,
     buffer_index: usize,
     frame: &VideoFrame,
 ) -> Result<()> {
-    let registration = gpu_side.gpu.resolve_texture_registration_by_surface_id(
-        &frame.surface_id,
-        frame.texture_layout,
-        frame.width,
-        frame.height,
-    )?;
-    // A published frame arrives sampled-ready; the encoder built-in holds the
-    // same line. A transition from an unknown layout would discard the
-    // picture, so a frame in any other layout is refused rather than bridged.
-    let source_layout = registration.current_layout();
-    if source_layout != VulkanLayout::SHADER_READ_ONLY_OPTIMAL {
-        return Err(Error::Runtime(format!(
-            "{VIRTUAL_CAMERA_SINK_PROCESSOR_NAME}: frame {} is in layout {} rather than \
-             SHADER_READ_ONLY_OPTIMAL ({})",
-            frame.surface_id,
-            source_layout.0,
-            VulkanLayout::SHADER_READ_ONLY_OPTIMAL.0
-        )));
-    }
+    let registration = resolve_frame_to_a_sampled_texture(gpu, frame)?;
     let resolved_color = streaming.resolved_color;
     let bytesperline = streaming.bytesperline;
     let buffer = &mut streaming.buffers[buffer_index];
@@ -1231,6 +1420,7 @@ fn write_frame_into_buffer(
         bytesperline,
         &resolved_color,
     )?;
+    let source_layout = VulkanLayout::SHADER_READ_ONLY_OPTIMAL;
     let recorder = &mut gpu_side.recorder;
     recorder.begin()?;
     // A failure between `begin()` and the submit leaves the recorder mid-
@@ -1393,9 +1583,12 @@ mod tests {
         );
     }
 
+    /// The door rule, both ways round: with the permission `auto` takes the
+    /// door every application sees, and without it takes the PipeWire door
+    /// rather than refusing — which is what makes a fresh `pip install` have a
+    /// camera door on every machine.
     #[test]
-    fn auto_takes_the_loopback_door_when_the_control_node_opens_and_refuses_naming_the_verb_otherwise()
-     {
+    fn auto_takes_the_loopback_door_when_the_control_node_opens_and_pipewire_otherwise() {
         assert_eq!(
             decide_door(
                 VirtualCameraDoor::Auto,
@@ -1405,15 +1598,40 @@ mod tests {
             DoorDecision::Loopback
         );
         for access in [ControlNodeAccess::Absent, ControlNodeAccess::NotWritable] {
-            let DoorDecision::Refused(message) =
-                decide_door(VirtualCameraDoor::Auto, "Desk cam", access)
-            else {
-                panic!("auto without permission refuses until the PipeWire door lands");
-            };
-            assert!(message.contains(ENABLE_VIRTUAL_CAMERA_VERB), "{message}");
-            assert!(
-                message.contains("PipeWire"),
-                "auto says why it refuses today: {message}"
+            assert_eq!(
+                decide_door(VirtualCameraDoor::Auto, "Desk cam", access),
+                DoorDecision::PipeWire(PipeWireDoorReason::TheLoopbackDoorHasNoPermission(access)),
+                "auto falls back rather than refusing"
+            );
+        }
+    }
+
+    /// The fallback is not silent: the door taken is not the one every
+    /// application sees, so the line has to name the verb that grants that one.
+    #[test]
+    fn the_pipewire_fallback_names_the_verb_that_would_grant_the_wider_door() {
+        let notice = pipewire_fallback_notice("Desk cam");
+        assert!(notice.contains(ENABLE_VIRTUAL_CAMERA_VERB), "{notice}");
+        assert!(
+            notice.contains("the door every application sees"),
+            "the line says what the user is not getting: {notice}"
+        );
+    }
+
+    /// A named door is taken whatever the other one's permission, because the
+    /// two are never both taken for one instance — a session manager mirrors
+    /// every V4L2 capture device into the portal's set, so an instance on both
+    /// would list the same camera twice.
+    #[test]
+    fn a_named_pipewire_door_is_taken_whatever_the_control_node_says() {
+        for access in [
+            ControlNodeAccess::Writable,
+            ControlNodeAccess::Absent,
+            ControlNodeAccess::NotWritable,
+        ] {
+            assert_eq!(
+                decide_door(VirtualCameraDoor::PipeWire, "Desk cam", access),
+                DoorDecision::PipeWire(PipeWireDoorReason::TheDoorWasNamedInTheConfig)
             );
         }
     }
@@ -1431,7 +1649,8 @@ mod tests {
             absent,
             "VirtualCameraSink \"Desk cam\": no permission to create a v4l2loopback camera: \
              /dev/v4l2loopback is absent. Run `streamlib enable-virtual-camera` once (it asks \
-             for your password), then re-run."
+             for your password), then re-run; or set door=\"auto\" to use the PipeWire door \
+             meanwhile."
         );
         let DoorDecision::Refused(locked) = decide_door(
             VirtualCameraDoor::V4l2Loopback,
