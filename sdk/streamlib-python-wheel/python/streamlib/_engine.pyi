@@ -77,6 +77,8 @@ __all__ = [
     "log_event",
     "monotonic_now_ns",
     "open_test_harness_channel",
+    "processor_class_import_paths_in_this_processes_catalog",
+    "register_declared_processor_class",
     "runtime_log_directory",
 ]
 
@@ -1639,6 +1641,28 @@ def capability_extension_host_for_the_helper_process(
     distribution: str,
 ) -> CapabilityExtensionHost:
     """Mint the host `distribution`'s hook is handed in a helper process."""
+
+def register_declared_processor_class(processor_class: type) -> None:
+    """Register the descriptor `@processor` has just stamped onto a class.
+
+    Called by the decorator and nowhere else, so the class is in the processor
+    catalog from the moment its module is imported; the constructor arrives at
+    the first `Runtime.add`. A class decorated inside a helper process
+    registers nothing — a helper hosts no graph — and so does one no
+    interpreter could import, which `Runtime.add` refuses by name.
+    """
+
+def processor_class_import_paths_in_this_processes_catalog() -> list[str]:
+    """Every processor class import path in the calling process's catalog.
+
+    What `GET /api/registry` renders, readable in a process that serves no
+    control plane — which a helper process is. In the app process a path
+    appears here the moment its `@processor` decorator runs, whether or not
+    anything has added it, so a path listed here may be one the engine cannot
+    yet construct. In a helper nothing appears, because decoration registers
+    nothing there — and seeing that from inside one is what the wheel's own
+    suites read this for.
+    """
 
 def monotonic_now_ns() -> int:
     """Current monotonic time in nanoseconds via `clock_gettime(CLOCK_MONOTONIC)`."""

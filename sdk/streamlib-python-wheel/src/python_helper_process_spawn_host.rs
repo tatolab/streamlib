@@ -34,6 +34,11 @@ use streamlib::sdk::processors::{DynGeneratedProcessor, OutOfProcessLinkWiringEn
 /// The module CPython is launched with in a helper process.
 const HELPER_PROCESS_MODULE: &str = "streamlib._helper";
 
+/// The environment variable carrying the class import path a helper process
+/// hosts — set here and nowhere else, so its presence is what tells code
+/// running inside a child that it is one.
+pub(crate) const HELPER_PROCESS_ENTRYPOINT_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_ENTRYPOINT";
+
 /// How long the child has to import the user's class, open its ports, run
 /// `setup` and report ready before this host gives up and kills it.
 ///
@@ -178,7 +183,10 @@ impl PythonHelperProcessSpawnHostProcessor {
             // only send the child looking for the wrong standard library.
             .env_remove("PYTHONHOME")
             .env("PYTHONPATH", self.child_python_path())
-            .env("STREAMLIB_ENTRYPOINT", &self.processor_class_import_path)
+            .env(
+                HELPER_PROCESS_ENTRYPOINT_ENVIRONMENT_VARIABLE,
+                &self.processor_class_import_path,
+            )
             .env("STREAMLIB_PROCESSOR_ID", &self.processor_id)
             .env("STREAMLIB_RUNTIME_ID", runtime_id)
             .env(

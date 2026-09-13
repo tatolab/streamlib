@@ -396,9 +396,11 @@ impl ProcessorInstanceFactory {
 
     /// Register a processor descriptor without a constructor.
     ///
-    /// Used for subprocess processors (Python, TypeScript) where no Rust-side
-    /// `ProcessorInstance` is created. The graph needs the descriptor and port info
-    /// for validation and wiring, but `create()` will return an error if called.
+    /// What a Python class's `@processor` decorator calls, so the class is in
+    /// the catalog before anything adds it. The graph has the descriptor and
+    /// port info it needs to validate and wire, and `create()` refuses until
+    /// [`Self::install_constructor_for_registered_descriptor`] supplies the
+    /// constructor — which a first add does.
     pub fn register_descriptor_only(&self, descriptor: ProcessorDescriptor) -> Result<()> {
         let processor_class_import_path = descriptor.processor_class_import_path.clone();
 
@@ -418,11 +420,8 @@ impl ProcessorInstanceFactory {
         descriptors.insert(processor_class_import_path.clone(), descriptor);
         drop(descriptors);
 
-        // No constructor registered - create() will fail with ProcessorNotFound,
-        // which is correct since subprocess processors are never instantiated in Rust.
-
         tracing::info!(
-            "[register_descriptor_only] subprocess processor type registered '{}'",
+            "[register_descriptor_only] processor type registered without a constructor '{}'",
             processor_class_import_path
         );
 
@@ -431,6 +430,51 @@ impl ProcessorInstanceFactory {
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeDidRegisterProcessorType {
                 processor_type: processor_class_import_path,
             }),
+        );
+
+        Ok(())
+    }
+
+    /// Give a descriptor that registered without a constructor the one that
+    /// can build it — what a Python class's first add supplies, after its
+    /// decorator registered the descriptor at import.
+    ///
+    /// Succeeds only on a path holding a descriptor and no constructor. A path
+    /// that already has one is two classes claiming one import path, refused
+    /// with the same text a second registration meets; a path nobody
+    /// registered is refused by name rather than registered here, because the
+    /// descriptor is the decorator's to write.
+    pub fn install_constructor_for_registered_descriptor(
+        &self,
+        processor_class_import_path: &ProcessorClassImportPath,
+        constructor: DynamicProcessorConstructorFn,
+    ) -> Result<()> {
+        // The same outer-to-inner order a registration takes, so an install
+        // racing one cannot interleave between their check and their claim.
+        let descriptors = self.descriptors.read();
+        if !descriptors.contains_key(processor_class_import_path) {
+            return Err(Error::ProcessorNotFound(format!(
+                "no descriptor is registered for processor type \
+                 '{processor_class_import_path}', so there is nothing to install a constructor \
+                 onto. A Python class registers its descriptor when its `@processor` decorator \
+                 runs, so a path missing here names a class this process never imported."
+            )));
+        }
+
+        let mut registrations = self.registrations.write();
+        if registrations.contains_key(processor_class_import_path) {
+            return Err(duplicate_class_import_path(processor_class_import_path));
+        }
+        registrations.insert(
+            processor_class_import_path.clone(),
+            RegistrationKind::LegacyDyn { constructor },
+        );
+        drop(registrations);
+        drop(descriptors);
+
+        tracing::info!(
+            processor_class_import_path = processor_class_import_path.as_str(),
+            "[install_constructor_for_registered_descriptor] a registered descriptor gained its constructor"
         );
 
         Ok(())
@@ -570,6 +614,15 @@ impl ProcessorInstanceFactory {
             .read()
             .get(processor_type)
             .map(|descriptor| descriptor.processor_class_short_name.as_str().to_string())
+    }
+
+    /// Every processor class import path the registry holds a descriptor for.
+    ///
+    /// Projects the keys out under the read lock rather than going through
+    /// [`Self::list_registered`], which clones every descriptor whole — port
+    /// vectors and config schema included — for callers that want the names.
+    pub fn registered_processor_class_import_paths(&self) -> Vec<ProcessorClassImportPath> {
+        self.descriptors.read().keys().cloned().collect()
     }
 
     /// List all registered processor types with their full descriptors.
@@ -793,6 +846,108 @@ mod tests {
             assert_eq!(winners, 1, "exactly one registration may claim a path");
             assert_eq!(factory.list_registered().len(), 1);
         }
+    }
+
+    /// The declaration-registers path: a descriptor lands at import with no
+    /// constructor, and the first add installs one onto it rather than
+    /// registering a second time.
+    #[test]
+    fn a_constructor_installs_onto_a_descriptor_registered_without_one() {
+        let factory = ProcessorInstanceFactory::new();
+        let path = "my_app.filters:BlurProcessor";
+
+        factory
+            .register_descriptor_only(descriptor_for(path))
+            .expect("the decorator's descriptor-only registration succeeds");
+        assert!(
+            !factory.can_create(&class_import_path(path)),
+            "a descriptor-only registration has nothing to construct with"
+        );
+
+        factory
+            .install_constructor_for_registered_descriptor(
+                &class_import_path(path),
+                Box::new(|_node| Err(Error::Configuration("unreachable".into()))),
+            )
+            .expect("the first add installs its constructor");
+
+        assert!(factory.can_create(&class_import_path(path)));
+        assert_eq!(
+            factory.list_registered().len(),
+            1,
+            "installing a constructor adds no second catalog entry"
+        );
+        assert!(
+            factory.port_info(&class_import_path(path)).is_some(),
+            "the descriptor the decorator registered keeps its port info"
+        );
+    }
+
+    /// Two classes claiming one import path are the same collision whichever
+    /// half of the registration arrives second, so the install refuses with the
+    /// text the registration would have.
+    #[test]
+    fn installing_onto_a_path_that_already_has_a_constructor_is_refused() {
+        let factory = ProcessorInstanceFactory::new();
+        let path = "my_app.filters:BlurProcessor";
+
+        factory
+            .register_dynamic(
+                descriptor_for(path),
+                Box::new(|_node| Err(Error::Configuration("the first".into()))),
+            )
+            .expect("the first registration succeeds");
+
+        let refusal = factory
+            .install_constructor_for_registered_descriptor(
+                &class_import_path(path),
+                Box::new(|_node| Err(Error::Configuration("the second".into()))),
+            )
+            .expect_err("a path that already has a constructor must be refused");
+
+        let Error::Configuration(message) = refusal else {
+            panic!("expected Configuration; got {refusal:?}");
+        };
+        assert!(
+            message.contains(path),
+            "the refusal must name the contested path; got: {message}"
+        );
+        assert!(
+            message.contains("importlib.reload"),
+            "the refusal must carry the two-classes-one-path text; got: {message}"
+        );
+    }
+
+    /// Nothing registered the descriptor, so there is nothing to install onto:
+    /// silently registering here would let a class the decorator never saw
+    /// reach the catalog by a different door.
+    #[test]
+    fn installing_onto_an_unregistered_path_is_refused_naming_the_path() {
+        let factory = ProcessorInstanceFactory::new();
+        let path = "my_app.filters:NeverDeclared";
+
+        let refusal = factory
+            .install_constructor_for_registered_descriptor(
+                &class_import_path(path),
+                Box::new(|_node| Err(Error::Configuration("unreachable".into()))),
+            )
+            .expect_err("an unknown path must be refused");
+
+        let Error::ProcessorNotFound(message) = refusal else {
+            panic!("expected ProcessorNotFound; got {refusal:?}");
+        };
+        assert!(
+            message.contains(path),
+            "the refusal must name the path nobody registered; got: {message}"
+        );
+        assert!(
+            !message.contains("  "),
+            "a source-wrapped message must carry no gutter into its text; got: {message}"
+        );
+        assert!(
+            factory.descriptor(&class_import_path(path)).is_none(),
+            "a refused install must leave the registry untouched"
+        );
     }
 
     #[test]

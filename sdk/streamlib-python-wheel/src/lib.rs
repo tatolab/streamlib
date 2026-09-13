@@ -100,6 +100,14 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
         python_capability_extension_host::capability_extension_host_for_the_helper_process,
         module
     )?)?;
+    module.add_function(wrap_pyfunction!(
+        python_processor_registration::register_declared_processor_class,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        python_processor_registration::processor_class_import_paths_in_this_processes_catalog,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(python_logging::monotonic_now_ns, module)?)?;
     module.add_function(wrap_pyfunction!(python_logging::log_event, module)?)?;
     module.add_function(wrap_pyfunction!(

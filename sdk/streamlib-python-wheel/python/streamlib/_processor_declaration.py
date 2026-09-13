@@ -4,9 +4,11 @@
 """The `@processor` grammar — execution mode and ports, declared in code.
 
 Nothing is read from disk: there is no manifest, and a bare `.py` module defines
-a working processor. `@processor` attaches the metadata the engine reads at
-`Runtime.add` time as `__streamlib_processor_*__` class attributes; that set is
-the contract between this module and the native half, and the two move together.
+a working processor. `@processor` attaches the metadata as
+`__streamlib_processor_*__` class attributes and hands the class to the native
+half, which reads exactly that set and registers the descriptor there and then;
+the set is the contract between this module and the native half, and the two
+move together.
 Ports are declared with the `@input` / `@output` method decorators and accessed
 at run time through `ctx.inputs` / `ctx.outputs` — the marker methods themselves
 are never called.
@@ -22,6 +24,7 @@ import inspect
 import typing
 from typing import Any, Callable, Optional, TypeVar
 
+from ._engine import register_declared_processor_class
 from ._processor_config_schema import (
     derive_config_class_json_schema,
     json_schema_for_a_processor_declaring_no_config,
@@ -355,6 +358,12 @@ def processor(
     Schema is derived from its annotations and defaults and published in the
     processor catalog, which is how an agent learns the keys before adding the
     node.
+
+    Decorating registers the class's descriptor — identity, description, ports
+    and config schema — so the class is in that catalog from the moment its
+    module is imported, whether or not anything ever adds it. The constructor
+    arrives at the first `rt.add`. `description` falls back to the class's
+    docstring when it is not given.
     """
     if isinstance(processor_class, type):
         return _declare_processor(
@@ -405,7 +414,9 @@ def _declare_processor(
         if config_class is None
         else derive_config_class_json_schema(config_class)
     )
-    processor_class.__streamlib_processor_description__ = description  # type: ignore[attr-defined]
+    processor_class.__streamlib_processor_description__ = (  # type: ignore[attr-defined]
+        description or inspect.getdoc(processor_class) or ""
+    )
     processor_class.__streamlib_processor_execution__ = _resolve_execution(  # type: ignore[attr-defined]
         execution, interval_ms, processor_class, has_input_ports=bool(input_ports)
     )
@@ -414,6 +425,10 @@ def _declare_processor(
     )
     processor_class.__streamlib_processor_input_ports__ = input_ports  # type: ignore[attr-defined]
     processor_class.__streamlib_processor_output_ports__ = output_ports  # type: ignore[attr-defined]
+
+    # After the attributes and not before: the native half reads exactly them
+    # to build the descriptor it registers.
+    register_declared_processor_class(processor_class)
     return processor_class
 
 

@@ -1,13 +1,14 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Four processors — three kinds of config class and one declaring none.
+"""Five processors — three kinds of config class, one declaring none, one never added.
 
 Their own module, not the test module, because each runs in a helper process
 that reaches its class by importing the module it was declared in.
 
-Each reports, from inside its helper, the object its `__init__` was handed —
-which is the half of the contract a served schema cannot show.
+Each added one reports, from inside its helper, the object its `__init__` was
+handed — which is the half of the contract a served schema cannot show. The
+fifth is added nowhere and reaches the catalog on its import alone.
 """
 
 import dataclasses
@@ -73,3 +74,11 @@ class ModelConfiguredProbe:
 class UnconfiguredProbe:
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         _report("UnconfiguredProbe", None)
+
+
+@processor(execution="manual")
+class ImportedButNeverAddedProbe:
+    """An effect the app knows how to run and has not been asked to."""
+
+    def __init__(self, config: DataclassProbeConfig) -> None:
+        self.config = config

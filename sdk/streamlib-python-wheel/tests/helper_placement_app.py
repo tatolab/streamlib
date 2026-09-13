@@ -15,9 +15,13 @@ import threading
 import streamlib
 from helper_placement_processors import (
     DiesAbruptlyProbe,
+    ReportsItsOwnProcessesProcessorCatalog,
     ReportsItsOwnProcessSource,
     ReportsItsOwnProcessVideoSink,
     ReportsUpstreamProcessSink,
+)
+from streamlib._engine import (
+    processor_class_import_paths_in_this_processes_catalog,
 )
 
 MARKER_PREFIX = "MARKER:"
@@ -147,6 +151,25 @@ def scenario_a_crashed_helper_leaves_the_pipeline_running() -> None:
         survivor_source.output("frames_to_downstream"),
         survivor_sink.input("frames_from_upstream"),
     )
+    marker(f"APP_PID={os.getpid()}")
+    runtime.run()
+    marker("CLEAN_EXIT")
+
+
+def scenario_a_helper_registers_nothing_it_imports() -> None:
+    """The class is in the app's catalog from its import, and in no child's.
+
+    The app side is the decorator's whole point — the class is discoverable
+    without ever being added. The child side is the other half: it imports the
+    same module to host the class and must register nothing, because a helper
+    hosts no graph.
+    """
+    marker(
+        f"APP_CATALOG_HAS_THE_CLASS="
+        f"{'helper_placement_processors:ReportsItsOwnProcessesProcessorCatalog' in processor_class_import_paths_in_this_processes_catalog()}"
+    )
+    runtime = streamlib.Runtime()
+    runtime.add(ReportsItsOwnProcessesProcessorCatalog)
     marker(f"APP_PID={os.getpid()}")
     runtime.run()
     marker("CLEAN_EXIT")

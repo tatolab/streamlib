@@ -35,6 +35,7 @@ SINK_PID_MARKER = re.compile(r"MARKER:SINK_PID (\d+) UPSTREAM_PID (\d+)")
 VIDEO_SINK_PID_MARKER = re.compile(r"MARKER:VIDEO_SINK_PID (\d+)")
 APP_PID_MARKER = re.compile(r"MARKER:APP_PID=(\d+)")
 HELPER_STARTED_MARKER = re.compile(r"helper process started: pid=(\d+)")
+CHILD_CATALOG_MARKER = re.compile(r"MARKER:CHILD_CATALOG (\d+) (True|False) (\d+)")
 
 
 def run_scenario(start_app_under_test, scenario: str):
@@ -177,6 +178,43 @@ def test_a_native_builtin_stays_in_the_app_process(start_app_under_test):
     )
     assert sink_pid != app_pid, (
         f"the Python sink ran in the app's own process ({app_pid})"
+    )
+
+
+def test_a_helper_registers_nothing_the_module_it_imports_declares(start_app_under_test):
+    """The app's catalog carries the class; the child that hosts it carries none.
+
+    A helper hosts no graph, so the registry a decoration would fill has no
+    reader there. The child imports the same module the app did — that import
+    is how it reaches the class at all — so the two catalogs are the whole
+    difference, and the child reports its own.
+    """
+    app = run_scenario_until(
+        start_app_under_test,
+        "a_helper_registers_nothing_it_imports",
+        "MARKER:CHILD_CATALOG",
+        "the helper to report the catalog of the process it was constructed in",
+    )
+
+    assert "APP_CATALOG_HAS_THE_CLASS=True" in app.output, (
+        f"the app never registered a class it imported:\n{app.output}"
+    )
+
+    app_pid = int(matched_marker(APP_PID_MARKER, app.output).group(1))
+    child_pid, child_registered_the_class, declared_classes_in_the_child = (
+        matched_marker(CHILD_CATALOG_MARKER, app.output).groups()
+    )
+
+    assert int(child_pid) != app_pid, (
+        f"the processor reported the app's own process ({app_pid}), so this "
+        f"says nothing about a helper:\n{app.output}"
+    )
+    assert child_registered_the_class == "False", (
+        f"the helper registered the class it hosts:\n{app.output}"
+    )
+    assert declared_classes_in_the_child == "0", (
+        f"the helper registered {declared_classes_in_the_child} of the module's "
+        f"declared classes — a helper hosts no graph:\n{app.output}"
     )
 
 

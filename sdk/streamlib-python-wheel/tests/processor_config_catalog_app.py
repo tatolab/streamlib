@@ -5,7 +5,9 @@
 
 Run as a real `python app.py`: four processors are added, each hosted in its own
 helper process, and this app then reads `GET /api/registry` off itself — the
-exact payload an agent gets before deciding which keys a processor takes.
+exact payload an agent gets before deciding which keys a processor takes. A
+fifth class is imported and never added, which is what an agent discovering an
+app's effects reads.
 """
 
 import json
@@ -34,6 +36,8 @@ def main() -> None:
     runtime.add(probes.DataclassConfiguredProbe, config={"width": 640, "label": "left"})
     runtime.add(probes.ModelConfiguredProbe, config={"width": 1280})
     runtime.add(probes.UnconfiguredProbe)
+    # `probes.ImportedButNeverAddedProbe` is deliberately not added: importing
+    # the module is what put it in the catalog.
 
     def read_the_catalog_this_node_serves() -> None:
         try:
@@ -45,7 +49,7 @@ def main() -> None:
             with urllib.request.urlopen(registry_url, timeout=READ_TIMEOUT_SECONDS) as response:
                 served = json.load(response)
             catalog = {
-                entry["processor_class_import_path"]: entry.get("config_schema")
+                entry["processor_class_import_path"]: entry
                 for entry in served["processors"]
                 if entry["processor_class_import_path"].startswith(
                     "processor_config_catalog_probes:"
