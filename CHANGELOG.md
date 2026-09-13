@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.3](https://github.com/tatolab/streamlib/compare/v0.22.2...v0.22.3) (2026-09-13)
+
+
+### Bug Fixes
+
+* **engine:** stop the DRM modifier probe and EglRuntime terminating the shared EGL default display ([#2248](https://github.com/tatolab/streamlib/issues/2248)) ([e9d5ba5](https://github.com/tatolab/streamlib/commit/e9d5ba588159e390b0c17eea5e20f04c38991611))
+
 ## [0.22.2](https://github.com/tatolab/streamlib/compare/v0.22.1...v0.22.2) (2026-09-13)
 
 
