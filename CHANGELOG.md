@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.1](https://github.com/tatolab/streamlib/compare/v0.22.0...v0.22.1) (2026-09-13)
+
+
+### Features
+
+* **api-server:** the node's MCP server serves resources and prompts beside its tools ([#2232](https://github.com/tatolab/streamlib/issues/2232)) ([8998315](https://github.com/tatolab/streamlib/commit/8998315cc0204ba495d30aa30c0eef5661309d2d))
+
 ## [0.22.0](https://github.com/tatolab/streamlib/compare/v0.21.0...v0.22.0) (2026-09-13)
 
 
