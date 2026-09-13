@@ -2,12 +2,16 @@
 name = "camera-virtual-camera"
 version = "0.1.0"
 requires-python = ">=3.12"
-# Both doors ship from 0.18.59, but a sink only takes a Python processor's
-# frames from 0.18.60 — which is this example's second camera. 0.19.1 is the
-# floor the example can actually run on: below it, a refused surface-store
-# lookup leaked a plane fd per frame (#2207) and a desktop run died at about
-# 30 s against the shell's 1024 descriptor limit.
-dependencies = ["streamlib>=0.19.1", "numpy>=2.1"]
+# `ShaderEffect` takes its look as a config class, which the wheel constructs
+# from 0.21.0; a node serves the MCP recipe that inserts an effect between two
+# running processors from 0.22.1.
+dependencies = [
+    "streamlib>=0.22.1",
+    "numpy>=2.1",
+    # `ShaderEffect`'s landing copy, device-to-device. Any DLPack-speaking GPU
+    # array package would serve; cupy is the smallest one that does nothing else.
+    "cupy-cuda13x>=14.2",
+]
 
 # streamlib is served from its own simple index until the PyPI publication that
 # follows the project rename; everything else resolves from PyPI as usual.
@@ -18,3 +22,9 @@ explicit = true
 
 [tool.uv.sources]
 streamlib = { index = "streamlib" }
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
