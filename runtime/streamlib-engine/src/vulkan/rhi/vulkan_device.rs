@@ -1965,6 +1965,47 @@ pub(crate) fn memory_type_index_is_host_cached(
         .contains(vk::MemoryPropertyFlags::HOST_CACHED)
 }
 
+/// `DMA_BUF_MAGIC` from the kernel's `include/uapi/linux/magic.h`: the
+/// `f_type` `fstatfs` reports for a DMA-BUF, which lives on the dmabuf
+/// pseudo-filesystem from Linux 5.3 on.
+#[cfg(target_os = "linux")]
+const DMA_BUF_FILE_SYSTEM_MAGIC: u64 = 0x444d_4142;
+
+/// Hand `candidate_fd` back when it names a DMA-BUF; close it and refuse
+/// the import otherwise.
+///
+/// Whether a driver took the fd after a failed `vkAllocateMemory` depends
+/// on why it refused: NVIDIA 595.84 closes a DMA-BUF it cannot import but
+/// leaves a memfd open behind `ERROR_OUT_OF_DEVICE_MEMORY`. Only a refusal
+/// before the call leaves an owner who knows the fd is still open.
+#[cfg(target_os = "linux")]
+fn refuse_a_file_descriptor_that_is_not_a_dma_buf(
+    candidate_fd: std::os::fd::OwnedFd,
+) -> Result<std::os::fd::OwnedFd> {
+    use std::os::fd::AsRawFd as _;
+
+    let mut file_system_status = std::mem::MaybeUninit::<libc::statfs>::uninit();
+    // SAFETY: `candidate_fd` is open for the call and the pointer names a
+    // writable `statfs`.
+    if unsafe { libc::fstatfs(candidate_fd.as_raw_fd(), file_system_status.as_mut_ptr()) } != 0 {
+        return Err(Error::GpuError(format!(
+            "DMA-BUF import: fstatfs on fd {} failed: {}",
+            candidate_fd.as_raw_fd(),
+            std::io::Error::last_os_error()
+        )));
+    }
+    // SAFETY: `fstatfs` returned 0 above, so it filled every field.
+    let file_system_magic = unsafe { file_system_status.assume_init() }.f_type as u64;
+    if file_system_magic != DMA_BUF_FILE_SYSTEM_MAGIC {
+        return Err(Error::NotSupported(format!(
+            "DMA-BUF import: fd {} is not a DMA-BUF (its file system magic is \
+             {file_system_magic:#x}, a DMA-BUF's is {DMA_BUF_FILE_SYSTEM_MAGIC:#x})",
+            candidate_fd.as_raw_fd()
+        )));
+    }
+    Ok(candidate_fd)
+}
+
 /// How a mapped OPAQUE_FD buffer allocation is reached from the host.
 ///
 /// One choice rather than two flags: VMA asserts when both HOST_ACCESS
@@ -3639,10 +3680,10 @@ impl HostVulkanDevice {
     ///
     /// Takes the fd by value: it is the driver's from `vkAllocateMemory`
     /// on, whatever that call returns — the spec transfers ownership on
-    /// success, and the NVIDIA driver also closes the fd on a failed
+    /// success, and the NVIDIA driver also closes a DMA-BUF on a failed
     /// import, so a close after the call lands on whatever the kernel has
-    /// since handed that number to — and it is closed here on the one
-    /// exit before that call.
+    /// since handed that number to. Every exit before that call closes it
+    /// here, and a fd that is not a DMA-BUF never reaches the call.
     pub fn import_dma_buf_memory(
         &self,
         dma_buf_fd: std::os::fd::OwnedFd,
@@ -3652,6 +3693,8 @@ impl HostVulkanDevice {
     ) -> Result<vk::DeviceMemory> {
         use std::os::fd::IntoRawFd as _;
 
+        #[cfg(target_os = "linux")]
+        let dma_buf_fd = refuse_a_file_descriptor_that_is_not_a_dma_buf(dma_buf_fd)?;
         let memory_type_index = self.find_memory_type(memory_type_bits, preferred_flags)?;
 
         let mut import_info = vk::ImportMemoryFdInfoKHR::builder()
@@ -4004,6 +4047,74 @@ mod tests {
             Some(inode),
             "the refused import left the DMA-BUF fd open — no owner remains to close it"
         );
+    }
+
+    /// A memfd and a pipe are refused and closed without a device. A kept
+    /// second descriptor of each file holds its inode, so a closed number
+    /// that a parallel test reopens can never stat as the same file.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_file_descriptor_that_is_not_a_dma_buf_is_refused_and_closed() {
+        use std::os::fd::{FromRawFd as _, OwnedFd};
+
+        let memfd = unsafe { libc::memfd_create(c"not-a-dma-buf".as_ptr(), 0) };
+        assert!(
+            memfd >= 0,
+            "memfd_create: {}",
+            std::io::Error::last_os_error()
+        );
+        let memfd_duplicate = unsafe { libc::dup(memfd) };
+        assert!(
+            memfd_duplicate >= 0,
+            "dup: {}",
+            std::io::Error::last_os_error()
+        );
+        let _memfd_kept_open = unsafe { OwnedFd::from_raw_fd(memfd_duplicate) };
+
+        let mut pipe_ends = [0 as std::os::unix::io::RawFd; 2];
+        assert_eq!(unsafe { libc::pipe(pipe_ends.as_mut_ptr()) }, 0);
+        let _pipe_write_end_kept_open = unsafe { OwnedFd::from_raw_fd(pipe_ends[1]) };
+
+        for (candidate_fd, descriptor_kind) in [(memfd, "memfd"), (pipe_ends[0], "pipe")] {
+            let inode = inode_of(candidate_fd).expect("a fresh fd must stat");
+            let refusal = refuse_a_file_descriptor_that_is_not_a_dma_buf(unsafe {
+                OwnedFd::from_raw_fd(candidate_fd)
+            })
+            .expect_err("only a DMA-BUF passes");
+            assert!(
+                refusal.to_string().contains("is not a DMA-BUF"),
+                "the {descriptor_kind} refusal must say why: {refusal}"
+            );
+            assert_ne!(
+                inode_of(candidate_fd),
+                Some(inode),
+                "the refused {descriptor_kind} fd was left open — no owner remains to close it"
+            );
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn an_exported_dma_buf_passes_the_dma_buf_check_as_the_same_fd() {
+        use std::os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd};
+
+        let Ok(device) = HostVulkanDevice::new() else {
+            tracing::warn!("skipping — no Vulkan device available");
+            return;
+        };
+        let source =
+            crate::vulkan::rhi::HostVulkanBuffer::new_storage_buffer_host_visible(&device, 4096)
+                .expect("source buffer allocation failed");
+        let fd = source.export_dma_buf_fd().expect("DMA-BUF export failed");
+
+        let fd_that_passed_the_dma_buf_check =
+            refuse_a_file_descriptor_that_is_not_a_dma_buf(unsafe { OwnedFd::from_raw_fd(fd) })
+                .expect("an exported DMA-BUF must pass");
+        assert_eq!(fd_that_passed_the_dma_buf_check.as_raw_fd(), fd);
     }
 
     /// Build a `VkPhysicalDeviceMemoryProperties` whose first

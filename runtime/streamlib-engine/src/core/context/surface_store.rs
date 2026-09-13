@@ -3009,18 +3009,36 @@ mod fd_ownership_tests {
         service.stop();
     }
 
+    /// Without an import device the lookup is refused before any Vulkan
+    /// call, so on a machine with a GPU the test brings one up itself;
+    /// otherwise which refusal it proves would depend on whether an earlier
+    /// test in the binary happened to.
     #[test]
     fn a_buffer_lookup_that_cannot_import_closes_the_planes_it_received() {
         const PLANE: &str = "fd-ownership-test-plane-for-buffer-lookup";
+        let import_device_is_up = crate::vulkan::rhi::vulkan_buffer::VULKAN_DEVICE_FOR_IMPORT
+            .get()
+            .is_some()
+            || crate::core::rhi::GpuDevice::new().is_ok();
+        if !import_device_is_up {
+            tracing::warn!(
+                "no Vulkan device — this run proves the no-device refusal, not the DMA-BUF check"
+            );
+        }
         let (_socket_dir, mut service, _registering_connection, store) =
             store_against_a_service_holding_one_pixel_buffer_slot(PLANE);
 
         let descriptors_before_any_lookup = open_descriptors_of_the_plane(PLANE);
         for _ in 0..9 {
-            assert!(
-                store.lookup_buffer(PIXEL_BUFFER_SLOT_ID).is_err(),
-                "a memfd is not a DMA-BUF, so the import must refuse"
-            );
+            let Err(refusal) = store.lookup_buffer(PIXEL_BUFFER_SLOT_ID) else {
+                panic!("a memfd is not a DMA-BUF, so the import must refuse");
+            };
+            if import_device_is_up {
+                assert!(
+                    refusal.to_string().contains("is not a DMA-BUF"),
+                    "with an import device up, the refusal must come before the driver call: {refusal}"
+                );
+            }
         }
         assert_eq!(
             open_descriptors_of_the_plane_once_the_service_thread_settled(

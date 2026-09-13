@@ -529,6 +529,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::context::surface_store::fd_ownership_tests::a_texture_lookup_of_a_pixel_buffer_slot_is_refused_and_closes_the_plane_it_received",
                 "core::context::surface_store::fd_ownership_tests::a_buffer_lookup_that_cannot_import_closes_the_planes_it_received",
                 "core::rhi::external_handle::tests::a_refused_opaque_fd_import_closes_every_plane_fd_it_was_handed",
+                "vulkan::rhi::vulkan_device::tests::a_file_descriptor_that_is_not_a_dma_buf_is_refused_and_closed",
                 "core::context::surface_store::plane_fd_ownership_tests::a_reply_announcing_no_edges_keeps_every_fd_as_a_plane",
                 "core::context::surface_store::plane_fd_ownership_tests::each_announced_edge_is_peeled_off_the_end_and_closed",
                 "core::context::surface_store::plane_fd_ownership_tests::a_reply_shorter_than_its_flags_promise_is_refused_and_closes_what_it_carried",
