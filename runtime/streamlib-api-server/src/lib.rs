@@ -8,6 +8,8 @@ pub mod control_plane_host;
 mod control_plane_stub_support;
 mod handlers;
 mod mcp;
+mod mcp_prompts;
+mod mcp_resources;
 pub mod node_registry;
 mod state;
 
@@ -22,6 +24,7 @@ pub mod api_server;
 pub use api_server::ApiServerProcessor;
 pub use api_server_config::ApiServerConfig;
 pub use handlers::control_plane_openapi_spec;
+pub use mcp_prompts::VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH;
 pub use node_registry::{
     NODE_REGISTRY_SCHEMA_VERSION, NodeRegistryEntry, NodeRegistryError, read_entry, registry_dir,
     remove_entry, scan_entries, write_entry,
