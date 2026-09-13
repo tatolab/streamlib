@@ -427,7 +427,7 @@ mod tests {
     /// The behavioural half; `channel_sizing_tests` reads the same
     /// contract off the opened service's static config. Neither catches
     /// the `.enable_safe_overflow(true)` line simply going missing —
-    /// iceoryx2 0.9.3 defaults to `true` — but a `false` written there
+    /// iceoryx2 defaults to `true` — but a `false` written there
     /// fails both.
     #[test]
     fn overflow_enabled_publisher_does_not_block_on_full_buffer() {
