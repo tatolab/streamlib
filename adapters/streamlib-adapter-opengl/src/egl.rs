@@ -194,10 +194,8 @@ impl EglRuntime {
         // Verify the GL OES extension we depend on is present. Modern
         // core profile reports extensions via glGetStringi only.
         if !gl_has_extension("GL_OES_EGL_image") {
-            // Tear down so we don't leak EGL state on the failure path.
             let _ = egl.make_current(display, None, None, None);
             let _ = egl.destroy_context(display, context);
-            let _ = egl.terminate(display);
             return Err(EglRuntimeError::MissingGlExtension("GL_OES_EGL_image"));
         }
 
@@ -366,9 +364,11 @@ impl EglRuntime {
 
 impl Drop for EglRuntime {
     fn drop(&mut self) {
+        // The display is the process's shared `EGL_DEFAULT_DISPLAY`, so it is
+        // never `eglTerminate`d — see
+        // `docs/learnings/egl-default-display-terminate-is-process-wide.md`.
         let _ = self.egl.make_current(self.display, None, None, None);
         let _ = self.egl.destroy_context(self.display, self.context);
-        let _ = self.egl.terminate(self.display);
     }
 }
 
