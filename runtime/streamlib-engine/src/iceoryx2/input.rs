@@ -101,18 +101,17 @@ struct PortBoundSubscriber {
     dropped_bag_counter: InboundLinkDroppedBagCounter,
 }
 
-/// Thread-local set of channel subscribers.
+/// A destination's channel subscribers, wired by one thread and read by another.
 ///
 /// # Safety
-/// Safe to send between threads because:
-/// 1. Subscribers are only ever pushed AFTER the processor is spawned on its
-///    execution thread (during wiring).
-/// 2. Once pushed, each subscriber is only accessed from that same thread.
-/// 3. The set starts empty (safe to send) and is populated on the target thread.
+/// `Subscriber` is not `Send`, and nothing here locks. Every access must be
+/// serialized by the owner: in the engine, the compiler thread (wiring and
+/// unwiring) and the execution thread (reads) both hold the owning
+/// `ProcessorInstance` mutex; in a helper process, wiring and reads both run on
+/// the helper's main thread. [`SendableListener`] relies on the same rule.
 struct SendableChannelSubscribers(UnsafeCell<Vec<PortBoundSubscriber>>);
 
-// SAFETY: subscribers are only accessed from a single thread after being pushed;
-// see the numbered discipline above.
+// SAFETY: access is serialized by the owner; see the type's `# Safety`.
 unsafe impl Send for SendableChannelSubscribers {}
 unsafe impl Sync for SendableChannelSubscribers {}
 
@@ -129,7 +128,7 @@ impl SendableChannelSubscribers {
         subscriber: Subscriber<ipc::Service, [u8], ()>,
         dropped_bag_counter: InboundLinkDroppedBagCounter,
     ) {
-        // SAFETY: Only called from the processor's execution thread during wiring.
+        // SAFETY: access is serialized by the owner; see the type's `# Safety`.
         unsafe {
             (*self.0.get()).push(PortBoundSubscriber {
                 link_id,
@@ -145,8 +144,7 @@ impl SendableChannelSubscribers {
     /// was bound to (so the caller can decide whether that port's mailbox is now
     /// orphaned). `None` if no subscriber matches — a no-op.
     fn remove_by_link(&self, link_id: &str) -> Option<String> {
-        // SAFETY: sound because every caller (exec thread and compiler thread)
-        // holds the owning ProcessorInstance mutex; never call without that lock.
+        // SAFETY: access is serialized by the owner; see the type's `# Safety`.
         unsafe {
             let subscribers = &mut *self.0.get();
             let position = subscribers.iter().position(|b| b.link_id == link_id)?;
@@ -156,13 +154,12 @@ impl SendableChannelSubscribers {
 
     /// Whether any remaining subscriber is still bound to `local_port`.
     fn port_still_bound(&self, local_port: &str) -> bool {
-        // SAFETY: sound because every caller (exec thread and compiler thread)
-        // holds the owning ProcessorInstance mutex; never call without that lock.
+        // SAFETY: access is serialized by the owner; see the type's `# Safety`.
         unsafe { (*self.0.get()).iter().any(|b| b.local_port == local_port) }
     }
 
     fn as_slice(&self) -> &[PortBoundSubscriber] {
-        // SAFETY: Only called from the processor's execution thread.
+        // SAFETY: access is serialized by the owner; see the type's `# Safety`.
         unsafe { &*self.0.get() }
     }
 
@@ -178,17 +175,19 @@ impl SendableChannelSubscribers {
     }
 
     fn is_empty(&self) -> bool {
-        // SAFETY: Only called from the processor's execution thread.
+        // SAFETY: access is serialized by the owner; see the type's `# Safety`.
         unsafe { (*self.0.get()).is_empty() }
     }
 }
 
-/// Thread-local listener wrapper. Mirrors [`SendableSubscriber`] — the
-/// [`Listener`] is set once on the processor's execution thread and accessed
-/// only from that thread thereafter.
+/// A destination's notify-service [`Listener`], installed and cleared by wiring
+/// and drained by the execution thread.
+///
+/// # Safety
+/// Same owner-serialized access as [`SendableChannelSubscribers`].
 struct SendableListener(UnsafeCell<Option<Listener<ipc::Service>>>);
 
-// SAFETY: same single-thread-after-set discipline as SendableSubscriber.
+// SAFETY: access is serialized by the owner; see [`SendableChannelSubscribers`].
 unsafe impl Send for SendableListener {}
 unsafe impl Sync for SendableListener {}
 
@@ -198,14 +197,14 @@ impl SendableListener {
     }
 
     fn set(&self, listener: Listener<ipc::Service>) {
-        // SAFETY: Only called from the processor's execution thread after spawn
+        // SAFETY: access is serialized by the owner; see [`SendableChannelSubscribers`].
         unsafe {
             *self.0.get() = Some(listener);
         }
     }
 
     fn get(&self) -> Option<&Listener<ipc::Service>> {
-        // SAFETY: Only called from the processor's execution thread
+        // SAFETY: access is serialized by the owner; see [`SendableChannelSubscribers`].
         unsafe { (*self.0.get()).as_ref() }
     }
 
@@ -213,8 +212,7 @@ impl SendableListener {
     /// listener slot. Called when a destination's last inbound link disconnects
     /// so a reconnect recreates the notify service fresh.
     fn clear(&self) {
-        // SAFETY: sound because every caller (exec thread and compiler thread)
-        // holds the owning ProcessorInstance mutex; never call without that lock.
+        // SAFETY: access is serialized by the owner; see [`SendableChannelSubscribers`].
         unsafe {
             *self.0.get() = None;
         }
@@ -693,7 +691,8 @@ impl InputMailboxesInner {
     /// subscriber delivers into `local_port`'s mailbox (binding-based routing;
     /// see [`PortBoundSubscriber`]).
     ///
-    /// Note: This should only be called from the processor's execution thread.
+    /// Callers must hold the owning processor instance, or in a helper process
+    /// be on its main thread.
     pub fn add_channel_subscriber(
         &self,
         local_port: &str,
@@ -718,7 +717,8 @@ impl InputMailboxesInner {
     /// port with no links lists none rather than refusing — an unconnected
     /// input is a legal graph, not an error.
     ///
-    /// Note: This should only be called from the processor's execution thread.
+    /// Callers must hold the owning processor instance, or in a helper process
+    /// be on its main thread.
     pub fn inbound_link_names(&self, port: &str) -> Vec<InboundLinkName> {
         self.subscribers
             .bound_to_local_port(port)
@@ -757,8 +757,8 @@ impl InputMailboxesInner {
     /// notify service so a reconnect recreates fresh-sized, refcounted ports rather
     /// than colliding with the stale service (`DoesNotSupportRequestedMinBufferSize`).
     ///
-    /// Must be called from the processor's execution thread, in the same wiring
-    /// phase a `connect` runs in.
+    /// Callers must hold the owning processor instance, or in a helper process
+    /// be on its main thread.
     pub fn remove_channel_link(&self, link_id: &str) {
         let Some(local_port) = self.subscribers.remove_by_link(link_id) else {
             return;
@@ -779,7 +779,8 @@ impl InputMailboxesInner {
 
     /// Set the iceoryx2 Listener for fd-multiplexed wakeups.
     ///
-    /// Note: This should only be called from the processor's execution thread.
+    /// Callers must hold the owning processor instance, or in a helper process
+    /// be on its main thread.
     pub fn set_listener(&self, listener: Listener<ipc::Service>) {
         self.listener.set(listener);
         self.listener_generation
@@ -832,7 +833,8 @@ impl InputMailboxesInner {
     /// This is called automatically by `read()` and `has_data()`, but can be
     /// called explicitly if needed.
     ///
-    /// Note: This should only be called from the thread that owns the subscribers.
+    /// Callers must hold the owning processor instance, or in a helper process
+    /// be on its main thread.
     pub fn receive_pending(&self) {
         for bound in self.subscribers.as_slice() {
             loop {
@@ -1227,7 +1229,7 @@ pub struct InputMailboxes {
 
 // SAFETY: `handle` points at an `Arc<InputMailboxesInner>` whose
 // interior is Send+Sync (the inner uses parking_lot::Mutex for
-// `ports` and the SendableSubscriber/SendableListener wrappers
+// `ports` and the SendableChannelSubscribers/SendableListener wrappers
 // declare Send+Sync above).
 unsafe impl Send for InputMailboxes {}
 unsafe impl Sync for InputMailboxes {}
