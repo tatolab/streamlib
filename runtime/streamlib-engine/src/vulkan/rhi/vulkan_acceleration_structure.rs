@@ -984,8 +984,6 @@ impl AsBuffer {
             .allocation
             .take()
             .expect("AsBuffer always carries an allocation until consumed");
-        // Skip Drop's free path — caller now owns the buffer + allocation.
-        std::mem::forget(self);
         (buffer, allocation, device_address)
     }
 }
@@ -1085,6 +1083,46 @@ fn instance_bytes(desc: &TlasInstanceDesc) -> [u8; INSTANCE_BYTES] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `into_parts` hands the buffer and its allocation to the caller, but
+    /// the device reference it held must still be released, or that device
+    /// and every pool on it are never dropped (#2247).
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn an_acceleration_structure_buffer_taken_apart_releases_its_device() {
+        let device = match HostVulkanDevice::new() {
+            Ok(d) => d,
+            Err(e) => {
+                println!("Skipping — no Vulkan device: {e}");
+                return;
+            }
+        };
+        let device_references_before_the_buffer = Arc::strong_count(&device);
+
+        let buffer = AsBuffer::new(
+            &device,
+            64,
+            vk::BufferUsageFlags::TRANSFER_DST,
+            "into-parts-under-test",
+        )
+        .expect("a 64-byte buffer allocates");
+        assert_eq!(
+            Arc::strong_count(&device),
+            device_references_before_the_buffer + 1,
+            "the buffer holds the device it allocated from"
+        );
+
+        let (vk_buffer, allocation, _device_address) = buffer.into_parts();
+        assert_eq!(
+            Arc::strong_count(&device),
+            device_references_before_the_buffer,
+            "taking the buffer apart must release its device reference"
+        );
+        unsafe { device.allocator().destroy_buffer(vk_buffer, allocation) };
+    }
 
     #[test]
     fn every_defined_geometry_instance_flag_survives_the_raw_bitmask() {
