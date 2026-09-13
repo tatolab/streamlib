@@ -532,33 +532,36 @@ class BlurProcessor:
             .unwrap()
             .cast_into::<PyDict>()
             .unwrap();
-        if sys_modules.contains("streamlib").unwrap() {
-            return;
+        // Each half is claimed on its own: a `streamlib` already on `sys.modules` without
+        // `streamlib._engine` would otherwise skip the stand-in and leave the relative import
+        // to find the compiled artifact this binary is a copy of.
+        if !sys_modules.contains("streamlib").unwrap() {
+            let package = python
+                .import("types")
+                .unwrap()
+                .call_method1("ModuleType", ("streamlib",))
+                .unwrap();
+            package
+                .setattr(
+                    "__path__",
+                    PyList::new(python, [WHEEL_PYTHON_PACKAGE_DIRECTORY]).unwrap(),
+                )
+                .unwrap();
+            sys_modules.set_item("streamlib", package).unwrap();
         }
 
-        let package = python
-            .import("types")
-            .unwrap()
-            .call_method1("ModuleType", ("streamlib",))
-            .unwrap();
-        package
-            .setattr(
-                "__path__",
-                PyList::new(python, [WHEEL_PYTHON_PACKAGE_DIRECTORY]).unwrap(),
+        if !sys_modules.contains("streamlib._engine").unwrap() {
+            let stand_in_engine = PyModule::from_code(
+                python,
+                c"def register_declared_processor_class(processor_class): pass",
+                c"streamlib/_engine.py",
+                c"streamlib._engine",
             )
             .unwrap();
-        sys_modules.set_item("streamlib", package).unwrap();
-
-        let stand_in_engine = PyModule::from_code(
-            python,
-            c"def register_declared_processor_class(processor_class): pass",
-            c"streamlib/_engine.py",
-            c"streamlib._engine",
-        )
-        .unwrap();
-        sys_modules
-            .set_item("streamlib._engine", stand_in_engine)
-            .unwrap();
+            sys_modules
+                .set_item("streamlib._engine", stand_in_engine)
+                .unwrap();
+        }
     }
 
     /// Run the real decorator module, run `class_body_source` against it, and
