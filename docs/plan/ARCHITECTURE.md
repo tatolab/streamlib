@@ -434,7 +434,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   [consumer-tree-disposition — SHIPPED; a standing convention, and by the same decision
   the showcase carries no CI check to run]
 
-## Processor model & scheduling — IN-FLIGHT (→ agent-readable-processor-catalog)
+## Processor model & scheduling — IN-FLIGHT
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a bag
   (self-describing msgpack named map). The engine has no type layer: ports carry no
@@ -581,7 +581,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   code-first, it names nothing on a link, and no engine path reads it. The entry below
   is the only such schema. [schema-free-ports — SHIPPED #1813, #1815; the
   `SchemaIdent` grammar itself — processor-class-identity, SHIPPED #1841; narrowed by
-  agent-readable-processor-catalog]
+  agent-readable-processor-catalog — SHIPPED #2224, #2226]
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-11-schema-free-ports.md -->
 - **DECIDED** — A processor's config shape is a JSON Schema derived from its config
   type, carried on its descriptor and rendered by the control plane in the processor
@@ -596,7 +596,73 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   not kept beside the class form. A processor that takes no config declares none and
   refuses one. Reconfiguration takes the same object. Processors in the engine tree
   written the old way migrate with the change; consumers lag as §Consumers states.
-  [agent-readable-processor-catalog]
+  [agent-readable-processor-catalog — SHIPPED #2224 for Rust, #2226 for Python]
+  <!-- verify: cargo test -p streamlib-engine --test attribute_macro_test the_descriptor_carries_the_config_types_schema_rather_than_its_name -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_processor_config_class.py -->
+- **DECIDED** — The Rust half, as built. `ProcessorDescriptor.config_schema` is
+  `Option<serde_json::Value>` — the config type's document, `None` only on a descriptor
+  built by hand without one — and `ProcessorDescriptorOutput` mirrors it, so
+  `/api/registry` serves the same document the MCP catalog does. `#[processor]` emits it
+  through `ProcessorConfigJsonSchema`, a blanket trait over `schemars::JsonSchema` whose
+  `#[diagnostic::on_unimplemented]` note names the derive and the SDK's re-export at
+  `streamlib::sdk::schemars`, so a config type without the derive fails on a message
+  naming the fix rather than on a bare trait bound; the synthesized config id and the
+  `config_schema` attribute key are gone. `EmptyConfig`, what a processor with no
+  `config =` gets, publishes an object with no properties and `additionalProperties:
+  false`, and refuses a non-empty map naming the key that had nowhere to go. Every
+  in-tree config type derives the schema — the built-ins' configs, their enums and
+  `ApiServerConfig` — and a field's `///` doc is its `description`, a serde default its
+  `default`, a field with neither `required`. The per-field `ConfigDescriptor` trait,
+  its derive, `ConfigField` and `ConfigFieldOutput`, which nothing constructed, are
+  deleted. Every catalog document, from either language, is JSON Schema draft 2020-12
+  with no `$schema` key: schemars 0.8 emits draft-07, so the Rust seam writes its
+  definitions under `$defs` with references pointing there and a tuple's positional
+  schemas as `prefixItems`. The two languages keep two spellings that are both valid
+  2020-12 — Rust writes a nullable as `"type": [T, "null"]` and stamps a root `title`,
+  Python writes `anyOf` with null and no title — and neither is converted.
+  [agent-readable-processor-catalog — SHIPPED #2224]
+  <!-- verify: cargo test -p streamlib-engine --test attribute_macro_test a_processor_declaring_no_config_takes_none_and_says_which_key_had_nowhere_to_go -->
+  <!-- verify: cargo test -p streamlib-engine --test compile_fail_config_without_json_schema -->
+  <!-- verify: cargo test -p streamlib-processor-schema the_document_is_2020_12_with_no_schema_key_and_no_definitions_keyword -->
+  <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-09-13-agent-readable-processor-catalog.md -->
+- **DECIDED** — The Python half, as built. `@processor` reads `__init__` through
+  `typing.get_type_hints(..., include_extras=True)`: a `config` parameter annotated with
+  a class names the config class; an `__init__` taking nothing beyond `self`, or none at
+  all, declares no config; every other signature — a keyword parameter or several,
+  `*args` or `**kwargs`, a positional-only or unannotated `config`, an annotation that
+  is not a class (a parameterised generic, `Any`) or cannot be resolved — is refused at
+  decoration naming the class, the parameter and the fix. The class and its schema are
+  stamped as `__streamlib_processor_config_class__` and
+  `__streamlib_processor_config_schema__`. The deriver is stdlib-only and emits 2020-12
+  directly, inlining nested classes and never writing a `$ref`: a TypedDict yields its
+  annotations, inherited keys included, and `required` from `__required_keys__`; a
+  dataclass yields its constructor's inputs — its `init=True` fields and `InitVar`s, a
+  `default_factory` field optional with no default, and a default the wire cannot carry
+  dropped rather than rewritten — with `additionalProperties: false`, since a dataclass
+  refuses an unknown key and a TypedDict does not; `Annotated[T, "text"]` is a
+  description; a class exposing `model_json_schema()` contributes that document minus
+  `$schema` and `title`, recognised by the method rather than by importing pydantic; an
+  annotation the deriver does not know renders `{}`, a config class of a kind it cannot
+  read is accepted with an open schema, and a self-referential class stops at an open
+  object rather than recursing. The helper constructs
+  `processor_class(config=config_class(**configuration))` and whatever the config class
+  raises is what the author sees; a class declaring no config takes an empty
+  configuration and refuses a non-empty one by name; reconfiguration calls
+  `configure(config_class(**configuration))`. Construction is the only check — the wheel
+  carries no validator, and how strict it is stays the author's choice of config class.
+  The wire is unchanged: `rt.add(cls, config={…})` carries a dict, the graph node stores
+  its JSON, and `ctx.config` stays that mapping. The six engine-tree fixtures migrated
+  with the change, and so did the four extension-wheel processors, as the canary
+  §Consumers reserves — owner ruling 2026-09-11, since `packages/` is the one consumer
+  tree CI runs; the fourteen example processors still written the old way are filed as
+  backlog at their seven examples, #2236–#2242. [agent-readable-processor-catalog —
+  SHIPPED #2226]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_processor_config_class.py::test_a_keyword_parameter_is_refused_with_the_fix_named -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_processor_config_class.py::test_the_helper_constructs_the_processor_by_the_config_keyword -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_processor_config_class.py::test_the_document_is_2020_12_with_no_meta_schema_key -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_processor_config_catalog.py -->
+  <!-- verify: pytest packages/streamlib-moq/tests/test_processors.py -->
+  <!-- verify: pytest packages/streamlib-webrtc/tests/test_processors.py -->
 - **DECIDED** — Port rendering in the control plane is name, description, delivery
   profile, direction, and — on an audio input that declared one — its window contract; no
   port carries a type in `graph`, `tap`, or any snapshot. A port that declared nothing
@@ -671,7 +737,22 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   catalog before its first add; the constructor arrives at first add exactly as today.
   Decoration inside a helper process registers nothing, because a helper hosts no
   graph. A class decorated twice under one import path meets the existing
-  duplicate-path refusal. [agent-readable-processor-catalog]
+  duplicate-path refusal. As built: after stamping, the decorator calls the
+  wheel-internal `register_declared_processor_class`, which reads the class as `rt.add`
+  does and registers the descriptor alone through `register_descriptor_only`. It passes
+  over two classes — one decorated where `STREAMLIB_ENTRYPOINT` is in the environment,
+  which is how a helper knows itself, and one with no import path (declared inside a
+  function, or in the entry file), whose refusal stays at `rt.add` with the fix named.
+  At first add `ProcessorInstanceFactory::install_constructor_for_registered_descriptor`
+  gives the registered descriptor its constructor, refusing a path that already has one
+  with the two-classes-one-path text and a path nobody registered by name; the
+  unregistered-type resolver keeps its shape, since importing the module runs the
+  decorator before the constructor is installed. A second decoration of one import path
+  is refused at import naming `importlib.reload`, and the first registration stands. A
+  class decorated with no `description=` registers its docstring, or `""`.
+  [agent-readable-processor-catalog — SHIPPED #2228]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_declaration_registers.py -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_processor_config_catalog.py::test_a_class_the_app_imported_and_never_added_is_in_the_catalog -->
 - **DECIDED** — An instance's display name is the human-facing label — passed at `add`,
   readable off the returned handle, and the prefix on its log records; it defaults to
   the class's short name and the engine disambiguates duplicates within one graph.
@@ -2343,7 +2424,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_the_native_extension_links_nothing_the_host_may_not_supply -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_the_glsl_compiler_is_linked_statically -->
 
-## Control plane & observability — IN-FLIGHT (→ agent-readable-processor-catalog)
+## Control plane & observability — IN-FLIGHT
 
 - **DECIDED** — The control plane carries no optional capability's routes natively. A
   capability extension that needs an endpoint contributes it through the `host` door
@@ -2382,13 +2463,24 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   served by the node's control plane at `POST /mcp`, mounted with the node and sharing
   its lifecycle; it has exactly one transport, and no CLI verb, stdio server, or bridge
   process stands between a host and that endpoint — an MCP host is configured with a
-  running node's URL.
+  running node's URL. Beside its tools the node serves two resources, each rendered at
+  the moment it is read: `streamlib://processor-catalog`, every processor type it can
+  add with its description, derived config schema and ports — `/api/registry`'s
+  document — and `streamlib://graph`, the `graph` tool's. It also serves four prompts,
+  recipes rendered against the live graph and the catalog —
+  `insert_processor_between_linked_processors`, `fan_output_to_another_consumer`,
+  `show_channel_on_virtual_camera` and `look_at_what_a_channel_carries` — whose every
+  step is a call to a served tool: a prompt is text, never a mutation path, so the tool
+  set stays the whole of the control vocabulary.
   [importable-python-library, mcp-served-with-the-node — SHIPPED #1712;
   control-plane-surface-pixel-exchange — SHIPPED #1972, #1974 for the vocabulary
-  sentence; live graph mutation restored by owner ruling 2026-09-06]
+  sentence; live graph mutation restored by owner ruling 2026-09-06; resources and
+  prompts — SHIPPED #2232, the catalog they serve from agent-readable-processor-catalog]
   <!-- verify: sdk/streamlib-python-wheel/tests/test_cli.py::test_the_wheel_serves_no_mcp_verb -->
   <!-- verify: cargo test -p streamlib-api-server tools_list_advertises_exactly_the_control_vocabulary -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_live_graph_mutation.py -->
+  <!-- verify: cargo test -p streamlib-api-server resources_list_names_the_processor_catalog_and_the_live_graph -->
+  <!-- verify: cargo test -p streamlib-api-server every_step_of_every_prompt_calls_a_tool_the_node_serves -->
 - **DECIDED** — `dev` and `run` bind the control plane identically: all interfaces
   (`0.0.0.0`) by default, narrowed per invocation by `--host`. There is no dev-only
   exposure posture — a node another host can reach is bound wide by definition, so
