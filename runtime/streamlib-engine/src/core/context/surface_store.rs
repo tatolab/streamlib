@@ -3009,9 +3009,19 @@ mod fd_ownership_tests {
         service.stop();
     }
 
+    /// Without an import device the lookup is refused before any Vulkan
+    /// call, so on a machine with a GPU the test brings one up itself;
+    /// otherwise which refusal it proves would depend on whether an earlier
+    /// test in the binary happened to.
     #[test]
     fn a_buffer_lookup_that_cannot_import_closes_the_planes_it_received() {
         const PLANE: &str = "fd-ownership-test-plane-for-buffer-lookup";
+        if crate::vulkan::rhi::vulkan_buffer::VULKAN_DEVICE_FOR_IMPORT
+            .get()
+            .is_none()
+        {
+            let _ = crate::core::rhi::GpuDevice::new();
+        }
         let (_socket_dir, mut service, _registering_connection, store) =
             store_against_a_service_holding_one_pixel_buffer_slot(PLANE);
 
