@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.4](https://github.com/tatolab/streamlib/compare/v0.22.3...v0.22.4) (2026-09-13)
+
+
+### Bug Fixes
+
+* **engine:** refuse a non-DMA-BUF fd before the driver so a failed buffer lookup closes it ([#2250](https://github.com/tatolab/streamlib/issues/2250)) ([c27f5a1](https://github.com/tatolab/streamlib/commit/c27f5a1ddc94bff461f4078d60463bd1497be564))
+
 ## [0.22.3](https://github.com/tatolab/streamlib/compare/v0.22.2...v0.22.3) (2026-09-13)
 
 
