@@ -49,12 +49,14 @@ Loading and unloading libEGL is not the trigger. `eglTerminate` is.
 Treat an initialized default display as process state. Nobody terminates it:
 
 - Never call `eglTerminate` on a display obtained from `EGL_DEFAULT_DISPLAY`.
-  Release your own context and images, and leave the display initialized for
-  the life of the process.
-- Keep libEGL loaded for as long as that display stays initialized.
+  Release your own context and images, and leave the display initialized.
 - If an answer comes from the display and not from a particular caller, such as
   the DRM modifiers the driver advertises, compute it once per process and share
   it.
+
+Unloading libEGL is not what races (row three of the table). The engine probe
+keeps its handle loaded anyway, as any app that links libEGL does. An
+`EglRuntime` still releases its handle when it drops.
 
 Adding only a lock around terminate stops the concurrent crash, but the next
 holder still gets `EGL_NOT_INITIALIZED`.

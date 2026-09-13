@@ -1317,17 +1317,18 @@ impl HostVulkanDevice {
         // with an error rather than silently picking a sampler-only modifier.
         // See `docs/learnings/nvidia-egl-dmabuf-render-target.md`.
         #[cfg(target_os = "linux")]
-        let drm_modifier_table = match drm_modifier_probe::probe_default_display() {
-            Ok(t) => t,
-            Err(e) => {
-                tracing::warn!(
-                    "EGL DRM modifier probe failed: {e} — render-target DMA-BUF \
+        let drm_modifier_table =
+            match drm_modifier_probe::default_display_drm_modifier_table_probed_once_per_process() {
+                Ok(t) => t,
+                Err(e) => {
+                    tracing::warn!(
+                        "EGL DRM modifier probe failed: {e} — render-target DMA-BUF \
                      pool will be unavailable; only sampler-only / linear DMA-BUF \
                      allocations will succeed"
-                );
-                Arc::new(DrmModifierTable::empty())
-            }
-        };
+                    );
+                    Arc::new(DrmModifierTable::empty())
+                }
+            };
 
         // Build the OPAQUE_FD buffer pool — used by CUDA / OpenCL interop
         // (host allocates, exports OPAQUE_FD, CUDA `cudaImportExternalMemory`

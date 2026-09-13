@@ -21,9 +21,8 @@
 //! a fallback path (typically: refuse to allocate a render-target image and
 //! surface a `GpuError`).
 //!
-//! The probe runs once per process and every caller shares its answer. The
-//! default display it initializes stays initialized, and libEGL stays loaded,
-//! for the life of the process.
+//! The probe runs once per process and every caller shares its answer. It never
+//! terminates the default display, and it keeps libEGL loaded.
 
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_char, c_void};
@@ -70,7 +69,7 @@ pub const DRM_FORMAT_MOD_LINEAR: u64 = 0;
 ///
 /// All variants are fall-back-to-linear conditions, not hard failures —
 /// the runtime keeps booting even when EGL is missing.
-#[derive(Debug, Clone, Error)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ProbeError {
     #[error("libEGL.so.1 not loadable: {0}")]
     LibraryNotFound(String),
@@ -99,7 +98,7 @@ pub enum ProbeError {
 /// The convention for the RT list is: empty ⇒ no render-target path is
 /// available for this format on this driver, fall back to linear with a
 /// `tracing::warn!`.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DrmModifierTable {
     rt_modifiers: HashMap<u32, Vec<u64>>,
     sampler_only_modifiers: HashMap<u32, Vec<u64>>,
@@ -173,9 +172,10 @@ mod egl {
     pub const EGL_EXTENSIONS: EGLint = 0x3055;
 }
 
-/// Probed EGL function pointers, resolved from a libEGL that is never unloaded.
+static LIBEGL_KEPT_LOADED_FOR_PROCESS: OnceLock<Result<Library, ProbeError>> = OnceLock::new();
+
+/// Probed EGL function pointers, resolved from the process's one libEGL handle.
 struct EglFns {
-    _libegl_loaded_for_process_lifetime: &'static Library,
     egl_get_display: unsafe extern "C" fn(egl::EGLNativeDisplayType) -> egl::EGLDisplay,
     egl_initialize: unsafe extern "C" fn(
         egl::EGLDisplay,
@@ -201,12 +201,16 @@ struct EglFns {
 
 impl EglFns {
     fn load() -> Result<Self, ProbeError> {
-        let lib = unsafe { Library::new("libEGL.so.1") }
-            .or_else(|_| unsafe { Library::new("libEGL.so") })
-            .map_err(|e| ProbeError::LibraryNotFound(e.to_string()))?;
-        // The default display stays initialized for the process, so the
-        // library behind it must never be unloaded.
-        let lib: &'static Library = Box::leak(Box::new(lib));
+        // Kept loaded, as in any app that links libEGL, so the default display
+        // the probe leaves initialized never outlives the library behind it.
+        let lib = LIBEGL_KEPT_LOADED_FOR_PROCESS
+            .get_or_init(|| {
+                unsafe { Library::new("libEGL.so.1") }
+                    .or_else(|_| unsafe { Library::new("libEGL.so") })
+                    .map_err(|e| ProbeError::LibraryNotFound(e.to_string()))
+            })
+            .as_ref()
+            .map_err(Clone::clone)?;
 
         unsafe fn sym<T: Copy>(lib: &Library, name: &'static [u8]) -> Result<T, ProbeError> {
             let symbol: libloading::Symbol<T> = unsafe { lib.get(name) }.map_err(|_| {
@@ -224,7 +228,6 @@ impl EglFns {
         let egl_get_error = unsafe { sym(lib, b"eglGetError\0")? };
 
         Ok(Self {
-            _libegl_loaded_for_process_lifetime: lib,
             egl_get_display,
             egl_initialize,
             egl_query_string,
@@ -297,7 +300,8 @@ static DEFAULT_DISPLAY_PROBE_RESULT: OnceLock<Result<Arc<DrmModifierTable>, Prob
 /// On any failure (missing libEGL, no display server, extension not
 /// advertised), returns the error and the caller decides whether to
 /// degrade to [`DrmModifierTable::empty`] or surface the failure.
-pub fn probe_default_display() -> Result<Arc<DrmModifierTable>, ProbeError> {
+pub fn default_display_drm_modifier_table_probed_once_per_process()
+-> Result<Arc<DrmModifierTable>, ProbeError> {
     DEFAULT_DISPLAY_PROBE_RESULT
         .get_or_init(|| probe_with_formats(DEFAULT_PROBE_FORMATS).map(Arc::new))
         .clone()
@@ -319,11 +323,8 @@ fn probe_with_formats(formats: &[u32]) -> Result<DrmModifierTable, ProbeError> {
         let err = unsafe { (fns.egl_get_error)() } as u32;
         return Err(ProbeError::InitFailed(err));
     }
-    // Never `eglTerminate` this display. EGL hands every caller in the process
-    // the same default display and `eglTerminate` is not reference-counted
-    // without `EGL_KHR_display_reference`, which NVIDIA does not advertise —
-    // terminating it tears it down under every other holder, and racing a
-    // concurrent caller's queries corrupts the heap. See
+    // The display is the process's shared `EGL_DEFAULT_DISPLAY`, so it is never
+    // `eglTerminate`d — see
     // `docs/learnings/egl-default-display-terminate-is-process-wide.md`.
 
     // Verify the extension is advertised on this display before chasing the
@@ -509,7 +510,7 @@ mod tests {
     /// with the RT path.
     #[test]
     fn rt_and_sampler_only_lists_are_disjoint_when_probed() {
-        let table = match probe_default_display() {
+        let table = match default_display_drm_modifier_table_probed_once_per_process() {
             Ok(t) => t,
             Err(e) => {
                 println!("EGL probe skipped: {e}");
@@ -535,8 +536,8 @@ mod tests {
     /// count is driver-dependent. We assert only that the probe ran and
     /// either returned a known error or a sane table.
     #[test]
-    fn probe_default_display_runs_or_skips_cleanly() {
-        match probe_default_display() {
+    fn the_default_display_probe_runs_or_skips_cleanly() {
+        match default_display_drm_modifier_table_probed_once_per_process() {
             Ok(table) => {
                 let n = table.formats_with_rt_modifier();
                 println!("EGL probe ok: {} format(s) with RT modifiers", n);
@@ -550,10 +551,10 @@ mod tests {
         }
     }
 
-    /// Every device bring-up probes, so concurrent callers are the production
-    /// shape — the process must survive them.
+    /// Uncached probes racing on the shared default display never tear it down
+    /// under one another: the process survives and every probe agrees.
     #[test]
-    fn probing_the_default_display_from_many_threads_at_once_leaves_the_process_standing() {
+    fn uncached_probes_from_many_threads_at_once_leave_the_process_standing_and_agree() {
         const PROBING_THREAD_COUNT: usize = 8;
         const PROBES_PER_THREAD: usize = 4;
         let start_together = Arc::new(std::sync::Barrier::new(PROBING_THREAD_COUNT));
@@ -563,7 +564,7 @@ mod tests {
                 std::thread::spawn(move || {
                     start_together.wait();
                     (0..PROBES_PER_THREAD)
-                        .map(|_| probe_default_display())
+                        .map(|_| probe_with_formats(DEFAULT_PROBE_FORMATS))
                         .collect::<Vec<_>>()
                 })
             })
@@ -572,28 +573,28 @@ mod tests {
             .into_iter()
             .flat_map(|probing_thread| probing_thread.join().expect("probing thread panicked"))
             .collect();
-        assert_eq!(
-            every_probe_result.len(),
-            PROBING_THREAD_COUNT * PROBES_PER_THREAD
-        );
+        let first_probe_result = &every_probe_result[0];
+        for probe_result in &every_probe_result {
+            assert_eq!(
+                probe_result, first_probe_result,
+                "concurrent probes of one display disagreed"
+            );
+        }
     }
 
     /// The table describes the process's default display, not a device, so
     /// every caller shares the one probe's answer.
     #[test]
     fn every_caller_shares_the_one_default_display_probe() {
-        let first_probe_result = probe_default_display();
-        let second_probe_result = probe_default_display();
+        let first_probe_result = default_display_drm_modifier_table_probed_once_per_process();
+        let second_probe_result = default_display_drm_modifier_table_probed_once_per_process();
         match (first_probe_result, second_probe_result) {
             (Ok(first_table), Ok(second_table)) => assert!(
                 Arc::ptr_eq(&first_table, &second_table),
                 "a second call re-probed EGL instead of sharing the first table"
             ),
-            (Err(first_error), Err(second_error)) => {
-                assert_eq!(first_error.to_string(), second_error.to_string())
-            }
-            (first, second) => {
-                panic!("two calls disagreed on whether EGL probed: {first:?} vs {second:?}")
+            (first_probe_result, second_probe_result) => {
+                assert_eq!(first_probe_result, second_probe_result)
             }
         }
     }
