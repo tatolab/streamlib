@@ -59,14 +59,16 @@ class RunningTestApp:
             start_new_session=True,
         )
         self.output_lines: list[str] = []
-        self._incoming: queue.Queue[str | None] = queue.Queue()
+        self._output_lines_pumped_from_the_app_pipe: queue.Queue[str | None] = (
+            queue.Queue()
+        )
         threading.Thread(target=self._pump_output, daemon=True).start()
 
     def _pump_output(self) -> None:
         assert self.process.stdout is not None
         for line in self.process.stdout:
-            self._incoming.put(line)
-        self._incoming.put(None)
+            self._output_lines_pumped_from_the_app_pipe.put(line)
+        self._output_lines_pumped_from_the_app_pipe.put(None)
 
     @property
     def output(self) -> str:
@@ -81,7 +83,9 @@ class RunningTestApp:
             if remaining <= 0:
                 raise AssertionError(f"no {what} within {timeout} s:\n{self.output}")
             try:
-                line = self._incoming.get(timeout=min(0.5, remaining))
+                line = self._output_lines_pumped_from_the_app_pipe.get(
+                    timeout=min(0.5, remaining)
+                )
             except queue.Empty:
                 continue
             if line is None:
@@ -135,7 +139,7 @@ def assert_rendered_matches_the_reference(
 ) -> None:
     assert all(
         abs(rendered_channel - expected_channel) <= PIXEL_CHANNEL_TOLERANCE
-        for rendered_channel, expected_channel in zip(rendered, expected)
+        for rendered_channel, expected_channel in zip(rendered, expected, strict=True)
     ), f"{what}: rendered {rendered}, the CPU reference is {expected}"
 
 

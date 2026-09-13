@@ -2,14 +2,11 @@
 name = "camera-virtual-camera"
 version = "0.1.0"
 requires-python = ">=3.12"
-# `ShaderEffect` takes its look as a config class, which the wheel constructs
-# from 0.21.0; a node serves the MCP recipe that inserts an effect between two
-# running processors from 0.22.1.
+# 0.22.1 is the release `ShaderEffect`'s tests and live swap ran against.
 dependencies = [
     "streamlib>=0.22.1",
     "numpy>=2.1",
-    # `ShaderEffect`'s landing copy, device-to-device. Any DLPack-speaking GPU
-    # array package would serve; cupy is the smallest one that does nothing else.
+    # `ShaderEffect`'s landing copy, device-to-device.
     "cupy-cuda13x>=14.2",
 ]
 

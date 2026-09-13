@@ -124,13 +124,11 @@ and one add — `ShaderEffect` is importable as
 3. `connect` the camera's `video` to its `video_from_upstream`, and its
    `video_to_downstream` to the inverted sink's `video`.
 
-To stack a look on top of the inversion instead, the node's
-`insert_processor_between_linked_processors` prompt splices one into the link
-between the effect and its sink. Swapping one look for another is the same
-remove and add again. The camera, both sinks and every other processor
-keep running through it — only the second camera goes without new frames for
-the moment the splice takes, under a second on a 640×480 feed — and at that
-size the effect keeps the source's 30 fps.
+Swapping one look for another is the same remove and add again. The camera,
+both sinks and every other processor keep running through it — only the second
+camera goes without new frames for the moment the splice takes, under a second
+on a 640×480 feed — and the effect keeps the source's 30 fps, at 1920×1080 as
+much as at 640×480.
 
 Each frame is copied device-to-device into a texture the effect owns before the
 pass samples it: a camera publishes buffer-backed frames, and a draw binds

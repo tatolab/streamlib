@@ -39,7 +39,7 @@ FULLSCREEN_TRIANGLE_VERTEX_GLSL = (
 
 # One format end to end: the camera publishes RGBA8 and a `VirtualCameraSink`
 # samples RGBA8 on its way to the device's buffers.
-TEXTURE_FORMAT = "rgba8_unorm"
+LANDING_AND_RENDERED_FRAME_TEXTURE_FORMAT = "rgba8_unorm"
 
 # The texture each incoming frame lands in and the shader samples.
 SAMPLED_LANDING_TEXTURE_USAGE = ["texture_binding"]
@@ -86,7 +86,7 @@ class ShaderEffect:
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         try:
             self.graphics_kernel = ctx.gpu_full_access.create_graphics_kernel(
-                color_attachment_formats=[TEXTURE_FORMAT],
+                color_attachment_formats=[LANDING_AND_RENDERED_FRAME_TEXTURE_FORMAT],
                 vertex_source=FULLSCREEN_TRIANGLE_VERTEX_GLSL,
                 fragment_source=self.fragment_glsl,
                 bindings={
@@ -94,8 +94,8 @@ class ShaderEffect:
                 },
                 label="ShaderEffect",
             )
-        except Exception as refusal:
-            raise ValueError(
+        except RuntimeError as refusal:
+            raise RuntimeError(
                 f"ShaderEffect could not build its pass from `fragment_glsl` sampling "
                 f"`{self.sampled_input_binding_name}` "
                 f"(`sampled_input_binding_name`): {refusal}"
@@ -103,10 +103,12 @@ class ShaderEffect:
         # Depth 1: the draw returns with the GPU work retired, and nothing
         # outside this processor ever names a landing texture.
         self.landing_texture_ring = ProcessorOutputTextureRing(
-            TEXTURE_FORMAT, SAMPLED_LANDING_TEXTURE_USAGE, depth=1
+            LANDING_AND_RENDERED_FRAME_TEXTURE_FORMAT,
+            SAMPLED_LANDING_TEXTURE_USAGE,
+            depth=1,
         )
         self.rendered_output_texture_ring = ProcessorOutputTextureRing(
-            TEXTURE_FORMAT, RENDERED_OUTPUT_TEXTURE_USAGE
+            LANDING_AND_RENDERED_FRAME_TEXTURE_FORMAT, RENDERED_OUTPUT_TEXTURE_USAGE
         )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
@@ -119,8 +121,7 @@ class ShaderEffect:
 
         # A camera publishes buffer-backed frames and a draw binds
         # texture-backed surfaces only, so each frame is copied device-to-device
-        # into a texture this processor owns. cupy does nothing here but that
-        # copy; the frame is a DLPack producer in its own right.
+        # into a texture this processor owns.
         landing_texture = self.landing_texture_ring.next_texture_for_this_frame(
             ctx.gpu_limited_access, frame.width, frame.height
         )
