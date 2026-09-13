@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use streamlib::sdk::runtime::RuntimeOperations;
 
 use crate::handlers::processor_catalog_of_this_process;
-use crate::mcp::RpcError;
+use crate::mcp::{RpcError, RpcResult};
 
 /// Every processor type the node can add, with its config schema and ports.
 pub(crate) const PROCESSOR_CATALOG_RESOURCE_URI: &str = "streamlib://processor-catalog";
@@ -58,7 +58,7 @@ pub(crate) fn resource_templates_list_result() -> Value {
 pub(crate) async fn read_resource(
     runtime: &Arc<dyn RuntimeOperations>,
     params: Value,
-) -> std::result::Result<Value, RpcError> {
+) -> RpcResult<Value> {
     #[derive(Deserialize)]
     struct ReadResourceParams {
         uri: String,
@@ -66,19 +66,30 @@ pub(crate) async fn read_resource(
     let ReadResourceParams { uri } = serde_json::from_value(params)
         .map_err(|e| RpcError::invalid_params(format!("malformed resources/read params: {e}")))?;
 
-    let document = match uri.as_str() {
-        PROCESSOR_CATALOG_RESOURCE_URI => serde_json::to_value(processor_catalog_of_this_process())
-            .map_err(|e| RpcError::internal(format!("processor catalog rendering failed: {e}")))?,
-        LIVE_GRAPH_RESOURCE_URI => runtime
-            .to_json_async()
-            .await
-            .map_err(|e| RpcError::internal(format!("graph export failed: {e}")))?,
+    let rendering = match uri.as_str() {
+        PROCESSOR_CATALOG_RESOURCE_URI => {
+            serde_json::to_string_pretty(&processor_catalog_of_this_process())
+        }
+        LIVE_GRAPH_RESOURCE_URI => {
+            serde_json::to_string_pretty(&exported_live_graph_json(runtime).await?)
+        }
         other => return Err(RpcError::resource_not_found(other)),
     };
-    let text = serde_json::to_string_pretty(&document)
+    let text = rendering
         .map_err(|e| RpcError::internal(format!("resource `{uri}` rendering failed: {e}")))?;
 
     Ok(json!({
         "contents": [{ "uri": uri, "mimeType": JSON_RESOURCE_MIME_TYPE, "text": text }]
     }))
+}
+
+/// The runtime's graph export — the document the `graph` resource serves and
+/// the prompts render against.
+pub(crate) async fn exported_live_graph_json(
+    runtime: &Arc<dyn RuntimeOperations>,
+) -> RpcResult<Value> {
+    runtime
+        .to_json_async()
+        .await
+        .map_err(|e| RpcError::internal(format!("graph export failed: {e}")))
 }

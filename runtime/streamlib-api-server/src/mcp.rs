@@ -150,6 +150,9 @@ pub(crate) struct RpcError {
     message: String,
 }
 
+/// A JSON-RPC method's answer: its result, or the error the envelope carries.
+pub(crate) type RpcResult<T> = std::result::Result<T, RpcError>;
+
 impl RpcError {
     fn method_not_found(method: &str) -> Self {
         Self {
@@ -229,7 +232,7 @@ async fn dispatch(
     runtime: &Arc<dyn RuntimeOperations>,
     method: &str,
     params: Value,
-) -> std::result::Result<Value, RpcError> {
+) -> RpcResult<Value> {
     match method {
         "initialize" => Ok(initialize_result()),
         "ping" => Ok(json!({})),
@@ -264,7 +267,7 @@ fn initialize_result() -> Value {
 /// The MCP tool catalog returned by `tools/list`. Each entry mirrors an
 /// api-server control-plane op; the `inputSchema` is the JSON Schema a client
 /// validates its `arguments` against.
-pub(crate) fn tool_definitions() -> Vec<Value> {
+fn tool_definitions() -> Vec<Value> {
     vec![
         json!({
             "name": "graph",
@@ -380,10 +383,7 @@ pub(crate) fn tool_definitions() -> Vec<Value> {
 // tools/call dispatch
 // ============================================================================
 
-async fn tools_call(
-    runtime: &Arc<dyn RuntimeOperations>,
-    params: Value,
-) -> std::result::Result<Value, RpcError> {
+async fn tools_call(runtime: &Arc<dyn RuntimeOperations>, params: Value) -> RpcResult<Value> {
     #[derive(Deserialize)]
     struct ToolCallParams {
         name: String,
@@ -2525,34 +2525,196 @@ mod tests {
 
     /// Resources and prompts expose nothing the tools do not, and are gated
     /// exactly as `graph` is: by the one bearer gate in front of `POST /mcp`.
+    ///
+    /// Paired, because the gate sits on the route: an unauthorised call is
+    /// refused whether or not the method exists, so only the authorised half
+    /// proves each method is served behind it.
     #[tokio::test]
-    async fn resources_and_prompts_are_refused_without_the_bearer_token_when_auth_is_on() {
+    async fn resources_and_prompts_answer_behind_the_bearer_gate_and_nowhere_else() {
+        use axum::http::header::AUTHORIZATION;
+        const TOKEN: &str = "mcp-resources-secret";
+
         for (method, params) in [
             ("resources/list", json!({})),
             ("resources/read", json!({ "uri": "streamlib://graph" })),
             ("prompts/list", json!({})),
             (
                 "prompts/get",
-                json!({ "name": "look_at_what_a_channel_carries" }),
+                json!({ "name": "look_at_what_a_channel_carries", "arguments": { "from_processor_id": "PatternSourceId", "from_port": "video" } }),
             ),
         ] {
-            let router = crate::handlers::build_router(
-                stub_serving_two_linked_processors(),
-                Some(crate::auth::ApiServerBearerToken::from_secret(
-                    "mcp-resources-secret",
-                )),
-            );
-            let request = Request::builder()
-                .method("POST")
-                .uri("/mcp")
-                .header(CONTENT_TYPE, "application/json")
-                .body(Body::from(
-                    json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params })
-                        .to_string(),
-                ))
+            let message = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params })
+                .to_string();
+            let request_with = |authorization: Option<String>| {
+                let mut request = Request::builder()
+                    .method("POST")
+                    .uri("/mcp")
+                    .header(CONTENT_TYPE, "application/json");
+                if let Some(authorization) = authorization {
+                    request = request.header(AUTHORIZATION, authorization);
+                }
+                request.body(Body::from(message.clone())).unwrap()
+            };
+            let router = || {
+                crate::handlers::build_router(
+                    stub_serving_two_linked_processors(),
+                    Some(crate::auth::ApiServerBearerToken::from_secret(TOKEN)),
+                )
+            };
+
+            let refused = router().oneshot(request_with(None)).await.unwrap();
+            assert_eq!(refused.status(), StatusCode::UNAUTHORIZED, "{method}");
+
+            let answered = router()
+                .oneshot(request_with(Some(format!("Bearer {TOKEN}"))))
+                .await
                 .unwrap();
-            let status = router.oneshot(request).await.unwrap().status();
-            assert_eq!(status, StatusCode::UNAUTHORIZED, "{method}");
+            assert_eq!(answered.status(), StatusCode::OK, "{method}");
+            let bytes = axum::body::to_bytes(answered.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let body: Value = serde_json::from_slice(&bytes).unwrap();
+            assert!(
+                body["error"].is_null() && !body["result"].is_null(),
+                "{method} must answer a result behind the gate: {body}"
+            );
         }
+    }
+
+    #[tokio::test]
+    async fn the_fan_prompt_adds_one_consumer_and_wires_it_to_the_named_port() {
+        let text = prompt_text(
+            stub_serving_two_linked_processors(),
+            "fan_output_to_another_consumer",
+            json!({ "from_processor_id": "PatternSourceId", "from_port": "video", "processor_type": "effects:Blur" }),
+        )
+        .await;
+
+        assert_eq!(
+            tool_names_the_numbered_steps_call(&text),
+            ["add_processor", "graph", "connect", "graph"]
+        );
+        assert!(
+            text.contains("`from_processor_id`: `PatternSourceId`, `from_port`: `video`"),
+            "{text}"
+        );
+        assert!(
+            text.contains("reading it `newest`"),
+            "an unregistered type's recipe must name the profile the port's consumers read: {text}"
+        );
+    }
+
+    /// A probe with one `ordered` input, registered once for the test binary.
+    fn register_an_ordered_input_probe_once() -> &'static str {
+        const ORDERED_INPUT_PROBE_IMPORT_PATH: &str =
+            "streamlib_api_server::prompt_delivery_profile_probe::OrderedInputProbe";
+        static REGISTERED: std::sync::Once = std::sync::Once::new();
+        REGISTERED.call_once(|| {
+            PROCESSOR_REGISTRY
+                .register_descriptor_only(
+                    ProcessorDescriptor::new(
+                        ProcessorClassShortName::new("OrderedInputProbe").unwrap(),
+                        ProcessorClassImportPath::new(ORDERED_INPUT_PROBE_IMPORT_PATH).unwrap(),
+                        "a probe reading its one input in publication order",
+                    )
+                    .with_input(
+                        PortDescriptor::new("bags_from_upstream", "", true)
+                            .with_delivery_profile("ordered"),
+                    )
+                    .with_output(PortDescriptor::new(
+                        "bags_to_downstream",
+                        "",
+                        true,
+                    )),
+                )
+                .expect("the ordered probe's path is registered by this helper alone");
+        });
+        ORDERED_INPUT_PROBE_IMPORT_PATH
+    }
+
+    /// The engine refuses an output port whose consumers read it under two
+    /// profiles, and counts the link being replaced while it still exists — so
+    /// an `ordered` type spliced into a `newest` link must take the link out
+    /// first. Mental revert: keep the zero-gap order and the first `connect`
+    /// is refused on a live node.
+    #[tokio::test]
+    async fn inserting_a_type_that_reads_another_delivery_profile_removes_the_link_before_wiring() {
+        let ordered_input_probe = register_an_ordered_input_probe_once();
+
+        let text = prompt_text(
+            stub_serving_two_linked_processors(),
+            "insert_processor_between_linked_processors",
+            json!({ "link_id": "link-pattern-to-window", "processor_type": ordered_input_probe }),
+        )
+        .await;
+
+        assert_eq!(
+            tool_names_the_numbered_steps_call(&text),
+            [
+                "add_processor",
+                "graph",
+                "disconnect",
+                "connect",
+                "connect",
+                "graph"
+            ]
+        );
+        assert!(
+            text.contains("`ordered`") && text.contains("`newest`"),
+            "the recipe must say which two profiles forced the order:\n{text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn inserting_into_a_link_whose_target_takes_one_inbound_link_removes_the_link_first() {
+        let runtime = ControlPlaneMcpDispatchStubRuntime::new();
+        let mut graph = two_linked_processors_graph();
+        graph["nodes"][1]["ports"]["inputs"][0]["delivery_profile"] = json!("ordered");
+        graph["nodes"][1]["ports"]["inputs"][0]["audio_window"] =
+            json!({ "resolved_from": "match_device" });
+        *runtime.exported_graph.lock() = graph;
+
+        let text = prompt_text(
+            Arc::new(runtime),
+            "insert_processor_between_linked_processors",
+            json!({ "link_id": "link-pattern-to-window", "processor_type": "effects:NeverImported" }),
+        )
+        .await;
+
+        assert_eq!(
+            tool_names_the_numbered_steps_call(&text),
+            [
+                "add_processor",
+                "graph",
+                "disconnect",
+                "connect",
+                "connect",
+                "graph"
+            ]
+        );
+        assert!(text.contains("audio window contract"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn a_new_consumer_reading_another_profile_than_the_port_already_feeds_is_refused_by_name()
+    {
+        let ordered_input_probe = register_an_ordered_input_probe_once();
+
+        let error = rpc_error(
+            stub_serving_two_linked_processors(),
+            "prompts/get",
+            json!({
+                "name": "fan_output_to_another_consumer",
+                "arguments": { "from_processor_id": "PatternSourceId", "from_port": "video", "processor_type": ordered_input_probe }
+            }),
+        )
+        .await;
+
+        assert_eq!(error["code"], -32602, "{error}");
+        let message = error["message"].as_str().unwrap();
+        assert!(
+            message.contains("`ordered`") && message.contains("`newest`"),
+            "the refusal must name both profiles: {message}"
+        );
     }
 }

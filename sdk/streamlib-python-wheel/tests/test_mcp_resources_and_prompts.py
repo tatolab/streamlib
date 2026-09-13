@@ -1,14 +1,17 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""A client that knows nothing about streamlib follows a node's own prompt.
+"""A scripted client follows a node's own prompt to a spliced live graph.
 
-The client here is scripted, not a model, and holds no streamlib vocabulary:
-no port names, no ids, no import paths, no tool order. It reads the catalog and
-the graph off the node's resources, asks the node for its "insert between"
-recipe, and dispatches each numbered step as the text spells it — taking every
-id, port and path from what the server said. The graph it leaves is then
-checked through `graph`, and the frames through the processor it inserted.
+The client is a script, not a model. What it brings is the names of the two
+resources and the one prompt it picks from the node's listings, and the short
+class name of the effect it wants inserted. Everything else comes from the
+server: the resource URIs and the prompt's argument names from
+`resources/list` and `prompts/list`, the link from the graph resource, the
+import path from the catalog resource, and the tool order, ids and ports from
+the recipe text, whose numbered steps it dispatches as written. The graph it
+leaves is then checked through `graph`, and the frames through the processor it
+inserted.
 
 Booting initializes a GPU context, so the whole module needs a device.
 """
@@ -154,7 +157,13 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
     assert {"tools", "resources", "prompts"} <= capabilities.keys(), capabilities
     served_tool_names = {tool["name"] for tool in client.request("tools/list", {})["tools"]}
 
-    catalog = client.read_json_resource("streamlib://processor-catalog")
+    resource_uris_by_name = {
+        resource["name"]: resource["uri"] for resource in client.request("resources/list", {})["resources"]
+    }
+    prompts_by_name = {prompt["name"]: prompt for prompt in client.request("prompts/list", {})["prompts"]}
+    insert_prompt = prompts_by_name["insert_processor_between_linked_processors"]
+
+    catalog = client.read_json_resource(resource_uris_by_name["processor-catalog"])
     catalog_paths = [entry["processor_class_import_path"] for entry in catalog["processors"]]
     inserted_type = next(
         (path for path in catalog_paths if path.endswith(":BagMarkingEffect")), None
@@ -163,15 +172,20 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
         f"a class the app imported and never added must be in the catalog: {catalog_paths}"
     )
 
-    graph_before = client.read_json_resource("streamlib://graph")
+    graph_before = client.read_json_resource(resource_uris_by_name["graph"])
     assert len(graph_before["links"]) == 1, graph_before["links"]
     replaced_link = graph_before["links"][0]
 
+    # The prompt's two arguments, bound by the names the listing gave them: one
+    # takes the link's id, the other a catalog import path.
+    argument_names = [argument["name"] for argument in insert_prompt["arguments"]]
+    link_argument = next(name for name in argument_names if name.startswith("link"))
+    type_argument = next(name for name in argument_names if name != link_argument)
     recipe = client.request(
         "prompts/get",
         {
-            "name": "insert_processor_between_linked_processors",
-            "arguments": {"link_id": replaced_link["id"], "processor_type": inserted_type},
+            "name": insert_prompt["name"],
+            "arguments": {link_argument: replaced_link["id"], type_argument: inserted_type},
         },
     )
     recipe_text = recipe["messages"][0]["content"]["text"]
@@ -233,14 +247,18 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
 
     # The virtual camera recipe names a type this node's catalog actually holds.
     source_endpoint = replaced_link["source"]
+    camera_prompt = prompts_by_name["show_channel_on_virtual_camera"]
     camera_recipe_text = client.request(
         "prompts/get",
         {
-            "name": "show_channel_on_virtual_camera",
-            "arguments": {
-                "from_processor_id": source_endpoint["processor_id"],
-                "from_port": source_endpoint["port_name"],
-            },
+            "name": camera_prompt["name"],
+            # Its required arguments name a processor, then one of its output ports.
+            "arguments": dict(
+                zip(
+                    [argument["name"] for argument in camera_prompt["arguments"] if argument["required"]],
+                    [source_endpoint["processor_id"], source_endpoint["port_name"]],
+                )
+            ),
         },
     )["messages"][0]["content"]["text"]
     camera_add_step = next(
