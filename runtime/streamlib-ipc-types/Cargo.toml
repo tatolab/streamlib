@@ -11,7 +11,7 @@ repository.workspace = true
 description = "Shared iceoryx2 payload types for StreamLib IPC"
 
 [dependencies]
-iceoryx2 = "0.8.1"
+iceoryx2 = "0.9.3"
 tracing.workspace = true
 
 [lints]
