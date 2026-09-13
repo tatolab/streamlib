@@ -279,7 +279,14 @@ pub const MAX_DESTINATIONS_PER_CHANNEL: usize = 8;
 pub const MAX_INBOUND_LINKS_PER_DESTINATION: usize = 8;
 
 /// Size of the frame header in the `[u8]` slice wire format.
-pub const FRAME_HEADER_SIZE: usize = MAX_PORT_KEY_SIZE + 8 + 4; // 76 bytes
+pub const FRAME_HEADER_SIZE: usize =
+    MAX_PORT_KEY_SIZE + FRAME_HEADER_TIMESTAMP_NS_SIZE + FRAME_HEADER_PAYLOAD_LEN_SIZE;
+
+/// Size of the frame header's `timestamp_ns` field, little-endian on the wire.
+pub const FRAME_HEADER_TIMESTAMP_NS_SIZE: usize = std::mem::size_of::<i64>();
+
+/// Size of the frame header's payload-length field, little-endian on the wire.
+pub const FRAME_HEADER_PAYLOAD_LEN_SIZE: usize = std::mem::size_of::<u32>();
 
 /// Error constructing a [`PortKey`] from a name that overflows the fixed
 /// wire capacity.
@@ -409,10 +416,11 @@ impl FrameHeader {
         buf[0] = self.port_key.len;
         buf[1..MAX_PORT_KEY_SIZE].copy_from_slice(&self.port_key.name);
         // timestamp_ns: 8 bytes little-endian
-        let t = MAX_PORT_KEY_SIZE;
-        buf[t..t + 8].copy_from_slice(&self.timestamp_ns.to_le_bytes());
+        let timestamp_ns_offset = MAX_PORT_KEY_SIZE;
+        let len_offset = timestamp_ns_offset + FRAME_HEADER_TIMESTAMP_NS_SIZE;
+        buf[timestamp_ns_offset..len_offset].copy_from_slice(&self.timestamp_ns.to_le_bytes());
         // len: 4 bytes little-endian
-        buf[t + 8..t + 12].copy_from_slice(&self.len.to_le_bytes());
+        buf[len_offset..FRAME_HEADER_SIZE].copy_from_slice(&self.len.to_le_bytes());
     }
 
     /// Read a header from the first [`FRAME_HEADER_SIZE`] bytes of `buf`.
@@ -427,9 +435,11 @@ impl FrameHeader {
         };
         port_key.name.copy_from_slice(&buf[1..MAX_PORT_KEY_SIZE]);
 
-        let t = MAX_PORT_KEY_SIZE;
-        let timestamp_ns = i64::from_le_bytes(buf[t..t + 8].try_into().unwrap());
-        let len = u32::from_le_bytes(buf[t + 8..t + 12].try_into().unwrap());
+        let timestamp_ns_offset = MAX_PORT_KEY_SIZE;
+        let len_offset = timestamp_ns_offset + FRAME_HEADER_TIMESTAMP_NS_SIZE;
+        let timestamp_ns =
+            i64::from_le_bytes(buf[timestamp_ns_offset..len_offset].try_into().unwrap());
+        let len = u32::from_le_bytes(buf[len_offset..FRAME_HEADER_SIZE].try_into().unwrap());
 
         Self {
             port_key,
