@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.2](https://github.com/tatolab/streamlib/compare/v0.22.1...v0.22.2) (2026-09-13)
+
+
+### Features
+
+* **examples:** ShaderEffect runs a fragment shader from config over each frame ([#2234](https://github.com/tatolab/streamlib/issues/2234)) ([6a5f7ab](https://github.com/tatolab/streamlib/commit/6a5f7abf8eaaf719573c2009334c109a0fdcbc39))
+
 ## [0.22.1](https://github.com/tatolab/streamlib/compare/v0.22.0...v0.22.1) (2026-09-13)
 
 
