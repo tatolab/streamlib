@@ -127,8 +127,10 @@ and one add — `ShaderEffect` is importable as
 Swapping one look for another is the same remove and add again. The camera,
 both sinks and every other processor keep running through it — only the second
 camera goes without new frames for the moment the splice takes, under a second
-on a 640×480 feed — and the effect keeps the source's 30 fps, at 1920×1080 as
-much as at 640×480.
+on a 640×480 feed.
+
+The effect keeps its source's rate: 30 fps in that 640×480 showcase run, and
+30 fps from a synthetic 1920×1080 source into a counting sink.
 
 Each frame is copied device-to-device into a texture the effect owns before the
 pass samples it: a camera publishes buffer-backed frames, and a draw binds
