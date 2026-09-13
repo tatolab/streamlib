@@ -96,7 +96,7 @@ jobs:
       # tracked follow-up. The "parallel-run test flake" this comment used to
       # cite was never pinned to a specific test; the one flake since diagnosed
       # is the pubsub subscribe race, fixed in #1873. What is known to remain is
-      # a DRM-probe hang, a rare SIGABRT, and fd-capture flakes.
+      # fd-capture flakes.
       # Here rather than in source-gates.yml because clippy has to compile the
       # workspace, and this is the job that already carries the engine's build
       # dependencies and its warm dependency cache. Default targets only: a
