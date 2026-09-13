@@ -337,13 +337,6 @@ fn sample_external_oes_round_trip_sampler_only_modifier() {
         }
     };
 
-    // Read sampler-only modifiers from the table cached on
-    // `HostVulkanDevice` at construction. Re-running
-    // `drm_modifier_probe::probe_default_display()` here would
-    // `eglInitialize` + `eglTerminate` on the same EGL display the
-    // adapter's `EglRuntime` is bound to — NVIDIA's driver tears down
-    // the shared display rather than refcounting it, breaking every
-    // subsequent `lock_make_current()` on the adapter context.
     let device = fixture.gpu.device().vulkan_device();
     let table = device.drm_modifier_table();
     let modifier = match table

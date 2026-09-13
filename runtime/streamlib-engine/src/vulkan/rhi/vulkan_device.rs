@@ -1318,7 +1318,7 @@ impl HostVulkanDevice {
         // See `docs/learnings/nvidia-egl-dmabuf-render-target.md`.
         #[cfg(target_os = "linux")]
         let drm_modifier_table = match drm_modifier_probe::probe_default_display() {
-            Ok(t) => Arc::new(t),
+            Ok(t) => t,
             Err(e) => {
                 tracing::warn!(
                     "EGL DRM modifier probe failed: {e} — render-target DMA-BUF \
