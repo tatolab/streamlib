@@ -1985,18 +1985,19 @@ fn refuse_a_file_descriptor_that_is_not_a_dma_buf(
     use std::os::fd::AsRawFd as _;
 
     let mut file_system_status = std::mem::MaybeUninit::<libc::statfs>::uninit();
-    // SAFETY: `candidate_fd` is open for the call, and `fstatfs` fills the
-    // whole struct whenever it returns 0.
+    // SAFETY: `candidate_fd` is open for the call and the pointer names a
+    // writable `statfs`.
     if unsafe { libc::fstatfs(candidate_fd.as_raw_fd(), file_system_status.as_mut_ptr()) } != 0 {
-        return Err(Error::Configuration(format!(
+        return Err(Error::GpuError(format!(
             "DMA-BUF import: fstatfs on fd {} failed: {}",
             candidate_fd.as_raw_fd(),
             std::io::Error::last_os_error()
         )));
     }
+    // SAFETY: `fstatfs` returned 0 above, so it filled every field.
     let file_system_magic = unsafe { file_system_status.assume_init() }.f_type as u64;
     if file_system_magic != DMA_BUF_FILE_SYSTEM_MAGIC {
-        return Err(Error::Configuration(format!(
+        return Err(Error::NotSupported(format!(
             "DMA-BUF import: fd {} is not a DMA-BUF (its file system magic is \
              {file_system_magic:#x}, a DMA-BUF's is {DMA_BUF_FILE_SYSTEM_MAGIC:#x})",
             candidate_fd.as_raw_fd()
@@ -4056,20 +4057,25 @@ mod tests {
     fn a_file_descriptor_that_is_not_a_dma_buf_is_refused_and_closed() {
         use std::os::fd::{FromRawFd as _, OwnedFd};
 
-        let memfd_name = std::ffi::CString::new("not-a-dma-buf").unwrap();
-        let memfd = unsafe { libc::memfd_create(memfd_name.as_ptr(), 0) };
+        let memfd = unsafe { libc::memfd_create(c"not-a-dma-buf".as_ptr(), 0) };
         assert!(
             memfd >= 0,
             "memfd_create: {}",
             std::io::Error::last_os_error()
         );
-        let _memfd_kept_open = unsafe { OwnedFd::from_raw_fd(libc::dup(memfd)) };
+        let memfd_duplicate = unsafe { libc::dup(memfd) };
+        assert!(
+            memfd_duplicate >= 0,
+            "dup: {}",
+            std::io::Error::last_os_error()
+        );
+        let _memfd_kept_open = unsafe { OwnedFd::from_raw_fd(memfd_duplicate) };
 
         let mut pipe_ends = [0 as std::os::unix::io::RawFd; 2];
         assert_eq!(unsafe { libc::pipe(pipe_ends.as_mut_ptr()) }, 0);
         let _pipe_write_end_kept_open = unsafe { OwnedFd::from_raw_fd(pipe_ends[1]) };
 
-        for (candidate_fd, what) in [(memfd, "memfd"), (pipe_ends[0], "pipe")] {
+        for (candidate_fd, descriptor_kind) in [(memfd, "memfd"), (pipe_ends[0], "pipe")] {
             let inode = inode_of(candidate_fd).expect("a fresh fd must stat");
             let refusal = refuse_a_file_descriptor_that_is_not_a_dma_buf(unsafe {
                 OwnedFd::from_raw_fd(candidate_fd)
@@ -4077,12 +4083,12 @@ mod tests {
             .expect_err("only a DMA-BUF passes");
             assert!(
                 refusal.to_string().contains("is not a DMA-BUF"),
-                "the {what} refusal must say why: {refusal}"
+                "the {descriptor_kind} refusal must say why: {refusal}"
             );
             assert_ne!(
                 inode_of(candidate_fd),
                 Some(inode),
-                "the refused {what} fd was left open — no owner remains to close it"
+                "the refused {descriptor_kind} fd was left open — no owner remains to close it"
             );
         }
     }
@@ -4105,10 +4111,10 @@ mod tests {
                 .expect("source buffer allocation failed");
         let fd = source.export_dma_buf_fd().expect("DMA-BUF export failed");
 
-        let passed =
+        let fd_that_passed_the_dma_buf_check =
             refuse_a_file_descriptor_that_is_not_a_dma_buf(unsafe { OwnedFd::from_raw_fd(fd) })
                 .expect("an exported DMA-BUF must pass");
-        assert_eq!(passed.as_raw_fd(), fd);
+        assert_eq!(fd_that_passed_the_dma_buf_check.as_raw_fd(), fd);
     }
 
     /// Build a `VkPhysicalDeviceMemoryProperties` whose first
