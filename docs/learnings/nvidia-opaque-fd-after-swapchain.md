@@ -102,8 +102,13 @@ buffer sentinel (1920×1080×4 ≈ 8 MiB) *deterministically* blocked the
 consumer's same-size post-swapchain allocation, indicating NVIDIA
 tracks a cumulative byte budget on top of the per-handle-type state.
 Sentinels exist only to pin the per-handle-type kernel state, so they
-must not compete with consumer-class allocations. Sentinels are freed
-in `HostVulkanDevice::Drop` before the allocator is torn down.
+must not compete with consumer-class allocations. Each sentinel frees
+its own allocation on drop, and must drop before its pool: VMA's
+`vmaDestroyPool` over a live dedicated allocation aborts with
+`Unfreed dedicated allocations found!` — the same assertion text as an
+allocator teardown (#2247). `HostVulkanDevice::Drop` clears the
+sentinels before destroying any pool, and a pre-warm that returns early
+frees the sentinels it already made.
 
 **Image-flavored sentinel — provisional retention pending consumer.**
 The OPAQUE_FD image pool ships a matching retained sentinel that
@@ -157,8 +162,8 @@ back through the public RHI constructors (which take
 construction either yields a fully-usable instance with all
 init-time invariants run, or fails — there is no half-formed state
 observable to callers. Sentinel storage is bypassed in the wrapper
-chain (raw `vk::Buffer` + `vma::Allocation`, not
-`HostVulkanBuffer`) to avoid the `Arc<HostVulkanDevice>`
+chain (raw `vk::Buffer` / `vk::Image` + `vma::Allocation` + the
+device's `Arc<vma::Allocator>`, not `HostVulkanBuffer`) to avoid the `Arc<HostVulkanDevice>`
 back-reference cycle that would prevent the device from ever
 dropping.
 

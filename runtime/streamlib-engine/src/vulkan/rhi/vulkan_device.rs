@@ -1554,9 +1554,9 @@ impl HostVulkanDevice {
             let sentinels = Self::prewarm_export_pools(&device)?;
             // Sentinels hold the allocator, not `Arc<HostVulkanDevice>`
             // clones, so the Arc strong count is still 1 here and
-            // `get_mut` succeeds. The other prewarm
-            // probes inside `prewarm_export_pools` are dropped before the
-            // function returns, so they don't bump the count either.
+            // `get_mut` succeeds. The other prewarm probes inside
+            // `prewarm_export_pools` are dropped before the function
+            // returns, so they don't bump the count either.
             Arc::get_mut(&mut device)
                 .expect(
                     "HostVulkanDevice has unique Arc ownership during construction; \
@@ -1832,7 +1832,7 @@ impl HostVulkanDevice {
         //    pin the per-handle-type kernel state.
         if let Some(pool) = device.opaque_fd_buffer_pool() {
             let sentinel = make_opaque_fd_buffer_sentinel(
-                device.allocator(),
+                device,
                 pool,
                 "opaque_fd_host_visible",
                 (PROBE_W as vk::DeviceSize)
@@ -1851,7 +1851,7 @@ impl HostVulkanDevice {
         //    sentinel rather than riding that one's.
         if let Some(pool) = device.opaque_fd_buffer_pool_host_cached() {
             let sentinel = make_opaque_fd_buffer_sentinel(
-                device.allocator(),
+                device,
                 pool,
                 "opaque_fd_host_cached",
                 (PROBE_W as vk::DeviceSize)
@@ -1874,7 +1874,7 @@ impl HostVulkanDevice {
         //    cumulative byte budget — so the sentinel must be tiny.
         if let Some(pool) = device.opaque_fd_buffer_pool_device_local() {
             let sentinel = make_opaque_fd_buffer_sentinel(
-                device.allocator(),
+                device,
                 pool,
                 "opaque_fd_device_local",
                 (PROBE_W as vk::DeviceSize)
@@ -1917,13 +1917,8 @@ impl HostVulkanDevice {
         //    without competing with consumer-class allocations on
         //    NVIDIA's cumulative OPAQUE_FD byte budget.
         if let Some(pool) = device.opaque_fd_image_pool() {
-            let sentinel = make_opaque_fd_image_sentinel(
-                device.allocator(),
-                pool,
-                "opaque_fd_image",
-                PROBE_W,
-                PROBE_H,
-            )?;
+            let sentinel =
+                make_opaque_fd_image_sentinel(device, pool, "opaque_fd_image", PROBE_W, PROBE_H)?;
             sentinels.push(sentinel);
         }
 
@@ -2033,10 +2028,10 @@ impl MappedOpaqueFdBufferHostAccessPattern {
 /// Bypasses [`super::HostVulkanBuffer`] deliberately: that wrapper
 /// holds an `Arc<HostVulkanDevice>` for cleanup, which would create a
 /// reference cycle when stored as a field on the device itself.
-/// `pool` must belong to `allocator`.
+/// `pool` must be one of `device`'s pools.
 #[cfg(target_os = "linux")]
 fn make_opaque_fd_buffer_sentinel(
-    allocator: &Arc<vma::Allocator>,
+    device: &HostVulkanDevice,
     pool: &vma::Pool,
     label: &'static str,
     size: vk::DeviceSize,
@@ -2076,7 +2071,7 @@ fn make_opaque_fd_buffer_sentinel(
         })?;
 
     Ok(ExportPoolSentinel {
-        allocator: Arc::clone(allocator),
+        allocator: Arc::clone(device.allocator()),
         resource: ExportPoolSentinelResource::Buffer(buffer),
         allocation,
         label,
@@ -2103,10 +2098,10 @@ fn make_opaque_fd_buffer_sentinel(
 /// avoid competing with consumer-class allocations on NVIDIA's
 /// cumulative OPAQUE_FD byte budget — see the
 /// `nvidia-opaque-fd-after-swapchain` learning's "tiny sentinels"
-/// rationale. `pool` must belong to `allocator`.
+/// rationale. `pool` must be one of `device`'s pools.
 #[cfg(target_os = "linux")]
 fn make_opaque_fd_image_sentinel(
-    allocator: &Arc<vma::Allocator>,
+    device: &HostVulkanDevice,
     pool: &vma::Pool,
     label: &'static str,
     width: u32,
@@ -2154,7 +2149,7 @@ fn make_opaque_fd_image_sentinel(
 
     let size: vk::DeviceSize = (width as vk::DeviceSize) * (height as vk::DeviceSize) * 4;
     Ok(ExportPoolSentinel {
-        allocator: Arc::clone(allocator),
+        allocator: Arc::clone(device.allocator()),
         resource: ExportPoolSentinelResource::Image(image),
         allocation,
         label,
@@ -4531,7 +4526,7 @@ mod tests {
         let allocations_before_the_sentinel = live_allocations_in_pool();
 
         let sentinel = make_opaque_fd_buffer_sentinel(
-            device.allocator(),
+            &device,
             pool,
             "opaque_fd_host_visible",
             64,
