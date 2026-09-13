@@ -340,6 +340,31 @@ fn sole_input_port(entry: &ProcessorDescriptorOutput) -> Option<&PortDescriptorO
     }
 }
 
+/// The profile a registered type's sole input reads, when the catalog has the
+/// type and the type has exactly one input.
+fn sole_input_delivery_profile(
+    entry: Option<&ProcessorDescriptorOutput>,
+) -> Option<DeliveryProfile> {
+    entry
+        .and_then(sole_input_port)
+        .and_then(|port| declared_delivery_profile(port.delivery_profile.as_deref()))
+}
+
+/// The profiles whose ring holds more than `profile`'s, which a channel opened
+/// for `profile` cannot be reopened for while its publisher lives.
+fn delivery_profiles_queueing_deeper_than(profile: DeliveryProfile) -> Vec<DeliveryProfile> {
+    // Exhaustive, so a new profile fails to compile here rather than go unlisted.
+    let every_delivery_profile = match profile {
+        DeliveryProfile::Newest | DeliveryProfile::Ordered => {
+            [DeliveryProfile::Newest, DeliveryProfile::Ordered]
+        }
+    };
+    every_delivery_profile
+        .into_iter()
+        .filter(|candidate| candidate.resolve().depth > profile.resolve().depth)
+        .collect()
+}
+
 /// The consumers an output port keeps feeding through a recipe, reduced to
 /// what a new consumer of the port has to agree with them on.
 ///
@@ -505,10 +530,7 @@ fn insert_processor_between_linked_processors_recipe(
     let target_label = processor_node_display_name_and_id_label(target);
 
     let inserted_type_entry = catalog_entry_for(processor_type);
-    let inserted_delivery_profile = inserted_type_entry
-        .as_ref()
-        .and_then(sole_input_port)
-        .and_then(|port| declared_delivery_profile(port.delivery_profile.as_deref()));
+    let inserted_delivery_profile = sole_input_delivery_profile(inserted_type_entry.as_ref());
     let consumers_kept = OutputPortConsumersKept::of(graph, source, source_port, Some(link_id));
     consumers_kept.refuse_a_new_consumer_reading(processor_type, inserted_delivery_profile)?;
 
@@ -520,7 +542,7 @@ fn insert_processor_between_linked_processors_recipe(
     // open after its last link goes — so a running node cannot reopen the
     // port's channel for a consumer that queues deeper.
     if let (Some(inserted), Some(replaced)) = (inserted_delivery_profile, target_delivery_profile)
-        && inserted.resolve().depth > replaced.resolve().depth
+        && delivery_profiles_queueing_deeper_than(replaced).contains(&inserted)
     {
         return Err(RpcError::invalid_params(format!(
             "`{processor_type}` reads its input `{}`, and {source_label} port `{source_port}` has \
@@ -594,28 +616,56 @@ fn insert_processor_between_linked_processors_recipe(
         ),
     ));
 
-    let closing_note = match (&reason_the_link_goes_first, inserted_delivery_profile) {
-        (Some(reason), _) => Some(format!(
+    let restore_the_replaced_link = format!(
+        "If a `connect` after the `disconnect` is refused, `connect` {source_label} port \
+         `{source_port}` to {target_label} port `{target_port}` again to restore what the link \
+         carried."
+    );
+    let mut closing_note_sentences = Vec::new();
+    if let Some(reason) = &reason_the_link_goes_first {
+        closing_note_sentences.push(format!(
             "The link goes before the new processor is wired because {reason}; {target_label} \
-             receives nothing between the `disconnect` and the second `connect`. If a `connect` \
-             is refused, `connect` {source_label} port `{source_port}` to {target_label} port \
-             `{target_port}` again to restore what the link carried."
-        )),
-        (None, Some(_)) => None,
-        (None, None) => {
-            let mut note = "If a `connect` is refused naming conflicting delivery profiles, or \
-                            naming a port that takes a single inbound link, call `disconnect` \
-                            before the first `connect` instead."
-                .to_string();
-            if let Some(delivery_profile_note) =
-                consumers_kept.refusal_note_when_the_new_consumers_profile_is_unknown()
-            {
-                note.push(' ');
-                note.push_str(&delivery_profile_note);
-            }
-            Some(note)
+             receives nothing between the `disconnect` and the second `connect`."
+        ));
+    }
+    if inserted_delivery_profile.is_none() {
+        closing_note_sentences.push(format!(
+            "The catalog cannot tell yet which delivery profile `{processor_type}`'s input reads, \
+             so read it off the new node in the first `graph`."
+        ));
+        let deeper_profiles: Vec<String> = target_delivery_profile
+            .map(delivery_profiles_queueing_deeper_than)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|deeper| format!("`{}`", deeper.as_manifest_str()))
+            .collect();
+        if let (Some(replaced), false) = (target_delivery_profile, deeper_profiles.is_empty()) {
+            closing_note_sentences.push(format!(
+                "If it reads {} where {target_label} reads port `{target_port}` `{}`, the insert \
+                 cannot take while {source_label} runs — its channel keeps the depth it was \
+                 opened with — so `remove_processor` the new node and stop.",
+                deeper_profiles.join(" or "),
+                replaced.as_manifest_str()
+            ));
         }
-    };
+        if reason_the_link_goes_first.is_none() {
+            closing_note_sentences.push(
+                "If it reads another profile that queues no deeper, call `disconnect` before the \
+                 first `connect`."
+                    .to_string(),
+            );
+        }
+        if let Some(delivery_profile_note) =
+            consumers_kept.refusal_note_when_the_new_consumers_profile_is_unknown()
+        {
+            closing_note_sentences.push(delivery_profile_note);
+        }
+    }
+    if reason_the_link_goes_first.is_some() || inserted_delivery_profile.is_none() {
+        closing_note_sentences.push(restore_the_replaced_link);
+    }
+    let closing_note =
+        (!closing_note_sentences.is_empty()).then(|| closing_note_sentences.join(" "));
 
     Ok(GraphRecipe {
         introduction_text: format!(
@@ -636,10 +686,7 @@ fn fan_output_to_another_consumer_recipe(
     let processor_type = prompt_arguments.required(&PROCESSOR_TYPE_ARGUMENT)?;
     let source_label = processor_node_display_name_and_id_label(source);
     let consumer_type_entry = catalog_entry_for(processor_type);
-    let consumer_delivery_profile = consumer_type_entry
-        .as_ref()
-        .and_then(sole_input_port)
-        .and_then(|port| declared_delivery_profile(port.delivery_profile.as_deref()));
+    let consumer_delivery_profile = sole_input_delivery_profile(consumer_type_entry.as_ref());
     let consumers_kept = OutputPortConsumersKept::of(graph, source, from_port, None);
     consumers_kept.refuse_a_new_consumer_reading(processor_type, consumer_delivery_profile)?;
 

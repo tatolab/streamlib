@@ -2701,6 +2701,31 @@ mod tests {
         );
     }
 
+    /// A class the agent just wrote is not in the catalog until its first add,
+    /// so the recipe cannot see its profile; the note must carry the depth
+    /// rule itself, or the fallback it offers is the refused re-open.
+    #[tokio::test]
+    async fn an_insert_of_an_uncatalogued_type_says_when_to_stop_and_how_to_restore_the_link() {
+        let text = prompt_text(
+            stub_serving_two_linked_processors(),
+            "insert_processor_between_linked_processors",
+            json!({ "link_id": "link-pattern-to-window", "processor_type": "effects:WrittenJustNow" }),
+        )
+        .await;
+
+        assert!(
+            text.contains("If it reads `ordered` where `window` (id `WindowSinkId`) reads port `video` `newest`")
+                && text.contains("`remove_processor` the new node and stop"),
+            "the note must name the deeper profile that cannot take and say to stop:\n{text}"
+        );
+        assert!(
+            text.contains(
+                "`connect` `pattern` (id `PatternSourceId`) port `video` to `window` (id `WindowSinkId`) port `video` again"
+            ),
+            "the note must say how to restore the replaced link:\n{text}"
+        );
+    }
+
     #[tokio::test]
     async fn inserting_into_a_link_whose_target_takes_one_inbound_link_removes_the_link_first() {
         let runtime = ControlPlaneMcpDispatchStubRuntime::new();
