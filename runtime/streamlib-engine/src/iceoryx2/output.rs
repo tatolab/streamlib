@@ -142,7 +142,10 @@ pub struct OutputWriterInner {
     declared_output_ports: Mutex<HashSet<String>>,
 }
 
-// OutputWriterInner is Send + Sync via Mutex.
+// SAFETY: `Publisher` and `Notifier` are not `Send`, so the `Mutex` alone does
+// not make this type shareable. It is sound because every port and every loaned
+// sample is touched only while `channels` is held, and no sample outlives that
+// guard.
 unsafe impl Send for OutputWriterInner {}
 unsafe impl Sync for OutputWriterInner {}
 

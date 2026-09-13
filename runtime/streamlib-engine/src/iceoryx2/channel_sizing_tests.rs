@@ -156,7 +156,7 @@ fn default_primed_channel_round_trips_a_header_and_an_oversized_payload() {
 ///
 /// Mentally-revert: drop the `.enable_safe_overflow(true)` line in
 /// [`Iceoryx2Node::open_or_create_service`] and this test still passes —
-/// iceoryx2 0.8.1's own default is `true`. Pass `false` there instead, which is
+/// iceoryx2's own default is `true`. Pass `false` there instead, which is
 /// the only way the contract can actually break now, and it goes red.
 #[test]
 fn every_channel_service_opens_under_safe_overflow() {
