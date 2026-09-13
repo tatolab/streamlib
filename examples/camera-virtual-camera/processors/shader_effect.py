@@ -26,7 +26,7 @@ from streamlib import (
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     VideoFrame,
-    input,
+    input,  # noqa: A004 — streamlib's port decorator
     output,
     processor,
 )
