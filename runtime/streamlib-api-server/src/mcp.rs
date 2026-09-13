@@ -2604,22 +2604,25 @@ mod tests {
         );
     }
 
-    /// A probe with one `ordered` input, registered once for the test binary.
-    fn register_an_ordered_input_probe_once() -> &'static str {
-        const ORDERED_INPUT_PROBE_IMPORT_PATH: &str =
-            "streamlib_api_server::prompt_delivery_profile_probe::OrderedInputProbe";
-        static REGISTERED: std::sync::Once = std::sync::Once::new();
-        REGISTERED.call_once(|| {
+    /// A probe with one input declaring `delivery_profile`, registered once per
+    /// profile for the test binary.
+    fn register_a_sole_input_probe_once(delivery_profile: &'static str) -> String {
+        static REGISTERED_PROFILES: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+        let class_import_path = format!(
+            "streamlib_api_server::prompt_delivery_profile_probe::{delivery_profile}::SoleInputProbe"
+        );
+        let mut registered_profiles = REGISTERED_PROFILES.lock();
+        if !registered_profiles.contains(&delivery_profile) {
             PROCESSOR_REGISTRY
                 .register_descriptor_only(
                     ProcessorDescriptor::new(
-                        ProcessorClassShortName::new("OrderedInputProbe").unwrap(),
-                        ProcessorClassImportPath::new(ORDERED_INPUT_PROBE_IMPORT_PATH).unwrap(),
-                        "a probe reading its one input in publication order",
+                        ProcessorClassShortName::new("SoleInputProbe").unwrap(),
+                        ProcessorClassImportPath::new(&class_import_path).unwrap(),
+                        "a probe with one input",
                     )
                     .with_input(
                         PortDescriptor::new("bags_from_upstream", "", true)
-                            .with_delivery_profile("ordered"),
+                            .with_delivery_profile(delivery_profile),
                     )
                     .with_output(PortDescriptor::new(
                         "bags_to_downstream",
@@ -2627,24 +2630,29 @@ mod tests {
                         true,
                     )),
                 )
-                .expect("the ordered probe's path is registered by this helper alone");
-        });
-        ORDERED_INPUT_PROBE_IMPORT_PATH
+                .expect("each probe path is registered by this helper alone");
+            registered_profiles.push(delivery_profile);
+        }
+        class_import_path
     }
 
     /// The engine refuses an output port whose consumers read it under two
-    /// profiles, and counts the link being replaced while it still exists — so
-    /// an `ordered` type spliced into a `newest` link must take the link out
-    /// first. Mental revert: keep the zero-gap order and the first `connect`
-    /// is refused on a live node.
+    /// profiles and counts the replaced link while it still exists, so a
+    /// shallower type spliced into a deeper link must take the link out first.
+    /// Mental revert: keep the zero-gap order and the first `connect` is
+    /// refused on a live node.
     #[tokio::test]
-    async fn inserting_a_type_that_reads_another_delivery_profile_removes_the_link_before_wiring() {
-        let ordered_input_probe = register_an_ordered_input_probe_once();
+    async fn inserting_a_type_that_queues_shallower_than_the_link_removes_the_link_before_wiring() {
+        let newest_input_probe = register_a_sole_input_probe_once("newest");
+        let runtime = ControlPlaneMcpDispatchStubRuntime::new();
+        let mut graph = two_linked_processors_graph();
+        graph["nodes"][1]["ports"]["inputs"][0]["delivery_profile"] = json!("ordered");
+        *runtime.exported_graph.lock() = graph;
 
         let text = prompt_text(
-            stub_serving_two_linked_processors(),
+            Arc::new(runtime),
             "insert_processor_between_linked_processors",
-            json!({ "link_id": "link-pattern-to-window", "processor_type": ordered_input_probe }),
+            json!({ "link_id": "link-pattern-to-window", "processor_type": newest_input_probe }),
         )
         .await;
 
@@ -2662,6 +2670,34 @@ mod tests {
         assert!(
             text.contains("`ordered`") && text.contains("`newest`"),
             "the recipe must say which two profiles forced the order:\n{text}"
+        );
+    }
+
+    /// A live channel keeps the subscriber buffer it was created with, so an
+    /// `ordered` consumer cannot replace a `newest` one on a running source.
+    /// Proven on the rig: the engine's `connect` answers
+    /// `DoesNotSupportRequestedMinBufferSize`.
+    #[tokio::test]
+    async fn inserting_a_type_that_queues_deeper_than_the_links_channel_is_refused_by_name() {
+        let ordered_input_probe = register_a_sole_input_probe_once("ordered");
+
+        let error = rpc_error(
+            stub_serving_two_linked_processors(),
+            "prompts/get",
+            json!({
+                "name": "insert_processor_between_linked_processors",
+                "arguments": { "link_id": "link-pattern-to-window", "processor_type": ordered_input_probe }
+            }),
+        )
+        .await;
+
+        assert_eq!(error["code"], -32602, "{error}");
+        let message = error["message"].as_str().unwrap();
+        assert!(
+            message.contains("`ordered`")
+                && message.contains("`newest`")
+                && message.contains("queues deeper"),
+            "the refusal must name both profiles and why: {message}"
         );
     }
 
@@ -2698,7 +2734,7 @@ mod tests {
     #[tokio::test]
     async fn a_new_consumer_reading_another_profile_than_the_port_already_feeds_is_refused_by_name()
     {
-        let ordered_input_probe = register_an_ordered_input_probe_once();
+        let ordered_input_probe = register_a_sole_input_probe_once("ordered");
 
         let error = rpc_error(
             stub_serving_two_linked_processors(),

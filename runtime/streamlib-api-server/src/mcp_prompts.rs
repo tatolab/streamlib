@@ -15,11 +15,12 @@ use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use streamlib::sdk::descriptors::ProcessorClassImportPath;
 use streamlib::sdk::iceoryx2::{
-    FRAME_HEADER_PAYLOAD_LEN_SIZE, FRAME_HEADER_SIZE, FRAME_HEADER_TIMESTAMP_NS_SIZE,
-    MAX_PORT_KEY_SIZE, source_channel_name,
+    DeliveryProfile, FRAME_HEADER_PAYLOAD_LEN_SIZE, FRAME_HEADER_SIZE,
+    FRAME_HEADER_TIMESTAMP_NS_SIZE, MAX_PORT_KEY_SIZE, source_channel_name,
 };
 use streamlib::sdk::json_schema::{
-    GraphResponse, PortInfoOutput, ProcessorDescriptorOutput, ProcessorNodeOutput,
+    GraphResponse, PortDescriptorOutput, PortInfoOutput, ProcessorDescriptorOutput,
+    ProcessorNodeOutput,
 };
 use streamlib::sdk::processors::PROCESSOR_REGISTRY;
 use streamlib::sdk::runtime::RuntimeOperations;
@@ -326,90 +327,104 @@ fn processor_node_display_name_and_id_label(node: &ProcessorNodeOutput) -> Strin
     format!("`{}` (id `{}`)", node.display_name, node.id)
 }
 
-/// The distinct delivery profiles the processors an output port feeds read it
-/// under, leaving out the link a recipe is about to remove.
-///
-/// The engine keys a channel on its source output port and refuses a channel
-/// whose destinations disagree on a profile, so these are the profiles a new
-/// consumer of the port has to match.
-fn delivery_profiles_an_output_port_keeps_feeding(
-    graph: &GraphResponse,
-    source_processor_id: &str,
-    source_port: &str,
-    link_id_being_removed: Option<&str>,
-) -> Vec<String> {
-    let mut delivery_profiles: Vec<String> = graph
-        .links
-        .iter()
-        .filter(|link| {
-            link.source.processor_id == source_processor_id
-                && link.source.port_name == source_port
-                && Some(link.id.as_str()) != link_id_being_removed
-        })
-        .filter_map(|link| {
-            let consumer = graph
-                .nodes
-                .iter()
-                .find(|node| node.id == link.target.processor_id)?;
-            input_port_of(consumer, &link.target.port_name)?
-                .delivery_profile
-                .clone()
-        })
-        .collect();
-    delivery_profiles.sort_unstable();
-    delivery_profiles.dedup();
-    delivery_profiles
+/// The profile a rendered port declares, in the engine's own vocabulary.
+fn declared_delivery_profile(declared: Option<&str>) -> Option<DeliveryProfile> {
+    declared.and_then(|declared| DeliveryProfile::from_manifest_str(declared).ok())
 }
 
-/// The delivery profile a registered type's input declares, when it has
-/// exactly one input for a recipe to wire.
-fn sole_input_delivery_profile(entry: &ProcessorDescriptorOutput) -> Option<&str> {
+/// A registered type's input, when it has exactly one for a recipe to wire.
+fn sole_input_port(entry: &ProcessorDescriptorOutput) -> Option<&PortDescriptorOutput> {
     match entry.inputs.as_slice() {
-        [sole_input] => sole_input.delivery_profile.as_deref(),
+        [sole_input] => Some(sole_input),
         _ => None,
     }
 }
 
-/// Refuses a recipe the engine would refuse at its `connect`: a new consumer
-/// reading an output port under a profile a consumer the port keeps feeding
-/// does not share.
-fn refuse_a_new_consumer_whose_delivery_profile_conflicts(
-    processor_type: &str,
-    new_consumer_delivery_profile: Option<&str>,
-    source: &ProcessorNodeOutput,
-    source_port: &str,
-    delivery_profiles_kept: &[String],
-) -> RpcResult<()> {
-    let Some(new_consumer_delivery_profile) = new_consumer_delivery_profile else {
-        return Ok(());
-    };
-    if let Some(conflicting) = delivery_profiles_kept
-        .iter()
-        .find(|kept| kept.as_str() != new_consumer_delivery_profile)
-    {
-        return Err(RpcError::invalid_params(format!(
-            "`{processor_type}` reads its input `{new_consumer_delivery_profile}`, but {} port \
-             `{source_port}` also feeds a processor reading it `{conflicting}`, and every \
-             consumer of one output port reads it under one delivery profile",
-            processor_node_display_name_and_id_label(source)
-        )));
-    }
-    Ok(())
+/// The consumers an output port keeps feeding through a recipe, reduced to
+/// what a new consumer of the port has to agree with them on.
+///
+/// The engine keys a channel on its source output port and refuses a channel
+/// whose destinations disagree on a delivery profile, counting every link
+/// still on the port.
+struct OutputPortConsumersKept<'recipe> {
+    source: &'recipe ProcessorNodeOutput,
+    source_port: &'recipe str,
+    delivery_profiles: Vec<DeliveryProfile>,
 }
 
-/// The note for a type whose input profile the catalog cannot tell yet.
-fn delivery_profile_refusal_note_for_an_unregistered_type(
-    source: &ProcessorNodeOutput,
-    source_port: &str,
-    delivery_profiles_kept: &[String],
-) -> Option<String> {
-    let kept = delivery_profiles_kept.first()?;
-    Some(format!(
-        "{} port `{source_port}` feeds processors reading it `{kept}`, and every consumer of one \
-         output port reads it under one delivery profile: a `connect` from it is refused naming \
-         conflicting delivery profiles when the new processor's input declares another.",
-        processor_node_display_name_and_id_label(source)
-    ))
+impl<'recipe> OutputPortConsumersKept<'recipe> {
+    fn of(
+        graph: &'recipe GraphResponse,
+        source: &'recipe ProcessorNodeOutput,
+        source_port: &'recipe str,
+        link_id_being_removed: Option<&str>,
+    ) -> Self {
+        let mut delivery_profiles = Vec::new();
+        for link in graph.links.iter().filter(|link| {
+            link.source.processor_id == source.id
+                && link.source.port_name == source_port
+                && Some(link.id.as_str()) != link_id_being_removed
+        }) {
+            let consumer_delivery_profile = graph
+                .nodes
+                .iter()
+                .find(|node| node.id == link.target.processor_id)
+                .and_then(|consumer| input_port_of(consumer, &link.target.port_name))
+                .and_then(|port| declared_delivery_profile(port.delivery_profile.as_deref()));
+            if let Some(consumer_delivery_profile) = consumer_delivery_profile
+                && !delivery_profiles.contains(&consumer_delivery_profile)
+            {
+                delivery_profiles.push(consumer_delivery_profile);
+            }
+        }
+        Self {
+            source,
+            source_port,
+            delivery_profiles,
+        }
+    }
+
+    /// Refuses a recipe the engine would refuse at its `connect`: a new
+    /// consumer reading the port under a profile a kept consumer does not share.
+    fn refuse_a_new_consumer_reading(
+        &self,
+        processor_type: &str,
+        new_consumer_delivery_profile: Option<DeliveryProfile>,
+    ) -> RpcResult<()> {
+        let Some(new_consumer_delivery_profile) = new_consumer_delivery_profile else {
+            return Ok(());
+        };
+        match self
+            .delivery_profiles
+            .iter()
+            .find(|kept| **kept != new_consumer_delivery_profile)
+        {
+            Some(conflicting) => Err(RpcError::invalid_params(format!(
+                "`{processor_type}` reads its input `{}`, but {} port `{}` also feeds a processor \
+                 reading it `{}`, and every consumer of one output port reads it under one \
+                 delivery profile",
+                new_consumer_delivery_profile.as_manifest_str(),
+                processor_node_display_name_and_id_label(self.source),
+                self.source_port,
+                conflicting.as_manifest_str()
+            ))),
+            None => Ok(()),
+        }
+    }
+
+    /// The warning a recipe carries when the catalog cannot tell which profile
+    /// the new consumer's input reads.
+    fn refusal_note_when_the_new_consumers_profile_is_unknown(&self) -> Option<String> {
+        let kept = self.delivery_profiles.first()?;
+        Some(format!(
+            "{} port `{}` feeds processors reading it `{}`, and every consumer of one output port \
+             reads it under one delivery profile: a `connect` from it is refused naming \
+             conflicting delivery profiles when the new processor's input declares another.",
+            processor_node_display_name_and_id_label(self.source),
+            self.source_port,
+            kept.as_manifest_str()
+        ))
+    }
 }
 
 /// The catalog entry for one import path, or `None` when nothing is
@@ -492,23 +507,30 @@ fn insert_processor_between_linked_processors_recipe(
     let inserted_type_entry = catalog_entry_for(processor_type);
     let inserted_delivery_profile = inserted_type_entry
         .as_ref()
-        .and_then(sole_input_delivery_profile);
-    let delivery_profiles_kept = delivery_profiles_an_output_port_keeps_feeding(
-        graph,
-        &source.id,
-        source_port,
-        Some(link_id),
-    );
-    refuse_a_new_consumer_whose_delivery_profile_conflicts(
-        processor_type,
-        inserted_delivery_profile,
-        source,
-        source_port,
-        &delivery_profiles_kept,
-    )?;
+        .and_then(sole_input_port)
+        .and_then(|port| declared_delivery_profile(port.delivery_profile.as_deref()));
+    let consumers_kept = OutputPortConsumersKept::of(graph, source, source_port, Some(link_id));
+    consumers_kept.refuse_a_new_consumer_reading(processor_type, inserted_delivery_profile)?;
 
     let target_input = input_port_of(target, target_port);
-    let target_delivery_profile = target_input.and_then(|port| port.delivery_profile.as_deref());
+    let target_delivery_profile =
+        target_input.and_then(|port| declared_delivery_profile(port.delivery_profile.as_deref()));
+    // A channel's subscriber buffer is its profile's depth, fixed when the
+    // service is created, and the source's live publisher keeps that service
+    // open after its last link goes — so a running node cannot reopen the
+    // port's channel for a consumer that queues deeper.
+    if let (Some(inserted), Some(replaced)) = (inserted_delivery_profile, target_delivery_profile)
+        && inserted.resolve().depth > replaced.resolve().depth
+    {
+        return Err(RpcError::invalid_params(format!(
+            "`{processor_type}` reads its input `{}`, and {source_label} port `{source_port}` has \
+             its channel open for `{}` consumers: a running node cannot reopen a channel for a \
+             consumer that queues deeper than the one it was created for, so this insert cannot \
+             take while {source_label} runs",
+            inserted.as_manifest_str(),
+            replaced.as_manifest_str()
+        )));
+    }
     let reason_the_link_goes_first = if target_input.is_some_and(|port| port.audio_window.is_some())
     {
         Some(format!(
@@ -518,9 +540,11 @@ fn insert_processor_between_linked_processors_recipe(
     } else {
         match (inserted_delivery_profile, target_delivery_profile) {
             (Some(inserted), Some(replaced)) if inserted != replaced => Some(format!(
-                "`{processor_type}` reads its input `{inserted}` while {target_label} reads port \
-                 `{target_port}` `{replaced}`, and every consumer of {source_label} port \
-                 `{source_port}` reads it under one delivery profile"
+                "`{processor_type}` reads its input `{}` while {target_label} reads port \
+                 `{target_port}` `{}`, and every consumer of {source_label} port `{source_port}` \
+                 reads it under one delivery profile",
+                inserted.as_manifest_str(),
+                replaced.as_manifest_str()
             )),
             _ => None,
         }
@@ -570,7 +594,7 @@ fn insert_processor_between_linked_processors_recipe(
         ),
     ));
 
-    let closing_note = match (&reason_the_link_goes_first, &inserted_type_entry) {
+    let closing_note = match (&reason_the_link_goes_first, inserted_delivery_profile) {
         (Some(reason), _) => Some(format!(
             "The link goes before the new processor is wired because {reason}; {target_label} \
              receives nothing between the `disconnect` and the second `connect`. If a `connect` \
@@ -584,11 +608,7 @@ fn insert_processor_between_linked_processors_recipe(
                             before the first `connect` instead."
                 .to_string();
             if let Some(delivery_profile_note) =
-                delivery_profile_refusal_note_for_an_unregistered_type(
-                    source,
-                    source_port,
-                    &delivery_profiles_kept,
-                )
+                consumers_kept.refusal_note_when_the_new_consumers_profile_is_unknown()
             {
                 note.push(' ');
                 note.push_str(&delivery_profile_note);
@@ -616,17 +636,12 @@ fn fan_output_to_another_consumer_recipe(
     let processor_type = prompt_arguments.required(&PROCESSOR_TYPE_ARGUMENT)?;
     let source_label = processor_node_display_name_and_id_label(source);
     let consumer_type_entry = catalog_entry_for(processor_type);
-    let delivery_profiles_kept =
-        delivery_profiles_an_output_port_keeps_feeding(graph, &source.id, from_port, None);
-    refuse_a_new_consumer_whose_delivery_profile_conflicts(
-        processor_type,
-        consumer_type_entry
-            .as_ref()
-            .and_then(sole_input_delivery_profile),
-        source,
-        from_port,
-        &delivery_profiles_kept,
-    )?;
+    let consumer_delivery_profile = consumer_type_entry
+        .as_ref()
+        .and_then(sole_input_port)
+        .and_then(|port| declared_delivery_profile(port.delivery_profile.as_deref()));
+    let consumers_kept = OutputPortConsumersKept::of(graph, source, from_port, None);
+    consumers_kept.refuse_a_new_consumer_reading(processor_type, consumer_delivery_profile)?;
 
     Ok(GraphRecipe {
         introduction_text: format!(
@@ -654,13 +669,9 @@ fn fan_output_to_another_consumer_recipe(
                 ),
             ),
         ],
-        closing_note: match consumer_type_entry {
+        closing_note: match consumer_delivery_profile {
             Some(_) => None,
-            None => delivery_profile_refusal_note_for_an_unregistered_type(
-                source,
-                from_port,
-                &delivery_profiles_kept,
-            ),
+            None => consumers_kept.refusal_note_when_the_new_consumers_profile_is_unknown(),
         },
     })
 }
@@ -678,23 +689,18 @@ fn show_channel_on_virtual_camera_recipe(
                  the virtual camera is a Linux built-in"
             ))
         })?;
-    let video_input_port = virtual_camera_sink
-        .inputs
-        .first()
-        .map(|port| port.name.as_str())
-        .ok_or_else(|| {
-            RpcError::internal(format!(
-                "`{VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH}` is registered with no input \
-                 port"
-            ))
-        })?;
-    refuse_a_new_consumer_whose_delivery_profile_conflicts(
+    let video_input = sole_input_port(&virtual_camera_sink).ok_or_else(|| {
+        RpcError::internal(format!(
+            "`{VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH}` is registered with {} input \
+             ports rather than one",
+            virtual_camera_sink.inputs.len()
+        ))
+    })?;
+    OutputPortConsumersKept::of(graph, source, from_port, None).refuse_a_new_consumer_reading(
         VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH,
-        sole_input_delivery_profile(&virtual_camera_sink),
-        source,
-        from_port,
-        &delivery_profiles_an_output_port_keeps_feeding(graph, &source.id, from_port, None),
+        declared_delivery_profile(video_input.delivery_profile.as_deref()),
     )?;
+    let video_input_port = video_input.name.as_str();
     let config_instruction = match camera_name {
         Some(camera_name) => format!("`config`: `{}`", json!({ "name": camera_name })),
         None => "`config`: `{}`, which takes the default camera name".to_string(),

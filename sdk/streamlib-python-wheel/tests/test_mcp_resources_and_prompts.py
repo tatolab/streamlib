@@ -52,7 +52,10 @@ def setup(rt: Runtime) -> None:
     rt.connect(source.output("video"), sink.input("bags_from_upstream"))
 '''
 
-BAG_MARKING_EFFECT_SOURCE = '''\
+# Both `{delivery_profile}` slots are filled per run, so each way the effect's
+# input can relate to the sink's — the same profile, a shallower one, a deeper
+# one — meets a live node.
+BAG_MARKING_EFFECT_SOURCE_TEMPLATE = '''\
 from streamlib import RuntimeContextLimitedAccess, input, output, processor
 
 
@@ -60,7 +63,7 @@ from streamlib import RuntimeContextLimitedAccess, input, output, processor
 class BagMarkingEffect:
     """Forwards every bag with one key added, so a consumer can tell it passed through."""
 
-    @input(delivery_profile="newest")
+    @input(delivery_profile="{delivery_profile}")
     def bags_from_upstream(self) -> None: ...
 
     @output()
@@ -69,10 +72,10 @@ class BagMarkingEffect:
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         bag = ctx.inputs.read("bags_from_upstream")
         if bag is not None:
-            ctx.outputs.write("marked_bags_to_downstream", {**bag, "marked_by_inserted_effect": True})
+            ctx.outputs.write("marked_bags_to_downstream", {{**bag, "marked_by_inserted_effect": True}})
 '''
 
-MARKED_BAG_SINK_SOURCE = '''\
+MARKED_BAG_SINK_SOURCE_TEMPLATE = '''\
 from streamlib import RuntimeContextLimitedAccess, input, log, processor
 
 
@@ -83,7 +86,7 @@ class MarkedBagSink:
     def __init__(self) -> None:
         self.announced = False
 
-    @input(delivery_profile="newest")
+    @input(delivery_profile="{delivery_profile}")
     def bags_from_upstream(self) -> None: ...
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
@@ -105,6 +108,16 @@ class ScriptedMcpClient:
         self.next_request_id = 0
 
     def request(self, method: str, params: "dict[str, Any]") -> Any:
+        envelope = self.envelope(method, params)
+        assert "error" not in envelope, f"{method} was refused: {envelope['error']}"
+        return envelope["result"]
+
+    def refusal(self, method: str, params: "dict[str, Any]") -> "dict[str, Any]":
+        envelope = self.envelope(method, params)
+        assert "error" in envelope, f"{method} was expected to be refused: {envelope}"
+        return envelope["error"]
+
+    def envelope(self, method: str, params: "dict[str, Any]") -> "dict[str, Any]":
         self.next_request_id += 1
         body = json.dumps(
             {"jsonrpc": "2.0", "id": self.next_request_id, "method": method, "params": params}
@@ -113,9 +126,7 @@ class ScriptedMcpClient:
             self.endpoint, data=body, method="POST", headers={"content-type": "application/json"}
         )
         with urllib.request.urlopen(request, timeout=JSON_RPC_TIMEOUT_SECONDS) as response:
-            envelope = json.loads(response.read())
-        assert "error" not in envelope, f"{method} was refused: {envelope['error']}"
-        return envelope["result"]
+            return json.loads(response.read())
 
     def read_json_resource(self, uri: str) -> Any:
         contents = self.request("resources/read", {"uri": uri})["contents"]
@@ -135,14 +146,33 @@ def numbered_steps(prompt_text: str) -> "list[tuple[str, str]]":
     ]
 
 
+@pytest.mark.parametrize(
+    ("sink_input_delivery_profile", "inserted_input_delivery_profile", "expected_wiring_order"),
+    [
+        ("newest", "newest", ["connect", "connect", "disconnect"]),
+        ("ordered", "newest", ["disconnect", "connect", "connect"]),
+        # A live channel keeps the buffer depth it was opened with, so the
+        # recipe refuses rather than hand the agent a `connect` that fails.
+        ("newest", "ordered", None),
+    ],
+)
 def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_link(
-    tmp_path: Path, isolated_runtime_directory: Path, launch_node
+    tmp_path: Path,
+    isolated_runtime_directory: Path,
+    launch_node,
+    sink_input_delivery_profile: str,
+    inserted_input_delivery_profile: str,
+    expected_wiring_order: "list[str] | None",
 ):
     app_directory = tmp_path / "app"
     (app_directory / "processors").mkdir(parents=True)
     (app_directory / "processors" / "__init__.py").write_text("")
-    (app_directory / "processors" / "bag_marking_effect.py").write_text(BAG_MARKING_EFFECT_SOURCE)
-    (app_directory / "processors" / "marked_bag_sink.py").write_text(MARKED_BAG_SINK_SOURCE)
+    (app_directory / "processors" / "bag_marking_effect.py").write_text(
+        BAG_MARKING_EFFECT_SOURCE_TEMPLATE.format(delivery_profile=inserted_input_delivery_profile)
+    )
+    (app_directory / "processors" / "marked_bag_sink.py").write_text(
+        MARKED_BAG_SINK_SOURCE_TEMPLATE.format(delivery_profile=sink_input_delivery_profile)
+    )
     (app_directory / "app.py").write_text(APP_WITH_A_SOURCE_LINKED_TO_A_SINK)
 
     node = launch_node("run", app_directory, free_port(), capture_output=True)
@@ -181,17 +211,30 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
     argument_names = [argument["name"] for argument in insert_prompt["arguments"]]
     link_argument = next(name for name in argument_names if name.startswith("link"))
     type_argument = next(name for name in argument_names if name != link_argument)
-    recipe = client.request(
-        "prompts/get",
-        {
-            "name": insert_prompt["name"],
-            "arguments": {link_argument: replaced_link["id"], type_argument: inserted_type},
-        },
-    )
+    insert_request = {
+        "name": insert_prompt["name"],
+        "arguments": {link_argument: replaced_link["id"], type_argument: inserted_type},
+    }
+    if expected_wiring_order is None:
+        refusal = client.refusal("prompts/get", insert_request)
+        assert all(
+            profile in refusal["message"]
+            for profile in (sink_input_delivery_profile, inserted_input_delivery_profile)
+        ), refusal
+        assert [link["id"] for link in client.call_tool("graph", {})["links"]] == [
+            replaced_link["id"]
+        ], "a refused recipe must leave the running graph as it was"
+        node.interrupt()
+        assert node.await_exit(CLEAN_EXIT_TIMEOUT_SECONDS) == 0, node.recent_output()
+        return
+    recipe = client.request("prompts/get", insert_request)
     recipe_text = recipe["messages"][0]["content"]["text"]
     steps = numbered_steps(recipe_text)
     assert steps, f"the recipe lists no steps:\n{recipe_text}"
     assert {tool_name for tool_name, _ in steps} <= served_tool_names, recipe_text
+    assert [
+        tool_name for tool_name, _ in steps if tool_name in ("connect", "disconnect")
+    ] == expected_wiring_order, recipe_text
 
     # Dispatch each step as written. An argument the text spells in backticks
     # is passed verbatim; the rest are what an earlier step answered.
