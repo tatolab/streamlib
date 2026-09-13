@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.22.0](https://github.com/tatolab/streamlib/compare/v0.21.0...v0.22.0) (2026-09-13)
+
+
+### ⚠ BREAKING CHANGES
+
+* **wheel:** @processor registers the descriptor when it runs; the constructor arrives at first add ([#2228](https://github.com/tatolab/streamlib/issues/2228))
+
+### Features
+
+* **wheel:** [@processor](https://github.com/processor) registers the descriptor when it runs; the constructor arrives at first add ([#2228](https://github.com/tatolab/streamlib/issues/2228)) ([fe7097c](https://github.com/tatolab/streamlib/commit/fe7097c06e69b44b8f5c78034fea5b75abc76817))
+
 ## [0.21.0](https://github.com/tatolab/streamlib/compare/v0.20.0...v0.21.0) (2026-09-11)
 
 
