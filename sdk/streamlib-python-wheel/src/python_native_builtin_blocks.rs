@@ -219,3 +219,18 @@ pub(crate) fn native_builtin_class_import_path(
 pub(crate) fn register_native_builtin_processor_types() {
     streamlib_media_builtins::register_media_builtin_processor_types();
 }
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    /// The control plane's virtual-camera prompt names the built-in by a path
+    /// it cannot derive, because the api-server does not link the media
+    /// built-ins; the wheel links both, so this is where the two must agree.
+    #[test]
+    fn the_virtual_camera_prompt_names_the_path_the_built_in_registers_under() {
+        assert_eq!(
+            streamlib_api_server::VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH,
+            streamlib_media_builtins::VirtualCameraSink::Processor::processor_class_import_path()
+                .as_str()
+        );
+    }
+}

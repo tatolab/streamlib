@@ -11,7 +11,10 @@
 //! with the node and shares its lifecycle, so an MCP host reaches StreamLib by
 //! pointing at a running node's URL — there is nothing to start and nothing to
 //! attach. It exposes the runtime as MCP *tools* so an LLM agent observes the
-//! live graph the same way the REST client does.
+//! live graph the same way the REST client does, and beside them serves the
+//! processor catalog and the live graph as *resources*
+//! ([`crate::mcp_resources`]) and recipes over those tools as *prompts*
+//! ([`crate::mcp_prompts`]).
 //!
 //! The vocabulary is the observation verbs — graph, tap, logs, exchange,
 //! shutdown — beside the four graph-mutation verbs the engine's own runtime
@@ -142,10 +145,13 @@ pub(crate) struct JsonRpcRequest {
 /// A JSON-RPC error (method-not-found / invalid-params). Tool-execution
 /// failures are NOT these — they surface as a successful `tools/call` result
 /// with `isError: true`, per the MCP tool-error convention.
-struct RpcError {
+pub(crate) struct RpcError {
     code: i64,
     message: String,
 }
+
+/// A JSON-RPC method's answer: its result, or the error the envelope carries.
+pub(crate) type RpcResult<T> = std::result::Result<T, RpcError>;
 
 impl RpcError {
     fn method_not_found(method: &str) -> Self {
@@ -154,10 +160,25 @@ impl RpcError {
             message: format!("method not found: {method}"),
         }
     }
-    fn invalid_params(message: impl Into<String>) -> Self {
+    pub(crate) fn invalid_params(message: impl Into<String>) -> Self {
         Self {
             code: -32602,
             message: message.into(),
+        }
+    }
+    pub(crate) fn internal(message: impl Into<String>) -> Self {
+        Self {
+            code: -32603,
+            message: message.into(),
+        }
+    }
+    /// `-32002`, the code the MCP specification assigns an unknown resource URI.
+    pub(crate) fn resource_not_found(uri: &str) -> Self {
+        Self {
+            code: -32002,
+            message: format!(
+                "no resource at `{uri}`; `resources/list` names the ones this node serves"
+            ),
         }
     }
 }
@@ -211,12 +232,17 @@ async fn dispatch(
     runtime: &Arc<dyn RuntimeOperations>,
     method: &str,
     params: Value,
-) -> std::result::Result<Value, RpcError> {
+) -> RpcResult<Value> {
     match method {
         "initialize" => Ok(initialize_result()),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": tool_definitions() })),
         "tools/call" => tools_call(runtime, params).await,
+        "resources/list" => Ok(crate::mcp_resources::resources_list_result()),
+        "resources/templates/list" => Ok(crate::mcp_resources::resource_templates_list_result()),
+        "resources/read" => crate::mcp_resources::read_resource(runtime, params).await,
+        "prompts/list" => Ok(crate::mcp_prompts::prompts_list_result()),
+        "prompts/get" => crate::mcp_prompts::get_prompt(runtime, params).await,
         other => Err(RpcError::method_not_found(other)),
     }
 }
@@ -224,9 +250,13 @@ async fn dispatch(
 fn initialize_result() -> Value {
     json!({
         "protocolVersion": MCP_PROTOCOL_VERSION,
-        "capabilities": { "tools": { "listChanged": false } },
+        "capabilities": {
+            "tools": { "listChanged": false },
+            "resources": { "subscribe": false, "listChanged": false },
+            "prompts": { "listChanged": false },
+        },
         "serverInfo": { "name": MCP_SERVER_NAME, "version": MCP_SERVER_VERSION },
-        "instructions": "StreamLib runtime control plane for one running node. Observe it with `graph` (processors, their ids, port names and links), `tap` (raw bags on a channel spelled `<processor id, lowercased>/<output port>`), `logs` and `exchange` (a published frame's pixels). Change its live graph with `add_processor`, `connect`, `disconnect` and `remove_processor`: a Python processor class written to a module the app can import — a file beside `app.py`, or a pip-installed package — is added by its `module:ClassName` path and runs in its own helper process; a link is spliced in by connecting the new processor on both sides, then disconnecting the link it replaces. Read `graph` first for ids and port names, and again afterwards to confirm a link's state is `wired` and the processor is `Running`.",
+        "instructions": "StreamLib runtime control plane for one running node. Observe it with `graph` (processors, their ids, port names and links), `tap` (raw bags on a channel spelled `<processor id, lowercased>/<output port>`), `logs` and `exchange` (a published frame's pixels). Change its live graph with `add_processor`, `connect`, `disconnect` and `remove_processor`: a Python processor class written to a module the app can import — a file beside `app.py`, or a pip-installed package — is added by its `module:ClassName` path and runs in its own helper process; a link is spliced in by connecting the new processor on both sides, then disconnecting the link it replaces. Read `graph` first for ids and port names, and again afterwards to confirm a link's state is `wired` and the processor is `Running`. The resource `streamlib://processor-catalog` lists every type `add_processor` can take with its config schema and ports, and `streamlib://graph` is the live graph. The prompts are step-by-step recipes over these tools: inserting a processor into a link, fanning an output to another consumer, showing a channel on a virtual camera, and looking at what a channel carries.",
     })
 }
 
@@ -353,10 +383,7 @@ fn tool_definitions() -> Vec<Value> {
 // tools/call dispatch
 // ============================================================================
 
-async fn tools_call(
-    runtime: &Arc<dyn RuntimeOperations>,
-    params: Value,
-) -> std::result::Result<Value, RpcError> {
+async fn tools_call(runtime: &Arc<dyn RuntimeOperations>, params: Value) -> RpcResult<Value> {
     #[derive(Deserialize)]
     struct ToolCallParams {
         name: String,
@@ -852,6 +879,7 @@ mod tests {
     /// id, so a mutation tool's test asserts the op it reached and the
     /// arguments it carried.
     struct ControlPlaneMcpDispatchStubRuntime {
+        exported_graph: Arc<Mutex<Value>>,
         tap_plan: Option<StubTapPlan>,
         recorded_shutdown_reasons: Arc<Mutex<Vec<String>>>,
         recorded_graph_mutations: crate::control_plane_stub_support::RecordedGraphMutations,
@@ -861,6 +889,7 @@ mod tests {
     impl ControlPlaneMcpDispatchStubRuntime {
         fn new() -> Self {
             Self {
+                exported_graph: Arc::new(Mutex::new(json!({ "processors": [], "links": [] }))),
                 tap_plan: None,
                 recorded_shutdown_reasons: Arc::new(Mutex::new(Vec::new())),
                 recorded_graph_mutations: Arc::new(Mutex::new(Vec::new())),
@@ -901,7 +930,8 @@ mod tests {
 
     impl RuntimeOperations for ControlPlaneMcpDispatchStubRuntime {
         fn to_json_async(&self) -> BoxFuture<'_, Result<Value>> {
-            Box::pin(async { Ok(json!({ "processors": [], "links": [] })) })
+            let exported_graph = self.exported_graph.lock().clone();
+            Box::pin(async move { Ok(exported_graph) })
         }
         fn tap_async(
             &self,
@@ -981,7 +1011,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn initialize_handshake_reports_tools_capability() {
+    async fn initialize_handshake_reports_the_tools_resources_and_prompts_capabilities() {
         let (status, body) = mcp_call(
             Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
             json!({
@@ -995,10 +1025,12 @@ mod tests {
         assert_eq!(body["id"], 1);
         assert_eq!(body["result"]["protocolVersion"], "2025-06-18");
         assert_eq!(body["result"]["serverInfo"]["name"], "streamlib-api-server");
-        assert!(
-            body["result"]["capabilities"]["tools"].is_object(),
-            "server must advertise the tools capability"
-        );
+        for capability in ["tools", "resources", "prompts"] {
+            assert!(
+                body["result"]["capabilities"][capability].is_object(),
+                "server must advertise the {capability} capability: {body}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -1926,6 +1958,824 @@ mod tests {
             json!(["channel"]),
             "every argument beyond the channel stays optional, so the ordinary \
              call is still `tap <channel>`"
+        );
+    }
+
+    // ------------------------------------------------------------------------
+    // Resources and prompts
+    // ------------------------------------------------------------------------
+
+    use streamlib::sdk::descriptors::{
+        PortDescriptor, ProcessorClassShortName, ProcessorDescriptor,
+    };
+    use streamlib::sdk::processors::PROCESSOR_REGISTRY;
+
+    /// Two processors and the one link between them, in the shape the engine's
+    /// graph export takes, so the prompts parse what a real node answers.
+    fn two_linked_processors_graph() -> Value {
+        json!({
+            "nodes": [
+                {
+                    "id": "PatternSourceId",
+                    "type": "graph_probes:PatternSource",
+                    "display_name": "pattern",
+                    "ports": {
+                        "inputs": [],
+                        "outputs": [{ "name": "video", "description": "", "delivery_profile": null }]
+                    },
+                    "components": { "state": "Running" }
+                },
+                {
+                    "id": "WindowSinkId",
+                    "type": "graph_probes:WindowSink",
+                    "display_name": "window",
+                    "ports": {
+                        "inputs": [{ "name": "video", "description": "", "delivery_profile": "newest" }],
+                        "outputs": []
+                    },
+                    "components": { "state": "Running" }
+                }
+            ],
+            "links": [{
+                "id": "link-pattern-to-window",
+                "source": { "processor_id": "PatternSourceId", "port_name": "video" },
+                "target": { "processor_id": "WindowSinkId", "port_name": "video" },
+                "state": "wired",
+                "components": {}
+            }],
+            "extensions": []
+        })
+    }
+
+    fn stub_serving_two_linked_processors() -> Arc<ControlPlaneMcpDispatchStubRuntime> {
+        let runtime = ControlPlaneMcpDispatchStubRuntime::new();
+        *runtime.exported_graph.lock() = two_linked_processors_graph();
+        Arc::new(runtime)
+    }
+
+    /// The registry is process-global and refuses a second registration of a
+    /// path, so the probe standing in for the built-in registers once for the
+    /// whole test binary.
+    fn register_a_virtual_camera_sink_probe_once() {
+        static REGISTERED: std::sync::Once = std::sync::Once::new();
+        REGISTERED.call_once(|| {
+            PROCESSOR_REGISTRY
+                .register_descriptor_only(
+                    ProcessorDescriptor::new(
+                        ProcessorClassShortName::new("VirtualCameraSink").unwrap(),
+                        ProcessorClassImportPath::new(
+                            crate::mcp_prompts::VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH,
+                        )
+                        .unwrap(),
+                        "a virtual-camera probe",
+                    )
+                    .with_config_schema(
+                        json!({ "type": "object", "properties": { "name": { "type": "string" } } }),
+                    )
+                    .with_input(
+                        PortDescriptor::new("video", "frames to present", true)
+                            .with_delivery_profile("newest"),
+                    ),
+                )
+                .expect("the virtual camera path is registered by this helper alone");
+        });
+    }
+
+    async fn rpc_result(runtime: Arc<dyn RuntimeOperations>, method: &str, params: Value) -> Value {
+        let (status, body) = mcp_call(
+            runtime,
+            json!({ "jsonrpc": "2.0", "id": 40, "method": method, "params": params }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            body["error"].is_null(),
+            "{method} answered an error: {body}"
+        );
+        body["result"].clone()
+    }
+
+    async fn rpc_error(runtime: Arc<dyn RuntimeOperations>, method: &str, params: Value) -> Value {
+        let (status, body) = mcp_call(
+            runtime,
+            json!({ "jsonrpc": "2.0", "id": 41, "method": method, "params": params }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            body["result"].is_null(),
+            "{method} answered a result: {body}"
+        );
+        body["error"].clone()
+    }
+
+    async fn resource_document(runtime: Arc<dyn RuntimeOperations>, uri: &str) -> Value {
+        let result = rpc_result(runtime, "resources/read", json!({ "uri": uri })).await;
+        let contents = result["contents"].as_array().expect("a contents array");
+        assert_eq!(contents.len(), 1, "one document per resource: {result}");
+        assert_eq!(contents[0]["uri"], uri);
+        assert_eq!(contents[0]["mimeType"], "application/json");
+        serde_json::from_str(contents[0]["text"].as_str().expect("a text document"))
+            .expect("the document is JSON")
+    }
+
+    async fn prompt_text(
+        runtime: Arc<dyn RuntimeOperations>,
+        prompt_name: &str,
+        arguments: Value,
+    ) -> String {
+        let result = rpc_result(
+            runtime,
+            "prompts/get",
+            json!({ "name": prompt_name, "arguments": arguments }),
+        )
+        .await;
+        let messages = result["messages"].as_array().expect("a messages array");
+        assert_eq!(messages.len(), 1, "{result}");
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[0]["content"]["type"], "text");
+        messages[0]["content"]["text"].as_str().unwrap().to_string()
+    }
+
+    /// The tools a recipe's numbered steps call, in order — what a client
+    /// following the text step by step dispatches.
+    fn tool_names_the_numbered_steps_call(prompt_text: &str) -> Vec<String> {
+        prompt_text
+            .lines()
+            .filter_map(|line| {
+                let (step_number, rest) = line.split_once(". `")?;
+                if step_number.is_empty() || !step_number.chars().all(|c| c.is_ascii_digit()) {
+                    return None;
+                }
+                rest.split_once('`')
+                    .map(|(tool_name, _)| tool_name.to_string())
+            })
+            .collect()
+    }
+
+    fn served_tool_names() -> Vec<String> {
+        tool_definitions()
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn resources_list_names_the_processor_catalog_and_the_live_graph() {
+        let result = rpc_result(
+            Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
+            "resources/list",
+            json!({}),
+        )
+        .await;
+
+        let uris: Vec<&str> = result["resources"]
+            .as_array()
+            .expect("a resources array")
+            .iter()
+            .map(|resource| resource["uri"].as_str().unwrap())
+            .collect();
+        assert_eq!(uris, ["streamlib://processor-catalog", "streamlib://graph"]);
+        for resource in result["resources"].as_array().unwrap() {
+            assert_eq!(resource["mimeType"], "application/json", "{resource}");
+            assert!(
+                resource["description"]
+                    .as_str()
+                    .is_some_and(|d| !d.is_empty())
+            );
+        }
+
+        let templates = rpc_result(
+            Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
+            "resources/templates/list",
+            json!({}),
+        )
+        .await;
+        assert_eq!(templates, json!({ "resourceTemplates": [] }));
+    }
+
+    /// Mental revert: render the catalog once at startup and cache it, and the
+    /// second read misses the type registered after the first.
+    #[tokio::test]
+    async fn the_catalog_resource_renders_the_registry_as_it_stands_at_each_read() {
+        let class_import_path =
+            "streamlib_api_server::catalog_resource_probe::RegisteredBetweenReads";
+        let entry_for_the_probe = |catalog: &Value| {
+            catalog["processors"]
+                .as_array()
+                .expect("a processor list")
+                .iter()
+                .find(|entry| entry["processor_class_import_path"] == class_import_path)
+                .cloned()
+        };
+
+        let before = resource_document(
+            Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
+            "streamlib://processor-catalog",
+        )
+        .await;
+        assert!(entry_for_the_probe(&before).is_none());
+
+        let config_schema = json!({
+            "type": "object",
+            "properties": { "strength": { "type": "number", "default": 0.5 } }
+        });
+        PROCESSOR_REGISTRY
+            .register_descriptor_only(
+                ProcessorDescriptor::new(
+                    ProcessorClassShortName::new("RegisteredBetweenReads").unwrap(),
+                    ProcessorClassImportPath::new(class_import_path).unwrap(),
+                    "registered after the first read",
+                )
+                .with_config_schema(config_schema.clone())
+                .with_input(
+                    PortDescriptor::new("video_from_upstream", "", true)
+                        .with_delivery_profile("newest"),
+                ),
+            )
+            .expect("the probe's path is registered by this test alone");
+
+        let after = resource_document(
+            Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
+            "streamlib://processor-catalog",
+        )
+        .await;
+        let entry = entry_for_the_probe(&after).expect("the type registered between reads");
+        assert_eq!(entry["config_schema"], config_schema);
+        assert_eq!(entry["inputs"][0]["name"], "video_from_upstream");
+        assert_eq!(entry["inputs"][0]["delivery_profile"], "newest");
+    }
+
+    #[tokio::test]
+    async fn the_graph_resource_renders_the_graph_as_it_stands_at_each_read() {
+        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
+        let exported_graph = runtime.exported_graph.clone();
+
+        let before = resource_document(runtime.clone(), "streamlib://graph").await;
+        assert_eq!(before, json!({ "processors": [], "links": [] }));
+
+        *exported_graph.lock() = two_linked_processors_graph();
+        let after = resource_document(runtime, "streamlib://graph").await;
+        assert_eq!(after, two_linked_processors_graph());
+    }
+
+    #[tokio::test]
+    async fn reading_a_resource_the_node_does_not_serve_is_refused_naming_the_uri() {
+        let error = rpc_error(
+            Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
+            "resources/read",
+            json!({ "uri": "streamlib://contracts" }),
+        )
+        .await;
+        assert_eq!(error["code"], -32002);
+        assert!(
+            error["message"]
+                .as_str()
+                .unwrap()
+                .contains("streamlib://contracts"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn prompts_list_names_the_four_recipes_and_their_arguments() {
+        let result = rpc_result(
+            Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
+            "prompts/list",
+            json!({}),
+        )
+        .await;
+        let prompts = result["prompts"].as_array().expect("a prompts array");
+
+        let described: Vec<(String, Vec<(String, bool)>)> = prompts
+            .iter()
+            .map(|prompt| {
+                let arguments = prompt["arguments"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|argument| {
+                        (
+                            argument["name"].as_str().unwrap().to_string(),
+                            argument["required"].as_bool().unwrap(),
+                        )
+                    })
+                    .collect();
+                (prompt["name"].as_str().unwrap().to_string(), arguments)
+            })
+            .collect();
+        let owned = |name: &str, arguments: &[(&str, bool)]| {
+            (
+                name.to_string(),
+                arguments
+                    .iter()
+                    .map(|(argument, required)| (argument.to_string(), *required))
+                    .collect::<Vec<_>>(),
+            )
+        };
+        assert_eq!(
+            described,
+            vec![
+                owned(
+                    "insert_processor_between_linked_processors",
+                    &[("link_id", true), ("processor_type", true)]
+                ),
+                owned(
+                    "fan_output_to_another_consumer",
+                    &[
+                        ("from_processor_id", true),
+                        ("from_port", true),
+                        ("processor_type", true)
+                    ]
+                ),
+                owned(
+                    "show_channel_on_virtual_camera",
+                    &[
+                        ("from_processor_id", true),
+                        ("from_port", true),
+                        ("camera_name", false)
+                    ]
+                ),
+                owned(
+                    "look_at_what_a_channel_carries",
+                    &[("from_processor_id", true), ("from_port", true)]
+                ),
+            ]
+        );
+    }
+
+    /// A prompt is a recipe over the tool set, never a verb of its own: every
+    /// step of every recipe calls a tool `tools/list` serves.
+    #[tokio::test]
+    async fn every_step_of_every_prompt_calls_a_tool_the_node_serves() {
+        register_a_virtual_camera_sink_probe_once();
+        let served = served_tool_names();
+
+        for (prompt_name, arguments) in [
+            (
+                "insert_processor_between_linked_processors",
+                json!({ "link_id": "link-pattern-to-window", "processor_type": "effects:Blur" }),
+            ),
+            (
+                "fan_output_to_another_consumer",
+                json!({ "from_processor_id": "PatternSourceId", "from_port": "video", "processor_type": "effects:Blur" }),
+            ),
+            (
+                "show_channel_on_virtual_camera",
+                json!({ "from_processor_id": "PatternSourceId", "from_port": "video" }),
+            ),
+            (
+                "look_at_what_a_channel_carries",
+                json!({ "from_processor_id": "PatternSourceId", "from_port": "video" }),
+            ),
+        ] {
+            let text =
+                prompt_text(stub_serving_two_linked_processors(), prompt_name, arguments).await;
+            let called = tool_names_the_numbered_steps_call(&text);
+            assert!(!called.is_empty(), "{prompt_name} lists no steps:\n{text}");
+            for tool_name in &called {
+                assert!(
+                    served.contains(tool_name),
+                    "{prompt_name} calls `{tool_name}`, which the node does not serve:\n{text}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn the_insert_prompt_splices_the_named_link_in_an_order_that_never_leaves_it_unfed() {
+        let text = prompt_text(
+            stub_serving_two_linked_processors(),
+            "insert_processor_between_linked_processors",
+            json!({ "link_id": "link-pattern-to-window", "processor_type": "effects:Blur" }),
+        )
+        .await;
+
+        assert_eq!(
+            tool_names_the_numbered_steps_call(&text),
+            [
+                "add_processor",
+                "graph",
+                "connect",
+                "connect",
+                "disconnect",
+                "graph"
+            ]
+        );
+        for named in [
+            "`effects:Blur`",
+            "`PatternSourceId`",
+            "`WindowSinkId`",
+            "`link-pattern-to-window`",
+        ] {
+            assert!(
+                text.contains(named),
+                "the recipe must name {named}:\n{text}"
+            );
+        }
+    }
+
+    /// The type an agent is about to add is described from the catalog as it
+    /// is now, so the config keys it passes are the ones the node will take.
+    #[tokio::test]
+    async fn a_registered_types_catalog_entry_is_rendered_into_the_prompt() {
+        let class_import_path = "streamlib_api_server::prompt_catalog_probe::GrayscaleEffect";
+        PROCESSOR_REGISTRY
+            .register_descriptor_only(
+                ProcessorDescriptor::new(
+                    ProcessorClassShortName::new("GrayscaleEffect").unwrap(),
+                    ProcessorClassImportPath::new(class_import_path).unwrap(),
+                    "a prompt-rendering probe",
+                )
+                .with_config_schema(json!({
+                    "type": "object",
+                    "properties": { "grayscale_strength_probe_key": { "type": "number" } }
+                })),
+            )
+            .expect("the probe's path is registered by this test alone");
+
+        let registered = prompt_text(
+            stub_serving_two_linked_processors(),
+            "fan_output_to_another_consumer",
+            json!({ "from_processor_id": "PatternSourceId", "from_port": "video", "processor_type": class_import_path }),
+        )
+        .await;
+        assert!(
+            registered.contains("grayscale_strength_probe_key"),
+            "a registered type's config schema must reach the recipe:\n{registered}"
+        );
+
+        let unregistered = prompt_text(
+            stub_serving_two_linked_processors(),
+            "fan_output_to_another_consumer",
+            json!({ "from_processor_id": "PatternSourceId", "from_port": "video", "processor_type": "never_imported:Effect" }),
+        )
+        .await;
+        assert!(
+            unregistered.contains("not in this node's catalog yet"),
+            "an unregistered type must be said to be absent, not described:\n{unregistered}"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_virtual_camera_prompt_adds_the_registered_sink_on_its_own_input_port() {
+        register_a_virtual_camera_sink_probe_once();
+
+        let text = prompt_text(
+            stub_serving_two_linked_processors(),
+            "show_channel_on_virtual_camera",
+            json!({ "from_processor_id": "PatternSourceId", "from_port": "video", "camera_name": "Desk \"cam\"" }),
+        )
+        .await;
+
+        assert_eq!(
+            tool_names_the_numbered_steps_call(&text),
+            ["add_processor", "connect", "graph"]
+        );
+        assert!(
+            text.contains(crate::mcp_prompts::VIRTUAL_CAMERA_SINK_PROCESSOR_CLASS_IMPORT_PATH),
+            "{text}"
+        );
+        assert!(text.contains("`to_port`: `video`"), "{text}");
+        assert!(
+            text.contains(r#"{"name":"Desk \"cam\""}"#),
+            "the camera name must reach the config as escaped JSON:\n{text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_look_prompt_taps_the_channel_the_output_publishes_on() {
+        let text = prompt_text(
+            stub_serving_two_linked_processors(),
+            "look_at_what_a_channel_carries",
+            json!({ "from_processor_id": "PatternSourceId", "from_port": "video" }),
+        )
+        .await;
+
+        assert_eq!(
+            tool_names_the_numbered_steps_call(&text),
+            ["tap", "exchange"]
+        );
+        assert!(
+            text.contains("`channel`: `patternsourceid/video`"),
+            "the channel is the processor id lowercased, then the port:\n{text}"
+        );
+        assert!(
+            text.contains(&format!(
+                "{}-byte frame header",
+                streamlib::sdk::iceoryx2::FRAME_HEADER_SIZE
+            )),
+            "{text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_prompt_request_naming_nothing_the_node_has_is_refused_by_name() {
+        for (case, prompt_name, arguments, named) in [
+            (
+                "an unknown prompt",
+                "delete_everything",
+                json!({}),
+                "delete_everything",
+            ),
+            (
+                "a missing required argument",
+                "insert_processor_between_linked_processors",
+                json!({ "link_id": "link-pattern-to-window" }),
+                "processor_type",
+            ),
+            (
+                "a link the graph does not have",
+                "insert_processor_between_linked_processors",
+                json!({ "link_id": "no-such-link", "processor_type": "effects:Blur" }),
+                "no-such-link",
+            ),
+            (
+                "a processor the graph does not have",
+                "look_at_what_a_channel_carries",
+                json!({ "from_processor_id": "NoSuchProcessor", "from_port": "video" }),
+                "NoSuchProcessor",
+            ),
+            (
+                "a port that is not one of the processor's outputs",
+                "look_at_what_a_channel_carries",
+                json!({ "from_processor_id": "WindowSinkId", "from_port": "video" }),
+                "video",
+            ),
+            (
+                "an argument that is not a string",
+                "look_at_what_a_channel_carries",
+                json!({ "from_processor_id": 7, "from_port": "video" }),
+                "from_processor_id",
+            ),
+        ] {
+            let error = rpc_error(
+                stub_serving_two_linked_processors(),
+                "prompts/get",
+                json!({ "name": prompt_name, "arguments": arguments }),
+            )
+            .await;
+            assert_eq!(error["code"], -32602, "{case}: {error}");
+            assert!(
+                error["message"].as_str().unwrap().contains(named),
+                "{case} must be refused naming `{named}`: {error}"
+            );
+        }
+    }
+
+    /// Resources and prompts expose nothing the tools do not, and are gated
+    /// exactly as `graph` is: by the one bearer gate in front of `POST /mcp`.
+    ///
+    /// Paired, because the gate sits on the route: an unauthorised call is
+    /// refused whether or not the method exists, so only the authorised half
+    /// proves each method is served behind it.
+    #[tokio::test]
+    async fn resources_and_prompts_answer_behind_the_bearer_gate_and_nowhere_else() {
+        use axum::http::header::AUTHORIZATION;
+        const TOKEN: &str = "mcp-resources-secret";
+
+        for (method, params) in [
+            ("resources/list", json!({})),
+            ("resources/read", json!({ "uri": "streamlib://graph" })),
+            ("prompts/list", json!({})),
+            (
+                "prompts/get",
+                json!({ "name": "look_at_what_a_channel_carries", "arguments": { "from_processor_id": "PatternSourceId", "from_port": "video" } }),
+            ),
+        ] {
+            let message = json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params })
+                .to_string();
+            let request_with = |authorization: Option<String>| {
+                let mut request = Request::builder()
+                    .method("POST")
+                    .uri("/mcp")
+                    .header(CONTENT_TYPE, "application/json");
+                if let Some(authorization) = authorization {
+                    request = request.header(AUTHORIZATION, authorization);
+                }
+                request.body(Body::from(message.clone())).unwrap()
+            };
+            let router = || {
+                crate::handlers::build_router(
+                    stub_serving_two_linked_processors(),
+                    Some(crate::auth::ApiServerBearerToken::from_secret(TOKEN)),
+                )
+            };
+
+            let refused = router().oneshot(request_with(None)).await.unwrap();
+            assert_eq!(refused.status(), StatusCode::UNAUTHORIZED, "{method}");
+
+            let answered = router()
+                .oneshot(request_with(Some(format!("Bearer {TOKEN}"))))
+                .await
+                .unwrap();
+            assert_eq!(answered.status(), StatusCode::OK, "{method}");
+            let bytes = axum::body::to_bytes(answered.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let body: Value = serde_json::from_slice(&bytes).unwrap();
+            assert!(
+                body["error"].is_null() && !body["result"].is_null(),
+                "{method} must answer a result behind the gate: {body}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn the_fan_prompt_adds_one_consumer_and_wires_it_to_the_named_port() {
+        let text = prompt_text(
+            stub_serving_two_linked_processors(),
+            "fan_output_to_another_consumer",
+            json!({ "from_processor_id": "PatternSourceId", "from_port": "video", "processor_type": "effects:Blur" }),
+        )
+        .await;
+
+        assert_eq!(
+            tool_names_the_numbered_steps_call(&text),
+            ["add_processor", "graph", "connect", "graph"]
+        );
+        assert!(
+            text.contains("`from_processor_id`: `PatternSourceId`, `from_port`: `video`"),
+            "{text}"
+        );
+        assert!(
+            text.contains("reading it `newest`"),
+            "an unregistered type's recipe must name the profile the port's consumers read: {text}"
+        );
+    }
+
+    /// A probe with one input declaring `delivery_profile`, registered once per
+    /// profile for the test binary.
+    fn register_a_sole_input_probe_once(delivery_profile: &'static str) -> String {
+        static REGISTERED_PROFILES: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+        let class_import_path = format!(
+            "streamlib_api_server::prompt_delivery_profile_probe::{delivery_profile}::SoleInputProbe"
+        );
+        let mut registered_profiles = REGISTERED_PROFILES.lock();
+        if !registered_profiles.contains(&delivery_profile) {
+            PROCESSOR_REGISTRY
+                .register_descriptor_only(
+                    ProcessorDescriptor::new(
+                        ProcessorClassShortName::new("SoleInputProbe").unwrap(),
+                        ProcessorClassImportPath::new(&class_import_path).unwrap(),
+                        "a probe with one input",
+                    )
+                    .with_input(
+                        PortDescriptor::new("bags_from_upstream", "", true)
+                            .with_delivery_profile(delivery_profile),
+                    )
+                    .with_output(PortDescriptor::new(
+                        "bags_to_downstream",
+                        "",
+                        true,
+                    )),
+                )
+                .expect("each probe path is registered by this helper alone");
+            registered_profiles.push(delivery_profile);
+        }
+        class_import_path
+    }
+
+    /// The engine refuses an output port whose consumers read it under two
+    /// profiles and counts the replaced link while it still exists, so a
+    /// shallower type spliced into a deeper link must take the link out first.
+    /// Mental revert: keep the zero-gap order and the first `connect` is
+    /// refused on a live node.
+    #[tokio::test]
+    async fn inserting_a_type_that_queues_shallower_than_the_link_removes_the_link_before_wiring() {
+        let newest_input_probe = register_a_sole_input_probe_once("newest");
+        let runtime = ControlPlaneMcpDispatchStubRuntime::new();
+        let mut graph = two_linked_processors_graph();
+        graph["nodes"][1]["ports"]["inputs"][0]["delivery_profile"] = json!("ordered");
+        *runtime.exported_graph.lock() = graph;
+
+        let text = prompt_text(
+            Arc::new(runtime),
+            "insert_processor_between_linked_processors",
+            json!({ "link_id": "link-pattern-to-window", "processor_type": newest_input_probe }),
+        )
+        .await;
+
+        assert_eq!(
+            tool_names_the_numbered_steps_call(&text),
+            [
+                "add_processor",
+                "graph",
+                "disconnect",
+                "connect",
+                "connect",
+                "graph"
+            ]
+        );
+        assert!(
+            text.contains("`ordered`") && text.contains("`newest`"),
+            "the recipe must say which two profiles forced the order:\n{text}"
+        );
+    }
+
+    /// A live channel keeps the subscriber buffer it was created with, so an
+    /// `ordered` consumer cannot replace a `newest` one on a running source.
+    /// Proven on the rig: the engine's `connect` answers
+    /// `DoesNotSupportRequestedMinBufferSize`.
+    #[tokio::test]
+    async fn inserting_a_type_that_queues_deeper_than_the_links_channel_is_refused_by_name() {
+        let ordered_input_probe = register_a_sole_input_probe_once("ordered");
+
+        let error = rpc_error(
+            stub_serving_two_linked_processors(),
+            "prompts/get",
+            json!({
+                "name": "insert_processor_between_linked_processors",
+                "arguments": { "link_id": "link-pattern-to-window", "processor_type": ordered_input_probe }
+            }),
+        )
+        .await;
+
+        assert_eq!(error["code"], -32602, "{error}");
+        let message = error["message"].as_str().unwrap();
+        assert!(
+            message.contains("`ordered`")
+                && message.contains("`newest`")
+                && message.contains("queues deeper"),
+            "the refusal must name both profiles and why: {message}"
+        );
+    }
+
+    /// A class the agent just wrote is not in the catalog until its first add,
+    /// so the recipe cannot see its profile; the note must carry the depth
+    /// rule itself, or the fallback it offers is the refused re-open.
+    #[tokio::test]
+    async fn an_insert_of_an_uncatalogued_type_says_when_to_stop_and_how_to_restore_the_link() {
+        let text = prompt_text(
+            stub_serving_two_linked_processors(),
+            "insert_processor_between_linked_processors",
+            json!({ "link_id": "link-pattern-to-window", "processor_type": "effects:WrittenJustNow" }),
+        )
+        .await;
+
+        assert!(
+            text.contains("If it reads `ordered` where `window` (id `WindowSinkId`) reads port `video` `newest`")
+                && text.contains("`remove_processor` the new node and stop"),
+            "the note must name the deeper profile that cannot take and say to stop:\n{text}"
+        );
+        assert!(
+            text.contains(
+                "`connect` `pattern` (id `PatternSourceId`) port `video` to `window` (id `WindowSinkId`) port `video` again"
+            ),
+            "the note must say how to restore the replaced link:\n{text}"
+        );
+    }
+
+    #[tokio::test]
+    async fn inserting_into_a_link_whose_target_takes_one_inbound_link_removes_the_link_first() {
+        let runtime = ControlPlaneMcpDispatchStubRuntime::new();
+        let mut graph = two_linked_processors_graph();
+        graph["nodes"][1]["ports"]["inputs"][0]["delivery_profile"] = json!("ordered");
+        graph["nodes"][1]["ports"]["inputs"][0]["audio_window"] =
+            json!({ "resolved_from": "match_device" });
+        *runtime.exported_graph.lock() = graph;
+
+        let text = prompt_text(
+            Arc::new(runtime),
+            "insert_processor_between_linked_processors",
+            json!({ "link_id": "link-pattern-to-window", "processor_type": "effects:NeverImported" }),
+        )
+        .await;
+
+        assert_eq!(
+            tool_names_the_numbered_steps_call(&text),
+            [
+                "add_processor",
+                "graph",
+                "disconnect",
+                "connect",
+                "connect",
+                "graph"
+            ]
+        );
+        assert!(text.contains("audio window contract"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn a_new_consumer_reading_another_profile_than_the_port_already_feeds_is_refused_by_name()
+    {
+        let ordered_input_probe = register_a_sole_input_probe_once("ordered");
+
+        let error = rpc_error(
+            stub_serving_two_linked_processors(),
+            "prompts/get",
+            json!({
+                "name": "fan_output_to_another_consumer",
+                "arguments": { "from_processor_id": "PatternSourceId", "from_port": "video", "processor_type": ordered_input_probe }
+            }),
+        )
+        .await;
+
+        assert_eq!(error["code"], -32602, "{error}");
+        let message = error["message"].as_str().unwrap();
+        assert!(
+            message.contains("`ordered`") && message.contains("`newest`"),
+            "the refusal must name both profiles: {message}"
         );
     }
 }

@@ -363,13 +363,19 @@ fn surface_exchange_failure_response(failure: &Error) -> Response {
     )
 )]
 pub(crate) async fn get_registry() -> Json<RegistryResponse> {
+    Json(processor_catalog_of_this_process())
+}
+
+/// Every processor type this process has registered, rendered as the catalog
+/// `/api/registry` and the MCP catalog resource both serve.
+pub(crate) fn processor_catalog_of_this_process() -> RegistryResponse {
     let processors: Vec<ProcessorDescriptorOutput> = PROCESSOR_REGISTRY
         .list_registered()
         .into_iter()
         .map(|d| ProcessorDescriptorOutput::from(&d))
         .collect();
 
-    Json(RegistryResponse { processors })
+    RegistryResponse { processors }
 }
 
 pub(crate) async fn get_openapi_spec(
