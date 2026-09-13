@@ -71,9 +71,78 @@ in the frame counts: over one 1080p run the passthrough camera wrote 1325 frames
 while the inverted one wrote 523 — and both sinks' dropped-frame counters read
 zero, so neither was outrun. The effect is simply slower, because a 1920×1080
 frame goes out to the host and back for it.
-An effect that stays on the GPU — a compute kernel, or a graphics pass as
-`examples/camera-python-effects` writes them — does not pay that, and the two
-cameras keep pace.
+An effect that stays on the GPU does not pay that — `ShaderEffect`, below, is
+one.
+
+## One host, many looks
+
+`processors/shader_effect.py` is an effect written once. It takes a fragment
+shader as config, and the shader *is* the look — the engine compiles it at
+`setup()` and draws it over every frame as one fullscreen pass, so the pixels
+never leave the GPU. Three looks ship in `processors/shaders/` to start from:
+`grayscale.frag`, `vignette.frag` and `pixelate.frag`.
+
+```python
+from processors.shader_effect import SHIPPED_SHADERS_DIRECTORY, ShaderEffect
+
+vignette = rt.add(
+    ShaderEffect,
+    config={"fragment_glsl": (SHIPPED_SHADERS_DIRECTORY / "vignette.frag").read_text()},
+)
+```
+
+A new look is a paragraph of GLSL, not a processor. The shader samples the
+frame as a `sampler2D` named `upstream_frame` (or whatever
+`sampled_input_binding_name` in the config says), may read `screen_uv` at
+location 0 — 0..1 across the frame from the top left — and writes one colour:
+
+```glsl
+#version 450
+layout(location = 0) in vec2 screen_uv;
+layout(location = 0) out vec4 painted_colour;
+layout(set = 0, binding = 0) uniform sampler2D upstream_frame;
+
+void main() {
+    vec4 source = texture(upstream_frame, screen_uv);
+    painted_colour = vec4(source.bgr, source.a);
+}
+```
+
+A shader that does not compile never gets as far as a frame: the effect is
+refused at `setup()` with the compiler's own diagnostic in `streamlib logs`,
+and every other processor in the graph keeps running.
+
+The ports are the inverting effect's, so a look takes its place without
+touching anything else. **Into the running app, over MCP**, that is one remove
+and one add — `ShaderEffect` is importable as
+`processors.shader_effect:ShaderEffect` from this directory, which is what
+`add_processor` needs:
+
+1. `remove_processor` with the `InvertingEffect`'s id from `graph`;
+2. `add_processor` with `{"type": "processors.shader_effect:ShaderEffect",
+   "config": {"fragment_glsl": "…"}}`;
+3. `connect` the camera's `video` to its `video_from_upstream`, and its
+   `video_to_downstream` to the inverted sink's `video`.
+
+To stack a look on top of the inversion instead, the node's
+`insert_processor_between_linked_processors` prompt splices one into the link
+between the effect and its sink. Swapping one look for another is the same
+remove and add again. The camera, both sinks and every other processor
+keep running through it — only the second camera goes without new frames for
+the moment the splice takes, under a second on a 640×480 feed — and at that
+size the effect keeps the source's 30 fps.
+
+Each frame is copied device-to-device into a texture the effect owns before the
+pass samples it: a camera publishes buffer-backed frames, and a draw binds
+texture-backed ones. `cupy` does nothing in the module but that copy.
+
+The tests in `tests/` run each shipped look over a known pattern and check a
+pixel against the same maths done on the CPU, and check that a broken shader is
+refused. They boot an engine and build kernels, so they need an NVIDIA GPU:
+
+```bash
+uv run pytest
+```
 
 ## Run it
 
