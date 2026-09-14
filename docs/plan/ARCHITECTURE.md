@@ -2035,7 +2035,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   machine-global scan paths; the lane costs nothing when unused (no `DT_NEEDED`
   entries, no import-time work). [audio-subsystem]
 
-## Networking — transport, moq, webrtc — IN-FLIGHT
+## Networking — transport, runtime mesh, moq, webrtc — IN-FLIGHT
 
 - **DECIDED** — Cross-language interop happens on the wire between nodes, as
   self-describing bags — never in-graph. [importable-python-library — SHIPPED #1715]
@@ -2049,9 +2049,9 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   extensions. The one expected exception to "leaves the runtime" is a runtime capability
   the moved code turns out to need, which is exposed as engine code — a split of concerns,
   expected to be rare. Zenoh is new work rather than a move and is its own later change;
-  the cross-host fabric stays OPEN below. MoQ and WebRTC are edge source/sink processors
+  the runtime mesh is decided below. MoQ and WebRTC are edge source/sink processors
   ingesting and egressing external streams at a runtime boundary; they are not the
-  runtime-to-runtime fabric. The held consumers `packages/{moq,webrtc}` and
+  runtime mesh. The held consumers `packages/{moq,webrtc}` and
   `examples/{moq-roundtrip,webrtc-cloudflare-stream,whep-player}` resolved through this
   change and are gone — mined, replaced or deleted per §Consumers.
   [extension-model; networking-extension-wheels — SHIPPED #2153]
@@ -2362,8 +2362,70 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   before. The `cmaf` arm and its `moq-sub` read are unchanged.
   [moq-data-tracks — SHIPPED #2174]
   <!-- verify: pytest packages/streamlib-moq/tests/test_data_track_round_trip.py -->
-- **OPEN** — Later work, after the move: mesh discovery and the cross-host fabric
-  (Zenoh).
+- **DECIDED** — Runtimes on different machines form a runtime mesh over Zenoh, and the mesh
+  is engine transport: always on, beside iceoryx2, in the app process. It is not a processor,
+  not a built-in, not an extension wheel, and never upstream iceoryx2's tunnel or gateway.
+  Every runtime opens one Zenoh session when it starts and closes it inside the shutdown
+  budget; helper processes never open one. A link carries the same way wherever its ends
+  are: a link whose ends share a runtime rides iceoryx2, a link between runtimes rides Zenoh,
+  chosen by the engine from the link's ends, and no processor can tell which. A runtime
+  that cannot open its session runs local-only and says so once; the mesh never fails a
+  runtime's start. Easy, automatic data exchange between runtimes is runtime capability.
+  [runtime-mesh]
+- **DECIDED** — A runtime announces itself on the mesh and discovers other runtimes
+  automatically: peer-to-peer discovery is on by default, and explicit peers or a Zenoh
+  router serve networks that multicast discovery does not cross. [runtime-mesh]
+- **DECIDED** — Everything a runtime puts on the mesh lives under a mesh name, `default`
+  unless the runtime names another, so runtimes join everything reachable out of the box and
+  groups sharing one network separate by naming different meshes. There is no switch that
+  turns the mesh off; a runtime is isolated by a mesh name, explicit peers, or discovery
+  turned off. Stated as the posture for now, not a permanent default. [runtime-mesh]
+- **DECIDED** — A port on the mesh is addressed `<runtime name>/<display name>/<port>`. The
+  runtime name belongs to the runtime rather than to its control plane, defaults to
+  `<hostname>-<app directory>`, is stable across runs, and is unique within a mesh: a runtime
+  whose name is already live on the mesh refuses to start by name, except over a runtime of
+  that name on the same host whose process is gone. The display name — already unique within
+  a graph — is the processor's part of the address, so renaming a processor re-addresses it;
+  identity stays the class import path. Per-run processor ids and cuid2 channel names never
+  appear on the mesh. [runtime-mesh]
+- **DECIDED** — A bag's top-level `surface_id` crosses the mesh transparently, for now: the
+  sending runtime resolves it locally and sends the frame's pixels with what the receiver
+  needs to rebuild them, and the receiving runtime writes the pixels into a freshly minted
+  local surface and hands the bag on carrying that local `surface_id`. No surface id, lease,
+  lifetime state or write-back crosses. The `surface_id` key is a stand-in the general
+  mechanism replaces in a later release. [runtime-mesh]
+- **DECIDED** — The mesh carries no authentication or access control in this work; security
+  is its own later pass, and the auth posture OPEN under §Control plane & observability owns
+  it. [runtime-mesh]
+- **DECIDED** — Any runtime on the mesh may create a remote link: a receiver pulling another
+  runtime's output into its own input, a sender pushing its output into another runtime's
+  input, or a third runtime wiring two others. The runtime that owns the input end applies the
+  link through the same `connect` operation and the same refusals a local link meets, and the
+  requesting runtime receives that outcome. The request travels over the mesh, so neither end
+  needs a control plane, and `graph` on the input's runtime shows which runtime created the
+  link. Until the security pass, any runtime on the mesh may wire. [runtime-mesh]
+- **DECIDED** — A remote link naming a runtime that is not on the mesh waits and wires when
+  that runtime appears; a runtime that is present but offers no such processor or port refuses
+  the link by name, listing what it does offer; and a link whose remote runtime leaves returns
+  to waiting and restarts its loss count when the runtime returns. A sending runtime does no
+  network work and copies no frame for a port until a remote link to that port exists.
+  [runtime-mesh]
+- **DECIDED** — Stamps cross the mesh unchanged — the frame header's and every stamp in the
+  bag — carrying the identity of the clock that produced them, and a stamp is never compared
+  against one from another clock. The one monotonic clock of §Media I/O is therefore one
+  clock per machine. [runtime-mesh]
+- **DECIDED** — No link ever blocks a producer across the mesh either: a send the network
+  cannot take is dropped rather than waited for, and every bag lost between two runtimes is
+  counted on its remote link in `graph`, beside the drops its ports already count. Notify
+  services, the runtime event bus, request-response and blackboard never cross the mesh.
+  [runtime-mesh]
+- **DECIDED** — `graph` carries the runtime's mesh peers, and `streamlib nodes` lists mesh
+  peers beside the nodes in the local registry. A runtime that hosts no control plane still
+  joins the mesh and carries remote links; it is not drivable remotely. [runtime-mesh]
+- **OPEN** — A common clock across machines: intended, do not build until designed. Direction:
+  runtimes on a mesh negotiate a shared network time (PTP, NTP or similar) so stamps from
+  different machines become comparable; until then the per-clock rule above stands.
+  [runtime-mesh]
 
 ## Language SDKs & parity — SHIPPED
 <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py -->

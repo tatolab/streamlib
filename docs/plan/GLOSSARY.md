@@ -39,9 +39,22 @@ engine runs once in every process taking an engine role. _Avoid_: "plugin init",
 "entry point" for the callable (that is how it is declared, not what it is).
 
 **Edge I/O processor**: a source or sink processor that ingests or egresses an
-external-world stream at a runtime boundary — WebRTC, MoQ, raw UDP. Not the
-runtime-to-runtime fabric. _Avoid_: "transport processor", "network transport" (that is
-the fabric's word).
+external-world stream at a runtime boundary — WebRTC, MoQ, raw UDP. Not the runtime mesh.
+_Avoid_: "transport processor", "network transport" (runtime-to-runtime transport is the
+**runtime mesh**).
+
+**Runtime mesh**: the runtimes that have discovered each other over Zenoh under one mesh
+name, carrying remote links as engine transport beside iceoryx2 — always on, never a
+processor or an extension. _Avoid_: "fabric" (retired for this term), "gateway", "cluster",
+"federation".
+
+**Remote link**: a link whose output and input ports belong to different runtimes on the
+runtime mesh, addressed by runtime name, display name and port. _Avoid_: "network link",
+"bridge", "export".
+
+**Mesh peer**: another runtime on the same runtime mesh, whether or not it hosts a control
+plane. _Avoid_: "node" for a peer merely seen on the mesh (a node is reachable over its
+control plane).
 
 **Capability extension**: an extension wheel's support code — declared by a standard entry
 point in its `pyproject.toml` that pip records and the engine runs once at startup, like
@@ -90,7 +103,8 @@ with its description, config schema and ports — served over the control plane.
 "registry" for the served view (the registry is the process-global table behind it).
 
 **Node**: a live runtime reachable over its control plane; discovered via the per-user
-on-disk registry. _Avoid_: "instance", "server".
+on-disk registry. A runtime on the mesh without a control plane is a **mesh peer**, not a
+node. _Avoid_: "instance", "server".
 
 **Processor**: the unit of pipeline computation — a Python class (`@processor`) or a
 Rust type (`#[processor]`) — wired by ports. Its identity is the class itself, named by
@@ -99,8 +113,8 @@ side-effect-safe module; a class defined in the entry file (`__main__:<Type>`) i
 wiring error. _Avoid_: an authored `@org/package/Type` name.
 
 **Display name**: an instance's human-facing label — passed at `add`, prefixing its log
-records, defaulting to the class's short name. Never an identity. _Avoid_: "processor
-name", "id".
+records, defaulting to the class's short name, and the processor's part of its address on
+the runtime mesh. Never an identity. _Avoid_: "processor name", "id".
 
 **Port**: a processor's named attachment point for a link. Declares name, description,
 and — on an input — delivery profile; never a type. _Avoid_: "channel" for the port
