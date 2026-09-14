@@ -25,7 +25,7 @@ egress and ingress will join running channels of any profile and wire and unwire
 
 **Precondition.** Every entry this change implements is DECIDED: `:717`, `:2196`, `:2501`, and
 the late-joiner sentence at `:2573-2574`, and the node registry at `:2625`. Two OPENs are left untouched:
-- the windowed-connect OPEN at `:1519`, which belongs to `loss-visibility`;
+- the windowed-connect OPEN at `:1523`, which belongs to `loss-visibility`;
 - the auth OPEN at `:2708`.
 
 The align classified two items as needing no plan text (PR #2258 body): the per-user iceoryx2

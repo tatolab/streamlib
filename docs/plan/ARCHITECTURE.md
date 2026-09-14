@@ -435,7 +435,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   [consumer-tree-disposition — SHIPPED; a standing convention, and by the same decision
   the showcase carries no CI check to run]
 
-## Processor model & scheduling — IN-FLIGHT (→ local-transport-hardening)
+## Processor model & scheduling — IN-FLIGHT (→ local-transport-hardening, loss-visibility)
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a bag
   (self-describing msgpack named map). The engine has no type layer: ports carry no
@@ -996,7 +996,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   unbuilt engine capabilities rather than Python-reach gaps; equalising the construction
   surface with no pass to render against would buy nothing.
 
-## Media I/O — camera, display, audio, codecs — IN-FLIGHT
+## Media I/O — camera, display, audio, codecs — IN-FLIGHT (→ loss-visibility)
 
 - **DECIDED** — First-party camera, display, and audio are native built-in processors
   in the engine tree, statically linked into the wheel — pre-built named blocks
@@ -1516,15 +1516,15 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   profile's depth, never to the contract's own depth, and a windowed port connected live onto
   a channel created smaller than that cap is refused by name. [the flush count, the ring cap
   and the live refusal — loss-visibility]
-- **OPEN** — Whether a windowed port connected live onto a channel created smaller than the
-  windowed cap should instead wire at that channel's depth, with its ring overwrites counted,
-  once overwrite counting has shipped. Until then it is refused as the entry above states.
-  [loss-visibility]
   [audio-port-window-contract — SHIPPED #2033]
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::resolved_audio_window_contract::tests::the_profiles_depth_is_a_floor_no_contract_undercuts -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::resolved_audio_window_contract::tests::a_one_second_window_is_sized_past_the_profiles_depth_by_its_own_quanta -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::audio_window_stage_tests::a_single_evicted_block_displaces_the_stamps_enough_to_flush -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::audio_window_stage_tests::a_full_mailbox_that_still_cannot_make_a_window_says_so_once -->
+- **OPEN** — Whether a windowed port connected live onto a channel created smaller than the
+  windowed cap should instead wire at that channel's depth, with its ring overwrites counted,
+  once overwrite counting has shipped. Until then it is refused as the entry above states.
+  [loss-visibility]
 - **DECIDED** — The resampler is `rubato` — pure Rust, MIT, adding no `DT_NEEDED` entry —
   and the portability gate stays the pass/fail: the shipped `_engine.abi3.so` names the
   same five host libraries with the resampler in as without it. Its three adapter
