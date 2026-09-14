@@ -1,9 +1,9 @@
 # StreamLib JSONL logging schema
 
 This is the **durable interface contract** for logs emitted by the
-StreamLib runtime. Every line in
-`<STREAMLIB_HOME>/.streamlib/logs/<runtime_id>-<started_at>.jsonl` is one
-serialized [`RuntimeLogEvent`][rs]. Downstream consumers — `streamlib-cli
+StreamLib runtime. Every line of every segment under
+`<STREAMLIB_HOME>/.streamlib/logs/` (see [Files and rotation](#files-and-rotation))
+is one serialized [`RuntimeLogEvent`][rs]. Downstream consumers — `streamlib-cli
 logs`, polyglot SDKs, the future orchestrator — depend on this shape.
 
 **Schema changes are expensive.** Adding a new optional field is fine;
@@ -19,6 +19,43 @@ Each JSONL line is a UTF-8 JSON object with no trailing comma, followed
 by `\n`. Lines are newline-aligned by construction — batched flushes
 only write whole records, so a hard crash mid-batch leaves at most the
 last in-memory batch missing (see [Durability](#durability) below).
+
+## Files and rotation
+
+One runtime instance writes one or more **segments**, all in
+`<STREAMLIB_HOME>/.streamlib/logs/`:
+
+| Segment | File name |
+| --- | --- |
+| Active — the one being written | `<runtime_id>-<started_at_millis>.jsonl` |
+| Rotated | `<runtime_id>-<started_at_millis>.<seq>.jsonl` |
+
+- `started_at_millis` is the wall-clock start of the runtime instance, so a
+  restart under a pinned `STREAMLIB_RUNTIME_ID` starts a new set of segments.
+- The active segment always keeps the un-numbered name. When it holds
+  `STREAMLIB_LOG_ROTATE_BYTES` or more after a flush, the writer renames it to
+  the next `<seq>` and reopens the active name empty. `seq` starts at `1` and
+  increments per rotation, so a higher `seq` holds newer records and the active
+  segment is newer than every rotated one.
+- `seq` is separated by a **dot**, never a dash: `runtime_id` may itself contain
+  dashes and dots, while `started_at_millis` and `seq` are always decimal digits.
+  An active stem always ends in `-<digits>`, so the text after its last dot is
+  never all digits and the two shapes cannot be confused.
+- Rotation happens only between whole batches, so every segment ends on a
+  newline, no record is split across two segments, and no record appears in two.
+  A segment can therefore pass the threshold by up to one batch.
+- Retention keeps at most `STREAMLIB_LOG_RETAIN_SEGMENTS` segments per runtime
+  instance, **the active one included**; each rotation deletes the rotated
+  segment that falls outside it. Rotation and retention never `fsync`; the
+  durability contract below applies per batch as before, and a clean shutdown
+  never rotates.
+- The `dropped=N` synthetic record counts per runtime, not per segment.
+
+To read a runtime in order: its rotated segments by ascending `seq`, then the
+active segment. A reader following the active segment detects a rotation when
+the active name stops pointing at the file it holds open, finishes that file,
+reads any segments rotated since, and reopens the active name —
+`streamlib logs --follow` does this.
 
 ## Fields
 
@@ -108,6 +145,8 @@ type.
 | `STREAMLIB_LOG_BATCH_MS` | `100` | Time threshold for JSONL flush. |
 | `STREAMLIB_LOG_CHANNEL_CAPACITY` | `65536` | Bounded MPMC channel depth. Drop-oldest when full. |
 | `STREAMLIB_LOG_FSYNC_ON_EVERY_BATCH` | `0` | When `1`, `fdatasync` after every size/time-triggered flush. Massive throughput cost; only enable when the operating environment requires per-batch durability. |
+| `STREAMLIB_LOG_ROTATE_BYTES` | `104857600` (100 MiB) | Size at which the active segment rotates. `0` never rotates, so one segment grows for the runtime's life. |
+| `STREAMLIB_LOG_RETAIN_SEGMENTS` | `10` | Segments kept per runtime instance, the active one included. `0` keeps every segment. |
 
 ## Example
 
