@@ -136,7 +136,10 @@ impl JsonlBatchedWriter {
         // (EMFILE, ENOSPC) leaves the active name where it was. `set_len` clears
         // a replacement a crash left behind, since std refuses append + truncate.
         let replacement_file = open_segment_for_append(&replacement_path)?;
-        replacement_file.set_len(0)?;
+        if let Err(clear_failure) = replacement_file.set_len(0) {
+            let _ = std::fs::remove_file(&replacement_path);
+            return Err(clear_failure);
+        }
         if let Err(rename_failure) = std::fs::rename(&self.active_segment_path, &rotated_path) {
             let _ = std::fs::remove_file(&replacement_path);
             return Err(rename_failure);
@@ -199,6 +202,7 @@ fn highest_rotated_segment_sequence_on_disk(active_segment_path: &Path) -> io::R
     }
     Ok(highest_rotated_sequence)
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
