@@ -535,16 +535,18 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   sample reaches the send, unless the send fails before delivering to anyone; a bag refused
   at the ceiling or never loaned consumes none. Each subscriber keeps the last number it
   received per producing publisher, the first sample after wiring its baseline, so a
-  restarted producer is never read as a gap; a jump is added to that inbound link's
-  dropped-bag count, on `ordered` ports only, since a `newest` port passing over bags is the
+  restarted producer is never read as a gap; the numbers a jump skips — the new number
+  minus the last, minus one — are added to that inbound link's dropped-bag count, on
+  `ordered` ports only, since a `newest` port passing over bags is the
   profile working. The number is engine-internal: no processor reads it and no bag carries
   it. Stated residual: a bag lost after a link's last receive and before its disconnect is
   not counted. [loss-visibility]
 - **DECIDED** — A helper-placed destination's per-link counts reach `graph`. The parent
   creates one blackboard per helper spawn; the helper is its only writer, one entry per
   inbound link holding that link's dropped-bag count, and the parent reads it whenever
-  `graph` renders, without waiting on the child. The counts survive the helper crashing, and
-  a respawned helper gets a fresh board. A helper's write refused at the per-link ceiling is
+  `graph` renders, without waiting on the child. The last counts a crashed helper wrote stay
+  readable; a dead writer can no longer update its entries, so a respawned helper gets a
+  fresh board. A helper's write refused at the per-link ceiling is
   counted the same way. The node's `metrics` key then renders for a helper-placed processor
   as it does for an app-process one. [loss-visibility]
   <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_helper_placed_destinations_node_carries_no_metrics_rather_than_a_zero -->
@@ -721,10 +723,13 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   Native code a callback is inside is interrupted only when it returns. Budgets are
   engine-chosen and not authorable. A processor's descendants die with it: its process group
   goes at every helper exit — shutdown, removal, or a crash the engine detects by the process
-  itself rather than by its socket — and a helper inherits no descriptor beyond its standard
-  streams and its escalate socket, so nothing it starts can hold the app's output open or keep
-  issuing its privileged operations. A descendant that leaves the process group on purpose is
-  the stated residual, holding no engine descriptor. [shutdown-ladder]
+  itself rather than by its socket — and a helper inherits no descriptor beyond its escalate
+  socket and its standard streams, which are pipes the engine reads, never the app's own
+  output. At every helper exit the engine shuts its end of the escalate socket and stops
+  waiting on those pipes, so nothing the helper started can hold the app's output open, delay
+  the app's exit, or keep issuing the helper's privileged operations. A descendant that leaves
+  the process group on purpose is the stated residual: it survives, holding none of the app's
+  descriptors and reaching no engine operation. [shutdown-ladder]
   <!-- verify: sdk/streamlib-python-wheel/tests/test_helper_placement.py -->
 - **DECIDED** — The MVP edit loop is re-running `dev` (warm restart is sub-second by
   construction). Reload-on-save is a nicety, not MVP-gating, and when built it is

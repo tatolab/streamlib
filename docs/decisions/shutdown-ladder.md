@@ -15,8 +15,10 @@ will not stop is handled.
   callback still running after one second is interrupted with `KeyboardInterrupt`, and
   `stop()` and `teardown()` still run. `teardown()` has five seconds. Then the helper's
   process group is terminated, killed and reaped.
-- **Descendants die with the processor.** A helper's descendants go with it, and a helper
-  inherits no descriptor beyond its standard streams and its escalate socket.
+- **Descendants die with the processor.** A helper's descendants go with it. A helper
+  inherits no descriptor beyond its escalate socket and its standard streams, which are
+  pipes the engine reads, never the app's own output. At helper exit the engine shuts its
+  end of the escalate socket and stops waiting on those pipes.
 - **Repeated interrupts escalate.** `rt.run()` owns SIGINT, SIGTERM and SIGHUP through the
   whole teardown. The first interrupt is graceful, the second forces, and the third kills
   every helper group and exits with status 130.
@@ -51,7 +53,8 @@ will not stop is handled.
   is lost, which `teardown()` can observe.
 - An abandoned native thread keeps the engine alive beneath it until the process exits, and
   `run()` raises naming it rather than returning cleanly.
-- A descendant that deliberately leaves its process group escapes the kill. It holds no
-  engine descriptor, so it cannot stall the app's output or issue privileged operations.
+- A descendant that deliberately leaves its process group escapes the kill. It holds none
+  of the app's descriptors, and the escalate socket it may have inherited is already shut at
+  the engine's end, so it cannot stall the app's output or issue privileged operations.
 - A process stuck in uninterruptible sleep inside a GPU driver cannot be killed from user
   space. The watchdog ends the app around it where the kernel allows.

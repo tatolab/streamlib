@@ -33,7 +33,9 @@ processor is unchanged either way.
   Nothing is sent for a port no remote link reads.
 - **Stamps.** Stamps cross unchanged, tagged with the clock that produced them, and are never
   compared across clocks. A negotiated network clock (PTP, NTP or similar) is intended later.
-- **Loss and scope.** A send the network cannot take is dropped and counted per remote link.
+- **Loss and scope.** A send the network cannot take is dropped and counted per remote link,
+  by a gap in a sequence number the sending runtime carries in each mesh message's metadata,
+  never in the bag.
   Notify services, the event bus, request-response and blackboard never cross.
 - **Visibility.** `graph` and `streamlib nodes` show mesh peers. A runtime without a control
   plane still carries links.
