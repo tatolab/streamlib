@@ -163,6 +163,8 @@ fn time_triggered_flush_writes_without_size_trigger() {
             batch_bytes: Some(1 << 22),
             channel_capacity: Some(1024),
             fsync_on_every_batch: None,
+            rotate_bytes: None,
+            retain_segments: None,
         },
     };
     let guard = init_for_tests(config).unwrap();
@@ -269,6 +271,8 @@ fn panic_hook_best_effort_flush() {
             batch_bytes: Some(1 << 20),
             channel_capacity: Some(1024),
             fsync_on_every_batch: None,
+            rotate_bytes: None,
+            retain_segments: None,
         },
     };
     let guard = init_for_tests(config).unwrap();
@@ -314,6 +318,8 @@ fn hot_path_is_not_blocked_on_io() {
             batch_bytes: Some(64 * 1024),
             channel_capacity: Some(65_536),
             fsync_on_every_batch: None,
+            rotate_bytes: None,
+            retain_segments: None,
         },
     };
     let _guard = init_for_tests(config).unwrap();
@@ -854,6 +860,8 @@ fn burst_surfaces_dropped_counter_record() {
             // Tiny capacity so the burst forces drops.
             channel_capacity: Some(8),
             fsync_on_every_batch: None,
+            rotate_bytes: None,
+            retain_segments: None,
         },
     };
     let guard = init_for_tests(config).unwrap();
@@ -916,4 +924,63 @@ fn the_pretty_rendering_matches_the_golden_the_python_reader_asserts() {
         "21:04:27.573 [ INFO] [Rabc/rust] streamlib_engine::core::runtime — \
          Creating Runner\n"
     );
+}
+
+#[test]
+#[serial]
+fn a_runtime_logging_past_its_rotation_threshold_keeps_every_retained_record_whole() {
+    reset_for_test();
+    let tmp = TempDir::new().unwrap();
+    set_streamlib_home(&tmp);
+
+    let runtime_id = Arc::new(RuntimeUniqueId::from("RtestRotate"));
+    let config = StreamlibLoggingConfig {
+        service_name: "test".into(),
+        runtime_id: Some(Arc::clone(&runtime_id)),
+        stdout: false,
+        jsonl: true,
+        intercept_stdio: false,
+        tunables: LoggingTunables {
+            batch_ms: Some(25),
+            batch_bytes: Some(2 * 1024),
+            channel_capacity: Some(65_536),
+            fsync_on_every_batch: None,
+            rotate_bytes: Some(8 * 1024),
+            retain_segments: Some(1000),
+        },
+    };
+    let guard = init_for_tests(config).unwrap();
+
+    const EVENT_COUNT: u64 = 2_000;
+    for i in 0..EVENT_COUNT {
+        tracing::info!(i, "rotation-line");
+    }
+
+    let active_segment_path = guard.jsonl_path().unwrap().to_path_buf();
+    drop(guard);
+
+    let segment_paths: Vec<_> = std::fs::read_dir(log_dir())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert!(
+        segment_paths.len() >= 2,
+        "~2 000 records against an 8 KB threshold must rotate; found {segment_paths:?}"
+    );
+    assert!(segment_paths.contains(&active_segment_path));
+
+    let mut rotation_line_indices: Vec<u64> = segment_paths
+        .iter()
+        .flat_map(|path| read_jsonl(path))
+        .filter(|event| event.message == "rotation-line")
+        .map(|event| event.attrs["i"].as_u64().unwrap())
+        .collect();
+    rotation_line_indices.sort_unstable();
+    assert_eq!(
+        rotation_line_indices,
+        (0..EVENT_COUNT).collect::<Vec<_>>(),
+        "every record lands in exactly one segment"
+    );
+
+    clear_streamlib_home();
 }

@@ -64,6 +64,8 @@ fn main() {
             batch_bytes: Some(64 * 1024),
             channel_capacity: Some(65_536),
             fsync_on_every_batch: None,
+            rotate_bytes: None,
+            retain_segments: None,
         },
     };
     let guard = init_for_tests(config).expect("install logging pathway");

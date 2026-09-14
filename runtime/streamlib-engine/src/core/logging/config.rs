@@ -3,9 +3,11 @@
 
 //! Configuration for [`crate::core::logging::init`].
 
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::core::logging::writer::JsonlSegmentRotationPolicy;
 use crate::core::runtime::RuntimeUniqueId;
 
 /// Environment variables read at [`init`](super::init) time.
@@ -20,11 +22,17 @@ pub mod env {
     pub const CHANNEL_CAPACITY: &str = "STREAMLIB_LOG_CHANNEL_CAPACITY";
     /// Force `fdatasync` on every batch flush (default off).
     pub const FSYNC_ON_EVERY_BATCH: &str = "STREAMLIB_LOG_FSYNC_ON_EVERY_BATCH";
+    /// Bytes after which the active JSONL segment rotates; `0` never rotates.
+    pub const ROTATE_BYTES: &str = "STREAMLIB_LOG_ROTATE_BYTES";
+    /// JSONL segments kept per runtime, the active one included; `0` keeps every one.
+    pub const RETAIN_SEGMENTS: &str = "STREAMLIB_LOG_RETAIN_SEGMENTS";
 }
 
 const DEFAULT_BATCH_BYTES: usize = 64 * 1024;
 const DEFAULT_BATCH_MS: u64 = 100;
 const DEFAULT_CHANNEL_CAPACITY: usize = 65_536;
+const DEFAULT_ROTATE_BYTES: u64 = 100 * 1024 * 1024;
+const DEFAULT_RETAIN_SEGMENTS: usize = 10;
 
 /// Configuration passed to [`init`](super::init).
 #[derive(Debug, Clone)]
@@ -63,6 +71,10 @@ pub struct LoggingTunables {
     pub batch_ms: Option<u64>,
     pub channel_capacity: Option<usize>,
     pub fsync_on_every_batch: Option<bool>,
+    /// Bytes after which the active JSONL segment rotates; `Some(0)` never rotates.
+    pub rotate_bytes: Option<u64>,
+    /// JSONL segments kept per runtime, the active one included; `Some(0)` keeps every one.
+    pub retain_segments: Option<usize>,
 }
 
 /// Effective tunables after env var resolution.
@@ -72,6 +84,7 @@ pub(crate) struct ResolvedTunables {
     pub batch_interval: Duration,
     pub channel_capacity: usize,
     pub fsync_on_every_batch: bool,
+    pub segment_rotation: JsonlSegmentRotationPolicy,
 }
 
 impl ResolvedTunables {
@@ -88,11 +101,21 @@ impl ResolvedTunables {
         let fsync_on_every_batch = env_bool(env::FSYNC_ON_EVERY_BATCH)
             .or(tunables.fsync_on_every_batch)
             .unwrap_or(false);
+        let rotate_bytes = env_u64(env::ROTATE_BYTES)
+            .or(tunables.rotate_bytes)
+            .unwrap_or(DEFAULT_ROTATE_BYTES);
+        let retain_segments = env_usize(env::RETAIN_SEGMENTS)
+            .or(tunables.retain_segments)
+            .unwrap_or(DEFAULT_RETAIN_SEGMENTS);
         Self {
             batch_bytes,
             batch_interval: Duration::from_millis(batch_ms),
             channel_capacity,
             fsync_on_every_batch,
+            segment_rotation: JsonlSegmentRotationPolicy {
+                rotate_at_segment_bytes: (rotate_bytes > 0).then_some(rotate_bytes),
+                retained_segment_count: NonZeroUsize::new(retain_segments),
+            },
         }
     }
 }
@@ -156,34 +179,100 @@ fn env_bool(key: &str) -> Option<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
-    #[test]
-    fn defaults_match_spec() {
-        let tunables = ResolvedTunables::from_config(&LoggingTunables::default());
-        assert_eq!(tunables.batch_bytes, 64 * 1024);
-        assert_eq!(tunables.batch_interval, Duration::from_millis(100));
-        assert_eq!(tunables.channel_capacity, 65_536);
-        assert!(!tunables.fsync_on_every_batch);
-    }
-
-    #[test]
-    fn construction_tunables_apply_when_env_unset() {
-        // Ensure env is clean.
+    fn clear_tunable_env() {
         unsafe {
             std::env::remove_var(env::BATCH_BYTES);
             std::env::remove_var(env::BATCH_MS);
             std::env::remove_var(env::CHANNEL_CAPACITY);
             std::env::remove_var(env::FSYNC_ON_EVERY_BATCH);
+            std::env::remove_var(env::ROTATE_BYTES);
+            std::env::remove_var(env::RETAIN_SEGMENTS);
         }
+    }
+
+    #[test]
+    #[serial]
+    fn defaults_match_spec() {
+        clear_tunable_env();
+        let tunables = ResolvedTunables::from_config(&LoggingTunables::default());
+        assert_eq!(tunables.batch_bytes, 64 * 1024);
+        assert_eq!(tunables.batch_interval, Duration::from_millis(100));
+        assert_eq!(tunables.channel_capacity, 65_536);
+        assert!(!tunables.fsync_on_every_batch);
+        assert_eq!(
+            tunables.segment_rotation,
+            JsonlSegmentRotationPolicy {
+                rotate_at_segment_bytes: Some(100 * 1024 * 1024),
+                retained_segment_count: NonZeroUsize::new(10),
+            }
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn construction_tunables_apply_when_env_unset() {
+        clear_tunable_env();
         let tunables = ResolvedTunables::from_config(&LoggingTunables {
             batch_bytes: Some(128),
             batch_ms: Some(5),
             channel_capacity: Some(16),
             fsync_on_every_batch: Some(true),
+            rotate_bytes: Some(4096),
+            retain_segments: Some(3),
         });
         assert_eq!(tunables.batch_bytes, 128);
         assert_eq!(tunables.batch_interval, Duration::from_millis(5));
         assert_eq!(tunables.channel_capacity, 16);
         assert!(tunables.fsync_on_every_batch);
+        assert_eq!(
+            tunables.segment_rotation,
+            JsonlSegmentRotationPolicy {
+                rotate_at_segment_bytes: Some(4096),
+                retained_segment_count: NonZeroUsize::new(3),
+            }
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn the_rotation_env_vars_outrank_the_construction_tunables() {
+        clear_tunable_env();
+        unsafe {
+            std::env::set_var(env::ROTATE_BYTES, "2048");
+            std::env::set_var(env::RETAIN_SEGMENTS, "7");
+        }
+        let tunables = ResolvedTunables::from_config(&LoggingTunables {
+            rotate_bytes: Some(4096),
+            retain_segments: Some(3),
+            ..LoggingTunables::default()
+        });
+        clear_tunable_env();
+
+        assert_eq!(
+            tunables.segment_rotation,
+            JsonlSegmentRotationPolicy {
+                rotate_at_segment_bytes: Some(2048),
+                retained_segment_count: NonZeroUsize::new(7),
+            }
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn zero_turns_rotation_and_retention_off() {
+        clear_tunable_env();
+        unsafe {
+            std::env::set_var(env::ROTATE_BYTES, "0");
+            std::env::set_var(env::RETAIN_SEGMENTS, "0");
+        }
+        let tunables = ResolvedTunables::from_config(&LoggingTunables::default());
+        clear_tunable_env();
+
+        assert_eq!(
+            tunables.segment_rotation,
+            JsonlSegmentRotationPolicy::NEVER_ROTATE
+        );
     }
 }

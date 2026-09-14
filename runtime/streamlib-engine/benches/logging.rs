@@ -56,6 +56,8 @@ fn install_pathway(tmp: &TempDir, runtime_id: &str) -> StreamlibLoggingGuard {
             batch_bytes: Some(64 * 1024),
             channel_capacity: Some(65_536),
             fsync_on_every_batch: None,
+            rotate_bytes: None,
+            retain_segments: None,
         },
     };
     init_for_tests(config).expect("install logging pathway")
@@ -198,6 +200,8 @@ fn bench_burst_drops_surface(c: &mut Criterion) {
                         batch_bytes: Some(1 << 20),
                         channel_capacity: Some(512),
                         fsync_on_every_batch: None,
+                        rotate_bytes: None,
+                        retain_segments: None,
                     },
                 };
                 let guard = init_for_tests(config).expect("install");
