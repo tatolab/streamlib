@@ -32,8 +32,9 @@ the MVP with showable work.
 3. **Inline the constraints** each ticket must respect — copied from the change and the
    plan into the ticket body. Agents don't follow pointer chains reliably; the ticket
    must stand alone. Link the change file by path for context only.
-4. Declare blocking edges. Milestone = the standing MVP umbrella (`MVP`, M39) — never
-   create a per-change milestone.
+4. Declare blocking edges. Milestone = the epic naming the capability this change
+   delivers: reuse that capability's milestone when one exists, create it when none does.
+   A milestone names a product capability, never the change file or an activity.
 5. **Quiz the owner**: a numbered list — title / blocked-by / what it delivers. Iterate
    until they approve the LIST. Hard stop; nothing publishes before the yes.
 6. Publish blockers-first on the `.github/ISSUE_TEMPLATE/` forms via `gh issue create`,
