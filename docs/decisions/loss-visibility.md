@@ -50,6 +50,28 @@ parent.
   meant to hold a whole window. It is headroom for a stalled `process()`: 640 ms at the common
   10 ms block. Anything that still overflows is counted.
 
+## Shape at proposal
+
+Added by `docs/plan/changes/loss-visibility.md`, against iceoryx2 0.9.3.
+
+- **A helper's board is slots, not links.** A blackboard's keys are fixed when it is created, and
+  links are wired live after spawn, so no key can be a link id. The board declares one slot per
+  permitted inbound link. The parent assigns each link a slot and a wiring generation, and the
+  helper writes the generation beside its counts. The parent renders a slot only while the
+  generation matches, which is what keeps a late write from an unwired link off a reused slot.
+  The rejected alternative was a link id in the value: an unbounded string in a fixed-size entry.
+- **A partially delivered send consumes its number.** iceoryx2 does not say which subscribers a
+  failed send reached. Only its two pre-delivery errors are known to have reached none, so only
+  they return the number; any other failure is read as a gap by whoever missed the bag.
+- **The flush and the bag counts share one slot**, so a windowed port on a helper needs no second
+  board.
+- **A write refused at the ceiling is counted on its producer, per output port** (owner,
+  2026-09-14). The refusal happens before the bag belongs to any link and consumes no sequence
+  number, so no destination could corroborate it. One counter at the one send seam serves native
+  and Python producers alike. The rejected alternative added the refusal into every outbound link's
+  count at its destination: it put a link's whole loss in one number, but it needed per-link
+  baselines at the producer and a merge of two processes' counters at render.
+
 ## Consequences
 
 - The iceoryx2 wire gains 8 bytes per sample and a user-header type every opener shares. The
