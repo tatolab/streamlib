@@ -24,7 +24,7 @@ egress and ingress will join running channels of any profile and wire and unwire
   raises, and a `KeyboardInterrupt` delivered inside a callback at shutdown.
 
 **Precondition.** Every entry this change implements is DECIDED: `:717`, `:2196`, `:2501`, and
-the late-joiner sentence at `:2573-2574`. Two OPENs are left untouched:
+the late-joiner sentence at `:2573-2574`, and the node registry at `:2625`. Two OPENs are left untouched:
 - the windowed-connect OPEN at `:1519`, which belongs to `loss-visibility`;
 - the auth OPEN at `:2708`.
 
@@ -45,7 +45,10 @@ at `117486268`, and every commit since touches other code.
   the wheel's `python_processor_link_data_access.rs:239`) and 65 in tests and benches.
 - The tree has no `global_config`, `Node::list` or `try_cleanup_dead_nodes` call, and no
   socket-path budget check.
-- Linux already refuses to start without `XDG_RUNTIME_DIR` (`runtime.rs:1281-1288`).
+- Linux refuses to start without `XDG_RUNTIME_DIR` (`runtime.rs:1281-1288`), so CI sets it by
+  hand (`.github/workflows/python-wheel.yml:172`, `:304`; `release-extension-wheel.yml:112`).
+  The node registry falls back instead, to a temp folder every user shares
+  (`runtime/streamlib-api-server/src/node_registry.rs:117-126`).
 
 **Sizing**
 - A channel's depth is fixed by its first consumer's profile
@@ -153,6 +156,21 @@ dlopen'd cdylib's load handshake. The sentence gains that scope, so it does not 
 helper's handshake, which imports the one wheel and checks that it is the parent's build. No
 dlopen or ABI surface returns.
 
+## MODIFIED: §Control plane & observability `:2625-2628` — the runtime directory always resolves
+
+"The OS's standard per-user runtime directory" becomes one engine-resolved directory shared by
+every piece of StreamLib's live plumbing: the node registry, the surface-sharing socket and the
+iceoryx2 domain. It is `$XDG_RUNTIME_DIR/streamlib/` when that variable is set and non-empty, and
+otherwise `/tmp/streamlib-<uid>/`, which the engine creates owner-only and checks before every use
+as a real directory the uid owns with no group or other bits; a failed check refuses the
+runtime's start by name. macOS always takes the second arm. No StreamLib variable overrides it —
+a container or CI job wanting a particular place sets `XDG_RUNTIME_DIR` — so a runtime starts on a
+desktop, in a container and in CI with nothing set, and the Linux refusal goes. The wheel's
+Python registry reader (`_node_registry.py:58-61`) resolves identically, so discovery agrees.
+What a runtime keeps — logs, caches — stays under the project's `.streamlib/`
+(`core/streamlib_home.rs`); this directory holds only what means nothing once the processes are
+gone. Owner, 2026-09-14.
+
 ## Shutdown ladder: the readings the tree will build
 
 The plan text at `:717-732` and `:2501-2512` is DECIDED. Each point below reads that text where
@@ -217,8 +235,7 @@ ADR.
 - One engine function builds every node's iceoryx2 configuration from the defaults, never from
   the lookup path, and every node and static call uses it.
   - Prefix `sl{uid}_`.
-  - Root `$XDG_RUNTIME_DIR/streamlib/iox2/` on Linux and `/tmp/streamlib-{uid}/iox2/` on macOS,
-    created 0700 and `lstat`-checked as a real directory owned by the uid.
+  - Root `iox2/` inside the runtime directory the MODIFIED entry above resolves.
   - Nodes named `streamlib-runtime/{runtime_id}` and `streamlib-helper/{processor_id}`, which
     are labels, never identities.
   - `SignalHandlingMode::Disabled`, which changes nothing today and guards a future
@@ -232,8 +249,7 @@ ADR.
 - All 67 sites migrate in one PR, with a new source-walking gate refusing `NodeBuilder::new()`
   outside `iceoryx2/node.rs`. The gate covers test modules and benches, unlike every existing
   gate, because a partial migration hangs tests silently across two domains.
-- The unset-`XDG_RUNTIME_DIR` refusal already exists, so this adds no failure mode. Relaxing it
-  for containers is a later change.
+- CI's hand-set `XDG_RUNTIME_DIR` is deleted from the workflows, so CI runs the fallback arm.
 
 **Sizing.**
 - Every data service is created at `ORDERED_DEPTH` (16) through one creation-depth function,
@@ -277,7 +293,7 @@ ADR.
 
 | # | Slice | Blocked by | Proof |
 |---|---|---|---|
-| M1 | Engine-owned domain, node names, budget refusal, helper env var, test override, 67 sites + gate | — (first, alone) | CI: config built from defaults, a CWD `config/iceoryx2.toml` ignored, budget refusal by name, two test processes in disjoint domains; gate green |
+| M1 | One runtime-directory resolver (registry, surface socket, iceoryx2), engine-owned domain, node names, budget refusal, helper env var, test override, 67 sites + gate | — (first, alone) | CI: starts with `XDG_RUNTIME_DIR` unset; a fallback folder that is a symlink or another uid's is refused by name; a CWD `config/iceoryx2.toml` ignored; budget refusal by name; two test processes in disjoint domains; gate green |
 | M2 | Creation depth 16, per-port rings, envelope split, held factories, refusal and mirrors deleted, caps 32+tap / 256, `max_nodes`, borrowed/loaned/history | M1 | CI: a `newest` then an `ordered` consumer of one running port both wire; 33 subscribers from 33 nodes; 256 notifiers from distinct nodes |
 | M3 | `wired` / `wire_failed` reply on its own rpc tag, link state from it | M2 | CI: a helper that cannot open its port leaves the link not `wired`, with the reason; `test_helper_process.py` arm |
 | M4 | Build id in the handshake; protocol version retired | — | CI: a mismatched and an absent id each refused by name before any channel opens |
@@ -306,6 +322,11 @@ These are statements the change makes false; each is a record, not a question:
 - The `run()` docstring in `_engine.pyi:502-503` and its rustdoc.
 
 ## REMOVED
+
+Runtime directory (M1):
+- REMOVED: XDG_RUNTIME_DIR is not set
+- REMOVED: node registry falling back to the system temp dir
+- REMOVED: /tmp/streamlib-runtime-dir
 
 Channel sizing (M2):
 - REMOVED: delivery_profiles_queueing_deeper_than

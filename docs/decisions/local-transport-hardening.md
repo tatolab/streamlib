@@ -18,8 +18,13 @@ Read this before:
 - **The engine owns the iceoryx2 domain.** One engine function builds every node's configuration
   from the library defaults, never from iceoryx2's lookup path (the working directory, the home
   directory, `/etc`).
-  - The domain is per OS user: prefix `sl{uid}_`, rooted in the user's runtime directory and
-    created owner-only.
+  - The domain is per OS user: prefix `sl{uid}_`, rooted in StreamLib's runtime directory.
+- **One runtime directory, and it always resolves.** Everything that means nothing once the
+  processes are gone — the iceoryx2 domain, the surface-sharing socket, the node registry — lives
+  in one directory: `$XDG_RUNTIME_DIR/streamlib/` when that variable is set, otherwise a
+  `/tmp/streamlib-<uid>/` the engine creates owner-only and checks before use as a real directory
+  the uid owns. A failed check refuses the start by name. What a runtime keeps — logs, caches —
+  stays in the project's `.streamlib/`.
   - The engine refuses by name a root that would overrun the Unix-socket path budget.
   - A helper is told the root by its parent, and refuses to start untold.
   - Nodes carry names for inspection, never for identity.
@@ -51,8 +56,17 @@ Read this before:
   crashed runtime's domain.
 - **Deriving the helper's root from the surface-socket variable.** It is Linux-only, and it couples
   two concerns.
-- **A silent `/tmp` fallback on Linux.** It invites squatting, and no user needs it: the runtime
-  already requires the runtime directory.
+- > ~~**A silent `/tmp` fallback on Linux.** It invites squatting, and no user needs it: the
+  > runtime already requires the runtime directory.~~ — Superseded 2026-09-14 by the owner's
+  > ruling that a runtime starts in containers and CI with nothing set. The fallback is checked
+  > (owner-only, a real directory the uid owns), never silent, which closes the squatting hole.
+- **Refusing to start without `XDG_RUNTIME_DIR`.** Containers and CI rarely set it; this repo's
+  own CI sets it by hand only to get past that refusal.
+- **A StreamLib-specific override variable.** A second dial for what `XDG_RUNTIME_DIR` already
+  overrides.
+- **The project's `.streamlib/`.** A nested project path overruns the socket budget (109 bytes for
+  an example in this repo against 63), crash leftovers would accumulate there forever, and a
+  project may sit on a network or bind mount where sockets and locks misbehave.
 - **Sizing a channel by its first consumer's profile.** A running output port then refuses a
   deeper consumer, which contradicts channels sized for a destination that connects later.
 - **Sizing a channel to a windowed port's mailbox depth.** iceoryx2 commits bookkeeping up front:
@@ -76,6 +90,7 @@ Read this before:
 
 ## Consequences
 
+- On the fallback arm, leftovers stay in `/tmp` until reboot rather than logout.
 - The stock `iox2` tool sees StreamLib's services only when given a matching configuration.
 - Every node-construction site, tests and benches included, goes through the engine function. A
   source-walking gate refuses a raw builder anywhere else, because a partial migration hangs tests
