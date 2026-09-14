@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.5](https://github.com/tatolab/streamlib/compare/v0.22.4...v0.22.5) (2026-09-14)
+
+
+### Bug Fixes
+
+* **engine:** free export-pool sentinels on drop and release the device an acceleration-structure buffer held ([#2252](https://github.com/tatolab/streamlib/issues/2252)) ([4c95ef5](https://github.com/tatolab/streamlib/commit/4c95ef50734a6ec405ce7a4c4bf3df367190f61c))
+
 ## [0.22.4](https://github.com/tatolab/streamlib/compare/v0.22.3...v0.22.4) (2026-09-13)
 
 
