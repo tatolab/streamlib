@@ -21,10 +21,12 @@ Read this before:
   - The domain is per OS user: prefix `sl{uid}_`, rooted in StreamLib's runtime directory.
 - **One runtime directory, and it always resolves.** Everything that means nothing once the
   processes are gone — the iceoryx2 domain, the surface-sharing socket, the node registry — lives
-  in one directory: `$XDG_RUNTIME_DIR/streamlib/` when that variable is set, otherwise a
-  `/tmp/streamlib-<uid>/` the engine creates owner-only and checks before use as a real directory
-  the uid owns. A failed check refuses the start by name. What a runtime keeps — logs, caches —
-  stays in the project's `.streamlib/`.
+  in one directory. On Linux it is `$XDG_RUNTIME_DIR/streamlib/` when that variable is set and
+  non-empty; otherwise — empty or unset, and on macOS always — it is a `/tmp/streamlib-<uid>/` the
+  engine creates owner-only and checks as a real directory the uid owns with no group or other
+  bits. The check runs once as the runtime starts, before its first node, socket or registry
+  write, and a failure refuses the start by name. What a runtime keeps — logs, caches — stays in
+  the project's `.streamlib/`.
   - The engine refuses by name a root that would overrun the Unix-socket path budget.
   - A helper is told the root by its parent, and refuses to start untold.
   - Nodes carry names for inspection, never for identity.

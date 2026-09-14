@@ -158,15 +158,15 @@ dlopen or ABI surface returns.
 
 ## MODIFIED: §Control plane & observability `:2625-2628` — the runtime directory always resolves
 
-"The OS's standard per-user runtime directory" becomes one engine-resolved directory shared by
-every piece of StreamLib's live plumbing: the node registry, the surface-sharing socket and the
-iceoryx2 domain. It is `$XDG_RUNTIME_DIR/streamlib/` when that variable is set and non-empty, and
-otherwise `/tmp/streamlib-<uid>/`, which the engine creates owner-only and checks before every use
-as a real directory the uid owns with no group or other bits; a failed check refuses the
-runtime's start by name. macOS always takes the second arm. No StreamLib variable overrides it —
-a container or CI job wanting a particular place sets `XDG_RUNTIME_DIR` — so a runtime starts on a
-desktop, in a container and in CI with nothing set, and the Linux refusal goes. The wheel's
-Python registry reader (`_node_registry.py:58-61`) resolves identically, so discovery agrees.
+"The OS's standard per-user runtime directory" becomes one engine-resolved directory for the node
+registry, the surface-sharing socket and the iceoryx2 domain. On Linux it is
+`$XDG_RUNTIME_DIR/streamlib/` when that variable is set and non-empty, and otherwise — empty or
+unset, and on macOS always — `/tmp/streamlib-<uid>/`, created owner-only and checked as a real
+directory the uid owns with no group or other bits. The check runs once as the runtime starts,
+before its first node, socket or registry write, and a failure refuses the start by name; every
+user takes the resolved directory. No StreamLib variable overrides it — a container or CI job
+sets `XDG_RUNTIME_DIR` — so a runtime starts anywhere with nothing set, and the Linux refusal
+goes. The wheel's Python registry reader (`_node_registry.py:58-61`) resolves identically.
 What a runtime keeps — logs, caches — stays under the project's `.streamlib/`
 (`core/streamlib_home.rs`); this directory holds only what means nothing once the processes are
 gone. Owner, 2026-09-14.
@@ -293,7 +293,7 @@ ADR.
 
 | # | Slice | Blocked by | Proof |
 |---|---|---|---|
-| M1 | One runtime-directory resolver (registry, surface socket, iceoryx2), engine-owned domain, node names, budget refusal, helper env var, test override, 67 sites + gate | — (first, alone) | CI: starts with `XDG_RUNTIME_DIR` unset; a fallback folder that is a symlink or another uid's is refused by name; a CWD `config/iceoryx2.toml` ignored; budget refusal by name; two test processes in disjoint domains; gate green |
+| M1 | One runtime-directory resolver (registry, surface socket, iceoryx2), engine-owned domain, node names, budget refusal, helper env var, test override, 67 sites + gate | — (first, alone) | CI: starts with `XDG_RUNTIME_DIR` unset, its registry entry found through the Python reader and gone after a clean teardown; a fallback folder that is a symlink, another uid's, or mode 0755 or 0770 is refused by name before any node; a CWD `config/iceoryx2.toml` ignored; budget refusal by name; two test processes in disjoint domains; gate green |
 | M2 | Creation depth 16, per-port rings, envelope split, held factories, refusal and mirrors deleted, caps 32+tap / 256, `max_nodes`, borrowed/loaned/history | M1 | CI: a `newest` then an `ordered` consumer of one running port both wire; 33 subscribers from 33 nodes; 256 notifiers from distinct nodes |
 | M3 | `wired` / `wire_failed` reply on its own rpc tag, link state from it | M2 | CI: a helper that cannot open its port leaves the link not `wired`, with the reason; `test_helper_process.py` arm |
 | M4 | Build id in the handshake; protocol version retired | — | CI: a mismatched and an absent id each refused by name before any channel opens |
