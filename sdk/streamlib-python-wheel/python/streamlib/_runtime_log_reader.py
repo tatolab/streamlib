@@ -483,10 +483,11 @@ def _lines_of_runtime_log_instance(
     """Every line of one runtime instance's log, oldest segment first.
 
     With `follow`, yields `None` each time the read reaches the live edge with
-    nothing new, so the caller can look for a restart and wait. Rotation renames
-    the active segment and reopens its name, which the held file is checked against
-    at every edge: once they part, the held file is drained, the rotated segments
-    newer than it are read, and the new active segment is opened.
+    nothing new, so the caller can look for a restart and wait. Rotation moves the
+    active segment to a numbered name and puts a new file under the active name,
+    which is checked against the held file at every edge: once it names a different
+    file, the held file is drained, the rotated segments newer than it are read, and
+    the new active segment is opened.
     """
     active_segment_path = log_file.path
     active_segment_file, rotation_sequences = _open_active_segment_after_listing(

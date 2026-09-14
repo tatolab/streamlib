@@ -35,6 +35,28 @@ pub(crate) fn rotated_runtime_log_segment_path(
     active_segment_path.with_extension(format!("{rotation_sequence}.jsonl"))
 }
 
+/// The rotation sequence `candidate_file_name` carries when it names a rotated
+/// segment of `active_segment_path` — the inverse of [`rotated_runtime_log_segment_path`].
+pub(crate) fn rotated_runtime_log_segment_sequence(
+    active_segment_path: &Path,
+    candidate_file_name: &str,
+) -> Option<u64> {
+    let active_stem = active_segment_path.file_stem()?.to_str()?;
+    let sequence_digits = candidate_file_name
+        .strip_prefix(active_stem)?
+        .strip_prefix('.')?
+        .strip_suffix(".jsonl")?;
+    if sequence_digits.is_empty() || !sequence_digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    sequence_digits.parse().ok()
+}
+
+/// Path a rotation creates the next active segment at before renaming it into place.
+pub(crate) fn replacement_runtime_log_segment_path(active_segment_path: &Path) -> PathBuf {
+    active_segment_path.with_extension("jsonl.rotating")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -77,6 +99,51 @@ mod tests {
         assert_eq!(
             rotated.file_name().unwrap(),
             "Rabc123-1700000000000.3.jsonl"
+        );
+    }
+
+    #[test]
+    fn filename_shape_round_trips() {
+        for (active_segment_path, rotation_sequence) in [
+            (runtime_log_path("Rabc123", 1_700_000_000_000), 1),
+            (runtime_log_path("Rabc123", 1_700_000_000_000), 3),
+            (PathBuf::from("/logs/my.node-2-1700000000000.jsonl"), 12),
+            (PathBuf::from("/logs/camera-2-1000.jsonl"), u64::MAX),
+        ] {
+            let rotated = rotated_runtime_log_segment_path(&active_segment_path, rotation_sequence);
+            let rotated_file_name = rotated.file_name().unwrap().to_str().unwrap();
+
+            assert_eq!(
+                rotated_runtime_log_segment_sequence(&active_segment_path, rotated_file_name),
+                Some(rotation_sequence),
+                "{rotated_file_name} does not parse back to {rotation_sequence}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_file_that_is_not_one_of_this_segments_rotations_parses_to_no_sequence() {
+        let active_segment_path = Path::new("/logs/Rabc-1000.jsonl");
+
+        for foreign_file_name in [
+            "Rabc-1000.jsonl",
+            "Rabc-10000.7.jsonl",
+            "Rabc-100.7.jsonl",
+            "Rabc-1000.+5.jsonl",
+            "Rabc-1000..jsonl",
+            "Rabc-1000.5a.jsonl",
+            "Rabc-1000.jsonl.rotating",
+            "Rabc-1000.99999999999999999999999.jsonl",
+        ] {
+            assert_eq!(
+                rotated_runtime_log_segment_sequence(active_segment_path, foreign_file_name),
+                None,
+                "{foreign_file_name} was read as a rotation of Rabc-1000.jsonl"
+            );
+        }
+        assert_eq!(
+            replacement_runtime_log_segment_path(active_segment_path),
+            Path::new("/logs/Rabc-1000.jsonl.rotating")
         );
     }
 

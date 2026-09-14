@@ -9,7 +9,10 @@ use std::io::{self, Write};
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
 
-use crate::core::logging::paths::rotated_runtime_log_segment_path;
+use crate::core::logging::paths::{
+    replacement_runtime_log_segment_path, rotated_runtime_log_segment_path,
+    rotated_runtime_log_segment_sequence,
+};
 
 /// When the active JSONL segment rolls over, and how many segments survive it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,14 +131,12 @@ impl JsonlBatchedWriter {
         let rotated_sequence = self.next_rotated_segment_sequence;
         let rotated_path =
             rotated_runtime_log_segment_path(&self.active_segment_path, rotated_sequence);
-        let replacement_path = replacement_active_segment_path(&self.active_segment_path);
+        let replacement_path = replacement_runtime_log_segment_path(&self.active_segment_path);
         // The replacement is created before either rename, so a failed open
-        // (EMFILE, ENOSPC) leaves the active name where it was.
-        let replacement_file = OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&replacement_path)?;
+        // (EMFILE, ENOSPC) leaves the active name where it was. `set_len` clears
+        // a replacement a crash left behind, since std refuses append + truncate.
+        let replacement_file = open_segment_for_append(&replacement_path)?;
+        replacement_file.set_len(0)?;
         if let Err(rename_failure) = std::fs::rename(&self.active_segment_path, &rotated_path) {
             let _ = std::fs::remove_file(&replacement_path);
             return Err(rename_failure);
@@ -180,39 +181,24 @@ fn open_segment_for_append(path: &Path) -> io::Result<File> {
     OpenOptions::new().create(true).append(true).open(path)
 }
 
-/// Where a rotation builds the next active segment before renaming it into place.
-fn replacement_active_segment_path(active_segment_path: &Path) -> PathBuf {
-    active_segment_path.with_extension("jsonl.rotating")
-}
-
 /// The highest `<seq>` among `active_segment_path`'s rotated segments, or `0`.
 fn highest_rotated_segment_sequence_on_disk(active_segment_path: &Path) -> io::Result<u64> {
-    let (Some(directory), Some(active_stem)) = (
-        active_segment_path.parent(),
-        active_segment_path
-            .file_stem()
-            .and_then(|stem| stem.to_str()),
-    ) else {
-        return Ok(0);
+    let directory = match active_segment_path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
     };
-    let rotated_name_prefix = format!("{active_stem}.");
     let mut highest_rotated_sequence = 0;
     for entry in std::fs::read_dir(directory)? {
         let file_name = entry?.file_name();
-        let Some(rotated_sequence) = file_name
+        if let Some(rotated_sequence) = file_name
             .to_str()
-            .and_then(|name| name.strip_prefix(&rotated_name_prefix))
-            .and_then(|name| name.strip_suffix(".jsonl"))
-            .filter(|digits| digits.bytes().all(|byte| byte.is_ascii_digit()))
-            .and_then(|digits| digits.parse::<u64>().ok())
-        else {
-            continue;
-        };
-        highest_rotated_sequence = highest_rotated_sequence.max(rotated_sequence);
+            .and_then(|name| rotated_runtime_log_segment_sequence(active_segment_path, name))
+        {
+            highest_rotated_sequence = highest_rotated_sequence.max(rotated_sequence);
+        }
     }
     Ok(highest_rotated_sequence)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -237,15 +223,22 @@ mod tests {
         .into_bytes()
     }
 
-    /// Every `*.jsonl` file in `directory`, sorted by name.
-    fn segment_file_names(directory: &Path) -> Vec<String> {
+    /// Every file in `directory`, sorted by name.
+    fn every_file_name(directory: &Path) -> Vec<String> {
         let mut names: Vec<String> = std::fs::read_dir(directory)
             .unwrap()
             .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-            .filter(|name| name.ends_with(".jsonl"))
             .collect();
         names.sort();
         names
+    }
+
+    /// Every `*.jsonl` file in `directory`, sorted by name.
+    fn segment_file_names(directory: &Path) -> Vec<String> {
+        every_file_name(directory)
+            .into_iter()
+            .filter(|name| name.ends_with(".jsonl"))
+            .collect()
     }
 
     /// Every record's `sequence`, across every segment, asserting each line parses.
@@ -537,14 +530,66 @@ mod tests {
         w.append_record(&numbered_record(0)).unwrap();
         w.append_record(&numbered_record(1)).unwrap();
 
-        let mut every_file_name: Vec<String> = std::fs::read_dir(tmp.path())
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-            .collect();
-        every_file_name.sort();
         assert_eq!(
-            every_file_name,
+            every_file_name(tmp.path()),
             ["Rabc-1000.1.jsonl", "Rabc-1000.2.jsonl", "Rabc-1000.jsonl"]
+        );
+    }
+
+    #[test]
+    fn a_rotation_that_cannot_create_its_replacement_leaves_the_active_name_in_place() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("Rabc-1000.jsonl");
+        let blocking_directory = tmp.path().join("Rabc-1000.jsonl.rotating");
+        std::fs::create_dir(&blocking_directory).unwrap();
+        let mut w = JsonlBatchedWriter::open(&path, 1, false, rotating_every(1, None)).unwrap();
+
+        assert!(w.append_record(&numbered_record(0)).is_err());
+        assert!(w.append_record(&numbered_record(1)).is_err());
+
+        assert_eq!(
+            segment_file_names(tmp.path()),
+            ["Rabc-1000.jsonl"],
+            "a rotation with nowhere to put its replacement must not move the active segment"
+        );
+        assert_eq!(sequences_across_segments(tmp.path()), [0, 1]);
+
+        std::fs::remove_dir(&blocking_directory).unwrap();
+        w.append_record(&numbered_record(2)).unwrap();
+
+        assert_eq!(
+            every_file_name(tmp.path()),
+            ["Rabc-1000.1.jsonl", "Rabc-1000.jsonl"]
+        );
+        assert_eq!(sequences_across_segments(tmp.path()), [0, 1, 2]);
+    }
+
+    #[test]
+    fn a_rotated_in_segment_truncated_from_outside_keeps_appending_at_its_end() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("Rabc-1000.jsonl");
+        let record_bytes = numbered_record(0).len() as u64 + 1;
+        let mut w =
+            JsonlBatchedWriter::open(&path, 1, false, rotating_every(3 * record_bytes, None))
+                .unwrap();
+        for sequence in 0..4 {
+            w.append_record(&numbered_record(sequence)).unwrap();
+        }
+        assert!(tmp.path().join("Rabc-1000.1.jsonl").exists());
+
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_len(0)
+            .unwrap();
+        w.append_record(&numbered_record(4)).unwrap();
+
+        let active_contents = read_all(&path);
+        assert_eq!(
+            active_contents,
+            format!("{}\n", String::from_utf8(numbered_record(4)).unwrap()),
+            "a write past a truncation must land at the new end, not leave a hole before it"
         );
     }
 }

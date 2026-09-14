@@ -778,7 +778,11 @@ def write_segment(path: Path, messages: "list[str]") -> None:
 
 
 def rotate_like_the_engine(active_segment_path: Path, rotation_sequence: int) -> None:
-    """Rename the active segment to its rotated name and reopen the active name."""
+    """Move the active segment to its rotated name and leave an empty file under the active name.
+
+    The engine gets there through a `.rotating` replacement and two renames; what a
+    reader can observe of that is this end state, or the active name briefly absent.
+    """
     os.rename(
         active_segment_path,
         active_segment_path.with_name(
