@@ -18,6 +18,7 @@ flowchart LR
   wire["Wire\n(self-describing bags between nodes —\nthe only cross-language boundary)"]
 
   registry["Node registry\n(per-user on-disk, one JSON per live node)"]
+  mesh["Runtime mesh (Zenoh)\n(engine transport, always on, beside iceoryx2 — one session per runtime\nin the app process, never in a helper; runtimes announce themselves and\ndiscover each other peer-to-peer, explicit peers or a router where multicast\ndoes not cross; everything under a mesh name, default `default`, no off switch;\nports addressed runtime name / display name / port, the runtime name unique\nin the mesh; any runtime may create a remote link — the input's runtime applies it\nwith connect's own refusals, a missing runtime waits, a missing port is refused;\nnothing is sent for a port no remote link reads; stamps cross unchanged tagged with\ntheir clock, never compared across clocks (a shared network clock is OPEN);\na send the network cannot take is dropped and counted per remote link;\nnotify, event bus, request-response and blackboard never cross;\ngraph lists mesh peers; a top-level surface_id crosses as pixels and lands as a fresh\nlocal surface id; no auth yet — the auth posture owns it)"]
 
   app -->|imports classes for rt.add| procs
   app -->|imports classes for rt.add| pkgs
@@ -44,8 +45,11 @@ its channel count is the contract's one optional value: absent means the source'
 count, carried on every emitted window, and a declared count is what the stage converts to;
 every input port declares one read policy — newest or ordered — and no other delivery setting:
 both drop under pressure, and no link ever blocks a producer;
-a drop is counted at the port that lost it, but only an app-process destination's
-count reaches graph — a helper's counts stay in its own child process (OPEN);
+a drop is counted at the port that lost it; a ring overwrite is counted by a sequence
+number in an iceoryx2 user header, and a helper's counts reach graph through a
+per-spawn blackboard the parent reads (decided, not yet built);
+shutdown always ends — every helper stops at once on one ladder, interrupt after 1 s,
+teardown within 5 s, then its process group terminated and killed;
 a read can name the inbound link a bag arrived on, and a port can list the links wired
 into it — which is how a many-track sink learns what it owes, counting unchanged;
 every stamp reads the one machine-monotonic clock"| helper
@@ -74,3 +78,6 @@ the codec proof rig scores off this door — tap the decoded channel, exchange e
 sampled id for exact pixels — never off a display writing frames to disk"| engine
   cli --> ctl
   engine --> wire
+  engine -->|"a link between runtimes rides the mesh;
+a link within one runtime rides iceoryx2 —
+the engine chooses from the link's ends, processors unchanged"| mesh

@@ -262,7 +262,8 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   that reads the bag as a dict. Publish-to-claim transit rides pool depth, and so
   does an untyped read: the strictness dial is also the safety dial — depth bounds
   the window, and outwaiting it is an error, never somebody else's pixels. The
-  engine inspects no bag content anywhere. The producer never waits on a consumer:
+  engine inspects no bag content anywhere, save the top-level `surface_id` a remote link
+  carries across the runtime mesh (§Networking). The producer never waits on a consumer:
   the pool skips leased slots and grows to its cap; at cap the producer drops its
   own frame — a slow consumer costs memory, then its own frames, never another
   processor's cadence. A producer-internal transient (a frames-in-flight ring
@@ -441,9 +442,11 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   type declaration, connect never inspects or compares types and never warns, no read
   path examines a tag, and the frame header carries no schema ident. Consuming is a
   cast at read time; a mismatch surfaces as a decode failure at the consuming
-  processor. One carve-out, and only one: declaring an audio window contract **is** that
+  processor. Two carve-outs, and only two: declaring an audio window contract **is** that
   port's opt-in to the engine reading its bags as `AudioBlock`, so the engine inspects a
-  payload on exactly the ports that asked it to and nowhere else. A link into a port with
+  payload on exactly the ports that asked it to; and a remote link reads a bag's top-level
+  `surface_id` to carry the frame across the runtime mesh (§Networking) — reading that one
+  key, never a type, a tag or anything else in the bag. A link into a port with
   no contract is unchanged in every respect — still pure plumbing, `connect` still
   compares nothing, and the frame header still carries no schema ident.
   [schema-free-ports — SHIPPED #1814; the carve-out — audio-port-window-contract, SHIPPED
@@ -465,7 +468,9 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
 - **DECIDED** — A read can name the inbound link it drained. Beside `read_raw`, a reader
   offers a read that returns the bag, its stamp and the *inbound link* it arrived on,
   named by the source channel name the link subscribed to — `<lowercased producer
-  processor id>/<output port>`, the name `graph` and `tap` already show. The mailbox
+  processor id>/<output port>`, the name `graph` and `tap` already show — or, for a remote
+  link, by its mesh address `<runtime name>/<display name>/<output port>` (§Networking), so a
+  many-track sink fed across the mesh names its tracks the same way on every run. The mailbox
   already queued each frame holding its link's identity for drop attribution; this
   exposes the identity the per-link counters are keyed by, so no frame carries anything
   it did not carry before and counting is unchanged. In Python `LinkInputDataReader`
@@ -516,24 +521,34 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   port, and is deliberately uncounted. **The clause states the intent, not yet the
   tree**: what shipped counts the mailbox eviction at an app-process destination and
   renders it under that node's `metrics` key. Two paths still lose a bag without
-  counting it anywhere a reader can reach, and they are OPEN directly below; until they
-  close, a `graph` that reports no drops is not yet proof that none happened.
+  counting it anywhere a reader can reach; how both are counted is DECIDED directly below
+  and not yet built, and until it ships a `graph` that reports no drops is not yet proof that
+  none happened.
   [delivery-profile-vocabulary — SHIPPED #2023 for the app-process half]
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::mailbox::tests::an_eviction_is_counted_against_the_link_whose_bag_was_lost -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::input::tests::each_inbound_link_reports_its_own_losses_at_a_stalled_ordered_port -->
   <!-- verify: cargo test -p streamlib-engine --lib core::graph::components::processor_metrics::tests::a_processors_metrics_render_every_inbound_links_losses_by_name -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::mailbox::tests::passing_over_bags_to_reach_the_newest_is_not_a_drop_at_the_port -->
-- **OPEN** — Counting the two losses no port mailbox ever sees, so "no loss is silent"
-  becomes true of the tree and not only of its app-process half. (a) A helper-placed
-  destination — which is every Python processor — evicts and counts inside its own child
-  process, and its graph node deliberately renders no `metrics` key at all rather than a
-  zero the parent cannot stand behind, so a Python processor's losses reach no reader.
-  (b) A bag the iceoryx2 subscriber ring overwrites under `enable_safe_overflow` never
-  reaches a mailbox and so is counted nowhere at all, whichever process the destination
-  runs in. Both need an owner decision before building: (a) is a reporting hop from the
-  child to its node in the parent, (b) needs a count taken where the overwrite happens.
-  Until then the gap is recorded here, never papered over with a zero.
-  [delivery-profile-vocabulary]
+- **DECIDED** — A bag the iceoryx2 subscriber ring overwrites is counted. Every channel's
+  data service carries a per-channel 64-bit sequence number in an iceoryx2 user header —
+  never in the frame header, which stays exactly as it is. A number is consumed once a
+  sample reaches the send, unless the send fails before delivering to anyone; a bag refused
+  at the ceiling or never loaned consumes none. Each subscriber keeps the last number it
+  received per producing publisher, the first sample after wiring its baseline, so a
+  restarted producer is never read as a gap; the numbers a jump skips — the new number
+  minus the last, minus one — are added to that inbound link's dropped-bag count, on
+  `ordered` ports only, since a `newest` port passing over bags is the
+  profile working. The number is engine-internal: no processor reads it and no bag carries
+  it. Stated residual: a bag lost after a link's last receive and before its disconnect is
+  not counted. [loss-visibility]
+- **DECIDED** — A helper-placed destination's per-link counts reach `graph`. The parent
+  creates one blackboard per helper spawn; the helper is its only writer, one entry per
+  inbound link holding that link's dropped-bag count, and the parent reads it whenever
+  `graph` renders, without waiting on the child. The last counts a crashed helper wrote stay
+  readable; a dead writer can no longer update its entries, so a respawned helper gets a
+  fresh board. A helper's write refused at the per-link ceiling is
+  counted the same way. The node's `metrics` key then renders for a helper-placed processor
+  as it does for an app-process one. [loss-visibility]
   <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_helper_placed_destinations_node_carries_no_metrics_rather_than_a_zero -->
 - **DECIDED** — No link ever blocks a producer. Producer-blocking is deleted, not merely
   unreachable: no profile resolves to it and the overflow policy it was the second half
@@ -699,6 +714,22 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   must be import-addressable from a module whose import is side-effect-safe; there is
   nothing to equalize and nothing to move between, because there is no second
   placement. [helper-process-placement-only — SHIPPED #1714]
+- **DECIDED** — Shutdown always ends, and a cooperative processor's `teardown()` always
+  runs. The engine stops every helper at once, never one after another, each on the same
+  ladder: `stop` and `teardown` are sent together; a Python callback still running after one
+  second is interrupted with `KeyboardInterrupt`, after which `stop()` and `teardown()` still
+  run and the bag in flight is lost; `teardown()` then has five seconds; the helper's whole
+  process group is terminated, then killed; and the child is reaped, or abandoned and named.
+  Native code a callback is inside is interrupted only when it returns. Budgets are
+  engine-chosen and not authorable. A processor's descendants die with it: its process group
+  goes at every helper exit — shutdown, removal, or a crash the engine detects by the process
+  itself rather than by its socket — and a helper inherits no descriptor beyond its escalate
+  socket and its standard streams, which are pipes the engine reads, never the app's own
+  output. At every helper exit the engine shuts its end of the escalate socket and stops
+  waiting on those pipes, so nothing the helper started can hold the app's output open, delay
+  the app's exit, or keep issuing the helper's privileged operations. A descendant that leaves
+  the process group on purpose is the stated residual: it survives, holding none of the app's
+  descriptors and reaching no engine operation. [shutdown-ladder]
   <!-- verify: sdk/streamlib-python-wheel/tests/test_helper_placement.py -->
 - **DECIDED** — The MVP edit loop is re-running `dev` (warm restart is sub-second by
   construction). Reload-on-save is a nicety, not MVP-gating, and when built it is
@@ -755,8 +786,9 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_processor_config_catalog.py::test_a_class_the_app_imported_and_never_added_is_in_the_catalog -->
 - **DECIDED** — An instance's display name is the human-facing label — passed at `add`,
   readable off the returned handle, and the prefix on its log records; it defaults to
-  the class's short name and the engine disambiguates duplicates within one graph.
-  Identity is never derived from it — and neither is the default: a descriptor carries
+  the class's short name and the engine disambiguates duplicates within one graph. It is
+  also the processor's part of its address on the runtime mesh (§Networking), so renaming a
+  processor re-addresses its ports. Identity is never derived from it — and neither is the default: a descriptor carries
   the class's short name as its own validated field rather than the engine splitting one
   out of the import path, because splitting re-invents the grammar this change deleted.
   [processor-class-identity — SHIPPED #1838, #1841]
@@ -1476,10 +1508,18 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   contract (`ceil(window / quantum) + margin`) — still engine-chosen, still not authorable;
   the contract is a declaration, not a depth dial. Overflow past that depth is a counted
   mailbox eviction, same counter, same `graph` surface. A discontinuity flush discards the
-  remainder — under one window of samples, not a bag, not counted as one — logged with the
+  remainder — under one window of samples — and that discard is counted: the samples it
+  threw away are reported on the port's link beside its dropped bags and logged with the
   port and the sample count, so a bag evicted at a windowed port costs its own samples plus
-  the flush of the remainder behind it: a stated, bounded loss shape beside the
-  no-loss-is-silent clause in §Processor model.
+  the counted flush of the remainder behind it, and no part of the loss is silent. The
+  iceoryx2 ring in front of a windowed port is engine-sized to a fixed cap well above a
+  profile's depth, never to the contract's own depth, and a windowed port connected live onto
+  a channel created smaller than that cap is refused by name. [the flush count, the ring cap
+  and the live refusal — loss-visibility]
+- **OPEN** — Whether a windowed port connected live onto a channel created smaller than the
+  windowed cap should instead wire at that channel's depth, with its ring overwrites counted,
+  once overwrite counting has shipped. Until then it is refused as the entry above states.
+  [loss-visibility]
   [audio-port-window-contract — SHIPPED #2033]
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::resolved_audio_window_contract::tests::the_profiles_depth_is_a_floor_no_contract_undercuts -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::resolved_audio_window_contract::tests::a_one_second_window_is_sized_past_the_profiles_depth_by_its_own_quanta -->
@@ -2035,7 +2075,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   machine-global scan paths; the lane costs nothing when unused (no `DT_NEEDED`
   entries, no import-time work). [audio-subsystem]
 
-## Networking — transport, moq, webrtc — IN-FLIGHT
+## Networking — transport, runtime mesh, moq, webrtc — IN-FLIGHT
 
 - **DECIDED** — Cross-language interop happens on the wire between nodes, as
   self-describing bags — never in-graph. [importable-python-library — SHIPPED #1715]
@@ -2049,9 +2089,9 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   extensions. The one expected exception to "leaves the runtime" is a runtime capability
   the moved code turns out to need, which is exposed as engine code — a split of concerns,
   expected to be rare. Zenoh is new work rather than a move and is its own later change;
-  the cross-host fabric stays OPEN below. MoQ and WebRTC are edge source/sink processors
+  the runtime mesh is decided below. MoQ and WebRTC are edge source/sink processors
   ingesting and egressing external streams at a runtime boundary; they are not the
-  runtime-to-runtime fabric. The held consumers `packages/{moq,webrtc}` and
+  runtime mesh. The held consumers `packages/{moq,webrtc}` and
   `examples/{moq-roundtrip,webrtc-cloudflare-stream,whep-player}` resolved through this
   change and are gone — mined, replaced or deleted per §Consumers.
   [extension-model; networking-extension-wheels — SHIPPED #2153]
@@ -2155,9 +2195,10 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   as usual. A received stream reaches the bag through the proven manual-source shape: the
   wheel's Rust receives on its own runtime and a processor-owned thread writes, so no
   engine seam is added for it. Two budgets the wheels live inside, ticket-level but named
-  here: a helper's teardown reply and exit are bounded at five seconds each, so a WHIP
-  `DELETE` or a QUIC close must be bounded too; and connecting inside `setup()` spends
-  the sixty-second registration budget. [extension-model]
+  here: a helper stops on the shutdown ladder §Processor model states, whose `teardown()`
+  budget is five seconds, so a WHIP `DELETE` or a QUIC close must fit inside it; and
+  connecting inside `setup()` spends the sixty-second registration budget.
+  [extension-model; the ladder — shutdown-ladder]
 - **DECIDED** — The proof bar is the codec blocks' two halves. CI-run, GPU-free and
   endpoint-free: RTP packetising and depacketising round trips, SDP construction and
   parsing, MoQ catalog and object bytes, and the bag literal a player writes checked
@@ -2362,10 +2403,72 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   before. The `cmaf` arm and its `moq-sub` read are unchanged.
   [moq-data-tracks — SHIPPED #2174]
   <!-- verify: pytest packages/streamlib-moq/tests/test_data_track_round_trip.py -->
-- **OPEN** — Later work, after the move: mesh discovery and the cross-host fabric
-  (Zenoh).
+- **DECIDED** — Runtimes on different machines form a runtime mesh over Zenoh, and the mesh
+  is engine transport: always on, beside iceoryx2, in the app process. It is not a processor,
+  not a built-in, not an extension wheel, and never upstream iceoryx2's tunnel or gateway.
+  Every runtime opens one Zenoh session when it starts and closes it inside the shutdown
+  budget; helper processes never open one. A link carries the same way wherever its ends
+  are: a link whose ends share a runtime rides iceoryx2, a link between runtimes rides Zenoh,
+  chosen by the engine from the link's ends, and no processor can tell which. A runtime
+  that cannot open its session runs local-only and says so once; the mesh never fails a
+  runtime's start. Easy, automatic data exchange between runtimes is runtime capability.
+  [runtime-mesh]
+- **DECIDED** — A runtime announces itself on the mesh and discovers other runtimes
+  automatically: peer-to-peer discovery is on by default, and explicit peers or a Zenoh
+  router serve networks that multicast discovery does not cross. [runtime-mesh]
+- **DECIDED** — Everything a runtime puts on the mesh lives under a mesh name, `default`
+  unless the runtime names another, so runtimes join everything reachable out of the box and
+  groups sharing one network separate by naming different meshes. There is no switch that
+  turns the mesh off; a runtime is isolated by a mesh name, explicit peers, or discovery
+  turned off. Stated as the posture for now, not a permanent default. [runtime-mesh]
+- **DECIDED** — A port on the mesh is addressed `<runtime name>/<display name>/<port>`. The
+  runtime name belongs to the runtime rather than to its control plane, defaults to
+  `<hostname>-<app directory>`, is stable across runs, and is unique within a mesh: a runtime
+  whose name is already live on the mesh refuses to start by name, except over a runtime of
+  that name on the same host whose process is gone. The display name — already unique within
+  a graph — is the processor's part of the address, so renaming a processor re-addresses it;
+  identity stays the class import path. Per-run processor ids and cuid2 channel names never
+  appear on the mesh. [runtime-mesh]
+- **DECIDED** — A bag's top-level `surface_id` crosses the mesh transparently, for now: the
+  sending runtime resolves it locally and sends the frame's pixels with what the receiver
+  needs to rebuild them, and the receiving runtime writes the pixels into a freshly minted
+  local surface and hands the bag on carrying that local `surface_id`. No surface id, lease,
+  lifetime state or write-back crosses. The `surface_id` key is a stand-in the general
+  mechanism replaces in a later release. [runtime-mesh]
+- **DECIDED** — The mesh carries no authentication or access control in this work; security
+  is its own later pass, and the auth posture OPEN under §Control plane & observability owns
+  it. [runtime-mesh]
+- **DECIDED** — Any runtime on the mesh may create a remote link: a receiver pulling another
+  runtime's output into its own input, a sender pushing its output into another runtime's
+  input, or a third runtime wiring two others. The runtime that owns the input end applies the
+  link through the same `connect` operation and the same refusals a local link meets, and the
+  requesting runtime receives that outcome. The request travels over the mesh, so neither end
+  needs a control plane, and `graph` on the input's runtime shows which runtime created the
+  link. Until the security pass, any runtime on the mesh may wire. [runtime-mesh]
+- **DECIDED** — A remote link naming a runtime that is not on the mesh waits and wires when
+  that runtime appears; a runtime that is present but offers no such processor or port refuses
+  the link by name, listing what it does offer; and a link whose remote runtime leaves returns
+  to waiting and restarts its loss count when the runtime returns. A sending runtime does no
+  network work and copies no frame for a port until a remote link to that port exists.
+  [runtime-mesh]
+- **DECIDED** — Stamps cross the mesh unchanged — the frame header's and every stamp in the
+  bag — carrying the identity of the clock that produced them, and a stamp is never compared
+  against one from another clock. The one monotonic clock of §Media I/O is therefore one
+  clock per machine. [runtime-mesh]
+- **DECIDED** — No link ever blocks a producer across the mesh either: a send the network
+  cannot take is dropped rather than waited for, and every bag lost between two runtimes is
+  counted on its remote link in `graph`, beside the drops its ports already count. Notify
+  services, the runtime event bus, request-response and blackboard never cross the mesh.
+  [runtime-mesh]
+- **DECIDED** — `graph` carries the runtime's mesh peers, and `streamlib nodes` lists mesh
+  peers beside the nodes in the local registry. A runtime that hosts no control plane still
+  joins the mesh and carries remote links; it is not drivable remotely. [runtime-mesh]
+- **OPEN** — A common clock across machines: intended, do not build until designed. Direction:
+  runtimes on a mesh negotiate a shared network time (PTP, NTP or similar) so stamps from
+  different machines become comparable; until then the per-clock rule above stands.
+  [runtime-mesh]
 
-## Language SDKs & parity — SHIPPED
+## Language SDKs & parity — IN-FLIGHT
 <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py -->
 
 - **DECIDED** — Python is the sole focus runtime: the importable PyO3 wheel is the
@@ -2395,6 +2498,16 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   `atexit`/context-manager guarantee on the exception path. Proven against a real
   `python app.py` harness, the arrangement the spike never ran.
   [importable-python-library — SHIPPED #1707]
+- **DECIDED** — `rt.run()` owns SIGINT, SIGTERM and SIGHUP through the whole teardown,
+  engine drop included, and escalates on repeat: the first interrupt stops the graph
+  gracefully; the second forces it — every helper's ladder skips to terminating its process
+  group, and a native processor thread still inside its callback is abandoned; the third
+  kills every helper's process group and exits with status 130 at once. A native processor
+  thread that ignores shutdown past its budget is abandoned rather than joined: the engine
+  stays alive beneath it, and `run()` raises naming the processor. An engine-chosen watchdog
+  of about fifteen seconds ends a teardown hung anywhere else. The entry above's "all engine
+  threads joined" therefore reads "joined, or abandoned and named". The `run()` docstring
+  states the same. [shutdown-ladder]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_ctrl_c_exits_cleanly -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_sigint_is_handed_back_to_cpython -->
 
