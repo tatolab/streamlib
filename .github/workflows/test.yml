@@ -224,6 +224,10 @@ jobs:
           # duplicate refusal, and `graph`'s third top-level key. The Python
           # discovery loop and the two call sites are proven in the wheel's
           # pytest suite; these are the seam it registers through.
+          # The JSONL writer's segment rotation and retention, the knobs that
+          # resolve its policy, and the rotated-segment name the wheel's
+          # `streamlib logs` parses back out — tempdir-only, no GPU, no env
+          # beyond the logging knobs themselves.
           cargo test --locked -p streamlib-engine --lib -- \
             core::processor_owned_window \
             processor_owned_window_ops \
@@ -285,6 +289,12 @@ jobs:
             core::json_schema::capability_extension_rendering_tests::a_graph_with_no_extensions_still_carries_the_key_as_an_empty_list \
             core::json_schema::capability_extension_rendering_tests::a_registered_extension_renders_its_name_version_and_distribution \
             core::runtime::runtime::tests::to_json_renders_every_capability_this_process_registered \
+            core::logging::writer \
+            core::logging::config \
+            core::logging::paths::tests::a_rotated_segment_is_named_with_a_dot_separated_sequence \
+            core::logging::paths::tests::a_runtime_id_carrying_dots_and_dashes_keeps_its_whole_name_when_rotated \
+            core::logging::paths::tests::filename_shape_round_trips \
+            core::logging::paths::tests::a_file_that_is_not_one_of_this_segments_rotations_parses_to_no_sequence \
             core::json_schema::port_rendering_tests::port_info_output_renders_exactly_the_declared_keys \
             core::json_schema::port_rendering_tests::port_info_output_carries_no_type_key_under_any_spelling \
             core::json_schema::port_rendering_tests::port_descriptor_output_carries_no_type_key \

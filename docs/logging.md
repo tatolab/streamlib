@@ -12,8 +12,8 @@ keep everyone on the same path.
 | Python SDK  | `streamlib.log.{trace,debug,info,warn,error}(message, **attrs)` |
 
 The Python SDK and the Rust host produce the same unified JSONL
-stream on disk (`<STREAMLIB_HOME>/.streamlib/logs/<runtime_id>-<started_at>.jsonl`)
-and mirror to stdout. The host handler (escalate IPC `{op:"log"}`)
+stream on disk (`<STREAMLIB_HOME>/.streamlib/logs/<runtime_id>-<started_at_millis>.jsonl`,
+rotated by size — see `docs/logging-schema.md` §Files and rotation) and mirror to stdout. The host handler (escalate IPC `{op:"log"}`)
 forwards helper-process records to the subscriber that owns the file.
 
 **Don't reach for `eprintln!` / `println!` / `print` /

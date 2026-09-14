@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Reading a runtime's on-disk JSONL log file.
+"""Reading a runtime's on-disk JSONL log segments.
 
 The JSONL log schema is a durable contract, and so is the pretty rendering: a
 replayed line must match what the runtime mirrored to its own stdout, byte for
@@ -17,6 +17,7 @@ pipeline would re-ingest the records it was asked to display.
 from __future__ import annotations
 
 import json
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -92,12 +93,78 @@ def runtime_log_directory_path() -> Path:
 
 
 class RuntimeLogFile(NamedTuple):
-    """One `<runtime_id>-<started_at_millis>.jsonl` file on disk."""
+    """One runtime instance's JSONL log on disk.
+
+    `path` names the active `<runtime_id>-<started_at_millis>.jsonl` segment and
+    `size_bytes` counts every segment of the instance, rotated ones included.
+    """
 
     runtime_id: str
     started_at_millis: int
     path: Path
     size_bytes: int
+
+
+class _RuntimeLogSegmentName(NamedTuple):
+    """What a segment's file name says about it."""
+
+    runtime_id: str
+    started_at_millis_text: str
+    rotation_sequence: "Optional[int]"
+
+
+def _parse_runtime_log_segment_name(file_name: str) -> "Optional[_RuntimeLogSegmentName]":
+    """A segment's identity from its file name, or `None` for any other file.
+
+    The active segment is `<runtime_id>-<started_at_millis>.jsonl` and a rotated one
+    `<runtime_id>-<started_at_millis>.<rotation_sequence>.jsonl`, the shape the
+    engine's `rotated_runtime_log_segment_path` writes. `runtime_id` may carry
+    dashes and dots: an active stem always ends `-<digits>`, so the text after its
+    last dot is never all digits and the two shapes cannot be confused.
+    """
+    if not file_name.endswith(".jsonl"):
+        return None
+    stem = file_name[: -len(".jsonl")]
+    rotation_sequence: "Optional[int]" = None
+    before_sequence, dot, sequence_text = stem.rpartition(".")
+    if dot and sequence_text.isascii() and sequence_text.isdigit():
+        stem = before_sequence
+        rotation_sequence = int(sequence_text)
+    runtime_id, separator, millis_text = stem.rpartition("-")
+    if not separator or not runtime_id:
+        return None
+    if not (millis_text.isascii() and millis_text.isdigit()):
+        return None
+    return _RuntimeLogSegmentName(runtime_id, millis_text, rotation_sequence)
+
+
+def _rotated_segment_path(active_segment_path: Path, rotation_sequence: int) -> Path:
+    """Where rotation `rotation_sequence` of `active_segment_path` lives."""
+    return active_segment_path.with_name(
+        f"{active_segment_path.stem}.{rotation_sequence}.jsonl"
+    )
+
+
+def _rotated_segment_sequences(active_segment_path: Path) -> "list[int]":
+    """The rotated segments of `active_segment_path` on disk, oldest first."""
+    active = _parse_runtime_log_segment_name(active_segment_path.name)
+    if active is None:
+        return []
+    try:
+        entries = list(active_segment_path.parent.iterdir())
+    except OSError:
+        return []
+    sequences = []
+    for entry in entries:
+        segment = _parse_runtime_log_segment_name(entry.name)
+        if (
+            segment is not None
+            and segment.rotation_sequence is not None
+            and segment.runtime_id == active.runtime_id
+            and segment.started_at_millis_text == active.started_at_millis_text
+        ):
+            sequences.append(segment.rotation_sequence)
+    return sorted(sequences)
 
 
 class LogRecordFilters(NamedTuple):
@@ -132,32 +199,31 @@ class LogRecordFilters(NamedTuple):
 
 
 def enumerate_runtime_log_files(log_directory: Path) -> "list[RuntimeLogFile]":
-    """Every parseable `<runtime_id>-<millis>.jsonl` under `log_directory`."""
+    """Every runtime instance with a parseable log segment under `log_directory`."""
     if not log_directory.is_dir():
         return []
 
-    found: "list[RuntimeLogFile]" = []
+    size_bytes_by_instance: "dict[tuple[str, str], int]" = {}
     for entry in log_directory.iterdir():
-        if entry.suffix != ".jsonl":
-            continue
-        # `runtime_id` may itself contain dashes, so split on the LAST one.
-        runtime_id, separator, millis_text = entry.stem.rpartition("-")
-        if not separator or not runtime_id:
+        segment = _parse_runtime_log_segment_name(entry.name)
+        if segment is None:
             continue
         try:
-            started_at_millis = int(millis_text)
             size_bytes = entry.stat().st_size
-        except (ValueError, OSError):
+        except OSError:
             continue
-        found.append(
-            RuntimeLogFile(
-                runtime_id=runtime_id,
-                started_at_millis=started_at_millis,
-                path=entry,
-                size_bytes=size_bytes,
-            )
+        instance = (segment.runtime_id, segment.started_at_millis_text)
+        size_bytes_by_instance[instance] = size_bytes_by_instance.get(instance, 0) + size_bytes
+
+    return [
+        RuntimeLogFile(
+            runtime_id=runtime_id,
+            started_at_millis=int(millis_text),
+            path=log_directory / f"{runtime_id}-{millis_text}.jsonl",
+            size_bytes=size_bytes,
         )
-    return found
+        for (runtime_id, millis_text), size_bytes in size_bytes_by_instance.items()
+    ]
 
 
 def newest_log_file_for_runtime(
@@ -297,6 +363,184 @@ def wait_for_runtime_log_file(
         time.sleep(_FOLLOW_POLL_SECONDS)
 
 
+class _SegmentLineReader:
+    """Whole lines from one open segment, holding back a line still being written.
+
+    A batch lands in the file across more than one write, so a reader at the live
+    edge can see the front of a record before its newline; decoding that front
+    would report a healthy record as malformed and lose it.
+    """
+
+    def __init__(self, opened: TextIO) -> None:
+        self._opened = opened
+        self._unfinished_line = ""
+
+    def complete_lines(self) -> "Generator[str, None, None]":
+        """Every line the segment holds whole right now."""
+        while True:
+            chunk = self._opened.readline()
+            if not chunk:
+                return
+            if not chunk.endswith("\n"):
+                self._unfinished_line += chunk
+                continue
+            yield self._unfinished_line + chunk
+            self._unfinished_line = ""
+
+    def unfinished_line(self) -> str:
+        """The line left without its newline, handed over once the segment is done."""
+        unfinished_line, self._unfinished_line = self._unfinished_line, ""
+        return unfinished_line
+
+
+def _open_active_segment_after_listing(
+    active_segment_path: Path,
+) -> "tuple[Optional[TextIO], list[int]]":
+    """The active segment opened, beside the rotated segments that precede it.
+
+    A rotation landing between the listing and the open would hand back an active
+    segment the listing does not account for, so the listing is retaken until its
+    newest sequence is unchanged across the open.
+    """
+    while True:
+        listed_rotation_sequences = _rotated_segment_sequences(active_segment_path)
+        try:
+            active_segment_file = active_segment_path.open(
+                "r", encoding="utf-8", errors="replace"
+            )
+        except FileNotFoundError:
+            return None, listed_rotation_sequences
+        relisted_rotation_sequences = _rotated_segment_sequences(active_segment_path)
+        if relisted_rotation_sequences[-1:] == listed_rotation_sequences[-1:]:
+            return active_segment_file, listed_rotation_sequences
+        active_segment_file.close()
+
+
+def _held_segment_was_rotated_away(held_segment_file: TextIO, active_segment_path: Path) -> bool:
+    """Whether the active segment's name now points at a different file than the held one.
+
+    A missing name is not a rotation: a rotation's two renames leave it absent for a
+    moment, and so does a rotation the writer backed out of, which gives the name
+    back to the very file held here.
+    """
+    held_segment_status = os.fstat(held_segment_file.fileno())
+    try:
+        named_segment_status = active_segment_path.stat()
+    except FileNotFoundError:
+        return False
+    return (named_segment_status.st_dev, named_segment_status.st_ino) != (
+        held_segment_status.st_dev,
+        held_segment_status.st_ino,
+    )
+
+
+def _rotation_sequence_of_held_segment(
+    held_segment_file: TextIO, active_segment_path: Path, last_read_rotation_sequence: int
+) -> int:
+    """The sequence the held file was rotated to, matched by inode rather than counted.
+
+    Asked while the file is still held open, so its inode cannot have been reused. A
+    held file that retention already deleted matches nothing, and every rotated
+    segment newer than `last_read_rotation_sequence` is then newer than it too.
+    """
+    held_segment_status = os.fstat(held_segment_file.fileno())
+    for rotation_sequence in _rotated_segment_sequences(active_segment_path):
+        try:
+            rotated_segment_status = _rotated_segment_path(
+                active_segment_path, rotation_sequence
+            ).stat()
+        except FileNotFoundError:
+            continue
+        if (rotated_segment_status.st_dev, rotated_segment_status.st_ino) == (
+            held_segment_status.st_dev,
+            held_segment_status.st_ino,
+        ):
+            return rotation_sequence
+    return last_read_rotation_sequence
+
+
+def _lines_of_rotated_segment(
+    active_segment_path: Path, rotation_sequence: int, errors: TextIO
+) -> "Generator[str, None, None]":
+    """Every line of one rotated segment, or a note if retention removed it first."""
+    rotated_segment_path = _rotated_segment_path(active_segment_path, rotation_sequence)
+    try:
+        rotated_segment_file = rotated_segment_path.open("r", encoding="utf-8", errors="replace")
+    except FileNotFoundError:
+        print(
+            f"note: log segment {rotated_segment_path.name} was removed by retention "
+            f"before it was read; skipping.",
+            file=errors,
+        )
+        return
+    with rotated_segment_file:
+        yield from rotated_segment_file
+
+
+def _lines_of_runtime_log_instance(
+    log_file: RuntimeLogFile, *, follow: bool, errors: TextIO
+) -> "Generator[Optional[str], None, None]":
+    """Every line of one runtime instance's log, oldest segment first.
+
+    With `follow`, yields `None` each time the read reaches the live edge with
+    nothing new, so the caller can look for a restart and wait. Rotation moves the
+    active segment to a numbered name and puts a new file under the active name,
+    which is checked against the held file at every edge: once it names a different
+    file, the held file is drained, the rotated segments newer than it are read, and
+    the new active segment is opened.
+    """
+    active_segment_path = log_file.path
+    active_segment_file, rotation_sequences = _open_active_segment_after_listing(
+        active_segment_path
+    )
+    last_read_rotation_sequence = 0
+    try:
+        while True:
+            for rotation_sequence in rotation_sequences:
+                if rotation_sequence <= last_read_rotation_sequence:
+                    continue
+                yield from _lines_of_rotated_segment(
+                    active_segment_path, rotation_sequence, errors
+                )
+                last_read_rotation_sequence = rotation_sequence
+
+            if active_segment_file is None:
+                if not follow:
+                    return
+                yield None
+            else:
+                active_segment_line_reader = _SegmentLineReader(active_segment_file)
+                rotated_away = False
+                while not rotated_away:
+                    yield from active_segment_line_reader.complete_lines()
+                    rotated_away = _held_segment_was_rotated_away(
+                        active_segment_file, active_segment_path
+                    )
+                    if rotated_away:
+                        yield from active_segment_line_reader.complete_lines()
+                        last_read_rotation_sequence = _rotation_sequence_of_held_segment(
+                            active_segment_file, active_segment_path, last_read_rotation_sequence
+                        )
+                    elif not follow:
+                        break
+                    else:
+                        yield None
+                unfinished_line = active_segment_line_reader.unfinished_line()
+                if unfinished_line:
+                    yield unfinished_line
+                active_segment_file.close()
+                active_segment_file = None
+                if not rotated_away:
+                    return
+
+            active_segment_file, rotation_sequences = _open_active_segment_after_listing(
+                active_segment_path
+            )
+    finally:
+        if active_segment_file is not None:
+            active_segment_file.close()
+
+
 def read_log_file(
     log_file: RuntimeLogFile,
     filters: LogRecordFilters,
@@ -305,34 +549,42 @@ def read_log_file(
     errors: TextIO,
     log_directory: Path,
 ) -> "Generator[str, None, None]":
-    """Yield rendered lines from `log_file`, optionally tailing it forever.
+    """Yield rendered lines from `log_file`'s segments, optionally tailing forever.
 
-    Drains what is already there, then — with `follow` — polls for appended
-    bytes. A restart under a pinned `STREAMLIB_RUNTIME_ID` writes a SECOND file
-    for the same runtime, so the tail switches to it and says so; without that
-    the tail sits on a file that will never grow again and goes silently quiet.
+    Drains the rotated segments oldest first and then the active one, carrying on
+    across any rotation that lands mid-read. With `follow` it then polls for
+    appended bytes. A restart under a pinned `STREAMLIB_RUNTIME_ID` writes a SECOND
+    instance for the same runtime, so the tail switches to it and says so; without
+    that the tail sits on a file that will never grow again and goes silently quiet.
     The caller owns the loop, so a `KeyboardInterrupt` stops the tail without
     unwinding through file handling.
     """
     current = log_file
     while True:
-        with current.path.open("r", encoding="utf-8", errors="replace") as opened:
-            while True:
-                line = opened.readline()
-                if line:
-                    record = _decode_line(line, errors)
-                    if record is not None and filters.matches(record):
-                        yield format_record_pretty(record)
+        lines = _lines_of_runtime_log_instance(current, follow=follow, errors=errors)
+        switched_to_newer_instance = False
+        try:
+            for line in lines:
+                if line is None:
+                    newer = newest_log_file_for_runtime(log_directory, current.runtime_id)
+                    if (
+                        newer is not None
+                        and newer.started_at_millis > current.started_at_millis
+                    ):
+                        print(
+                            f"note: runtime '{current.runtime_id}' restarted into a newer "
+                            f"log file; switching.",
+                            file=errors,
+                        )
+                        current = newer
+                        switched_to_newer_instance = True
+                        break
+                    time.sleep(_FOLLOW_POLL_SECONDS)
                     continue
-                if not follow:
-                    return
-                newer = newest_log_file_for_runtime(log_directory, current.runtime_id)
-                if newer is not None and newer.started_at_millis > current.started_at_millis:
-                    print(
-                        f"note: runtime '{current.runtime_id}' rotated to a newer "
-                        f"log file; switching.",
-                        file=errors,
-                    )
-                    current = newer
-                    break
-                time.sleep(_FOLLOW_POLL_SECONDS)
+                record = _decode_line(line, errors)
+                if record is not None and filters.matches(record):
+                    yield format_record_pretty(record)
+        finally:
+            lines.close()
+        if not switched_to_newer_instance:
+            return

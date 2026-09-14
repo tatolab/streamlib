@@ -18,13 +18,15 @@ from __future__ import annotations
 
 import argparse
 import io
+import itertools
 import json
 import os
 import threading
+import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import Any, Generator, NamedTuple, Optional
+from typing import Any, Callable, Generator, NamedTuple, Optional, TextIO
 
 import pytest
 
@@ -41,6 +43,8 @@ from streamlib._node_registry import registry_directory, scan_check_and_prune
 from streamlib._runtime_log_reader import (
     LogRecordFilters,
     RuntimeLogFile,
+    _held_segment_was_rotated_away,
+    _rotated_segment_sequences,
     enumerate_runtime_log_files,
     format_record_pretty,
     format_size,
@@ -761,7 +765,365 @@ def test_follow_switches_to_a_newer_file_when_the_runtime_restarts(tmp_path):
     assert next_line_within_timeout(lines, "the post-restart line").endswith(
         "after-restart"
     )
-    assert "rotated to a newer log file" in errors.getvalue()
+    assert "restarted into a newer log file" in errors.getvalue()
+    lines.close()
+
+
+# ─── Rotated log segments ────────────────────────────────────────────────────
+
+
+def write_segment(path: Path, messages: "list[str]") -> None:
+    path.write_text(
+        "".join(json.dumps(a_log_record(message=message)) + "\n" for message in messages),
+        encoding="utf-8",
+    )
+
+
+def rotate_like_the_engine(active_segment_path: Path, rotation_sequence: int) -> None:
+    """Move the active segment to its rotated name and leave an empty file under the active name.
+
+    The engine gets there through a `.rotating` replacement and two renames; what a
+    reader can observe of that is this end state, or the active name briefly absent.
+    """
+    os.rename(
+        active_segment_path,
+        active_segment_path.with_name(
+            f"{active_segment_path.stem}.{rotation_sequence}.jsonl"
+        ),
+    )
+    active_segment_path.touch()
+
+
+def rendered_messages(lines: "list[str]") -> "list[str]":
+    return [line.split(" — ", 1)[1] for line in lines]
+
+
+def test_a_rotated_segment_is_listed_under_its_runtime_rather_than_as_a_runtime_of_its_own(
+    tmp_path,
+):
+    # The literal the engine's `paths::tests::a_rotated_segment_is_named_with_a_dot_separated_sequence`
+    # asserts it writes; the two sides share this string, not code.
+    write_segment(tmp_path / "Rabc123-1700000000000.3.jsonl", ["rotated"])
+
+    found = enumerate_runtime_log_files(tmp_path)
+
+    assert [(f.runtime_id, f.started_at_millis, f.path.name) for f in found] == [
+        ("Rabc123", 1700000000000, "Rabc123-1700000000000.jsonl")
+    ]
+
+
+def test_a_runtime_is_listed_once_with_the_size_of_every_segment(tmp_path):
+    write_segment(tmp_path / "camera-2-1000.jsonl", ["active"])
+    write_segment(tmp_path / "camera-2-1000.1.jsonl", ["first"])
+    write_segment(tmp_path / "camera-2-1000.2.jsonl", ["second"])
+    write_segment(tmp_path / "my.node-2000.4.jsonl", ["other"])
+    expected_size = sum(
+        (tmp_path / name).stat().st_size
+        for name in ("camera-2-1000.jsonl", "camera-2-1000.1.jsonl", "camera-2-1000.2.jsonl")
+    )
+
+    found = sorted(enumerate_runtime_log_files(tmp_path))
+
+    assert [(f.runtime_id, f.started_at_millis) for f in found] == [
+        ("camera-2", 1000),
+        ("my.node", 2000),
+    ]
+    assert found[0].size_bytes == expected_size
+
+
+def test_reading_a_runtime_walks_its_rotated_segments_oldest_first(tmp_path):
+    active_segment_path = tmp_path / "Rabc-1000.jsonl"
+    write_segment(tmp_path / "Rabc-1000.10.jsonl", ["ten"])
+    write_segment(tmp_path / "Rabc-1000.9.jsonl", ["nine"])
+    write_segment(tmp_path / "Rabc-2000.1.jsonl", ["another-instance"])
+    write_segment(active_segment_path, ["active"])
+    log_file = RuntimeLogFile("Rabc", 1000, active_segment_path, 0)
+
+    rendered = list(
+        read_log_file(
+            log_file, LogRecordFilters(), follow=False, errors=io.StringIO(), log_directory=tmp_path
+        )
+    )
+
+    assert rendered_messages(rendered) == ["nine", "ten", "active"]
+
+
+def test_a_runtime_whose_active_segment_is_missing_still_reads_its_rotated_ones(tmp_path):
+    write_segment(tmp_path / "Rabc-1000.1.jsonl", ["rotated"])
+    log_file = RuntimeLogFile("Rabc", 1000, tmp_path / "Rabc-1000.jsonl", 0)
+
+    rendered = list(
+        read_log_file(
+            log_file, LogRecordFilters(), follow=False, errors=io.StringIO(), log_directory=tmp_path
+        )
+    )
+
+    assert rendered_messages(rendered) == ["rotated"]
+
+
+def test_follow_carries_on_across_a_rotation(tmp_path):
+    active_segment_path = tmp_path / "Rabc-1000.jsonl"
+    write_segment(active_segment_path, ["first"])
+    log_file = RuntimeLogFile("Rabc", 1000, active_segment_path, 0)
+    errors = io.StringIO()
+    lines = read_log_file(
+        log_file, LogRecordFilters(), follow=True, errors=errors, log_directory=tmp_path
+    )
+
+    assert next_line_within_timeout(lines, "the drained line").endswith("first")
+
+    with active_segment_path.open("a", encoding="utf-8") as appending:
+        appending.write(json.dumps(a_log_record(message="second")) + "\n")
+    rotate_like_the_engine(active_segment_path, 1)
+    with active_segment_path.open("a", encoding="utf-8") as appending:
+        appending.write(json.dumps(a_log_record(message="third")) + "\n")
+
+    assert next_line_within_timeout(lines, "the line written just before the rotation").endswith(
+        "second"
+    )
+    assert next_line_within_timeout(lines, "the first line after the rotation").endswith("third")
+    assert errors.getvalue() == ""
+    lines.close()
+
+
+def lines_pulled_across_a_change_made_at_the_live_edge(
+    lines: "Generator[str, None, None]",
+    count: int,
+    change_the_log: "Callable[[], None]",
+    monkeypatch: pytest.MonkeyPatch,
+) -> "list[str]":
+    """The next `count` lines, with `change_the_log` run while the reader waits at the edge.
+
+    The reader has already read everything on disk when it first sleeps, so running
+    the change there, rather than racing it, is what makes a test of the reader's
+    edge behaviour red when that behaviour regresses.
+    """
+    reader_parked_at_the_edge = threading.Event()
+    change_made = threading.Event()
+    real_sleep = time.sleep
+
+    def sleep_once_the_change_is_made(seconds: float) -> None:
+        reader_parked_at_the_edge.set()
+        change_made.wait(FOLLOW_LINE_TIMEOUT_SECONDS)
+        real_sleep(seconds)
+
+    monkeypatch.setattr("streamlib._runtime_log_reader.time.sleep", sleep_once_the_change_is_made)
+    collected: "list[str]" = []
+    puller = threading.Thread(
+        target=lambda: collected.extend(next(lines) for _ in range(count)), daemon=True
+    )
+    puller.start()
+    assert reader_parked_at_the_edge.wait(FOLLOW_LINE_TIMEOUT_SECONDS)
+    change_the_log()
+    change_made.set()
+    puller.join(FOLLOW_LINE_TIMEOUT_SECONDS)
+    assert len(collected) == count, (
+        f"expected {count} lines within {FOLLOW_LINE_TIMEOUT_SECONDS}s, got {collected}"
+    )
+    return collected
+
+
+def test_follow_reads_every_segment_rotated_between_two_polls(tmp_path, monkeypatch):
+    active_segment_path = tmp_path / "Rabc-1000.jsonl"
+    write_segment(active_segment_path, ["first"])
+    lines = read_log_file(
+        RuntimeLogFile("Rabc", 1000, active_segment_path, 0),
+        LogRecordFilters(),
+        follow=True,
+        errors=io.StringIO(),
+        log_directory=tmp_path,
+    )
+    assert next_line_within_timeout(lines, "the drained line").endswith("first")
+
+    def append_then_rotate_twice() -> None:
+        with active_segment_path.open("a", encoding="utf-8") as appending:
+            appending.write(json.dumps(a_log_record(message="second")) + "\n")
+        rotate_like_the_engine(active_segment_path, 1)
+        write_segment(active_segment_path, ["third"])
+        rotate_like_the_engine(active_segment_path, 2)
+        write_segment(active_segment_path, ["fourth"])
+
+    collected = lines_pulled_across_a_change_made_at_the_live_edge(
+        lines, 3, append_then_rotate_twice, monkeypatch
+    )
+
+    assert rendered_messages(collected) == ["second", "third", "fourth"]
+    lines.close()
+
+
+def test_a_segment_retention_removed_before_it_was_read_is_skipped_with_a_note(
+    tmp_path, monkeypatch
+):
+    active_segment_path = tmp_path / "Rabc-1000.jsonl"
+    write_segment(tmp_path / "Rabc-1000.2.jsonl", ["survivor"])
+    write_segment(active_segment_path, ["active"])
+    monkeypatch.setattr("streamlib._runtime_log_reader._rotated_segment_sequences", lambda _active: [1, 2])
+    errors = io.StringIO()
+
+    rendered = list(
+        read_log_file(
+            RuntimeLogFile("Rabc", 1000, active_segment_path, 0),
+            LogRecordFilters(),
+            follow=False,
+            errors=errors,
+            log_directory=tmp_path,
+        )
+    )
+
+    assert rendered_messages(rendered) == ["survivor", "active"]
+    assert "Rabc-1000.1.jsonl was removed by retention" in errors.getvalue()
+
+
+#: More lines than any of the rotation scenarios writes, so a reader that
+#: re-reads a segment in a loop fails the assertion rather than hanging.
+MOST_LINES_A_ROTATION_SCENARIO_READS = 20
+
+
+def read_every_line(active_segment_path: Path, errors: TextIO) -> "list[str]":
+    return list(
+        itertools.islice(
+            read_log_file(
+                RuntimeLogFile("Rabc", 1000, active_segment_path, 0),
+                LogRecordFilters(),
+                follow=False,
+                errors=errors,
+                log_directory=active_segment_path.parent,
+            ),
+            MOST_LINES_A_ROTATION_SCENARIO_READS,
+        )
+    )
+
+
+def test_a_record_flushed_just_before_a_rotation_is_read_before_the_segment_after_it(
+    tmp_path, monkeypatch
+):
+    active_segment_path = tmp_path / "Rabc-1000.jsonl"
+    write_segment(active_segment_path, ["first"])
+    real_check = _held_segment_was_rotated_away
+    checks = []
+
+    def flush_then_rotate_before_the_first_check(held_segment_file, path):
+        if not checks:
+            with active_segment_path.open("a", encoding="utf-8") as appending:
+                appending.write(json.dumps(a_log_record(message="flushed-before-rotation")) + "\n")
+            rotate_like_the_engine(active_segment_path, 1)
+            write_segment(active_segment_path, ["after"])
+        checks.append(path)
+        return real_check(held_segment_file, path)
+
+    monkeypatch.setattr("streamlib._runtime_log_reader._held_segment_was_rotated_away", flush_then_rotate_before_the_first_check
+    )
+    errors = io.StringIO()
+
+    rendered = read_every_line(active_segment_path, errors)
+
+    assert rendered_messages(rendered) == ["first", "flushed-before-rotation", "after"]
+    assert errors.getvalue() == ""
+
+
+def test_a_rotation_between_listing_and_opening_keeps_the_segment_it_rotated(
+    tmp_path, monkeypatch
+):
+    active_segment_path = tmp_path / "Rabc-1000.jsonl"
+    write_segment(active_segment_path, ["before-rotation"])
+    real_listing = _rotated_segment_sequences
+    listings = []
+
+    def rotate_right_after_the_first_listing(path):
+        listed = real_listing(path)
+        if not listings:
+            rotate_like_the_engine(active_segment_path, 1)
+            write_segment(active_segment_path, ["after"])
+        listings.append(listed)
+        return listed
+
+    monkeypatch.setattr("streamlib._runtime_log_reader._rotated_segment_sequences", rotate_right_after_the_first_listing
+    )
+
+    rendered = read_every_line(active_segment_path, io.StringIO())
+
+    assert rendered_messages(rendered) == ["before-rotation", "after"]
+
+
+def test_a_rotation_the_writer_backed_out_of_repeats_no_record(tmp_path, monkeypatch):
+    # The writer renames the active segment away, fails to put a replacement in
+    # its place, and renames it back. A reader looking in that gap sees no name.
+    active_segment_path = tmp_path / "Rabc-1000.jsonl"
+    write_segment(active_segment_path, ["a1", "a2"])
+    rotated_segment_path = tmp_path / "Rabc-1000.1.jsonl"
+    real_check = _held_segment_was_rotated_away
+
+    def look_while_the_name_is_renamed_away(held_segment_file, path):
+        os.rename(active_segment_path, rotated_segment_path)
+        try:
+            return real_check(held_segment_file, path)
+        finally:
+            os.rename(rotated_segment_path, active_segment_path)
+
+    monkeypatch.setattr("streamlib._runtime_log_reader._held_segment_was_rotated_away", look_while_the_name_is_renamed_away
+    )
+
+    rendered = read_every_line(active_segment_path, io.StringIO())
+
+    assert rendered_messages(rendered) == ["a1", "a2"]
+
+
+def test_a_held_segment_is_matched_to_its_rotated_name_rather_than_counted(
+    tmp_path, monkeypatch
+):
+    # With one segment retained, earlier rotations are already deleted, so the
+    # held file becomes `.5` while the reader has read no rotated segment at all.
+    active_segment_path = tmp_path / "Rabc-1000.jsonl"
+    write_segment(active_segment_path, ["held"])
+    real_check = _held_segment_was_rotated_away
+    checks = []
+
+    def rotate_to_five_before_the_first_check(held_segment_file, path):
+        if not checks:
+            rotate_like_the_engine(active_segment_path, 5)
+            write_segment(active_segment_path, ["after"])
+        checks.append(path)
+        return real_check(held_segment_file, path)
+
+    monkeypatch.setattr("streamlib._runtime_log_reader._held_segment_was_rotated_away", rotate_to_five_before_the_first_check
+    )
+    errors = io.StringIO()
+
+    rendered = read_every_line(active_segment_path, errors)
+
+    assert rendered_messages(rendered) == ["held", "after"]
+    assert errors.getvalue() == ""
+
+
+def test_a_record_caught_half_written_is_held_until_its_newline_lands(
+    tmp_path, monkeypatch
+):
+    active_segment_path = tmp_path / "Rabc-1000.jsonl"
+    whole_record = json.dumps(a_log_record(message="second")) + "\n"
+    active_segment_path.write_text(
+        json.dumps(a_log_record(message="first")) + "\n" + whole_record[:20],
+        encoding="utf-8",
+    )
+    errors = io.StringIO()
+    lines = read_log_file(
+        RuntimeLogFile("Rabc", 1000, active_segment_path, 0),
+        LogRecordFilters(),
+        follow=True,
+        errors=errors,
+        log_directory=tmp_path,
+    )
+    assert next_line_within_timeout(lines, "the whole line").endswith("first")
+
+    def finish_the_record() -> None:
+        with active_segment_path.open("a", encoding="utf-8") as appending:
+            appending.write(whole_record[20:])
+
+    collected = lines_pulled_across_a_change_made_at_the_live_edge(
+        lines, 1, finish_the_record, monkeypatch
+    )
+
+    assert rendered_messages(collected) == ["second"]
+    assert "malformed" not in errors.getvalue()
     lines.close()
 
 

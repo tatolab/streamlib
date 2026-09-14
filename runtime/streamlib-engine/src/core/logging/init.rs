@@ -191,6 +191,7 @@ fn build_components(config: StreamlibLoggingConfig) -> Result<(Dispatch, Streaml
                 &path,
                 tunables.batch_bytes,
                 tunables.fsync_on_every_batch,
+                tunables.segment_rotation,
             ) {
                 Ok(w) => (Some(w), Some(path)),
                 Err(e) => {
