@@ -18,13 +18,14 @@ from __future__ import annotations
 
 import argparse
 import io
+import itertools
 import json
 import os
 import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import Any, Callable, Generator, NamedTuple, Optional
+from typing import Any, Callable, Generator, NamedTuple, Optional, TextIO
 
 import pytest
 
@@ -965,6 +966,131 @@ def test_a_segment_retention_removed_before_it_was_read_is_skipped_with_a_note(
 
     assert rendered_messages(rendered) == ["survivor", "active"]
     assert "Rabc-1000.1.jsonl was removed by retention" in errors.getvalue()
+
+
+#: More lines than any of the rotation scenarios writes, so a reader that
+#: re-reads a segment in a loop fails the assertion rather than hanging.
+MOST_LINES_A_ROTATION_SCENARIO_READS = 20
+
+
+def read_every_line(active_segment_path: Path, errors: TextIO) -> "list[str]":
+    return list(
+        itertools.islice(
+            read_log_file(
+                RuntimeLogFile("Rabc", 1000, active_segment_path, 0),
+                LogRecordFilters(),
+                follow=False,
+                errors=errors,
+                log_directory=active_segment_path.parent,
+            ),
+            MOST_LINES_A_ROTATION_SCENARIO_READS,
+        )
+    )
+
+
+def test_a_record_flushed_just_before_a_rotation_is_read_before_the_segment_after_it(
+    tmp_path, monkeypatch
+):
+    active_segment_path = tmp_path / "Rabc-1000.jsonl"
+    write_segment(active_segment_path, ["first"])
+    real_check = reader_module._held_segment_was_rotated_away
+    checks = []
+
+    def flush_then_rotate_before_the_first_check(held_segment_file, path):
+        if not checks:
+            with active_segment_path.open("a", encoding="utf-8") as appending:
+                appending.write(json.dumps(a_log_record(message="flushed-before-rotation")) + "\n")
+            rotate_like_the_engine(active_segment_path, 1)
+            write_segment(active_segment_path, ["after"])
+        checks.append(path)
+        return real_check(held_segment_file, path)
+
+    monkeypatch.setattr(
+        reader_module, "_held_segment_was_rotated_away", flush_then_rotate_before_the_first_check
+    )
+    errors = io.StringIO()
+
+    rendered = read_every_line(active_segment_path, errors)
+
+    assert rendered_messages(rendered) == ["first", "flushed-before-rotation", "after"]
+    assert errors.getvalue() == ""
+
+
+def test_a_rotation_between_listing_and_opening_keeps_the_segment_it_rotated(
+    tmp_path, monkeypatch
+):
+    active_segment_path = tmp_path / "Rabc-1000.jsonl"
+    write_segment(active_segment_path, ["before-rotation"])
+    real_listing = reader_module._rotated_segment_sequences
+    listings = []
+
+    def rotate_right_after_the_first_listing(path):
+        listed = real_listing(path)
+        if not listings:
+            rotate_like_the_engine(active_segment_path, 1)
+            write_segment(active_segment_path, ["after"])
+        listings.append(listed)
+        return listed
+
+    monkeypatch.setattr(
+        reader_module, "_rotated_segment_sequences", rotate_right_after_the_first_listing
+    )
+
+    rendered = read_every_line(active_segment_path, io.StringIO())
+
+    assert rendered_messages(rendered) == ["before-rotation", "after"]
+
+
+def test_a_rotation_the_writer_backed_out_of_repeats_no_record(tmp_path, monkeypatch):
+    # The writer renames the active segment away, fails to put a replacement in
+    # its place, and renames it back. A reader looking in that gap sees no name.
+    active_segment_path = tmp_path / "Rabc-1000.jsonl"
+    write_segment(active_segment_path, ["a1", "a2"])
+    rotated_segment_path = tmp_path / "Rabc-1000.1.jsonl"
+    real_check = reader_module._held_segment_was_rotated_away
+
+    def look_while_the_name_is_renamed_away(held_segment_file, path):
+        os.rename(active_segment_path, rotated_segment_path)
+        try:
+            return real_check(held_segment_file, path)
+        finally:
+            os.rename(rotated_segment_path, active_segment_path)
+
+    monkeypatch.setattr(
+        reader_module, "_held_segment_was_rotated_away", look_while_the_name_is_renamed_away
+    )
+
+    rendered = read_every_line(active_segment_path, io.StringIO())
+
+    assert rendered_messages(rendered) == ["a1", "a2"]
+
+
+def test_a_held_segment_is_matched_to_its_rotated_name_rather_than_counted(
+    tmp_path, monkeypatch
+):
+    # With one segment retained, earlier rotations are already deleted, so the
+    # held file becomes `.5` while the reader has read no rotated segment at all.
+    active_segment_path = tmp_path / "Rabc-1000.jsonl"
+    write_segment(active_segment_path, ["held"])
+    real_check = reader_module._held_segment_was_rotated_away
+    checks = []
+
+    def rotate_to_five_before_the_first_check(held_segment_file, path):
+        if not checks:
+            rotate_like_the_engine(active_segment_path, 5)
+            write_segment(active_segment_path, ["after"])
+        checks.append(path)
+        return real_check(held_segment_file, path)
+
+    monkeypatch.setattr(
+        reader_module, "_held_segment_was_rotated_away", rotate_to_five_before_the_first_check
+    )
+    errors = io.StringIO()
+
+    rendered = read_every_line(active_segment_path, errors)
+
+    assert rendered_messages(rendered) == ["held", "after"]
+    assert errors.getvalue() == ""
 
 
 def test_a_record_caught_half_written_is_held_until_its_newline_lands(

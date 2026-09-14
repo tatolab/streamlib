@@ -3,7 +3,7 @@
 
 //! Configuration for [`crate::core::logging::init`].
 
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU64, NonZeroUsize};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -113,7 +113,7 @@ impl ResolvedTunables {
             channel_capacity,
             fsync_on_every_batch,
             segment_rotation: JsonlSegmentRotationPolicy {
-                rotate_at_segment_bytes: (rotate_bytes > 0).then_some(rotate_bytes),
+                rotate_at_segment_bytes: NonZeroU64::new(rotate_bytes),
                 retained_segment_count: NonZeroUsize::new(retain_segments),
             },
         }
@@ -204,7 +204,7 @@ mod tests {
         assert_eq!(
             tunables.segment_rotation,
             JsonlSegmentRotationPolicy {
-                rotate_at_segment_bytes: Some(100 * 1024 * 1024),
+                rotate_at_segment_bytes: NonZeroU64::new(100 * 1024 * 1024),
                 retained_segment_count: NonZeroUsize::new(10),
             }
         );
@@ -229,7 +229,7 @@ mod tests {
         assert_eq!(
             tunables.segment_rotation,
             JsonlSegmentRotationPolicy {
-                rotate_at_segment_bytes: Some(4096),
+                rotate_at_segment_bytes: NonZeroU64::new(4096),
                 retained_segment_count: NonZeroUsize::new(3),
             }
         );
@@ -253,7 +253,7 @@ mod tests {
         assert_eq!(
             tunables.segment_rotation,
             JsonlSegmentRotationPolicy {
-                rotate_at_segment_bytes: Some(2048),
+                rotate_at_segment_bytes: NonZeroU64::new(2048),
                 retained_segment_count: NonZeroUsize::new(7),
             }
         );

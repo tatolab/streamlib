@@ -3,8 +3,9 @@
 This is the **durable interface contract** for logs emitted by the
 StreamLib runtime. Every line of every segment under
 `<STREAMLIB_HOME>/.streamlib/logs/` (see [Files and rotation](#files-and-rotation))
-is one serialized [`RuntimeLogEvent`][rs]. Downstream consumers — `streamlib-cli
-logs`, polyglot SDKs, the future orchestrator — depend on this shape.
+is one serialized [`RuntimeLogEvent`][rs]. Downstream consumers — the wheel's
+`streamlib logs` (`sdk/streamlib-python-wheel/python/streamlib/_runtime_log_reader.py`),
+polyglot SDKs, the future orchestrator — depend on this shape.
 
 **Schema changes are expensive.** Adding a new optional field is fine;
 renaming or removing an existing field, or changing its type, requires
@@ -33,10 +34,14 @@ One runtime instance writes one or more **segments**, all in
 - `started_at_millis` is the wall-clock start of the runtime instance, so a
   restart under a pinned `STREAMLIB_RUNTIME_ID` starts a new set of segments.
 - The active segment always keeps the un-numbered name. When it holds
-  `STREAMLIB_LOG_ROTATE_BYTES` or more after a flush, the writer renames it to
-  the next `<seq>` and reopens the active name empty. `seq` starts at `1` and
-  increments per rotation, so a higher `seq` holds newer records and the active
-  segment is newer than every rotated one.
+  `STREAMLIB_LOG_ROTATE_BYTES` or more after a flush, the writer creates an empty
+  `<runtime_id>-<started_at_millis>.jsonl.rotating`, renames the active segment to
+  the next `<seq>`, then renames the `.rotating` file to the active name. The
+  active name is absent between the two renames, and a rotation that fails partway
+  is backed out, giving the name back to the same file. `seq` starts one past the
+  highest rotated segment already on disk (`1` for a new runtime) and increments per
+  rotation, so a higher `seq` holds newer records and the active segment is newer
+  than every rotated one.
 - `seq` is separated by a **dot**, never a dash: `runtime_id` may itself contain
   dashes and dots, while `started_at_millis` and `seq` are always decimal digits.
   An active stem always ends in `-<digits>`, so the text after its last dot is
@@ -53,9 +58,10 @@ One runtime instance writes one or more **segments**, all in
 
 To read a runtime in order: its rotated segments by ascending `seq`, then the
 active segment. A reader following the active segment detects a rotation when
-the active name stops pointing at the file it holds open, finishes that file,
-reads any segments rotated since, and reopens the active name —
-`streamlib logs --follow` does this.
+the active name points at a *different* file than the one it holds open — a
+missing name is not yet a rotation. It then finishes the held file, finds which
+`seq` that file became by matching its inode, reads the segments rotated after
+it, and reopens the active name. `streamlib logs --follow` does this.
 
 ## Fields
 

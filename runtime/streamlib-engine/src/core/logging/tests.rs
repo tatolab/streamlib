@@ -163,8 +163,7 @@ fn time_triggered_flush_writes_without_size_trigger() {
             batch_bytes: Some(1 << 22),
             channel_capacity: Some(1024),
             fsync_on_every_batch: None,
-            rotate_bytes: None,
-            retain_segments: None,
+            ..LoggingTunables::default()
         },
     };
     let guard = init_for_tests(config).unwrap();
@@ -271,8 +270,7 @@ fn panic_hook_best_effort_flush() {
             batch_bytes: Some(1 << 20),
             channel_capacity: Some(1024),
             fsync_on_every_batch: None,
-            rotate_bytes: None,
-            retain_segments: None,
+            ..LoggingTunables::default()
         },
     };
     let guard = init_for_tests(config).unwrap();
@@ -318,8 +316,7 @@ fn hot_path_is_not_blocked_on_io() {
             batch_bytes: Some(64 * 1024),
             channel_capacity: Some(65_536),
             fsync_on_every_batch: None,
-            rotate_bytes: None,
-            retain_segments: None,
+            ..LoggingTunables::default()
         },
     };
     let _guard = init_for_tests(config).unwrap();
@@ -860,8 +857,7 @@ fn burst_surfaces_dropped_counter_record() {
             // Tiny capacity so the burst forces drops.
             channel_capacity: Some(8),
             fsync_on_every_batch: None,
-            rotate_bytes: None,
-            retain_segments: None,
+            ..LoggingTunables::default()
         },
     };
     let guard = init_for_tests(config).unwrap();

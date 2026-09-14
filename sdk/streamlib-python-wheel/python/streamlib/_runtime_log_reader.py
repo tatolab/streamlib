@@ -403,45 +403,78 @@ def _open_active_segment_after_listing(
     newest sequence is unchanged across the open.
     """
     while True:
-        listed = _rotated_segment_sequences(active_segment_path)
+        listed_rotation_sequences = _rotated_segment_sequences(active_segment_path)
         try:
-            opened = active_segment_path.open("r", encoding="utf-8", errors="replace")
+            active_segment_file = active_segment_path.open(
+                "r", encoding="utf-8", errors="replace"
+            )
         except FileNotFoundError:
-            return None, listed
-        if _rotated_segment_sequences(active_segment_path)[-1:] == listed[-1:]:
-            return opened, listed
-        opened.close()
+            return None, listed_rotation_sequences
+        relisted_rotation_sequences = _rotated_segment_sequences(active_segment_path)
+        if relisted_rotation_sequences[-1:] == listed_rotation_sequences[-1:]:
+            return active_segment_file, listed_rotation_sequences
+        active_segment_file.close()
 
 
-def _held_segment_was_rotated_away(held: TextIO, active_segment_path: Path) -> bool:
-    """Whether the active segment's name no longer points at the file `held` reads."""
-    held_status = os.fstat(held.fileno())
+def _held_segment_was_rotated_away(held_segment_file: TextIO, active_segment_path: Path) -> bool:
+    """Whether the active segment's name now points at a different file than the held one.
+
+    A missing name is not a rotation: a rotation's two renames leave it absent for a
+    moment, and so does a rotation the writer backed out of, which gives the name
+    back to the very file held here.
+    """
+    held_segment_status = os.fstat(held_segment_file.fileno())
     try:
-        named_status = active_segment_path.stat()
+        named_segment_status = active_segment_path.stat()
     except FileNotFoundError:
-        return True
-    return (named_status.st_dev, named_status.st_ino) != (
-        held_status.st_dev,
-        held_status.st_ino,
+        return False
+    return (named_segment_status.st_dev, named_segment_status.st_ino) != (
+        held_segment_status.st_dev,
+        held_segment_status.st_ino,
     )
+
+
+def _rotation_sequence_of_held_segment(
+    held_segment_file: TextIO, active_segment_path: Path, last_read_rotation_sequence: int
+) -> int:
+    """The sequence the held file was rotated to, matched by inode rather than counted.
+
+    Asked while the file is still held open, so its inode cannot have been reused. A
+    held file that retention already deleted matches nothing, and every rotated
+    segment newer than `last_read_rotation_sequence` is then newer than it too.
+    """
+    held_segment_status = os.fstat(held_segment_file.fileno())
+    for rotation_sequence in _rotated_segment_sequences(active_segment_path):
+        try:
+            rotated_segment_status = _rotated_segment_path(
+                active_segment_path, rotation_sequence
+            ).stat()
+        except FileNotFoundError:
+            continue
+        if (rotated_segment_status.st_dev, rotated_segment_status.st_ino) == (
+            held_segment_status.st_dev,
+            held_segment_status.st_ino,
+        ):
+            return rotation_sequence
+    return last_read_rotation_sequence
 
 
 def _lines_of_rotated_segment(
     active_segment_path: Path, rotation_sequence: int, errors: TextIO
 ) -> "Generator[str, None, None]":
     """Every line of one rotated segment, or a note if retention removed it first."""
-    rotated_path = _rotated_segment_path(active_segment_path, rotation_sequence)
+    rotated_segment_path = _rotated_segment_path(active_segment_path, rotation_sequence)
     try:
-        opened = rotated_path.open("r", encoding="utf-8", errors="replace")
+        rotated_segment_file = rotated_segment_path.open("r", encoding="utf-8", errors="replace")
     except FileNotFoundError:
         print(
-            f"note: log segment {rotated_path.name} was removed by retention before "
-            f"it was read; skipping.",
+            f"note: log segment {rotated_segment_path.name} was removed by retention "
+            f"before it was read; skipping.",
             file=errors,
         )
         return
-    with opened:
-        yield from opened
+    with rotated_segment_file:
+        yield from rotated_segment_file
 
 
 def _lines_of_runtime_log_instance(
@@ -452,16 +485,17 @@ def _lines_of_runtime_log_instance(
     With `follow`, yields `None` each time the read reaches the live edge with
     nothing new, so the caller can look for a restart and wait. Rotation renames
     the active segment and reopens its name, which the held file is checked against
-    at every edge: once they part, the held file is drained as the rotated segment
-    after the last one read, the segments rotated since are read, and the new active
-    segment is opened.
+    at every edge: once they part, the held file is drained, the rotated segments
+    newer than it are read, and the new active segment is opened.
     """
     active_segment_path = log_file.path
-    active, rotated_sequences = _open_active_segment_after_listing(active_segment_path)
+    active_segment_file, rotation_sequences = _open_active_segment_after_listing(
+        active_segment_path
+    )
     last_read_rotation_sequence = 0
     try:
         while True:
-            for rotation_sequence in rotated_sequences:
+            for rotation_sequence in rotation_sequences:
                 if rotation_sequence <= last_read_rotation_sequence:
                     continue
                 yield from _lines_of_rotated_segment(
@@ -469,38 +503,41 @@ def _lines_of_runtime_log_instance(
                 )
                 last_read_rotation_sequence = rotation_sequence
 
-            if active is None:
-                # Between a rotation's rename and its reopen, or never reopened.
+            if active_segment_file is None:
                 if not follow:
                     return
                 yield None
             else:
-                reader = _SegmentLineReader(active)
+                active_segment_line_reader = _SegmentLineReader(active_segment_file)
                 rotated_away = False
                 while not rotated_away:
-                    yield from reader.complete_lines()
-                    rotated_away = _held_segment_was_rotated_away(active, active_segment_path)
+                    yield from active_segment_line_reader.complete_lines()
+                    rotated_away = _held_segment_was_rotated_away(
+                        active_segment_file, active_segment_path
+                    )
                     if rotated_away:
-                        yield from reader.complete_lines()
-                        last_read_rotation_sequence += 1
+                        yield from active_segment_line_reader.complete_lines()
+                        last_read_rotation_sequence = _rotation_sequence_of_held_segment(
+                            active_segment_file, active_segment_path, last_read_rotation_sequence
+                        )
                     elif not follow:
                         break
                     else:
                         yield None
-                unfinished_line = reader.unfinished_line()
+                unfinished_line = active_segment_line_reader.unfinished_line()
                 if unfinished_line:
                     yield unfinished_line
-                active.close()
-                active = None
+                active_segment_file.close()
+                active_segment_file = None
                 if not rotated_away:
                     return
 
-            active, rotated_sequences = _open_active_segment_after_listing(
+            active_segment_file, rotation_sequences = _open_active_segment_after_listing(
                 active_segment_path
             )
     finally:
-        if active is not None:
-            active.close()
+        if active_segment_file is not None:
+            active_segment_file.close()
 
 
 def read_log_file(

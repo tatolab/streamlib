@@ -6,7 +6,7 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
 
 use crate::core::logging::paths::rotated_runtime_log_segment_path;
@@ -15,7 +15,7 @@ use crate::core::logging::paths::rotated_runtime_log_segment_path;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct JsonlSegmentRotationPolicy {
     /// Bytes after which the active segment rolls over; `None` never rotates.
-    pub rotate_at_segment_bytes: Option<u64>,
+    pub rotate_at_segment_bytes: Option<NonZeroU64>,
     /// Segments kept per runtime, the active one included; `None` keeps every one.
     pub retained_segment_count: Option<NonZeroUsize>,
 }
@@ -52,11 +52,12 @@ impl JsonlBatchedWriter {
         }
         let active_segment_file = open_segment_for_append(path)?;
         let active_segment_bytes = active_segment_file.metadata()?.len();
+        let next_rotated_segment_sequence = highest_rotated_segment_sequence_on_disk(path)? + 1;
         Ok(Self {
             active_segment_path: path.to_path_buf(),
             active_segment_file,
             active_segment_bytes,
-            next_rotated_segment_sequence: 1,
+            next_rotated_segment_sequence,
             rotation_policy,
             buffer: Vec::with_capacity(batch_bytes.saturating_add(1024)),
             batch_bytes,
@@ -105,7 +106,7 @@ impl JsonlBatchedWriter {
         if self
             .rotation_policy
             .rotate_at_segment_bytes
-            .is_some_and(|limit| self.active_segment_bytes >= limit)
+            .is_some_and(|limit| self.active_segment_bytes >= limit.get())
         {
             self.rotate_active_segment()?;
         }
@@ -127,41 +128,89 @@ impl JsonlBatchedWriter {
         let rotated_sequence = self.next_rotated_segment_sequence;
         let rotated_path =
             rotated_runtime_log_segment_path(&self.active_segment_path, rotated_sequence);
-        std::fs::rename(&self.active_segment_path, &rotated_path)?;
-        let fresh_active_segment_file = match open_segment_for_append(&self.active_segment_path) {
-            Ok(file) => file,
-            Err(open_failure) => {
-                // Hand the name back so records keep landing under the
-                // active segment's name rather than a rotated one.
-                let _ = std::fs::rename(&rotated_path, &self.active_segment_path);
-                return Err(open_failure);
-            }
-        };
-        self.active_segment_file = fresh_active_segment_file;
+        let replacement_path = replacement_active_segment_path(&self.active_segment_path);
+        // The replacement is created before either rename, so a failed open
+        // (EMFILE, ENOSPC) leaves the active name where it was.
+        let replacement_file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&replacement_path)?;
+        if let Err(rename_failure) = std::fs::rename(&self.active_segment_path, &rotated_path) {
+            let _ = std::fs::remove_file(&replacement_path);
+            return Err(rename_failure);
+        }
+        if let Err(rename_failure) = std::fs::rename(&replacement_path, &self.active_segment_path) {
+            let _ = std::fs::rename(&rotated_path, &self.active_segment_path);
+            let _ = std::fs::remove_file(&replacement_path);
+            return Err(rename_failure);
+        }
+        self.active_segment_file = replacement_file;
         self.active_segment_bytes = 0;
         self.next_rotated_segment_sequence += 1;
+        self.delete_rotated_segment_past_retention(rotated_sequence)
+    }
 
-        if let Some(retained_segment_count) = self.rotation_policy.retained_segment_count {
-            let retained_rotated_segment_count = retained_segment_count.get() as u64 - 1;
-            if let Some(expired_sequence) =
-                rotated_sequence.checked_sub(retained_rotated_segment_count)
-                && expired_sequence >= 1
-            {
-                let expired_path =
-                    rotated_runtime_log_segment_path(&self.active_segment_path, expired_sequence);
-                match std::fs::remove_file(&expired_path) {
-                    Ok(()) => {}
-                    Err(missing) if missing.kind() == io::ErrorKind::NotFound => {}
-                    Err(removal_failure) => return Err(removal_failure),
-                }
-            }
+    fn delete_rotated_segment_past_retention(
+        &self,
+        newest_rotated_sequence: u64,
+    ) -> io::Result<()> {
+        let Some(retained_segment_count) = self.rotation_policy.retained_segment_count else {
+            return Ok(());
+        };
+        // The active segment is one of the retained ones.
+        let retained_rotated_segment_count = retained_segment_count.get() as u64 - 1;
+        if newest_rotated_sequence <= retained_rotated_segment_count {
+            return Ok(());
         }
-        Ok(())
+        let expired_path = rotated_runtime_log_segment_path(
+            &self.active_segment_path,
+            newest_rotated_sequence - retained_rotated_segment_count,
+        );
+        match std::fs::remove_file(&expired_path) {
+            Err(removal_failure) if removal_failure.kind() != io::ErrorKind::NotFound => {
+                Err(removal_failure)
+            }
+            _ => Ok(()),
+        }
     }
 }
 
 fn open_segment_for_append(path: &Path) -> io::Result<File> {
     OpenOptions::new().create(true).append(true).open(path)
+}
+
+/// Where a rotation builds the next active segment before renaming it into place.
+fn replacement_active_segment_path(active_segment_path: &Path) -> PathBuf {
+    active_segment_path.with_extension("jsonl.rotating")
+}
+
+/// The highest `<seq>` among `active_segment_path`'s rotated segments, or `0`.
+fn highest_rotated_segment_sequence_on_disk(active_segment_path: &Path) -> io::Result<u64> {
+    let (Some(directory), Some(active_stem)) = (
+        active_segment_path.parent(),
+        active_segment_path
+            .file_stem()
+            .and_then(|stem| stem.to_str()),
+    ) else {
+        return Ok(0);
+    };
+    let rotated_name_prefix = format!("{active_stem}.");
+    let mut highest_rotated_sequence = 0;
+    for entry in std::fs::read_dir(directory)? {
+        let file_name = entry?.file_name();
+        let Some(rotated_sequence) = file_name
+            .to_str()
+            .and_then(|name| name.strip_prefix(&rotated_name_prefix))
+            .and_then(|name| name.strip_suffix(".jsonl"))
+            .filter(|digits| digits.bytes().all(|byte| byte.is_ascii_digit()))
+            .and_then(|digits| digits.parse::<u64>().ok())
+        else {
+            continue;
+        };
+        highest_rotated_sequence = highest_rotated_sequence.max(rotated_sequence);
+    }
+    Ok(highest_rotated_sequence)
 }
 
 #[cfg(test)]
@@ -175,7 +224,7 @@ mod tests {
 
     fn rotating_every(bytes: u64, retained: Option<usize>) -> JsonlSegmentRotationPolicy {
         JsonlSegmentRotationPolicy {
-            rotate_at_segment_bytes: Some(bytes),
+            rotate_at_segment_bytes: Some(NonZeroU64::new(bytes).unwrap()),
             retained_segment_count: retained.map(|count| NonZeroUsize::new(count).unwrap()),
         }
     }
@@ -377,8 +426,8 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("Rabc-1000.jsonl");
         let record_bytes = numbered_record(0).len() as u64 + 1;
-        // Each batch holds seven records and the threshold falls inside the
-        // second one, so the rollover is forced while a batch is buffered.
+        // Each batch holds seven records and the threshold is crossed partway
+        // through the second, which must still land whole in one segment.
         let mut w = JsonlBatchedWriter::open(
             &path,
             (7 * record_bytes) as usize,
@@ -401,7 +450,7 @@ mod tests {
     }
 
     #[test]
-    fn a_clean_shutdown_never_leaves_an_empty_active_segment_behind_a_rotation() {
+    fn flush_and_fsync_never_rotates_the_active_segment() {
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("Rabc-1000.jsonl");
         let mut w =
@@ -427,6 +476,75 @@ mod tests {
         assert_eq!(
             segment_file_names(tmp.path()),
             ["Rabc-1000.1.jsonl", "Rabc-1000.jsonl"]
+        );
+    }
+
+    #[test]
+    fn reopening_an_existing_segment_numbers_rotations_after_the_ones_already_on_disk() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("Rabc-1000.jsonl");
+        std::fs::write(tmp.path().join("Rabc-1000.1.jsonl"), "{\"sequence\":100}\n").unwrap();
+        std::fs::write(tmp.path().join("Rabc-1000.2.jsonl"), "{\"sequence\":101}\n").unwrap();
+        std::fs::write(
+            tmp.path().join("Rabc-10000.7.jsonl"),
+            "{\"sequence\":102}\n",
+        )
+        .unwrap();
+        let mut w = JsonlBatchedWriter::open(&path, 1, false, rotating_every(1, None)).unwrap();
+
+        w.append_record(&numbered_record(0)).unwrap();
+
+        assert_eq!(
+            segment_file_names(tmp.path()),
+            [
+                "Rabc-1000.1.jsonl",
+                "Rabc-1000.2.jsonl",
+                "Rabc-1000.3.jsonl",
+                "Rabc-1000.jsonl",
+                "Rabc-10000.7.jsonl",
+            ],
+            "the earlier run's segments survive and the new rotation takes the next number"
+        );
+    }
+
+    #[test]
+    fn a_rotated_segment_removed_from_outside_does_not_stop_retention() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("Rabc-1000.jsonl");
+        let mut w = JsonlBatchedWriter::open(&path, 1, false, rotating_every(1, Some(3))).unwrap();
+        for sequence in 0..2 {
+            w.append_record(&numbered_record(sequence)).unwrap();
+        }
+        std::fs::remove_file(tmp.path().join("Rabc-1000.1.jsonl")).unwrap();
+
+        for sequence in 2..5 {
+            w.append_record(&numbered_record(sequence))
+                .expect("an already-missing expired segment is not a failure");
+        }
+
+        assert_eq!(
+            segment_file_names(tmp.path()),
+            ["Rabc-1000.4.jsonl", "Rabc-1000.5.jsonl", "Rabc-1000.jsonl"]
+        );
+    }
+
+    #[test]
+    fn a_rotation_leaves_no_replacement_file_behind() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("Rabc-1000.jsonl");
+        let mut w = JsonlBatchedWriter::open(&path, 1, false, rotating_every(1, None)).unwrap();
+
+        w.append_record(&numbered_record(0)).unwrap();
+        w.append_record(&numbered_record(1)).unwrap();
+
+        let mut every_file_name: Vec<String> = std::fs::read_dir(tmp.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        every_file_name.sort();
+        assert_eq!(
+            every_file_name,
+            ["Rabc-1000.1.jsonl", "Rabc-1000.2.jsonl", "Rabc-1000.jsonl"]
         );
     }
 }
