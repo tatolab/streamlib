@@ -55,17 +55,24 @@ impl JsonlBatchedWriter {
         }
         let active_segment_file = open_segment_for_append(path)?;
         let active_segment_bytes = active_segment_file.metadata()?.len();
-        let next_rotated_segment_sequence = highest_rotated_segment_sequence_on_disk(path)? + 1;
-        Ok(Self {
+        let highest_rotated_sequence = rotated_segment_sequences_on_disk(path)?
+            .into_iter()
+            .max()
+            .unwrap_or(0);
+        let writer = Self {
             active_segment_path: path.to_path_buf(),
             active_segment_file,
             active_segment_bytes,
-            next_rotated_segment_sequence,
+            next_rotated_segment_sequence: highest_rotated_sequence + 1,
             rotation_policy,
             buffer: Vec::with_capacity(batch_bytes.saturating_add(1024)),
             batch_bytes,
             fsync_on_every_batch,
-        })
+        };
+        // Best effort: a segment that will not delete here is retried at the
+        // next rotation, and refusing to open would lose the log entirely.
+        let _ = writer.delete_rotated_segments_past_retention(highest_rotated_sequence);
+        Ok(writer)
     }
 
     /// Append one JSONL record to the buffer. `bytes` must be the
@@ -152,10 +159,13 @@ impl JsonlBatchedWriter {
         self.active_segment_file = replacement_file;
         self.active_segment_bytes = 0;
         self.next_rotated_segment_sequence += 1;
-        self.delete_rotated_segment_past_retention(rotated_sequence)
+        self.delete_rotated_segments_past_retention(rotated_sequence)
     }
 
-    fn delete_rotated_segment_past_retention(
+    /// Deletes every rotated segment on disk older than the retained ones, so a
+    /// segment that failed to delete before, or an earlier run's backlog, is
+    /// caught up rather than left past the bound.
+    fn delete_rotated_segments_past_retention(
         &self,
         newest_rotated_sequence: u64,
     ) -> io::Result<()> {
@@ -164,19 +174,26 @@ impl JsonlBatchedWriter {
         };
         // The active segment is one of the retained ones.
         let retained_rotated_segment_count = retained_segment_count.get() as u64 - 1;
-        if newest_rotated_sequence <= retained_rotated_segment_count {
+        let Some(newest_expired_sequence) =
+            newest_rotated_sequence.checked_sub(retained_rotated_segment_count)
+        else {
             return Ok(());
-        }
-        let expired_path = rotated_runtime_log_segment_path(
-            &self.active_segment_path,
-            newest_rotated_sequence - retained_rotated_segment_count,
-        );
-        match std::fs::remove_file(&expired_path) {
-            Err(removal_failure) if removal_failure.kind() != io::ErrorKind::NotFound => {
-                Err(removal_failure)
+        };
+        let mut first_removal_failure = None;
+        for expired_sequence in rotated_segment_sequences_on_disk(&self.active_segment_path)?
+            .into_iter()
+            .filter(|&sequence| sequence <= newest_expired_sequence)
+        {
+            let expired_path =
+                rotated_runtime_log_segment_path(&self.active_segment_path, expired_sequence);
+            match std::fs::remove_file(&expired_path) {
+                Err(removal_failure) if removal_failure.kind() != io::ErrorKind::NotFound => {
+                    first_removal_failure.get_or_insert(removal_failure);
+                }
+                _ => {}
             }
-            _ => Ok(()),
         }
+        first_removal_failure.map_or(Ok(()), Err)
     }
 }
 
@@ -184,23 +201,23 @@ fn open_segment_for_append(path: &Path) -> io::Result<File> {
     OpenOptions::new().create(true).append(true).open(path)
 }
 
-/// The highest `<seq>` among `active_segment_path`'s rotated segments, or `0`.
-fn highest_rotated_segment_sequence_on_disk(active_segment_path: &Path) -> io::Result<u64> {
+/// The `<seq>` of every rotated segment of `active_segment_path` on disk, in no order.
+fn rotated_segment_sequences_on_disk(active_segment_path: &Path) -> io::Result<Vec<u64>> {
     let directory = match active_segment_path.parent() {
         Some(parent) if !parent.as_os_str().is_empty() => parent,
         _ => Path::new("."),
     };
-    let mut highest_rotated_sequence = 0;
+    let mut rotated_sequences = Vec::new();
     for entry in std::fs::read_dir(directory)? {
         let file_name = entry?.file_name();
         if let Some(rotated_sequence) = file_name
             .to_str()
             .and_then(|name| rotated_runtime_log_segment_sequence(active_segment_path, name))
         {
-            highest_rotated_sequence = highest_rotated_sequence.max(rotated_sequence);
+            rotated_sequences.push(rotated_sequence);
         }
     }
-    Ok(highest_rotated_sequence)
+    Ok(rotated_sequences)
 }
 
 #[cfg(test)]
@@ -501,6 +518,46 @@ mod tests {
                 "Rabc-10000.7.jsonl",
             ],
             "the earlier run's segments survive and the new rotation takes the next number"
+        );
+    }
+
+    #[test]
+    fn reopening_past_an_earlier_runs_backlog_trims_it_to_the_retention_bound() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("Rabc-1000.jsonl");
+        for rotated_sequence in [1, 2, 4, 5, 6] {
+            std::fs::write(
+                tmp.path()
+                    .join(format!("Rabc-1000.{rotated_sequence}.jsonl")),
+                format!("{{\"sequence\":{rotated_sequence}}}\n"),
+            )
+            .unwrap();
+        }
+        std::fs::write(tmp.path().join("Rabc-10000.1.jsonl"), "{\"sequence\":0}\n").unwrap();
+
+        let mut w = JsonlBatchedWriter::open(&path, 1, false, rotating_every(1, Some(3))).unwrap();
+
+        assert_eq!(
+            segment_file_names(tmp.path()),
+            [
+                "Rabc-1000.5.jsonl",
+                "Rabc-1000.6.jsonl",
+                "Rabc-1000.jsonl",
+                "Rabc-10000.1.jsonl",
+            ],
+            "opening trims every expired segment, across the gap at 3, and no other runtime's"
+        );
+
+        w.append_record(&numbered_record(7)).unwrap();
+
+        assert_eq!(
+            segment_file_names(tmp.path()),
+            [
+                "Rabc-1000.6.jsonl",
+                "Rabc-1000.7.jsonl",
+                "Rabc-1000.jsonl",
+                "Rabc-10000.1.jsonl",
+            ]
         );
     }
 

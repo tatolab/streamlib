@@ -50,8 +50,9 @@ One runtime instance writes one or more **segments**, all in
   newline, no record is split across two segments, and no record appears in two.
   A segment can therefore pass the threshold by up to one batch.
 - Retention keeps at most `STREAMLIB_LOG_RETAIN_SEGMENTS` segments per runtime
-  instance, **the active one included**; each rotation deletes the rotated
-  segment that falls outside it. Rotation and retention never `fsync`; the
+  instance, **the active one included**; opening a writer and every rotation
+  delete each rotated segment on disk that falls outside it, so a segment that
+  failed to delete is retried at the next rotation. Rotation and retention never `fsync`; the
   durability contract below applies per batch as before, and a clean shutdown
   never rotates.
 - The `dropped=N` synthetic record counts per runtime, not per segment.

@@ -22,6 +22,7 @@ import itertools
 import json
 import os
 import threading
+import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -39,10 +40,11 @@ from streamlib._control_plane_client import (
     resolve_control_url,
 )
 from streamlib._node_registry import registry_directory, scan_check_and_prune
-import streamlib._runtime_log_reader as reader_module
 from streamlib._runtime_log_reader import (
     LogRecordFilters,
     RuntimeLogFile,
+    _held_segment_was_rotated_away,
+    _rotated_segment_sequences,
     enumerate_runtime_log_files,
     format_record_pretty,
     format_size,
@@ -898,14 +900,14 @@ def lines_pulled_across_a_change_made_at_the_live_edge(
     """
     reader_parked_at_the_edge = threading.Event()
     change_made = threading.Event()
-    real_sleep = reader_module.time.sleep
+    real_sleep = time.sleep
 
     def sleep_once_the_change_is_made(seconds: float) -> None:
         reader_parked_at_the_edge.set()
         change_made.wait(FOLLOW_LINE_TIMEOUT_SECONDS)
         real_sleep(seconds)
 
-    monkeypatch.setattr(reader_module.time, "sleep", sleep_once_the_change_is_made)
+    monkeypatch.setattr("streamlib._runtime_log_reader.time.sleep", sleep_once_the_change_is_made)
     collected: "list[str]" = []
     puller = threading.Thread(
         target=lambda: collected.extend(next(lines) for _ in range(count)), daemon=True
@@ -955,7 +957,7 @@ def test_a_segment_retention_removed_before_it_was_read_is_skipped_with_a_note(
     active_segment_path = tmp_path / "Rabc-1000.jsonl"
     write_segment(tmp_path / "Rabc-1000.2.jsonl", ["survivor"])
     write_segment(active_segment_path, ["active"])
-    monkeypatch.setattr(reader_module, "_rotated_segment_sequences", lambda _active: [1, 2])
+    monkeypatch.setattr("streamlib._runtime_log_reader._rotated_segment_sequences", lambda _active: [1, 2])
     errors = io.StringIO()
 
     rendered = list(
@@ -997,7 +999,7 @@ def test_a_record_flushed_just_before_a_rotation_is_read_before_the_segment_afte
 ):
     active_segment_path = tmp_path / "Rabc-1000.jsonl"
     write_segment(active_segment_path, ["first"])
-    real_check = reader_module._held_segment_was_rotated_away
+    real_check = _held_segment_was_rotated_away
     checks = []
 
     def flush_then_rotate_before_the_first_check(held_segment_file, path):
@@ -1009,8 +1011,7 @@ def test_a_record_flushed_just_before_a_rotation_is_read_before_the_segment_afte
         checks.append(path)
         return real_check(held_segment_file, path)
 
-    monkeypatch.setattr(
-        reader_module, "_held_segment_was_rotated_away", flush_then_rotate_before_the_first_check
+    monkeypatch.setattr("streamlib._runtime_log_reader._held_segment_was_rotated_away", flush_then_rotate_before_the_first_check
     )
     errors = io.StringIO()
 
@@ -1025,7 +1026,7 @@ def test_a_rotation_between_listing_and_opening_keeps_the_segment_it_rotated(
 ):
     active_segment_path = tmp_path / "Rabc-1000.jsonl"
     write_segment(active_segment_path, ["before-rotation"])
-    real_listing = reader_module._rotated_segment_sequences
+    real_listing = _rotated_segment_sequences
     listings = []
 
     def rotate_right_after_the_first_listing(path):
@@ -1036,8 +1037,7 @@ def test_a_rotation_between_listing_and_opening_keeps_the_segment_it_rotated(
         listings.append(listed)
         return listed
 
-    monkeypatch.setattr(
-        reader_module, "_rotated_segment_sequences", rotate_right_after_the_first_listing
+    monkeypatch.setattr("streamlib._runtime_log_reader._rotated_segment_sequences", rotate_right_after_the_first_listing
     )
 
     rendered = read_every_line(active_segment_path, io.StringIO())
@@ -1051,7 +1051,7 @@ def test_a_rotation_the_writer_backed_out_of_repeats_no_record(tmp_path, monkeyp
     active_segment_path = tmp_path / "Rabc-1000.jsonl"
     write_segment(active_segment_path, ["a1", "a2"])
     rotated_segment_path = tmp_path / "Rabc-1000.1.jsonl"
-    real_check = reader_module._held_segment_was_rotated_away
+    real_check = _held_segment_was_rotated_away
 
     def look_while_the_name_is_renamed_away(held_segment_file, path):
         os.rename(active_segment_path, rotated_segment_path)
@@ -1060,8 +1060,7 @@ def test_a_rotation_the_writer_backed_out_of_repeats_no_record(tmp_path, monkeyp
         finally:
             os.rename(rotated_segment_path, active_segment_path)
 
-    monkeypatch.setattr(
-        reader_module, "_held_segment_was_rotated_away", look_while_the_name_is_renamed_away
+    monkeypatch.setattr("streamlib._runtime_log_reader._held_segment_was_rotated_away", look_while_the_name_is_renamed_away
     )
 
     rendered = read_every_line(active_segment_path, io.StringIO())
@@ -1076,7 +1075,7 @@ def test_a_held_segment_is_matched_to_its_rotated_name_rather_than_counted(
     # held file becomes `.5` while the reader has read no rotated segment at all.
     active_segment_path = tmp_path / "Rabc-1000.jsonl"
     write_segment(active_segment_path, ["held"])
-    real_check = reader_module._held_segment_was_rotated_away
+    real_check = _held_segment_was_rotated_away
     checks = []
 
     def rotate_to_five_before_the_first_check(held_segment_file, path):
@@ -1086,8 +1085,7 @@ def test_a_held_segment_is_matched_to_its_rotated_name_rather_than_counted(
         checks.append(path)
         return real_check(held_segment_file, path)
 
-    monkeypatch.setattr(
-        reader_module, "_held_segment_was_rotated_away", rotate_to_five_before_the_first_check
+    monkeypatch.setattr("streamlib._runtime_log_reader._held_segment_was_rotated_away", rotate_to_five_before_the_first_check
     )
     errors = io.StringIO()
 
