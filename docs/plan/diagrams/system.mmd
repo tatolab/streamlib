@@ -45,8 +45,11 @@ its channel count is the contract's one optional value: absent means the source'
 count, carried on every emitted window, and a declared count is what the stage converts to;
 every input port declares one read policy — newest or ordered — and no other delivery setting:
 both drop under pressure, and no link ever blocks a producer;
-a drop is counted at the port that lost it, but only an app-process destination's
-count reaches graph — a helper's counts stay in its own child process (OPEN);
+a drop is counted at the port that lost it; a ring overwrite is counted by a sequence
+number in an iceoryx2 user header, and a helper's counts reach graph through a
+per-spawn blackboard the parent reads (decided, not yet built);
+shutdown always ends — every helper stops at once on one ladder, interrupt after 1 s,
+teardown within 5 s, then its process group terminated and killed;
 a read can name the inbound link a bag arrived on, and a port can list the links wired
 into it — which is how a many-track sink learns what it owes, counting unchanged;
 every stamp reads the one machine-monotonic clock"| helper
