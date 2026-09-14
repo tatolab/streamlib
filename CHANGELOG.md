@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.6](https://github.com/tatolab/streamlib/compare/v0.22.5...v0.22.6) (2026-09-14)
+
+
+### Features
+
+* **logging:** rotate and retain per-runtime JSONL log segments ([#2254](https://github.com/tatolab/streamlib/issues/2254)) ([eb3a5e1](https://github.com/tatolab/streamlib/commit/eb3a5e126724dcde5853ba3d51f760d650263d7f))
+
 ## [0.22.5](https://github.com/tatolab/streamlib/compare/v0.22.4...v0.22.5) (2026-09-14)
 
 
