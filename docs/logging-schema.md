@@ -4,8 +4,11 @@ This is the **durable interface contract** for logs emitted by the
 StreamLib runtime. Every line of every segment under
 `<STREAMLIB_HOME>/.streamlib/logs/` (see [Files and rotation](#files-and-rotation))
 is one serialized [`RuntimeLogEvent`][rs]. Downstream consumers — the wheel's
-`streamlib logs` (`sdk/streamlib-python-wheel/python/streamlib/_runtime_log_reader.py`),
-polyglot SDKs, the future orchestrator — depend on this shape.
+`streamlib logs` (`sdk/streamlib-python-wheel/python/streamlib/_runtime_log_reader.py`)
+and any tool that reads a runtime's segments — depend on this shape.
+
+> ~~polyglot SDKs, the future orchestrator~~ — Superseded 2026-09-14: the Python
+> wheel is the only polyglot SDK and the orchestrator is retired.
 
 **Schema changes are expensive.** Adding a new optional field is fine;
 renaming or removing an existing field, or changing its type, requires
@@ -69,50 +72,79 @@ it, and reopens the active name. `streamlib logs --follow` does this.
 | Field | Type | Nullable | Notes |
 | --- | --- | --- | --- |
 | `schema_version` | integer | no | Bumped on breaking schema changes. |
-| `host_ts` | integer | no | Host monotonic timestamp (nanoseconds since UNIX epoch). Authoritative sort key across the merged stream. |
+| `host_ts` | integer | no | Host wall-clock timestamp (nanoseconds since UNIX epoch). Stamped on the emitting thread for a Rust or app-process Python record, and at receipt for a record a helper process sends. Not monotonic — see [Ordering](#ordering). |
 | `runtime_id` | string | no | The owning runtime's id ([`RuntimeUniqueId`][rs_id]). |
-| `source` | enum | no | `"rust"` \| `"python"` \| `"deno"`. Rust events come from the in-process `tracing` pipeline; python/deno events arrive via the `{op:"log"}` escalate IPC (wired in #442). |
+| `source` | enum | no | `"rust"` \| `"python"`. Rust events come from the in-process `tracing` pipeline; python events come from `streamlib.log.*` in the app's interpreter, from a helper process via the `{op:"log"}` escalate IPC, or from a helper process's captured stdout / stderr. |
 | `level` | enum | no | `"trace"` \| `"debug"` \| `"info"` \| `"warn"` \| `"error"`. |
 | `message` | string | no | Primary human-readable message. May be empty for events that carry only structured fields. |
 | `target` | string | no | Tracing target (module path, typically) for Rust; subprocess-declared target for polyglot. |
 | `pipeline_id` | string | yes | Pipeline identifier. `null` for runtime-level events. |
 | `processor_id` | string | yes | Processor identifier. `null` for events outside a processor. |
 | `rhi_op` | string | yes | RHI operation name (`"acquire_texture"`, `"acquire_pixel_buffer"`, `"queue_submit"`, …). Set only inside RHI call sites. |
-| `source_ts` | string | yes | Subprocess wall-clock timestamp (ISO8601). Advisory only — never used for ordering. `null` when `source="rust"`. |
-| `source_seq` | integer | yes | Subprocess-monotonic sequence number. Escape hatch for subprocess-local order. `null` when `source="rust"`. |
-| `intercepted` | bool | no (default `false`) | `true` when the record came from an interceptor (captured `print()`, `console.log`, raw fd write, etc.) rather than a direct tracing call. Filled by #438 (Rust fd interceptor), #443 (Python), #444 (Deno). |
-| `channel` | string | yes | Interceptor channel identifier when `intercepted: true` (`"stdout"`, `"stderr"`, `"console.log"`, `"logging"`, `"fd1"`, `"fd2"`, …). `null` otherwise. |
+| `source_ts` | string | yes | Helper-process wall-clock timestamp (ISO8601). Advisory only — never used for ordering. Set only on records a helper process sends via the `{op:"log"}` escalate IPC; `null` otherwise. |
+| `source_seq` | integer | yes | Helper-process sequence number: starts at `1` and increments per record the helper sends via the `{op:"log"}` escalate IPC. One helper hosts one processor, so the sequence is per `(runtime_id, processor_id)`, and a new helper process for that processor starts again at `1`. `null` on every other record. |
+| `intercepted` | bool | no (default `false`) | `true` when the record came from fd-level capture of stdout / stderr (a raw fd write, a Python `print()`, a third-party library's output) rather than a direct `tracing` / `streamlib.log.*` call. |
+| `channel` | string | yes | `"fd1"` (stdout) or `"fd2"` (stderr) when `intercepted: true`. `null` otherwise. |
 | `attrs` | object<string, any> | yes (default `{}`) | User-supplied structured fields captured from the emitting call site. For Rust, anything passed to `tracing::info!(foo = 123, bar = "abc", "msg")` other than the well-known fields above; for polyglot, the `**attrs` / `attrs` object passed to `streamlib.log.*`. |
+
+> ~~`"deno"` as a `source` value, `host_ts` as a host monotonic timestamp and the
+> authoritative sort key across the merged stream, `console.log` / `"logging"` /
+> `"stdout"` / `"stderr"` channels~~ — Superseded 2026-09-14: `Source` is `Rust` \|
+> `Python` (`runtime/streamlib-engine/src/core/logging/event.rs`), `host_ts` is
+> `SystemTime::now()`, and both capture paths tag only `fd1` / `fd2`.
 
 ## Ordering
 
-- **Cross-source**: `host_ts` is the authoritative sort key. Subprocess
-  clocks are not synced cheaply with the host, so there is no reliable
-  "true origin time" to sort by. Anyone reading the JSONL should sort
-  by `host_ts` when merging events from multiple sources.
-- **Within a source**: FIFO is preserved by the channel — records from
-  the same source arrive on the host in the order the source emitted
-  them. `source_seq` (when present) provides a forensic escape hatch
-  for recovering that order even after any merge rearranges things.
+- **Within a runtime**: file order — rotated segments by ascending `seq`,
+  then the active segment — is the order the drain worker wrote the
+  records in, and every source of a runtime (Rust, app-process Python,
+  each helper process) shares that one stream. `host_ts` is not
+  monotonic in it: many threads stamp a record and then race into one
+  queue, and a wall-clock step moves `host_ts` backwards. Sorting a
+  runtime's records by `host_ts` can reorder records its file holds in
+  order.
+- **Within a helper process**: `source_seq` recovers the order the
+  helper sent its `{op:"log"}` records in, and a jump in it means
+  records between the two were lost. A record names its processor but
+  not its helper process, so a `source_seq` that falls for one
+  `(runtime_id, processor_id)` marks a new helper process, and a loss
+  that straddles that boundary cannot be detected from the records
+  alone.
+- **Across runtimes**: each runtime writes its own segments and nothing
+  in the runtime merges them. `host_ts` is the only field comparable
+  across runtimes, and only as far as their hosts' clocks agree.
+
+> ~~Cross-source: `host_ts` is the authoritative sort key … Within a
+> source: FIFO is preserved by the channel — records from the same source
+> arrive on the host in the order the source emitted them.~~ — Superseded
+> 2026-09-14: `host_ts` is stamped before the record enters the drain
+> queue — on the emitting thread for an in-process record, on the receiving
+> thread at host receipt for a helper process's record — so neither the file
+> nor one source is ordered by it.
 
 ## Interceptors
 
 Records tagged `intercepted: true` come from a capture layer rather than
 a direct `tracing` / `streamlib.log.*` call. The three enforcement
-layers specified in #430 are:
+layers are:
 
 1. **Compile-time (Rust)**: clippy `disallowed-macros` rejects
    `println!` / `eprintln!` / `print!` / `eprint!` / `dbg!` in library
-   code (#441).
-2. **CI lint (Python + TypeScript)**: `cargo xtask lint-logging`
-   rejects `print(`, `sys.stdout`, `sys.stderr`, `logging.basicConfig`,
-   `console.(log|warn|error|info|debug)`, `Deno.stdout.write`,
-   `Deno.stderr.write` in SDK source (#441).
-3. **Runtime interceptors**: fd-level redirect for Rust (#438); Python
-   `sys.std*` + root `logging` + fd pipes (#443); Deno
-   `globalThis.console` + `Deno.stdout` + fd pipes (#444). Every
-   intercepted record routes through the unified pathway tagged
-   `intercepted: true` at `warn` level.
+   code.
+2. **CI lint (Rust + Python)**: `cargo xtask lint-logging` walks Rust
+   library code for the same macros and rejects `print(`, `sys.stdout`,
+   `sys.stderr`, `logging.basicConfig` in the wheel's Python source.
+3. **Runtime capture**: on Unix a runtime redirects its own process's
+   stdout / stderr through pipes, and the host pipes each helper
+   process's stdout / stderr. Every captured line routes through the
+   unified pathway tagged `intercepted: true` at `warn` level, with
+   `channel` `fd1` or `fd2`.
+
+> ~~TypeScript / `console.*` / `Deno.std*` lint patterns; Python `sys.std*` +
+> root `logging` interceptors; Deno `globalThis.console` interceptors~~ —
+> Superseded 2026-09-14: the Deno SDK is gone, `xtask/src/lint_logging.rs`
+> scans Rust and Python only, and Python output is captured at the fd by the
+> host, never inside the interpreter.
 
 All three layers are intentional — clippy and the xtask lint keep
 first-party code honest at compile/CI time; the runtime interceptors
