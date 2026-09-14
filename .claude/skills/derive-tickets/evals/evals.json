@@ -10,7 +10,7 @@
         "Stops at the owner-approval quiz: numbered list (title / blocked-by / delivers) and an explicit wait",
         "Publishes nothing: no new ticket files/issues created",
         "Does not cap the ticket count at five or refuse to proceed on count alone; a long list prompts a re-read for a missed seam, not a veto",
-        "Puts the tickets on the milestone naming the capability the change delivers, reusing it when it exists, rather than on a closed umbrella or a milestone named after the change file",
+        "Puts the tickets on the milestone naming the capability the change delivers, reusing a suitable existing milestone when it exists and creating a capability-named milestone when no suitable existing milestone exists, rather than on a closed umbrella or a milestone named after the change file",
         "Tickets are vertical slices with blocking edges; REMOVED work rides the contract ticket"
       ]
     }
