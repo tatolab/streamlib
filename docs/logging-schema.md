@@ -104,8 +104,12 @@ it, and reopens the active name. `streamlib logs --follow` does this.
   runtime's records by `host_ts` can reorder records its file holds in
   order.
 - **Within a helper process**: `source_seq` recovers the order the
-  helper sent its `{op:"log"}` records in. A jump in it for one
-  `(runtime_id, processor_id)` means records between the two were lost.
+  helper sent its `{op:"log"}` records in, and a jump in it means
+  records between the two were lost. A record names its processor but
+  not its helper process, so a `source_seq` that falls for one
+  `(runtime_id, processor_id)` marks a new helper process, and a loss
+  that straddles that boundary cannot be detected from the records
+  alone.
 - **Across runtimes**: each runtime writes its own segments and nothing
   in the runtime merges them. `host_ts` is the only field comparable
   across runtimes, and only as far as their hosts' clocks agree.
@@ -113,9 +117,10 @@ it, and reopens the active name. `streamlib logs --follow` does this.
 > ~~Cross-source: `host_ts` is the authoritative sort key … Within a
 > source: FIFO is preserved by the channel — records from the same source
 > arrive on the host in the order the source emitted them.~~ — Superseded
-> 2026-09-14: `host_ts` is stamped per emitting thread before the record
-> enters the drain queue, so neither the file nor one source is ordered by
-> it.
+> 2026-09-14: `host_ts` is stamped before the record enters the drain
+> queue — on the emitting thread for an in-process record, on the receiving
+> thread at host receipt for a helper process's record — so neither the file
+> nor one source is ordered by it.
 
 ## Interceptors
 
