@@ -374,55 +374,38 @@ pub struct RayTracingPipelineProperties {
 
 /// Internal anti-decay sentinel for an export-capable VMA pool.
 ///
-/// Holds raw `vk::Buffer` / `vk::Image` + `vma::Allocation` (no
-/// `Arc<HostVulkanDevice>` back-reference) so it can be stored on the
-/// device itself without creating a reference cycle. Freed by
-/// [`HostVulkanDevice`]'s `Drop` impl before the allocator is torn down.
+/// Frees its allocation on drop, so it must drop before the pool it was
+/// allocated from: VMA aborts when a pool is destroyed with a live
+/// dedicated allocation. Holds the allocator rather than an
+/// `Arc<HostVulkanDevice>` so it can be stored on the device itself
+/// without creating a reference cycle.
 #[cfg(target_os = "linux")]
-enum ExportPoolSentinel {
-    Buffer {
-        buffer: vk::Buffer,
-        allocation: vma::Allocation,
-        /// Diagnostic label for the pool this sentinel covers.
-        label: &'static str,
-        /// Allocation size in bytes (for the tracing log at init).
-        size: vk::DeviceSize,
-    },
-    Image {
-        image: vk::Image,
-        allocation: vma::Allocation,
-        label: &'static str,
-        size: vk::DeviceSize,
-    },
+struct ExportPoolSentinel {
+    allocator: Arc<vma::Allocator>,
+    resource: ExportPoolSentinelResource,
+    allocation: vma::Allocation,
+    /// Diagnostic label for the pool this sentinel covers.
+    label: &'static str,
+    /// Allocation size in bytes (for the tracing log at init).
+    size: vk::DeviceSize,
+}
+
+/// The Vulkan object an [`ExportPoolSentinel`]'s allocation is bound to.
+#[cfg(target_os = "linux")]
+enum ExportPoolSentinelResource {
+    Buffer(vk::Buffer),
+    Image(vk::Image),
 }
 
 #[cfg(target_os = "linux")]
-impl ExportPoolSentinel {
-    fn label(&self) -> &'static str {
-        match self {
-            Self::Buffer { label, .. } | Self::Image { label, .. } => label,
-        }
-    }
-
-    fn size(&self) -> vk::DeviceSize {
-        match self {
-            Self::Buffer { size, .. } | Self::Image { size, .. } => *size,
-        }
-    }
-
-    /// Free the underlying VMA-allocated resource through `allocator`.
-    /// Must be called before the allocator is destroyed.
-    unsafe fn destroy(self, allocator: &vma::Allocator) {
-        match self {
-            Self::Buffer {
-                buffer, allocation, ..
-            } => unsafe {
-                allocator.destroy_buffer(buffer, allocation);
+impl Drop for ExportPoolSentinel {
+    fn drop(&mut self) {
+        match self.resource {
+            ExportPoolSentinelResource::Buffer(buffer) => unsafe {
+                self.allocator.destroy_buffer(buffer, self.allocation);
             },
-            Self::Image {
-                image, allocation, ..
-            } => unsafe {
-                allocator.destroy_image(image, allocation);
+            ExportPoolSentinelResource::Image(image) => unsafe {
+                self.allocator.destroy_image(image, self.allocation);
             },
         }
     }
@@ -1569,11 +1552,11 @@ impl HostVulkanDevice {
         let device = {
             let mut device = Arc::new(device);
             let sentinels = Self::prewarm_export_pools(&device)?;
-            // Sentinels hold only raw `vk::Buffer` + `vma::Allocation`,
-            // not `Arc<HostVulkanDevice>` clones, so the Arc strong count
-            // is still 1 here and `get_mut` succeeds. The other prewarm
-            // probes inside `prewarm_export_pools` are dropped before the
-            // function returns, so they don't bump the count either.
+            // Sentinels hold the allocator, not `Arc<HostVulkanDevice>`
+            // clones, so the Arc strong count is still 1 here and
+            // `get_mut` succeeds. The other prewarm probes inside
+            // `prewarm_export_pools` are dropped before the function
+            // returns, so they don't bump the count either.
             Arc::get_mut(&mut device)
                 .expect(
                     "HostVulkanDevice has unique Arc ownership during construction; \
@@ -1849,6 +1832,7 @@ impl HostVulkanDevice {
         //    pin the per-handle-type kernel state.
         if let Some(pool) = device.opaque_fd_buffer_pool() {
             let sentinel = make_opaque_fd_buffer_sentinel(
+                device,
                 pool,
                 "opaque_fd_host_visible",
                 (PROBE_W as vk::DeviceSize)
@@ -1867,6 +1851,7 @@ impl HostVulkanDevice {
         //    sentinel rather than riding that one's.
         if let Some(pool) = device.opaque_fd_buffer_pool_host_cached() {
             let sentinel = make_opaque_fd_buffer_sentinel(
+                device,
                 pool,
                 "opaque_fd_host_cached",
                 (PROBE_W as vk::DeviceSize)
@@ -1889,6 +1874,7 @@ impl HostVulkanDevice {
         //    cumulative byte budget — so the sentinel must be tiny.
         if let Some(pool) = device.opaque_fd_buffer_pool_device_local() {
             let sentinel = make_opaque_fd_buffer_sentinel(
+                device,
                 pool,
                 "opaque_fd_device_local",
                 (PROBE_W as vk::DeviceSize)
@@ -1932,15 +1918,15 @@ impl HostVulkanDevice {
         //    NVIDIA's cumulative OPAQUE_FD byte budget.
         if let Some(pool) = device.opaque_fd_image_pool() {
             let sentinel =
-                make_opaque_fd_image_sentinel(pool, "opaque_fd_image", PROBE_W, PROBE_H)?;
+                make_opaque_fd_image_sentinel(device, pool, "opaque_fd_image", PROBE_W, PROBE_H)?;
             sentinels.push(sentinel);
         }
 
         for s in &sentinels {
             tracing::info!(
                 "HostVulkanDevice export pool sentinel retained: {} ({} bytes)",
-                s.label(),
-                s.size(),
+                s.label,
+                s.size,
             );
         }
         tracing::info!("HostVulkanDevice export pools pre-warmed");
@@ -2041,11 +2027,11 @@ impl MappedOpaqueFdBufferHostAccessPattern {
 ///
 /// Bypasses [`super::HostVulkanBuffer`] deliberately: that wrapper
 /// holds an `Arc<HostVulkanDevice>` for cleanup, which would create a
-/// reference cycle when stored as a field on the device itself. The
-/// sentinel holds only raw `vk::Buffer` + `vma::Allocation`; cleanup
-/// runs in the device's `Drop` impl using the still-live allocator.
+/// reference cycle when stored as a field on the device itself.
+/// `pool` must be one of `device`'s pools.
 #[cfg(target_os = "linux")]
 fn make_opaque_fd_buffer_sentinel(
+    device: &HostVulkanDevice,
     pool: &vma::Pool,
     label: &'static str,
     size: vk::DeviceSize,
@@ -2084,8 +2070,9 @@ fn make_opaque_fd_buffer_sentinel(
             ))
         })?;
 
-    Ok(ExportPoolSentinel::Buffer {
-        buffer,
+    Ok(ExportPoolSentinel {
+        allocator: Arc::clone(device.allocator()),
+        resource: ExportPoolSentinelResource::Buffer(buffer),
         allocation,
         label,
         size,
@@ -2093,7 +2080,7 @@ fn make_opaque_fd_buffer_sentinel(
 }
 
 /// Allocate one OPAQUE_FD-exportable image through the given VMA pool
-/// and wrap it in an [`ExportPoolSentinel::Image`]. The image-flavored
+/// and wrap it in an image-backed [`ExportPoolSentinel`]. The image-flavored
 /// counterpart to [`make_opaque_fd_buffer_sentinel`]: pins the
 /// per-handle-type kernel state for OPAQUE_FD `VkImage` allocations
 /// the same way the buffer sentinels pin the state for OPAQUE_FD
@@ -2111,9 +2098,10 @@ fn make_opaque_fd_buffer_sentinel(
 /// avoid competing with consumer-class allocations on NVIDIA's
 /// cumulative OPAQUE_FD byte budget — see the
 /// `nvidia-opaque-fd-after-swapchain` learning's "tiny sentinels"
-/// rationale.
+/// rationale. `pool` must be one of `device`'s pools.
 #[cfg(target_os = "linux")]
 fn make_opaque_fd_image_sentinel(
+    device: &HostVulkanDevice,
     pool: &vma::Pool,
     label: &'static str,
     width: u32,
@@ -2160,8 +2148,9 @@ fn make_opaque_fd_image_sentinel(
         })?;
 
     let size: vk::DeviceSize = (width as vk::DeviceSize) * (height as vk::DeviceSize) * 4;
-    Ok(ExportPoolSentinel::Image {
-        image,
+    Ok(ExportPoolSentinel {
+        allocator: Arc::clone(device.allocator()),
+        resource: ExportPoolSentinelResource::Image(image),
         allocation,
         label,
         size,
@@ -3939,20 +3928,16 @@ impl Drop for HostVulkanDevice {
         let _ = self.wait_idle();
 
         // Critical drop order:
-        //  0. OPAQUE_FD export sentinels — free via the still-live
-        //     allocator before any pool is destroyed (vmaDestroyPool
-        //     refuses to run while live allocations exist).
+        //  0. OPAQUE_FD export sentinels — freed before any pool is
+        //     destroyed (vmaDestroyPool aborts on a live dedicated
+        //     allocation) and release their Arc<Allocator> refs.
         //  1. DMA-BUF + OPAQUE_FD pools — release Arc<Allocator> refs and call vmaDestroyPool
         //  2. Allocator — call vmaDestroyAllocator (only after all Arc refs gone)
         //  3. Export info Boxes — VMA no longer references them after pool destruction
         //  4. Device + instance — Vulkan handles
         #[cfg(target_os = "linux")]
         {
-            if let Some(allocator) = self.allocator.as_ref() {
-                for sentinel in self.opaque_fd_export_sentinels.drain(..) {
-                    unsafe { sentinel.destroy(allocator) };
-                }
-            }
+            self.opaque_fd_export_sentinels.clear();
             drop(self.dma_buf_buffer_pool.take());
             drop(self.dma_buf_image_pool.take());
             drop(self.dma_buf_image_pool_tiled.take());
@@ -4452,7 +4437,7 @@ mod tests {
         let actual_labels: Vec<&'static str> = device
             .opaque_fd_export_sentinels
             .iter()
-            .map(|s| s.label())
+            .map(|s| s.label)
             .collect();
         assert_eq!(
             actual_labels, expected_labels,
@@ -4476,14 +4461,14 @@ mod tests {
             if let Some(s) = device
                 .opaque_fd_export_sentinels
                 .iter()
-                .find(|s| s.label() == label)
+                .find(|s| s.label == label)
             {
                 assert!(
-                    s.size() <= max_acceptable,
+                    s.size <= max_acceptable,
                     "OPAQUE_FD sentinel '{label}' must be small (≤ 64 KiB) to \
                      avoid competing with consumer allocations on NVIDIA's \
                      cumulative OPAQUE_FD byte budget (got {} bytes, max {})",
-                    s.size(),
+                    s.size,
                     max_acceptable,
                 );
             }
@@ -4493,23 +4478,74 @@ mod tests {
         // actually allocated would not pin any kernel state). Switch on
         // the variant so a future Image-sentinel addition is locked too.
         for s in device.opaque_fd_export_sentinels.iter() {
-            match s {
-                ExportPoolSentinel::Buffer { buffer, label, .. } => {
+            let label = s.label;
+            match s.resource {
+                ExportPoolSentinelResource::Buffer(buffer) => {
                     assert_ne!(
-                        *buffer,
+                        buffer,
                         vk::Buffer::null(),
                         "sentinel '{label}' has null VkBuffer",
                     );
                 }
-                ExportPoolSentinel::Image { image, label, .. } => {
+                ExportPoolSentinelResource::Image(image) => {
                     assert_ne!(
-                        *image,
+                        image,
                         vk::Image::null(),
                         "sentinel '{label}' has null VkImage",
                     );
                 }
             }
         }
+    }
+
+    /// Pre-warm returns early when a later sentinel fails, dropping the
+    /// sentinels it already made. Each must free its own allocation, or the
+    /// device's pool teardown aborts inside VMA with `Unfreed dedicated
+    /// allocations found!` (#2247).
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn an_export_pool_sentinel_dropped_before_the_device_frees_its_pool_allocation() {
+        let device = match try_create_device() {
+            Some(d) => d,
+            None => return,
+        };
+        let Some(pool) = device.opaque_fd_buffer_pool() else {
+            println!("Skipping — no OPAQUE_FD buffer pool on this driver");
+            return;
+        };
+        let live_allocations_in_pool = || {
+            pool.calculate_statistics()
+                .expect("pool statistics")
+                .statistics
+                .allocationCount
+        };
+        let allocations_before_the_sentinel = live_allocations_in_pool();
+
+        let sentinel = make_opaque_fd_buffer_sentinel(
+            &device,
+            pool,
+            "opaque_fd_host_visible",
+            64,
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+            Some(MappedOpaqueFdBufferHostAccessPattern::SequentialWrite),
+        )
+        .expect("a 64-byte OPAQUE_FD sentinel allocates");
+        assert_eq!(
+            live_allocations_in_pool(),
+            allocations_before_the_sentinel + 1,
+            "the sentinel allocates out of the pool it pins"
+        );
+
+        drop(sentinel);
+        assert_eq!(
+            live_allocations_in_pool(),
+            allocations_before_the_sentinel,
+            "a sentinel dropped outside the device's teardown must free its allocation"
+        );
     }
 
     #[cfg(target_os = "linux")]
