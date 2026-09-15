@@ -435,7 +435,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   [consumer-tree-disposition — SHIPPED; a standing convention, and by the same decision
   the showcase carries no CI check to run]
 
-## Processor model & scheduling — IN-FLIGHT (→ local-transport-hardening, loss-visibility)
+## Processor model & scheduling — IN-FLIGHT (→ local-transport-hardening, loss-visibility, runtime-mesh)
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a bag
   (self-describing msgpack named map). The engine has no type layer: ports carry no
@@ -2075,7 +2075,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   machine-global scan paths; the lane costs nothing when unused (no `DT_NEEDED`
   entries, no import-time work). [audio-subsystem]
 
-## Networking — transport, runtime mesh, moq, webrtc — IN-FLIGHT (→ local-transport-hardening)
+## Networking — transport, runtime mesh, moq, webrtc — IN-FLIGHT (→ local-transport-hardening, runtime-mesh)
 
 - **DECIDED** — Cross-language interop happens on the wire between nodes, as
   self-describing bags — never in-graph. [importable-python-library — SHIPPED #1715]
@@ -2422,13 +2422,13 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   turns the mesh off; a runtime is isolated by a mesh name, explicit peers, or discovery
   turned off. Stated as the posture for now, not a permanent default. [runtime-mesh]
 - **DECIDED** — A port on the mesh is addressed `<runtime name>/<display name>/<port>`. The
-  runtime name belongs to the runtime rather than to its control plane, defaults to
-  `<hostname>-<app directory>`, is stable across runs, and is unique within a mesh: a runtime
-  whose name is already live on the mesh refuses to start by name, except over a runtime of
-  that name on the same host whose process is gone. The display name — already unique within
-  a graph — is the processor's part of the address, so renaming a processor re-addresses it;
-  identity stays the class import path. Per-run processor ids and cuid2 channel names never
-  appear on the mesh. [runtime-mesh]
+  runtime name belongs to the runtime rather than to its control plane; defaults to
+  `<hostname>-<app directory name>-<id>`, the id hashed from the directory's full path so two
+  checkouts differ and reruns match; is never auto-suffixed; and is unique within a mesh: a
+  runtime whose name is already live on the mesh refuses to start by name, except over one on
+  the same host whose process is gone. The display name — already unique within a graph — is
+  the processor's part of the address, so renaming re-addresses it; identity stays the class
+  import path. Processor ids and cuid2 channel names never appear on the mesh. [runtime-mesh]
 - **DECIDED** — A bag's top-level `surface_id` crosses the mesh transparently, for now: the
   sending runtime resolves it locally and sends the frame's pixels with what the receiver
   needs to rebuild them, and the receiving runtime writes the pixels into a freshly minted
@@ -2537,7 +2537,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_the_native_extension_links_nothing_the_host_may_not_supply -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_the_glsl_compiler_is_linked_statically -->
 
-## Control plane & observability — IN-FLIGHT (→ local-transport-hardening)
+## Control plane & observability — IN-FLIGHT (→ local-transport-hardening, runtime-mesh)
 
 - **DECIDED** — The control plane carries no optional capability's routes natively. A
   capability extension that needs an endpoint contributes it through the `host` door

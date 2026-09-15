@@ -21,8 +21,8 @@ processor is unchanged either way.
 - **Mesh name.** Everything on the mesh lives under a mesh name, `default` unless a runtime
   names another. There is no switch that turns the mesh off.
 - **Addressing.** A port on the mesh is `<runtime name>/<display name>/<port>`. The runtime
-  name belongs to the runtime, defaults to `<hostname>-<app directory>`, and is unique within
-  a mesh.
+  name belongs to the runtime, defaults to `<hostname>-<app directory name>-<id>` with the id
+  hashed from the directory's full path, is never auto-suffixed, and is unique within a mesh.
 - **Surfaces.** A top-level `surface_id` crosses as the frame's pixels and lands as a freshly
   minted local surface id. The `surface_id` key is a stand-in until a general mechanism
   replaces it.
@@ -40,6 +40,27 @@ processor is unchanged either way.
 - **Visibility.** `graph` and `streamlib nodes` show mesh peers. A runtime without a control
   plane still carries links.
 
+## How the announcement is built
+
+Recorded with the `runtime-mesh` proposal. It reads `zenoh` 1.10.1 and the rig probes.
+
+- **Token plus queryable.** A liveliness token carries no payload. So the token key holds only
+  what a runtime that has already died must still answer, its host identity and pid, and a
+  queryable beside it describes the live runtime. The description is answered at query time,
+  so a control plane hosted after construction appears in it.
+- **A verbatim `@runtime` chunk.** No `**` subscription over port addresses ever matches it, and
+  a display name may not begin with `@`, so no address can collide with it.
+- **TCP only, default features off.** `transport_udp` pulls in the QUIC datagram link and a
+  CDLA-Permissive-2.0 licence `deny.toml` refuses, and discovery needs neither. Zenoh is
+  elected under Apache-2.0.
+- **The duplicate check needs the mesh before the runtime exists.** The session therefore opens
+  in `Runner::new()`, beside the runtime-id socket refusal, which needs no GPU.
+  - Cost: `Runtime()` takes Zenoh's 500 ms scouting delay while multicast discovery is on.
+  - A same-host exception needs the pid in the key: a killed runtime's token is gone within
+    milliseconds because the kernel closes TCP, but a restart can race that.
+- **Tests run with discovery off.** Otherwise parallel test runtimes on one machine would find
+  each other under one default name and refuse.
+
 ## Rejected alternatives
 
 - **A gateway processor, or a built-in pair.** A processor has to be wired into a graph, so
@@ -53,6 +74,17 @@ processor is unchanged either way.
   and subscriber. That collides with a channel's single publisher and a notify service's
   single listener. It keys by service hash rather than a name a remote runtime can know, it
   counts no drops, and it forwards surface ids that mean nothing on another machine.
+  - Rechecked 2026-09-14 against upstream main `b1c4cae`. The tunnel is now the
+    `iceoryx2-gateway` with an `integrations/zenoh/gateway-backend` (upstream #1891),
+    unreleased: it needs iceoryx2 main, Rust 1.89 and zenoh 1.9 with `unstable`, and crates.io
+    holds only `iceoryx2-tunnels-zenoh` 0.7.0 from 2025-09. It runs as `iox2 gateway zenoh`
+    or embedded as a library. Every finding above still holds in that source:
+    `ports/publish_subscribe.rs` does `open_or_create` plus a publisher and a subscriber;
+    the key is `iox2/v1/publish_subscribe/<service hash>/<config fingerprint>`; the payload
+    is a `Passthrough` byte frame under `Reliability::Reliable`; and it bridges every
+    allow-listed service the moment it is discovered, so nothing is lazy. What it shares with
+    this design: a liveliness token plus a queryable per announcement, `Locality::Remote`, and
+    peer mode with multicast scouting.
 - **Endpoint-config stream names (the MoQ `track_names` shape).** This would put a naming
   step on every stream a user wants to reach. A stable address derived from names the runtime
   already has makes every port reachable without configuration.
@@ -73,6 +105,19 @@ processor is unchanged either way.
   and Zenoh closes a peer's transport after a stalled blocking send.
 - **An off switch.** A dial the zero-ceremony bar does not want. Isolation already has three
   levers: a mesh name, explicit peers, and discovery turned off.
+- **Auto-suffixing a duplicate default name, the way the control-plane port increments from
+  9000.** A port is a transient the registry records; a runtime name is the address other
+  runtimes and agents wire against. A suffix chosen by start order makes yesterday's link reach
+  a different runtime today, and a `dev` restart that loses the pid-gone race comes up as `-2`
+  while every remote link to the old name waits forever. Hashing the directory's full path into
+  the default gives two checkouts different names with no flag, and a real duplicate still fails
+  by name (owner, 2026-09-14).
+- **Encoding a runtime's description into its token key.** A control-plane URL holds `/`, and it
+  appears only once a control plane is hosted, after the token is declared.
+- **Zenoh's `AdvancedPublisher` cache or `zenoh-ext` group membership for the description.** Both
+  are `unstable`, and `zenoh-ext`'s default features turn every transport back on.
+- **Zenoh's `namespace` config as the mesh name.** It prefixes keys but separates nothing
+  further, and its tests are unstable-only, so the engine writes the prefix itself.
 
 ## Consequences
 
