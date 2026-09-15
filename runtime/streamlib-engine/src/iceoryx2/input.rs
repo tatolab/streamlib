@@ -102,6 +102,7 @@ struct PortBoundSubscriber {
 
 /// A destination's channel subscribers and its notify-service [`Listener`],
 /// wired and unwired by one thread and read by any other.
+#[derive(Default)]
 struct InboundLinkSubscribersAndListener {
     subscribers: Vec<PortBoundSubscriber>,
     listener: Option<Listener<ipc::Service>>,
@@ -125,6 +126,11 @@ impl InboundLinkSubscribersAndListener {
             .iter()
             .position(|bound| bound.link_id == link_id)?;
         Some(self.subscribers.remove(position).local_port)
+    }
+
+    /// Whether any remaining subscriber is still bound to `local_port`.
+    fn local_port_still_bound(&self, local_port: &str) -> bool {
+        self.bound_to_local_port(local_port).next().is_some()
     }
 
     /// The bindings feeding one local input port, in wiring order — a
@@ -370,13 +376,18 @@ fn notice_that_a_bag_was_lost_at_a_port_whose_match_device_contract_is_unsettled
 /// Held via `Arc<InputMailboxesInner>`; the [`InputMailboxes`] handle
 /// stores a separate `Arc::into_raw`-encoded strong reference to the
 /// same inner.
+///
+/// Wiring against wiring is still serialized by its caller — the compiler under
+/// the processor mutex, a helper one wiring command at a time — because a
+/// check-then-install pair such as `has_listener` then `set_listener` is not
+/// atomic. Reads need no such caller.
 pub struct InputMailboxesInner {
     /// Taken by every access to a subscriber or the listener, from whichever
     /// thread: wiring and unwiring, a processor reading on its own thread, a
     /// helper reading with no GIL attached.
     ///
-    /// Lock order: this, then `ports`, then a windowed port's stage. A read
-    /// that needs a link's name under a stage takes the name before the stage.
+    /// Lock order: this, then `ports` or the dropped-bag counts, then a
+    /// windowed port's stage. Never take an earlier one while holding a later.
     inbound_link_subscribers_and_listener: parking_lot::Mutex<InboundLinkSubscribersAndListener>,
     ports: parking_lot::Mutex<HashMap<String, PortConfig>>,
     /// Counts every listener installed, so a runner can tell a listener
@@ -390,12 +401,7 @@ impl InputMailboxesInner {
     /// Create a new empty inner.
     pub fn new() -> Self {
         Self {
-            inbound_link_subscribers_and_listener: parking_lot::Mutex::new(
-                InboundLinkSubscribersAndListener {
-                    subscribers: Vec::new(),
-                    listener: None,
-                },
-            ),
+            inbound_link_subscribers_and_listener: parking_lot::Mutex::default(),
             ports: parking_lot::Mutex::new(HashMap::new()),
             listener_generation: std::sync::atomic::AtomicU64::new(0),
             dropped_bag_counts: Arc::new(DroppedBagCountsByInboundLink::default()),
@@ -695,11 +701,7 @@ impl InputMailboxesInner {
             return;
         };
         self.dropped_bag_counts.forget_inbound_link(link_id);
-        if subscribers_and_listener
-            .bound_to_local_port(&local_port)
-            .next()
-            .is_none()
-        {
+        if !subscribers_and_listener.local_port_still_bound(&local_port) {
             self.ports.lock().remove(&local_port);
         }
         if subscribers_and_listener.subscribers.is_empty() {
@@ -936,11 +938,11 @@ impl InputMailboxesInner {
         port: &str,
         stage: &SharedAudioWindowStage,
     ) -> Result<Option<BagBodyForTheReader>> {
-        let inbound_link_name = self.the_single_inbound_link_name_of(port);
         loop {
-            if let Some(window) = stage.lock().next_ready_window()? {
+            let ready_window = stage.lock().next_ready_window()?;
+            if let Some(window) = ready_window {
                 return Ok(Some(BagBodyForTheReader {
-                    inbound_link_name,
+                    inbound_link_name: self.the_single_inbound_link_name_of(port),
                     ..window
                 }));
             }
@@ -1165,8 +1167,8 @@ pub struct InputMailboxes {
 }
 
 const _: () = {
-    fn input_mailboxes_inner_is_send_and_sync<T: Send + Sync>() {}
-    let _ = input_mailboxes_inner_is_send_and_sync::<InputMailboxesInner>;
+    const fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<InputMailboxesInner>();
 };
 
 // SAFETY: `handle` points at an `Arc<InputMailboxesInner>`, and the assertion
@@ -3266,56 +3268,63 @@ mod tests {
     /// nothing does in either of those processors. Without a lock of the
     /// mailboxes' own, the subscriber list reallocates under an iterating
     /// receive and iceoryx2's single-consumer queue gets two callers: memory is
-    /// corrupted and the test binary aborts, usually well inside this window.
+    /// corrupted and the test binary aborts, usually well inside the window.
+    ///
+    /// Each racer runs for the window and on past it until it has met its
+    /// floor, so a starved runner races longer rather than failing; the hard
+    /// cap turns a racer that never gets there into a failure, never a hang.
     #[test]
     fn a_link_wired_and_unwired_in_a_loop_never_races_a_read_that_holds_no_processor_mutex() {
         const RACE_WINDOW: std::time::Duration = std::time::Duration::from_secs(3);
+        const RACE_HARD_CAP: std::time::Duration = std::time::Duration::from_secs(30);
+        const WIRE_AND_UNWIRE_CYCLES_FLOOR: u64 = 100;
+        const READ_PASSES_FLOOR: u64 = 100;
         const MAX_SUBSCRIBERS: usize = 2;
         const MAX_QUEUED_MESSAGES: usize = 16;
-        const MAX_NOTIFIERS: usize = 2;
+        const MAX_NOTIFIERS: usize = 1;
+        const EXPECTED_PAYLOAD_BYTES: usize = 64;
+
+        /// Counts a racer out when it ends, by returning or by panicking, so the
+        /// publisher it feeds never outlives it.
+        struct RacerStillRunning<'a>(&'a std::sync::atomic::AtomicUsize);
+        impl Drop for RacerStillRunning<'_> {
+            fn drop(&mut self) {
+                self.0.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
 
         let node = crate::iceoryx2::Iceoryx2Node::for_this_test_process();
         let channel_service_name = unique_suffix("live-rewire-race/channel");
         let notify_service_name = unique_suffix("live-rewire-race/notify");
         let inbound_link_name = InboundLinkName::from(channel_service_name.as_str());
+        let open_the_rewired_channel = || {
+            node.open_or_create_service(&channel_service_name, MAX_SUBSCRIBERS, MAX_QUEUED_MESSAGES)
+                .unwrap()
+        };
         let mailboxes = InputMailboxesInner::new();
-        let publisher_is_done = std::sync::atomic::AtomicBool::new(false);
-        let publisher_is_ready = std::sync::Barrier::new(2);
-        let race_deadline = std::time::Instant::now() + RACE_WINDOW;
+        let racers_still_running = std::sync::atomic::AtomicUsize::new(2);
+        let race_started = std::time::Instant::now();
+        let still_racing = |floor_met: bool| {
+            let elapsed = race_started.elapsed();
+            elapsed < RACE_HARD_CAP && (elapsed < RACE_WINDOW || !floor_met)
+        };
 
         let (wire_and_unwire_cycles, read_passes, frames_read) = std::thread::scope(|scope| {
             scope.spawn(|| {
-                let channel = node
-                    .open_or_create_service(
-                        &channel_service_name,
-                        MAX_SUBSCRIBERS,
-                        MAX_QUEUED_MESSAGES,
-                    )
+                let publisher = open_the_rewired_channel()
+                    .create_publisher(EXPECTED_PAYLOAD_BYTES)
                     .unwrap();
-                let publisher = channel.create_publisher(64).unwrap();
-                let notifier = node
-                    .open_or_create_notify_service(&notify_service_name, MAX_NOTIFIERS)
-                    .unwrap()
-                    .create_notifier()
-                    .unwrap();
-                publisher_is_ready.wait();
-                while !publisher_is_done.load(std::sync::atomic::Ordering::Relaxed) {
+                while racers_still_running.load(std::sync::atomic::Ordering::Relaxed) > 0
+                    && race_started.elapsed() < RACE_HARD_CAP
+                {
                     publish_one_frame(&publisher, "out", b"a-bag-published-mid-rewire");
-                    notifier.notify().unwrap();
                 }
             });
 
             let wiring = scope.spawn(|| {
-                publisher_is_ready.wait();
+                let _still_running = RacerStillRunning(&racers_still_running);
                 let mut wire_and_unwire_cycles = 0u64;
-                while std::time::Instant::now() < race_deadline {
-                    let channel = node
-                        .open_or_create_service(
-                            &channel_service_name,
-                            MAX_SUBSCRIBERS,
-                            MAX_QUEUED_MESSAGES,
-                        )
-                        .unwrap();
+                while still_racing(wire_and_unwire_cycles >= WIRE_AND_UNWIRE_CYCLES_FLOOR) {
                     if !mailboxes.has_port("in") {
                         mailboxes.add_port("in", MAX_QUEUED_MESSAGES, ReadMode::ReadNextInOrder);
                     }
@@ -3323,7 +3332,7 @@ mod tests {
                         "in",
                         "L-rewired",
                         &inbound_link_name,
-                        channel.create_subscriber().unwrap(),
+                        open_the_rewired_channel().create_subscriber().unwrap(),
                     );
                     if !mailboxes.has_listener() {
                         mailboxes.set_listener(
@@ -3340,9 +3349,10 @@ mod tests {
             });
 
             let reading = scope.spawn(|| {
+                let _still_running = RacerStillRunning(&racers_still_running);
                 let mut read_passes = 0u64;
                 let mut frames_read = 0u64;
-                while std::time::Instant::now() < race_deadline {
+                while still_racing(read_passes >= READ_PASSES_FLOOR && frames_read > 0) {
                     mailboxes.drain_listener();
                     let _ = mailboxes.listener_fd();
                     let _ = mailboxes.inbound_link_names("in");
@@ -3359,18 +3369,17 @@ mod tests {
 
             let wire_and_unwire_cycles = wiring.join().unwrap();
             let (read_passes, frames_read) = reading.join().unwrap();
-            publisher_is_done.store(true, std::sync::atomic::Ordering::Relaxed);
             (wire_and_unwire_cycles, read_passes, frames_read)
         });
 
         assert!(
-            wire_and_unwire_cycles >= 100,
-            "the wiring thread must re-splice the link many times inside the window, \
+            wire_and_unwire_cycles >= WIRE_AND_UNWIRE_CYCLES_FLOOR,
+            "the wiring thread must re-splice the link many times before the hard cap, \
              got {wire_and_unwire_cycles}"
         );
         assert!(
-            read_passes >= 100,
-            "the reading thread must read many times inside the window, got {read_passes}"
+            read_passes >= READ_PASSES_FLOOR,
+            "the reading thread must read many times before the hard cap, got {read_passes}"
         );
         assert!(
             frames_read > 0,
