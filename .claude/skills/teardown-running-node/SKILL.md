@@ -13,14 +13,14 @@ Stops the node the same way you started it — by ending its process. There is d
 ```bash
 streamlib nodes
 ```
-Find the row for your `RUNTIME_ID` and note its `PID` (the host process — typically the `cargo run` of the example app). Confirm `ALIVE?` is `yes` before signaling.
+Find the row for your `RUNTIME_ID` and note its `PID` (the host process — typically the `streamlib run` / `streamlib dev` that launched the app). Confirm `ALIVE?` is `yes` before signaling.
 
 ### 2. Signal the process to stop cleanly
 Send `SIGTERM` (the default) so the runtime tears down gracefully and removes its own registry entry:
 ```bash
 kill <pid>
 ```
-If it is a `cargo run` you launched in this session's foreground, `Ctrl-C` is equivalent. Escalate to `kill -9 <pid>` only if the process refuses to exit after a graceful signal — a hard kill skips clean teardown, but `streamlib nodes` will still prune the stale entry on its next scan (unreachable AND pid-dead).
+If it is a node you launched in this session's foreground, `Ctrl-C` is equivalent. Escalate to `kill -9 <pid>` only if the process refuses to exit after a graceful signal — a hard kill skips clean teardown: `streamlib nodes` still prunes the stale entry on its next scan (unreachable AND pid-dead), but on Linux the node's `surface-share-<runtime_id>.sock` stays behind in the runtime directory.
 
 ### 3. Confirm the node is gone
 ```bash
