@@ -13,9 +13,11 @@
 //! Python the app is, with the same packages, reached by exec and never by
 //! fork — a forked GPU context is not usable in the child.
 
+use std::collections::VecDeque;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use pyo3::prelude::*;
@@ -25,9 +27,8 @@ use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::execution::{ExecutionConfig, ProcessExecution};
 use streamlib::sdk::graph::ProcessorNode;
 use streamlib::sdk::helper_process_transport::{
-    EscalateTransport, PROTOCOL_VERSION_ENV, SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS,
-    STREAMLIB_SUBPROCESS_PROTOCOL_VERSION, SubprocessBridge, spawn_fd_line_reader,
-    validate_subprocess_protocol,
+    ENGINE_BUILD_ID, ENGINE_BUILD_ID_ENVIRONMENT_VARIABLE, EscalateTransport,
+    SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS, SubprocessBridge, spawn_fd_line_reader,
 };
 use streamlib::sdk::iceoryx2::ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE;
 use streamlib::sdk::processors::{DynGeneratedProcessor, OutOfProcessLinkWiringEnvelope};
@@ -60,6 +61,16 @@ const TEARDOWN_EXIT_DEADLINE: Duration = Duration::from_secs(5);
 /// behind these commands are expected to return promptly, and a child that
 /// needs longer has already broken the contract.
 const REPLY_DEADLINE: Duration = Duration::from_secs(5);
+
+/// How long the refusal of a helper that died while setting up waits for the
+/// helper's standard error to close, so what it wrote last is in the refusal.
+///
+/// Bounded because a descendant the helper started can hold the pipe open past
+/// the helper's own exit.
+const STANDARD_ERROR_CLOSE_DEADLINE: Duration = Duration::from_secs(1);
+
+/// How much of a helper's standard error a refusal carries, from the end.
+const STANDARD_ERROR_TAIL_BYTES: usize = 16 * 1024;
 
 // =============================================================================
 // Where a child comes from
@@ -136,6 +147,13 @@ pub(crate) fn helper_process_launch_environment() -> Result<&'static HelperProce
     })
 }
 
+/// The engine build id compiled into this extension, which a helper process
+/// compares with the id its parent handed it before it opens anything.
+#[pyfunction]
+pub(crate) fn engine_build_id_compiled_into_this_extension() -> &'static str {
+    ENGINE_BUILD_ID
+}
+
 // =============================================================================
 // The host
 // =============================================================================
@@ -154,6 +172,7 @@ pub(crate) struct PythonHelperProcessSpawnHostProcessor {
     interpreter_path: PathBuf,
     app_entry_directory: Option<PathBuf>,
     child: Option<Child>,
+    child_standard_error_tail: Option<HelperProcessStandardErrorTail>,
     bridge: Option<SubprocessBridge>,
     /// Set once the child stops answering. The pipeline keeps running and the
     /// graph shows this processor in error; the frame in flight is lost, and
@@ -201,10 +220,7 @@ impl PythonHelperProcessSpawnHostProcessor {
                 ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE,
                 iceoryx2_domain_root,
             )
-            .env(
-                PROTOCOL_VERSION_ENV,
-                STREAMLIB_SUBPROCESS_PROTOCOL_VERSION.to_string(),
-            );
+            .env(ENGINE_BUILD_ID_ENVIRONMENT_VARIABLE, ENGINE_BUILD_ID);
         if let Some(surface_socket_path) = surface_socket_path {
             command.env("STREAMLIB_SURFACE_SOCKET", surface_socket_path);
         }
@@ -353,26 +369,13 @@ impl PythonHelperProcessSpawnHostProcessor {
                 Ok(reply) => break reply,
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                    self.child_is_gone = true;
-                    return Err(Error::Runtime(format!(
-                        "[{}] its helper process died before it finished setting up",
-                        self.processor_display_name
-                    )));
+                    return Err(self.refuse_the_helper_process_that_died_while_setting_up());
                 }
             }
         };
 
         match reply.get("rpc").and_then(|rpc| rpc.as_str()) {
-            Some("ready") => {
-                validate_subprocess_protocol(
-                    reply
-                        .get("protocol_version")
-                        .and_then(|version| version.as_u64())
-                        .and_then(|version| u32::try_from(version).ok()),
-                    &self.processor_display_name,
-                )?;
-                Ok(())
-            }
+            Some("ready") => Ok(()),
             _ => {
                 let reported = reply
                     .get("error")
@@ -384,6 +387,25 @@ impl PythonHelperProcessSpawnHostProcessor {
                 )))
             }
         }
+    }
+
+    /// The refusal of a child that exited before `ready`, carrying the end of
+    /// what it wrote to its standard error.
+    ///
+    /// A helper refuses its own start — an engine build other than the
+    /// parent's, a missing variable — before its log channel exists, so raw
+    /// standard error is the only place its reason is written.
+    fn refuse_the_helper_process_that_died_while_setting_up(&mut self) -> Error {
+        self.child_is_gone = true;
+        let standard_error_tail = self
+            .child_standard_error_tail
+            .as_ref()
+            .map(|tail| tail.text_once_closed_or_after(STANDARD_ERROR_CLOSE_DEADLINE))
+            .unwrap_or_default();
+        refusal_of_a_helper_process_that_died_while_setting_up(
+            &self.processor_display_name,
+            &standard_error_tail,
+        )
     }
 
     fn kill_child(&mut self) {
@@ -426,6 +448,122 @@ impl PythonHelperProcessSpawnHostProcessor {
             }
         }
     }
+}
+
+/// Refuse a processor whose helper process exited before it reported `ready`.
+fn refusal_of_a_helper_process_that_died_while_setting_up(
+    processor_display_name: &str,
+    standard_error_tail: &str,
+) -> Error {
+    if standard_error_tail.is_empty() {
+        return Error::Runtime(format!(
+            "[{processor_display_name}] its helper process died before it finished setting up, \
+             and wrote nothing to its standard error"
+        ));
+    }
+    Error::Runtime(format!(
+        "[{processor_display_name}] its helper process died before it finished setting up. Its \
+         standard error ended with:\n{standard_error_tail}"
+    ))
+}
+
+// =============================================================================
+// What a child last wrote to its standard error
+// =============================================================================
+
+/// The end of what a helper process wrote to its standard error, and whether
+/// the pipe has closed.
+#[derive(Clone, Default)]
+struct HelperProcessStandardErrorTail {
+    recorded_standard_error_and_pipe_closed_signal: Arc<(
+        parking_lot::Mutex<RecordedHelperProcessStandardError>,
+        parking_lot::Condvar,
+    )>,
+}
+
+#[derive(Default)]
+struct RecordedHelperProcessStandardError {
+    tail_bytes: VecDeque<u8>,
+    pipe_closed: bool,
+}
+
+impl HelperProcessStandardErrorTail {
+    fn record(&self, written_bytes: &[u8]) {
+        let (recorded_standard_error_lock, _) =
+            &*self.recorded_standard_error_and_pipe_closed_signal;
+        let mut recorded_standard_error = recorded_standard_error_lock.lock();
+        recorded_standard_error.tail_bytes.extend(written_bytes);
+        let overflow_byte_count = recorded_standard_error
+            .tail_bytes
+            .len()
+            .saturating_sub(STANDARD_ERROR_TAIL_BYTES);
+        recorded_standard_error
+            .tail_bytes
+            .drain(..overflow_byte_count);
+    }
+
+    fn mark_the_pipe_closed(&self) {
+        let (recorded_standard_error_lock, pipe_closed_signal) =
+            &*self.recorded_standard_error_and_pipe_closed_signal;
+        recorded_standard_error_lock.lock().pipe_closed = true;
+        pipe_closed_signal.notify_all();
+    }
+
+    /// What was recorded, once the pipe has closed or `deadline` has passed.
+    fn text_once_closed_or_after(&self, deadline: Duration) -> String {
+        let (recorded_standard_error_lock, pipe_closed_signal) =
+            &*self.recorded_standard_error_and_pipe_closed_signal;
+        let mut recorded_standard_error = recorded_standard_error_lock.lock();
+        pipe_closed_signal.wait_while_for(
+            &mut recorded_standard_error,
+            |recorded_standard_error| !recorded_standard_error.pipe_closed,
+            deadline,
+        );
+        String::from_utf8_lossy(recorded_standard_error.tail_bytes.make_contiguous())
+            .trim()
+            .to_string()
+    }
+}
+
+/// A reader that records the tail of everything read through it, and marks the
+/// pipe closed when the line reader owning it lets go — at end of file, on a
+/// read error, or when its thread never started.
+struct StandardErrorTailRecordingReader<R> {
+    standard_error: R,
+    tail: HelperProcessStandardErrorTail,
+}
+
+impl<R: Read> Read for StandardErrorTailRecordingReader<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let read_byte_count = self.standard_error.read(buffer)?;
+        self.tail.record(&buffer[..read_byte_count]);
+        Ok(read_byte_count)
+    }
+}
+
+impl<R> Drop for StandardErrorTailRecordingReader<R> {
+    fn drop(&mut self) {
+        self.tail.mark_the_pipe_closed();
+    }
+}
+
+/// Log a child's standard error line by line, as every intercepted fd is, while
+/// keeping its tail for a refusal.
+fn spawn_standard_error_reader_keeping_its_tail<R: Read + Send + 'static>(
+    standard_error: R,
+    processor_id: &str,
+) -> HelperProcessStandardErrorTail {
+    let tail = HelperProcessStandardErrorTail::default();
+    spawn_fd_line_reader(
+        StandardErrorTailRecordingReader {
+            standard_error,
+            tail: tail.clone(),
+        },
+        "py-stderr",
+        "fd2",
+        processor_id,
+    );
+    tail
 }
 
 /// Give the child its own process group and tie its lifetime to this process.
@@ -502,7 +640,10 @@ impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
             spawn_fd_line_reader(child_stdout, "py-stdout", "fd1", &self.processor_id);
         }
         if let Some(child_stderr) = child.stderr.take() {
-            spawn_fd_line_reader(child_stderr, "py-stderr", "fd2", &self.processor_id);
+            self.child_standard_error_tail = Some(spawn_standard_error_reader_keeping_its_tail(
+                child_stderr,
+                &self.processor_id,
+            ));
         }
 
         self.child = Some(child);
@@ -512,7 +653,7 @@ impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
             self.processor_id.clone(),
         )?);
 
-        self.send_to_child(&serde_json::json!({
+        let setup_command_sent = self.send_to_child(&serde_json::json!({
             // The engine's own constant: the escalate dispatch reads this
             // exact spelling to decide that a window may be minted, and a
             // rename on one side alone would refuse every window silently.
@@ -524,7 +665,17 @@ impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
                 .unwrap_or(serde_json::Value::Null),
             "processor_id": self.processor_id,
             "ports": self.link_wiring.as_setup_command_ports(),
-        }))?;
+        }));
+        if let Err(setup_command_send_failure) = setup_command_sent {
+            // The child's end is already closed: it refused its own start
+            // before reading anything.
+            tracing::debug!(
+                "[{}] could not send its helper process the setup command: \
+                 {setup_command_send_failure}",
+                self.processor_display_name
+            );
+            return Err(self.refuse_the_helper_process_that_died_while_setting_up());
+        }
         self.await_child_registration()
     }
 
@@ -785,6 +936,7 @@ pub(crate) fn spawn_host_for_processor_node(
         interpreter_path: launch_environment.interpreter_path.clone(),
         app_entry_directory: launch_environment.app_entry_directory.clone(),
         child: None,
+        child_standard_error_tail: None,
         bridge: None,
         child_is_gone: false,
         link_wiring: OutOfProcessLinkWiringEnvelope::default(),
@@ -837,6 +989,7 @@ mod tests {
             interpreter_path: PathBuf::from("/venv/bin/python"),
             app_entry_directory,
             child: None,
+            child_standard_error_tail: None,
             bridge: None,
             child_is_gone: false,
             link_wiring: OutOfProcessLinkWiringEnvelope::default(),
@@ -918,6 +1071,127 @@ mod tests {
         assert_eq!(
             value_of(&environment, "STREAMLIB_ICEORYX2_DOMAIN_ROOT"),
             Some("/tmp/streamlib-1000/iox2")
+        );
+    }
+
+    /// The child is handed the id of the engine this parent was compiled from,
+    /// and refuses to start unless the engine it imports carries the same one.
+    #[test]
+    fn the_child_is_handed_the_engine_build_id_it_must_match() {
+        let command = spawn_host_for_test(None).build_helper_process_command(
+            "Rtest",
+            Path::new("/tmp/streamlib-1000/iox2"),
+            None,
+        );
+        let environment = environment_of(&command);
+        assert_eq!(
+            value_of(&environment, "STREAMLIB_ENGINE_BUILD_ID"),
+            Some(ENGINE_BUILD_ID)
+        );
+    }
+
+    /// A helper refuses its own start on raw standard error before its log
+    /// channel exists, so the processor's refusal is the only place an
+    /// operator reads why. A real child, so the pipe closes the way a helper's
+    /// does, refused through the host's own path out of a setup that failed.
+    ///
+    /// Fail-without-fix: refuse without the tail and the refusal names the
+    /// processor but not the two build ids.
+    #[test]
+    fn a_helper_that_died_while_setting_up_is_refused_naming_what_it_wrote_to_standard_error() {
+        let mut child = Command::new("sh")
+            .args([
+                "-c",
+                "printf 'some earlier line\\n[streamlib] this helper imported engine build A, \
+                 its parent is build B\\n' >&2; exit 1",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("sh starts");
+        let mut host = spawn_host_for_test(None);
+        host.child_standard_error_tail = Some(spawn_standard_error_reader_keeping_its_tail(
+            child.stderr.take().expect("stderr is piped"),
+            "Pblur",
+        ));
+        child.wait().expect("sh exits");
+
+        let refusal = host
+            .refuse_the_helper_process_that_died_while_setting_up()
+            .to_string();
+
+        assert!(host.child_is_gone);
+        assert!(
+            refusal
+                .contains("[BlurProcessor] its helper process died before it finished setting up"),
+            "{refusal}"
+        );
+        assert!(
+            refusal.ends_with(
+                "some earlier line\n[streamlib] this helper imported engine build A, its parent \
+                 is build B"
+            ),
+            "{refusal}"
+        );
+    }
+
+    /// A descendant still holding the pipe cannot stall the refusal: the wait
+    /// gives up at its deadline with what had arrived.
+    #[test]
+    fn a_standard_error_left_open_bounds_the_wait_and_keeps_what_arrived() {
+        let (mut still_open_writer, reader) =
+            std::os::unix::net::UnixStream::pair().expect("socketpair");
+        let tail = spawn_standard_error_reader_keeping_its_tail(reader, "Pblur");
+        std::io::Write::write_all(&mut still_open_writer, b"said before exiting\n").unwrap();
+        let recorded_by = Instant::now() + Duration::from_secs(10);
+        while tail.text_once_closed_or_after(Duration::ZERO).is_empty() {
+            assert!(Instant::now() < recorded_by, "the line was never recorded");
+            std::thread::yield_now();
+        }
+
+        let (text_sender, text_receiver) = std::sync::mpsc::channel();
+        let waiting_tail = tail.clone();
+        std::thread::spawn(move || {
+            let _ = text_sender
+                .send(waiting_tail.text_once_closed_or_after(Duration::from_millis(200)));
+        });
+        let text = text_receiver
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the wait on a pipe nobody closed returned at its deadline");
+
+        assert_eq!(text, "said before exiting");
+        drop(still_open_writer);
+    }
+
+    /// Only the end of a long standard error is kept, so a helper that wrote
+    /// without bound cannot grow the parent's memory with it.
+    #[test]
+    fn only_the_last_bytes_of_a_long_standard_error_are_kept() {
+        let tail = HelperProcessStandardErrorTail::default();
+        tail.record(b"the earliest bytes, overwritten");
+        tail.record(&vec![b'x'; STANDARD_ERROR_TAIL_BYTES]);
+        tail.record(b"the reason");
+        tail.mark_the_pipe_closed();
+
+        let text = tail.text_once_closed_or_after(Duration::ZERO);
+
+        assert_eq!(text.len(), STANDARD_ERROR_TAIL_BYTES);
+        assert!(text.ends_with("xthe reason"));
+    }
+
+    /// A helper that died writing nothing is still refused by name, and says
+    /// there was nothing to carry rather than ending on an empty line.
+    #[test]
+    fn a_helper_that_died_writing_nothing_is_refused_saying_so() {
+        let refusal =
+            refusal_of_a_helper_process_that_died_while_setting_up("BlurProcessor", "").to_string();
+        assert!(
+            refusal.ends_with(
+                "[BlurProcessor] its helper process died before it finished setting up, and \
+                 wrote nothing to its standard error"
+            ),
+            "{refusal}"
         );
     }
 

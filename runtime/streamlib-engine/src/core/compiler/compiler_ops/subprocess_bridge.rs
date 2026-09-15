@@ -49,57 +49,19 @@ use super::subprocess_escalate::{
 /// uses it as the framed-IPC transport.
 pub(crate) const ESCALATE_FD_ENV: &str = "STREAMLIB_ESCALATE_FD";
 
-/// Helper-process protocol version — the coordinate the engine and the
-/// helper's Python half handshake on. Covers the escalate IPC schema and this
-/// lifecycle-command protocol; bump it, in lockstep with `_helper.py`'s
-/// mirror constant, when either changes incompatibly.
+/// This engine's build id: its crate version, the git sha it was built from
+/// (`unknown` where the build had no checkout) and a nonce minted each time the
+/// build script ran, so two builds of one sha still differ.
+pub const ENGINE_BUILD_ID: &str = env!("STREAMLIB_ENGINE_BUILD_ID_FROM_BUILD_SCRIPT");
+
+/// Env var carrying the parent's [`ENGINE_BUILD_ID`] to a helper process, which
+/// refuses to start unless the engine it imported was compiled with the same id.
 ///
-/// Engine and helper ship in one wheel, so this cannot disagree with itself in
-/// a correct install. What the handshake catches is a stale process still
-/// running an older build, or a different `streamlib` earlier on the child's
-/// `sys.path` — both of which would otherwise surface as a mis-parsed op deep
-/// inside an escalate round trip.
-///
-/// v2: the compute escalate ops carry named binding arrays.
-pub const STREAMLIB_SUBPROCESS_PROTOCOL_VERSION: u32 = 2;
-
-/// Oldest helper protocol this engine accepts. Equal to the current version:
-/// the two halves ship together, so there is no supported skew, and accepting
-/// an older helper would let it mis-parse an op that changed shape.
-pub(crate) const MIN_SUPPORTED_SUBPROCESS_PROTOCOL: u32 = 2;
-
-/// Env var the engine sets to advertise [`STREAMLIB_SUBPROCESS_PROTOCOL_VERSION`]
-/// to the subprocess. The SDK reads it at startup and refuses to run if it
-/// can't speak the engine's protocol (the engine → SDK handshake direction).
-pub const PROTOCOL_VERSION_ENV: &str = "STREAMLIB_PROTOCOL_VERSION";
-
-/// Validate the protocol version an SDK reported (in its `ready` response)
-/// against the engine's supported range — the SDK → engine handshake
-/// direction. Fails loud with an actionable named error so an incompatible
-/// installed SDK is caught at setup, never as a deep FFI/escalate crash.
-pub fn validate_subprocess_protocol(sdk_version: Option<u32>, processor_id: &str) -> Result<()> {
-    let sdk_version = sdk_version.ok_or_else(|| {
-        Error::Runtime(format!(
-            "[{processor_id}] subprocess protocol handshake failed: the SDK did \
-             not report a protocol version. The installed streamlib is older \
-             than this engine's handshake (engine speaks \
-             v{MIN_SUPPORTED_SUBPROCESS_PROTOCOL}..=v{STREAMLIB_SUBPROCESS_PROTOCOL_VERSION}); \
-             bump the package's declared streamlib version."
-        ))
-    })?;
-    if !(MIN_SUPPORTED_SUBPROCESS_PROTOCOL..=STREAMLIB_SUBPROCESS_PROTOCOL_VERSION)
-        .contains(&sdk_version)
-    {
-        return Err(Error::Runtime(format!(
-            "[{processor_id}] subprocess protocol mismatch: the installed \
-             streamlib SDK speaks protocol v{sdk_version}, this engine speaks \
-             v{MIN_SUPPORTED_SUBPROCESS_PROTOCOL}..=v{STREAMLIB_SUBPROCESS_PROTOCOL_VERSION}. \
-             Align the package's declared streamlib version to one compatible \
-             with this engine."
-        )));
-    }
-    Ok(())
-}
+/// Parent and helper import one wheel, so the ids differ only when the helper
+/// imported another build — a stale `streamlib` earlier on its `sys.path`, or
+/// an engine built against another iceoryx2 — which would otherwise surface as
+/// every service open failing on a corrupted service.
+pub const ENGINE_BUILD_ID_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_ENGINE_BUILD_ID";
 
 /// Socketpair-backed escalate IPC transport. The parent holds one half
 /// and the subprocess inherits the other via [`ESCALATE_FD_ENV`].
@@ -167,9 +129,9 @@ impl EscalateTransport {
 /// §Media I/O has it "requested in `setup()` … never minted
 /// mid-`process()`".
 ///
-/// Named here, beside the protocol version, because the escalate dispatch
-/// reads it and the spawn host that sends it lives in another crate: a bare
-/// literal on each side would let a rename refuse every window silently.
+/// Named here because the escalate dispatch reads it and the spawn host that
+/// sends it lives in another crate: a bare literal on each side would let a
+/// rename refuse every window silently.
 pub const SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS: &str = "setup";
 
 /// Shared writer handle. The host's lifecycle path and the reader
@@ -673,59 +635,11 @@ mod tests {
         assert_eq!(got.get("rpc").and_then(|v| v.as_str()), Some("ready"));
     }
 
-    // SDK → engine handshake gate. The whole point of the version handshake is
-    // that an incompatible installed SDK is refused at setup, not run. Mentally
-    // revert `validate_subprocess_protocol` to `Ok(())` and every assertion
-    // below that expects an `Err` goes green for the wrong reason — so these
-    // lock the gate, not just exercise it.
     #[test]
-    fn subprocess_protocol_gate_accepts_supported_and_rejects_others() {
-        // Current engine version is in range → accepted.
+    fn the_compiled_engine_build_id_leads_with_this_crates_version() {
         assert!(
-            validate_subprocess_protocol(Some(STREAMLIB_SUBPROCESS_PROTOCOL_VERSION), "p",).is_ok()
-        );
-        // The minimum supported version is in range → accepted.
-        assert!(validate_subprocess_protocol(Some(MIN_SUPPORTED_SUBPROCESS_PROTOCOL), "p").is_ok());
-
-        // One past the engine's current version → refused (SDK too new).
-        let too_new = validate_subprocess_protocol(
-            Some(STREAMLIB_SUBPROCESS_PROTOCOL_VERSION + 1),
-            "p-too-new",
-        );
-        assert!(
-            too_new.is_err(),
-            "an SDK newer than the engine must be refused"
-        );
-        assert!(
-            too_new
-                .unwrap_err()
-                .to_string()
-                .contains("protocol mismatch")
-        );
-
-        // Below the minimum supported version → refused (SDK too old).
-        if MIN_SUPPORTED_SUBPROCESS_PROTOCOL > 0 {
-            assert!(
-                validate_subprocess_protocol(
-                    Some(MIN_SUPPORTED_SUBPROCESS_PROTOCOL - 1),
-                    "p-too-old",
-                )
-                .is_err(),
-                "an SDK older than the engine's minimum must be refused"
-            );
-        }
-
-        // No version reported at all (an SDK predating the handshake) → refused.
-        let missing = validate_subprocess_protocol(None, "p-missing");
-        assert!(
-            missing.is_err(),
-            "a missing SDK protocol version must be refused"
-        );
-        assert!(
-            missing
-                .unwrap_err()
-                .to_string()
-                .contains("did not report a protocol version")
+            ENGINE_BUILD_ID.starts_with(concat!(env!("CARGO_PKG_VERSION"), "+")),
+            "{ENGINE_BUILD_ID}"
         );
     }
 

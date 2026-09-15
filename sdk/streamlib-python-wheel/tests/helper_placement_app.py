@@ -9,8 +9,11 @@ processor's module, and that the pid a bag was produced in is not the app's.
 """
 
 import os
+import shutil
 import sys
+import tempfile
 import threading
+from pathlib import Path
 
 import streamlib
 from helper_placement_processors import (
@@ -21,6 +24,7 @@ from helper_placement_processors import (
     ReportsUpstreamProcessSink,
 )
 from streamlib._engine import (
+    engine_build_id_compiled_into_this_extension,
     processor_class_import_paths_in_this_processes_catalog,
 )
 
@@ -172,6 +176,52 @@ def scenario_a_helper_registers_nothing_it_imports() -> None:
     runtime.add(ReportsItsOwnProcessesProcessorCatalog)
     marker(f"APP_PID={os.getpid()}")
     runtime.run()
+    marker("CLEAN_EXIT")
+
+
+#: A build id no build of this checkout mints: its nonce is all zeros.
+ENGINE_BUILD_ID_OF_ANOTHER_BUILD = (
+    "0.0.1+0123456789abcdef0123456789abcdef01234567.00000000000000000000000000000000"
+)
+
+
+def scenario_a_helper_that_imported_another_engine_build_is_refused() -> None:
+    """A child whose engine is not the app's is refused, and the refusal says why.
+
+    The child is made to see another build the one way a test can reach it
+    before `main()` runs: a `sitecustomize` on the child's `PYTHONPATH` rewrites
+    the id the parent handed it, which is what a stale `streamlib` earlier on
+    the child's `sys.path` amounts to from the check's side.
+    """
+    child_startup_directory = Path(tempfile.mkdtemp(prefix="streamlib-stale-build-"))
+    (child_startup_directory / "sitecustomize.py").write_text(
+        "import os\n"
+        "if 'STREAMLIB_ENTRYPOINT' in os.environ:\n"
+        f"    os.environ['STREAMLIB_ENGINE_BUILD_ID'] = {ENGINE_BUILD_ID_OF_ANOTHER_BUILD!r}\n"
+    )
+    inherited_python_path = os.environ.get("PYTHONPATH")
+    os.environ["PYTHONPATH"] = os.pathsep.join(
+        entry for entry in (str(child_startup_directory), inherited_python_path) if entry
+    )
+
+    runtime = streamlib.Runtime()
+    runtime.add(ReportsItsOwnProcessSource, config={"label": "stale"})
+    marker(f"APP_ENGINE_BUILD_ID={engine_build_id_compiled_into_this_extension()}")
+
+    def report_whether_the_processor_ever_started() -> None:
+        try:
+            runtime.wait_until_every_processor_is_running(timeout=30.0)
+        except RuntimeError as never_started:
+            marker(f"PROCESSOR_REFUSED={never_started}")
+        else:
+            marker("PROCESSOR_REFUSED=it started anyway")
+        runtime.shutdown()
+
+    threading.Thread(target=report_whether_the_processor_ever_started, daemon=True).start()
+    try:
+        runtime.run()
+    finally:
+        shutil.rmtree(child_startup_directory, ignore_errors=True)
     marker("CLEAN_EXIT")
 
 

@@ -72,6 +72,7 @@ __all__ = [
     "decode_msgpack_bytes_to_python_object",
     "decode_tapped_channel_bag_frame_to_python_object",
     "encode_bag_to_msgpack_bytes",
+    "engine_build_id_compiled_into_this_extension",
     "feed_test_harness_bag",
     "gpu_limited_access_of_the_typed_read_in_progress",
     "log_event",
@@ -1664,6 +1665,16 @@ def processor_class_import_paths_in_this_processes_catalog() -> list[str]:
     yet construct. In a helper nothing appears, because decoration registers
     nothing there — and seeing that from inside one is what the wheel's own
     suites read this for.
+    """
+
+def engine_build_id_compiled_into_this_extension() -> str:
+    """The build id of the engine compiled into this extension:
+    `<crate version>+<git sha>.<per-build nonce>`, the sha `unknown` where the
+    build had no git checkout.
+
+    A helper process compares it with the id its parent handed it in
+    `STREAMLIB_ENGINE_BUILD_ID` and refuses to start on any difference, so two
+    builds of one commit are still two ids.
     """
 
 def monotonic_now_ns() -> int:

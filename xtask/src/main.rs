@@ -402,6 +402,8 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::logging::paths::tests::a_runtime_id_carrying_dots_and_dashes_keeps_its_whole_name_when_rotated",
                 "core::logging::paths::tests::filename_shape_round_trips",
                 "core::logging::paths::tests::a_file_that_is_not_one_of_this_segments_rotations_parses_to_no_sequence",
+                "core::engine_build_id_composition",
+                "core::compiler::compiler_ops::subprocess_bridge::tests::the_compiled_engine_build_id_leads_with_this_crates_version",
                 "core::json_schema::port_rendering_tests::port_info_output_renders_exactly_the_declared_keys",
                 "core::json_schema::port_rendering_tests::port_info_output_carries_no_type_key_under_any_spelling",
                 "core::json_schema::port_rendering_tests::port_descriptor_output_carries_no_type_key",

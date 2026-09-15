@@ -8,9 +8,15 @@
 //! ships (`vulkan/rhi/shaders/*.{comp,vert,frag,rgen,rmiss,rchit}`) to
 //! SPIR-V via `glslc` and stages the artifacts in `OUT_DIR` for
 //! `include_bytes!` to consume at compile time, and compiles the PipeWire
-//! shims against the vendored PipeWire/SPA headers.
+//! shims against the vendored PipeWire/SPA headers; and stamps the engine's
+//! build id, which a helper process checks against its parent's.
+
+#[path = "src/core/engine_build_id_composition.rs"]
+mod engine_build_id_composition;
 
 fn main() {
+    stamp_the_engine_build_id();
+
     // Link Metal framework on macOS for MP4 writer
     #[cfg(target_os = "macos")]
     {
@@ -27,6 +33,54 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
         compile_pipewire_shims();
     }
+}
+
+/// Hand the compiler `STREAMLIB_ENGINE_BUILD_ID_FROM_BUILD_SCRIPT`.
+///
+/// The nonce is minted each time this script runs, so the script reruns
+/// whenever the code compiled into the engine changes: its own sources and
+/// manifest, every crate it links through a path dependency, and the lockfile
+/// pinning the rest. Otherwise a rebuilt engine would keep the id of the build
+/// it replaced and a stale helper would pass the check. The checked-out commit
+/// is deliberately not watched — every commit would rebuild the engine and
+/// everything above it — so the sha names the commit checked out when the
+/// script last ran.
+fn stamp_the_engine_build_id() {
+    use engine_build_id_composition::{
+        compose_engine_build_id, git_sha_of_the_checkout_containing, mint_per_build_nonce,
+        path_dependency_directories_linked_into,
+    };
+
+    let manifest_directory = std::path::PathBuf::from(
+        std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set"),
+    );
+    let workspace_manifest_directory = manifest_directory.join("../..");
+    let crate_directories_compiled_into_the_engine = std::iter::once(manifest_directory.clone())
+        .chain(path_dependency_directories_linked_into(
+            &manifest_directory,
+            &workspace_manifest_directory,
+        ));
+    let watched_paths = crate_directories_compiled_into_the_engine
+        .flat_map(|crate_directory| {
+            ["src", "Cargo.toml", "build.rs"].map(|entry| crate_directory.join(entry))
+        })
+        .chain(std::iter::once(
+            workspace_manifest_directory.join("Cargo.lock"),
+        ));
+    // Only paths that exist: cargo reruns a script on every build while a
+    // watched path is missing.
+    for watched_path in watched_paths.filter(|path| path.exists()) {
+        println!("cargo:rerun-if-changed={}", watched_path.display());
+    }
+
+    let per_build_nonce = mint_per_build_nonce()
+        .expect("could not read /dev/urandom for the engine build id's per-build nonce");
+    let engine_build_id = compose_engine_build_id(
+        &std::env::var("CARGO_PKG_VERSION").expect("CARGO_PKG_VERSION not set"),
+        git_sha_of_the_checkout_containing(&manifest_directory).as_deref(),
+        &per_build_nonce,
+    );
+    println!("cargo:rustc-env=STREAMLIB_ENGINE_BUILD_ID_FROM_BUILD_SCRIPT={engine_build_id}");
 }
 
 /// Compile the header-only half of every PipeWire arm.

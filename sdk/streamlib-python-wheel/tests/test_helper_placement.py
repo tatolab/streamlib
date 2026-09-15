@@ -286,3 +286,34 @@ def test_a_crashed_helper_is_surfaced_and_the_pipeline_keeps_running(
     app.interrupt()
     app.await_marker("CLEAN_EXIT")
     app.await_clean_exit()
+
+
+def test_a_helper_that_imported_another_engine_build_is_refused_naming_both_builds(
+    start_app_under_test,
+):
+    """The whole handshake through a real `Runtime`: the parent hands its build
+    id over, the child compares it with its own and refuses on raw stderr, and
+    the processor's start is refused by name carrying what the child wrote —
+    the only place an operator reads which two builds disagreed.
+
+    Fail-without-fix: drop the stderr tail from the parent's refusal and the
+    refusal names the processor but neither build.
+    """
+    app = run_scenario(
+        start_app_under_test, "a_helper_that_imported_another_engine_build_is_refused"
+    )
+
+    app_engine_build_id = re.search(r"MARKER:APP_ENGINE_BUILD_ID=(\S+)", app.output)
+    assert app_engine_build_id is not None, app.output
+    refusal = (
+        "[ReportsItsOwnProcessSource] its helper process died before it finished setting "
+        "up. Its standard error ended with:\n"
+        f"[streamlib] this helper imported engine build {app_engine_build_id.group(1)}"
+    )
+    assert refusal in app.output, app.output
+    assert (
+        "its parent is engine build "
+        "0.0.1+0123456789abcdef0123456789abcdef01234567.00000000000000000000000000000000"
+        in app.output
+    )
+    assert "MARKER:PROCESSOR_REFUSED=it started anyway" not in app.output

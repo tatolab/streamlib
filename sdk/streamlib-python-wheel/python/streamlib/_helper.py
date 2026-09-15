@@ -42,6 +42,7 @@ from ._engine import (
     ProcessorLinkDataAccess,
     RuntimeContextFullAccess,
     capability_extension_host_for_the_helper_process,
+    engine_build_id_compiled_into_this_extension,
 )
 from ._processor_hosting import apply_configuration, construct_processor_instance
 
@@ -49,12 +50,7 @@ ENTRYPOINT_ENV = "STREAMLIB_ENTRYPOINT"
 PROCESSOR_ID_ENV = "STREAMLIB_PROCESSOR_ID"
 RUNTIME_ID_ENV = "STREAMLIB_RUNTIME_ID"
 ESCALATE_FD_ENV = "STREAMLIB_ESCALATE_FD"
-PROTOCOL_VERSION_ENV = "STREAMLIB_PROTOCOL_VERSION"
-
-# The engine and this module ship in one artifact, so the version cannot
-# disagree with itself. The handshake stays as an assertion because a stale
-# `streamlib` earlier on the child's `sys.path` is still reachable.
-PROTOCOL_VERSION = 2
+ENGINE_BUILD_ID_ENV = "STREAMLIB_ENGINE_BUILD_ID"
 
 # Upper bound on how long an escalate request waits for its correlated
 # response. Generous enough for a cold GPU allocation under load; bounded so
@@ -622,7 +618,7 @@ class HelperProcessLifecycle:
                 }
             )
             return
-        self._bridge.send({"rpc": "ready", "protocol_version": PROTOCOL_VERSION})
+        self._bridge.send({"rpc": "ready"})
 
     def _run(self, command: "dict[str, Any]") -> None:
         if self._hosted is None:
@@ -796,23 +792,33 @@ def _required_environment(name: str) -> str:
     return value
 
 
-def _assert_the_parent_speaks_this_protocol() -> None:
-    advertised = os.environ.get(PROTOCOL_VERSION_ENV)
-    if advertised is None:
-        return
-    if advertised != str(PROTOCOL_VERSION):
+def _refuse_an_engine_built_other_than_the_parents() -> None:
+    """Parent and helper import one wheel, so differing ids mean this process
+    imported another build — which would otherwise surface as every iceoryx2
+    service open failing on a corrupted service."""
+    helper_engine_build_id = engine_build_id_compiled_into_this_extension()
+    parent_engine_build_id = os.environ.get(ENGINE_BUILD_ID_ENV)
+    if not parent_engine_build_id:
         raise HelperProcessProtocolError(
-            f"the engine speaks helper protocol v{advertised}, this streamlib speaks "
-            f"v{PROTOCOL_VERSION}. The engine and the helper ship in one artifact, so "
-            f"this means a different streamlib is earlier on this process's sys.path: "
-            f"{sys.path[0]!r}"
+            f"{ENGINE_BUILD_ID_ENV} is not set, so this helper cannot tell whether the "
+            f"engine it imported (build {helper_engine_build_id}) is its parent's; a "
+            f"helper process is only ever started by the engine's spawn host, which "
+            f"always sets it"
+        )
+    if parent_engine_build_id != helper_engine_build_id:
+        raise HelperProcessProtocolError(
+            f"this helper imported engine build {helper_engine_build_id} from "
+            f"{os.path.dirname(os.path.abspath(__file__))!r}, but its parent is engine "
+            f"build {parent_engine_build_id}. Parent and helper must import the same "
+            f"streamlib wheel; a different streamlib is earlier on this process's "
+            f"sys.path, or the wheel was rebuilt under a running app"
         )
 
 
 def main() -> None:
     """Run one processor until its parent tears it down."""
     try:
-        _assert_the_parent_speaks_this_protocol()
+        _refuse_an_engine_built_other_than_the_parents()
         import_path = _required_environment(ENTRYPOINT_ENV)
         processor_id = _required_environment(PROCESSOR_ID_ENV)
         runtime_id = os.environ.get(RUNTIME_ID_ENV, "")

@@ -237,6 +237,9 @@ jobs:
           # processor mutex, for at least three seconds and on until both
           # racers meet their floors, capped at thirty: the input side's own
           # lock is what keeps that from corrupting the heap.
+          # The engine build id a helper checks against its parent's: how the
+          # build script composes it, `unknown` with no git checkout, a fresh
+          # nonce per build, and the compiled id leading with the crate version.
           cargo test --locked -p streamlib-engine --lib -- \
             core::processor_owned_window \
             processor_owned_window_ops \
@@ -311,6 +314,8 @@ jobs:
             core::logging::paths::tests::a_runtime_id_carrying_dots_and_dashes_keeps_its_whole_name_when_rotated \
             core::logging::paths::tests::filename_shape_round_trips \
             core::logging::paths::tests::a_file_that_is_not_one_of_this_segments_rotations_parses_to_no_sequence \
+            core::engine_build_id_composition \
+            core::compiler::compiler_ops::subprocess_bridge::tests::the_compiled_engine_build_id_leads_with_this_crates_version \
             core::json_schema::port_rendering_tests::port_info_output_renders_exactly_the_declared_keys \
             core::json_schema::port_rendering_tests::port_info_output_carries_no_type_key_under_any_spelling \
             core::json_schema::port_rendering_tests::port_descriptor_output_carries_no_type_key \
