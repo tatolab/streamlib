@@ -65,6 +65,32 @@ Recorded with the `runtime-mesh` proposal. It reads `zenoh` 1.10.1 and the rig p
 - **Tests run with discovery off.** Otherwise parallel test runtimes on one machine would find
   each other under one default name and refuse.
 
+## How links are carried
+
+Recorded with the `cross-runtime-links` proposal. It reads `zenoh` 1.10.1 at tag `1211779` and the
+engine at `d4ce808f6`.
+
+- **The input's runtime always pulls.** A push and a third-party wiring become a request to that
+  runtime, which applies `connect` with a remote source. One data shape and one set of refusals
+  then serve all three ways of creating a link.
+- **Readers announce, sources watch.** A reader declares a liveliness token under the source runtime's
+  verbatim prefix, and the source creates an egress when the first token for a port appears. Zenoh's
+  stable matching status was rejected: one wildcard subscriber anywhere on the mesh would start every
+  source's network work.
+- **The hop count reuses the local sequence number.** Egress copies each sample's user-header number
+  into the attachment, so one gap at ingress covers the egress ring, refused copies, Zenoh's silent
+  `Drop`, the network and the ingress ring. A second numbering minted at egress would miss the
+  source-side ring.
+- **Nothing blocks on a Zenoh thread or a producer's.** `put().wait()` can hold its caller for about
+  51 ms while a fragmented message queues, so it runs on the egress thread. A subscriber callback runs
+  on the link's receive loop, so it only hands off into a ring.
+- **Surfaces copy through export staging, never through `exchange`.** `exchange` converts to RGBA8 and
+  builds resources per call. A pooled buffer's mapping is write-combined memory, where a 1080p memcpy
+  cost 37 ms. The claim spans the GPU copy alone, so a slow network never pins the producer's slot. A
+  frame lands as a pooled pixel buffer, because no texture mint stamps a generation.
+- **Egress forwards every bag.** Skipping to the newest at the sender for a `newest` reader would make a
+  gap at ingress ambiguous between loss and the profile working. Skipping stays at the receiving port.
+
 ## Rejected alternatives
 
 - **A gateway processor, or a built-in pair.** A processor has to be wired into a graph, so
