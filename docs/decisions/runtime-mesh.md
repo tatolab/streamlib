@@ -21,8 +21,8 @@ processor is unchanged either way.
 - **Mesh name.** Everything on the mesh lives under a mesh name, `default` unless a runtime
   names another. There is no switch that turns the mesh off.
 - **Addressing.** A port on the mesh is `<runtime name>/<display name>/<port>`. The runtime
-  name belongs to the runtime, defaults to `<hostname>-<app directory>`, and is unique within
-  a mesh.
+  name belongs to the runtime, defaults to `<hostname>-<app directory name>-<id>` with the id
+  hashed from the directory's full path, is never auto-suffixed, and is unique within a mesh.
 - **Surfaces.** A top-level `surface_id` crosses as the frame's pixels and lands as a freshly
   minted local surface id. The `surface_id` key is a stand-in until a general mechanism
   replaces it.

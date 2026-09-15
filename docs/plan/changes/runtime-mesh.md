@@ -170,16 +170,16 @@ streamlib-specific file an app would author, which the zero-ceremony bar (`:33-4
      answer: its host identity and its pid.
    - The queryable answers a msgpack document: `runtime_id`, `host_name`, `pid`,
      `engine_version` (the crate version) and `control_plane_urls`.
-     - `control_plane_urls` is one `http://<address>:<port>` per non-loopback interface address
-       the bind covers, and is empty with no control plane.
+     - `control_plane_urls` is one `http://<address>:<port>` per non-loopback, non-link-local
+       interface address the bind covers — an IPv6 literal bracketed (RFC 3986), so
+       `http://[2001:db8::1]:9000` — and is empty with no control plane.
      - It answers from the runtime's state at query time, so a control plane hosted after
        construction shows up.
    - The `@runtime` chunk is verbatim, so no `**` subscription over a mesh's port addresses ever
      matches it. Since a display name may not begin with `@` (below), no address collides with it.
    - The rest of the key layout belongs to the tickets.
 2. **Discovery is a liveliness subscriber with history**, plus one description query per runtime
-   that appears. A runtime that leaves is removed. The peer table is read lock-free, so `graph`
-   never waits on the network.
+   that appears; one that leaves is removed. `graph` reads the peer table lock-free, never waiting.
 3. **The mesh name is one chunk of the channel-name grammar**, `[a-z][a-z0-9_-]*`
    (`channel_name.rs`).
    - Runtimes in different meshes on one network may still connect at the transport and exchange
@@ -207,8 +207,8 @@ streamlib-specific file an app would author, which the zero-ceremony bar (`:33-4
    - **Where it bites:** a second run from the same directory is refused until one is given
      `--runtime-name`; moving the directory renames the runtime, as it already relabels its
      unnamed virtual cameras.
-   - **The refusal** names the runtime name and the holder's host, pid and app directory, and
-     offers both fixes: stop it (`streamlib nodes` shows it) or start this one under another name.
+   - **The refusal** names the runtime name and the holder's host and pid — both on the token key
+     — and offers both fixes: stop it (`streamlib nodes` shows it) or start under another name.
 3. **The duplicate check.** Before declaring its token, a runtime queries the mesh for tokens under
    its own name. Discovery is on, so `open` has already waited out the scouting delay. The query then
    waits at most an engine-chosen bound for connected peers to answer.
@@ -223,8 +223,7 @@ streamlib-specific file an app would author, which the zero-ceremony bar (`:33-4
 4. **Stated residual.** Two runtimes that start inside one discovery window, or meet when a
    partition heals, are not refused. Both keep running, each says so once naming the other's host,
    and `graph` lists both. Which one a remote link reaches is `cross-runtime-links`'s to settle.
-5. **`runtime_id` stays** as the per-run id in logs, the registry file name and iceoryx2 service
-   names, and in the description document. It is never part of an address.
+5. **`runtime_id` stays** per-run — logs, registry file, iceoryx2 names, the description — never an address.
 
 ## MODIFIED: §Processor model `:787-794` — a display name is one address chunk
 
@@ -241,12 +240,13 @@ the fix. The refusal applies in Rust, in `rt.add`, and in MCP `add_processor`.
    `{"mesh_name", "runtime_name", "session": "open" | "local_only", "local_only_reason"?, "peers":
    [...]}`.
    - Each peer is `{"runtime_name", "runtime_id", "host_name", "engine_version",
-     "control_plane_urls"}`, sorted by name. A peer whose description has not answered yet renders
-     `runtime_name` alone.
+     "control_plane_urls"}`, sorted by name. `runtime_name` is always present; the other four are
+     absent until the description answers, so each is optional on the peer type, and the key-list
+     test, the strict fixture and the schema cover both shapes.
    - `local_only_reason` is present only when the session is local-only.
    - No peer carries a last-seen time: a wall-clock one would be a fifth surface (`:1171-1181`), and
      a monotonic one means nothing to another machine.
-   - The key list test, the strict `mcp_prompts.rs:172` fixture and `generate_schemas.rs` follow.
+   - The key list test, `mcp_prompts.rs:172`'s strict fixture and `generate_schemas.rs` follow.
 2. **The registry entry gains `runtime_name`** and bumps `schema_version`.
    - `host_control_plane` takes the name from its runtime.
    - `node_name`, `ApiServerConfig.name`, `resolved_name` and the generator go.
@@ -294,7 +294,8 @@ the fix. The refusal applies in Rust, in `rt.add`, and in MCP `add_processor`.
 - **What a runtime offers:** learned by query when a link names a port, never announced.
 - **Peers of another engine version:** `engine_version` is rendered here; whether a link between
   two versions is refused, and whether M4's build id joins the announcement, is that change's.
-- **Duplicate names met after start** (residual 4 above).
+- **Duplicate names met after start** (residual 4 above): that change defines what a link naming
+  a name two live runtimes hold does before any link resolves a name.
 
 ## Assumptions stated, not asked
 
@@ -311,7 +312,7 @@ the fix. The refusal applies in Rust, in `rt.add`, and in MCP `add_processor`.
 | # | Slice | Blocked by | Proof |
 |---|---|---|---|
 | N1 | The five configuration values across constructor, environment and CLI; runtime-name and mesh-name grammar and default; display-name refusal in all three doors; `runtime_name` on the registry entry, the `nodes` column and `--node`; `node_name`, `--name`, `ApiServerConfig.name` and the generator deleted | — | CI: the default comes from hostname, app directory name and the path hash in all three resolution arms — two directories sharing a final component get different defaults, one directory gets the same default twice; a keyword beats the environment, which beats the default; each forbidden character is refused by name in a runtime name, a mesh name and a display name through `rt.add` and MCP; a `udp/` endpoint is refused by name; the `nodes` table test shows the name, and `--node <runtime name>` resolves |
-| N2 | `zenoh` (TCP only); session in `Runner::new()`; token and description queryable; peer table; duplicate refusal with same-host takeover; local-only; close at `stop()`; `graph` `mesh` key; test defaults; notices and portability | N1 | CI, GPU-free, two OS processes, multicast pinned to `127.0.0.1` with a per-test mesh name: each lists the other in `graph.mesh.peers` within a bound, and an arm with explicit `tcp/127.0.0.1` peers and discovery off does the same. A second process of the same name is refused naming the host; after a SIGKILL of the first the name is free at once. A peer that closes leaves `graph`. Two mesh names see nothing of each other. A taken listen endpoint gives `local_only` with its reason and a constructed runtime. Portability and notices gates are green. Rig: two `streamlib run` apps list each other, and SIGTERM exits both cleanly |
+| N2 | `zenoh` (TCP only); session in `Runner::new()`; token and description queryable; peer table; duplicate refusal with same-host takeover; local-only; close at `stop()`; `graph` `mesh` key; test defaults; notices and portability | N1 | CI, GPU-free, two OS processes, multicast pinned to `127.0.0.1` with a per-test mesh name: each lists the other in `graph.mesh.peers` within a bound, and an arm with explicit `tcp/127.0.0.1` peers and discovery off does the same. A second process of the same name is refused naming the host; after a SIGKILL of the first the name is free at once. A peer that closes leaves `graph`; one whose description has not answered renders its name alone and still deserializes. An IPv6 control-plane address renders bracketed. Two mesh names see nothing of each other. A taken listen endpoint gives `local_only` with its reason and a constructed runtime. Portability and notices gates are green. Rig: two `streamlib run` apps list each other, and SIGTERM exits both cleanly |
 | N3 | `streamlib nodes` mesh-peers table through the observe-only session | N2 | CI (GPU-free pytest): a `Runtime()` in a subprocess under a test mesh appears in `nodes --mesh-name <test mesh>` and is not repeated when it is also a registry row; with no peers the table says so |
 
 Every new engine test is named in `.github/workflows/test.yml`'s slice and the
