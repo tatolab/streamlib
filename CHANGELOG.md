@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.9](https://github.com/tatolab/streamlib/compare/v0.22.8...v0.22.9) (2026-09-15)
+
+
+### Features
+
+* **engine:** refuse a helper built from a different engine by its build id ([#2299](https://github.com/tatolab/streamlib/issues/2299)) ([0b6cc16](https://github.com/tatolab/streamlib/commit/0b6cc16e72f8167734c101ab96a22199f70e94a0))
+
 ## [0.22.8](https://github.com/tatolab/streamlib/compare/v0.22.7...v0.22.8) (2026-09-15)
 
 
