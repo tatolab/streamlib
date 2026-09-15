@@ -4,8 +4,9 @@
 //! On-disk discovery registry for ApiServer-hosting runtimes.
 //!
 //! A runtime that hosts an [`crate::ApiServerProcessor`] writes one JSON entry
-//! per runtime into `$XDG_RUNTIME_DIR/streamlib/nodes/<runtime_id>.json` when
-//! its control port binds, and removes it on clean teardown. A CLI discovers
+//! per runtime into `<runtime directory>/nodes/<runtime_id>.json` when its
+//! control port binds, and removes it on clean teardown. The runtime directory
+//! is the one the engine resolved and checked as the runtime started. A CLI discovers
 //! live control planes by scanning that directory. Entry existence is tied to
 //! the control endpoint existing: a runtime without an ApiServer never appears.
 //!
@@ -14,7 +15,7 @@
 //! [`NODE_REGISTRY_SCHEMA_VERSION`] stamps it so a reader rejects an entry it
 //! does not understand.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -105,37 +106,20 @@ pub enum NodeRegistryError {
     },
 }
 
-/// The directory holding node discovery entries.
-///
-/// `$XDG_RUNTIME_DIR/streamlib/nodes` when `XDG_RUNTIME_DIR` is set and
-/// non-empty; otherwise a fallback under the system temp dir
-/// (`<temp>/streamlib/nodes`), per the XDG Base Directory spec's
-/// replacement-directory guidance (a warning is emitted on the fallback). The
-/// writing runtime and any reader resolve this identically within one user
-/// session, so discovery agrees on both paths.
-#[tracing::instrument]
-pub fn registry_dir() -> PathBuf {
-    match std::env::var_os("XDG_RUNTIME_DIR") {
-        Some(dir) if !dir.is_empty() => PathBuf::from(dir).join("streamlib").join("nodes"),
-        _ => {
-            tracing::warn!(
-                "XDG_RUNTIME_DIR is unset; node registry falling back to the system temp dir"
-            );
-            std::env::temp_dir().join("streamlib").join("nodes")
-        }
-    }
-}
-
-/// Write (create or replace) the discovery entry for `entry.runtime_id`,
-/// creating the registry directory if needed. Returns the entry's path.
+/// Write (create or replace) the discovery entry for `entry.runtime_id` into
+/// `registry_directory`, creating it if needed. Returns the entry's path.
 #[tracing::instrument(skip(entry), fields(runtime_id = %entry.runtime_id, control_url = %entry.control_url))]
-pub fn write_entry(entry: &NodeRegistryEntry) -> Result<PathBuf, NodeRegistryError> {
-    let dir = registry_dir();
-    std::fs::create_dir_all(&dir).map_err(|source| NodeRegistryError::RegistryDirCreate {
-        path: dir.clone(),
-        source,
+pub fn write_entry(
+    registry_directory: &Path,
+    entry: &NodeRegistryEntry,
+) -> Result<PathBuf, NodeRegistryError> {
+    std::fs::create_dir_all(registry_directory).map_err(|source| {
+        NodeRegistryError::RegistryDirCreate {
+            path: registry_directory.to_path_buf(),
+            source,
+        }
     })?;
-    let path = dir.join(entry_file_name(&entry.runtime_id));
+    let path = registry_directory.join(entry_file_name(&entry.runtime_id));
     let json =
         serde_json::to_vec_pretty(entry).map_err(|source| NodeRegistryError::EntryEncode {
             runtime_id: entry.runtime_id.clone(),
@@ -148,11 +132,11 @@ pub fn write_entry(entry: &NodeRegistryEntry) -> Result<PathBuf, NodeRegistryErr
     Ok(path)
 }
 
-/// Remove the discovery entry for `runtime_id`. A missing entry is not an error
-/// (idempotent teardown).
+/// Remove the discovery entry for `runtime_id` from `registry_directory`. A
+/// missing entry is not an error (idempotent teardown).
 #[tracing::instrument]
-pub fn remove_entry(runtime_id: &str) -> Result<(), NodeRegistryError> {
-    let path = registry_dir().join(entry_file_name(runtime_id));
+pub fn remove_entry(registry_directory: &Path, runtime_id: &str) -> Result<(), NodeRegistryError> {
+    let path = registry_directory.join(entry_file_name(runtime_id));
     match std::fs::remove_file(&path) {
         Ok(()) => Ok(()),
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -164,8 +148,11 @@ pub fn remove_entry(runtime_id: &str) -> Result<(), NodeRegistryError> {
 /// exists. A present-but-corrupt or version-mismatched entry is an error — this
 /// is the strict single-entry lookup a `--node <runtime_id>` resolve uses.
 #[tracing::instrument]
-pub fn read_entry(runtime_id: &str) -> Result<Option<NodeRegistryEntry>, NodeRegistryError> {
-    let path = registry_dir().join(entry_file_name(runtime_id));
+pub fn read_entry(
+    registry_directory: &Path,
+    runtime_id: &str,
+) -> Result<Option<NodeRegistryEntry>, NodeRegistryError> {
+    let path = registry_directory.join(entry_file_name(runtime_id));
     let bytes = match std::fs::read(&path) {
         Ok(bytes) => bytes,
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -191,8 +178,8 @@ pub fn read_entry(runtime_id: &str) -> Result<Option<NodeRegistryEntry>, NodeReg
 /// listing. A missing registry directory yields an empty list. Only a failure
 /// to read the directory itself is a hard error.
 #[tracing::instrument]
-pub fn scan_entries() -> Result<Vec<NodeRegistryEntry>, NodeRegistryError> {
-    let dir = registry_dir();
+pub fn scan_entries(registry_directory: &Path) -> Result<Vec<NodeRegistryEntry>, NodeRegistryError> {
+    let dir = registry_directory.to_path_buf();
     let read_dir = match std::fs::read_dir(&dir) {
         Ok(read_dir) => read_dir,
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
@@ -283,32 +270,14 @@ fn current_process_hint() -> String {
 #[cfg(test)]
 mod tests {
     //! Registry write / scan / read / remove / prune-shape and the
-    //! `schema_version` round-trip. Each test swaps `XDG_RUNTIME_DIR` for a
-    //! fresh tempdir (guarded `#[serial]` like the runtime's env-swap tests, so
-    //! no concurrent test reads the mutated env) and asserts entries land under
-    //! it.
-
-    use serial_test::serial;
+    //! `schema_version` round-trip, each against its own tempdir registry.
 
     use super::*;
 
-    /// Point `XDG_RUNTIME_DIR` at a fresh tempdir for the closure's duration,
-    /// restoring the prior value after.
-    fn with_isolated_xdg_runtime_dir<F: FnOnce(&std::path::Path) -> R, R>(f: F) -> R {
-        let prev = std::env::var_os("XDG_RUNTIME_DIR");
-        let tmp = tempfile::tempdir().expect("tempdir");
-        // SAFETY: tests are serialized via #[serial]; no concurrent env mutation.
-        unsafe {
-            std::env::set_var("XDG_RUNTIME_DIR", tmp.path());
-        }
-        let result = f(tmp.path());
-        unsafe {
-            match prev {
-                Some(value) => std::env::set_var("XDG_RUNTIME_DIR", value),
-                None => std::env::remove_var("XDG_RUNTIME_DIR"),
-            }
-        }
-        result
+    /// Run `f` against a fresh registry directory inside a tempdir.
+    fn with_isolated_registry_directory<F: FnOnce(&std::path::Path) -> R, R>(f: F) -> R {
+        let runtime_directory = tempfile::tempdir().expect("tempdir");
+        f(&runtime_directory.path().join("nodes"))
     }
 
     fn sample_entry(runtime_id: &str, port: u16) -> NodeRegistryEntry {
@@ -322,25 +291,23 @@ mod tests {
     }
 
     #[test]
-    #[serial]
-    fn write_then_scan_round_trips_the_entry_under_xdg_runtime_dir() {
-        with_isolated_xdg_runtime_dir(|xdg| {
+    fn write_then_scan_round_trips_the_entry_in_the_registry_directory() {
+        with_isolated_registry_directory(|registry_directory| {
             let entry = sample_entry("Rnode-alpha", 8080);
-            let path = write_entry(&entry).expect("write");
+            let path = write_entry(registry_directory, &entry).expect("write");
             assert!(
-                path.starts_with(xdg),
-                "entry {} must land under XDG_RUNTIME_DIR {}",
+                path.starts_with(registry_directory),
+                "entry {} must land in the registry directory {}",
                 path.display(),
-                xdg.display()
+                registry_directory.display()
             );
 
-            let scanned = scan_entries().expect("scan");
+            let scanned = scan_entries(registry_directory).expect("scan");
             assert_eq!(scanned, vec![entry]);
         });
     }
 
     #[test]
-    #[serial]
     fn schema_version_survives_a_serde_round_trip() {
         let entry = sample_entry("Rnode-beta", 9090);
         let json = serde_json::to_string(&entry).expect("encode");
@@ -354,67 +321,62 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn remove_entry_deletes_the_file_and_is_idempotent() {
-        with_isolated_xdg_runtime_dir(|_xdg| {
+        with_isolated_registry_directory(|registry_directory| {
             let entry = sample_entry("Rnode-gamma", 7000);
-            write_entry(&entry).expect("write");
-            assert_eq!(scan_entries().expect("scan").len(), 1);
+            write_entry(registry_directory, &entry).expect("write");
+            assert_eq!(scan_entries(registry_directory).expect("scan").len(), 1);
 
-            remove_entry(&entry.runtime_id).expect("remove");
-            assert!(scan_entries().expect("scan").is_empty());
+            remove_entry(registry_directory, &entry.runtime_id).expect("remove");
+            assert!(scan_entries(registry_directory).expect("scan").is_empty());
 
-            remove_entry(&entry.runtime_id).expect("second remove is a no-op");
+            remove_entry(registry_directory, &entry.runtime_id).expect("second remove is a no-op");
         });
     }
 
     #[test]
-    #[serial]
     fn read_entry_returns_none_for_a_missing_runtime_and_the_entry_when_present() {
-        with_isolated_xdg_runtime_dir(|_xdg| {
-            assert!(read_entry("Rnobody").expect("read missing").is_none());
+        with_isolated_registry_directory(|registry_directory| {
+            assert!(read_entry(registry_directory, "Rnobody").expect("read missing").is_none());
             let entry = sample_entry("Rnode-delta", 6001);
-            write_entry(&entry).expect("write");
-            assert_eq!(read_entry(&entry.runtime_id).expect("read"), Some(entry));
+            write_entry(registry_directory, &entry).expect("write");
+            assert_eq!(read_entry(registry_directory, &entry.runtime_id).expect("read"), Some(entry));
         });
     }
 
     #[test]
-    #[serial]
     fn scan_skips_a_corrupt_entry_and_still_returns_the_valid_ones() {
-        with_isolated_xdg_runtime_dir(|_xdg| {
+        with_isolated_registry_directory(|registry_directory| {
             let good = sample_entry("Rgood", 5000);
-            write_entry(&good).expect("write good");
-            let corrupt_path = registry_dir().join("Rcorrupt.json");
+            write_entry(registry_directory, &good).expect("write good");
+            let corrupt_path = registry_directory.join("Rcorrupt.json");
             std::fs::write(&corrupt_path, b"not json").expect("write corrupt");
 
-            let scanned = scan_entries().expect("scan tolerates corruption");
+            let scanned = scan_entries(registry_directory).expect("scan tolerates corruption");
             assert_eq!(scanned, vec![good]);
         });
     }
 
     #[test]
-    #[serial]
     fn scan_skips_an_entry_with_an_unrecognized_schema_version() {
-        with_isolated_xdg_runtime_dir(|_xdg| {
+        with_isolated_registry_directory(|registry_directory| {
             let mut future = sample_entry("Rfuture", 5100);
             future.schema_version = NODE_REGISTRY_SCHEMA_VERSION + 1;
-            write_entry(&future).expect("write future");
+            write_entry(registry_directory, &future).expect("write future");
             assert!(
-                scan_entries().expect("scan").is_empty(),
+                scan_entries(registry_directory).expect("scan").is_empty(),
                 "an unrecognized schema_version must be skipped"
             );
         });
     }
 
     #[test]
-    #[serial]
     fn read_entry_rejects_an_entry_with_an_unrecognized_schema_version() {
-        with_isolated_xdg_runtime_dir(|_xdg| {
+        with_isolated_registry_directory(|registry_directory| {
             let mut future = sample_entry("Rfuture-read", 5200);
             future.schema_version = NODE_REGISTRY_SCHEMA_VERSION + 1;
-            write_entry(&future).expect("write future");
-            let error = read_entry(&future.runtime_id)
+            write_entry(registry_directory, &future).expect("write future");
+            let error = read_entry(registry_directory, &future.runtime_id)
                 .expect_err("a version-mismatched entry must be a hard error, not Ok(Some(_))");
             assert!(
                 matches!(error, NodeRegistryError::EntrySchemaVersionMismatch { .. }),
@@ -424,10 +386,9 @@ mod tests {
     }
 
     #[test]
-    #[serial]
     fn scan_on_a_missing_registry_directory_is_empty_not_an_error() {
-        with_isolated_xdg_runtime_dir(|_xdg| {
-            assert!(scan_entries().expect("scan of absent dir").is_empty());
+        with_isolated_registry_directory(|registry_directory| {
+            assert!(scan_entries(registry_directory).expect("scan of absent dir").is_empty());
         });
     }
 

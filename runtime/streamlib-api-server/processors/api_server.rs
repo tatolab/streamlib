@@ -20,6 +20,8 @@ struct StashedHandles {
     runtime: Arc<dyn RuntimeOperations>,
     tokio_handle: tokio::runtime::Handle,
     runtime_id: String,
+    /// Where this node's discovery entry is written and removed.
+    node_registry_directory: std::path::PathBuf,
     /// `Some` only when the config opted into bearer auth; `None` leaves the
     /// shutdown route and the tap WebSocket open (the zero-ceremony default).
     auth_token: Option<crate::auth::ApiServerBearerToken>,
@@ -169,6 +171,7 @@ impl ManualProcessor for ApiServerProcessor::Processor {
             runtime: ctx.runtime(),
             tokio_handle,
             runtime_id: ctx.runtime_id().to_string(),
+            node_registry_directory: ctx.runtime_directory().node_registry_directory(),
             auth_token,
         });
         Ok(())
@@ -262,7 +265,7 @@ impl ManualProcessor for ApiServerProcessor::Processor {
             handles.runtime_id.clone(),
             control_url,
         );
-        match crate::node_registry::write_entry(&entry) {
+        match crate::node_registry::write_entry(&handles.node_registry_directory, &entry) {
             Ok(path) => tracing::debug!("Node registry entry written at {}", path.display()),
             Err(error) => {
                 tracing::warn!(%error, "failed to write node registry entry; node not discoverable")
@@ -291,8 +294,10 @@ impl ManualProcessor for ApiServerProcessor::Processor {
         // Tear down the discovery entry alongside the control endpoint it
         // advertises. Non-fatal on failure — a stale entry is pruned by the
         // reader's liveness check.
-        if let Some(runtime_id) = self.runtime_id.take() {
-            if let Err(error) = crate::node_registry::remove_entry(&runtime_id) {
+        if let (Some(runtime_id), Some(handles)) = (self.runtime_id.take(), self.handles.as_ref()) {
+            if let Err(error) =
+                crate::node_registry::remove_entry(&handles.node_registry_directory, &runtime_id)
+            {
                 tracing::warn!(%error, "failed to remove node registry entry on stop");
             }
         }

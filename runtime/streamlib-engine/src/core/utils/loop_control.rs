@@ -151,18 +151,13 @@ mod tests {
         use std::sync::mpsc;
         use std::time::{Duration, Instant};
 
-        // Ensure PUBSUB has an iceoryx2 backend. Use a process-unique runtime_id
-        // so iceoryx2's persistent service state under /tmp/iceoryx2/ doesn't
-        // collide with stale state left by crashed prior cargo-test invocations
-        // (which surfaced as PublishSubscribeOpenError(ServiceInCorruptedState)).
-        // If PUBSUB was already initialized by another test in this process,
-        // init() is a no-op (OnceLock), and the existing runtime_id is used.
-        if let Ok(node) = Iceoryx2Node::new() {
-            let runtime_id = format!("test-loop-control-{}", uuid::Uuid::new_v4());
-            PUBSUB
-                .init(&runtime_id, node)
-                .expect("init establishes pending subscriptions");
-        }
+        // Ensure PUBSUB has an iceoryx2 backend. If PUBSUB was already
+        // initialized by another test in this process, init() is a no-op
+        // (OnceLock), and the existing runtime_id is used.
+        let runtime_id = format!("test-loop-control-{}", uuid::Uuid::new_v4());
+        PUBSUB
+            .init(&runtime_id, Iceoryx2Node::for_this_test_process())
+            .expect("init establishes pending subscriptions");
 
         let counter = Arc::new(AtomicUsize::new(0));
         let counter_clone = Arc::clone(&counter);

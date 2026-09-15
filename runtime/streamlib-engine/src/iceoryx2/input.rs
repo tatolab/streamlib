@@ -1533,7 +1533,7 @@ mod tests {
     /// or select wait wakes promptly.
     #[test]
     fn listener_fd_is_valid_and_readable_after_notify() {
-        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let name = unique_suffix("notify");
 
         let svc = node
@@ -1660,7 +1660,7 @@ mod tests {
     /// two-frame assertion fails.
     #[test]
     fn two_channel_subscribers_fan_into_one_local_port() {
-        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let (publisher_a, sub_a) = open_channel_for_one_link(&node, "fanin/a", 1);
         let (publisher_b, sub_b) = open_channel_for_one_link(&node, "fanin/b", 1);
         publish_one_frame(&publisher_a, "src_a_out", b"frame-from-a");
@@ -1714,7 +1714,7 @@ mod tests {
         const MAILBOX_DEPTH: usize = 2;
         const FRAMES_PER_LINK: usize = 5;
 
-        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let (publisher_a, subscriber_a) =
             open_channel_for_one_link(&node, "drop-count/a", FRAMES_PER_LINK);
         let (publisher_b, subscriber_b) =
@@ -1780,7 +1780,7 @@ mod tests {
     /// interleaving would be pinning an artifact.
     #[test]
     fn two_inbound_links_hand_a_reader_the_link_each_bag_arrived_on() {
-        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let (publisher_a, sub_a) = open_channel_for_one_link(&node, "naming/a", 4);
         let (publisher_b, sub_b) = open_channel_for_one_link(&node, "naming/b", 4);
 
@@ -1848,7 +1848,7 @@ mod tests {
         const MAILBOX_DEPTH: usize = 2;
         const FRAMES_PER_LINK: usize = 5;
 
-        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let (publisher_a, subscriber_a) =
             open_channel_for_one_link(&node, "naming-counts/a", FRAMES_PER_LINK);
         let (publisher_b, subscriber_b) =
@@ -1922,7 +1922,7 @@ mod tests {
             track: String,
         }
 
-        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let (publisher, subscriber) = open_channel_for_one_link(&node, "naming/typed", 4);
 
         let mailboxes = InputMailboxesInner::new();
@@ -1971,7 +1971,7 @@ mod tests {
     /// do so in its own words.
     #[test]
     fn a_port_lists_the_inbound_links_wired_into_it_and_a_port_with_none_lists_none() {
-        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let (_publisher_a, sub_a) = open_channel_for_one_link(&node, "listing/a", 1);
         let (_publisher_b, sub_b) = open_channel_for_one_link(&node, "listing/b", 1);
         let (_publisher_c, sub_c) = open_channel_for_one_link(&node, "listing/c", 1);
@@ -2026,7 +2026,7 @@ mod tests {
     /// port answers for it and the read works there too.
     #[test]
     fn a_windowed_ports_read_names_the_one_link_that_feeds_it() {
-        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let (publisher, subscriber) = open_channel_for_one_link(&node, "naming/windowed", 8);
 
         let mailboxes = InputMailboxesInner::new();
@@ -2130,7 +2130,7 @@ mod tests {
     /// rates equal there is no filter and no priming to give back.
     #[test]
     fn a_resampling_windowed_port_reports_data_only_once_a_full_window_can_be_emitted() {
-        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let (publisher, subscriber) =
             open_channel_for_one_link_loaning(&node, "window/resampled", 32, 16_384);
 
@@ -2260,7 +2260,7 @@ mod tests {
     /// the plausible-looking wrong audio this contract exists to rule out.
     #[test]
     fn a_port_awaiting_its_device_hands_a_reader_nothing_however_much_is_queued() {
-        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let (publisher, subscriber) =
             open_channel_for_one_link_loaning(&node, "window/awaiting", 8, 16_384);
 
@@ -2317,7 +2317,7 @@ mod tests {
         const MAILBOX_DEPTH: usize = 2;
         const FRAMES_PUBLISHED: usize = 6;
 
-        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let (publisher, subscriber) = open_channel_for_one_link(&node, "window/awaiting-drop", 4);
 
         let mailboxes = InputMailboxesInner::new();
@@ -2373,7 +2373,7 @@ mod tests {
     fn a_settled_ports_evictions_are_not_reported_as_an_unsettled_contract() {
         const FRAMES_PUBLISHED: usize = 24;
 
-        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let (publisher, subscriber) = open_channel_for_one_link(&node, "window/settled-drop", 4);
 
         let mailboxes = InputMailboxesInner::new();
@@ -2437,7 +2437,7 @@ mod tests {
         /// Publish four 16 kHz mono blocks onto port `"in"` and draw them into
         /// its mailbox, so what follows has something queued to work on.
         fn publish_four_mono_blocks_into(mailboxes: &InputMailboxesInner, tag: &str) {
-            let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+            let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
             let (publisher, subscriber) = open_channel_for_one_link_loaning(&node, tag, 16, 16_384);
             mailboxes.add_channel_subscriber(
                 "in",
@@ -2663,7 +2663,7 @@ mod tests {
     /// a reactive processor is never dispatched with nothing to read.
     #[test]
     fn a_windowed_port_reports_data_only_once_a_full_window_can_be_emitted() {
-        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let (publisher, subscriber) = open_channel_for_one_link(&node, "window/readiness", 8);
 
         let mailboxes = InputMailboxesInner::new();
@@ -2717,7 +2717,7 @@ mod tests {
     /// windows — the count the reactive drain loop dispatches `process()`.
     #[test]
     fn one_1024_sample_quantum_reads_out_of_a_512_512_port_exactly_twice() {
-        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let (publisher, subscriber) =
             open_channel_for_one_link_loaning(&node, "window/quantum", 4, 16_384);
 
@@ -2758,7 +2758,7 @@ mod tests {
     /// reader gets back are the bytes the producer published.
     #[test]
     fn a_contract_less_port_still_reads_the_bag_the_producer_published_byte_for_byte() {
-        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let (publisher, subscriber) =
             open_channel_for_one_link_loaning(&node, "window/untouched", 4, 16_384);
 
@@ -2797,7 +2797,7 @@ mod tests {
             published_bags: usize,
             contract: Option<ResolvedAudioWindowContract>,
         ) -> u64 {
-            let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+            let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
             let (publisher, subscriber) = open_channel_for_one_link(&node, tag, 4);
             let mailboxes = InputMailboxesInner::new();
             match contract {
@@ -2859,7 +2859,7 @@ mod tests {
         )
         .expect("a one-second rolling window is legal");
 
-        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let (publisher, subscriber) = open_channel_for_one_link(&node, "window/depth", 4);
         let mailboxes = InputMailboxesInner::new();
         mailboxes.add_windowed_port("in", ReadMode::ReadNextInOrder, one_second_rolling);
@@ -2895,7 +2895,7 @@ mod tests {
     /// port — never reshaped into a plausible wrong answer.
     #[test]
     fn a_bag_the_stage_cannot_read_is_refused_at_the_read_naming_the_port() {
-        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let (publisher, subscriber) = open_channel_for_one_link(&node, "window/refusal", 4);
 
         let mailboxes = InputMailboxesInner::new();
@@ -2933,7 +2933,7 @@ mod tests {
     /// from a link nobody wired.
     #[test]
     fn a_port_that_keeps_up_reports_a_zero_for_every_wired_link() {
-        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let (publisher_a, subscriber_a) = open_channel_for_one_link(&node, "no-drop/a", 4);
         let (publisher_b, subscriber_b) = open_channel_for_one_link(&node, "no-drop/b", 4);
 
@@ -2976,7 +2976,7 @@ mod tests {
     /// is a reader's dead end.
     #[test]
     fn a_disconnected_links_count_goes_with_the_link() {
-        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let (publisher, subscriber) = open_channel_for_one_link(&node, "reclaim-count", 4);
 
         let mailboxes = InputMailboxesInner::new();
@@ -3021,7 +3021,7 @@ mod tests {
     /// release assertions fail.
     #[test]
     fn remove_channel_link_reclaims_per_link_then_drops_port_and_listener() {
-        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
 
         let open_subscriber = |tag: &str| {
             node.service_builder(&ServiceName::new(&unique_suffix(tag)).unwrap())

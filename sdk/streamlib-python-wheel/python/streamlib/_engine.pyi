@@ -590,7 +590,9 @@ class ProcessorLinkDataAccess:
     """One processor's links. The engine binds it; app code never builds one.
 
     Constructing one opens a helper process's own data plane, with its own
-    iceoryx2 node — only `streamlib._helper` does that.
+    iceoryx2 node — only `streamlib._helper` does that. The node opens in the
+    domain root the parent runtime hands over in `STREAMLIB_ICEORYX2_DOMAIN_ROOT`,
+    and construction raises `RuntimeError` naming that variable when it is unset.
     """
 
     def __new__(cls) -> ProcessorLinkDataAccess: ...

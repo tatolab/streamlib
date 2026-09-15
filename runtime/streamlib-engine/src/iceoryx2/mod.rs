@@ -40,9 +40,13 @@ pub use input::{BoundedReadOutcome, InputMailboxes, InputMailboxesInner};
 pub use mailbox::{
     PortMailbox, PortMailboxDeliveredBag, PortMailboxEvictionNotice, PortMailboxQueuedFrameMeasure,
 };
+#[cfg(test)]
+pub(crate) use node::create_iceoryx2_node_for_this_test_process;
 pub use node::{
-    ChannelTapSubscribeError, Iceoryx2EventService, Iceoryx2Node, Iceoryx2NotifyService,
-    Iceoryx2Service,
+    ChannelTapSubscribeError, ICEORYX2_DOMAIN_ROOT_AND_PREFIX_BUDGET_BYTES,
+    ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, Iceoryx2EventService, Iceoryx2Node,
+    Iceoryx2NotifyService, Iceoryx2Service, create_iceoryx2_node_in_engine_owned_domain,
+    engine_owned_iceoryx2_config, engine_owned_iceoryx2_prefix_for_this_user,
 };
 pub use output::{ChannelEgressConfig, OutputWriter, OutputWriterInner};
 pub use payload::{

@@ -10,7 +10,7 @@ use super::{
     GpuContext, GpuContextFullAccess, GpuContextLimitedAccess, SharedAudioClock, TimeContext,
 };
 use crate::core::graph::ProcessorUniqueId;
-use crate::core::runtime::{RuntimeOperations, RuntimeUniqueId};
+use crate::core::runtime::{RuntimeOperations, RuntimeUniqueId, StreamlibRuntimeDirectory};
 use crate::iceoryx2::Iceoryx2Node;
 
 #[derive(Clone)]
@@ -42,6 +42,8 @@ pub struct RuntimeContext {
     iceoryx2_node: Iceoryx2Node,
     /// Audio clock for synchronized audio timing.
     audio_clock: SharedAudioClock,
+    /// The runtime directory resolved and checked as the runtime started.
+    runtime_directory: StreamlibRuntimeDirectory,
     /// Per-runtime surface-sharing Unix socket path. Polyglot subprocesses
     /// receive this via the `STREAMLIB_SURFACE_SOCKET` env var so their
     /// `streamlib-surface-client` connects to the runtime-internal service
@@ -59,6 +61,7 @@ impl RuntimeContext {
         tokio_handle: tokio::runtime::Handle,
         iceoryx2_node: Iceoryx2Node,
         audio_clock: SharedAudioClock,
+        runtime_directory: StreamlibRuntimeDirectory,
         #[cfg(target_os = "linux")] surface_socket_path: std::path::PathBuf,
     ) -> Self {
         Self {
@@ -72,6 +75,7 @@ impl RuntimeContext {
             tokio_handle,
             iceoryx2_node,
             audio_clock,
+            runtime_directory,
             #[cfg(target_os = "linux")]
             surface_socket_path,
         }
@@ -112,6 +116,11 @@ impl RuntimeContext {
     /// Get the runtime's unique identifier.
     pub fn runtime_id(&self) -> &RuntimeUniqueId {
         &self.runtime_id
+    }
+
+    /// The runtime directory resolved and checked as the runtime started.
+    pub fn runtime_directory(&self) -> &StreamlibRuntimeDirectory {
+        &self.runtime_directory
     }
 
     /// Per-runtime surface-sharing Unix socket path. Polyglot subprocess
@@ -184,6 +193,7 @@ impl RuntimeContext {
             tokio_handle: self.tokio_handle.clone(),
             iceoryx2_node: self.iceoryx2_node.clone(),
             audio_clock: Arc::clone(&self.audio_clock),
+            runtime_directory: self.runtime_directory.clone(),
             #[cfg(target_os = "linux")]
             surface_socket_path: self.surface_socket_path.clone(),
         }
@@ -202,6 +212,7 @@ impl RuntimeContext {
             tokio_handle: self.tokio_handle.clone(),
             iceoryx2_node: self.iceoryx2_node.clone(),
             audio_clock: Arc::clone(&self.audio_clock),
+            runtime_directory: self.runtime_directory.clone(),
             #[cfg(target_os = "linux")]
             surface_socket_path: self.surface_socket_path.clone(),
         }
@@ -775,6 +786,12 @@ impl<'a> RuntimeContextFullAccess<'a> {
     #[cfg(target_os = "linux")]
     pub fn surface_socket_path(&self) -> &std::path::Path {
         self.host_base().surface_socket_path()
+    }
+
+    /// The runtime directory, for a control plane's registry and a spawn host's
+    /// iceoryx2 domain root.
+    pub fn runtime_directory(&self) -> &StreamlibRuntimeDirectory {
+        self.host_base().runtime_directory()
     }
 }
 

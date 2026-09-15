@@ -1648,7 +1648,7 @@ mod tests {
         crate::iceoryx2::Iceoryx2Service,
         Option<crate::iceoryx2::Iceoryx2NotifyService>,
     ) {
-        let node = crate::iceoryx2::Iceoryx2Node::new().expect("an iceoryx2 node must open");
+        let node = crate::iceoryx2::Iceoryx2Node::for_this_test_process();
         let channel = node
             .open_or_create_service(&unique_service_name(&format!("{tag}/channel")), 2, 8)
             .expect("the channel service must open");
