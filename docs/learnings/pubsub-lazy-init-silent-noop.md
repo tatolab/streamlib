@@ -49,6 +49,11 @@ if let Ok(node) = Iceoryx2Node::new() {
 }
 ```
 
+> ~~`Iceoryx2Node::new()`~~ — Superseded 2026-09-15 by the engine-owned iceoryx2
+> domain (#2261): a node takes a domain root and a name, and a unit test spells
+> this `PUBSUB.init("test-name", Iceoryx2Node::for_this_test_process())`. The
+> lesson — initialize PUBSUB before subscribing — is unchanged.
+
 2. **Use `mpsc::channel` + `recv_timeout` instead of `handle.join()`**:
 ```rust
 let (done_tx, done_rx) = mpsc::channel();

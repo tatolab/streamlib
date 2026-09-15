@@ -45,7 +45,7 @@ fn receive_one_sample_within(
 /// reason a fixed prime is safe.
 #[test]
 fn loan_past_the_prime_fails_when_the_publisher_cannot_grow() {
-    let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+    let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
     let service = node
         .service_builder(&"streamlib/test/sizing-no-growth".try_into().unwrap())
         .publish_subscribe::<[u8]>()
@@ -72,7 +72,7 @@ fn loan_past_the_prime_fails_when_the_publisher_cannot_grow() {
 #[test]
 fn default_primed_publisher_grows_to_loan_an_oversized_payload() {
     let max_subscribers = 2;
-    let node = Iceoryx2Node::new().unwrap();
+    let node = Iceoryx2Node::for_this_test_process();
     let service = node
         .open_or_create_service(
             "streamlib/test/sizing-default-grows",
@@ -100,7 +100,7 @@ fn default_primed_publisher_grows_to_loan_an_oversized_payload() {
 #[test]
 fn default_primed_channel_round_trips_a_header_and_an_oversized_payload() {
     let max_subscribers = 2;
-    let node = Iceoryx2Node::new().unwrap();
+    let node = Iceoryx2Node::for_this_test_process();
     let service = node
         .open_or_create_service(
             "streamlib/test/sizing-default-roundtrip",
@@ -160,7 +160,7 @@ fn default_primed_channel_round_trips_a_header_and_an_oversized_payload() {
 /// the only way the contract can actually break now, and it goes red.
 #[test]
 fn every_channel_service_opens_under_safe_overflow() {
-    let node = Iceoryx2Node::new().unwrap();
+    let node = Iceoryx2Node::for_this_test_process();
     let service = node
         .open_or_create_service(
             "streamlib/test/sizing-safe-overflow",

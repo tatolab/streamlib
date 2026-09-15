@@ -5,8 +5,8 @@
 //! iceoryx2 transport layer.
 //!
 //! Each test that requires iceoryx2 creates its own `PubSub::new()` +
-//! `Iceoryx2Node::new()` instance with a unique runtime_id for
-//! isolation (no global state).
+//! `Iceoryx2Node::for_this_test_process()` instance with a unique
+//! runtime_id for isolation (no global state).
 //!
 //! `PubSub::subscribe()` takes ownership of the `Arc` but only stores
 //! a `Weak` ref internally. Callers MUST keep a strong reference
@@ -88,7 +88,7 @@ impl EventListener for ChannelListener {
 /// Create an initialized PubSub instance with its own iceoryx2 node and unique runtime_id.
 fn create_initialized_bus(test_name: &str) -> PubSub {
     let runtime_id = format!("test-{}-{}", test_name, uuid::Uuid::new_v4());
-    let node = Iceoryx2Node::new().expect("Failed to create iceoryx2 node");
+    let node = Iceoryx2Node::for_this_test_process();
     let bus = PubSub::new();
     bus.init(&runtime_id, node)
         .expect("init establishes pending subscriptions");
@@ -181,7 +181,7 @@ fn test_event_msgpack_serialization() {
 #[test]
 fn test_iceoryx2_direct_delivery() {
     // Bypass PubSub layer entirely — verify iceoryx2 pub/sub works in-process
-    let node = Iceoryx2Node::new().expect("Failed to create iceoryx2 node");
+    let node = Iceoryx2Node::for_this_test_process();
 
     let service_name = format!(
         "streamlib/diag-{}/events/test",
@@ -228,7 +228,7 @@ fn test_iceoryx2_direct_delivery() {
 #[test]
 fn test_iceoryx2_cross_thread_delivery() {
     // Verify iceoryx2 delivery works across threads (mimics PubSub pattern)
-    let node = Iceoryx2Node::new().expect("Failed to create iceoryx2 node");
+    let node = Iceoryx2Node::for_this_test_process();
     let service_name = format!(
         "streamlib/diag-xthread-{}/events/test",
         uuid::Uuid::new_v4()
@@ -288,7 +288,7 @@ fn test_iceoryx2_cross_thread_delivery() {
 #[test]
 fn test_iceoryx2_pubsub_pattern_mimic() {
     // Exactly mimic what PubSub does: subscriber thread + fresh publisher per call
-    let node = Iceoryx2Node::new().expect("Failed to create iceoryx2 node");
+    let node = Iceoryx2Node::for_this_test_process();
     let runtime_id = format!("test-mimic-{}", uuid::Uuid::new_v4());
     let topic = "input/keyboard";
     let service_name = format!("streamlib/{}/events/{}", runtime_id, topic);
@@ -360,7 +360,7 @@ fn test_pubsub_publish_sends_to_iceoryx2() {
     // is in publish (send side) or subscribe (receive side).
 
     let runtime_id = format!("test-pub-sends-{}", uuid::Uuid::new_v4());
-    let node = Iceoryx2Node::new().expect("Failed to create iceoryx2 node");
+    let node = Iceoryx2Node::for_this_test_process();
     let node_probe = node.clone();
     let bus = PubSub::new();
     bus.init(&runtime_id, node)
@@ -475,7 +475,7 @@ fn test_pubsub_publish_sends_to_iceoryx2() {
 /// to determine if OnceLock storage causes the iceoryx2 delivery failure.
 #[test]
 fn test_oncelock_node_delivery() {
-    let node = Iceoryx2Node::new().expect("Failed to create iceoryx2 node");
+    let node = Iceoryx2Node::for_this_test_process();
     let runtime_id = format!("test-oncelock-{}", uuid::Uuid::new_v4());
     let service_name = format!("streamlib/{}/events/input/keyboard", runtime_id);
 
@@ -743,7 +743,7 @@ fn test_subscribing_concurrently_with_init_loses_no_listener() {
     // once the interleaving happens at all.
     for attempt in 0..8 {
         let runtime_id = format!("test-init-race-{}-{}", attempt, uuid::Uuid::new_v4());
-        let node = Iceoryx2Node::new().expect("Failed to create iceoryx2 node");
+        let node = Iceoryx2Node::for_this_test_process();
         let bus = Arc::new(PubSub::new());
 
         let subscriber_count = 4;
@@ -801,7 +801,7 @@ fn test_subscribing_concurrently_with_init_loses_no_listener() {
 #[test]
 fn test_subscribe_before_init_receives_events_after_init() {
     let runtime_id = format!("test-sub-before-init-{}", uuid::Uuid::new_v4());
-    let node = Iceoryx2Node::new().expect("Failed to create iceoryx2 node");
+    let node = Iceoryx2Node::for_this_test_process();
     let bus = PubSub::new();
 
     // Subscribe BEFORE init
@@ -829,7 +829,7 @@ fn test_subscribe_before_init_receives_events_after_init() {
 #[test]
 fn test_multiple_subscribes_before_init_all_replayed() {
     let runtime_id = format!("test-multi-sub-before-init-{}", uuid::Uuid::new_v4());
-    let node = Iceoryx2Node::new().expect("Failed to create iceoryx2 node");
+    let node = Iceoryx2Node::for_this_test_process();
     let bus = PubSub::new();
 
     // Subscribe 3 listeners to different topics BEFORE init

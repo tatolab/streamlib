@@ -552,7 +552,7 @@ mod tests {
 
     #[test]
     fn write_raw_calls_notifier() {
-        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let pubsub_name = unique_suffix("pubsub");
         let notify_name = unique_suffix("notify");
 
@@ -625,7 +625,7 @@ mod tests {
     /// destination off mid-stream, so the release keys on the links.
     #[test]
     fn a_fan_out_holds_its_publisher_until_the_last_link_goes_not_the_last_notifier() {
-        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let pubsub_name = unique_suffix("mixed-fanout/pubsub");
         let notify_name = unique_suffix("mixed-fanout/notify");
 
@@ -704,7 +704,7 @@ mod tests {
         // at ~280 notifications against the default socket buffer.
         const SENDS: usize = 8192;
 
-        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
 
         let open_notify_service = |name: &str| {
             node.service_builder(&ServiceName::new(name).unwrap())
@@ -765,7 +765,7 @@ mod tests {
     #[test]
     fn write_raw_fans_out_single_loan_to_all_subscribers() {
         const N: usize = 3;
-        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let pubsub_name = unique_suffix("fanout/pubsub");
 
         let pubsub = node
@@ -858,7 +858,7 @@ mod tests {
     /// disconnect and the "channel fully removed" assertion fails.
     #[test]
     fn remove_channel_link_reclaims_per_link_then_drops_channel() {
-        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let pubsub = node
             .service_builder(&ServiceName::new(&unique_suffix("reclaim/pubsub")).unwrap())
             .publish_subscribe::<[u8]>()
@@ -996,7 +996,7 @@ mod tests {
     /// 100 KiB loan fails instead of delivering.
     #[test]
     fn write_raw_refuses_over_ceiling_and_grows_within_it() {
-        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let pubsub = node
             .service_builder(&ServiceName::new(&unique_suffix("ceiling/pubsub")).unwrap())
             .publish_subscribe::<[u8]>()
@@ -1122,7 +1122,7 @@ mod tests {
     /// fresh bytes belong.
     #[test]
     fn a_frame_written_after_a_larger_one_carries_no_stale_bytes() {
-        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let pubsub = node
             .service_builder(&ServiceName::new(&unique_suffix("stale/pubsub")).unwrap())
             .publish_subscribe::<[u8]>()

@@ -13,6 +13,105 @@ use parking_lot::Mutex;
 
 use super::{EventPayload, FRAME_HEADER_SIZE, MAX_PUBLISHERS_PER_CHANNEL};
 use crate::core::error::{Error, Result};
+use crate::core::runtime::current_process_uid;
+
+/// The environment variable a parent hands its helper the iceoryx2 domain root in.
+pub const ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_ICEORYX2_DOMAIN_ROOT";
+
+/// The most bytes a domain root and its prefix may take together.
+///
+/// iceoryx2 names its Unix sockets `<root>/<prefix><entity file name>`, and a
+/// socket path must fit `sun_path` (108 bytes on Linux, 104 on macOS) with room
+/// for the longest name iceoryx2 appends. Past this the first listener fails late
+/// as an opaque `ResourceCreationFailed`.
+pub const ICEORYX2_DOMAIN_ROOT_AND_PREFIX_BUDGET_BYTES: usize =
+    if cfg!(target_os = "macos") { 58 } else { 63 };
+
+/// The file prefix every engine-owned iceoryx2 node of this OS user shares.
+pub fn engine_owned_iceoryx2_prefix_for_this_user() -> String {
+    format!("sl{}_", current_process_uid())
+}
+
+/// The iceoryx2 configuration every engine-owned node, and every static iceoryx2
+/// call, uses — built from the library defaults, never from iceoryx2's lookup path.
+pub fn engine_owned_iceoryx2_config(domain_root: &std::path::Path) -> Result<Config> {
+    iceoryx2_config_for_domain(domain_root, &engine_owned_iceoryx2_prefix_for_this_user())
+}
+
+/// Build the configuration for the domain named by `domain_root` and `prefix`.
+///
+/// iceoryx2 keeps file-backed state under the root but names its POSIX shared
+/// memory from the prefix alone, so two domains are disjoint only when their
+/// prefixes differ too.
+pub(crate) fn iceoryx2_config_for_domain(
+    domain_root: &std::path::Path,
+    prefix: &str,
+) -> Result<Config> {
+    let root_bytes = domain_root.as_os_str().as_encoded_bytes();
+    let root_and_prefix_bytes = root_bytes.len() + prefix.len();
+    if root_and_prefix_bytes > ICEORYX2_DOMAIN_ROOT_AND_PREFIX_BUDGET_BYTES {
+        return Err(Error::Configuration(format!(
+            "the iceoryx2 domain root {} with prefix {prefix} takes {root_and_prefix_bytes} bytes, \
+             past the {ICEORYX2_DOMAIN_ROOT_AND_PREFIX_BUDGET_BYTES}-byte budget a Unix socket \
+             path leaves them; set XDG_RUNTIME_DIR to a shorter directory",
+            domain_root.display()
+        )));
+    }
+
+    let mut config = Config::default();
+    config
+        .global
+        .set_root_path(&Path::new(root_bytes).map_err(|refusal| {
+            Error::Configuration(format!(
+                "the iceoryx2 domain root {} is not a path iceoryx2 accepts: {refusal:?}",
+                domain_root.display()
+            ))
+        })?);
+    config.global.prefix = FileName::new(prefix.as_bytes()).map_err(|refusal| {
+        Error::Configuration(format!(
+            "the iceoryx2 domain prefix {prefix} is not a file name iceoryx2 accepts: {refusal:?}"
+        ))
+    })?;
+    Ok(config)
+}
+
+/// Create a raw iceoryx2 node, labelled `node_name`, in the engine-owned domain rooted at `domain_root`.
+pub fn create_iceoryx2_node_in_engine_owned_domain(
+    domain_root: &std::path::Path,
+    node_name: &str,
+) -> Result<Node<ipc::Service>> {
+    create_iceoryx2_node_in_domain(
+        domain_root,
+        &engine_owned_iceoryx2_prefix_for_this_user(),
+        node_name,
+    )
+}
+
+/// Create a raw iceoryx2 node, labelled `node_name`, in the domain named by `domain_root` and `prefix`.
+pub(crate) fn create_iceoryx2_node_in_domain(
+    domain_root: &std::path::Path,
+    prefix: &str,
+    node_name: &str,
+) -> Result<Node<ipc::Service>> {
+    let config = iceoryx2_config_for_domain(domain_root, prefix)?;
+    let node_name = NodeName::new(node_name).map_err(|refusal| {
+        Error::Configuration(format!(
+            "'{node_name}' is not an iceoryx2 node name: {refusal:?}"
+        ))
+    })?;
+    NodeBuilder::new()
+        .config(&config)
+        .name(&node_name)
+        .signal_handling_mode(SignalHandlingMode::Disabled)
+        .create::<ipc::Service>()
+        .map_err(|failure| {
+            Error::Runtime(format!(
+                "failed to create iceoryx2 node '{}' in the domain rooted at {}: {failure:?}",
+                node_name.as_str(),
+                domain_root.display()
+            ))
+        })
+}
 
 /// Thread-safe wrapper for iceoryx2 Node.
 ///
@@ -24,15 +123,23 @@ pub struct Iceoryx2Node {
 }
 
 impl Iceoryx2Node {
-    /// Create a new iceoryx2 Node.
-    pub fn new() -> Result<Self> {
-        let node = NodeBuilder::new()
-            .create::<ipc::Service>()
-            .map_err(|e| Error::Runtime(format!("Failed to create iceoryx2 node: {:?}", e)))?;
+    /// Create a node, labelled `node_name`, in the engine-owned domain rooted at `domain_root`.
+    pub fn new(domain_root: &std::path::Path, node_name: &str) -> Result<Self> {
+        let node = create_iceoryx2_node_in_engine_owned_domain(domain_root, node_name)?;
+        Ok(Self::wrapping(node))
+    }
 
-        Ok(Self {
+    /// Share an already-created raw node.
+    pub(crate) fn wrapping(node: Node<ipc::Service>) -> Self {
+        Self {
             inner: Arc::new(Mutex::new(node)),
-        })
+        }
+    }
+
+    /// The iceoryx2 configuration this node was created with.
+    #[cfg(test)]
+    pub(crate) fn config(&self) -> Config {
+        self.inner.lock().config().clone()
     }
 
     /// Open or create a publish-subscribe service for EventPayload.
@@ -309,7 +416,7 @@ mod tests {
     #[test]
     fn notify_service_honors_requested_max_notifiers() {
         let fanin = 3usize;
-        let node = Iceoryx2Node::new().expect("create iceoryx2 node");
+        let node = Iceoryx2Node::for_this_test_process();
         let service = node
             .open_or_create_notify_service(&unique_service_name("notify_cap"), fanin)
             .expect("open notify service");
@@ -347,7 +454,7 @@ mod tests {
 
         let destinations = 3usize;
         let max_subscribers = destinations + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL;
-        let node = Iceoryx2Node::new().expect("create iceoryx2 node");
+        let node = Iceoryx2Node::for_this_test_process();
         let service = node
             .open_or_create_service(&unique_service_name("chan_caps"), max_subscribers, 4)
             .expect("open channel data service");
@@ -388,7 +495,7 @@ mod tests {
     /// changes this open-validation behavior, this test is the trip-wire.
     #[test]
     fn channel_service_reopen_larger_fails_smaller_succeeds() {
-        let node = Iceoryx2Node::new().expect("create iceoryx2 node");
+        let node = Iceoryx2Node::for_this_test_process();
         let subs = 2usize;
 
         // Bug shape: a shallow-depth open creates the service first, then a
@@ -434,7 +541,7 @@ mod tests {
         use std::time::{Duration, Instant};
 
         let depth: usize = 4;
-        let node = Iceoryx2Node::new().expect("create iceoryx2 node");
+        let node = Iceoryx2Node::for_this_test_process();
         let service = node
             .open_or_create_service(&unique_service_name("overflow_true"), 2, depth)
             .expect("open service");
@@ -467,7 +574,7 @@ mod tests {
     /// trips this test.
     #[test]
     fn data_service_records_configured_max_queued_messages() {
-        let node = Iceoryx2Node::new().expect("create iceoryx2 node");
+        let node = Iceoryx2Node::for_this_test_process();
         let service = node
             .open_or_create_service(&unique_service_name("mqm_recorded"), 2, 42)
             .expect("open data service");
@@ -519,7 +626,7 @@ mod tests {
             // iceoryx2 Publishers/Subscribers are `!Send` (they hold Rc
             // internally), so each thread constructs its own ports from
             // the shared Node + service-name string.
-            let node = Iceoryx2Node::new().expect("create iceoryx2 node");
+            let node = Iceoryx2Node::for_this_test_process();
             let s1_name = Arc::new(unique_service_name("relay_s1"));
             let s2_name = Arc::new(unique_service_name("relay_s2"));
 
@@ -691,7 +798,7 @@ mod tests {
     fn data_service_honors_small_ring_depth_with_overwrite() {
         let depth: usize = 4;
         let send_count: usize = depth + 3; // 3 extra overwrites
-        let node = Iceoryx2Node::new().expect("create iceoryx2 node");
+        let node = Iceoryx2Node::for_this_test_process();
         let service = node
             .open_or_create_service(&unique_service_name("ring_overwrite"), 2, depth)
             .expect("open data service");
@@ -757,7 +864,7 @@ mod tests {
     /// exact crash class this issue deletes — and the `.expect("loan")` panics.
     #[test]
     fn publisher_grows_segment_for_oversized_loan_and_delivers() {
-        let node = Iceoryx2Node::new().expect("create iceoryx2 node");
+        let node = Iceoryx2Node::for_this_test_process();
         let service = node
             .open_or_create_service(&unique_service_name("powertwo_growth"), 2, 4)
             .expect("open data service");
@@ -822,7 +929,7 @@ mod tests {
         };
         use streamlib_ipc_types::RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL;
 
-        let node = Iceoryx2Node::new().expect("create iceoryx2 node");
+        let node = Iceoryx2Node::for_this_test_process();
         let data_name = unique_service_name("cycle/data");
         let notify_name = unique_service_name("cycle/notify");
         let link_id = "L-cycle-1";
@@ -908,5 +1015,214 @@ mod tests {
         connect(64);
         assert!(out_inner.has_channel_publisher("out"));
         assert!(in_inner.has_listener());
+    }
+
+    fn names_of_the_live_nodes_in(config: &Config) -> Vec<String> {
+        use iceoryx2::node::NodeView;
+
+        let mut names = Vec::new();
+        Node::<ipc::Service>::list(config, |node_state| {
+            if let NodeState::Alive(view) = node_state {
+                if let Some(details) = view.details() {
+                    names.push(details.name().as_str().to_string());
+                }
+            }
+            CallbackProgression::Continue
+        })
+        .expect("the domain's nodes can be listed with its own config");
+        names
+    }
+
+    #[test]
+    fn a_domain_root_past_the_socket_path_budget_is_refused_by_name() {
+        let prefix = engine_owned_iceoryx2_prefix_for_this_user();
+        let root_at_the_budget = format!(
+            "/{}",
+            "r".repeat(ICEORYX2_DOMAIN_ROOT_AND_PREFIX_BUDGET_BYTES - prefix.len() - 1)
+        );
+        let root_one_byte_past_it = format!("{root_at_the_budget}r");
+
+        engine_owned_iceoryx2_config(std::path::Path::new(&root_at_the_budget))
+            .expect("a root exactly at the budget is accepted");
+        let refusal = match create_iceoryx2_node_in_engine_owned_domain(
+            std::path::Path::new(&root_one_byte_past_it),
+            "streamlib-test",
+        ) {
+            Ok(_) => panic!("a root one byte past the budget must be refused before any node"),
+            Err(refusal) => refusal.to_string(),
+        };
+
+        assert!(refusal.contains(&root_one_byte_past_it), "{refusal}");
+        assert!(
+            refusal.contains(&format!(
+                "{ICEORYX2_DOMAIN_ROOT_AND_PREFIX_BUDGET_BYTES}-byte budget"
+            )),
+            "{refusal}"
+        );
+        assert!(
+            !std::path::Path::new(&root_one_byte_past_it).exists(),
+            "a refused root must never be created"
+        );
+    }
+
+    const HIJACKED_MAX_SUBSCRIBERS: usize = 3;
+
+    /// Set only in the child process the working-directory test re-runs itself in.
+    const CWD_CONFIG_CHILD_DOMAIN_ROOT_ENVIRONMENT_VARIABLE: &str =
+        "STREAMLIB_TEST_CWD_CONFIG_CHILD_ICEORYX2_DOMAIN_ROOT";
+
+    /// The working directory is process-wide, so the node opens in a child test
+    /// process started inside the directory holding the config file; changing
+    /// this process's directory would move it under every test running beside it.
+    #[test]
+    fn an_iceoryx2_toml_in_the_working_directory_has_no_effect_on_a_node() {
+        if let Some(domain_root) =
+            std::env::var_os(CWD_CONFIG_CHILD_DOMAIN_ROOT_ENVIRONMENT_VARIABLE)
+        {
+            open_a_node_beside_a_working_directory_iceoryx2_toml(std::path::Path::new(
+                &domain_root,
+            ));
+            return;
+        }
+
+        let working_directory = tempfile::tempdir().unwrap();
+        let hijacked_root = working_directory.path().join("hijacked");
+        std::fs::create_dir(working_directory.path().join("config")).unwrap();
+        std::fs::write(
+            working_directory
+                .path()
+                .join("config")
+                .join("iceoryx2.toml"),
+            format!(
+                "[global]\nroot-path = \"{}\"\nprefix = \"hijack_\"\n\n\
+                 [defaults.publish-subscribe]\nmax-subscribers = {HIJACKED_MAX_SUBSCRIBERS}\n",
+                hijacked_root.display()
+            ),
+        )
+        .unwrap();
+        let domain = tempfile::tempdir().unwrap();
+        let domain_root = domain.path().join("iox2");
+
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "iceoryx2::node::tests::an_iceoryx2_toml_in_the_working_directory_has_no_effect_on_a_node",
+                "--exact",
+                "--test-threads=1",
+            ])
+            .env(CWD_CONFIG_CHILD_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, &domain_root)
+            .current_dir(working_directory.path())
+            .output()
+            .expect("the test binary re-runs this test in a child process");
+        let child_stdout = String::from_utf8_lossy(&child.stdout);
+        assert!(
+            child.status.success() && child_stdout.contains("1 passed"),
+            "the child test process must run this test and pass\nstdout:\n{child_stdout}\nstderr:\n{}",
+            String::from_utf8_lossy(&child.stderr)
+        );
+        assert!(
+            !hijacked_root.exists(),
+            "nothing may be written where the working directory's config points"
+        );
+    }
+
+    fn open_a_node_beside_a_working_directory_iceoryx2_toml(domain_root: &std::path::Path) {
+        assert!(
+            std::path::Path::new("config/iceoryx2.toml").is_file(),
+            "the child must start in the directory holding the config file"
+        );
+
+        let node = Iceoryx2Node::new(domain_root, "streamlib-test/cwd-config-ignored")
+            .expect("a node opens in the engine-owned domain");
+
+        let config = node.config();
+        assert_eq!(
+            config.global.root_path().as_bytes_const(),
+            domain_root.as_os_str().as_encoded_bytes()
+        );
+        assert_eq!(
+            config.global.prefix.as_bytes_const(),
+            engine_owned_iceoryx2_prefix_for_this_user().as_bytes()
+        );
+        assert_ne!(
+            Config::default().defaults.publish_subscribe.max_subscribers,
+            HIJACKED_MAX_SUBSCRIBERS
+        );
+        assert_eq!(
+            config.defaults.publish_subscribe.max_subscribers,
+            Config::default().defaults.publish_subscribe.max_subscribers,
+            "a value the engine never sets must still be the library default, not the file's"
+        );
+        assert!(
+            names_of_the_live_nodes_in(&engine_owned_iceoryx2_config(domain_root).unwrap())
+                .contains(&"streamlib-test/cwd-config-ignored".to_string()),
+            "the named node must be listed in the engine-owned domain"
+        );
+    }
+
+    #[test]
+    fn two_test_process_domains_share_neither_files_nor_shared_memory() {
+        let first_process = tempfile::tempdir().unwrap();
+        let second_process = tempfile::tempdir().unwrap();
+        let first_root = first_process.path().join("iox2");
+        let second_root = second_process.path().join("iox2");
+        // Prefixes of exited pids, so the next test process's sweep reclaims the
+        // shared memory this test leaves behind.
+        let uid = current_process_uid();
+        let exited = crate::iceoryx2::iceoryx2_domain_for_this_test_process::tests::a_process_id_that_has_exited;
+        let first_prefix =
+            crate::iceoryx2::iceoryx2_domain_for_this_test_process::test_domain_prefix(
+                uid,
+                exited(),
+            );
+        let second_prefix =
+            crate::iceoryx2::iceoryx2_domain_for_this_test_process::test_domain_prefix(
+                uid,
+                exited(),
+            );
+        let service_name = ServiceName::new(&unique_service_name("disjoint")).unwrap();
+
+        let first_node =
+            create_iceoryx2_node_in_domain(&first_root, &first_prefix, "streamlib-test/first")
+                .unwrap();
+        let _service_in_the_first_domain = first_node
+            .service_builder(&service_name)
+            .publish_subscribe::<[u8]>()
+            .create()
+            .expect("the first domain creates the service");
+
+        let second_node =
+            create_iceoryx2_node_in_domain(&second_root, &second_prefix, "streamlib-test/second")
+                .unwrap();
+        assert!(
+            second_node
+                .service_builder(&service_name)
+                .publish_subscribe::<[u8]>()
+                .open()
+                .is_err(),
+            "a service created in one domain must not be visible from another"
+        );
+        let _service_in_the_second_domain = second_node
+            .service_builder(&service_name)
+            .publish_subscribe::<[u8]>()
+            .create()
+            .expect("the same service name creates afresh in a domain with its own shared memory");
+        assert!(
+            !names_of_the_live_nodes_in(
+                &iceoryx2_config_for_domain(&second_root, &second_prefix).unwrap()
+            )
+            .contains(&"streamlib-test/first".to_string())
+        );
+
+        let another_node_in_the_first_domain = create_iceoryx2_node_in_domain(
+            &first_root,
+            &first_prefix,
+            "streamlib-test/first-again",
+        )
+        .unwrap();
+        another_node_in_the_first_domain
+            .service_builder(&service_name)
+            .publish_subscribe::<[u8]>()
+            .open()
+            .expect("the same root and prefix are the same domain");
     }
 }

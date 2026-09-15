@@ -29,6 +29,7 @@ use streamlib::sdk::helper_process_transport::{
     STREAMLIB_SUBPROCESS_PROTOCOL_VERSION, SubprocessBridge, spawn_fd_line_reader,
     validate_subprocess_protocol,
 };
+use streamlib::sdk::iceoryx2::ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE;
 use streamlib::sdk::processors::{DynGeneratedProcessor, OutOfProcessLinkWiringEnvelope};
 
 /// The module CPython is launched with in a helper process.
@@ -38,6 +39,9 @@ const HELPER_PROCESS_MODULE: &str = "streamlib._helper";
 /// hosts — set here and nowhere else, so its presence is what tells code
 /// running inside a child that it is one.
 pub(crate) const HELPER_PROCESS_ENTRYPOINT_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_ENTRYPOINT";
+
+/// The environment variable carrying the id of the processor a helper process hosts.
+pub(crate) const HELPER_PROCESS_PROCESSOR_ID_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_PROCESSOR_ID";
 
 /// How long the child has to import the user's class, open its ports, run
 /// `setup` and report ready before this host gives up and kills it.
@@ -166,6 +170,7 @@ impl PythonHelperProcessSpawnHostProcessor {
     pub(crate) fn build_helper_process_command(
         &self,
         runtime_id: &str,
+        iceoryx2_domain_root: &Path,
         surface_socket_path: Option<&Path>,
     ) -> Command {
         let mut command = Command::new(&self.interpreter_path);
@@ -187,8 +192,15 @@ impl PythonHelperProcessSpawnHostProcessor {
                 HELPER_PROCESS_ENTRYPOINT_ENVIRONMENT_VARIABLE,
                 &self.processor_class_import_path,
             )
-            .env("STREAMLIB_PROCESSOR_ID", &self.processor_id)
+            .env(
+                HELPER_PROCESS_PROCESSOR_ID_ENVIRONMENT_VARIABLE,
+                &self.processor_id,
+            )
             .env("STREAMLIB_RUNTIME_ID", runtime_id)
+            .env(
+                ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE,
+                iceoryx2_domain_root,
+            )
             .env(
                 PROTOCOL_VERSION_ENV,
                 STREAMLIB_SUBPROCESS_PROTOCOL_VERSION.to_string(),
@@ -457,7 +469,11 @@ impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
         #[cfg(not(target_os = "linux"))]
         let surface_socket_path: Option<&Path> = None;
 
-        let mut command = self.build_helper_process_command(&ctx.runtime_id(), surface_socket_path);
+        let mut command = self.build_helper_process_command(
+            &ctx.runtime_id(),
+            &ctx.runtime_directory().iceoryx2_domain_root(),
+            surface_socket_path,
+        );
         let mut escalate_transport = EscalateTransport::attach(&mut command)?;
 
         let mut child = command.spawn().map_err(|spawn_failure| {
@@ -854,7 +870,11 @@ mod tests {
     /// module — never a fork, and never some other Python found on `PATH`.
     #[test]
     fn the_child_is_the_apps_own_interpreter_running_the_helper_module() {
-        let command = spawn_host_for_test(None).build_helper_process_command("Rtest", None);
+        let command = spawn_host_for_test(None).build_helper_process_command(
+            "Rtest",
+            Path::new("/tmp/streamlib-1000/iox2"),
+            None,
+        );
         assert_eq!(command.get_program(), OsStr::new("/venv/bin/python"));
         let arguments: Vec<_> = command.get_args().collect();
         assert_eq!(arguments, ["-m", "streamlib._helper"]);
@@ -865,7 +885,11 @@ mod tests {
     /// `rt.add` derived and refused an unimportable class by.
     #[test]
     fn the_child_is_told_which_class_to_import_and_who_it_is() {
-        let command = spawn_host_for_test(None).build_helper_process_command("Rtest", None);
+        let command = spawn_host_for_test(None).build_helper_process_command(
+            "Rtest",
+            Path::new("/tmp/streamlib-1000/iox2"),
+            None,
+        );
         let environment = environment_of(&command);
         assert_eq!(
             value_of(&environment, "STREAMLIB_ENTRYPOINT"),
@@ -881,6 +905,22 @@ mod tests {
         );
     }
 
+    /// The child opens its iceoryx2 node in the domain its parent resolved, so
+    /// the two always share one domain whatever the child's working directory.
+    #[test]
+    fn the_child_is_handed_the_parents_iceoryx2_domain_root() {
+        let command = spawn_host_for_test(None).build_helper_process_command(
+            "Rtest",
+            Path::new("/tmp/streamlib-1000/iox2"),
+            None,
+        );
+        let environment = environment_of(&command);
+        assert_eq!(
+            value_of(&environment, "STREAMLIB_ICEORYX2_DOMAIN_ROOT"),
+            Some("/tmp/streamlib-1000/iox2")
+        );
+    }
+
     /// The app's import root leads the child's `PYTHONPATH`, which is the only
     /// reason a processor module sitting beside the entry file is importable
     /// in a child launched from somewhere else entirely.
@@ -888,7 +928,7 @@ mod tests {
     fn the_apps_import_root_leads_the_childs_python_path() {
         let app_entry_directory = std::env::temp_dir();
         let command = spawn_host_for_test(Some(app_entry_directory.clone()))
-            .build_helper_process_command("Rtest", None);
+            .build_helper_process_command("Rtest", Path::new("/tmp/streamlib-1000/iox2"), None);
         let environment = environment_of(&command);
         let python_path = value_of(&environment, "PYTHONPATH").expect("PYTHONPATH is set");
         assert_eq!(
@@ -903,7 +943,11 @@ mod tests {
     /// it would only send the child looking for the wrong standard library.
     #[test]
     fn an_inherited_python_home_is_not_passed_to_the_child() {
-        let command = spawn_host_for_test(None).build_helper_process_command("Rtest", None);
+        let command = spawn_host_for_test(None).build_helper_process_command(
+            "Rtest",
+            Path::new("/tmp/streamlib-1000/iox2"),
+            None,
+        );
         let cleared: Vec<_> = command
             .get_envs()
             .filter(|(name, value)| *name == OsStr::new("PYTHONHOME") && value.is_none())

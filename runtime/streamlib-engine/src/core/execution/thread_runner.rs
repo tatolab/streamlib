@@ -875,7 +875,7 @@ mod tests {
     fn draining_a_saturated_listener_lets_it_be_notified_again() {
         use crate::core::test_support::MockInputOnlyProcessor;
 
-        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let service = node
             .service_builder(&ServiceName::new(&unique_suffix("saturated-drain")).unwrap())
             .event()
@@ -926,7 +926,7 @@ mod tests {
     /// waiter thread.
     #[test]
     fn reactive_loop_wakes_on_notify() {
-        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let name = unique_suffix("wake");
         let svc = node
             .service_builder(&ServiceName::new(&name).unwrap())
@@ -991,7 +991,7 @@ mod tests {
         // production two-fd shape (listener + shutdown eventfd). The
         // listener never sees a notify in this test — only the shutdown
         // eventfd should fire.
-        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let name = unique_suffix("shutdown");
         let svc = node
             .service_builder(&ServiceName::new(&name).unwrap())
@@ -1046,7 +1046,7 @@ mod tests {
     /// before the loop and the second notify below wakes nothing.
     #[test]
     fn the_waiter_follows_a_listener_replaced_after_the_last_link_went_away() {
-        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let open_event_service = |suffix: &str| {
             node.service_builder(&ServiceName::new(&unique_suffix(suffix)).unwrap())
                 .event()
@@ -1155,7 +1155,7 @@ mod tests {
     /// rather than sleeping on a dead fd until shutdown.
     #[test]
     fn a_wait_with_nothing_to_report_returns_at_its_bound() {
-        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let svc = node
             .service_builder(&ServiceName::new(&unique_suffix("bounded-wait")).unwrap())
             .event()

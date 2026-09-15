@@ -35,6 +35,8 @@ from streamlib import (
 )
 from streamlib import claimed_surface_pixel_access as composable_module
 
+pytestmark = pytest.mark.usefixtures("private_iceoryx2_domain_for_this_test_process")
+
 FRAME_BAG = {
     "surface_id": "surface-7",
     "width_in_pixels": 1280,

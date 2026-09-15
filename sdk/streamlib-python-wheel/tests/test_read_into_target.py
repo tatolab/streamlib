@@ -26,6 +26,8 @@ from typing_extensions import assert_type
 
 from streamlib import ProcessorLinkDataAccess
 
+pytestmark = pytest.mark.usefixtures("private_iceoryx2_domain_for_this_test_process")
+
 OUTPUT_PORT = "detections_to_downstream"
 INPUT_PORT = "detections_from_upstream"
 
@@ -77,9 +79,9 @@ class WiredLinkUnderTest:
 def wired_link(request: pytest.FixtureRequest) -> Iterator[WiredLinkUnderTest]:
     """A source and a destination joined by one link.
 
-    Service names carry the pid and the test's own name because iceoryx2
-    service state is machine-global and outlives a crashed process — a fixed
-    name would let one bad run poison every later one.
+    Service names carry the test's own name because every test in this
+    process shares one iceoryx2 domain — a fixed name would let one test's
+    channel meet the next one's.
     """
     unique = f"pinto{os.getpid()}_{request.node.name}"
     channel_service_name = f"{unique}/detections"

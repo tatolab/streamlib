@@ -23,13 +23,14 @@ use pyo3::prelude::*;
 use streamlib::sdk::descriptors::AudioWindowContractDeclaredValues;
 use streamlib::sdk::error::Error;
 use streamlib::sdk::iceoryx2::{
-    ChannelEgressConfig, ChannelTrustTier, Iceoryx2Node, InboundLinkName, InputMailboxesInner,
-    OutputWriterInner, ReadMode, ResolvedAudioWindowContract,
+    ChannelEgressConfig, ChannelTrustTier, ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, Iceoryx2Node,
+    InboundLinkName, InputMailboxesInner, OutputWriterInner, ReadMode, ResolvedAudioWindowContract,
 };
 
 use crate::python_bag_conversion::{
     cast_decoded_bag_into_read_target, decode_msgpack_to_python_object, encode_bag_to_msgpack,
 };
+use crate::python_helper_process_spawn_host::HELPER_PROCESS_PROCESSOR_ID_ENVIRONMENT_VARIABLE;
 use crate::python_logging::monotonic_clock_now_ns;
 use crate::python_processor_context::PythonGpuContextLimitedAccess;
 use crate::python_processor_declaration::read_a_channel_count_or_the_source_spelling;
@@ -63,6 +64,17 @@ impl PythonProcessorLinkDataAccess {
             declared_input_ports: parking_lot::Mutex::new(HashSet::new()),
             declared_output_ports: parking_lot::Mutex::new(HashSet::new()),
         }
+    }
+
+    /// A helper process's own data plane over an iceoryx2 node it already opened.
+    pub(crate) fn over_helper_process_iceoryx2_node(node: Iceoryx2Node) -> Self {
+        let wiring = Self::new();
+        let _ = wiring.iceoryx2_node.set(node);
+        let _ = wiring
+            .input_mailboxes
+            .set(Arc::new(InputMailboxesInner::new()));
+        let _ = wiring.output_writer.set(Arc::new(OutputWriterInner::new()));
+        wiring
     }
 
     /// The mailboxes `port_name` reads from; `None` for a declared input port
@@ -232,19 +244,27 @@ impl PythonProcessorLinkDataAccess {
     ///
     /// The parent's copy of this object is built in Rust and wired by the
     /// compiler op; this is the constructor a child uses to wire itself from
-    /// the port wiring the parent sent it.
+    /// the port wiring the parent sent it. The node opens in the domain root
+    /// the parent handed over, and a process handed none is refused.
     #[new]
     fn open_for_helper_process(python: Python<'_>) -> PyResult<Self> {
+        let iceoryx2_domain_root = std::env::var_os(ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE)
+            .filter(|root| !root.is_empty())
+            .ok_or_else(|| {
+                PyRuntimeError::new_err(format!(
+                    "{ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE} is not set: a helper process \
+                     opens its iceoryx2 node only in the domain its parent runtime hands it"
+                ))
+            })?;
+        let node_name = std::env::var(HELPER_PROCESS_PROCESSOR_ID_ENVIRONMENT_VARIABLE)
+            .map_or_else(
+                |_| format!("streamlib-helper/pid{}", std::process::id()),
+                |processor_id| format!("streamlib-helper/{processor_id}"),
+            );
         let node = python
-            .detach(Iceoryx2Node::new)
+            .detach(|| Iceoryx2Node::new(std::path::Path::new(&iceoryx2_domain_root), &node_name))
             .map_err(|node_failure| PyRuntimeError::new_err(node_failure.to_string()))?;
-        let wiring = Self::new();
-        let _ = wiring.iceoryx2_node.set(node);
-        let _ = wiring
-            .input_mailboxes
-            .set(Arc::new(InputMailboxesInner::new()));
-        let _ = wiring.output_writer.set(Arc::new(OutputWriterInner::new()));
-        Ok(wiring)
+        Ok(Self::over_helper_process_iceoryx2_node(node))
     }
 
     /// Open this processor's publisher and one destination notifier for a link
@@ -578,9 +598,8 @@ mod tests {
     use super::*;
     use pyo3::types::PyDict;
 
-    /// Unique per run: iceoryx2 service state is machine-global and outlives a
-    /// crashed process, so a fixed name makes one bad run poison every later
-    /// one.
+    /// Unique per test: every test in this process shares one iceoryx2 domain,
+    /// so a fixed name would let one test's channel meet the next one's.
     fn unique_channel_names(label: &str) -> (String, String) {
         let run = std::process::id();
         (
@@ -589,8 +608,10 @@ mod tests {
         )
     }
 
-    fn helper_plane(python: Python<'_>) -> PythonProcessorLinkDataAccess {
-        PythonProcessorLinkDataAccess::open_for_helper_process(python).unwrap()
+    fn helper_plane() -> PythonProcessorLinkDataAccess {
+        PythonProcessorLinkDataAccess::over_helper_process_iceoryx2_node(
+            Iceoryx2Node::for_this_test_process(),
+        )
     }
 
     /// The whole point of the wiring surface: a helper process opens its own
@@ -602,8 +623,8 @@ mod tests {
         Python::initialize();
         Python::attach(|python| {
             let (channel, notify) = unique_channel_names("roundtrip");
-            let source = helper_plane(python);
-            let destination = helper_plane(python);
+            let source = helper_plane();
+            let destination = helper_plane();
 
             // The destination subscribes first: iceoryx2 drops a send with no
             // subscriber attached, so wiring the publisher first would race.
@@ -672,8 +693,8 @@ mod tests {
         Python::initialize();
         Python::attach(|python| {
             let (channel, notify) = unique_channel_names("windowed");
-            let source = helper_plane(python);
-            let destination = helper_plane(python);
+            let source = helper_plane();
+            let destination = helper_plane();
 
             let contract = PyDict::new(python);
             contract.set_item("sample_rate", 16_000i64).unwrap();
@@ -776,7 +797,7 @@ mod tests {
         Python::attach(|python| {
             let (channel, notify) = unique_channel_names("fanout");
             let (_, second_notify) = unique_channel_names("fanout_second");
-            let source = helper_plane(python);
+            let source = helper_plane();
 
             source
                 .wire_output_link(
@@ -844,7 +865,7 @@ mod tests {
         Python::initialize();
         Python::attach(|python| {
             let (channel, notify) = unique_channel_names("readmode");
-            let destination = helper_plane(python);
+            let destination = helper_plane();
             let refusal = destination
                 .wire_input_link(
                     python,

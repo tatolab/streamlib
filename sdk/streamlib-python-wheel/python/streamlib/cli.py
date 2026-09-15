@@ -47,6 +47,7 @@ from typing import TYPE_CHECKING, Any, Callable, Optional, Sequence
 
 from . import Runtime
 from ._control_plane_client import ControlPlaneError, call_tool, resolve_control_url
+from ._node_registry import UntrustedRuntimeDirectoryError
 from ._surface_image_exchange import (
     DEFAULT_SURFACE_ID_BAG_FIELD_NAME,
     SampledChannelExchangeReport,
@@ -1251,6 +1252,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         ObservationVerbUsageError,
         ControlPlaneError,
         MachineSetupError,
+        UntrustedRuntimeDirectoryError,
     ) as failure:
         print(f"error: {failure}", file=sys.stderr)
         return 1

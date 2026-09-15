@@ -4,7 +4,7 @@
 """Discovering the StreamLib nodes running on this machine.
 
 A node that hosts a control plane writes one JSON file per live node into the
-OS's per-user runtime directory. This reads that registry, liveness-checks each
+`nodes/` folder of the StreamLib runtime directory. This reads that registry, liveness-checks each
 entry, and prunes the ones that are definitively gone.
 
 Liveness has two independent signals: whether the control plane answers, and
@@ -17,13 +17,16 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
+import stat
+import sys
 from pathlib import Path
 from typing import NamedTuple, Optional
 
 __all__ = [
     "NodeRegistryEntry",
     "DiscoveredNode",
+    "UntrustedRuntimeDirectoryError",
+    "runtime_directory",
     "registry_directory",
     "scan_check_and_prune",
     "live_nodes",
@@ -52,16 +55,62 @@ class DiscoveredNode(NamedTuple):
     reachable: bool
 
 
-def registry_directory() -> Path:
-    """Where control-plane-hosting runtimes publish their discovery entries.
+class UntrustedRuntimeDirectoryError(Exception):
+    """The per-user fallback runtime directory exists but fails the engine's check."""
 
-    Mirrors the engine's own resolution: `$XDG_RUNTIME_DIR/streamlib/nodes`,
-    falling back to the system temp dir when the variable is unset.
+
+def runtime_directory() -> Path:
+    """The StreamLib runtime directory, resolved exactly as the engine resolves it.
+
+    On Linux `$XDG_RUNTIME_DIR/streamlib` when that variable is set and
+    non-empty; otherwise, and on macOS always, `/tmp/streamlib-<uid>`.
     """
-    runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
-    if runtime_dir:
-        return Path(runtime_dir) / "streamlib" / "nodes"
-    return Path(tempfile.gettempdir()) / "streamlib" / "nodes"
+    return _resolve_runtime_directory(
+        os.environ.get("XDG_RUNTIME_DIR"), sys.platform, Path("/tmp"), os.getuid()
+    )
+
+
+def _resolve_runtime_directory(
+    xdg_runtime_dir: "Optional[str]",
+    platform: str,
+    shared_temporary_directory: Path,
+    uid: int,
+) -> Path:
+    """The resolver with its inputs named, so every arm is testable in a tempdir.
+
+    The fallback sits in a directory every user can write, so an existing one is
+    trusted only as a real directory this uid owns with no group or other bits —
+    an entry planted there could point a control verb at anyone's port. A
+    fallback that does not exist yet is returned unchecked: a reader never
+    creates it, and there is nothing in it to trust.
+    """
+    if platform == "linux" and xdg_runtime_dir:
+        return Path(xdg_runtime_dir) / "streamlib"
+    fallback = shared_temporary_directory / f"streamlib-{uid}"
+    try:
+        status = os.lstat(fallback)
+    except FileNotFoundError:
+        return fallback
+    refusal = f"the StreamLib runtime directory {fallback} cannot be trusted"
+    if stat.S_ISLNK(status.st_mode):
+        raise UntrustedRuntimeDirectoryError(f"{refusal}: it is a symlink, not a directory")
+    if not stat.S_ISDIR(status.st_mode):
+        raise UntrustedRuntimeDirectoryError(f"{refusal}: it is not a directory")
+    if status.st_uid != uid:
+        raise UntrustedRuntimeDirectoryError(
+            f"{refusal}: it is owned by uid {status.st_uid}, not uid {uid}"
+        )
+    if status.st_mode & 0o077:
+        raise UntrustedRuntimeDirectoryError(
+            f"{refusal}: its mode is {stat.S_IMODE(status.st_mode):o}, which grants "
+            f"group or other permissions"
+        )
+    return fallback
+
+
+def registry_directory() -> Path:
+    """Where control-plane-hosting runtimes publish their discovery entries."""
+    return runtime_directory() / "nodes"
 
 
 def _read_entry_file(path: Path) -> "Optional[NodeRegistryEntry]":

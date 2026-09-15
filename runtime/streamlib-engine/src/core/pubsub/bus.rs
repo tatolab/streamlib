@@ -201,9 +201,9 @@ impl PubSub {
         let builder = std::thread::Builder::new().name(format!("pubsub-{}", topic));
         if let Err(e) = builder.spawn(move || {
             // Retry `open_or_create` — iceoryx2 can transiently report
-            // `ServiceInCorruptedState` when a concurrent node (e.g. another
-            // streamlib process or another test binary on the same machine)
-            // is scanning/cleaning dead-node state under `/tmp/iceoryx2/`.
+            // `ServiceInCorruptedState` when a concurrent node in the same
+            // domain (another runtime of this OS user) is scanning/cleaning
+            // dead-node state.
             // The state stabilizes within a few tens of milliseconds.
             let mut service = None;
             for attempt in 0..10 {

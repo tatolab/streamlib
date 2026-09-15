@@ -302,6 +302,83 @@ def test_a_launched_app_registers_as_a_node_and_tears_down(
     )
 
 
+def test_a_node_launched_with_xdg_runtime_dir_unset_keeps_everything_live_in_the_per_user_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A runtime starts anywhere with nothing set — a container, a CI runner —
+    and `streamlib nodes` still finds it.
+
+    The node carries a Python processor, so a frame reaching it proves parent
+    and helper opened their nodes in one iceoryx2 domain. Discovery goes through
+    the wheel's own registry reader, never a hand-built path, because the
+    reader resolving exactly as the engine does is the contract. The launch
+    tests above all set `XDG_RUNTIME_DIR`, so none of them reaches this arm.
+    """
+    from streamlib._node_registry import registry_directory, runtime_directory, scan_check_and_prune
+
+    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+    per_user_fallback = Path("/tmp") / f"streamlib-{os.getuid()}"
+
+    def iceoryx2_node_details() -> "set[Path]":
+        return set((per_user_fallback / "iox2" / "nodes").glob("*/*node.details"))
+
+    iceoryx2_node_details_before = iceoryx2_node_details()
+    app_directory = tmp_path / "app"
+    write_app_with_helper_placed_processors(app_directory, 1)
+    output_file = app_directory / "node-output.log"
+    with open(output_file, "w", encoding="utf-8") as output_sink:
+        process = subprocess.Popen(
+            [
+                sys.executable, "-m", "streamlib.cli", "run",
+                "--dir", str(app_directory),
+                "--host", "127.0.0.1",
+                "--port", str(free_port()),
+            ],
+            stdout=output_sink,
+            stderr=subprocess.STDOUT,
+            text=True,
+            start_new_session=True,
+            env={**os.environ},
+        )  # fmt: skip
+    node = LaunchedNode(process, output_file)
+    try:
+        seconds_until_every_helper_reports(node, 1)
+
+        assert runtime_directory() == per_user_fallback
+        deadline = time.monotonic() + NODE_READY_TIMEOUT_SECONDS
+        discovered = []
+        while not discovered and time.monotonic() < deadline:
+            discovered = [
+                found for found in scan_check_and_prune()
+                if found.entry.pid == process.pid and found.reachable
+            ]  # fmt: skip
+            time.sleep(0.2)
+        assert discovered, (
+            f"the reader never found the node in {registry_directory()}; output "
+            f"ended:\n{node.recent_output()}"
+        )
+        runtime_id = discovered[0].entry.runtime_id
+
+        entry_file = registry_directory() / f"{runtime_id}.json"
+        assert entry_file.is_file()
+        assert (per_user_fallback / f"surface-share-{runtime_id}.sock").exists()
+        new_node_details = iceoryx2_node_details() - iceoryx2_node_details_before
+        assert {details.name for details in new_node_details} == {f"sl{os.getuid()}_node.details"}
+        assert len(new_node_details) == 2, (
+            f"the parent and its helper must each open a node in the per-user fallback's "
+            f"domain; found {sorted(map(str, new_node_details))}"
+        )
+
+        node.interrupt()
+        assert node.await_exit(CLEAN_EXIT_TIMEOUT_SECONDS) == 0, (
+            f"the node must exit cleanly on SIGINT; output ended:\n{node.recent_output()}"
+        )
+        assert not entry_file.exists(), "clean teardown must remove the node-registry entry"
+        assert all(found.entry.pid != process.pid for found in scan_check_and_prune())
+    finally:
+        node.kill_process_group()
+
+
 def test_a_native_block_added_without_config_reaches_a_running_graph(
     tmp_path: Path, isolated_runtime_directory: Path, launch_node
 ):

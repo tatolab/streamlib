@@ -28,6 +28,8 @@ from streamlib._helper import (
     load_processor_class,
 )
 
+pytestmark = pytest.mark.usefixtures("private_iceoryx2_domain_for_this_test_process")
+
 FRAME_LENGTH_PREFIX = struct.Struct(">I")
 
 PROBE_MODULE = "helper_process_probes"
@@ -157,6 +159,25 @@ def engine_shaped_link_wiring(direction: str, link_id: str) -> dict:
         "max_subscribers": 2,
         "notify_max_notifiers": 1,
     }
+
+
+def test_a_helper_handed_no_iceoryx2_domain_root_refuses_to_start_by_name(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A helper opens its node only in the domain its parent resolved. One that
+    guessed a root instead — from its working directory, iceoryx2's defaults or
+    a config file — would open in a domain the parent is not in, where no bag
+    ever arrives and nothing errors.
+
+    Fail-without-fix: fall back to any root when the variable is absent and the
+    constructor below returns a data plane that silently reaches nobody.
+    """
+    from streamlib import ProcessorLinkDataAccess
+
+    monkeypatch.delenv("STREAMLIB_ICEORYX2_DOMAIN_ROOT")
+
+    with pytest.raises(RuntimeError, match="STREAMLIB_ICEORYX2_DOMAIN_ROOT is not set"):
+        ProcessorLinkDataAccess()
 
 
 def test_a_declared_port_with_no_link_reads_empty_and_drops_writes():

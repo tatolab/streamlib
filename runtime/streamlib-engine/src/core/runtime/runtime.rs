@@ -12,6 +12,7 @@ use serde::Serialize;
 use super::RuntimeOperations;
 use super::RuntimeStatus;
 use super::RuntimeUniqueId;
+use super::StreamlibRuntimeDirectory;
 use super::graph_change_listener::GraphChangeListener;
 use crate::core::compiler::{Compiler, PendingOperation};
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
@@ -94,10 +95,11 @@ pub struct Runner {
     #[cfg(target_os = "linux")]
     pub(crate) surface_service:
         Arc<Mutex<Option<crate::linux::surface_share::UnixSocketSurfaceService>>>,
-    /// Path of the per-runtime surface-sharing socket
-    /// (`$XDG_RUNTIME_DIR/streamlib-<runtime_uuid>.sock`).
+    /// Path of the per-runtime surface-sharing socket, inside the runtime directory.
     #[cfg(target_os = "linux")]
     pub(crate) surface_socket_path: std::path::PathBuf,
+    /// The runtime directory this runtime resolved as it started.
+    pub(crate) runtime_directory: StreamlibRuntimeDirectory,
     /// The surfaces cross-process consumers currently hold checked out, owned
     /// by the service above and read by the pixel-buffer pool through the
     /// `SurfaceStore` `start()` hands it. Held here because the service is
@@ -178,6 +180,12 @@ impl Runner {
             .map_err(|e| Error::Runtime(format!("Failed to initialize logging: {}", e)))?;
         tracing::info!("Creating Runner with ID: {}", runtime_id);
 
+        let runtime_directory = StreamlibRuntimeDirectory::resolve()?;
+        tracing::info!(
+            "StreamLib runtime directory: {}",
+            runtime_directory.path().display()
+        );
+
         // Get STREAMLIB_HOME and run init hooks (once per process)
         let streamlib_home = crate::core::streamlib_home::get_streamlib_home();
         tracing::debug!("STREAMLIB_HOME: {}", streamlib_home.display());
@@ -196,7 +204,10 @@ impl Runner {
         // Create iceoryx2 Node early so PUBSUB can initialize before start().
         // The node is cloned into RuntimeContext during start().
         tracing::info!("[new] Creating iceoryx2 Node...");
-        let iceoryx2_node = Iceoryx2Node::new()?;
+        let iceoryx2_node = Iceoryx2Node::new(
+            &runtime_directory.iceoryx2_domain_root(),
+            &format!("streamlib-runtime/{runtime_id}"),
+        )?;
         tracing::info!("[new] iceoryx2 Node created");
 
         // Initialize global PUBSUB with iceoryx2 backend.
@@ -204,12 +215,12 @@ impl Runner {
         PUBSUB.init(&runtime_id, iceoryx2_node.clone())?;
 
         // Bring up the per-runtime surface-sharing service. Each runtime owns
-        // a unique Unix socket at $XDG_RUNTIME_DIR/streamlib-<uuid>.sock that
-        // its polyglot subprocesses connect to via STREAMLIB_SURFACE_SOCKET.
-        // No external daemon is required.
+        // a unique Unix socket in the runtime directory that its polyglot
+        // subprocesses connect to via STREAMLIB_SURFACE_SOCKET. No external
+        // daemon is required.
         #[cfg(target_os = "linux")]
         let (surface_service, surface_socket_path, surface_check_out_leases) =
-            bring_up_surface_service(&runtime_id)?;
+            bring_up_surface_service(&runtime_directory, &runtime_id)?;
 
         // Create Arc-wrapped components
         let compiler = Arc::new(Compiler::new());
@@ -239,6 +250,7 @@ impl Runner {
             surface_service,
             #[cfg(target_os = "linux")]
             surface_socket_path,
+            runtime_directory,
             #[cfg(target_os = "linux")]
             surface_check_out_leases,
             #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
@@ -264,7 +276,7 @@ impl Runner {
     /// Path of the per-runtime surface-sharing Unix socket.
     ///
     /// Bound during [`Runner::new`] at
-    /// `$XDG_RUNTIME_DIR/streamlib-<runtime_uuid>.sock`. Polyglot
+    /// `<runtime directory>/surface-share-<runtime_id>.sock`. Polyglot
     /// subprocesses spawned by this runtime inherit this path via the
     /// `STREAMLIB_SURFACE_SOCKET` env var so their `streamlib-surface-client`
     /// connects to the runtime-internal service.
@@ -482,6 +494,7 @@ impl Runner {
             self.tokio_runtime_variant.handle(),
             iceoryx2_node,
             Arc::clone(&audio_clock),
+            self.runtime_directory.clone(),
             #[cfg(target_os = "linux")]
             self.surface_socket_path.clone(),
         ));
@@ -1270,6 +1283,7 @@ fn pascal_to_camel(short: &str) -> String {
 /// from a prior crashed runtime, and bring the listener up.
 #[cfg(target_os = "linux")]
 fn bring_up_surface_service(
+    runtime_directory: &StreamlibRuntimeDirectory,
     runtime_id: &RuntimeUniqueId,
 ) -> Result<(
     Arc<Mutex<Option<crate::linux::surface_share::UnixSocketSurfaceService>>>,
@@ -1278,17 +1292,7 @@ fn bring_up_surface_service(
 )> {
     use crate::linux::surface_share::{SurfaceShareState, UnixSocketSurfaceService};
 
-    let xdg_runtime_dir = std::env::var_os("XDG_RUNTIME_DIR").ok_or_else(|| {
-        Error::Runtime(
-            "XDG_RUNTIME_DIR is not set. The runtime needs a writable directory \
-             for its per-runtime surface-sharing socket — typically /run/user/<uid>. \
-             Set XDG_RUNTIME_DIR or run under a session manager that provides it."
-                .to_string(),
-        )
-    })?;
-
-    let socket_path =
-        std::path::PathBuf::from(xdg_runtime_dir).join(format!("streamlib-{}.sock", runtime_id));
+    let socket_path = runtime_directory.surface_share_socket_path(runtime_id);
 
     if socket_path.exists() {
         match std::os::unix::net::UnixStream::connect(&socket_path) {
@@ -1528,8 +1532,8 @@ mod tests {
                     socket_path.display()
                 );
                 assert!(
-                    socket_path.starts_with(xdg),
-                    "socket {} should be under XDG_RUNTIME_DIR {}",
+                    socket_path.starts_with(xdg.join("streamlib")),
+                    "socket {} should be under the runtime directory in XDG_RUNTIME_DIR {}",
                     socket_path.display(),
                     xdg.display()
                 );
@@ -1555,7 +1559,8 @@ mod tests {
 
         #[test]
         #[serial]
-        fn runtime_fails_fast_when_xdg_runtime_dir_missing() {
+        fn a_runtime_started_with_xdg_runtime_dir_unset_keeps_its_socket_and_domain_in_the_per_user_fallback()
+         {
             let prev = std::env::var_os("XDG_RUNTIME_DIR");
             // SAFETY: serialized via #[serial].
             unsafe {
@@ -1571,14 +1576,25 @@ mod tests {
                 }
             }
 
-            let err = match result {
-                Err(e) => e,
-                Ok(_) => panic!("runtime should refuse to start without XDG_RUNTIME_DIR"),
-            };
-            let msg = err.to_string();
+            let runtime = result.expect("a runtime starts with XDG_RUNTIME_DIR unset");
+            let fallback = std::path::PathBuf::from(format!(
+                "/tmp/streamlib-{}",
+                crate::core::runtime::current_process_uid()
+            ));
             assert!(
-                msg.contains("XDG_RUNTIME_DIR"),
-                "error should name XDG_RUNTIME_DIR; got: {msg}"
+                runtime.surface_socket_path().starts_with(&fallback),
+                "socket {} should be under {}",
+                runtime.surface_socket_path().display(),
+                fallback.display()
+            );
+            let iceoryx2_config = runtime.iceoryx2_node.config();
+            assert_eq!(
+                iceoryx2_config.global.root_path().as_bytes_const(),
+                fallback.join("iox2").as_os_str().as_encoded_bytes()
+            );
+            assert_eq!(
+                iceoryx2_config.global.prefix.as_bytes_const(),
+                crate::iceoryx2::engine_owned_iceoryx2_prefix_for_this_user().as_bytes()
             );
         }
 
@@ -1652,7 +1668,10 @@ mod tests {
                     std::env::set_var("STREAMLIB_RUNTIME_ID", &pinned_id);
                 }
 
-                let stale_path = xdg.join(format!("streamlib-{pinned_id}.sock"));
+                std::fs::create_dir(xdg.join("streamlib")).expect("create runtime directory");
+                let stale_path = xdg
+                    .join("streamlib")
+                    .join(format!("surface-share-{pinned_id}.sock"));
                 std::fs::write(&stale_path, b"orphan-from-prior-crashed-runtime")
                     .expect("write orphan");
                 assert!(stale_path.exists());

@@ -168,10 +168,7 @@ jobs:
       # owner decision (2026-08-03) rather than a self-hosted GPU runner.
       - name: Interpreter-lifecycle contract (GPU-free half)
         working-directory: sdk/streamlib-python-wheel
-        env:
-          XDG_RUNTIME_DIR: /tmp/streamlib-runtime-dir
         run: |
-          mkdir -p "$XDG_RUNTIME_DIR"
           .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"
 
       # The Rust half of the same lifecycle contract the pytest step above
@@ -300,10 +297,7 @@ jobs:
       # so it owes the same manylinux promise.
       - name: Extension tests, GPU-free
         working-directory: packages/${{ matrix.extension }}
-        env:
-          XDG_RUNTIME_DIR: /tmp/streamlib-runtime-dir
         run: |
-          mkdir -p "$XDG_RUNTIME_DIR"
           .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"
 
   python-types:

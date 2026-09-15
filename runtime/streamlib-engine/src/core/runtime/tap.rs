@@ -375,7 +375,7 @@ mod tests {
         let destinations = 1usize;
         let max_subscribers = destinations + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL;
 
-        let node = Iceoryx2Node::new().expect("create iceoryx2 node");
+        let node = Iceoryx2Node::for_this_test_process();
         let channel = unique_channel_name("live");
         let service = open_channel(&node, &channel, max_subscribers);
         let publisher = service.create_publisher(64).expect("channel publisher");
@@ -453,7 +453,7 @@ mod tests {
     #[test]
     fn bounded_tap_delivers_exactly_n_bags_then_ends() {
         let max_subscribers = RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL;
-        let node = Iceoryx2Node::new().expect("create iceoryx2 node");
+        let node = Iceoryx2Node::for_this_test_process();
         let channel = unique_channel_name("bounded");
         let service = open_channel(&node, &channel, max_subscribers);
         let publisher = service.create_publisher(64).expect("channel publisher");
@@ -506,7 +506,7 @@ mod tests {
     #[test]
     fn zero_count_tap_delivers_no_bags_then_closes() {
         let max_subscribers = RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL;
-        let node = Iceoryx2Node::new().expect("create iceoryx2 node");
+        let node = Iceoryx2Node::for_this_test_process();
         let channel = unique_channel_name("zero-count");
         let service = open_channel(&node, &channel, max_subscribers);
         let publisher = service.create_publisher(64).expect("channel publisher");
@@ -554,7 +554,7 @@ mod tests {
     #[test]
     fn stalled_downstream_never_blocks_the_drain_and_detach_returns_promptly() {
         let max_subscribers = RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL;
-        let node = Iceoryx2Node::new().expect("create iceoryx2 node");
+        let node = Iceoryx2Node::for_this_test_process();
         let channel = unique_channel_name("stalled-downstream");
         let service = open_channel(&node, &channel, max_subscribers);
         let publisher = service.create_publisher(64).expect("channel publisher");

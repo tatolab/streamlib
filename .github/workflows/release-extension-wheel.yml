@@ -108,10 +108,7 @@ jobs:
         env:
           EXTENSION_DISTRIBUTION_NAME: ${{ inputs.extension_distribution_name }}
           EXTENSION_IMPORT_PACKAGE_NAME: ${{ inputs.extension_import_package_name }}
-          # The engine wheel reads this at import; a runner has no session bus.
-          XDG_RUNTIME_DIR: /tmp/streamlib-runtime-dir
         run: |
-          mkdir -p "$XDG_RUNTIME_DIR"
           python3 -m venv /tmp/extension-wheel-check
           /tmp/extension-wheel-check/bin/pip install \
             --index-url "$STREAMLIB_SIMPLE_INDEX_URL" \

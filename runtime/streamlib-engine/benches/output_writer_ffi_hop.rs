@@ -52,10 +52,22 @@ use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use iceoryx2::prelude::*;
 
 use streamlib_engine::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
+use streamlib_engine::core::runtime::StreamlibRuntimeDirectory;
 use streamlib_engine::iceoryx2::{
     ChannelEgressConfig, ChannelTrustTier, InboundLinkName, InputMailboxesInner, OutputWriter,
     OutputWriterInner, ReadMode, TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+    create_iceoryx2_node_in_engine_owned_domain,
 };
+
+/// A node in the engine-owned domain a runtime on this machine would use.
+fn create_bench_iceoryx2_node() -> Node<iceoryx2::service::ipc::Service> {
+    let runtime_directory = StreamlibRuntimeDirectory::resolve().unwrap();
+    create_iceoryx2_node_in_engine_owned_domain(
+        &runtime_directory.iceoryx2_domain_root(),
+        "streamlib-bench",
+    )
+    .unwrap()
+}
 
 /// Per-bench-run unique service-name suffix so parallel benches
 /// don't collide on iceoryx2's machine-global `/dev/shm` namespace.
@@ -134,7 +146,7 @@ struct BenchFixture {
 /// drains the subscriber + listener in-line between writes so the
 /// publisher's ring doesn't back-pressure).
 fn build_inner_with_connection(tag: &str) -> BenchFixture {
-    let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+    let node = create_bench_iceoryx2_node();
     let (publisher, mut subscribers) = open_bench_channel_pubsub(&node, tag, 1);
     let subscriber = subscribers.pop().unwrap();
 
@@ -241,7 +253,7 @@ struct FanoutFixture {
 /// `set_channel_publisher` + N `add_channel_link`, N subscribers on the one
 /// pubsub service.
 fn build_inner_with_fanout(tag: &str, subscriber_count: usize) -> FanoutFixture {
-    let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+    let node = create_bench_iceoryx2_node();
     let (publisher, subscribers) = open_bench_channel_pubsub(&node, tag, subscriber_count);
     let inner = Arc::new(output_writer_inner_publishing_to(publisher));
 
@@ -317,7 +329,7 @@ struct RoundTripFixture {
 }
 
 fn build_round_trip(tag: &str) -> RoundTripFixture {
-    let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+    let node = create_bench_iceoryx2_node();
     let (publisher, mut subscribers) = open_bench_channel_pubsub(&node, tag, 1);
     let subscriber = subscribers.pop().unwrap();
 

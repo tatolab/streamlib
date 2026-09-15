@@ -191,7 +191,7 @@ impl ManualProcessor for ApiServerProcessor::Processor {
         Ok(())
     }
 
-    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+    fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let handles = self
             .handles
             .as_ref()
@@ -262,7 +262,10 @@ impl ManualProcessor for ApiServerProcessor::Processor {
             handles.runtime_id.clone(),
             control_url,
         );
-        match crate::node_registry::write_entry(&entry) {
+        match crate::node_registry::write_entry(
+            &ctx.runtime_directory().node_registry_directory(),
+            &entry,
+        ) {
             Ok(path) => tracing::debug!("Node registry entry written at {}", path.display()),
             Err(error) => {
                 tracing::warn!(%error, "failed to write node registry entry; node not discoverable")
@@ -287,12 +290,15 @@ impl ManualProcessor for ApiServerProcessor::Processor {
         Ok(())
     }
 
-    fn stop(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+    fn stop(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         // Tear down the discovery entry alongside the control endpoint it
         // advertises. Non-fatal on failure — a stale entry is pruned by the
         // reader's liveness check.
         if let Some(runtime_id) = self.runtime_id.take() {
-            if let Err(error) = crate::node_registry::remove_entry(&runtime_id) {
+            if let Err(error) = crate::node_registry::remove_entry(
+                &ctx.runtime_directory().node_registry_directory(),
+                &runtime_id,
+            ) {
                 tracing::warn!(%error, "failed to remove node registry entry on stop");
             }
         }
