@@ -240,6 +240,12 @@ jobs:
           # The engine build id a helper checks against its parent's: how the
           # build script composes it, `unknown` with no git checkout, a fresh
           # nonce per build, and the compiled id leading with the crate version.
+          # Channel sizing for a late consumer: a `newest` and an `ordered`
+          # consumer on one running port each at its own depth, a channel
+          # created deep whichever consumer came first, the services a link
+          # holds against a helper opening first and released with it, the
+          # fan-out and fan-in caps from distinct nodes and their refusals, and
+          # the one-sample, no-history limits every channel states.
           cargo test --locked -p streamlib-engine --lib -- \
             core::processor_owned_window \
             processor_owned_window_ops \
@@ -294,6 +300,16 @@ jobs:
             iceoryx2::iceoryx2_domain_for_this_test_process \
             core::runtime::runtime::tests::runtime_internal_surface_share::a_runtime_started_with_xdg_runtime_dir_unset_keeps_its_socket_and_domain_in_the_per_user_fallback \
             iceoryx2::channel_sizing_tests::every_channel_service_opens_under_safe_overflow \
+            core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_newest_and_an_ordered_consumer_share_one_running_output_port_each_at_its_own_depth \
+            core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_channel_first_wired_to_a_newest_consumer_is_created_deep_enough_for_any_consumer \
+            core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_helper_opening_first_joins_the_channel_the_engine_created_between_two_helpers \
+            core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_disconnected_link_releases_the_services_it_held \
+            core::compiler::compiler_ops::open_iceoryx2_service_op::tests::channel_max_subscribers_is_the_fixed_cap_plus_tap_and_refuses_past_it \
+            core::compiler::compiler_ops::open_iceoryx2_service_op::tests::destination_max_notifiers_is_the_fixed_cap_and_refuses_past_it \
+            iceoryx2::node::tests::a_channel_admits_every_destination_and_the_tap_from_their_own_nodes_and_no_more \
+            iceoryx2::node::tests::a_notify_service_admits_every_inbound_link_from_their_own_nodes_and_no_more \
+            iceoryx2::node::tests::a_channel_service_lends_one_sample_at_a_time_and_replays_none \
+            iceoryx2::node::tests::a_reopened_service_states_the_depth_it_was_created_at \
             iceoryx2::delivery_profile::tests::newest_resolves_to_skip_drop_shallow \
             iceoryx2::delivery_profile::tests::ordered_resolves_to_fifo_drop_deep \
             iceoryx2::delivery_profile::tests::profile_parses_known_and_rejects_unknown \
