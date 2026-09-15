@@ -23,7 +23,6 @@ use crate::core::graph::{
     DeviceMatchedAudioWindowContractsComponent, Graph, GraphEdgeWithComponents,
     GraphNodeWithComponents, Iceoryx2ServicesHeldOpenForLinkComponent, LinkState,
     LinkStateComponent, LinkUniqueId, ProcessorInstanceComponent, ProcessorMetrics,
-    SubprocessHandleComponent,
 };
 use crate::core::processors::ProcessorInstance;
 use crate::iceoryx2::{
@@ -592,17 +591,7 @@ fn refuse_a_second_inbound_link_into_a_windowed_port(
 
 /// Check if a processor is a subprocess.
 fn is_subprocess_processor(graph: &mut Graph, proc_id: &ProcessorUniqueId) -> bool {
-    let has_component = graph
-        .traversal_mut()
-        .v(proc_id)
-        .first()
-        .map(|n| n.has::<SubprocessHandleComponent>())
-        .unwrap_or(false);
-    if has_component {
-        return true;
-    }
-
-    if let Some(proc_arc) = graph
+    graph
         .traversal_mut()
         .v(proc_id)
         .first_mut()
@@ -610,13 +599,7 @@ fn is_subprocess_processor(graph: &mut Graph, proc_id: &ProcessorUniqueId) -> bo
             node.get::<ProcessorInstanceComponent>()
                 .map(|i| i.0.clone())
         })
-    {
-        if proc_arc.lock().out_of_process_link_wiring().is_some() {
-            return true;
-        }
-    }
-
-    false
+        .is_some_and(|proc_arc| proc_arc.lock().out_of_process_link_wiring().is_some())
 }
 
 /// Reclaim one link on an endpoint that owns its ports out of process: forget

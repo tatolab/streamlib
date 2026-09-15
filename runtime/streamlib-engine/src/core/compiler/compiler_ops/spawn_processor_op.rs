@@ -19,7 +19,7 @@ use crate::core::execution::run_processor_loop;
 use crate::core::graph::{
     Graph, GraphNodeWithComponents, ObservableProcessorState, ProcessorInstanceComponent,
     ProcessorPauseGateComponent, ProcessorReadyBarrierComponent, ProcessorUniqueId,
-    ShutdownChannelComponent, StateComponent, SubprocessHandleComponent, ThreadHandleComponent,
+    ShutdownChannelComponent, StateComponent, ThreadHandleComponent,
 };
 use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorInstanceFactory, ProcessorState};
 
@@ -48,7 +48,7 @@ pub(crate) fn spawn_processor(
             .traversal()
             .v(processor_id)
             .first()
-            .map(|n| n.has::<ThreadHandleComponent>() || n.has::<SubprocessHandleComponent>())
+            .map(|n| n.has::<ThreadHandleComponent>())
             .unwrap_or(false);
         if already_running {
             return Ok(());

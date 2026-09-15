@@ -102,7 +102,7 @@ impl Compiler {
     ) -> Result<()> {
         use crate::core::graph::{
             PendingDeletionComponent, ProcessorInstanceComponent, ShutdownChannelComponent,
-            StateComponent, SubprocessHandleComponent, ThreadHandleComponent,
+            StateComponent, ThreadHandleComponent,
         };
         use crate::core::processors::ProcessorState;
 
@@ -276,10 +276,10 @@ impl Compiler {
 
                 tracing::info!("[REMOVE] {}", proc_id);
 
-                // Phase 1: Signal shutdown, extract thread/subprocess handles (with lock)
+                // Phase 1: Signal shutdown, extract the thread handle (with lock)
                 // Lock is released before join() to avoid deadlock - processors may be
                 // waiting on runtime operations that need this lock to complete.
-                let (thread_handle, subprocess_handle) = {
+                let thread_handle = {
                     let mut graph = graph_arc.write();
                     if let Some(node) = graph.traversal_mut().v(proc_id).first_mut() {
                         // Set state to stopping
@@ -291,16 +291,13 @@ impl Compiler {
                         if let Some(channel) = node.get::<ShutdownChannelComponent>() {
                             channel.signal_shutdown();
                         }
-                        // Extract thread and subprocess handles
-                        let th = node.remove::<ThreadHandleComponent>();
-                        let sh = node.remove::<SubprocessHandleComponent>();
-                        (th, sh)
+                        node.remove::<ThreadHandleComponent>()
                     } else {
-                        (None, None)
+                        None
                     }
                 }; // Lock released here
 
-                // Phase 2: Wait for thread/subprocess to exit (no lock held)
+                // Phase 2: Wait for the thread to exit (no lock held)
                 // Processor can now complete any pending runtime operations before exiting.
                 if let Some(handle) = thread_handle {
                     match handle.0.join() {
@@ -315,53 +312,6 @@ impl Compiler {
                             );
                         }
                     }
-                }
-
-                // Subprocess shutdown: SIGTERM → wait with timeout → SIGKILL
-                if let Some(mut handle) = subprocess_handle {
-                    let child_pid = handle.child.id();
-                    tracing::info!(
-                        "[{}] Shutting down Python subprocess (pid={})",
-                        proc_id,
-                        child_pid
-                    );
-
-                    // Send SIGTERM for graceful shutdown (subprocess_runner has signal handler)
-                    #[cfg(unix)]
-                    unsafe {
-                        libc::kill(child_pid as i32, libc::SIGTERM);
-                    }
-
-                    // Wait with timeout (5s)
-                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-                    loop {
-                        match handle.child.try_wait() {
-                            Ok(Some(status)) => {
-                                tracing::info!(
-                                    "[{}] Python subprocess exited: {}",
-                                    proc_id,
-                                    status
-                                );
-                                break;
-                            }
-                            Ok(None) if std::time::Instant::now() < deadline => {
-                                std::thread::sleep(std::time::Duration::from_millis(100));
-                            }
-                            _ => {
-                                tracing::warn!(
-                                    "[{}] Python subprocess did not exit gracefully, killing (pid={})",
-                                    proc_id,
-                                    child_pid
-                                );
-                                let _ = handle.child.kill();
-                                let _ = handle.child.wait();
-                                break;
-                            }
-                        }
-                    }
-
-                    // Clean up config temp file
-                    let _ = std::fs::remove_file(&handle.config_path);
                 }
 
                 // Phase 3: Cleanup (re-acquire lock)
