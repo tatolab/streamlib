@@ -50,9 +50,13 @@ Recorded with the `runtime-mesh` proposal. It reads `zenoh` 1.10.1 and the rig p
   so a control plane hosted after construction appears in it.
 - **A verbatim `@runtime` chunk.** No `**` subscription over port addresses ever matches it, and
   a display name may not begin with `@`, so no address can collide with it.
-- **TCP only, default features off.** `transport_udp` pulls in the QUIC datagram link and a
-  CDLA-Permissive-2.0 licence `deny.toml` refuses, and discovery needs neither. Zenoh is
-  elected under Apache-2.0.
+- **TCP and UDP, default features off.** Realtime media needs UDP (owner, 2026-09-14): a `udp/`
+  link is best-effort, so a lost packet costs that message rather than stalling the ones behind
+  it, and `?rel=1` gives a reliable link over unencrypted QUIC with nothing to provision. UDP
+  brings CDLA-Permissive-2.0 `webpki-roots`, a permissive data licence with no conflict for
+  commercial distribution, accepted into `deny.toml`. TLS `quic/` waits for the security
+  milestone because it needs a provisioned key and certificate. Zenoh is elected under
+  Apache-2.0.
 - **The duplicate check needs the mesh before the runtime exists.** The session therefore opens
   in `Runner::new()`, beside the runtime-id socket refusal, which needs no GPU.
   - Cost: `Runtime()` takes Zenoh's 500 ms scouting delay while multicast discovery is on.
