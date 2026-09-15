@@ -108,12 +108,17 @@ struct InboundLinkSubscribersAndListener {
     listener: Option<Listener<ipc::Service>>,
 }
 
-// SAFETY: `Subscriber` and `Listener` are not `Send`. Moving them between
-// threads is sound because every subscriber, every received sample and the
-// listener are touched only while
-// [`InputMailboxesInner::inbound_link_subscribers_and_listener`] is held, and no
-// sample outlives that guard. iceoryx2's `receive` also pops a single-consumer
-// queue that forbids concurrent callers, so no other path may reach a subscriber.
+// SAFETY: `Subscriber` and `Listener` are `!Send` only because `ipc::Service`
+// sets `ArcThreadSafetyPolicy` to `SingleThreaded`, which in iceoryx2 0.9.3 is a
+// bare `Rc` with no thread-affine state; `ipc_threadsafe::Service` differs in
+// that one type, putting the same state behind a mutex. The `Rc` is cloned only
+// into the `Sample`s `receive` returns, and everything a port shares with other
+// ports, its service or its node is an `Arc` or lock-free shared memory. So
+// moving the ports between threads is sound while every port access, and every
+// sample from creation to drop, stays inside
+// [`InputMailboxesInner::inbound_link_subscribers_and_listener`]'s guard.
+// `receive` also pops a single-consumer queue that forbids concurrent callers.
+// Re-check this against the source on any iceoryx2 upgrade.
 unsafe impl Send for InboundLinkSubscribersAndListener {}
 
 impl InboundLinkSubscribersAndListener {
