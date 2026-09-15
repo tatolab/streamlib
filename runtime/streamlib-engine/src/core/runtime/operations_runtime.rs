@@ -493,7 +493,7 @@ impl RuntimeOperations for Runner {
         // used to open the service, so the tap's publisher-free reopen requests
         // identical, iceoryx2-verified parameters.
         let resolved = self.compiler.scope(
-            |graph, _tx| -> Result<(String, crate::core::compiler::compiler_ops::ChannelSizing)> {
+            |graph, _tx| -> Result<(String, crate::iceoryx2::ChannelSizing)> {
                 let (source_proc_id, source_port) =
                     crate::core::compiler::compiler_ops::find_channel_source_port(graph, &channel)
                         .ok_or_else(|| Error::TapChannelNotFound(channel.clone()))?;
@@ -513,15 +513,7 @@ impl RuntimeOperations for Runner {
             // OS thread; `start_channel_tap` blocks briefly for its subscribe
             // outcome, so it runs on a blocking pool, off the async worker.
             tokio::task::spawn_blocking(move || {
-                crate::core::runtime::tap::start_channel_tap(
-                    node,
-                    channel,
-                    crate::core::runtime::tap::TapChannelSizing {
-                        max_subscribers: sizing.max_subscribers,
-                        channel_service_creation_depth: sizing.channel_service_creation_depth,
-                    },
-                    count,
-                )
+                crate::core::runtime::tap::start_channel_tap(node, channel, sizing, count)
             })
             .await
             .map_err(|join_error| {

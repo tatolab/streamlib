@@ -47,6 +47,7 @@ pub use input::{BoundedReadOutcome, InputMailboxes, InputMailboxesInner};
 pub use mailbox::{
     PortMailbox, PortMailboxDeliveredBag, PortMailboxEvictionNotice, PortMailboxQueuedFrameMeasure,
 };
+pub(crate) use node::ChannelSizing;
 pub use node::{
     ChannelTapSubscribeError, ICEORYX2_DOMAIN_ROOT_AND_PREFIX_BUDGET_BYTES,
     ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, Iceoryx2EventService, Iceoryx2Node,

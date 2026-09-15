@@ -17,6 +17,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use crate::core::ProcessorUniqueId;
+use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
     DeviceMatchedAudioWindowContractsComponent, Graph, GraphEdgeWithComponents,
@@ -26,7 +27,7 @@ use crate::core::graph::{
 };
 use crate::core::processors::ProcessorInstance;
 use crate::iceoryx2::{
-    AudioWindowDeclarationOfAnInputPort, ChannelEgressConfig, ChannelTrustTier,
+    AudioWindowDeclarationOfAnInputPort, ChannelEgressConfig, ChannelSizing, ChannelTrustTier,
     DEFAULT_EXPECTED_PAYLOAD_BYTES, DeliveryProfile, DeliveryResolution, Iceoryx2Node,
     Iceoryx2NotifyService, Iceoryx2Service, InboundLinkName,
     RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL, audio_windowing_declared_by_input_port,
@@ -134,18 +135,15 @@ pub fn open_iceoryx2_service(
     // The tier default is the structural ceiling; an operator raises or lowers it
     // per deployment through the tier's node-level env override.
     let channel_ceiling_bytes = effective_channel_ceiling_bytes(trust_tier);
-    let ChannelSizing {
-        max_subscribers,
-        channel_service_creation_depth,
-    } = resolve_channel_sizing(graph, &source_proc_id, &source_port)?;
+    let channel_sizing = resolve_channel_sizing(graph, &source_proc_id, &source_port)?;
     let dest_input_port_delivery =
         delivery_resolution_of_input_port(graph, &dest_proc_id, &dest_port)?;
     let max_notifiers = destination_max_notifiers(graph, &dest_proc_id)?;
 
     let service = iceoryx2_node.open_or_create_service(
         &channel_service_name,
-        max_subscribers,
-        channel_service_creation_depth,
+        channel_sizing.max_subscribers,
+        channel_sizing.channel_service_creation_depth,
     )?;
     let notify_service = notify_service_name
         .as_deref()
@@ -163,8 +161,7 @@ pub fn open_iceoryx2_service(
             notify_service_name.as_deref().unwrap_or(""),
             DEFAULT_EXPECTED_PAYLOAD_BYTES,
             channel_ceiling_bytes,
-            channel_service_creation_depth,
-            max_subscribers,
+            channel_sizing,
             max_notifiers,
             link_id,
         )?;
@@ -195,8 +192,7 @@ pub fn open_iceoryx2_service(
             &channel_service_name,
             notify_service_name.as_deref().unwrap_or(""),
             dest_input_port_delivery,
-            channel_service_creation_depth,
-            max_subscribers,
+            channel_sizing,
             max_notifiers,
             link_id,
             dest_audio_windowing,
@@ -356,31 +352,20 @@ fn notify_service_name_for(dest_proc_id: &ProcessorUniqueId) -> String {
     format!("streamlib/{}/notify", dest_proc_id)
 }
 
-/// The `(dest_proc_id, dest_port)` set a channel feeds — every `connect()` link
-/// out of `source_port`. This predicate IS the definition of a channel's
-/// membership: a channel keys on its source output port, so its destinations are
-/// exactly the links leaving that port.
-///
-/// Only its size is read: sizing never follows the destinations, so a link
-/// connected to a running source reopens the service with exactly what created it.
-fn channel_destinations(
+/// How many `connect()` links leave `source_port` — the destinations its
+/// channel feeds, since a channel keys on its source output port.
+fn channel_destination_count(
     graph: &mut Graph,
     source_proc_id: &ProcessorUniqueId,
     source_port: &str,
-) -> Vec<(ProcessorUniqueId, String)> {
+) -> usize {
     graph
         .traversal_mut()
         .v(source_proc_id)
         .out_e()
         .iter()
         .filter(|link| link.from_port().port_name == source_port)
-        .map(|link| {
-            (
-                link.to_port().processor_id.clone(),
-                link.to_port().port_name.clone(),
-            )
-        })
-        .collect()
+        .count()
 }
 
 /// The `max_subscribers` every channel data service is created with:
@@ -396,7 +381,7 @@ fn channel_max_subscribers(
     source_proc_id: &ProcessorUniqueId,
     source_port: &str,
 ) -> Result<usize> {
-    let destinations = channel_destinations(graph, source_proc_id, source_port).len();
+    let destinations = channel_destination_count(graph, source_proc_id, source_port);
     if destinations > MAX_DESTINATIONS_PER_CHANNEL {
         return Err(Error::Configuration(format!(
             "output port '{source_proc_id}:{source_port}' would feed {destinations} \
@@ -404,20 +389,6 @@ fn channel_max_subscribers(
         )));
     }
     Ok(MAX_DESTINATIONS_PER_CHANNEL + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL)
-}
-
-/// The iceoryx2 sizing a channel data service is opened with — the fixed
-/// parameters iceoryx2 verifies on every reopen of the same service name.
-///
-/// Both the compiler op (which creates the service with a publisher) and the
-/// phase-3.5 `tap` op (which reopens it publisher-free to add a reserved-slot
-/// subscriber) derive this through [`resolve_channel_sizing`], so their
-/// `open_or_create_service` calls agree.
-pub(crate) struct ChannelSizing {
-    /// The fixed destination slot count plus the reserved tap slot.
-    pub(crate) max_subscribers: usize,
-    /// The deepest ring any subscriber on the channel may take.
-    pub(crate) channel_service_creation_depth: usize,
 }
 
 /// Derive the [`ChannelSizing`] for the channel keyed on `(source_proc_id,
@@ -538,13 +509,22 @@ fn delivery_resolution_of_input_port(
     dest_proc_id: &ProcessorUniqueId,
     dest_port: &str,
 ) -> Result<DeliveryResolution> {
-    let dest_type = graph
+    let dest_type = processor_class_import_path_of(graph, dest_proc_id)?;
+    Ok(delivery_profile_for_input_port(&dest_type, dest_port)?.resolve())
+}
+
+/// The class a processor in the graph was added as, refused by name when the
+/// graph has no such processor.
+fn processor_class_import_path_of(
+    graph: &mut Graph,
+    proc_id: &ProcessorUniqueId,
+) -> Result<ProcessorClassImportPath> {
+    graph
         .traversal_mut()
-        .v(dest_proc_id)
+        .v(proc_id)
         .first()
         .map(|node| node.processor_type().clone())
-        .ok_or_else(|| Error::ProcessorNotFound(format!("Processor '{dest_proc_id}' not found")))?;
-    Ok(delivery_profile_for_input_port(&dest_type, dest_port)?.resolve())
+        .ok_or_else(|| Error::ProcessorNotFound(format!("Processor '{proc_id}' not found")))
 }
 
 /// The window declaration this destination's input port carries, if it carries
@@ -557,12 +537,7 @@ fn audio_windowing_declared_by_input_port_of(
     dest_proc_id: &ProcessorUniqueId,
     dest_port: &str,
 ) -> Result<Option<AudioWindowDeclarationOfAnInputPort>> {
-    let Some(dest_type) = graph
-        .traversal_mut()
-        .v(dest_proc_id)
-        .first()
-        .map(|node| node.processor_type().clone())
-    else {
+    let Ok(dest_type) = processor_class_import_path_of(graph, dest_proc_id) else {
         return Ok(None);
     };
     audio_windowing_declared_by_input_port(&dest_type, dest_port)
@@ -901,8 +876,7 @@ fn wire_subprocess_source(
     notify_service_name: &str,
     expected_payload: usize,
     channel_ceiling_bytes: usize,
-    channel_service_creation_depth: usize,
-    max_subscribers: usize,
+    channel_sizing: ChannelSizing,
     notify_max_notifiers: usize,
     link_id: &LinkUniqueId,
 ) -> Result<()> {
@@ -917,8 +891,8 @@ fn wire_subprocess_source(
         "dest_notify_service_name": notify_service_name,
         "expected_payload_bytes": expected_payload,
         "max_payload_bytes_per_channel": channel_ceiling_bytes,
-        "channel_service_creation_depth": channel_service_creation_depth,
-        "max_subscribers": max_subscribers,
+        "channel_service_creation_depth": channel_sizing.channel_service_creation_depth,
+        "max_subscribers": channel_sizing.max_subscribers,
         "notify_max_notifiers": notify_max_notifiers,
     });
 
@@ -951,8 +925,7 @@ fn wire_subprocess_dest(
     channel_service_name: &str,
     notify_service_name: &str,
     dest_input_port_delivery: DeliveryResolution,
-    channel_service_creation_depth: usize,
-    max_subscribers: usize,
+    channel_sizing: ChannelSizing,
     notify_max_notifiers: usize,
     link_id: &LinkUniqueId,
     audio_windowing: Option<AudioWindowDeclarationOfAnInputPort>,
@@ -971,9 +944,9 @@ fn wire_subprocess_dest(
         "channel_service_name": channel_service_name,
         "notify_service_name": notify_service_name,
         "read_mode": dest_input_port_delivery.drain_order.as_manifest_str(),
-        "channel_service_creation_depth": channel_service_creation_depth,
+        "channel_service_creation_depth": channel_sizing.channel_service_creation_depth,
         "input_port_ring_depth": dest_input_port_delivery.depth,
-        "max_subscribers": max_subscribers,
+        "max_subscribers": channel_sizing.max_subscribers,
         "notify_max_notifiers": notify_max_notifiers,
     });
     // The window contract rides the envelope beside `read_mode`, or the child's
@@ -995,14 +968,7 @@ fn wire_subprocess_dest(
                 })?;
         }
         Some(AudioWindowDeclarationOfAnInputPort::MatchesItsProcessorsDeviceStream) => {
-            let dest_type = graph
-                .traversal_mut()
-                .v(dest_proc_id)
-                .first()
-                .map(|node| node.processor_type().clone())
-                .ok_or_else(|| {
-                    Error::ProcessorNotFound(format!("Processor '{dest_proc_id}' not found"))
-                })?;
+            let dest_type = processor_class_import_path_of(graph, dest_proc_id)?;
             return Err(refuse_an_unsettled_match_device_sentinel(
                 &dest_type, dest_port,
             ));
@@ -1027,7 +993,7 @@ mod tests {
     use crate::core::execution::ExecutionConfig;
     use crate::core::graph::{InputLinkPortRef, OutputLinkPortRef};
     use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
-    use crate::core::processors::{DynGeneratedProcessor, PROCESSOR_REGISTRY, ProcessorSpec};
+    use crate::core::processors::{DynGeneratedProcessor, ProcessorSpec};
     use crate::core::{ProcessorDescriptor, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 
     /// One reclaim the engine asked an out-of-process endpoint for. Named
@@ -1186,8 +1152,7 @@ mod tests {
             "pdef/notify",
             4096,
             1 << 20,
-            channel_service_creation_depth(),
-            2,
+            sizing_of_a_two_subscriber_test_channel(),
             1,
             link_id,
         )
@@ -1199,8 +1164,7 @@ mod tests {
             "pabc/out1",
             "pdef/notify",
             DeliveryProfile::Newest.resolve(),
-            channel_service_creation_depth(),
-            2,
+            sizing_of_a_two_subscriber_test_channel(),
             1,
             link_id,
             None,
@@ -1550,8 +1514,7 @@ mod tests {
             "pabc/out1",
             "pdef/notify",
             DeliveryProfile::Newest.resolve(),
-            channel_service_creation_depth(),
-            2,
+            sizing_of_a_two_subscriber_test_channel(),
             1,
             &link_id,
             None,
@@ -1602,6 +1565,14 @@ mod tests {
         let input_inner = instance.iceoryx2_input_mailboxes_inner();
         let instance = attach_processor_instance(graph, proc_id, instance);
         (instance, output_inner, input_inner)
+    }
+
+    /// Sizing for a test channel with room for one destination and the tap.
+    fn sizing_of_a_two_subscriber_test_channel() -> ChannelSizing {
+        ChannelSizing {
+            max_subscribers: 2,
+            channel_service_creation_depth: channel_service_creation_depth(),
+        }
     }
 
     /// A service name no concurrent test — or an earlier run that recycled this
@@ -1951,6 +1922,26 @@ mod tests {
             .clone()
     }
 
+    /// A graph holding one link, wired by the op, from `out1` to `in1` of two
+    /// processors that are both helper stubs, so the engine opens no port of
+    /// its own on it. Hands back the source's id and the link.
+    fn graph_with_one_wired_link_between_two_helper_stubs() -> (Graph, String, LinkUniqueId) {
+        let mut graph = Graph::new();
+        let source_id = add_mock_output_only(&mut graph);
+        let dest_id = add_mock_input_only(&mut graph);
+        for helper_id in [&source_id, &dest_id] {
+            attach_processor_instance(
+                &mut graph,
+                helper_id,
+                ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
+            );
+        }
+        let link_id = add_link_from_out1_to_in1(&mut graph, &source_id, &dest_id);
+        open_iceoryx2_service(&mut graph, &link_id, &Iceoryx2Node::for_this_test_process())
+            .expect("the helper-to-helper link wires");
+        (graph, source_id, link_id)
+    }
+
     /// The depth the live channel `source_id`'s `out1` publishes to was created
     /// at, as a helper opening its own end would find it.
     fn creation_depth_a_helper_opening_out1_finds(source_id: &str) -> usize {
@@ -2033,7 +2024,7 @@ mod tests {
         assert_eq!(
             graph
                 .traversal_mut()
-                .v(&ProcessorUniqueId::from(newest_consumer_id.as_str()))
+                .v(ProcessorUniqueId::from(newest_consumer_id.as_str()))
                 .first()
                 .expect("the newest consumer is in the graph")
                 .serialize_components()["metrics"]["dropped_bags_by_link"][newest_link.as_str()],
@@ -2087,21 +2078,8 @@ mod tests {
     /// is gone when the op returns, so the helper creates it at four.
     #[test]
     fn a_helper_opening_first_joins_the_channel_the_engine_created_between_two_helpers() {
-        let node = Iceoryx2Node::for_this_test_process();
-        let mut graph = Graph::new();
-        let source_id = add_mock_output_only(&mut graph);
-        let dest_id = add_mock_input_only(&mut graph);
-        for helper_id in [&source_id, &dest_id] {
-            attach_processor_instance(
-                &mut graph,
-                helper_id,
-                ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
-            );
-        }
-        let link_id = add_link_from_out1_to_in1(&mut graph, &source_id, &dest_id);
-
-        open_iceoryx2_service(&mut graph, &link_id, &node)
-            .expect("the helper-to-helper link wires");
+        let (_graph_holding_the_link, source_id, _) =
+            graph_with_one_wired_link_between_two_helper_stubs();
 
         assert_eq!(
             creation_depth_a_helper_opening_out1_finds(&source_id),
@@ -2116,20 +2094,7 @@ mod tests {
     /// reopen below still finds the old service's depth.
     #[test]
     fn a_disconnected_link_releases_the_services_it_held() {
-        let node = Iceoryx2Node::for_this_test_process();
-        let mut graph = Graph::new();
-        let source_id = add_mock_output_only(&mut graph);
-        let dest_id = add_mock_input_only(&mut graph);
-        for helper_id in [&source_id, &dest_id] {
-            attach_processor_instance(
-                &mut graph,
-                helper_id,
-                ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
-            );
-        }
-        let link_id = add_link_from_out1_to_in1(&mut graph, &source_id, &dest_id);
-        open_iceoryx2_service(&mut graph, &link_id, &node)
-            .expect("the helper-to-helper link wires");
+        let (mut graph, source_id, link_id) = graph_with_one_wired_link_between_two_helper_stubs();
 
         close_iceoryx2_service(&mut graph, &link_id).expect("the disconnect must succeed");
 
@@ -2359,8 +2324,7 @@ mod tests {
             "pabc/out1",
             "pdef/notify",
             DeliveryProfile::Ordered.resolve(),
-            channel_service_creation_depth(),
-            2,
+            sizing_of_a_two_subscriber_test_channel(),
             1,
             &"L-helper-windowed".into(),
             Some(AudioWindowDeclarationOfAnInputPort::MatchesItsProcessorsDeviceStream),
@@ -2408,8 +2372,7 @@ mod tests {
             "pabc/out1",
             "pdef/notify",
             DeliveryProfile::Ordered.resolve(),
-            channel_service_creation_depth(),
-            2,
+            sizing_of_a_two_subscriber_test_channel(),
             1,
             &"L-helper-settled".into(),
             Some(AudioWindowDeclarationOfAnInputPort::StatedOutright(settled)),

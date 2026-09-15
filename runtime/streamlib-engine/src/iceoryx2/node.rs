@@ -132,6 +132,16 @@ pub(crate) fn create_iceoryx2_node_in_domain(
         })
 }
 
+/// The sizing a channel data service is created with, and that every opener
+/// reopens it at — the parameters iceoryx2 verifies on each open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ChannelSizing {
+    /// The fixed destination slot count plus the reserved tap slot.
+    pub(crate) max_subscribers: usize,
+    /// The deepest ring any subscriber on the channel may take.
+    pub(crate) channel_service_creation_depth: usize,
+}
+
 /// Thread-safe wrapper for iceoryx2 Node.
 ///
 /// The Node is created once per runtime and shared across all processors.
@@ -323,7 +333,7 @@ impl Iceoryx2Service {
     /// A channel data service is opened with
     /// `max_subscribers = MAX_DESTINATIONS_PER_CHANNEL + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL`.
     /// Destination subscribers take their slots as links are wired; the reserved
-    /// slot is what a tap consumes here, with a ring as deep as the service's.
+    /// slot is what a tap consumes here, with a ring `tap_ring_depth` deep.
     /// iceoryx2 fixes `max_subscribers` at create time, so a tap arriving when
     /// every slot is taken trips
     /// [`iceoryx2::port::subscriber::SubscriberCreateError::ExceedsMaxSupportedSubscribers`]
@@ -332,6 +342,7 @@ impl Iceoryx2Service {
     /// subscribe failure.
     pub fn create_tap_subscriber(
         &self,
+        tap_ring_depth: usize,
     ) -> std::result::Result<
         iceoryx2::port::subscriber::Subscriber<ipc::Service, [u8], ()>,
         ChannelTapSubscribeError,
@@ -339,7 +350,7 @@ impl Iceoryx2Service {
         use iceoryx2::port::subscriber::SubscriberCreateError;
         self.inner
             .subscriber_builder()
-            .buffer_size(self.channel_service_creation_depth())
+            .buffer_size(tap_ring_depth)
             .create()
             .map_err(|e| match e {
                 SubscriberCreateError::ExceedsMaxSupportedSubscribers => {
@@ -433,10 +444,9 @@ mod tests {
     }
 
     /// The destination-keyed notify service honors the requested `max_notifiers`
-    /// (its compile-time fan-in) — exactly that many notifiers can be created and
-    /// the (fan-in+1)th must fail. Every source publishing into one of the
-    /// destination's channels holds one notifier here, so the cap must equal the
-    /// inbound-link count the compiler passes.
+    /// — exactly that many notifiers can be created and one more must fail.
+    /// Every source publishing into one of the destination's channels holds one
+    /// notifier here, so the cap is the most inbound links a destination holds.
     #[test]
     fn notify_service_honors_requested_max_notifiers() {
         let fanin = 3usize;
@@ -518,8 +528,8 @@ mod tests {
     /// admits a notifier from every one of those links' nodes, and refuses one
     /// more.
     ///
-    /// Fail-without-fix: leave `max_nodes` at iceoryx2's default of 20 and the
-    /// twentieth notifier's node cannot open the service.
+    /// Fail-without-fix: leave `max_nodes` at iceoryx2's event default of 36 and
+    /// the thirty-sixth notifier's node cannot open the service.
     #[test]
     fn a_notify_service_admits_every_inbound_link_from_their_own_nodes_and_no_more() {
         use streamlib_ipc_types::MAX_INBOUND_LINKS_PER_DESTINATION;
