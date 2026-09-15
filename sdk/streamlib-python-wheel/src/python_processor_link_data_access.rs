@@ -24,8 +24,7 @@ use streamlib::sdk::descriptors::AudioWindowContractDeclaredValues;
 use streamlib::sdk::error::Error;
 use streamlib::sdk::iceoryx2::{
     ChannelEgressConfig, ChannelTrustTier, ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, Iceoryx2Node,
-    InboundLinkName, InputMailboxesInner, OutputWriterInner, ReadMode,
-    ResolvedAudioWindowContract,
+    InboundLinkName, InputMailboxesInner, OutputWriterInner, ReadMode, ResolvedAudioWindowContract,
 };
 
 use crate::python_bag_conversion::{

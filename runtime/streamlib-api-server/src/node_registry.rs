@@ -56,7 +56,7 @@ impl NodeRegistryEntry {
 /// variant carries the offending path and the underlying cause.
 #[derive(Debug, thiserror::Error)]
 pub enum NodeRegistryError {
-    /// Creating the registry directory (`.../streamlib/nodes`) failed.
+    /// Creating the registry directory (`<runtime directory>/nodes`) failed.
     #[error("failed to create node registry directory {path}: {source}")]
     RegistryDirCreate {
         path: PathBuf,
@@ -178,7 +178,9 @@ pub fn read_entry(
 /// listing. A missing registry directory yields an empty list. Only a failure
 /// to read the directory itself is a hard error.
 #[tracing::instrument]
-pub fn scan_entries(registry_directory: &Path) -> Result<Vec<NodeRegistryEntry>, NodeRegistryError> {
+pub fn scan_entries(
+    registry_directory: &Path,
+) -> Result<Vec<NodeRegistryEntry>, NodeRegistryError> {
     let dir = registry_directory.to_path_buf();
     let read_dir = match std::fs::read_dir(&dir) {
         Ok(read_dir) => read_dir,
@@ -337,10 +339,17 @@ mod tests {
     #[test]
     fn read_entry_returns_none_for_a_missing_runtime_and_the_entry_when_present() {
         with_isolated_registry_directory(|registry_directory| {
-            assert!(read_entry(registry_directory, "Rnobody").expect("read missing").is_none());
+            assert!(
+                read_entry(registry_directory, "Rnobody")
+                    .expect("read missing")
+                    .is_none()
+            );
             let entry = sample_entry("Rnode-delta", 6001);
             write_entry(registry_directory, &entry).expect("write");
-            assert_eq!(read_entry(registry_directory, &entry.runtime_id).expect("read"), Some(entry));
+            assert_eq!(
+                read_entry(registry_directory, &entry.runtime_id).expect("read"),
+                Some(entry)
+            );
         });
     }
 
@@ -388,7 +397,11 @@ mod tests {
     #[test]
     fn scan_on_a_missing_registry_directory_is_empty_not_an_error() {
         with_isolated_registry_directory(|registry_directory| {
-            assert!(scan_entries(registry_directory).expect("scan of absent dir").is_empty());
+            assert!(
+                scan_entries(registry_directory)
+                    .expect("scan of absent dir")
+                    .is_empty()
+            );
         });
     }
 

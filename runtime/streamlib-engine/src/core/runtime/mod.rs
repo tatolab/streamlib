@@ -27,7 +27,7 @@ pub use runtime_shutdown_request::{
 };
 pub use runtime_unique_id::RuntimeUniqueId;
 pub use status::RuntimeStatus;
-pub(crate) use streamlib_runtime_directory::current_process_uid;
 pub use streamlib_runtime_directory::StreamlibRuntimeDirectory;
+pub(crate) use streamlib_runtime_directory::current_process_uid;
 pub use surface_image_exchange::ExchangedPublishedSurfaceFramePngImage;
 pub use tap::TapSubscription;

@@ -239,8 +239,11 @@ mod tests {
     fn a_fallback_that_is_a_symlink_is_refused_by_name() {
         let shared_temporary_directory = tempfile::tempdir().unwrap();
         let somewhere_else = tempfile::tempdir().unwrap();
-        std::fs::set_permissions(somewhere_else.path(), std::fs::Permissions::from_mode(0o700))
-            .unwrap();
+        std::fs::set_permissions(
+            somewhere_else.path(),
+            std::fs::Permissions::from_mode(0o700),
+        )
+        .unwrap();
         let fallback = fallback_path_for(shared_temporary_directory.path());
         std::os::unix::fs::symlink(somewhere_else.path(), &fallback).unwrap();
 
@@ -250,7 +253,10 @@ mod tests {
             current_process_uid(),
         ));
 
-        assert!(refusal.contains(&fallback.display().to_string()), "{refusal}");
+        assert!(
+            refusal.contains(&fallback.display().to_string()),
+            "{refusal}"
+        );
         assert!(refusal.contains("symlink"), "{refusal}");
     }
 
@@ -273,7 +279,10 @@ mod tests {
             another_uid,
         ));
 
-        assert!(refusal.contains(&fallback.display().to_string()), "{refusal}");
+        assert!(
+            refusal.contains(&fallback.display().to_string()),
+            "{refusal}"
+        );
         assert!(
             refusal.contains(&format!("owned by uid {this_uid}, not uid {another_uid}")),
             "{refusal}"
@@ -302,7 +311,10 @@ mod tests {
             current_process_uid(),
         ));
 
-        assert!(refusal.contains(&fallback.display().to_string()), "{refusal}");
+        assert!(
+            refusal.contains(&fallback.display().to_string()),
+            "{refusal}"
+        );
         assert!(refusal.contains(&format!("mode is {mode:o}")), "{refusal}");
     }
 

@@ -122,8 +122,9 @@ mod tests {
 
     #[test]
     fn a_raw_node_builder_in_library_code_is_refused() {
-        let violations =
-            violations_in("fn open() {\n    let node = NodeBuilder::new().create::<ipc::Service>();\n}\n");
+        let violations = violations_in(
+            "fn open() {\n    let node = NodeBuilder::new().create::<ipc::Service>();\n}\n",
+        );
 
         assert_eq!(violations.len(), 1, "{violations:?}");
         assert_eq!(violations[0].line_no, 2);
@@ -169,7 +170,11 @@ mod tests {
         std::fs::write(&allowed, "NodeBuilder::new()\n").unwrap();
         let bench = tmp.path().join("runtime/streamlib-engine/benches/hop.rs");
         std::fs::create_dir_all(bench.parent().unwrap()).unwrap();
-        std::fs::write(&bench, "let node = NodeBuilder::new().create::<ipc::Service>();\n").unwrap();
+        std::fs::write(
+            &bench,
+            "let node = NodeBuilder::new().create::<ipc::Service>();\n",
+        )
+        .unwrap();
         std::process::Command::new("git")
             .arg("init")
             .arg("-q")

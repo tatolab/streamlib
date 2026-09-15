@@ -1080,7 +1080,10 @@ mod tests {
         let hijacked_root = working_directory.path().join("hijacked");
         std::fs::create_dir(working_directory.path().join("config")).unwrap();
         std::fs::write(
-            working_directory.path().join("config").join("iceoryx2.toml"),
+            working_directory
+                .path()
+                .join("config")
+                .join("iceoryx2.toml"),
             format!(
                 "[global]\nroot-path = \"{}\"\nprefix = \"hijack_\"\n",
                 hijacked_root.display()

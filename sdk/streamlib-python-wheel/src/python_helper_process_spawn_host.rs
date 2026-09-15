@@ -191,7 +191,10 @@ impl PythonHelperProcessSpawnHostProcessor {
             )
             .env("STREAMLIB_PROCESSOR_ID", &self.processor_id)
             .env("STREAMLIB_RUNTIME_ID", runtime_id)
-            .env(ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, iceoryx2_domain_root)
+            .env(
+                ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE,
+                iceoryx2_domain_root,
+            )
             .env(
                 PROTOCOL_VERSION_ENV,
                 STREAMLIB_SUBPROCESS_PROTOCOL_VERSION.to_string(),
@@ -861,7 +864,11 @@ mod tests {
     /// module — never a fork, and never some other Python found on `PATH`.
     #[test]
     fn the_child_is_the_apps_own_interpreter_running_the_helper_module() {
-        let command = spawn_host_for_test(None).build_helper_process_command("Rtest", Path::new("/tmp/streamlib-1000/iox2"), None);
+        let command = spawn_host_for_test(None).build_helper_process_command(
+            "Rtest",
+            Path::new("/tmp/streamlib-1000/iox2"),
+            None,
+        );
         assert_eq!(command.get_program(), OsStr::new("/venv/bin/python"));
         let arguments: Vec<_> = command.get_args().collect();
         assert_eq!(arguments, ["-m", "streamlib._helper"]);
@@ -872,7 +879,11 @@ mod tests {
     /// `rt.add` derived and refused an unimportable class by.
     #[test]
     fn the_child_is_told_which_class_to_import_and_who_it_is() {
-        let command = spawn_host_for_test(None).build_helper_process_command("Rtest", Path::new("/tmp/streamlib-1000/iox2"), None);
+        let command = spawn_host_for_test(None).build_helper_process_command(
+            "Rtest",
+            Path::new("/tmp/streamlib-1000/iox2"),
+            None,
+        );
         let environment = environment_of(&command);
         assert_eq!(
             value_of(&environment, "STREAMLIB_ENTRYPOINT"),
@@ -926,7 +937,11 @@ mod tests {
     /// it would only send the child looking for the wrong standard library.
     #[test]
     fn an_inherited_python_home_is_not_passed_to_the_child() {
-        let command = spawn_host_for_test(None).build_helper_process_command("Rtest", Path::new("/tmp/streamlib-1000/iox2"), None);
+        let command = spawn_host_for_test(None).build_helper_process_command(
+            "Rtest",
+            Path::new("/tmp/streamlib-1000/iox2"),
+            None,
+        );
         let cleared: Vec<_> = command
             .get_envs()
             .filter(|(name, value)| *name == OsStr::new("PYTHONHOME") && value.is_none())
