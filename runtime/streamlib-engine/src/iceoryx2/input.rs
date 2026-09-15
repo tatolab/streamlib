@@ -7,7 +7,7 @@
 //!
 //! - [`InputMailboxesInner`] holds the actual state — the
 //!   `HashMap<port, PortConfig>` of per-port mailboxes plus the
-//!   thread-local `Subscriber` and `Listener` wrappers. All
+//!   channel subscribers and listener behind their own lock. All
 //!   per-frame `receive_pending` + mailbox push/pop work runs here.
 //! - [`InputMailboxes`] is the public handle that processor structs
 //!   hold via the macro-emitted `inputs: InputMailboxes` field. It
@@ -20,7 +20,6 @@
 //! `drain_listener`, etc.) operates on `Arc<InputMailboxesInner>`
 //! directly via the methods declared on the inner type.
 
-use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::Arc;
@@ -101,66 +100,42 @@ struct PortBoundSubscriber {
     dropped_bag_counter: InboundLinkDroppedBagCounter,
 }
 
-/// A destination's channel subscribers, wired by one thread and read by another.
-///
-/// # Safety
-/// `Subscriber` is not `Send`, and nothing here locks. Every access must be
-/// serialized by the owner: in the engine, the compiler thread (wiring and
-/// unwiring) and the execution thread (reads) both hold the owning
-/// `ProcessorInstance` mutex; in a helper process, wiring and reads both run on
-/// the helper's main thread. [`SendableListener`] relies on the same rule.
-struct SendableChannelSubscribers(UnsafeCell<Vec<PortBoundSubscriber>>);
+/// A destination's channel subscribers and its notify-service [`Listener`],
+/// wired and unwired by one thread and read by any other.
+#[derive(Default)]
+struct InboundLinkSubscribersAndListener {
+    subscribers: Vec<PortBoundSubscriber>,
+    listener: Option<Listener<ipc::Service>>,
+}
 
-// SAFETY: access is serialized by the owner; see the type's `# Safety`.
-unsafe impl Send for SendableChannelSubscribers {}
-unsafe impl Sync for SendableChannelSubscribers {}
+// SAFETY: `Subscriber` and `Listener` are `!Send` only because `ipc::Service`
+// sets `ArcThreadSafetyPolicy` to `SingleThreaded`, which in iceoryx2 0.9.3 is a
+// bare `Rc` with no thread-affine state; `ipc_threadsafe::Service` differs in
+// that one type, putting the same state behind a mutex. The `Rc` is cloned only
+// into the `Sample`s `receive` returns, and everything a port shares with other
+// ports, its service or its node is an `Arc` or lock-free shared memory. So
+// moving the ports between threads is sound while every port access, and every
+// sample from creation to drop, stays inside
+// [`InputMailboxesInner::inbound_link_subscribers_and_listener`]'s guard.
+// `receive` also pops a single-consumer queue that forbids concurrent callers.
+// Re-check this against the source on any iceoryx2 upgrade.
+unsafe impl Send for InboundLinkSubscribersAndListener {}
 
-impl SendableChannelSubscribers {
-    fn new() -> Self {
-        Self(UnsafeCell::new(Vec::new()))
-    }
-
-    fn push(
-        &self,
-        link_id: String,
-        local_port: String,
-        inbound_link_name: InboundLinkName,
-        subscriber: Subscriber<ipc::Service, [u8], ()>,
-        dropped_bag_counter: InboundLinkDroppedBagCounter,
-    ) {
-        // SAFETY: access is serialized by the owner; see the type's `# Safety`.
-        unsafe {
-            (*self.0.get()).push(PortBoundSubscriber {
-                link_id,
-                local_port,
-                inbound_link_name,
-                subscriber,
-                dropped_bag_counter,
-            });
-        }
-    }
-
+impl InboundLinkSubscribersAndListener {
     /// Remove the subscriber serving `link_id`, returning the local input port it
     /// was bound to (so the caller can decide whether that port's mailbox is now
     /// orphaned). `None` if no subscriber matches — a no-op.
-    fn remove_by_link(&self, link_id: &str) -> Option<String> {
-        // SAFETY: access is serialized by the owner; see the type's `# Safety`.
-        unsafe {
-            let subscribers = &mut *self.0.get();
-            let position = subscribers.iter().position(|b| b.link_id == link_id)?;
-            Some(subscribers.remove(position).local_port)
-        }
+    fn remove_by_link(&mut self, link_id: &str) -> Option<String> {
+        let position = self
+            .subscribers
+            .iter()
+            .position(|bound| bound.link_id == link_id)?;
+        Some(self.subscribers.remove(position).local_port)
     }
 
     /// Whether any remaining subscriber is still bound to `local_port`.
-    fn port_still_bound(&self, local_port: &str) -> bool {
-        // SAFETY: access is serialized by the owner; see the type's `# Safety`.
-        unsafe { (*self.0.get()).iter().any(|b| b.local_port == local_port) }
-    }
-
-    fn as_slice(&self) -> &[PortBoundSubscriber] {
-        // SAFETY: access is serialized by the owner; see the type's `# Safety`.
-        unsafe { &*self.0.get() }
+    fn local_port_still_bound(&self, local_port: &str) -> bool {
+        self.bound_to_local_port(local_port).next().is_some()
     }
 
     /// The bindings feeding one local input port, in wiring order — a
@@ -169,53 +144,9 @@ impl SendableChannelSubscribers {
         &'a self,
         local_port: &'a str,
     ) -> impl Iterator<Item = &'a PortBoundSubscriber> {
-        self.as_slice()
+        self.subscribers
             .iter()
             .filter(move |bound| bound.local_port == local_port)
-    }
-
-    fn is_empty(&self) -> bool {
-        // SAFETY: access is serialized by the owner; see the type's `# Safety`.
-        unsafe { (*self.0.get()).is_empty() }
-    }
-}
-
-/// A destination's notify-service [`Listener`], installed and cleared by wiring
-/// and drained by the execution thread.
-///
-/// # Safety
-/// Same owner-serialized access as [`SendableChannelSubscribers`].
-struct SendableListener(UnsafeCell<Option<Listener<ipc::Service>>>);
-
-// SAFETY: access is serialized by the owner; see [`SendableChannelSubscribers`].
-unsafe impl Send for SendableListener {}
-unsafe impl Sync for SendableListener {}
-
-impl SendableListener {
-    fn new() -> Self {
-        Self(UnsafeCell::new(None))
-    }
-
-    fn set(&self, listener: Listener<ipc::Service>) {
-        // SAFETY: access is serialized by the owner; see [`SendableChannelSubscribers`].
-        unsafe {
-            *self.0.get() = Some(listener);
-        }
-    }
-
-    fn get(&self) -> Option<&Listener<ipc::Service>> {
-        // SAFETY: access is serialized by the owner; see [`SendableChannelSubscribers`].
-        unsafe { (*self.0.get()).as_ref() }
-    }
-
-    /// Drop the listener, releasing the destination-keyed notify service's
-    /// listener slot. Called when a destination's last inbound link disconnects
-    /// so a reconnect recreates the notify service fresh.
-    fn clear(&self) {
-        // SAFETY: access is serialized by the owner; see [`SendableChannelSubscribers`].
-        unsafe {
-            *self.0.get() = None;
-        }
     }
 }
 
@@ -444,16 +375,26 @@ fn notice_that_a_bag_was_lost_at_a_port_whose_match_device_contract_is_unsettled
 }
 
 /// Host-side inner state for input mailboxes. Owns the per-port
-/// mailbox map plus the per-thread subscriber + listener. All
+/// mailbox map plus the channel subscribers and listener. All
 /// per-frame `receive_pending` + queue-pop work runs here.
 ///
 /// Held via `Arc<InputMailboxesInner>`; the [`InputMailboxes`] handle
 /// stores a separate `Arc::into_raw`-encoded strong reference to the
 /// same inner.
+///
+/// Wiring against wiring is serialized by its caller — the compiler under
+/// the processor mutex, a helper one wiring command at a time — because a
+/// check-then-install pair such as `has_listener` then `set_listener` is not
+/// atomic. Reads need no such caller.
 pub struct InputMailboxesInner {
+    /// Taken by every access to a subscriber or the listener, from whichever
+    /// thread: wiring and unwiring, a processor reading on its own thread, a
+    /// helper reading with no GIL attached.
+    ///
+    /// Lock order: this, then `ports` or the dropped-bag counts, then a
+    /// windowed port's stage. Never take an earlier one while holding a later.
+    inbound_link_subscribers_and_listener: parking_lot::Mutex<InboundLinkSubscribersAndListener>,
     ports: parking_lot::Mutex<HashMap<String, PortConfig>>,
-    subscribers: SendableChannelSubscribers,
-    listener: SendableListener,
     /// Counts every listener installed, so a runner can tell a listener
     /// created after its last link went away from the one it registered.
     listener_generation: std::sync::atomic::AtomicU64,
@@ -465,9 +406,8 @@ impl InputMailboxesInner {
     /// Create a new empty inner.
     pub fn new() -> Self {
         Self {
+            inbound_link_subscribers_and_listener: parking_lot::Mutex::default(),
             ports: parking_lot::Mutex::new(HashMap::new()),
-            subscribers: SendableChannelSubscribers::new(),
-            listener: SendableListener::new(),
             listener_generation: std::sync::atomic::AtomicU64::new(0),
             dropped_bag_counts: Arc::new(DroppedBagCountsByInboundLink::default()),
             device_matched_audio_window_contracts: Arc::new(
@@ -681,7 +621,11 @@ impl InputMailboxesInner {
 
     /// Whether any channel subscriber has been configured yet.
     pub fn has_subscribers(&self) -> bool {
-        !self.subscribers.is_empty()
+        !self
+            .inbound_link_subscribers_and_listener
+            .lock()
+            .subscribers
+            .is_empty()
     }
 
     /// Bind an iceoryx2 channel Subscriber to the local input port it feeds.
@@ -690,9 +634,6 @@ impl InputMailboxesInner {
     /// channels holds N subscribers. The receive path routes every frame a
     /// subscriber delivers into `local_port`'s mailbox (binding-based routing;
     /// see [`PortBoundSubscriber`]).
-    ///
-    /// Callers must hold the owning processor instance, or in a helper process
-    /// be on its main thread.
     pub fn add_channel_subscriber(
         &self,
         local_port: &str,
@@ -700,13 +641,17 @@ impl InputMailboxesInner {
         inbound_link_name: &InboundLinkName,
         subscriber: Subscriber<ipc::Service, [u8], ()>,
     ) {
-        self.subscribers.push(
-            link_id.to_string(),
-            local_port.to_string(),
-            inbound_link_name.clone(),
-            subscriber,
-            self.dropped_bag_counts.counter_for_inbound_link(link_id),
-        );
+        let dropped_bag_counter = self.dropped_bag_counts.counter_for_inbound_link(link_id);
+        self.inbound_link_subscribers_and_listener
+            .lock()
+            .subscribers
+            .push(PortBoundSubscriber {
+                link_id: link_id.to_string(),
+                local_port: local_port.to_string(),
+                inbound_link_name: inbound_link_name.clone(),
+                subscriber,
+                dropped_bag_counter,
+            });
     }
 
     /// Every inbound link feeding `port`, in wiring order.
@@ -716,11 +661,9 @@ impl InputMailboxesInner {
     /// here learns how many producers it owes before the first bag arrives. A
     /// port with no links lists none rather than refusing — an unconnected
     /// input is a legal graph, not an error.
-    ///
-    /// Callers must hold the owning processor instance, or in a helper process
-    /// be on its main thread.
     pub fn inbound_link_names(&self, port: &str) -> Vec<InboundLinkName> {
-        self.subscribers
+        self.inbound_link_subscribers_and_listener
+            .lock()
             .bound_to_local_port(port)
             .map(|bound| bound.inbound_link_name.clone())
             .collect()
@@ -733,7 +676,8 @@ impl InputMailboxesInner {
     /// port takes exactly one link (a second is refused at wire time), so the
     /// port itself answers.
     fn the_single_inbound_link_name_of(&self, port: &str) -> Option<InboundLinkName> {
-        let mut feeding = self.subscribers.bound_to_local_port(port);
+        let subscribers_and_listener = self.inbound_link_subscribers_and_listener.lock();
+        let mut feeding = subscribers_and_listener.bound_to_local_port(port);
         let only = feeding.next()?;
         feeding
             .next()
@@ -756,33 +700,32 @@ impl InputMailboxesInner {
     /// none at all the shared listener is dropped — releasing the destination-keyed
     /// notify service so a reconnect recreates fresh-sized, refcounted ports rather
     /// than colliding with the stale service (`DoesNotSupportRequestedMinBufferSize`).
-    ///
-    /// Callers must hold the owning processor instance, or in a helper process
-    /// be on its main thread.
     pub fn remove_channel_link(&self, link_id: &str) {
-        let Some(local_port) = self.subscribers.remove_by_link(link_id) else {
+        let mut subscribers_and_listener = self.inbound_link_subscribers_and_listener.lock();
+        let Some(local_port) = subscribers_and_listener.remove_by_link(link_id) else {
             return;
         };
         self.dropped_bag_counts.forget_inbound_link(link_id);
-        if !self.subscribers.port_still_bound(&local_port) {
+        if !subscribers_and_listener.local_port_still_bound(&local_port) {
             self.ports.lock().remove(&local_port);
         }
-        if self.subscribers.is_empty() {
-            self.listener.clear();
+        if subscribers_and_listener.subscribers.is_empty() {
+            subscribers_and_listener.listener = None;
         }
     }
 
     /// Check if a listener has already been configured.
     pub fn has_listener(&self) -> bool {
-        self.listener.get().is_some()
+        self.inbound_link_subscribers_and_listener
+            .lock()
+            .listener
+            .is_some()
     }
 
     /// Set the iceoryx2 Listener for fd-multiplexed wakeups.
-    ///
-    /// Callers must hold the owning processor instance, or in a helper process
-    /// be on its main thread.
     pub fn set_listener(&self, listener: Listener<ipc::Service>) {
-        self.listener.set(listener);
+        let mut subscribers_and_listener = self.inbound_link_subscribers_and_listener.lock();
+        subscribers_and_listener.listener = Some(listener);
         self.listener_generation
             .fetch_add(1, std::sync::atomic::Ordering::Release);
     }
@@ -806,8 +749,10 @@ impl InputMailboxesInner {
         // the value across the Listener's lifetime would dangle. We return the
         // raw int and document that callers must drop usage before the Listener
         // is dropped, mirroring the FileDescriptor lifetime contract.
-        self.listener
-            .get()
+        self.inbound_link_subscribers_and_listener
+            .lock()
+            .listener
+            .as_ref()
             .map(|l| unsafe { l.file_descriptor().native_handle() })
     }
 
@@ -817,13 +762,13 @@ impl InputMailboxesInner {
     /// Call this after `epoll_wait` reports the fd readable, before the next
     /// `epoll_wait`, otherwise the wait returns immediately on the same event.
     pub fn drain_listener(&self) {
-        if let Some(listener) = self.listener.get() {
-            if let Err(e) = listener.try_wait_all(|_event_id| {}) {
-                tracing::trace!(
-                    "InputMailboxes: drain_listener try_wait_all failed: {:?}",
-                    e
-                );
-            }
+        if let Some(listener) = &self.inbound_link_subscribers_and_listener.lock().listener
+            && let Err(e) = listener.try_wait_all(|_event_id| {})
+        {
+            tracing::trace!(
+                "InputMailboxes: drain_listener try_wait_all failed: {:?}",
+                e
+            );
         }
     }
 
@@ -832,11 +777,9 @@ impl InputMailboxesInner {
     ///
     /// This is called automatically by `read()` and `has_data()`, but can be
     /// called explicitly if needed.
-    ///
-    /// Callers must hold the owning processor instance, or in a helper process
-    /// be on its main thread.
     pub fn receive_pending(&self) {
-        for bound in self.subscribers.as_slice() {
+        let subscribers_and_listener = self.inbound_link_subscribers_and_listener.lock();
+        for bound in &subscribers_and_listener.subscribers {
             loop {
                 match bound.subscriber.receive() {
                     Ok(Some(sample)) => {
@@ -1001,7 +944,8 @@ impl InputMailboxesInner {
         stage: &SharedAudioWindowStage,
     ) -> Result<Option<BagBodyForTheReader>> {
         loop {
-            if let Some(window) = stage.lock().next_ready_window()? {
+            let ready_window = stage.lock().next_ready_window()?;
+            if let Some(window) = ready_window {
                 return Ok(Some(BagBodyForTheReader {
                     inbound_link_name: self.the_single_inbound_link_name_of(port),
                     ..window
@@ -1227,10 +1171,13 @@ pub struct InputMailboxes {
     pub(crate) handle: *const c_void,
 }
 
-// SAFETY: `handle` points at an `Arc<InputMailboxesInner>` whose
-// interior is Send+Sync (the inner uses parking_lot::Mutex for
-// `ports` and the SendableChannelSubscribers/SendableListener wrappers
-// declare Send+Sync above).
+const _: () = {
+    const fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<InputMailboxesInner>();
+};
+
+// SAFETY: `handle` points at an `Arc<InputMailboxesInner>`, and the assertion
+// above holds the compiler to that inner being `Send + Sync`.
 unsafe impl Send for InputMailboxes {}
 unsafe impl Sync for InputMailboxes {}
 
@@ -3316,5 +3263,144 @@ mod tests {
         assert_eq!(Arc::strong_count(&inner_for_test), 2);
         drop(mb1);
         assert_eq!(Arc::strong_count(&inner_for_test), 1);
+    }
+
+    /// A live connect and disconnect racing a read on the same destination, the
+    /// shape of `DisplayWindow` reading on its own thread, or of a helper's
+    /// reads detached from the GIL, while `connect` / `disconnect` re-splice it.
+    ///
+    /// Nothing outside the mailboxes serializes the two threads here, as
+    /// nothing does in either of those processors. Without a lock of the
+    /// mailboxes' own, the subscriber list reallocates under an iterating
+    /// receive and iceoryx2's single-consumer queue gets two callers: memory is
+    /// corrupted and the test binary aborts, usually well inside the window.
+    /// The two racers end together, past the window only until both floors are
+    /// met, so a starved runner races longer and a dead racer fails the test.
+    #[test]
+    fn a_link_wired_and_unwired_in_a_loop_never_races_a_read_that_holds_no_processor_mutex() {
+        const RACE_WINDOW: std::time::Duration = std::time::Duration::from_secs(3);
+        const RACE_HARD_CAP: std::time::Duration = std::time::Duration::from_secs(30);
+        const WIRE_AND_UNWIRE_CYCLES_FLOOR: u64 = 100;
+        const READ_PASSES_FLOOR: u64 = 100;
+        const MAX_SUBSCRIBERS: usize = 2;
+        const MAX_QUEUED_MESSAGES: usize = 16;
+        const MAX_NOTIFIERS: usize = 1;
+        const EXPECTED_PAYLOAD_BYTES: usize = 64;
+        const RACERS: usize = 2;
+
+        /// Counts a racer out when it ends, by returning or by panicking, so the
+        /// publisher it feeds never outlives it.
+        struct RacerStillRunning<'a>(&'a std::sync::atomic::AtomicUsize);
+        impl Drop for RacerStillRunning<'_> {
+            fn drop(&mut self) {
+                self.0.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+
+        let node = crate::iceoryx2::Iceoryx2Node::for_this_test_process();
+        let channel_service_name = unique_suffix("live-rewire-race/channel");
+        let notify_service_name = unique_suffix("live-rewire-race/notify");
+        let inbound_link_name = InboundLinkName::from(channel_service_name.as_str());
+        let open_the_rewired_channel = || {
+            node.open_or_create_service(&channel_service_name, MAX_SUBSCRIBERS, MAX_QUEUED_MESSAGES)
+                .unwrap()
+        };
+        let mailboxes = InputMailboxesInner::new();
+        let racers_still_running = std::sync::atomic::AtomicUsize::new(RACERS);
+        let wiring_floor_met = std::sync::atomic::AtomicBool::new(false);
+        let reading_floor_met = std::sync::atomic::AtomicBool::new(false);
+        let race_started = std::time::Instant::now();
+        let still_racing = || {
+            let elapsed = race_started.elapsed();
+            let both_floors_met = wiring_floor_met.load(std::sync::atomic::Ordering::Relaxed)
+                && reading_floor_met.load(std::sync::atomic::Ordering::Relaxed);
+            elapsed < RACE_HARD_CAP
+                && racers_still_running.load(std::sync::atomic::Ordering::Relaxed) == RACERS
+                && (elapsed < RACE_WINDOW || !both_floors_met)
+        };
+
+        let (wire_and_unwire_cycles, read_passes, frames_read) = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let publisher = open_the_rewired_channel()
+                    .create_publisher(EXPECTED_PAYLOAD_BYTES)
+                    .unwrap();
+                while racers_still_running.load(std::sync::atomic::Ordering::Relaxed) > 0
+                    && race_started.elapsed() < RACE_HARD_CAP
+                {
+                    publish_one_frame(&publisher, "out", b"a-bag-published-mid-rewire");
+                }
+            });
+
+            let wiring = scope.spawn(|| {
+                let _still_running = RacerStillRunning(&racers_still_running);
+                let mut wire_and_unwire_cycles = 0u64;
+                while still_racing() {
+                    if !mailboxes.has_port("in") {
+                        mailboxes.add_port("in", MAX_QUEUED_MESSAGES, ReadMode::ReadNextInOrder);
+                    }
+                    mailboxes.add_channel_subscriber(
+                        "in",
+                        "L-rewired",
+                        &inbound_link_name,
+                        open_the_rewired_channel().create_subscriber().unwrap(),
+                    );
+                    if !mailboxes.has_listener() {
+                        mailboxes.set_listener(
+                            node.open_or_create_notify_service(&notify_service_name, MAX_NOTIFIERS)
+                                .unwrap()
+                                .create_listener()
+                                .unwrap(),
+                        );
+                    }
+                    mailboxes.remove_channel_link("L-rewired");
+                    wire_and_unwire_cycles += 1;
+                    if wire_and_unwire_cycles >= WIRE_AND_UNWIRE_CYCLES_FLOOR {
+                        wiring_floor_met.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+                wire_and_unwire_cycles
+            });
+
+            let reading = scope.spawn(|| {
+                let _still_running = RacerStillRunning(&racers_still_running);
+                let mut read_passes = 0u64;
+                let mut frames_read = 0u64;
+                while still_racing() {
+                    mailboxes.drain_listener();
+                    let _ = mailboxes.listener_fd();
+                    let _ = mailboxes.inbound_link_names("in");
+                    if mailboxes.has_data("in") {
+                        while let Ok(Some(_)) = mailboxes.read_raw("in") {
+                            frames_read += 1;
+                        }
+                    }
+                    let _ = mailboxes.any_port_has_data();
+                    read_passes += 1;
+                    if read_passes >= READ_PASSES_FLOOR && frames_read > 0 {
+                        reading_floor_met.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+                (read_passes, frames_read)
+            });
+
+            let wire_and_unwire_cycles = wiring.join().unwrap();
+            let (read_passes, frames_read) = reading.join().unwrap();
+            (wire_and_unwire_cycles, read_passes, frames_read)
+        });
+
+        assert!(
+            wire_and_unwire_cycles >= WIRE_AND_UNWIRE_CYCLES_FLOOR,
+            "the wiring thread must re-splice the link many times before the hard cap, \
+             got {wire_and_unwire_cycles}"
+        );
+        assert!(
+            read_passes >= READ_PASSES_FLOOR,
+            "the reading thread must read many times before the hard cap, got {read_passes}"
+        );
+        assert!(
+            frames_read > 0,
+            "reads must have interleaved with a wired link, but none returned a bag \
+             across {read_passes} passes and {wire_and_unwire_cycles} re-splices"
+        );
     }
 }
