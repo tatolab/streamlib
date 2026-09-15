@@ -228,6 +228,10 @@ jobs:
           # resolve its policy, and the rotated-segment name the wheel's
           # `streamlib logs` parses back out — tempdir-only, no GPU, no env
           # beyond the logging knobs themselves.
+          # The runtime directory's resolver arms and refusals, and the
+          # engine-owned iceoryx2 domain: the socket-path budget, a working
+          # directory's `iceoryx2.toml` ignored, and two roots as two domains.
+          # The runner arm starts a runtime with `XDG_RUNTIME_DIR` unset.
           cargo test --locked -p streamlib-engine --lib -- \
             core::processor_owned_window \
             processor_owned_window_ops \
@@ -274,6 +278,12 @@ jobs:
             core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_helper_placed_destinations_node_carries_no_metrics_rather_than_a_zero \
             core::runtime::tap::tests::stalled_downstream_never_blocks_the_drain_and_detach_returns_promptly \
             iceoryx2::node::tests::overflow_enabled_publisher_does_not_block_on_full_buffer \
+            core::runtime::streamlib_runtime_directory \
+            iceoryx2::node::tests::a_domain_root_past_the_socket_path_budget_is_refused_by_name \
+            iceoryx2::node::tests::an_iceoryx2_toml_in_the_working_directory_has_no_effect_on_a_node \
+            iceoryx2::node::tests::two_domain_roots_are_disjoint_domains \
+            iceoryx2::node::tests::the_test_process_domain_root_carries_this_process_id_inside_the_runtime_directory \
+            core::runtime::runtime::tests::runtime_internal_surface_share::a_runtime_started_with_xdg_runtime_dir_unset_keeps_its_socket_and_domain_in_the_per_user_fallback \
             iceoryx2::channel_sizing_tests::every_channel_service_opens_under_safe_overflow \
             iceoryx2::delivery_profile::tests::newest_resolves_to_skip_drop_shallow \
             iceoryx2::delivery_profile::tests::ordered_resolves_to_fifo_drop_deep \

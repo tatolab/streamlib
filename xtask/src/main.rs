@@ -11,6 +11,7 @@ pub mod check_boundaries;
 pub mod check_bounded_apt_install;
 pub mod check_clock_usage;
 pub mod check_device_wait_idle;
+pub mod check_iceoryx2_node_construction;
 pub mod check_no_escalate_in_lifecycle;
 pub mod check_no_in_process_placement;
 pub mod check_no_inventory_submit;
@@ -118,7 +119,7 @@ pub fn ensure_source_walking_gate_read_source(
 /// Every source-walking gate, paired with the subcommand name that runs it alone.
 ///
 /// Each gate reads the tree and reports; none builds the workspace. That is what
-/// lets one process run all eleven in well under a second, and why CI runs them as
+/// lets one process run all twelve in well under a second, and why CI runs them as
 /// a single job rather than one runner per gate.
 const ALL_SOURCE_WALKING_GATES: &[(&str, fn(&Path) -> Result<()>)] = &[
     ("lint-logging", lint_logging::run),
@@ -134,6 +135,10 @@ const ALL_SOURCE_WALKING_GATES: &[(&str, fn(&Path) -> Result<()>)] = &[
         check_no_escalate_in_lifecycle::run,
     ),
     ("check-device-wait-idle", check_device_wait_idle::run),
+    (
+        "check-iceoryx2-node-construction",
+        check_iceoryx2_node_construction::run,
+    ),
     (
         "check-no-unbounded-cstr-from-ptr",
         check_no_unbounded_cstr_from_ptr::run,
@@ -369,6 +374,12 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_helper_placed_destinations_node_carries_no_metrics_rather_than_a_zero",
                 "core::runtime::tap::tests::stalled_downstream_never_blocks_the_drain_and_detach_returns_promptly",
                 "iceoryx2::node::tests::overflow_enabled_publisher_does_not_block_on_full_buffer",
+                "core::runtime::streamlib_runtime_directory",
+                "iceoryx2::node::tests::a_domain_root_past_the_socket_path_budget_is_refused_by_name",
+                "iceoryx2::node::tests::an_iceoryx2_toml_in_the_working_directory_has_no_effect_on_a_node",
+                "iceoryx2::node::tests::two_domain_roots_are_disjoint_domains",
+                "iceoryx2::node::tests::the_test_process_domain_root_carries_this_process_id_inside_the_runtime_directory",
+                "core::runtime::runtime::tests::runtime_internal_surface_share::a_runtime_started_with_xdg_runtime_dir_unset_keeps_its_socket_and_domain_in_the_per_user_fallback",
                 "iceoryx2::channel_sizing_tests::every_channel_service_opens_under_safe_overflow",
                 "iceoryx2::delivery_profile::tests::newest_resolves_to_skip_drop_shallow",
                 "iceoryx2::delivery_profile::tests::ordered_resolves_to_fifo_drop_deep",
@@ -731,6 +742,12 @@ enum Commands {
     /// reports `UNASSIGNED-Threading-Info`).
     CheckDeviceWaitIdle,
 
+    /// CI gate for the engine-owned iceoryx2 domain. Fails on any
+    /// `NodeBuilder::new()` or `Config::global_config()` under `runtime/`,
+    /// `sdk/` or `adapters/` outside `iceoryx2/node.rs` — tests and benches
+    /// included, since a node in another domain hangs a test silently.
+    CheckIceoryx2NodeConstruction,
+
     /// CI gate for the borrow-checked-C-string rule in the Vulkan RHI. Fails
     /// on any `CStr::from_ptr(<owner>.as_ptr())` under
     /// `runtime/streamlib-engine/src/vulkan/` or
@@ -858,6 +875,9 @@ fn main() -> Result<()> {
             check_no_escalate_in_lifecycle::run(&workspace_root()?)?
         }
         Commands::CheckDeviceWaitIdle => check_device_wait_idle::run(&workspace_root()?)?,
+        Commands::CheckIceoryx2NodeConstruction => {
+            check_iceoryx2_node_construction::run(&workspace_root()?)?
+        }
         Commands::CheckNoUnboundedCstrFromPtr => {
             check_no_unbounded_cstr_from_ptr::run(&workspace_root()?)?
         }
