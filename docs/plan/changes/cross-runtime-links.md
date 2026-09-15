@@ -220,8 +220,9 @@ and cannot map a remote monotonic stamp onto ours; the OPEN's PTP/NTP direction 
 ## MODIFIED: §Networking `:2458-2462` — how hop loss is read
 
 1. **The number is `loss-visibility`'s**, carried end to end. Egress copies each sample's user-header
-   sequence number into a fixed little-endian attachment `{sequence_number u64, publisher_generation u64,
-   clock_identity [u8; 16]}`, layout-tested. It bumps the generation when the sample's `origin()` changes.
+   sequence number into a fixed little-endian attachment `{timestamp_ns i64, sequence_number u64,
+   publisher_generation u64, clock_identity [u8; 16]}`, layout-tested; `timestamp_ns` is the frame header's
+   stamp. It bumps the generation when the sample's `origin()` changes.
 2. **Ingress counts the gap** after its ring. A gap covers the egress ring's overwrites, refused copies,
    Zenoh's silent drops, the network and the ingress ring — everything between the producer's send and
    the local write. A new generation is a baseline, never a gap.
@@ -255,7 +256,8 @@ and cannot map a remote monotonic stamp onto ours; the OPEN's PTP/NTP direction 
 
 ## Expected slices
 
-`/derive-tickets` decides the breakdown. The shape the recon supports:
+Ticketed 2026-09-14 in milestone #33: X1 split for context size into #2292 (pull, bags), #2287 (Python,
+MCP, helper destinations) and #2288 (hop loss); X2 is #2289, X3 #2290, X4 #2291. The shape the recon supported:
 
 | # | Slice | Blocked by | Proof |
 |---|---|---|---|
