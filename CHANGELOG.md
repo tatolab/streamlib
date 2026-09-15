@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.10](https://github.com/tatolab/streamlib/compare/v0.22.9...v0.22.10) (2026-09-15)
+
+
+### Features
+
+* **engine:** size every channel for a late consumer of any delivery profile and raise the link caps to 32 + tap and 256 ([#2301](https://github.com/tatolab/streamlib/issues/2301)) ([bf2b1e0](https://github.com/tatolab/streamlib/commit/bf2b1e018412eccdfea312c5be2be10645b4eb94))
+
 ## [0.22.9](https://github.com/tatolab/streamlib/compare/v0.22.8...v0.22.9) (2026-09-15)
 
 
