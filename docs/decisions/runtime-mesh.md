@@ -50,13 +50,15 @@ Recorded with the `runtime-mesh` proposal. It reads `zenoh` 1.10.1 and the rig p
   so a control plane hosted after construction appears in it.
 - **A verbatim `@runtime` chunk.** No `**` subscription over port addresses ever matches it, and
   a display name may not begin with `@`, so no address can collide with it.
-- **TCP and UDP, default features off.** Realtime media needs UDP (owner, 2026-09-14): a `udp/`
-  link is best-effort, so a lost packet costs that message rather than stalling the ones behind
-  it, and `?rel=1` gives a reliable link over unencrypted QUIC with nothing to provision. UDP
-  brings CDLA-Permissive-2.0 `webpki-roots`, a permissive data licence with no conflict for
-  commercial distribution, accepted into `deny.toml`. TLS `quic/` waits for the security
-  milestone because it needs a provisioned key and certificate. Zenoh is elected under
-  Apache-2.0.
+- **QUIC over UDP, default features off.** Realtime media needs UDP (owner, 2026-09-14). The
+  `cross-runtime-links` recon then found that with `transport_multilink` off two peers keep one
+  link, chosen at random when both TCP and UDP listen, and that plain `udp/` carries declarations
+  and liveliness tokens with no retransmission. So the mesh listens on `udp/…?rel=1` only — QUIC,
+  unencrypted, self-signed, nothing to provision, one stream per priority — and `transport_tcp`
+  stays for a network that blocks UDP, pinned by endpoint (owner, 2026-09-14). UDP brings
+  CDLA-Permissive-2.0 `webpki-roots`, a permissive data licence with no conflict for commercial
+  distribution, accepted into `deny.toml`. TLS `quic/` waits for the security milestone because it
+  needs a provisioned key and certificate. Zenoh is elected under Apache-2.0.
 - **The duplicate check needs the mesh before the runtime exists.** The session therefore opens
   in `Runner::new()`, beside the runtime-id socket refusal, which needs no GPU.
   - Cost: `Runtime()` takes Zenoh's 500 ms scouting delay while multicast discovery is on.
@@ -131,6 +133,12 @@ engine at `d4ce808f6`.
   machine's monotonic clock has its own boot epoch, and the hybrid logical clock is wall time
   plus a counter, not a media clock. Until a common network time is negotiated, the only safe
   rule is never to compare stamps from two clocks.
+  - Rechecked 2026-09-14 at the owner's request: Zenoh's timestamp is a uHLC whose physical
+    part is `SystemTime::now()` (`uhlc-0.8.2/src/lib.rs:330-338`), tagged with the session id
+    (`zenoh/src/net/runtime/mod.rs:286`), off for peers by default (`DEFAULT_CONFIG.json5:215`).
+    It refuses a stamp too far ahead and adjusts no clock, so it orders events between hosts
+    that already share NTP time. The `cross-runtime-links` change carries a clock identity per
+    inbound link instead, and records the relay gap as known.
 - **Blocking a sender under network congestion.** It breaks "no link ever blocks a producer",
   and Zenoh closes a peer's transport after a stalled blocking send.
 - **An off switch.** A dial the zero-ceremony bar does not want. Isolation already has three

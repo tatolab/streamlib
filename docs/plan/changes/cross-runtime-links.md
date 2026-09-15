@@ -85,25 +85,21 @@ Paths are under `runtime/streamlib-engine/src/` unless rooted.
 
 ---
 
-## [NEEDS DECISION] Which network connection carries runtime-to-runtime traffic
+## DECIDED (owner, 2026-09-14) — the mesh rides QUIC over UDP
 
-The session `runtime-mesh` ticketed as #2283 listens on TCP and plain UDP (`runtime-mesh.md:146`). Two
-peers keep one link, chosen at random. When plain UDP wins, link requests and discovery tokens can
-vanish unseen. Sending media on UDP and control on TCP needs features that plan rules out.
-
-1. **QUIC over UDP only (recommended).** Listen on `udp/[::]:0?rel=1`. Each priority gets its own stream,
-   so a raw frame never delays audio or a link request. Congestion control is built in and nothing is
-   provisioned; the payload is unencrypted, like the rest before the security pass. A loss inside one
-   stream costs a retransmit, bounded by the sender's drop. `mesh_listen_endpoints` still takes `tcp/`
-   for networks that block UDP, and explicit peers name `udp/<host>:<port>?rel=1`.
-2. **TCP for control, QUIC for media.** Adds `transport_multilink` and `max_links = 2`, priority ranges
-   per endpoint: two sockets per peer pair for little over option 1.
-3. **TCP for control, plain UDP for media.** Adds `unstable` and multilink. It gives media with no
-   retransmit, but plain UDP lost most raw frames even on loopback, the socket buffer needs a sysctl
-   Zenoh cannot set, and `unstable` APIs may change in a patch release.
-
-TCP alone is not offered (owner, 2026-09-14). Whichever is chosen, `runtime-mesh.md:146` and `:269-274`
-and #2283 are updated to match in this PR.
+The session `runtime-mesh` ticketed as #2283 listened on TCP and plain UDP (`runtime-mesh.md:146`). With
+`transport_multilink` off two peers keep one link, chosen at random, and plain UDP carries link requests
+and discovery tokens with no retransmission. So a runtime listens on `udp/[::]:0?rel=1` only: QUIC over
+UDP, one stream per priority, so a raw frame never delays audio or a link request; congestion-controlled;
+unencrypted and self-signed, like everything before the security pass. A loss inside one stream costs a
+retransmit, bounded by the sender's drop. `mesh_listen_endpoints` and `mesh_peer_endpoints` still take
+`tcp/` for a network that blocks UDP, and then everything rides that one TCP link; a plain best-effort
+`udp/` endpoint is refused by name, naming `?rel=1`, since it would carry the control traffic unreliably.
+Rejected: TCP for control plus QUIC for media — `transport_multilink`, `max_links = 2` and priority
+ranges per endpoint, two sockets per peer pair for little over one QUIC link; and TCP plus plain UDP,
+which needs Zenoh's `unstable` feature, lost most raw frames even on loopback, and needs a socket-buffer
+sysctl Zenoh cannot set. TCP alone was never offered. `runtime-mesh.md:120-122`, `:146-147`, `:269-271`,
+`:315` and #2283 are updated in this PR.
 
 ## ADDED: §Networking — how a remote link is spelled
 
@@ -191,26 +187,27 @@ and #2283 are updated to match in this PR.
 
 ## MODIFIED: §Networking `:2454-2457` — how a stamp's clock is carried
 
-Both options share this. A **clock identity** is the kernel boot id on Linux
-(`/proc/sys/kernel/random/boot_id`) and `kern.bootsessionuuid` on macOS, so two runtimes on one machine,
-or a container and its host, share one. It rides each mesh message's attachment. The frame header does
-not change, and the docstrings that call a stamp comparable "across every process" say "on one machine".
+A **clock identity** is the kernel boot id on Linux (`/proc/sys/kernel/random/boot_id`) and
+`kern.bootsessionuuid` on macOS, so two runtimes on one machine, or a container and its host, share
+one. It rides each mesh message's attachment. The frame header does not change, and the docstrings that
+call a stamp comparable "across every process" say "on one machine".
 
-**[NEEDS DECISION] Where a stamp's clock identity lives once the bag has crossed.** The engine's own
-`Mp4Sink` compares first stamps across tracks, so a remote track beside a local one writes a wrong
-file. A peer that reboots and returns on the same link does the same. Relays restate an upstream
-stamp on local links, which is what separates the options.
-
-- **(A) On every bag.** The identity sits in the iceoryx2 user header beside `loss-visibility`'s
-  sequence number. A read hands back a stamp together with its clock; the timestamped write takes that
-  pair; every built-in relay passes it on. Relays are covered. The cost: every read and write signature
-  with a stamp changes in Rust and Python, and each sample grows by 16 bytes.
-- **(B) On the inbound link (recommended).** A remote link carries its peer's identity. `graph` renders
-  it on the link, and the link-naming read surface gains `inbound_link_stamp_clock_identity(port, link)` in
-  Rust and Python. A peer returning with a new identity re-wires as a new wiring. `Mp4Sink` stops a track
-  whose link's clock differs from the recording's first track, or changes mid-recording, by name —
-  its existing per-track latch (`:1928-1938`). The stated residual: a stamp restated by a relay reads
-  as local, so mixing machines downstream of a relay goes uncaught until the common-clock OPEN closes.
+**DECIDED (owner, 2026-09-14) — the inbound link carries the clock identity; the relay gap is recorded
+as known.** A remote link carries its peer's identity: `graph` renders it on the link, and the
+link-naming read surface gains `inbound_link_stamp_clock_identity(port, link)` in Rust and Python. A peer
+returning with a new identity re-wires as a new wiring. `Mp4Sink` compares first stamps across tracks
+(`mp4_fragmented_file_writer.rs:731-735`), so it stops a track whose link's clock differs from the
+recording's first track, or changes mid-recording, by name — its existing per-track latch
+(`:1928-1938`). **Known gap:** a relay — `h264_decoder.rs:79-82`, `opus_encoder.rs:59-68`, any Python
+`write(..., timestamp_ns=)` — restates an upstream stamp on a local link, where it reads as local, so
+mixing machines downstream of a relay goes uncaught until the common-clock OPEN `:2466` closes.
+Rejected: the identity on every bag, in the user header beside `loss-visibility`'s sequence number,
+which covers relays but changes every timestamped read and write signature in both languages.
+**Zenoh's own timestamps were rechecked** at the owner's request: they are a hybrid logical clock —
+`SystemTime::now()` wall time plus a counter and the session id (`uhlc-0.8.2/src/lib.rs:330-338`,
+`zenoh/src/net/runtime/mod.rs:286`) — off for peers by default (`DEFAULT_CONFIG.json5:215`), refusing a
+stamp too far ahead and adjusting no clock. They order events between hosts that already share NTP time
+and cannot map a remote monotonic stamp onto ours; the OPEN's PTP/NTP direction stands.
 
 ## MODIFIED: §Networking `:2458-2462` — how hop loss is read
 
@@ -254,10 +251,10 @@ stamp on local links, which is what separates the options.
 
 | # | Slice | Blocked by | Proof |
 |---|---|---|---|
-| X1 | Pull: `MeshPortAddress`, Python and MCP remote source, offered-port query, reader and egress tokens, ingress, egress without surfaces, states and reasons, version and duplicate-name errors, attachment, hop count, inbound link name incl. helper envelope, `graph` link shape, tap by address | #2283, #2263, #2265, #2268, #2272, #2273, the transport decision | CI two-process components over loopback: bags byte-equal and stamps equal; dropping every k-th put counts exactly k's; SIGKILL of the source returns `awaiting_remote` and a restart re-wires from zero; no key without a reader; attachment golden bytes. Rig: two `streamlib run` apps, the known audio signal across, `tap_audio_channel.py --expect-frame-not-restamped` |
+| X1 | Pull: `MeshPortAddress`, Python and MCP remote source, offered-port query, reader and egress tokens, ingress, egress without surfaces, states and reasons, version and duplicate-name errors, attachment, hop count, inbound link name incl. helper envelope, `graph` link shape, tap by address | #2283, #2263, #2265, #2268, #2272, #2273 | CI two-process components over loopback: bags byte-equal and stamps equal; dropping every k-th put counts exactly k's; SIGKILL of the source returns `awaiting_remote` and a restart re-wires from zero; no key without a reader; attachment golden bytes. Rig: two `streamlib run` apps, the known audio signal across, `tap_audio_channel.py --expect-frame-not-restamped` |
 | X2 | Requests: push and third party, `link_requests_awaiting_runtime`, disconnect over the mesh, `created_by_runtime_name`, MCP `to_*` | X1 | CI: a request's reply and refusal by name, a silent input runtime, an absent one whose request sends on appearance. Rig: a third app wires the other two over MCP |
 | X3 | Surfaces: staging's pooled source, egress copy, ingress mint, refusals counted | X1 | Rig: an RGBA source across, both ends exchanged, byte-exact, the ids differing; an NV12 and a retired id counted |
-| X4 | Clock identity, per the decision, and `Mp4Sink`'s refusal | X1 | CI: boot id read on both platforms, cross-compiled; a track from another clock stops by name while the rest record |
+| X4 | Clock identity on the link, its read and `graph` rendering, `Mp4Sink`'s refusal | X1 | CI: boot id read on both platforms, cross-compiled; a track from another clock stops by name while the rest record |
 
 Every new engine test is named in `.github/workflows/test.yml`'s slice and the `run_local_ci_gates`
 mirror (`xtask/src/main.rs:204`), or it runs nowhere, and a two-process test must be reachable from that slice.

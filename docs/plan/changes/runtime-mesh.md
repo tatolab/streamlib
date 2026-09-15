@@ -117,8 +117,8 @@ get it too.
 `--mesh-listen` (both repeatable) and `--no-mesh-multicast-discovery`, and pass them to `Runtime()`.
 `--name` goes.
 
-**Values.** An endpoint is a Zenoh locator, `tcp/<host>:<port>`, and a router is named the way a
-peer is. A malformed value — an endpoint on a transport the build lacks, such as `quic/`, included —
+**Values.** An endpoint is a Zenoh locator, `udp/<host>:<port>?rel=1` or `tcp/<host>:<port>`, and a
+router is named the way a peer is. A malformed value — a transport the build lacks (`quic/`), or plain `udp/` —
 is refused at construction by name, the caller's wiring error as a wrong `device_id` is. An
 unreachable endpoint never fails the runtime.
 
@@ -143,8 +143,8 @@ streamlib-specific file an app would author, which the zero-ceremony bar (`:33-4
      measure and lower it. `dev`'s warm restart pays it.
 2. **The session is built from defaults, never from a Zenoh config file or `ZENOH_*` variable.**
    - Peer mode.
-   - Listeners on `tcp/[::]:0` and best-effort `udp/[::]:0`, unless `mesh_listen_endpoints` names others.
-     Which traffic rides which link (Zenoh picks per message by `?rel=`/`?prio=`) is `cross-runtime-links`'s.
+   - One listener, `udp/[::]:0?rel=1` — QUIC over UDP, a stream per priority — unless `mesh_listen_endpoints`
+     names others; two peers keep one link (owner, 2026-09-14, in `cross-runtime-links`). Plain `udp/` is refused.
    - Multicast scouting on its default group.
    - No `namespace`: the mesh name is a key prefix the engine writes itself (`:2419`).
    This is the M1 domain precedent applied to a second transport.
@@ -266,9 +266,9 @@ the fix. The refusal applies in Rust, in `rt.add`, and in MCP `add_processor`.
 - **Which crates.** `zenoh = { version = "1.10.1", default-features = false, features =
   ["transport_tcp", "transport_udp"] }` on `streamlib-engine`, the only crate naming it; no
   `zenoh-ext` (its defaults turn every transport back on), no `unstable`, no `shared-memory`.
-  - UDP because realtime media needs it (owner, 2026-09-14): `udp/` is best-effort by default, and
-    `?rel=1` runs unencrypted QUIC on a self-signed key Zenoh makes itself, with nothing to provision
-    (`zenoh-link-udp/src/reliability.rs`, `zenoh-link-commons/src/quic/plaintext.rs`).
+  - UDP because realtime media needs it (owner, 2026-09-14), as `?rel=1` QUIC: unencrypted, on a self-signed
+    key Zenoh makes itself, nothing to provision, one stream per priority; it ships inside `transport_udp`
+    (`zenoh-link-udp/src/reliability.rs`, `zenoh-link-commons/src/quic/plaintext.rs:39-47`).
   - `transport_quic` (TLS) waits for the security milestone, since it needs a provisioned key and
     certificate (`zenoh-link-commons/src/quic/utils.rs:92-110`). CDLA-Permissive-2.0 joins `deny.toml`
     for `webpki-roots` (owner, 2026-09-14); `about.toml`'s comment on it is corrected in the same PR.
@@ -312,7 +312,7 @@ the fix. The refusal applies in Rust, in `rt.add`, and in MCP `add_processor`.
 | # | Slice | Blocked by | Proof |
 |---|---|---|---|
 | N1 | The five configuration values across constructor, environment and CLI; runtime-name and mesh-name grammar and default; display-name refusal in all three doors; `runtime_name` on the registry entry, the `nodes` column and `--node`; `node_name`, `--name`, `ApiServerConfig.name` and the generator deleted | — | CI: the default comes from hostname, app directory name and the path hash in all three resolution arms — two directories sharing a final component get different defaults, one directory gets the same default twice; a keyword beats the environment, which beats the default; each forbidden character is refused by name in a runtime name, a mesh name and a display name through `rt.add` and MCP; a `quic/` endpoint is refused by name; the `nodes` table test shows the name, and `--node <runtime name>` resolves |
-| N2 | `zenoh` (TCP and UDP); session in `Runner::new()`; token and description queryable; peer table; duplicate refusal with same-host takeover; local-only; close at `stop()`; `graph` `mesh` key; test defaults; notices and portability | N1 | CI, GPU-free, two OS processes, multicast pinned to `127.0.0.1` with a per-test mesh name: each lists the other in `graph.mesh.peers` within a bound, and arms with explicit `tcp/127.0.0.1` and `udp/127.0.0.1` peers and discovery off do the same. A second process of the same name is refused naming the host; after a SIGKILL of the first the name is free at once. A peer that closes leaves `graph`; one whose description has not answered renders its name alone and still deserializes. An IPv6 control-plane address renders bracketed. Two mesh names see nothing of each other. A taken listen endpoint gives `local_only` with its reason and a constructed runtime. Portability and notices gates are green. Rig: two `streamlib run` apps list each other, and SIGTERM exits both cleanly |
+| N2 | `zenoh` (TCP and UDP); session in `Runner::new()`; token and description queryable; peer table; duplicate refusal with same-host takeover; local-only; close at `stop()`; `graph` `mesh` key; test defaults; notices and portability | N1 | CI, GPU-free, two OS processes, multicast pinned to `127.0.0.1` with a per-test mesh name: each lists the other in `graph.mesh.peers` within a bound, and arms with explicit `udp/127.0.0.1?rel=1` and `tcp/127.0.0.1` peers and discovery off do the same. A second process of the same name is refused naming the host; after a SIGKILL of the first the name is free at once. A peer that closes leaves `graph`; one whose description has not answered renders its name alone and still deserializes. An IPv6 control-plane address renders bracketed. Two mesh names see nothing of each other. A taken listen endpoint gives `local_only` with its reason and a constructed runtime. Portability and notices gates are green. Rig: two `streamlib run` apps list each other, and SIGTERM exits both cleanly |
 | N3 | `streamlib nodes` mesh-peers table through the observe-only session | N2 | CI (GPU-free pytest): a `Runtime()` in a subprocess under a test mesh appears in `nodes --mesh-name <test mesh>` and is not repeated when it is also a registry row; with no peers the table says so |
 
 Every new engine test is named in `.github/workflows/test.yml`'s slice and the
