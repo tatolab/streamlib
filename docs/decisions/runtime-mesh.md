@@ -40,6 +40,27 @@ processor is unchanged either way.
 - **Visibility.** `graph` and `streamlib nodes` show mesh peers. A runtime without a control
   plane still carries links.
 
+## How the announcement is built
+
+Recorded with the `runtime-mesh` proposal. It reads `zenoh` 1.10.1 and the rig probes.
+
+- **Token plus queryable.** A liveliness token carries no payload. So the token key holds only
+  what a runtime that has already died must still answer, its host identity and pid, and a
+  queryable beside it describes the live runtime. The description is answered at query time,
+  so a control plane hosted after construction appears in it.
+- **A verbatim `@runtime` chunk.** No `**` subscription over port addresses ever matches it, and
+  a display name may not begin with `@`, so no address can collide with it.
+- **TCP only, default features off.** `transport_udp` pulls in the QUIC datagram link and a
+  CDLA-Permissive-2.0 licence `deny.toml` refuses, and discovery needs neither. Zenoh is
+  elected under Apache-2.0.
+- **The duplicate check needs the mesh before the runtime exists.** The session therefore opens
+  in `Runner::new()`, beside the runtime-id socket refusal, which needs no GPU.
+  - Cost: `Runtime()` takes Zenoh's 500 ms scouting delay while multicast discovery is on.
+  - A same-host exception needs the pid in the key: a killed runtime's token is gone within
+    milliseconds because the kernel closes TCP, but a restart can race that.
+- **Tests run with discovery off.** Otherwise parallel test runtimes on one machine would find
+  each other under one default name and refuse.
+
 ## Rejected alternatives
 
 - **A gateway processor, or a built-in pair.** A processor has to be wired into a graph, so
@@ -73,6 +94,12 @@ processor is unchanged either way.
   and Zenoh closes a peer's transport after a stalled blocking send.
 - **An off switch.** A dial the zero-ceremony bar does not want. Isolation already has three
   levers: a mesh name, explicit peers, and discovery turned off.
+- **Encoding a runtime's description into its token key.** A control-plane URL holds `/`, and it
+  appears only once a control plane is hosted, after the token is declared.
+- **Zenoh's `AdvancedPublisher` cache or `zenoh-ext` group membership for the description.** Both
+  are `unstable`, and `zenoh-ext`'s default features turn every transport back on.
+- **Zenoh's `namespace` config as the mesh name.** It prefixes keys but separates nothing
+  further, and its tests are unstable-only, so the engine writes the prefix itself.
 
 ## Consequences
 
