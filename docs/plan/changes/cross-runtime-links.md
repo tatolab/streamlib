@@ -91,7 +91,8 @@ The session `runtime-mesh` ticketed as #2283 listened on TCP and plain UDP (`run
 `transport_multilink` off two peers keep one link, chosen at random, and plain UDP carries link requests
 and discovery tokens with no retransmission. So a runtime listens on `udp/[::]:0?rel=1` only: QUIC over
 UDP, one stream per priority, so a raw frame never delays audio or a link request; congestion-controlled;
-unencrypted and self-signed, like everything before the security pass. A loss inside one stream costs a
+unencrypted and self-signed, so remote links, like the rest of the mesh, belong on isolated or trusted
+networks until the security pass (`:2438-2440`). A loss inside one stream costs a
 retransmit, bounded by the sender's drop. `mesh_listen_endpoints` and `mesh_peer_endpoints` still take
 `tcp/` for a network that blocks UDP, and then everything rides that one TCP link; a plain best-effort
 `udp/` endpoint is refused by name, naming `?rel=1`, since it would carry the control traffic unreliably.
@@ -114,8 +115,8 @@ sysctl Zenoh cannot set. TCP alone was never offered. `runtime-mesh.md:120-122`,
   `Runner::request_link_on_remote_input_runtime` asks another runtime to apply one.
 - **MCP.** `connect` takes `from_runtime_name` with `from_processor_display_name` in place of
   `from_processor_id`, and `to_runtime_name` with `to_processor_display_name` in place of `to_processor_id`,
-  one pair per end. It returns `{link_id?, input_runtime_name, state}`. `disconnect` takes an optional
-  `input_runtime_name` beside `link_id`.
+  one pair per end. It returns `{link_request_id?, link_id?, input_runtime_name, state}`. `disconnect` takes
+  `link_id` with an optional `input_runtime_name`, or a `link_request_id` to cancel a request still waiting.
 - A runtime name equal to one's own is a local reference, resolved by display name.
 
 ## MODIFIED: §Networking `:2441-2447` — how a link request is read
@@ -124,15 +125,20 @@ sysctl Zenoh cannot set. TCP alone was never offered. `runtime-mesh.md:120-122`,
    the input's runtime, which applies `connect` with a remote source. One data shape serves all three.
 2. **A request is a Zenoh query** to a queryable under the input runtime's `@runtime/<runtime name>`
    prefix (`runtime-mesh.md:163-178`), sent at `Drop` on the control priority with an engine-chosen
-   timeout. The payload is msgpack `{operation, source_address, destination_address or link_id,
-   requester_runtime_name, engine_version}`. The reply is `{link_id, state}` or a refusal by `reply_err`;
-   no reply is a refusal naming the silence.
-3. **`connect` never waits on the mesh**, the owner's helper ruling applied again: it returns
+   timeout. The payload is msgpack `{operation, link_request_id, source_address, destination_address or
+   link_id, requester_runtime_name, engine_version}`; the requester mints the id. The reply is
+   `{link_id, state}` or a refusal by `reply_err`, and only `reply_err` refuses.
+3. **Silence is not a refusal.** `Drop` loses a query or its reply without a word, so a timeout leaves the
+   request waiting with reason `unanswered` and resends it on an engine-chosen backoff. The input's
+   runtime keeps each applied `link_request_id` beside its link for the link's life, so a resend returns
+   the link it already made, never a second one.
+4. **`connect` never waits on the mesh**, the owner's helper ruling applied again: it returns
    `awaiting_remote` or `pending`, and the outcome lands in `graph`.
-4. **An absent input runtime.** The requester keeps the request, renders it in
-   `graph.mesh.link_requests_awaiting_runtime`, and sends it when that runtime appears. A request dies with its requester.
-5. **`disconnect` over the mesh** is the same request with `link_id`. Any runtime may send it until the security pass.
-6. **Every link renders `created_by_runtime_name`**, its own runtime's name for a local link.
+5. **An absent or silent input runtime.** The requester keeps the request, renders it with its id in
+   `graph.mesh.link_requests_awaiting_runtime`, and sends it when that runtime appears. A request dies with
+   its requester; `disconnect` naming its `link_request_id` cancels it.
+6. **`disconnect` over the mesh** is the same request with `link_id`. Any runtime may send it until the security pass.
+7. **Every link renders `created_by_runtime_name`**, its own runtime's name for a local link.
 
 ## MODIFIED: §Networking `:2448-2453` — how waiting, refusal and laziness are read
 
@@ -156,9 +162,10 @@ sysctl Zenoh cannot set. TCP alone was never offered. `runtime-mesh.md:120-122`,
 6. **Egress.** A source runtime watches `@runtime/<own name>/@readers/**`. The first reader of an
    existing output port creates one egress, which takes one ordinary destination slot on that
    channel; the last reader's leave removes it. It declares `@runtime/<own name>/@egress/<display>/<port>`,
-   drains FIFO on its own OS thread and puts at `CongestionControl::Drop`: surface-carrying bags at
-   `Priority::DataLow`, the rest at `Priority::Data`, requests and tokens above both. With no reader it
-   holds no subscriber, publisher or token.
+   drains FIFO on its own OS thread and puts at `CongestionControl::Drop` on one priority for its life:
+   `Priority::DataLow` when its first bag carries a top-level `surface_id`, `Priority::Data` otherwise.
+   Two priorities are two QUIC streams, which would reorder one port's sequence and read as gaps.
+   Requests and tokens ride above both. With no reader it holds no subscriber, publisher or token.
 7. **Tap** resolves a remote link's local channel by the link's mesh address.
 
 ## MODIFIED: §Networking `:2432-2437` — how a surface crosses
@@ -181,7 +188,8 @@ sysctl Zenoh cannot set. TCP alone was never offered. `runtime-mesh.md:120-122`,
    - An sRGB texture label collapses to its linear buffer format (`surface_export_staging.rs:131`).
    - `texture_layout` crosses verbatim, since the engine reads no other key. It is inert: a pooled id never
      takes the import path that reads it (`gpu_context.rs:1366-1379`).
-   - Every new format and extent a sender sends leaves a pool behind on the receiver until the security pass.
+   - Pools are never freed (`gpu_context.rs:146-147`), so an ingress admits an engine-chosen handful of
+     distinct format and extent pairs per remote link, and refuses and counts a bag beyond them by name.
    - Bandwidth: 1080p RGBA (8.3 MB) must queue inside ~51 ms, roughly 1.3 Gbit/s, so raw frames over
      1 GbE mostly drop and are counted. Encoded bags are the path for ordinary links.
 
@@ -241,9 +249,9 @@ and cannot map a remote monotonic stamp onto ours; the OPEN's PTP/NTP direction 
 - **Python gains no `disconnect` and no post-`run()` connect.** MCP is the dynamic door, as today.
 - **Consumer backlog, filed when X1 merges:** `packages/streamlib-moq`'s deadline measures a remote stamp
   against local now (`delivery_deadline.rs:127`, `:156`).
-- **Found, not fixed here:** `disconnect_impl` names the target's port as the source port
-  (`operations_runtime.rs:358`); a duplicate link is never refused; NV12 pool slots are undersized
-  (`gpu_context.rs:405`). They go in the PR body.
+- **Found, not fixed here:** a duplicate local link is never refused (a resent mesh request is covered by its
+  id); NV12 pool slots are undersized (`gpu_context.rs:405`). They go in the PR body. `disconnect_impl`
+  naming the target's port as the source port (`operations_runtime.rs:358`) is fixed in X2, which builds on it.
 
 ## Expected slices
 
@@ -252,7 +260,7 @@ and cannot map a remote monotonic stamp onto ours; the OPEN's PTP/NTP direction 
 | # | Slice | Blocked by | Proof |
 |---|---|---|---|
 | X1 | Pull: `MeshPortAddress`, Python and MCP remote source, offered-port query, reader and egress tokens, ingress, egress without surfaces, states and reasons, version and duplicate-name errors, attachment, hop count, inbound link name incl. helper envelope, `graph` link shape, tap by address | #2283, #2263, #2265, #2268, #2272, #2273 | CI two-process components over loopback: bags byte-equal and stamps equal; dropping every k-th put counts exactly k's; SIGKILL of the source returns `awaiting_remote` and a restart re-wires from zero; no key without a reader; attachment golden bytes. Rig: two `streamlib run` apps, the known audio signal across, `tap_audio_channel.py --expect-frame-not-restamped` |
-| X2 | Requests: push and third party, `link_requests_awaiting_runtime`, disconnect over the mesh, `created_by_runtime_name`, MCP `to_*` | X1 | CI: a request's reply and refusal by name, a silent input runtime, an absent one whose request sends on appearance. Rig: a third app wires the other two over MCP |
+| X2 | Requests: push and third party, `link_request_id`, resend and idempotent apply, cancel, `link_requests_awaiting_runtime`, disconnect over the mesh and `disconnect_impl`'s source port, `created_by_runtime_name`, MCP `to_*` | X1 | CI: a request's reply and refusal by name; a dropped reply resent returns the one link; a silent input runtime stays waiting; an absent one's request sends on appearance and a cancelled one never does; the disconnect events name both ports on an asymmetric link. Rig: a third app wires the other two over MCP |
 | X3 | Surfaces: staging's pooled source, egress copy, ingress mint, refusals counted | X1 | Rig: an RGBA source across, both ends exchanged, byte-exact, the ids differing; an NV12 and a retired id counted |
 | X4 | Clock identity on the link, its read and `graph` rendering, `Mp4Sink`'s refusal | X1 | CI: boot id read on both platforms, cross-compiled; a track from another clock stops by name while the rest record |
 
