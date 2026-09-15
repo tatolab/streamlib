@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.7](https://github.com/tatolab/streamlib/compare/v0.22.6...v0.22.7) (2026-09-15)
+
+
+### Features
+
+* **engine:** resolve one runtime directory and run iceoryx2 in an engine-owned domain per OS user ([#2294](https://github.com/tatolab/streamlib/issues/2294)) ([bc87317](https://github.com/tatolab/streamlib/commit/bc87317b4c7c79a495c4b6c598d9a04795c95785))
+
 ## [0.22.6](https://github.com/tatolab/streamlib/compare/v0.22.5...v0.22.6) (2026-09-14)
 
 

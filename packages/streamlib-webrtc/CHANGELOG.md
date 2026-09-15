@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/tatolab/streamlib/compare/streamlib-webrtc-v0.2.0...streamlib-webrtc-v0.2.1) (2026-09-15)
+
+
+### Features
+
+* **engine:** resolve one runtime directory and run iceoryx2 in an engine-owned domain per OS user ([#2294](https://github.com/tatolab/streamlib/issues/2294)) ([bc87317](https://github.com/tatolab/streamlib/commit/bc87317b4c7c79a495c4b6c598d9a04795c95785))
+
 ## [0.2.0](https://github.com/tatolab/streamlib/compare/streamlib-webrtc-v0.1.1...streamlib-webrtc-v0.2.0) (2026-09-11)
 
 
