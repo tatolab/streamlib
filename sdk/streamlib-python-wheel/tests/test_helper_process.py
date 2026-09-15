@@ -11,15 +11,21 @@ does is asserted directly rather than inferred from a running graph.
 import json
 import os
 import select
+import shutil
 import socket
 import struct
+import subprocess
+import sys
+import tempfile
 import threading
 import time
+from pathlib import Path
 from typing import cast
 
 import pytest
 
 from streamlib import _helper
+from streamlib._engine import engine_build_id_compiled_into_this_extension
 from streamlib._helper import (
     HelperProcessLifecycle,
     HelperProcessProtocolError,
@@ -461,9 +467,7 @@ def test_setup_answers_ready_and_run_answers_nothing_at_all(stand_in_parent):
     stand_in_parent.send(
         {"cmd": "setup", "capability": "full", "config": {"tag": "probe"}, "ports": {}}
     )
-    ready = stand_in_parent.receive()
-    assert ready["rpc"] == "ready"
-    assert ready["protocol_version"] == _helper.PROTOCOL_VERSION
+    assert stand_in_parent.receive() == {"rpc": "ready"}
 
     stand_in_parent.send({"cmd": "run", "execution": "reactive", "interval_ms": 0})
     assert stand_in_parent.receive(timeout_seconds=0.5) is None
@@ -818,6 +822,155 @@ def test_a_non_numeric_channel_fd_is_refused_by_value(monkeypatch):
     with pytest.raises(HelperProcessProtocolError) as refusal:
         ParentProcessBridge.open_from_inherited_fd()
     assert "not-an-fd" in str(refusal.value)
+
+
+#: A build id no build of this checkout mints: its nonce is all zeros.
+ENGINE_BUILD_ID_OF_ANOTHER_BUILD = (
+    "0.0.1+0123456789abcdef0123456789abcdef01234567.00000000000000000000000000000000"
+)
+
+#: Long enough for a cold interpreter to import the whole wheel.
+SECONDS_A_REAL_HELPER_HAS_TO_START = 30.0
+
+
+@pytest.fixture
+def empty_iceoryx2_domain_root():
+    """A domain root of the helper's own, empty until an iceoryx2 node opens in
+    it — which is how a test sees whether one did. Short, under `/tmp`, so a
+    helper that did get as far as a node is not refused on the socket budget
+    instead."""
+    domain_root = Path(tempfile.mkdtemp(prefix="sl-build-id-", dir="/tmp"))
+    try:
+        yield domain_root
+    finally:
+        shutil.rmtree(domain_root, ignore_errors=True)
+
+
+def start_a_real_helper_process(
+    parent: StandInParent,
+    domain_root: Path,
+    parent_engine_build_id: "str | None",
+) -> subprocess.Popen:
+    """`python -m streamlib._helper` as the spawn host starts it — its channel,
+    its class, its domain — handed `parent_engine_build_id`, or no id at all.
+
+    Everything a helper needs to reach its own iceoryx2 node is supplied, so a
+    helper that let its start through would open one and wait on `parent`."""
+    environment = {
+        name: value
+        for name, value in os.environ.items()
+        if name != _helper.ENGINE_BUILD_ID_ENV
+    }
+    if parent_engine_build_id is not None:
+        environment[_helper.ENGINE_BUILD_ID_ENV] = parent_engine_build_id
+    environment.update(
+        {
+            _helper.ENTRYPOINT_ENV: f"{PROBE_MODULE}:PassThroughProbe",
+            _helper.PROCESSOR_ID_ENV: "Pbuildid",
+            _helper.ESCALATE_FD_ENV: str(parent.child_end.fileno()),
+            "STREAMLIB_ICEORYX2_DOMAIN_ROOT": str(domain_root),
+            "PYTHONPATH": os.pathsep.join(
+                entry
+                for entry in (str(Path(__file__).parent), os.environ.get("PYTHONPATH"))
+                if entry
+            ),
+        }
+    )
+    return subprocess.Popen(
+        [sys.executable, "-m", "streamlib._helper"],
+        env=environment,
+        pass_fds=[parent.child_end.fileno()],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+
+def standard_error_of_a_helper_that_refused_its_start(helper: subprocess.Popen) -> str:
+    try:
+        _, standard_error = helper.communicate(timeout=SECONDS_A_REAL_HELPER_HAS_TO_START)
+    except subprocess.TimeoutExpired:
+        helper.kill()
+        _, standard_error = helper.communicate()
+        pytest.fail(f"the helper let its start through and ran on:\n{standard_error}")
+    assert helper.returncode == 1, standard_error
+    return standard_error
+
+
+def test_a_helper_that_imported_another_engine_build_refuses_before_it_opens_anything(
+    stand_in_parent, empty_iceoryx2_domain_root
+):
+    """A stale `streamlib` earlier on a helper's `sys.path`, or an engine built
+    against another iceoryx2, otherwise fails every service open as a
+    corrupted service. The refusal is on raw stderr, naming both builds,
+    because the log channel does not exist yet — and no node has opened.
+
+    Fail-without-fix: skip the comparison and this helper opens its node in
+    the domain root and waits on its parent until the timeout.
+    """
+    helper = start_a_real_helper_process(
+        stand_in_parent, empty_iceoryx2_domain_root, ENGINE_BUILD_ID_OF_ANOTHER_BUILD
+    )
+
+    standard_error = standard_error_of_a_helper_that_refused_its_start(helper)
+
+    assert (
+        f"this helper imported engine build {engine_build_id_compiled_into_this_extension()}"
+        in standard_error
+    ), standard_error
+    assert (
+        f"its parent is engine build {ENGINE_BUILD_ID_OF_ANOTHER_BUILD}" in standard_error
+    ), standard_error
+    assert list(empty_iceoryx2_domain_root.iterdir()) == []
+    assert stand_in_parent.receive(timeout_seconds=0.1) is None
+
+
+def test_a_helper_handed_no_engine_build_id_refuses_rather_than_passing(
+    stand_in_parent, empty_iceoryx2_domain_root
+):
+    """An absent id is not a pass: a helper that cannot tell whether its engine
+    is its parent's does not start.
+
+    Fail-without-fix: treat an unset variable as agreement — the check this
+    replaced did — and this helper opens its node and waits.
+    """
+    helper = start_a_real_helper_process(
+        stand_in_parent, empty_iceoryx2_domain_root, parent_engine_build_id=None
+    )
+
+    standard_error = standard_error_of_a_helper_that_refused_its_start(helper)
+
+    assert f"{_helper.ENGINE_BUILD_ID_ENV} is not set" in standard_error, standard_error
+    assert engine_build_id_compiled_into_this_extension() in standard_error
+    assert list(empty_iceoryx2_domain_root.iterdir()) == []
+
+
+def test_a_helper_handed_its_own_engine_build_id_starts_and_opens_its_node(
+    stand_in_parent, empty_iceoryx2_domain_root
+):
+    """The control arm: parent and helper importing one wheel start exactly as
+    before — the helper reports itself started on its channel with its node
+    open in the domain it was handed."""
+    helper = start_a_real_helper_process(
+        stand_in_parent,
+        empty_iceoryx2_domain_root,
+        engine_build_id_compiled_into_this_extension(),
+    )
+    try:
+        deadline = time.monotonic() + SECONDS_A_REAL_HELPER_HAS_TO_START
+        started = None
+        while started is None and time.monotonic() < deadline:
+            frame = stand_in_parent.receive(timeout_seconds=deadline - time.monotonic())
+            if frame is None:
+                break
+            if frame.get("op") == "log" and frame.get("message") == "helper process started":
+                started = frame
+        assert started is not None, "the helper never reported itself started"
+        assert (empty_iceoryx2_domain_root / "nodes").is_dir()
+    finally:
+        helper.kill()
+        helper.communicate()
 
 
 def test_the_helper_module_is_runnable_as_a_module():
