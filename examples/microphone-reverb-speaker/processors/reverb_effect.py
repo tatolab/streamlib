@@ -14,6 +14,8 @@ depends on every sample that came before it; `newest` skips bags by design, and
 a skipped block is a hole in a delay line.
 """
 
+from dataclasses import dataclass
+
 import numpy
 
 from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
@@ -61,6 +63,14 @@ GAIN_INTO_THE_COMB_BANK = 0.015
 ROOM_SIZE_TO_FEEDBACK_SCALE = 0.28
 ROOM_SIZE_TO_FEEDBACK_OFFSET = 0.7
 DAMPING_TO_FILTER_COEFFICIENT_SCALE = 0.4
+
+
+@dataclass
+class ReverbEffectConfig:
+    room_size: float = 0.7
+    damping: float = 0.5
+    wet_level: float = 0.25
+    dry_level: float = 0.7
 
 
 def _delay_length_at_the_contracts_rate(delay_at_the_reference_rate: int) -> int:
@@ -189,18 +199,12 @@ class ReverbDiffuserFilter:
 class ReverbEffect:
     """Mixes a decaying tail under the audio that produced it."""
 
-    def __init__(
-        self,
-        room_size: float = 0.7,
-        damping: float = 0.5,
-        wet_level: float = 0.25,
-        dry_level: float = 0.7,
-    ) -> None:
+    def __init__(self, config: ReverbEffectConfig) -> None:
         for dial_name, value in (
-            ("room_size", room_size),
-            ("damping", damping),
-            ("wet_level", wet_level),
-            ("dry_level", dry_level),
+            ("room_size", config.room_size),
+            ("damping", config.damping),
+            ("wet_level", config.wet_level),
+            ("dry_level", config.dry_level),
         ):
             if not 0.0 <= float(value) <= 1.0:
                 raise ValueError(
@@ -209,11 +213,14 @@ class ReverbEffect:
                 )
 
         self.comb_feedback = (
-            float(room_size) * ROOM_SIZE_TO_FEEDBACK_SCALE + ROOM_SIZE_TO_FEEDBACK_OFFSET
+            float(config.room_size) * ROOM_SIZE_TO_FEEDBACK_SCALE
+            + ROOM_SIZE_TO_FEEDBACK_OFFSET
         )
-        self.damping_coefficient = float(damping) * DAMPING_TO_FILTER_COEFFICIENT_SCALE
-        self.wet_level = float(wet_level)
-        self.dry_level = float(dry_level)
+        self.damping_coefficient = (
+            float(config.damping) * DAMPING_TO_FILTER_COEFFICIENT_SCALE
+        )
+        self.wet_level = float(config.wet_level)
+        self.dry_level = float(config.dry_level)
 
         self.comb_filters = [
             ReverbCombFilter(
@@ -288,5 +295,7 @@ class ReverbEffect:
     )
     def dry_audio_from_upstream(self) -> None: ...
 
-    @output(description="The input with its own tail mixed under it, as AudioBlock bags")
+    @output(
+        description="The input with its own tail mixed under it, as AudioBlock bags"
+    )
     def reverberated_audio_to_downstream(self) -> None: ...
