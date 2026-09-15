@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/tatolab/streamlib/compare/streamlib-moq-v0.2.1...streamlib-moq-v0.2.2) (2026-09-15)
+
+
+### Features
+
+* **engine:** size every channel for a late consumer of any delivery profile and raise the link caps to 32 + tap and 256 ([#2301](https://github.com/tatolab/streamlib/issues/2301)) ([bf2b1e0](https://github.com/tatolab/streamlib/commit/bf2b1e018412eccdfea312c5be2be10645b4eb94))
+
 ## [0.2.1](https://github.com/tatolab/streamlib/compare/streamlib-moq-v0.2.0...streamlib-moq-v0.2.1) (2026-09-15)
 
 
