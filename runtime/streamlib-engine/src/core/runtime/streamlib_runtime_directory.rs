@@ -331,7 +331,7 @@ mod tests {
             PathBuf::from("/tmp/streamlib-1000/nodes")
         );
         assert_eq!(
-            directory.surface_share_socket_path(&RuntimeUniqueId::from("Rabc".to_string())),
+            directory.surface_share_socket_path(&RuntimeUniqueId::from("Rabc")),
             PathBuf::from("/tmp/streamlib-1000/surface-share-Rabc.sock")
         );
     }

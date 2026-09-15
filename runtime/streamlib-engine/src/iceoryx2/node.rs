@@ -1128,8 +1128,20 @@ mod tests {
         let second_process = tempfile::tempdir().unwrap();
         let first_root = first_process.path().join("iox2");
         let second_root = second_process.path().join("iox2");
+        // Prefixes of exited pids, so the next test process's sweep reclaims the
+        // shared memory this test leaves behind.
         let uid = current_process_uid();
-        let (first_prefix, second_prefix) = (format!("sl{uid}t1_"), format!("sl{uid}t2_"));
+        let exited = crate::iceoryx2::iceoryx2_domain_for_this_test_process::tests::a_process_id_that_has_exited;
+        let first_prefix =
+            crate::iceoryx2::iceoryx2_domain_for_this_test_process::test_domain_prefix(
+                uid,
+                exited(),
+            );
+        let second_prefix =
+            crate::iceoryx2::iceoryx2_domain_for_this_test_process::test_domain_prefix(
+                uid,
+                exited(),
+            );
         let service_name = ServiceName::new(&unique_service_name("disjoint")).unwrap();
 
         let first_node =

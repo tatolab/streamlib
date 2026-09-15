@@ -11,7 +11,7 @@ mod channel_sizing_tests;
 mod delivery_profile;
 mod dropped_bag_counters;
 #[cfg(any(test, feature = "test-support"))]
-mod iceoryx2_domain_for_this_test_process;
+pub(crate) mod iceoryx2_domain_for_this_test_process;
 mod input;
 mod mailbox;
 mod node;

@@ -86,8 +86,13 @@ fn test_domain_for_process(
     }
 }
 
-fn test_domain_prefix(uid: u32, process_id: u32) -> String {
-    format!("sl{uid}t{process_id}_")
+/// A test domain's prefix: this stem, then the owning pid, then `_`.
+pub(crate) fn test_domain_prefix_stem(uid: u32) -> String {
+    format!("sl{uid}t")
+}
+
+pub(crate) fn test_domain_prefix(uid: u32, process_id: u32) -> String {
+    format!("{}{process_id}_", test_domain_prefix_stem(uid))
 }
 
 /// Remove the roots and shared memory of every test domain whose process is gone,
@@ -117,7 +122,7 @@ fn remove_iceoryx2_test_domains_whose_process_is_gone(
     let Some(posix_shared_memory_directory) = posix_shared_memory_directory else {
         return;
     };
-    let shared_memory_prefix_stem = format!("sl{uid}t");
+    let shared_memory_prefix_stem = test_domain_prefix_stem(uid);
     if let Ok(entries) = std::fs::read_dir(posix_shared_memory_directory) {
         for entry in entries.flatten() {
             let file_name = entry.file_name();
@@ -143,11 +148,11 @@ fn process_is_alive(process_id: u32) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::iceoryx2::ICEORYX2_DOMAIN_ROOT_AND_PREFIX_BUDGET_BYTES;
 
-    fn a_process_id_that_has_exited() -> u32 {
+    pub(crate) fn a_process_id_that_has_exited() -> u32 {
         let mut child = std::process::Command::new("true").spawn().unwrap();
         let process_id = child.id();
         child.wait().unwrap();
