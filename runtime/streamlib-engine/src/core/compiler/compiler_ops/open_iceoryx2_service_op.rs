@@ -17,17 +17,18 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use crate::core::ProcessorUniqueId;
-use crate::core::context::RuntimeContext;
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
     DeviceMatchedAudioWindowContractsComponent, Graph, GraphEdgeWithComponents,
-    GraphNodeWithComponents, LinkState, LinkStateComponent, LinkUniqueId,
-    ProcessorInstanceComponent, ProcessorMetrics, SubprocessHandleComponent,
+    GraphNodeWithComponents, Iceoryx2ServicesHeldOpenForLinkComponent, LinkState,
+    LinkStateComponent, LinkUniqueId, ProcessorInstanceComponent, ProcessorMetrics,
+    SubprocessHandleComponent,
 };
 use crate::core::processors::ProcessorInstance;
 use crate::iceoryx2::{
     AudioWindowDeclarationOfAnInputPort, ChannelEgressConfig, ChannelTrustTier,
-    DEFAULT_EXPECTED_PAYLOAD_BYTES, Iceoryx2NotifyService, Iceoryx2Service, InboundLinkName,
+    DEFAULT_EXPECTED_PAYLOAD_BYTES, DeliveryProfile, DeliveryResolution, Iceoryx2Node,
+    Iceoryx2NotifyService, Iceoryx2Service, InboundLinkName,
     RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL, audio_windowing_declared_by_input_port,
     delivery_profile_for_input_port, effective_channel_ceiling_bytes,
     refuse_an_unsettled_match_device_sentinel,
@@ -44,17 +45,20 @@ use streamlib_ipc_types::{MAX_DESTINATIONS_PER_CHANNEL, MAX_INBOUND_LINKS_PER_DE
 ///   subscriber from the wiring envelope.
 /// - subprocess→Rust: dest-side Rust wiring; the subprocess opens its own
 ///   publisher from the wiring envelope.
-/// - subprocess→subprocess: both sides open their own ports; the host only
-///   pre-creates the services so their sizing is fixed once.
+/// - subprocess→subprocess: both sides open their own ports.
+///
+/// In every combination the engine creates both services and the link holds
+/// them for as long as it stays in the graph, so no endpoint that opens later
+/// can size them.
 #[tracing::instrument(
     name = "compiler.open_iceoryx2_service",
-    skip(graph, runtime_ctx),
+    skip(graph, iceoryx2_node),
     fields(link_id = %link_id)
 )]
 pub fn open_iceoryx2_service(
     graph: &mut Graph,
     link_id: &LinkUniqueId,
-    runtime_ctx: &Arc<RuntimeContext>,
+    iceoryx2_node: &Iceoryx2Node,
 ) -> Result<()> {
     let (from_port, to_port) = {
         let link =
@@ -130,21 +134,18 @@ pub fn open_iceoryx2_service(
     // The tier default is the structural ceiling; an operator raises or lowers it
     // per deployment through the tier's node-level env override.
     let channel_ceiling_bytes = effective_channel_ceiling_bytes(trust_tier);
-    // Subscriber count is the compile-time destination fan-out plus the reserved
-    // tap slot. Ring depth and consumer drain order both derive from the single
-    // delivery profile the channel's destinations agree on.
     let ChannelSizing {
         max_subscribers,
-        max_queued_messages,
-        drain_order,
+        channel_service_creation_depth,
     } = resolve_channel_sizing(graph, &source_proc_id, &source_port)?;
+    let dest_input_port_delivery =
+        delivery_resolution_of_input_port(graph, &dest_proc_id, &dest_port)?;
     let max_notifiers = destination_max_notifiers(graph, &dest_proc_id)?;
 
-    let iceoryx2_node = runtime_ctx.iceoryx2_node();
     let service = iceoryx2_node.open_or_create_service(
         &channel_service_name,
         max_subscribers,
-        max_queued_messages,
+        channel_service_creation_depth,
     )?;
     let notify_service = notify_service_name
         .as_deref()
@@ -162,7 +163,7 @@ pub fn open_iceoryx2_service(
             notify_service_name.as_deref().unwrap_or(""),
             DEFAULT_EXPECTED_PAYLOAD_BYTES,
             channel_ceiling_bytes,
-            max_queued_messages,
+            channel_service_creation_depth,
             max_subscribers,
             max_notifiers,
             link_id,
@@ -193,8 +194,8 @@ pub fn open_iceoryx2_service(
             &dest_port,
             &channel_service_name,
             notify_service_name.as_deref().unwrap_or(""),
-            drain_order,
-            max_queued_messages,
+            dest_input_port_delivery,
+            channel_service_creation_depth,
             max_subscribers,
             max_notifiers,
             link_id,
@@ -209,8 +210,7 @@ pub fn open_iceoryx2_service(
             &dest_port,
             link_id,
             &InboundLinkName::from(channel_service_name.as_str()),
-            drain_order,
-            max_queued_messages,
+            dest_input_port_delivery,
             &service,
             notify_service.as_ref(),
             dest_audio_windowing,
@@ -222,6 +222,10 @@ pub fn open_iceoryx2_service(
         .e(link_id)
         .first_mut()
         .ok_or_else(|| Error::LinkNotFound(link_id.to_string()))?;
+    link.insert_component_without_rendering_it(Iceoryx2ServicesHeldOpenForLinkComponent {
+        channel_data_service: service,
+        destination_notify_service: notify_service,
+    });
     link.insert(LinkStateComponent(LinkState::Wired));
 
     tracing::info!(
@@ -236,10 +240,9 @@ pub fn open_iceoryx2_service(
 ///
 /// Stamping [`LinkState::Disconnected`] is not enough: the source-side notifier
 /// and dest-side subscriber (plus listener, orphaned mailbox, channel publisher)
-/// must be dropped to release their iceoryx2 services, else a reconnect re-appends
-/// past the notify service's create-time `max_notifiers` cap
-/// (`ExceedsMaxSupportedNotifiers`) and the stale, shallower-sized data service
-/// collides with a deeper-ring reopen (`DoesNotSupportRequestedMinBufferSize`).
+/// must be dropped, and the services the link held released, else a reconnect
+/// re-appends past the notify service's create-time `max_notifiers` cap
+/// (`ExceedsMaxSupportedNotifiers`).
 ///
 /// An endpoint whose ports live out of process owns them itself, so its half is
 /// reclaimed through [`DynGeneratedProcessor::unwire_out_of_process_link`] —
@@ -316,6 +319,7 @@ pub fn close_iceoryx2_service(graph: &mut Graph, link_id: &LinkUniqueId) -> Resu
     }
 
     if let Some(link) = graph.traversal_mut().e(link_id).first_mut() {
+        link.remove::<Iceoryx2ServicesHeldOpenForLinkComponent>();
         link.insert(LinkStateComponent(LinkState::Disconnected));
     }
     tracing::info!("Closed iceoryx2 service: {} (state: Disconnected)", link_id);
@@ -357,10 +361,8 @@ fn notify_service_name_for(dest_proc_id: &ProcessorUniqueId) -> String {
 /// membership: a channel keys on its source output port, so its destinations are
 /// exactly the links leaving that port.
 ///
-/// The full graph is built by the time the compiler op runs, so this outbound
-/// set is stable — every link out of the same source port sees the same set,
-/// which is what lets the incremental `open_or_create` calls agree (iceoryx2
-/// verifies `max_subscribers` on reopen).
+/// Only its size is read: sizing never follows the destinations, so a link
+/// connected to a running source reopens the service with exactly what created it.
 fn channel_destinations(
     graph: &mut Graph,
     source_proc_id: &ProcessorUniqueId,
@@ -398,8 +400,7 @@ fn channel_max_subscribers(
     if destinations > MAX_DESTINATIONS_PER_CHANNEL {
         return Err(Error::Configuration(format!(
             "output port '{source_proc_id}:{source_port}' would feed {destinations} \
-             destinations, and a channel carries at most {MAX_DESTINATIONS_PER_CHANNEL}; \
-             fan out through another output port"
+             destinations, and a channel carries at most {MAX_DESTINATIONS_PER_CHANNEL}"
         )));
     }
     Ok(MAX_DESTINATIONS_PER_CHANNEL + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL)
@@ -410,34 +411,38 @@ fn channel_max_subscribers(
 ///
 /// Both the compiler op (which creates the service with a publisher) and the
 /// phase-3.5 `tap` op (which reopens it publisher-free to add a reserved-slot
-/// subscriber) derive this from the SAME graph state via
-/// [`resolve_channel_sizing`], so their `open_or_create_service` calls agree —
-/// a mismatched `max_subscribers` / `subscriber_max_buffer_size` would be
-/// rejected by iceoryx2 on open.
+/// subscriber) derive this through [`resolve_channel_sizing`], so their
+/// `open_or_create_service` calls agree.
 pub(crate) struct ChannelSizing {
     /// The fixed destination slot count plus the reserved tap slot.
     pub(crate) max_subscribers: usize,
-    /// Ring depth (`subscriber_max_buffer_size`) — the agreed delivery profile's depth.
-    pub(crate) max_queued_messages: usize,
-    /// The agreed delivery profile's consumer drain order.
-    pub(crate) drain_order: crate::iceoryx2::ReadMode,
+    /// The deepest ring any subscriber on the channel may take.
+    pub(crate) channel_service_creation_depth: usize,
 }
 
 /// Derive the [`ChannelSizing`] for the channel keyed on `(source_proc_id,
-/// source_port)` from the current graph — the single derivation both the
-/// service-open compiler op and the `tap` op share so their `open_or_create`
-/// calls request identical, iceoryx2-verified parameters.
+/// source_port)` — the single derivation both the service-open compiler op and
+/// the `tap` op share, refusing a source port past the destination cap.
 pub(crate) fn resolve_channel_sizing(
     graph: &mut Graph,
     source_proc_id: &ProcessorUniqueId,
     source_port: &str,
 ) -> Result<ChannelSizing> {
-    let delivery = channel_delivery_profile(graph, source_proc_id, source_port)?.resolve();
     Ok(ChannelSizing {
         max_subscribers: channel_max_subscribers(graph, source_proc_id, source_port)?,
-        max_queued_messages: delivery.depth,
-        drain_order: delivery.drain_order,
+        channel_service_creation_depth: channel_service_creation_depth(),
     })
+}
+
+/// The depth every channel data service is created at: deep enough for a
+/// consumer of any delivery profile, whichever consumer connects first.
+///
+/// A channel's depth is fixed for its life, so sizing it by the consumers of
+/// the day would refuse a deeper one connected later. Each subscriber then
+/// takes its own port's ring inside it, and a shallower ring saves nothing —
+/// iceoryx2 sizes the sample pool from the service's depth and subscriber count.
+fn channel_service_creation_depth() -> usize {
+    DeliveryProfile::ORDERED_DEPTH
 }
 
 /// Reverse-resolve a channel data-service name to the `(source_proc_id,
@@ -523,59 +528,23 @@ fn destination_consumes_notifications(
         .unwrap_or(true)
 }
 
-/// The channel's [`DeliveryProfile`], agreed across every destination the
-/// channel feeds.
+/// The drain order and ring depth of one destination input port, from the
+/// delivery profile that port declares.
 ///
-/// A channel's single publisher shares one ring depth across all subscribers
-/// and its destinations drain in one order, so they must resolve to one
-/// delivery profile. A channel whose destinations disagree (`newest` vs
-/// `ordered`, say) is genuinely ambiguous in both — a named
-/// [`Error::Configuration`] rather than a silent pick. A channel with a single
-/// destination (the common case) uses that destination's profile.
-///
-/// [`DeliveryProfile`]: crate::iceoryx2::DeliveryProfile
-fn channel_delivery_profile(
+/// Resolved per destination port, never per channel: consumers of one output
+/// port read it under whatever profiles they each declare.
+fn delivery_resolution_of_input_port(
     graph: &mut Graph,
-    source_proc_id: &ProcessorUniqueId,
-    source_port: &str,
-) -> Result<crate::iceoryx2::DeliveryProfile> {
-    // Collected up front so the traversal borrow is released before re-traversing
-    // per edge to read each destination's processor type.
-    let destinations = channel_destinations(graph, source_proc_id, source_port);
-
-    let mut agreed: Option<crate::iceoryx2::DeliveryProfile> = None;
-    for (dest_proc_id, dest_port) in &destinations {
-        let dest_type = graph
-            .traversal_mut()
-            .v(dest_proc_id)
-            .first()
-            .map(|node| node.processor_type().clone());
-        let profile = match dest_type.as_ref() {
-            Some(ident) => delivery_profile_for_input_port(ident, dest_port)?,
-            None => crate::iceoryx2::DeliveryProfile::Newest,
-        };
-        match agreed {
-            None => agreed = Some(profile),
-            Some(prev) if prev != profile => {
-                return Err(Error::Configuration(format!(
-                    "channel '{}:{}' feeds destinations with conflicting delivery \
-                     profiles — '{}' vs '{}'. A channel's single publisher shares \
-                     one ring config across all subscribers; give the destinations \
-                     the same input-port delivery profile, or fan them out through \
-                     distinct source ports.",
-                    source_proc_id,
-                    source_port,
-                    prev.as_manifest_str(),
-                    profile.as_manifest_str(),
-                )));
-            }
-            Some(_) => {}
-        }
-    }
-
-    // Every wired link has at least the current destination, so `agreed` is Some;
-    // the realtime default is the correct fallback if the outbound set were empty.
-    Ok(agreed.unwrap_or(crate::iceoryx2::DeliveryProfile::Newest))
+    dest_proc_id: &ProcessorUniqueId,
+    dest_port: &str,
+) -> Result<DeliveryResolution> {
+    let dest_type = graph
+        .traversal_mut()
+        .v(dest_proc_id)
+        .first()
+        .map(|node| node.processor_type().clone())
+        .ok_or_else(|| Error::ProcessorNotFound(format!("Processor '{dest_proc_id}' not found")))?;
+    Ok(delivery_profile_for_input_port(&dest_type, dest_port)?.resolve())
 }
 
 /// The window declaration this destination's input port carries, if it carries
@@ -789,8 +758,9 @@ fn wire_rust_source(
 /// ensure its single listener exists, and publish its dropped-bag counts onto
 /// its graph node.
 ///
-/// `notify_service` is `None` when this destination never drains a listener, and
-/// no listener is created for it.
+/// The subscriber's ring and the port's mailbox take the port's own delivery
+/// resolution. `notify_service` is `None` when this destination never drains a
+/// listener, and no listener is created for it.
 #[allow(clippy::too_many_arguments)]
 fn wire_rust_dest(
     graph: &mut Graph,
@@ -799,8 +769,7 @@ fn wire_rust_dest(
     dest_port: &str,
     link_id: &LinkUniqueId,
     inbound_link_name: &InboundLinkName,
-    drain_order: crate::iceoryx2::ReadMode,
-    depth: usize,
+    dest_input_port_delivery: DeliveryResolution,
     service: &Iceoryx2Service,
     notify_service: Option<&Iceoryx2NotifyService>,
     audio_windowing: Option<AudioWindowDeclarationOfAnInputPort>,
@@ -809,10 +778,14 @@ fn wire_rust_dest(
     let Some(input_inner) = dest_guard.iceoryx2_input_mailboxes_inner() else {
         return Ok(());
     };
+    let DeliveryResolution {
+        drain_order,
+        depth: input_port_ring_depth,
+    } = dest_input_port_delivery;
 
     if !input_inner.has_port(dest_port) {
         match audio_windowing {
-            None => input_inner.add_port(dest_port, depth, drain_order),
+            None => input_inner.add_port(dest_port, input_port_ring_depth, drain_order),
             Some(AudioWindowDeclarationOfAnInputPort::StatedOutright(contract)) => {
                 input_inner.add_windowed_port(dest_port, drain_order, contract)
             }
@@ -829,7 +802,7 @@ fn wire_rust_dest(
                     }
                     None => input_inner.add_port_awaiting_its_device_stream_format(
                         dest_port,
-                        depth,
+                        input_port_ring_depth,
                         drain_order,
                     ),
                 }
@@ -837,7 +810,7 @@ fn wire_rust_dest(
         }
     }
 
-    let subscriber = service.create_subscriber()?;
+    let subscriber = service.create_subscriber(input_port_ring_depth)?;
     input_inner.add_channel_subscriber(dest_port, link_id.as_str(), inbound_link_name, subscriber);
     tracing::debug!(
         "Bound channel subscriber to destination input port '{}'",
@@ -928,7 +901,7 @@ fn wire_subprocess_source(
     notify_service_name: &str,
     expected_payload: usize,
     channel_ceiling_bytes: usize,
-    max_queued_messages: usize,
+    channel_service_creation_depth: usize,
     max_subscribers: usize,
     notify_max_notifiers: usize,
     link_id: &LinkUniqueId,
@@ -944,7 +917,7 @@ fn wire_subprocess_source(
         "dest_notify_service_name": notify_service_name,
         "expected_payload_bytes": expected_payload,
         "max_payload_bytes_per_channel": channel_ceiling_bytes,
-        "max_queued_messages": max_queued_messages,
+        "channel_service_creation_depth": channel_service_creation_depth,
         "max_subscribers": max_subscribers,
         "notify_max_notifiers": notify_max_notifiers,
     });
@@ -977,8 +950,8 @@ fn wire_subprocess_dest(
     dest_port: &str,
     channel_service_name: &str,
     notify_service_name: &str,
-    drain_order: crate::iceoryx2::ReadMode,
-    max_queued_messages: usize,
+    dest_input_port_delivery: DeliveryResolution,
+    channel_service_creation_depth: usize,
     max_subscribers: usize,
     notify_max_notifiers: usize,
     link_id: &LinkUniqueId,
@@ -987,8 +960,9 @@ fn wire_subprocess_dest(
     // The dest reader no longer carries a payload-size hint: the subprocess read
     // buffer starts at the default and grows to the frame it actually receives
     // (PowerOfTwo segment growth on the publisher side, grow-and-retry on read).
-    // The drain order is the delivery profile's, resolved host-side; the
-    // subprocess maps the string back to its `*_input_set_read_mode` integer.
+    // The drain order and ring depth are the port's own delivery profile's,
+    // resolved host-side. The creation depth is what the child opens the
+    // service with, and the ring depth what its subscriber and mailbox take.
     // `enable_safe_overflow` is the same wire fact the source side records.
     let mut entry = serde_json::json!({
         "name": dest_port,
@@ -996,8 +970,9 @@ fn wire_subprocess_dest(
         "enable_safe_overflow": true,
         "channel_service_name": channel_service_name,
         "notify_service_name": notify_service_name,
-        "read_mode": drain_order.as_manifest_str(),
-        "max_queued_messages": max_queued_messages,
+        "read_mode": dest_input_port_delivery.drain_order.as_manifest_str(),
+        "channel_service_creation_depth": channel_service_creation_depth,
+        "input_port_ring_depth": dest_input_port_delivery.depth,
         "max_subscribers": max_subscribers,
         "notify_max_notifiers": notify_max_notifiers,
     });
@@ -1211,7 +1186,7 @@ mod tests {
             "pdef/notify",
             4096,
             1 << 20,
-            8,
+            channel_service_creation_depth(),
             2,
             1,
             link_id,
@@ -1223,8 +1198,8 @@ mod tests {
             "in1",
             "pabc/out1",
             "pdef/notify",
-            crate::iceoryx2::ReadMode::SkipToLatest,
-            8,
+            DeliveryProfile::Newest.resolve(),
+            channel_service_creation_depth(),
             2,
             1,
             link_id,
@@ -1574,8 +1549,8 @@ mod tests {
             "in1",
             "pabc/out1",
             "pdef/notify",
-            crate::iceoryx2::ReadMode::SkipToLatest,
-            8,
+            DeliveryProfile::Newest.resolve(),
+            channel_service_creation_depth(),
             2,
             1,
             &link_id,
@@ -1650,7 +1625,11 @@ mod tests {
     ) {
         let node = crate::iceoryx2::Iceoryx2Node::for_this_test_process();
         let channel = node
-            .open_or_create_service(&unique_service_name(&format!("{tag}/channel")), 2, 8)
+            .open_or_create_service(
+                &unique_service_name(&format!("{tag}/channel")),
+                2,
+                channel_service_creation_depth(),
+            )
             .expect("the channel service must open");
         let notify = destination_consumes_notifications.then(|| {
             node.open_or_create_notify_service(&unique_service_name(&format!("{tag}/notify")), 1)
@@ -1751,8 +1730,7 @@ mod tests {
             "in1",
             &link_id,
             &InboundLinkName::from("psource/out1"),
-            crate::iceoryx2::ReadMode::SkipToLatest,
-            8,
+            DeliveryProfile::Newest.resolve(),
             &channel,
             notify_service.as_ref(),
             None,
@@ -1814,8 +1792,10 @@ mod tests {
             "in1",
             &link_id,
             &InboundLinkName::from("psource/out1"),
-            crate::iceoryx2::ReadMode::ReadNextInOrder,
-            DESTINATION_MAILBOX_DEPTH,
+            DeliveryResolution {
+                drain_order: crate::iceoryx2::ReadMode::ReadNextInOrder,
+                depth: DESTINATION_MAILBOX_DEPTH,
+            },
             &channel,
             None,
             None,
@@ -1838,12 +1818,15 @@ mod tests {
             "a wired link that has lost nothing must render a zero, not go missing"
         );
 
+        // Taken off the subscriber after every bag: the subscriber's ring is as
+        // deep as the mailbox, so a burst received all at once would be
+        // overwritten in the ring before the mailbox ever held it.
         for frame in 0..FRAMES_PUBLISHED {
             source_output
                 .write_raw("out1", b"a bag the destination never reads", frame as i64)
                 .expect("the source publishes onto the wired channel");
+            dest_input.receive_pending();
         }
-        dest_input.receive_pending();
 
         let metrics = rendered_metrics(&mut graph);
         assert_eq!(
@@ -1934,6 +1917,227 @@ mod tests {
             .expect("mock_input_only_processor must be in the registry")
             .id
             .to_string()
+    }
+
+    fn add_mock_ordered_input_only(graph: &mut Graph) -> String {
+        crate::core::test_support::ensure_test_mocks_registered();
+        graph
+            .traversal_mut()
+            .add_v(ProcessorSpec::new(
+                crate::core::test_support::MockOrderedInputOnlyProcessor::processor_class_import_path(),
+                serde_json::Value::Null,
+            ))
+            .first()
+            .expect("mock_ordered_input_only_processor must be in the registry")
+            .id
+            .to_string()
+    }
+
+    /// Add a link from `source_id`'s `out1` to `dest_id`'s `in1`.
+    fn add_link_from_out1_to_in1(
+        graph: &mut Graph,
+        source_id: &str,
+        dest_id: &str,
+    ) -> LinkUniqueId {
+        graph
+            .traversal_mut()
+            .add_e(
+                OutputLinkPortRef::new(source_id, "out1"),
+                InputLinkPortRef::new(dest_id, "in1"),
+            )
+            .first()
+            .expect("the link must exist")
+            .id
+            .clone()
+    }
+
+    /// The depth the live channel `source_id`'s `out1` publishes to was created
+    /// at, as a helper opening its own end would find it.
+    fn creation_depth_a_helper_opening_out1_finds(source_id: &str) -> usize {
+        let channel_service_name = channel_service_name(&source_id.into(), "out1")
+            .expect("the mock's output port derives a channel name");
+        Iceoryx2Node::for_this_test_process()
+            .open_or_create_service(
+                &channel_service_name,
+                MAX_DESTINATIONS_PER_CHANNEL + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL,
+                DeliveryProfile::NEWEST_DEPTH,
+            )
+            .expect("a helper opening at its own port's depth joins or creates the service")
+            .channel_service_creation_depth()
+    }
+
+    /// A running output port that already feeds a `newest` consumer takes an
+    /// `ordered` one, and each reads at its own port's depth.
+    ///
+    /// Ten bags published while neither reads: the `newest` port's ring holds
+    /// four, so its mailbox takes four and evicts none, while the `ordered` port
+    /// receives all ten. Fail-without-fix: restore the one-profile-per-channel
+    /// refusal and the second `open_iceoryx2_service` is refused; give every
+    /// subscriber the service's depth and the `newest` port's mailbox evicts six.
+    #[test]
+    fn a_newest_and_an_ordered_consumer_share_one_running_output_port_each_at_its_own_depth() {
+        use crate::core::test_support::{
+            MockInputOnlyProcessor, MockOrderedInputOnlyProcessor, MockOutputOnlyProcessor,
+        };
+        const BAGS_PUBLISHED_WHILE_NEITHER_CONSUMER_READS: usize = 10;
+
+        let node = Iceoryx2Node::for_this_test_process();
+        let mut graph = Graph::new();
+        let source_id = add_mock_output_only(&mut graph);
+        let (_, source_output, _) =
+            attach_mock_instance::<MockOutputOnlyProcessor::Processor>(&mut graph, &source_id);
+        let source_output = source_output.expect("an output-only mock holds an output writer");
+        let newest_consumer_id = add_mock_input_only(&mut graph);
+        let (_, _, newest_consumer_input) = attach_mock_instance::<MockInputOnlyProcessor::Processor>(
+            &mut graph,
+            &newest_consumer_id,
+        );
+        let newest_consumer_input =
+            newest_consumer_input.expect("an input-only mock holds input mailboxes");
+        let ordered_consumer_id = add_mock_ordered_input_only(&mut graph);
+        let (_, _, ordered_consumer_input) = attach_mock_instance::<
+            MockOrderedInputOnlyProcessor::Processor,
+        >(&mut graph, &ordered_consumer_id);
+        let ordered_consumer_input =
+            ordered_consumer_input.expect("an input-only mock holds input mailboxes");
+
+        let newest_link = add_link_from_out1_to_in1(&mut graph, &source_id, &newest_consumer_id);
+        open_iceoryx2_service(&mut graph, &newest_link, &node).expect("the newest consumer wires");
+        source_output
+            .write_raw(
+                "out1",
+                b"a bag the port carried before the ordered consumer",
+                0,
+            )
+            .expect("the port runs with one consumer");
+        newest_consumer_input.receive_pending();
+        newest_consumer_input.drain("in1");
+
+        let ordered_link = add_link_from_out1_to_in1(&mut graph, &source_id, &ordered_consumer_id);
+        open_iceoryx2_service(&mut graph, &ordered_link, &node)
+            .expect("an ordered consumer connects onto the running port");
+
+        for bag in 1..=BAGS_PUBLISHED_WHILE_NEITHER_CONSUMER_READS {
+            source_output
+                .write_raw("out1", b"a bag both consumers are fed", bag as i64)
+                .expect("the port publishes to both consumers");
+        }
+        newest_consumer_input.receive_pending();
+        ordered_consumer_input.receive_pending();
+
+        assert_eq!(
+            newest_consumer_input.drain("in1").len(),
+            DeliveryProfile::NEWEST_DEPTH,
+            "the newest port holds its own depth"
+        );
+        assert_eq!(
+            graph
+                .traversal_mut()
+                .v(&ProcessorUniqueId::from(newest_consumer_id.as_str()))
+                .first()
+                .expect("the newest consumer is in the graph")
+                .serialize_components()["metrics"]["dropped_bags_by_link"][newest_link.as_str()],
+            serde_json::json!(0),
+            "the newest port's ring, not its mailbox, held it to its depth"
+        );
+        assert_eq!(
+            ordered_consumer_input.drain("in1").len(),
+            BAGS_PUBLISHED_WHILE_NEITHER_CONSUMER_READS,
+            "the ordered port receives every bag its deeper ring holds"
+        );
+    }
+
+    /// The first consumer of a channel does not size it: one first wired to a
+    /// `newest` port is created at the depth any consumer needs.
+    ///
+    /// Fail-without-fix: size the service by the first consumer's profile and
+    /// the link's held service states four.
+    #[test]
+    fn a_channel_first_wired_to_a_newest_consumer_is_created_deep_enough_for_any_consumer() {
+        use crate::core::test_support::{MockInputOnlyProcessor, MockOutputOnlyProcessor};
+
+        let node = Iceoryx2Node::for_this_test_process();
+        let mut graph = Graph::new();
+        let source_id = add_mock_output_only(&mut graph);
+        attach_mock_instance::<MockOutputOnlyProcessor::Processor>(&mut graph, &source_id);
+        let newest_consumer_id = add_mock_input_only(&mut graph);
+        attach_mock_instance::<MockInputOnlyProcessor::Processor>(&mut graph, &newest_consumer_id);
+        let newest_link = add_link_from_out1_to_in1(&mut graph, &source_id, &newest_consumer_id);
+
+        open_iceoryx2_service(&mut graph, &newest_link, &node).expect("the newest consumer wires");
+
+        let held_creation_depth = graph
+            .traversal_mut()
+            .e(&newest_link)
+            .first()
+            .expect("the link is in the graph")
+            .get::<Iceoryx2ServicesHeldOpenForLinkComponent>()
+            .expect("a wired link holds its services")
+            .channel_data_service
+            .channel_service_creation_depth();
+        assert_eq!(held_creation_depth, DeliveryProfile::ORDERED_DEPTH);
+    }
+
+    /// On a link between two helpers the engine opens no port of its own, yet
+    /// it still decides the channel's size: a helper opening its end — first,
+    /// and asking for only its own port's depth — joins the service the engine
+    /// created.
+    ///
+    /// Fail-without-fix: drop the held services from the link and the service
+    /// is gone when the op returns, so the helper creates it at four.
+    #[test]
+    fn a_helper_opening_first_joins_the_channel_the_engine_created_between_two_helpers() {
+        let node = Iceoryx2Node::for_this_test_process();
+        let mut graph = Graph::new();
+        let source_id = add_mock_output_only(&mut graph);
+        let dest_id = add_mock_input_only(&mut graph);
+        for helper_id in [&source_id, &dest_id] {
+            attach_processor_instance(
+                &mut graph,
+                helper_id,
+                ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
+            );
+        }
+        let link_id = add_link_from_out1_to_in1(&mut graph, &source_id, &dest_id);
+
+        open_iceoryx2_service(&mut graph, &link_id, &node)
+            .expect("the helper-to-helper link wires");
+
+        assert_eq!(
+            creation_depth_a_helper_opening_out1_finds(&source_id),
+            DeliveryProfile::ORDERED_DEPTH,
+        );
+    }
+
+    /// A disconnected link lets go of the services it held, so a channel whose
+    /// last link went is created afresh by whoever opens it next.
+    ///
+    /// Fail-without-fix: keep the held services on a disconnected link and the
+    /// reopen below still finds the old service's depth.
+    #[test]
+    fn a_disconnected_link_releases_the_services_it_held() {
+        let node = Iceoryx2Node::for_this_test_process();
+        let mut graph = Graph::new();
+        let source_id = add_mock_output_only(&mut graph);
+        let dest_id = add_mock_input_only(&mut graph);
+        for helper_id in [&source_id, &dest_id] {
+            attach_processor_instance(
+                &mut graph,
+                helper_id,
+                ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
+            );
+        }
+        let link_id = add_link_from_out1_to_in1(&mut graph, &source_id, &dest_id);
+        open_iceoryx2_service(&mut graph, &link_id, &node)
+            .expect("the helper-to-helper link wires");
+
+        close_iceoryx2_service(&mut graph, &link_id).expect("the disconnect must succeed");
+
+        assert_eq!(
+            creation_depth_a_helper_opening_out1_finds(&source_id),
+            DeliveryProfile::NEWEST_DEPTH,
+            "nothing may still hold the channel of a link that is gone"
+        );
     }
 
     fn add_mock_reactive_input_only(graph: &mut Graph) -> String {
@@ -2068,8 +2272,7 @@ mod tests {
             "audio",
             &"L-match-device".into(),
             &InboundLinkName::from("psource/audio_out"),
-            crate::iceoryx2::ReadMode::ReadNextInOrder,
-            crate::iceoryx2::DeliveryProfile::ORDERED_DEPTH,
+            DeliveryProfile::Ordered.resolve(),
             &channel,
             None,
             Some(AudioWindowDeclarationOfAnInputPort::MatchesItsProcessorsDeviceStream),
@@ -2155,8 +2358,8 @@ mod tests {
             "audio",
             "pabc/out1",
             "pdef/notify",
-            crate::iceoryx2::ReadMode::ReadNextInOrder,
-            8,
+            DeliveryProfile::Ordered.resolve(),
+            channel_service_creation_depth(),
             2,
             1,
             &"L-helper-windowed".into(),
@@ -2204,8 +2407,8 @@ mod tests {
             "audio",
             "pabc/out1",
             "pdef/notify",
-            crate::iceoryx2::ReadMode::ReadNextInOrder,
-            8,
+            DeliveryProfile::Ordered.resolve(),
+            channel_service_creation_depth(),
             2,
             1,
             &"L-helper-settled".into(),
@@ -2497,80 +2700,6 @@ mod tests {
         assert!(
             refused.to_string().contains("at most"),
             "the refusal names the cap; got {refused}"
-        );
-    }
-
-    /// A source output port feeding two destinations whose input ports resolve
-    /// to CONFLICTING delivery profiles (`ordered` vs `newest`) is genuinely
-    /// ambiguous: a channel's single publisher shares one ring config across
-    /// every subscriber. `channel_delivery_profile` surfaces this as a named
-    /// [`Error::Configuration`], not a silent first-connection-wins pick.
-    ///
-    /// Revert lock: drop the conflict branch (return the first destination's
-    /// profile) and this returns `Ok(_)` — the `expect_err` fails.
-    #[test]
-    fn conflicting_destination_profile_is_a_configuration_error() {
-        use crate::core::descriptors::{
-            PortDescriptor, ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor,
-        };
-
-        // One sink per profile, under distinct import paths: the registry keys
-        // on the path, so two sinks sharing one would collide and the second
-        // registration — the `newest` half this test needs — would be
-        // discarded, leaving both destinations agreeing on `ordered` and no
-        // conflict to detect.
-        let register_sink = |profile: &str| -> ProcessorClassImportPath {
-            let import_path =
-                ProcessorClassImportPath::new(format!("{}::ProfileSink_{profile}", module_path!()))
-                    .unwrap();
-            let mut desc = ProcessorDescriptor::new(
-                ProcessorClassShortName::new("ProfileSink").unwrap(),
-                import_path.clone(),
-                "conflicting-profile sink",
-            );
-            desc.inputs
-                .push(PortDescriptor::iceoryx2("in1", "input").with_delivery_profile(profile));
-            // Idempotent: a duplicate path (re-run in the same process) errors;
-            // the first registration is the one that stands.
-            let _ = PROCESSOR_REGISTRY.register_descriptor_only(desc);
-            import_path
-        };
-
-        let ordered_ident = register_sink("ordered");
-        let newest_ident = register_sink("newest");
-
-        let mut graph = Graph::new();
-        let src_id = add_mock_output_only(&mut graph);
-        let ordered_dest = graph
-            .traversal_mut()
-            .add_v(ProcessorSpec::new(ordered_ident, serde_json::Value::Null))
-            .first()
-            .expect("ordered sink node")
-            .id
-            .to_string();
-        let newest_dest = graph
-            .traversal_mut()
-            .add_v(ProcessorSpec::new(newest_ident, serde_json::Value::Null))
-            .first()
-            .expect("newest sink node")
-            .id
-            .to_string();
-
-        graph.traversal_mut().add_e(
-            OutputLinkPortRef::new(&src_id, "out1"),
-            InputLinkPortRef::new(&ordered_dest, "in1"),
-        );
-        graph.traversal_mut().add_e(
-            OutputLinkPortRef::new(&src_id, "out1"),
-            InputLinkPortRef::new(&newest_dest, "in1"),
-        );
-
-        let src_uid: ProcessorUniqueId = src_id.as_str().into();
-        let err = channel_delivery_profile(&mut graph, &src_uid, "out1")
-            .expect_err("conflicting delivery profiles must be a configuration error");
-        assert!(
-            matches!(err, Error::Configuration(_)),
-            "conflicting destination profile must surface as Error::Configuration; got {err:?}",
         );
     }
 }

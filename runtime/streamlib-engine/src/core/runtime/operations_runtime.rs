@@ -518,7 +518,7 @@ impl RuntimeOperations for Runner {
                     channel,
                     crate::core::runtime::tap::TapChannelSizing {
                         max_subscribers: sizing.max_subscribers,
-                        max_queued_messages: sizing.max_queued_messages,
+                        channel_service_creation_depth: sizing.channel_service_creation_depth,
                     },
                     count,
                 )

@@ -108,6 +108,35 @@ impl crate::core::ManualProcessor for MockInputOnlyProcessor::Processor {
     }
 }
 
+/// Mock processor whose one input port reads `ordered`, beside the `newest`
+/// ports every other input mock declares.
+#[crate::processor(
+    execution = manual,
+    input("in1", delivery_profile = "ordered"),
+)]
+pub(crate) struct MockOrderedInputOnlyProcessor;
+
+impl crate::core::ManualProcessor for MockOrderedInputOnlyProcessor::Processor {
+    fn setup(
+        &mut self,
+        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
+    ) -> crate::core::error::Result<()> {
+        Ok(())
+    }
+    fn teardown(
+        &mut self,
+        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
+    ) -> crate::core::error::Result<()> {
+        Ok(())
+    }
+    fn start(
+        &mut self,
+        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
+    ) -> crate::core::error::Result<()> {
+        Ok(())
+    }
+}
+
 /// Mock processor with only input ports, waking on upstream writes rather
 /// than driving itself — the one execution mode that consumes the link
 /// notifications its listener receives.
@@ -184,6 +213,7 @@ pub(crate) fn ensure_test_mocks_registered() {
         PROCESSOR_REGISTRY.register::<MockWindowedAudioConsumerProcessor::Processor>();
         PROCESSOR_REGISTRY.register::<MockDeviceMatchedAudioConsumerProcessor::Processor>();
         PROCESSOR_REGISTRY.register::<MockInputOnlyProcessor::Processor>();
+        PROCESSOR_REGISTRY.register::<MockOrderedInputOnlyProcessor::Processor>();
         PROCESSOR_REGISTRY.register::<MockReactiveInputOnlyProcessor::Processor>();
     });
 }

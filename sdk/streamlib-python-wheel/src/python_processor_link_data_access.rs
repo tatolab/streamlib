@@ -281,7 +281,7 @@ impl PythonProcessorLinkDataAccess {
         dest_notify_service_name,
         expected_payload_bytes,
         max_payload_bytes_per_channel,
-        max_queued_messages,
+        channel_service_creation_depth,
         max_subscribers,
         notify_max_notifiers,
         link_id,
@@ -295,7 +295,7 @@ impl PythonProcessorLinkDataAccess {
         dest_notify_service_name: &str,
         expected_payload_bytes: usize,
         max_payload_bytes_per_channel: usize,
-        max_queued_messages: usize,
+        channel_service_creation_depth: usize,
         max_subscribers: usize,
         notify_max_notifiers: usize,
         link_id: &str,
@@ -308,7 +308,7 @@ impl PythonProcessorLinkDataAccess {
                     let channel = node.open_or_create_service(
                         channel_service_name,
                         max_subscribers,
-                        max_queued_messages,
+                        channel_service_creation_depth,
                     )?;
                     let publisher = channel.create_publisher(expected_payload_bytes)?;
                     output_writer.set_channel_publisher(
@@ -361,7 +361,8 @@ impl PythonProcessorLinkDataAccess {
         channel_service_name,
         notify_service_name,
         read_mode,
-        max_queued_messages,
+        channel_service_creation_depth,
+        input_port_ring_depth,
         max_subscribers,
         notify_max_notifiers,
         link_id,
@@ -375,7 +376,8 @@ impl PythonProcessorLinkDataAccess {
         channel_service_name: &str,
         notify_service_name: &str,
         read_mode: &str,
-        max_queued_messages: usize,
+        channel_service_creation_depth: usize,
+        input_port_ring_depth: usize,
         max_subscribers: usize,
         notify_max_notifiers: usize,
         link_id: &str,
@@ -401,25 +403,27 @@ impl PythonProcessorLinkDataAccess {
                 if !input_mailboxes.has_port(port_name) {
                     match audio_window {
                         // The window contract sizes the mailbox itself, so the
-                        // envelope's depth is the profile's and this port's is
-                        // its own — the same derivation the parent runs for an
-                        // app-process destination.
+                        // envelope's ring depth is the profile's and this
+                        // port's mailbox is its own — the same derivation the
+                        // parent runs for an app-process destination.
                         Some(contract) => {
                             input_mailboxes.add_windowed_port(port_name, read_mode, contract)
                         }
-                        None => input_mailboxes.add_port(port_name, max_queued_messages, read_mode),
+                        None => {
+                            input_mailboxes.add_port(port_name, input_port_ring_depth, read_mode)
+                        }
                     }
                 }
                 let channel = node.open_or_create_service(
                     channel_service_name,
                     max_subscribers,
-                    max_queued_messages,
+                    channel_service_creation_depth,
                 )?;
                 input_mailboxes.add_channel_subscriber(
                     port_name,
                     link_id,
                     &InboundLinkName::from(channel_service_name),
-                    channel.create_subscriber()?,
+                    channel.create_subscriber(input_port_ring_depth)?,
                 );
                 if !input_mailboxes.has_listener() {
                     let notify_service = node
@@ -636,6 +640,7 @@ mod tests {
                     &notify,
                     "read_next_in_order",
                     8,
+                    8,
                     2,
                     1,
                     "link-1",
@@ -710,6 +715,7 @@ mod tests {
                     &channel,
                     &notify,
                     "read_next_in_order",
+                    8,
                     8,
                     2,
                     1,
@@ -873,6 +879,7 @@ mod tests {
                     &channel,
                     &notify,
                     "whenever",
+                    8,
                     8,
                     2,
                     1,

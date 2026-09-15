@@ -12,8 +12,7 @@
 //! and every language native must agree on byte-for-byte or silently drift:
 //! [`decide_channel_egress_admission`] with its
 //! [`emit_channel_egress_admission_tracing`] diagnostics (so the crate does
-//! emit `tracing`), and [`next_read_required_len`], the peek rule over a
-//! native's local receive queue.
+//! emit `tracing`).
 
 use iceoryx2::prelude::*;
 
@@ -214,30 +213,6 @@ pub fn emit_channel_egress_admission_tracing(
     }
 }
 
-/// Byte length of the frame a read would return next from a native SDK's local
-/// `pending` receive queue, so every native shares one peek rule.
-/// `read_next_in_order` selects the FIFO front; otherwise the SkipToLatest
-/// newest. `None` when the queue is empty. The caller compares the returned
-/// length against its receive buffer to decide whether to grow before
-/// consuming the frame.
-pub fn next_read_required_len(queue: &[(Vec<u8>, i64)], read_next_in_order: bool) -> Option<usize> {
-    let next = if read_next_in_order {
-        queue.first()
-    } else {
-        queue.last()
-    };
-    next.map(|(frame, _)| frame.len())
-}
-
-/// Default iceoryx2 ring depth (slot count, not bytes) for the data
-/// pub/sub channel between two processors.
-///
-/// iceoryx2 pre-allocates `DEFAULT_MAX_QUEUED_MESSAGES * (primed slot bytes)`
-/// of shared memory per publisher, so this value is a per-publisher memory
-/// commitment too. The slot bytes are primed from
-/// [`DEFAULT_EXPECTED_PAYLOAD_BYTES`] and grow on demand.
-pub const DEFAULT_MAX_QUEUED_MESSAGES: usize = 16;
-
 /// Publishers on a channel-centric iceoryx2 pub/sub data service.
 ///
 /// A channel is keyed on its **source output port** — one source port publishes
@@ -267,7 +242,7 @@ pub const RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL: usize = 1;
 /// link connected to a running source must fit a slot that existed when the
 /// channel opened. Every opener requests this same fixed count, and a source
 /// output port refuses a link past it by name.
-pub const MAX_DESTINATIONS_PER_CHANNEL: usize = 8;
+pub const MAX_DESTINATIONS_PER_CHANNEL: usize = 32;
 
 /// Inbound links one destination processor may hold at once — the
 /// `max_notifiers` its destination-keyed notify service is created with.
@@ -276,7 +251,7 @@ pub const MAX_DESTINATIONS_PER_CHANNEL: usize = 8;
 /// service is created with the first inbound link and iceoryx2 verifies the
 /// count on every reopen, so a link connected later must fit a notifier slot
 /// that already exists.
-pub const MAX_INBOUND_LINKS_PER_DESTINATION: usize = 8;
+pub const MAX_INBOUND_LINKS_PER_DESTINATION: usize = 256;
 
 /// Size of the frame header in the `[u8]` slice wire format.
 pub const FRAME_HEADER_SIZE: usize =
@@ -587,16 +562,6 @@ impl std::fmt::Debug for EventPayload {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn next_read_required_len_picks_front_or_back_by_read_mode() {
-        let queue: Vec<(Vec<u8>, i64)> =
-            vec![(vec![0u8; 4], 1), (vec![0u8; 16], 2), (vec![0u8; 64], 3)];
-        assert_eq!(next_read_required_len(&queue, true), Some(4));
-        assert_eq!(next_read_required_len(&queue, false), Some(64));
-        assert_eq!(next_read_required_len(&[], true), None);
-        assert_eq!(next_read_required_len(&[], false), None);
-    }
 
     #[test]
     fn frame_header_round_trip_via_slice() {

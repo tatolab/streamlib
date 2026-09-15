@@ -13,17 +13,16 @@
 //! It is not a realtime-video transport — that is the WebRTC/MoQ/display processors.
 //!
 //! A channel data service is opened with
-//! `max_subscribers = N_destinations + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL`
-//! (1), so a tap is a pure subscriber-add onto the pre-sized reserved slot: it
-//! reopens the existing service publisher-free (iceoryx2 verifies the identical
-//! `max_subscribers`) and creates the reserved subscriber. No new service, no
-//! publisher change, no sizing change.
+//! `max_subscribers = MAX_DESTINATIONS_PER_CHANNEL + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL`,
+//! so a tap is a pure subscriber-add onto the pre-sized reserved slot: it
+//! reopens the existing service publisher-free at the channel's creation depth
+//! (iceoryx2 verifies both) and creates a subscriber as deep as the channel. No
+//! new service, no publisher change, no sizing change.
 //!
-//! The reserved slot is a COUNTING reservation (iceoryx2 only enforces
-//! `max_subscribers = destinations + 1`), not an identity reservation, so a tap
-//! attached during a startup/replace window before a destination subscriber
-//! exists can occupy the slot that destination will need — narrow in practice,
-//! since taps target already-running pipelines.
+//! The reserved slot is a COUNTING reservation (iceoryx2 only enforces the
+//! total), not an identity reservation. While a port feeds fewer than
+//! `MAX_DESTINATIONS_PER_CHANNEL` destinations a second tap still finds a free
+//! slot, and taps holding slots can leave a destination connected later none.
 //!
 //! iceoryx2's `Subscriber` holds `Rc` internally and is `!Send`, so it cannot
 //! move into the caller's tokio tasks. The tap therefore owns a dedicated OS
@@ -66,11 +65,11 @@ const TAP_DROP_WARN_INTERVAL: u64 = 256;
 
 /// The iceoryx2 sizing a tap must reopen its channel data service with. Both
 /// the compiler op that created the service and this tap derive the same pair
-/// from the live graph, so iceoryx2 accepts the publisher-free reopen.
+/// through one function, so iceoryx2 accepts the publisher-free reopen.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct TapChannelSizing {
     pub(crate) max_subscribers: usize,
-    pub(crate) max_queued_messages: usize,
+    pub(crate) channel_service_creation_depth: usize,
 }
 
 /// The two Arc handles shared between a [`TapSubscription`] and its forwarder
@@ -170,7 +169,7 @@ pub(crate) fn start_channel_tap(
     sizing: TapChannelSizing,
     count: Option<usize>,
 ) -> Result<TapSubscription> {
-    let forward_capacity = sizing.max_queued_messages.max(1);
+    let forward_capacity = sizing.channel_service_creation_depth.max(1);
     let (forward_tx, receiver) = tokio::sync::mpsc::channel::<Vec<u8>>(forward_capacity);
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<()>>();
     let signals = TapForwarderSignals {
@@ -236,7 +235,7 @@ fn run_forwarder(
     let service = match node.open_or_create_service(
         &channel,
         sizing.max_subscribers,
-        sizing.max_queued_messages,
+        sizing.channel_service_creation_depth,
     ) {
         Ok(service) => service,
         Err(open_error) => {
@@ -356,7 +355,7 @@ mod tests {
     fn tap_channel_sizing_matching_open_channel(max_subscribers: usize) -> TapChannelSizing {
         TapChannelSizing {
             max_subscribers,
-            max_queued_messages: RING_DEPTH,
+            channel_service_creation_depth: RING_DEPTH,
         }
     }
 
@@ -381,7 +380,11 @@ mod tests {
         let publisher = service.create_publisher(64).expect("channel publisher");
         // Occupy the destination slot(s) so the tap can only take the reserved one.
         let _destination_subscribers: Vec<_> = (0..destinations)
-            .map(|_| service.create_subscriber().expect("destination subscriber"))
+            .map(|_| {
+                service
+                    .create_subscriber(RING_DEPTH)
+                    .expect("destination subscriber")
+            })
             .collect();
 
         // Tap #1 fills the reserved slot.
