@@ -492,9 +492,7 @@ impl HelperProcessStandardErrorTail {
         let (recorded_standard_error_lock, _) =
             &*self.recorded_standard_error_and_pipe_closed_signal;
         let mut recorded_standard_error = recorded_standard_error_lock.lock();
-        recorded_standard_error
-            .tail_bytes
-            .extend(written_bytes.iter().copied());
+        recorded_standard_error.tail_bytes.extend(written_bytes);
         let overflow_byte_count = recorded_standard_error
             .tail_bytes
             .len()
@@ -521,8 +519,9 @@ impl HelperProcessStandardErrorTail {
             |recorded_standard_error| !recorded_standard_error.pipe_closed,
             deadline,
         );
-        let tail_bytes: Vec<u8> = recorded_standard_error.tail_bytes.iter().copied().collect();
-        String::from_utf8_lossy(&tail_bytes).trim().to_string()
+        String::from_utf8_lossy(recorded_standard_error.tail_bytes.make_contiguous())
+            .trim()
+            .to_string()
     }
 }
 

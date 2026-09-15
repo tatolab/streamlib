@@ -65,15 +65,11 @@ pub(crate) fn path_dependency_directories_linked_into(
     crate_directory: &Path,
     workspace_manifest_directory: &Path,
 ) -> BTreeSet<PathBuf> {
-    let workspace_dependency_paths = read_manifest(workspace_manifest_directory)
-        .and_then(|workspace_manifest| {
-            workspace_manifest
-                .get("workspace")?
-                .get("dependencies")?
-                .as_table()
-                .cloned()
-        })
-        .unwrap_or_default();
+    let workspace_manifest = read_manifest(workspace_manifest_directory);
+    let workspace_dependencies = workspace_manifest
+        .as_ref()
+        .and_then(|workspace_manifest| workspace_manifest.get("workspace")?.get("dependencies"))
+        .and_then(toml::Value::as_table);
 
     let mut linked_directories = BTreeSet::new();
     let mut manifests_to_read = vec![crate_directory.to_path_buf()];
@@ -86,8 +82,8 @@ pub(crate) fn path_dependency_directories_linked_into(
                 if let Some(path) = dependency.get("path").and_then(toml::Value::as_str) {
                     manifest_directory.join(path)
                 } else if dependency.get("workspace").and_then(toml::Value::as_bool) == Some(true) {
-                    let Some(path) = workspace_dependency_paths
-                        .get(&dependency_name)
+                    let Some(path) = workspace_dependencies
+                        .and_then(|dependencies| dependencies.get(dependency_name))
                         .and_then(|entry| entry.get("path"))
                         .and_then(toml::Value::as_str)
                     else {
@@ -137,7 +133,9 @@ fn read_manifest(manifest_directory: &Path) -> Option<toml::Table> {
 
 /// `(name, entry)` for every `[dependencies]` and
 /// `[target.<cfg>.dependencies]` entry written as a table.
-fn linked_dependency_entries(manifest: &toml::Table) -> Vec<(String, toml::Table)> {
+fn linked_dependency_entries(
+    manifest: &toml::Table,
+) -> impl Iterator<Item = (&str, &toml::Table)> + '_ {
     let target_dependency_tables = manifest
         .get("target")
         .and_then(toml::Value::as_table)
@@ -150,8 +148,7 @@ fn linked_dependency_entries(manifest: &toml::Table) -> Vec<(String, toml::Table
         .chain(target_dependency_tables)
         .filter_map(toml::Value::as_table)
         .flat_map(|dependencies| dependencies.iter())
-        .filter_map(|(name, entry)| Some((name.clone(), entry.as_table()?.clone())))
-        .collect()
+        .filter_map(|(name, entry)| Some((name.as_str(), entry.as_table()?)))
 }
 
 #[cfg(test)]
