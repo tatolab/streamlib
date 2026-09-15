@@ -234,8 +234,9 @@ jobs:
           # and the sweep of what a dead test process left.
           # The runner arm starts a runtime with `XDG_RUNTIME_DIR` unset.
           # A link wired and unwired in a loop against a read holding no
-          # processor mutex, for three seconds: the input side's own lock is
-          # what keeps that from corrupting the heap.
+          # processor mutex, for at least three seconds and on until both
+          # racers meet their floors, capped at thirty: the input side's own
+          # lock is what keeps that from corrupting the heap.
           cargo test --locked -p streamlib-engine --lib -- \
             core::processor_owned_window \
             processor_owned_window_ops \

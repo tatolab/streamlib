@@ -377,7 +377,7 @@ fn notice_that_a_bag_was_lost_at_a_port_whose_match_device_contract_is_unsettled
 /// stores a separate `Arc::into_raw`-encoded strong reference to the
 /// same inner.
 ///
-/// Wiring against wiring is still serialized by its caller — the compiler under
+/// Wiring against wiring is serialized by its caller — the compiler under
 /// the processor mutex, a helper one wiring command at a time — because a
 /// check-then-install pair such as `has_listener` then `set_listener` is not
 /// atomic. Reads need no such caller.
@@ -3269,10 +3269,8 @@ mod tests {
     /// mailboxes' own, the subscriber list reallocates under an iterating
     /// receive and iceoryx2's single-consumer queue gets two callers: memory is
     /// corrupted and the test binary aborts, usually well inside the window.
-    ///
-    /// Each racer runs for the window and on past it until it has met its
-    /// floor, so a starved runner races longer rather than failing; the hard
-    /// cap turns a racer that never gets there into a failure, never a hang.
+    /// The two racers end together, past the window only until both floors are
+    /// met, so a starved runner races longer and a dead racer fails the test.
     #[test]
     fn a_link_wired_and_unwired_in_a_loop_never_races_a_read_that_holds_no_processor_mutex() {
         const RACE_WINDOW: std::time::Duration = std::time::Duration::from_secs(3);
@@ -3283,6 +3281,7 @@ mod tests {
         const MAX_QUEUED_MESSAGES: usize = 16;
         const MAX_NOTIFIERS: usize = 1;
         const EXPECTED_PAYLOAD_BYTES: usize = 64;
+        const RACERS: usize = 2;
 
         /// Counts a racer out when it ends, by returning or by panicking, so the
         /// publisher it feeds never outlives it.
@@ -3302,11 +3301,17 @@ mod tests {
                 .unwrap()
         };
         let mailboxes = InputMailboxesInner::new();
-        let racers_still_running = std::sync::atomic::AtomicUsize::new(2);
+        let racers_still_running = std::sync::atomic::AtomicUsize::new(RACERS);
+        let wiring_floor_met = std::sync::atomic::AtomicBool::new(false);
+        let reading_floor_met = std::sync::atomic::AtomicBool::new(false);
         let race_started = std::time::Instant::now();
-        let still_racing = |floor_met: bool| {
+        let still_racing = || {
             let elapsed = race_started.elapsed();
-            elapsed < RACE_HARD_CAP && (elapsed < RACE_WINDOW || !floor_met)
+            let both_floors_met = wiring_floor_met.load(std::sync::atomic::Ordering::Relaxed)
+                && reading_floor_met.load(std::sync::atomic::Ordering::Relaxed);
+            elapsed < RACE_HARD_CAP
+                && racers_still_running.load(std::sync::atomic::Ordering::Relaxed) == RACERS
+                && (elapsed < RACE_WINDOW || !both_floors_met)
         };
 
         let (wire_and_unwire_cycles, read_passes, frames_read) = std::thread::scope(|scope| {
@@ -3324,7 +3329,7 @@ mod tests {
             let wiring = scope.spawn(|| {
                 let _still_running = RacerStillRunning(&racers_still_running);
                 let mut wire_and_unwire_cycles = 0u64;
-                while still_racing(wire_and_unwire_cycles >= WIRE_AND_UNWIRE_CYCLES_FLOOR) {
+                while still_racing() {
                     if !mailboxes.has_port("in") {
                         mailboxes.add_port("in", MAX_QUEUED_MESSAGES, ReadMode::ReadNextInOrder);
                     }
@@ -3344,6 +3349,9 @@ mod tests {
                     }
                     mailboxes.remove_channel_link("L-rewired");
                     wire_and_unwire_cycles += 1;
+                    if wire_and_unwire_cycles >= WIRE_AND_UNWIRE_CYCLES_FLOOR {
+                        wiring_floor_met.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
                 }
                 wire_and_unwire_cycles
             });
@@ -3352,7 +3360,7 @@ mod tests {
                 let _still_running = RacerStillRunning(&racers_still_running);
                 let mut read_passes = 0u64;
                 let mut frames_read = 0u64;
-                while still_racing(read_passes >= READ_PASSES_FLOOR && frames_read > 0) {
+                while still_racing() {
                     mailboxes.drain_listener();
                     let _ = mailboxes.listener_fd();
                     let _ = mailboxes.inbound_link_names("in");
@@ -3363,6 +3371,9 @@ mod tests {
                     }
                     let _ = mailboxes.any_port_has_data();
                     read_passes += 1;
+                    if read_passes >= READ_PASSES_FLOOR && frames_read > 0 {
+                        reading_floor_met.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
                 }
                 (read_passes, frames_read)
             });
