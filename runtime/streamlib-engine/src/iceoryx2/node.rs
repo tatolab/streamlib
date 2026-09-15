@@ -1164,9 +1164,20 @@ mod tests {
     #[test]
     fn the_test_process_domain_root_carries_this_process_id_inside_the_runtime_directory() {
         let root = super::iceoryx2_domain_root_for_this_test_process();
-        let runtime_directory = crate::core::runtime::StreamlibRuntimeDirectory::resolve().unwrap();
 
-        assert_eq!(root.parent(), Some(runtime_directory.path()));
+        // Which arm resolved it depends on `XDG_RUNTIME_DIR` at first use, which
+        // a `#[serial]` runner test elsewhere in this process may have unset.
+        let runtime_directory_name = root.parent().and_then(|parent| parent.file_name());
+        assert!(
+            runtime_directory_name == Some(std::ffi::OsStr::new("streamlib"))
+                || runtime_directory_name
+                    == Some(
+                        std::ffi::OsString::from(format!("streamlib-{}", current_process_uid()))
+                            .as_os_str()
+                    ),
+            "{}",
+            root.display()
+        );
         assert!(
             root.file_name()
                 .unwrap()

@@ -586,14 +586,32 @@ impl PythonProcessorLinkDataAccess {
     }
 }
 
+/// Stand in for the parent runtime: hand this test process one iceoryx2 domain
+/// root, the way a parent hands its helper one, before any helper plane opens.
+#[cfg(test)]
+pub(crate) fn hand_this_test_process_an_iceoryx2_domain_root() {
+    static ICEORYX2_DOMAIN_ROOT_HANDED_TO_THIS_TEST_PROCESS: std::sync::OnceLock<()> =
+        std::sync::OnceLock::new();
+    ICEORYX2_DOMAIN_ROOT_HANDED_TO_THIS_TEST_PROCESS.get_or_init(|| {
+        let domain_root =
+            std::env::temp_dir().join(format!("sl-iox2-wheel-{}", std::process::id()));
+        // Anything here was left by an earlier, dead process that held this pid.
+        let _ = std::fs::remove_dir_all(&domain_root);
+        // SAFETY: set once, before this process opens any iceoryx2 node, and read
+        // only by helper-plane construction.
+        unsafe {
+            std::env::set_var(ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, &domain_root);
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use pyo3::types::PyDict;
 
-    /// Unique per run: iceoryx2 service state is machine-global and outlives a
-    /// crashed process, so a fixed name makes one bad run poison every later
-    /// one.
+    /// Unique per test: every test in this process shares one iceoryx2 domain,
+    /// so a fixed name would let one test's channel meet the next one's.
     fn unique_channel_names(label: &str) -> (String, String) {
         let run = std::process::id();
         (
@@ -603,6 +621,7 @@ mod tests {
     }
 
     fn helper_plane(python: Python<'_>) -> PythonProcessorLinkDataAccess {
+        hand_this_test_process_an_iceoryx2_domain_root();
         PythonProcessorLinkDataAccess::open_for_helper_process(python).unwrap()
     }
 

@@ -3684,6 +3684,7 @@ class FrameSomebodyElseWrote:
     /// A data plane the way a helper process builds one — through its own
     /// constructor, which is where its iceoryx2 node comes from.
     fn helper_process_data_plane(python: Python<'_>) -> Py<PythonProcessorLinkDataAccess> {
+        crate::python_processor_link_data_access::hand_this_test_process_an_iceoryx2_domain_root();
         python
             .get_type::<PythonProcessorLinkDataAccess>()
             .call0()
