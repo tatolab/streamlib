@@ -144,15 +144,17 @@ import streamlib
 from streamlib._node_registry import runtime_directory
 
 resolved = runtime_directory()
-sockets_before = {str(path) for path in resolved.glob("surface-share-*.sock")}
+def node_details():
+    return {str(path) for path in (resolved / "iox2" / "nodes").glob("*/*node.details")}
+def sockets():
+    return {str(path) for path in resolved.glob("surface-share-*.sock")}
+node_details_before, sockets_before = node_details(), sockets()
 runtime = streamlib.Runtime()
 try:
     print(json.dumps({
         "resolved_by_the_reader": str(resolved),
-        "domain_files": [str(path) for path in (resolved / "iox2").rglob("*")],
-        "new_sockets": sorted(
-            {str(path) for path in resolved.glob("surface-share-*.sock")} - sockets_before
-        ),
+        "new_node_details": sorted(node_details() - node_details_before),
+        "new_sockets": sorted(sockets() - sockets_before),
     }))
 finally:
     runtime.shutdown()
@@ -194,10 +196,9 @@ def test_the_reader_resolves_the_directory_a_runtime_opened_its_domain_in(
         assert resolved == short_xdg_runtime_dir / "streamlib"
     else:
         assert resolved == PER_USER_FALLBACK
-    assert any(
-        Path(domain_file).name.startswith(f"sl{os.getuid()}_")
-        for domain_file in report["domain_files"]
-    ), f"the runtime's iceoryx2 domain must be in {resolved / 'iox2'}: {report}"
+    assert [Path(details).name for details in report["new_node_details"]] == [
+        f"sl{os.getuid()}_node.details"
+    ], f"the runtime's iceoryx2 node must be in {resolved / 'iox2'}: {report}"
     if sys.platform == "linux":
         assert len(report["new_sockets"]) == 1, (
             f"the runtime's surface socket must be in {resolved}: {report}"

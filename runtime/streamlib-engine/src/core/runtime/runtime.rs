@@ -98,7 +98,7 @@ pub struct Runner {
     /// Path of the per-runtime surface-sharing socket, inside the runtime directory.
     #[cfg(target_os = "linux")]
     pub(crate) surface_socket_path: std::path::PathBuf,
-    /// The runtime directory resolved and checked as this runtime started.
+    /// The runtime directory this runtime resolved as it started.
     pub(crate) runtime_directory: StreamlibRuntimeDirectory,
     /// The surfaces cross-process consumers currently hold checked out, owned
     /// by the service above and read by the pixel-buffer pool through the
@@ -1292,7 +1292,7 @@ fn bring_up_surface_service(
 )> {
     use crate::linux::surface_share::{SurfaceShareState, UnixSocketSurfaceService};
 
-    let socket_path = runtime_directory.surface_share_socket_path(&runtime_id.to_string());
+    let socket_path = runtime_directory.surface_share_socket_path(runtime_id);
 
     if socket_path.exists() {
         match std::os::unix::net::UnixStream::connect(&socket_path) {

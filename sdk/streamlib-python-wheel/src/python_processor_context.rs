@@ -3681,17 +3681,16 @@ class FrameSomebodyElseWrote:
         reader: PythonLinkInputDataReader,
     }
 
-    /// A data plane the way a helper process builds one — through its own
-    /// constructor, which is where its iceoryx2 node comes from.
+    /// A data plane the way a helper process builds one, over a node in this test
+    /// process's own iceoryx2 domain.
     fn helper_process_data_plane(python: Python<'_>) -> Py<PythonProcessorLinkDataAccess> {
-        crate::python_processor_link_data_access::hand_this_test_process_an_iceoryx2_domain_root();
-        python
-            .get_type::<PythonProcessorLinkDataAccess>()
-            .call0()
-            .unwrap()
-            .cast_into::<PythonProcessorLinkDataAccess>()
-            .unwrap()
-            .unbind()
+        Py::new(
+            python,
+            PythonProcessorLinkDataAccess::over_helper_process_iceoryx2_node(
+                streamlib::sdk::iceoryx2::Iceoryx2Node::for_this_test_process(),
+            ),
+        )
+        .unwrap()
     }
 
     fn wire_one_link_into_a_reader(

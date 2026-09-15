@@ -8,6 +8,7 @@ use std::ffi::OsString;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 use std::path::{Path, PathBuf};
 
+use super::RuntimeUniqueId;
 use crate::core::error::{Error, Result};
 
 /// The folder the resolver keeps inside `$XDG_RUNTIME_DIR`.
@@ -22,7 +23,7 @@ const OWNER_ONLY_DIRECTORY_MODE: u32 = 0o700;
 /// Every permission bit a group or other could hold.
 const GROUP_AND_OTHER_PERMISSION_BITS: u32 = 0o077;
 
-/// A runtime directory that has been resolved, created and checked.
+/// A runtime directory that has been resolved and created, the shared-`/tmp` fallback also trust-checked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StreamlibRuntimeDirectory {
     path: PathBuf,
@@ -59,7 +60,7 @@ impl StreamlibRuntimeDirectory {
     }
 
     /// The Unix socket a runtime's surface-sharing service listens on.
-    pub fn surface_share_socket_path(&self, runtime_id: &str) -> PathBuf {
+    pub fn surface_share_socket_path(&self, runtime_id: &RuntimeUniqueId) -> PathBuf {
         self.path.join(format!("surface-share-{runtime_id}.sock"))
     }
 }
@@ -83,12 +84,7 @@ fn resolve_streamlib_runtime_directory(
             .recursive(true)
             .mode(OWNER_ONLY_DIRECTORY_MODE)
             .create(&path)
-            .map_err(|source| {
-                Error::Runtime(format!(
-                    "the StreamLib runtime directory {} could not be created: {source}",
-                    path.display()
-                ))
-            })?;
+            .map_err(|source| runtime_directory_creation_failure(&path, source))?;
         return Ok(StreamlibRuntimeDirectory { path });
     }
 
@@ -99,15 +95,17 @@ fn resolve_streamlib_runtime_directory(
     {
         Ok(()) => {}
         Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists => {}
-        Err(source) => {
-            return Err(Error::Runtime(format!(
-                "the StreamLib runtime directory {} could not be created: {source}",
-                path.display()
-            )));
-        }
+        Err(source) => return Err(runtime_directory_creation_failure(&path, source)),
     }
     refuse_a_fallback_directory_this_uid_cannot_trust(&path, uid)?;
     Ok(StreamlibRuntimeDirectory { path })
+}
+
+fn runtime_directory_creation_failure(path: &Path, source: std::io::Error) -> Error {
+    Error::Runtime(format!(
+        "the StreamLib runtime directory {} could not be created: {source}",
+        path.display()
+    ))
 }
 
 /// The fallback lives in a directory every user can write, so it is trusted only
@@ -333,7 +331,7 @@ mod tests {
             PathBuf::from("/tmp/streamlib-1000/nodes")
         );
         assert_eq!(
-            directory.surface_share_socket_path("Rabc"),
+            directory.surface_share_socket_path(&RuntimeUniqueId::from("Rabc".to_string())),
             PathBuf::from("/tmp/streamlib-1000/surface-share-Rabc.sock")
         );
     }

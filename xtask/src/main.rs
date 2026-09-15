@@ -377,8 +377,8 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::runtime::streamlib_runtime_directory",
                 "iceoryx2::node::tests::a_domain_root_past_the_socket_path_budget_is_refused_by_name",
                 "iceoryx2::node::tests::an_iceoryx2_toml_in_the_working_directory_has_no_effect_on_a_node",
-                "iceoryx2::node::tests::two_domain_roots_are_disjoint_domains",
-                "iceoryx2::node::tests::the_test_process_domain_root_carries_this_process_id_inside_the_runtime_directory",
+                "iceoryx2::node::tests::two_test_process_domains_share_neither_files_nor_shared_memory",
+                "iceoryx2::iceoryx2_domain_for_this_test_process",
                 "core::runtime::runtime::tests::runtime_internal_surface_share::a_runtime_started_with_xdg_runtime_dir_unset_keeps_its_socket_and_domain_in_the_per_user_fallback",
                 "iceoryx2::channel_sizing_tests::every_channel_service_opens_under_safe_overflow",
                 "iceoryx2::delivery_profile::tests::newest_resolves_to_skip_drop_shallow",
@@ -743,9 +743,9 @@ enum Commands {
     CheckDeviceWaitIdle,
 
     /// CI gate for the engine-owned iceoryx2 domain. Fails on any
-    /// `NodeBuilder::new()` or `Config::global_config()` under `runtime/`,
-    /// `sdk/` or `adapters/` outside `iceoryx2/node.rs` — tests and benches
-    /// included, since a node in another domain hangs a test silently.
+    /// `NodeBuilder::new()` under `runtime/`, `sdk/` or `adapters/` outside
+    /// `iceoryx2/node.rs`, and on any `Config::global_config()` anywhere — tests
+    /// and benches included, since a node in another domain hangs a test silently.
     CheckIceoryx2NodeConstruction,
 
     /// CI gate for the borrow-checked-C-string rule in the Vulkan RHI. Fails

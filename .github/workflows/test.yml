@@ -230,7 +230,8 @@ jobs:
           # beyond the logging knobs themselves.
           # The runtime directory's resolver arms and refusals, and the
           # engine-owned iceoryx2 domain: the socket-path budget, a working
-          # directory's `iceoryx2.toml` ignored, and two roots as two domains.
+          # directory's `iceoryx2.toml` ignored, two test processes as two domains,
+          # and the sweep of what a dead test process left.
           # The runner arm starts a runtime with `XDG_RUNTIME_DIR` unset.
           cargo test --locked -p streamlib-engine --lib -- \
             core::processor_owned_window \
@@ -281,8 +282,8 @@ jobs:
             core::runtime::streamlib_runtime_directory \
             iceoryx2::node::tests::a_domain_root_past_the_socket_path_budget_is_refused_by_name \
             iceoryx2::node::tests::an_iceoryx2_toml_in_the_working_directory_has_no_effect_on_a_node \
-            iceoryx2::node::tests::two_domain_roots_are_disjoint_domains \
-            iceoryx2::node::tests::the_test_process_domain_root_carries_this_process_id_inside_the_runtime_directory \
+            iceoryx2::node::tests::two_test_process_domains_share_neither_files_nor_shared_memory \
+            iceoryx2::iceoryx2_domain_for_this_test_process \
             core::runtime::runtime::tests::runtime_internal_surface_share::a_runtime_started_with_xdg_runtime_dir_unset_keeps_its_socket_and_domain_in_the_per_user_fallback \
             iceoryx2::channel_sizing_tests::every_channel_service_opens_under_safe_overflow \
             iceoryx2::delivery_profile::tests::newest_resolves_to_skip_drop_shallow \

@@ -181,17 +181,21 @@ pub fn read_entry(
 pub fn scan_entries(
     registry_directory: &Path,
 ) -> Result<Vec<NodeRegistryEntry>, NodeRegistryError> {
-    let dir = registry_directory.to_path_buf();
-    let read_dir = match std::fs::read_dir(&dir) {
+    let read_dir = match std::fs::read_dir(registry_directory) {
         Ok(read_dir) => read_dir,
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(source) => return Err(NodeRegistryError::EntryRead { path: dir, source }),
+        Err(source) => {
+            return Err(NodeRegistryError::EntryRead {
+                path: registry_directory.to_path_buf(),
+                source,
+            });
+        }
     };
 
     let mut entries = Vec::new();
     for dir_entry in read_dir {
         let dir_entry = dir_entry.map_err(|source| NodeRegistryError::EntryRead {
-            path: dir.clone(),
+            path: registry_directory.to_path_buf(),
             source,
         })?;
         let path = dir_entry.path();

@@ -15,6 +15,9 @@ from app_under_test import AppUnderTest, start_app
 
 ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE = "STREAMLIB_ICEORYX2_DOMAIN_ROOT"
 DOMAIN_ROOT_NAME_PREFIX = "sl-iox2-"
+# Not `tempfile.gettempdir()`: on macOS that is a `/var/folders/...` path long
+# enough to overrun the budget iceoryx2's socket paths leave a domain root.
+SHARED_TEMPORARY_DIRECTORY = Path("/tmp")
 
 
 @pytest.fixture
@@ -51,7 +54,7 @@ def _remove_iceoryx2_domain_roots_whose_test_process_is_gone() -> None:
     """A root outlives its session: a node can still be dropping as the process
     exits, and iceoryx2 warns when its files vanish first. So a root is swept by
     a later session once the process named in it has gone."""
-    for domain_root in Path(tempfile.gettempdir()).glob(f"{DOMAIN_ROOT_NAME_PREFIX}*"):
+    for domain_root in SHARED_TEMPORARY_DIRECTORY.glob(f"{DOMAIN_ROOT_NAME_PREFIX}*"):
         try:
             owning_process_id = int(domain_root.name[len(DOMAIN_ROOT_NAME_PREFIX) :].split("-")[0])
             os.kill(owning_process_id, 0)
@@ -75,7 +78,9 @@ def private_iceoryx2_domain_for_this_test_process() -> "Iterator[Path]":
     """
     _remove_iceoryx2_domain_roots_whose_test_process_is_gone()
     domain_root = Path(
-        tempfile.mkdtemp(prefix=f"{DOMAIN_ROOT_NAME_PREFIX}{os.getpid()}-")
+        tempfile.mkdtemp(
+            prefix=f"{DOMAIN_ROOT_NAME_PREFIX}{os.getpid()}-", dir=SHARED_TEMPORARY_DIRECTORY
+        )
     )
     previous_domain_root = os.environ.get(ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE)
     os.environ[ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE] = str(domain_root)

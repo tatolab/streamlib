@@ -318,6 +318,11 @@ def test_a_node_launched_with_xdg_runtime_dir_unset_keeps_everything_live_in_the
 
     monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
     per_user_fallback = Path("/tmp") / f"streamlib-{os.getuid()}"
+
+    def iceoryx2_node_details() -> "set[Path]":
+        return set((per_user_fallback / "iox2" / "nodes").glob("*/*node.details"))
+
+    iceoryx2_node_details_before = iceoryx2_node_details()
     app_directory = tmp_path / "app"
     write_app_with_helper_placed_processors(app_directory, 1)
     output_file = app_directory / "node-output.log"
@@ -357,10 +362,12 @@ def test_a_node_launched_with_xdg_runtime_dir_unset_keeps_everything_live_in_the
         entry_file = registry_directory() / f"{runtime_id}.json"
         assert entry_file.is_file()
         assert (per_user_fallback / f"surface-share-{runtime_id}.sock").exists()
-        assert any(
-            path.name.startswith(f"sl{os.getuid()}_")
-            for path in (per_user_fallback / "iox2").rglob("*")
-        ), "the node's iceoryx2 domain must be in the per-user fallback"
+        new_node_details = iceoryx2_node_details() - iceoryx2_node_details_before
+        assert {details.name for details in new_node_details} == {f"sl{os.getuid()}_node.details"}
+        assert len(new_node_details) == 2, (
+            f"the parent and its helper must each open a node in the per-user fallback's "
+            f"domain; found {sorted(map(str, new_node_details))}"
+        )
 
         node.interrupt()
         assert node.await_exit(CLEAN_EXIT_TIMEOUT_SECONDS) == 0, (

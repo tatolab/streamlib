@@ -93,5 +93,10 @@ cudarc = { workspace = true }
 streamlib-surface-client = { path = "../../runtime/streamlib-surface-client", version = "0.22.6" }
 streamlib-consumer-rhi = { path = "../../runtime/streamlib-consumer-rhi", version = "0.22.6" }
 
+[dev-dependencies]
+# Unit tests open helper data planes over a node in the test process's own
+# iceoryx2 domain.
+streamlib = { path = "../streamlib-sdk", version = "0.22.6", features = ["test-support"] }
+
 [lints]
 workspace = true

@@ -40,6 +40,9 @@ const HELPER_PROCESS_MODULE: &str = "streamlib._helper";
 /// running inside a child that it is one.
 pub(crate) const HELPER_PROCESS_ENTRYPOINT_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_ENTRYPOINT";
 
+/// The environment variable carrying the id of the processor a helper process hosts.
+pub(crate) const HELPER_PROCESS_PROCESSOR_ID_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_PROCESSOR_ID";
+
 /// How long the child has to import the user's class, open its ports, run
 /// `setup` and report ready before this host gives up and kills it.
 ///
@@ -189,7 +192,10 @@ impl PythonHelperProcessSpawnHostProcessor {
                 HELPER_PROCESS_ENTRYPOINT_ENVIRONMENT_VARIABLE,
                 &self.processor_class_import_path,
             )
-            .env("STREAMLIB_PROCESSOR_ID", &self.processor_id)
+            .env(
+                HELPER_PROCESS_PROCESSOR_ID_ENVIRONMENT_VARIABLE,
+                &self.processor_id,
+            )
             .env("STREAMLIB_RUNTIME_ID", runtime_id)
             .env(
                 ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE,

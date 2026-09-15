@@ -10,6 +10,8 @@ mod channel_name;
 mod channel_sizing_tests;
 mod delivery_profile;
 mod dropped_bag_counters;
+#[cfg(any(test, feature = "test-support"))]
+mod iceoryx2_domain_for_this_test_process;
 mod input;
 mod mailbox;
 mod node;
@@ -36,12 +38,15 @@ pub use channel_name::{
 pub(crate) use delivery_profile::delivery_profile_for_input_port;
 pub use delivery_profile::{DeliveryProfile, DeliveryResolution};
 pub use dropped_bag_counters::DroppedBagCountsByInboundLink;
+#[cfg(any(test, feature = "test-support"))]
+pub use iceoryx2_domain_for_this_test_process::{
+    Iceoryx2DomainForThisTestProcess, create_iceoryx2_node_for_this_test_process,
+    iceoryx2_domain_for_this_test_process,
+};
 pub use input::{BoundedReadOutcome, InputMailboxes, InputMailboxesInner};
 pub use mailbox::{
     PortMailbox, PortMailboxDeliveredBag, PortMailboxEvictionNotice, PortMailboxQueuedFrameMeasure,
 };
-#[cfg(test)]
-pub(crate) use node::create_iceoryx2_node_for_this_test_process;
 pub use node::{
     ChannelTapSubscribeError, ICEORYX2_DOMAIN_ROOT_AND_PREFIX_BUDGET_BYTES,
     ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, Iceoryx2EventService, Iceoryx2Node,

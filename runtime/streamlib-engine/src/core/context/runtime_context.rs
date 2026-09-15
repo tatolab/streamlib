@@ -42,7 +42,7 @@ pub struct RuntimeContext {
     iceoryx2_node: Iceoryx2Node,
     /// Audio clock for synchronized audio timing.
     audio_clock: SharedAudioClock,
-    /// The runtime directory resolved and checked as the runtime started.
+    /// The runtime directory this runtime resolved as it started.
     runtime_directory: StreamlibRuntimeDirectory,
     /// Per-runtime surface-sharing Unix socket path. Polyglot subprocesses
     /// receive this via the `STREAMLIB_SURFACE_SOCKET` env var so their
@@ -118,7 +118,7 @@ impl RuntimeContext {
         &self.runtime_id
     }
 
-    /// The runtime directory resolved and checked as the runtime started.
+    /// The runtime directory this runtime resolved as it started.
     pub fn runtime_directory(&self) -> &StreamlibRuntimeDirectory {
         &self.runtime_directory
     }

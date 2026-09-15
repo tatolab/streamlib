@@ -30,6 +30,7 @@ use streamlib::sdk::iceoryx2::{
 use crate::python_bag_conversion::{
     cast_decoded_bag_into_read_target, decode_msgpack_to_python_object, encode_bag_to_msgpack,
 };
+use crate::python_helper_process_spawn_host::HELPER_PROCESS_PROCESSOR_ID_ENVIRONMENT_VARIABLE;
 use crate::python_logging::monotonic_clock_now_ns;
 use crate::python_processor_context::PythonGpuContextLimitedAccess;
 use crate::python_processor_declaration::read_a_channel_count_or_the_source_spelling;
@@ -63,6 +64,17 @@ impl PythonProcessorLinkDataAccess {
             declared_input_ports: parking_lot::Mutex::new(HashSet::new()),
             declared_output_ports: parking_lot::Mutex::new(HashSet::new()),
         }
+    }
+
+    /// A helper process's own data plane over an iceoryx2 node it already opened.
+    pub(crate) fn over_helper_process_iceoryx2_node(node: Iceoryx2Node) -> Self {
+        let wiring = Self::new();
+        let _ = wiring.iceoryx2_node.set(node);
+        let _ = wiring
+            .input_mailboxes
+            .set(Arc::new(InputMailboxesInner::new()));
+        let _ = wiring.output_writer.set(Arc::new(OutputWriterInner::new()));
+        wiring
     }
 
     /// The mailboxes `port_name` reads from; `None` for a declared input port
@@ -244,20 +256,15 @@ impl PythonProcessorLinkDataAccess {
                      opens its iceoryx2 node only in the domain its parent runtime hands it"
                 ))
             })?;
-        let node_name = match std::env::var("STREAMLIB_PROCESSOR_ID") {
-            Ok(processor_id) => format!("streamlib-helper/{processor_id}"),
-            Err(_) => format!("streamlib-helper/pid{}", std::process::id()),
-        };
+        let node_name = std::env::var(HELPER_PROCESS_PROCESSOR_ID_ENVIRONMENT_VARIABLE)
+            .map_or_else(
+                |_| format!("streamlib-helper/pid{}", std::process::id()),
+                |processor_id| format!("streamlib-helper/{processor_id}"),
+            );
         let node = python
             .detach(|| Iceoryx2Node::new(std::path::Path::new(&iceoryx2_domain_root), &node_name))
             .map_err(|node_failure| PyRuntimeError::new_err(node_failure.to_string()))?;
-        let wiring = Self::new();
-        let _ = wiring.iceoryx2_node.set(node);
-        let _ = wiring
-            .input_mailboxes
-            .set(Arc::new(InputMailboxesInner::new()));
-        let _ = wiring.output_writer.set(Arc::new(OutputWriterInner::new()));
-        Ok(wiring)
+        Ok(Self::over_helper_process_iceoryx2_node(node))
     }
 
     /// Open this processor's publisher and one destination notifier for a link
@@ -586,25 +593,6 @@ impl PythonProcessorLinkDataAccess {
     }
 }
 
-/// Stand in for the parent runtime: hand this test process one iceoryx2 domain
-/// root, the way a parent hands its helper one, before any helper plane opens.
-#[cfg(test)]
-pub(crate) fn hand_this_test_process_an_iceoryx2_domain_root() {
-    static ICEORYX2_DOMAIN_ROOT_HANDED_TO_THIS_TEST_PROCESS: std::sync::OnceLock<()> =
-        std::sync::OnceLock::new();
-    ICEORYX2_DOMAIN_ROOT_HANDED_TO_THIS_TEST_PROCESS.get_or_init(|| {
-        let domain_root =
-            std::env::temp_dir().join(format!("sl-iox2-wheel-{}", std::process::id()));
-        // Anything here was left by an earlier, dead process that held this pid.
-        let _ = std::fs::remove_dir_all(&domain_root);
-        // SAFETY: set once, before this process opens any iceoryx2 node, and read
-        // only by helper-plane construction.
-        unsafe {
-            std::env::set_var(ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, &domain_root);
-        }
-    });
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -620,9 +608,10 @@ mod tests {
         )
     }
 
-    fn helper_plane(python: Python<'_>) -> PythonProcessorLinkDataAccess {
-        hand_this_test_process_an_iceoryx2_domain_root();
-        PythonProcessorLinkDataAccess::open_for_helper_process(python).unwrap()
+    fn helper_plane() -> PythonProcessorLinkDataAccess {
+        PythonProcessorLinkDataAccess::over_helper_process_iceoryx2_node(
+            Iceoryx2Node::for_this_test_process(),
+        )
     }
 
     /// The whole point of the wiring surface: a helper process opens its own
@@ -634,8 +623,8 @@ mod tests {
         Python::initialize();
         Python::attach(|python| {
             let (channel, notify) = unique_channel_names("roundtrip");
-            let source = helper_plane(python);
-            let destination = helper_plane(python);
+            let source = helper_plane();
+            let destination = helper_plane();
 
             // The destination subscribes first: iceoryx2 drops a send with no
             // subscriber attached, so wiring the publisher first would race.
@@ -704,8 +693,8 @@ mod tests {
         Python::initialize();
         Python::attach(|python| {
             let (channel, notify) = unique_channel_names("windowed");
-            let source = helper_plane(python);
-            let destination = helper_plane(python);
+            let source = helper_plane();
+            let destination = helper_plane();
 
             let contract = PyDict::new(python);
             contract.set_item("sample_rate", 16_000i64).unwrap();
@@ -808,7 +797,7 @@ mod tests {
         Python::attach(|python| {
             let (channel, notify) = unique_channel_names("fanout");
             let (_, second_notify) = unique_channel_names("fanout_second");
-            let source = helper_plane(python);
+            let source = helper_plane();
 
             source
                 .wire_output_link(
@@ -876,7 +865,7 @@ mod tests {
         Python::initialize();
         Python::attach(|python| {
             let (channel, notify) = unique_channel_names("readmode");
-            let destination = helper_plane(python);
+            let destination = helper_plane();
             let refusal = destination
                 .wire_input_link(
                     python,

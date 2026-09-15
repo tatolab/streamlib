@@ -35,7 +35,18 @@ pub fn engine_owned_iceoryx2_prefix_for_this_user() -> String {
 /// The iceoryx2 configuration every engine-owned node, and every static iceoryx2
 /// call, uses — built from the library defaults, never from iceoryx2's lookup path.
 pub fn engine_owned_iceoryx2_config(domain_root: &std::path::Path) -> Result<Config> {
-    let prefix = engine_owned_iceoryx2_prefix_for_this_user();
+    iceoryx2_config_for_domain(domain_root, &engine_owned_iceoryx2_prefix_for_this_user())
+}
+
+/// Build the configuration for the domain named by `domain_root` and `prefix`.
+///
+/// iceoryx2 keeps file-backed state under the root but names its POSIX shared
+/// memory from the prefix alone, so two domains are disjoint only when their
+/// prefixes differ too.
+pub(crate) fn iceoryx2_config_for_domain(
+    domain_root: &std::path::Path,
+    prefix: &str,
+) -> Result<Config> {
     let root_bytes = domain_root.as_os_str().as_encoded_bytes();
     let root_and_prefix_bytes = root_bytes.len() + prefix.len();
     if root_and_prefix_bytes > ICEORYX2_DOMAIN_ROOT_AND_PREFIX_BUDGET_BYTES {
@@ -69,7 +80,20 @@ pub fn create_iceoryx2_node_in_engine_owned_domain(
     domain_root: &std::path::Path,
     node_name: &str,
 ) -> Result<Node<ipc::Service>> {
-    let config = engine_owned_iceoryx2_config(domain_root)?;
+    create_iceoryx2_node_in_domain(
+        domain_root,
+        &engine_owned_iceoryx2_prefix_for_this_user(),
+        node_name,
+    )
+}
+
+/// Create a raw iceoryx2 node, labelled `node_name`, in the domain named by `domain_root` and `prefix`.
+pub(crate) fn create_iceoryx2_node_in_domain(
+    domain_root: &std::path::Path,
+    prefix: &str,
+    node_name: &str,
+) -> Result<Node<ipc::Service>> {
+    let config = iceoryx2_config_for_domain(domain_root, prefix)?;
     let node_name = NodeName::new(node_name).map_err(|refusal| {
         Error::Configuration(format!(
             "'{node_name}' is not an iceoryx2 node name: {refusal:?}"
@@ -89,35 +113,6 @@ pub fn create_iceoryx2_node_in_engine_owned_domain(
         })
 }
 
-/// The iceoryx2 domain root this test process gives every node it creates.
-#[cfg(test)]
-pub(crate) fn iceoryx2_domain_root_for_this_test_process() -> std::path::PathBuf {
-    static ICEORYX2_DOMAIN_ROOT_FOR_THIS_TEST_PROCESS: std::sync::OnceLock<std::path::PathBuf> =
-        std::sync::OnceLock::new();
-    ICEORYX2_DOMAIN_ROOT_FOR_THIS_TEST_PROCESS
-        .get_or_init(|| {
-            let runtime_directory = crate::core::runtime::StreamlibRuntimeDirectory::resolve()
-                .expect("a test process needs a runtime directory to hold its iceoryx2 domain");
-            let random_suffix = uuid::Uuid::new_v4().simple().to_string();
-            runtime_directory.path().join(format!(
-                "iox2-test-{}-{}",
-                std::process::id(),
-                &random_suffix[..8]
-            ))
-        })
-        .clone()
-}
-
-/// A raw iceoryx2 node in this test process's own domain.
-#[cfg(test)]
-pub(crate) fn create_iceoryx2_node_for_this_test_process() -> Node<ipc::Service> {
-    create_iceoryx2_node_in_engine_owned_domain(
-        &iceoryx2_domain_root_for_this_test_process(),
-        "streamlib-test",
-    )
-    .expect("a test process opens iceoryx2 nodes in its own domain")
-}
-
 /// Thread-safe wrapper for iceoryx2 Node.
 ///
 /// The Node is created once per runtime and shared across all processors.
@@ -131,16 +126,13 @@ impl Iceoryx2Node {
     /// Create a node, labelled `node_name`, in the engine-owned domain rooted at `domain_root`.
     pub fn new(domain_root: &std::path::Path, node_name: &str) -> Result<Self> {
         let node = create_iceoryx2_node_in_engine_owned_domain(domain_root, node_name)?;
-        Ok(Self {
-            inner: Arc::new(Mutex::new(node)),
-        })
+        Ok(Self::wrapping(node))
     }
 
-    /// A node in this test process's own domain.
-    #[cfg(test)]
-    pub(crate) fn for_this_test_process() -> Self {
+    /// Share an already-created raw node.
+    pub(crate) fn wrapping(node: Node<ipc::Service>) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(create_iceoryx2_node_for_this_test_process())),
+            inner: Arc::new(Mutex::new(node)),
         }
     }
 
@@ -1076,6 +1068,7 @@ mod tests {
     #[test]
     #[serial_test::serial]
     fn an_iceoryx2_toml_in_the_working_directory_has_no_effect_on_a_node() {
+        const HIJACKED_MAX_SUBSCRIBERS: usize = 3;
         let working_directory = tempfile::tempdir().unwrap();
         let hijacked_root = working_directory.path().join("hijacked");
         std::fs::create_dir(working_directory.path().join("config")).unwrap();
@@ -1085,7 +1078,8 @@ mod tests {
                 .join("config")
                 .join("iceoryx2.toml"),
             format!(
-                "[global]\nroot-path = \"{}\"\nprefix = \"hijack_\"\n",
+                "[global]\nroot-path = \"{}\"\nprefix = \"hijack_\"\n\n\
+                 [defaults.publish-subscribe]\nmax-subscribers = {HIJACKED_MAX_SUBSCRIBERS}\n",
                 hijacked_root.display()
             ),
         )
@@ -1108,6 +1102,15 @@ mod tests {
             config.global.prefix.as_bytes_const(),
             engine_owned_iceoryx2_prefix_for_this_user().as_bytes()
         );
+        assert_ne!(
+            Config::default().defaults.publish_subscribe.max_subscribers,
+            HIJACKED_MAX_SUBSCRIBERS
+        );
+        assert_eq!(
+            config.defaults.publish_subscribe.max_subscribers,
+            Config::default().defaults.publish_subscribe.max_subscribers,
+            "a value the engine never sets must still be the library default, not the file's"
+        );
         assert!(
             !hijacked_root.exists(),
             "nothing may be written where the working directory's config points"
@@ -1120,24 +1123,26 @@ mod tests {
     }
 
     #[test]
-    fn two_domain_roots_are_disjoint_domains() {
-        let first_process_domain = tempfile::tempdir().unwrap();
-        let second_process_domain = tempfile::tempdir().unwrap();
-        let first_root = first_process_domain.path().join("iox2");
-        let second_root = second_process_domain.path().join("iox2");
+    fn two_test_process_domains_share_neither_files_nor_shared_memory() {
+        let first_process = tempfile::tempdir().unwrap();
+        let second_process = tempfile::tempdir().unwrap();
+        let first_root = first_process.path().join("iox2");
+        let second_root = second_process.path().join("iox2");
+        let uid = current_process_uid();
+        let (first_prefix, second_prefix) = (format!("sl{uid}t1_"), format!("sl{uid}t2_"));
         let service_name = ServiceName::new(&unique_service_name("disjoint")).unwrap();
 
         let first_node =
-            create_iceoryx2_node_in_engine_owned_domain(&first_root, "streamlib-test/first")
+            create_iceoryx2_node_in_domain(&first_root, &first_prefix, "streamlib-test/first")
                 .unwrap();
-        let _service = first_node
+        let _service_in_the_first_domain = first_node
             .service_builder(&service_name)
             .publish_subscribe::<[u8]>()
             .create()
             .expect("the first domain creates the service");
 
         let second_node =
-            create_iceoryx2_node_in_engine_owned_domain(&second_root, "streamlib-test/second")
+            create_iceoryx2_node_in_domain(&second_root, &second_prefix, "streamlib-test/second")
                 .unwrap();
         assert!(
             second_node
@@ -1147,45 +1152,28 @@ mod tests {
                 .is_err(),
             "a service created in one domain must not be visible from another"
         );
-        let names_in_the_second_domain =
-            names_of_the_live_nodes_in(&engine_owned_iceoryx2_config(&second_root).unwrap());
-        assert!(!names_in_the_second_domain.contains(&"streamlib-test/first".to_string()));
+        let _service_in_the_second_domain = second_node
+            .service_builder(&service_name)
+            .publish_subscribe::<[u8]>()
+            .create()
+            .expect("the same service name creates afresh in a domain with its own shared memory");
+        assert!(
+            !names_of_the_live_nodes_in(
+                &iceoryx2_config_for_domain(&second_root, &second_prefix).unwrap()
+            )
+            .contains(&"streamlib-test/first".to_string())
+        );
 
-        let another_node_in_the_first_domain =
-            create_iceoryx2_node_in_engine_owned_domain(&first_root, "streamlib-test/first-again")
-                .unwrap();
+        let another_node_in_the_first_domain = create_iceoryx2_node_in_domain(
+            &first_root,
+            &first_prefix,
+            "streamlib-test/first-again",
+        )
+        .unwrap();
         another_node_in_the_first_domain
             .service_builder(&service_name)
             .publish_subscribe::<[u8]>()
             .open()
-            .expect("the same root is the same domain");
-    }
-
-    #[test]
-    fn the_test_process_domain_root_carries_this_process_id_inside_the_runtime_directory() {
-        let root = super::iceoryx2_domain_root_for_this_test_process();
-
-        // Which arm resolved it depends on `XDG_RUNTIME_DIR` at first use, which
-        // a `#[serial]` runner test elsewhere in this process may have unset.
-        let runtime_directory_name = root.parent().and_then(|parent| parent.file_name());
-        assert!(
-            runtime_directory_name == Some(std::ffi::OsStr::new("streamlib"))
-                || runtime_directory_name
-                    == Some(
-                        std::ffi::OsString::from(format!("streamlib-{}", current_process_uid()))
-                            .as_os_str()
-                    ),
-            "{}",
-            root.display()
-        );
-        assert!(
-            root.file_name()
-                .unwrap()
-                .to_string_lossy()
-                .starts_with(&format!("iox2-test-{}-", std::process::id())),
-            "{}",
-            root.display()
-        );
-        engine_owned_iceoryx2_config(&root).expect("the test root fits the socket path budget");
+            .expect("the same root and prefix are the same domain");
     }
 }
