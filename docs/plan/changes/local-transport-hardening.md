@@ -280,10 +280,10 @@ ADR.
 
 - **A helper that dies with a link unconfirmed** takes the link down with it on the same
   death path the ladder runs; the link never reads `wired`.
-- **Bug tickets B1–B7** from the audit (the input-side lock, wake-ups, lock order, helper-line
-  fixes, event bus, helper diagnostics, tap hygiene) are not this change. They are bugs against
-  shipped behavior and get no change artifact. None is filed yet. B1 and B2 must land before
-  the mesh, not before this change.
+- **The audit's bug tickets #2272–#2278** (input-side lock, wake-ups, lock order, helper-line
+  fixes, event bus, helper diagnostics, transport hygiene) are not this change. They are bugs
+  against shipped behavior with no change artifact. #2276 and #2277 wait on M1, #2278 on M2;
+  #2272 and #2273 must land before the mesh, not before this change.
 - **One ADR for the four protocol and sizing items**, `docs/decisions/local-transport-hardening.md`.
   The ladder's rationale stays in `shutdown-ladder.md`.
 
