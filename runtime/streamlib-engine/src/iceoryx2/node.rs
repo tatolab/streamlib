@@ -1065,10 +1065,26 @@ mod tests {
         );
     }
 
+    const HIJACKED_MAX_SUBSCRIBERS: usize = 3;
+
+    /// Set only in the child process the working-directory test re-runs itself in.
+    const CWD_CONFIG_CHILD_DOMAIN_ROOT_ENVIRONMENT_VARIABLE: &str =
+        "STREAMLIB_TEST_CWD_CONFIG_CHILD_ICEORYX2_DOMAIN_ROOT";
+
+    /// The working directory is process-wide, so the node opens in a child test
+    /// process started inside the directory holding the config file; changing
+    /// this process's directory would move it under every test running beside it.
     #[test]
-    #[serial_test::serial]
     fn an_iceoryx2_toml_in_the_working_directory_has_no_effect_on_a_node() {
-        const HIJACKED_MAX_SUBSCRIBERS: usize = 3;
+        if let Some(domain_root) =
+            std::env::var_os(CWD_CONFIG_CHILD_DOMAIN_ROOT_ENVIRONMENT_VARIABLE)
+        {
+            open_a_node_beside_a_working_directory_iceoryx2_toml(std::path::Path::new(
+                &domain_root,
+            ));
+            return;
+        }
+
         let working_directory = tempfile::tempdir().unwrap();
         let hijacked_root = working_directory.path().join("hijacked");
         std::fs::create_dir(working_directory.path().join("config")).unwrap();
@@ -1087,11 +1103,36 @@ mod tests {
         let domain = tempfile::tempdir().unwrap();
         let domain_root = domain.path().join("iox2");
 
-        let previous_working_directory = std::env::current_dir().unwrap();
-        std::env::set_current_dir(working_directory.path()).unwrap();
-        let node = Iceoryx2Node::new(&domain_root, "streamlib-test/cwd-config-ignored");
-        std::env::set_current_dir(previous_working_directory).unwrap();
-        let node = node.expect("a node opens in the engine-owned domain");
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "iceoryx2::node::tests::an_iceoryx2_toml_in_the_working_directory_has_no_effect_on_a_node",
+                "--exact",
+                "--test-threads=1",
+            ])
+            .env(CWD_CONFIG_CHILD_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, &domain_root)
+            .current_dir(working_directory.path())
+            .output()
+            .expect("the test binary re-runs this test in a child process");
+        let child_stdout = String::from_utf8_lossy(&child.stdout);
+        assert!(
+            child.status.success() && child_stdout.contains("1 passed"),
+            "the child test process must run this test and pass\nstdout:\n{child_stdout}\nstderr:\n{}",
+            String::from_utf8_lossy(&child.stderr)
+        );
+        assert!(
+            !hijacked_root.exists(),
+            "nothing may be written where the working directory's config points"
+        );
+    }
+
+    fn open_a_node_beside_a_working_directory_iceoryx2_toml(domain_root: &std::path::Path) {
+        assert!(
+            std::path::Path::new("config/iceoryx2.toml").is_file(),
+            "the child must start in the directory holding the config file"
+        );
+
+        let node = Iceoryx2Node::new(domain_root, "streamlib-test/cwd-config-ignored")
+            .expect("a node opens in the engine-owned domain");
 
         let config = node.config();
         assert_eq!(
@@ -1112,11 +1153,7 @@ mod tests {
             "a value the engine never sets must still be the library default, not the file's"
         );
         assert!(
-            !hijacked_root.exists(),
-            "nothing may be written where the working directory's config points"
-        );
-        assert!(
-            names_of_the_live_nodes_in(&engine_owned_iceoryx2_config(&domain_root).unwrap())
+            names_of_the_live_nodes_in(&engine_owned_iceoryx2_config(domain_root).unwrap())
                 .contains(&"streamlib-test/cwd-config-ignored".to_string()),
             "the named node must be listed in the engine-owned domain"
         );
