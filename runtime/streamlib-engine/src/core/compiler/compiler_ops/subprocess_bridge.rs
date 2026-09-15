@@ -130,8 +130,8 @@ impl EscalateTransport {
 /// mid-`process()`".
 ///
 /// Named here because the escalate dispatch reads it and the spawn host that
-/// sends it lives in another crate: a bare
-/// literal on each side would let a rename refuse every window silently.
+/// sends it lives in another crate: a bare literal on each side would let a
+/// rename refuse every window silently.
 pub const SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS: &str = "setup";
 
 /// Shared writer handle. The host's lifecycle path and the reader

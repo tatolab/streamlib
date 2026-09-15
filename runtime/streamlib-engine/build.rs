@@ -37,31 +37,39 @@ fn main() {
 
 /// Hand the compiler `STREAMLIB_ENGINE_BUILD_ID_FROM_BUILD_SCRIPT`.
 ///
-/// The nonce is minted each time this script runs, so the script is made to
-/// rerun whenever the engine it stamps could have changed — its sources, its
-/// manifest, the lockfile pinning its dependencies, the commit checked out.
-/// Otherwise a rebuilt engine would keep the nonce of the build it replaced and
-/// a stale helper would pass the check.
+/// The nonce is minted each time this script runs, so the script reruns
+/// whenever the code compiled into the engine changes: its own sources and
+/// manifest, every crate it links through a path dependency, and the lockfile
+/// pinning the rest. Otherwise a rebuilt engine would keep the id of the build
+/// it replaced and a stale helper would pass the check. The checked-out commit
+/// is deliberately not watched — every commit would rebuild the engine and
+/// everything above it — so the sha names the commit checked out when the
+/// script last ran.
 fn stamp_the_engine_build_id() {
     use engine_build_id_composition::{
-        compose_engine_build_id, git_files_rewritten_when_the_checked_out_commit_changes,
-        git_sha_of_the_checkout_containing, mint_per_build_nonce,
+        compose_engine_build_id, git_sha_of_the_checkout_containing, mint_per_build_nonce,
+        path_dependency_directories_linked_into,
     };
 
     let manifest_directory = std::path::PathBuf::from(
         std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set"),
     );
-    println!("cargo:rerun-if-changed=src");
-    println!("cargo:rerun-if-changed=Cargo.toml");
+    let workspace_manifest_directory = manifest_directory.join("../..");
+    let crate_directories_compiled_into_the_engine = std::iter::once(manifest_directory.clone())
+        .chain(path_dependency_directories_linked_into(
+            &manifest_directory,
+            &workspace_manifest_directory,
+        ));
+    let watched_paths = crate_directories_compiled_into_the_engine
+        .flat_map(|crate_directory| {
+            ["src", "Cargo.toml", "build.rs"].map(|entry| crate_directory.join(entry))
+        })
+        .chain(std::iter::once(
+            workspace_manifest_directory.join("Cargo.lock"),
+        ));
     // Only paths that exist: cargo reruns a script on every build while a
     // watched path is missing.
-    let workspace_lockfile = manifest_directory.join("../../Cargo.lock");
-    let files_rewritten_when_the_commit_changes =
-        git_files_rewritten_when_the_checked_out_commit_changes(&manifest_directory);
-    for watched_path in std::iter::once(workspace_lockfile)
-        .filter(|path| path.is_file())
-        .chain(files_rewritten_when_the_commit_changes)
-    {
+    for watched_path in watched_paths.filter(|path| path.exists()) {
         println!("cargo:rerun-if-changed={}", watched_path.display());
     }
 

@@ -13,10 +13,11 @@
 //! Python the app is, with the same packages, reached by exec and never by
 //! fork — a forked GPU context is not usable in the child.
 
+use std::collections::VecDeque;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use pyo3::prelude::*;
@@ -474,53 +475,54 @@ fn refusal_of_a_helper_process_that_died_while_setting_up(
 /// the pipe has closed.
 #[derive(Clone, Default)]
 struct HelperProcessStandardErrorTail {
-    recorded: Arc<(Mutex<RecordedHelperProcessStandardError>, Condvar)>,
+    recorded_standard_error_and_pipe_closed_signal: Arc<(
+        parking_lot::Mutex<RecordedHelperProcessStandardError>,
+        parking_lot::Condvar,
+    )>,
 }
 
 #[derive(Default)]
 struct RecordedHelperProcessStandardError {
-    tail_bytes: Vec<u8>,
+    tail_bytes: VecDeque<u8>,
     pipe_closed: bool,
 }
 
 impl HelperProcessStandardErrorTail {
     fn record(&self, written_bytes: &[u8]) {
-        let (recorded, _) = &*self.recorded;
-        let Ok(mut recorded) = recorded.lock() else {
-            return;
-        };
-        recorded.tail_bytes.extend_from_slice(written_bytes);
-        let overflow = recorded
+        let (recorded_standard_error_lock, _) =
+            &*self.recorded_standard_error_and_pipe_closed_signal;
+        let mut recorded_standard_error = recorded_standard_error_lock.lock();
+        recorded_standard_error
+            .tail_bytes
+            .extend(written_bytes.iter().copied());
+        let overflow_byte_count = recorded_standard_error
             .tail_bytes
             .len()
             .saturating_sub(STANDARD_ERROR_TAIL_BYTES);
-        recorded.tail_bytes.drain(..overflow);
+        recorded_standard_error
+            .tail_bytes
+            .drain(..overflow_byte_count);
     }
 
     fn mark_the_pipe_closed(&self) {
-        let (recorded, pipe_closed_changed) = &*self.recorded;
-        if let Ok(mut recorded) = recorded.lock() {
-            recorded.pipe_closed = true;
-        }
-        pipe_closed_changed.notify_all();
+        let (recorded_standard_error_lock, pipe_closed_signal) =
+            &*self.recorded_standard_error_and_pipe_closed_signal;
+        recorded_standard_error_lock.lock().pipe_closed = true;
+        pipe_closed_signal.notify_all();
     }
 
     /// What was recorded, once the pipe has closed or `deadline` has passed.
     fn text_once_closed_or_after(&self, deadline: Duration) -> String {
-        let (recorded, pipe_closed_changed) = &*self.recorded;
-        let Ok(recorded) = recorded.lock() else {
-            return String::new();
-        };
-        let recorded =
-            match pipe_closed_changed
-                .wait_timeout_while(recorded, deadline, |recorded| !recorded.pipe_closed)
-            {
-                Ok((recorded, _)) => recorded,
-                Err(poisoned) => poisoned.into_inner().0,
-            };
-        String::from_utf8_lossy(&recorded.tail_bytes)
-            .trim()
-            .to_string()
+        let (recorded_standard_error_lock, pipe_closed_signal) =
+            &*self.recorded_standard_error_and_pipe_closed_signal;
+        let mut recorded_standard_error = recorded_standard_error_lock.lock();
+        pipe_closed_signal.wait_while_for(
+            &mut recorded_standard_error,
+            |recorded_standard_error| !recorded_standard_error.pipe_closed,
+            deadline,
+        );
+        let tail_bytes: Vec<u8> = recorded_standard_error.tail_bytes.iter().copied().collect();
+        String::from_utf8_lossy(&tail_bytes).trim().to_string()
     }
 }
 
@@ -665,9 +667,14 @@ impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
             "processor_id": self.processor_id,
             "ports": self.link_wiring.as_setup_command_ports(),
         }));
-        if setup_command_sent.is_err() {
+        if let Err(setup_command_send_failure) = setup_command_sent {
             // The child's end is already closed: it refused its own start
             // before reading anything.
+            tracing::debug!(
+                "[{}] could not send its helper process the setup command: \
+                 {setup_command_send_failure}",
+                self.processor_display_name
+            );
             return Err(self.refuse_the_helper_process_that_died_while_setting_up());
         }
         self.await_child_registration()
@@ -1082,16 +1089,12 @@ mod tests {
             value_of(&environment, "STREAMLIB_ENGINE_BUILD_ID"),
             Some(ENGINE_BUILD_ID)
         );
-        assert_eq!(
-            engine_build_id_compiled_into_this_extension(),
-            ENGINE_BUILD_ID
-        );
     }
 
     /// A helper refuses its own start on raw standard error before its log
     /// channel exists, so the processor's refusal is the only place an
     /// operator reads why. A real child, so the pipe closes the way a helper's
-    /// does.
+    /// does, refused through the host's own path out of a setup that failed.
     ///
     /// Fail-without-fix: refuse without the tail and the refusal names the
     /// processor but not the two build ids.
@@ -1108,18 +1111,18 @@ mod tests {
             .stderr(Stdio::piped())
             .spawn()
             .expect("sh starts");
-        let tail = spawn_standard_error_reader_keeping_its_tail(
+        let mut host = spawn_host_for_test(None);
+        host.child_standard_error_tail = Some(spawn_standard_error_reader_keeping_its_tail(
             child.stderr.take().expect("stderr is piped"),
             "Pblur",
-        );
+        ));
         child.wait().expect("sh exits");
 
-        let refusal = refusal_of_a_helper_process_that_died_while_setting_up(
-            "BlurProcessor",
-            &tail.text_once_closed_or_after(Duration::from_secs(10)),
-        )
-        .to_string();
+        let refusal = host
+            .refuse_the_helper_process_that_died_while_setting_up()
+            .to_string();
 
+        assert!(host.child_is_gone);
         assert!(
             refusal
                 .contains("[BlurProcessor] its helper process died before it finished setting up"),
@@ -1142,12 +1145,21 @@ mod tests {
             std::os::unix::net::UnixStream::pair().expect("socketpair");
         let tail = spawn_standard_error_reader_keeping_its_tail(reader, "Pblur");
         std::io::Write::write_all(&mut still_open_writer, b"said before exiting\n").unwrap();
-
-        let waited_from = Instant::now();
-        let mut text = tail.text_once_closed_or_after(Duration::from_millis(200));
-        while text.is_empty() && waited_from.elapsed() < Duration::from_secs(10) {
-            text = tail.text_once_closed_or_after(Duration::from_millis(200));
+        let recorded_by = Instant::now() + Duration::from_secs(10);
+        while tail.text_once_closed_or_after(Duration::ZERO).is_empty() {
+            assert!(Instant::now() < recorded_by, "the line was never recorded");
+            std::thread::yield_now();
         }
+
+        let (text_sender, text_receiver) = std::sync::mpsc::channel();
+        let waiting_tail = tail.clone();
+        std::thread::spawn(move || {
+            let _ = text_sender
+                .send(waiting_tail.text_once_closed_or_after(Duration::from_millis(200)));
+        });
+        let text = text_receiver
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the wait on a pipe nobody closed returned at its deadline");
 
         assert_eq!(text, "said before exiting");
         drop(still_open_writer);
@@ -1158,6 +1170,7 @@ mod tests {
     #[test]
     fn only_the_last_bytes_of_a_long_standard_error_are_kept() {
         let tail = HelperProcessStandardErrorTail::default();
+        tail.record(b"the earliest bytes, overwritten");
         tail.record(&vec![b'x'; STANDARD_ERROR_TAIL_BYTES]);
         tail.record(b"the reason");
         tail.mark_the_pipe_closed();

@@ -236,6 +236,9 @@ required-features = []
 
 [build-dependencies]
 serde_json = { workspace = true }
+# Reads the manifests of the crates the engine links through path dependencies,
+# whose edits rotate the engine build id.
+toml = { workspace = true }
 
 # Compiles `src/linux/pipewire_audio_shim.c`. SPA's pod builders and parsers
 # are header-only inline C, so the PipeWire audio arm needs a C toolchain step
