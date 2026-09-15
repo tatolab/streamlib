@@ -2598,9 +2598,49 @@ mod tests {
             text.contains("`from_processor_id`: `PatternSourceId`, `from_port`: `video`"),
             "{text}"
         );
-        assert!(
-            text.contains("reading it `newest`"),
-            "an unregistered type's recipe must name the profile the port's consumers read: {text}"
+    }
+
+    /// A consumer reading another profile than the ones an output port already
+    /// feeds is fanned like any other. Mental revert: restore the refusal and
+    /// the recipe is an error naming both profiles.
+    #[tokio::test]
+    async fn the_fan_prompt_wires_a_consumer_reading_another_profile_than_the_port_already_feeds() {
+        let ordered_input_probe = register_a_sole_input_probe_once("ordered");
+
+        let text = prompt_text(
+            stub_serving_two_linked_processors(),
+            "fan_output_to_another_consumer",
+            json!({ "from_processor_id": "PatternSourceId", "from_port": "video", "processor_type": ordered_input_probe }),
+        )
+        .await;
+
+        assert_eq!(
+            tool_names_the_numbered_steps_call(&text),
+            ["add_processor", "graph", "connect", "graph"]
+        );
+    }
+
+    /// The virtual camera's `newest` input joins a port whatever its other
+    /// consumers read. Mental revert: restore the refusal and a port already
+    /// feeding an `ordered` consumer refuses the recipe.
+    #[tokio::test]
+    async fn the_virtual_camera_prompt_wires_onto_a_port_that_feeds_an_ordered_consumer() {
+        register_a_virtual_camera_sink_probe_once();
+        let runtime = ControlPlaneMcpDispatchStubRuntime::new();
+        let mut graph = two_linked_processors_graph();
+        graph["nodes"][1]["ports"]["inputs"][0]["delivery_profile"] = json!("ordered");
+        *runtime.exported_graph.lock() = graph;
+
+        let text = prompt_text(
+            Arc::new(runtime),
+            "show_channel_on_virtual_camera",
+            json!({ "from_processor_id": "PatternSourceId", "from_port": "video" }),
+        )
+        .await;
+
+        assert_eq!(
+            tool_names_the_numbered_steps_call(&text),
+            ["add_processor", "connect", "graph"]
         );
     }
 
@@ -2636,23 +2676,53 @@ mod tests {
         class_import_path
     }
 
-    /// The engine refuses an output port whose consumers read it under two
-    /// profiles and counts the replaced link while it still exists, so a
-    /// shallower type spliced into a deeper link must take the link out first.
-    /// Mental revert: keep the zero-gap order and the first `connect` is
-    /// refused on a live node.
+    /// Consumers of one output port read it under whatever profiles they each
+    /// declare, so a type reading another profile than the link it is spliced
+    /// into still takes the zero-gap order: both new links first, the old one
+    /// last. Mental revert: take the link out first again and the target sees a
+    /// gap no refusal calls for.
     #[tokio::test]
-    async fn inserting_a_type_that_queues_shallower_than_the_link_removes_the_link_before_wiring() {
-        let newest_input_probe = register_a_sole_input_probe_once("newest");
-        let runtime = ControlPlaneMcpDispatchStubRuntime::new();
-        let mut graph = two_linked_processors_graph();
-        graph["nodes"][1]["ports"]["inputs"][0]["delivery_profile"] = json!("ordered");
-        *runtime.exported_graph.lock() = graph;
+    async fn inserting_a_type_that_reads_another_profile_than_the_link_connects_before_it_disconnects()
+     {
+        for (inserted_profile, replaced_profile) in [("newest", "ordered"), ("ordered", "newest")] {
+            let inserted_probe = register_a_sole_input_probe_once(inserted_profile);
+            let runtime = ControlPlaneMcpDispatchStubRuntime::new();
+            let mut graph = two_linked_processors_graph();
+            graph["nodes"][1]["ports"]["inputs"][0]["delivery_profile"] = json!(replaced_profile);
+            *runtime.exported_graph.lock() = graph;
 
+            let text = prompt_text(
+                Arc::new(runtime),
+                "insert_processor_between_linked_processors",
+                json!({ "link_id": "link-pattern-to-window", "processor_type": inserted_probe }),
+            )
+            .await;
+
+            assert_eq!(
+                tool_names_the_numbered_steps_call(&text),
+                [
+                    "add_processor",
+                    "graph",
+                    "connect",
+                    "connect",
+                    "disconnect",
+                    "graph"
+                ],
+                "a `{inserted_profile}` type into a `{replaced_profile}` link:\n{text}"
+            );
+        }
+    }
+
+    /// A class the agent just wrote is not in the catalog until its first add,
+    /// and nothing about the recipe waits on it: the order is the zero-gap one
+    /// and no note asks the agent to read a profile before wiring.
+    #[tokio::test]
+    async fn an_insert_of_an_uncatalogued_type_connects_before_it_disconnects_with_no_profile_note()
+    {
         let text = prompt_text(
-            Arc::new(runtime),
+            stub_serving_two_linked_processors(),
             "insert_processor_between_linked_processors",
-            json!({ "link_id": "link-pattern-to-window", "processor_type": newest_input_probe }),
+            json!({ "link_id": "link-pattern-to-window", "processor_type": "effects:WrittenJustNow" }),
         )
         .await;
 
@@ -2661,68 +2731,15 @@ mod tests {
             [
                 "add_processor",
                 "graph",
+                "connect",
+                "connect",
                 "disconnect",
-                "connect",
-                "connect",
                 "graph"
             ]
         );
         assert!(
-            text.contains("`ordered`") && text.contains("`newest`"),
-            "the recipe must say which two profiles forced the order:\n{text}"
-        );
-    }
-
-    /// A live channel keeps the subscriber buffer it was created with, so an
-    /// `ordered` consumer cannot replace a `newest` one on a running source.
-    /// Proven on the rig: the engine's `connect` answers
-    /// `DoesNotSupportRequestedMinBufferSize`.
-    #[tokio::test]
-    async fn inserting_a_type_that_queues_deeper_than_the_links_channel_is_refused_by_name() {
-        let ordered_input_probe = register_a_sole_input_probe_once("ordered");
-
-        let error = rpc_error(
-            stub_serving_two_linked_processors(),
-            "prompts/get",
-            json!({
-                "name": "insert_processor_between_linked_processors",
-                "arguments": { "link_id": "link-pattern-to-window", "processor_type": ordered_input_probe }
-            }),
-        )
-        .await;
-
-        assert_eq!(error["code"], -32602, "{error}");
-        let message = error["message"].as_str().unwrap();
-        assert!(
-            message.contains("`ordered`")
-                && message.contains("`newest`")
-                && message.contains("queues deeper"),
-            "the refusal must name both profiles and why: {message}"
-        );
-    }
-
-    /// A class the agent just wrote is not in the catalog until its first add,
-    /// so the recipe cannot see its profile; the note must carry the depth
-    /// rule itself, or the fallback it offers is the refused re-open.
-    #[tokio::test]
-    async fn an_insert_of_an_uncatalogued_type_says_when_to_stop_and_how_to_restore_the_link() {
-        let text = prompt_text(
-            stub_serving_two_linked_processors(),
-            "insert_processor_between_linked_processors",
-            json!({ "link_id": "link-pattern-to-window", "processor_type": "effects:WrittenJustNow" }),
-        )
-        .await;
-
-        assert!(
-            text.contains("If it reads `ordered` where `window` (id `WindowSinkId`) reads port `video` `newest`")
-                && text.contains("`remove_processor` the new node and stop"),
-            "the note must name the deeper profile that cannot take and say to stop:\n{text}"
-        );
-        assert!(
-            text.contains(
-                "`connect` `pattern` (id `PatternSourceId`) port `video` to `window` (id `WindowSinkId`) port `video` again"
-            ),
-            "the note must say how to restore the replaced link:\n{text}"
+            !text.contains("delivery profile") && !text.contains("remove_processor"),
+            "nothing about the insert depends on the new type's profile:\n{text}"
         );
     }
 
@@ -2754,28 +2771,5 @@ mod tests {
             ]
         );
         assert!(text.contains("audio window contract"), "{text}");
-    }
-
-    #[tokio::test]
-    async fn a_new_consumer_reading_another_profile_than_the_port_already_feeds_is_refused_by_name()
-    {
-        let ordered_input_probe = register_a_sole_input_probe_once("ordered");
-
-        let error = rpc_error(
-            stub_serving_two_linked_processors(),
-            "prompts/get",
-            json!({
-                "name": "fan_output_to_another_consumer",
-                "arguments": { "from_processor_id": "PatternSourceId", "from_port": "video", "processor_type": ordered_input_probe }
-            }),
-        )
-        .await;
-
-        assert_eq!(error["code"], -32602, "{error}");
-        let message = error["message"].as_str().unwrap();
-        assert!(
-            message.contains("`ordered`") && message.contains("`newest`"),
-            "the refusal must name both profiles: {message}"
-        );
     }
 }
