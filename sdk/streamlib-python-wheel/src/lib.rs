@@ -108,6 +108,10 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
         python_processor_registration::processor_class_import_paths_in_this_processes_catalog,
         module
     )?)?;
+    module.add_function(wrap_pyfunction!(
+        python_helper_process_spawn_host::engine_build_id_compiled_into_this_extension,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(python_logging::monotonic_now_ns, module)?)?;
     module.add_function(wrap_pyfunction!(python_logging::log_event, module)?)?;
     module.add_function(wrap_pyfunction!(

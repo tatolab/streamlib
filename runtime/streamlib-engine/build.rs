@@ -8,9 +8,15 @@
 //! ships (`vulkan/rhi/shaders/*.{comp,vert,frag,rgen,rmiss,rchit}`) to
 //! SPIR-V via `glslc` and stages the artifacts in `OUT_DIR` for
 //! `include_bytes!` to consume at compile time, and compiles the PipeWire
-//! shims against the vendored PipeWire/SPA headers.
+//! shims against the vendored PipeWire/SPA headers; and stamps the engine's
+//! build id, which a helper process checks against its parent's.
+
+#[path = "src/core/engine_build_id_composition.rs"]
+mod engine_build_id_composition;
 
 fn main() {
+    stamp_the_engine_build_id();
+
     // Link Metal framework on macOS for MP4 writer
     #[cfg(target_os = "macos")]
     {
@@ -27,6 +33,46 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
         compile_pipewire_shims();
     }
+}
+
+/// Hand the compiler `STREAMLIB_ENGINE_BUILD_ID_FROM_BUILD_SCRIPT`.
+///
+/// The nonce is minted each time this script runs, so the script is made to
+/// rerun whenever the engine it stamps could have changed — its sources, its
+/// manifest, the lockfile pinning its dependencies, the commit checked out.
+/// Otherwise a rebuilt engine would keep the nonce of the build it replaced and
+/// a stale helper would pass the check.
+fn stamp_the_engine_build_id() {
+    use engine_build_id_composition::{
+        compose_engine_build_id, git_files_rewritten_when_the_checked_out_commit_changes,
+        git_sha_of_the_checkout_containing, mint_per_build_nonce,
+    };
+
+    let manifest_directory = std::path::PathBuf::from(
+        std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set"),
+    );
+    println!("cargo:rerun-if-changed=src");
+    println!("cargo:rerun-if-changed=Cargo.toml");
+    // Only paths that exist: cargo reruns a script on every build while a
+    // watched path is missing.
+    let workspace_lockfile = manifest_directory.join("../../Cargo.lock");
+    let files_rewritten_when_the_commit_changes =
+        git_files_rewritten_when_the_checked_out_commit_changes(&manifest_directory);
+    for watched_path in std::iter::once(workspace_lockfile)
+        .filter(|path| path.is_file())
+        .chain(files_rewritten_when_the_commit_changes)
+    {
+        println!("cargo:rerun-if-changed={}", watched_path.display());
+    }
+
+    let per_build_nonce = mint_per_build_nonce()
+        .expect("could not read /dev/urandom for the engine build id's per-build nonce");
+    let engine_build_id = compose_engine_build_id(
+        &std::env::var("CARGO_PKG_VERSION").expect("CARGO_PKG_VERSION not set"),
+        git_sha_of_the_checkout_containing(&manifest_directory).as_deref(),
+        &per_build_nonce,
+    );
+    println!("cargo:rustc-env=STREAMLIB_ENGINE_BUILD_ID_FROM_BUILD_SCRIPT={engine_build_id}");
 }
 
 /// Compile the header-only half of every PipeWire arm.
