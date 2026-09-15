@@ -8,9 +8,7 @@ pub(crate) mod subprocess_bridge;
 mod subprocess_escalate;
 mod subprocess_escalate_wire_types;
 
-pub(crate) use open_iceoryx2_service_op::{
-    ChannelSizing, find_channel_source_port, resolve_channel_sizing,
-};
 pub use open_iceoryx2_service_op::{close_iceoryx2_service, open_iceoryx2_service};
+pub(crate) use open_iceoryx2_service_op::{find_channel_source_port, resolve_channel_sizing};
 pub(crate) use prepare_processor_op::prepare_processor;
 pub(crate) use spawn_processor_op::spawn_processor;

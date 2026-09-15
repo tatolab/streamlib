@@ -12,8 +12,7 @@
 use std::time::{Duration, Instant};
 
 use crate::iceoryx2::{
-    DEFAULT_EXPECTED_PAYLOAD_BYTES, DEFAULT_MAX_QUEUED_MESSAGES, FRAME_HEADER_SIZE, FrameHeader,
-    Iceoryx2Node,
+    DEFAULT_EXPECTED_PAYLOAD_BYTES, DeliveryProfile, FRAME_HEADER_SIZE, FrameHeader, Iceoryx2Node,
 };
 use iceoryx2::prelude::*;
 
@@ -77,7 +76,7 @@ fn default_primed_publisher_grows_to_loan_an_oversized_payload() {
         .open_or_create_service(
             "streamlib/test/sizing-default-grows",
             max_subscribers,
-            DEFAULT_MAX_QUEUED_MESSAGES,
+            DeliveryProfile::ORDERED_DEPTH,
         )
         .unwrap();
     let publisher = service
@@ -105,13 +104,15 @@ fn default_primed_channel_round_trips_a_header_and_an_oversized_payload() {
         .open_or_create_service(
             "streamlib/test/sizing-default-roundtrip",
             max_subscribers,
-            DEFAULT_MAX_QUEUED_MESSAGES,
+            DeliveryProfile::ORDERED_DEPTH,
         )
         .unwrap();
     let publisher = service
         .create_publisher(DEFAULT_EXPECTED_PAYLOAD_BYTES)
         .unwrap();
-    let subscriber = service.create_subscriber().unwrap();
+    let subscriber = service
+        .create_subscriber(DeliveryProfile::ORDERED_DEPTH)
+        .unwrap();
 
     let payload: Vec<u8> = (0..OVERSIZED_PAYLOAD_BYTES)
         .map(|i| (i % 251) as u8)
@@ -165,7 +166,7 @@ fn every_channel_service_opens_under_safe_overflow() {
         .open_or_create_service(
             "streamlib/test/sizing-safe-overflow",
             2,
-            DEFAULT_MAX_QUEUED_MESSAGES,
+            DeliveryProfile::ORDERED_DEPTH,
         )
         .unwrap();
 

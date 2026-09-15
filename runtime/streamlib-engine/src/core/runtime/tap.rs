@@ -13,17 +13,16 @@
 //! It is not a realtime-video transport — that is the WebRTC/MoQ/display processors.
 //!
 //! A channel data service is opened with
-//! `max_subscribers = N_destinations + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL`
-//! (1), so a tap is a pure subscriber-add onto the pre-sized reserved slot: it
-//! reopens the existing service publisher-free (iceoryx2 verifies the identical
-//! `max_subscribers`) and creates the reserved subscriber. No new service, no
-//! publisher change, no sizing change.
+//! `max_subscribers = MAX_DESTINATIONS_PER_CHANNEL + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL`,
+//! so a tap is a pure subscriber-add onto the pre-sized reserved slot: it
+//! reopens the existing service publisher-free at the channel's creation depth
+//! (iceoryx2 verifies both) and creates a subscriber as deep as the channel. No
+//! new service, no publisher change, no sizing change.
 //!
-//! The reserved slot is a COUNTING reservation (iceoryx2 only enforces
-//! `max_subscribers = destinations + 1`), not an identity reservation, so a tap
-//! attached during a startup/replace window before a destination subscriber
-//! exists can occupy the slot that destination will need — narrow in practice,
-//! since taps target already-running pipelines.
+//! The reserved slot is a COUNTING reservation (iceoryx2 only enforces the
+//! total), not an identity reservation. While a port feeds fewer than
+//! `MAX_DESTINATIONS_PER_CHANNEL` destinations a second tap still finds a free
+//! slot, and taps holding slots can leave a destination connected later none.
 //!
 //! iceoryx2's `Subscriber` holds `Rc` internally and is `!Send`, so it cannot
 //! move into the caller's tokio tasks. The tap therefore owns a dedicated OS
@@ -50,7 +49,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use crate::core::error::{Error, Result};
-use crate::iceoryx2::{ChannelTapSubscribeError, Iceoryx2Node};
+use crate::iceoryx2::{ChannelSizing, ChannelTapSubscribeError, Iceoryx2Node};
 
 /// Idle backoff between empty `subscriber.receive()` polls on the forwarder
 /// thread. The tap has no notify-listener slot of its own (the notify service
@@ -63,15 +62,6 @@ const TAP_IDLE_POLL_BACKOFF: Duration = Duration::from_micros(500);
 /// drops, so a persistently-slow downstream is visible without spamming a log
 /// line per dropped bag on a hot channel.
 const TAP_DROP_WARN_INTERVAL: u64 = 256;
-
-/// The iceoryx2 sizing a tap must reopen its channel data service with. Both
-/// the compiler op that created the service and this tap derive the same pair
-/// from the live graph, so iceoryx2 accepts the publisher-free reopen.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct TapChannelSizing {
-    pub(crate) max_subscribers: usize,
-    pub(crate) max_queued_messages: usize,
-}
 
 /// The two Arc handles shared between a [`TapSubscription`] and its forwarder
 /// thread: the stop flag the owner raises on detach, and the counter the
@@ -167,10 +157,10 @@ impl Drop for TapSubscription {
 pub(crate) fn start_channel_tap(
     node: Iceoryx2Node,
     channel: String,
-    sizing: TapChannelSizing,
+    sizing: ChannelSizing,
     count: Option<usize>,
 ) -> Result<TapSubscription> {
-    let forward_capacity = sizing.max_queued_messages.max(1);
+    let forward_capacity = sizing.channel_service_creation_depth;
     let (forward_tx, receiver) = tokio::sync::mpsc::channel::<Vec<u8>>(forward_capacity);
     let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<()>>();
     let signals = TapForwarderSignals {
@@ -224,7 +214,7 @@ pub(crate) fn start_channel_tap(
 fn run_forwarder(
     node: Iceoryx2Node,
     channel: String,
-    sizing: TapChannelSizing,
+    sizing: ChannelSizing,
     count: Option<usize>,
     forward_tx: tokio::sync::mpsc::Sender<Vec<u8>>,
     ready_tx: std::sync::mpsc::Sender<Result<()>>,
@@ -236,7 +226,7 @@ fn run_forwarder(
     let service = match node.open_or_create_service(
         &channel,
         sizing.max_subscribers,
-        sizing.max_queued_messages,
+        sizing.channel_service_creation_depth,
     ) {
         Ok(service) => service,
         Err(open_error) => {
@@ -245,7 +235,7 @@ fn run_forwarder(
         }
     };
 
-    let subscriber = match service.create_tap_subscriber() {
+    let subscriber = match service.create_tap_subscriber(sizing.channel_service_creation_depth) {
         Ok(subscriber) => subscriber,
         Err(ChannelTapSubscribeError::ReservedSlotOccupied) => {
             let _ = ready_tx.send(Err(Error::TapSlotOccupied(channel)));
@@ -353,10 +343,10 @@ mod tests {
     }
 
     /// Sizing matching [`open_channel`], for the tap's publisher-free reopen.
-    fn tap_channel_sizing_matching_open_channel(max_subscribers: usize) -> TapChannelSizing {
-        TapChannelSizing {
+    fn tap_channel_sizing_matching_open_channel(max_subscribers: usize) -> ChannelSizing {
+        ChannelSizing {
             max_subscribers,
-            max_queued_messages: RING_DEPTH,
+            channel_service_creation_depth: RING_DEPTH,
         }
     }
 
@@ -381,7 +371,11 @@ mod tests {
         let publisher = service.create_publisher(64).expect("channel publisher");
         // Occupy the destination slot(s) so the tap can only take the reserved one.
         let _destination_subscribers: Vec<_> = (0..destinations)
-            .map(|_| service.create_subscriber().expect("destination subscriber"))
+            .map(|_| {
+                service
+                    .create_subscriber(RING_DEPTH)
+                    .expect("destination subscriber")
+            })
             .collect();
 
         // Tap #1 fills the reserved slot.

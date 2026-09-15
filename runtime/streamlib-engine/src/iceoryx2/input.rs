@@ -697,9 +697,8 @@ impl InputMailboxesInner {
     ///
     /// Drops the `link_id`-tagged subscriber; when its local input port has no
     /// remaining subscribers the mailbox is removed, and when the destination has
-    /// none at all the shared listener is dropped — releasing the destination-keyed
-    /// notify service so a reconnect recreates fresh-sized, refcounted ports rather
-    /// than colliding with the stale service (`DoesNotSupportRequestedMinBufferSize`).
+    /// none at all the shared listener is dropped, so this destination holds
+    /// nothing against a channel or notify service no link uses.
     pub fn remove_channel_link(&self, link_id: &str) {
         let mut subscribers_and_listener = self.inbound_link_subscribers_and_listener.lock();
         let Some(local_port) = subscribers_and_listener.remove_by_link(link_id) else {
@@ -3342,7 +3341,9 @@ mod tests {
                         "in",
                         "L-rewired",
                         &inbound_link_name,
-                        open_the_rewired_channel().create_subscriber().unwrap(),
+                        open_the_rewired_channel()
+                            .create_subscriber(MAX_QUEUED_MESSAGES)
+                            .unwrap(),
                     );
                     if !mailboxes.has_listener() {
                         mailboxes.set_listener(

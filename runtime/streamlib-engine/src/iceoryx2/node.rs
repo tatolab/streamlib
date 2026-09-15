@@ -15,6 +15,25 @@ use super::{EventPayload, FRAME_HEADER_SIZE, MAX_PUBLISHERS_PER_CHANNEL};
 use crate::core::error::{Error, Result};
 use crate::core::runtime::current_process_uid;
 
+/// Nodes a channel or notify service admits per subscriber or notifier slot.
+///
+/// Every endpoint that is a helper opens the service from its own node, and a
+/// node that died holds its place until a sweep reclaims it, so the headroom is
+/// what keeps a crashed helper from locking a live one out of a channel.
+const ICEORYX2_NODES_ADMITTED_PER_PORT_SLOT: usize = 2;
+
+/// Samples a channel subscriber borrows at once: the receive path copies each
+/// sample out and drops it before taking the next.
+const CHANNEL_SUBSCRIBER_MAX_BORROWED_SAMPLES: usize = 1;
+
+/// Samples a channel publisher loans at once: every write loans, fills and sends
+/// one before the next.
+const CHANNEL_PUBLISHER_MAX_LOANED_SAMPLES: usize = 1;
+
+/// Samples a channel replays to a subscriber that connects late: none, since a
+/// replayed bag is stale by the time it arrives.
+const CHANNEL_HISTORY_SIZE: usize = 0;
+
 /// The environment variable a parent hands its helper the iceoryx2 domain root in.
 pub const ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_ICEORYX2_DOMAIN_ROOT";
 
@@ -113,6 +132,16 @@ pub(crate) fn create_iceoryx2_node_in_domain(
         })
 }
 
+/// The sizing a channel data service is created with, and that every opener
+/// reopens it at — the parameters iceoryx2 verifies on each open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ChannelSizing {
+    /// The fixed destination slot count plus the reserved tap slot.
+    pub(crate) max_subscribers: usize,
+    /// The deepest ring any subscriber on the channel may take.
+    pub(crate) channel_service_creation_depth: usize,
+}
+
 /// Thread-safe wrapper for iceoryx2 Node.
 ///
 /// The Node is created once per runtime and shared across all processors.
@@ -168,9 +197,9 @@ impl Iceoryx2Node {
     /// notify service stays destination-keyed (`streamlib/<dest>/notify`) so a
     /// destination waits on ONE `Listener` fd regardless of fan-in, while every
     /// upstream source publishing into one of its channels holds a `Notifier`
-    /// here. `max_notifiers` is the destination's compile-time fan-in (the count
-    /// of inbound links). Distinct from [`Iceoryx2EventService`] which is a typed
-    /// pub/sub for runtime events.
+    /// here. `max_notifiers` is the fixed inbound-link cap every opener requests,
+    /// never the fan-in of the day. Distinct from [`Iceoryx2EventService`] which
+    /// is a typed pub/sub for runtime events.
     pub fn open_or_create_notify_service(
         &self,
         service_name: &str,
@@ -186,6 +215,7 @@ impl Iceoryx2Node {
             .event()
             .max_notifiers(max_notifiers)
             .max_listeners(1)
+            .max_nodes(max_notifiers * ICEORYX2_NODES_ADMITTED_PER_PORT_SLOT)
             .open_or_create()
             .map_err(|e| {
                 Error::Runtime(format!("Failed to open/create notify service: {:?}", e))
@@ -200,15 +230,15 @@ impl Iceoryx2Node {
     /// The service name is the source-port channel
     /// (`{source_processor}/{source_output_port}`). The service carries exactly
     /// [`MAX_PUBLISHERS_PER_CHANNEL`] (1) publisher — the source — and
-    /// `max_subscribers` slots: one per compile-time-known destination plus the
-    /// reserved tap slot ([`crate::iceoryx2::RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL`]).
-    /// Every opener (host + subprocess SDKs) must request the SAME `max_subscribers`
-    /// — iceoryx2 verifies it on `open`.
+    /// `max_subscribers` slots: the fixed destination cap plus the reserved tap
+    /// slot ([`crate::iceoryx2::RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL`]).
+    /// Every opener (the engine and every helper) must request the SAME
+    /// `max_subscribers` — iceoryx2 verifies it on `open`.
     ///
-    /// `max_queued_messages` caps how many `[u8]` samples any subscriber on this
-    /// service can buffer — the ring depth of the channel's agreed
-    /// [`DeliveryProfile`](crate::iceoryx2::DeliveryProfile), resolved via
-    /// [`crate::iceoryx2::delivery_profile_for_input_port`].
+    /// `channel_service_creation_depth` is the deepest ring any subscriber on
+    /// this service may take. A create fixes it for the service's life; a reopen
+    /// asks only that the live service is at least that deep, so every opener
+    /// passes the creation depth and never a port's own ring depth.
     ///
     /// Safe overflow is on for every channel service: a full subscriber
     /// buffer auto-evicts its oldest sample so the publisher's `send()`
@@ -217,7 +247,7 @@ impl Iceoryx2Node {
         &self,
         service_name: &str,
         max_subscribers: usize,
-        max_queued_messages: usize,
+        channel_service_creation_depth: usize,
     ) -> Result<Iceoryx2Service> {
         let node = self.inner.lock();
         let service_name: ServiceName = service_name.try_into().map_err(|e| {
@@ -229,28 +259,29 @@ impl Iceoryx2Node {
             .publish_subscribe::<[u8]>()
             .max_publishers(MAX_PUBLISHERS_PER_CHANNEL)
             .max_subscribers(max_subscribers)
-            .subscriber_max_buffer_size(max_queued_messages)
+            .max_nodes(max_subscribers * ICEORYX2_NODES_ADMITTED_PER_PORT_SLOT)
+            .subscriber_max_buffer_size(channel_service_creation_depth)
+            .subscriber_max_borrowed_samples(CHANNEL_SUBSCRIBER_MAX_BORROWED_SAMPLES)
+            .history_size(CHANNEL_HISTORY_SIZE)
             .enable_safe_overflow(true)
             .open_or_create()
             .map_err(|e| Error::Runtime(format!("Failed to open/create service: {:?}", e)))?;
 
-        Ok(Iceoryx2Service {
-            inner: service,
-            max_queued_messages,
-        })
+        Ok(Iceoryx2Service { inner: service })
     }
 }
 
 /// Handle to an iceoryx2 publish-subscribe service for `[u8]` slices.
 pub struct Iceoryx2Service {
     inner: iceoryx2::service::port_factory::publish_subscribe::PortFactory<ipc::Service, [u8], ()>,
-    max_queued_messages: usize,
 }
 
 impl Iceoryx2Service {
-    /// Maximum number of messages this service's subscribers can queue.
-    pub fn max_queued_messages(&self) -> usize {
-        self.max_queued_messages
+    /// The deepest ring a subscriber may take, read off the live service — on a
+    /// reopen that is the depth the service was created at, not what the reopen
+    /// asked for.
+    pub fn channel_service_creation_depth(&self) -> usize {
+        self.inner.static_config().subscriber_max_buffer_size()
     }
 
     /// Whether iceoryx2 holds this service under safe overflow, read off the
@@ -278,18 +309,20 @@ impl Iceoryx2Service {
             .publisher_builder()
             .initial_max_slice_len(expected_payload_bytes + FRAME_HEADER_SIZE)
             .allocation_strategy(AllocationStrategy::PowerOfTwo)
+            .max_loaned_samples(CHANNEL_PUBLISHER_MAX_LOANED_SAMPLES)
             .create()
             .map_err(|e| Error::Runtime(format!("Failed to create publisher: {:?}", e)))
     }
 
-    /// Create a subscriber for this service, requesting the service's
-    /// configured ring depth.
+    /// Create a subscriber whose ring holds `input_port_ring_depth` samples —
+    /// the depth of the input port it feeds, at most the service's creation depth.
     pub fn create_subscriber(
         &self,
+        input_port_ring_depth: usize,
     ) -> Result<iceoryx2::port::subscriber::Subscriber<ipc::Service, [u8], ()>> {
         self.inner
             .subscriber_builder()
-            .buffer_size(self.max_queued_messages)
+            .buffer_size(input_port_ring_depth)
             .create()
             .map_err(|e| Error::Runtime(format!("Failed to create subscriber: {:?}", e)))
     }
@@ -298,16 +331,18 @@ impl Iceoryx2Service {
     /// slot-exhaustion case from every other transport failure.
     ///
     /// A channel data service is opened with
-    /// `max_subscribers = N_destinations + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL`
-    /// (1). The N destination subscribers occupy their slots at compile time; the
-    /// reserved slot is what a tap consumes here. iceoryx2 fixes `max_subscribers`
-    /// at create time, so a second concurrent tap trips
+    /// `max_subscribers = MAX_DESTINATIONS_PER_CHANNEL + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL`.
+    /// Destination subscribers take their slots as links are wired; the reserved
+    /// slot is what a tap consumes here, with a ring `tap_ring_depth` deep.
+    /// iceoryx2 fixes `max_subscribers` at create time, so a tap arriving when
+    /// every slot is taken trips
     /// [`iceoryx2::port::subscriber::SubscriberCreateError::ExceedsMaxSupportedSubscribers`]
     /// — surfaced as [`ChannelTapSubscribeError::ReservedSlotOccupied`] so the op
     /// can map it to the named [`Error::TapSlotOccupied`], distinct from a generic
     /// subscribe failure.
     pub fn create_tap_subscriber(
         &self,
+        tap_ring_depth: usize,
     ) -> std::result::Result<
         iceoryx2::port::subscriber::Subscriber<ipc::Service, [u8], ()>,
         ChannelTapSubscribeError,
@@ -315,7 +350,7 @@ impl Iceoryx2Service {
         use iceoryx2::port::subscriber::SubscriberCreateError;
         self.inner
             .subscriber_builder()
-            .buffer_size(self.max_queued_messages)
+            .buffer_size(tap_ring_depth)
             .create()
             .map_err(|e| match e {
                 SubscriberCreateError::ExceedsMaxSupportedSubscribers => {
@@ -409,10 +444,9 @@ mod tests {
     }
 
     /// The destination-keyed notify service honors the requested `max_notifiers`
-    /// (its compile-time fan-in) — exactly that many notifiers can be created and
-    /// the (fan-in+1)th must fail. Every source publishing into one of the
-    /// destination's channels holds one notifier here, so the cap must equal the
-    /// inbound-link count the compiler passes.
+    /// — exactly that many notifiers can be created and one more must fail.
+    /// Every source publishing into one of the destination's channels holds one
+    /// notifier here, so the cap is the most inbound links a destination holds.
     #[test]
     fn notify_service_honors_requested_max_notifiers() {
         let fanin = 3usize;
@@ -434,6 +468,130 @@ mod tests {
             "creating notifier {} must fail — notify service was opened with \
              max_notifiers={fanin}",
             fanin + 1,
+        );
+    }
+
+    /// A channel created for the full destination cap admits every one of its
+    /// subscribers — the destinations and the tap — each opening the service
+    /// from its own node, as helpers do, and refuses one more.
+    ///
+    /// Fail-without-fix: leave `max_nodes` at iceoryx2's default of 20 and the
+    /// twentieth subscriber's node cannot open the service.
+    #[test]
+    fn a_channel_admits_every_destination_and_the_tap_from_their_own_nodes_and_no_more() {
+        use crate::iceoryx2::DeliveryProfile;
+        use streamlib_ipc_types::{
+            MAX_DESTINATIONS_PER_CHANNEL, RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL,
+        };
+
+        let max_subscribers =
+            MAX_DESTINATIONS_PER_CHANNEL + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL;
+        let service_name = unique_service_name("fan_out_from_distinct_nodes");
+        let open_from_a_node_of_its_own = || {
+            let node = Iceoryx2Node::for_this_test_process();
+            let service = node
+                .open_or_create_service(
+                    &service_name,
+                    max_subscribers,
+                    DeliveryProfile::ORDERED_DEPTH,
+                )
+                .expect("every opener's node fits the service");
+            (node, service)
+        };
+        let (_source_node, source_service) = open_from_a_node_of_its_own();
+        let _publisher = source_service
+            .create_publisher(64)
+            .expect("the source publisher");
+
+        let mut subscribers_on_their_own_nodes = Vec::with_capacity(max_subscribers);
+        for subscriber_index in 0..max_subscribers {
+            let (node, service) = open_from_a_node_of_its_own();
+            let subscriber = service
+                .create_subscriber(DeliveryProfile::NEWEST_DEPTH)
+                .unwrap_or_else(|refusal| {
+                    panic!("subscriber {subscriber_index} must fit: {refusal:?}")
+                });
+            subscribers_on_their_own_nodes.push((node, service, subscriber));
+        }
+
+        let (_one_node_too_many, service) = open_from_a_node_of_its_own();
+        assert!(
+            service
+                .create_subscriber(DeliveryProfile::NEWEST_DEPTH)
+                .is_err(),
+            "subscriber {} is one past the destination cap plus the tap",
+            max_subscribers + 1
+        );
+    }
+
+    /// A destination's notify service created for the full inbound-link cap
+    /// admits a notifier from every one of those links' nodes, and refuses one
+    /// more.
+    ///
+    /// Fail-without-fix: leave `max_nodes` at iceoryx2's event default of 36 and
+    /// the thirty-sixth notifier's node cannot open the service.
+    #[test]
+    fn a_notify_service_admits_every_inbound_link_from_their_own_nodes_and_no_more() {
+        use streamlib_ipc_types::MAX_INBOUND_LINKS_PER_DESTINATION;
+
+        let service_name = unique_service_name("fan_in_from_distinct_nodes");
+        let open_from_a_node_of_its_own = || {
+            let node = Iceoryx2Node::for_this_test_process();
+            let service = node
+                .open_or_create_notify_service(&service_name, MAX_INBOUND_LINKS_PER_DESTINATION)
+                .expect("every opener's node fits the service");
+            (node, service)
+        };
+        let (_destination_node, destination_service) = open_from_a_node_of_its_own();
+        let _listener = destination_service
+            .create_listener()
+            .expect("the destination's listener");
+
+        let mut notifiers_on_their_own_nodes =
+            Vec::with_capacity(MAX_INBOUND_LINKS_PER_DESTINATION);
+        for notifier_index in 0..MAX_INBOUND_LINKS_PER_DESTINATION {
+            let (node, service) = open_from_a_node_of_its_own();
+            let notifier = service.create_notifier().unwrap_or_else(|refusal| {
+                panic!("notifier {notifier_index} must fit: {refusal:?}")
+            });
+            notifiers_on_their_own_nodes.push((node, service, notifier));
+        }
+
+        let (_one_node_too_many, service) = open_from_a_node_of_its_own();
+        assert!(
+            service.create_notifier().is_err(),
+            "notifier {} is one past the inbound-link cap",
+            MAX_INBOUND_LINKS_PER_DESTINATION + 1
+        );
+    }
+
+    /// Every channel service states the sample limits the engine's ports stay
+    /// inside: one borrowed sample per subscriber, no history, room for twice
+    /// its subscribers in nodes — and a publisher that loans one sample at a
+    /// time.
+    #[test]
+    fn a_channel_service_lends_one_sample_at_a_time_and_replays_none() {
+        use crate::iceoryx2::DeliveryProfile;
+
+        let max_subscribers = 3;
+        let service = Iceoryx2Node::for_this_test_process()
+            .open_or_create_service(
+                &unique_service_name("sample_limits"),
+                max_subscribers,
+                DeliveryProfile::ORDERED_DEPTH,
+            )
+            .expect("open channel data service");
+
+        let static_config = service.inner.static_config();
+        assert_eq!(static_config.subscriber_max_borrowed_samples(), 1);
+        assert_eq!(static_config.history_size(), 0);
+        assert_eq!(static_config.max_nodes(), max_subscribers * 2);
+
+        let publisher = service.create_publisher(64).expect("the source publisher");
+        let _first_loan = publisher.loan_slice_uninit(8).expect("one loan");
+        assert!(
+            publisher.loan_slice_uninit(8).is_err(),
+            "a second loan held beside the first must be refused"
         );
     }
 
@@ -472,13 +630,13 @@ mod tests {
         let mut subscribers = Vec::with_capacity(max_subscribers);
         for i in 0..max_subscribers {
             subscribers.push(
-                service.create_subscriber().unwrap_or_else(|e| {
+                service.create_subscriber(4).unwrap_or_else(|e| {
                     panic!("subscriber {i} (destination or tap) must fit: {e:?}")
                 }),
             );
         }
         assert!(
-            service.create_subscriber().is_err(),
+            service.create_subscriber(4).is_err(),
             "the {}th subscriber must fail — max_subscribers was N({destinations}) + \
              reserved tap({RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL})",
             max_subscribers + 1,
@@ -549,7 +707,7 @@ mod tests {
         // Subscriber attached but never read — the buffer fills against
         // it. Required for the publisher to observe back-pressure at
         // all (without a subscriber, sends silently no-op).
-        let _subscriber = service.create_subscriber().expect("subscriber");
+        let _subscriber = service.create_subscriber(depth).expect("subscriber");
 
         let start = Instant::now();
         for _ in 0..(depth * 3) {
@@ -568,21 +726,21 @@ mod tests {
         );
     }
 
-    /// `Iceoryx2Service` stores the configured ring depth and exposes it
-    /// via [`Iceoryx2Service::max_queued_messages`]. Reverting the
-    /// field-storage path (e.g. ignoring the argument and hardcoding 16)
-    /// trips this test.
+    /// A reopen of a live service states the depth the service was created at,
+    /// read off iceoryx2 rather than echoed from the call, so a later wire can
+    /// see how deep the channel it joins really is.
     #[test]
-    fn data_service_records_configured_max_queued_messages() {
-        let node = Iceoryx2Node::for_this_test_process();
-        let service = node
-            .open_or_create_service(&unique_service_name("mqm_recorded"), 2, 42)
-            .expect("open data service");
-        assert_eq!(
-            service.max_queued_messages(),
-            42,
-            "service should record the depth it was opened with"
-        );
+    fn a_reopened_service_states_the_depth_it_was_created_at() {
+        let service_name = unique_service_name("creation_depth_stated");
+        let _creating_node_service = Iceoryx2Node::for_this_test_process()
+            .open_or_create_service(&service_name, 2, 42)
+            .expect("create data service");
+
+        let reopened = Iceoryx2Node::for_this_test_process()
+            .open_or_create_service(&service_name, 2, 4)
+            .expect("a shallower reopen joins the live service");
+
+        assert_eq!(reopened.channel_service_creation_depth(), 42);
     }
 
     /// End-to-end smoke test for the 200 Hz two-stage pipeline shape that
@@ -683,7 +841,7 @@ mod tests {
                 let svc_out = node_r
                     .open_or_create_service(&s2_r, 2, s2_depth)
                     .expect("relay s2 open");
-                let subscriber = svc_in.create_subscriber().expect("relay sub");
+                let subscriber = svc_in.create_subscriber(s1_depth).expect("relay sub");
                 let publisher = svc_out.create_publisher(64).expect("relay pub");
                 startup_r.wait();
                 let mut count: u32 = 0;
@@ -734,7 +892,7 @@ mod tests {
                 let svc = node_c
                     .open_or_create_service(&s2_c, 2, s2_depth)
                     .expect("consumer s2 open");
-                let subscriber = svc.create_subscriber().expect("consumer sub");
+                let subscriber = svc.create_subscriber(s2_depth).expect("consumer sub");
                 startup_c.wait();
                 let mut received: u32 = 0;
                 loop {
@@ -807,7 +965,7 @@ mod tests {
         let publisher = service
             .create_publisher(max_payload)
             .expect("create publisher");
-        let subscriber = service.create_subscriber().expect("create subscriber");
+        let subscriber = service.create_subscriber(depth).expect("create subscriber");
 
         for i in 0..send_count {
             let mut payload = vec![0u8; FRAME_HEADER_SIZE + 1];
@@ -874,7 +1032,7 @@ mod tests {
         let publisher = service
             .create_publisher(hint_bytes)
             .expect("create PowerOfTwo publisher");
-        let subscriber = service.create_subscriber().expect("subscriber");
+        let subscriber = service.create_subscriber(4).expect("subscriber");
 
         // Loan a 1 MiB slice — ~16000x the primed slot. Under Static this is an
         // ExceedsMaxLoanSize failure; under PowerOfTwo it grows and succeeds.
@@ -980,7 +1138,7 @@ mod tests {
                 "in",
                 link_id,
                 &InboundLinkName::from("psource/out"),
-                data.create_subscriber().expect("dest subscriber"),
+                data.create_subscriber(depth).expect("dest subscriber"),
             );
             if !in_inner.has_listener() {
                 in_inner.set_listener(notify.create_listener().expect("dest listener"));

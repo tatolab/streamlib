@@ -225,6 +225,7 @@ def wire_with_window(data_plane: ProcessorLinkDataAccess, audio_window) -> None:
         "streamlib/tests/audio-window/never-notified",
         "read_next_in_order",
         16,
+        16,
         2,
         1,
         "L-test",

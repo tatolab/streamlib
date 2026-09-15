@@ -3714,6 +3714,7 @@ class FrameSomebodyElseWrote:
                     &notify_service_name,
                     "read_next_in_order",
                     8,
+                    8,
                     2,
                     1,
                     &link_id,

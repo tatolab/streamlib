@@ -107,6 +107,12 @@ pub trait GraphEdgeWithComponents: GraphWeight {
         }));
     }
 
+    /// Insert a component `graph` never renders, replacing any existing
+    /// component of the same type.
+    fn insert_component_without_rendering_it<C: StorableComponent>(&mut self, component: C) {
+        self.components_mut().insert(component);
+    }
+
     /// Get an immutable reference to a component.
     fn get<C: StorableComponent>(&self) -> Option<&C> {
         self.components().get::<C>()

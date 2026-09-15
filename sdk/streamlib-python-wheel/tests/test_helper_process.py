@@ -150,7 +150,7 @@ def engine_shaped_link_wiring(direction: str, link_id: str) -> dict:
             "dest_notify_service_name": notify_service_name,
             "expected_payload_bytes": 1024,
             "max_payload_bytes_per_channel": 1 << 20,
-            "max_queued_messages": 8,
+            "channel_service_creation_depth": 16,
             "max_subscribers": 2,
             "notify_max_notifiers": 1,
         }
@@ -161,7 +161,8 @@ def engine_shaped_link_wiring(direction: str, link_id: str) -> dict:
         "channel_service_name": channel_service_name,
         "notify_service_name": notify_service_name,
         "read_mode": "read_next_in_order",
-        "max_queued_messages": 8,
+        "channel_service_creation_depth": 16,
+        "input_port_ring_depth": 16,
         "max_subscribers": 2,
         "notify_max_notifiers": 1,
     }
@@ -238,6 +239,49 @@ def test_a_helper_opens_its_own_ports_from_the_envelope_the_engine_sends():
     }
 
 
+def test_a_helper_opens_the_channel_at_its_creation_depth_and_reads_at_its_own_ports_depth():
+    """A helper opens a channel at the creation depth the envelope names and
+    reads through a ring its own port's depth, so a shallow port that opens a
+    channel first never sizes it for the deeper one that joins.
+
+    Ten bags published while neither reads: the four-deep port reads four, the
+    sixteen-deep port reads all ten. Fail-without-fix: open the service at the
+    port's ring depth and the second destination's open is refused
+    (`DoesNotSupportRequestedMinBufferSize`).
+    """
+    from streamlib import ProcessorLinkDataAccess
+
+    bags_published_while_neither_reads = 10
+    shallow_wiring = engine_shaped_link_wiring("input", "L-shallow-port")
+    shallow_wiring["input_port_ring_depth"] = 4
+    deep_wiring = engine_shaped_link_wiring("input", "L-deep-port")
+    deep_wiring["channel_service_name"] = shallow_wiring["channel_service_name"]
+    deep_wiring["notify_service_name"] = f"{shallow_wiring['notify_service_name']}_deep"
+    source_wiring = engine_shaped_link_wiring("output", "L-shallow-port")
+    source_wiring["channel_service_name"] = shallow_wiring["channel_service_name"]
+    for wiring in (shallow_wiring, deep_wiring, source_wiring):
+        wiring["max_subscribers"] = 3
+
+    shallow_destination = ProcessorLinkDataAccess()
+    _helper.wire_link_data_access(shallow_destination, {"inputs": [shallow_wiring]})
+    deep_destination = ProcessorLinkDataAccess()
+    _helper.wire_link_data_access(deep_destination, {"inputs": [deep_wiring]})
+    source = ProcessorLinkDataAccess()
+    _helper.wire_link_data_access(source, {"outputs": [source_wiring]})
+
+    for frame_index in range(bags_published_while_neither_reads):
+        source.write_to_output_port("frames_to_downstream", {"frame_index": frame_index})
+
+    def every_bag_read(destination: ProcessorLinkDataAccess) -> list:
+        read = []
+        while (bag := destination.read_from_input_port("frames_from_upstream")) is not None:
+            read.append(bag["frame_index"])
+        return read
+
+    assert every_bag_read(shallow_destination) == [6, 7, 8, 9]
+    assert every_bag_read(deep_destination) == list(range(bags_published_while_neither_reads))
+
+
 def test_a_helper_publishes_to_a_destination_that_wants_no_notification():
     """An empty `dest_notify_service_name` is the engine saying this
     destination never drains a listener — a self-driven sink like
@@ -275,10 +319,10 @@ def test_a_disconnected_links_ports_are_free_for_its_reconnect():
     """The child half of #1554: a disconnect must release the ports this
     process opened, or the same link cannot be wired a second time.
 
-    The envelope caps the notify service at one notifier (`notify_max_notifiers`
-    is the destination's fan-in), so a notifier still held from the first
-    connect makes the reconnect's `create_notifier` the second on a max-1
-    service — `ExceedsMaxSupportedNotifiers`. The engine cannot reclaim these
+    This envelope caps the notify service at one notifier (the engine sends its
+    fixed inbound-link cap; the fixture shrinks it), so a notifier still held
+    from the first connect makes the reconnect's `create_notifier` the second
+    on a max-1 service — `ExceedsMaxSupportedNotifiers`. The engine cannot reclaim these
     from the parent: the publisher, notifier and subscriber all belong here.
 
     Fail-without-fix: make `unwire_output_link` / `unwire_input_link` no-ops

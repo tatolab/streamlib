@@ -71,9 +71,14 @@ doesn't fire.
 
 ## Reference
 
-- iceoryx2 sizing fix: `core/compiler/compiler_ops/open_iceoryx2_service_op.rs`
-  (the channel's agreed delivery-profile ring depth) + `iceoryx2/node.rs`
-  (`max_subscribers`).
+- > ~~iceoryx2 sizing fix: `core/compiler/compiler_ops/open_iceoryx2_service_op.rs`
+  > (the channel's agreed delivery-profile ring depth) + `iceoryx2/node.rs`
+  > (`max_subscribers`).~~ — Superseded 2026-09-15 by #2263: no channel is sized
+  > from its consumers any more. Every channel service is created at the ordered
+  > depth through `channel_service_creation_depth`, each subscriber takes its own
+  > port's ring, and the link holds the service so a later opener joins it. The
+  > `DoesNotSupportRequestedMinBufferSize` class this learning diagnosed cannot
+  > arise between two engine-sized opens.
 - The latent GPU race's mechanism (main-vs-fan-out glcore contention) and the
   funnel candidate fix live in the tracked issue for it, not here — this file
   is the *diagnostic* learning, not the fix proposal.

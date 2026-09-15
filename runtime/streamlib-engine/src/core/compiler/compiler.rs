@@ -482,7 +482,11 @@ impl Compiler {
 
                 tracing::info!("[{}] Opening service {}", CompilePhase::Wire, link_id);
 
-                super::compiler_ops::open_iceoryx2_service(&mut graph, link_id, runtime_ctx)?;
+                super::compiler_ops::open_iceoryx2_service(
+                    &mut graph,
+                    link_id,
+                    runtime_ctx.iceoryx2_node(),
+                )?;
 
                 PUBSUB.publish(
                     topics::RUNTIME_GLOBAL,

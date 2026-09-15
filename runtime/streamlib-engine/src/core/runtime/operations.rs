@@ -70,11 +70,12 @@ pub trait RuntimeOperations: Send + Sync {
     /// (`{source_processor}/{source_output_port}`,
     /// [`crate::iceoryx2::source_channel_name`]); `count` bounds the tap to that
     /// many bags then ends, `None` streams live until the returned
-    /// [`TapSubscription`] is dropped. The tap consumes the channel's single
-    /// reserved subscriber slot with no publisher re-open, so exactly one
-    /// concurrent tap per channel is allowed — a second attach fails with
-    /// [`Error::TapSlotOccupied`] until the first detaches (drops). An unwired /
-    /// unknown channel fails with [`Error::TapChannelNotFound`].
+    /// [`TapSubscription`] is dropped. The tap takes a subscriber slot on the
+    /// channel with no publisher re-open; the channel reserves one slot beyond
+    /// its destination cap, but iceoryx2 counts slots rather than naming them,
+    /// so an attach fails with [`Error::TapSlotOccupied`] only once every slot
+    /// is held. An unwired / unknown channel fails with
+    /// [`Error::TapChannelNotFound`].
     ///
     /// There is no sync variant: a tap yields a live streaming handle, not a
     /// one-shot result, so blocking on it is never the intent. Host-side only —

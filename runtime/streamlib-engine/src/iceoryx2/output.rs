@@ -248,10 +248,10 @@ impl OutputWriterInner {
     /// Reclaim the source-side egress for one disconnected `connect()` link.
     ///
     /// When the dropped `link_id` notifier was the port's last outbound link, the
-    /// whole [`ChannelEgress`] (publisher + data service) is released so a reconnect
-    /// recreates a fresh-sized, refcounted service rather than colliding with the
-    /// stale one (`DoesNotSupportRequestedMinBufferSize`) or exceeding the notify
-    /// service's create-time `max_notifiers` cap (`ExceedsMaxSupportedNotifiers`).
+    /// whole [`ChannelEgress`] (publisher + data service) is released so this
+    /// writer holds nothing against the channel once no link uses it, and a
+    /// reconnect never exceeds the notify service's create-time `max_notifiers`
+    /// cap (`ExceedsMaxSupportedNotifiers`).
     ///
     /// Returns `true` when that last link went away and the publisher was removed.
     pub fn remove_channel_link(&self, output_port: &str, link_id: &str) -> bool {
