@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.8](https://github.com/tatolab/streamlib/compare/v0.22.7...v0.22.8) (2026-09-15)
+
+
+### Bug Fixes
+
+* **engine:** guard a destination's subscribers and listener with one lock so a live re-splice never races a read ([#2297](https://github.com/tatolab/streamlib/issues/2297)) ([abed310](https://github.com/tatolab/streamlib/commit/abed3108fd248a6377a0d9fa6e5bc33d30edab84))
+
 ## [0.22.7](https://github.com/tatolab/streamlib/compare/v0.22.6...v0.22.7) (2026-09-15)
 
 
