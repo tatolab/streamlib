@@ -22,6 +22,8 @@ import pytest
 
 from streamlib import ProcessorLinkDataAccess
 
+pytestmark = pytest.mark.usefixtures("private_iceoryx2_domain_for_this_test_process")
+
 APP = Path(__file__).parent / "audio_window_app.py"
 
 WINDOWS_SEEN = re.compile(r"MARKER:WINDOWS_SEEN (\[.*\])")

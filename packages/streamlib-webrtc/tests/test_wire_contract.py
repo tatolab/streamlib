@@ -25,6 +25,8 @@ from streamlib_webrtc.processors import (
     encoded_video_frame_bag,
 )
 
+pytestmark = pytest.mark.usefixtures("private_iceoryx2_domain_for_this_test_process")
+
 INPUT_PORT = "encoded_in"
 OUTPUT_PORT = "encoded_out"
 
@@ -76,8 +78,8 @@ class WiredLinkUnderTest:
 def wired_link(request: pytest.FixtureRequest) -> Iterator[WiredLinkUnderTest]:
     """A source and a destination joined by one link.
 
-    Service names carry the pid and the test's own name because iceoryx2
-    service state is machine-global and outlives a crashed process.
+    Service names carry the test's own name because every test in this
+    process shares one iceoryx2 domain.
     """
     unique = f"webrtcwire{os.getpid()}_{request.node.name}"
     channel_service_name = f"{unique}/encoded"

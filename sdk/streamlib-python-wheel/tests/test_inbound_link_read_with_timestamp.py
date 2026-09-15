@@ -23,6 +23,8 @@ import pytest
 from streamlib import RuntimeContextFullAccess
 from streamlib._engine import ProcessorLinkDataAccess
 
+pytestmark = pytest.mark.usefixtures("private_iceoryx2_domain_for_this_test_process")
+
 INPUT_PORT = "tracks"
 OUTPUT_PORT = "bags_to_downstream"
 
@@ -56,8 +58,8 @@ class TwoLinksIntoOnePort:
 def two_links_into_one_port(
     request: pytest.FixtureRequest,
 ) -> Iterator[TwoLinksIntoOnePort]:
-    """Service names carry the pid and the test's own name because iceoryx2
-    service state is machine-global and outlives a crashed process."""
+    """Service names carry the test's own name because every test in this
+    process shares one iceoryx2 domain."""
     unique = f"fanints{os.getpid()}_{request.node.name}"
     notify_service_name = f"{unique}_dest/notify"
 

@@ -36,6 +36,8 @@ from streamlib_webrtc.processors import (
     resolve_track_kind,
 )
 
+pytestmark = pytest.mark.usefixtures("private_iceoryx2_domain_for_this_test_process")
+
 
 @pytest.fixture
 def runtime():
