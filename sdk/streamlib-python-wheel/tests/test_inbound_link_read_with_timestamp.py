@@ -72,7 +72,7 @@ def two_links_into_one_port(
         channel_service_name = f"{unique}/{kind}"
         destination.wire_input_link(
             INPUT_PORT, channel_service_name, notify_service_name,
-            "read_next_in_order", 8, 2, 2, f"L-{unique}-{kind}",
+            "read_next_in_order", 8, 8, 2, 2, f"L-{unique}-{kind}",
         )  # fmt: skip
         source = ProcessorLinkDataAccess()
         source.wire_output_link(
