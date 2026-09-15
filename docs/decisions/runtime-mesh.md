@@ -50,13 +50,15 @@ Recorded with the `runtime-mesh` proposal. It reads `zenoh` 1.10.1 and the rig p
   so a control plane hosted after construction appears in it.
 - **A verbatim `@runtime` chunk.** No `**` subscription over port addresses ever matches it, and
   a display name may not begin with `@`, so no address can collide with it.
-- **TCP and UDP, default features off.** Realtime media needs UDP (owner, 2026-09-14): a `udp/`
-  link is best-effort, so a lost packet costs that message rather than stalling the ones behind
-  it, and `?rel=1` gives a reliable link over unencrypted QUIC with nothing to provision. UDP
-  brings CDLA-Permissive-2.0 `webpki-roots`, a permissive data licence with no conflict for
-  commercial distribution, accepted into `deny.toml`. TLS `quic/` waits for the security
-  milestone because it needs a provisioned key and certificate. Zenoh is elected under
-  Apache-2.0.
+- **QUIC over UDP, default features off.** Realtime media needs UDP (owner, 2026-09-14). The
+  `cross-runtime-links` recon then found that with `transport_multilink` off two peers keep one
+  link, chosen at random when both TCP and UDP listen, and that plain `udp/` carries declarations
+  and liveliness tokens with no retransmission. So the mesh listens on `udp/…?rel=1` only — QUIC,
+  unencrypted, self-signed, nothing to provision, one stream per priority — and `transport_tcp`
+  stays for a network that blocks UDP, pinned by endpoint (owner, 2026-09-14). UDP brings
+  CDLA-Permissive-2.0 `webpki-roots`, a permissive data licence with no conflict for commercial
+  distribution, accepted into `deny.toml`. TLS `quic/` waits for the security milestone because it
+  needs a provisioned key and certificate. Zenoh is elected under Apache-2.0.
 - **The duplicate check needs the mesh before the runtime exists.** The session therefore opens
   in `Runner::new()`, beside the runtime-id socket refusal, which needs no GPU.
   - Cost: `Runtime()` takes Zenoh's 500 ms scouting delay while multicast discovery is on.
@@ -64,6 +66,32 @@ Recorded with the `runtime-mesh` proposal. It reads `zenoh` 1.10.1 and the rig p
     milliseconds because the kernel closes TCP, but a restart can race that.
 - **Tests run with discovery off.** Otherwise parallel test runtimes on one machine would find
   each other under one default name and refuse.
+
+## How links are carried
+
+Recorded with the `cross-runtime-links` proposal. It reads `zenoh` 1.10.1 at tag `1211779` and the
+engine at `d4ce808f6`.
+
+- **The input's runtime always pulls.** A push and a third-party wiring become a request to that
+  runtime, which applies `connect` with a remote source. One data shape and one set of refusals
+  then serve all three ways of creating a link.
+- **Readers announce, sources watch.** A reader declares a liveliness token under the source runtime's
+  verbatim prefix, and the source creates an egress when the first token for a port appears. Zenoh's
+  stable matching status was rejected: one wildcard subscriber anywhere on the mesh would start every
+  source's network work.
+- **The hop count reuses the local sequence number.** Egress copies each sample's user-header number
+  into the attachment, so one gap at ingress covers the egress ring, refused copies, Zenoh's silent
+  `Drop`, the network and the ingress ring. A second numbering minted at egress would miss the
+  source-side ring.
+- **Nothing blocks on a Zenoh thread or a producer's.** `put().wait()` can hold its caller for about
+  51 ms while a fragmented message queues, so it runs on the egress thread. A subscriber callback runs
+  on the link's receive loop, so it only hands off into a ring.
+- **Surfaces copy through export staging, never through `exchange`.** `exchange` converts to RGBA8 and
+  builds resources per call. A pooled buffer's mapping is write-combined memory, where a 1080p memcpy
+  cost 37 ms. The claim spans the GPU copy alone, so a slow network never pins the producer's slot. A
+  frame lands as a pooled pixel buffer, because no texture mint stamps a generation.
+- **Egress forwards every bag.** Skipping to the newest at the sender for a `newest` reader would make a
+  gap at ingress ambiguous between loss and the profile working. Skipping stays at the receiving port.
 
 ## Rejected alternatives
 
@@ -105,6 +133,12 @@ Recorded with the `runtime-mesh` proposal. It reads `zenoh` 1.10.1 and the rig p
   machine's monotonic clock has its own boot epoch, and the hybrid logical clock is wall time
   plus a counter, not a media clock. Until a common network time is negotiated, the only safe
   rule is never to compare stamps from two clocks.
+  - Rechecked 2026-09-14 at the owner's request: Zenoh's timestamp is a uHLC whose physical
+    part is `SystemTime::now()` (`uhlc-0.8.2/src/lib.rs:330-338`), tagged with the session id
+    (`zenoh/src/net/runtime/mod.rs:286`), off for peers by default (`DEFAULT_CONFIG.json5:215`).
+    It refuses a stamp too far ahead and adjusts no clock, so it orders events between hosts
+    that already share NTP time. The `cross-runtime-links` change carries a clock identity per
+    inbound link instead, and records the relay gap as known.
 - **Blocking a sender under network congestion.** It breaks "no link ever blocks a producer",
   and Zenoh closes a peer's transport after a stalled blocking send.
 - **An off switch.** A dial the zero-ceremony bar does not want. Isolation already has three
