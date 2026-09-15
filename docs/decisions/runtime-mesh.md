@@ -74,6 +74,17 @@ Recorded with the `runtime-mesh` proposal. It reads `zenoh` 1.10.1 and the rig p
   and subscriber. That collides with a channel's single publisher and a notify service's
   single listener. It keys by service hash rather than a name a remote runtime can know, it
   counts no drops, and it forwards surface ids that mean nothing on another machine.
+  - Rechecked 2026-09-14 against upstream main `b1c4cae`. The tunnel is now the
+    `iceoryx2-gateway` with an `integrations/zenoh/gateway-backend` (upstream #1891),
+    unreleased: it needs iceoryx2 main, Rust 1.89 and zenoh 1.9 with `unstable`, and crates.io
+    holds only `iceoryx2-tunnels-zenoh` 0.7.0 from 2025-09. It runs as `iox2 gateway zenoh`
+    or embedded as a library. Every finding above still holds in that source:
+    `ports/publish_subscribe.rs` does `open_or_create` plus a publisher and a subscriber;
+    the key is `iox2/v1/publish_subscribe/<service hash>/<config fingerprint>`; the payload
+    is a `Passthrough` byte frame under `Reliability::Reliable`; and it bridges every
+    allow-listed service the moment it is discovered, so nothing is lazy. What it shares with
+    this design: a liveliness token plus a queryable per announcement, `Locality::Remote`, and
+    peer mode with multicast scouting.
 - **Endpoint-config stream names (the MoQ `track_names` shape).** This would put a naming
   step on every stream a user wants to reach. A stable address derived from names the runtime
   already has makes every port reachable without configuration.
@@ -94,6 +105,13 @@ Recorded with the `runtime-mesh` proposal. It reads `zenoh` 1.10.1 and the rig p
   and Zenoh closes a peer's transport after a stalled blocking send.
 - **An off switch.** A dial the zero-ceremony bar does not want. Isolation already has three
   levers: a mesh name, explicit peers, and discovery turned off.
+- **Auto-suffixing a duplicate default name, the way the control-plane port increments from
+  9000.** A port is a transient the registry records; a runtime name is the address other
+  runtimes and agents wire against. A suffix chosen by start order makes yesterday's link reach
+  a different runtime today, and a `dev` restart that loses the pid-gone race comes up as `-2`
+  while every remote link to the old name waits forever. Hashing the directory's full path into
+  the default gives two checkouts different names with no flag, and a real duplicate still fails
+  by name (owner, 2026-09-14).
 - **Encoding a runtime's description into its token key.** A control-plane URL holds `/`, and it
   appears only once a control plane is hosted, after the token is declared.
 - **Zenoh's `AdvancedPublisher` cache or `zenoh-ext` group membership for the description.** Both

@@ -2422,13 +2422,13 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   turns the mesh off; a runtime is isolated by a mesh name, explicit peers, or discovery
   turned off. Stated as the posture for now, not a permanent default. [runtime-mesh]
 - **DECIDED** — A port on the mesh is addressed `<runtime name>/<display name>/<port>`. The
-  runtime name belongs to the runtime rather than to its control plane, defaults to
-  `<hostname>-<app directory>`, is stable across runs, and is unique within a mesh: a runtime
-  whose name is already live on the mesh refuses to start by name, except over a runtime of
-  that name on the same host whose process is gone. The display name — already unique within
-  a graph — is the processor's part of the address, so renaming a processor re-addresses it;
-  identity stays the class import path. Per-run processor ids and cuid2 channel names never
-  appear on the mesh. [runtime-mesh]
+  runtime name belongs to the runtime rather than to its control plane; defaults to
+  `<hostname>-<app directory name>-<id>`, the id hashed from the directory's full path so two
+  checkouts differ and reruns match; is never auto-suffixed; and is unique within a mesh: a
+  runtime whose name is already live on the mesh refuses to start by name, except over one on
+  the same host whose process is gone. The display name — already unique within a graph — is
+  the processor's part of the address, so renaming re-addresses it; identity stays the class
+  import path. Processor ids and cuid2 channel names never appear on the mesh. [runtime-mesh]
 - **DECIDED** — A bag's top-level `surface_id` crosses the mesh transparently, for now: the
   sending runtime resolves it locally and sends the frame's pixels with what the receiver
   needs to rebuild them, and the receiving runtime writes the pixels into a freshly minted

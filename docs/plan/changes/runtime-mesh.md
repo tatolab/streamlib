@@ -125,25 +125,15 @@ peer is. A malformed value — an endpoint on a transport the build lacks, such 
 is refused at construction by name, the caller's wiring error as a wrong `device_id` is. An
 unreachable endpoint never fails the runtime.
 
-**[NEEDS DECISION] — how a CLI-launched app keeps its name in its own code.** `streamlib run`
-constructs `Runtime()` before `setup(rt)` runs (`cli.py:243-256`), so under the primary launcher
-`app.py` cannot pass a keyword.
-- **A. Constructor, environment and CLI only (recommended).** A CLI-launched app is named on its
-  command line or in its environment. Most apps need neither, because the default
-  `<hostname>-<app directory>` is already stable. The session opens in `Runner::new()`, so the
-  duplicate refusal and discovery are CI-provable with no GPU, and a container configures itself
-  with no code.
-- **B. As A, plus `setup(rt)` may name the runtime and mesh.** The session opens at `run()` instead,
-  so `app.py` carries its own name under `streamlib run`.
-  - Costs: the mesh configuration becomes mutable state on a constructed runtime.
-  - The duplicate refusal and discovery land inside `start()` beside the GPU bring-up, so a booted
-    runtime proves them only on the rig. The mesh module alone still proves them in CI.
-- **C. As A, plus a `[tool.streamlib]` table in `pyproject.toml` that the CLI reads.** This would be
-  the first streamlib-specific configuration an app authors, which the zero-ceremony bar
-  (`:33-40`) rules out.
-
-The rest of this proposal is written against A. Choosing B moves the session-open reading below
-from `Runner::new()` to the top of `start()`, and moves N2's refusal proof to the rig.
+**DECIDED (owner, 2026-09-14) — a runtime's name and mesh come from its constructor, its
+environment or the CLI, and nowhere else.** `streamlib run` constructs `Runtime()` before
+`setup(rt)` (`cli.py:243-256`), so a CLI-launched app is named on its command line or in its
+environment, never in `app.py`; most apps need neither, the default being stable. The session
+therefore opens in `Runner::new()`, which keeps the duplicate refusal and discovery CI-provable
+with no GPU and lets a container configure itself with no code. Rejected: `setup(rt)` naming the
+runtime, which makes mesh configuration mutable state on a constructed runtime and moves both
+proofs behind the GPU in `start()`; and a `[tool.streamlib]` table in `pyproject.toml`, the first
+streamlib-specific file an app would author, which the zero-ceremony bar (`:33-40`) rules out.
 
 ## MODIFIED: §Networking `:2406-2415` — how the session is read
 
@@ -203,13 +193,22 @@ from `Runner::new()` to the top of `start()`, and moves N2's refusal proof to th
    - It is otherwise free text like a display name, validated against the real `zenoh-keyexpr`
      rules.
    - An explicit name that breaks the rule is refused at construction, naming the character.
-2. **Default.** `<hostname>-<final component of the app directory>`, with every forbidden character
-   replaced by `-`. The app directory is resolved in this order:
+2. **Default.** `<hostname>-<app directory name>-<id>`, with every forbidden character replaced
+   by `-`. The id is four base-36 characters of an FNV-1a hash over the directory's full path,
+   the virtual camera's own recipe (`virtual_camera_sink.rs:509-520`), so two checkouts of one
+   app on one host get different names and every run of one checkout gets the same one. The app
+   directory is resolved in this order:
    - `STREAMLIB_APP_DIRECTORY`, which the CLI sets;
    - the wheel's captured entry directory for a hand-run `python app.py`;
    - otherwise the working directory, which is what a Rust app gets.
-   - **Where it bites:** two copies of one app on one machine, such as two worktrees running the
-     same example, share a default, and the second is refused until one is given `--runtime-name`.
+   - **Never auto-suffixed** (owner, 2026-09-14). A name is the address other runtimes and agents
+     wire against, so it may not depend on start order the way the control-plane port does
+     (`api_server.rs:220-249` increments from 9000; the registry records the real URL).
+   - **Where it bites:** a second run from the same directory is refused until one is given
+     `--runtime-name`; moving the directory renames the runtime, as it already relabels its
+     unnamed virtual cameras.
+   - **The refusal** names the runtime name and the holder's host, pid and app directory, and
+     offers both fixes: stop it (`streamlib nodes` shows it) or start this one under another name.
 3. **The duplicate check.** Before declaring its token, a runtime queries the mesh for tokens under
    its own name. Discovery is on, so `open` has already waited out the scouting delay. The query then
    waits at most an engine-chosen bound for connected peers to answer.
@@ -311,7 +310,7 @@ the fix. The refusal applies in Rust, in `rt.add`, and in MCP `add_processor`.
 
 | # | Slice | Blocked by | Proof |
 |---|---|---|---|
-| N1 | The five configuration values across constructor, environment and CLI; runtime-name and mesh-name grammar and default; display-name refusal in all three doors; `runtime_name` on the registry entry, the `nodes` column and `--node`; `node_name`, `--name`, `ApiServerConfig.name` and the generator deleted | — | CI: the default comes from hostname and app directory in all three resolution arms; a keyword beats the environment, which beats the default; each forbidden character is refused by name in a runtime name, a mesh name and a display name through `rt.add` and MCP; a `udp/` endpoint is refused by name; the `nodes` table test shows the name, and `--node <runtime name>` resolves |
+| N1 | The five configuration values across constructor, environment and CLI; runtime-name and mesh-name grammar and default; display-name refusal in all three doors; `runtime_name` on the registry entry, the `nodes` column and `--node`; `node_name`, `--name`, `ApiServerConfig.name` and the generator deleted | — | CI: the default comes from hostname, app directory name and the path hash in all three resolution arms — two directories sharing a final component get different defaults, one directory gets the same default twice; a keyword beats the environment, which beats the default; each forbidden character is refused by name in a runtime name, a mesh name and a display name through `rt.add` and MCP; a `udp/` endpoint is refused by name; the `nodes` table test shows the name, and `--node <runtime name>` resolves |
 | N2 | `zenoh` (TCP only); session in `Runner::new()`; token and description queryable; peer table; duplicate refusal with same-host takeover; local-only; close at `stop()`; `graph` `mesh` key; test defaults; notices and portability | N1 | CI, GPU-free, two OS processes, multicast pinned to `127.0.0.1` with a per-test mesh name: each lists the other in `graph.mesh.peers` within a bound, and an arm with explicit `tcp/127.0.0.1` peers and discovery off does the same. A second process of the same name is refused naming the host; after a SIGKILL of the first the name is free at once. A peer that closes leaves `graph`. Two mesh names see nothing of each other. A taken listen endpoint gives `local_only` with its reason and a constructed runtime. Portability and notices gates are green. Rig: two `streamlib run` apps list each other, and SIGTERM exits both cleanly |
 | N3 | `streamlib nodes` mesh-peers table through the observe-only session | N2 | CI (GPU-free pytest): a `Runtime()` in a subprocess under a test mesh appears in `nodes --mesh-name <test mesh>` and is not repeated when it is also a registry row; with no peers the table says so |
 
