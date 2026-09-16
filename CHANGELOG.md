@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.11](https://github.com/tatolab/streamlib/compare/v0.22.10...v0.22.11) (2026-09-16)
+
+
+### Features
+
+* **engine:** stop every helper on the shutdown ladder ([#2303](https://github.com/tatolab/streamlib/issues/2303)) ([2c33dfc](https://github.com/tatolab/streamlib/commit/2c33dfce04f12a911e2a05f0fb7f92ffce68aa74))
+
 ## [0.22.10](https://github.com/tatolab/streamlib/compare/v0.22.9...v0.22.10) (2026-09-15)
 
 
