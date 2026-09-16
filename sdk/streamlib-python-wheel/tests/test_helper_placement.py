@@ -306,14 +306,16 @@ def test_a_processor_asleep_in_its_callback_still_runs_its_teardown(
     app.await_clean_exit()
     ended_in = time.monotonic() - interrupted_at
 
-    markers = app.markers()
-    assert "SLEEPER_STOPPED" in markers, (
+    # Matched in the output rather than through `markers()`: while the engine
+    # is up these ride a log record that appends the processor's id, so the
+    # marker is a prefix of the line rather than the whole of it.
+    assert "MARKER:SLEEPER_STOPPED" in app.output, (
         f"`stop()` did not run after the interrupt:\n{app.output}"
     )
-    assert "SLEEPER_TORE_DOWN" in markers, (
+    assert "MARKER:SLEEPER_TORE_DOWN" in app.output, (
         f"`teardown()` did not run after the interrupt:\n{app.output}"
     )
-    assert "SLEPT_THE_WHOLE_WAY" not in markers, (
+    assert "MARKER:SLEPT_THE_WHOLE_WAY" not in app.output, (
         f"the callback returned on its own, so nothing interrupted it:\n{app.output}"
     )
     assert ended_in < LADDER_BUDGET_SECONDS, (
