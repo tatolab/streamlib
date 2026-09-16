@@ -402,10 +402,10 @@ impl PythonProcessorLinkDataAccess {
             .detach(|| -> Result<(), Error> {
                 if !input_mailboxes.has_port(port_name) {
                     match audio_window {
-                        // The window contract sizes the mailbox itself, so the
-                        // envelope's ring depth is the profile's and this
-                        // port's mailbox is its own — the same derivation the
-                        // parent runs for an app-process destination.
+                        // The window contract sizes the mailbox itself, and the
+                        // envelope's ring depth is the windowed ring the
+                        // subscriber below takes — the same split the parent
+                        // makes for an app-process destination.
                         Some(contract) => {
                             input_mailboxes.add_windowed_port(port_name, read_mode, contract)
                         }

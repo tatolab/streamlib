@@ -31,7 +31,7 @@ use iceoryx2::prelude::*;
 use parking_lot::Mutex;
 use serde::Serialize;
 
-use super::dropped_bag_counters::{OutputPortRefusedBagCounter, RefusedBagCountsByOutputPort};
+use super::loss_counters::{OutputPortRefusedBagCounter, RefusedBagCountsByOutputPort};
 use super::{ChannelDataServicePublisher, ChannelTrustTier, FRAME_HEADER_SIZE, FrameHeader};
 use crate::core::error::{ChannelTrustTierLabel, Error, Result};
 use crate::core::media_clock::MediaClock;

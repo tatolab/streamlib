@@ -86,6 +86,17 @@ const MOST_SLOTS_ONE_WINDOWED_PORT_HOLDS: usize = 8_192;
 /// needs.
 const WINDOWED_PORT_MAILBOX_DEPTH_MARGIN: usize = 4;
 
+/// The iceoryx2 subscriber ring in front of every windowed port, and the depth a
+/// channel feeding one is created at.
+///
+/// Never sized from the contract: iceoryx2 commits publisher heap for every slot
+/// of a channel's depth up front.
+pub(crate) const WINDOWED_PORT_SUBSCRIBER_RING_DEPTH: usize = 64;
+
+// A channel created for a windowed destination must still hold every profile's
+// ring.
+const _: () = assert!(WINDOWED_PORT_SUBSCRIBER_RING_DEPTH >= DeliveryProfile::ORDERED_DEPTH);
+
 impl ResolvedAudioWindowContract {
     /// Read the values a declaration states, refusing one the stage could not
     /// honour.

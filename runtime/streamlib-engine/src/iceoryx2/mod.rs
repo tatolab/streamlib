@@ -9,23 +9,25 @@ mod channel_name;
 #[cfg(test)]
 mod channel_sizing_tests;
 mod delivery_profile;
-mod dropped_bag_counters;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) mod iceoryx2_domain_for_this_test_process;
 mod input;
+mod loss_counters;
 mod mailbox;
 mod node;
 mod output;
 mod payload;
 mod read_mode;
 
+#[cfg(test)]
+pub(crate) use audio_window::{AudioBlockSampleDtype, encode_an_audio_block_onto_the_wire};
 pub use audio_window::{
     AudioWindowContractMatchingADeviceStream, DeviceMatchedAudioWindowContractsByInputPort,
     ResolvedAudioWindowContract,
 };
 pub(crate) use audio_window::{
-    AudioWindowDeclarationOfAnInputPort, audio_windowing_declared_by_input_port,
-    refuse_an_unsettled_match_device_sentinel,
+    AudioWindowDeclarationOfAnInputPort, WINDOWED_PORT_SUBSCRIBER_RING_DEPTH,
+    audio_windowing_declared_by_input_port, refuse_an_unsettled_match_device_sentinel,
 };
 pub use channel_ceiling::{
     ENV_MAX_PAYLOAD_BYTES_PER_CHANNEL_TRUSTED, ENV_MAX_PAYLOAD_BYTES_PER_CHANNEL_UNTRUSTED_SESSION,
@@ -37,13 +39,15 @@ pub use channel_name::{
 };
 pub(crate) use delivery_profile::delivery_profile_for_input_port;
 pub use delivery_profile::{DeliveryProfile, DeliveryResolution};
-pub use dropped_bag_counters::{DroppedBagCountsByInboundLink, RefusedBagCountsByOutputPort};
 #[cfg(any(test, feature = "test-support"))]
 pub use iceoryx2_domain_for_this_test_process::{
     Iceoryx2DomainForThisTestProcess, create_iceoryx2_node_for_this_test_process,
     iceoryx2_domain_for_this_test_process,
 };
 pub use input::{BoundedReadOutcome, InputMailboxes, InputMailboxesInner};
+pub use loss_counters::{
+    DiscardedSampleCountsByInboundLink, DroppedBagCountsByInboundLink, RefusedBagCountsByOutputPort,
+};
 pub use mailbox::{
     PortMailbox, PortMailboxDeliveredBag, PortMailboxEvictionNotice, PortMailboxQueuedFrameMeasure,
 };

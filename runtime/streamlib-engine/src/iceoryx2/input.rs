@@ -30,12 +30,15 @@ use iceoryx2::prelude::*;
 use serde::de::DeserializeOwned;
 
 use super::audio_window::{
-    AudioWindowAccumulator, AudioWindowContractMatchingADeviceStream,
+    AudioWindowAccumulator, AudioWindowContractMatchingADeviceStream, AudioWindowStageFlush,
     DeviceMatchedAudioWindowContractsByInputPort, LatestQueuedSourceAudioFormat,
     ResolvedAudioWindowContract, queued_audio_window_frame_measure,
 };
 use super::channel_name::InboundLinkName;
-use super::dropped_bag_counters::{DroppedBagCountsByInboundLink, InboundLinkDroppedBagCounter};
+use super::loss_counters::{
+    DiscardedSampleCountsByInboundLink, DroppedBagCountsByInboundLink,
+    InboundLinkDiscardedSampleCounter, InboundLinkDroppedBagCounter,
+};
 use super::mailbox::{PortMailbox, PortMailboxEvictionNotice};
 use super::read_mode::ReadMode;
 use super::{ChannelDataServiceSubscriber, FRAME_HEADER_SIZE, FrameHeader};
@@ -72,6 +75,24 @@ fn unknown_input_port(port: &str) -> Error {
     Error::Link(format!("Unknown input port: {port}"))
 }
 
+/// The one link feeding a windowed port, taken together with the port's stage.
+struct WindowedPortInboundLink {
+    link_id: String,
+    inbound_link_name: InboundLinkName,
+    discarded_sample_counter: Option<InboundLinkDiscardedSampleCounter>,
+}
+
+/// Whether the stage a read took is still the one its port reads through.
+enum WindowedPortStageInstallation {
+    /// The port was unwired, and perhaps wired again, since the read took it.
+    Replaced,
+    /// Still installed, fed by this link — or by none, for a manually injected
+    /// frame.
+    StillInstalled {
+        feeding_link: Option<WindowedPortInboundLink>,
+    },
+}
+
 /// One channel subscriber bound to the local input port it feeds.
 ///
 /// The transport inversion (#1419): a channel is keyed on its source output
@@ -98,6 +119,9 @@ struct PortBoundSubscriber {
     /// this subscriber delivers is queued holding it, so an eviction names the
     /// link the evicted bag came in on rather than the one that made room.
     dropped_bag_counter: InboundLinkDroppedBagCounter,
+    /// This link's share of the destination's discarded-sample counts, held only
+    /// by a link into a windowed port.
+    discarded_sample_counter: Option<InboundLinkDiscardedSampleCounter>,
     /// The sequence number of the last sample this subscriber received, and the
     /// id of the publisher that numbered it; `None` until the first sample after
     /// wiring.
@@ -179,6 +203,17 @@ impl InboundLinkSubscribersAndListener {
     /// Whether any remaining subscriber is still bound to `local_port`.
     fn local_port_still_bound(&self, local_port: &str) -> bool {
         self.bound_to_local_port(local_port).next().is_some()
+    }
+
+    /// The one binding feeding `local_port`, or `None` where it has none or
+    /// several.
+    fn the_only_subscriber_bound_to_local_port<'a>(
+        &'a self,
+        local_port: &'a str,
+    ) -> Option<&'a PortBoundSubscriber> {
+        let mut feeding = self.bound_to_local_port(local_port);
+        let only = feeding.next()?;
+        feeding.next().is_none().then_some(only)
     }
 
     /// The bindings feeding one local input port, in wiring order — a
@@ -329,6 +364,16 @@ enum InstalledInputPortAudioWindowing {
 }
 
 impl InstalledInputPortAudioWindowing {
+    /// Whether this port reads through `stage` itself, not one installed since.
+    fn installs_stage(&self, stage: &SharedAudioWindowStage) -> bool {
+        matches!(self, InstalledInputPortAudioWindowing::Windowed(installed) if Arc::ptr_eq(installed, stage))
+    }
+
+    /// Whether the port declared a window contract, settled or not.
+    fn is_windowed(&self) -> bool {
+        !matches!(self, InstalledInputPortAudioWindowing::NotWindowed)
+    }
+
     /// Why this port cannot take a contract settled from a device stream, or
     /// `None` when it is waiting for exactly that.
     ///
@@ -440,6 +485,7 @@ pub struct InputMailboxesInner {
     /// created after its last link went away from the one it registered.
     listener_generation: std::sync::atomic::AtomicU64,
     dropped_bag_counts: Arc<DroppedBagCountsByInboundLink>,
+    discarded_sample_counts: Arc<DiscardedSampleCountsByInboundLink>,
     device_matched_audio_window_contracts: Arc<DeviceMatchedAudioWindowContractsByInputPort>,
 }
 
@@ -451,6 +497,7 @@ impl InputMailboxesInner {
             ports: parking_lot::Mutex::new(HashMap::new()),
             listener_generation: std::sync::atomic::AtomicU64::new(0),
             dropped_bag_counts: Arc::new(DroppedBagCountsByInboundLink::default()),
+            discarded_sample_counts: Arc::new(DiscardedSampleCountsByInboundLink::default()),
             device_matched_audio_window_contracts: Arc::new(
                 DeviceMatchedAudioWindowContractsByInputPort::default(),
             ),
@@ -673,6 +720,9 @@ impl InputMailboxesInner {
     /// channels holds N subscribers. The receive path routes every frame a
     /// subscriber delivers into `local_port`'s mailbox (binding-based routing;
     /// see [`PortBoundSubscriber`]).
+    ///
+    /// Bind after adding the port: a link into a windowed port is given its
+    /// discarded-sample count here, from the port it finds.
     pub fn add_channel_subscriber(
         &self,
         local_port: &str,
@@ -681,6 +731,15 @@ impl InputMailboxesInner {
         subscriber: ChannelDataServiceSubscriber,
     ) {
         let dropped_bag_counter = self.dropped_bag_counts.counter_for_inbound_link(link_id);
+        let into_a_windowed_port = self
+            .ports
+            .lock()
+            .get(local_port)
+            .is_some_and(|port| port.audio_windowing.is_windowed());
+        let discarded_sample_counter = into_a_windowed_port.then(|| {
+            self.discarded_sample_counts
+                .counter_for_inbound_link(link_id)
+        });
         self.inbound_link_subscribers_and_listener
             .lock()
             .subscribers
@@ -690,6 +749,7 @@ impl InputMailboxesInner {
                 inbound_link_name: inbound_link_name.clone(),
                 subscriber,
                 dropped_bag_counter,
+                discarded_sample_counter,
                 last_received_sequence_number: None,
             });
     }
@@ -709,20 +769,64 @@ impl InputMailboxesInner {
             .collect()
     }
 
-    /// The one link feeding `port`, or `None` where it has none or several.
+    /// Whether `stage` is still the stage installed on `port`, and the one link
+    /// feeding the port if it is.
     ///
-    /// What a windowed port reads its name off: a window is cut from bags
-    /// rather than being one, so no entry carries the name — but a windowed
-    /// port takes exactly one link (a second is refused at wire time), so the
-    /// port itself answers.
-    fn the_single_inbound_link_name_of(&self, port: &str) -> Option<InboundLinkName> {
+    /// Taken under both locks at once, so the link is the one wired with that
+    /// stage: a window is cut from bags rather than being one, so no entry
+    /// carries the link, but a windowed port takes exactly one (a second is
+    /// refused at wire time).
+    fn installation_of_a_windowed_ports_stage(
+        &self,
+        port: &str,
+        stage: &SharedAudioWindowStage,
+    ) -> WindowedPortStageInstallation {
         let subscribers_and_listener = self.inbound_link_subscribers_and_listener.lock();
-        let mut feeding = subscribers_and_listener.bound_to_local_port(port);
-        let only = feeding.next()?;
-        feeding
-            .next()
-            .is_none()
-            .then(|| only.inbound_link_name.clone())
+        if !self
+            .ports
+            .lock()
+            .get(port)
+            .is_some_and(|port_config| port_config.audio_windowing.installs_stage(stage))
+        {
+            return WindowedPortStageInstallation::Replaced;
+        }
+        WindowedPortStageInstallation::StillInstalled {
+            feeding_link: subscribers_and_listener
+                .the_only_subscriber_bound_to_local_port(port)
+                .map(|only| WindowedPortInboundLink {
+                    link_id: only.link_id.clone(),
+                    inbound_link_name: only.inbound_link_name.clone(),
+                    discarded_sample_counter: only.discarded_sample_counter.clone(),
+                }),
+        }
+    }
+
+    /// Count a windowed port's flush on the link feeding it, and say so.
+    ///
+    /// A port no single link feeds — a manually injected frame's — has nowhere
+    /// to count it, and still says what went.
+    fn count_a_flush_on_the_link_feeding(
+        port: &str,
+        feeding_link: Option<&WindowedPortInboundLink>,
+        flush: AudioWindowStageFlush,
+    ) {
+        let AudioWindowStageFlush {
+            cause,
+            discarded_per_channel_samples_at_the_declared_rate: discarded_samples,
+        } = flush;
+        if let Some(counter) =
+            feeding_link.and_then(|feeding| feeding.discarded_sample_counter.as_ref())
+        {
+            counter.record_discarded_samples(discarded_samples);
+        }
+        tracing::warn!(
+            port,
+            link = feeding_link.map(|feeding| feeding.link_id.as_str()),
+            channel = feeding_link.map(|feeding| feeding.inbound_link_name.as_str()),
+            discarded_samples,
+            "audio window stage: {cause}, so the accumulator and the resampler's filter state \
+             were flushed, discarding {discarded_samples} samples no reader had received"
+        );
     }
 
     /// This processor's per-inbound-link dropped-bag counts, shared with the
@@ -731,6 +835,16 @@ impl InputMailboxesInner {
     /// [`ProcessorMetrics`]: crate::core::graph::ProcessorMetrics
     pub fn dropped_bag_counts_by_inbound_link(&self) -> Arc<DroppedBagCountsByInboundLink> {
         Arc::clone(&self.dropped_bag_counts)
+    }
+
+    /// This processor's per-inbound-link counts of samples its windowed ports'
+    /// flushes discarded, shared with the graph node's [`ProcessorMetrics`].
+    ///
+    /// [`ProcessorMetrics`]: crate::core::graph::ProcessorMetrics
+    pub fn discarded_sample_counts_by_inbound_link(
+        &self,
+    ) -> Arc<DiscardedSampleCountsByInboundLink> {
+        Arc::clone(&self.discarded_sample_counts)
     }
 
     /// Reclaim the destination-side ports for one disconnected `connect()` link.
@@ -745,6 +859,7 @@ impl InputMailboxesInner {
             return;
         };
         self.dropped_bag_counts.forget_inbound_link(link_id);
+        self.discarded_sample_counts.forget_inbound_link(link_id);
         if !subscribers_and_listener.local_port_still_bound(&local_port) {
             self.ports.lock().remove(&local_port);
         }
@@ -921,7 +1036,7 @@ impl InputMailboxesInner {
             Some(staged) => Some(staged),
             None => match audio_windowing {
                 InstalledInputPortAudioWindowing::NotWindowed => {
-                    self.pop_one_bag_off_the_mailbox(port)?
+                    self.pop_one_bag_off_the_mailbox(port, None)?
                 }
                 // Nothing, and deliberately not the bag underneath: a port
                 // whose contract is unsettled has no exact size to cut one to.
@@ -953,11 +1068,22 @@ impl InputMailboxesInner {
     }
 
     /// Pop the next queued frame for `port` per its read mode and strip its
-    /// header, or `None` when the mailbox is empty.
-    fn pop_one_bag_off_the_mailbox(&self, port: &str) -> Result<Option<BagBodyForTheReader>> {
+    /// header, or `None` when the mailbox is empty — or, given a stage, when
+    /// that stage is no longer the one installed on the port, so a read that
+    /// outlived a rewire takes none of the new wiring's bags.
+    fn pop_one_bag_off_the_mailbox(
+        &self,
+        port: &str,
+        only_while_this_stage_is_installed: Option<&SharedAudioWindowStage>,
+    ) -> Result<Option<BagBodyForTheReader>> {
         let raw = {
             let ports = self.ports.lock();
             let port_config = ports.get(port).ok_or_else(|| unknown_input_port(port))?;
+            if only_while_this_stage_is_installed
+                .is_some_and(|stage| !port_config.audio_windowing.installs_stage(stage))
+            {
+                return Ok(None);
+            }
             match port_config.mailbox.read_mode() {
                 ReadMode::SkipToLatest => port_config.mailbox.pop_latest(),
                 ReadMode::ReadNextInOrder => port_config.mailbox.pop(),
@@ -1003,18 +1129,28 @@ impl InputMailboxesInner {
         port: &str,
         stage: &SharedAudioWindowStage,
     ) -> Result<Option<BagBodyForTheReader>> {
+        let WindowedPortStageInstallation::StillInstalled { feeding_link } =
+            self.installation_of_a_windowed_ports_stage(port, stage)
+        else {
+            return Ok(None);
+        };
         loop {
             let ready_window = stage.lock().next_ready_window()?;
             if let Some(window) = ready_window {
                 return Ok(Some(BagBodyForTheReader {
-                    inbound_link_name: self.the_single_inbound_link_name_of(port),
+                    inbound_link_name: feeding_link
+                        .as_ref()
+                        .map(|feeding| feeding.inbound_link_name.clone()),
                     ..window
                 }));
             }
-            let Some(bag) = self.pop_one_bag_off_the_mailbox(port)? else {
+            let Some(bag) = self.pop_one_bag_off_the_mailbox(port, Some(stage))? else {
                 return Ok(None);
             };
-            stage.lock().accept(&bag.body)?;
+            let flush = stage.lock().accept(&bag.body)?;
+            if let Some(flush) = flush {
+                Self::count_a_flush_on_the_link_feeding(port, feeding_link.as_ref(), flush);
+            }
         }
     }
 
@@ -2209,6 +2345,103 @@ mod tests {
             inbound_link_name.as_str(),
             "pmicrophone/audio_out",
             "a window names the one link its bags arrived on",
+        );
+    }
+
+    /// A read that took a windowed port's stage before the port was unwired and
+    /// wired again feeds that stage nothing from the new wiring, so the new link
+    /// is never charged for a flush of the old wiring's samples and its bags stay
+    /// queued for the stage installed with it.
+    ///
+    /// Fail-without-fix: the read pops the rewired port's late block into the
+    /// stage it took, flushes the 300 samples the old wiring left there, counts
+    /// them on the replacement link, and the replacement's own stage never sees
+    /// that block.
+    #[test]
+    fn a_read_holding_a_stage_from_before_a_rewire_feeds_it_nothing_from_the_new_wiring() {
+        let (first_publisher, first_subscriber) = open_channel_for_one_link("rewire/first", 8);
+        let mailboxes = InputMailboxesInner::new();
+        mailboxes.add_windowed_port(
+            "in",
+            ReadMode::ReadNextInOrder,
+            a_512_512_contract_at(16_000, 1),
+        );
+        mailboxes.add_channel_subscriber(
+            "in",
+            "L-first",
+            &InboundLinkName::from("pfirst/audio_out"),
+            first_subscriber,
+        );
+        publish_one_frame(
+            &first_publisher,
+            "audio_out",
+            &mono_audio_block_body(300, 16_000, 0),
+        );
+        assert!(
+            mailboxes
+                .read_raw("in")
+                .expect("the read succeeds")
+                .is_none(),
+            "300 of 512 samples is not a window"
+        );
+        let stage_the_read_took = match &mailboxes.ports.lock()["in"].audio_windowing {
+            InstalledInputPortAudioWindowing::Windowed(stage) => Arc::clone(stage),
+            _ => panic!("the port windows"),
+        };
+
+        mailboxes.remove_channel_link("L-first");
+        let (second_publisher, second_subscriber) = open_channel_for_one_link("rewire/second", 8);
+        mailboxes.add_windowed_port(
+            "in",
+            ReadMode::ReadNextInOrder,
+            a_512_512_contract_at(16_000, 1),
+        );
+        mailboxes.add_channel_subscriber(
+            "in",
+            "L-second",
+            &InboundLinkName::from("psecond/audio_out"),
+            second_subscriber,
+        );
+        let a_second_later_ns = 1_000_000_000;
+        publish_one_frame(
+            &second_publisher,
+            "audio_out",
+            &mono_audio_block_body(300, 16_000, a_second_later_ns),
+        );
+        mailboxes.receive_pending();
+
+        assert!(
+            mailboxes
+                .next_window_out_of_the_stage("in", &stage_the_read_took)
+                .expect("the read succeeds")
+                .is_none(),
+            "the stage the read took is no longer the port's"
+        );
+        let discarded_samples_by_link = || {
+            mailboxes
+                .discarded_sample_counts_by_inbound_link()
+                .discarded_sample_count_snapshot_by_inbound_link()
+        };
+        assert_eq!(
+            discarded_samples_by_link(),
+            std::collections::BTreeMap::from([("L-second".to_string(), 0)]),
+        );
+
+        publish_one_frame(
+            &second_publisher,
+            "audio_out",
+            &mono_audio_block_body(300, 16_000, a_second_later_ns + 18_750_000),
+        );
+        assert!(
+            mailboxes
+                .read_raw("in")
+                .expect("the read succeeds")
+                .is_some(),
+            "both of the new wiring's blocks reach its own stage and make a window"
+        );
+        assert_eq!(
+            discarded_samples_by_link(),
+            std::collections::BTreeMap::from([("L-second".to_string(), 0)]),
         );
     }
 

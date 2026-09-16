@@ -6,7 +6,9 @@ use std::sync::Arc;
 use serde_json::Value as JsonValue;
 
 use super::JsonSerializableComponent;
-use crate::iceoryx2::{DroppedBagCountsByInboundLink, RefusedBagCountsByOutputPort};
+use crate::iceoryx2::{
+    DiscardedSampleCountsByInboundLink, DroppedBagCountsByInboundLink, RefusedBagCountsByOutputPort,
+};
 
 /// Runtime metrics for a processor.
 #[derive(Default, Clone)]
@@ -25,6 +27,10 @@ pub struct ProcessorMetrics {
     /// Shared live with the destination's input mailboxes, so a snapshot reads
     /// the counts as they stand rather than a copy taken at wiring time.
     pub dropped_bag_counts_by_inbound_link: Arc<DroppedBagCountsByInboundLink>,
+    /// Samples this processor's windowed input ports discarded when they
+    /// flushed, counted per inbound link and shared live with its input
+    /// mailboxes.
+    pub discarded_sample_counts_by_inbound_link: Arc<DiscardedSampleCountsByInboundLink>,
     /// Bags this processor wrote that its output ports refused at the channel
     /// ceiling, counted per output port and shared live with its output writer.
     pub refused_bag_counts_by_output_port: Arc<RefusedBagCountsByOutputPort>,
@@ -57,13 +63,25 @@ impl JsonSerializableComponent for ProcessorMetrics {
         let by_inbound_link = self
             .dropped_bag_counts_by_inbound_link
             .dropped_bag_count_snapshot_by_inbound_link();
-        serde_json::json!({
+        let mut rendered = serde_json::json!({
             "frames_dropped": by_inbound_link.values().sum::<u64>(),
             "dropped_bags_by_link": by_inbound_link,
             "refused_bags_by_output_port": self
                 .refused_bag_counts_by_output_port
                 .refused_bag_count_snapshot_by_output_port()
-        })
+        });
+        let discarded_samples_by_link = self
+            .discarded_sample_counts_by_inbound_link
+            .discarded_sample_count_snapshot_by_inbound_link();
+        if !discarded_samples_by_link.is_empty()
+            && let Some(rendered_keys) = rendered.as_object_mut()
+        {
+            rendered_keys.insert(
+                "discarded_samples_by_link".to_string(),
+                serde_json::json!(discarded_samples_by_link),
+            );
+        }
+        rendered
     }
 }
 
@@ -120,6 +138,49 @@ mod tests {
                 "refused_bags_by_output_port": { "audio": 0, "video": 2 }
             }),
             "refusals stay per output port and never enter the inbound bag total"
+        );
+    }
+
+    /// Only a link into a windowed port carries a sample count, and a processor
+    /// with no such link renders no key for one rather than an empty map.
+    #[test]
+    fn a_processors_metrics_render_discarded_samples_only_for_links_into_windowed_ports() {
+        let dropped = Arc::new(DroppedBagCountsByInboundLink::default());
+        let _ = dropped.counter_for_inbound_link("L-windowed");
+        let _ = dropped.counter_for_inbound_link("L-unwindowed");
+        let discarded = Arc::new(DiscardedSampleCountsByInboundLink::default());
+        discarded
+            .counter_for_inbound_link("L-windowed")
+            .record_discarded_samples(480);
+
+        let rendered = ProcessorMetrics {
+            dropped_bag_counts_by_inbound_link: Arc::clone(&dropped),
+            discarded_sample_counts_by_inbound_link: discarded,
+            ..Default::default()
+        }
+        .to_json();
+        assert_eq!(
+            rendered,
+            serde_json::json!({
+                "frames_dropped": 0,
+                "dropped_bags_by_link": { "L-unwindowed": 0, "L-windowed": 0 },
+                "discarded_samples_by_link": { "L-windowed": 480 },
+                "refused_bags_by_output_port": {}
+            }),
+            "samples stay out of the bag total, and the unwindowed link carries none"
+        );
+
+        let with_no_windowed_link = ProcessorMetrics {
+            dropped_bag_counts_by_inbound_link: dropped,
+            ..Default::default()
+        }
+        .to_json();
+        assert!(
+            with_no_windowed_link
+                .get("discarded_samples_by_link")
+                .is_none(),
+            "a processor with no windowed link has no sample count to render; got \
+             {with_no_windowed_link}"
         );
     }
 

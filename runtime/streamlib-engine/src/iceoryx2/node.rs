@@ -14,7 +14,8 @@ use parking_lot::Mutex;
 use iceoryx2::port::publisher::Publisher;
 use iceoryx2::port::subscriber::Subscriber;
 use iceoryx2::service::builder::publish_subscribe::{
-    PublishSubscribeOpenError, PublishSubscribeOpenOrCreateError,
+    Builder as PublishSubscribeServiceBuilder, PublishSubscribeOpenError,
+    PublishSubscribeOpenOrCreateError,
 };
 
 use super::{
@@ -221,9 +222,7 @@ impl Iceoryx2Node {
     /// The service name should follow the format: "streamlib/{runtime_id}/events/{topic}"
     pub fn open_or_create_event_service(&self, service_name: &str) -> Result<Iceoryx2EventService> {
         let node = self.inner.lock();
-        let service_name: ServiceName = service_name.try_into().map_err(|e| {
-            Error::Configuration(format!("Invalid service name '{}': {:?}", service_name, e))
-        })?;
+        let service_name = iceoryx2_service_name_of(service_name)?;
 
         let service = node
             .service_builder(&service_name)
@@ -251,9 +250,7 @@ impl Iceoryx2Node {
         max_notifiers: usize,
     ) -> Result<Iceoryx2NotifyService> {
         let node = self.inner.lock();
-        let service_name: ServiceName = service_name.try_into().map_err(|e| {
-            Error::Configuration(format!("Invalid service name '{}': {:?}", service_name, e))
-        })?;
+        let service_name = iceoryx2_service_name_of(service_name)?;
 
         let service = node
             .service_builder(&service_name)
@@ -272,9 +269,9 @@ impl Iceoryx2Node {
     /// Open or create a channel-centric publish-subscribe service for `[u8]`
     /// slices under [`DataChannelBagSequenceNumberUserHeader`].
     ///
-    /// The one place a channel data service is built: iceoryx2 refuses an
-    /// opener presenting any other user header, so every opener comes through
-    /// here.
+    /// Every opener comes through here or [`Self::open_existing_channel_service`],
+    /// which share one builder: iceoryx2 refuses an opener presenting any other
+    /// user header.
     ///
     /// The service name is the source-port channel
     /// (`{source_processor}/{source_output_port}`). The service carries exactly
@@ -299,14 +296,9 @@ impl Iceoryx2Node {
         channel_service_creation_depth: usize,
     ) -> Result<Iceoryx2Service> {
         let node = self.inner.lock();
-        let service_name: ServiceName = service_name.try_into().map_err(|e| {
-            Error::Configuration(format!("Invalid service name '{}': {:?}", service_name, e))
-        })?;
+        let service_name = iceoryx2_service_name_of(service_name)?;
 
-        let service = node
-            .service_builder(&service_name)
-            .publish_subscribe::<[u8]>()
-            .user_header::<DataChannelBagSequenceNumberUserHeader>()
+        let service = channel_data_service_builder(&node, &service_name)
             .max_publishers(MAX_PUBLISHERS_PER_CHANNEL)
             .max_subscribers(max_subscribers)
             .max_nodes(max_subscribers * ICEORYX2_NODES_ADMITTED_PER_PORT_SLOT)
@@ -318,17 +310,80 @@ impl Iceoryx2Node {
             .map_err(|failure| match failure {
                 PublishSubscribeOpenOrCreateError::PublishSubscribeOpenError(
                     PublishSubscribeOpenError::IncompatibleTypes,
-                ) => Error::Runtime(format!(
-                    "channel data service '{}' exists with a sample type other than `[u8]` \
-                     frames under the `DataChannelBagSequenceNumberUserHeader` user header, \
-                     so it was built by something other than this engine: {failure:?}",
-                    service_name.as_str()
-                )),
+                ) => channel_data_service_built_by_something_other_than_this_engine(
+                    &service_name,
+                    &failure,
+                ),
                 other => Error::Runtime(format!("Failed to open/create service: {other:?}")),
             })?;
 
         Ok(Iceoryx2Service { inner: service })
     }
+
+    /// The channel data service named `service_name`, or `None` when nothing
+    /// holds one open.
+    ///
+    /// Opens without creating and requests no sizing, so a live service of any
+    /// depth answers rather than refusing the open.
+    pub fn open_existing_channel_service(
+        &self,
+        service_name: &str,
+    ) -> Result<Option<Iceoryx2Service>> {
+        let node = self.inner.lock();
+        let service_name = iceoryx2_service_name_of(service_name)?;
+
+        match channel_data_service_builder(&node, &service_name).open() {
+            Ok(service) => Ok(Some(Iceoryx2Service { inner: service })),
+            // A service whose last holder has let it go is recreated by the
+            // next open-or-create, so it is as good as absent.
+            Err(
+                PublishSubscribeOpenError::DoesNotExist
+                | PublishSubscribeOpenError::IsMarkedForDestruction,
+            ) => Ok(None),
+            Err(failure @ PublishSubscribeOpenError::IncompatibleTypes) => Err(
+                channel_data_service_built_by_something_other_than_this_engine(
+                    &service_name,
+                    &failure,
+                ),
+            ),
+            Err(failure) => Err(Error::Runtime(format!(
+                "Failed to open existing service '{}': {failure:?}",
+                service_name.as_str()
+            ))),
+        }
+    }
+}
+
+/// `service_name` as a name iceoryx2 accepts, refused by name when it is not one.
+fn iceoryx2_service_name_of(service_name: &str) -> Result<ServiceName> {
+    service_name.try_into().map_err(|e| {
+        Error::Configuration(format!("Invalid service name '{}': {:?}", service_name, e))
+    })
+}
+
+/// The channel data service builder: `[u8]` frames under
+/// [`DataChannelBagSequenceNumberUserHeader`], the one type pair every opener
+/// presents.
+fn channel_data_service_builder(
+    node: &Node<ipc::Service>,
+    service_name: &ServiceName,
+) -> PublishSubscribeServiceBuilder<[u8], DataChannelBagSequenceNumberUserHeader, ipc::Service> {
+    node.service_builder(service_name)
+        .publish_subscribe::<[u8]>()
+        .user_header::<DataChannelBagSequenceNumberUserHeader>()
+}
+
+/// The refusal for a channel data service whose type pair is not this engine's.
+fn channel_data_service_built_by_something_other_than_this_engine(
+    service_name: &ServiceName,
+    failure: &dyn std::fmt::Debug,
+) -> Error {
+    Error::Runtime(format!(
+        "channel data service '{}' exists with a sample type other than `[u8]` frames under \
+         the `DataChannelBagSequenceNumberUserHeader` user header, so it was built by \
+         something other than this engine: {failure:?}",
+        service_name.as_str()
+    ))
 }
 
 /// Handle to an iceoryx2 channel data service.
@@ -862,6 +917,37 @@ mod tests {
             .expect("a shallower reopen joins the live service");
 
         assert_eq!(reopened.channel_service_creation_depth(), 42);
+    }
+
+    /// Opening an existing channel service finds none where nothing holds one,
+    /// and finds one of any depth where something does.
+    #[test]
+    fn opening_an_existing_channel_service_finds_one_of_any_depth_and_creates_none() {
+        let node = Iceoryx2Node::for_this_test_process();
+        let service_name = unique_service_name("open_existing");
+
+        assert!(
+            node.open_existing_channel_service(&service_name)
+                .expect("a missing service is not an error")
+                .is_none(),
+            "nothing holds the service, so opening finds none"
+        );
+        assert!(
+            node.open_existing_channel_service(&service_name)
+                .expect("a missing service is not an error")
+                .is_none(),
+            "the first open created nothing"
+        );
+
+        let _held_open = node
+            .open_or_create_service(&service_name, 2, 3)
+            .expect("create data service");
+        assert_eq!(
+            node.open_existing_channel_service(&service_name)
+                .expect("a live service answers")
+                .map(|service| service.channel_service_creation_depth()),
+            Some(3),
+        );
     }
 
     /// End-to-end smoke test for the 200 Hz two-stage pipeline shape that
