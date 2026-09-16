@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 mod capability_extensions;
+mod engine_teardown_watchdog;
 mod graph_change_listener;
 mod helper_process_group_registry;
 mod local_processor_type_registration;
@@ -18,6 +19,10 @@ mod surface_image_exchange;
 mod tap;
 
 pub use capability_extensions::{LoadedCapabilityExtension, LoadedCapabilityExtensionRegistry};
+pub use engine_teardown_watchdog::{
+    ArmedEngineTeardownWatchdog, EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED,
+    note_what_the_engine_teardown_is_waiting_on,
+};
 #[cfg(unix)]
 pub(crate) use helper_process_group_registry::kill_every_registered_helper_process_group;
 pub use helper_process_group_registry::{
