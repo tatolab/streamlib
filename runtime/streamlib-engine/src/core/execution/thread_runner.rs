@@ -621,6 +621,14 @@ fn run_manual_mode(
         // nowhere. The loop keeps running rather than breaking: the rest of
         // the pipeline is unaffected, and breaking would run teardown and
         // then overwrite the state with `Stopped`, hiding what happened.
+        //
+        // Asked before it is read: a helper process that died on its own is
+        // noticed here, by the process rather than by its escalate socket,
+        // whose EOF a surviving descendant defers indefinitely.
+        {
+            let mut guard = processor.lock();
+            guard.detect_and_clean_up_after_an_out_of_process_helper_that_died();
+        }
         if !already_reported_failure && processor.lock().has_failed_unrecoverably() {
             tracing::error!("[{}] Processor failed unrecoverably", id);
             state.transition_to(ProcessorState::Error);

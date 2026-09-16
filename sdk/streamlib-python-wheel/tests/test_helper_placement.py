@@ -267,9 +267,11 @@ def test_a_crashed_helper_is_surfaced_and_the_pipeline_keeps_running(
     """The owner's crash policy: surface, keep running.
 
     A processor that takes its own process down mid-run is reported in error,
-    and the rest of the graph is unaffected. Nothing polls the child between
-    `run` and teardown, so what notices is the bridge reader seeing EOF — break
-    that and the death goes unreported until shutdown, which is what this locks.
+    and the rest of the graph is unaffected. What notices is the Manual loop's
+    hundred-millisecond poll asking the process itself; the bridge reader seeing
+    EOF is the second signal, and a descendant holding that socket defers it
+    indefinitely. Break both and the death goes unreported until shutdown, which
+    is what this locks.
     """
     app = start_app_under_test(APP, "a_crashed_helper_leaves_the_pipeline_running")
     app.await_output_containing(

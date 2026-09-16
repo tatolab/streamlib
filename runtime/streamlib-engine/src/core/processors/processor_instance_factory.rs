@@ -87,6 +87,12 @@ impl ProcessorInstance {
         self.0.has_iceoryx2_inputs()
     }
 
+    /// Notice a helper process that died on its own, and take its group with it.
+    pub fn detect_and_clean_up_after_an_out_of_process_helper_that_died(&mut self) {
+        self.0
+            .detect_and_clean_up_after_an_out_of_process_helper_that_died()
+    }
+
     /// Whether this processor has failed unrecoverably.
     pub fn has_failed_unrecoverably(&self) -> bool {
         self.0.has_failed_unrecoverably()

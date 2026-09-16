@@ -94,6 +94,32 @@ pub(crate) fn iceoryx2_config_for_domain(
     Ok(config)
 }
 
+/// Reclaim what every dead iceoryx2 node in the engine-owned domain still holds,
+/// and say how many went.
+///
+/// A dead node keeps its place in every service it had opened, so a channel
+/// whose helper process crashed counts that helper against the subscriber cap
+/// until a sweep takes it out. The engine's own configuration and never the
+/// ambient one: the lookup path would sweep another domain, or none.
+///
+/// The non-blocking form, because this runs from a liveness poll — a node
+/// another process is already cleaning up is left to that process and gone by
+/// the next sweep, rather than parking the poll on it.
+pub fn reclaim_dead_iceoryx2_nodes_in_engine_owned_domain(
+    domain_root: &std::path::Path,
+) -> Result<u64> {
+    let config = engine_owned_iceoryx2_config(domain_root)?;
+    let reclaimed = Node::<ipc::Service>::try_cleanup_dead_nodes(&config);
+    if reclaimed.failed_cleanups > 0 {
+        tracing::debug!(
+            "{} dead iceoryx2 node(s) could not be reclaimed, which is ordinary when another \
+             process holds them",
+            reclaimed.failed_cleanups,
+        );
+    }
+    Ok(reclaimed.cleanups)
+}
+
 /// Create a raw iceoryx2 node, labelled `node_name`, in the engine-owned domain rooted at `domain_root`.
 pub fn create_iceoryx2_node_in_engine_owned_domain(
     domain_root: &std::path::Path,
