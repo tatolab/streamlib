@@ -11,7 +11,7 @@ pub mod check_boundaries;
 pub mod check_bounded_apt_install;
 pub mod check_clock_usage;
 pub mod check_device_wait_idle;
-pub mod check_iceoryx2_node_construction;
+pub mod check_iceoryx2_construction;
 pub mod check_no_escalate_in_lifecycle;
 pub mod check_no_in_process_placement;
 pub mod check_no_inheritable_descriptor;
@@ -156,8 +156,8 @@ const ALL_SOURCE_WALKING_GATES: &[(&str, fn(&Path) -> Result<()>)] = &[
     ),
     ("check-device-wait-idle", check_device_wait_idle::run),
     (
-        "check-iceoryx2-node-construction",
-        check_iceoryx2_node_construction::run,
+        "check-iceoryx2-construction",
+        check_iceoryx2_construction::run,
     ),
     (
         "check-no-unbounded-cstr-from-ptr",
@@ -833,7 +833,7 @@ enum Commands {
     /// `adapters/` outside `iceoryx2/node.rs`, and on any `Config::global_config()`
     /// anywhere — tests and benches included, since a node in another domain hangs
     /// a test silently and a service without the user header counts no loss.
-    CheckIceoryx2NodeConstruction,
+    CheckIceoryx2Construction,
 
     /// CI gate for the borrow-checked-C-string rule in the Vulkan RHI. Fails
     /// on any `CStr::from_ptr(<owner>.as_ptr())` under
@@ -971,8 +971,8 @@ fn main() -> Result<()> {
             check_no_escalate_in_lifecycle::run(&workspace_root()?)?
         }
         Commands::CheckDeviceWaitIdle => check_device_wait_idle::run(&workspace_root()?)?,
-        Commands::CheckIceoryx2NodeConstruction => {
-            check_iceoryx2_node_construction::run(&workspace_root()?)?
+        Commands::CheckIceoryx2Construction => {
+            check_iceoryx2_construction::run(&workspace_root()?)?
         }
         Commands::CheckNoUnboundedCstrFromPtr => {
             check_no_unbounded_cstr_from_ptr::run(&workspace_root()?)?

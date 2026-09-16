@@ -58,7 +58,7 @@ pub struct CheckReport {
 pub fn run(workspace_root: &Path) -> Result<()> {
     let report = scan(workspace_root)?;
     crate::ensure_source_walking_gate_read_source(
-        "check-iceoryx2-node-construction",
+        "check-iceoryx2-construction",
         &format!("{SCAN_ROOTS:?}"),
         report.files_scanned,
         "an iceoryx2 node outside the engine-owned domain",
@@ -97,14 +97,14 @@ pub fn run(workspace_root: &Path) -> Result<()> {
         .collect();
     anyhow::ensure!(
         failure_lines.is_empty(),
-        "check-iceoryx2-node-construction found {} violation(s) across {} file(s):\n{}",
+        "check-iceoryx2-construction found {} violation(s) across {} file(s):\n{}",
         failure_lines.len(),
         report.files_scanned,
         failure_lines.join("\n"),
     );
 
     tracing::info!(
-        "check-iceoryx2-node-construction: {} files scanned across {SCAN_ROOTS:?}, no iceoryx2 \
+        "check-iceoryx2-construction: {} files scanned across {SCAN_ROOTS:?}, no iceoryx2 \
          node built outside `{ALLOWED_CONSTRUCTOR_SIGNATURE}..)`, no publish-subscribe service \
          built outside {ALLOWED_FILE} and no global configuration read",
         report.files_scanned,
