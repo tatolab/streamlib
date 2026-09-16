@@ -22,6 +22,7 @@ needs no device and belongs back in CI; #1823 carries that.
 
 import os
 import re
+import time
 from pathlib import Path
 
 import pytest
@@ -258,6 +259,87 @@ def test_no_helper_survives_the_app(start_app_under_test):
     survivors = [pid for pid in helper_pids if helper_process_is_still_alive(pid)]
     assert not survivors, (
         f"helper processes {survivors} outlived the app that spawned them"
+    )
+
+
+WORKER_PID_MARKER = re.compile(r"MARKER:WORKER_PID (\d+) HELPER_PID (\d+)")
+
+# The ladder's own worst case is a second of interrupt plus five of teardown
+# plus the group's grace; a helper that answers at once is far inside it. This
+# is what separates "the ladder ran" from "the thirty-second callback did".
+LADDER_BUDGET_SECONDS = 15.0
+
+
+def a_pid_is_gone_within(pid: int, budget_seconds: float) -> bool:
+    """Whether `pid` has stopped existing inside `budget_seconds`.
+
+    Signal 0 rather than a wait: a worker a helper forked is nobody's child
+    here, so it is reaped by init and never by this process.
+    """
+    deadline = time.monotonic() + budget_seconds
+    while True:
+        try:
+            os.kill(pid, 0)
+        except (ProcessLookupError, PermissionError):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+
+
+def test_a_processor_asleep_in_its_callback_still_runs_its_teardown(
+    start_app_under_test,
+):
+    """The ladder ARCHITECTURE.md:717-732 decides, end to end.
+
+    Fail-without-fix: with the old pair of five-second reply deadlines the
+    sleeping callback misses `stopped`, the helper is marked gone, and its
+    `teardown()` is skipped outright — so `SLEEPER_TORE_DOWN` never arrives.
+    """
+    app = start_app_under_test(APP, "a_sleeping_processor_still_runs_its_teardown")
+    app.await_output_containing(
+        "MARKER:ASLEEP_IN_PROCESS", "the processor to park in its callback"
+    )
+    interrupted_at = time.monotonic()
+    app.interrupt()
+    app.await_marker("CLEAN_EXIT")
+    app.await_clean_exit()
+    ended_in = time.monotonic() - interrupted_at
+
+    markers = app.markers()
+    assert "SLEEPER_STOPPED" in markers, (
+        f"`stop()` did not run after the interrupt:\n{app.output}"
+    )
+    assert "SLEEPER_TORE_DOWN" in markers, (
+        f"`teardown()` did not run after the interrupt:\n{app.output}"
+    )
+    assert "SLEPT_THE_WHOLE_WAY" not in markers, (
+        f"the callback returned on its own, so nothing interrupted it:\n{app.output}"
+    )
+    assert ended_in < LADDER_BUDGET_SECONDS, (
+        f"the app took {ended_in:.1f}s to end, which is the callback's thirty seconds "
+        f"rather than the ladder's budget:\n{app.output}"
+    )
+
+
+def test_a_worker_a_processor_forked_goes_down_with_the_apps_helper(
+    start_app_under_test,
+):
+    """`:724` — a processor's descendants die with it.
+
+    Fail-without-fix: the kills target the helper's pid, the worker outlives
+    the app holding whatever it inherited, and this finds it still running.
+    """
+    app = run_scenario_until(
+        start_app_under_test,
+        "a_helper_that_forked_a_worker_leaves_nothing_behind",
+        "MARKER:WORKER_PID",
+        "the processor to fork a worker of its own",
+    )
+    worker_pid = int(matched_marker(WORKER_PID_MARKER, app.output).group(1))
+
+    assert a_pid_is_gone_within(worker_pid, 2.0), (
+        f"the worker a processor forked outlived the app that spawned it:\n{app.output}"
     )
 
 
