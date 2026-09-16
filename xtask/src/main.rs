@@ -586,6 +586,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::runtime::helper_process_group_registry",
                 "core::runtime::engine_teardown_watchdog",
                 "core::compiler::processor_thread_shutdown",
+                "core::runtime::runtime::tests::an_owned_tokio_runtime_whose_blocking_task_never_returns_still_drops_within_its_budget",
             ],
         ),
         // The rig-tier integration binary that drives the two `match_device`

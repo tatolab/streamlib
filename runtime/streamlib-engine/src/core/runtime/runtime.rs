@@ -38,7 +38,7 @@ use crate::iceoryx2::Iceoryx2Node;
 /// integrated into existing tokio applications (using the current handle).
 pub(crate) enum TokioRuntimeVariant {
     /// Runner owns the tokio Runtime (created when NOT in tokio context).
-    OwnedTokioRuntime(tokio::runtime::Runtime),
+    OwnedTokioRuntime(TokioRuntimeShutDownWithinItsBudget),
     /// Runner uses an external tokio Handle (auto-detected when called from tokio context).
     ExternalTokioHandle(tokio::runtime::Handle),
 }
@@ -49,6 +49,43 @@ impl TokioRuntimeVariant {
         match self {
             TokioRuntimeVariant::OwnedTokioRuntime(rt) => rt.handle().clone(),
             TokioRuntimeVariant::ExternalTokioHandle(h) => h.clone(),
+        }
+    }
+}
+
+/// How long dropping an owned tokio runtime waits for its tasks to stop.
+///
+/// A plain drop waits for every `spawn_blocking` task to return, without
+/// limit, so one blocking call that never returns hangs the engine's teardown.
+const OWNED_TOKIO_RUNTIME_SHUTDOWN_BUDGET: Duration = Duration::from_secs(2);
+
+/// A tokio runtime the engine owns, shut down within
+/// [`OWNED_TOKIO_RUNTIME_SHUTDOWN_BUDGET`] when dropped.
+pub(crate) struct TokioRuntimeShutDownWithinItsBudget(Option<tokio::runtime::Runtime>);
+
+impl TokioRuntimeShutDownWithinItsBudget {
+    pub(crate) fn owning(runtime: tokio::runtime::Runtime) -> Self {
+        Self(Some(runtime))
+    }
+}
+
+impl std::ops::Deref for TokioRuntimeShutDownWithinItsBudget {
+    type Target = tokio::runtime::Runtime;
+
+    fn deref(&self) -> &Self::Target {
+        self.0
+            .as_ref()
+            .expect("the runtime is taken only by the drop that ends this value")
+    }
+}
+
+impl Drop for TokioRuntimeShutDownWithinItsBudget {
+    fn drop(&mut self) {
+        if let Some(runtime) = self.0.take() {
+            crate::core::runtime::note_what_the_engine_teardown_is_waiting_on(
+                "the engine's tokio runtime",
+            );
+            runtime.shutdown_timeout(OWNED_TOKIO_RUNTIME_SHUTDOWN_BUDGET);
         }
     }
 }
@@ -154,7 +191,9 @@ impl Runner {
                     .map_err(|e| {
                         Error::Runtime(format!("Failed to create tokio runtime: {}", e))
                     })?;
-                TokioRuntimeVariant::OwnedTokioRuntime(rt)
+                TokioRuntimeVariant::OwnedTokioRuntime(TokioRuntimeShutDownWithinItsBudget::owning(
+                    rt,
+                ))
             }
         };
 
@@ -1478,6 +1517,34 @@ mod tests {
             runtime.tokio_runtime_variant,
             TokioRuntimeVariant::OwnedTokioRuntime(_)
         ));
+    }
+
+    /// Fail-without-fix: a plain drop of the runtime waits for the blocking task
+    /// below for its whole minute.
+    #[test]
+    fn an_owned_tokio_runtime_whose_blocking_task_never_returns_still_drops_within_its_budget() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("a tokio runtime builds");
+        let (blocking_task_started, blocking_task_has_started) = std::sync::mpsc::channel();
+        runtime.spawn_blocking(move || {
+            let _ = blocking_task_started.send(());
+            std::thread::sleep(Duration::from_secs(60));
+        });
+        blocking_task_has_started
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the blocking task starts");
+
+        let owned = TokioRuntimeShutDownWithinItsBudget::owning(runtime);
+        let started = std::time::Instant::now();
+        drop(owned);
+
+        assert!(
+            started.elapsed() < OWNED_TOKIO_RUNTIME_SHUTDOWN_BUDGET + Duration::from_secs(1),
+            "dropping the runtime took {:?}",
+            started.elapsed()
+        );
     }
 
     #[test]

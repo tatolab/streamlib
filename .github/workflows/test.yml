@@ -485,7 +485,8 @@ jobs:
             core::runtime::runtime_shutdown_request \
             core::runtime::helper_process_group_registry \
             core::runtime::engine_teardown_watchdog \
-            core::compiler::processor_thread_shutdown
+            core::compiler::processor_thread_shutdown \
+            core::runtime::runtime::tests::an_owned_tokio_runtime_whose_blocking_task_never_returns_still_drops_within_its_budget
           # The two arms' own liveness tests are named one by one rather than
           # by module: their modules also hold tests that dlopen libasound and
           # walk a real PCM, which this runner has no `/dev/snd` for. These

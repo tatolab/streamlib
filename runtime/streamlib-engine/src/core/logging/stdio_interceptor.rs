@@ -12,8 +12,20 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use tracing::Dispatch;
+
+/// How long dropping the interceptor waits for its reader threads to see end of
+/// file.
+///
+/// Every process the app spawned inherits fds 1 and 2, which are the pipes'
+/// write ends, so a reader cannot see end of file before the last of them
+/// exits. Waiting on it without a bound let anything the app started hold the
+/// app's own teardown open.
+const INTERCEPT_READER_JOIN_BUDGET: Duration = Duration::from_secs(1);
+
+const INTERCEPT_READER_JOIN_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 pub(crate) struct StdioInterceptor {
     saved_stdout: Option<OwnedFd>,
@@ -118,13 +130,39 @@ impl Drop for StdioInterceptor {
         if let Some(fd) = self.saved_stderr.take() {
             let _ = dup2_fd(fd.as_raw_fd(), libc::STDERR_FILENO);
         }
-        if let Some(j) = self.fd1_reader.take() {
-            let _ = j.join();
-        }
-        if let Some(j) = self.fd2_reader.take() {
-            let _ = j.join();
-        }
+        let readers = [self.fd1_reader.take(), self.fd2_reader.take()];
+        join_intercept_readers_within(readers.into_iter().flatten(), INTERCEPT_READER_JOIN_BUDGET);
     }
+}
+
+/// Join every reader that sees end of file within `budget`, and leave the rest
+/// running detached. Returns how many were left.
+fn join_intercept_readers_within(
+    readers: impl IntoIterator<Item = JoinHandle<()>>,
+    budget: Duration,
+) -> usize {
+    let deadline = Instant::now() + budget;
+    let mut still_reading: Vec<JoinHandle<()>> = readers.into_iter().collect();
+    loop {
+        let (returned, reading): (Vec<_>, Vec<_>) = still_reading
+            .into_iter()
+            .partition(|reader| reader.is_finished());
+        for reader in returned {
+            let _ = reader.join();
+        }
+        still_reading = reading;
+        if still_reading.is_empty() || Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(INTERCEPT_READER_JOIN_POLL_INTERVAL);
+    }
+    if !still_reading.is_empty() {
+        tracing::warn!(
+            "{} stdio intercept reader(s) left running: a process this app started still              holds the app's standard output or error",
+            still_reading.len()
+        );
+    }
+    still_reading.len()
 }
 
 fn spawn_reader(pipe_read: OwnedFd, channel: &'static str, dispatch: Dispatch) -> JoinHandle<()> {
@@ -213,6 +251,37 @@ mod tests {
         assert!(
             is_close_on_exec(&stderr_copy),
             "a spawned process would inherit the copy of stderr"
+        );
+    }
+
+    /// Fail-without-fix: joining without a bound waits for as long as the write
+    /// end stays open, which is as long as whatever the app spawned lives.
+    #[test]
+    fn a_reader_whose_pipe_is_still_held_open_is_left_running_at_its_budget() {
+        let (read_end, write_end_a_spawned_process_holds) = make_pipe().expect("a pipe opens");
+        let reader = spawn_reader(read_end, "fd1", Dispatch::none());
+
+        let started = Instant::now();
+        let left_running = join_intercept_readers_within([reader], Duration::from_millis(200));
+
+        assert_eq!(left_running, 1);
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "the join waited {:?} on a pipe that stays open",
+            started.elapsed()
+        );
+        drop(write_end_a_spawned_process_holds);
+    }
+
+    #[test]
+    fn a_reader_that_sees_end_of_file_is_joined() {
+        let (read_end, write_end) = make_pipe().expect("a pipe opens");
+        let reader = spawn_reader(read_end, "fd2", Dispatch::none());
+        drop(write_end);
+
+        assert_eq!(
+            join_intercept_readers_within([reader], Duration::from_secs(5)),
+            0
         );
     }
 
