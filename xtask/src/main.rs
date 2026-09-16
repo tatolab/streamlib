@@ -9,7 +9,6 @@ use std::path::{Path, PathBuf};
 
 pub mod check_boundaries;
 pub mod check_bounded_apt_install;
-pub mod check_channel_data_service_construction;
 pub mod check_clock_usage;
 pub mod check_device_wait_idle;
 pub mod check_iceoryx2_node_construction;
@@ -159,10 +158,6 @@ const ALL_SOURCE_WALKING_GATES: &[(&str, fn(&Path) -> Result<()>)] = &[
     (
         "check-iceoryx2-node-construction",
         check_iceoryx2_node_construction::run,
-    ),
-    (
-        "check-channel-data-service-construction",
-        check_channel_data_service_construction::run,
     ),
     (
         "check-no-unbounded-cstr-from-ptr",
@@ -413,7 +408,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "iceoryx2::input::tests::a_frame_too_short_for_a_header_is_counted_on_the_link_it_arrived_on",
                 "iceoryx2::input::tests::a_frame_bound_to_a_port_with_no_mailbox_is_counted_on_its_link",
                 "iceoryx2::output::tests::a_write_refused_at_the_ceiling_consumes_no_sequence_number",
-                "iceoryx2::output::tests::only_a_send_failing_before_any_delivery_gives_its_sequence_number_back",
+                "iceoryx2::output::tests::a_send_consumes_its_sequence_number_unless_it_failed_before_any_delivery",
                 "iceoryx2::output::tests::an_output_ports_refusals_leave_with_its_last_link",
                 "core::runtime::tap::tests::stalled_downstream_never_blocks_the_drain_and_detach_returns_promptly",
                 "iceoryx2::node::tests::overflow_enabled_publisher_does_not_block_on_full_buffer",
@@ -834,15 +829,11 @@ enum Commands {
     CheckDeviceWaitIdle,
 
     /// CI gate for the engine-owned iceoryx2 domain. Fails on any
-    /// `NodeBuilder::new()` under `runtime/`, `sdk/` or `adapters/` outside
-    /// `iceoryx2/node.rs`, and on any `Config::global_config()` anywhere — tests
-    /// and benches included, since a node in another domain hangs a test silently.
+    /// `NodeBuilder::new()` or `publish_subscribe::<` under `runtime/`, `sdk/` or
+    /// `adapters/` outside `iceoryx2/node.rs`, and on any `Config::global_config()`
+    /// anywhere — tests and benches included, since a node in another domain hangs
+    /// a test silently and a service without the user header counts no loss.
     CheckIceoryx2NodeConstruction,
-
-    /// CI gate for the sequence-number user header on every channel data
-    /// service. Fails on any `publish_subscribe::<` under `runtime/`, `sdk/` or
-    /// `adapters/` outside `iceoryx2/node.rs` — tests and benches included.
-    CheckChannelDataServiceConstruction,
 
     /// CI gate for the borrow-checked-C-string rule in the Vulkan RHI. Fails
     /// on any `CStr::from_ptr(<owner>.as_ptr())` under
@@ -982,9 +973,6 @@ fn main() -> Result<()> {
         Commands::CheckDeviceWaitIdle => check_device_wait_idle::run(&workspace_root()?)?,
         Commands::CheckIceoryx2NodeConstruction => {
             check_iceoryx2_node_construction::run(&workspace_root()?)?
-        }
-        Commands::CheckChannelDataServiceConstruction => {
-            check_channel_data_service_construction::run(&workspace_root()?)?
         }
         Commands::CheckNoUnboundedCstrFromPtr => {
             check_no_unbounded_cstr_from_ptr::run(&workspace_root()?)?

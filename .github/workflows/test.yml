@@ -320,7 +320,7 @@ jobs:
             iceoryx2::input::tests::a_frame_too_short_for_a_header_is_counted_on_the_link_it_arrived_on \
             iceoryx2::input::tests::a_frame_bound_to_a_port_with_no_mailbox_is_counted_on_its_link \
             iceoryx2::output::tests::a_write_refused_at_the_ceiling_consumes_no_sequence_number \
-            iceoryx2::output::tests::only_a_send_failing_before_any_delivery_gives_its_sequence_number_back \
+            iceoryx2::output::tests::a_send_consumes_its_sequence_number_unless_it_failed_before_any_delivery \
             iceoryx2::output::tests::an_output_ports_refusals_leave_with_its_last_link \
             core::runtime::tap::tests::stalled_downstream_never_blocks_the_drain_and_detach_returns_promptly \
             iceoryx2::node::tests::overflow_enabled_publisher_does_not_block_on_full_buffer \
