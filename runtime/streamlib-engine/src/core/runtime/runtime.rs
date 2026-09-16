@@ -29,6 +29,7 @@ use crate::core::processors::ProcessorSpec;
 use crate::core::processors::ProcessorState;
 use crate::core::pubsub::{Event, EventListener, PUBSUB, ProcessorEvent, RuntimeEvent, topics};
 use crate::core::runtime::LoadedCapabilityExtensionRegistry;
+use crate::core::signals::ScopedShutdownSignalOwnership;
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 use crate::iceoryx2::Iceoryx2Node;
 
@@ -904,7 +905,7 @@ impl Runner {
         Ok(())
     }
 
-    /// Block until shutdown signal (Ctrl+C, SIGTERM, Cmd+Q) or a latched
+    /// Block until shutdown signal (Ctrl+C, SIGTERM, SIGHUP, Cmd+Q) or a
     /// [`request_runtime_shutdown`](crate::core::runtime::request_runtime_shutdown).
     pub fn wait_for_signal(self: &Arc<Self>) -> Result<()> {
         self.wait_for_signal_with(|_| ControlFlow::Continue(()))
@@ -925,20 +926,38 @@ impl Runner {
                 self.wait_for_shutdown_observation_with(|_| ControlFlow::Continue(()))
             })
         };
-        Self::clear_shutdown_requests_latched_during_teardown();
+        Self::clear_the_shutdown_escalation_this_run_observed();
         run_outcome
     }
 
-    /// Take any request that landed after the run loop stopped observing.
+    /// [`start`](Self::start) and block until a shutdown is requested, tearing
+    /// nothing down — for an embedding host that holds the shutdown signals
+    /// through its own teardown and the engine's drop, so a second or third
+    /// interrupt still escalates wherever that teardown is.
+    ///
+    /// On macOS the run loop is an `NSApplication` loop that stops the runtime
+    /// and terminates the process instead of returning.
+    pub fn start_and_block_until_shutdown_is_requested(
+        self: &Arc<Self>,
+        _shutdown_signals_held_by_the_caller: &ScopedShutdownSignalOwnership,
+    ) -> Result<()> {
+        self.start()?;
+        self.block_until_shutdown_is_observed_with(|_| ControlFlow::Continue(()))
+    }
+
+    /// Take any request that landed after the run loop stopped observing, and
+    /// how far this run's interrupts escalated.
     ///
     /// Called once shutdown-signal ownership has dropped, so no further signal
     /// can reach the funnel.
-    fn clear_shutdown_requests_latched_during_teardown() {
+    fn clear_the_shutdown_escalation_this_run_observed() {
         crate::core::runtime::take_runtime_shutdown_escalation();
     }
 
-    fn take_shutdown_signal_ownership()
-    -> Result<crate::core::signals::ScopedShutdownSignalOwnership> {
+    /// Own SIGINT, SIGTERM and SIGHUP until the returned value drops.
+    ///
+    /// Fails if another run loop in this process already owns them.
+    pub fn take_shutdown_signal_ownership() -> Result<ScopedShutdownSignalOwnership> {
         crate::core::signals::ScopedShutdownSignalOwnership::take_until_dropped().map_err(
             |ownership_failure| {
                 crate::core::Error::Configuration(format!(
@@ -952,8 +971,8 @@ impl Runner {
     /// Block until shutdown signal, with periodic callback for dynamic control.
     ///
     /// This is the run-loop owner: it observes both the `RuntimeShutdown`
-    /// event and the shutdown-request latch, then runs the normal teardown.
-    /// The latch is polled as well as the event because a request published
+    /// event and the shutdown escalation, then runs the normal teardown.
+    /// The escalation is polled as well as the event because a request published
     /// before this subscriber was wired up leaves no event to receive.
     pub fn wait_for_signal_with<F>(self: &Arc<Self>, callback: F) -> Result<()>
     where
@@ -965,12 +984,22 @@ impl Runner {
             let _shutdown_signals = Self::take_shutdown_signal_ownership()?;
             self.wait_for_shutdown_observation_with(callback)
         };
-        Self::clear_shutdown_requests_latched_during_teardown();
+        Self::clear_the_shutdown_escalation_this_run_observed();
         wait_outcome
     }
 
-    /// The wait loop itself, for callers that already own the shutdown signals.
-    fn wait_for_shutdown_observation_with<F>(self: &Arc<Self>, mut callback: F) -> Result<()>
+    /// The wait loop and the teardown after it, for callers that already own
+    /// the shutdown signals.
+    fn wait_for_shutdown_observation_with<F>(self: &Arc<Self>, callback: F) -> Result<()>
+    where
+        F: FnMut(&Self) -> ControlFlow<()>,
+    {
+        self.block_until_shutdown_is_observed_with(callback)?;
+        self.stop()
+    }
+
+    /// The wait loop alone.
+    fn block_until_shutdown_is_observed_with<F>(self: &Arc<Self>, mut callback: F) -> Result<()>
     where
         F: FnMut(&Self) -> ControlFlow<()>,
     {
@@ -1045,11 +1074,6 @@ impl Runner {
                     crate::core::runtime::RUNTIME_SHUTDOWN_REQUEST_OBSERVATION_POLL_INTERVAL,
                 );
             }
-
-            // Auto-stop on exit. The observed request is taken by the caller
-            // once shutdown-signal ownership has dropped, which also catches
-            // anything latched during this teardown.
-            self.stop()?;
 
             Ok(())
         }

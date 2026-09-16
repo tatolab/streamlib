@@ -501,7 +501,24 @@ class Runtime:
         """
 
     def run(self) -> None:
-        """Run the pipeline until Ctrl-C, SIGTERM or `shutdown()`, then tear down."""
+        """Run the pipeline until Ctrl-C, SIGTERM, SIGHUP or `shutdown()`, then tear down.
+
+        Call it from the main thread. It owns SIGINT, SIGTERM and SIGHUP from
+        startup until the engine is dropped, then hands them back to Python.
+        The first interrupt stops the graph gracefully: every processor stops at
+        once, and each Python processor's `stop()` and `teardown()` run. The
+        second forces it: every helper process group is terminated without its
+        `teardown()`, and a native processor still inside its callback is
+        abandoned. The third kills every helper process group and exits the
+        process with status 130 at once. `shutdown()` is the first step only,
+        however often it is called.
+
+        Raises `RuntimeError` naming each processor, by display name and id,
+        whose thread ignored shutdown past its budget and was abandoned — the
+        engine then stays alive beneath it until the process exits. A forced
+        shutdown that abandoned nothing returns normally. A teardown still hung
+        after about fifteen seconds ends the process with status 124.
+        """
 
     def wait_until_every_processor_is_running(self, *, timeout: float = 30.0) -> None:
         """Block until every processor in the graph is running.

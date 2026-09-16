@@ -21,6 +21,7 @@ mod tap;
 pub use crate::core::compiler::{
     AbandonedProcessorThread, refusal_naming_the_abandoned_processor_threads,
 };
+pub use crate::core::signals::ScopedShutdownSignalOwnership;
 pub use capability_extensions::{LoadedCapabilityExtension, LoadedCapabilityExtensionRegistry};
 pub use engine_teardown_watchdog::{
     ArmedEngineTeardownWatchdog, EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED,

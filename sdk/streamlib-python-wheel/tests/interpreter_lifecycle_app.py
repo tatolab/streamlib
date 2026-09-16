@@ -11,11 +11,18 @@ Rust, and an unflushed Python buffer would reorder them.
 
 import os
 import signal
+import subprocess
 import sys
 import threading
 import time
 
 import streamlib
+from interpreter_lifecycle_processors import (
+    AsleepInItsCallbackAndSlowToTearDownProbe,
+    AsleepInItsCallbackProbe,
+    ThirtySecondImportProbe,
+    WorkerKeepingTeardownGoingProbe,
+)
 
 
 KEYBOARD_INTERRUPT_UPPER_BOUND_SECONDS = 5.0
@@ -251,6 +258,56 @@ def scenario_two_pipelines_in_one_process() -> None:
     marker(f"PIPELINE_2_BLOCKED_MS={blocked_milliseconds}")
 
 
+def scenario_a_processor_asleep_in_its_callback() -> None:
+    """The driver interrupts a graph whose one processor sleeps in `process()`."""
+    runtime = streamlib.Runtime()
+    runtime.add(AsleepInItsCallbackProbe)
+    runtime.run()
+    marker("RUN_RETURNED")
+
+
+def scenario_three_processors_slow_to_tear_down() -> None:
+    """Three helpers, each asleep in its callback and three seconds over its
+    teardown, so stopping them one after another is plainly slower than at once."""
+    runtime = streamlib.Runtime()
+    for _ in range(3):
+        runtime.add(AsleepInItsCallbackAndSlowToTearDownProbe)
+    runtime.run()
+    marker("RUN_RETURNED")
+
+
+def scenario_a_teardown_only_a_forced_shutdown_cuts_short() -> None:
+    """A helper whose teardown takes thirty seconds, and whose forked worker
+    ignores SIGTERM. The driver interrupts it two or three times."""
+    runtime = streamlib.Runtime()
+    runtime.add(WorkerKeepingTeardownGoingProbe)
+    runtime.run()
+    marker("RUN_RETURNED")
+
+
+def scenario_a_process_the_app_started_outlives_it() -> None:
+    """The app starts a process that inherits every descriptor it can and
+    outlives the app by far.
+
+    Started once the engine exists, so it inherits whatever the engine holds —
+    the stdio interceptor's copies of the app's own output included, were they
+    inheritable.
+    """
+    runtime = streamlib.Runtime()
+    survivor = subprocess.Popen(["sleep", "30"], close_fds=False, stdin=subprocess.DEVNULL)
+    marker(f"SURVIVOR_PID={survivor.pid}")
+    runtime.run()
+    marker("RUN_RETURNED")
+
+
+def scenario_a_helper_still_importing_its_processor() -> None:
+    """The one processor's module takes thirty seconds to import in its helper."""
+    runtime = streamlib.Runtime()
+    runtime.add(ThirtySecondImportProbe)
+    runtime.run()
+    marker("RUN_RETURNED")
+
+
 SCENARIOS = {
     "ctrl_c": scenario_ctrl_c,
     "gil_released": scenario_gil_released_while_running,
@@ -263,6 +320,13 @@ SCENARIOS = {
     "readiness_wait_across_teardown": scenario_readiness_wait_across_teardown,
     "two_pipelines_in_one_process": scenario_two_pipelines_in_one_process,
     "shutdown_spun_across_the_run_loop_exit": scenario_shutdown_spun_across_the_run_loop_exit,
+    "a_processor_asleep_in_its_callback": scenario_a_processor_asleep_in_its_callback,
+    "three_processors_slow_to_tear_down": scenario_three_processors_slow_to_tear_down,
+    "a_teardown_only_a_forced_shutdown_cuts_short": (
+        scenario_a_teardown_only_a_forced_shutdown_cuts_short
+    ),
+    "a_process_the_app_started_outlives_it": scenario_a_process_the_app_started_outlives_it,
+    "a_helper_still_importing_its_processor": scenario_a_helper_still_importing_its_processor,
 }
 
 

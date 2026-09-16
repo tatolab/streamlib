@@ -373,10 +373,10 @@ impl PythonHelperProcessSpawnHostProcessor {
             .ok_or_else(|| Error::Runtime("there is no helper process to wait for".to_string()))?;
         let deadline = Instant::now() + REGISTRATION_DEADLINE;
         // Only a request that arrives *during* this wait cuts it short. The
-        // latch is process-global and first-observer-wins, so one already set
-        // when a helper starts belongs to a run that has not taken it yet —
-        // and reading that as "shutdown began" would refuse every helper a
-        // later graph in this process adds.
+        // escalation is process-global and taken only when a run ends, so one
+        // already raised when a helper starts belongs to a run that has not
+        // taken it yet — and reading that as "shutdown began" would refuse
+        // every helper a later graph in this process adds.
         let shutdown_was_already_requested =
             streamlib::sdk::runtime::is_runtime_shutdown_requested();
         let reply = loop {
@@ -926,6 +926,14 @@ impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
             child.id(),
             self.processor_class_import_path,
         );
+        // `pre_exec` made the child the leader of a group whose id is its pid.
+        if !streamlib::sdk::runtime::register_a_helper_process_group(child.id() as i32) {
+            tracing::warn!(
+                "[{}] its helper process group could not be registered, so a third interrupt \
+                 will not kill it; the kernel still kills the helper itself when the app exits",
+                self.processor_display_name,
+            );
+        }
 
         // fd1/fd2 carry anything that bypasses `streamlib.log` — a raw
         // `os.write`, a C extension's `printf`, an interpreter-level fatal —

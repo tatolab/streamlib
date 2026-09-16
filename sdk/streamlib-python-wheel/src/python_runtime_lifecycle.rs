@@ -5,8 +5,9 @@
 //! interpreter finalization.
 //!
 //! Every blocking step runs with the GIL released, and the engine is dropped —
-//! not merely stopped — before [`PythonRuntimeHandle::run`] returns, so no
-//! engine thread can still be alive when CPython finalizes.
+//! not merely stopped — before [`PythonRuntimeHandle::run`] returns, so every
+//! engine thread is joined, or abandoned and named, when CPython finalizes.
+//! Every teardown runs under the engine's watchdog.
 
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
 use std::time::Duration;
@@ -16,7 +17,11 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::processors::ProcessorSpec;
-use streamlib::sdk::runtime::{Runner, request_runtime_shutdown, take_runtime_shutdown_escalation};
+use streamlib::sdk::runtime::{
+    AbandonedProcessorThread, ArmedEngineTeardownWatchdog, Runner,
+    refusal_naming_the_abandoned_processor_threads, request_runtime_shutdown,
+    take_runtime_shutdown_escalation,
+};
 
 use crate::python_added_processor::{
     PythonAddedProcessor, PythonProcessorInputPortReference, PythonProcessorOutputPortReference,
@@ -63,16 +68,31 @@ fn classify_processor_class(
     )))
 }
 
-/// A reference to the engine outlived the handle, so its threads were not
-/// joined and the teardown contract was not kept.
-struct EngineTeardownIncomplete;
+/// The engine could not be dropped, so its teardown did not finish.
+enum EngineTeardownIncomplete {
+    /// Processor threads ignored shutdown past their budget. The engine is left
+    /// alive beneath them until the process exits, never dropped: a thread
+    /// returning late would otherwise run the engine's drop — tokio's shutdown,
+    /// the stdio restore, device wait-idle — on its own thread during
+    /// interpreter finalization.
+    ProcessorThreadsAbandoned(Vec<AbandonedProcessorThread>),
+    /// Something else still held a reference, so the threads were not joined.
+    EngineStillReferenced,
+}
 
 impl std::fmt::Display for EngineTeardownIncomplete {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(
-            "engine teardown left a live reference behind — engine threads may outlive \
-             interpreter finalization",
-        )
+        match self {
+            Self::ProcessorThreadsAbandoned(abandoned) => write!(
+                formatter,
+                "{}",
+                refusal_naming_the_abandoned_processor_threads(abandoned)
+            ),
+            Self::EngineStillReferenced => formatter.write_str(
+                "engine teardown left a live reference behind — engine threads may outlive \
+                 interpreter finalization",
+            ),
+        }
     }
 }
 
@@ -86,16 +106,16 @@ impl From<EngineTeardownIncomplete> for PyErr {
 ///
 /// One locked value rather than an engine slot plus a "running" flag, because
 /// `shutdown()` must decide *and act* without the run loop's exit racing it: the
-/// shutdown-request latch is process-global and first-observer-wins, so a
-/// request issued after the run loop stopped observing is inherited by the next
-/// run loop in the interpreter, which then returns having run nothing.
+/// shutdown escalation is process-global and taken only when a run ends, so a
+/// request issued after `run()` had taken it would be inherited by the next run
+/// loop in the interpreter, which then returns having run nothing.
 enum PythonRuntimeLifecycleState {
     EngineConstructedNotYetRun(Arc<Runner>),
     /// Weak, never strong: the run loop owns the only strong reference, and a
     /// second one here would make teardown's `Arc::into_inner` find the engine
     /// still borrowed and report that its threads were never joined.
     RunLoopBlockedUntilShutdownRequested(Weak<Runner>),
-    EngineTornDownAndThreadsJoined,
+    EngineTornDownWithThreadsJoinedOrAbandoned,
 }
 
 /// The engine, held by a Python object.
@@ -145,7 +165,7 @@ impl PythonRuntimeHandle {
                      before calling run()."
                 )))
             }
-            PythonRuntimeLifecycleState::EngineTornDownAndThreadsJoined => {
+            PythonRuntimeLifecycleState::EngineTornDownWithThreadsJoinedOrAbandoned => {
                 Err(PyRuntimeError::new_err(format!(
                     "cannot {what}: this Runtime has been shut down. Construct a new one."
                 )))
@@ -177,7 +197,7 @@ impl PythonRuntimeHandle {
                     ))
                 })
             }
-            PythonRuntimeLifecycleState::EngineTornDownAndThreadsJoined => {
+            PythonRuntimeLifecycleState::EngineTornDownWithThreadsJoinedOrAbandoned => {
                 Err(PyRuntimeError::new_err(format!(
                     "cannot {what}: this Runtime has been shut down. Construct a new one."
                 )))
@@ -185,7 +205,8 @@ impl PythonRuntimeHandle {
         }
     }
 
-    /// Drop the engine with the GIL released, joining its threads.
+    /// Tear the engine down and drop it with the GIL released, under the
+    /// engine's watchdog.
     ///
     /// Releasing the GIL is not an optimization: an engine thread that needs
     /// this interpreter's GIL to finish — a control-plane handler, a log
@@ -193,27 +214,54 @@ impl PythonRuntimeHandle {
     fn drop_engine_without_holding_the_gil(
         python: Python<'_>,
         engine: Arc<Runner>,
+        teardown_name: &str,
     ) -> Result<(), EngineTeardownIncomplete> {
         python.detach(move || {
-            // `start()` parks an `Arc<Runner>` inside the `RuntimeContext` it
-            // stores on the runner, and only `stop()` clears it. Without this
-            // the cycle survives every path where the run loop did not stop the
-            // engine itself — a failed `start()`, or a handle torn down before
-            // it ever ran — and `into_inner` below would join nothing.
-            if let Err(stop_failure) = engine.stop() {
-                tracing::warn!(%stop_failure, "engine stop reported a failure during teardown");
-            }
-
-            match Arc::into_inner(engine) {
-                Some(owned_engine) => {
-                    drop(owned_engine);
-                    Ok(())
-                }
-                // Something still holds a reference, so the threads are not
-                // joined.
-                None => Err(EngineTeardownIncomplete),
-            }
+            let watchdog = ArmedEngineTeardownWatchdog::arm(teardown_name);
+            Self::stop_and_drop_the_engine(engine, &watchdog)
         })
+    }
+
+    /// Stop the engine and drop it, or leave it to the processor threads that
+    /// were abandoned beneath it.
+    fn stop_and_drop_the_engine(
+        engine: Arc<Runner>,
+        _watched_by: &ArmedEngineTeardownWatchdog,
+    ) -> Result<(), EngineTeardownIncomplete> {
+        // `start()` parks an `Arc<Runner>` inside the `RuntimeContext` it
+        // stores on the runner, and only `stop()` clears it. Without this the
+        // cycle survives every path where the run loop did not stop the engine
+        // itself — a failed `start()`, or a handle torn down before it ever
+        // ran — and `into_inner` below would join nothing.
+        if let Err(stop_failure) = engine.stop() {
+            tracing::warn!(%stop_failure, "engine stop reported a failure during teardown");
+        }
+
+        let abandoned = engine.processor_threads_abandoned_and_still_running();
+        if !abandoned.is_empty() {
+            std::mem::forget(engine);
+            return Err(EngineTeardownIncomplete::ProcessorThreadsAbandoned(
+                abandoned,
+            ));
+        }
+
+        streamlib::sdk::runtime::note_what_the_engine_teardown_is_waiting_on(
+            "the engine's own drop",
+        );
+        match Arc::into_inner(engine) {
+            Some(owned_engine) => {
+                drop(owned_engine);
+                Ok(())
+            }
+            None => Err(EngineTeardownIncomplete::EngineStillReferenced),
+        }
+    }
+
+    /// Mark the handle torn down, under the lock `shutdown()` takes, so a
+    /// `shutdown()` from here on does nothing rather than request a shutdown of
+    /// an engine on its way out.
+    fn transition_to_torn_down(&self) {
+        *self.lifecycle() = PythonRuntimeLifecycleState::EngineTornDownWithThreadsJoinedOrAbandoned;
     }
 }
 
@@ -358,11 +406,22 @@ impl PythonRuntimeHandle {
         )
     }
 
-    /// Run the pipeline until Ctrl-C, SIGTERM, or [`shutdown`], then tear the
-    /// engine down.
+    /// Run the pipeline until Ctrl-C, SIGTERM, SIGHUP or [`shutdown`], then tear
+    /// the engine down.
     ///
-    /// Owns SIGINT while it blocks and hands it back to CPython before
-    /// returning, so a later Ctrl-C raises `KeyboardInterrupt` as usual.
+    /// Owns SIGINT, SIGTERM and SIGHUP from startup until the engine is dropped,
+    /// and hands them back to CPython before returning, so a later Ctrl-C raises
+    /// `KeyboardInterrupt` as usual. The first interrupt stops the graph
+    /// gracefully; the second forces it — every helper's process group is
+    /// terminated without its teardown, and a native processor thread still in
+    /// its callback is abandoned; the third kills every helper's process group
+    /// and exits the process with status 130 at once.
+    ///
+    /// Raises `RuntimeError` naming each processor, by display name and id,
+    /// whose thread ignored shutdown past its budget and was abandoned; the
+    /// engine then stays alive beneath it until the process exits. A forced
+    /// shutdown that abandoned nothing returns normally. A teardown still hung
+    /// after about fifteen seconds ends the process with status 124.
     ///
     /// Call it from the main thread. On a worker thread the interpreter can
     /// begin finalizing while this is still inside teardown, and the thread is
@@ -381,7 +440,7 @@ impl PythonRuntimeHandle {
             // needs the engine to point at, which is what is being taken here.
             match std::mem::replace(
                 &mut *lifecycle,
-                PythonRuntimeLifecycleState::EngineTornDownAndThreadsJoined,
+                PythonRuntimeLifecycleState::EngineTornDownWithThreadsJoinedOrAbandoned,
             ) {
                 PythonRuntimeLifecycleState::EngineConstructedNotYetRun(engine) => {
                     *lifecycle = PythonRuntimeLifecycleState::RunLoopBlockedUntilShutdownRequested(
@@ -398,25 +457,41 @@ impl PythonRuntimeHandle {
             }
         };
 
-        // Owns the shutdown signals across startup as well as the wait: with the
-        // GIL released here, a SIGINT that reached CPython's handler instead
-        // could never become a `KeyboardInterrupt`, and this call would block
-        // forever.
-        let run_outcome = python.detach(|| engine.start_and_wait_for_shutdown());
+        let (run_outcome, teardown_outcome) = python.detach(|| {
+            // Held from before startup until the engine is dropped. Across
+            // startup, because with the GIL released here a SIGINT that reached
+            // CPython's handler could never become a `KeyboardInterrupt`; through
+            // the drop, so a second and third interrupt escalate wherever the
+            // teardown is.
+            let (shutdown_signals, run_outcome) = match Runner::take_shutdown_signal_ownership() {
+                Ok(shutdown_signals) => {
+                    let run_outcome =
+                        engine.start_and_block_until_shutdown_is_requested(&shutdown_signals);
+                    (Some(shutdown_signals), run_outcome)
+                }
+                Err(ownership_failure) => (None, Err(ownership_failure)),
+            };
 
-        {
-            let mut lifecycle = self.lifecycle();
-            // Taken under the same lock `shutdown()` holds while it requests, so
-            // a request issued in the window between the run loop's last
-            // observation and this transition is consumed here rather than left
-            // for the next run loop in this interpreter.
-            take_runtime_shutdown_escalation();
-            *lifecycle = PythonRuntimeLifecycleState::EngineTornDownAndThreadsJoined;
-        }
+            // Unconditional: a failed start must still not leave engine threads
+            // alive to race interpreter finalization.
+            let watchdog =
+                ArmedEngineTeardownWatchdog::arm("the engine teardown Runtime.run() began");
+            let stop_outcome = engine.stop();
+            // Before the drop: `Arc::into_inner` needs the only strong
+            // reference, and a readiness wait upgrading the running state's weak
+            // one would otherwise find the engine still borrowed.
+            self.transition_to_torn_down();
+            let teardown_outcome = Self::stop_and_drop_the_engine(engine, &watchdog);
+            drop(shutdown_signals);
+            drop(watchdog);
+            (run_outcome.and(stop_outcome), teardown_outcome)
+        });
 
-        // Unconditional: a failed start must still not leave engine threads
-        // alive to race interpreter finalization.
-        let teardown_outcome = Self::drop_engine_without_holding_the_gil(python, engine);
+        // After the signals were handed back, so nothing can escalate this run
+        // any further, and after the transition above, so no `shutdown()` can
+        // request one either: what this run observed must not reach the next
+        // run loop in this interpreter.
+        take_runtime_shutdown_escalation();
 
         run_outcome
             .map_err(|engine_failure| PyRuntimeError::new_err(engine_failure.to_string()))?;
@@ -439,22 +514,27 @@ impl PythonRuntimeHandle {
                 let PythonRuntimeLifecycleState::EngineConstructedNotYetRun(engine) =
                     std::mem::replace(
                         &mut *lifecycle,
-                        PythonRuntimeLifecycleState::EngineTornDownAndThreadsJoined,
+                        PythonRuntimeLifecycleState::EngineTornDownWithThreadsJoinedOrAbandoned,
                     )
                 else {
                     unreachable!("matched EngineConstructedNotYetRun under the same lock")
                 };
                 drop(lifecycle);
-                Ok(Self::drop_engine_without_holding_the_gil(python, engine)?)
+                Ok(Self::drop_engine_without_holding_the_gil(
+                    python,
+                    engine,
+                    "the engine teardown Runtime.shutdown() began",
+                )?)
             }
             PythonRuntimeLifecycleState::RunLoopBlockedUntilShutdownRequested(_) => {
                 // Issued while still holding the lock: `run()` takes it to move
-                // to the torn-down state and clears the latch there, so this
-                // request cannot outlive the run loop it is meant for.
+                // to the torn-down state before its teardown and clears the
+                // escalation only after it, so this request cannot outlive the
+                // run loop it is meant for.
                 request_runtime_shutdown("streamlib.Runtime.shutdown()")
                     .map_err(|request_failure| PyRuntimeError::new_err(request_failure.to_string()))
             }
-            PythonRuntimeLifecycleState::EngineTornDownAndThreadsJoined => Ok(()),
+            PythonRuntimeLifecycleState::EngineTornDownWithThreadsJoinedOrAbandoned => Ok(()),
         }
     }
 
@@ -527,14 +607,17 @@ impl Drop for PythonRuntimeHandle {
     fn drop(&mut self) {
         let engine = match std::mem::replace(
             &mut *self.lifecycle(),
-            PythonRuntimeLifecycleState::EngineTornDownAndThreadsJoined,
+            PythonRuntimeLifecycleState::EngineTornDownWithThreadsJoinedOrAbandoned,
         ) {
             PythonRuntimeLifecycleState::EngineConstructedNotYetRun(engine) => engine,
             _ => return,
         };
         Python::attach(|python| {
-            if let Err(teardown_failure) = Self::drop_engine_without_holding_the_gil(python, engine)
-            {
+            if let Err(teardown_failure) = Self::drop_engine_without_holding_the_gil(
+                python,
+                engine,
+                "the engine teardown a dropped Runtime began",
+            ) {
                 tracing::error!(%teardown_failure);
             }
         });
