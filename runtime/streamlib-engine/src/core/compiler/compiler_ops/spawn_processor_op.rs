@@ -162,6 +162,7 @@ fn spawn_dedicated_thread(
     };
 
     let processor_arc_clone = Arc::clone(&processor_arc);
+    let hosts_a_helper_process = matches!(runtime, ProcessorRuntime::Python);
 
     // Gates every FullAccess mint on this thread (setup / start / stop /
     // teardown). Not derived: every processor the engine can spawn is compiled
@@ -429,7 +430,10 @@ fn spawn_dedicated_thread(
             .ok_or_else(|| {
                 Error::ProcessorNotFound(format!("Processor '{}' not found", processor_id))
             })?;
-        node.insert(ThreadHandleComponent(thread));
+        node.insert(ThreadHandleComponent {
+            join_handle: thread,
+            hosts_a_helper_process,
+        });
     }
 
     Ok(())

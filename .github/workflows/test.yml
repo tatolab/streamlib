@@ -484,7 +484,8 @@ jobs:
             core::signals \
             core::runtime::runtime_shutdown_request \
             core::runtime::helper_process_group_registry \
-            core::runtime::engine_teardown_watchdog
+            core::runtime::engine_teardown_watchdog \
+            core::compiler::processor_thread_shutdown
           # The two arms' own liveness tests are named one by one rather than
           # by module: their modules also hold tests that dlopen libasound and
           # walk a real PCM, which this runner has no `/dev/snd` for. These

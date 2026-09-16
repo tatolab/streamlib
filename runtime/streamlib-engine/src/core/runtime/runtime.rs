@@ -528,6 +528,10 @@ impl Runner {
     }
 
     /// Stop the runtime.
+    ///
+    /// Runs every step of the teardown even when removing the processors
+    /// failed — a processor thread abandoned past its budget included — and
+    /// reports that failure once the rest is down.
     #[tracing::instrument(name = "runtime.stop", skip_all)]
     pub fn stop(&self) -> Result<()> {
         // Idempotent, and claimed under one lock acquisition so two concurrent
@@ -562,12 +566,16 @@ impl Runner {
         });
         tracing::info!("[stop] Queued removal of {} processor(s)", processor_count);
 
+        let mut processor_removal_outcome = Ok(());
         if let Some(ctx) = runtime_ctx {
             tracing::debug!("[stop] Committing processor teardown");
-            self.compiler.commit(&ctx)?;
+            processor_removal_outcome = self.compiler.commit(&ctx);
+            if let Err(removal_failure) = &processor_removal_outcome {
+                tracing::error!("[stop] Removing the processors failed: {removal_failure}");
+            }
             tracing::debug!("[stop] Processor teardown complete");
 
-            // Stop the audio clock
+            crate::core::runtime::note_what_the_engine_teardown_is_waiting_on("the audio clock");
             tracing::debug!("[stop] Stopping audio clock");
             if let Err(e) = ctx.audio_clock().stop() {
                 tracing::warn!("[stop] Failed to stop audio clock: {}", e);
@@ -576,6 +584,9 @@ impl Runner {
             // Cleanup SurfaceStore - releases all surfaces and disconnects
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             {
+                crate::core::runtime::note_what_the_engine_teardown_is_waiting_on(
+                    "the GPU context's surface store",
+                );
                 ctx.gpu.clear_surface_store();
                 tracing::debug!("[stop] SurfaceStore cleared");
             }
@@ -592,6 +603,9 @@ impl Runner {
         // tests that immediately re-bind a new runtime on the same path.
         #[cfg(target_os = "linux")]
         {
+            crate::core::runtime::note_what_the_engine_teardown_is_waiting_on(
+                "the surface-sharing service",
+            );
             if let Some(mut svc) = self.surface_service.lock().take() {
                 svc.stop();
                 tracing::debug!(
@@ -608,7 +622,16 @@ impl Runner {
         );
 
         tracing::info!("[stop] Graceful shutdown complete");
-        Ok(())
+        processor_removal_outcome
+    }
+
+    /// The processors whose threads were abandoned past their shutdown budget
+    /// and have not returned since. Each one holds this engine alive.
+    pub fn processor_threads_abandoned_and_still_running(
+        &self,
+    ) -> Vec<crate::core::runtime::AbandonedProcessorThread> {
+        self.compiler
+            .processor_threads_abandoned_and_still_running()
     }
 
     // =========================================================================

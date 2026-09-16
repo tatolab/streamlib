@@ -10,6 +10,11 @@ use crate::core::compiler::compilation_plan::CompilationPlan;
 use crate::core::compiler::compile_phase::CompilePhase;
 use crate::core::compiler::compile_result::CompileResult;
 use crate::core::compiler::compiler_transaction::CompilerTransactionHandle;
+use crate::core::compiler::processor_thread_shutdown::{
+    AbandonedProcessorThread, AbandonedProcessorThreadStillRunning, ProcessorThreadJoinBudgets,
+    refusal_naming_the_abandoned_processor_threads,
+    remove_processors_signalling_every_thread_before_joining_any,
+};
 use crate::core::context::RuntimeContext;
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
@@ -28,6 +33,9 @@ pub struct Compiler {
     /// Held for the whole of a commit: two batches compiling at once would
     /// interleave their spawn and wire phases against one graph.
     one_commit_at_a_time: Mutex<()>,
+    /// Processor threads a removal abandoned. Each holds the engine alive
+    /// beneath it until it returns, so teardown asks which still run.
+    abandoned_processor_threads: Mutex<Vec<AbandonedProcessorThreadStillRunning>>,
 }
 
 impl Default for Compiler {
@@ -43,7 +51,19 @@ impl Compiler {
             graph: Arc::new(RwLock::new(Graph::new())),
             transaction: Arc::new(Mutex::new(Vec::new())),
             one_commit_at_a_time: Mutex::new(()),
+            abandoned_processor_threads: Mutex::new(Vec::new()),
         }
+    }
+
+    /// The processors whose threads a removal abandoned and that have not
+    /// returned since.
+    pub fn processor_threads_abandoned_and_still_running(&self) -> Vec<AbandonedProcessorThread> {
+        let mut abandoned = self.abandoned_processor_threads.lock();
+        abandoned.retain(|thread| !thread.join_handle.is_finished());
+        abandoned
+            .iter()
+            .map(|thread| thread.abandoned.clone())
+            .collect()
     }
 
     // =========================================================================
@@ -86,7 +106,12 @@ impl Compiler {
         // via RuntimeContext::run_on_runtime_thread_blocking() in their setup() if required.
         // This avoids forcing all compilation to runtime thread when most processors
         // don't need it (only Apple framework processors like Camera, Display).
-        Self::compile(Arc::clone(&self.graph), operations, runtime_ctx)
+        Self::compile(
+            Arc::clone(&self.graph),
+            operations,
+            runtime_ctx,
+            &self.abandoned_processor_threads,
+        )
     }
 
     // =========================================================================
@@ -95,18 +120,19 @@ impl Compiler {
 
     /// Single compile method - ALL orchestration logic here, no helper methods.
     /// Calls compiler_ops::* for actual operations.
+    ///
+    /// A removal whose thread outlived its budget still removes the processor
+    /// and lets the rest of the batch compile; the call then fails naming it.
     fn compile(
         graph_arc: Arc<RwLock<Graph>>,
         operations: Vec<PendingOperation>,
         runtime_ctx: &Arc<RuntimeContext>,
+        abandoned_processor_threads: &Mutex<Vec<AbandonedProcessorThreadStillRunning>>,
     ) -> Result<()> {
-        use crate::core::graph::{
-            PendingDeletionComponent, ProcessorInstanceComponent, ShutdownChannelComponent,
-            StateComponent, ThreadHandleComponent,
-        };
-        use crate::core::processors::ProcessorState;
+        use crate::core::graph::{PendingDeletionComponent, ProcessorInstanceComponent};
 
         let mut result = CompileResult::default();
+        let mut abandoned_in_this_compile: Vec<AbandonedProcessorThread> = Vec::new();
 
         // =====================================================================
         // 1. Validate and categorize operations
@@ -266,78 +292,22 @@ impl Compiler {
                 }
             }
 
-            // Shutdown and remove processors
-            for proc_id in &plan.processors_to_remove {
-                PUBSUB.publish(
-                    topics::RUNTIME_GLOBAL,
-                    &Event::RuntimeGlobal(RuntimeEvent::CompilerWillDestroyProcessor {
-                        processor_id: proc_id.clone(),
-                    }),
-                );
-
-                tracing::info!("[REMOVE] {}", proc_id);
-
-                // Phase 1: Signal shutdown, extract the thread handle (with lock)
-                // Lock is released before join() to avoid deadlock - processors may be
-                // waiting on runtime operations that need this lock to complete.
-                let thread_handle = {
-                    let mut graph = graph_arc.write();
-                    if let Some(node) = graph.traversal_mut().v(proc_id).first_mut() {
-                        // Set state to stopping
-                        if let Some(state) = node.get::<StateComponent>() {
-                            state.transition_to(ProcessorState::Stopping);
-                        }
-                        // Send shutdown signal — eventfd wakes reactive
-                        // mode's epoll, channel send wakes continuous/manual.
-                        if let Some(channel) = node.get::<ShutdownChannelComponent>() {
-                            channel.signal_shutdown();
-                        }
-                        node.remove::<ThreadHandleComponent>()
-                    } else {
-                        None
-                    }
-                }; // Lock released here
-
-                // Phase 2: Wait for the thread to exit (no lock held)
-                // Processor can now complete any pending runtime operations before exiting.
-                if let Some(handle) = thread_handle {
-                    match handle.0.join() {
-                        Ok(_) => {
-                            tracing::info!("[{}] Processor thread joined successfully", proc_id);
-                        }
-                        Err(panic_err) => {
-                            tracing::error!(
-                                "[{}] Processor thread panicked: {:?}",
-                                proc_id,
-                                panic_err
-                            );
-                        }
-                    }
-                }
-
-                // Phase 3: Cleanup (re-acquire lock)
-                {
-                    let mut graph = graph_arc.write();
-                    if let Some(node) = graph.traversal_mut().v(proc_id).first_mut() {
-                        if let Some(state) = node.get::<StateComponent>() {
-                            state.transition_to(ProcessorState::Stopped);
-                        }
-                    }
-                    // Remove from graph
-                    if graph.traversal_mut().v(proc_id).drop().exists() {
-                        return Err(Error::GraphError("value was not dropped".into()));
-                    }
-                }
-
-                PUBSUB.publish(
-                    topics::RUNTIME_GLOBAL,
-                    &Event::RuntimeGlobal(RuntimeEvent::CompilerDidDestroyProcessor {
-                        processor_id: proc_id.clone(),
-                    }),
-                );
-
-                result.processors_removed += 1;
-            }
+            let abandoned_by_this_removal =
+                remove_processors_signalling_every_thread_before_joining_any(
+                    &graph_arc,
+                    &plan.processors_to_remove,
+                    ProcessorThreadJoinBudgets::ENGINE_CHOSEN,
+                    crate::core::runtime::is_runtime_shutdown_forced,
+                )?;
+            result.processors_removed += plan.processors_to_remove.len();
+            abandoned_in_this_compile.extend(
+                abandoned_by_this_removal
+                    .iter()
+                    .map(|thread| thread.abandoned.clone()),
+            );
+            abandoned_processor_threads
+                .lock()
+                .extend(abandoned_by_this_removal);
         }
 
         // =====================================================================
@@ -516,6 +486,11 @@ impl Compiler {
         );
         tracing::info!("Compile complete: {}", result);
 
+        if !abandoned_in_this_compile.is_empty() {
+            return Err(refusal_naming_the_abandoned_processor_threads(
+                &abandoned_in_this_compile,
+            ));
+        }
         Ok(())
     }
 }
