@@ -47,19 +47,35 @@ fn trust_tier_label(trust_tier: ChannelTrustTier) -> ChannelTrustTierLabel {
     }
 }
 
-/// Whether a failed send may have reached some subscriber, and so consumed its
-/// sequence number.
+/// The sequence number the send after one numbered `sent_sequence_number`
+/// carries, given how that send ended.
 ///
-/// iceoryx2 does not say which subscribers a failed send reached. Only a failure
-/// before any delivery is known to have reached none; any other leaves a gap for
-/// whoever missed the bag, which is a real loss to that subscriber.
-fn a_failed_send_may_have_delivered(send_failure: SendError) -> bool {
-    !matches!(
-        send_failure,
-        SendError::ConnectionBrokenSinceSenderNoLongerExists
+/// A send consumes its number once it may have reached a subscriber. iceoryx2
+/// does not say which subscribers a failed send reached, so only a failure
+/// before any delivery gives the number back; any other leaves a gap for
+/// whoever missed the bag, which is a real loss to that subscriber. Every
+/// variant is named so an iceoryx2 upgrade adding one does not compile until
+/// it is placed.
+fn sequence_number_following_a_send(
+    sent_sequence_number: u64,
+    send_outcome: &std::result::Result<usize, SendError>,
+) -> u64 {
+    let may_have_delivered = match send_outcome {
+        Ok(_) => true,
+        Err(
+            SendError::ConnectionBrokenSinceSenderNoLongerExists
             | SendError::ConnectionError(_)
-            | SendError::LoanError(_)
-    )
+            | SendError::LoanError(_),
+        ) => false,
+        Err(
+            SendError::ConnectionCorrupted | SendError::UnableToDeliver | SendError::InternalError,
+        ) => true,
+    };
+    if may_have_delivered {
+        sent_sequence_number + 1
+    } else {
+        sent_sequence_number
+    }
 }
 
 /// View initialized bytes as `MaybeUninit` for writing into a loaned iceoryx2
@@ -319,24 +335,12 @@ impl OutputWriterInner {
 
         let total_len = FRAME_HEADER_SIZE + data.len();
 
-        // Per-channel ceiling refusal + PowerOfTwo growth bookkeeping share their
-        // authority with the subprocess natives via
-        // `decide_channel_egress_admission`; the host layers its typed error and
-        // the quarter-of-ceiling warning on top of the shared decision.
         let admission = streamlib_ipc_types::decide_channel_egress_admission(
             total_len,
             egress.ceiling_bytes,
             &mut egress.current_slot_capacity_bytes,
+            || egress.refused_bag_counter.record_one_refused_bag(),
         );
-        let refused_over_ceiling = matches!(
-            admission,
-            streamlib_ipc_types::ChannelEgressAdmission::RefusedOverCeiling
-        );
-        let refused_bag_count = if refused_over_ceiling {
-            egress.refused_bag_counter.record_one_refused_bag()
-        } else {
-            egress.refused_bag_counter.refused_bag_count()
-        };
         streamlib_ipc_types::emit_channel_egress_admission_tracing(
             None,
             egress.trust_tier,
@@ -344,9 +348,8 @@ impl OutputWriterInner {
             egress.ceiling_bytes,
             total_len,
             &admission,
-            refused_bag_count,
         );
-        if refused_over_ceiling {
+        if let streamlib_ipc_types::ChannelEgressAdmission::RefusedOverCeiling { .. } = admission {
             return Err(Error::PayloadExceedsChannelCeiling {
                 channel: egress.channel_service_name.clone(),
                 payload_bytes: total_len,
@@ -376,9 +379,8 @@ impl OutputWriterInner {
         // loan was taken for — or panicked on a length mismatch.
         let sample = unsafe { sample.assume_init() };
         let send_outcome = sample.send();
-        if send_outcome.map_or_else(a_failed_send_may_have_delivered, |_| true) {
-            egress.next_sequence_number += 1;
-        }
+        egress.next_sequence_number =
+            sequence_number_following_a_send(egress.next_sequence_number, &send_outcome);
         send_outcome.map_err(|e| Error::Link(format!("Failed to send sample: {:?}", e)))?;
 
         // Wake every downstream listener fd. notify() may transiently fail
@@ -594,6 +596,26 @@ mod tests {
         inner
             .refused_bag_counts_by_output_port()
             .refused_bag_count_snapshot_by_output_port()[output_port]
+    }
+
+    /// A writer whose one output port `out` publishes onto `pubsub` under a
+    /// `ceiling_bytes` ceiling.
+    fn output_writer_with_one_channel(
+        pubsub: &Iceoryx2Service,
+        ceiling_bytes: usize,
+    ) -> OutputWriterInner {
+        let inner = OutputWriterInner::new();
+        inner.set_channel_publisher(
+            "out",
+            pubsub.create_publisher(64).unwrap(),
+            ChannelEgressConfig {
+                service_name: "test/out".to_string(),
+                trust_tier: ChannelTrustTier::Trusted,
+                expected_payload_bytes: 64,
+                ceiling_bytes,
+            },
+        );
+        inner
     }
 
     /// A channel data service opened the way the engine opens one, sized for
@@ -1097,18 +1119,8 @@ mod tests {
     fn a_write_refused_at_the_ceiling_consumes_no_sequence_number() {
         let pubsub = open_channel_data_service("sequence/pubsub", 2);
         let subscriber = pubsub.create_subscriber(4).unwrap();
-        let inner = OutputWriterInner::new();
         let ceiling = 1024usize;
-        inner.set_channel_publisher(
-            "out",
-            pubsub.create_publisher(64).unwrap(),
-            ChannelEgressConfig {
-                service_name: "test/sequence/out".to_string(),
-                trust_tier: ChannelTrustTier::Trusted,
-                expected_payload_bytes: 64,
-                ceiling_bytes: ceiling,
-            },
-        );
+        let inner = output_writer_with_one_channel(&pubsub, ceiling);
 
         inner.write_raw("out", b"first", 1).unwrap();
         inner
@@ -1124,18 +1136,27 @@ mod tests {
         assert_eq!(refused_bag_count_of(&inner, "out"), 1);
     }
 
-    /// iceoryx2 does not say which subscribers a failed send reached, so only
-    /// a failure known to precede any delivery gives its number back.
+    /// A send consumes its number once it may have reached a subscriber, and
+    /// only a failure known to precede any delivery gives it back.
+    /// `ConnectionError` wraps a type from a crate the engine does not depend
+    /// on, so it is placed by the exhaustive match alone.
     #[test]
-    fn only_a_send_failing_before_any_delivery_gives_its_sequence_number_back() {
+    fn a_send_consumes_its_sequence_number_unless_it_failed_before_any_delivery() {
         use iceoryx2::port::LoanError;
 
+        assert_eq!(sequence_number_following_a_send(7, &Ok(1)), 8);
+        assert_eq!(
+            sequence_number_following_a_send(7, &Ok(0)),
+            8,
+            "a send that reached no subscriber still numbered a bag"
+        );
         for failed_before_delivering in [
             SendError::ConnectionBrokenSinceSenderNoLongerExists,
             SendError::LoanError(LoanError::OutOfMemory),
         ] {
-            assert!(
-                !a_failed_send_may_have_delivered(failed_before_delivering),
+            assert_eq!(
+                sequence_number_following_a_send(7, &Err(failed_before_delivering)),
+                7,
                 "{failed_before_delivering:?} reached no subscriber"
             );
         }
@@ -1144,8 +1165,9 @@ mod tests {
             SendError::ConnectionCorrupted,
             SendError::InternalError,
         ] {
-            assert!(
-                a_failed_send_may_have_delivered(failed_after_delivering_to_some),
+            assert_eq!(
+                sequence_number_following_a_send(7, &Err(failed_after_delivering_to_some)),
+                8,
                 "{failed_after_delivering_to_some:?} may have reached a subscriber"
             );
         }
@@ -1156,17 +1178,7 @@ mod tests {
     #[test]
     fn an_output_ports_refusals_leave_with_its_last_link() {
         let pubsub = open_channel_data_service("refusals-leave/pubsub", 2);
-        let inner = OutputWriterInner::new();
-        inner.set_channel_publisher(
-            "out",
-            pubsub.create_publisher(64).unwrap(),
-            ChannelEgressConfig {
-                service_name: "test/refusals-leave/out".to_string(),
-                trust_tier: ChannelTrustTier::Trusted,
-                expected_payload_bytes: 64,
-                ceiling_bytes: 128,
-            },
-        );
+        let inner = output_writer_with_one_channel(&pubsub, 128);
         inner.add_channel_link("out", "L-only", None);
         let refused_bag_counts = inner.refused_bag_counts_by_output_port();
         inner.write_raw("out", &[0u8; 128], 0).unwrap_err();

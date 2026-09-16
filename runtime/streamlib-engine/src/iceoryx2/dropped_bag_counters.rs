@@ -62,9 +62,10 @@ impl InboundLinkDroppedBagCounter {
         self.record_dropped_bags(1);
     }
 
-    /// Record `dropped_bags` of this link's bags, lost before anything read them.
-    pub fn record_dropped_bags(&self, dropped_bags: u64) {
-        self.0.fetch_add(dropped_bags, Ordering::Relaxed);
+    /// Record `dropped_bag_count` of this link's bags, lost before anything read
+    /// them.
+    pub fn record_dropped_bags(&self, dropped_bag_count: u64) {
+        self.0.fetch_add(dropped_bag_count, Ordering::Relaxed);
     }
 
     /// How many of this link's bags have been lost since it was wired.

@@ -99,42 +99,44 @@ struct PortBoundSubscriber {
     /// link the evicted bag came in on rather than the one that made room.
     dropped_bag_counter: InboundLinkDroppedBagCounter,
     /// The sequence number of the last sample this subscriber received, and the
-    /// publisher that sent it; `None` until the first sample after wiring.
+    /// id of the publisher that numbered it; `None` until the first sample after
+    /// wiring.
     last_received_sequence_number: Option<LastReceivedSequenceNumber>,
 }
 
-/// The last sequence number a subscriber received, and the publisher that
-/// numbered it.
+/// The last sequence number a subscriber received, and the id of the publisher
+/// that numbered it.
 ///
 /// One slot rather than one per publisher: a channel carries one publisher at
 /// a time and its ring delivers in send order, so a sample from any other
 /// publisher is a new baseline either way.
 #[derive(Clone, Copy)]
 struct LastReceivedSequenceNumber {
-    publisher: UniquePublisherId,
+    numbering_publisher_id: UniquePublisherId,
     sequence_number: u64,
 }
 
 impl PortBoundSubscriber {
-    /// How many bags the subscriber ring overwrote ahead of a sample numbered
-    /// `sequence_number` by `publisher`, remembering it as the last received.
+    /// Remember a sample numbered `sequence_number` by `numbering_publisher_id`
+    /// as the last received, and return how many bags the subscriber ring
+    /// overwrote ahead of it.
     ///
     /// The first sample after wiring, and the first from a publisher this
     /// subscriber has not heard from, is a baseline and never a gap, so a
     /// replaced producer is not read as a loss.
-    fn bags_the_ring_overwrote_before(
+    fn record_received_sequence_number_and_count_bags_the_ring_overwrote(
         &mut self,
-        publisher: UniquePublisherId,
+        numbering_publisher_id: UniquePublisherId,
         sequence_number: u64,
     ) -> u64 {
         let overwritten = match self.last_received_sequence_number {
-            Some(last) if last.publisher == publisher => sequence_number
+            Some(last) if last.numbering_publisher_id == numbering_publisher_id => sequence_number
                 .saturating_sub(last.sequence_number)
                 .saturating_sub(1),
             _ => 0,
         };
         self.last_received_sequence_number = Some(LastReceivedSequenceNumber {
-            publisher,
+            numbering_publisher_id,
             sequence_number,
         });
         overwritten
@@ -283,7 +285,7 @@ impl PortReadiness {
     }
 }
 
-/// Per-port configuration: mailbox and read mode.
+/// Per-port configuration: the mailbox, which carries the port's read mode.
 ///
 /// Interior mutability: the host-side wiring path discovers
 /// per-port configuration (read_mode, buffer_size) at the moment
@@ -293,7 +295,6 @@ impl PortReadiness {
 /// `&mut self` through `Arc<...>`.
 struct PortConfig {
     mailbox: PortMailbox,
-    read_mode: ReadMode,
     /// A frame popped by [`InputMailboxesInner::read_raw_bounded`] that did not
     /// fit the caller's buffer. It is stashed here (not lost) and re-delivered
     /// on the next call once the caller resizes — the grow-and-retry contract
@@ -366,7 +367,6 @@ fn windowed_port_config(
                 contract,
                 Arc::clone(&latest_queued_source_audio_format),
             )),
-        read_mode,
         staged_oversized: None,
         audio_windowing: InstalledInputPortAudioWindowing::Windowed(Arc::new(
             parking_lot::Mutex::new(AudioWindowAccumulator::new(
@@ -475,7 +475,6 @@ impl InputMailboxesInner {
             port.to_string(),
             PortConfig {
                 mailbox: PortMailbox::new(buffer_size, read_mode),
-                read_mode,
                 staged_oversized: None,
                 audio_windowing: InstalledInputPortAudioWindowing::NotWindowed,
             },
@@ -520,7 +519,6 @@ impl InputMailboxesInner {
                         port, depth,
                     ),
                 ),
-                read_mode,
                 staged_oversized: None,
                 audio_windowing: InstalledInputPortAudioWindowing::AwaitingItsDeviceStreamFormat,
             },
@@ -600,7 +598,7 @@ impl InputMailboxesInner {
                      device its processor opened"
                 )));
             }
-            let settled = windowed_port_config(port, existing.read_mode, contract);
+            let settled = windowed_port_config(port, existing.mailbox.read_mode(), contract);
             // Anything that arrived while the contract was unsettled moves into
             // the mailbox the contract sized, rather than being dropped where
             // no counter would see it. The staged frame moves with them: a
@@ -836,14 +834,18 @@ impl InputMailboxesInner {
                         break;
                     }
                 };
-                let bags_the_ring_overwrote = bound.bags_the_ring_overwrote_before(
-                    sample.origin(),
-                    sample.user_header().sequence_number,
-                );
+                let bags_the_ring_overwrote = bound
+                    .record_received_sequence_number_and_count_bags_the_ring_overwrote(
+                        sample.origin(),
+                        sample.user_header().sequence_number,
+                    );
                 let slice: &[u8] = sample.payload();
                 let ports = self.ports.lock();
                 let port_config = ports.get(&bound.local_port);
-                if port_config.is_some_and(|port| port.read_mode == ReadMode::ReadNextInOrder) {
+                if bags_the_ring_overwrote > 0
+                    && port_config
+                        .is_some_and(|port| port.mailbox.read_mode().a_bag_passed_over_is_lost())
+                {
                     bound
                         .dropped_bag_counter
                         .record_dropped_bags(bags_the_ring_overwrote);
@@ -956,7 +958,7 @@ impl InputMailboxesInner {
         let raw = {
             let ports = self.ports.lock();
             let port_config = ports.get(port).ok_or_else(|| unknown_input_port(port))?;
-            match port_config.read_mode {
+            match port_config.mailbox.read_mode() {
                 ReadMode::SkipToLatest => port_config.mailbox.pop_latest(),
                 ReadMode::ReadNextInOrder => port_config.mailbox.pop(),
             }
@@ -1496,6 +1498,15 @@ mod tests {
                 next_sequence_number: std::cell::Cell::new(0),
             }
         }
+
+        /// Send `bytes` as one sample carrying the next sequence number.
+        fn send_numbered(&self, bytes: &[u8]) {
+            let mut sample = self.publisher.loan_slice_uninit(bytes.len()).unwrap();
+            sample.user_header_mut().sequence_number = self
+                .next_sequence_number
+                .replace(self.next_sequence_number.get() + 1);
+            sample.write_from_slice(bytes).send().unwrap();
+        }
     }
 
     /// Open a channel sized for `buffered_frames` in flight and hand back the
@@ -1539,16 +1550,7 @@ mod tests {
         body: &[u8],
     ) {
         let frame = wire_frame_stamping(source_port, 0, body.len() as u32, body);
-        send_raw_bytes_numbered(publisher, &frame);
-    }
-
-    /// Send `bytes` as one sample carrying the publisher's next sequence number.
-    fn send_raw_bytes_numbered(publisher: &TestChannelPublisherNumberingItsSends, bytes: &[u8]) {
-        let mut sample = publisher.publisher.loan_slice_uninit(bytes.len()).unwrap();
-        sample.user_header_mut().sequence_number = publisher
-            .next_sequence_number
-            .replace(publisher.next_sequence_number.get() + 1);
-        sample.write_from_slice(bytes).send().unwrap();
+        publisher.send_numbered(&frame);
     }
 
     /// Driving the iceoryx2 Event service end-to-end: notify must transition
@@ -1881,7 +1883,7 @@ mod tests {
             subscriber,
         );
 
-        send_raw_bytes_numbered(&publisher, &[0u8; FRAME_HEADER_SIZE - 1]);
+        publisher.send_numbered(&[0u8; FRAME_HEADER_SIZE - 1]);
         publish_one_frame(&publisher, "out", b"a whole frame");
         mailboxes.receive_pending();
 

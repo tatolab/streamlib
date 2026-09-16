@@ -83,9 +83,8 @@ impl From<PortMailboxQueuedFrame> for PortMailboxDeliveredBag {
 pub struct PortMailbox {
     queue: ArrayQueue<PortMailboxQueuedFrame>,
     capacity: usize,
-    /// The read mode of the port this mailbox serves. A `newest` port passing
-    /// over bags is the profile working, so only an `ordered` one counts what
-    /// it evicts.
+    /// The read mode of the port this mailbox serves, which decides both which
+    /// bag a read takes and whether an eviction is counted.
     read_mode: ReadMode,
     measure: Option<PortMailboxQueuedFrameMeasure>,
     queued_frame_measure_total: AtomicU64,
@@ -204,7 +203,7 @@ impl PortMailbox {
                     frame = rejected;
                     if let Some(evicted) = self.queue.pop() {
                         self.take_out_of_the_total(&evicted);
-                        if self.read_mode == ReadMode::ReadNextInOrder {
+                        if self.read_mode.a_bag_passed_over_is_lost() {
                             evicted.record_eviction();
                         }
                         if let Some(notice) = &self.eviction_notice {
@@ -247,6 +246,11 @@ impl PortMailbox {
             latest = Some(PortMailboxDeliveredBag::from(frame));
         }
         latest
+    }
+
+    /// The read mode of the port this mailbox serves.
+    pub fn read_mode(&self) -> ReadMode {
+        self.read_mode
     }
 
     /// Check if the mailbox is empty.
