@@ -506,6 +506,7 @@ impl RuntimeOperations for Runner {
                         .ok_or_else(|| Error::TapChannelNotFound(channel.clone()))?;
                 let sizing = crate::core::compiler::compiler_ops::resolve_channel_sizing(
                     graph,
+                    &self.iceoryx2_node,
                     &source_proc_id,
                     &source_port,
                 )?;

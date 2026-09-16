@@ -45,8 +45,10 @@ pub enum DeliveryProfile {
 pub struct DeliveryResolution {
     /// Consumer-side drain order applied by the destination's mailbox.
     pub drain_order: ReadMode,
-    /// Ring depth — both the input port's iceoryx2 subscriber buffer and its
-    /// mailbox capacity. The channel service itself is always created deeper.
+    /// Ring depth — both the iceoryx2 subscriber buffer and the mailbox capacity
+    /// of an input port that declares no window contract. A windowed port's
+    /// subscriber takes the engine's fixed windowed ring and its mailbox is
+    /// sized from its contract.
     pub depth: usize,
 }
 

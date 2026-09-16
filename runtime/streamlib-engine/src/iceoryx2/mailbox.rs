@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crossbeam_queue::ArrayQueue;
 
 use super::channel_name::InboundLinkName;
-use super::dropped_bag_counters::InboundLinkDroppedBagCounter;
+use super::loss_counters::InboundLinkDroppedBagCounter;
 use super::read_mode::ReadMode;
 
 /// A per-frame measure a port may install so it can ask what its mailbox holds
@@ -299,7 +299,7 @@ impl PortMailbox {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::iceoryx2::dropped_bag_counters::DroppedBagCountsByInboundLink;
+    use crate::iceoryx2::loss_counters::DroppedBagCountsByInboundLink;
 
     /// The name a test that is not itself about naming pushes under.
     fn any_inbound_link_name() -> InboundLinkName {

@@ -192,17 +192,40 @@ impl AudioWindowRateConversion {
     }
 }
 
+/// Why the stage flushed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AudioWindowStageFlushCause {
+    /// A block arrived in another rate or channel count than the run's.
+    SourceChangedFormatMidStream,
+    /// A block's stamp missed where the previous block ended by more than half
+    /// that block's duration.
+    BlockArrivedAwayFromWhereThePreviousEnded,
+}
+
+impl std::fmt::Display for AudioWindowStageFlushCause {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            AudioWindowStageFlushCause::SourceChangedFormatMidStream => {
+                "the source changed format mid-stream"
+            }
+            AudioWindowStageFlushCause::BlockArrivedAwayFromWhereThePreviousEnded => {
+                "a block arrived away from where the previous one ended"
+            }
+        })
+    }
+}
+
 /// What one flush threw away, and why it flushed.
 ///
 /// The stage holds no link, so it hands this back and the port counts it on the
 /// one link that feeds it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AudioWindowStageFlush {
-    pub(crate) why_the_stage_flushed: &'static str,
-    /// The remainder and the staged source frames, as the per-channel samples at
-    /// the contract's rate a reader would have received — `AudioBlock`'s
-    /// `sample_count` unit. The staged frames are scaled by the rate ratio and
-    /// rounded down.
+    pub(crate) cause: AudioWindowStageFlushCause,
+    /// The samples no reader had received, in per-channel samples at the
+    /// declared rate — `AudioBlock`'s `sample_count` unit: the remainder past
+    /// the last emitted window's overlap, plus the staged source frames scaled
+    /// by the rate ratio and rounded down.
     pub(crate) discarded_per_channel_samples_at_the_declared_rate: u64,
 }
 
@@ -212,7 +235,7 @@ pub(crate) struct AudioWindowStageFlush {
 /// Holds only the already-consumed remainder — under one window's worth of
 /// output plus under one resampler chunk of source — and never evicts. Bags
 /// stay in the counted mailbox until [`Self::accept`] takes one, which is what
-/// keeps the per-link drop counters the authority on loss at this port.
+/// keeps the per-link drop counters the authority on bags lost at this port.
 pub(crate) struct AudioWindowAccumulator {
     port_name: String,
     contract: ResolvedAudioWindowContract,
@@ -318,27 +341,24 @@ impl AudioWindowAccumulator {
             });
         }
 
-        // A format change leaves no stamp to expect, so at most one of the
-        // two flushes below runs for one bag.
-        let mut flush = None;
-        if self
+        let source_changed_format = self
             .source_format
-            .is_some_and(|running| running != arriving)
-        {
-            flush = Some(self.flush("the source changed format mid-stream"));
-        }
-        self.source_format = Some(arriving);
-        let rate_conversion_inputs = RateConversionInputs::for_a_source_in(arriving, self.contract);
-        self.build_the_rate_conversion_if_its_inputs_are_new(rate_conversion_inputs)?;
-
+            .is_some_and(|running| running != arriving);
         let arrived_away_from_where_the_last_block_ended = self
             .expected_next_source_timestamp_ns
             .is_some_and(|expected| {
                 block.first_sample_timestamp_ns.abs_diff(expected) > self.gap_tolerance_ns as u64
             });
-        if arrived_away_from_where_the_last_block_ended {
-            flush = Some(self.flush("a block arrived away from where the previous one ended"));
-        }
+        let flush = if source_changed_format {
+            Some(self.flush(AudioWindowStageFlushCause::SourceChangedFormatMidStream))
+        } else if arrived_away_from_where_the_last_block_ended {
+            Some(self.flush(AudioWindowStageFlushCause::BlockArrivedAwayFromWhereThePreviousEnded))
+        } else {
+            None
+        };
+        self.source_format = Some(arriving);
+        let rate_conversion_inputs = RateConversionInputs::for_a_source_in(arriving, self.contract);
+        self.build_the_rate_conversion_if_its_inputs_are_new(rate_conversion_inputs)?;
 
         if self.run_anchor_timestamp_ns.is_none() {
             self.run_anchor_timestamp_ns = Some(block.first_sample_timestamp_ns);
@@ -604,7 +624,7 @@ impl AudioWindowAccumulator {
             .map(|format| format.sample_rate)
             .unwrap_or(latest_queued_source_rate)
             .max(1);
-        let equivalents = self.staged_source_frames_at_the_output_rate(source_rate);
+        let equivalents = self.staged_source_frames_at_the_declared_rate(source_rate);
 
         let slack = match self.rate_conversion.source_frames_per_call() {
             None => 0,
@@ -621,10 +641,10 @@ impl AudioWindowAccumulator {
         )
     }
 
-    /// The staged source frames as frames at the contract's rate, rounded down.
-    fn staged_source_frames_at_the_output_rate(&self, source_rate: u32) -> u64 {
+    /// The staged source frames as frames at the declared rate, rounded down.
+    fn staged_source_frames_at_the_declared_rate(&self, source_rate: u32) -> u64 {
         self.staged_source_frames_held() as u64 * u64::from(self.contract.sample_rate)
-            / u64::from(source_rate)
+            / u64::from(source_rate.max(1))
     }
 
     /// Build the rate conversion when these are the first inputs the stage has
@@ -642,17 +662,25 @@ impl AudioWindowAccumulator {
     }
 
     /// Discard the remainder and the filter's held samples, so the next block
-    /// starts a run of its own, and say how many samples went.
+    /// starts a run of its own, and say how many samples no reader had received.
     ///
-    /// Runs before the arriving block's format is taken, so the count is in the
-    /// format the discarded samples arrived in. The input still inside the
-    /// resampler's filter, about one group delay of it, is not in the count.
-    fn flush(&mut self, why_the_stage_flushed: &'static str) -> AudioWindowStageFlush {
-        let staged_source_frames_at_the_output_rate = self.source_format.map_or(0, |format| {
-            self.staged_source_frames_at_the_output_rate(format.sample_rate)
+    /// Called while `source_format` is still the format the discarded samples
+    /// arrived in. The input still inside the resampler's filter, about one
+    /// group delay of it, is not in the count.
+    fn flush(&mut self, cause: AudioWindowStageFlushCause) -> AudioWindowStageFlush {
+        let staged_source_frames_at_the_declared_rate = self.source_format.map_or(0, |format| {
+            self.staged_source_frames_at_the_declared_rate(format.sample_rate)
         });
-        let discarded_per_channel_samples_at_the_declared_rate =
-            self.output_frames_held() as u64 + staged_source_frames_at_the_output_rate;
+        // A hop below the window leaves the last emitted window's overlap at
+        // the front of the remainder, and that the reader already has.
+        let already_delivered_overlap_frames = if self.next_window_start_output_frame > 0 {
+            u64::from(self.contract.window_size.saturating_sub(self.contract.hop))
+        } else {
+            0
+        };
+        let discarded_per_channel_samples_at_the_declared_rate = (self.output_frames_held() as u64)
+            .saturating_sub(already_delivered_overlap_frames)
+            + staged_source_frames_at_the_declared_rate;
         self.windowable_output_scalars.clear();
         self.channel_converted_source_scalars.clear();
         self.rate_conversion.forget_everything_held();
@@ -662,7 +690,7 @@ impl AudioWindowAccumulator {
         self.priming_output_frames_still_to_discard = 0;
 
         AudioWindowStageFlush {
-            why_the_stage_flushed,
+            cause,
             discarded_per_channel_samples_at_the_declared_rate,
         }
     }

@@ -79,6 +79,15 @@ doesn't fire.
   > port's ring, and the link holds the service so a later opener joins it. The
   > `DoesNotSupportRequestedMinBufferSize` class this learning diagnosed cannot
   > arise between two engine-sized opens.
+  >
+  > ~~Every channel service is created at the ordered depth through
+  > `channel_service_creation_depth`.~~ — Superseded 2026-09-16 by #2269: a
+  > channel yet to be created is 64 deep when any of its destinations declares an
+  > audio window, and 16 otherwise; a live channel keeps the depth it was created
+  > at, read off the service a link holds or, with no link behind it, off the
+  > service a tap or a helper still holds. A windowed consumer connected onto a
+  > channel created shallower is refused by name before any open, so the error
+  > class still cannot arise between two engine-sized opens.
 - The latent GPU race's mechanism (main-vs-fan-out glcore contention) and the
   funnel candidate fix live in the tracked issue for it, not here — this file
   is the *diagnostic* learning, not the fix proposal.

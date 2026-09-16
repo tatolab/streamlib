@@ -90,8 +90,7 @@ const WINDOWED_PORT_MAILBOX_DEPTH_MARGIN: usize = 4;
 /// channel feeding one is created at.
 ///
 /// Never sized from the contract: iceoryx2 commits publisher heap for every slot
-/// of a channel's depth up front, about 141 MiB at a one-second window's 8,000
-/// slots against 1.45 MiB at 64.
+/// of a channel's depth up front.
 pub(crate) const WINDOWED_PORT_SUBSCRIBER_RING_DEPTH: usize = 64;
 
 impl ResolvedAudioWindowContract {

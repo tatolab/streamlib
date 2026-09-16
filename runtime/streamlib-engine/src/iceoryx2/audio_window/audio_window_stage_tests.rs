@@ -13,7 +13,8 @@ use super::audio_block_bag_wire_codec::{
     AudioBlockSampleDtype, encode_an_audio_block_onto_the_wire, read_an_audio_block_off_the_wire,
 };
 use super::audio_window_accumulator::{
-    AudioWindowAccumulator, LatestQueuedSourceAudioFormat, SourceAudioFormat,
+    AudioWindowAccumulator, AudioWindowStageFlushCause, LatestQueuedSourceAudioFormat,
+    SourceAudioFormat,
 };
 use super::resolved_audio_window_contract::ResolvedAudioWindowContract;
 
@@ -549,6 +550,10 @@ fn a_gap_flush_counts_its_staged_source_frames_as_samples_at_the_declared_rate()
         .expect("accepted")
         .expect("a block a second past where the last one ended flushes");
 
+    assert_eq!(
+        flush.cause,
+        AudioWindowStageFlushCause::BlockArrivedAwayFromWhereThePreviousEnded
+    );
     assert_eq!(flush.discarded_per_channel_samples_at_the_declared_rate, 33);
 }
 
@@ -584,9 +589,47 @@ fn a_format_change_flush_counts_the_remainder_in_per_channel_samples() {
         .expect("a block in another channel count flushes, however contiguous its stamp");
 
     assert_eq!(
+        flush.cause,
+        AudioWindowStageFlushCause::SourceChangedFormatMidStream
+    );
+    assert_eq!(
         flush.discarded_per_channel_samples_at_the_declared_rate,
         300
     );
+}
+
+/// A flush on a rolling window counts only the samples no window has carried:
+/// the last window's overlap is still in the remainder, and the reader already
+/// has it.
+///
+/// Six hundred samples against a 512/160 contract emit one window and leave 440
+/// behind, 352 of them the overlap that window carried. The flush counts the 88
+/// no window reached; counting the whole remainder gives 440.
+#[test]
+fn a_rolling_windows_flush_counts_none_of_the_overlap_its_last_window_delivered() {
+    let mut stage = stage_on(contract(16_000, 1, "f32", 512, 160));
+
+    stage
+        .accept(&source_block(
+            &interleaved_sine(0, 600, 1, 16_000, 440.0),
+            16_000,
+            1,
+            0,
+        ))
+        .expect("accepted");
+    assert_eq!(drain_every_ready_window(&mut stage).len(), 1);
+
+    let flush = stage
+        .accept(&source_block(
+            &interleaved_sine(0, 100, 1, 16_000, 440.0),
+            16_000,
+            1,
+            NANOSECONDS_PER_SECOND,
+        ))
+        .expect("accepted")
+        .expect("a block a second late flushes");
+
+    assert_eq!(flush.discarded_per_channel_samples_at_the_declared_rate, 88);
 }
 
 #[test]

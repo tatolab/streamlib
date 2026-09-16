@@ -9,10 +9,10 @@ mod channel_name;
 #[cfg(test)]
 mod channel_sizing_tests;
 mod delivery_profile;
-mod dropped_bag_counters;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) mod iceoryx2_domain_for_this_test_process;
 mod input;
+mod loss_counters;
 mod mailbox;
 mod node;
 mod output;
@@ -39,15 +39,15 @@ pub use channel_name::{
 };
 pub(crate) use delivery_profile::delivery_profile_for_input_port;
 pub use delivery_profile::{DeliveryProfile, DeliveryResolution};
-pub use dropped_bag_counters::{
-    DiscardedSampleCountsByInboundLink, DroppedBagCountsByInboundLink, RefusedBagCountsByOutputPort,
-};
 #[cfg(any(test, feature = "test-support"))]
 pub use iceoryx2_domain_for_this_test_process::{
     Iceoryx2DomainForThisTestProcess, create_iceoryx2_node_for_this_test_process,
     iceoryx2_domain_for_this_test_process,
 };
 pub use input::{BoundedReadOutcome, InputMailboxes, InputMailboxesInner};
+pub use loss_counters::{
+    DiscardedSampleCountsByInboundLink, DroppedBagCountsByInboundLink, RefusedBagCountsByOutputPort,
+};
 pub use mailbox::{
     PortMailbox, PortMailboxDeliveredBag, PortMailboxEvictionNotice, PortMailboxQueuedFrameMeasure,
 };

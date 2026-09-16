@@ -329,6 +329,40 @@ impl Iceoryx2Node {
 
         Ok(Iceoryx2Service { inner: service })
     }
+
+    /// The depth the channel data service named `service_name` was created at,
+    /// or `None` when nothing holds one open.
+    ///
+    /// Opens without creating and requests no depth, so a live service of any
+    /// depth answers rather than refusing the open.
+    pub fn creation_depth_of_an_existing_channel_service(
+        &self,
+        service_name: &str,
+    ) -> Result<Option<usize>> {
+        let node = self.inner.lock();
+        let iceoryx2_service_name: ServiceName = service_name.try_into().map_err(|e| {
+            Error::Configuration(format!("Invalid service name '{}': {:?}", service_name, e))
+        })?;
+
+        match node
+            .service_builder(&iceoryx2_service_name)
+            .publish_subscribe::<[u8]>()
+            .user_header::<DataChannelBagSequenceNumberUserHeader>()
+            .open()
+        {
+            Ok(service) => Ok(Some(service.static_config().subscriber_max_buffer_size())),
+            // A service whose last holder has let it go is recreated by the
+            // next open-or-create, so it is as good as absent.
+            Err(
+                PublishSubscribeOpenError::DoesNotExist
+                | PublishSubscribeOpenError::IsMarkedForDestruction,
+            ) => Ok(None),
+            Err(failure) => Err(Error::Runtime(format!(
+                "could not read the depth channel data service '{service_name}' was created at: \
+                 {failure:?}"
+            ))),
+        }
+    }
 }
 
 /// Handle to an iceoryx2 channel data service.
@@ -862,6 +896,29 @@ mod tests {
             .expect("a shallower reopen joins the live service");
 
         assert_eq!(reopened.channel_service_creation_depth(), 42);
+    }
+
+    /// A service nothing holds states no creation depth, and one something holds
+    /// states the depth it was created at, whatever depth that is.
+    #[test]
+    fn an_existing_channel_service_states_its_creation_depth_and_a_missing_one_states_none() {
+        let node = Iceoryx2Node::for_this_test_process();
+        let service_name = unique_service_name("existing_creation_depth");
+
+        assert_eq!(
+            node.creation_depth_of_an_existing_channel_service(&service_name)
+                .expect("a missing service is not an error"),
+            None,
+        );
+
+        let _held_open = node
+            .open_or_create_service(&service_name, 2, 3)
+            .expect("create data service");
+        assert_eq!(
+            node.creation_depth_of_an_existing_channel_service(&service_name)
+                .expect("a live service answers"),
+            Some(3),
+        );
     }
 
     /// End-to-end smoke test for the 200 Hz two-stage pipeline shape that

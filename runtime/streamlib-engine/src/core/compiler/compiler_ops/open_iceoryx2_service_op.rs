@@ -93,6 +93,7 @@ pub fn open_iceoryx2_service(
         )?;
         refuse_a_windowed_port_onto_a_channel_created_shallower_than_its_ring(
             graph,
+            iceoryx2_node,
             &source_proc_id,
             &source_port,
             &dest_proc_id,
@@ -144,7 +145,8 @@ pub fn open_iceoryx2_service(
     // The tier default is the structural ceiling; an operator raises or lowers it
     // per deployment through the tier's node-level env override.
     let channel_ceiling_bytes = effective_channel_ceiling_bytes(trust_tier);
-    let channel_sizing = resolve_channel_sizing(graph, &source_proc_id, &source_port)?;
+    let channel_sizing =
+        resolve_channel_sizing(graph, iceoryx2_node, &source_proc_id, &source_port)?;
     let dest_input_port_delivery =
         delivery_resolution_of_input_port(graph, &dest_proc_id, &dest_port)?;
     let max_notifiers = destination_max_notifiers(graph, &dest_proc_id)?;
@@ -433,6 +435,7 @@ fn channel_max_subscribers(
 /// the `tap` op share, refusing a source port past the destination cap.
 pub(crate) fn resolve_channel_sizing(
     graph: &mut Graph,
+    iceoryx2_node: &Iceoryx2Node,
     source_proc_id: &ProcessorUniqueId,
     source_port: &str,
 ) -> Result<ChannelSizing> {
@@ -440,6 +443,7 @@ pub(crate) fn resolve_channel_sizing(
         max_subscribers: channel_max_subscribers(graph, source_proc_id, source_port)?,
         channel_service_creation_depth: channel_service_creation_depth(
             graph,
+            iceoryx2_node,
             source_proc_id,
             source_port,
         )?,
@@ -449,55 +453,60 @@ pub(crate) fn resolve_channel_sizing(
 /// The depth the channel keyed on `(source_proc_id, source_port)` is created
 /// at, or was.
 ///
-/// A channel a link already holds open keeps the depth it was created at, which
-/// is the only depth an opener can ask for. A channel yet to be created is deep
-/// enough for a consumer of any delivery profile, whichever connects first,
-/// and [`WINDOWED_PORT_SUBSCRIBER_RING_DEPTH`] deep when any of its destinations
+/// A live channel keeps the depth it was created at, which is the only depth an
+/// opener can ask for. A channel yet to be created is deep enough for a consumer
+/// of any delivery profile, whichever connects first, and
+/// [`WINDOWED_PORT_SUBSCRIBER_RING_DEPTH`] deep when any of its destinations
 /// windows. Each subscriber then takes its own port's ring inside it, and a
 /// shallower ring saves nothing — iceoryx2 sizes the sample pool from the
 /// service's depth and subscriber count.
 fn channel_service_creation_depth(
-    graph: &mut Graph,
+    graph: &Graph,
+    iceoryx2_node: &Iceoryx2Node,
     source_proc_id: &ProcessorUniqueId,
     source_port: &str,
 ) -> Result<usize> {
-    if let Some(held_creation_depth) =
-        creation_depth_of_the_channel_a_link_holds_open(graph, source_proc_id, source_port)
+    if let Some(live_creation_depth) =
+        creation_depth_of_the_live_channel(graph, iceoryx2_node, source_proc_id, source_port)?
     {
-        return Ok(held_creation_depth);
+        return Ok(live_creation_depth);
     }
-    let destinations: Vec<(ProcessorUniqueId, String)> = graph
-        .traversal_mut()
+    for link in graph
+        .traversal()
         .v(source_proc_id)
         .out_e()
         .iter()
         .filter(|link| link.from_port().port_name == source_port)
-        .filter(|link| counts_toward_its_ports(link))
-        .map(|link| {
-            (
-                link.to_port().processor_id.clone(),
-                link.to_port().port_name.clone(),
-            )
-        })
-        .collect();
-    for (dest_proc_id, dest_port) in destinations {
-        if audio_windowing_declared_by_input_port_of(graph, &dest_proc_id, &dest_port)?.is_some() {
+        .filter(|link| link_still_counts_toward_its_ports(link))
+    {
+        let destination = link.to_port();
+        if audio_windowing_declared_by_input_port_of(
+            graph,
+            &destination.processor_id,
+            &destination.port_name,
+        )?
+        .is_some()
+        {
             return Ok(WINDOWED_PORT_SUBSCRIBER_RING_DEPTH);
         }
     }
     Ok(DeliveryProfile::ORDERED_DEPTH)
 }
 
-/// The depth the channel keyed on `(source_proc_id, source_port)` was created
-/// at, read off the service a link out of that port holds open; `None` while no
-/// link holds one.
-fn creation_depth_of_the_channel_a_link_holds_open(
-    graph: &mut Graph,
+/// The depth the live channel keyed on `(source_proc_id, source_port)` was
+/// created at, or `None` while no channel exists.
+///
+/// Read off the service a link out of that port holds open, and otherwise off
+/// whatever still holds the service with no link behind it — a tap, or a helper
+/// that has not yet released its port.
+fn creation_depth_of_the_live_channel(
+    graph: &Graph,
+    iceoryx2_node: &Iceoryx2Node,
     source_proc_id: &ProcessorUniqueId,
     source_port: &str,
-) -> Option<usize> {
-    graph
-        .traversal_mut()
+) -> Result<Option<usize>> {
+    let held_open_by_a_link = graph
+        .traversal()
         .v(source_proc_id)
         .out_e()
         .iter()
@@ -505,7 +514,14 @@ fn creation_depth_of_the_channel_a_link_holds_open(
         .find_map(|link| {
             link.get::<Iceoryx2ServicesHeldOpenForLinkComponent>()
                 .map(|held| held.channel_data_service.channel_service_creation_depth())
-        })
+        });
+    if held_open_by_a_link.is_some() {
+        return Ok(held_open_by_a_link);
+    }
+    iceoryx2_node.creation_depth_of_an_existing_channel_service(&channel_service_name(
+        source_proc_id,
+        source_port,
+    )?)
 }
 
 /// The ring a destination input port's subscriber takes: the windowed ring for a
@@ -513,12 +529,11 @@ fn creation_depth_of_the_channel_a_link_holds_open(
 /// otherwise.
 fn subscriber_ring_depth_of_input_port(
     dest_input_port_delivery: DeliveryResolution,
-    declares_an_audio_window: bool,
+    audio_windowing: Option<&AudioWindowDeclarationOfAnInputPort>,
 ) -> usize {
-    if declares_an_audio_window {
-        WINDOWED_PORT_SUBSCRIBER_RING_DEPTH
-    } else {
-        dest_input_port_delivery.depth
+    match audio_windowing {
+        Some(_) => WINDOWED_PORT_SUBSCRIBER_RING_DEPTH,
+        None => dest_input_port_delivery.depth,
     }
 }
 
@@ -622,11 +637,11 @@ fn delivery_resolution_of_input_port(
 /// The class a processor in the graph was added as, refused by name when the
 /// graph has no such processor.
 fn processor_class_import_path_of(
-    graph: &mut Graph,
+    graph: &Graph,
     proc_id: &ProcessorUniqueId,
 ) -> Result<ProcessorClassImportPath> {
     graph
-        .traversal_mut()
+        .traversal()
         .v(proc_id)
         .first()
         .map(|node| node.processor_type().clone())
@@ -639,7 +654,7 @@ fn processor_class_import_path_of(
 /// Reads the destination's registered class, the same way the delivery profile
 /// is read: the declaration is the whole answer and nothing is inferred.
 fn audio_windowing_declared_by_input_port_of(
-    graph: &mut Graph,
+    graph: &Graph,
     dest_proc_id: &ProcessorUniqueId,
     dest_port: &str,
 ) -> Result<Option<AudioWindowDeclarationOfAnInputPort>> {
@@ -668,7 +683,7 @@ fn refuse_a_second_inbound_link_into_a_windowed_port(
         .in_e()
         .iter()
         .filter(|link| link.to_port().port_name == dest_port)
-        .filter(|link| counts_toward_its_ports(link))
+        .filter(|link| link_still_counts_toward_its_ports(link))
         .map(|link| link.id.to_string())
         .find(|inbound| inbound != link_id.as_str());
     let Some(first) = already_inbound else {
@@ -690,28 +705,29 @@ fn refuse_a_second_inbound_link_into_a_windowed_port(
 /// A channel's depth is fixed for its life, and a subscriber cannot take a ring
 /// deeper than it.
 fn refuse_a_windowed_port_onto_a_channel_created_shallower_than_its_ring(
-    graph: &mut Graph,
+    graph: &Graph,
+    iceoryx2_node: &Iceoryx2Node,
     source_proc_id: &ProcessorUniqueId,
     source_port: &str,
     dest_proc_id: &ProcessorUniqueId,
     dest_port: &str,
     link_id: &LinkUniqueId,
 ) -> Result<()> {
-    let Some(held_creation_depth) =
-        creation_depth_of_the_channel_a_link_holds_open(graph, source_proc_id, source_port)
+    let Some(live_creation_depth) =
+        creation_depth_of_the_live_channel(graph, iceoryx2_node, source_proc_id, source_port)?
     else {
         return Ok(());
     };
-    if held_creation_depth >= WINDOWED_PORT_SUBSCRIBER_RING_DEPTH {
+    if live_creation_depth >= WINDOWED_PORT_SUBSCRIBER_RING_DEPTH {
         return Ok(());
     }
     Err(Error::Configuration(format!(
         "input port '{dest_port}' on '{dest_proc_id}' declares an `audio_window` contract, \
          and link '{link_id}' would wire it onto the running channel of \
-         '{source_proc_id}:{source_port}', created {held_creation_depth} bags deep. A windowed \
+         '{source_proc_id}:{source_port}', created {live_creation_depth} bags deep. A windowed \
          port reads through a {WINDOWED_PORT_SUBSCRIBER_RING_DEPTH}-bag ring, and a channel \
-         keeps its depth for as long as a link holds it. Connect the windowed consumer before \
-         the channel's other links, so the channel is created \
+         keeps its depth for as long as anything holds it open. Connect the windowed consumer \
+         before the channel's other links, so the channel is created \
          {WINDOWED_PORT_SUBSCRIBER_RING_DEPTH} bags deep."
     )))
 }
@@ -719,7 +735,7 @@ fn refuse_a_windowed_port_onto_a_channel_created_shallower_than_its_ring(
 /// Whether a link still counts toward the ports it joins: one on its way out of
 /// the graph, or one that failed, does not, or a disconnect followed by a
 /// reconnect of the same port would be judged against itself.
-fn counts_toward_its_ports(link: &Link) -> bool {
+fn link_still_counts_toward_its_ports(link: &Link) -> bool {
     link.get::<LinkStateComponent>()
         .map(|state| {
             !matches!(
@@ -888,7 +904,7 @@ fn wire_rust_dest(
         depth: input_port_ring_depth,
     } = dest_input_port_delivery;
     let subscriber_ring_depth =
-        subscriber_ring_depth_of_input_port(dest_input_port_delivery, audio_windowing.is_some());
+        subscriber_ring_depth_of_input_port(dest_input_port_delivery, audio_windowing.as_ref());
 
     if !input_inner.has_port(dest_port) {
         match audio_windowing {
@@ -963,13 +979,13 @@ fn publish_loss_counts_on_processor_node(
     if node.has::<ProcessorMetrics>() {
         return;
     }
+    let input_inner = processor.iceoryx2_input_mailboxes_inner();
     node.insert(ProcessorMetrics {
-        dropped_bag_counts_by_inbound_link: processor
-            .iceoryx2_input_mailboxes_inner()
+        dropped_bag_counts_by_inbound_link: input_inner
+            .as_ref()
             .map(|input_inner| input_inner.dropped_bag_counts_by_inbound_link())
             .unwrap_or_default(),
-        discarded_sample_counts_by_inbound_link: processor
-            .iceoryx2_input_mailboxes_inner()
+        discarded_sample_counts_by_inbound_link: input_inner
             .map(|input_inner| input_inner.discarded_sample_counts_by_inbound_link())
             .unwrap_or_default(),
         refused_bag_counts_by_output_port: processor
@@ -1082,8 +1098,8 @@ fn wire_subprocess_dest(
     link_id: &LinkUniqueId,
     audio_windowing: Option<AudioWindowDeclarationOfAnInputPort>,
 ) -> Result<Option<Arc<OutOfProcessLinkWireReply>>> {
-    // The dest reader no longer carries a payload-size hint: the subprocess read
-    // buffer starts at the default and grows to the frame it actually receives
+    // The dest reader carries no payload-size hint: the subprocess read buffer
+    // starts at the default and grows to the frame it actually receives
     // (PowerOfTwo segment growth on the publisher side, grow-and-retry on read).
     // The drain order is the port's own delivery profile's, resolved host-side.
     // The creation depth is what the child opens the service with, and the ring
@@ -1101,7 +1117,7 @@ fn wire_subprocess_dest(
         "channel_service_creation_depth": channel_sizing.channel_service_creation_depth,
         "input_port_ring_depth": subscriber_ring_depth_of_input_port(
             dest_input_port_delivery,
-            audio_windowing.is_some(),
+            audio_windowing.as_ref(),
         ),
         "max_subscribers": channel_sizing.max_subscribers,
         "notify_max_notifiers": notify_max_notifiers,
@@ -1153,6 +1169,7 @@ mod tests {
     use crate::core::processors::{
         DynGeneratedProcessor, OutOfProcessLinkWireOutcome, ProcessorSpec,
     };
+    use crate::core::test_support::CapturedTracingWarnings;
     use crate::core::{ProcessorDescriptor, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 
     /// One reclaim the engine asked an out-of-process endpoint for. Named
@@ -2032,6 +2049,11 @@ mod tests {
             serde_json::json!(FRAMES_PUBLISHED - DESTINATION_MAILBOX_DEPTH),
             "the total must be the per-link counts summed, never a second tally"
         );
+        assert!(
+            metrics.get("discarded_samples_by_link").is_none(),
+            "a link into a port that declares no window contract carries no sample count; \
+             got {metrics}"
+        );
     }
 
     /// An `ordered` consumer that stops reading shows exactly the bags its
@@ -2259,11 +2281,21 @@ mod tests {
         source_id: &str,
         dest_id: &str,
     ) -> LinkUniqueId {
+        add_link_from_out1_to(graph, source_id, dest_id, "in1")
+    }
+
+    /// Add a link from `source_id`'s `out1` to `dest_id`'s `dest_port`.
+    fn add_link_from_out1_to(
+        graph: &mut Graph,
+        source_id: &str,
+        dest_id: &str,
+        dest_port: &str,
+    ) -> LinkUniqueId {
         graph
             .traversal_mut()
             .add_e(
                 OutputLinkPortRef::new(source_id, "out1"),
-                InputLinkPortRef::new(dest_id, "in1"),
+                InputLinkPortRef::new(dest_id, dest_port),
             )
             .first()
             .expect("the link must exist")
@@ -2706,13 +2738,10 @@ mod tests {
         let mut graph = Graph::new();
         let dest_id = add_mock_windowed_audio_consumer(&mut graph);
 
-        let windowing = audio_windowing_declared_by_input_port_of(
-            &mut graph,
-            &dest_id.as_str().into(),
-            "audio",
-        )
-        .expect("a declared contract resolves")
-        .expect("the port declares one");
+        let windowing =
+            audio_windowing_declared_by_input_port_of(&graph, &dest_id.as_str().into(), "audio")
+                .expect("a declared contract resolves")
+                .expect("the port declares one");
 
         let AudioWindowDeclarationOfAnInputPort::StatedOutright(contract) = windowing else {
             panic!("a port stating five values resolves to them at wire time");
@@ -2730,7 +2759,7 @@ mod tests {
         let dest_id = add_mock_reactive_input_only(&mut graph);
 
         let windowing =
-            audio_windowing_declared_by_input_port_of(&mut graph, &dest_id.as_str().into(), "in1")
+            audio_windowing_declared_by_input_port_of(&graph, &dest_id.as_str().into(), "in1")
                 .expect("resolution succeeds");
         assert!(windowing.is_none());
     }
@@ -2746,13 +2775,10 @@ mod tests {
         let mut graph = Graph::new();
         let dest_id = add_mock_device_matched_audio_consumer(&mut graph);
 
-        let windowing = audio_windowing_declared_by_input_port_of(
-            &mut graph,
-            &dest_id.as_str().into(),
-            "audio",
-        )
-        .expect("a sentinel is not a wiring error by itself")
-        .expect("the port declares one");
+        let windowing =
+            audio_windowing_declared_by_input_port_of(&graph, &dest_id.as_str().into(), "audio")
+                .expect("a sentinel is not a wiring error by itself")
+                .expect("the port declares one");
 
         assert_eq!(
             windowing,
@@ -3070,24 +3096,6 @@ mod tests {
         .expect("a reconnect past a disconnected link is one inbound link, not two");
     }
 
-    /// Add a link from `source_id`'s `out1` to `dest_id`'s windowed `audio` port.
-    fn add_link_from_out1_to_audio(
-        graph: &mut Graph,
-        source_id: &str,
-        dest_id: &str,
-    ) -> LinkUniqueId {
-        graph
-            .traversal_mut()
-            .add_e(
-                OutputLinkPortRef::new(source_id, "out1"),
-                InputLinkPortRef::new(dest_id, "audio"),
-            )
-            .first()
-            .expect("the link must exist")
-            .id
-            .clone()
-    }
-
     /// The depth the channel a wired link holds open was created at.
     fn creation_depth_of_the_channel_held_by(graph: &mut Graph, link_id: &LinkUniqueId) -> usize {
         graph
@@ -3139,7 +3147,7 @@ mod tests {
             let (_, _, dest_input) = attach_mock_instance::<
                 MockWindowedAudioConsumerProcessor::Processor,
             >(&mut graph, &dest_id);
-            let link_id = add_link_from_out1_to_audio(&mut graph, &source_id, &dest_id);
+            let link_id = add_link_from_out1_to(&mut graph, &source_id, &dest_id, "audio");
             open_iceoryx2_service(&mut graph, &link_id, &Iceoryx2Node::for_this_test_process())
                 .expect("the windowed consumer wires");
 
@@ -3179,10 +3187,11 @@ mod tests {
     }
 
     /// A windowed consumer added beside a plain one before either is wired sizes
-    /// the channel, whichever link the compiler opens first — which is the fix
-    /// the live refusal names.
+    /// the channel even when the compiler opens the plain link first — which is
+    /// the fix the live refusal names.
     #[test]
-    fn a_windowed_consumer_added_beside_a_plain_one_sizes_the_channel_whichever_opens_first() {
+    fn a_windowed_consumer_added_beside_a_plain_one_sizes_the_channel_even_when_the_plain_link_opens_first()
+     {
         use crate::core::test_support::{
             MockInputOnlyProcessor, MockOutputOnlyProcessor, MockWindowedAudioConsumerProcessor,
         };
@@ -3200,7 +3209,7 @@ mod tests {
         );
         let plain_link = add_link_from_out1_to_in1(&mut graph, &source_id, &plain_consumer_id);
         let windowed_link =
-            add_link_from_out1_to_audio(&mut graph, &source_id, &windowed_consumer_id);
+            add_link_from_out1_to(&mut graph, &source_id, &windowed_consumer_id, "audio");
 
         open_iceoryx2_service(&mut graph, &plain_link, &node).expect("the plain consumer wires");
         open_iceoryx2_service(&mut graph, &windowed_link, &node)
@@ -3238,26 +3247,94 @@ mod tests {
             MockWindowedAudioConsumerProcessor::Processor,
         >(&mut graph, &windowed_consumer_id);
         let windowed_link =
-            add_link_from_out1_to_audio(&mut graph, &source_id, &windowed_consumer_id);
+            add_link_from_out1_to(&mut graph, &source_id, &windowed_consumer_id, "audio");
 
         let refusal = open_iceoryx2_service(&mut graph, &windowed_link, &node)
             .expect_err("a windowed port cannot read through a ring its channel cannot hold")
             .to_string();
 
-        assert!(
-            refusal.contains("'audio'")
-                && refusal.contains(windowed_link.as_str())
-                && refusal.contains(&DeliveryProfile::ORDERED_DEPTH.to_string())
-                && refusal
-                    .contains(&crate::iceoryx2::WINDOWED_PORT_SUBSCRIBER_RING_DEPTH.to_string())
-                && refusal.contains("before"),
-            "the refusal must name the port, the link, both depths and the fix; got {refusal}"
+        assert_the_refusal_names_the_port_the_link_both_depths_and_the_fix(
+            &refusal,
+            &windowed_link,
         );
         assert!(
             !windowed_consumer_input
                 .expect("a windowed consumer holds input mailboxes")
                 .has_subscribers(),
             "a refused link leaves no port half-wired"
+        );
+    }
+
+    /// A windowed-onto-shallow refusal names the `audio` port, the link, the
+    /// channel's 16 and the ring's 64 in the phrases the message uses, and the
+    /// fix.
+    fn assert_the_refusal_names_the_port_the_link_both_depths_and_the_fix(
+        refusal: &str,
+        windowed_link: &LinkUniqueId,
+    ) {
+        let channel_depth = format!("created {} bags deep", DeliveryProfile::ORDERED_DEPTH);
+        let ring_depth = format!(
+            "{}-bag ring",
+            crate::iceoryx2::WINDOWED_PORT_SUBSCRIBER_RING_DEPTH
+        );
+        assert!(
+            refusal.contains("'audio'")
+                && refusal.contains(windowed_link.as_str())
+                && refusal.contains(&channel_depth)
+                && refusal.contains(&ring_depth)
+                && refusal
+                    .contains("Connect the windowed consumer before the channel's other links"),
+            "the refusal must name the port, the link, both depths and the fix; got {refusal}"
+        );
+    }
+
+    /// A channel no link holds any more can still be alive in a tap, or in a
+    /// helper yet to release its port, at the depth it was created at. A
+    /// windowed consumer connected onto it is refused by name there too.
+    ///
+    /// Fail-without-fix: read the depth off the graph's links alone and the op
+    /// asks iceoryx2 for a 64-deep channel, which refuses with an error naming
+    /// neither the port nor the fix.
+    #[test]
+    fn a_windowed_consumer_onto_a_shallower_channel_only_a_tap_still_holds_is_refused_naming_both_depths()
+     {
+        use crate::core::test_support::{
+            MockInputOnlyProcessor, MockOutputOnlyProcessor, MockWindowedAudioConsumerProcessor,
+        };
+
+        let node = Iceoryx2Node::for_this_test_process();
+        let mut graph = Graph::new();
+        let source_id = add_mock_output_only(&mut graph);
+        attach_mock_instance::<MockOutputOnlyProcessor::Processor>(&mut graph, &source_id);
+        let plain_consumer_id = add_mock_input_only(&mut graph);
+        attach_mock_instance::<MockInputOnlyProcessor::Processor>(&mut graph, &plain_consumer_id);
+        let plain_link = add_link_from_out1_to_in1(&mut graph, &source_id, &plain_consumer_id);
+        open_iceoryx2_service(&mut graph, &plain_link, &node).expect("the plain consumer wires");
+        let _held_open_the_way_a_tap_holds_it = node
+            .open_or_create_service(
+                &channel_service_name(&source_id.as_str().into(), "out1")
+                    .expect("the mock's output port derives a channel name"),
+                MAX_DESTINATIONS_PER_CHANNEL + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL,
+                DeliveryProfile::ORDERED_DEPTH,
+            )
+            .expect("a tap joins the running channel");
+        close_iceoryx2_service(&mut graph, &plain_link).expect("the plain consumer disconnects");
+
+        let windowed_consumer_id = add_mock_windowed_audio_consumer(&mut graph);
+        attach_mock_instance::<MockWindowedAudioConsumerProcessor::Processor>(
+            &mut graph,
+            &windowed_consumer_id,
+        );
+        let windowed_link =
+            add_link_from_out1_to(&mut graph, &source_id, &windowed_consumer_id, "audio");
+
+        let refusal = open_iceoryx2_service(&mut graph, &windowed_link, &node)
+            .expect_err("the channel the tap holds is still 16 deep")
+            .to_string();
+
+        assert_the_refusal_names_the_port_the_link_both_depths_and_the_fix(
+            &refusal,
+            &windowed_link,
         );
     }
 
@@ -3320,10 +3397,21 @@ mod tests {
         link.source_output
             .write_raw("out1", &a_mono_16k_audio_block(300, 1_000_000_000), 0)
             .expect("the source publishes");
-        link.dest_input
-            .read_raw("audio")
-            .expect("the read succeeds");
+        let (_, warnings) = CapturedTracingWarnings::captured_while(|| {
+            link.dest_input
+                .read_raw("audio")
+                .expect("the read succeeds")
+        });
 
+        let [warning] = warnings.as_slice() else {
+            panic!("the flush says so in exactly one warning; got {warnings:?}");
+        };
+        assert!(
+            warning.contains("port=audio")
+                && warning.contains(&format!("link={link_id}"))
+                && warning.contains("discarded_samples=300"),
+            "the warning names the port, the link and the count; got {warning}"
+        );
         let metrics = link.rendered_metrics_of_the_destination();
         assert_eq!(
             metrics["discarded_samples_by_link"],
@@ -3347,12 +3435,10 @@ mod tests {
             &dest_id,
             ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
         );
-        let Some(declared) = audio_windowing_declared_by_input_port_of(
-            &mut graph,
-            &dest_id.as_str().into(),
-            "audio",
-        )
-        .expect("the mock's contract resolves") else {
+        let Some(declared) =
+            audio_windowing_declared_by_input_port_of(&graph, &dest_id.as_str().into(), "audio")
+                .expect("the mock's contract resolves")
+        else {
             panic!("the mock's audio port declares a window contract");
         };
 
@@ -3363,7 +3449,11 @@ mod tests {
             "pabc/out1",
             "pdef/notify",
             DeliveryProfile::Ordered.resolve(),
-            sizing_of_a_two_subscriber_test_channel(),
+            ChannelSizing {
+                max_subscribers: 2,
+                channel_service_creation_depth:
+                    crate::iceoryx2::WINDOWED_PORT_SUBSCRIBER_RING_DEPTH,
+            },
             1,
             &"L-helper-windowed-ring".into(),
             Some(declared),
@@ -3451,8 +3541,13 @@ mod tests {
         }
         let src_uid: ProcessorUniqueId = src_id.as_str().into();
 
-        let sizing = resolve_channel_sizing(&mut graph, &src_uid, "out1")
-            .expect("sizing resolves for a wired channel");
+        let sizing = resolve_channel_sizing(
+            &mut graph,
+            &Iceoryx2Node::for_this_test_process(),
+            &src_uid,
+            "out1",
+        )
+        .expect("sizing resolves for a wired channel");
         assert_eq!(
             sizing.max_subscribers,
             channel_max_subscribers(&mut graph, &src_uid, "out1")

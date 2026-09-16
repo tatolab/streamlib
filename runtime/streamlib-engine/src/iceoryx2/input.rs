@@ -35,7 +35,7 @@ use super::audio_window::{
     ResolvedAudioWindowContract, queued_audio_window_frame_measure,
 };
 use super::channel_name::InboundLinkName;
-use super::dropped_bag_counters::{
+use super::loss_counters::{
     DiscardedSampleCountsByInboundLink, DroppedBagCountsByInboundLink,
     InboundLinkDiscardedSampleCounter, InboundLinkDroppedBagCounter,
 };
@@ -189,7 +189,7 @@ impl InboundLinkSubscribersAndListener {
 
     /// The one binding feeding `local_port`, or `None` where it has none or
     /// several.
-    fn the_only_one_bound_to_local_port<'a>(
+    fn the_only_subscriber_bound_to_local_port<'a>(
         &'a self,
         local_port: &'a str,
     ) -> Option<&'a PortBoundSubscriber> {
@@ -755,7 +755,7 @@ impl InputMailboxesInner {
     fn the_single_inbound_link_name_of(&self, port: &str) -> Option<InboundLinkName> {
         self.inbound_link_subscribers_and_listener
             .lock()
-            .the_only_one_bound_to_local_port(port)
+            .the_only_subscriber_bound_to_local_port(port)
             .map(|only| only.inbound_link_name.clone())
     }
 
@@ -765,22 +765,28 @@ impl InputMailboxesInner {
     /// to count it, and still says what went.
     fn count_a_flush_on_the_link_feeding(&self, port: &str, flush: AudioWindowStageFlush) {
         let AudioWindowStageFlush {
-            why_the_stage_flushed,
+            cause,
             discarded_per_channel_samples_at_the_declared_rate: discarded_samples,
         } = flush;
-        let subscribers_and_listener = self.inbound_link_subscribers_and_listener.lock();
-        let feeding = subscribers_and_listener.the_only_one_bound_to_local_port(port);
-        if let Some(counter) = feeding.and_then(|only| only.discarded_sample_counter.as_ref()) {
-            counter.record_discarded_samples(discarded_samples);
-        }
+        let feeding_link_id_and_channel = {
+            let subscribers_and_listener = self.inbound_link_subscribers_and_listener.lock();
+            subscribers_and_listener
+                .the_only_subscriber_bound_to_local_port(port)
+                .map(|only| {
+                    if let Some(counter) = &only.discarded_sample_counter {
+                        counter.record_discarded_samples(discarded_samples);
+                    }
+                    (only.link_id.clone(), only.inbound_link_name.clone())
+                })
+        };
+        let (link, channel) = feeding_link_id_and_channel.unzip();
         tracing::warn!(
             port,
-            link = feeding.map_or("<no single inbound link>", |only| only.link_id.as_str()),
-            channel = feeding.map_or("<none>", |only| only.inbound_link_name.as_str()),
+            link = link.as_deref(),
+            channel = channel.as_ref().map(InboundLinkName::as_str),
             discarded_samples,
-            "audio window stage: {why_the_stage_flushed}, so the accumulator and the resampler's \
-             filter state were flushed, discarding {discarded_samples} samples rather than \
-             emitting a window that spans the gap"
+            "audio window stage: {cause}, so the accumulator and the resampler's filter state \
+             were flushed, discarding {discarded_samples} samples no reader had received"
         );
     }
 
