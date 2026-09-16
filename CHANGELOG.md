@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.13](https://github.com/tatolab/streamlib/compare/v0.22.12...v0.22.13) (2026-09-16)
+
+
+### Features
+
+* **wheel:** end every app on the shutdown ladder ([#2308](https://github.com/tatolab/streamlib/issues/2308)) ([a58712c](https://github.com/tatolab/streamlib/commit/a58712c81af28f8f0c074f153d6f03711bd82efe))
+
 ## [0.22.12](https://github.com/tatolab/streamlib/compare/v0.22.11...v0.22.12) (2026-09-16)
 
 
