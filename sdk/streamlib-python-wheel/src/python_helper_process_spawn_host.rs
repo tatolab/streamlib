@@ -479,6 +479,9 @@ impl PythonHelperProcessSpawnHostProcessor {
         if self.bridge.is_none() {
             return;
         }
+        // Warned once rather than per command: a helper that did not take the
+        // first will not take the second either, and one unusable child owes
+        // one line, which is the posture `exchange_with_child` already keeps.
         for command in HelperProcessShutdownCommand::BOTH_IN_THE_ORDER_THE_LADDER_SENDS_THEM {
             let asked = self.send_to_child(&serde_json::json!({
                 "cmd": command.command_tag(),
@@ -486,10 +489,12 @@ impl PythonHelperProcessSpawnHostProcessor {
             }));
             if let Err(unreachable_helper) = asked {
                 tracing::warn!(
-                    "[{}] its helper process did not take the {} command: {unreachable_helper}",
+                    "[{}] its helper process did not take the {} command, so neither it nor \
+                     anything after it was asked for: {unreachable_helper}",
                     self.processor_display_name,
                     command.command_tag(),
                 );
+                return;
             }
         }
     }
@@ -1375,9 +1380,14 @@ if os.fork() == 0:
             )
             .output()
             .expect("the test binary re-runs this test in a child process");
-        assert!(
-            !dead_node_owner.status.success(),
-            "the child must die where it stood rather than report a result"
+        // The signal and not merely a non-zero exit: a child that panicked
+        // before it opened its node would also exit non-zero, and would leave
+        // the domain empty — against which the zero below asserts nothing.
+        assert_eq!(
+            std::os::unix::process::ExitStatusExt::signal(&dead_node_owner.status),
+            Some(libc::SIGKILL),
+            "the child must die where it stood, holding its node: {}",
+            String::from_utf8_lossy(&dead_node_owner.stderr),
         );
 
         // A host whose own helper has already left, closed the ordinary way.
@@ -1419,8 +1429,11 @@ if os.fork() == 0:
         let mut host = spawn_host_for_test(None);
         assert!(!host.shutdown_was_already_asked_of_this_helper);
 
-        // No bridge, so the sends fail and are logged — what is under test is
-        // that the ask happens at all, and happens once.
+        // With no bridge the ask short-circuits before its sends, so the flag
+        // is the whole of what is observable here: that every route onto the
+        // ladder goes through the ask, and that a second route does not repeat
+        // it. That the commands then reach the wire is the rig scenario's, in
+        // `test_helper_placement.py`.
         host.ask_the_helper_to_stop_and_tear_down();
         assert!(host.shutdown_was_already_asked_of_this_helper);
 
