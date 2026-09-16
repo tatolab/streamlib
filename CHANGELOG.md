@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.15](https://github.com/tatolab/streamlib/compare/v0.22.14...v0.22.15) (2026-09-16)
+
+
+### Features
+
+* **engine:** count a windowed port's flushed samples, give it a 64-bag ring and refuse a shallower live connect ([#2312](https://github.com/tatolab/streamlib/issues/2312)) ([df9b6db](https://github.com/tatolab/streamlib/commit/df9b6db37d9f4f5110f90bd4caa6394c8368ad4f))
+
 ## [0.22.14](https://github.com/tatolab/streamlib/compare/v0.22.13...v0.22.14) (2026-09-16)
 
 
