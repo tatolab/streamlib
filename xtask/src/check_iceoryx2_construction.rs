@@ -32,8 +32,14 @@ const NODE_BUILDER_CALL: &str = "NodeBuilder::new(";
 /// The call that reads iceoryx2's lookup-path configuration, allowed nowhere.
 const GLOBAL_CONFIG_CALL: &str = "Config::global_config(";
 
-/// The builder call that opens a publish-subscribe service, allowed only in [`ALLOWED_FILE`].
-const PUBLISH_SUBSCRIBE_BUILDER_CALL: &str = "publish_subscribe::<";
+/// The builder method that opens a publish-subscribe service, allowed only in [`ALLOWED_FILE`].
+///
+/// Matched as a whole identifier rather than as `publish_subscribe::<`, because
+/// the identifier is the one token no spelling of the call can split: spacing
+/// or a line break around `::<`, a comment between the tokens, a call whose
+/// payload type is inferred, and a macro rustfmt leaves unformatted all still
+/// carry it.
+const PUBLISH_SUBSCRIBE_BUILDER_METHOD: &str = "publish_subscribe";
 
 /// What a violating line built, and the fix the failure names for it.
 #[derive(Debug, PartialEq, Eq)]
@@ -156,7 +162,9 @@ fn collect_violations(relative_path: &Path, content: &str, violations: &mut Vec<
         let refused_construction =
             if builds_a_node_outside_the_allowed_constructor || line.contains(GLOBAL_CONFIG_CALL) {
                 RefusedIceoryx2Construction::NodeOrGlobalConfigurationOutsideTheEngineOwnedDomain
-            } else if !is_the_allowed_file && line.contains(PUBLISH_SUBSCRIBE_BUILDER_CALL) {
+            } else if !is_the_allowed_file
+                && contains_the_whole_identifier(line, PUBLISH_SUBSCRIBE_BUILDER_METHOD)
+            {
                 RefusedIceoryx2Construction::PublishSubscribeServiceOutsideTheEngineWrapper
             } else {
                 continue;
@@ -168,6 +176,17 @@ fn collect_violations(relative_path: &Path, content: &str, violations: &mut Vec<
             refused_construction,
         });
     }
+}
+
+/// Whether `identifier` appears in `line` as a whole identifier, not as part of
+/// a longer one.
+fn contains_the_whole_identifier(line: &str, identifier: &str) -> bool {
+    let continues_an_identifier = |character: char| character.is_alphanumeric() || character == '_';
+    line.match_indices(identifier).any(|(start, _)| {
+        let before = line[..start].chars().next_back();
+        let after = line[start + identifier.len()..].chars().next();
+        !before.is_some_and(continues_an_identifier) && !after.is_some_and(continues_an_identifier)
+    })
 }
 
 /// The zero-based line span from the allowed constructor's signature to its
@@ -252,6 +271,31 @@ mod tests {
             violations[0].refused_construction,
             RefusedIceoryx2Construction::PublishSubscribeServiceOutsideTheEngineWrapper
         );
+    }
+
+    #[test]
+    fn a_publish_subscribe_builder_spelled_across_lines_or_without_a_turbofish_is_refused() {
+        let violations = violations_in(
+            "let split = node.service_builder(&name)\n    .publish_subscribe\n    :: <[u8]>()\n    .open_or_create();\nlet commented = builder.publish_subscribe /* raw */ ::<[u8]>();\nlet inferred: Builder<[u8], (), ipc::Service> = builder.publish_subscribe();\n",
+        );
+
+        assert_eq!(
+            violations
+                .iter()
+                .map(|violation| violation.line_no)
+                .collect::<Vec<_>>(),
+            vec![2, 5, 6],
+            "{violations:?}"
+        );
+    }
+
+    #[test]
+    fn a_longer_identifier_containing_the_builder_method_is_not_a_builder() {
+        let violations = violations_in(
+            "let publish_subscribe_count = 2;\nlet raw_publish_subscribe = count_publish_subscribe_services();\n",
+        );
+
+        assert!(violations.is_empty(), "{violations:?}");
     }
 
     #[test]
