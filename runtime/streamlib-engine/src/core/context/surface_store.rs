@@ -2551,7 +2551,7 @@ mod plane_fd_ownership_tests {
         fn mint() -> Self {
             let mut pipe_ends = [0 as std::os::unix::io::RawFd; 2];
             assert_eq!(
-                unsafe { libc::pipe(pipe_ends.as_mut_ptr()) },
+                unsafe { libc::pipe2(pipe_ends.as_mut_ptr(), libc::O_CLOEXEC) },
                 0,
                 "could not mint a stand-in plane fd"
             );

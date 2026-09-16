@@ -1321,7 +1321,10 @@ mod tests {
     /// a fake number would make that close land on someone else's fd.
     fn a_pipe_read_end() -> OwnedFd {
         let mut pipe_ends = [0 as std::os::unix::io::RawFd; 2];
-        assert_eq!(unsafe { libc::pipe(pipe_ends.as_mut_ptr()) }, 0);
+        assert_eq!(
+            unsafe { libc::pipe2(pipe_ends.as_mut_ptr(), libc::O_CLOEXEC) },
+            0
+        );
         unsafe { libc::close(pipe_ends[1]) };
         unsafe { OwnedFd::from_raw_fd(pipe_ends[0]) }
     }

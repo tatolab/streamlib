@@ -4048,7 +4048,7 @@ mod tests {
             "memfd_create: {}",
             std::io::Error::last_os_error()
         );
-        let memfd_duplicate = unsafe { libc::dup(memfd) };
+        let memfd_duplicate = unsafe { libc::fcntl(memfd, libc::F_DUPFD_CLOEXEC, 0) };
         assert!(
             memfd_duplicate >= 0,
             "dup: {}",
@@ -4057,7 +4057,10 @@ mod tests {
         let _memfd_kept_open = unsafe { OwnedFd::from_raw_fd(memfd_duplicate) };
 
         let mut pipe_ends = [0 as std::os::unix::io::RawFd; 2];
-        assert_eq!(unsafe { libc::pipe(pipe_ends.as_mut_ptr()) }, 0);
+        assert_eq!(
+            unsafe { libc::pipe2(pipe_ends.as_mut_ptr(), libc::O_CLOEXEC) },
+            0
+        );
         let _pipe_write_end_kept_open = unsafe { OwnedFd::from_raw_fd(pipe_ends[1]) };
 
         for (candidate_fd, descriptor_kind) in [(memfd, "memfd"), (pipe_ends[0], "pipe")] {

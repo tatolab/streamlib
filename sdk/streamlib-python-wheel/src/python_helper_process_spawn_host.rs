@@ -1306,12 +1306,23 @@ if os.fork() == 0:
     os._exit(0)
 "#;
 
-    /// A pipe whose write end is inheritable, standing in for the stdio
-    /// interceptor's own `dup`s and pipes — none of which set `FD_CLOEXEC`.
+    /// A pipe whose write end is inheritable on purpose, standing in for any
+    /// descriptor this process holds that a helper must not keep.
     fn an_inheritable_pipe() -> (OwnedFd, OwnedFd) {
         let mut ends: [libc::c_int; 2] = [-1, -1];
-        // SAFETY: `ends` is a two-element array, which is what `pipe` fills.
-        assert_eq!(unsafe { libc::pipe(ends.as_mut_ptr()) }, 0, "pipe");
+        // SAFETY: `ends` is a two-element array, which is what `pipe2` fills.
+        assert_eq!(
+            unsafe { libc::pipe2(ends.as_mut_ptr(), libc::O_CLOEXEC) },
+            0,
+            "pipe2"
+        );
+        // SAFETY: `ends[1]` was just created here; clearing its close-on-exec
+        // flag is what makes it the inheritable descriptor the sweep must catch.
+        assert_eq!(
+            unsafe { libc::fcntl(ends[1], libc::F_SETFD, 0) },
+            0,
+            "F_SETFD"
+        );
         // SAFETY: both descriptors are freshly created and owned by nobody else.
         unsafe { (OwnedFd::from_raw_fd(ends[0]), OwnedFd::from_raw_fd(ends[1])) }
     }

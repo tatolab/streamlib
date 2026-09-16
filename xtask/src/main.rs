@@ -14,6 +14,7 @@ pub mod check_device_wait_idle;
 pub mod check_iceoryx2_node_construction;
 pub mod check_no_escalate_in_lifecycle;
 pub mod check_no_in_process_placement;
+pub mod check_no_inheritable_descriptor;
 pub mod check_no_inventory_submit;
 pub mod check_no_unbounded_cstr_from_ptr;
 pub mod check_vendored_trees;
@@ -119,7 +120,7 @@ pub fn ensure_source_walking_gate_read_source(
 /// Every source-walking gate, paired with the subcommand name that runs it alone.
 ///
 /// Each gate reads the tree and reports; none builds the workspace. That is what
-/// lets one process run all twelve in well under a second, and why CI runs them as
+/// lets one process run all thirteen in well under a second, and why CI runs them as
 /// a single job rather than one runner per gate.
 const ALL_SOURCE_WALKING_GATES: &[(&str, fn(&Path) -> Result<()>)] = &[
     ("lint-logging", lint_logging::run),
@@ -144,6 +145,10 @@ const ALL_SOURCE_WALKING_GATES: &[(&str, fn(&Path) -> Result<()>)] = &[
         check_no_unbounded_cstr_from_ptr::run,
     ),
     ("check-clock-usage", check_clock_usage::run),
+    (
+        "check-no-inheritable-descriptor",
+        check_no_inheritable_descriptor::run,
+    ),
     ("check-bounded-apt-install", check_bounded_apt_install::run),
     (
         "check-workspace-version-pins",
@@ -575,6 +580,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_link_no_helper_has_to_answer_for_is_wired_as_soon_as_it_is_opened",
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_link_between_one_helpers_own_ports_waits_on_both_of_its_ends",
                 "core::json_schema::link_rendering_tests",
+                "core::logging::stdio_interceptor",
             ],
         ),
         // The rig-tier integration binary that drives the two `match_device`
@@ -784,6 +790,15 @@ enum Commands {
     /// external API is not flagged.
     CheckNoUnboundedCstrFromPtr,
 
+    /// CI gate for close-on-exec at source. Fails on a raw `libc::dup` or
+    /// `libc::pipe`, and on a `pipe2`, `epoll_create1`, `timerfd_create`,
+    /// `eventfd` or `recvmsg` missing its close-on-exec flag, anywhere under
+    /// `runtime/ sdk/ adapters/` — test code included. A descriptor created
+    /// inheritable reaches every process the app spawns, and a grandchild
+    /// holding a copy of the app's stdout keeps anything reading that output
+    /// waiting after the app has died.
+    CheckNoInheritableDescriptor,
+
     /// CI gate for the wall-clock allowlist. Fails on a wall-clock read
     /// (`SystemTime::now`, `Utc::now`, `time.time_ns`, `datetime.now`, …)
     /// anywhere under `runtime/ sdk/ adapters/ xtask/ packages/test-fixtures/`
@@ -907,6 +922,9 @@ fn main() -> Result<()> {
             check_no_unbounded_cstr_from_ptr::run(&workspace_root()?)?
         }
         Commands::CheckClockUsage => check_clock_usage::run(&workspace_root()?)?,
+        Commands::CheckNoInheritableDescriptor => {
+            check_no_inheritable_descriptor::run(&workspace_root()?)?
+        }
         Commands::CheckBoundedAptInstall => check_bounded_apt_install::run(&workspace_root()?)?,
         Commands::CheckVendoredTrees => check_vendored_trees::run(&workspace_root()?)?,
         Commands::CheckWorkspaceVersionPins { fix } => {

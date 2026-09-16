@@ -10,7 +10,7 @@
 
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::thread::JoinHandle;
 
 use tracing::Dispatch;
@@ -162,12 +162,12 @@ fn spawn_reader(pipe_read: OwnedFd, channel: &'static str, dispatch: Dispatch) -
         .expect("spawn stdio interceptor reader thread")
 }
 
+/// A close-on-exec copy of a standard stream. A copy anything spawned could
+/// inherit is the app's own output held open by a grandchild after the app has
+/// died.
 fn dup_fd(fd: libc::c_int) -> std::io::Result<OwnedFd> {
-    let dup = unsafe { libc::dup(fd) };
-    if dup < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(unsafe { OwnedFd::from_raw_fd(dup) })
+    // SAFETY: fds 1 and 2 are open for the life of the process.
+    unsafe { BorrowedFd::borrow_raw(fd) }.try_clone_to_owned()
 }
 
 fn dup2_fd(src: libc::c_int, dst: libc::c_int) -> std::io::Result<()> {
@@ -178,17 +178,54 @@ fn dup2_fd(src: libc::c_int, dst: libc::c_int) -> std::io::Result<()> {
     Ok(())
 }
 
+/// A close-on-exec pipe. The write end reaches fds 1 and 2 through `dup2`,
+/// which is what clears the flag there and only there.
 fn make_pipe() -> std::io::Result<(OwnedFd, OwnedFd)> {
-    let mut fds: [libc::c_int; 2] = [-1, -1];
-    let rc = unsafe { libc::pipe(fds.as_mut_ptr()) };
-    if rc < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok((unsafe { OwnedFd::from_raw_fd(fds[0]) }, unsafe {
-        OwnedFd::from_raw_fd(fds[1])
-    }))
+    let (read_end, write_end) = std::io::pipe()?;
+    Ok((OwnedFd::from(read_end), OwnedFd::from(write_end)))
 }
 
 fn owned_fd_to_file(fd: OwnedFd) -> File {
     unsafe { File::from_raw_fd(fd.into_raw_fd()) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn is_close_on_exec(descriptor: &OwnedFd) -> bool {
+        // SAFETY: `F_GETFD` reads the flags of a descriptor this test owns.
+        let flags = unsafe { libc::fcntl(descriptor.as_raw_fd(), libc::F_GETFD) };
+        flags >= 0 && flags & libc::FD_CLOEXEC != 0
+    }
+
+    /// Fail-without-fix: a plain `dup` hands every process the app spawns a copy
+    /// of the app's real stdout, and a grandchild holding it keeps anything
+    /// reading that output waiting after the app has died.
+    #[test]
+    fn a_copy_of_the_apps_own_output_is_close_on_exec() {
+        let stdout_copy = dup_fd(libc::STDOUT_FILENO).expect("fd 1 duplicates");
+        let stderr_copy = dup_fd(libc::STDERR_FILENO).expect("fd 2 duplicates");
+        assert!(
+            is_close_on_exec(&stdout_copy),
+            "a spawned process would inherit the copy of stdout"
+        );
+        assert!(
+            is_close_on_exec(&stderr_copy),
+            "a spawned process would inherit the copy of stderr"
+        );
+    }
+
+    #[test]
+    fn both_ends_of_an_intercept_pipe_are_close_on_exec() {
+        let (read_end, write_end) = make_pipe().expect("a pipe opens");
+        assert!(
+            is_close_on_exec(&read_end),
+            "a spawned process would inherit the read end"
+        );
+        assert!(
+            is_close_on_exec(&write_end),
+            "a spawned process would inherit the write end"
+        );
+    }
 }

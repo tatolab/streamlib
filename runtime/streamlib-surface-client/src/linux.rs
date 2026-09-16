@@ -166,7 +166,7 @@ pub fn recv_message_with_fds(
     msg.msg_control = cmsg_buf.as_mut_ptr() as *mut libc::c_void;
     msg.msg_controllen = cmsg_space;
 
-    let n = unsafe { libc::recvmsg(stream.as_raw_fd(), &mut msg, 0) };
+    let n = unsafe { libc::recvmsg(stream.as_raw_fd(), &mut msg, libc::MSG_CMSG_CLOEXEC) };
     if n < 0 {
         return Err(std::io::Error::last_os_error());
     }

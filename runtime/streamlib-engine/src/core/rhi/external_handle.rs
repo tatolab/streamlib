@@ -309,7 +309,10 @@ mod tests {
     impl PlaneFdUnderTest {
         fn mint() -> Self {
             let mut pipe_ends = [0 as std::os::unix::io::RawFd; 2];
-            assert_eq!(unsafe { libc::pipe(pipe_ends.as_mut_ptr()) }, 0);
+            assert_eq!(
+                unsafe { libc::pipe2(pipe_ends.as_mut_ptr(), libc::O_CLOEXEC) },
+                0
+            );
             let inode = inode_of(pipe_ends[0]).expect("a fresh pipe must stat");
             Self {
                 plane_fd: pipe_ends[0],

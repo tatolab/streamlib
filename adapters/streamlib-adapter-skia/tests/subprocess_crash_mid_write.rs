@@ -87,8 +87,8 @@ fn subprocess_crash_mid_skia_write_observed_by_harness() {
     // primitive, mirror of the OpenGL adapter's crash test.
     let mut pipe_fds = [-1i32; 2];
     unsafe {
-        let r = libc::pipe(pipe_fds.as_mut_ptr());
-        assert_eq!(r, 0, "pipe() failed: {}", std::io::Error::last_os_error());
+        let r = libc::pipe2(pipe_fds.as_mut_ptr(), libc::O_CLOEXEC);
+        assert_eq!(r, 0, "pipe2() failed: {}", std::io::Error::last_os_error());
         let flags = libc::fcntl(pipe_fds[0], libc::F_GETFL);
         libc::fcntl(pipe_fds[0], libc::F_SETFL, flags | libc::O_NONBLOCK);
         let wf = libc::fcntl(pipe_fds[1], libc::F_GETFD);
