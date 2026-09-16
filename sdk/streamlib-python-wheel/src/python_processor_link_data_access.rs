@@ -903,6 +903,29 @@ mod tests {
                 parent_board.output_port_refused_bags("frames_to_downstream"),
                 Some(1)
             );
+
+            let refusal = destination
+                .wire_input_link(
+                    python,
+                    "frames_from_upstream",
+                    &format!("{channel}_second"),
+                    &notify,
+                    "read_next_in_order",
+                    8,
+                    8,
+                    2,
+                    1,
+                    "link-with-no-slot",
+                    None,
+                    None,
+                    None,
+                )
+                .expect_err("a helper with a board open is told where every link's counts go");
+            assert!(
+                refusal.to_string().contains("link-with-no-slot")
+                    && refusal.to_string().contains("loss_count_slot"),
+                "the refusal names the link and what it was wired without: {refusal}"
+            );
         });
     }
 
