@@ -11,7 +11,7 @@ pub use config::{LoggingTunables, StreamlibLoggingConfig};
 pub use event::{LogLevel, RuntimeLogEvent, SCHEMA_VERSION, Source};
 pub use init::{StreamlibLoggingGuard, init, init_for_tests};
 pub use paths::{log_dir, runtime_log_path};
-pub(crate) use polyglot_sink::push_polyglot_record;
+pub(crate) use polyglot_sink::{push_polyglot_record, request_a_best_effort_flush};
 pub(crate) use record::LogRecord;
 pub(crate) use worker::now_ns;
 

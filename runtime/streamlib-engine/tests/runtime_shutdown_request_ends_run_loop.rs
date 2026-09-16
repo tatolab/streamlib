@@ -143,7 +143,7 @@ fn a_request_latched_before_the_run_loop_subscribes_still_ends_it() {
 /// instead of being discarded — otherwise the caller gets `Ok(())` and a
 /// runtime that never stops.
 ///
-/// Mental revert: reinstate a `take_runtime_shutdown_request_latch()` at the top
+/// Mental revert: reinstate a `take_runtime_shutdown_escalation()` at the top
 /// of `Runner::start` and the loop runs to the watchdog `Break` — the
 /// elapsed-time assertion then fails.
 #[test]

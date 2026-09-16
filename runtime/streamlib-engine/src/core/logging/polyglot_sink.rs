@@ -86,6 +86,16 @@ pub(crate) fn uninstall() {
     *GLOBAL.write().expect("polyglot sink lock poisoned") = None;
 }
 
+/// Ask the drain worker to flush what it holds, without waiting for it.
+///
+/// For a path that is about to `_exit`, where no guard will ever drop.
+pub(crate) fn request_a_best_effort_flush() {
+    let guard = GLOBAL.read().expect("polyglot sink lock poisoned");
+    if let Some(sink) = guard.as_ref() {
+        let _ = sink.doorbell.try_send(WorkerSignal::Flush);
+    }
+}
+
 /// Enqueue a polyglot-origin record into the unified JSONL pipeline.
 ///
 /// Silently no-ops when no logging runtime is installed — matches the

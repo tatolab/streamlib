@@ -31,11 +31,6 @@ impl EventListener for ShutdownListener {
 }
 
 /// Run a loop that automatically exits on shutdown events.
-///
-/// Host-only: both of its shutdown sources are inert inside a plugin cdylib —
-/// the plugin image's `PUBSUB` is never `init()`ed (so the subscription below
-/// never delivers) and the funnel's cdylib arm deliberately latches nothing in
-/// the plugin image's copy of the engine.
 pub fn shutdown_aware_loop<F, E>(mut f: F) -> std::result::Result<(), E>
 where
     F: FnMut() -> std::result::Result<LoopControl, E>,
@@ -53,11 +48,11 @@ where
     // The event bus stores only weak references, so if we drop the Arc, the listener is lost.
     let listener_arc: Arc<Mutex<dyn EventListener>> = Arc::new(Mutex::new(listener));
     // This loop's error type is the caller's `E`, so a subscribe failure cannot
-    // be returned. It does not have to be: the latch below is polled as well as
+    // be returned. It does not have to be: the escalation below is polled as well as
     // the event, so a shutdown still lands — just from the request rather than
     // from the broadcast.
     if let Err(e) = PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener_arc)) {
-        tracing::error!("Shutdown-aware loop falling back to the latch alone: {e}");
+        tracing::error!("Shutdown-aware loop falling back to the shutdown escalation alone: {e}");
     }
 
     tracing::info!(
@@ -67,8 +62,8 @@ where
 
     // Main loop
     loop {
-        // The latch is polled as well as the event because a request latched
-        // before the subscribe above leaves no event to receive.
+        // The escalation is polled as well as the event because a request
+        // issued before the subscribe above leaves no event to receive.
         if shutdown_flag.load(Ordering::Relaxed)
             || crate::core::runtime::is_runtime_shutdown_requested()
         {
@@ -95,16 +90,16 @@ mod tests {
     use crate::core::pubsub::PUBSUB;
     use serial_test::serial;
 
-    /// A request latched before the loop subscribes leaves no event to receive,
-    /// so the loop must read the latch too. The callback breaks itself after a
+    /// A request issued before the loop subscribes leaves no event to receive,
+    /// so the loop must read the escalation too. The callback breaks itself after a
     /// bounded number of iterations so a mental-revert (dropping the
     /// `is_runtime_shutdown_requested()` term) fails the `iterations == 0`
     /// assertion instead of spinning until a harness timeout.
     #[test]
     #[serial]
-    fn latched_shutdown_request_exits_the_loop_without_an_event() {
-        let _latch_cleared_even_on_unwind =
-            crate::core::runtime::RuntimeShutdownRequestLatchClearedOnDrop::clear_now_and_on_drop();
+    fn a_shutdown_requested_before_the_loop_subscribed_exits_it_without_an_event() {
+        let _escalation_cleared_even_on_unwind =
+            crate::core::runtime::RuntimeShutdownEscalationClearedOnDrop::clear_now_and_on_drop();
         crate::core::runtime::request_runtime_shutdown("unit test")
             .expect("the host arm never fails");
 
@@ -121,7 +116,7 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(
             iterations, 0,
-            "the latch is checked before the first user callback"
+            "the escalation is checked before the first user callback"
         );
     }
 

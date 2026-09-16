@@ -16,9 +16,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::processors::ProcessorSpec;
-use streamlib::sdk::runtime::{
-    Runner, request_runtime_shutdown, take_runtime_shutdown_request_latch,
-};
+use streamlib::sdk::runtime::{Runner, request_runtime_shutdown, take_runtime_shutdown_escalation};
 
 use crate::python_added_processor::{
     PythonAddedProcessor, PythonProcessorInputPortReference, PythonProcessorOutputPortReference,
@@ -412,7 +410,7 @@ impl PythonRuntimeHandle {
             // a request issued in the window between the run loop's last
             // observation and this transition is consumed here rather than left
             // for the next run loop in this interpreter.
-            take_runtime_shutdown_request_latch();
+            take_runtime_shutdown_escalation();
             *lifecycle = PythonRuntimeLifecycleState::EngineTornDownAndThreadsJoined;
         }
 

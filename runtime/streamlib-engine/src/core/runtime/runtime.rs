@@ -872,7 +872,7 @@ impl Runner {
     /// Called once shutdown-signal ownership has dropped, so no further signal
     /// can reach the funnel.
     fn clear_shutdown_requests_latched_during_teardown() {
-        crate::core::runtime::take_runtime_shutdown_request_latch();
+        crate::core::runtime::take_runtime_shutdown_escalation();
     }
 
     fn take_shutdown_signal_ownership()
@@ -960,7 +960,7 @@ impl Runner {
                         callback(&runtime_for_callback)
                     };
                     if control_flow.is_break() {
-                        crate::core::runtime::take_runtime_shutdown_request_latch();
+                        crate::core::runtime::take_runtime_shutdown_escalation();
                     }
                     control_flow
                 },

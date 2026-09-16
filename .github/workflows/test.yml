@@ -480,7 +480,10 @@ jobs:
             core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_link_no_helper_has_to_answer_for_is_wired_as_soon_as_it_is_opened \
             core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_link_between_one_helpers_own_ports_waits_on_both_of_its_ends \
             core::json_schema::link_rendering_tests \
-            core::logging::stdio_interceptor
+            core::logging::stdio_interceptor \
+            core::signals \
+            core::runtime::runtime_shutdown_request \
+            core::runtime::helper_process_group_registry
           # The two arms' own liveness tests are named one by one rather than
           # by module: their modules also hold tests that dlopen libasound and
           # walk a real PCM, which this runner has no `/dev/snd` for. These

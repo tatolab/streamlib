@@ -581,6 +581,9 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_link_between_one_helpers_own_ports_waits_on_both_of_its_ends",
                 "core::json_schema::link_rendering_tests",
                 "core::logging::stdio_interceptor",
+                "core::signals",
+                "core::runtime::runtime_shutdown_request",
+                "core::runtime::helper_process_group_registry",
             ],
         ),
         // The rig-tier integration binary that drives the two `match_device`
