@@ -357,7 +357,7 @@ impl From<crate::core::graph::PortKind> for PortKindOutput {
 
 impl From<&crate::core::graph::Link> for LinkOutput {
     fn from(link: &crate::core::graph::Link) -> Self {
-        let (state, error_reason) = link_state_of(link);
+        let (state, error_reason) = rendered_link_state_and_the_reason_for_an_error(link);
         Self {
             id: link.id.to_string(),
             source: LinkPortRefOutput::from(&link.source),
@@ -379,7 +379,9 @@ impl From<&crate::core::graph::Link> for LinkOutput {
 /// those cells reads its state off them instead. Once the disconnect path has
 /// moved the component past `Pending`, that stamp is the answer: a link on its
 /// way out is not `wired` because a helper once said so.
-fn link_state_of(link: &crate::core::graph::Link) -> (LinkStateOutput, Option<String>) {
+fn rendered_link_state_and_the_reason_for_an_error(
+    link: &crate::core::graph::Link,
+) -> (LinkStateOutput, Option<String>) {
     let stamped = link
         .get::<crate::core::graph::LinkStateComponent>()
         .map(|state| state.0)

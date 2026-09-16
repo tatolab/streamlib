@@ -1110,7 +1110,7 @@ impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
             // A link on its way out is one this child owes no answer for. Left
             // waiting, a child that dies later would refuse a link the graph no
             // longer has.
-            bridge.stop_awaiting_the_subprocesss_wire_answer_for_link(link_id);
+            bridge.stop_awaiting_the_subprocess_wire_answer_for_link(link_id);
         }
         if self.has_failed_unrecoverably() || self.bridge.is_none() {
             return Ok(());
@@ -1154,7 +1154,8 @@ impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
         };
         let Some(link_id) = link_wiring.get("link_id").and_then(|id| id.as_str()) else {
             return Err(Error::Configuration(format!(
-                "the wiring handed to processor '{}' ({}) names no link, so its helper process                  could not answer for one",
+                "the wiring handed to processor '{}' ({}) names no link, so its helper \
+                 process could not answer for one",
                 self.processor_display_name, self.processor_id
             )));
         };
@@ -1162,7 +1163,7 @@ impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
         // Registered before the send, never after: the child can answer the
         // moment the frame lands, and a cell registered afterwards would miss
         // an answer already routed.
-        bridge.await_the_subprocesss_wire_answer_for_link(link_id.to_string(), Arc::clone(&reply));
+        bridge.await_the_subprocess_wire_answer_for_link(link_id.to_string(), Arc::clone(&reply));
         let link_id = link_id.to_string();
         match self.send_to_child(&serde_json::json!({
             "cmd": "wire_link",
@@ -1175,7 +1176,7 @@ impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
                 // caller hears the failure, and the cell is taken back out so
                 // a later death refuses nothing on this link's behalf.
                 if let Some(bridge) = self.bridge.as_ref() {
-                    bridge.stop_awaiting_the_subprocesss_wire_answer_for_link(&link_id);
+                    bridge.stop_awaiting_the_subprocess_wire_answer_for_link(&link_id);
                 }
                 Err(send_failure)
             }

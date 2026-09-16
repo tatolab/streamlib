@@ -808,7 +808,7 @@ class HelperProcessLifecycle:
                 direction=direction,
                 link_id=link_id,
             )
-            self._answer_the_wire(link_id, f"unknown link direction {direction!r}")
+            self._answer_the_parents_wire_link(link_id, f"unknown link direction {direction!r}")
             return
         try:
             wire_link_data_access(self._link_data_access, port_wiring)
@@ -819,11 +819,11 @@ class HelperProcessLifecycle:
                 direction=direction,
                 error=str(wire_failure),
             )
-            self._answer_the_wire(link_id, str(wire_failure))
+            self._answer_the_parents_wire_link(link_id, str(wire_failure))
             return
-        self._answer_the_wire(link_id, None)
+        self._answer_the_parents_wire_link(link_id, None)
 
-    def _answer_the_wire(self, link_id: "Optional[str]", refusal: "Optional[str]") -> None:
+    def _answer_the_parents_wire_link(self, link_id: "Optional[str]", refusal: "Optional[str]") -> None:
         """Tell the parent whether this processor's port for one link is open.
 
         Wire contract: the two rpc tags are link-scoped rather than lifecycle

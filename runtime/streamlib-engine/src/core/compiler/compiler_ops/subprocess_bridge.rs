@@ -326,7 +326,7 @@ impl SubprocessBridge {
     ///
     /// Called by the host as it sends the `wire_link`, before the answer can
     /// come back: registering after the send would race the reader.
-    pub fn await_the_subprocesss_wire_answer_for_link(
+    pub fn await_the_subprocess_wire_answer_for_link(
         &self,
         link_id: String,
         reply: Arc<OutOfProcessLinkWireReply>,
@@ -338,7 +338,7 @@ impl SubprocessBridge {
     /// Stop waiting on a link that is being disconnected before its answer
     /// arrived, so a dead subprocess does not refuse a link the graph no
     /// longer has.
-    pub fn stop_awaiting_the_subprocesss_wire_answer_for_link(&self, link_id: &str) {
+    pub fn stop_awaiting_the_subprocess_wire_answer_for_link(&self, link_id: &str) {
         self.links_awaiting_their_wire_reply
             .stop_awaiting_an_answer_for_link(link_id);
     }
