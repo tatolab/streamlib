@@ -10,9 +10,15 @@
 //! hands SIGINT back to CPython, so a Ctrl-C after `run()` returns raises
 //! `KeyboardInterrupt` instead of being swallowed by a handler whose run loop
 //! is gone.
+//!
+//! `docs/plan/ARCHITECTURE.md` §Language SDKs: each delivered signal escalates
+//! the shutdown one step — graceful, forced, then every helper's process group
+//! killed and the process gone with status 130.
 
 #[cfg(all(unix, not(target_os = "macos")))]
-use crate::core::runtime::request_runtime_shutdown;
+use crate::core::runtime::{
+    RuntimeShutdownEscalation, escalate_runtime_shutdown_for_a_delivered_signal,
+};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Only one run loop may own the shutdown signals at a time — two owners would
@@ -20,8 +26,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// winner had already replaced.
 static SHUTDOWN_SIGNALS_OWNED: AtomicBool = AtomicBool::new(false);
 
-/// Owns SIGTERM + SIGINT for as long as it is alive, funnelling both into
-/// [`request_runtime_shutdown`](crate::core::runtime::request_runtime_shutdown).
+/// Owns SIGINT, SIGTERM and SIGHUP for as long as it is alive, escalating the
+/// runtime shutdown one step for each one delivered.
+///
+/// A SIGHUP already ignored when ownership is taken stays ignored: that is how
+/// `nohup` and a supervisor tell a process to outlive its terminal.
 ///
 /// Dropping it stops the forwarding thread, joins it, and restores the signal
 /// dispositions captured at construction. macOS instead routes termination
@@ -33,12 +42,16 @@ pub struct ScopedShutdownSignalOwnership {
     signal_forwarding: Option<UnixSignalForwarding>,
 }
 
+/// The signals a run loop owns, in the order their dispositions are displaced.
+#[cfg(all(unix, not(target_os = "macos")))]
+const SHUTDOWN_SIGNALS_OWNED_BY_THE_RUN_LOOP: [libc::c_int; 3] =
+    [libc::SIGINT, libc::SIGTERM, libc::SIGHUP];
+
 /// The Linux forwarding thread plus the dispositions it displaced.
 #[cfg(all(unix, not(target_os = "macos")))]
 struct UnixSignalForwarding {
     forwarding_thread: std::thread::JoinHandle<()>,
-    displaced_sigint: DisplacedSignalDisposition,
-    displaced_sigterm: DisplacedSignalDisposition,
+    displaced_shutdown_signal_dispositions: Vec<DisplacedSignalDisposition>,
 }
 
 /// One signal's pre-existing disposition, restored on drop unless already
@@ -123,6 +136,11 @@ struct ShutdownSignalSelfPipe {
 static SHUTDOWN_SIGNAL_SELF_PIPE: std::sync::OnceLock<ShutdownSignalSelfPipe> =
     std::sync::OnceLock::new();
 
+/// The status a third interrupt exits with: 128 plus SIGINT, the shell's own
+/// convention for a process ended by Ctrl-C.
+#[cfg(all(unix, not(target_os = "macos")))]
+const EXIT_STATUS_OF_A_THIRD_INTERRUPT: libc::c_int = 130;
+
 /// Wakes the forwarding thread for shutdown rather than for a signal. Real
 /// signal numbers start at 1, so zero can never collide with one.
 #[cfg(all(unix, not(target_os = "macos")))]
@@ -192,16 +210,16 @@ impl ScopedShutdownSignalOwnership {
 
     #[cfg(all(unix, not(target_os = "macos")))]
     fn install() -> std::io::Result<Self> {
-        use signal_hook::consts::signal::{SIGINT, SIGTERM};
-
         let self_pipe = shutdown_signal_self_pipe()?;
         // A signal delivered during the previous owner's teardown would
         // otherwise be read by this owner and shut it down on the spot.
         drain_pending_bytes(self_pipe.read_end)?;
 
-        let displaced_sigint = DisplacedSignalDisposition::displace_with_self_pipe_handler(SIGINT)?;
-        let displaced_sigterm =
-            DisplacedSignalDisposition::displace_with_self_pipe_handler(SIGTERM)?;
+        let displaced_shutdown_signal_dispositions = SHUTDOWN_SIGNALS_OWNED_BY_THE_RUN_LOOP
+            .into_iter()
+            .filter(|signal| !is_a_hangup_the_process_was_told_to_ignore(*signal))
+            .map(DisplacedSignalDisposition::displace_with_self_pipe_handler)
+            .collect::<std::io::Result<Vec<_>>>()?;
 
         FORWARDING_THREAD_SHOULD_STOP.store(false, Ordering::SeqCst);
         let read_end = self_pipe.read_end;
@@ -209,12 +227,20 @@ impl ScopedShutdownSignalOwnership {
             .name("shutdown-signal-forwarding".to_string())
             .spawn(move || forward_signals_until_stopped(read_end))?;
 
-        tracing::info!("Shutdown signals owned by this run loop (SIGTERM, SIGINT)");
+        let owned_signal_names: Vec<&str> = displaced_shutdown_signal_dispositions
+            .iter()
+            .map(|displaced| {
+                signal_hook::low_level::signal_name(displaced.signal).unwrap_or("unnamed signal")
+            })
+            .collect();
+        tracing::info!(
+            "Shutdown signals owned by this run loop ({})",
+            owned_signal_names.join(", ")
+        );
         Ok(Self {
             signal_forwarding: Some(UnixSignalForwarding {
                 forwarding_thread,
-                displaced_sigint,
-                displaced_sigterm,
+                displaced_shutdown_signal_dispositions,
             }),
         })
     }
@@ -265,8 +291,9 @@ impl Drop for ScopedShutdownSignalOwnership {
             // Restore before winding the thread down, so a signal arriving
             // during teardown reaches whoever held the disposition rather than
             // a handler whose reader is going away.
-            forwarding.displaced_sigint.restore_now();
-            forwarding.displaced_sigterm.restore_now();
+            for displaced in &mut forwarding.displaced_shutdown_signal_dispositions {
+                displaced.restore_now();
+            }
 
             stop_forwarding_thread();
             if forwarding.forwarding_thread.join().is_err() {
@@ -316,8 +343,8 @@ fn shutdown_signal_self_pipe() -> std::io::Result<&'static ShutdownSignalSelfPip
     )
 }
 
-/// Read the self-pipe until stopped, funnelling each delivered signal into
-/// [`request_runtime_shutdown`].
+/// Read the self-pipe until stopped, escalating the runtime shutdown one step for
+/// each delivered signal.
 #[cfg(all(unix, not(target_os = "macos")))]
 fn forward_signals_until_stopped(read_end: std::os::fd::RawFd) {
     tracing::debug!("Shutdown-signal forwarding thread started");
@@ -370,11 +397,21 @@ fn forward_signals_until_stopped(read_end: std::os::fd::RawFd) {
 
         let signal_name = signal_hook::low_level::signal_name(libc::c_int::from(delivered))
             .unwrap_or("unrecognized signal");
-        if let Err(error) = request_runtime_shutdown(&format!("posix signal {signal_name}")) {
-            tracing::error!(%error, "Shutdown-signal forwarding: request failed");
+        if escalate_runtime_shutdown_for_a_delivered_signal(&format!("posix signal {signal_name}"))
+            == RuntimeShutdownEscalation::ExitAtOnce
+        {
+            crate::core::runtime::kill_every_helper_process_group_and_end_the_process_at_once(
+                EXIT_STATUS_OF_A_THIRD_INTERRUPT,
+            );
         }
     }
     tracing::debug!("Shutdown-signal forwarding thread exiting");
+}
+
+/// Whether `signal` is a SIGHUP this process was already set to ignore.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn is_a_hangup_the_process_was_told_to_ignore(signal: libc::c_int) -> bool {
+    signal == libc::SIGHUP && current_disposition_of(signal).sa_sigaction == libc::SIG_IGN
 }
 
 /// Ask the forwarding thread to stop, and nudge it out of its poll.
@@ -425,11 +462,9 @@ fn drain_pending_bytes(read_end: std::os::fd::RawFd) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Read a signal's current disposition without changing it. The restoration
-/// contract is only witnessable against the kernel's own record, so this exists
-/// for the tests that assert it.
-#[cfg(all(test, unix, not(target_os = "macos")))]
-fn read_current_disposition(signal: libc::c_int) -> libc::sigaction {
+/// Read a signal's current disposition without changing it.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn current_disposition_of(signal: libc::c_int) -> libc::sigaction {
     // SAFETY: a NULL `act` is POSIX's read-only query. `previous` is a fully
     // owned, zeroed `sigaction` the kernel writes into.
     unsafe {
@@ -496,37 +531,38 @@ mod tests {
     /// still pointed at a dead run loop's forwarding thread is exactly the
     /// "Ctrl-C stops working after run()" failure the wheel must not ship.
     ///
-    /// Mental-revert: dropping the `restore_disposition` calls from `Drop`
-    /// leaves `sa_sigaction` pointing at the self-pipe handler and fails.
+    /// Mental-revert: dropping the `restore_now` calls from `Drop` leaves
+    /// `sa_sigaction` pointing at the self-pipe handler and fails.
     #[test]
     #[serial]
     #[cfg(all(unix, not(target_os = "macos")))]
     fn dropping_ownership_restores_the_previous_dispositions() {
-        use signal_hook::consts::signal::{SIGINT, SIGTERM};
-
-        let sigint_before = read_current_disposition(SIGINT);
-        let sigterm_before = read_current_disposition(SIGTERM);
+        let _hangup_not_ignored = SignalDispositionSetForOneTest::set(libc::SIGHUP, libc::SIG_DFL);
+        let dispositions_before: Vec<(libc::c_int, libc::sigaction)> =
+            SHUTDOWN_SIGNALS_OWNED_BY_THE_RUN_LOOP
+                .into_iter()
+                .map(|signal| (signal, current_disposition_of(signal)))
+                .collect();
 
         {
             let _owned = ScopedShutdownSignalOwnership::take_until_dropped()
                 .expect("no other run loop owns the shutdown signals");
-            assert_ne!(
-                read_current_disposition(SIGINT).sa_sigaction,
-                sigint_before.sa_sigaction,
-                "taking ownership must actually displace the SIGINT handler",
-            );
+            for (signal, before) in &dispositions_before {
+                assert_ne!(
+                    current_disposition_of(*signal).sa_sigaction,
+                    before.sa_sigaction,
+                    "taking ownership must actually displace signal {signal}'s handler",
+                );
+            }
         }
 
-        assert_eq!(
-            read_current_disposition(SIGINT).sa_sigaction,
-            sigint_before.sa_sigaction,
-            "SIGINT must be handed back to whoever held it",
-        );
-        assert_eq!(
-            read_current_disposition(SIGTERM).sa_sigaction,
-            sigterm_before.sa_sigaction,
-            "SIGTERM must be handed back to whoever held it",
-        );
+        for (signal, before) in &dispositions_before {
+            assert_eq!(
+                current_disposition_of(*signal).sa_sigaction,
+                before.sa_sigaction,
+                "signal {signal} must be handed back to whoever held it",
+            );
+        }
     }
 
     /// Ownership is exclusive, and a refused take must not disturb the owner's
@@ -549,43 +585,111 @@ mod tests {
         );
     }
 
-    /// Raise SIGINT and wait for the forwarding thread to latch a request.
-    /// Panics rather than hanging if the signal never arrives.
+    /// Raise `signal` and wait for the forwarding thread to escalate the
+    /// shutdown to `awaited`. Panics rather than hanging if it never does.
     #[cfg(all(unix, not(target_os = "macos")))]
-    fn raise_sigint_and_await_latched_request(context: &str) {
-        use crate::core::runtime::is_runtime_shutdown_requested;
+    fn raise_and_await_escalation_to(
+        signal: libc::c_int,
+        awaited: crate::core::runtime::RuntimeShutdownEscalation,
+        context: &str,
+    ) {
+        use crate::core::runtime::runtime_shutdown_escalation;
 
-        // SAFETY: SIGINT is owned by the caller's live
+        // SAFETY: the signal is owned by the caller's live
         // `ScopedShutdownSignalOwnership`, so this reaches the self-pipe
         // handler rather than the default terminate action.
         assert_eq!(
-            unsafe { libc::raise(signal_hook::consts::signal::SIGINT) },
+            unsafe { libc::raise(signal) },
             0,
-            "raising SIGINT must succeed ({context})",
+            "raising signal {signal} must succeed ({context})",
         );
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while std::time::Instant::now() < deadline {
-            if is_runtime_shutdown_requested() {
+            if runtime_shutdown_escalation() == awaited {
                 return;
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        panic!("SIGINT was never funnelled into a runtime-shutdown request ({context})");
+        panic!(
+            "signal {signal} never escalated the shutdown to {awaited:?}; it reads {:?} \
+             ({context})",
+            runtime_shutdown_escalation()
+        );
     }
 
     /// The whole point of owning the signals: a delivered SIGINT must reach the
-    /// request funnel the run loop polls.
+    /// request the run loop polls.
     #[test]
     #[serial]
     #[cfg(all(unix, not(target_os = "macos")))]
     fn a_delivered_sigint_becomes_a_runtime_shutdown_request() {
-        let _latch_cleared_even_on_unwind =
-            crate::core::RuntimeShutdownRequestLatchClearedOnDrop::clear_now_and_on_drop();
+        let _escalation_cleared_even_on_unwind =
+            crate::core::RuntimeShutdownEscalationClearedOnDrop::clear_now_and_on_drop();
 
         let _owned = ScopedShutdownSignalOwnership::take_until_dropped()
             .expect("no other run loop owns the shutdown signals");
-        raise_sigint_and_await_latched_request("first owner");
+        raise_and_await_escalation_to(
+            signal_hook::consts::signal::SIGINT,
+            crate::core::runtime::RuntimeShutdownEscalation::Graceful,
+            "first owner",
+        );
+    }
+
+    /// A closed terminal or a supervisor's reload sends SIGHUP, which must tear
+    /// the graph down gracefully rather than kill the app where it stands.
+    #[test]
+    #[serial]
+    #[cfg(all(unix, not(target_os = "macos")))]
+    fn a_delivered_sighup_becomes_a_graceful_shutdown() {
+        let _escalation_cleared_even_on_unwind =
+            crate::core::RuntimeShutdownEscalationClearedOnDrop::clear_now_and_on_drop();
+        let _hangup_not_ignored = SignalDispositionSetForOneTest::set(libc::SIGHUP, libc::SIG_DFL);
+
+        let _owned = ScopedShutdownSignalOwnership::take_until_dropped()
+            .expect("no other run loop owns the shutdown signals");
+        raise_and_await_escalation_to(
+            signal_hook::consts::signal::SIGHUP,
+            crate::core::runtime::RuntimeShutdownEscalation::Graceful,
+            "SIGHUP",
+        );
+    }
+
+    /// A second interrupt forces the run it lands in, and the next run's first
+    /// interrupt is graceful again — the escalation is one run's, never the
+    /// process's.
+    ///
+    /// Fail-without-fix: a latch reads the second SIGINT as the first, so the
+    /// escalation never reaches `Forced`.
+    #[test]
+    #[serial]
+    #[cfg(all(unix, not(target_os = "macos")))]
+    fn repeated_interrupts_escalate_one_run_and_the_next_run_starts_graceful() {
+        use crate::core::runtime::{RuntimeShutdownEscalation, take_runtime_shutdown_escalation};
+        use signal_hook::consts::signal::{SIGINT, SIGTERM};
+
+        let _escalation_cleared_even_on_unwind =
+            crate::core::RuntimeShutdownEscalationClearedOnDrop::clear_now_and_on_drop();
+
+        let first_run = ScopedShutdownSignalOwnership::take_until_dropped()
+            .expect("no other run loop owns the shutdown signals");
+        raise_and_await_escalation_to(SIGINT, RuntimeShutdownEscalation::Graceful, "first");
+        raise_and_await_escalation_to(SIGTERM, RuntimeShutdownEscalation::Forced, "second");
+        drop(first_run);
+        assert_eq!(
+            take_runtime_shutdown_escalation(),
+            RuntimeShutdownEscalation::Forced
+        );
+
+        let _next_run = ScopedShutdownSignalOwnership::take_until_dropped()
+            .expect("ownership must be retakeable once the first owner drops");
+        raise_and_await_escalation_to(SIGINT, RuntimeShutdownEscalation::Graceful, "next run");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert_eq!(
+            crate::core::runtime::runtime_shutdown_escalation(),
+            RuntimeShutdownEscalation::Graceful,
+            "the next run's first interrupt must not force it"
+        );
     }
 
     /// Re-taking after a drop is the wheel's second-`Runtime()`-in-one-process
@@ -604,14 +708,16 @@ mod tests {
     #[cfg(all(unix, not(target_os = "macos")))]
     fn every_retaken_ownership_still_catches_sigint() {
         for ownership_generation in 1..=3 {
-            let _latch_cleared_even_on_unwind =
-                crate::core::RuntimeShutdownRequestLatchClearedOnDrop::clear_now_and_on_drop();
+            let _escalation_cleared_even_on_unwind =
+                crate::core::RuntimeShutdownEscalationClearedOnDrop::clear_now_and_on_drop();
 
             let owned = ScopedShutdownSignalOwnership::take_until_dropped()
                 .expect("each run loop in turn may own the shutdown signals");
-            raise_sigint_and_await_latched_request(&format!(
-                "ownership generation {ownership_generation}"
-            ));
+            raise_and_await_escalation_to(
+                signal_hook::consts::signal::SIGINT,
+                crate::core::runtime::RuntimeShutdownEscalation::Graceful,
+                &format!("ownership generation {ownership_generation}"),
+            );
             drop(owned);
         }
     }
@@ -622,8 +728,8 @@ mod tests {
     #[serial]
     #[cfg(all(unix, not(target_os = "macos")))]
     fn a_stale_signal_does_not_shut_down_the_next_run_loop() {
-        let _latch_cleared_even_on_unwind =
-            crate::core::RuntimeShutdownRequestLatchClearedOnDrop::clear_now_and_on_drop();
+        let _escalation_cleared_even_on_unwind =
+            crate::core::RuntimeShutdownEscalationClearedOnDrop::clear_now_and_on_drop();
 
         {
             let _owned = ScopedShutdownSignalOwnership::take_until_dropped()
@@ -640,7 +746,7 @@ mod tests {
             }
         }
 
-        crate::core::runtime::take_runtime_shutdown_request_latch();
+        crate::core::runtime::take_runtime_shutdown_escalation();
         let _owned = ScopedShutdownSignalOwnership::take_until_dropped()
             .expect("ownership must be retakeable once the first owner drops");
         std::thread::sleep(std::time::Duration::from_millis(100));
@@ -648,5 +754,147 @@ mod tests {
             !crate::core::runtime::is_runtime_shutdown_requested(),
             "a byte left over from the previous owner must not shut this run loop down",
         );
+    }
+
+    /// Sets one signal's disposition for the length of a test and puts back what
+    /// was there — so a suite run under `nohup` does not read as a failure.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    struct SignalDispositionSetForOneTest {
+        signal: libc::c_int,
+        previous: libc::sigaction,
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    impl SignalDispositionSetForOneTest {
+        fn set(signal: libc::c_int, handler: libc::sighandler_t) -> Self {
+            let previous = current_disposition_of(signal);
+            // SAFETY: a zeroed `sigaction` with only its handler set is a valid
+            // disposition, and the previous one is restored on drop.
+            unsafe {
+                let mut requested: libc::sigaction = std::mem::zeroed();
+                requested.sa_sigaction = handler;
+                libc::sigemptyset(&mut requested.sa_mask);
+                libc::sigaction(signal, &requested, std::ptr::null_mut());
+            }
+            Self { signal, previous }
+        }
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    impl Drop for SignalDispositionSetForOneTest {
+        fn drop(&mut self) {
+            // SAFETY: restores the disposition this value captured.
+            unsafe { libc::sigaction(self.signal, &self.previous, std::ptr::null_mut()) };
+        }
+    }
+
+    /// `nohup` tells a process to outlive its terminal by ignoring SIGHUP, and
+    /// taking the shutdown signals must not undo that.
+    ///
+    /// Fail-without-fix: displacing SIGHUP whatever it was makes closing the
+    /// terminal shut down an app its user started under `nohup`.
+    #[test]
+    #[serial]
+    #[cfg(all(unix, not(target_os = "macos")))]
+    fn a_hangup_the_process_was_told_to_ignore_stays_ignored() {
+        let _escalation_cleared_even_on_unwind =
+            crate::core::RuntimeShutdownEscalationClearedOnDrop::clear_now_and_on_drop();
+        let _hangup_ignored = SignalDispositionSetForOneTest::set(libc::SIGHUP, libc::SIG_IGN);
+
+        let owned = ScopedShutdownSignalOwnership::take_until_dropped()
+            .expect("no other run loop owns the shutdown signals");
+        assert_eq!(
+            current_disposition_of(libc::SIGHUP).sa_sigaction,
+            libc::SIG_IGN
+        );
+        // SAFETY: SIGHUP is ignored, so raising it delivers nothing.
+        unsafe { libc::raise(libc::SIGHUP) };
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(
+            !crate::core::runtime::is_runtime_shutdown_requested(),
+            "an ignored SIGHUP still shut the run loop down"
+        );
+        drop(owned);
+        assert_eq!(
+            current_disposition_of(libc::SIGHUP).sa_sigaction,
+            libc::SIG_IGN
+        );
+    }
+
+    /// Set in the child process the third-interrupt test re-runs itself in,
+    /// naming the file it records its stand-in helper's process group in.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    const THIRD_INTERRUPT_CHILD_RECORD_PATH_ENVIRONMENT_VARIABLE: &str =
+        "STREAMLIB_TEST_THIRD_INTERRUPT_CHILD_RECORD_PATH";
+
+    /// The third interrupt ends the process at once with status 130, and takes
+    /// every registered helper process group with it — a helper's descendants
+    /// included, which the kernel's parent-death signal never reaches.
+    ///
+    /// Run in a child process, because passing is exiting.
+    #[test]
+    #[serial]
+    #[cfg(all(unix, not(target_os = "macos")))]
+    fn a_third_interrupt_kills_every_helper_process_group_and_exits_with_130() {
+        if let Some(record_path) =
+            std::env::var_os(THIRD_INTERRUPT_CHILD_RECORD_PATH_ENVIRONMENT_VARIABLE)
+        {
+            interrupt_this_process_three_times_holding_a_helper_process_group(record_path.into());
+        }
+
+        let record = tempfile::tempdir().expect("a temporary directory");
+        let record_path = record.path().join("helper-process-group");
+        let child = crate::core::test_support::rerun_this_test_in_a_child_process(
+            "core::signals::tests::a_third_interrupt_kills_every_helper_process_group_and_exits_with_130",
+            THIRD_INTERRUPT_CHILD_RECORD_PATH_ENVIRONMENT_VARIABLE,
+            record_path.as_os_str(),
+        );
+
+        assert_eq!(
+            child.status.code(),
+            Some(EXIT_STATUS_OF_A_THIRD_INTERRUPT),
+            "the child did not exit on its third interrupt with status 130: {}\n{}\n{}",
+            child.status,
+            String::from_utf8_lossy(&child.stdout),
+            String::from_utf8_lossy(&child.stderr),
+        );
+
+        let helper_process_group: libc::pid_t = std::fs::read_to_string(&record_path)
+            .expect("the child recorded its helper's process group")
+            .trim()
+            .parse()
+            .expect("the record is a process group id");
+        assert!(
+            crate::core::test_support::a_process_group_is_gone_within(
+                helper_process_group,
+                std::time::Duration::from_secs(5)
+            ),
+            "the helper's process group outlived the app's third interrupt"
+        );
+    }
+
+    /// The child's half: a stand-in helper in a group of its own, registered,
+    /// and three SIGINTs. Never returns — the third one exits the process.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    fn interrupt_this_process_three_times_holding_a_helper_process_group(
+        record_path: std::path::PathBuf,
+    ) -> ! {
+        let stand_in_helper =
+            crate::core::test_support::a_process_parked_in_a_process_group_of_its_own();
+        let helper_process_group = stand_in_helper.id() as i32;
+        std::fs::write(&record_path, helper_process_group.to_string())
+            .expect("the record is written");
+        assert!(crate::core::runtime::register_a_helper_process_group(
+            helper_process_group
+        ));
+
+        let _owned = ScopedShutdownSignalOwnership::take_until_dropped()
+            .expect("no other run loop owns the shutdown signals");
+        for _ in 0..3 {
+            // SAFETY: SIGINT is owned above, so it reaches the self-pipe handler.
+            unsafe { libc::raise(signal_hook::consts::signal::SIGINT) };
+        }
+        std::thread::sleep(std::time::Duration::from_secs(30));
+        panic!("three interrupts did not end the process");
     }
 }

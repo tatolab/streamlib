@@ -196,7 +196,14 @@ async fn remove_processor_impl(
         Ok(())
     })?;
 
-    commit_live_graph_change(&compiler, live).await?;
+    let removal_outcome = commit_live_graph_change(&compiler, live).await;
+    // A removal that abandoned the processor's thread still took the processor
+    // out of the graph, so it is announced before the call fails naming it.
+    if removal_outcome.is_err()
+        && compiler.scope(|graph, _tx| graph.traversal().v(&processor_id).exists())
+    {
+        return removal_outcome;
+    }
 
     PUBSUB.publish(
         topics::RUNTIME_GLOBAL,
@@ -217,7 +224,7 @@ async fn remove_processor_impl(
         &Event::RuntimeGlobal(RuntimeEvent::GraphDidChange),
     );
 
-    Ok(())
+    removal_outcome
 }
 
 /// Core implementation for connect - takes owned Arcs for 'static lifetime.

@@ -12,12 +12,12 @@
 //!   exits cleanly (`Ok(())`) with the runtime at `RuntimeStatus::Stopped`,
 //!   i.e. teardown ran and the request never tore the runtime down behind the
 //!   harness's back.
-//! - The latch leg on its own: a request published while nothing is subscribed
-//!   to `RuntimeShutdown` still ends the loop. Which of the two legs (event or
-//!   latch) observes the processor-driven request above is a race — the
-//!   processor's `start()` runs on its own thread against the harness reaching
-//!   `PUBSUB.subscribe` — so the latch gets its own deterministic test rather
-//!   than riding on that timing.
+//! - The escalation leg on its own: a request published while nothing is
+//!   subscribed to `RuntimeShutdown` still ends the loop. Which of the two legs
+//!   (event or escalation) observes the processor-driven request above is a
+//!   race — the processor's `start()` runs on its own thread against the
+//!   harness reaching `PUBSUB.subscribe` — so the escalation gets its own
+//!   deterministic test rather than riding on that timing.
 //! - A request issued BEFORE `start()` — where the milestone's `setup(rt)`
 //!   inversion puts a start-script that decides to abort — is honored by the
 //!   run loop rather than silently discarded.
@@ -113,9 +113,9 @@ fn a_processor_shutdown_request_ends_the_harness_run_loop() {
     assert_the_run_loop_ends_before_the_watchdog(&runtime, "the processor's shutdown request");
 }
 
-/// The latch's whole reason to exist: a request published while nothing is
-/// subscribed to `RuntimeShutdown` leaves no event for the run loop's listener
-/// to receive, so only the latch can end the loop.
+/// Why the escalation is polled as well as the event: a request published
+/// while nothing is subscribed to `RuntimeShutdown` leaves no event for the run
+/// loop's listener to receive, so only the escalation can end the loop.
 ///
 /// Deterministic where the processor-driven test is not — the request is issued
 /// from the harness thread after `start()` and before `wait_for_signal_with`
@@ -126,7 +126,7 @@ fn a_processor_shutdown_request_ends_the_harness_run_loop() {
 /// elapsed-time assertion then fails.
 #[test]
 #[serial]
-fn a_request_latched_before_the_run_loop_subscribes_still_ends_it() {
+fn a_request_issued_before_the_run_loop_subscribes_still_ends_it() {
     let runtime = Runner::new().expect("Runner::new");
     runtime.start().expect("runtime start");
 
@@ -134,16 +134,16 @@ fn a_request_latched_before_the_run_loop_subscribes_still_ends_it() {
         .request_runtime_shutdown("integration test: requested before the loop subscribed")
         .expect("the host arm never fails");
 
-    assert_the_run_loop_ends_before_the_watchdog(&runtime, "the latched request");
+    assert_the_run_loop_ends_before_the_watchdog(&runtime, "the unobserved request");
 }
 
 /// A start-script that decides to abort calls `request_runtime_shutdown` from
-/// `setup(rt)`, which runs before the harness calls `start()`. The latch is
-/// first-observer-wins, not per-run, so the request survives to the run loop
-/// instead of being discarded — otherwise the caller gets `Ok(())` and a
-/// runtime that never stops.
+/// `setup(rt)`, which runs before the harness calls `start()`. The escalation
+/// is cleared when a run ends, never when one starts, so the request survives
+/// to the run loop instead of being discarded — otherwise the caller gets
+/// `Ok(())` and a runtime that never stops.
 ///
-/// Mental revert: reinstate a `take_runtime_shutdown_request_latch()` at the top
+/// Mental revert: reinstate a `take_runtime_shutdown_escalation()` at the top
 /// of `Runner::start` and the loop runs to the watchdog `Break` — the
 /// elapsed-time assertion then fails.
 #[test]

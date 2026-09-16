@@ -26,13 +26,15 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
+use crate::source_call_site_scan::{blank_out_lines, call_sites_of, is_a_whole_line_comment};
+
 /// Workspace-relative roots that own every `vulkanalia` call.
 const SCAN_ROOTS: &[&str] = &[
     "runtime/streamlib-engine/src/vulkan",
     "runtime/streamlib-consumer-rhi/src",
 ];
 
-const UNBOUNDED_CSTR_CONSTRUCTOR: &str = "CStr::from_ptr(";
+const UNBOUNDED_CSTR_CONSTRUCTOR: &str = "CStr::from_ptr";
 
 /// Presence of this in the argument means a Rust value owns the storage, so a
 /// borrowing accessor exists and the unbounded lifetime is unnecessary.
@@ -66,7 +68,10 @@ pub fn run(workspace_root: &Path) -> Result<()> {
         report.files_scanned,
         "an unbounded-lifetime CStr borrow re-enter the Vulkan RHI",
     )?;
-    ensure_every_scan_root_contributed(&report)?;
+    crate::ensure_every_source_walking_gate_scan_root_contributed(
+        "check-no-unbounded-cstr-from-ptr",
+        &report.files_scanned_per_root,
+    )?;
 
     if report.violations.is_empty() {
         println!(
@@ -98,19 +103,6 @@ pub fn run(workspace_root: &Path) -> Result<()> {
     );
 }
 
-/// A renamed or moved root would leave the other one carrying the whole gate,
-/// which reads identically to a clean tree.
-fn ensure_every_scan_root_contributed(report: &UnboundedCStrFromPtrScanReport) -> Result<()> {
-    for (root, files_scanned) in &report.files_scanned_per_root {
-        anyhow::ensure!(
-            *files_scanned > 0,
-            "check-no-unbounded-cstr-from-ptr scanned 0 files under {root} — that scan \
-             root moved out from under the gate"
-        );
-    }
-    Ok(())
-}
-
 pub fn scan(workspace_root: &Path) -> Result<UnboundedCStrFromPtrScanReport> {
     let mut report = UnboundedCStrFromPtrScanReport::default();
     for root in SCAN_ROOTS {
@@ -129,13 +121,9 @@ pub fn scan(workspace_root: &Path) -> Result<UnboundedCStrFromPtrScanReport> {
             let body = fs::read_to_string(path)
                 .with_context(|| format!("failed to read {}", path.display()))?;
             files_scanned_here += 1;
-            for (line, call_text) in unbounded_cstr_from_ptr_calls(&body) {
-                report.violations.push(UnboundedCStrFromPtrViolation {
-                    file: path.to_path_buf(),
-                    line,
-                    call_text,
-                });
-            }
+            report
+                .violations
+                .extend(unbounded_cstr_from_ptr_calls(path, &body));
         }
         report.files_scanned += files_scanned_here;
         report
@@ -146,61 +134,24 @@ pub fn scan(workspace_root: &Path) -> Result<UnboundedCStrFromPtrScanReport> {
 }
 
 /// Every `CStr::from_ptr(…)` in `body` whose argument reaches through
-/// `.as_ptr()`, as `(1-based line, whitespace-collapsed call text)`.
-fn unbounded_cstr_from_ptr_calls(body: &str) -> Vec<(usize, String)> {
-    let code = blank_out_exempt_lines(body);
-    let mut calls = Vec::new();
-    let mut search_from = 0usize;
-    while let Some(offset) = code[search_from..].find(UNBOUNDED_CSTR_CONSTRUCTOR) {
-        let call_start = search_from + offset;
-        let open_paren = call_start + UNBOUNDED_CSTR_CONSTRUCTOR.len() - 1;
-        let Some(close_paren) = matching_close_paren(&code, open_paren) else {
-            break;
-        };
-        if code[open_paren + 1..close_paren].contains(OWNED_STORAGE_POINTER_ACCESSOR) {
-            calls.push((
-                code[..call_start].matches('\n').count() + 1,
-                code[call_start..=close_paren]
-                    .split_whitespace()
-                    .collect::<Vec<_>>()
-                    .join(" "),
-            ));
-        }
-        search_from = close_paren + 1;
-    }
-    calls
-}
-
-/// Blank the lines the gate does not read while keeping the line count, so a
-/// reported line number still points at the source.
-fn blank_out_exempt_lines(body: &str) -> String {
-    body.lines()
-        .map(|line| {
-            if line.trim_start().starts_with("//") || line.contains(ALLOW_LINE_PRAGMA) {
-                ""
-            } else {
-                line
-            }
+/// `.as_ptr()`.
+fn unbounded_cstr_from_ptr_calls(path: &Path, body: &str) -> Vec<UnboundedCStrFromPtrViolation> {
+    let code = blank_out_lines(body, |line| {
+        is_a_whole_line_comment(line) || line.contains(ALLOW_LINE_PRAGMA)
+    });
+    call_sites_of(&code, UNBOUNDED_CSTR_CONSTRUCTOR)
+        .into_iter()
+        .filter(|call_site| {
+            call_site
+                .argument_text
+                .contains(OWNED_STORAGE_POINTER_ACCESSOR)
         })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn matching_close_paren(code: &str, open_paren: usize) -> Option<usize> {
-    let mut depth = 0usize;
-    for (offset, byte) in code.as_bytes().iter().enumerate().skip(open_paren) {
-        match byte {
-            b'(' => depth += 1,
-            b')' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(offset);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
+        .map(|call_site| UnboundedCStrFromPtrViolation {
+            file: path.to_path_buf(),
+            line: call_site.line,
+            call_text: call_site.collapsed_call_text,
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -333,7 +284,11 @@ mod tests {
             "pub fn ok() {}\n",
         );
         let report = scan(tmp.path()).unwrap();
-        let err = ensure_every_scan_root_contributed(&report).unwrap_err();
+        let err = crate::ensure_every_source_walking_gate_scan_root_contributed(
+            "check-no-unbounded-cstr-from-ptr",
+            &report.files_scanned_per_root,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains(SCAN_ROOTS[1]), "got {err}");
     }
 }

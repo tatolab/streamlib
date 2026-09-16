@@ -1320,10 +1320,8 @@ mod tests {
     /// A pipe's read end stands in for a plane fd a refusal must close;
     /// a fake number would make that close land on someone else's fd.
     fn a_pipe_read_end() -> OwnedFd {
-        let mut pipe_ends = [0 as std::os::unix::io::RawFd; 2];
-        assert_eq!(unsafe { libc::pipe(pipe_ends.as_mut_ptr()) }, 0);
-        unsafe { libc::close(pipe_ends[1]) };
-        unsafe { OwnedFd::from_raw_fd(pipe_ends[0]) }
+        let (read_end, _write_end_closed_here) = std::io::pipe().expect("a pipe opens");
+        OwnedFd::from(read_end)
     }
     #[cfg(target_os = "linux")]
     use crate::vulkan::rhi::video_profile_test_fixture::{

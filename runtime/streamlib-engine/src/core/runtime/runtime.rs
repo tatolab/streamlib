@@ -29,6 +29,7 @@ use crate::core::processors::ProcessorSpec;
 use crate::core::processors::ProcessorState;
 use crate::core::pubsub::{Event, EventListener, PUBSUB, ProcessorEvent, RuntimeEvent, topics};
 use crate::core::runtime::LoadedCapabilityExtensionRegistry;
+use crate::core::signals::ScopedShutdownSignalOwnership;
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 use crate::iceoryx2::Iceoryx2Node;
 
@@ -38,7 +39,7 @@ use crate::iceoryx2::Iceoryx2Node;
 /// integrated into existing tokio applications (using the current handle).
 pub(crate) enum TokioRuntimeVariant {
     /// Runner owns the tokio Runtime (created when NOT in tokio context).
-    OwnedTokioRuntime(tokio::runtime::Runtime),
+    OwnedTokioRuntime(TokioRuntimeShutDownWithinItsBudget),
     /// Runner uses an external tokio Handle (auto-detected when called from tokio context).
     ExternalTokioHandle(tokio::runtime::Handle),
 }
@@ -50,6 +51,44 @@ impl TokioRuntimeVariant {
             TokioRuntimeVariant::OwnedTokioRuntime(rt) => rt.handle().clone(),
             TokioRuntimeVariant::ExternalTokioHandle(h) => h.clone(),
         }
+    }
+}
+
+/// How long dropping an owned tokio runtime waits for its tasks to stop.
+///
+/// A plain drop waits for every `spawn_blocking` task to return, without
+/// limit, so one blocking call that never returns hangs the engine's teardown.
+const OWNED_TOKIO_RUNTIME_SHUTDOWN_BUDGET: Duration = Duration::from_secs(2);
+
+/// A tokio runtime the engine owns, shut down within
+/// [`OWNED_TOKIO_RUNTIME_SHUTDOWN_BUDGET`] when dropped.
+pub(crate) struct TokioRuntimeShutDownWithinItsBudget(
+    std::mem::ManuallyDrop<tokio::runtime::Runtime>,
+);
+
+impl TokioRuntimeShutDownWithinItsBudget {
+    pub(crate) fn owning(runtime: tokio::runtime::Runtime) -> Self {
+        Self(std::mem::ManuallyDrop::new(runtime))
+    }
+
+    pub(crate) fn handle(&self) -> &tokio::runtime::Handle {
+        self.0.handle()
+    }
+
+    pub(crate) fn block_on<F: std::future::Future>(&self, future: F) -> F::Output {
+        self.0.block_on(future)
+    }
+}
+
+impl Drop for TokioRuntimeShutDownWithinItsBudget {
+    fn drop(&mut self) {
+        crate::core::runtime::note_what_the_engine_teardown_is_waiting_on(
+            "the engine's tokio runtime",
+        );
+        // SAFETY: taken once, here, as this value is dropped; nothing reads the
+        // runtime afterwards.
+        let runtime = unsafe { std::mem::ManuallyDrop::take(&mut self.0) };
+        runtime.shutdown_timeout(OWNED_TOKIO_RUNTIME_SHUTDOWN_BUDGET);
     }
 }
 
@@ -154,7 +193,9 @@ impl Runner {
                     .map_err(|e| {
                         Error::Runtime(format!("Failed to create tokio runtime: {}", e))
                     })?;
-                TokioRuntimeVariant::OwnedTokioRuntime(rt)
+                TokioRuntimeVariant::OwnedTokioRuntime(TokioRuntimeShutDownWithinItsBudget::owning(
+                    rt,
+                ))
             }
         };
 
@@ -528,6 +569,10 @@ impl Runner {
     }
 
     /// Stop the runtime.
+    ///
+    /// Runs every step of the teardown even when removing the processors
+    /// failed — a processor thread abandoned past its budget included — and
+    /// reports that failure once the rest is down.
     #[tracing::instrument(name = "runtime.stop", skip_all)]
     pub fn stop(&self) -> Result<()> {
         // Idempotent, and claimed under one lock acquisition so two concurrent
@@ -562,12 +607,16 @@ impl Runner {
         });
         tracing::info!("[stop] Queued removal of {} processor(s)", processor_count);
 
+        let mut processor_removal_outcome = Ok(());
         if let Some(ctx) = runtime_ctx {
             tracing::debug!("[stop] Committing processor teardown");
-            self.compiler.commit(&ctx)?;
+            processor_removal_outcome = self.compiler.commit(&ctx);
+            if let Err(removal_failure) = &processor_removal_outcome {
+                tracing::error!("[stop] Removing the processors failed: {removal_failure}");
+            }
             tracing::debug!("[stop] Processor teardown complete");
 
-            // Stop the audio clock
+            crate::core::runtime::note_what_the_engine_teardown_is_waiting_on("the audio clock");
             tracing::debug!("[stop] Stopping audio clock");
             if let Err(e) = ctx.audio_clock().stop() {
                 tracing::warn!("[stop] Failed to stop audio clock: {}", e);
@@ -576,6 +625,9 @@ impl Runner {
             // Cleanup SurfaceStore - releases all surfaces and disconnects
             #[cfg(any(target_os = "macos", target_os = "linux"))]
             {
+                crate::core::runtime::note_what_the_engine_teardown_is_waiting_on(
+                    "the GPU context's surface store",
+                );
                 ctx.gpu.clear_surface_store();
                 tracing::debug!("[stop] SurfaceStore cleared");
             }
@@ -592,6 +644,9 @@ impl Runner {
         // tests that immediately re-bind a new runtime on the same path.
         #[cfg(target_os = "linux")]
         {
+            crate::core::runtime::note_what_the_engine_teardown_is_waiting_on(
+                "the surface-sharing service",
+            );
             if let Some(mut svc) = self.surface_service.lock().take() {
                 svc.stop();
                 tracing::debug!(
@@ -608,7 +663,23 @@ impl Runner {
         );
 
         tracing::info!("[stop] Graceful shutdown complete");
-        Ok(())
+        processor_removal_outcome
+    }
+
+    /// Hand fds 1 and 2 back to the process now, for a caller about to leave
+    /// this engine alive rather than drop it.
+    pub fn stop_intercepting_the_standard_streams(&self) {
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
+        self._logging_guard.stop_intercepting_the_standard_streams();
+    }
+
+    /// The processors whose threads were abandoned past their shutdown budget
+    /// and have not returned since. Each one holds this engine alive.
+    pub fn processor_threads_abandoned_and_still_running(
+        &self,
+    ) -> Vec<crate::core::runtime::ProcessorDisplayNameAndId> {
+        self.compiler
+            .processor_threads_abandoned_and_still_running()
     }
 
     // =========================================================================
@@ -842,7 +913,7 @@ impl Runner {
         Ok(())
     }
 
-    /// Block until shutdown signal (Ctrl+C, SIGTERM, Cmd+Q) or a latched
+    /// Block until shutdown signal (Ctrl+C, SIGTERM, SIGHUP, Cmd+Q) or a
     /// [`request_runtime_shutdown`](crate::core::runtime::request_runtime_shutdown).
     pub fn wait_for_signal(self: &Arc<Self>) -> Result<()> {
         self.wait_for_signal_with(|_| ControlFlow::Continue(()))
@@ -863,20 +934,38 @@ impl Runner {
                 self.wait_for_shutdown_observation_with(|_| ControlFlow::Continue(()))
             })
         };
-        Self::clear_shutdown_requests_latched_during_teardown();
+        Self::clear_the_shutdown_escalation_this_run_observed();
         run_outcome
     }
 
-    /// Take any request that landed after the run loop stopped observing.
+    /// [`start`](Self::start) and block until a shutdown is requested, tearing
+    /// nothing down — for an embedding host that holds the shutdown signals
+    /// through its own teardown and the engine's drop, so a second or third
+    /// interrupt still escalates wherever that teardown is.
+    ///
+    /// On macOS the run loop is an `NSApplication` loop that stops the runtime
+    /// and terminates the process instead of returning.
+    pub fn start_and_block_until_shutdown_is_requested(
+        self: &Arc<Self>,
+        _shutdown_signals_held_by_the_caller: &ScopedShutdownSignalOwnership,
+    ) -> Result<()> {
+        self.start()?;
+        self.block_until_shutdown_is_observed_with(|_| ControlFlow::Continue(()))
+    }
+
+    /// Take any request that landed after the run loop stopped observing, and
+    /// how far this run's interrupts escalated.
     ///
     /// Called once shutdown-signal ownership has dropped, so no further signal
     /// can reach the funnel.
-    fn clear_shutdown_requests_latched_during_teardown() {
-        crate::core::runtime::take_runtime_shutdown_request_latch();
+    fn clear_the_shutdown_escalation_this_run_observed() {
+        crate::core::runtime::take_runtime_shutdown_escalation();
     }
 
-    fn take_shutdown_signal_ownership()
-    -> Result<crate::core::signals::ScopedShutdownSignalOwnership> {
+    /// Own SIGINT, SIGTERM and SIGHUP until the returned value drops.
+    ///
+    /// Fails if another run loop in this process already owns them.
+    pub fn take_shutdown_signal_ownership() -> Result<ScopedShutdownSignalOwnership> {
         crate::core::signals::ScopedShutdownSignalOwnership::take_until_dropped().map_err(
             |ownership_failure| {
                 crate::core::Error::Configuration(format!(
@@ -890,8 +979,8 @@ impl Runner {
     /// Block until shutdown signal, with periodic callback for dynamic control.
     ///
     /// This is the run-loop owner: it observes both the `RuntimeShutdown`
-    /// event and the shutdown-request latch, then runs the normal teardown.
-    /// The latch is polled as well as the event because a request published
+    /// event and the shutdown escalation, then runs the normal teardown.
+    /// The escalation is polled as well as the event because a request published
     /// before this subscriber was wired up leaves no event to receive.
     pub fn wait_for_signal_with<F>(self: &Arc<Self>, callback: F) -> Result<()>
     where
@@ -903,12 +992,22 @@ impl Runner {
             let _shutdown_signals = Self::take_shutdown_signal_ownership()?;
             self.wait_for_shutdown_observation_with(callback)
         };
-        Self::clear_shutdown_requests_latched_during_teardown();
+        Self::clear_the_shutdown_escalation_this_run_observed();
         wait_outcome
     }
 
-    /// The wait loop itself, for callers that already own the shutdown signals.
-    fn wait_for_shutdown_observation_with<F>(self: &Arc<Self>, mut callback: F) -> Result<()>
+    /// The wait loop and the teardown after it, for callers that already own
+    /// the shutdown signals.
+    fn wait_for_shutdown_observation_with<F>(self: &Arc<Self>, callback: F) -> Result<()>
+    where
+        F: FnMut(&Self) -> ControlFlow<()>,
+    {
+        self.block_until_shutdown_is_observed_with(callback)?;
+        self.stop()
+    }
+
+    /// The wait loop alone.
+    fn block_until_shutdown_is_observed_with<F>(self: &Arc<Self>, mut callback: F) -> Result<()>
     where
         F: FnMut(&Self) -> ControlFlow<()>,
     {
@@ -960,7 +1059,7 @@ impl Runner {
                         callback(&runtime_for_callback)
                     };
                     if control_flow.is_break() {
-                        crate::core::runtime::take_runtime_shutdown_request_latch();
+                        crate::core::runtime::take_runtime_shutdown_escalation();
                     }
                     control_flow
                 },
@@ -983,11 +1082,6 @@ impl Runner {
                     crate::core::runtime::RUNTIME_SHUTDOWN_REQUEST_OBSERVATION_POLL_INTERVAL,
                 );
             }
-
-            // Auto-stop on exit. The observed request is taken by the caller
-            // once shutdown-signal ownership has dropped, which also catches
-            // anything latched during this teardown.
-            self.stop()?;
 
             Ok(())
         }
@@ -1255,7 +1349,7 @@ impl Runner {
 }
 
 /// Whether the run loop should stop: the `RuntimeShutdown` event was received,
-/// or a request is latched. One predicate so both `#[cfg]` arms of
+/// or the shutdown escalation has been raised. One predicate so both `#[cfg]` arms of
 /// [`Runner::wait_for_signal_with`] observe the same set of sources.
 fn runtime_shutdown_observed(event_shutdown_flag: &AtomicBool) -> bool {
     event_shutdown_flag.load(Ordering::SeqCst)
@@ -1455,6 +1549,34 @@ mod tests {
             runtime.tokio_runtime_variant,
             TokioRuntimeVariant::OwnedTokioRuntime(_)
         ));
+    }
+
+    /// Fail-without-fix: a plain drop of the runtime waits for the blocking task
+    /// below for its whole minute.
+    #[test]
+    fn an_owned_tokio_runtime_whose_blocking_task_never_returns_still_drops_within_its_budget() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("a tokio runtime builds");
+        let (blocking_task_started, blocking_task_has_started) = std::sync::mpsc::channel();
+        runtime.spawn_blocking(move || {
+            let _ = blocking_task_started.send(());
+            std::thread::sleep(Duration::from_secs(60));
+        });
+        blocking_task_has_started
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the blocking task starts");
+
+        let owned = TokioRuntimeShutDownWithinItsBudget::owning(runtime);
+        let started = std::time::Instant::now();
+        drop(owned);
+
+        assert!(
+            started.elapsed() < OWNED_TOKIO_RUNTIME_SHUTDOWN_BUDGET + Duration::from_secs(1),
+            "dropping the runtime took {:?}",
+            started.elapsed()
+        );
     }
 
     #[test]

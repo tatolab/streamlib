@@ -9,8 +9,11 @@ process, because the failures being ruled out — a surviving process, a hang at
 interpreter finalization, a non-zero exit — are only visible to a parent.
 """
 
+import contextlib
 import os
+import re
 import signal
+import threading
 import time
 from pathlib import Path
 
@@ -84,9 +87,9 @@ def test_no_survivors_are_left_in_the_process_group(app_under_test):
 
     A `waitpid` check cannot show this — the parent has already reaped the
     child, so it raises `ChildProcessError` for any exited process whatsoever.
-    Every Python processor runs in a child interpreter of its own, and each is
-    stopped on the shutdown ladder that ends by terminating and killing its
-    whole process group, so a survivor here is that ladder failing to reach one.
+    It reaches only what the app process itself started inside its own group:
+    every helper process leads a group of its own, and its survival is asserted
+    by pid in `test_helper_placement.py`.
     """
     app = app_under_test("ctrl_c")
     process_group = os.getpgid(app.process.pid)
@@ -179,8 +182,8 @@ def test_a_second_pipeline_in_one_process_still_blocks(app_under_test):
     """Two run loops in one interpreter: the second must not inherit the first's
     shutdown request.
 
-    Regression lock on a real defect. The shutdown-request latch is
-    process-global and first-observer-wins, so a `shutdown()` issued once the
+    Regression lock on a real defect. The shutdown escalation is process-global
+    and taken only when a run ends, so a `shutdown()` issued once the
     engine was already torn down — which `__exit__` does on every
     `with streamlib.Runtime()` block — left it set, and the next `run()`
     returned immediately having run nothing.
@@ -239,7 +242,8 @@ def test_shutdown_spun_across_the_run_loop_exit_does_not_poison_the_next(app_und
 
     Honest scope: this is a concurrent smoke test, NOT a regression lock. The
     fix is structural — the request is issued under the same lock `run()` takes
-    to transition and clear the latch, so the interleaving cannot occur — and
+    to transition, and the escalation is cleared only after that transition, so
+    the interleaving cannot occur — and
     reintroducing the racy shape does not make this test red on this rig (3 of 3
     green). Treat a failure here as real; do not read a pass as proof.
     """
@@ -327,4 +331,220 @@ def test_shutdown_from_another_thread_ends_a_blocking_run(app_under_test):
     app.await_clean_exit()
     assert "STOPPED_FROM_ANOTHER_THREAD" in app.markers(), (
         f"shutdown() from a worker thread must end run(); output:\n{app.output}"
+    )
+
+
+# How long an app with a helper asleep in its callback may take to end after a
+# Ctrl-C: the one-second callback budget, the helper's own `stop()` and
+# `teardown()`, and the engine's drop. The plan's "about two seconds or less",
+# with room for a loaded rig.
+ASLEEP_HELPER_EXIT_BUDGET_SECONDS = 3.0
+
+HELPER_STARTED_MARKER = re.compile(r"helper process started: pid=(\d+)")
+TEARDOWN_WORKER_PID_MARKER = re.compile(r"MARKER:TEARDOWN_WORKER_PID (\d+)")
+SURVIVOR_PID_MARKER = re.compile(r"MARKER:SURVIVOR_PID=(\d+)")
+
+
+def a_pid_is_gone_within(pid: int, budget_seconds: float) -> bool:
+    """Whether `pid` has stopped existing inside `budget_seconds`.
+
+    Signal 0 rather than a wait: the processes this suite looks for are not this
+    test's children.
+    """
+    deadline = time.monotonic() + budget_seconds
+    while True:
+        try:
+            os.kill(pid, 0)
+        except (ProcessLookupError, PermissionError):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+
+
+def matched_pid(pattern: "re.Pattern[str]", app: AppUnderTest) -> int:
+    match = pattern.search(app.output)
+    assert match is not None, f"the app never reported {pattern.pattern!r}:\n{app.output}"
+    return int(match.group(1))
+
+
+@pytest.mark.requires_gpu
+def test_ctrl_c_with_a_processor_asleep_in_its_callback_exits_in_about_two_seconds(
+    app_under_test,
+):
+    """A helper asleep in `process()` costs one interrupt, and its `teardown()` runs."""
+    app = app_under_test("a_processor_asleep_in_its_callback")
+    app.await_output_containing("MARKER:ASLEEP_IN_PROCESS", "the processor to park")
+    interrupted_at = time.monotonic()
+    app.interrupt()
+    app.await_clean_exit()
+    ended_in = time.monotonic() - interrupted_at
+
+    assert "MARKER:ASLEEP_PROBE_TORE_DOWN" in app.output, (
+        f"`teardown()` did not run after the interrupt:\n{app.output}"
+    )
+    assert ended_in < ASLEEP_HELPER_EXIT_BUDGET_SECONDS, (
+        f"the app took {ended_in:.1f}s to end after Ctrl-C:\n{app.output}"
+    )
+
+
+@pytest.mark.requires_gpu
+def test_three_helpers_slow_to_stop_cost_about_one_ladder(app_under_test):
+    """Every helper walks its ladder at the same time.
+
+    Each takes the one-second callback budget and three seconds of teardown, so
+    one after another is over twelve seconds and at once is about four.
+    """
+    app = app_under_test("three_processors_slow_to_tear_down")
+    for _ in range(3):
+        app.await_output_containing(
+            "MARKER:SLOW_TO_TEAR_DOWN_ASLEEP", "every helper to park in its callback"
+        )
+    interrupted_at = time.monotonic()
+    app.interrupt()
+    app.await_clean_exit()
+    ended_in = time.monotonic() - interrupted_at
+
+    assert app.output.count("MARKER:SLOW_TEARDOWN_FINISHED") == 3, (
+        f"every helper's `teardown()` must still run:\n{app.output}"
+    )
+    assert ended_in < 8.0, (
+        f"three helpers took {ended_in:.1f}s to stop, which is one after another:\n"
+        f"{app.output}"
+    )
+
+
+@pytest.mark.requires_gpu
+def test_a_second_ctrl_c_forces_the_shutdown_past_a_long_teardown(app_under_test):
+    """The second interrupt terminates a helper still inside its `teardown()`,
+    and `run()` returns normally, having abandoned nothing."""
+    app = app_under_test("a_teardown_only_a_forced_shutdown_cuts_short")
+    app.await_output_containing("MARKER:TEARDOWN_WORKER_PID", "the helper to fork its worker")
+    app.interrupt()
+    app.await_output_containing("MARKER:LONG_TEARDOWN_BEGAN", "the helper's teardown to begin")
+    forced_at = time.monotonic()
+    app.interrupt()
+    app.await_clean_exit()
+    ended_in = time.monotonic() - forced_at
+
+    assert "RUN_RETURNED" in app.markers(), (
+        f"a forced shutdown that abandoned nothing must return normally:\n{app.output}"
+    )
+    assert "MARKER:LONG_TEARDOWN_FINISHED" not in app.output, (
+        f"the teardown ran to its end, so the second interrupt forced nothing:\n{app.output}"
+    )
+    assert ended_in < 3.0, (
+        f"the app took {ended_in:.1f}s to end after the second Ctrl-C:\n{app.output}"
+    )
+
+
+@pytest.mark.requires_gpu
+def test_a_third_ctrl_c_kills_every_helper_process_group_and_exits_130(app_under_test):
+    """The third interrupt exits at once, taking the helper's group with it.
+
+    The helper and its worker both ignore SIGTERM, so the forced ladder waits
+    out its half-second grace before it sends the group SIGKILL. The third
+    interrupt lands well inside that grace, so the worker being gone is the third
+    interrupt's doing: the kernel's parent-death signal reaches the helper, never
+    a process the helper forked.
+    """
+    app = app_under_test("a_teardown_only_a_forced_shutdown_cuts_short")
+    app.await_output_containing("MARKER:TEARDOWN_WORKER_PID", "the helper to fork its worker")
+    app.interrupt()
+    app.await_output_containing("MARKER:LONG_TEARDOWN_BEGAN", "the helper's teardown to begin")
+    app.interrupt()
+    time.sleep(0.05)
+    app.interrupt()
+    exit_status = app.await_exit_status()
+
+    assert exit_status == 130, (
+        f"a third Ctrl-C must exit with status 130, got {exit_status}:\n{app.output}"
+    )
+    assert "RUN_RETURNED" not in app.markers(), (
+        f"`run()` returned, so the process did not exit at once:\n{app.output}"
+    )
+    worker_pid = matched_pid(TEARDOWN_WORKER_PID_MARKER, app)
+    assert a_pid_is_gone_within(worker_pid, 2.0), (
+        f"the helper's SIGTERM-deaf worker outlived the third interrupt:\n{app.output}"
+    )
+
+
+@pytest.mark.requires_gpu
+def test_sighup_tears_the_graph_down_gracefully(app_under_test):
+    """A closed terminal is a graceful shutdown, `teardown()` included."""
+    app = app_under_test("a_processor_asleep_in_its_callback_with_hangups_not_ignored")
+    app.await_output_containing("MARKER:ASLEEP_IN_PROCESS", "the processor to park")
+    app.process.send_signal(signal.SIGHUP)
+    app.await_clean_exit()
+
+    assert "RUN_RETURNED" in app.markers(), f"`run()` did not return:\n{app.output}"
+    assert "MARKER:ASLEEP_PROBE_TORE_DOWN" in app.output, (
+        f"`teardown()` did not run after SIGHUP:\n{app.output}"
+    )
+
+
+@pytest.mark.requires_gpu
+def test_a_process_the_app_started_never_holds_the_apps_output_past_its_exit(
+    app_under_test,
+):
+    """Whatever the app starts inherits no copy of the app's own output.
+
+    The survivor sleeps thirty seconds holding every descriptor it could
+    inherit. Reading the app's output to its end must finish within a second of
+    the app's own exit.
+
+    Fail-without-fix: the stdio interceptor's copies of the app's stdout were
+    inheritable, so the survivor held this pipe for its whole thirty seconds;
+    and its hold on the intercept pipe made the interceptor's unbounded join
+    hang the app's own teardown for as long.
+    """
+    app = app_under_test("a_process_the_app_started_outlives_it")
+    app.await_output_containing("MARKER:SURVIVOR_PID", "the app to start its survivor")
+    survivor_pid = matched_pid(SURVIVOR_PID_MARKER, app)
+    exited_at: "list[float]" = []
+
+    def record_when_the_app_exits() -> None:
+        app.process.wait()
+        exited_at.append(time.monotonic())
+
+    waiter = threading.Thread(target=record_when_the_app_exits, daemon=True)
+    try:
+        app.await_engine_ready()
+        waiter.start()
+        app.interrupt()
+        output_ended_at = app.await_end_of_output()
+        waiter.join(timeout=CLEAN_EXIT_BUDGET_AFTER_OUTPUT_ENDS_SECONDS)
+
+        assert exited_at, f"the app never exited:\n{app.output}"
+        assert app.process.returncode == 0, (
+            f"the app exited with {app.process.returncode}:\n{app.output}"
+        )
+        assert output_ended_at - exited_at[0] < 1.0, (
+            f"the app's output ended {output_ended_at - exited_at[0]:.1f}s after it exited — "
+            f"something it started held it open:\n{app.output}"
+        )
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(survivor_pid, signal.SIGKILL)
+
+
+# How long the app may take to be reaped once its output has ended.
+CLEAN_EXIT_BUDGET_AFTER_OUTPUT_ENDS_SECONDS = 10.0
+
+
+@pytest.mark.requires_gpu
+def test_ctrl_c_while_a_helper_is_still_importing_exits_promptly(app_under_test):
+    """A helper thirty seconds into importing its processor holds the app for
+    one interrupt, not for its import."""
+    app = app_under_test("a_helper_still_importing_its_processor")
+    app.await_output_containing("helper process started", "the helper to start importing")
+    time.sleep(1.0)
+    interrupted_at = time.monotonic()
+    app.interrupt()
+    app.await_clean_exit()
+    ended_in = time.monotonic() - interrupted_at
+
+    assert ended_in < 5.0, (
+        f"the app took {ended_in:.1f}s to end, which is the import rather than the "
+        f"interrupt:\n{app.output}"
     )

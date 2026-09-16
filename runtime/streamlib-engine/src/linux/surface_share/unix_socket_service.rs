@@ -550,7 +550,7 @@ fn handle_register(
 
     let mut dup_plane_fds: Vec<RawFd> = Vec::with_capacity(plane_fds.len());
     for fd in plane_fds {
-        let dup_fd = unsafe { libc::dup(*fd) };
+        let dup_fd = unsafe { libc::fcntl(*fd, libc::F_DUPFD_CLOEXEC, 0) };
         if dup_fd < 0 {
             for d in &dup_plane_fds {
                 unsafe { libc::close(*d) };
@@ -565,7 +565,7 @@ fn handle_register(
 
     let dup_produce_done_fd: Option<RawFd> = match produce_done_src_fd {
         Some(src) => {
-            let dup = unsafe { libc::dup(src) };
+            let dup = unsafe { libc::fcntl(src, libc::F_DUPFD_CLOEXEC, 0) };
             if dup < 0 {
                 for d in &dup_plane_fds {
                     unsafe { libc::close(*d) };
@@ -581,7 +581,7 @@ fn handle_register(
     };
     let dup_consume_done_fd: Option<RawFd> = match consume_done_src_fd {
         Some(src) => {
-            let dup = unsafe { libc::dup(src) };
+            let dup = unsafe { libc::fcntl(src, libc::F_DUPFD_CLOEXEC, 0) };
             if dup < 0 {
                 for d in &dup_plane_fds {
                     unsafe { libc::close(*d) };
@@ -791,7 +791,7 @@ fn handle_lookup(
     // dup we already took.
     let mut dup_fds: Vec<RawFd> = Vec::with_capacity(checkout.dma_buf_fds.len() + 2);
     for fd in &checkout.dma_buf_fds {
-        let dup = unsafe { libc::dup(*fd) };
+        let dup = unsafe { libc::fcntl(*fd, libc::F_DUPFD_CLOEXEC, 0) };
         if dup < 0 {
             for d in &dup_fds {
                 unsafe { libc::close(*d) };
@@ -813,7 +813,7 @@ fn handle_lookup(
     let has_produce_done_fd = checkout.produce_done_fd.is_some();
     let has_consume_done_fd = checkout.consume_done_fd.is_some();
     if let Some(src) = checkout.produce_done_fd {
-        let dup = unsafe { libc::dup(src) };
+        let dup = unsafe { libc::fcntl(src, libc::F_DUPFD_CLOEXEC, 0) };
         if dup < 0 {
             for d in &dup_fds {
                 unsafe { libc::close(*d) };
@@ -826,7 +826,7 @@ fn handle_lookup(
         dup_fds.push(dup);
     }
     if let Some(src) = checkout.consume_done_fd {
-        let dup = unsafe { libc::dup(src) };
+        let dup = unsafe { libc::fcntl(src, libc::F_DUPFD_CLOEXEC, 0) };
         if dup < 0 {
             for d in &dup_fds {
                 unsafe { libc::close(*d) };
@@ -1012,7 +1012,7 @@ fn handle_check_in(
 
     let mut dup_fds: Vec<RawFd> = Vec::with_capacity(received_fds.len());
     for fd in received_fds {
-        let dup = unsafe { libc::dup(*fd) };
+        let dup = unsafe { libc::fcntl(*fd, libc::F_DUPFD_CLOEXEC, 0) };
         if dup < 0 {
             for d in &dup_fds {
                 unsafe { libc::close(*d) };

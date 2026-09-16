@@ -756,7 +756,7 @@ mod tests {
         let mut write_fds: Vec<RawFd> = Vec::with_capacity(3);
         for _ in 0..3 {
             let mut fds = [0i32; 2];
-            let rc = unsafe { libc::pipe(fds.as_mut_ptr()) };
+            let rc = unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) };
             assert_eq!(rc, 0, "pipe: {}", std::io::Error::last_os_error());
             read_fds.push(fds[0]);
             write_fds.push(fds[1]);

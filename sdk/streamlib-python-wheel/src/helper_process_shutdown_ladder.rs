@@ -14,6 +14,10 @@
 //! it until the last signal has gone out: reaping a group leader frees its pid,
 //! and the process group id equals that pid, so a group signalled after the
 //! reap could land on whoever the OS handed it to next. Every wait is bounded.
+//!
+//! §Language SDKs: once a second interrupt forces the shutdown, the ladder
+//! skips whatever cooperative rung it is on — and the child's own window to
+//! leave — straight to terminating the helper's process group.
 
 use std::process::{Child, ExitStatus};
 use std::time::{Duration, Instant};
@@ -51,6 +55,10 @@ const REAP_BUDGET: Duration = Duration::from_secs(1);
 
 /// How often a bounded wait for the child's exit re-checks.
 const CHILD_EXIT_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+/// How long a cooperative rung waits between checks of whether the shutdown
+/// has been forced or the child has already gone.
+const COOPERATIVE_RUNG_OBSERVATION_INTERVAL: Duration = Duration::from_millis(50);
 
 /// How one helper's shutdown ended.
 #[derive(Debug, PartialEq, Eq)]
@@ -97,9 +105,29 @@ fn reported_process_id(reported: &libc::siginfo_t) -> libc::pid_t {
     reported.si_pid
 }
 
+/// What waiting one slice of a cooperative rung for a helper's reply found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LifecycleReplyAwaited {
+    Arrived,
+    SliceElapsed,
+    /// The channel the reply would arrive on has closed.
+    NoReplyCanArrive,
+}
+
+/// How a cooperative rung ended.
+#[derive(Debug, PartialEq, Eq)]
+enum CooperativeRungEnded {
+    ReplyArrived,
+    BudgetSpent,
+    NoReplyCanArrive,
+    ChildAlreadyExited,
+    ShutdownForced,
+}
+
 pub(crate) struct HelperProcessShutdownLadder {
     processor_display_name: String,
     child: Child,
+    is_shutdown_forced: fn() -> bool,
 }
 
 impl HelperProcessShutdownLadder {
@@ -107,6 +135,22 @@ impl HelperProcessShutdownLadder {
         Self {
             processor_display_name,
             child,
+            is_shutdown_forced: streamlib::sdk::runtime::is_runtime_shutdown_forced,
+        }
+    }
+
+    /// A ladder that reads whether shutdown was forced from `is_shutdown_forced`
+    /// rather than the process's own escalation, which only a delivered signal
+    /// raises.
+    #[cfg(test)]
+    fn taking_over_reading_a_forced_shutdown_from(
+        processor_display_name: String,
+        child: Child,
+        is_shutdown_forced: fn() -> bool,
+    ) -> Self {
+        Self {
+            is_shutdown_forced,
+            ..Self::taking_over(processor_display_name, child)
         }
     }
 
@@ -114,13 +158,16 @@ impl HelperProcessShutdownLadder {
     ///
     /// Both commands are already on the wire when this is called — the host
     /// sends them together — so `await_lifecycle_reply` only answers whether
-    /// that command's reply arrived inside the budget it was handed, draining
+    /// that command's reply arrived inside the slice it was handed, draining
     /// whatever else the helper sent on the way. A closure rather than the
     /// bridge itself, so the rungs are drivable against a stub child with no
     /// engine behind it.
     pub(crate) fn walk_every_rung(
         mut self,
-        mut await_lifecycle_reply: impl FnMut(HelperProcessShutdownCommand, Duration) -> bool,
+        mut await_lifecycle_reply: impl FnMut(
+            HelperProcessShutdownCommand,
+            Duration,
+        ) -> LifecycleReplyAwaited,
     ) -> HelperProcessShutdownOutcome {
         // A helper that is already gone answers nothing and needs no interrupt.
         // Skipped rather than waited out, so a crash before shutdown does not
@@ -140,27 +187,103 @@ impl HelperProcessShutdownLadder {
 
     fn walk_the_cooperative_rungs(
         &mut self,
-        await_lifecycle_reply: &mut impl FnMut(HelperProcessShutdownCommand, Duration) -> bool,
+        await_lifecycle_reply: &mut impl FnMut(
+            HelperProcessShutdownCommand,
+            Duration,
+        ) -> LifecycleReplyAwaited,
     ) {
-        if !await_lifecycle_reply(HelperProcessShutdownCommand::Stop, CALLBACK_RETURN_BUDGET) {
-            // A real signal, not `_thread.interrupt_main()`: only a signal
-            // wakes a main thread asleep inside a blocking call.
-            self.signal_the_child_itself(libc::SIGINT);
-            tracing::warn!(
-                "[{}] its helper process was still in a callback after {}s; interrupting it. \
-                 The bag in flight is lost.",
-                self.processor_display_name,
-                CALLBACK_RETURN_BUDGET.as_secs(),
-            );
+        match self.walk_one_cooperative_rung(
+            await_lifecycle_reply,
+            HelperProcessShutdownCommand::Stop,
+            CALLBACK_RETURN_BUDGET,
+        ) {
+            CooperativeRungEnded::ReplyArrived => {}
+            CooperativeRungEnded::ChildAlreadyExited => return,
+            CooperativeRungEnded::ShutdownForced => return self.say_the_shutdown_was_forced(),
+            CooperativeRungEnded::BudgetSpent => {
+                // A real signal, not `_thread.interrupt_main()`: only a signal
+                // wakes a main thread asleep inside a blocking call.
+                self.signal_the_child_itself(libc::SIGINT);
+                tracing::warn!(
+                    "[{}] its helper process was still in a callback after {}s; interrupting \
+                     it. The bag in flight is lost.",
+                    self.processor_display_name,
+                    CALLBACK_RETURN_BUDGET.as_secs(),
+                );
+            }
+            CooperativeRungEnded::NoReplyCanArrive => {
+                self.signal_the_child_itself(libc::SIGINT);
+                tracing::warn!(
+                    "[{}] its helper process can no longer answer; interrupting it",
+                    self.processor_display_name,
+                );
+            }
         }
 
-        if !await_lifecycle_reply(HelperProcessShutdownCommand::Teardown, TEARDOWN_BUDGET) {
-            tracing::warn!(
+        match self.walk_one_cooperative_rung(
+            await_lifecycle_reply,
+            HelperProcessShutdownCommand::Teardown,
+            TEARDOWN_BUDGET,
+        ) {
+            CooperativeRungEnded::ReplyArrived | CooperativeRungEnded::ChildAlreadyExited => {}
+            CooperativeRungEnded::ShutdownForced => self.say_the_shutdown_was_forced(),
+            CooperativeRungEnded::BudgetSpent => tracing::warn!(
                 "[{}] its helper process did not finish teardown within {}s",
                 self.processor_display_name,
                 TEARDOWN_BUDGET.as_secs(),
-            );
+            ),
+            CooperativeRungEnded::NoReplyCanArrive => tracing::warn!(
+                "[{}] its helper process can no longer answer its teardown",
+                self.processor_display_name,
+            ),
         }
+    }
+
+    /// Wait up to `budget` for `command`'s reply, in slices, so a forced
+    /// shutdown or a child that has already exited ends the wait at once.
+    ///
+    /// A child that has exited can never answer, and its escalate socket can
+    /// stay open behind a descendant that inherited it, so the socket alone
+    /// would hold the rung for its whole budget.
+    fn walk_one_cooperative_rung(
+        &self,
+        await_lifecycle_reply: &mut impl FnMut(
+            HelperProcessShutdownCommand,
+            Duration,
+        ) -> LifecycleReplyAwaited,
+        command: HelperProcessShutdownCommand,
+        budget: Duration,
+    ) -> CooperativeRungEnded {
+        let deadline = Instant::now() + budget;
+        loop {
+            if (self.is_shutdown_forced)() {
+                return CooperativeRungEnded::ShutdownForced;
+            }
+            if a_helper_process_has_exited_without_being_reaped(self.child.id()) {
+                return CooperativeRungEnded::ChildAlreadyExited;
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return CooperativeRungEnded::BudgetSpent;
+            }
+            match await_lifecycle_reply(
+                command,
+                remaining.min(COOPERATIVE_RUNG_OBSERVATION_INTERVAL),
+            ) {
+                LifecycleReplyAwaited::Arrived => return CooperativeRungEnded::ReplyArrived,
+                LifecycleReplyAwaited::NoReplyCanArrive => {
+                    return CooperativeRungEnded::NoReplyCanArrive;
+                }
+                LifecycleReplyAwaited::SliceElapsed => {}
+            }
+        }
+    }
+
+    fn say_the_shutdown_was_forced(&self) {
+        tracing::warn!(
+            "[{}] shutdown was forced; terminating its helper process group without its teardown",
+            self.processor_display_name,
+        );
     }
 
     /// Let the child leave, then terminate, kill and reap its whole group.
@@ -176,7 +299,9 @@ impl HelperProcessShutdownLadder {
     /// a reaped leader's pid, and the group id equal to it, are free for reuse
     /// the moment it returns.
     fn end_the_process_group_and_reap(&mut self) -> HelperProcessShutdownOutcome {
-        self.wait_for_the_child_to_become_collectable(CHILD_SELF_EXIT_GRACE);
+        if !(self.is_shutdown_forced)() {
+            self.wait_for_the_child_to_become_collectable(CHILD_SELF_EXIT_GRACE);
+        }
 
         // The group, never the pid: a fork-based worker or an `os.system`
         // child survives a signal to the helper alone, and it holds the
@@ -185,6 +310,9 @@ impl HelperProcessShutdownLadder {
         self.wait_for_the_child_to_become_collectable(PROCESS_GROUP_TERMINATION_GRACE);
 
         self.signal_the_whole_process_group(libc::SIGKILL);
+        // Out of the registry the third interrupt kills from before the reap
+        // frees the group's id for reuse.
+        streamlib::sdk::runtime::deregister_a_helper_process_group(self.child.id() as i32);
         self.reap_the_child_within(REAP_BUDGET)
     }
 
@@ -300,6 +428,18 @@ mod tests {
         fn into_ladder(self, processor_display_name: &str) -> HelperProcessShutdownLadder {
             HelperProcessShutdownLadder::taking_over(processor_display_name.to_string(), self.child)
         }
+
+        fn into_ladder_reading_a_forced_shutdown_from(
+            self,
+            processor_display_name: &str,
+            is_shutdown_forced: fn() -> bool,
+        ) -> HelperProcessShutdownLadder {
+            HelperProcessShutdownLadder::taking_over_reading_a_forced_shutdown_from(
+                processor_display_name.to_string(),
+                self.child,
+                is_shutdown_forced,
+            )
+        }
     }
 
     /// A stub that installs `SIGINT` and `SIGTERM` dispositions, then reports
@@ -326,32 +466,36 @@ signal.signal(signal.SIGTERM, signal.SIG_IGN)
 "#;
 
     /// Neither rung is ever answered, and each budget is spent in full.
-    fn never_answers(_: HelperProcessShutdownCommand, budget: Duration) -> bool {
-        std::thread::sleep(budget);
-        false
+    fn never_answers(_: HelperProcessShutdownCommand, slice: Duration) -> LifecycleReplyAwaited {
+        std::thread::sleep(slice);
+        LifecycleReplyAwaited::SliceElapsed
     }
 
-    /// Neither rung is answered and no budget is spent, which is how a test
-    /// reaches the group rungs without waiting six seconds for them.
-    fn never_answers_without_waiting(_: HelperProcessShutdownCommand, _: Duration) -> bool {
-        false
+    /// Neither rung is answered because the channel has closed, which is how a
+    /// test reaches the group rungs without waiting six seconds for them.
+    fn never_answers_without_waiting(
+        _: HelperProcessShutdownCommand,
+        _: Duration,
+    ) -> LifecycleReplyAwaited {
+        LifecycleReplyAwaited::NoReplyCanArrive
     }
 
-    /// Neither rung is answered, but the teardown rung spends a slice of its
-    /// budget — which is what gives an interrupted callback time to unwind. The
-    /// ladder's own five seconds, shortened so the test is not five seconds.
+    /// The stop rung's channel has closed; the teardown rung waits half a
+    /// second — which is what gives an interrupted callback time to unwind —
+    /// and the helper is gone before its next slice.
     fn never_answers_but_lets_an_interrupted_callback_unwind(
         command: HelperProcessShutdownCommand,
         _: Duration,
-    ) -> bool {
+    ) -> LifecycleReplyAwaited {
         if command == HelperProcessShutdownCommand::Teardown {
             std::thread::sleep(Duration::from_millis(500));
+            return LifecycleReplyAwaited::SliceElapsed;
         }
-        false
+        LifecycleReplyAwaited::NoReplyCanArrive
     }
 
-    fn answers_at_once(_: HelperProcessShutdownCommand, _: Duration) -> bool {
-        true
+    fn answers_at_once(_: HelperProcessShutdownCommand, _: Duration) -> LifecycleReplyAwaited {
+        LifecycleReplyAwaited::Arrived
     }
 
     /// The exit code a stub's own `SIGINT` handler leaves through, so a test
@@ -549,6 +693,69 @@ time.sleep(120)
         assert!(
             a_pid_is_gone_within(worker_pid, Duration::from_secs(5)),
             "a detected crash must take the helper's descendants with it"
+        );
+    }
+
+    /// A second interrupt: no interrupt for a callback, no teardown and no
+    /// window to leave — the group is terminated at once.
+    ///
+    /// Fail-without-fix: an unforced ladder waits out the one-second stop rung
+    /// and interrupts this stub, which leaves through its handler with exit 7.
+    #[test]
+    fn a_forced_shutdown_interrupts_nothing_and_terminates_the_group_at_once() {
+        let mut stub = a_stub_parking_after(LEAVES_THROUGH_THE_INTERRUPT);
+        assert_eq!(stub.next_reported_line(), "ready");
+
+        let ladder = stub.into_ladder_reading_a_forced_shutdown_from("ForcedProbe", || true);
+        let started = Instant::now();
+        let outcome = ladder.walk_every_rung(never_answers);
+
+        assert_eq!(
+            terminating_signal_of(&outcome),
+            Some(libc::SIGTERM),
+            "a forced ladder must go straight to terminating the group: {outcome:?}"
+        );
+        assert!(
+            started.elapsed() < CALLBACK_RETURN_BUDGET,
+            "a forced ladder still waited {:?} on cooperative rungs",
+            started.elapsed()
+        );
+    }
+
+    static SHUTDOWN_FORCED_WHILE_TEARDOWN_IS_AWAITED: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+
+    fn shutdown_forced_while_teardown_is_awaited() -> bool {
+        SHUTDOWN_FORCED_WHILE_TEARDOWN_IS_AWAITED.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// A second interrupt landing while a helper's `teardown()` is awaited ends
+    /// that wait rather than the rest of its five seconds.
+    #[test]
+    fn a_shutdown_forced_while_teardown_is_awaited_ends_the_wait_at_once() {
+        let mut stub = a_stub_parking_after("signal.signal(signal.SIGINT, signal.SIG_IGN)");
+        assert_eq!(stub.next_reported_line(), "ready");
+
+        let ladder = stub.into_ladder_reading_a_forced_shutdown_from(
+            "TeardownForcedProbe",
+            shutdown_forced_while_teardown_is_awaited,
+        );
+        let forced_during_teardown = std::thread::spawn(|| {
+            std::thread::sleep(CALLBACK_RETURN_BUDGET + Duration::from_millis(500));
+            SHUTDOWN_FORCED_WHILE_TEARDOWN_IS_AWAITED
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        let started = Instant::now();
+        let outcome = ladder.walk_every_rung(never_answers);
+        forced_during_teardown
+            .join()
+            .expect("the forcing thread returns");
+
+        assert_eq!(terminating_signal_of(&outcome), Some(libc::SIGTERM));
+        assert!(
+            started.elapsed() < CALLBACK_RETURN_BUDGET + Duration::from_secs(2),
+            "the teardown rung was waited out for {:?} after shutdown was forced",
+            started.elapsed()
         );
     }
 

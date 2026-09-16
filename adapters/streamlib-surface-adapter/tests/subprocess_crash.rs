@@ -30,8 +30,8 @@ use streamlib_surface_adapter::testing::{CrashTiming, SubprocessCrashHarness};
 fn harness_signals_cleanup_after_kernel_closes_inherited_fd() {
     // Pipe: parent reads, child holds the write end open by inheriting it.
     let mut fds = [0i32; 2];
-    let rc = unsafe { libc::pipe(fds.as_mut_ptr()) };
-    assert_eq!(rc, 0, "pipe() failed: {}", std::io::Error::last_os_error());
+    let rc = unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) };
+    assert_eq!(rc, 0, "pipe2() failed: {}", std::io::Error::last_os_error());
     let read_fd = fds[0];
     let write_fd = fds[1];
 
@@ -92,7 +92,7 @@ fn harness_signals_cleanup_after_kernel_closes_inherited_fd() {
             let mut buf = [0u8; 1];
             // Use a duplicated FD so we don't accidentally close the
             // original via the File destructor on every poll.
-            let dup_fd = unsafe { libc::dup(read_fd) };
+            let dup_fd = unsafe { libc::fcntl(read_fd, libc::F_DUPFD_CLOEXEC, 0) };
             if dup_fd < 0 {
                 return Err("dup failed");
             }

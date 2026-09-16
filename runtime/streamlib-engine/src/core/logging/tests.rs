@@ -375,8 +375,8 @@ fn rust_println_captured_via_fd_redirect() {
 
     // Dup fd 1 so the File wrapper owns a separate fd we can close
     // on drop without touching the interceptor's fd 1.
-    let dup_fd = unsafe { libc::dup(libc::STDOUT_FILENO) };
-    assert!(dup_fd >= 0, "libc::dup failed");
+    let dup_fd = unsafe { libc::fcntl(libc::STDOUT_FILENO, libc::F_DUPFD_CLOEXEC, 0) };
+    assert!(dup_fd >= 0, "F_DUPFD_CLOEXEC failed");
     let mut f = unsafe { std::fs::File::from_raw_fd(dup_fd) };
     writeln!(f, "sneaky-fd-interception").unwrap();
     drop(f);

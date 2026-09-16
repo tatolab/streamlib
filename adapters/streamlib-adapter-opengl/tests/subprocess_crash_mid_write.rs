@@ -62,8 +62,8 @@ fn subprocess_crash_mid_write_observed_by_harness() {
     // observation primitive.
     let mut pipe_fds = [-1i32; 2];
     unsafe {
-        let r = libc::pipe(pipe_fds.as_mut_ptr());
-        assert_eq!(r, 0, "pipe() failed: {}", std::io::Error::last_os_error());
+        let r = libc::pipe2(pipe_fds.as_mut_ptr(), libc::O_CLOEXEC);
+        assert_eq!(r, 0, "pipe2() failed: {}", std::io::Error::last_os_error());
         // Make the read end non-blocking so the observe loop
         // doesn't wedge if the child hasn't been reaped yet.
         let flags = libc::fcntl(pipe_fds[0], libc::F_GETFL);

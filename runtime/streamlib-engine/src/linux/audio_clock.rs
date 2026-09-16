@@ -135,7 +135,12 @@ fn run_timerfd_loop(
     let interval_nsec = (interval_ns % 1_000_000_000) as libc::c_long;
 
     // Create timerfd with CLOCK_MONOTONIC and TFD_NONBLOCK so we can check shutdown
-    let timer_fd = unsafe { libc::timerfd_create(libc::CLOCK_MONOTONIC, libc::TFD_NONBLOCK) };
+    let timer_fd = unsafe {
+        libc::timerfd_create(
+            libc::CLOCK_MONOTONIC,
+            libc::TFD_CLOEXEC | libc::TFD_NONBLOCK,
+        )
+    };
 
     if timer_fd < 0 {
         return Err(Error::Runtime(format!(
@@ -196,7 +201,7 @@ fn run_timerfd_loop(
     }
 
     // Use epoll to wait on the timerfd with a timeout so we can check shutdown
-    let epoll_fd = unsafe { libc::epoll_create1(0) };
+    let epoll_fd = unsafe { libc::epoll_create1(libc::EPOLL_CLOEXEC) };
     if epoll_fd < 0 {
         unsafe { libc::close(timer_fd) };
         return Err(Error::Runtime(format!(
