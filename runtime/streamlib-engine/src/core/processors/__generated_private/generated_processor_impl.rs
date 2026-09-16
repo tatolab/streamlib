@@ -220,7 +220,8 @@ pub trait DynGeneratedProcessor: Send + 'static {
     ///
     /// The default refuses for the same reason [`unwire_out_of_process_link`]
     /// does: a host that records wiring but cannot deliver it late leaves a
-    /// link the graph reports `Wired` and the far side never opened.
+    /// link nothing will ever carry a bag over, stuck `Pending` for as long as
+    /// the graph holds it.
     ///
     /// [`unwire_out_of_process_link`]: DynGeneratedProcessor::unwire_out_of_process_link
     fn wire_out_of_process_link(
