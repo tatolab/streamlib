@@ -9,6 +9,7 @@ process, because the failures being ruled out — a surviving process, a hang at
 interpreter finalization, a non-zero exit — are only visible to a parent.
 """
 
+import contextlib
 import os
 import re
 import signal
@@ -523,10 +524,8 @@ def test_a_process_the_app_started_never_holds_the_apps_output_past_its_exit(
             f"something it started held it open:\n{app.output}"
         )
     finally:
-        try:
+        with contextlib.suppress(ProcessLookupError):
             os.kill(survivor_pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
 
 
 # How long the app may take to be reaped once its output has ended.

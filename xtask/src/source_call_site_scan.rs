@@ -16,8 +16,9 @@ pub struct ScannedCallSite<'code> {
 }
 
 /// Every call to `callee` — a path such as `libc::dup` — in `code`, in source
-/// order. A call nested inside another's arguments is not reported, and a call
-/// whose parentheses never close ends the scan.
+/// order. A call nested inside another's arguments is not reported, and a
+/// candidate whose parentheses never close — one inside a string, say — is
+/// passed over.
 pub fn call_sites_of<'code>(code: &'code str, callee: &str) -> Vec<ScannedCallSite<'code>> {
     let call_prefix = format!("{callee}(");
     let mut call_sites = Vec::new();
@@ -26,7 +27,8 @@ pub fn call_sites_of<'code>(code: &'code str, callee: &str) -> Vec<ScannedCallSi
         let call_start = search_from + offset;
         let open_paren = call_start + call_prefix.len() - 1;
         let Some(close_paren) = matching_close_paren(code, open_paren) else {
-            break;
+            search_from = open_paren + 1;
+            continue;
         };
         call_sites.push(ScannedCallSite {
             line: code[..call_start].matches('\n').count() + 1,
@@ -90,8 +92,19 @@ mod tests {
     }
 
     #[test]
-    fn a_call_whose_parentheses_never_close_ends_the_scan() {
+    fn a_call_whose_parentheses_never_close_is_not_reported() {
         assert!(call_sites_of("libc::dup(fd", "libc::dup").is_empty());
+    }
+
+    /// Fail-without-fix: stopping at the first unclosed candidate hides every
+    /// real call after it.
+    #[test]
+    fn an_unclosed_candidate_does_not_hide_a_real_call_after_it() {
+        let code = "let s = \"libc::dup(fd\";\nlet d = libc::dup(fd);\n";
+        let call_sites = call_sites_of(code, "libc::dup");
+        assert_eq!(call_sites.len(), 1, "got {call_sites:?}");
+        assert_eq!(call_sites[0].line, 2);
+        assert_eq!(call_sites[0].collapsed_call_text, "libc::dup(fd)");
     }
 
     #[test]

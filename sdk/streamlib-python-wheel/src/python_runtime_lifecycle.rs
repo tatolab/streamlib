@@ -458,42 +458,52 @@ impl PythonRuntimeHandle {
             }
         };
 
-        let (run_outcome, teardown_outcome) = python.detach(|| {
-            // Held from before startup until the engine is dropped. Across
-            // startup, because with the GIL released here a SIGINT that reached
-            // CPython's handler could never become a `KeyboardInterrupt`; through
-            // the drop, so a second and third interrupt escalate wherever the
-            // teardown is.
-            let (shutdown_signals, run_outcome) = match Runner::take_shutdown_signal_ownership() {
-                Ok(shutdown_signals) => {
-                    let run_outcome =
-                        engine.start_and_block_until_shutdown_is_requested(&shutdown_signals);
-                    (Some(shutdown_signals), run_outcome)
-                }
-                Err(ownership_failure) => (None, Err(ownership_failure)),
-            };
+        let (run_outcome, teardown_outcome, this_run_owned_the_shutdown_signals) =
+            python.detach(|| {
+                // Held from before startup until the engine is dropped. Across
+                // startup, because with the GIL released here a SIGINT that reached
+                // CPython's handler could never become a `KeyboardInterrupt`; through
+                // the drop, so a second and third interrupt escalate wherever the
+                // teardown is.
+                let (shutdown_signals, run_outcome) = match Runner::take_shutdown_signal_ownership()
+                {
+                    Ok(shutdown_signals) => {
+                        let run_outcome =
+                            engine.start_and_block_until_shutdown_is_requested(&shutdown_signals);
+                        (Some(shutdown_signals), run_outcome)
+                    }
+                    Err(ownership_failure) => (None, Err(ownership_failure)),
+                };
 
-            // Unconditional: a failed start must still not leave engine threads
-            // alive to race interpreter finalization.
-            let watchdog =
-                ArmedEngineTeardownWatchdog::arm("the engine teardown Runtime.run() began");
-            let stop_outcome = engine.stop();
-            // Before the drop: `Arc::into_inner` needs the only strong
-            // reference, and a readiness wait upgrading the running state's weak
-            // one would otherwise find the engine still borrowed.
-            self.transition_to_torn_down();
-            let teardown_outcome =
-                Self::drop_the_stopped_engine_unless_threads_were_abandoned(engine, &watchdog);
-            drop(shutdown_signals);
-            drop(watchdog);
-            (run_outcome.and(stop_outcome), teardown_outcome)
-        });
+                // Unconditional: a failed start must still not leave engine threads
+                // alive to race interpreter finalization.
+                let watchdog =
+                    ArmedEngineTeardownWatchdog::arm("the engine teardown Runtime.run() began");
+                let stop_outcome = engine.stop();
+                // Before the drop: `Arc::into_inner` needs the only strong
+                // reference, and a readiness wait upgrading the running state's weak
+                // one would otherwise find the engine still borrowed.
+                self.transition_to_torn_down();
+                let teardown_outcome =
+                    Self::drop_the_stopped_engine_unless_threads_were_abandoned(engine, &watchdog);
+                let this_run_owned_the_shutdown_signals = shutdown_signals.is_some();
+                drop(shutdown_signals);
+                drop(watchdog);
+                (
+                    run_outcome.and(stop_outcome),
+                    teardown_outcome,
+                    this_run_owned_the_shutdown_signals,
+                )
+            });
 
         // After the signals were handed back, so nothing can escalate this run
         // any further, and after the transition above, so no `shutdown()` can
         // request one either: what this run observed must not reach the next
-        // run loop in this interpreter.
-        take_runtime_shutdown_escalation();
+        // run loop in this interpreter. A run that was refused the signals leaves
+        // the escalation alone: it belongs to the run loop that owns them.
+        if this_run_owned_the_shutdown_signals {
+            take_runtime_shutdown_escalation();
+        }
 
         run_outcome
             .map_err(|engine_failure| PyRuntimeError::new_err(engine_failure.to_string()))?;
