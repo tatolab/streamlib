@@ -20,10 +20,10 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
-use pyo3::prelude::*;
 use crate::helper_process_shutdown_ladder::{
     HelperProcessLifecycleReply, HelperProcessShutdownLadder, HelperProcessShutdownOutcome,
 };
+use pyo3::prelude::*;
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::descriptors::ProcessorDescriptor;
 use streamlib::sdk::error::{Error, Result};
@@ -797,13 +797,12 @@ fn give_the_child_no_descriptor_beyond_stdio(command: &mut Command) {
 /// async-signal-safe.
 unsafe fn mark_each_descriptor_past_stdio_close_on_exec() {
     let mut descriptor_limit: libc::rlimit = unsafe { std::mem::zeroed() };
-    let highest_descriptor = if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut descriptor_limit) }
-        == 0
-    {
-        (descriptor_limit.rlim_cur as libc::c_uint).min(DESCRIPTOR_SWEEP_FALLBACK_CEILING)
-    } else {
-        DESCRIPTOR_SWEEP_FALLBACK_CEILING
-    };
+    let highest_descriptor =
+        if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut descriptor_limit) } == 0 {
+            (descriptor_limit.rlim_cur as libc::c_uint).min(DESCRIPTOR_SWEEP_FALLBACK_CEILING)
+        } else {
+            DESCRIPTOR_SWEEP_FALLBACK_CEILING
+        };
     for descriptor in FIRST_DESCRIPTOR_PAST_STDIO..highest_descriptor {
         let flags = unsafe { libc::fcntl(descriptor as libc::c_int, libc::F_GETFD) };
         if flags < 0 {

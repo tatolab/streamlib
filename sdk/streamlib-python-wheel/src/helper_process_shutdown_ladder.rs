@@ -242,10 +242,7 @@ mod tests {
         }
 
         fn into_ladder(self, processor_display_name: &str) -> HelperProcessShutdownLadder {
-            HelperProcessShutdownLadder::taking_over(
-                processor_display_name.to_string(),
-                self.child,
-            )
+            HelperProcessShutdownLadder::taking_over(processor_display_name.to_string(), self.child)
         }
     }
 

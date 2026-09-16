@@ -1258,7 +1258,8 @@ mod tests {
     /// the same self-re-run shape the working-directory test uses.
     #[test]
     fn a_node_whose_process_was_killed_is_reclaimed_by_the_sweep() {
-        if let Some(domain_root) = std::env::var_os(DEAD_NODE_CHILD_DOMAIN_ROOT_ENVIRONMENT_VARIABLE)
+        if let Some(domain_root) =
+            std::env::var_os(DEAD_NODE_CHILD_DOMAIN_ROOT_ENVIRONMENT_VARIABLE)
         {
             let _node = Iceoryx2Node::new(
                 std::path::Path::new(&domain_root),
@@ -1280,7 +1281,10 @@ mod tests {
                 "--exact",
                 "--test-threads=1",
             ])
-            .env(DEAD_NODE_CHILD_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, &domain_root)
+            .env(
+                DEAD_NODE_CHILD_DOMAIN_ROOT_ENVIRONMENT_VARIABLE,
+                &domain_root,
+            )
             .output()
             .expect("the test binary re-runs this test in a child process");
         assert!(
@@ -1319,7 +1323,10 @@ mod tests {
         .expect_err("a root past the budget is refused before any listing")
         .to_string();
 
-        assert!(refusal.contains(&root_one_byte_past_the_budget), "{refusal}");
+        assert!(
+            refusal.contains(&root_one_byte_past_the_budget),
+            "{refusal}"
+        );
     }
 
     const HIJACKED_MAX_SUBSCRIBERS: usize = 3;
