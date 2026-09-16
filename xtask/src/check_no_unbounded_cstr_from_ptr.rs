@@ -121,13 +121,9 @@ pub fn scan(workspace_root: &Path) -> Result<UnboundedCStrFromPtrScanReport> {
             let body = fs::read_to_string(path)
                 .with_context(|| format!("failed to read {}", path.display()))?;
             files_scanned_here += 1;
-            for (line, call_text) in unbounded_cstr_from_ptr_calls(&body) {
-                report.violations.push(UnboundedCStrFromPtrViolation {
-                    file: path.to_path_buf(),
-                    line,
-                    call_text,
-                });
-            }
+            report
+                .violations
+                .extend(unbounded_cstr_from_ptr_calls(path, &body));
         }
         report.files_scanned += files_scanned_here;
         report
@@ -138,8 +134,8 @@ pub fn scan(workspace_root: &Path) -> Result<UnboundedCStrFromPtrScanReport> {
 }
 
 /// Every `CStr::from_ptr(…)` in `body` whose argument reaches through
-/// `.as_ptr()`, as `(1-based line, whitespace-collapsed call text)`.
-fn unbounded_cstr_from_ptr_calls(body: &str) -> Vec<(usize, String)> {
+/// `.as_ptr()`.
+fn unbounded_cstr_from_ptr_calls(path: &Path, body: &str) -> Vec<UnboundedCStrFromPtrViolation> {
     let code = blank_out_lines(body, |line| {
         is_a_whole_line_comment(line) || line.contains(ALLOW_LINE_PRAGMA)
     });
@@ -150,7 +146,11 @@ fn unbounded_cstr_from_ptr_calls(body: &str) -> Vec<(usize, String)> {
                 .argument_text
                 .contains(OWNED_STORAGE_POINTER_ACCESSOR)
         })
-        .map(|call_site| (call_site.line, call_site.collapsed_call_text))
+        .map(|call_site| UnboundedCStrFromPtrViolation {
+            file: path.to_path_buf(),
+            line: call_site.line,
+            call_text: call_site.collapsed_call_text,
+        })
         .collect()
 }
 

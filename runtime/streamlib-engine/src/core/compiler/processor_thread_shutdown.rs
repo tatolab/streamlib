@@ -92,9 +92,9 @@ pub(crate) struct AbandonedProcessorThreadStillRunning {
 }
 
 /// `'Name' (id), 'Other' (id)`, in the order given.
-struct DisplayNamesAndIds<'a>(&'a [ProcessorDisplayNameAndId]);
+struct ProcessorDisplayNamesAndIds<'a>(&'a [ProcessorDisplayNameAndId]);
 
-impl std::fmt::Display for DisplayNamesAndIds<'_> {
+impl std::fmt::Display for ProcessorDisplayNamesAndIds<'_> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for (index, processor) in self.0.iter().enumerate() {
             if index > 0 {
@@ -120,7 +120,7 @@ impl std::fmt::Display for DescriptionOfTheAbandonedProcessorThreads<'_> {
             "{} processor thread(s) ignored shutdown past their budget and were abandoned: {}. \
              The engine stays alive beneath them until this process exits.",
             self.0.len(),
-            DisplayNamesAndIds(self.0),
+            ProcessorDisplayNamesAndIds(self.0),
         )
     }
 }
@@ -262,7 +262,7 @@ fn join_every_signalled_processor_thread_within_its_budget(
                 .collect();
             crate::core::runtime::note_what_the_engine_teardown_is_waiting_on(format!(
                 "the processor threads of {}",
-                DisplayNamesAndIds(&waiting_on)
+                ProcessorDisplayNamesAndIds(&waiting_on)
             ));
         }
         std::thread::sleep(PROCESSOR_THREAD_JOIN_POLL_INTERVAL);

@@ -82,13 +82,10 @@ enum EngineTeardownIncomplete {
 impl std::fmt::Display for EngineTeardownIncomplete {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::ProcessorThreadsAbandoned(abandoned) => {
-                write!(
-                    formatter,
-                    "{}",
-                    DescriptionOfTheAbandonedProcessorThreads(abandoned)
-                )
-            }
+            Self::ProcessorThreadsAbandoned(abandoned) => std::fmt::Display::fmt(
+                &DescriptionOfTheAbandonedProcessorThreads(abandoned),
+                formatter,
+            ),
             Self::EngineStillReferenced => formatter.write_str(
                 "engine teardown left a live reference behind — engine threads may outlive \
                  interpreter finalization",
