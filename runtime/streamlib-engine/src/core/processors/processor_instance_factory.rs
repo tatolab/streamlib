@@ -127,12 +127,15 @@ impl ProcessorInstance {
 
     /// Hand a processor whose ports live outside the engine one link wired
     /// after its setup ran, so it opens its own port for it now rather than
-    /// never.
+    /// never, and hand back the cell its answer will land in.
+    ///
+    /// `None` is a link the far side's setup command will carry instead, which
+    /// its `ready` confirms.
     pub fn wire_out_of_process_link(
         &mut self,
         port_direction: PortDirection,
         link_wiring: &serde_json::Value,
-    ) -> Result<()> {
+    ) -> Result<Option<Arc<super::OutOfProcessLinkWireReply>>> {
         self.0.wire_out_of_process_link(port_direction, link_wiring)
     }
 

@@ -135,6 +135,14 @@ pub struct LinkOutput {
     /// Current state of the link.
     #[serde(default)]
     pub state: LinkStateOutput,
+    /// Why the link is in the `error` state, in the words of whoever refused
+    /// it — today always the helper process that could not open its port.
+    ///
+    /// Absent in every other state, so a reader that finds it knows the link
+    /// carries nothing and will not start to: disconnect it and wire again.
+    /// `state` stays a plain string so a check against `"wired"` is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_reason: Option<String>,
     /// Runtime components (dynamic, varies based on link state).
     pub components: serde_json::Map<String, serde_json::Value>,
 }
@@ -149,7 +157,9 @@ pub struct LinkPortRefOutput {
 }
 
 /// State of a link in the graph.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum LinkStateOutput {
     /// Link exists in graph but not yet wired.
@@ -347,18 +357,60 @@ impl From<crate::core::graph::PortKind> for PortKindOutput {
 
 impl From<&crate::core::graph::Link> for LinkOutput {
     fn from(link: &crate::core::graph::Link) -> Self {
+        let (state, error_reason) = rendered_link_state_and_the_reason_for_an_error(link);
+        let mut components = link.serialize_components();
+        // `LinkStateComponent` renders under `components.state` too, and for a
+        // link waiting on a helper it holds the `Pending` the op stamped. Left
+        // alone it would contradict the top-level state a reader was told to
+        // check — the same disagreement the top-level state reads the component
+        // to avoid, in the other direction.
+        if let Some(rendered_state) = components.get_mut("state") {
+            *rendered_state = serde_json::json!(format!("{state:?}"));
+        }
         Self {
             id: link.id.to_string(),
             source: LinkPortRefOutput::from(&link.source),
             target: LinkPortRefOutput::from(&link.target),
             capacity: link.capacity.get(),
-            // Wiring records its outcome on the component; the field is the
-            // state the link was created in.
-            state: link
-                .get::<crate::core::graph::LinkStateComponent>()
-                .map(|wired| LinkStateOutput::from(wired.0))
-                .unwrap_or_else(|| LinkStateOutput::from(link.state)),
-            components: link.serialize_components(),
+            state,
+            error_reason,
+            components,
+        }
+    }
+}
+
+/// What a link reports as its state, and why where that is `error`.
+///
+/// Wiring records its outcome on the component; the field is the state the link
+/// was created in. A link handed to an out-of-process end sits at `Pending`
+/// there until that end answers — the answer lands on a cell its bridge's
+/// reader thread fills, which holds no graph lock — so a link still carrying
+/// those cells reads its state off them instead. Once the disconnect path has
+/// moved the component past `Pending`, that stamp is the answer: a link on its
+/// way out is not `wired` because a helper once said so.
+fn rendered_link_state_and_the_reason_for_an_error(
+    link: &crate::core::graph::Link,
+) -> (LinkStateOutput, Option<String>) {
+    let stamped = link
+        .get::<crate::core::graph::LinkStateComponent>()
+        .map(|state| state.0)
+        .unwrap_or(link.state);
+    if stamped != crate::core::graph::LinkState::Pending {
+        return (LinkStateOutput::from(stamped), None);
+    }
+    let Some(replies) = link.get::<crate::core::graph::OutOfProcessLinkWireRepliesComponent>()
+    else {
+        return (LinkStateOutput::from(stamped), None);
+    };
+    match replies.what_its_out_of_process_ends_have_answered() {
+        crate::core::graph::OutOfProcessLinkWireProgress::AnEndHasNotAnsweredYet => {
+            (LinkStateOutput::Pending, None)
+        }
+        crate::core::graph::OutOfProcessLinkWireProgress::EveryEndOpenedItsPort => {
+            (LinkStateOutput::Wired, None)
+        }
+        crate::core::graph::OutOfProcessLinkWireProgress::AnEndRefused { reason } => {
+            (LinkStateOutput::Error, Some(reason))
         }
     }
 }
@@ -461,6 +513,73 @@ mod link_rendering_tests {
 
         link.insert(LinkStateComponent(LinkState::Wired));
         assert_eq!(rendered(&link)["state"], "wired");
+    }
+
+    /// The two places a link renders its state have to say the same thing.
+    ///
+    /// Fail-without-fix: render `components` untouched and a link its helper
+    /// opened comes back `{"state": "wired", "components": {"state":
+    /// "Pending"}}` — on the surface the MCP instructions tell an agent to
+    /// read.
+    #[test]
+    fn the_rendered_state_and_the_components_map_never_disagree() {
+        use crate::core::graph::OutOfProcessLinkWireRepliesComponent;
+        use crate::core::processors::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
+
+        let mut link = Link::new("Psrc.out1", "Pdst.in1");
+        link.insert(LinkStateComponent(LinkState::Pending));
+        let helpers_answer = OutOfProcessLinkWireReply::awaiting_the_far_sides_answer();
+        link.insert_component_without_rendering_it(OutOfProcessLinkWireRepliesComponent(vec![
+            std::sync::Arc::clone(&helpers_answer),
+        ]));
+        let rendered = |link: &Link| serde_json::to_value(LinkOutput::from(link)).unwrap();
+
+        assert_eq!(rendered(&link)["state"], "pending");
+        assert_eq!(rendered(&link)["components"]["state"], "Pending");
+
+        helpers_answer.note_the_far_sides_answer(OutOfProcessLinkWireOutcome::OpenedByTheFarSide);
+        assert_eq!(rendered(&link)["state"], "wired");
+        assert_eq!(rendered(&link)["components"]["state"], "Wired");
+    }
+
+    /// The same agreement on the arm that carries a reason.
+    #[test]
+    fn a_refused_links_reason_rides_beside_a_state_both_renderings_agree_on() {
+        use crate::core::graph::OutOfProcessLinkWireRepliesComponent;
+        use crate::core::processors::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
+
+        let mut link = Link::new("Psrc.out1", "Pdst.in1");
+        link.insert(LinkStateComponent(LinkState::Pending));
+        let helpers_answer = OutOfProcessLinkWireReply::awaiting_the_far_sides_answer();
+        helpers_answer.note_the_far_sides_answer(
+            OutOfProcessLinkWireOutcome::RefusedByTheFarSide {
+                reason: "BufferSizeExceedsMaxSupportedBufferSizeOfService".to_string(),
+            },
+        );
+        link.insert_component_without_rendering_it(OutOfProcessLinkWireRepliesComponent(vec![
+            helpers_answer,
+        ]));
+
+        let rendered = serde_json::to_value(LinkOutput::from(&link)).unwrap();
+        assert_eq!(rendered["state"], "error");
+        assert_eq!(rendered["components"]["state"], "Error");
+        assert_eq!(
+            rendered["error_reason"],
+            "BufferSizeExceedsMaxSupportedBufferSizeOfService"
+        );
+    }
+
+    /// A link nothing out of process is answering for carries no reason key at
+    /// all, so a reader that finds one knows the link is refused.
+    #[test]
+    fn a_link_that_was_never_refused_renders_no_reason_key() {
+        let mut link = Link::new("Psrc.out1", "Pdst.in1");
+        link.insert(LinkStateComponent(LinkState::Wired));
+        let rendered = serde_json::to_value(LinkOutput::from(&link)).unwrap();
+        assert!(
+            rendered.get("error_reason").is_none(),
+            "an ordinary link's shape is unchanged by this key: {rendered}"
+        );
     }
 }
 

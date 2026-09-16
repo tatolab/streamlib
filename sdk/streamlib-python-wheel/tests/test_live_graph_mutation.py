@@ -40,6 +40,10 @@ CLEAN_EXIT_TIMEOUT_SECONDS = 60.0
 # A disconnect takes the link, not the frame the effect was already holding;
 # that one still goes out, well inside this.
 SECONDS_FOR_A_HELD_FRAME_TO_LEAVE = 1.0
+# How long a link handed to a running helper has to come back `wired`. The
+# helper answers between callbacks, so this is bounded by one frame of the
+# processor's own work, not by the wire.
+LINK_ANSWER_TIMEOUT_SECONDS = 15.0
 
 # The node the test launches: one native source and nothing else. Everything
 # downstream of it is added live.
@@ -148,6 +152,28 @@ def link_with_id(graph: dict, link_id: str) -> "dict | None":
     return next((link for link in graph["links"] if link["id"] == link_id), None)
 
 
+def await_link_state(control_url: str, link_id: str, wanted: str) -> str:
+    """Poll `graph` until one link reaches `wanted`, and report what it reached.
+
+    A `connect` onto a helper-placed processor returns with the link `pending`:
+    the helper opens its own port and answers, and only that answer makes the
+    link `wired`. A helper reads commands between callbacks, so how long that
+    takes is the processor's cadence, not a fixed number — hence a poll rather
+    than a sleep. A link that reaches `error` is returned as it is, so the
+    caller's assertion carries the helper's own reason.
+    """
+    deadline = time.monotonic() + LINK_ANSWER_TIMEOUT_SECONDS
+    link = None
+    while time.monotonic() < deadline:
+        link = link_with_id(mcp_json(control_url, "graph", {}), link_id)
+        if link is not None and link["state"] in (wanted, "error"):
+            return link["state"] + (
+                f" ({link['error_reason']})" if link.get("error_reason") else ""
+            )
+        time.sleep(0.05)
+    return f"still {link['state'] if link else 'absent'} after {LINK_ANSWER_TIMEOUT_SECONDS}s"
+
+
 def tap_channel_of(processor_id: str, output_port: str) -> str:
     """The channel name `tap` takes: the source id lowercased, then the port."""
     return f"{processor_id.lower()}/{output_port}"
@@ -225,9 +251,14 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     graph_after_connect = mcp_json(control_url, "graph", {})
     upstream_link = link_with_id(graph_after_connect, upstream_link_id)
     assert upstream_link is not None, f"the link is missing from {graph_after_connect['links']}"
-    assert upstream_link["state"] == "wired", (
-        "the top-level link state must say the wiring happened, not the state "
-        "the link was created in"
+    assert upstream_link["state"] in ("pending", "wired"), (
+        "`connect` onto a helper returns before that helper has opened its "
+        f"port, so the link reads pending or wired and nothing else: {upstream_link}"
+    )
+    assert await_link_state(control_url, upstream_link_id, "wired") == "wired", (
+        "the helper's own answer is what makes the link wired; a link stuck "
+        "pending is a helper that never opened its port, and one in error "
+        "carries the helper's reason"
     )
     assert node_named(graph_after_connect, "effect")["components"]["state"] == "Running"
 

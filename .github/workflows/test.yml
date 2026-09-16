@@ -246,6 +246,12 @@ jobs:
           # holds against a helper opening first and released with it, the
           # fan-out and fan-in caps from distinct nodes and their refusals, and
           # the one-sample, no-history limits every channel states.
+          # A link onto a helper reads `wired` only once the helper answers:
+          # the answer's own rpc tags and the routing that keeps them out of the
+          # lifecycle queue, the cells they land on and the refusal of every one
+          # a dead helper still owed, the link state derived from them, and the
+          # plan check that never wires an unanswered link twice. The helper's
+          # half of the exchange is the wheel's `test_helper_process.py`.
           cargo test --locked -p streamlib-engine --lib -- \
             core::processor_owned_window \
             processor_owned_window_ops \
@@ -463,7 +469,17 @@ jobs:
             vulkan::rhi::vulkan_device::tests::a_file_descriptor_that_is_not_a_dma_buf_is_refused_and_closed \
             core::context::surface_store::plane_fd_ownership_tests::a_reply_announcing_no_edges_keeps_every_fd_as_a_plane \
             core::context::surface_store::plane_fd_ownership_tests::each_announced_edge_is_peeled_off_the_end_and_closed \
-            core::context::surface_store::plane_fd_ownership_tests::a_reply_shorter_than_its_flags_promise_is_refused_and_closes_what_it_carried
+            core::context::surface_store::plane_fd_ownership_tests::a_reply_shorter_than_its_flags_promise_is_refused_and_closes_what_it_carried \
+            core::processors::out_of_process_link_wire_reply \
+            core::graph::components::out_of_process_link_wire_replies_component \
+            core::compiler::compiler::already_wired_tests \
+            core::compiler::compiler_ops::subprocess_bridge::tests::incoming_frame_routing \
+            core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_link_handed_to_a_helper_is_pending_until_the_helper_says_it_opened_its_port \
+            core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_helper_that_cannot_open_its_port_leaves_the_link_in_error_with_its_reason \
+            core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_disconnected_link_stops_rendering_the_reason_it_was_refused_for \
+            core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_link_no_helper_has_to_answer_for_is_wired_as_soon_as_it_is_opened \
+            core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_link_between_one_helpers_own_ports_waits_on_both_of_its_ends \
+            core::json_schema::link_rendering_tests
           # The two arms' own liveness tests are named one by one rather than
           # by module: their modules also hold tests that dlopen libasound and
           # walk a real PCM, which this runner has no `/dev/snd` for. These

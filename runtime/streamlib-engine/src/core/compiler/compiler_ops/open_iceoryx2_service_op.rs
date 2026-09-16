@@ -22,9 +22,10 @@ use crate::core::error::{Error, Result};
 use crate::core::graph::{
     DeviceMatchedAudioWindowContractsComponent, Graph, GraphEdgeWithComponents,
     GraphNodeWithComponents, Iceoryx2ServicesHeldOpenForLinkComponent, LinkState,
-    LinkStateComponent, LinkUniqueId, ProcessorInstanceComponent, ProcessorMetrics,
+    LinkStateComponent, LinkUniqueId, OutOfProcessLinkWireRepliesComponent,
+    ProcessorInstanceComponent, ProcessorMetrics,
 };
-use crate::core::processors::ProcessorInstance;
+use crate::core::processors::{OutOfProcessLinkWireReply, ProcessorInstance};
 use crate::iceoryx2::{
     AudioWindowDeclarationOfAnInputPort, ChannelEgressConfig, ChannelSizing, ChannelTrustTier,
     DEFAULT_EXPECTED_PAYLOAD_BYTES, DeliveryProfile, DeliveryResolution, Iceoryx2Node,
@@ -149,10 +150,15 @@ pub fn open_iceoryx2_service(
         .map(|name| iceoryx2_node.open_or_create_notify_service(name, max_notifiers))
         .transpose()?;
 
+    // Every out-of-process end this link was handed to and has not answered
+    // for. Empty is a link wholly in the app process, or one carried in a far
+    // side's startup envelope — either way wired the moment this op returns.
+    let mut wire_replies_awaited_from_its_out_of_process_ends = Vec::new();
+
     // Source side: install the single channel publisher (first link out of this
     // port) and append this link's destination notifier.
     if source_is_subprocess {
-        wire_subprocess_source(
+        wire_replies_awaited_from_its_out_of_process_ends.extend(wire_subprocess_source(
             graph,
             &source_proc_id,
             &source_port,
@@ -163,7 +169,7 @@ pub fn open_iceoryx2_service(
             channel_sizing,
             max_notifiers,
             link_id,
-        )?;
+        )?);
     } else {
         let source_processor = get_single_processor(graph, &source_proc_id)?;
         wire_rust_source(
@@ -184,7 +190,7 @@ pub fn open_iceoryx2_service(
     // Destination side: subscribe to the channel bound to this local input port,
     // and ensure the destination's single listener exists.
     if dest_is_subprocess {
-        wire_subprocess_dest(
+        wire_replies_awaited_from_its_out_of_process_ends.extend(wire_subprocess_dest(
             graph,
             &dest_proc_id,
             &dest_port,
@@ -195,7 +201,7 @@ pub fn open_iceoryx2_service(
             max_notifiers,
             link_id,
             dest_audio_windowing,
-        )?;
+        )?);
     } else {
         let dest_processor = get_single_processor(graph, &dest_proc_id)?;
         wire_rust_dest(
@@ -221,13 +227,31 @@ pub fn open_iceoryx2_service(
         channel_data_service: service,
         destination_notify_service: notify_service,
     });
-    link.insert(LinkStateComponent(LinkState::Wired));
 
-    tracing::info!(
-        channel = %channel_service_name,
-        "Opened iceoryx2 channel: [{}] (state: Wired)",
-        link_id
-    );
+    // A link an out-of-process end has not answered for is `Pending`, not
+    // `Wired`: the engine has sent the wiring, and only that end opening its
+    // own port makes the link carry anything. `graph` reads the answers off
+    // the component below, which the end fills from its bridge's reader
+    // thread. `docs/plan/ARCHITECTURE.md` §Processor model, the
+    // `[local-transport-hardening]` entry.
+    if wire_replies_awaited_from_its_out_of_process_ends.is_empty() {
+        link.insert(LinkStateComponent(LinkState::Wired));
+        tracing::info!(
+            channel = %channel_service_name,
+            "Opened iceoryx2 channel: [{}] (state: Wired)",
+            link_id
+        );
+    } else {
+        link.insert(LinkStateComponent(LinkState::Pending));
+        link.insert_component_without_rendering_it(OutOfProcessLinkWireRepliesComponent(
+            wire_replies_awaited_from_its_out_of_process_ends,
+        ));
+        tracing::info!(
+            channel = %channel_service_name,
+            "Opened iceoryx2 channel: [{}] (state: Pending, awaiting its helper's answer)",
+            link_id
+        );
+    }
     Ok(())
 }
 
@@ -315,6 +339,9 @@ pub fn close_iceoryx2_service(graph: &mut Graph, link_id: &LinkUniqueId) -> Resu
 
     if let Some(link) = graph.traversal_mut().e(link_id).first_mut() {
         link.remove::<Iceoryx2ServicesHeldOpenForLinkComponent>();
+        // The answers go with the link: a refusal is rendered until the link is
+        // disconnected, and this is that point.
+        link.remove::<OutOfProcessLinkWireRepliesComponent>();
         link.insert(LinkStateComponent(LinkState::Disconnected));
     }
     tracing::info!("Closed iceoryx2 service: {} (state: Disconnected)", link_id);
@@ -850,6 +877,10 @@ fn publish_device_matched_audio_window_contracts_on_destination_node(
 /// An empty `notify_service_name` is the wire's way of saying the destination
 /// drains no listener, so the far side opens no notifier for this link. Every
 /// SDK reads it that way.
+///
+/// Hands back the cell this end's answer will land in, or `None` where the
+/// entry rides the far side's startup envelope instead and its `ready`
+/// confirms it.
 #[allow(clippy::too_many_arguments)]
 fn wire_subprocess_source(
     graph: &mut Graph,
@@ -862,7 +893,7 @@ fn wire_subprocess_source(
     channel_sizing: ChannelSizing,
     notify_max_notifiers: usize,
     link_id: &LinkUniqueId,
-) -> Result<()> {
+) -> Result<Option<Arc<OutOfProcessLinkWireReply>>> {
     // `enable_safe_overflow` is a wire fact, not a knob: iceoryx2 verifies it on
     // every reopen, so an SDK opening this service from its own bindings must
     // request the same value the engine did.
@@ -900,6 +931,9 @@ fn wire_subprocess_source(
 /// Record this link's dest-side wiring on a processor whose transport lives out
 /// of process, so it opens its own channel subscriber (bound to its local input
 /// port) from the envelope.
+///
+/// Hands back the cell this end's answer will land in, on the same terms as
+/// [`wire_subprocess_source`].
 #[allow(clippy::too_many_arguments)]
 fn wire_subprocess_dest(
     graph: &mut Graph,
@@ -912,7 +946,7 @@ fn wire_subprocess_dest(
     notify_max_notifiers: usize,
     link_id: &LinkUniqueId,
     audio_windowing: Option<AudioWindowDeclarationOfAnInputPort>,
-) -> Result<()> {
+) -> Result<Option<Arc<OutOfProcessLinkWireReply>>> {
     // The dest reader no longer carries a payload-size hint: the subprocess read
     // buffer starts at the default and grows to the frame it actually receives
     // (PowerOfTwo segment growth on the publisher side, grow-and-retry on read).
@@ -976,7 +1010,9 @@ mod tests {
     use crate::core::execution::ExecutionConfig;
     use crate::core::graph::{InputLinkPortRef, OutputLinkPortRef};
     use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
-    use crate::core::processors::{DynGeneratedProcessor, ProcessorSpec};
+    use crate::core::processors::{
+        DynGeneratedProcessor, OutOfProcessLinkWireOutcome, ProcessorSpec,
+    };
     use crate::core::{ProcessorDescriptor, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 
     /// One reclaim the engine asked an out-of-process endpoint for. Named
@@ -1001,6 +1037,10 @@ mod tests {
         /// Every link the engine handed this host after its setup, with the
         /// direction it was wired in.
         late_wired_links: Arc<Mutex<Vec<(crate::core::PortDirection, serde_json::Value)>>>,
+        /// The answer cells this host handed back, in the order the engine
+        /// asked for them — how a test plays a far side that has not answered
+        /// yet, opened its port, or refused.
+        wire_answers_owed: Arc<Mutex<Vec<Arc<OutOfProcessLinkWireReply>>>>,
     }
 
     impl DynGeneratedProcessor for OutOfCrateHelperSpawnHostStub {
@@ -1077,11 +1117,13 @@ mod tests {
             &mut self,
             port_direction: crate::core::PortDirection,
             link_wiring: &serde_json::Value,
-        ) -> Result<()> {
+        ) -> Result<Option<Arc<OutOfProcessLinkWireReply>>> {
             self.late_wired_links
                 .lock()
                 .push((port_direction, link_wiring.clone()));
-            Ok(())
+            let reply = OutOfProcessLinkWireReply::awaiting_the_far_sides_answer();
+            self.wire_answers_owed.lock().push(Arc::clone(&reply));
+            Ok(Some(reply))
         }
         fn apply_config_json(&mut self, _config_json: &serde_json::Value) -> Result<()> {
             Ok(())
@@ -1909,20 +1951,37 @@ mod tests {
     /// processors that are both helper stubs, so the engine opens no port of
     /// its own on it. Hands back the source's id and the link.
     fn graph_with_one_wired_link_between_two_helper_stubs() -> (Graph, String, LinkUniqueId) {
+        let (graph, source_id, link_id, _) = graph_and_owed_answers_of_a_helper_to_helper_link();
+        (graph, source_id, link_id)
+    }
+
+    /// The same graph, with the answers both helper ends still owe — which is
+    /// what a test plays a helper with, since the op does not wait for them.
+    fn graph_and_owed_answers_of_a_helper_to_helper_link() -> (
+        Graph,
+        String,
+        LinkUniqueId,
+        Vec<Arc<OutOfProcessLinkWireReply>>,
+    ) {
         let mut graph = Graph::new();
         let source_id = add_mock_output_only(&mut graph);
         let dest_id = add_mock_input_only(&mut graph);
+        let answers_owed: Arc<Mutex<Vec<Arc<OutOfProcessLinkWireReply>>>> = Arc::default();
         for helper_id in [&source_id, &dest_id] {
             attach_processor_instance(
                 &mut graph,
                 helper_id,
-                ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
+                ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub {
+                    wire_answers_owed: answers_owed.clone(),
+                    ..Default::default()
+                })),
             );
         }
         let link_id = add_link_from_out1_to_in1(&mut graph, &source_id, &dest_id);
         open_iceoryx2_service(&mut graph, &link_id, &Iceoryx2Node::for_this_test_process())
             .expect("the helper-to-helper link wires");
-        (graph, source_id, link_id)
+        let answers_owed = answers_owed.lock().clone();
+        (graph, source_id, link_id, answers_owed)
     }
 
     /// The depth the live channel `source_id`'s `out1` publishes to was created
@@ -2067,6 +2126,192 @@ mod tests {
         assert_eq!(
             creation_depth_a_helper_opening_out1_finds(&source_id),
             DeliveryProfile::ORDERED_DEPTH,
+        );
+    }
+
+    /// What one link reports to `graph`, and why where that is an error.
+    fn link_state_in_graph(
+        graph: &Graph,
+        link_id: &LinkUniqueId,
+    ) -> (crate::core::json_schema::LinkStateOutput, Option<String>) {
+        let link = graph
+            .traversal()
+            .e(link_id)
+            .first()
+            .expect("the link must be in the graph");
+        let rendered = crate::core::json_schema::LinkOutput::from(link);
+        (rendered.state, rendered.error_reason)
+    }
+
+    /// A link handed to a helper is `pending` until that helper says it opened
+    /// its port, and both ends of a helper-to-helper link have to say so.
+    ///
+    /// Fail-without-fix: stamp `Wired` in the op as before and the first
+    /// assertion reads `wired` with neither helper having opened anything.
+    #[test]
+    fn a_link_handed_to_a_helper_is_pending_until_the_helper_says_it_opened_its_port() {
+        use crate::core::json_schema::LinkStateOutput;
+        let (graph, _, link_id, answers_owed) = graph_and_owed_answers_of_a_helper_to_helper_link();
+        let [source_answer, dest_answer] = &answers_owed[..] else {
+            panic!(
+                "both helper ends owe an answer; got {} ",
+                answers_owed.len()
+            );
+        };
+
+        assert_eq!(
+            link_state_in_graph(&graph, &link_id),
+            (LinkStateOutput::Pending, None),
+            "`connect` returns before either helper has opened anything"
+        );
+
+        source_answer.note_the_far_sides_answer(OutOfProcessLinkWireOutcome::OpenedByTheFarSide);
+        assert_eq!(
+            link_state_in_graph(&graph, &link_id),
+            (LinkStateOutput::Pending, None),
+            "one end's answer does not wire a link the other end never opened"
+        );
+
+        dest_answer.note_the_far_sides_answer(OutOfProcessLinkWireOutcome::OpenedByTheFarSide);
+        assert_eq!(
+            link_state_in_graph(&graph, &link_id),
+            (LinkStateOutput::Wired, None)
+        );
+    }
+
+    /// A helper that could not open its port leaves the link in error with its
+    /// own reason, and `graph` renders that reason.
+    #[test]
+    fn a_helper_that_cannot_open_its_port_leaves_the_link_in_error_with_its_reason() {
+        use crate::core::json_schema::LinkStateOutput;
+        let (graph, _, link_id, answers_owed) = graph_and_owed_answers_of_a_helper_to_helper_link();
+
+        answers_owed[1].note_the_far_sides_answer(
+            OutOfProcessLinkWireOutcome::RefusedByTheFarSide {
+                reason: "ExceedsMaxSupportedSubscribers".to_string(),
+            },
+        );
+
+        assert_eq!(
+            link_state_in_graph(&graph, &link_id),
+            (
+                LinkStateOutput::Error,
+                Some("ExceedsMaxSupportedSubscribers".to_string())
+            ),
+            "a refusal is the link's answer even while the other end is still silent, and the \
+             reason is what the caller of a live `connect` has to read"
+        );
+
+        answers_owed[0].note_the_far_sides_answer(OutOfProcessLinkWireOutcome::OpenedByTheFarSide);
+        assert_eq!(
+            link_state_in_graph(&graph, &link_id).0,
+            LinkStateOutput::Error,
+            "the other end opening does not rescue a link one end refused"
+        );
+    }
+
+    /// The reason lives as long as the link does, and goes with it.
+    #[test]
+    fn a_disconnected_link_stops_rendering_the_reason_it_was_refused_for() {
+        use crate::core::json_schema::LinkStateOutput;
+        let (mut graph, _, link_id, answers_owed) =
+            graph_and_owed_answers_of_a_helper_to_helper_link();
+        answers_owed[0].note_the_far_sides_answer(
+            OutOfProcessLinkWireOutcome::RefusedByTheFarSide {
+                reason: "no such service".to_string(),
+            },
+        );
+
+        close_iceoryx2_service(&mut graph, &link_id).expect("the disconnect must succeed");
+
+        assert_eq!(
+            link_state_in_graph(&graph, &link_id),
+            (LinkStateOutput::Disconnected, None),
+        );
+    }
+
+    /// A link wholly inside the app process waits on nobody and is wired the
+    /// moment the op returns — the startup envelope's arm is the same one,
+    /// since a helper with no bridge yet hands back no answer to wait on.
+    #[test]
+    fn a_link_no_helper_has_to_answer_for_is_wired_as_soon_as_it_is_opened() {
+        use crate::core::json_schema::LinkStateOutput;
+        use crate::core::test_support::{MockInputOnlyProcessor, MockOutputOnlyProcessor};
+
+        let mut graph = Graph::new();
+        let source_id = add_mock_output_only(&mut graph);
+        let dest_id = add_mock_input_only(&mut graph);
+        attach_mock_instance::<MockOutputOnlyProcessor::Processor>(&mut graph, &source_id);
+        attach_mock_instance::<MockInputOnlyProcessor::Processor>(&mut graph, &dest_id);
+        let link_id = add_link_from_out1_to_in1(&mut graph, &source_id, &dest_id);
+
+        open_iceoryx2_service(&mut graph, &link_id, &Iceoryx2Node::for_this_test_process())
+            .expect("an app-process link wires");
+
+        assert_eq!(
+            link_state_in_graph(&graph, &link_id),
+            (LinkStateOutput::Wired, None)
+        );
+    }
+
+    /// A link whose source and destination are the same helper waits on two
+    /// answers, because the engine hands that helper both of its ends.
+    ///
+    /// `connect` accepts an output wired to its own processor's input, so this
+    /// is reachable rather than theoretical. Fail-without-fix: hand the link
+    /// one cell and the first answer reports it `wired` while the other end
+    /// may not have opened at all.
+    #[test]
+    fn a_link_between_one_helpers_own_ports_waits_on_both_of_its_ends() {
+        use crate::core::json_schema::LinkStateOutput;
+        crate::core::test_support::ensure_test_mocks_registered();
+        let mut graph = Graph::new();
+        let helper_id = graph
+            .traversal_mut()
+            .add_v(ProcessorSpec::new(
+                crate::core::test_support::MockProcessor::processor_class_import_path(),
+                serde_json::Value::Null,
+            ))
+            .first()
+            .expect("the four-port mock must be in the registry")
+            .id
+            .to_string();
+        let answers_owed: Arc<Mutex<Vec<Arc<OutOfProcessLinkWireReply>>>> = Arc::default();
+        attach_processor_instance(
+            &mut graph,
+            &helper_id,
+            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub {
+                wire_answers_owed: answers_owed.clone(),
+                ..Default::default()
+            })),
+        );
+        let link_id = add_link_from_out1_to_in1(&mut graph, &helper_id, &helper_id);
+
+        open_iceoryx2_service(&mut graph, &link_id, &Iceoryx2Node::for_this_test_process())
+            .expect("a link between one helper's own ports wires");
+
+        let answers_owed = answers_owed.lock().clone();
+        assert_eq!(
+            answers_owed.len(),
+            2,
+            "the engine hands this helper both ends of the link, so it owes two answers"
+        );
+        assert_eq!(
+            link_state_in_graph(&graph, &link_id),
+            (LinkStateOutput::Pending, None)
+        );
+
+        answers_owed[0].note_the_far_sides_answer(OutOfProcessLinkWireOutcome::OpenedByTheFarSide);
+        assert_eq!(
+            link_state_in_graph(&graph, &link_id),
+            (LinkStateOutput::Pending, None),
+            "one end opening does not wire a link whose other end is the same helper"
+        );
+
+        answers_owed[1].note_the_far_sides_answer(OutOfProcessLinkWireOutcome::OpenedByTheFarSide);
+        assert_eq!(
+            link_state_in_graph(&graph, &link_id),
+            (LinkStateOutput::Wired, None)
         );
     }
 

@@ -614,8 +614,11 @@ class HelperProcessLifecycle:
             # sends next.
             self._unwire_link(command)
         elif verb == "wire_link":
-            # A link the engine wired after `setup` read the envelope; unanswered
-            # for the same reason `unwire_link` is.
+            # A link the engine handed over after `setup` read the envelope.
+            # Answered, unlike `unwire_link`: the parent reports the link wired
+            # only once this side says its port is open, and the answer rides
+            # its own link-scoped rpc tag so it never becomes the reply to the
+            # next lifecycle command.
             self._wire_link(command)
         else:
             log.warn("the parent sent an unknown lifecycle command", cmd=verb)
@@ -794,6 +797,7 @@ class HelperProcessLifecycle:
     def _wire_link(self, command: "dict[str, Any]") -> None:
         direction = command.get("direction")
         link = command.get("link") or {}
+        link_id = link.get("link_id")
         if direction == "input":
             port_wiring = {"inputs": [link]}
         elif direction == "output":
@@ -802,19 +806,42 @@ class HelperProcessLifecycle:
             log.warn(
                 "the parent asked to wire a link in an unknown direction",
                 direction=direction,
-                link_id=link.get("link_id"),
+                link_id=link_id,
             )
+            self._answer_the_parents_wire_link(link_id, f"unknown link direction {direction!r}")
             return
         try:
             wire_link_data_access(self._link_data_access, port_wiring)
         except Exception as wire_failure:
-            # The engine already reports the link wired; without its port here
-            # this processor never sees a bag on it, so the failure is named.
             log.error(
                 "this processor could not open its port for a link wired after setup",
-                link_id=link.get("link_id"),
+                link_id=link_id,
                 direction=direction,
                 error=str(wire_failure),
+            )
+            self._answer_the_parents_wire_link(link_id, str(wire_failure))
+            return
+        self._answer_the_parents_wire_link(link_id, None)
+
+    def _answer_the_parents_wire_link(self, link_id: "Optional[str]", refusal: "Optional[str]") -> None:
+        """Tell the parent whether this processor's port for one link is open.
+
+        Wire contract: the two rpc tags are link-scoped rather than lifecycle
+        ones, so the parent's bridge routes an answer to the link it names
+        instead of reading it as the reply to whatever command it sends next.
+        Only this answer makes the engine report the link `wired`; a refusal
+        carries its reason into `graph`, where the caller of a live `connect`
+        reads it. A frame naming no link is answered to nothing, so there is
+        nothing to send.
+        """
+        if link_id is None:
+            log.warn("the parent asked to wire a link it did not name")
+            return
+        if refusal is None:
+            self._bridge.send({"rpc": "link_wired", "link_id": link_id})
+        else:
+            self._bridge.send(
+                {"rpc": "link_wire_failed", "link_id": link_id, "reason": refusal}
             )
 
     def _update_config(self, command: "dict[str, Any]") -> None:

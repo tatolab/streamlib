@@ -456,7 +456,11 @@ fn insert_processor_between_linked_processors_recipe(
         "graph",
         format!(
             "confirm the links both `connect` calls returned have `state` `wired`, the new node's \
-             `components.state` is `Running`, and link `{link_id}` is gone."
+             `components.state` is `Running`, and link `{link_id}` is gone. The new processor \
+             runs in a helper process, so each link reads `pending` until that helper has opened \
+             its port — read `graph` again. A link that reads `error` carries the helper's own \
+             reason in `error_reason` and will never carry a bag: `disconnect` it and fix what \
+             the reason names."
         ),
     ));
 
@@ -513,7 +517,10 @@ fn fan_output_to_another_consumer_recipe(
                 format!(
                     "confirm the link `connect` returned has `state` `wired`, the new node's \
                      `components.state` is `Running`, and {source_label}'s other links are still \
-                     there."
+                     there. The new processor runs in a helper process, so the link reads \
+                     `pending` until that helper has opened its port — read `graph` again. A link \
+                     that reads `error` carries the helper's own reason in `error_reason` and \
+                     will never carry a bag: `disconnect` it and fix what the reason names."
                 ),
             ),
         ],
@@ -574,7 +581,10 @@ fn show_channel_on_virtual_camera_recipe(
             graph_recipe_step_calling_tool(
                 "graph",
                 "confirm the link `connect` returned has `state` `wired` and the camera's node's \
-                 `components.state` is `Running`.",
+                 `components.state` is `Running`. `VirtualCameraSink` is a native built-in, so \
+                 its link is wired as soon as `connect` returns; a link onto a processor in a \
+                 helper process instead reads `pending` until that helper answers, and `error` \
+                 with the helper's own reason in `error_reason` where it could not open its port.",
             ),
         ],
         closing_note: Some(

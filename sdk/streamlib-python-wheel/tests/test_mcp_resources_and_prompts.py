@@ -18,6 +18,7 @@ Booting initializes a GPU context, so the whole module needs a device.
 
 import json
 import re
+import time
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -37,6 +38,10 @@ pytestmark = pytest.mark.requires_gpu
 FIRST_MARKED_BAG_TIMEOUT_SECONDS = 30.0
 CLEAN_EXIT_TIMEOUT_SECONDS = 60.0
 JSON_RPC_TIMEOUT_SECONDS = 30.0
+# How long a link handed to a running helper has to come back `wired`. The
+# helper answers between callbacks, so this is bounded by one frame of the
+# processor's own work, not by the wire.
+LINK_ANSWER_TIMEOUT_SECONDS = 15.0
 
 APP_WITH_A_SOURCE_LINKED_TO_A_SINK = '''\
 from streamlib import Runtime, TestPatternSource
@@ -98,6 +103,27 @@ class MarkedBagSink:
 
 NUMBERED_STEP = re.compile(r"^\d+\. `([a-z_]+)` — (.*)$")
 EXPLICIT_ARGUMENT = re.compile(r"`([a-z_]+)`: `([^`]+)`")
+
+
+def await_link_state(client: "ScriptedMcpClient", link_id: str, wanted: str) -> str:
+    """Poll `graph` until one link reaches `wanted`, and report what it reached.
+
+    A `connect` onto a helper-placed processor returns with the link `pending`:
+    the helper opens its own port and answers, and only that answer makes the
+    link `wired`. A link that reaches `error` is returned as it is, so the
+    caller's assertion carries the helper's own reason.
+    """
+    deadline = time.monotonic() + LINK_ANSWER_TIMEOUT_SECONDS
+    link = None
+    while time.monotonic() < deadline:
+        graph = client.call_tool("graph", {})
+        link = next((each for each in graph["links"] if each["id"] == link_id), None)
+        if link is not None and link["state"] in (wanted, "error"):
+            return link["state"] + (
+                f" ({link['error_reason']})" if link.get("error_reason") else ""
+            )
+        time.sleep(0.05)
+    return f"still {link['state'] if link else 'absent'} after {LINK_ANSWER_TIMEOUT_SECONDS}s"
 
 
 class ScriptedMcpClient:
@@ -272,8 +298,18 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
     links_by_id = {link["id"]: link for link in graph_after["links"]}
     assert replaced_link["id"] not in links_by_id, "the replaced link must be gone"
     assert len(returned_link_ids) == 2, returned_link_ids
+    # Both new links land on helper-placed processors, so each returns
+    # `pending` and reaches `wired` only when that helper answers that it opened
+    # its port — which is what the recipe the client just followed tells it to
+    # read `graph` again for.
     for link_id in returned_link_ids:
-        assert links_by_id[link_id]["state"] == "wired", links_by_id.get(link_id)
+        assert links_by_id[link_id]["state"] in ("pending", "wired"), links_by_id.get(link_id)
+        assert await_link_state(client, link_id, "wired") == "wired", (
+            "the helper's own answer is what makes the link wired; a link stuck "
+            "pending is a helper that never opened its port, and one in error "
+            "carries the helper's reason"
+        )
+    links_by_id = {link["id"]: link for link in client.call_tool("graph", {})["links"]}
     upstream_link, downstream_link = (links_by_id[link_id] for link_id in returned_link_ids)
     assert upstream_link["source"] == replaced_link["source"]
     assert upstream_link["target"]["processor_id"] == added_processor_id
