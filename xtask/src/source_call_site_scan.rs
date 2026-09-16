@@ -15,13 +15,14 @@ pub struct ScannedCallSite<'code> {
     pub collapsed_call_text: String,
 }
 
-/// Every call in `code` spelled `call_prefix` — which ends at its open
-/// parenthesis — in source order. A call nested inside another's arguments is
-/// not reported, and a call whose parentheses never close ends the scan.
-pub fn call_sites_of<'code>(code: &'code str, call_prefix: &str) -> Vec<ScannedCallSite<'code>> {
+/// Every call to `callee` — a path such as `libc::dup` — in `code`, in source
+/// order. A call nested inside another's arguments is not reported, and a call
+/// whose parentheses never close ends the scan.
+pub fn call_sites_of<'code>(code: &'code str, callee: &str) -> Vec<ScannedCallSite<'code>> {
+    let call_prefix = format!("{callee}(");
     let mut call_sites = Vec::new();
     let mut search_from = 0usize;
-    while let Some(offset) = code[search_from..].find(call_prefix) {
+    while let Some(offset) = code[search_from..].find(&call_prefix) {
         let call_start = search_from + offset;
         let open_paren = call_start + call_prefix.len() - 1;
         let Some(close_paren) = matching_close_paren(code, open_paren) else {
@@ -78,7 +79,7 @@ mod tests {
     #[test]
     fn a_call_split_across_lines_is_reported_at_its_first_line_with_its_arguments() {
         let code = "fn f() {\n    let x = libc::pipe2(\n        fds.as_mut_ptr(),\n        flags,\n    );\n}\n";
-        let call_sites = call_sites_of(code, "libc::pipe2(");
+        let call_sites = call_sites_of(code, "libc::pipe2");
         assert_eq!(call_sites.len(), 1);
         assert_eq!(call_sites[0].line, 2);
         assert!(call_sites[0].argument_text.contains("flags"));
@@ -90,14 +91,14 @@ mod tests {
 
     #[test]
     fn a_call_whose_parentheses_never_close_ends_the_scan() {
-        assert!(call_sites_of("libc::dup(fd", "libc::dup(").is_empty());
+        assert!(call_sites_of("libc::dup(fd", "libc::dup").is_empty());
     }
 
     #[test]
     fn a_blanked_line_keeps_every_later_line_number() {
         let body = "// libc::dup(fd)\nlibc::dup(fd);\n";
         let code = blank_out_lines(body, is_a_whole_line_comment);
-        let call_sites = call_sites_of(&code, "libc::dup(");
+        let call_sites = call_sites_of(&code, "libc::dup");
         assert_eq!(call_sites.len(), 1);
         assert_eq!(call_sites[0].line, 2);
     }

@@ -170,9 +170,9 @@ pub trait RuntimeOperations: Send + Sync {
     ///
     /// The effect is process-global (matching the `RuntimeShutdown` event on
     /// `topics::RUNTIME_GLOBAL`): the receiver is not a scoping parameter, and
-    /// the latch is first-observer-wins — the loop owner that observes the
-    /// request takes it. A request issued while no run loop is running is
-    /// observed by the next one to start, so a start-script that aborts from
+    /// the escalation it raises is cleared only by the run loop that observed it,
+    /// once that run has ended. A request issued while no run loop is running
+    /// is observed by the next one to start, so a start-script that aborts from
     /// `setup(rt)` still stops the run.
     ///
     /// Fire-and-forget with no completion payload, so unlike every other sync

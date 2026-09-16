@@ -18,9 +18,8 @@ use pyo3::types::PyDict;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::{
-    ArmedEngineTeardownWatchdog, ProcessorDisplayNameAndId, Runner,
-    description_of_the_abandoned_processor_threads, request_runtime_shutdown,
-    take_runtime_shutdown_escalation,
+    ArmedEngineTeardownWatchdog, DescriptionOfTheAbandonedProcessorThreads,
+    ProcessorDisplayNameAndId, Runner, request_runtime_shutdown, take_runtime_shutdown_escalation,
 };
 
 use crate::python_added_processor::{
@@ -84,7 +83,11 @@ impl std::fmt::Display for EngineTeardownIncomplete {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::ProcessorThreadsAbandoned(abandoned) => {
-                formatter.write_str(&description_of_the_abandoned_processor_threads(abandoned))
+                write!(
+                    formatter,
+                    "{}",
+                    DescriptionOfTheAbandonedProcessorThreads(abandoned)
+                )
             }
             Self::EngineStillReferenced => formatter.write_str(
                 "engine teardown left a live reference behind — engine threads may outlive \

@@ -1349,7 +1349,7 @@ impl Runner {
 }
 
 /// Whether the run loop should stop: the `RuntimeShutdown` event was received,
-/// or a request is latched. One predicate so both `#[cfg]` arms of
+/// or the shutdown escalation has been raised. One predicate so both `#[cfg]` arms of
 /// [`Runner::wait_for_signal_with`] observe the same set of sources.
 fn runtime_shutdown_observed(event_shutdown_flag: &AtomicBool) -> bool {
     event_shutdown_flag.load(Ordering::SeqCst)

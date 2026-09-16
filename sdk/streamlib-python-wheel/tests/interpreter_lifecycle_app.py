@@ -266,6 +266,17 @@ def scenario_a_processor_asleep_in_its_callback() -> None:
     marker("RUN_RETURNED")
 
 
+def scenario_a_processor_asleep_in_its_callback_with_hangups_not_ignored() -> None:
+    """The same graph, with SIGHUP at its default whatever the driver inherited.
+
+    A test suite run under `nohup` hands every child an ignored SIGHUP, which the
+    engine keeps ignored — so the scenario that proves a hangup tears the graph
+    down sets the disposition it is about.
+    """
+    signal.signal(signal.SIGHUP, signal.SIG_DFL)
+    scenario_a_processor_asleep_in_its_callback()
+
+
 def scenario_three_processors_slow_to_tear_down() -> None:
     """Three helpers, each asleep in its callback and three seconds over its
     teardown, so stopping them one after another is plainly slower than at once."""
@@ -321,6 +332,9 @@ SCENARIOS = {
     "two_pipelines_in_one_process": scenario_two_pipelines_in_one_process,
     "shutdown_spun_across_the_run_loop_exit": scenario_shutdown_spun_across_the_run_loop_exit,
     "a_processor_asleep_in_its_callback": scenario_a_processor_asleep_in_its_callback,
+    "a_processor_asleep_in_its_callback_with_hangups_not_ignored": (
+        scenario_a_processor_asleep_in_its_callback_with_hangups_not_ignored
+    ),
     "three_processors_slow_to_tear_down": scenario_three_processors_slow_to_tear_down,
     "a_teardown_only_a_forced_shutdown_cuts_short": (
         scenario_a_teardown_only_a_forced_shutdown_cuts_short

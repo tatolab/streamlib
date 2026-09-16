@@ -149,9 +149,8 @@ impl HelperProcessShutdownLadder {
         is_shutdown_forced: fn() -> bool,
     ) -> Self {
         Self {
-            processor_display_name,
-            child,
             is_shutdown_forced,
+            ..Self::taking_over(processor_display_name, child)
         }
     }
 

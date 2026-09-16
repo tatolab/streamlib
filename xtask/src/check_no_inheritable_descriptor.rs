@@ -34,7 +34,7 @@ const SCAN_ROOTS: &[&str] = &["runtime", "sdk", "adapters"];
 
 /// A `libc` call that creates a descriptor, and what makes it close-on-exec.
 struct DescriptorCreatingCall {
-    call_prefix: &'static str,
+    callee: &'static str,
     /// The flag the call must carry, or `None` when the call has no
     /// close-on-exec form at all and is refused outright.
     close_on_exec_flag: Option<&'static str>,
@@ -43,42 +43,42 @@ struct DescriptorCreatingCall {
 
 const DESCRIPTOR_CREATING_CALLS: &[DescriptorCreatingCall] = &[
     DescriptorCreatingCall {
-        call_prefix: "libc::dup(",
+        callee: "libc::dup",
         close_on_exec_flag: None,
         close_on_exec_spelling: "libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0)",
     },
     DescriptorCreatingCall {
-        call_prefix: "libc::pipe(",
+        callee: "libc::pipe",
         close_on_exec_flag: None,
         close_on_exec_spelling: "libc::pipe2(fds, libc::O_CLOEXEC)",
     },
     DescriptorCreatingCall {
-        call_prefix: "libc::pipe2(",
+        callee: "libc::pipe2",
         close_on_exec_flag: Some("O_CLOEXEC"),
         close_on_exec_spelling: "libc::pipe2(fds, libc::O_CLOEXEC)",
     },
     DescriptorCreatingCall {
-        call_prefix: "libc::epoll_create(",
+        callee: "libc::epoll_create",
         close_on_exec_flag: None,
         close_on_exec_spelling: "libc::epoll_create1(libc::EPOLL_CLOEXEC)",
     },
     DescriptorCreatingCall {
-        call_prefix: "libc::epoll_create1(",
+        callee: "libc::epoll_create1",
         close_on_exec_flag: Some("EPOLL_CLOEXEC"),
         close_on_exec_spelling: "libc::epoll_create1(libc::EPOLL_CLOEXEC)",
     },
     DescriptorCreatingCall {
-        call_prefix: "libc::timerfd_create(",
+        callee: "libc::timerfd_create",
         close_on_exec_flag: Some("TFD_CLOEXEC"),
         close_on_exec_spelling: "libc::timerfd_create(clock, libc::TFD_CLOEXEC | …)",
     },
     DescriptorCreatingCall {
-        call_prefix: "libc::eventfd(",
+        callee: "libc::eventfd",
         close_on_exec_flag: Some("EFD_CLOEXEC"),
         close_on_exec_spelling: "libc::eventfd(initial, libc::EFD_CLOEXEC | …)",
     },
     DescriptorCreatingCall {
-        call_prefix: "libc::recvmsg(",
+        callee: "libc::recvmsg",
         close_on_exec_flag: Some("MSG_CMSG_CLOEXEC"),
         close_on_exec_spelling: "libc::recvmsg(socket, &mut message, libc::MSG_CMSG_CLOEXEC)",
     },
@@ -107,7 +107,10 @@ pub fn run(workspace_root: &Path) -> Result<()> {
         report.files_scanned,
         "a descriptor every spawned process inherits",
     )?;
-    ensure_every_scan_root_contributed(&report)?;
+    crate::ensure_every_source_walking_gate_scan_root_contributed(
+        "check-no-inheritable-descriptor",
+        &report.files_scanned_per_scan_root,
+    )?;
 
     let failure_lines: Vec<String> = report
         .violations
@@ -136,19 +139,6 @@ pub fn run(workspace_root: &Path) -> Result<()> {
          created close-on-exec",
         report.files_scanned,
     );
-    Ok(())
-}
-
-/// A renamed or moved root would leave the others carrying the whole gate,
-/// which reads identically to a clean tree.
-fn ensure_every_scan_root_contributed(report: &InheritableDescriptorScanReport) -> Result<()> {
-    for (root, files_scanned) in &report.files_scanned_per_scan_root {
-        anyhow::ensure!(
-            *files_scanned > 0,
-            "check-no-inheritable-descriptor scanned 0 files under {root} — that scan root \
-             moved out from under the gate"
-        );
-    }
     Ok(())
 }
 
@@ -193,43 +183,40 @@ pub fn scan_files(
             .with_context(|| format!("failed to read {}", relative_path.display()))?;
         report.files_scanned += 1;
 
-        for (line, call_text, close_on_exec_spelling) in inheritable_descriptor_calls(&body) {
-            report.violations.push(InheritableDescriptorViolation {
-                file: relative_path.clone(),
-                line,
-                call_text,
-                close_on_exec_spelling,
-            });
-        }
+        report
+            .violations
+            .extend(inheritable_descriptor_calls(relative_path, &body));
     }
     Ok(report)
 }
 
-/// Every descriptor-creating call in `body` that is not close-on-exec, as
-/// `(1-based line, whitespace-collapsed call text, the close-on-exec spelling)`.
-fn inheritable_descriptor_calls(body: &str) -> Vec<(usize, String, &'static str)> {
+/// Every descriptor-creating call in `body` that is not close-on-exec, in line
+/// order.
+fn inheritable_descriptor_calls(
+    relative_path: &Path,
+    body: &str,
+) -> Vec<InheritableDescriptorViolation> {
     let code = blank_out_lines(body, is_a_whole_line_comment);
-    let mut calls: Vec<(usize, String, &'static str)> = DESCRIPTOR_CREATING_CALLS
+    let mut violations: Vec<InheritableDescriptorViolation> = DESCRIPTOR_CREATING_CALLS
         .iter()
         .flat_map(|descriptor_creating_call| {
-            call_sites_of(&code, descriptor_creating_call.call_prefix)
+            call_sites_of(&code, descriptor_creating_call.callee)
                 .into_iter()
                 .filter(|call_site| {
                     !descriptor_creating_call
                         .close_on_exec_flag
                         .is_some_and(|flag| call_site.argument_text.contains(flag))
                 })
-                .map(|call_site| {
-                    (
-                        call_site.line,
-                        call_site.collapsed_call_text,
-                        descriptor_creating_call.close_on_exec_spelling,
-                    )
+                .map(|call_site| InheritableDescriptorViolation {
+                    file: relative_path.to_path_buf(),
+                    line: call_site.line,
+                    call_text: call_site.collapsed_call_text,
+                    close_on_exec_spelling: descriptor_creating_call.close_on_exec_spelling,
                 })
         })
         .collect();
-    calls.sort_by_key(|(line, _, _)| *line);
-    calls
+    violations.sort_by_key(|violation| violation.line);
+    violations
 }
 
 #[cfg(test)]
@@ -362,7 +349,11 @@ mod tests {
         let relative_path = PathBuf::from(format!("{}/src/lib.rs", SCAN_ROOTS[0]));
         write(tmp.path(), &relative_path, "pub fn ok() {}\n");
         let report = scan_files(tmp.path(), &[relative_path]).unwrap();
-        let refusal = ensure_every_scan_root_contributed(&report).unwrap_err();
+        let refusal = crate::ensure_every_source_walking_gate_scan_root_contributed(
+            "check-no-inheritable-descriptor",
+            &report.files_scanned_per_scan_root,
+        )
+        .unwrap_err();
         assert!(refusal.to_string().contains(SCAN_ROOTS[1]), "got {refusal}");
     }
 }

@@ -20,7 +20,7 @@ mod surface_image_exchange;
 mod tap;
 
 pub use crate::core::compiler::{
-    ProcessorDisplayNameAndId, description_of_the_abandoned_processor_threads,
+    DescriptionOfTheAbandonedProcessorThreads, ProcessorDisplayNameAndId,
 };
 pub use crate::core::signals::ScopedShutdownSignalOwnership;
 pub use capability_extensions::{LoadedCapabilityExtension, LoadedCapabilityExtensionRegistry};

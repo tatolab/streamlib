@@ -118,6 +118,24 @@ pub fn ensure_source_walking_gate_read_source(
     Ok(())
 }
 
+/// Refuse a gate run where one of its scan roots contributed no file.
+///
+/// A renamed or moved root leaves the others carrying the whole gate, which
+/// reads identically to a clean tree.
+pub fn ensure_every_source_walking_gate_scan_root_contributed(
+    gate_name: &str,
+    files_scanned_per_scan_root: &[(&str, usize)],
+) -> Result<()> {
+    for (scan_root, files_scanned) in files_scanned_per_scan_root {
+        anyhow::ensure!(
+            *files_scanned > 0,
+            "{gate_name} scanned 0 files under {scan_root} — that scan root moved out from \
+             under the gate"
+        );
+    }
+    Ok(())
+}
+
 /// Every source-walking gate, paired with the subcommand name that runs it alone.
 ///
 /// Each gate reads the tree and reports; none builds the workspace. That is what

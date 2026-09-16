@@ -92,31 +92,37 @@ pub(crate) struct AbandonedProcessorThreadStillRunning {
 }
 
 /// `'Name' (id), 'Other' (id)`, in the order given.
-fn display_names_and_ids_of<'a>(
-    processors: impl IntoIterator<Item = &'a ProcessorDisplayNameAndId>,
-) -> String {
-    processors
-        .into_iter()
-        .map(|processor| {
-            format!(
+struct DisplayNamesAndIds<'a>(&'a [ProcessorDisplayNameAndId]);
+
+impl std::fmt::Display for DisplayNamesAndIds<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (index, processor) in self.0.iter().enumerate() {
+            if index > 0 {
+                formatter.write_str(", ")?;
+            }
+            write!(
+                formatter,
                 "'{}' ({})",
                 processor.processor_display_name, processor.processor_id
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(", ")
+            )?;
+        }
+        Ok(())
+    }
 }
 
 /// What to say about processors whose threads were abandoned.
-pub fn description_of_the_abandoned_processor_threads(
-    abandoned: &[ProcessorDisplayNameAndId],
-) -> String {
-    format!(
-        "{} processor thread(s) ignored shutdown past their budget and were abandoned: {}. \
-         The engine stays alive beneath them until this process exits.",
-        abandoned.len(),
-        display_names_and_ids_of(abandoned),
-    )
+pub struct DescriptionOfTheAbandonedProcessorThreads<'a>(pub &'a [ProcessorDisplayNameAndId]);
+
+impl std::fmt::Display for DescriptionOfTheAbandonedProcessorThreads<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "{} processor thread(s) ignored shutdown past their budget and were abandoned: {}. \
+             The engine stays alive beneath them until this process exits.",
+            self.0.len(),
+            DisplayNamesAndIds(self.0),
+        )
+    }
 }
 
 /// Remove `processor_ids` from the graph, telling every one of their threads to
@@ -250,9 +256,13 @@ fn join_every_signalled_processor_thread_within_its_budget(
         }
         if last_noted_waiting_count != Some(still_waited_on.len()) {
             last_noted_waiting_count = Some(still_waited_on.len());
+            let waiting_on: Vec<ProcessorDisplayNameAndId> = still_waited_on
+                .iter()
+                .map(|thread| thread.processor.clone())
+                .collect();
             crate::core::runtime::note_what_the_engine_teardown_is_waiting_on(format!(
                 "the processor threads of {}",
-                display_names_and_ids_of(still_waited_on.iter().map(|thread| &thread.processor))
+                DisplayNamesAndIds(&waiting_on)
             ));
         }
         std::thread::sleep(PROCESSOR_THREAD_JOIN_POLL_INTERVAL);
@@ -509,7 +519,7 @@ mod tests {
             "an abandoned processor's node must still leave the graph"
         );
 
-        let description = description_of_the_abandoned_processor_threads(&abandoned);
+        let description = DescriptionOfTheAbandonedProcessorThreads(&abandoned).to_string();
         assert!(
             description.contains("'StuckEncoder'")
                 && description.contains(abandoned[0].processor_id.as_str()),

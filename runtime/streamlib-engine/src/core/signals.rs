@@ -537,13 +537,12 @@ mod tests {
     #[serial]
     #[cfg(all(unix, not(target_os = "macos")))]
     fn dropping_ownership_restores_the_previous_dispositions() {
-        use signal_hook::consts::signal::{SIGHUP, SIGINT, SIGTERM};
-
-        let _hangup_not_ignored = SignalDispositionSetForOneTest::set(SIGHUP, libc::SIG_DFL);
-        let dispositions_before: Vec<(libc::c_int, libc::sigaction)> = [SIGINT, SIGTERM, SIGHUP]
-            .into_iter()
-            .map(|signal| (signal, current_disposition_of(signal)))
-            .collect();
+        let _hangup_not_ignored = SignalDispositionSetForOneTest::set(libc::SIGHUP, libc::SIG_DFL);
+        let dispositions_before: Vec<(libc::c_int, libc::sigaction)> =
+            SHUTDOWN_SIGNALS_OWNED_BY_THE_RUN_LOOP
+                .into_iter()
+                .map(|signal| (signal, current_disposition_of(signal)))
+                .collect();
 
         {
             let _owned = ScopedShutdownSignalOwnership::take_until_dropped()

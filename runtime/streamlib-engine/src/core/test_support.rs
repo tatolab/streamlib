@@ -324,10 +324,19 @@ pub(crate) fn rerun_this_test_in_a_child_process(
     environment_variable: &str,
     value: &std::ffi::OsStr,
 ) -> std::process::Output {
-    std::process::Command::new(std::env::current_exe().expect("the test binary's own path"))
-        .args([test_path, "--exact", "--test-threads=1", "--nocapture"])
-        .env(environment_variable, value)
-        .stdin(std::process::Stdio::null())
-        .output()
-        .expect("the test binary re-runs this test in a child process")
+    let child =
+        std::process::Command::new(std::env::current_exe().expect("the test binary's own path"))
+            .args([test_path, "--exact", "--test-threads=1", "--nocapture"])
+            .env(environment_variable, value)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("the test binary re-runs this test in a child process");
+    // `--exact` on a name that matches nothing runs no test and exits 0, which
+    // reads as a pass for a test that was renamed away.
+    assert!(
+        String::from_utf8_lossy(&child.stdout).contains("running 1 test"),
+        "the child process ran no test named `{test_path}`:\n{}",
+        String::from_utf8_lossy(&child.stdout)
+    );
+    child
 }

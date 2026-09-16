@@ -11,8 +11,8 @@ use crate::core::compiler::compile_phase::CompilePhase;
 use crate::core::compiler::compile_result::CompileResult;
 use crate::core::compiler::compiler_transaction::CompilerTransactionHandle;
 use crate::core::compiler::processor_thread_shutdown::{
-    AbandonedProcessorThreadStillRunning, ProcessorDisplayNameAndId, ProcessorThreadJoinBudgets,
-    description_of_the_abandoned_processor_threads,
+    AbandonedProcessorThreadStillRunning, DescriptionOfTheAbandonedProcessorThreads,
+    ProcessorDisplayNameAndId, ProcessorThreadJoinBudgets,
     remove_processors_signalling_every_thread_before_joining_any,
 };
 use crate::core::context::RuntimeContext;
@@ -132,8 +132,6 @@ impl Compiler {
         use crate::core::graph::{PendingDeletionComponent, ProcessorInstanceComponent};
 
         let mut result = CompileResult::default();
-        let mut abandoned_in_this_compile: Vec<ProcessorDisplayNameAndId> = Vec::new();
-
         // =====================================================================
         // 1. Validate and categorize operations
         // =====================================================================
@@ -238,70 +236,75 @@ impl Compiler {
         // =====================================================================
         // 2. Handle removals FIRST (before adding new processors)
         // =====================================================================
-        if !plan.links_to_remove.is_empty() || !plan.processors_to_remove.is_empty() {
-            tracing::debug!(
-                "[commit] Removing {} processors, {} links",
-                plan.processors_to_remove.len(),
-                plan.links_to_remove.len()
-            );
+        let abandoned_in_this_compile: Vec<ProcessorDisplayNameAndId> =
+            if !plan.links_to_remove.is_empty() || !plan.processors_to_remove.is_empty() {
+                tracing::debug!(
+                    "[commit] Removing {} processors, {} links",
+                    plan.processors_to_remove.len(),
+                    plan.links_to_remove.len()
+                );
 
-            // Unwire links first (before removing processors)
-            for link_id in &plan.links_to_remove {
-                let mut graph = graph_arc.write();
-                if let Some(link) = graph
-                    .traversal()
-                    .e(())
-                    .filter(|link| link.id == *link_id)
-                    .first()
-                {
-                    let from_port = link.from_port().to_string();
-                    let to_port = link.to_port().to_string();
-
-                    PUBSUB.publish(
-                        topics::RUNTIME_GLOBAL,
-                        &Event::RuntimeGlobal(RuntimeEvent::CompilerWillUnwireLink {
-                            link_id: link_id.to_string(),
-                            from_port: from_port.clone(),
-                            to_port: to_port.clone(),
-                        }),
-                    );
-
-                    tracing::info!("[CLOSE SERVICE] {}", link_id);
-                    if let Err(e) = super::compiler_ops::close_iceoryx2_service(&mut graph, link_id)
+                // Unwire links first (before removing processors)
+                for link_id in &plan.links_to_remove {
+                    let mut graph = graph_arc.write();
+                    if let Some(link) = graph
+                        .traversal()
+                        .e(())
+                        .filter(|link| link.id == *link_id)
+                        .first()
                     {
-                        tracing::warn!("Failed to close service {}: {}", link_id, e);
+                        let from_port = link.from_port().to_string();
+                        let to_port = link.to_port().to_string();
+
+                        PUBSUB.publish(
+                            topics::RUNTIME_GLOBAL,
+                            &Event::RuntimeGlobal(RuntimeEvent::CompilerWillUnwireLink {
+                                link_id: link_id.to_string(),
+                                from_port: from_port.clone(),
+                                to_port: to_port.clone(),
+                            }),
+                        );
+
+                        tracing::info!("[CLOSE SERVICE] {}", link_id);
+                        if let Err(e) =
+                            super::compiler_ops::close_iceoryx2_service(&mut graph, link_id)
+                        {
+                            tracing::warn!("Failed to close service {}: {}", link_id, e);
+                        }
+
+                        PUBSUB.publish(
+                            topics::RUNTIME_GLOBAL,
+                            &Event::RuntimeGlobal(RuntimeEvent::CompilerDidUnwireLink {
+                                link_id: link_id.to_string(),
+                                from_port,
+                                to_port,
+                            }),
+                        );
+
+                        result.links_unwired += 1;
                     }
+                    drop(graph);
 
-                    PUBSUB.publish(
-                        topics::RUNTIME_GLOBAL,
-                        &Event::RuntimeGlobal(RuntimeEvent::CompilerDidUnwireLink {
-                            link_id: link_id.to_string(),
-                            from_port,
-                            to_port,
-                        }),
-                    );
-
-                    result.links_unwired += 1;
+                    // Clean up graph after unwiring
+                    let mut graph = graph_arc.write();
+                    if graph.traversal_mut().e(link_id).drop().exists() {
+                        return Err(Error::GraphError("value was not dropped".into()));
+                    }
                 }
-                drop(graph);
 
-                // Clean up graph after unwiring
-                let mut graph = graph_arc.write();
-                if graph.traversal_mut().e(link_id).drop().exists() {
-                    return Err(Error::GraphError("value was not dropped".into()));
-                }
-            }
-
-            abandoned_in_this_compile =
-                remove_processors_signalling_every_thread_before_joining_any(
-                    &graph_arc,
-                    &plan.processors_to_remove,
-                    ProcessorThreadJoinBudgets::ENGINE_CHOSEN,
-                    crate::core::runtime::is_runtime_shutdown_forced,
-                    abandoned_processor_threads,
-                )?;
-            result.processors_removed += plan.processors_to_remove.len();
-        }
+                let abandoned_by_this_removal =
+                    remove_processors_signalling_every_thread_before_joining_any(
+                        &graph_arc,
+                        &plan.processors_to_remove,
+                        ProcessorThreadJoinBudgets::ENGINE_CHOSEN,
+                        crate::core::runtime::is_runtime_shutdown_forced,
+                        abandoned_processor_threads,
+                    )?;
+                result.processors_removed += plan.processors_to_remove.len();
+                abandoned_by_this_removal
+            } else {
+                Vec::new()
+            };
 
         // =====================================================================
         // 3. Phase 1: PREPARE - Attach infrastructure components
@@ -481,7 +484,7 @@ impl Compiler {
 
         if !abandoned_in_this_compile.is_empty() {
             return Err(Error::Runtime(
-                description_of_the_abandoned_processor_threads(&abandoned_in_this_compile),
+                DescriptionOfTheAbandonedProcessorThreads(&abandoned_in_this_compile).to_string(),
             ));
         }
         Ok(())

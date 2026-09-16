@@ -471,7 +471,7 @@ def test_a_third_ctrl_c_kills_every_helper_process_group_and_exits_130(app_under
 @pytest.mark.requires_gpu
 def test_sighup_tears_the_graph_down_gracefully(app_under_test):
     """A closed terminal is a graceful shutdown, `teardown()` included."""
-    app = app_under_test("a_processor_asleep_in_its_callback")
+    app = app_under_test("a_processor_asleep_in_its_callback_with_hangups_not_ignored")
     app.await_output_containing("MARKER:ASLEEP_IN_PROCESS", "the processor to park")
     app.process.send_signal(signal.SIGHUP)
     app.await_clean_exit()

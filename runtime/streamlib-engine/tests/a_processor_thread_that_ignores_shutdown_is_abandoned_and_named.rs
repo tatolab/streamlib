@@ -9,16 +9,18 @@
 //! processor it was. What it locks:
 //! - `Runner::stop()` finishes the teardown and fails naming the processor by
 //!   display name and id, and the runner still lists the thread as abandoned.
-//! - A live `remove_processor` takes the node out of the graph and fails naming
-//!   the processor.
+//! - A live `remove_processor` takes the node out of the graph, announces the
+//!   removal, and fails naming the processor.
 //!
 //! Starts a real `Runner` (GPU + iceoryx2), so this runs on the rig only.
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use parking_lot::Mutex;
 use serial_test::serial;
 use streamlib::sdk::processors::ProcessorSpec;
+use streamlib::sdk::pubsub::{Event, EventListener, PUBSUB, RuntimeEvent, topics};
 use streamlib::sdk::runtime::{Runner, RuntimeStatus};
 use streamlib_engine::core::processors::PROCESSOR_REGISTRY;
 use streamlib_engine::core::{Result, RuntimeContextFullAccess};
@@ -66,6 +68,20 @@ fn a_running_runner_with_a_processor_that_ignores_shutdown(
         .wait_until_every_processor_is_running(Duration::from_secs(30))
         .expect("the processor starts");
     (runtime, processor_id.to_string())
+}
+
+/// Records the ids of the processors a `RuntimeDidRemoveProcessor` names.
+struct RemovedProcessorIdsRecorder(Arc<Mutex<Vec<String>>>);
+
+impl EventListener for RemovedProcessorIdsRecorder {
+    fn on_event(&mut self, event: &Event) -> Result<()> {
+        if let Event::RuntimeGlobal(RuntimeEvent::RuntimeDidRemoveProcessor { processor_id }) =
+            event
+        {
+            self.0.lock().push(processor_id.to_string());
+        }
+        Ok(())
+    }
 }
 
 fn assert_the_graph_holds_no_processor(runtime: &Runner) {
@@ -123,6 +139,13 @@ fn stopping_the_runtime_abandons_the_thread_and_names_the_processor() {
 fn a_live_removal_abandons_the_thread_removes_the_node_and_fails_naming_it() {
     let (runtime, processor_id) =
         a_running_runner_with_a_processor_that_ignores_shutdown("StuckOnRemoval");
+    let removed_processor_ids = Arc::new(Mutex::new(Vec::new()));
+    let recorder: Arc<Mutex<dyn EventListener>> = Arc::new(Mutex::new(
+        RemovedProcessorIdsRecorder(Arc::clone(&removed_processor_ids)),
+    ));
+    PUBSUB
+        .subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&recorder))
+        .expect("subscribe to the removal events");
 
     let refusal = runtime
         .remove_processor(&processor_id.as_str().into())
@@ -140,6 +163,14 @@ fn a_live_removal_abandons_the_thread_removes_the_node_and_fails_naming_it() {
             .len(),
         1
     );
+    let announced_by = Instant::now() + Duration::from_secs(5);
+    while !removed_processor_ids.lock().contains(&processor_id) {
+        assert!(
+            Instant::now() < announced_by,
+            "a removal that left the graph was never announced"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
     runtime
         .stop()
         .expect("a stop that abandons nothing new succeeds");

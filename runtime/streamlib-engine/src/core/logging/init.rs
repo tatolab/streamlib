@@ -92,7 +92,6 @@ impl Drop for StreamlibLoggingGuard {
         // unblocks the reader threads with EOF, so their final
         // intercepted events land in the worker queue while the
         // worker is still draining.
-        #[cfg(unix)]
         self.stop_intercepting_the_standard_streams();
         if let Some(mut worker) = self.worker.take() {
             worker.shutdown_and_join();

@@ -34,7 +34,7 @@ const SCAN_ROOTS: &[&str] = &[
     "runtime/streamlib-consumer-rhi/src",
 ];
 
-const UNBOUNDED_CSTR_CONSTRUCTOR: &str = "CStr::from_ptr(";
+const UNBOUNDED_CSTR_CONSTRUCTOR: &str = "CStr::from_ptr";
 
 /// Presence of this in the argument means a Rust value owns the storage, so a
 /// borrowing accessor exists and the unbounded lifetime is unnecessary.
@@ -68,7 +68,10 @@ pub fn run(workspace_root: &Path) -> Result<()> {
         report.files_scanned,
         "an unbounded-lifetime CStr borrow re-enter the Vulkan RHI",
     )?;
-    ensure_every_scan_root_contributed(&report)?;
+    crate::ensure_every_source_walking_gate_scan_root_contributed(
+        "check-no-unbounded-cstr-from-ptr",
+        &report.files_scanned_per_root,
+    )?;
 
     if report.violations.is_empty() {
         println!(
@@ -98,19 +101,6 @@ pub fn run(workspace_root: &Path) -> Result<()> {
         "check-no-unbounded-cstr-from-ptr: {} unbounded CStr borrow(s) in the Vulkan RHI",
         report.violations.len()
     );
-}
-
-/// A renamed or moved root would leave the other one carrying the whole gate,
-/// which reads identically to a clean tree.
-fn ensure_every_scan_root_contributed(report: &UnboundedCStrFromPtrScanReport) -> Result<()> {
-    for (root, files_scanned) in &report.files_scanned_per_root {
-        anyhow::ensure!(
-            *files_scanned > 0,
-            "check-no-unbounded-cstr-from-ptr scanned 0 files under {root} — that scan \
-             root moved out from under the gate"
-        );
-    }
-    Ok(())
 }
 
 pub fn scan(workspace_root: &Path) -> Result<UnboundedCStrFromPtrScanReport> {
@@ -294,7 +284,11 @@ mod tests {
             "pub fn ok() {}\n",
         );
         let report = scan(tmp.path()).unwrap();
-        let err = ensure_every_scan_root_contributed(&report).unwrap_err();
+        let err = crate::ensure_every_source_walking_gate_scan_root_contributed(
+            "check-no-unbounded-cstr-from-ptr",
+            &report.files_scanned_per_root,
+        )
+        .unwrap_err();
         assert!(err.to_string().contains(SCAN_ROOTS[1]), "got {err}");
     }
 }
