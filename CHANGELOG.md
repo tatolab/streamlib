@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.14](https://github.com/tatolab/streamlib/compare/v0.22.13...v0.22.14) (2026-09-16)
+
+
+### Features
+
+* **engine:** count every bag lost on a native link ([#2310](https://github.com/tatolab/streamlib/issues/2310)) ([cf4696a](https://github.com/tatolab/streamlib/commit/cf4696afe83767f26f8a0a7079c9ea6637984574))
+
 ## [0.22.13](https://github.com/tatolab/streamlib/compare/v0.22.12...v0.22.13) (2026-09-16)
 
 
