@@ -55,7 +55,8 @@ fn trust_tier_label(trust_tier: ChannelTrustTier) -> ChannelTrustTierLabel {
 /// before any delivery gives the number back; any other leaves a gap for
 /// whoever missed the bag, which is a real loss to that subscriber. Every
 /// variant is named so an iceoryx2 upgrade adding one does not compile until
-/// it is placed.
+/// it is placed. The number wraps to zero past `u64::MAX` in every build
+/// profile, which a subscriber reads as no gap.
 fn sequence_number_following_a_send(
     sent_sequence_number: u64,
     send_outcome: &std::result::Result<usize, SendError>,
@@ -72,7 +73,7 @@ fn sequence_number_following_a_send(
         ) => true,
     };
     if may_have_delivered {
-        sent_sequence_number + 1
+        sent_sequence_number.wrapping_add(1)
     } else {
         sent_sequence_number
     }
@@ -1145,6 +1146,11 @@ mod tests {
         use iceoryx2::port::LoanError;
 
         assert_eq!(sequence_number_following_a_send(7, &Ok(1)), 8);
+        assert_eq!(
+            sequence_number_following_a_send(u64::MAX, &Ok(1)),
+            0,
+            "the last number wraps to zero rather than overflowing in a debug build"
+        );
         assert_eq!(
             sequence_number_following_a_send(7, &Ok(0)),
             8,
