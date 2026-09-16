@@ -297,6 +297,8 @@ jobs:
             iceoryx2::node::tests::a_domain_root_past_the_socket_path_budget_is_refused_by_name \
             iceoryx2::node::tests::an_iceoryx2_toml_in_the_working_directory_has_no_effect_on_a_node \
             iceoryx2::node::tests::two_test_process_domains_share_neither_files_nor_shared_memory \
+            iceoryx2::node::tests::a_node_whose_process_was_killed_is_reclaimed_by_the_sweep \
+            iceoryx2::node::tests::the_sweep_reads_the_engine_owned_domain_and_never_the_ambient_one \
             iceoryx2::iceoryx2_domain_for_this_test_process \
             core::runtime::runtime::tests::runtime_internal_surface_share::a_runtime_started_with_xdg_runtime_dir_unset_keeps_its_socket_and_domain_in_the_per_user_fallback \
             iceoryx2::channel_sizing_tests::every_channel_service_opens_under_safe_overflow \

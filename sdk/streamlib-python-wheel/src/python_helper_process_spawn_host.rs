@@ -20,6 +20,10 @@ use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
+use crate::helper_process_shutdown_ladder::{
+    HelperProcessShutdownLadder, HelperProcessShutdownOutcome,
+    a_helper_process_has_exited_without_being_reaped,
+};
 use pyo3::prelude::*;
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::descriptors::ProcessorDescriptor;
@@ -28,7 +32,8 @@ use streamlib::sdk::execution::{ExecutionConfig, ProcessExecution};
 use streamlib::sdk::graph::ProcessorNode;
 use streamlib::sdk::helper_process_transport::{
     ENGINE_BUILD_ID, ENGINE_BUILD_ID_ENVIRONMENT_VARIABLE, EscalateTransport,
-    SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS, SubprocessBridge, spawn_fd_line_reader,
+    HelperProcessShutdownCommand, SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS, SubprocessBridge,
+    spawn_fd_line_reader,
 };
 use streamlib::sdk::iceoryx2::ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE;
 use streamlib::sdk::processors::{DynGeneratedProcessor, OutOfProcessLinkWiringEnvelope};
@@ -51,15 +56,19 @@ pub(crate) const HELPER_PROCESS_PROCESSOR_ID_ENVIRONMENT_VARIABLE: &str = "STREA
 /// class that blocks at import time fails the graph instead of hanging it.
 const REGISTRATION_DEADLINE: Duration = Duration::from_secs(60);
 
-/// How long a child gets to exit on its own after teardown before it is killed.
-const TEARDOWN_EXIT_DEADLINE: Duration = Duration::from_secs(5);
+/// How long the registration wait parks before it re-reads whether shutdown has
+/// begun. A helper still importing then is put on the ladder rather than left
+/// holding the app for the rest of its budget.
+const REGISTRATION_SHUTDOWN_OBSERVATION_INTERVAL: Duration = Duration::from_millis(50);
 
-/// How long a child gets to answer a lifecycle command before the parent stops
-/// waiting on it.
+/// How long a child gets to answer a lifecycle command that is not part of the
+/// shutdown ladder before the parent stops waiting on it.
 ///
 /// This bounds the engine's own thread, not the child's work: the callbacks
 /// behind these commands are expected to return promptly, and a child that
-/// needs longer has already broken the contract.
+/// needs longer has already broken the contract. Shutdown has its own budgets —
+/// see [`crate::helper_process_shutdown_ladder`], where they are the ladder's
+/// rungs rather than one deadline reused.
 const REPLY_DEADLINE: Duration = Duration::from_secs(5);
 
 /// How long the refusal of a helper that died while setting up waits for the
@@ -172,12 +181,19 @@ pub(crate) struct PythonHelperProcessSpawnHostProcessor {
     interpreter_path: PathBuf,
     app_entry_directory: Option<PathBuf>,
     child: Option<Child>,
+    /// The engine-owned iceoryx2 domain this processor's nodes live in, kept
+    /// from `setup` because the sweep that reclaims a dead helper's nodes runs
+    /// from a liveness poll that is handed no context.
+    iceoryx2_domain_root: Option<PathBuf>,
     child_standard_error_tail: Option<HelperProcessStandardErrorTail>,
     bridge: Option<SubprocessBridge>,
     /// Set once the child stops answering. The pipeline keeps running and the
     /// graph shows this processor in error; the frame in flight is lost, and
     /// is never silently replayed.
     child_is_gone: bool,
+    /// Set once this helper has been through the shutdown ask, so the ladder's
+    /// own belt-and-braces call cannot make it a second time.
+    shutdown_was_already_asked_of_this_helper: bool,
     link_wiring: OutOfProcessLinkWiringEnvelope,
 }
 
@@ -225,6 +241,11 @@ impl PythonHelperProcessSpawnHostProcessor {
             command.env("STREAMLIB_SURFACE_SOCKET", surface_socket_path);
         }
         detach_child_from_the_terminal_and_bind_its_lifetime_to_ours(&mut command);
+        // Registered before `EscalateTransport::attach`, whose own `pre_exec`
+        // clears `FD_CLOEXEC` on the escalate socket's child end: `pre_exec`
+        // closures run in registration order, so the one descriptor a helper is
+        // owed is handed back after this sweep has marked everything.
+        give_the_child_no_descriptor_beyond_stdio(&mut command);
         command
     }
 
@@ -328,12 +349,9 @@ impl PythonHelperProcessSpawnHostProcessor {
         let Some(reply) = self.exchange_with_child(message, lifecycle_command_name) else {
             return;
         };
-        let reply_tag = reply.get("rpc").and_then(|rpc| rpc.as_str()).unwrap_or("");
+        let reply_tag = lifecycle_reply_tag(&reply).unwrap_or("");
         if reply_tag != expected_reply_tag {
-            let reported = reply
-                .get("error")
-                .and_then(|error| error.as_str())
-                .unwrap_or("it reported no reason");
+            let reported = reported_reason(&reply);
             tracing::warn!(
                 "[{}] helper process answered {lifecycle_command_name} with {reply_tag:?} rather \
                  than {expected_reply_tag:?}: {reported}",
@@ -352,10 +370,34 @@ impl PythonHelperProcessSpawnHostProcessor {
             .as_ref()
             .ok_or_else(|| Error::Runtime("there is no helper process to wait for".to_string()))?;
         let deadline = Instant::now() + REGISTRATION_DEADLINE;
+        // Only a request that arrives *during* this wait cuts it short. The
+        // latch is process-global and first-observer-wins, so one already set
+        // when a helper starts belongs to a run that has not taken it yet —
+        // and reading that as "shutdown began" would refuse every helper a
+        // later graph in this process adds.
+        let shutdown_was_already_requested =
+            streamlib::sdk::runtime::is_runtime_shutdown_requested();
         let reply = loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                self.kill_child();
+            if !shutdown_was_already_requested
+                && streamlib::sdk::runtime::is_runtime_shutdown_requested()
+            {
+                // A helper still importing when shutdown begins must not hold
+                // the app for the rest of a sixty-second budget. It goes on the
+                // ladder rather than taking a bare kill, because
+                // `docs/plan/ARCHITECTURE.md` §Processor model has any callback
+                // interrupted at shutdown — `setup()` included — followed by
+                // `teardown()`.
+                self.stop_the_helper_process_on_the_shutdown_ladder();
+                return Err(Error::Runtime(format!(
+                    "[{}] shutdown began while its helper process was still setting up",
+                    self.processor_display_name,
+                )));
+            }
+            let remaining = deadline
+                .saturating_duration_since(Instant::now())
+                .min(REGISTRATION_SHUTDOWN_OBSERVATION_INTERVAL);
+            if Instant::now() >= deadline {
+                self.take_the_helper_process_group_down();
                 return Err(Error::Runtime(format!(
                     "[{}] its helper process did not finish setting up within {}s. The class is \
                      imported from `{}` in a fresh interpreter — work that blocks at import time \
@@ -374,13 +416,13 @@ impl PythonHelperProcessSpawnHostProcessor {
             }
         };
 
-        match reply.get("rpc").and_then(|rpc| rpc.as_str()) {
+        match lifecycle_reply_tag(&reply) {
             Some("ready") => Ok(()),
             _ => {
-                let reported = reply
-                    .get("error")
-                    .and_then(|error| error.as_str())
-                    .unwrap_or("it reported no reason");
+                let reported = reported_reason(&reply).to_string();
+                // A helper that refused its own setup is never run and never
+                // torn down, so this is the only place its group goes.
+                self.take_the_helper_process_group_down();
                 Err(Error::Runtime(format!(
                     "[{}] could not set itself up in its helper process:\n{reported}",
                     self.processor_display_name
@@ -396,7 +438,12 @@ impl PythonHelperProcessSpawnHostProcessor {
     /// parent's, a missing variable — before its log channel exists, so raw
     /// standard error is the only place its reason is written.
     fn refuse_the_helper_process_that_died_while_setting_up(&mut self) -> Error {
-        self.child_is_gone = true;
+        // The group first, so nothing the helper started is still holding the
+        // standard-error pipe the tail below waits on — and so a refused start
+        // leaves no survivor, which `docs/plan/ARCHITECTURE.md` §Processor
+        // model owes at every helper exit and not only at the ones that reach
+        // teardown.
+        self.take_the_helper_process_group_down();
         let standard_error_tail = self
             .child_standard_error_tail
             .as_ref()
@@ -408,44 +455,167 @@ impl PythonHelperProcessSpawnHostProcessor {
         )
     }
 
-    fn kill_child(&mut self) {
-        self.child_is_gone = true;
-        self.bridge.take();
-        if let Some(mut child) = self.child.take() {
-            let _ = child.kill();
-            let _ = child.wait();
+    /// Ask the helper for both shutdown rungs at once, which is the plan's
+    /// "`stop` and `teardown` are sent together".
+    ///
+    /// Queued together and timed apart: a helper that misses its `stopped` —
+    /// because a callback outran the budget and took the interrupt — already
+    /// holds the command that runs its `teardown()`, so the interrupt costs it
+    /// the bag in flight rather than its teardown.
+    ///
+    /// Idempotent, because the engine's `stop()` is not the only way onto the
+    /// ladder: a helper interrupted while it was still importing never reached
+    /// that hook, and the plan owes it a `teardown()` all the same.
+    fn ask_the_helper_to_stop_and_tear_down(&mut self) {
+        if self.shutdown_was_already_asked_of_this_helper {
+            return;
+        }
+        self.shutdown_was_already_asked_of_this_helper = true;
+        // No channel is no failure to report: a helper whose crash was already
+        // noticed had its bridge dropped then, and warning twice more about a
+        // command nobody could have taken is the stream of noise
+        // `exchange_with_child` exists to avoid. A helper that is merely
+        // unresponsive still has its bridge, and is still asked.
+        if self.bridge.is_none() {
+            return;
+        }
+        // Warned once rather than per command: a helper that did not take the
+        // first will not take the second either, and one unusable child owes
+        // one line, which is the posture `exchange_with_child` already keeps.
+        for command in HelperProcessShutdownCommand::BOTH_IN_THE_ORDER_THE_LADDER_SENDS_THEM {
+            let asked = self.send_to_child(&serde_json::json!({
+                "cmd": command.command_tag(),
+                "capability": "full",
+            }));
+            if let Err(unreachable_helper) = asked {
+                tracing::warn!(
+                    "[{}] its helper process did not take the {} command, so neither it nor \
+                     anything after it was asked for: {unreachable_helper}",
+                    self.processor_display_name,
+                    command.command_tag(),
+                );
+                return;
+            }
         }
     }
 
-    /// Wait for the child to exit on its own, killing it once the deadline
-    /// passes. Either way it is reaped, so `rt.run()` leaves no survivors.
-    fn reap_child(&mut self) {
-        let Some(mut child) = self.child.take() else {
+    /// Walk the shutdown ladder: a callback that outran its budget interrupted,
+    /// `teardown()` given its five seconds, then the helper's whole process
+    /// group down and the child reaped.
+    fn stop_the_helper_process_on_the_shutdown_ladder(&mut self) {
+        self.ask_the_helper_to_stop_and_tear_down();
+        let outcome = self.child.take().map(|child| {
+            let bridge = self.bridge.as_ref();
+            HelperProcessShutdownLadder::taking_over(self.processor_display_name.clone(), child)
+                .walk_every_rung(|command, budget| {
+                    bridge.is_some_and(|bridge| await_the_reply_to(bridge, command, budget))
+                })
+        });
+        self.close_the_engines_end_of_the_helper_process(outcome);
+    }
+
+    /// Take the group down with no cooperative rung at all — see
+    /// [`HelperProcessShutdownLadder::skip_to_terminating_the_process_group`].
+    fn take_the_helper_process_group_down(&mut self) {
+        let outcome = self.child.take().map(|child| {
+            HelperProcessShutdownLadder::taking_over(self.processor_display_name.clone(), child)
+                .skip_to_terminating_the_process_group()
+        });
+        self.close_the_engines_end_of_the_helper_process(outcome);
+    }
+
+    /// Let go of everything this end held for the helper, whichever way it went.
+    ///
+    /// Dropping the bridge shuts the engine's end of the escalate socket, so a
+    /// descendant that outlived the group kill can issue no privileged
+    /// operation. The standard-output and standard-error readers are left
+    /// running rather than closed: they are detached threads, so nothing waits
+    /// on them, and a survivor's writes are still logged instead of raising
+    /// SIGPIPE at it.
+    fn close_the_engines_end_of_the_helper_process(
+        &mut self,
+        outcome: Option<HelperProcessShutdownOutcome>,
+    ) {
+        self.child_is_gone = true;
+        self.bridge.take();
+        if let Some(HelperProcessShutdownOutcome::Reaped(exit_status)) = outcome {
+            tracing::debug!(
+                "[{}] helper process exited: {exit_status}",
+                self.processor_display_name
+            );
+        }
+        if outcome.is_some() {
+            self.reclaim_the_iceoryx2_nodes_the_helper_left();
+        }
+    }
+
+    /// Reclaim the iceoryx2 nodes a helper left registered.
+    ///
+    /// A dead node holds its slot in every service it had opened, so a channel
+    /// whose destination is gone keeps counting it against the cap until a
+    /// sweep takes it out. Run at every helper exit and not only at a detected
+    /// crash: a helper the ladder had to kill never finalized its interpreter,
+    /// so its engine half never dropped the node either.
+    ///
+    /// The engine's own domain configuration, never the ambient one: the global
+    /// lookup path would sweep another domain, or none.
+    fn reclaim_the_iceoryx2_nodes_the_helper_left(&self) {
+        let Some(iceoryx2_domain_root) = self.iceoryx2_domain_root.as_deref() else {
             return;
         };
-        let deadline = Instant::now() + TEARDOWN_EXIT_DEADLINE;
-        loop {
-            match child.try_wait() {
-                Ok(Some(exit_status)) => {
-                    tracing::debug!(
-                        "[{}] helper process exited: {exit_status}",
-                        self.processor_display_name
-                    );
-                    return;
-                }
-                Ok(None) if Instant::now() < deadline => {
-                    std::thread::sleep(Duration::from_millis(20));
-                }
-                _ => {
-                    tracing::warn!(
-                        "[{}] helper process did not exit on its own; killing it",
-                        self.processor_display_name
-                    );
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return;
-                }
-            }
+        match streamlib::sdk::iceoryx2::reclaim_dead_iceoryx2_nodes_in_engine_owned_domain(
+            iceoryx2_domain_root,
+        ) {
+            Ok(reclaimed_node_count) if reclaimed_node_count > 0 => tracing::info!(
+                "[{}] reclaimed {reclaimed_node_count} iceoryx2 node(s) its helper left",
+                self.processor_display_name,
+            ),
+            Ok(_) => {}
+            Err(sweep_failure) => tracing::warn!(
+                "[{}] could not reclaim the iceoryx2 nodes its helper left: {sweep_failure}",
+                self.processor_display_name,
+            ),
+        }
+    }
+}
+
+/// The `rpc` tag a helper answered with, if it wrote one.
+fn lifecycle_reply_tag(reply: &serde_json::Value) -> Option<&str> {
+    reply.get("rpc").and_then(|rpc| rpc.as_str())
+}
+
+/// The reason a helper gave for a refusal, or a stand-in saying it gave none.
+fn reported_reason(reply: &serde_json::Value) -> &str {
+    reply
+        .get("error")
+        .and_then(|error| error.as_str())
+        .unwrap_or("it reported no reason")
+}
+
+/// Wait up to `budget` for the reply this command is answered with, reading
+/// past whatever the helper sent ahead of it.
+///
+/// Draining rather than taking the first frame: both commands are on the wire
+/// at once, so the helper answers `stopped` and then `done`, and a rung that
+/// claimed whatever arrived first would read the `stop` reply as the teardown
+/// it is timing.
+fn await_the_reply_to(
+    bridge: &SubprocessBridge,
+    command: HelperProcessShutdownCommand,
+    budget: Duration,
+) -> bool {
+    let deadline = Instant::now() + budget;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return false;
+        }
+        let Ok(reply) = bridge.recv_lifecycle_timeout(remaining) else {
+            // Timed out, or the socket reached EOF because the helper is gone.
+            return false;
+        };
+        if lifecycle_reply_tag(&reply) == Some(command.reply_tag()) {
+            return true;
         }
     }
 }
@@ -600,6 +770,126 @@ fn detach_child_from_the_terminal_and_bind_its_lifetime_to_ours(command: &mut Co
     }
 }
 
+/// The first descriptor past standard input, output and error.
+const FIRST_DESCRIPTOR_PAST_STDIO: libc::c_uint = 3;
+
+/// How far the per-descriptor fallback walks when the process's own limit is
+/// higher than that.
+///
+/// A session's limit can be a million, and a million `fcntl` calls between fork
+/// and exec would cost more than the interpreter start they precede. A
+/// descriptor above this is the stated residual of the fallback arm.
+const DESCRIPTOR_SWEEP_FALLBACK_CEILING: u64 = 65_536;
+
+/// Give the child no descriptor beyond its standard streams.
+///
+/// `docs/plan/ARCHITECTURE.md` §Processor model: a helper inherits nothing but
+/// its escalate socket and its standard streams. Everything else this process
+/// holds — the stdio interceptor's four dups and two pipe read ends, another
+/// helper's surface-share dups — reaches a child today, and a grandchild
+/// holding one keeps the app's output open past the app's own exit. That is the
+/// "won't quit even with SIGKILL" shape.
+///
+/// Marked close-on-exec rather than closed, because std's own machinery is
+/// still using descriptors here: the pipe it reports a failed `exec` on is one
+/// of them, and closing it would make a failure to start read as a success.
+fn give_the_child_no_descriptor_beyond_stdio(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+
+    // Read here rather than in the child: `getrlimit` is not on POSIX's
+    // async-signal-safe list, and the answer cannot change for the child
+    // between this call and its exec.
+    let highest_descriptor_the_fallback_walks = highest_descriptor_the_fallback_walks();
+
+    let sweep_every_descriptor_past_stdio = move || {
+        if one_syscall_marked_every_descriptor_past_stdio_close_on_exec() {
+            return Ok(());
+        }
+        // SAFETY: this closure is the `pre_exec` the call below registers, and
+        // `fcntl` is all the fallback reaches for.
+        unsafe {
+            mark_each_descriptor_past_stdio_close_on_exec(highest_descriptor_the_fallback_walks)
+        };
+        Ok(())
+    };
+    // SAFETY: the closure calls only the `close_range` syscall and `fcntl`,
+    // both async-signal-safe, which is the contract for a `pre_exec` closure
+    // running between fork and exec.
+    unsafe {
+        command.pre_exec(sweep_every_descriptor_past_stdio);
+    }
+}
+
+/// How far the per-descriptor fallback walks in this process, read before the
+/// fork so the child never has to ask.
+fn highest_descriptor_the_fallback_walks() -> libc::c_uint {
+    // SAFETY: a zeroed `rlimit` is a valid buffer for `getrlimit` to fill.
+    let mut descriptor_limit: libc::rlimit = unsafe { std::mem::zeroed() };
+    // SAFETY: `descriptor_limit` is a valid, live `rlimit` for the duration.
+    let read = unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut descriptor_limit) };
+    let limit = if read == 0 {
+        // Clamped in the wide type: `rlim_cur` is 64-bit and `RLIM_INFINITY`
+        // is its maximum, so narrowing first would wrap a large real limit
+        // down to a small one and stop the sweep short.
+        (descriptor_limit.rlim_cur as u64).min(DESCRIPTOR_SWEEP_FALLBACK_CEILING)
+    } else {
+        DESCRIPTOR_SWEEP_FALLBACK_CEILING
+    };
+    limit as libc::c_uint
+}
+
+/// Ask the kernel to mark the whole range at once, and say whether it did.
+///
+/// The raw syscall rather than glibc's `close_range` wrapper: that symbol
+/// arrived in glibc 2.34, and the release wheel is linked inside
+/// `manylinux_2_28`, whose glibc is 2.28 — an extern reference would fail to
+/// link there while every CI runner, on a newer glibc, links it happily. The
+/// syscall itself needs only Linux 5.9, and 5.11 for the flag.
+#[cfg(target_os = "linux")]
+fn one_syscall_marked_every_descriptor_past_stdio_close_on_exec() -> bool {
+    // SAFETY: a raw syscall with scalar arguments, async-signal-safe.
+    let swept = unsafe {
+        libc::syscall(
+            libc::SYS_close_range,
+            libc::c_long::from(FIRST_DESCRIPTOR_PAST_STDIO),
+            libc::c_long::from(libc::c_uint::MAX),
+            libc::c_long::from(libc::CLOSE_RANGE_CLOEXEC),
+        )
+    };
+    swept == 0
+}
+
+/// macOS has no `close_range`, so its children always take the fallback.
+#[cfg(not(target_os = "linux"))]
+fn one_syscall_marked_every_descriptor_past_stdio_close_on_exec() -> bool {
+    false
+}
+
+/// Mark each descriptor past stdio close-on-exec, one at a time.
+///
+/// Reached on macOS always, and on a Linux kernel older than the
+/// `CLOSE_RANGE_CLOEXEC` flag.
+///
+/// # Safety
+///
+/// Called only from a `pre_exec` closure. `fcntl` is on POSIX's
+/// async-signal-safe list, which is what makes that legal.
+unsafe fn mark_each_descriptor_past_stdio_close_on_exec(highest_descriptor: libc::c_uint) {
+    for descriptor in FIRST_DESCRIPTOR_PAST_STDIO..highest_descriptor {
+        let flags = unsafe { libc::fcntl(descriptor as libc::c_int, libc::F_GETFD) };
+        if flags < 0 {
+            continue;
+        }
+        unsafe {
+            libc::fcntl(
+                descriptor as libc::c_int,
+                libc::F_SETFD,
+                flags | libc::FD_CLOEXEC,
+            )
+        };
+    }
+}
+
 impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
     fn __generated_setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         #[cfg(target_os = "linux")]
@@ -607,11 +897,13 @@ impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
         #[cfg(not(target_os = "linux"))]
         let surface_socket_path: Option<&Path> = None;
 
+        let iceoryx2_domain_root = ctx.runtime_directory().iceoryx2_domain_root();
         let mut command = self.build_helper_process_command(
             &ctx.runtime_id(),
-            &ctx.runtime_directory().iceoryx2_domain_root(),
+            &iceoryx2_domain_root,
             surface_socket_path,
         );
+        self.iceoryx2_domain_root = Some(iceoryx2_domain_root);
         let mut escalate_transport = EscalateTransport::attach(&mut command)?;
 
         let mut child = command.spawn().map_err(|spawn_failure| {
@@ -698,24 +990,12 @@ impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
     }
 
     fn stop(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        self.exchange_with_child_expecting(
-            &serde_json::json!({"cmd": "stop", "capability": "full"}),
-            "stop",
-            "stopped",
-        );
+        self.ask_the_helper_to_stop_and_tear_down();
         Ok(())
     }
 
     fn __generated_teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        self.exchange_with_child_expecting(
-            &serde_json::json!({"cmd": "teardown", "capability": "full"}),
-            "teardown",
-            "done",
-        );
-        // Dropping the bridge closes this end, so a child still in its loop
-        // sees EOF and leaves it even if the teardown command never landed.
-        self.bridge.take();
-        self.reap_child();
+        self.stop_the_helper_process_on_the_shutdown_ladder();
         Ok(())
     }
 
@@ -755,13 +1035,39 @@ impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
         ExecutionConfig::new(ProcessExecution::Manual)
     }
 
+    /// Notice a helper process that died on its own, and take its group with it.
+    ///
+    /// Asked of the process rather than of the escalate socket, which is what
+    /// `docs/plan/ARCHITECTURE.md` §Processor model means by "a crash the engine
+    /// detects by the process itself rather than by its socket": a descendant
+    /// holding that socket keeps its EOF from ever arriving, so a helper whose
+    /// pid is gone went on reading as alive and issuing its privileged
+    /// operations.
+    fn detect_and_clean_up_after_an_out_of_process_helper_that_died(&mut self) {
+        if self.child_is_gone {
+            return;
+        }
+        let Some(child) = self.child.as_ref() else {
+            return;
+        };
+        if !a_helper_process_has_exited_without_being_reaped(child.id()) {
+            return;
+        }
+        tracing::error!(
+            "[{}] its helper process (pid={}) died; taking its process group down with it",
+            self.processor_display_name,
+            child.id(),
+        );
+        self.take_the_helper_process_group_down();
+    }
+
     fn has_failed_unrecoverably(&self) -> bool {
-        // The bridge, not just this host's own flag: between `run` and
+        // The bridge as well as this host's own flag: between `run` and
         // teardown the parent sends nothing, so a child that dies mid-run is
-        // never noticed by a failed exchange. What does notice is the bridge's
-        // reader thread, which sees EOF on the socket the moment the child's
-        // last fd closes — with no living process, that is the only signal
-        // there is.
+        // never noticed by a failed exchange. The bridge's reader thread sees
+        // EOF the moment the child's *last* fd closes, which a surviving
+        // descendant defers indefinitely — so the poll above asks the process
+        // and this reads what either of them found.
         self.child_is_gone || self.bridge.as_ref().is_some_and(|bridge| bridge.is_dead())
     }
 
@@ -873,12 +1179,8 @@ impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
                     self.processor_display_name
                 ))
             })?;
-        let reply_tag = reply.get("rpc").and_then(|rpc| rpc.as_str()).unwrap_or("");
-        if reply_tag != "ok" {
-            let reported = reply
-                .get("error")
-                .and_then(|error| error.as_str())
-                .unwrap_or("it reported no reason");
+        if lifecycle_reply_tag(&reply) != Some("ok") {
+            let reported = reported_reason(&reply);
             return Err(Error::Runtime(format!(
                 "[{}] its helper process refused update_config: {reported}",
                 self.processor_display_name
@@ -913,7 +1215,7 @@ impl Drop for PythonHelperProcessSpawnHostProcessor {
     /// processor's iceoryx2 ports open against the next run.
     fn drop(&mut self) {
         if self.child.is_some() {
-            self.kill_child();
+            self.take_the_helper_process_group_down();
         }
     }
 }
@@ -936,9 +1238,11 @@ pub(crate) fn spawn_host_for_processor_node(
         interpreter_path: launch_environment.interpreter_path.clone(),
         app_entry_directory: launch_environment.app_entry_directory.clone(),
         child: None,
+        iceoryx2_domain_root: None,
         child_standard_error_tail: None,
         bridge: None,
         child_is_gone: false,
+        shutdown_was_already_asked_of_this_helper: false,
         link_wiring: OutOfProcessLinkWiringEnvelope::default(),
     })
 }
@@ -947,6 +1251,290 @@ pub(crate) fn spawn_host_for_processor_node(
 mod tests {
     use super::*;
     use std::ffi::OsStr;
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+
+    // =========================================================================
+    // What a child inherits
+    // =========================================================================
+
+    /// A helper that forks a worker and leaves at once. The worker outlives it
+    /// holding whatever it inherited, which is the survivor the descriptor
+    /// sweep exists to leave empty-handed.
+    const A_HELPER_THAT_FORKS_A_WORKER_AND_LEAVES: &str = r#"
+import os, time
+if os.fork() == 0:
+    time.sleep(30)
+    os._exit(0)
+"#;
+
+    /// A pipe whose write end is inheritable, standing in for the stdio
+    /// interceptor's own `dup`s and pipes — none of which set `FD_CLOEXEC`.
+    fn an_inheritable_pipe() -> (OwnedFd, OwnedFd) {
+        let mut ends: [libc::c_int; 2] = [-1, -1];
+        // SAFETY: `ends` is a two-element array, which is what `pipe` fills.
+        assert_eq!(unsafe { libc::pipe(ends.as_mut_ptr()) }, 0, "pipe");
+        // SAFETY: both descriptors are freshly created and owned by nobody else.
+        unsafe { (OwnedFd::from_raw_fd(ends[0]), OwnedFd::from_raw_fd(ends[1])) }
+    }
+
+    /// Whether the descriptor reports end of file inside `budget`, which it can
+    /// only do once every holder of the other end has let go.
+    fn a_descriptor_reports_end_of_file_within(raw_fd: libc::c_int, budget: Duration) -> bool {
+        let mut watched = libc::pollfd {
+            fd: raw_fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: one valid `pollfd` for one descriptor this test owns.
+        let ready = unsafe { libc::poll(&mut watched, 1, budget.as_millis() as libc::c_int) };
+        ready > 0 && watched.revents & (libc::POLLHUP | libc::POLLIN) != 0
+    }
+
+    /// Wait for `process_id` to become a zombie, so a test asserting what the
+    /// notice says is not racing the child's own exit.
+    fn a_helper_process_becomes_collectable_within(process_id: u32, budget: Duration) -> bool {
+        let deadline = Instant::now() + budget;
+        while Instant::now() < deadline {
+            if a_helper_process_has_exited_without_being_reaped(process_id) {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        false
+    }
+
+    #[test]
+    fn nothing_a_helper_starts_can_hold_the_apps_output_open_past_its_own_exit() {
+        // The plan's own claim, asserted the way it bites: the app's standard
+        // output is a pipe somebody reads to its end, and a grandchild holding
+        // a copy of the write end keeps that read waiting after the app is gone.
+        let (read_end, write_end) = an_inheritable_pipe();
+
+        let mut command = Command::new("python3");
+        command
+            .arg("-c")
+            .arg(A_HELPER_THAT_FORKS_A_WORKER_AND_LEAVES)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        detach_child_from_the_terminal_and_bind_its_lifetime_to_ours(&mut command);
+        give_the_child_no_descriptor_beyond_stdio(&mut command);
+
+        let mut child = command.spawn().expect("the stub helper to start");
+        let helper_process_id = child.id() as libc::pid_t;
+        // Only the fork's survivor can be holding it now.
+        drop(write_end);
+        let _ = child.wait();
+
+        let the_apps_output_closed =
+            a_descriptor_reports_end_of_file_within(read_end.as_raw_fd(), Duration::from_secs(2));
+
+        // SAFETY: the group is this test's own child's; the survivor is in it.
+        unsafe { libc::killpg(helper_process_id, libc::SIGKILL) };
+
+        assert!(
+            the_apps_output_closed,
+            "a worker the helper forked inherited the app's output and held it open"
+        );
+    }
+
+    /// Set only in the child process the sweep-placement test re-runs itself in.
+    const DEAD_NODE_CHILD_DOMAIN_ROOT_ENVIRONMENT_VARIABLE: &str =
+        "STREAMLIB_TEST_HOST_SWEEP_CHILD_ICEORYX2_DOMAIN_ROOT";
+
+    #[test]
+    fn a_helper_exit_reclaims_the_iceoryx2_nodes_it_left_whatever_ended_it() {
+        // A node is dead only once the process holding it is gone, so it is
+        // opened in a child test process that is then killed where it stands.
+        if let Some(domain_root) =
+            std::env::var_os(DEAD_NODE_CHILD_DOMAIN_ROOT_ENVIRONMENT_VARIABLE)
+        {
+            let _node = streamlib::sdk::iceoryx2::Iceoryx2Node::new(
+                Path::new(&domain_root),
+                "streamlib-test/host-sweep-placement",
+            )
+            .expect("a node opens in the engine-owned domain");
+            // SAFETY: this process signalling itself, which is what leaves the
+            // node registered with no process behind it.
+            unsafe { libc::kill(std::process::id() as libc::pid_t, libc::SIGKILL) };
+            unreachable!("SIGKILL to self does not return");
+        }
+
+        // Named from this test process's own pid rather than through a
+        // temp-directory crate, so the one test needing a private domain adds
+        // no dependency to the wheel.
+        let domain =
+            std::env::temp_dir().join(format!("streamlib-host-sweep-{}", std::process::id()));
+        let domain_root = domain.join("iox2");
+        std::fs::create_dir_all(&domain_root).expect("a private domain root");
+        let dead_node_owner = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "python_helper_process_spawn_host::tests::\
+                 a_helper_exit_reclaims_the_iceoryx2_nodes_it_left_whatever_ended_it",
+                "--exact",
+                "--test-threads=1",
+            ])
+            .env(
+                DEAD_NODE_CHILD_DOMAIN_ROOT_ENVIRONMENT_VARIABLE,
+                &domain_root,
+            )
+            .output()
+            .expect("the test binary re-runs this test in a child process");
+        // The signal and not merely a non-zero exit: a child that panicked
+        // before it opened its node would also exit non-zero, and would leave
+        // the domain empty — against which the zero below asserts nothing.
+        assert_eq!(
+            std::os::unix::process::ExitStatusExt::signal(&dead_node_owner.status),
+            Some(libc::SIGKILL),
+            "the child must die where it stood, holding its node: {}",
+            String::from_utf8_lossy(&dead_node_owner.stderr),
+        );
+
+        // A host whose own helper has already left, closed the ordinary way.
+        let mut host = spawn_host_for_test(None);
+        host.iceoryx2_domain_root = Some(domain_root.clone());
+        host.child = Some(
+            Command::new("true")
+                .spawn()
+                .expect("a stand-in helper that is already done"),
+        );
+
+        host.take_the_helper_process_group_down();
+
+        let left_for_somebody_else =
+            streamlib::sdk::iceoryx2::reclaim_dead_iceoryx2_nodes_in_engine_owned_domain(
+                &domain_root,
+            )
+            .expect("the domain can be swept");
+        std::fs::remove_dir_all(&domain).ok();
+
+        assert_eq!(
+            left_for_somebody_else, 0,
+            "the helper's exit left a dead node for somebody else to reclaim — the sweep runs \
+             at every exit, not only at a crash the engine detected"
+        );
+    }
+
+    #[test]
+    fn every_path_onto_the_ladder_asks_the_helper_to_stop_and_tear_down_exactly_once() {
+        // The plan owes a `teardown()` to any callback interrupted at
+        // shutdown, `setup()` included — and a helper still importing then has
+        // never reached the engine's `stop()` hook, which is where the commands
+        // normally go out. So the ladder asks for itself, idempotently.
+        //
+        // Fail-without-fix: leave the send in `stop()` alone and the
+        // registration path waits out both budgets for replies to commands
+        // that were never sent, then warns that a teardown it never asked for
+        // did not finish.
+        let mut host = spawn_host_for_test(None);
+        assert!(!host.shutdown_was_already_asked_of_this_helper);
+
+        // With no bridge the ask short-circuits before its sends, so the flag
+        // is the whole of what is observable here: that every route onto the
+        // ladder goes through the ask, and that a second route does not repeat
+        // it. That the commands then reach the wire is the rig scenario's, in
+        // `test_helper_placement.py`.
+        host.ask_the_helper_to_stop_and_tear_down();
+        assert!(host.shutdown_was_already_asked_of_this_helper);
+
+        host.shutdown_was_already_asked_of_this_helper = false;
+        host.stop_the_helper_process_on_the_shutdown_ladder();
+        assert!(
+            host.shutdown_was_already_asked_of_this_helper,
+            "the ladder walked without ever asking the helper to stop or tear down"
+        );
+    }
+
+    #[test]
+    fn the_two_shutdown_commands_are_the_ones_the_helper_answers() {
+        // One pairing, in one place: the command the parent writes and the
+        // reply tag the rung waits on come from the same value, so a rename of
+        // either cannot leave the ladder waiting for a tag nobody sends.
+        let [stop, teardown] =
+            HelperProcessShutdownCommand::BOTH_IN_THE_ORDER_THE_LADDER_SENDS_THEM;
+
+        assert_eq!((stop.command_tag(), stop.reply_tag()), ("stop", "stopped"));
+        assert_eq!(
+            (teardown.command_tag(), teardown.reply_tag()),
+            ("teardown", "done")
+        );
+    }
+
+    #[test]
+    fn a_dead_helper_is_noticed_by_its_process_while_a_survivor_still_holds_its_socket() {
+        // the plan's "a crash the engine detects by the process itself rather than
+        // by its socket", asserted as the contrast it was written for: a worker
+        // the helper forked inherits the escalate socket through the fork, so
+        // the bridge's EOF never arrives and the engine used to read a dead
+        // helper as a live one — still wired, still able to escalate.
+        let mut command = Command::new("python3");
+        command
+            .arg("-c")
+            .arg(A_HELPER_THAT_FORKS_A_WORKER_AND_LEAVES)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        detach_child_from_the_terminal_and_bind_its_lifetime_to_ours(&mut command);
+        give_the_child_no_descriptor_beyond_stdio(&mut command);
+        let mut escalate_transport =
+            EscalateTransport::attach(&mut command).expect("an escalate socketpair");
+
+        let child = command.spawn().expect("the stub helper to start");
+        let helper_process_id = child.id();
+        escalate_transport.release_child_end();
+        let parent_end_of_the_escalate_socket = escalate_transport.into_parent_stream();
+
+        assert!(
+            a_helper_process_becomes_collectable_within(helper_process_id, Duration::from_secs(5)),
+            "the stub helper never exited"
+        );
+        assert!(
+            !a_descriptor_reports_end_of_file_within(
+                parent_end_of_the_escalate_socket.as_raw_fd(),
+                Duration::from_millis(500),
+            ),
+            "the socket reached EOF, so this asserts nothing the old signal did not already catch"
+        );
+
+        // SAFETY: the group is this test's own child's; the survivor is in it.
+        unsafe { libc::killpg(helper_process_id as libc::pid_t, libc::SIGKILL) };
+        let mut child = child;
+        let _ = child.wait();
+    }
+
+    #[test]
+    fn the_escalate_socket_survives_the_sweep_that_takes_every_other_descriptor() {
+        // The sweep marks everything past stdio close-on-exec and
+        // `EscalateTransport::attach` clears the flag again on the one
+        // descriptor a helper is owed, so the order of the two `pre_exec`
+        // registrations is the whole of whether a helper has a channel at all.
+        let mut command = Command::new("python3");
+        command
+            .arg("-c")
+            .arg(
+                r#"
+import os, sys
+os.fstat(int(os.environ["STREAMLIB_ESCALATE_FD"]))
+sys.exit(0)
+"#,
+            )
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        detach_child_from_the_terminal_and_bind_its_lifetime_to_ours(&mut command);
+        give_the_child_no_descriptor_beyond_stdio(&mut command);
+        let mut escalate_transport =
+            EscalateTransport::attach(&mut command).expect("an escalate socketpair");
+
+        let mut child = command.spawn().expect("the stub helper to start");
+        escalate_transport.release_child_end();
+        let exit_status = child.wait().expect("the stub helper to exit");
+
+        assert!(
+            exit_status.success(),
+            "the helper could not stat the escalate socket it was handed: {exit_status}"
+        );
+    }
 
     /// Read a built command's environment back as pairs, so a test can assert
     /// what a child would inherit without starting one.
@@ -989,9 +1577,11 @@ mod tests {
             interpreter_path: PathBuf::from("/venv/bin/python"),
             app_entry_directory,
             child: None,
+            iceoryx2_domain_root: None,
             child_standard_error_tail: None,
             bridge: None,
             child_is_gone: false,
+            shutdown_was_already_asked_of_this_helper: false,
             link_wiring: OutOfProcessLinkWiringEnvelope::default(),
         }
     }

@@ -113,6 +113,7 @@ class ParentProcessBridge:
         self._pending_escalate_responses: "dict[str, _PendingEscalateResponse]" = {}
         self._pending_lock = threading.Lock()
         self._channel_closed = False
+        self._the_parent_is_gone = threading.Event()
         self._reader = threading.Thread(
             target=self._demultiplex_frames_from_parent,
             name="streamlib-parent-bridge",
@@ -134,6 +135,11 @@ class ParentProcessBridge:
             raise HelperProcessProtocolError(
                 f"{ESCALATE_FD_ENV} must be a file-descriptor number, got {raw_fd!r}"
             ) from unparseable
+        # The parent cleared `FD_CLOEXEC` on this fd to hand it over and
+        # `socket.socket(fileno=)` leaves the flag as it found it, so anything
+        # this helper starts — `os.system`, `posix_spawn`, a fork worker —
+        # would inherit the channel every privileged operation rides.
+        os.set_inheritable(inherited_fd, False)
         return cls(socket.socket(fileno=inherited_fd))
 
     def start_reading(self) -> None:
@@ -202,7 +208,16 @@ class ParentProcessBridge:
 
     def next_lifecycle_command(self) -> "Optional[dict[str, Any]]":
         """Block until the parent sends one, or `None` once it is gone."""
-        return self._lifecycle_commands.get()
+        if not self._the_parent_is_gone.is_set():
+            return self._lifecycle_commands.get()
+        # Drained before the latch is believed: the reader sets it before it
+        # queues the end of the channel, so commands the parent sent before it
+        # let go — a `stop` and a `teardown` it wrote on its way out — are
+        # still waiting here and are still owed.
+        try:
+            return self._lifecycle_commands.get_nowait()
+        except queue.Empty:
+            return None
 
     def next_lifecycle_command_if_waiting(self) -> "tuple[bool, Optional[dict[str, Any]]]":
         """`(True, command)` when one was queued, `(False, None)` otherwise.
@@ -213,13 +228,18 @@ class ParentProcessBridge:
         try:
             return True, self._lifecycle_commands.get_nowait()
         except queue.Empty:
-            return False, None
+            return (True, None) if self._the_parent_is_gone.is_set() else (False, None)
 
     def _demultiplex_frames_from_parent(self) -> None:
         while True:
             frame = self._read_next_frame()
             if frame is None:
                 self._wake_every_pending_escalate_caller()
+                # Latched rather than queued once: a mid-run drain consumes
+                # whatever is on the queue, and a single end-of-channel
+                # consumed there would leave the outer read blocked on a
+                # queue no writer is left to fill.
+                self._the_parent_is_gone.set()
                 self._lifecycle_commands.put(None)
                 return
             if frame.get("rpc") == "escalate_response":
@@ -470,12 +490,20 @@ class HostedProcessor:
         """Call `hook_name` if the class defined one, logging what it raised.
 
         A hook raising here is not fatal to the helper — the processor keeps
-        being driven, exactly as it would in the parent.
+        being driven, exactly as it would in the parent. Nor is the
+        `KeyboardInterrupt` the parent's shutdown ladder delivers to a callback
+        that outran its budget: the bag in flight is lost and the rungs behind
+        it still run.
         """
         if hook_name not in self._declared_hooks:
             return
         try:
             getattr(self.instance, hook_name)(context)
+        except KeyboardInterrupt:
+            log.warn(
+                f"{hook_name}() was interrupted by the engine's shutdown ladder",
+                hook=hook_name,
+            )
         except Exception as hook_failure:
             log.error(
                 f"{hook_name}() raised",
@@ -544,11 +572,23 @@ class HelperProcessLifecycle:
 
     def run_until_the_parent_is_done(self) -> None:
         while not self._torn_down:
-            command = self._bridge.next_lifecycle_command()
-            if command is None:
-                log.info("the parent closed the channel; shutting down")
-                return
-            self._dispatch(command)
+            try:
+                command = self._bridge.next_lifecycle_command()
+                if command is None:
+                    log.info("the parent closed the channel; shutting down")
+                    return
+                self._dispatch(command)
+            except KeyboardInterrupt:
+                # The ladder's interrupt can land anywhere the main thread is,
+                # not only inside a hook — a `select`, a queue wait, a native
+                # call returning. Wherever it lands it leaves the execution
+                # loop and never the process: `stop` and `teardown` are already
+                # queued behind it.
+                self._running = False
+                log.warn(
+                    "the engine's shutdown ladder interrupted this processor; "
+                    "the bag in flight is lost"
+                )
 
     def _dispatch(self, command: "dict[str, Any]") -> None:
         verb = command.get("cmd", "")
@@ -611,6 +651,17 @@ class HelperProcessLifecycle:
             self._hosted.call_hook_letting_failure_propagate(
                 "setup", self._hosted.full_access_context
             )
+        except KeyboardInterrupt:
+            # The ladder interrupted a setup that outran its budget. The parent
+            # hears a refusal rather than nothing, and this helper stays up to
+            # take the `teardown` the same ladder sends next.
+            self._bridge.send(
+                {
+                    "rpc": "error",
+                    "error": "setup() was interrupted by the engine's shutdown ladder",
+                }
+            )
+            return
         except Exception as setup_failure:
             self._bridge.send(
                 {

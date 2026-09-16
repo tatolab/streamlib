@@ -6,6 +6,7 @@
 
 use pyo3::prelude::*;
 
+mod helper_process_shutdown_ladder;
 mod python_added_processor;
 mod python_bag_conversion;
 mod python_capability_extension_host;

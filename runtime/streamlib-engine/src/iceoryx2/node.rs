@@ -94,6 +94,32 @@ pub(crate) fn iceoryx2_config_for_domain(
     Ok(config)
 }
 
+/// Reclaim what every dead iceoryx2 node in the engine-owned domain still holds,
+/// and say how many went.
+///
+/// A dead node keeps its place in every service it had opened, so a channel
+/// whose helper process crashed counts that helper against the subscriber cap
+/// until a sweep takes it out. The engine's own configuration and never the
+/// ambient one: the lookup path would sweep another domain, or none.
+///
+/// The non-blocking form, because this runs from a liveness poll — a node
+/// another process is already cleaning up is left to that process and gone by
+/// the next sweep, rather than parking the poll on it.
+pub fn reclaim_dead_iceoryx2_nodes_in_engine_owned_domain(
+    domain_root: &std::path::Path,
+) -> Result<u64> {
+    let config = engine_owned_iceoryx2_config(domain_root)?;
+    let reclaimed = Node::<ipc::Service>::try_cleanup_dead_nodes(&config);
+    if reclaimed.failed_cleanups > 0 {
+        tracing::debug!(
+            "{} dead iceoryx2 node(s) could not be reclaimed, which is ordinary when another \
+             process holds them",
+            reclaimed.failed_cleanups,
+        );
+    }
+    Ok(reclaimed.cleanups)
+}
+
 /// Create a raw iceoryx2 node, labelled `node_name`, in the engine-owned domain rooted at `domain_root`.
 pub fn create_iceoryx2_node_in_engine_owned_domain(
     domain_root: &std::path::Path,
@@ -1220,6 +1246,86 @@ mod tests {
         assert!(
             !std::path::Path::new(&root_one_byte_past_it).exists(),
             "a refused root must never be created"
+        );
+    }
+
+    /// Set only in the child process the dead-node test re-runs itself in.
+    const DEAD_NODE_CHILD_DOMAIN_ROOT_ENVIRONMENT_VARIABLE: &str =
+        "STREAMLIB_TEST_DEAD_NODE_CHILD_ICEORYX2_DOMAIN_ROOT";
+
+    /// A node is dead only once the process that opened it is gone, so the node
+    /// is opened in a child test process that is then killed where it stands —
+    /// the same self-re-run shape the working-directory test uses.
+    #[test]
+    fn a_node_whose_process_was_killed_is_reclaimed_by_the_sweep() {
+        if let Some(domain_root) =
+            std::env::var_os(DEAD_NODE_CHILD_DOMAIN_ROOT_ENVIRONMENT_VARIABLE)
+        {
+            let _node = Iceoryx2Node::new(
+                std::path::Path::new(&domain_root),
+                "streamlib-test/killed-where-it-stood",
+            )
+            .expect("a node opens in the engine-owned domain");
+            // SAFETY: this process signalling itself, which is what leaves the
+            // node registered with no process behind it.
+            unsafe { libc::kill(std::process::id() as libc::pid_t, libc::SIGKILL) };
+            unreachable!("SIGKILL to self does not return");
+        }
+
+        let domain = tempfile::tempdir().unwrap();
+        let domain_root = domain.path().join("iox2");
+
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "iceoryx2::node::tests::a_node_whose_process_was_killed_is_reclaimed_by_the_sweep",
+                "--exact",
+                "--test-threads=1",
+            ])
+            .env(
+                DEAD_NODE_CHILD_DOMAIN_ROOT_ENVIRONMENT_VARIABLE,
+                &domain_root,
+            )
+            .output()
+            .expect("the test binary re-runs this test in a child process");
+        assert!(
+            !child.status.success(),
+            "the child must die where it stood rather than report a result"
+        );
+
+        let reclaimed = reclaim_dead_iceoryx2_nodes_in_engine_owned_domain(&domain_root)
+            .expect("the sweep runs against the engine-owned domain");
+
+        assert_eq!(
+            reclaimed, 1,
+            "the killed child's node was left registered with no process behind it"
+        );
+        assert_eq!(
+            reclaim_dead_iceoryx2_nodes_in_engine_owned_domain(&domain_root).unwrap(),
+            0,
+            "a swept domain has nothing left to reclaim"
+        );
+    }
+
+    #[test]
+    fn the_sweep_reads_the_engine_owned_domain_and_never_the_ambient_one() {
+        // The root-and-prefix budget belongs to `engine_owned_iceoryx2_config`,
+        // so a refusal by name here is the proof the sweep is built from that
+        // configuration rather than from iceoryx2's own lookup path.
+        let prefix = engine_owned_iceoryx2_prefix_for_this_user();
+        let root_one_byte_past_the_budget = format!(
+            "/{}",
+            "r".repeat(ICEORYX2_DOMAIN_ROOT_AND_PREFIX_BUDGET_BYTES - prefix.len())
+        );
+
+        let refusal = reclaim_dead_iceoryx2_nodes_in_engine_owned_domain(std::path::Path::new(
+            &root_one_byte_past_the_budget,
+        ))
+        .expect_err("a root past the budget is refused before any listing")
+        .to_string();
+
+        assert!(
+            refusal.contains(&root_one_byte_past_the_budget),
+            "{refusal}"
         );
     }
 

@@ -11,6 +11,7 @@ instance, which is the shape the ban forbids.
 
 import dataclasses
 import os
+import time
 
 from streamlib import input, log, output, processor
 from streamlib._engine import (
@@ -130,3 +131,69 @@ class ReportsItsOwnProcessesProcessorCatalog:
             f"{'helper_placement_processors:ReportsItsOwnProcessesProcessorCatalog' in declared_by_this_module} "
             f"{len(declared_by_this_module)}"
         )
+
+
+@processor(execution="continuous", interval_ms=10)
+class SleepsThroughItsOwnShutdownProbe:
+    """Parks in `process()` far past the ladder's one-second budget.
+
+    The bag it had in flight is lost to the interrupt, and `stop()` and
+    `teardown()` still run — which is what the markers below are for.
+    """
+
+    @output()
+    def frames_to_downstream(self) -> None: ...
+
+    def process(self, ctx) -> None:
+        log.info(f"MARKER:ASLEEP_IN_PROCESS {os.getpid()}")
+        time.sleep(30)
+        log.info("MARKER:SLEPT_THE_WHOLE_WAY")
+
+    def stop(self, ctx) -> None:
+        log.info("MARKER:SLEEPER_STOPPED")
+
+    def teardown(self, ctx) -> None:
+        log.info("MARKER:SLEEPER_TORE_DOWN")
+
+
+@processor(execution="continuous", interval_ms=50)
+class ForksAWorkerThatOutlivesItProbe:
+    """Starts a worker of its own the way `os.system("sleep 60 &")` does.
+
+    The worker is the descendant the process-group rung exists to reach. Its
+    pid is announced so a test can go looking for it after the app is gone.
+    """
+
+    def __init__(self) -> None:
+        self.worker_pid = None
+
+    @output()
+    def frames_to_downstream(self) -> None: ...
+
+    def process(self, ctx) -> None:
+        if self.worker_pid is None:
+            self.worker_pid = os.fork()
+            if self.worker_pid == 0:
+                time.sleep(120)
+                os._exit(0)
+            log.info(f"MARKER:WORKER_PID {self.worker_pid} HELPER_PID {os.getpid()}")
+
+
+@processor(execution="manual")
+class SleepsThroughItsOwnSetupProbe:
+    """Parks in `setup()`, so shutdown finds it still registering.
+
+    That is the one route onto the ladder the engine's `stop()` hook never
+    reaches, and the plan still owes this processor its `teardown()`.
+    """
+
+    @output()
+    def frames_to_downstream(self) -> None: ...
+
+    def setup(self, ctx) -> None:
+        log.info(f"MARKER:ASLEEP_IN_SETUP {os.getpid()}")
+        time.sleep(120)
+        log.info("MARKER:SLEPT_THE_WHOLE_SETUP")
+
+    def teardown(self, ctx) -> None:
+        log.info("MARKER:INTERRUPTED_SETUP_TORE_DOWN")

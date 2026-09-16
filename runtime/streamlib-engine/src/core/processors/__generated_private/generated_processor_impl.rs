@@ -122,6 +122,21 @@ pub trait DynGeneratedProcessor: Send + 'static {
         &self,
     ) -> Option<std::sync::Arc<crate::iceoryx2::InputMailboxesInner>>;
 
+    /// Notice a helper process that died on its own, and take its process group
+    /// with it.
+    ///
+    /// Polled beside [`Self::has_failed_unrecoverably`] by the Manual-mode
+    /// lifecycle loop. Separate from it because this one acts: a query that
+    /// killed a process group would hide the kill behind a name that reads like
+    /// a read. `docs/plan/ARCHITECTURE.md` §Processor model puts a helper's
+    /// group down at every helper exit, "a crash the engine detects by the
+    /// process itself rather than by its socket" included — a descendant
+    /// holding that socket keeps its EOF from ever arriving.
+    ///
+    /// Does nothing by default: only a processor hosting a child has one to
+    /// lose.
+    fn detect_and_clean_up_after_an_out_of_process_helper_that_died(&mut self) {}
+
     /// Whether this processor has failed in a way it cannot recover from, so
     /// the graph shows it in error while the rest of the pipeline keeps
     /// running.

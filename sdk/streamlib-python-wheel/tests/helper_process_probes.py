@@ -75,3 +75,50 @@ class SlowPassThroughProbe:
         if bag is not None:
             time.sleep(0.005)
             ctx.outputs.write("frames_to_downstream", bag)
+
+
+# The hooks the interrupt probes below actually reached, in order. A test reads
+# it to tell "the interrupt ended the helper" from "the interrupt was absorbed
+# and the rest of the ladder ran".
+HOOKS_THE_INTERRUPT_PROBES_REACHED: list[str] = []
+
+
+@processor(execution="continuous", interval_ms=0)
+class InterruptedInProcessProbe:
+    """Takes a `KeyboardInterrupt` inside `process()`, the way the parent's
+    shutdown ladder delivers one to a callback that outran its budget."""
+
+    @output()
+    def frames_to_downstream(self) -> None: ...
+
+    def __init__(self) -> None:
+        self.already_took_the_interrupt = False
+
+    def process(self, ctx) -> None:
+        if not self.already_took_the_interrupt:
+            self.already_took_the_interrupt = True
+            HOOKS_THE_INTERRUPT_PROBES_REACHED.append("process-interrupted")
+            raise KeyboardInterrupt
+        time.sleep(0.005)
+
+    def stop(self, ctx) -> None:
+        HOOKS_THE_INTERRUPT_PROBES_REACHED.append("stop")
+
+    def teardown(self, ctx) -> None:
+        HOOKS_THE_INTERRUPT_PROBES_REACHED.append("teardown")
+
+
+@processor(execution="manual")
+class InterruptedInSetupProbe:
+    """Takes a `KeyboardInterrupt` inside `setup()`. Unlike a `setup()` that
+    raises on its own, this one is still owed its `teardown()`."""
+
+    @output()
+    def frames_to_downstream(self) -> None: ...
+
+    def setup(self, ctx) -> None:
+        HOOKS_THE_INTERRUPT_PROBES_REACHED.append("setup-interrupted")
+        raise KeyboardInterrupt
+
+    def teardown(self, ctx) -> None:
+        HOOKS_THE_INTERRUPT_PROBES_REACHED.append("teardown")

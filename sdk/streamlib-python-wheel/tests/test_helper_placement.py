@@ -22,6 +22,7 @@ needs no device and belongs back in CI; #1823 carries that.
 
 import os
 import re
+import time
 from pathlib import Path
 
 import pytest
@@ -261,15 +262,137 @@ def test_no_helper_survives_the_app(start_app_under_test):
     )
 
 
+WORKER_PID_MARKER = re.compile(r"MARKER:WORKER_PID (\d+) HELPER_PID (\d+)")
+
+# The ladder's own worst case is a second of interrupt plus five of teardown
+# plus the group's grace; a helper that answers at once is far inside it. This
+# is what separates "the ladder ran" from "the thirty-second callback did".
+LADDER_BUDGET_SECONDS = 15.0
+
+
+def a_pid_is_gone_within(pid: int, budget_seconds: float) -> bool:
+    """Whether `pid` has stopped existing inside `budget_seconds`.
+
+    Signal 0 rather than a wait: a worker a helper forked is nobody's child
+    here, so it is reaped by init and never by this process.
+    """
+    deadline = time.monotonic() + budget_seconds
+    while True:
+        try:
+            os.kill(pid, 0)
+        except (ProcessLookupError, PermissionError):
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.05)
+
+
+def test_a_processor_asleep_in_its_callback_still_runs_its_teardown(
+    start_app_under_test,
+):
+    """The ladder `docs/plan/ARCHITECTURE.md` §Processor model decides, end to end.
+
+    Fail-without-fix: with the old pair of five-second reply deadlines the
+    sleeping callback misses `stopped`, the helper is marked gone, and its
+    `teardown()` is skipped outright — so `SLEEPER_TORE_DOWN` never arrives.
+    """
+    app = start_app_under_test(APP, "a_sleeping_processor_still_runs_its_teardown")
+    app.await_output_containing(
+        "MARKER:ASLEEP_IN_PROCESS", "the processor to park in its callback"
+    )
+    interrupted_at = time.monotonic()
+    app.interrupt()
+    app.await_marker("CLEAN_EXIT")
+    app.await_clean_exit()
+    ended_in = time.monotonic() - interrupted_at
+
+    # Matched in the output rather than through `markers()`: while the engine
+    # is up these ride a log record that appends the processor's id, so the
+    # marker is a prefix of the line rather than the whole of it.
+    assert "MARKER:SLEEPER_STOPPED" in app.output, (
+        f"`stop()` did not run after the interrupt:\n{app.output}"
+    )
+    assert "MARKER:SLEEPER_TORE_DOWN" in app.output, (
+        f"`teardown()` did not run after the interrupt:\n{app.output}"
+    )
+    assert "MARKER:SLEPT_THE_WHOLE_WAY" not in app.output, (
+        f"the callback returned on its own, so nothing interrupted it:\n{app.output}"
+    )
+    assert ended_in < LADDER_BUDGET_SECONDS, (
+        f"the app took {ended_in:.1f}s to end, which is the callback's thirty seconds "
+        f"rather than the ladder's budget:\n{app.output}"
+    )
+
+
+def test_a_processor_interrupted_while_still_setting_up_still_tears_down(
+    start_app_under_test,
+):
+    """The route onto the ladder the engine's `stop()` hook never reaches.
+
+    A helper still inside `setup()` has never had `stop()` called on it, so the
+    commands whose replies the ladder waits for are only on the wire because
+    the ladder asks for them itself.
+
+    Fail-without-fix: leave the ask in `stop()` alone and this helper is
+    SIGINT'd, answers its refusal, and is then killed with its group — its
+    `teardown()` never asked for and never run.
+    """
+    app = start_app_under_test(
+        APP, "a_processor_interrupted_while_still_setting_up_tears_down"
+    )
+    app.await_output_containing(
+        "MARKER:ASLEEP_IN_SETUP", "the processor to park inside its setup"
+    )
+    interrupted_at = time.monotonic()
+    app.interrupt()
+    app.await_marker("CLEAN_EXIT")
+    app.await_clean_exit()
+    ended_in = time.monotonic() - interrupted_at
+
+    assert "MARKER:INTERRUPTED_SETUP_TORE_DOWN" in app.output, (
+        f"an interrupted `setup()` was never given its `teardown()`:\n{app.output}"
+    )
+    assert "MARKER:SLEPT_THE_WHOLE_SETUP" not in app.output, (
+        f"`setup()` returned on its own, so nothing interrupted it:\n{app.output}"
+    )
+    assert ended_in < LADDER_BUDGET_SECONDS, (
+        f"the app took {ended_in:.1f}s to end, which is the registration budget rather "
+        f"than the ladder's:\n{app.output}"
+    )
+
+
+def test_a_worker_a_processor_forked_goes_down_with_the_apps_helper(
+    start_app_under_test,
+):
+    """A processor's descendants die with it.
+
+    Fail-without-fix: the kills target the helper's pid, the worker outlives
+    the app holding whatever it inherited, and this finds it still running.
+    """
+    app = run_scenario_until(
+        start_app_under_test,
+        "a_helper_that_forked_a_worker_leaves_nothing_behind",
+        "MARKER:WORKER_PID",
+        "the processor to fork a worker of its own",
+    )
+    worker_pid = int(matched_marker(WORKER_PID_MARKER, app.output).group(1))
+
+    assert a_pid_is_gone_within(worker_pid, 2.0), (
+        f"the worker a processor forked outlived the app that spawned it:\n{app.output}"
+    )
+
+
 def test_a_crashed_helper_is_surfaced_and_the_pipeline_keeps_running(
     start_app_under_test,
 ):
     """The owner's crash policy: surface, keep running.
 
     A processor that takes its own process down mid-run is reported in error,
-    and the rest of the graph is unaffected. Nothing polls the child between
-    `run` and teardown, so what notices is the bridge reader seeing EOF — break
-    that and the death goes unreported until shutdown, which is what this locks.
+    and the rest of the graph is unaffected. What notices is the Manual loop's
+    hundred-millisecond poll asking the process itself; the bridge reader seeing
+    EOF is the second signal, and a descendant holding that socket defers it
+    indefinitely. Break both and the death goes unreported until shutdown, which
+    is what this locks.
     """
     app = start_app_under_test(APP, "a_crashed_helper_leaves_the_pipeline_running")
     app.await_output_containing(

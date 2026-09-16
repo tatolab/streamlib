@@ -18,10 +18,13 @@ from pathlib import Path
 import streamlib
 from helper_placement_processors import (
     DiesAbruptlyProbe,
+    ForksAWorkerThatOutlivesItProbe,
     ReportsItsOwnProcessesProcessorCatalog,
     ReportsItsOwnProcessSource,
     ReportsItsOwnProcessVideoSink,
     ReportsUpstreamProcessSink,
+    SleepsThroughItsOwnSetupProbe,
+    SleepsThroughItsOwnShutdownProbe,
 )
 from streamlib._engine import (
     engine_build_id_compiled_into_this_extension,
@@ -222,6 +225,48 @@ def scenario_a_helper_that_imported_another_engine_build_is_refused() -> None:
         runtime.run()
     finally:
         shutil.rmtree(child_startup_directory, ignore_errors=True)
+    marker("CLEAN_EXIT")
+
+
+def scenario_a_sleeping_processor_still_runs_its_teardown() -> None:
+    """A processor parked in `process()` still ends on the ladder.
+
+    The interrupt costs it the bag in flight; `stop()` and `teardown()` run
+    after it, and the app exits in about the ladder's own budget rather than
+    the thirty seconds the callback asked for.
+    """
+    runtime = streamlib.Runtime()
+    runtime.add(SleepsThroughItsOwnShutdownProbe)
+    marker(f"APP_PID={os.getpid()}")
+    runtime.run()
+    marker("CLEAN_EXIT")
+
+
+def scenario_a_helper_that_forked_a_worker_leaves_nothing_behind() -> None:
+    """A worker a processor forked goes down with its helper's process group.
+
+    The app runs in its own session, so a survivor holding the app's standard
+    output is exactly the shape that keeps a terminal waiting after the app is
+    gone.
+    """
+    runtime = streamlib.Runtime()
+    runtime.add(ForksAWorkerThatOutlivesItProbe)
+    marker(f"APP_PID={os.getpid()}")
+    runtime.run()
+    marker("CLEAN_EXIT")
+
+
+def scenario_a_processor_interrupted_while_still_setting_up_tears_down() -> None:
+    """Shutdown reaches a helper that is still inside `setup()`.
+
+    Its registration is cut short rather than held for the sixty-second budget,
+    and the ladder still gives it the `teardown()` the plan owes any callback
+    interrupted at shutdown.
+    """
+    runtime = streamlib.Runtime()
+    runtime.add(SleepsThroughItsOwnSetupProbe)
+    marker(f"APP_PID={os.getpid()}")
+    runtime.run()
     marker("CLEAN_EXIT")
 
 
