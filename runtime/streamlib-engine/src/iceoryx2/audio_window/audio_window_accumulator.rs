@@ -341,8 +341,8 @@ impl AudioWindowAccumulator {
             });
         }
 
-        // Every refusal comes before the flush, so a flush always reaches the
-        // caller that counts it.
+        // Every refusal of the bag comes before the flush, so a refused bag
+        // never takes a flush's count down with it.
         let rate_conversion_inputs = RateConversionInputs::for_a_source_in(arriving, self.contract);
         self.refuse_a_channel_pair_neither_side_of_which_is_one(
             arriving.channels,

@@ -605,8 +605,8 @@ fn a_format_change_flush_counts_the_remainder_in_per_channel_samples() {
 /// stereo frames, which a four-channel contract cannot convert, arrive and are
 /// refused. The next four-channel block lands where the refused one ended, well
 /// past half a block from where the remainder's run expects, and its flush
-/// counts the 300. Flushing before
-/// the refusal throws those 300 away with no count and no warning.
+/// counts the 300. Flushing before the refusal throws those 300 away with no
+/// count and no warning.
 #[test]
 fn a_refused_block_flushes_nothing_and_the_next_flush_counts_what_it_left() {
     let mut stage = stage_on(contract(16_000, 4, "f32", 512, 512));

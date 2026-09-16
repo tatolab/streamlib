@@ -425,7 +425,7 @@ fn channel_destination_count(
 /// A source output port past the cap is refused here by name, before any
 /// service is touched.
 fn channel_max_subscribers(
-    graph: &mut Graph,
+    graph: &Graph,
     source_proc_id: &ProcessorUniqueId,
     source_port: &str,
 ) -> Result<usize> {
@@ -443,7 +443,7 @@ fn channel_max_subscribers(
 /// source_port)` — the single derivation both the service-open compiler op and
 /// the `tap` op share, refusing a source port past the destination cap.
 pub(crate) fn resolve_channel_sizing(
-    graph: &mut Graph,
+    graph: &Graph,
     iceoryx2_node: &Iceoryx2Node,
     source_proc_id: &ProcessorUniqueId,
     source_port: &str,
@@ -3492,7 +3492,7 @@ mod tests {
             connect_one_more_destination(&mut graph);
         }
         assert_eq!(
-            channel_max_subscribers(&mut graph, &src_uid, "out1")
+            channel_max_subscribers(&graph, &src_uid, "out1")
                 .expect("three destinations fit the cap"),
             MAX_DESTINATIONS_PER_CHANNEL + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL,
             "the channel is sized for the cap, not for the three it feeds today",
@@ -3501,7 +3501,7 @@ mod tests {
         for _ in 3..=MAX_DESTINATIONS_PER_CHANNEL {
             connect_one_more_destination(&mut graph);
         }
-        let refused = channel_max_subscribers(&mut graph, &src_uid, "out1")
+        let refused = channel_max_subscribers(&graph, &src_uid, "out1")
             .expect_err("one destination past the cap is refused");
         assert!(
             refused.to_string().contains("at most"),
@@ -3527,7 +3527,7 @@ mod tests {
         let src_uid: ProcessorUniqueId = src_id.as_str().into();
 
         let sizing = resolve_channel_sizing(
-            &mut graph,
+            &graph,
             &Iceoryx2Node::for_this_test_process(),
             &src_uid,
             "out1",
@@ -3535,7 +3535,7 @@ mod tests {
         .expect("sizing resolves for a wired channel");
         assert_eq!(
             sizing.max_subscribers,
-            channel_max_subscribers(&mut graph, &src_uid, "out1")
+            channel_max_subscribers(&graph, &src_uid, "out1")
                 .expect("two destinations fit the cap"),
             "resolve_channel_sizing must agree with channel_max_subscribers — the \
              single derivation both the service-open op and the tap op share",
