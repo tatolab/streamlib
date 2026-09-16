@@ -399,12 +399,11 @@ impl SubprocessBridge {
         if let Ok(mut dead) = self.dead.lock() {
             *dead = true;
         }
-        self.links_awaiting_their_wire_reply
-            .refuse_every_link_still_awaiting_an_answer(&format!(
-                "the helper process hosting '{}' is gone, so it never opened its port for this \
-                 link",
-                self.processor_id
-            ));
+        refuse_every_link_this_subprocess_still_owed(
+            &self.links_awaiting_their_wire_reply,
+            &self.processor_id,
+            "is gone",
+        );
     }
 
     pub fn is_dead(&self) -> bool {
@@ -500,62 +499,68 @@ fn reader_loop(
         // an escalate request" signal — that would silently re-route
         // every log message to the lifecycle queue and trip the
         // setup/teardown waiters.
-        let frame_route = classify_an_incoming_subprocess_frame(&msg);
-
-        if let IncomingSubprocessFrame::LinkWireAnswer { link_id, outcome } = &frame_route {
-            if !links_awaiting_their_wire_reply
-                .note_the_far_sides_answer_for_link(link_id, outcome.clone())
-            {
-                tracing::warn!(
-                    "[{}] its helper process answered for link '{}', which no link is waiting on",
-                    processor_id,
-                    link_id
-                );
-            }
-            continue;
-        }
-
-        if frame_route == IncomingSubprocessFrame::LinkWireAnswerNamingNoLink {
-            tracing::warn!(
-                "[{}] its helper process answered a wire with no link named, so the link it \
-                 meant stays unanswered",
-                processor_id
-            );
-            continue;
-        }
-
-        if frame_route == IncomingSubprocessFrame::EscalateRequest {
-            if let Some(response) = process_bridge_message(&sandbox, &registry, &msg) {
-                // Escalate request handled inline. Write response with the
-                // shared writer lock.
-                let send_result: Result<()> = {
-                    let mut writer = match writer.lock() {
-                        Ok(g) => g,
-                        Err(_) => {
-                            tracing::warn!(
-                                "[{}] bridge reader saw poisoned writer mutex",
-                                processor_id
-                            );
-                            break;
-                        }
-                    };
-                    write_frame(&mut *writer, &response)
-                };
-                if let Err(e) = send_result {
+        // Matched rather than compared arm by arm: a fifth route added later
+        // must not fall through to the lifecycle queue, which is the exact
+        // failure this classification exists to prevent.
+        match classify_an_incoming_subprocess_frame(&msg) {
+            IncomingSubprocessFrame::LinkWireAnswer { link_id, outcome } => {
+                if !links_awaiting_their_wire_reply
+                    .note_the_far_sides_answer_for_link(&link_id, outcome)
+                {
                     tracing::warn!(
-                        "[{}] bridge reader failed to write escalate response: {}",
+                        "[{}] its helper process answered for link '{}', which no link is \
+                         waiting on",
                         processor_id,
-                        e
+                        link_id
                     );
-                    if let Ok(mut dead) = dead.lock() {
-                        *dead = true;
-                    }
-                    break;
                 }
+                continue;
             }
-            // Fire-and-forget ops (log) leave nothing to write. Either way,
-            // never forward escalate traffic to the lifecycle channel.
-            continue;
+            IncomingSubprocessFrame::LinkWireAnswerNamingNoLink => {
+                tracing::warn!(
+                    "[{}] its helper process answered a wire with no link named, so the link it \
+                     meant stays unanswered",
+                    processor_id
+                );
+                continue;
+            }
+            IncomingSubprocessFrame::LifecycleReply => {
+                // Forwarded to the main thread below, where `msg` is still in
+                // hand — the one route that needs the frame itself.
+            }
+            IncomingSubprocessFrame::EscalateRequest => {
+                if let Some(response) = process_bridge_message(&sandbox, &registry, &msg) {
+                    // Escalate request handled inline. Write response with the
+                    // shared writer lock.
+                    let send_result: Result<()> = {
+                        let mut writer = match writer.lock() {
+                            Ok(g) => g,
+                            Err(_) => {
+                                tracing::warn!(
+                                    "[{}] bridge reader saw poisoned writer mutex",
+                                    processor_id
+                                );
+                                break;
+                            }
+                        };
+                        write_frame(&mut *writer, &response)
+                    };
+                    if let Err(e) = send_result {
+                        tracing::warn!(
+                            "[{}] bridge reader failed to write escalate response: {}",
+                            processor_id,
+                            e
+                        );
+                        if let Ok(mut dead) = dead.lock() {
+                            *dead = true;
+                        }
+                        break;
+                    }
+                }
+                // Fire-and-forget ops (log) leave nothing to write. Either way,
+                // never forward escalate traffic to the lifecycle channel.
+                continue;
+            }
         }
 
         // Lifecycle response — forward to main thread. Send failure
@@ -573,10 +578,37 @@ fn reader_loop(
     // subprocess, so the refusal sits here rather than on each `break`: a link
     // still waiting on an answer is refused once, whichever way the reader
     // stopped, and never reads `wired`.
-    links_awaiting_their_wire_reply.refuse_every_link_still_awaiting_an_answer(&format!(
-        "the helper process hosting '{processor_id}' stopped answering before it opened its port \
-         for this link"
-    ));
+    refuse_every_link_this_subprocess_still_owed(
+        &links_awaiting_their_wire_reply,
+        &processor_id,
+        "stopped answering",
+    );
+}
+
+/// Refuse every link this subprocess was still to answer for, and say so once.
+///
+/// Both ways a bridge gives up reach here — the reader thread's exit and
+/// `mark_dead` — so a link whose helper is gone is refused whichever noticed
+/// first, and the log names how many links it cost.
+fn refuse_every_link_this_subprocess_still_owed(
+    links_awaiting_their_wire_reply: &LinksAwaitingTheirOutOfProcessWireReply,
+    processor_id: &str,
+    how_the_helper_was_noticed_gone: &str,
+) {
+    let refused =
+        links_awaiting_their_wire_reply.refuse_every_link_still_awaiting_an_answer(&format!(
+            "the helper process hosting '{processor_id}' {how_the_helper_was_noticed_gone} before \
+             it opened its port for this link"
+        ));
+    if refused > 0 {
+        tracing::warn!(
+            "[{}] its helper process {} with {} link(s) it never opened a port for; each reads \
+             error rather than wired",
+            processor_id,
+            how_the_helper_was_noticed_gone,
+            refused
+        );
+    }
 }
 
 /// Per-line reader that tags each non-empty line with

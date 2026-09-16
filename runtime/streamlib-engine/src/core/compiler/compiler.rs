@@ -13,7 +13,7 @@ use crate::core::compiler::compiler_transaction::CompilerTransactionHandle;
 use crate::core::context::RuntimeContext;
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
-    Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkStateComponent,
+    Graph, GraphEdgeWithComponents, GraphNodeWithComponents, Link, LinkState, LinkStateComponent,
     OutOfProcessLinkWireRepliesComponent, ProcessorReadyBarrierHandle, ProcessorUniqueId,
 };
 use crate::core::processors::PROCESSOR_REGISTRY;
@@ -149,7 +149,8 @@ impl Compiler {
                     let graph = graph_arc.read();
                     let link = graph.traversal().e(&id).first();
                     let exists = link.is_some();
-                    let wired = link.is_some_and(this_link_was_already_wired);
+                    let already_wired_or_awaiting_an_answer =
+                        link.is_some_and(this_link_is_already_wired_or_awaiting_its_helpers_answer);
                     let pending_deletion = link
                         .map(|l| l.has::<PendingDeletionComponent>())
                         .unwrap_or(false);
@@ -157,12 +158,15 @@ impl Compiler {
 
                     if pending_deletion {
                         tracing::debug!("AddLink({}): pending deletion, skipping add", id);
-                    } else if exists && !wired {
+                    } else if exists && !already_wired_or_awaiting_an_answer {
                         plan.links_to_add.push(id);
                     } else if !exists {
                         tracing::warn!("AddLink({}): not in graph, skipping", id);
                     } else {
-                        tracing::debug!("AddLink({}): already wired, skipping", id);
+                        tracing::debug!(
+                            "AddLink({}): already wired or awaiting its helper's answer, skipping",
+                            id
+                        );
                     }
                 }
                 PendingOperation::RemoveLink(id) => {
@@ -516,37 +520,41 @@ impl Compiler {
     }
 }
 
-/// Whether an `AddLink` names a link this graph has already wired, so the plan
-/// passes it over rather than wiring it a second time.
+/// Whether an `AddLink` names a link this graph has already wired — or handed
+/// to a helper that has not answered yet — so the plan passes it over rather
+/// than wiring it a second time.
 ///
-/// A link handed to an out-of-process end counts as wired while that end's
-/// answer is still outstanding: it reads `Pending` until the helper says it
-/// opened its port, and re-planning it as unadded would open a second
-/// subscriber and notifier against the channel's caps for a link the helper is
-/// already opening.
-fn this_link_was_already_wired(link: &crate::core::graph::Link) -> bool {
+/// The second arm is not wired yet and says so in `graph`: it reads `Pending`
+/// until the helper says it opened its port. Re-planning it as unadded would
+/// open a second subscriber and notifier against the channel's caps for a link
+/// the helper is already opening, which is why it counts as added here and
+/// nowhere else.
+fn this_link_is_already_wired_or_awaiting_its_helpers_answer(link: &Link) -> bool {
     link.get::<LinkStateComponent>()
-        .is_some_and(|state| matches!(state.0, crate::core::graph::LinkState::Wired))
+        .is_some_and(|state| matches!(state.0, LinkState::Wired))
         || link.has::<OutOfProcessLinkWireRepliesComponent>()
 }
 
 #[cfg(test)]
 mod already_wired_tests {
     use super::*;
-    use crate::core::graph::{Link, LinkState, OutOfProcessLinkWireRepliesComponent};
     use crate::core::processors::OutOfProcessLinkWireReply;
 
     #[test]
     fn a_link_nothing_has_wired_yet_is_planned() {
         let link = Link::new("Psrc.out1", "Pdst.in1");
-        assert!(!this_link_was_already_wired(&link));
+        assert!(!this_link_is_already_wired_or_awaiting_its_helpers_answer(
+            &link
+        ));
     }
 
     #[test]
     fn a_wired_link_is_not_planned_again() {
         let mut link = Link::new("Psrc.out1", "Pdst.in1");
         link.insert(LinkStateComponent(LinkState::Wired));
-        assert!(this_link_was_already_wired(&link));
+        assert!(this_link_is_already_wired_or_awaiting_its_helpers_answer(
+            &link
+        ));
     }
 
     /// Fail-without-fix: read `LinkStateComponent` alone and this link — the
@@ -559,6 +567,8 @@ mod already_wired_tests {
         link.insert_component_without_rendering_it(OutOfProcessLinkWireRepliesComponent(vec![
             OutOfProcessLinkWireReply::awaiting_the_far_sides_answer(),
         ]));
-        assert!(this_link_was_already_wired(&link));
+        assert!(this_link_is_already_wired_or_awaiting_its_helpers_answer(
+            &link
+        ));
     }
 }

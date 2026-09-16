@@ -29,9 +29,11 @@ pub use __generated_private::{
 };
 
 pub use empty_config::EmptyConfig;
-pub use out_of_process_link_wire_reply::{
-    LinksAwaitingTheirOutOfProcessWireReply, OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply,
-};
+pub use out_of_process_link_wire_reply::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
+// Bridge-internal: the board one helper's own bridge keeps. Deliberately not
+// re-exported — `sdk::processors` is a blanket glob, and nothing outside this
+// crate has any business holding another helper's board.
+pub(crate) use out_of_process_link_wire_reply::LinksAwaitingTheirOutOfProcessWireReply;
 pub use processor_instance_factory::{
     DynamicProcessorConstructorFn, PROCESSOR_REGISTRY, ProcessorInstance, ProcessorInstanceFactory,
 };

@@ -10,7 +10,9 @@
 //! these cells are what `graph` reads afterwards.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, OnceLock};
+
+use parking_lot::Mutex;
 
 /// What one out-of-process far side answered about one link.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -27,9 +29,13 @@ pub enum OutOfProcessLinkWireOutcome {
 
 /// One far side's answer for one link, shared between the compiler op that
 /// handed the link over and the bridge reader thread that hears the answer.
+///
+/// A `OnceLock` rather than a settable cell, because first-answer-wins is the
+/// contract and not a convention: a far side whose death is noticed after it
+/// already answered must not rewrite the outcome the link has been reporting.
 #[derive(Debug, Default)]
 pub struct OutOfProcessLinkWireReply {
-    answer: Mutex<Option<OutOfProcessLinkWireOutcome>>,
+    answer: OnceLock<OutOfProcessLinkWireOutcome>,
 }
 
 impl OutOfProcessLinkWireReply {
@@ -38,21 +44,14 @@ impl OutOfProcessLinkWireReply {
         Arc::new(Self::default())
     }
 
-    /// Note what the far side answered. The first answer stands: a far side
-    /// whose death is noticed after it already answered must not overwrite the
-    /// outcome the link has been reporting.
+    /// Note what the far side answered. A second answer is dropped.
     pub fn note_the_far_sides_answer(&self, outcome: OutOfProcessLinkWireOutcome) {
-        let Ok(mut answer) = self.answer.lock() else {
-            return;
-        };
-        if answer.is_none() {
-            *answer = Some(outcome);
-        }
+        let _ = self.answer.set(outcome);
     }
 
     /// What the far side answered, or `None` while it still has not.
     pub fn the_far_sides_answer(&self) -> Option<OutOfProcessLinkWireOutcome> {
-        self.answer.lock().ok().and_then(|answer| answer.clone())
+        self.answer.get().cloned()
     }
 }
 
@@ -60,30 +59,29 @@ impl OutOfProcessLinkWireReply {
 /// by that far side's bridge so its reader thread can route an answer to the
 /// link it names.
 #[derive(Debug, Default)]
-pub struct LinksAwaitingTheirOutOfProcessWireReply {
+pub(crate) struct LinksAwaitingTheirOutOfProcessWireReply {
     replies_by_link_id: Mutex<HashMap<String, Arc<OutOfProcessLinkWireReply>>>,
 }
 
 impl LinksAwaitingTheirOutOfProcessWireReply {
     /// Start waiting on one link's answer.
-    pub fn await_an_answer_for_link(&self, link_id: String, reply: Arc<OutOfProcessLinkWireReply>) {
-        if let Ok(mut replies) = self.replies_by_link_id.lock() {
-            replies.insert(link_id, reply);
-        }
+    pub(crate) fn await_an_answer_for_link(
+        &self,
+        link_id: String,
+        reply: Arc<OutOfProcessLinkWireReply>,
+    ) {
+        self.replies_by_link_id.lock().insert(link_id, reply);
     }
 
     /// Note an answer that names a link, reporting whether any link was
     /// waiting for it — a far side answering for a link nobody is waiting on
     /// is worth a log line rather than a silent drop.
-    pub fn note_the_far_sides_answer_for_link(
+    pub(crate) fn note_the_far_sides_answer_for_link(
         &self,
         link_id: &str,
         outcome: OutOfProcessLinkWireOutcome,
     ) -> bool {
-        let Ok(mut replies) = self.replies_by_link_id.lock() else {
-            return false;
-        };
-        let Some(reply) = replies.remove(link_id) else {
+        let Some(reply) = self.replies_by_link_id.lock().remove(link_id) else {
             return false;
         };
         reply.note_the_far_sides_answer(outcome);
@@ -92,31 +90,26 @@ impl LinksAwaitingTheirOutOfProcessWireReply {
 
     /// Stop waiting on a link that is going away before it was ever answered
     /// for, so a disconnect leaves nothing behind for its far side to answer.
-    pub fn stop_awaiting_an_answer_for_link(&self, link_id: &str) {
-        if let Ok(mut replies) = self.replies_by_link_id.lock() {
-            replies.remove(link_id);
-        }
+    pub(crate) fn stop_awaiting_an_answer_for_link(&self, link_id: &str) {
+        self.replies_by_link_id.lock().remove(link_id);
     }
 
-    /// Refuse every link still waiting, because the far side is gone. A link
-    /// whose far side died unanswered never reads `wired`.
-    pub fn refuse_every_link_still_awaiting_an_answer(&self, reason: &str) {
-        let Ok(mut replies) = self.replies_by_link_id.lock() else {
-            return;
-        };
-        for (_, reply) in replies.drain() {
+    /// Refuse every link still waiting, because the far side is gone, and hand
+    /// back how many there were so the caller can say so once. A link whose far
+    /// side died unanswered never reads `wired`.
+    pub(crate) fn refuse_every_link_still_awaiting_an_answer(&self, reason: &str) -> usize {
+        let refused: Vec<Arc<OutOfProcessLinkWireReply>> = self
+            .replies_by_link_id
+            .lock()
+            .drain()
+            .map(|(_, r)| r)
+            .collect();
+        for reply in &refused {
             reply.note_the_far_sides_answer(OutOfProcessLinkWireOutcome::RefusedByTheFarSide {
                 reason: reason.to_string(),
             });
         }
-    }
-
-    /// How many links are still waiting. Test and log surface only.
-    pub fn count_still_awaiting_an_answer(&self) -> usize {
-        self.replies_by_link_id
-            .lock()
-            .map(|replies| replies.len())
-            .unwrap_or(0)
+        refused.len()
     }
 }
 
@@ -166,7 +159,11 @@ mod tests {
             Some(OutOfProcessLinkWireOutcome::OpenedByTheFarSide)
         );
         assert_eq!(untouched.the_far_sides_answer(), None);
-        assert_eq!(awaiting.count_still_awaiting_an_answer(), 1);
+        assert_eq!(
+            awaiting.refuse_every_link_still_awaiting_an_answer("its helper process died"),
+            1,
+            "an answered link is off the board, so only the untouched one is left to refuse"
+        );
     }
 
     #[test]
@@ -184,14 +181,16 @@ mod tests {
         let unanswered = OutOfProcessLinkWireReply::awaiting_the_far_sides_answer();
         awaiting.await_an_answer_for_link("L-unanswered".to_string(), Arc::clone(&unanswered));
 
-        awaiting.refuse_every_link_still_awaiting_an_answer("its helper process died");
+        assert_eq!(
+            awaiting.refuse_every_link_still_awaiting_an_answer("its helper process died"),
+            1
+        );
 
         assert_eq!(
             unanswered.the_far_sides_answer(),
             Some(refusal("its helper process died")),
             "a link whose far side died unanswered must never read wired"
         );
-        assert_eq!(awaiting.count_still_awaiting_an_answer(), 0);
     }
 
     #[test]
@@ -201,8 +200,11 @@ mod tests {
         awaiting.await_an_answer_for_link("L-disconnected".to_string(), Arc::clone(&disconnected));
 
         awaiting.stop_awaiting_an_answer_for_link("L-disconnected");
-        awaiting.refuse_every_link_still_awaiting_an_answer("its helper process died");
 
+        assert_eq!(
+            awaiting.refuse_every_link_still_awaiting_an_answer("its helper process died"),
+            0
+        );
         assert_eq!(disconnected.the_far_sides_answer(), None);
     }
 }

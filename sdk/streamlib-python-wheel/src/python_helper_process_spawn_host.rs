@@ -1164,7 +1164,6 @@ impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
         // moment the frame lands, and a cell registered afterwards would miss
         // an answer already routed.
         bridge.await_the_subprocess_wire_answer_for_link(link_id.to_string(), Arc::clone(&reply));
-        let link_id = link_id.to_string();
         match self.send_to_child(&serde_json::json!({
             "cmd": "wire_link",
             "direction": port_direction.as_wire_str(),
