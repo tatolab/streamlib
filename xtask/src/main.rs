@@ -573,6 +573,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_helper_that_cannot_open_its_port_leaves_the_link_in_error_with_its_reason",
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_disconnected_link_stops_rendering_the_reason_it_was_refused_for",
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_link_no_helper_has_to_answer_for_is_wired_as_soon_as_it_is_opened",
+                "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_link_between_one_helpers_own_ports_waits_on_both_of_its_ends",
                 "core::json_schema::link_rendering_tests",
             ],
         ),

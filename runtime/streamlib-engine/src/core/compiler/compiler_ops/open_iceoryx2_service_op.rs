@@ -2254,6 +2254,67 @@ mod tests {
         );
     }
 
+    /// A link whose source and destination are the same helper waits on two
+    /// answers, because the engine hands that helper both of its ends.
+    ///
+    /// `connect` accepts an output wired to its own processor's input, so this
+    /// is reachable rather than theoretical. Fail-without-fix: hand the link
+    /// one cell and the first answer reports it `wired` while the other end
+    /// may not have opened at all.
+    #[test]
+    fn a_link_between_one_helpers_own_ports_waits_on_both_of_its_ends() {
+        use crate::core::json_schema::LinkStateOutput;
+        crate::core::test_support::ensure_test_mocks_registered();
+        let mut graph = Graph::new();
+        let helper_id = graph
+            .traversal_mut()
+            .add_v(ProcessorSpec::new(
+                crate::core::test_support::MockProcessor::processor_class_import_path(),
+                serde_json::Value::Null,
+            ))
+            .first()
+            .expect("the four-port mock must be in the registry")
+            .id
+            .to_string();
+        let answers_owed: Arc<Mutex<Vec<Arc<OutOfProcessLinkWireReply>>>> = Arc::default();
+        attach_processor_instance(
+            &mut graph,
+            &helper_id,
+            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub {
+                wire_answers_owed: answers_owed.clone(),
+                ..Default::default()
+            })),
+        );
+        let link_id = add_link_from_out1_to_in1(&mut graph, &helper_id, &helper_id);
+
+        open_iceoryx2_service(&mut graph, &link_id, &Iceoryx2Node::for_this_test_process())
+            .expect("a link between one helper's own ports wires");
+
+        let answers_owed = answers_owed.lock().clone();
+        assert_eq!(
+            answers_owed.len(),
+            2,
+            "the engine hands this helper both ends of the link, so it owes two answers"
+        );
+        assert_eq!(
+            link_state_in_graph(&graph, &link_id),
+            (LinkStateOutput::Pending, None)
+        );
+
+        answers_owed[0].note_the_far_sides_answer(OutOfProcessLinkWireOutcome::OpenedByTheFarSide);
+        assert_eq!(
+            link_state_in_graph(&graph, &link_id),
+            (LinkStateOutput::Pending, None),
+            "one end opening does not wire a link whose other end is the same helper"
+        );
+
+        answers_owed[1].note_the_far_sides_answer(OutOfProcessLinkWireOutcome::OpenedByTheFarSide);
+        assert_eq!(
+            link_state_in_graph(&graph, &link_id),
+            (LinkStateOutput::Wired, None)
+        );
+    }
+
     /// A disconnected link lets go of the services it held, so a channel whose
     /// last link went is created afresh by whoever opens it next.
     ///
