@@ -11,7 +11,16 @@ use iceoryx2::port::notifier::Notifier;
 use iceoryx2::prelude::*;
 use parking_lot::Mutex;
 
-use super::{EventPayload, FRAME_HEADER_SIZE, MAX_PUBLISHERS_PER_CHANNEL};
+use iceoryx2::port::publisher::Publisher;
+use iceoryx2::port::subscriber::Subscriber;
+use iceoryx2::service::builder::publish_subscribe::{
+    PublishSubscribeOpenError, PublishSubscribeOpenOrCreateError,
+};
+
+use super::{
+    DataChannelBagSequenceNumberUserHeader, EventPayload, FRAME_HEADER_SIZE,
+    MAX_PUBLISHERS_PER_CHANNEL,
+};
 use crate::core::error::{Error, Result};
 use crate::core::runtime::current_process_uid;
 
@@ -168,6 +177,16 @@ pub(crate) struct ChannelSizing {
     pub(crate) channel_service_creation_depth: usize,
 }
 
+/// The publisher of a channel data service: `[u8]` frames under the
+/// sequence-number user header.
+pub type ChannelDataServicePublisher =
+    Publisher<ipc::Service, [u8], DataChannelBagSequenceNumberUserHeader>;
+
+/// A subscriber to a channel data service: `[u8]` frames under the
+/// sequence-number user header.
+pub type ChannelDataServiceSubscriber =
+    Subscriber<ipc::Service, [u8], DataChannelBagSequenceNumberUserHeader>;
+
 /// Thread-safe wrapper for iceoryx2 Node.
 ///
 /// The Node is created once per runtime and shared across all processors.
@@ -251,7 +270,11 @@ impl Iceoryx2Node {
     }
 
     /// Open or create a channel-centric publish-subscribe service for `[u8]`
-    /// slices.
+    /// slices under [`DataChannelBagSequenceNumberUserHeader`].
+    ///
+    /// The one place a channel data service is built: iceoryx2 refuses an
+    /// opener presenting any other user header, so every opener comes through
+    /// here.
     ///
     /// The service name is the source-port channel
     /// (`{source_processor}/{source_output_port}`). The service carries exactly
@@ -283,6 +306,7 @@ impl Iceoryx2Node {
         let service = node
             .service_builder(&service_name)
             .publish_subscribe::<[u8]>()
+            .user_header::<DataChannelBagSequenceNumberUserHeader>()
             .max_publishers(MAX_PUBLISHERS_PER_CHANNEL)
             .max_subscribers(max_subscribers)
             .max_nodes(max_subscribers * ICEORYX2_NODES_ADMITTED_PER_PORT_SLOT)
@@ -291,15 +315,29 @@ impl Iceoryx2Node {
             .history_size(CHANNEL_HISTORY_SIZE)
             .enable_safe_overflow(true)
             .open_or_create()
-            .map_err(|e| Error::Runtime(format!("Failed to open/create service: {:?}", e)))?;
+            .map_err(|failure| match failure {
+                PublishSubscribeOpenOrCreateError::PublishSubscribeOpenError(
+                    PublishSubscribeOpenError::IncompatibleTypes,
+                ) => Error::Runtime(format!(
+                    "channel data service '{}' exists with a sample type other than `[u8]` \
+                     frames under the `DataChannelBagSequenceNumberUserHeader` user header, \
+                     so it was built by something other than this engine: {failure:?}",
+                    service_name.as_str()
+                )),
+                other => Error::Runtime(format!("Failed to open/create service: {other:?}")),
+            })?;
 
         Ok(Iceoryx2Service { inner: service })
     }
 }
 
-/// Handle to an iceoryx2 publish-subscribe service for `[u8]` slices.
+/// Handle to an iceoryx2 channel data service.
 pub struct Iceoryx2Service {
-    inner: iceoryx2::service::port_factory::publish_subscribe::PortFactory<ipc::Service, [u8], ()>,
+    inner: iceoryx2::service::port_factory::publish_subscribe::PortFactory<
+        ipc::Service,
+        [u8],
+        DataChannelBagSequenceNumberUserHeader,
+    >,
 }
 
 impl Iceoryx2Service {
@@ -330,7 +368,7 @@ impl Iceoryx2Service {
     pub fn create_publisher(
         &self,
         expected_payload_bytes: usize,
-    ) -> Result<iceoryx2::port::publisher::Publisher<ipc::Service, [u8], ()>> {
+    ) -> Result<ChannelDataServicePublisher> {
         self.inner
             .publisher_builder()
             .initial_max_slice_len(expected_payload_bytes + FRAME_HEADER_SIZE)
@@ -340,12 +378,27 @@ impl Iceoryx2Service {
             .map_err(|e| Error::Runtime(format!("Failed to create publisher: {:?}", e)))
     }
 
+    /// A publisher primed at `primed_slice_bytes` with no growth strategy — the
+    /// counterfactual that proves [`Self::create_publisher`]'s growth is what
+    /// lets an oversized loan through.
+    #[cfg(test)]
+    pub(crate) fn create_publisher_that_cannot_grow(
+        &self,
+        primed_slice_bytes: usize,
+    ) -> ChannelDataServicePublisher {
+        self.inner
+            .publisher_builder()
+            .initial_max_slice_len(primed_slice_bytes)
+            .create()
+            .expect("a publisher with the library's static allocation strategy")
+    }
+
     /// Create a subscriber whose ring holds `input_port_ring_depth` samples —
     /// the depth of the input port it feeds, at most the service's creation depth.
     pub fn create_subscriber(
         &self,
         input_port_ring_depth: usize,
-    ) -> Result<iceoryx2::port::subscriber::Subscriber<ipc::Service, [u8], ()>> {
+    ) -> Result<ChannelDataServiceSubscriber> {
         self.inner
             .subscriber_builder()
             .buffer_size(input_port_ring_depth)
@@ -369,10 +422,7 @@ impl Iceoryx2Service {
     pub fn create_tap_subscriber(
         &self,
         tap_ring_depth: usize,
-    ) -> std::result::Result<
-        iceoryx2::port::subscriber::Subscriber<ipc::Service, [u8], ()>,
-        ChannelTapSubscribeError,
-    > {
+    ) -> std::result::Result<ChannelDataServiceSubscriber, ChannelTapSubscribeError> {
         use iceoryx2::port::subscriber::SubscriberCreateError;
         self.inner
             .subscriber_builder()
@@ -752,6 +802,51 @@ mod tests {
         );
     }
 
+    /// Every opener of a channel data service presents the sequence-number
+    /// user header. iceoryx2 refuses an opener that presents none, and a
+    /// service built without it is refused to the engine's own opener by a
+    /// message naming the header it lacks.
+    #[test]
+    fn a_channel_data_service_and_an_opener_disagreeing_on_the_user_header_are_refused_by_name() {
+        let node = Iceoryx2Node::for_this_test_process();
+
+        let built_by_the_engine = unique_service_name("header/engine-built");
+        let _service = node
+            .open_or_create_service(&built_by_the_engine, 2, 4)
+            .expect("the engine builds the service with its header");
+        let opened_without_the_header = node
+            .inner
+            .lock()
+            .service_builder(&ServiceName::new(&built_by_the_engine).unwrap())
+            .publish_subscribe::<[u8]>()
+            .open();
+        assert!(
+            matches!(
+                opened_without_the_header,
+                Err(iceoryx2::service::builder::publish_subscribe::PublishSubscribeOpenError::IncompatibleTypes)
+            ),
+            "an opener presenting no user header must be refused: {opened_without_the_header:?}"
+        );
+
+        let built_without_the_header = unique_service_name("header/built-without");
+        let _foreign_service = node
+            .inner
+            .lock()
+            .service_builder(&ServiceName::new(&built_without_the_header).unwrap())
+            .publish_subscribe::<[u8]>()
+            .create()
+            .unwrap();
+        let refusal = match node.open_or_create_service(&built_without_the_header, 2, 4) {
+            Ok(_) => panic!("a service built without the header must refuse the engine"),
+            Err(refusal) => refusal.to_string(),
+        };
+        assert!(
+            refusal.contains("DataChannelBagSequenceNumberUserHeader")
+                && refusal.contains(&built_without_the_header),
+            "the refusal must name the header and the service: {refusal}"
+        );
+    }
+
     /// A reopen of a live service states the depth the service was created at,
     /// read off iceoryx2 rather than echoed from the call, so a later wire can
     /// see how deep the channel it joins really is.
@@ -871,27 +966,22 @@ mod tests {
                 let publisher = svc_out.create_publisher(64).expect("relay pub");
                 startup_r.wait();
                 let mut count: u32 = 0;
-                let relay_one =
-                    |subscriber: &iceoryx2::port::subscriber::Subscriber<
-                        ipc::Service,
-                        [u8],
-                        (),
-                    >,
-                     publisher: &iceoryx2::port::publisher::Publisher<ipc::Service, [u8], ()>|
-                     -> bool {
-                        match subscriber.receive() {
-                            Ok(Some(sample)) => {
-                                let bytes = sample.payload().to_vec();
-                                let s = publisher
-                                    .loan_slice_uninit(bytes.len())
-                                    .expect("relay loan");
-                                let s = s.write_from_slice(&bytes);
-                                s.send().expect("relay send");
-                                true
-                            }
-                            _ => false,
+                let relay_one = |subscriber: &ChannelDataServiceSubscriber,
+                                 publisher: &ChannelDataServicePublisher|
+                 -> bool {
+                    match subscriber.receive() {
+                        Ok(Some(sample)) => {
+                            let bytes = sample.payload().to_vec();
+                            let s = publisher
+                                .loan_slice_uninit(bytes.len())
+                                .expect("relay loan");
+                            let s = s.write_from_slice(&bytes);
+                            s.send().expect("relay send");
+                            true
                         }
-                    };
+                        _ => false,
+                    }
+                };
                 loop {
                     if relay_stop_t.load(Ordering::Relaxed) {
                         // Drain anything still pending so the very last

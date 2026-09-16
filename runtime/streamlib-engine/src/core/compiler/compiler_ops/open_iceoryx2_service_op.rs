@@ -173,6 +173,8 @@ pub fn open_iceoryx2_service(
     } else {
         let source_processor = get_single_processor(graph, &source_proc_id)?;
         wire_rust_source(
+            graph,
+            &source_proc_id,
             &source_processor,
             &source_port,
             link_id,
@@ -705,12 +707,16 @@ fn get_single_processor(
         .ok_or_else(|| Error::Configuration(format!("Processor '{}' not found", proc_id)))
 }
 
-/// Install (once) the source's single channel publisher and append this link's
-/// destination notifier onto the Rust source's [`OutputWriterInner`].
+/// Install (once) the source's single channel publisher, append this link's
+/// destination notifier onto the Rust source's [`OutputWriterInner`], and
+/// publish its loss counts onto its graph node.
 ///
 /// `notify_service` is `None` when the destination never drains a listener, and
 /// the link is then wired for data only.
+#[allow(clippy::too_many_arguments)]
 fn wire_rust_source(
+    graph: &mut Graph,
+    source_proc_id: &ProcessorUniqueId,
     source_processor: &Arc<Mutex<ProcessorInstance>>,
     source_port: &str,
     link_id: &LinkUniqueId,
@@ -736,12 +742,13 @@ fn wire_rust_source(
         .map(|notify_service| notify_service.create_notifier())
         .transpose()?;
     output_inner.add_channel_link(source_port, link_id.as_str(), notifier);
+    publish_loss_counts_on_processor_node(graph, source_proc_id, &source_guard);
     Ok(())
 }
 
 /// Subscribe the Rust destination to the channel bound to its local input port,
-/// ensure its single listener exists, and publish its dropped-bag counts onto
-/// its graph node.
+/// ensure its single listener exists, and publish its loss counts onto its graph
+/// node.
 ///
 /// The subscriber's ring and the port's mailbox take the port's own delivery
 /// resolution. `notify_service` is `None` when this destination never drains a
@@ -809,7 +816,7 @@ fn wire_rust_dest(
             tracing::debug!("Created listener for destination on its notify service");
         }
     }
-    publish_dropped_bag_counts_on_destination_node(graph, dest_proc_id, &input_inner);
+    publish_loss_counts_on_processor_node(graph, dest_proc_id, &dest_guard);
     publish_device_matched_audio_window_contracts_on_destination_node(
         graph,
         dest_proc_id,
@@ -818,29 +825,38 @@ fn wire_rust_dest(
     Ok(())
 }
 
-/// Share the destination's per-inbound-link dropped-bag counts onto its graph
-/// node, so `graph` reads them live off the mailboxes that do the evicting.
+/// Share a processor's per-inbound-link dropped-bag counts and per-output-port
+/// refused-bag counts onto its graph node, so `graph` reads them live off the
+/// ports that count them.
 ///
-/// Inserted with the destination's first inbound link and left alone after: the
-/// counts are one shared object for the whole processor, and a link wired later
-/// mints its own zeroed entry inside it.
+/// Inserted with the processor's first wired link at either end and left alone
+/// after: each count is one shared object for the whole processor, and a link or
+/// channel wired later mints its own zeroed entry inside it. A producer that only
+/// produces carries its node's metrics as a destination does.
 ///
-/// A destination whose mailboxes live out of process never reaches here — it
-/// counts its evictions in its own process, and its node carries no metrics at
-/// all rather than a zero the parent cannot stand behind.
-fn publish_dropped_bag_counts_on_destination_node(
+/// A processor whose ports live out of process never reaches here — it counts in
+/// its own process, and its node carries no metrics at all rather than a zero
+/// the parent cannot stand behind.
+fn publish_loss_counts_on_processor_node(
     graph: &mut Graph,
-    dest_proc_id: &ProcessorUniqueId,
-    input_inner: &Arc<crate::iceoryx2::InputMailboxesInner>,
+    proc_id: &ProcessorUniqueId,
+    processor: &ProcessorInstance,
 ) {
-    let Some(node) = graph.traversal_mut().v(dest_proc_id).first_mut() else {
+    let Some(node) = graph.traversal_mut().v(proc_id).first_mut() else {
         return;
     };
     if node.has::<ProcessorMetrics>() {
         return;
     }
     node.insert(ProcessorMetrics {
-        dropped_bag_counts_by_inbound_link: input_inner.dropped_bag_counts_by_inbound_link(),
+        dropped_bag_counts_by_inbound_link: processor
+            .iceoryx2_input_mailboxes_inner()
+            .map(|input_inner| input_inner.dropped_bag_counts_by_inbound_link())
+            .unwrap_or_default(),
+        refused_bag_counts_by_output_port: processor
+            .iceoryx2_output_writer_inner()
+            .map(|output_inner| output_inner.refused_bag_counts_by_output_port())
+            .unwrap_or_default(),
         ..Default::default()
     });
 }
@@ -1519,6 +1535,8 @@ mod tests {
 
         let (channel, notify_service) = open_test_link_services("mixed-endpoints", true);
         wire_rust_source(
+            &mut graph,
+            &source_id.as_str().into(),
             &source,
             "out1",
             &link_id,
@@ -1706,6 +1724,8 @@ mod tests {
         let link_id: LinkUniqueId = format!("L-{tag}").as_str().into();
 
         wire_rust_source(
+            &mut graph,
+            &source_id.as_str().into(),
             &source,
             "out1",
             &link_id,
@@ -1736,6 +1756,101 @@ mod tests {
         (source_output, dest_input)
     }
 
+    /// One native link wired through both sides of the op the way the compiler
+    /// runs them, with the source's refusals and the destination's losses
+    /// counted where `graph` reads them.
+    struct NativeLinkWiredForLossCounting {
+        graph: Graph,
+        source_id: ProcessorUniqueId,
+        dest_id: ProcessorUniqueId,
+        link_id: LinkUniqueId,
+        source_output: Arc<crate::iceoryx2::OutputWriterInner>,
+        dest_input: Arc<crate::iceoryx2::InputMailboxesInner>,
+        // Held so the channel outlives the test's writes.
+        _channel: crate::iceoryx2::Iceoryx2Service,
+    }
+
+    impl NativeLinkWiredForLossCounting {
+        fn wire(tag: &str, dest_delivery: DeliveryResolution, source_ceiling_bytes: usize) -> Self {
+            use crate::core::test_support::{MockInputOnlyProcessor, MockOutputOnlyProcessor};
+
+            let mut graph = Graph::new();
+            let source_id = add_mock_output_only(&mut graph);
+            let (source, source_output, _) =
+                attach_mock_instance::<MockOutputOnlyProcessor::Processor>(&mut graph, &source_id);
+            let dest_id = add_mock_input_only(&mut graph);
+            let (dest, _, dest_input) =
+                attach_mock_instance::<MockInputOnlyProcessor::Processor>(&mut graph, &dest_id);
+            let source_id: ProcessorUniqueId = source_id.as_str().into();
+            let dest_id: ProcessorUniqueId = dest_id.as_str().into();
+
+            let (channel, _) = open_test_link_services(tag, false);
+            let link_id: LinkUniqueId = format!("L-{tag}").as_str().into();
+            wire_rust_source(
+                &mut graph,
+                &source_id,
+                &source,
+                "out1",
+                &link_id,
+                &channel,
+                None,
+                ChannelEgressConfig {
+                    service_name: unique_service_name(tag),
+                    trust_tier: ChannelTrustTier::Trusted,
+                    expected_payload_bytes: 4096,
+                    ceiling_bytes: source_ceiling_bytes,
+                },
+            )
+            .expect("the source side wires");
+            wire_rust_dest(
+                &mut graph,
+                &dest_id,
+                &dest,
+                "in1",
+                &link_id,
+                &InboundLinkName::from("psource/out1"),
+                dest_delivery,
+                &channel,
+                None,
+                None,
+            )
+            .expect("the destination side wires");
+
+            Self {
+                graph,
+                source_id,
+                dest_id,
+                link_id,
+                source_output: source_output.expect("an output-only mock holds an output writer"),
+                dest_input: dest_input.expect("an input-only mock holds input mailboxes"),
+                _channel: channel,
+            }
+        }
+
+        /// What `graph` renders under `metrics` for `proc_id`, or `None` for no key.
+        fn rendered_metrics_of(
+            &mut self,
+            proc_id: &ProcessorUniqueId,
+        ) -> Option<serde_json::Value> {
+            self.graph
+                .traversal_mut()
+                .v(proc_id)
+                .first()
+                .expect("the processor's node must be in the graph")
+                .serialize_components()
+                .get("metrics")
+                .cloned()
+        }
+
+        fn write_bags(&self, bag_count: usize) {
+            for bag in 0..bag_count {
+                self.source_output
+                    .write_raw("out1", b"a bag", bag as i64)
+                    .expect("the source publishes onto the wired channel");
+            }
+        }
+    }
+
     /// What the control plane serves for a dropping run: the destination's node
     /// carries its per-inbound-link dropped-bag counts, live off the mailboxes
     /// that did the evicting.
@@ -1749,91 +1864,170 @@ mod tests {
     /// lost three of its four bags reads exactly like a healthy one.
     #[test]
     fn a_dropping_destinations_node_renders_each_inbound_links_losses() {
-        use crate::core::test_support::{MockInputOnlyProcessor, MockOutputOnlyProcessor};
-
         const DESTINATION_MAILBOX_DEPTH: usize = 1;
         const FRAMES_PUBLISHED: usize = 4;
 
-        let mut graph = Graph::new();
-        let source_id = add_mock_output_only(&mut graph);
-        let (source, source_output, _) =
-            attach_mock_instance::<MockOutputOnlyProcessor::Processor>(&mut graph, &source_id);
-        let source_output = source_output.expect("an output-only mock holds an output writer");
-        let dest_id = add_mock_input_only(&mut graph);
-        let dest_unique_id: ProcessorUniqueId = dest_id.as_str().into();
-        let (dest, _, dest_input) =
-            attach_mock_instance::<MockInputOnlyProcessor::Processor>(&mut graph, &dest_id);
-        let dest_input = dest_input.expect("an input-only mock holds input mailboxes");
-
-        let (channel, _) = open_test_link_services("dropped-bag-counts", false);
-        let link_id: LinkUniqueId = "L-dropping".into();
-        wire_rust_source(
-            &source,
-            "out1",
-            &link_id,
-            &channel,
-            None,
-            ChannelEgressConfig {
-                service_name: unique_service_name("dropped-bag-counts"),
-                trust_tier: ChannelTrustTier::Trusted,
-                expected_payload_bytes: 4096,
-                ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
-            },
-        )
-        .expect("the source side wires");
-        wire_rust_dest(
-            &mut graph,
-            &dest_unique_id,
-            &dest,
-            "in1",
-            &link_id,
-            &InboundLinkName::from("psource/out1"),
+        let mut link = NativeLinkWiredForLossCounting::wire(
+            "dropped-bag-counts",
             DeliveryResolution {
                 drain_order: crate::iceoryx2::ReadMode::ReadNextInOrder,
                 depth: DESTINATION_MAILBOX_DEPTH,
             },
-            &channel,
-            None,
-            None,
-        )
-        .expect("the destination side wires");
-
-        let rendered_metrics = |graph: &mut Graph| -> serde_json::Value {
-            graph
-                .traversal_mut()
-                .v(&dest_unique_id)
-                .first()
-                .expect("the destination node must be in the graph")
-                .serialize_components()["metrics"]
-                .clone()
-        };
+            crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+        );
+        let dest_id = link.dest_id.clone();
+        let link_id = link.link_id.to_string();
 
         assert_eq!(
-            rendered_metrics(&mut graph)["dropped_bags_by_link"],
-            serde_json::json!({ "L-dropping": 0 }),
+            link.rendered_metrics_of(&dest_id).unwrap()["dropped_bags_by_link"],
+            serde_json::json!({ link_id.as_str(): 0 }),
             "a wired link that has lost nothing must render a zero, not go missing"
         );
 
         // Taken off the subscriber after every bag: the subscriber's ring is as
-        // deep as the mailbox, so a burst received all at once would be
-        // overwritten in the ring before the mailbox ever held it.
-        for frame in 0..FRAMES_PUBLISHED {
-            source_output
-                .write_raw("out1", b"a bag the destination never reads", frame as i64)
-                .expect("the source publishes onto the wired channel");
-            dest_input.receive_pending();
+        // deep as the mailbox, so what is counted here is eviction alone.
+        for _ in 0..FRAMES_PUBLISHED {
+            link.write_bags(1);
+            link.dest_input.receive_pending();
         }
 
-        let metrics = rendered_metrics(&mut graph);
+        let metrics = link.rendered_metrics_of(&dest_id).unwrap();
         assert_eq!(
             metrics["dropped_bags_by_link"],
-            serde_json::json!({ "L-dropping": FRAMES_PUBLISHED - DESTINATION_MAILBOX_DEPTH }),
+            serde_json::json!({ link_id.as_str(): FRAMES_PUBLISHED - DESTINATION_MAILBOX_DEPTH }),
             "the node must read the counts live, off the mailboxes that evicted"
         );
         assert_eq!(
             metrics["frames_dropped"],
             serde_json::json!(FRAMES_PUBLISHED - DESTINATION_MAILBOX_DEPTH),
             "the total must be the per-link counts summed, never a second tally"
+        );
+    }
+
+    /// An `ordered` consumer that stops reading shows exactly the bags its
+    /// subscriber ring overwrote, under the link they were lost from.
+    ///
+    /// The consumer reads one bag, then nothing while the source writes six
+    /// past its ring, then receives once: the ring hands over the newest
+    /// sixteen and the jump in their sequence numbers is the six it lost. The
+    /// mailbox is as deep as the ring, so nothing is evicted there and the
+    /// count is the ring's alone. Fail-without-fix: drop the gap from
+    /// `receive_pending` and the node renders a zero for a run that lost six.
+    #[test]
+    fn an_ordered_consumer_that_stops_reading_renders_exactly_the_bags_its_ring_overwrote() {
+        const BAGS_PAST_THE_RING: usize = 6;
+
+        let mut link = NativeLinkWiredForLossCounting::wire(
+            "ring-overrun/ordered",
+            DeliveryProfile::Ordered.resolve(),
+            crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+        );
+        let dest_id = link.dest_id.clone();
+        let link_id = link.link_id.to_string();
+
+        link.write_bags(1);
+        link.dest_input
+            .read_raw("in1")
+            .unwrap()
+            .expect("the consumer reads its first bag");
+        link.write_bags(DeliveryProfile::ORDERED_DEPTH + BAGS_PAST_THE_RING);
+        link.dest_input.receive_pending();
+
+        let metrics = link.rendered_metrics_of(&dest_id).unwrap();
+        assert_eq!(
+            metrics["dropped_bags_by_link"],
+            serde_json::json!({ link_id.as_str(): BAGS_PAST_THE_RING }),
+        );
+        assert_eq!(
+            metrics["frames_dropped"],
+            serde_json::json!(BAGS_PAST_THE_RING)
+        );
+        assert_eq!(
+            link.dest_input.drain("in1").len(),
+            DeliveryProfile::ORDERED_DEPTH,
+            "counted plus delivered accounts for every bag written after the first"
+        );
+    }
+
+    /// A `newest` consumer passing over bags is the profile working, in its
+    /// ring and in its mailbox alike, and its link shows no loss for either.
+    ///
+    /// Fail-without-fix: count the ring gap whatever the read mode and the link
+    /// shows six; count every mailbox eviction whatever the read mode and it
+    /// shows the evictions of the second burst too.
+    #[test]
+    fn a_newest_consumer_renders_no_loss_for_bags_passed_over_in_its_ring_or_its_mailbox() {
+        const BAGS_PAST_THE_RING: usize = 6;
+
+        let mut link = NativeLinkWiredForLossCounting::wire(
+            "ring-overrun/newest",
+            DeliveryProfile::Newest.resolve(),
+            crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+        );
+        let dest_id = link.dest_id.clone();
+        let link_id = link.link_id.to_string();
+
+        link.write_bags(1);
+        link.dest_input.receive_pending();
+        link.write_bags(DeliveryProfile::NEWEST_DEPTH + BAGS_PAST_THE_RING);
+        link.dest_input.receive_pending();
+        for _ in 0..DeliveryProfile::NEWEST_DEPTH + BAGS_PAST_THE_RING {
+            link.write_bags(1);
+            link.dest_input.receive_pending();
+        }
+
+        let metrics = link.rendered_metrics_of(&dest_id).unwrap();
+        assert_eq!(
+            metrics["dropped_bags_by_link"],
+            serde_json::json!({ link_id.as_str(): 0 }),
+        );
+        assert_eq!(metrics["frames_dropped"], serde_json::json!(0));
+    }
+
+    /// A producer that only produces carries metrics too, and a write its
+    /// output port refused at the channel ceiling shows under that port — on the
+    /// producer, since the refused bag never reached any link.
+    ///
+    /// Fail-without-fix: attach the metrics from destination wiring alone and
+    /// the source node renders no `metrics` key, so a camera refusing every
+    /// frame reads as healthy.
+    #[test]
+    fn a_producers_node_renders_the_writes_its_output_port_refused_at_the_ceiling() {
+        const CEILING_BYTES: usize = 1024;
+
+        let mut link = NativeLinkWiredForLossCounting::wire(
+            "refused-at-the-ceiling",
+            DeliveryProfile::Ordered.resolve(),
+            CEILING_BYTES,
+        );
+        let source_id = link.source_id.clone();
+        let dest_id = link.dest_id.clone();
+        let link_id = link.link_id.to_string();
+
+        assert_eq!(
+            link.rendered_metrics_of(&source_id),
+            Some(serde_json::json!({
+                "frames_dropped": 0,
+                "dropped_bags_by_link": {},
+                "refused_bags_by_output_port": { "out1": 0 }
+            })),
+            "a wired output port that has refused nothing renders a zero"
+        );
+
+        link.source_output
+            .write_raw("out1", &[0u8; CEILING_BYTES], 0)
+            .expect_err("a bag past the ceiling is refused");
+        link.write_bags(1);
+        link.dest_input.receive_pending();
+
+        assert_eq!(
+            link.rendered_metrics_of(&source_id).unwrap()["refused_bags_by_output_port"],
+            serde_json::json!({ "out1": 1 }),
+        );
+        assert_eq!(
+            link.rendered_metrics_of(&dest_id).unwrap()["dropped_bags_by_link"],
+            serde_json::json!({ link_id.as_str(): 0 }),
+            "the refused bag is the producer's loss and no link's"
         );
     }
 

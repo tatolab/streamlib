@@ -54,7 +54,8 @@ use iceoryx2::prelude::*;
 use streamlib_engine::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
 use streamlib_engine::core::runtime::StreamlibRuntimeDirectory;
 use streamlib_engine::iceoryx2::{
-    ChannelEgressConfig, ChannelTrustTier, InboundLinkName, InputMailboxesInner, OutputWriter,
+    ChannelDataServicePublisher, ChannelDataServiceSubscriber, ChannelEgressConfig,
+    ChannelTrustTier, Iceoryx2Node, InboundLinkName, InputMailboxesInner, OutputWriter,
     OutputWriterInner, ReadMode, TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
     create_iceoryx2_node_in_engine_owned_domain,
 };
@@ -78,41 +79,50 @@ fn unique_suffix(tag: &str) -> String {
     )
 }
 
-type BenchChannelPublisher =
-    iceoryx2::port::publisher::Publisher<iceoryx2::service::ipc::Service, [u8], ()>;
-type BenchChannelSubscriber =
-    iceoryx2::port::subscriber::Subscriber<iceoryx2::service::ipc::Service, [u8], ()>;
+/// A ring deep enough that 100k+ bench iterations don't overwrite ahead of the
+/// in-line drainers.
+const BENCH_CHANNEL_RING_DEPTH: usize = 8192;
 
-/// The one pubsub shape every bench arm publishes through: 2-publisher cap, a
-/// deep 8192-sample ring so 100k+ bench iterations don't backpressure ahead of
-/// the in-line drainers, and a 128 KiB slice cap covering the 64 KiB sweep arm
-/// plus `FRAME_HEADER_SIZE` with margin.
-fn open_bench_channel_pubsub(
-    node: &Node<ipc::Service>,
-    tag: &str,
-    subscriber_count: usize,
-) -> (BenchChannelPublisher, Vec<BenchChannelSubscriber>) {
-    let pubsub = node
-        .service_builder(&ServiceName::new(&unique_suffix(&format!("{tag}/pubsub"))).unwrap())
-        .publish_subscribe::<[u8]>()
-        .max_publishers(2)
-        .max_subscribers(subscriber_count + 1)
-        .subscriber_max_buffer_size(8192)
-        .open_or_create()
+/// A prime covering the 64 KiB sweep arm with margin.
+const BENCH_CHANNEL_EXPECTED_PAYLOAD_BYTES: usize = 128 * 1024;
+
+/// The one channel every bench arm publishes through, opened the way the engine
+/// opens one, and the node it was opened on.
+struct BenchChannel {
+    publisher: ChannelDataServicePublisher,
+    subscribers: Vec<ChannelDataServiceSubscriber>,
+    node: Iceoryx2Node,
+}
+
+fn open_bench_channel(tag: &str, subscriber_count: usize) -> BenchChannel {
+    let runtime_directory = StreamlibRuntimeDirectory::resolve().unwrap();
+    let node = Iceoryx2Node::new(
+        &runtime_directory.iceoryx2_domain_root(),
+        "streamlib-bench-channel",
+    )
+    .unwrap();
+    let channel = node
+        .open_or_create_service(
+            &unique_suffix(&format!("{tag}/pubsub")),
+            subscriber_count + 1,
+            BENCH_CHANNEL_RING_DEPTH,
+        )
         .unwrap();
-    let publisher = pubsub
-        .publisher_builder()
-        .initial_max_slice_len(128 * 1024)
-        .create()
+    let publisher = channel
+        .create_publisher(BENCH_CHANNEL_EXPECTED_PAYLOAD_BYTES)
         .unwrap();
     let subscribers = (0..subscriber_count)
-        .map(|_| pubsub.subscriber_builder().create().unwrap())
+        .map(|_| channel.create_subscriber(BENCH_CHANNEL_RING_DEPTH).unwrap())
         .collect();
-    (publisher, subscribers)
+    BenchChannel {
+        publisher,
+        subscribers,
+        node,
+    }
 }
 
 /// An `OutputWriterInner` primed with the bench's one "out" channel egress.
-fn output_writer_inner_publishing_to(publisher: BenchChannelPublisher) -> OutputWriterInner {
+fn output_writer_inner_publishing_to(publisher: ChannelDataServicePublisher) -> OutputWriterInner {
     let output_writer_inner = OutputWriterInner::new();
     output_writer_inner.set_channel_publisher(
         "out",
@@ -133,12 +143,12 @@ fn output_writer_inner_publishing_to(publisher: BenchChannelPublisher) -> Output
 /// hence no background-drainer thread).
 struct BenchFixture {
     inner: Arc<OutputWriterInner>,
-    subscriber: BenchChannelSubscriber,
+    subscriber: ChannelDataServiceSubscriber,
     listener: iceoryx2::port::listener::Listener<iceoryx2::service::ipc::Service>,
-    // Keep the node + service handles alive for the bench's
-    // lifetime so the publisher inside the inner doesn't observe
-    // a torn-down service mid-iteration.
+    // Keep the nodes alive for the bench's lifetime so the publisher inside
+    // the inner doesn't observe a torn-down service mid-iteration.
     _node: Node<iceoryx2::service::ipc::Service>,
+    _channel_node: Iceoryx2Node,
 }
 
 /// Build an `OutputWriterInner` with one configured downstream
@@ -147,7 +157,11 @@ struct BenchFixture {
 /// publisher's ring doesn't back-pressure).
 fn build_inner_with_connection(tag: &str) -> BenchFixture {
     let node = create_bench_iceoryx2_node();
-    let (publisher, mut subscribers) = open_bench_channel_pubsub(&node, tag, 1);
+    let BenchChannel {
+        publisher,
+        mut subscribers,
+        node: channel_node,
+    } = open_bench_channel(tag, 1);
     let subscriber = subscribers.pop().unwrap();
 
     let notify = node
@@ -168,6 +182,7 @@ fn build_inner_with_connection(tag: &str) -> BenchFixture {
         subscriber,
         listener,
         _node: node,
+        _channel_node: channel_node,
     }
 }
 
@@ -243,9 +258,10 @@ fn bench_payload_size_sweep(c: &mut Criterion) {
 /// and listeners in-line so the publisher's ring doesn't back-pressure.
 struct FanoutFixture {
     inner: Arc<OutputWriterInner>,
-    subscribers: Vec<BenchChannelSubscriber>,
+    subscribers: Vec<ChannelDataServiceSubscriber>,
     listeners: Vec<iceoryx2::port::listener::Listener<iceoryx2::service::ipc::Service>>,
     _node: Node<iceoryx2::service::ipc::Service>,
+    _channel_node: Iceoryx2Node,
 }
 
 /// Build an `OutputWriterInner` whose single "out" channel feeds
@@ -254,7 +270,11 @@ struct FanoutFixture {
 /// pubsub service.
 fn build_inner_with_fanout(tag: &str, subscriber_count: usize) -> FanoutFixture {
     let node = create_bench_iceoryx2_node();
-    let (publisher, subscribers) = open_bench_channel_pubsub(&node, tag, subscriber_count);
+    let BenchChannel {
+        publisher,
+        subscribers,
+        node: channel_node,
+    } = open_bench_channel(tag, subscriber_count);
     let inner = Arc::new(output_writer_inner_publishing_to(publisher));
 
     let mut listeners = Vec::with_capacity(subscriber_count);
@@ -278,6 +298,7 @@ fn build_inner_with_fanout(tag: &str, subscriber_count: usize) -> FanoutFixture 
         subscribers,
         listeners,
         _node: node,
+        _channel_node: channel_node,
     }
 }
 
@@ -325,12 +346,15 @@ fn bench_write_raw_fanout(c: &mut Criterion) {
 struct RoundTripFixture {
     output_writer_inner: OutputWriterInner,
     input_mailboxes_inner: InputMailboxesInner,
-    _node: Node<iceoryx2::service::ipc::Service>,
+    _channel_node: Iceoryx2Node,
 }
 
 fn build_round_trip(tag: &str) -> RoundTripFixture {
-    let node = create_bench_iceoryx2_node();
-    let (publisher, mut subscribers) = open_bench_channel_pubsub(&node, tag, 1);
+    let BenchChannel {
+        publisher,
+        mut subscribers,
+        node: channel_node,
+    } = open_bench_channel(tag, 1);
     let subscriber = subscribers.pop().unwrap();
 
     let output_writer_inner = output_writer_inner_publishing_to(publisher);
@@ -348,7 +372,7 @@ fn build_round_trip(tag: &str) -> RoundTripFixture {
     RoundTripFixture {
         output_writer_inner,
         input_mailboxes_inner,
-        _node: node,
+        _channel_node: channel_node,
     }
 }
 

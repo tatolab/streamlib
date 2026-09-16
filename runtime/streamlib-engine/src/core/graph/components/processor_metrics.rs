@@ -6,7 +6,7 @@ use std::sync::Arc;
 use serde_json::Value as JsonValue;
 
 use super::JsonSerializableComponent;
-use crate::iceoryx2::DroppedBagCountsByInboundLink;
+use crate::iceoryx2::{DroppedBagCountsByInboundLink, RefusedBagCountsByOutputPort};
 
 /// Runtime metrics for a processor.
 #[derive(Default, Clone)]
@@ -19,11 +19,15 @@ pub struct ProcessorMetrics {
     pub latency_p99_ms: f64,
     /// Total frames processed.
     pub frames_processed: u64,
-    /// Bags evicted at this processor's input ports, counted per inbound link.
+    /// Bags lost on the way to this processor's input ports, counted per
+    /// inbound link.
     ///
     /// Shared live with the destination's input mailboxes, so a snapshot reads
     /// the counts as they stand rather than a copy taken at wiring time.
     pub dropped_bag_counts_by_inbound_link: Arc<DroppedBagCountsByInboundLink>,
+    /// Bags this processor wrote that its output ports refused at the channel
+    /// ceiling, counted per output port and shared live with its output writer.
+    pub refused_bag_counts_by_output_port: Arc<RefusedBagCountsByOutputPort>,
 }
 
 impl ProcessorMetrics {
@@ -55,7 +59,10 @@ impl JsonSerializableComponent for ProcessorMetrics {
             .dropped_bag_count_snapshot_by_inbound_link();
         serde_json::json!({
             "frames_dropped": by_inbound_link.values().sum::<u64>(),
-            "dropped_bags_by_link": by_inbound_link
+            "dropped_bags_by_link": by_inbound_link,
+            "refused_bags_by_output_port": self
+                .refused_bag_counts_by_output_port
+                .refused_bag_count_snapshot_by_output_port()
         })
     }
 }
@@ -84,9 +91,35 @@ mod tests {
             rendered,
             serde_json::json!({
                 "frames_dropped": 8,
-                "dropped_bags_by_link": { "L-first": 7, "L-second": 1 }
+                "dropped_bags_by_link": { "L-first": 7, "L-second": 1 },
+                "refused_bags_by_output_port": {}
             }),
             "the whole rendering, so no uncomputed field creeps back onto the wire as a zero"
+        );
+    }
+
+    #[test]
+    fn a_processors_metrics_render_every_output_ports_refusals_beside_its_inbound_losses() {
+        let refused = Arc::new(RefusedBagCountsByOutputPort::default());
+        let video = refused.counter_for_output_port("video");
+        let _ = refused.counter_for_output_port("audio");
+        video.record_one_refused_bag();
+        video.record_one_refused_bag();
+
+        let rendered = ProcessorMetrics {
+            refused_bag_counts_by_output_port: refused,
+            ..Default::default()
+        }
+        .to_json();
+
+        assert_eq!(
+            rendered,
+            serde_json::json!({
+                "frames_dropped": 0,
+                "dropped_bags_by_link": {},
+                "refused_bags_by_output_port": { "audio": 0, "video": 2 }
+            }),
+            "refusals stay per output port and never enter the inbound bag total"
         );
     }
 
@@ -105,7 +138,8 @@ mod tests {
             rendered,
             serde_json::json!({
                 "frames_dropped": 0,
-                "dropped_bags_by_link": { "L-healthy": 0 }
+                "dropped_bags_by_link": { "L-healthy": 0 },
+                "refused_bags_by_output_port": {}
             }),
         );
     }

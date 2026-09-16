@@ -24,8 +24,8 @@ use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::Arc;
 
+use iceoryx2::identifiers::UniquePublisherId;
 use iceoryx2::port::listener::Listener;
-use iceoryx2::port::subscriber::Subscriber;
 use iceoryx2::prelude::*;
 use serde::de::DeserializeOwned;
 
@@ -38,7 +38,7 @@ use super::channel_name::InboundLinkName;
 use super::dropped_bag_counters::{DroppedBagCountsByInboundLink, InboundLinkDroppedBagCounter};
 use super::mailbox::{PortMailbox, PortMailboxEvictionNotice};
 use super::read_mode::ReadMode;
-use super::{FRAME_HEADER_SIZE, FrameHeader};
+use super::{ChannelDataServiceSubscriber, FRAME_HEADER_SIZE, FrameHeader};
 use crate::core::error::{Error, Result};
 
 /// One windowed port's stage, shared out of the `ports` map so the resample,
@@ -93,11 +93,52 @@ struct PortBoundSubscriber {
     /// hands back for every frame it delivers, and the name `graph` and `tap`
     /// show for the same link.
     inbound_link_name: InboundLinkName,
-    subscriber: Subscriber<ipc::Service, [u8], ()>,
+    subscriber: ChannelDataServiceSubscriber,
     /// This link's share of the destination's dropped-bag counts. Every frame
     /// this subscriber delivers is queued holding it, so an eviction names the
     /// link the evicted bag came in on rather than the one that made room.
     dropped_bag_counter: InboundLinkDroppedBagCounter,
+    /// The sequence number of the last sample this subscriber received, and the
+    /// publisher that sent it; `None` until the first sample after wiring.
+    last_received_sequence_number: Option<LastReceivedSequenceNumber>,
+}
+
+/// The last sequence number a subscriber received, and the publisher that
+/// numbered it.
+///
+/// One slot rather than one per publisher: a channel carries one publisher at
+/// a time and its ring delivers in send order, so a sample from any other
+/// publisher is a new baseline either way.
+#[derive(Clone, Copy)]
+struct LastReceivedSequenceNumber {
+    publisher: UniquePublisherId,
+    sequence_number: u64,
+}
+
+impl PortBoundSubscriber {
+    /// How many bags the subscriber ring overwrote ahead of a sample numbered
+    /// `sequence_number` by `publisher`, remembering it as the last received.
+    ///
+    /// The first sample after wiring, and the first from a publisher this
+    /// subscriber has not heard from, is a baseline and never a gap, so a
+    /// replaced producer is not read as a loss.
+    fn bags_the_ring_overwrote_before(
+        &mut self,
+        publisher: UniquePublisherId,
+        sequence_number: u64,
+    ) -> u64 {
+        let overwritten = match self.last_received_sequence_number {
+            Some(last) if last.publisher == publisher => sequence_number
+                .saturating_sub(last.sequence_number)
+                .saturating_sub(1),
+            _ => 0,
+        };
+        self.last_received_sequence_number = Some(LastReceivedSequenceNumber {
+            publisher,
+            sequence_number,
+        });
+        overwritten
+    }
 }
 
 /// A destination's channel subscribers and its notify-service [`Listener`],
@@ -320,7 +361,7 @@ fn windowed_port_config(
     // exact before it has consumed anything.
     let latest_queued_source_audio_format = Arc::new(LatestQueuedSourceAudioFormat::default());
     PortConfig {
-        mailbox: PortMailbox::new(contract.windowed_port_mailbox_depth())
+        mailbox: PortMailbox::new(contract.windowed_port_mailbox_depth(), read_mode)
             .measuring_every_queued_frame_with(queued_audio_window_frame_measure(
                 contract,
                 Arc::clone(&latest_queued_source_audio_format),
@@ -433,7 +474,7 @@ impl InputMailboxesInner {
         self.ports.lock().insert(
             port.to_string(),
             PortConfig {
-                mailbox: PortMailbox::new(buffer_size),
+                mailbox: PortMailbox::new(buffer_size, read_mode),
                 read_mode,
                 staged_oversized: None,
                 audio_windowing: InstalledInputPortAudioWindowing::NotWindowed,
@@ -474,7 +515,7 @@ impl InputMailboxesInner {
         self.ports.lock().insert(
             port.to_string(),
             PortConfig {
-                mailbox: PortMailbox::new(depth).reporting_every_eviction_to(
+                mailbox: PortMailbox::new(depth, read_mode).reporting_every_eviction_to(
                     notice_that_a_bag_was_lost_at_a_port_whose_match_device_contract_is_unsettled(
                         port, depth,
                     ),
@@ -639,7 +680,7 @@ impl InputMailboxesInner {
         local_port: &str,
         link_id: &str,
         inbound_link_name: &InboundLinkName,
-        subscriber: Subscriber<ipc::Service, [u8], ()>,
+        subscriber: ChannelDataServiceSubscriber,
     ) {
         let dropped_bag_counter = self.dropped_bag_counts.counter_for_inbound_link(link_id);
         self.inbound_link_subscribers_and_listener
@@ -651,6 +692,7 @@ impl InputMailboxesInner {
                 inbound_link_name: inbound_link_name.clone(),
                 subscriber,
                 dropped_bag_counter,
+                last_received_sequence_number: None,
             });
     }
 
@@ -774,57 +816,74 @@ impl InputMailboxesInner {
     /// Receive all pending payloads from every channel subscriber and route them
     /// to mailboxes by the subscriber's local-port binding.
     ///
+    /// Every loss this pass can see is counted on the link it happened to: the
+    /// bags a jump in the sequence number says the ring overwrote, on an
+    /// `ordered` port — a `newest` port passing over bags is the profile working
+    /// — and a frame too short to carry a header or bound to a port with no
+    /// mailbox, which consumed a number and reaches no reader.
+    ///
     /// This is called automatically by `read()` and `has_data()`, but can be
     /// called explicitly if needed.
     pub fn receive_pending(&self) {
-        let subscribers_and_listener = self.inbound_link_subscribers_and_listener.lock();
-        for bound in &subscribers_and_listener.subscribers {
+        let mut subscribers_and_listener = self.inbound_link_subscribers_and_listener.lock();
+        for bound in &mut subscribers_and_listener.subscribers {
             loop {
-                match bound.subscriber.receive() {
-                    Ok(Some(sample)) => {
-                        let slice: &[u8] = sample.payload();
-                        if slice.len() < FRAME_HEADER_SIZE {
-                            tracing::warn!(
-                                "InputMailboxes: received slice too small ({} < {})",
-                                slice.len(),
-                                FRAME_HEADER_SIZE
-                            );
-                            continue;
-                        }
-                        let ports = self.ports.lock();
-                        if let Some(port_config) = ports.get(&bound.local_port) {
-                            // The read side's per-frame cost after #1822 is this
-                            // `to_vec` plus the header-strip memmove in
-                            // `read_raw_bounded`. The copy is irreducible without
-                            // parking the iceoryx2 `Sample` here instead of bytes —
-                            // pinning shm slots while frames sit queued and coupling
-                            // the mailbox's drop-oldest depth to the subscriber
-                            // ring's. The memmove could fold into this copy by
-                            // parsing the header here and queuing payload +
-                            // timestamp, but that moves the stamped-length refusal
-                            // off the read path (today a typed, port-named error to
-                            // the reading processor, not a receive-time drop) and
-                            // reshapes the mailbox's raw-wire-frame element
-                            // contract (`route`, `drain`, [`PortMailbox`]).
-                            port_config.mailbox.push_frame_from_inbound_link(
-                                slice.to_vec(),
-                                &bound.dropped_bag_counter,
-                                &bound.inbound_link_name,
-                            );
-                        } else {
-                            tracing::warn!(
-                                port = %bound.local_port,
-                                "InputMailboxes: channel delivered a frame but its bound \
-                                 local port has no mailbox"
-                            );
-                        }
-                    }
+                let sample = match bound.subscriber.receive() {
+                    Ok(Some(sample)) => sample,
                     Ok(None) => break, // no more samples on this subscriber
                     Err(e) => {
                         tracing::error!("InputMailboxes: subscriber.receive() FAILED: {:?}", e);
                         break;
                     }
+                };
+                let bags_the_ring_overwrote = bound.bags_the_ring_overwrote_before(
+                    sample.origin(),
+                    sample.user_header().sequence_number,
+                );
+                let slice: &[u8] = sample.payload();
+                let ports = self.ports.lock();
+                let port_config = ports.get(&bound.local_port);
+                if port_config.is_some_and(|port| port.read_mode == ReadMode::ReadNextInOrder) {
+                    bound
+                        .dropped_bag_counter
+                        .record_dropped_bags(bags_the_ring_overwrote);
                 }
+                if slice.len() < FRAME_HEADER_SIZE {
+                    bound.dropped_bag_counter.record_one_dropped_bag();
+                    tracing::warn!(
+                        link = %bound.inbound_link_name,
+                        "InputMailboxes: received slice too small ({} < {}); dropped and counted",
+                        slice.len(),
+                        FRAME_HEADER_SIZE
+                    );
+                    continue;
+                }
+                let Some(port_config) = port_config else {
+                    bound.dropped_bag_counter.record_one_dropped_bag();
+                    tracing::warn!(
+                        port = %bound.local_port,
+                        link = %bound.inbound_link_name,
+                        "InputMailboxes: channel delivered a frame but its bound local port has \
+                         no mailbox; dropped and counted"
+                    );
+                    continue;
+                };
+                // The read side's per-frame cost after #1822 is this `to_vec`
+                // plus the header-strip memmove in `read_raw_bounded`. The copy
+                // is irreducible without parking the iceoryx2 `Sample` here
+                // instead of bytes — pinning shm slots while frames sit queued and
+                // coupling the mailbox's drop-oldest depth to the subscriber
+                // ring's. The memmove could fold into this copy by parsing the
+                // header here and queuing payload + timestamp, but that moves the
+                // stamped-length refusal off the read path (today a typed,
+                // port-named error to the reading processor, not a receive-time
+                // drop) and reshapes the mailbox's raw-wire-frame element contract
+                // (`route`, `drain`, [`PortMailbox`]).
+                port_config.mailbox.push_frame_from_inbound_link(
+                    slice.to_vec(),
+                    &bound.dropped_bag_counter,
+                    &bound.inbound_link_name,
+                );
             }
         }
     }
@@ -1421,57 +1480,75 @@ mod tests {
         frame
     }
 
+    /// A test channel's publisher, numbering its sends from zero the way
+    /// [`crate::iceoryx2::OutputWriterInner::write_raw`] does, so a frame
+    /// published raw — one whose stamped length a test wants wrong — still
+    /// reaches the receive seam in sequence.
+    struct TestChannelPublisherNumberingItsSends {
+        publisher: crate::iceoryx2::ChannelDataServicePublisher,
+        next_sequence_number: std::cell::Cell<u64>,
+    }
+
+    impl TestChannelPublisherNumberingItsSends {
+        fn numbering(publisher: crate::iceoryx2::ChannelDataServicePublisher) -> Self {
+            Self {
+                publisher,
+                next_sequence_number: std::cell::Cell::new(0),
+            }
+        }
+    }
+
     /// Open a channel sized for `buffered_frames` in flight and hand back the
     /// publisher (kept alive so sent samples stay resident) plus a bound
     /// subscriber, so a test can publish one frame at a time.
     fn open_channel_for_one_link(
-        node: &iceoryx2::node::Node<ipc::Service>,
         tag: &str,
         buffered_frames: usize,
     ) -> (
-        iceoryx2::port::publisher::Publisher<ipc::Service, [u8], ()>,
-        Subscriber<ipc::Service, [u8], ()>,
+        TestChannelPublisherNumberingItsSends,
+        crate::iceoryx2::ChannelDataServiceSubscriber,
     ) {
-        open_channel_for_one_link_loaning(node, tag, buffered_frames, 4096)
+        open_channel_for_one_link_loaning(tag, buffered_frames, 4096)
     }
 
     /// The same, with the publisher's loan sized explicitly — an audio block of
     /// a thousand `f32` samples outgrows the 4 KiB the frame tests want.
     fn open_channel_for_one_link_loaning(
-        node: &iceoryx2::node::Node<ipc::Service>,
         tag: &str,
         buffered_frames: usize,
         loan_bytes: usize,
     ) -> (
-        iceoryx2::port::publisher::Publisher<ipc::Service, [u8], ()>,
-        Subscriber<ipc::Service, [u8], ()>,
+        TestChannelPublisherNumberingItsSends,
+        crate::iceoryx2::ChannelDataServiceSubscriber,
     ) {
-        let pubsub = node
-            .service_builder(&ServiceName::new(&unique_suffix(tag)).unwrap())
-            .publish_subscribe::<[u8]>()
-            .max_publishers(2)
-            .subscriber_max_buffer_size(buffered_frames)
-            .enable_safe_overflow(true)
-            .open_or_create()
+        let channel = crate::iceoryx2::Iceoryx2Node::for_this_test_process()
+            .open_or_create_service(&unique_suffix(tag), 2, buffered_frames)
             .unwrap();
-        let publisher = pubsub
-            .publisher_builder()
-            .initial_max_slice_len(loan_bytes)
-            .create()
-            .unwrap();
-        let subscriber = pubsub.subscriber_builder().create().unwrap();
-        (publisher, subscriber)
+        let publisher = channel.create_publisher(loan_bytes).unwrap();
+        let subscriber = channel.create_subscriber(buffered_frames).unwrap();
+        (
+            TestChannelPublisherNumberingItsSends::numbering(publisher),
+            subscriber,
+        )
     }
 
     /// Publish one frame stamped with `source_port` onto an open channel.
     fn publish_one_frame(
-        publisher: &iceoryx2::port::publisher::Publisher<ipc::Service, [u8], ()>,
+        publisher: &TestChannelPublisherNumberingItsSends,
         source_port: &str,
         body: &[u8],
     ) {
         let frame = wire_frame_stamping(source_port, 0, body.len() as u32, body);
-        let sample = publisher.loan_slice_uninit(frame.len()).unwrap();
-        sample.write_from_slice(&frame).send().unwrap();
+        send_raw_bytes_numbered(publisher, &frame);
+    }
+
+    /// Send `bytes` as one sample carrying the publisher's next sequence number.
+    fn send_raw_bytes_numbered(publisher: &TestChannelPublisherNumberingItsSends, bytes: &[u8]) {
+        let mut sample = publisher.publisher.loan_slice_uninit(bytes.len()).unwrap();
+        sample.user_header_mut().sequence_number = publisher
+            .next_sequence_number
+            .replace(publisher.next_sequence_number.get() + 1);
+        sample.write_from_slice(bytes).send().unwrap();
     }
 
     /// Driving the iceoryx2 Event service end-to-end: notify must transition
@@ -1606,9 +1683,8 @@ mod tests {
     /// two-frame assertion fails.
     #[test]
     fn two_channel_subscribers_fan_into_one_local_port() {
-        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
-        let (publisher_a, sub_a) = open_channel_for_one_link(&node, "fanin/a", 1);
-        let (publisher_b, sub_b) = open_channel_for_one_link(&node, "fanin/b", 1);
+        let (publisher_a, sub_a) = open_channel_for_one_link("fanin/a", 1);
+        let (publisher_b, sub_b) = open_channel_for_one_link("fanin/b", 1);
         publish_one_frame(&publisher_a, "src_a_out", b"frame-from-a");
         publish_one_frame(&publisher_b, "src_b_out", b"frame-from-b");
 
@@ -1653,18 +1729,17 @@ mod tests {
     /// The stall here is the consumer never reading — the transport is pumped
     /// after every publish on purpose, so what the counts account for is
     /// eviction at the mailbox alone. A consumer parked deeper, pumping no
-    /// receive at all, overflows the iceoryx2 subscriber ring instead, and
-    /// that loss is counted nowhere.
+    /// receive at all, overflows the iceoryx2 subscriber ring instead, which
+    /// the sequence-number gap counts on the same link.
     #[test]
     fn each_inbound_link_reports_its_own_losses_at_a_stalled_ordered_port() {
         const MAILBOX_DEPTH: usize = 2;
         const FRAMES_PER_LINK: usize = 5;
 
-        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let (publisher_a, subscriber_a) =
-            open_channel_for_one_link(&node, "drop-count/a", FRAMES_PER_LINK);
+            open_channel_for_one_link("drop-count/a", FRAMES_PER_LINK);
         let (publisher_b, subscriber_b) =
-            open_channel_for_one_link(&node, "drop-count/b", FRAMES_PER_LINK);
+            open_channel_for_one_link("drop-count/b", FRAMES_PER_LINK);
 
         let mailboxes = InputMailboxesInner::new();
         mailboxes.add_port("in", MAILBOX_DEPTH, ReadMode::ReadNextInOrder);
@@ -1711,6 +1786,139 @@ mod tests {
         );
     }
 
+    /// An `OutputWriterInner` publishing `output_port` onto `channel`, the way
+    /// the wiring op installs one, with one outbound link.
+    fn output_writer_publishing_onto(
+        channel: &crate::iceoryx2::Iceoryx2Service,
+        output_port: &str,
+    ) -> crate::iceoryx2::OutputWriterInner {
+        let output_writer = crate::iceoryx2::OutputWriterInner::new();
+        install_a_fresh_publisher(&output_writer, channel, output_port);
+        output_writer
+    }
+
+    fn install_a_fresh_publisher(
+        output_writer: &crate::iceoryx2::OutputWriterInner,
+        channel: &crate::iceoryx2::Iceoryx2Service,
+        output_port: &str,
+    ) {
+        output_writer.set_channel_publisher(
+            output_port,
+            channel.create_publisher(64).unwrap(),
+            crate::iceoryx2::ChannelEgressConfig {
+                service_name: format!("test/input/{output_port}"),
+                trust_tier: crate::iceoryx2::ChannelTrustTier::Trusted,
+                expected_payload_bytes: 64,
+                ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+            },
+        );
+        output_writer.add_channel_link(output_port, "L-to-the-destination", None);
+    }
+
+    fn dropped_bag_counts_of(
+        mailboxes: &InputMailboxesInner,
+    ) -> std::collections::BTreeMap<String, u64> {
+        mailboxes
+            .dropped_bag_counts_by_inbound_link()
+            .dropped_bag_count_snapshot_by_inbound_link()
+    }
+
+    /// A publisher that replaced the one a live subscriber was hearing from
+    /// numbers its sends from zero again, and the first of them the subscriber
+    /// receives is a new baseline, never a gap measured against the old one.
+    ///
+    /// The replacement's first two bags are overwritten in a four-deep ring, so
+    /// its first received number is two past the old publisher's last.
+    /// Fail-without-fix: compare numbers without the publisher that sent them
+    /// and the link reports one lost bag the replacement never counted as sent
+    /// to it.
+    #[test]
+    fn a_replacement_publisher_on_a_live_subscriber_reads_as_a_new_baseline_not_a_gap() {
+        const RING_DEPTH: usize = 4;
+        let channel = crate::iceoryx2::Iceoryx2Node::for_this_test_process()
+            .open_or_create_service(&unique_suffix("replaced-publisher"), 2, 16)
+            .unwrap();
+        let mailboxes = InputMailboxesInner::new();
+        mailboxes.add_port("in", 16, ReadMode::ReadNextInOrder);
+        mailboxes.add_channel_subscriber(
+            "in",
+            "L-replaced",
+            &InboundLinkName::from("psource/out"),
+            channel.create_subscriber(RING_DEPTH).unwrap(),
+        );
+
+        let output_writer = output_writer_publishing_onto(&channel, "out");
+        output_writer.write_raw("out", b"old", 0).unwrap();
+        mailboxes.receive_pending();
+
+        assert!(output_writer.remove_channel_link("out", "L-to-the-destination"));
+        install_a_fresh_publisher(&output_writer, &channel, "out");
+        for bag in 0..RING_DEPTH + 2 {
+            output_writer.write_raw("out", b"new", bag as i64).unwrap();
+        }
+        mailboxes.receive_pending();
+
+        assert_eq!(
+            dropped_bag_counts_of(&mailboxes),
+            std::collections::BTreeMap::from([("L-replaced".to_string(), 0)]),
+            "the replacement's first received bag is a baseline"
+        );
+        assert_eq!(mailboxes.drain("in").len(), 1 + RING_DEPTH);
+    }
+
+    /// A frame too short to carry a frame header consumed a sequence number and
+    /// reaches no reader, so it is counted on the link it arrived on rather than
+    /// only warned about.
+    #[test]
+    fn a_frame_too_short_for_a_header_is_counted_on_the_link_it_arrived_on() {
+        let (publisher, subscriber) = open_channel_for_one_link("undersized-frame", 4);
+        let mailboxes = InputMailboxesInner::new();
+        mailboxes.add_port("in", 4, ReadMode::SkipToLatest);
+        mailboxes.add_channel_subscriber(
+            "in",
+            "L-undersized",
+            &InboundLinkName::from("psource/out"),
+            subscriber,
+        );
+
+        send_raw_bytes_numbered(&publisher, &[0u8; FRAME_HEADER_SIZE - 1]);
+        publish_one_frame(&publisher, "out", b"a whole frame");
+        mailboxes.receive_pending();
+
+        assert_eq!(
+            dropped_bag_counts_of(&mailboxes),
+            std::collections::BTreeMap::from([("L-undersized".to_string(), 1)]),
+        );
+        assert_eq!(
+            mailboxes.drain("in").len(),
+            1,
+            "the whole frame behind it is delivered"
+        );
+    }
+
+    /// A frame for a link whose local port has no mailbox consumed a sequence
+    /// number and reaches no reader, so it is counted on its link.
+    #[test]
+    fn a_frame_bound_to_a_port_with_no_mailbox_is_counted_on_its_link() {
+        let (publisher, subscriber) = open_channel_for_one_link("no-mailbox", 4);
+        let mailboxes = InputMailboxesInner::new();
+        mailboxes.add_channel_subscriber(
+            "in",
+            "L-portless",
+            &InboundLinkName::from("psource/out"),
+            subscriber,
+        );
+
+        publish_one_frame(&publisher, "out", b"nowhere to go");
+        publish_one_frame(&publisher, "out", b"nowhere to go either");
+        mailboxes.receive_pending();
+
+        assert_eq!(
+            dropped_bag_counts_of(&mailboxes),
+            std::collections::BTreeMap::from([("L-portless".to_string(), 2)]),
+        );
+    }
+
     // =========================================================================
     // Naming the inbound link a bag arrived on. The mailbox already knew — the
     // per-link drop counter is keyed by it — and these gate that a read hands
@@ -1726,9 +1934,8 @@ mod tests {
     /// interleaving would be pinning an artifact.
     #[test]
     fn two_inbound_links_hand_a_reader_the_link_each_bag_arrived_on() {
-        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
-        let (publisher_a, sub_a) = open_channel_for_one_link(&node, "naming/a", 4);
-        let (publisher_b, sub_b) = open_channel_for_one_link(&node, "naming/b", 4);
+        let (publisher_a, sub_a) = open_channel_for_one_link("naming/a", 4);
+        let (publisher_b, sub_b) = open_channel_for_one_link("naming/b", 4);
 
         let mailboxes = InputMailboxesInner::new();
         mailboxes.add_port("in", 64, ReadMode::ReadNextInOrder);
@@ -1794,11 +2001,10 @@ mod tests {
         const MAILBOX_DEPTH: usize = 2;
         const FRAMES_PER_LINK: usize = 5;
 
-        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let (publisher_a, subscriber_a) =
-            open_channel_for_one_link(&node, "naming-counts/a", FRAMES_PER_LINK);
+            open_channel_for_one_link("naming-counts/a", FRAMES_PER_LINK);
         let (publisher_b, subscriber_b) =
-            open_channel_for_one_link(&node, "naming-counts/b", FRAMES_PER_LINK);
+            open_channel_for_one_link("naming-counts/b", FRAMES_PER_LINK);
 
         let mailboxes = InputMailboxesInner::new();
         mailboxes.add_port("in", MAILBOX_DEPTH, ReadMode::ReadNextInOrder);
@@ -1868,8 +2074,7 @@ mod tests {
             track: String,
         }
 
-        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
-        let (publisher, subscriber) = open_channel_for_one_link(&node, "naming/typed", 4);
+        let (publisher, subscriber) = open_channel_for_one_link("naming/typed", 4);
 
         let mailboxes = InputMailboxesInner::new();
         mailboxes.add_port("in", 8, ReadMode::ReadNextInOrder);
@@ -1917,10 +2122,9 @@ mod tests {
     /// do so in its own words.
     #[test]
     fn a_port_lists_the_inbound_links_wired_into_it_and_a_port_with_none_lists_none() {
-        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
-        let (_publisher_a, sub_a) = open_channel_for_one_link(&node, "listing/a", 1);
-        let (_publisher_b, sub_b) = open_channel_for_one_link(&node, "listing/b", 1);
-        let (_publisher_c, sub_c) = open_channel_for_one_link(&node, "listing/c", 1);
+        let (_publisher_a, sub_a) = open_channel_for_one_link("listing/a", 1);
+        let (_publisher_b, sub_b) = open_channel_for_one_link("listing/b", 1);
+        let (_publisher_c, sub_c) = open_channel_for_one_link("listing/c", 1);
 
         let mailboxes = InputMailboxesInner::new();
         mailboxes.add_port("tracks", 8, ReadMode::ReadNextInOrder);
@@ -1972,8 +2176,7 @@ mod tests {
     /// port answers for it and the read works there too.
     #[test]
     fn a_windowed_ports_read_names_the_one_link_that_feeds_it() {
-        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
-        let (publisher, subscriber) = open_channel_for_one_link(&node, "naming/windowed", 8);
+        let (publisher, subscriber) = open_channel_for_one_link("naming/windowed", 8);
 
         let mailboxes = InputMailboxesInner::new();
         mailboxes.add_windowed_port(
@@ -2076,9 +2279,8 @@ mod tests {
     /// rates equal there is no filter and no priming to give back.
     #[test]
     fn a_resampling_windowed_port_reports_data_only_once_a_full_window_can_be_emitted() {
-        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let (publisher, subscriber) =
-            open_channel_for_one_link_loaning(&node, "window/resampled", 32, 16_384);
+            open_channel_for_one_link_loaning("window/resampled", 32, 16_384);
 
         let mailboxes = InputMailboxesInner::new();
         mailboxes.add_windowed_port(
@@ -2206,9 +2408,8 @@ mod tests {
     /// the plausible-looking wrong audio this contract exists to rule out.
     #[test]
     fn a_port_awaiting_its_device_hands_a_reader_nothing_however_much_is_queued() {
-        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let (publisher, subscriber) =
-            open_channel_for_one_link_loaning(&node, "window/awaiting", 8, 16_384);
+            open_channel_for_one_link_loaning("window/awaiting", 8, 16_384);
 
         let mailboxes = InputMailboxesInner::new();
         mailboxes.add_port_awaiting_its_device_stream_format(
@@ -2263,8 +2464,7 @@ mod tests {
         const MAILBOX_DEPTH: usize = 2;
         const FRAMES_PUBLISHED: usize = 6;
 
-        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
-        let (publisher, subscriber) = open_channel_for_one_link(&node, "window/awaiting-drop", 4);
+        let (publisher, subscriber) = open_channel_for_one_link("window/awaiting-drop", 4);
 
         let mailboxes = InputMailboxesInner::new();
         mailboxes.add_port_awaiting_its_device_stream_format(
@@ -2319,8 +2519,7 @@ mod tests {
     fn a_settled_ports_evictions_are_not_reported_as_an_unsettled_contract() {
         const FRAMES_PUBLISHED: usize = 24;
 
-        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
-        let (publisher, subscriber) = open_channel_for_one_link(&node, "window/settled-drop", 4);
+        let (publisher, subscriber) = open_channel_for_one_link("window/settled-drop", 4);
 
         let mailboxes = InputMailboxesInner::new();
         mailboxes.add_port_awaiting_its_device_stream_format(
@@ -2383,8 +2582,7 @@ mod tests {
         /// Publish four 16 kHz mono blocks onto port `"in"` and draw them into
         /// its mailbox, so what follows has something queued to work on.
         fn publish_four_mono_blocks_into(mailboxes: &InputMailboxesInner, tag: &str) {
-            let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
-            let (publisher, subscriber) = open_channel_for_one_link_loaning(&node, tag, 16, 16_384);
+            let (publisher, subscriber) = open_channel_for_one_link_loaning(tag, 16, 16_384);
             mailboxes.add_channel_subscriber(
                 "in",
                 "L-only",
@@ -2609,8 +2807,7 @@ mod tests {
     /// a reactive processor is never dispatched with nothing to read.
     #[test]
     fn a_windowed_port_reports_data_only_once_a_full_window_can_be_emitted() {
-        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
-        let (publisher, subscriber) = open_channel_for_one_link(&node, "window/readiness", 8);
+        let (publisher, subscriber) = open_channel_for_one_link("window/readiness", 8);
 
         let mailboxes = InputMailboxesInner::new();
         mailboxes.add_windowed_port(
@@ -2663,9 +2860,8 @@ mod tests {
     /// windows — the count the reactive drain loop dispatches `process()`.
     #[test]
     fn one_1024_sample_quantum_reads_out_of_a_512_512_port_exactly_twice() {
-        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let (publisher, subscriber) =
-            open_channel_for_one_link_loaning(&node, "window/quantum", 4, 16_384);
+            open_channel_for_one_link_loaning("window/quantum", 4, 16_384);
 
         let mailboxes = InputMailboxesInner::new();
         mailboxes.add_windowed_port(
@@ -2704,9 +2900,8 @@ mod tests {
     /// reader gets back are the bytes the producer published.
     #[test]
     fn a_contract_less_port_still_reads_the_bag_the_producer_published_byte_for_byte() {
-        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let (publisher, subscriber) =
-            open_channel_for_one_link_loaning(&node, "window/untouched", 4, 16_384);
+            open_channel_for_one_link_loaning("window/untouched", 4, 16_384);
 
         let mailboxes = InputMailboxesInner::new();
         mailboxes.add_port("in", 8, ReadMode::ReadNextInOrder);
@@ -2743,8 +2938,7 @@ mod tests {
             published_bags: usize,
             contract: Option<ResolvedAudioWindowContract>,
         ) -> u64 {
-            let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
-            let (publisher, subscriber) = open_channel_for_one_link(&node, tag, 4);
+            let (publisher, subscriber) = open_channel_for_one_link(tag, 4);
             let mailboxes = InputMailboxesInner::new();
             match contract {
                 Some(contract) => {
@@ -2805,8 +2999,7 @@ mod tests {
         )
         .expect("a one-second rolling window is legal");
 
-        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
-        let (publisher, subscriber) = open_channel_for_one_link(&node, "window/depth", 4);
+        let (publisher, subscriber) = open_channel_for_one_link("window/depth", 4);
         let mailboxes = InputMailboxesInner::new();
         mailboxes.add_windowed_port("in", ReadMode::ReadNextInOrder, one_second_rolling);
         mailboxes.add_channel_subscriber(
@@ -2841,8 +3034,7 @@ mod tests {
     /// port — never reshaped into a plausible wrong answer.
     #[test]
     fn a_bag_the_stage_cannot_read_is_refused_at_the_read_naming_the_port() {
-        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
-        let (publisher, subscriber) = open_channel_for_one_link(&node, "window/refusal", 4);
+        let (publisher, subscriber) = open_channel_for_one_link("window/refusal", 4);
 
         let mailboxes = InputMailboxesInner::new();
         mailboxes.add_windowed_port(
@@ -2879,9 +3071,8 @@ mod tests {
     /// from a link nobody wired.
     #[test]
     fn a_port_that_keeps_up_reports_a_zero_for_every_wired_link() {
-        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
-        let (publisher_a, subscriber_a) = open_channel_for_one_link(&node, "no-drop/a", 4);
-        let (publisher_b, subscriber_b) = open_channel_for_one_link(&node, "no-drop/b", 4);
+        let (publisher_a, subscriber_a) = open_channel_for_one_link("no-drop/a", 4);
+        let (publisher_b, subscriber_b) = open_channel_for_one_link("no-drop/b", 4);
 
         let mailboxes = InputMailboxesInner::new();
         mailboxes.add_port("in", 8, ReadMode::ReadNextInOrder);
@@ -2922,8 +3113,7 @@ mod tests {
     /// is a reader's dead end.
     #[test]
     fn a_disconnected_links_count_goes_with_the_link() {
-        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
-        let (publisher, subscriber) = open_channel_for_one_link(&node, "reclaim-count", 4);
+        let (publisher, subscriber) = open_channel_for_one_link("reclaim-count", 4);
 
         let mailboxes = InputMailboxesInner::new();
         mailboxes.add_port("in", 1, ReadMode::ReadNextInOrder);
@@ -2970,13 +3160,10 @@ mod tests {
         let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
 
         let open_subscriber = |tag: &str| {
-            node.service_builder(&ServiceName::new(&unique_suffix(tag)).unwrap())
-                .publish_subscribe::<[u8]>()
-                .max_publishers(2)
-                .open_or_create()
+            crate::iceoryx2::Iceoryx2Node::for_this_test_process()
+                .open_or_create_service(&unique_suffix(tag), 2, 4)
                 .unwrap()
-                .subscriber_builder()
-                .create()
+                .create_subscriber(4)
                 .unwrap()
         };
         let listener = node
@@ -3320,9 +3507,11 @@ mod tests {
 
         let (wire_and_unwire_cycles, read_passes, frames_read) = std::thread::scope(|scope| {
             scope.spawn(|| {
-                let publisher = open_the_rewired_channel()
-                    .create_publisher(EXPECTED_PAYLOAD_BYTES)
-                    .unwrap();
+                let publisher = TestChannelPublisherNumberingItsSends::numbering(
+                    open_the_rewired_channel()
+                        .create_publisher(EXPECTED_PAYLOAD_BYTES)
+                        .unwrap(),
+                );
                 while racers_still_running.load(std::sync::atomic::Ordering::Relaxed) > 0
                     && race_started.elapsed() < RACE_HARD_CAP
                 {

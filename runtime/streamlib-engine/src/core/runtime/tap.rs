@@ -307,7 +307,6 @@ mod tests {
     use super::*;
     use std::time::Duration;
 
-    use iceoryx2::prelude::*;
     use streamlib_ipc_types::RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL;
 
     use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
@@ -324,10 +323,7 @@ mod tests {
 
     /// Publish one bag whose last payload byte is `marker` (a full
     /// `FRAME_HEADER_SIZE + 1` slice, mirroring the channel wire shape).
-    fn publish_marker(
-        publisher: &iceoryx2::port::publisher::Publisher<ipc::Service, [u8], ()>,
-        marker: u8,
-    ) {
+    fn publish_marker(publisher: &crate::iceoryx2::ChannelDataServicePublisher, marker: u8) {
         let mut payload = vec![0u8; FRAME_HEADER_SIZE + 1];
         payload[FRAME_HEADER_SIZE] = marker;
         let sample = publisher

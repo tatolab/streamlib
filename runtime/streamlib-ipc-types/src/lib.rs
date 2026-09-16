@@ -97,11 +97,10 @@ pub struct ChannelSegmentGrowth {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChannelEgressAdmission {
     /// The frame is above the channel's per-channel payload ceiling and was
-    /// refused. The caller drops it — surfacing the refusal in its own way (a
-    /// typed `PayloadExceedsChannelCeiling` error in the host, a refuse return
-    /// code in a subprocess native) — and logs it; `refused_count` is the
-    /// running total after this refusal.
-    RefusedOverCeiling { refused_count: u64 },
+    /// refused. The caller drops it, counts it, surfaces the refusal in its own
+    /// way (a typed `PayloadExceedsChannelCeiling` error in the host, a refuse
+    /// return code in a subprocess native) and logs it.
+    RefusedOverCeiling,
     /// The frame fits under the ceiling; the caller publishes it. When `grew_to`
     /// is `Some(growth)` the tracked data-segment capacity crossed the frame size
     /// and was advanced — a PowerOfTwo growth the caller logs, additionally
@@ -118,24 +117,19 @@ pub enum ChannelEgressAdmission {
 /// Refusing above `channel_ceiling_bytes` is the graceful, observable layer in
 /// front of the subprocess cgroup `memory.max` backstop. This crate owns the
 /// thresholds so the host writer and the Python / Deno subprocess natives cannot
-/// drift: it increments `refused_over_ceiling_count` on a refusal, advances
-/// `current_slot_capacity_bytes` to the next power of two on a growth (both in
-/// place), and reports whether that growth first crossed a quarter of the
-/// ceiling. The caller owns the refusal surface (typed error vs. refuse return
-/// code); the shared diagnostics live in
+/// drift: it advances `current_slot_capacity_bytes` to the next power of two on
+/// a growth (in place) and reports whether that growth first crossed a quarter
+/// of the ceiling. The caller owns the refusal surface (typed error vs. refuse
+/// return code) and the refusal count; the shared diagnostics live in
 /// [`emit_channel_egress_admission_tracing`] beside this decision so they cannot
 /// drift from it.
 pub fn decide_channel_egress_admission(
     frame_total_bytes: usize,
     channel_ceiling_bytes: usize,
-    refused_over_ceiling_count: &mut u64,
     current_slot_capacity_bytes: &mut usize,
 ) -> ChannelEgressAdmission {
     if frame_total_bytes > channel_ceiling_bytes {
-        *refused_over_ceiling_count += 1;
-        return ChannelEgressAdmission::RefusedOverCeiling {
-            refused_count: *refused_over_ceiling_count,
-        };
+        return ChannelEgressAdmission::RefusedOverCeiling;
     }
     let grew_to = if frame_total_bytes > *current_slot_capacity_bytes {
         let old_segment_bytes = *current_slot_capacity_bytes;
@@ -160,9 +154,11 @@ pub fn decide_channel_egress_admission(
 /// off the same [`decide_channel_egress_admission`] decision. `trust_tier`
 /// labels each line; `log_prefix` is `None` for the host and
 /// `Some((runtime_tag, processor_id))` for a native (its runtime tag plus its
-/// processor id) to scope the message with a `[tag:id] ` prefix. The caller
-/// still maps [`ChannelEgressAdmission::RefusedOverCeiling`] to its own refuse
-/// return code or typed error.
+/// processor id) to scope the message with a `[tag:id] ` prefix.
+/// `refused_bag_count` is the output port's running refusal total, this frame
+/// included when it was refused. The caller still maps
+/// [`ChannelEgressAdmission::RefusedOverCeiling`] to its own refuse return code
+/// or typed error.
 pub fn emit_channel_egress_admission_tracing(
     log_prefix: Option<(&str, &str)>,
     trust_tier: ChannelTrustTier,
@@ -170,6 +166,7 @@ pub fn emit_channel_egress_admission_tracing(
     channel_ceiling_bytes: usize,
     payload_total_bytes: usize,
     admission: &ChannelEgressAdmission,
+    refused_bag_count: u64,
 ) {
     let prefix = match log_prefix {
         Some((runtime_tag, processor_id)) => format!("[{}:{}] ", runtime_tag, processor_id),
@@ -177,13 +174,13 @@ pub fn emit_channel_egress_admission_tracing(
     };
 
     match admission {
-        ChannelEgressAdmission::RefusedOverCeiling { refused_count } => {
+        ChannelEgressAdmission::RefusedOverCeiling => {
             tracing::warn!(
                 channel = channel_service_name,
                 payload_bytes = payload_total_bytes,
                 ceiling_bytes = channel_ceiling_bytes,
                 tier = trust_tier.as_str(),
-                refused_count = *refused_count,
+                refused_count = refused_bag_count,
                 "{}output channel refused a payload above its per-channel ceiling",
                 prefix,
             );
@@ -465,6 +462,23 @@ impl FrameHeader {
     }
 }
 
+/// The iceoryx2 user header every channel data sample carries: the bag's place
+/// in its publisher's sends, so a subscriber can count the bags its ring
+/// overwrote from the numbers a jump skips.
+///
+/// Engine-internal and outside the payload, so [`FrameHeader`] and every tap
+/// client reading payload bytes are untouched. The iceoryx2 type name is
+/// pinned because the default one carries the module path, and every opener of
+/// a data service must present the same name or be refused `IncompatibleTypes`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ZeroCopySend)]
+#[type_name("DataChannelBagSequenceNumberUserHeader")]
+#[repr(C)]
+pub struct DataChannelBagSequenceNumberUserHeader {
+    /// Counted from zero per publisher; consumed by every send that may have
+    /// delivered.
+    pub sequence_number: u64,
+}
+
 /// Fixed-size topic name for event pub/sub IPC.
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug, ZeroCopySend)]
 #[repr(C)]
@@ -636,6 +650,28 @@ mod tests {
     }
 
     #[test]
+    fn the_sequence_number_user_header_is_one_u64_at_offset_zero_under_its_pinned_name() {
+        assert_eq!(
+            std::mem::size_of::<DataChannelBagSequenceNumberUserHeader>(),
+            8
+        );
+        assert_eq!(
+            std::mem::align_of::<DataChannelBagSequenceNumberUserHeader>(),
+            8
+        );
+        assert_eq!(
+            std::mem::offset_of!(DataChannelBagSequenceNumberUserHeader, sequence_number),
+            0
+        );
+        assert_eq!(
+            // SAFETY: reads the pinned name; the layout it vouches for is asserted above.
+            unsafe { <DataChannelBagSequenceNumberUserHeader as ZeroCopySend>::type_name() },
+            "DataChannelBagSequenceNumberUserHeader",
+            "the iceoryx2 type name every opener must present, independent of the module path"
+        );
+    }
+
+    #[test]
     fn channel_trust_tier_defaults_and_labels() {
         assert_eq!(
             ChannelTrustTier::Trusted.default_ceiling_bytes(),
@@ -801,31 +837,34 @@ mod tests {
     }
 
     #[test]
-    fn egress_admission_refuses_over_ceiling_and_counts() {
+    fn egress_admission_refuses_over_ceiling_without_growing_the_slot() {
         let ceiling = 128 * 1024usize;
-        let mut refused = 0u64;
         let mut slot = 64usize;
-        // First over-ceiling frame: refused, count → 1, slot untouched.
         assert_eq!(
-            decide_channel_egress_admission(ceiling + 1, ceiling, &mut refused, &mut slot),
-            ChannelEgressAdmission::RefusedOverCeiling { refused_count: 1 }
+            decide_channel_egress_admission(ceiling + 1, ceiling, &mut slot),
+            ChannelEgressAdmission::RefusedOverCeiling
         );
         assert_eq!(slot, 64, "a refusal must not grow the tracked slot");
-        // Second over-ceiling frame: count keeps climbing.
         assert_eq!(
-            decide_channel_egress_admission(ceiling + 999, ceiling, &mut refused, &mut slot),
-            ChannelEgressAdmission::RefusedOverCeiling { refused_count: 2 }
+            decide_channel_egress_admission(ceiling, ceiling, &mut slot),
+            ChannelEgressAdmission::Admitted {
+                grew_to: Some(ChannelSegmentGrowth {
+                    old_segment_bytes: 64,
+                    new_segment_bytes: ceiling,
+                    crossed_quarter_ceiling: true,
+                })
+            },
+            "a frame exactly at the ceiling is admitted"
         );
     }
 
     #[test]
     fn egress_admission_grows_without_crossing_quarter_ceiling() {
         let ceiling = 128 * 1024usize; // quarter = 32 KiB
-        let mut refused = 0u64;
         let mut slot = 4096usize;
         // A frame that grows the slot but stays at or below the quarter ceiling
         // (32 KiB) must NOT flag a crossing. 20_000 → next_pow2 = 32_768 == quarter.
-        match decide_channel_egress_admission(20_000, ceiling, &mut refused, &mut slot) {
+        match decide_channel_egress_admission(20_000, ceiling, &mut slot) {
             ChannelEgressAdmission::Admitted {
                 grew_to: Some(growth),
             } => {
@@ -839,7 +878,6 @@ mod tests {
             other => panic!("expected an Admitted growth, got {other:?}"),
         }
         assert_eq!(slot, 32_768, "the slot advances to next_power_of_two");
-        assert_eq!(refused, 0);
     }
 
     #[test]
@@ -850,11 +888,10 @@ mod tests {
         // the three call sites. Drop the `> quarter && old <= quarter` computation
         // and this crossing goes unflagged — no runtime raises the warn.
         let ceiling = 128 * 1024usize; // quarter = 32 KiB = 32_768
-        let mut refused = 0u64;
         let mut slot = 4096usize;
         // 40_000 → next_pow2 = 65_536, which is past the 32_768 quarter while the
         // old 4096 slot was under it: exactly the first crossing.
-        match decide_channel_egress_admission(40_000, ceiling, &mut refused, &mut slot) {
+        match decide_channel_egress_admission(40_000, ceiling, &mut slot) {
             ChannelEgressAdmission::Admitted {
                 grew_to: Some(growth),
             } => {
@@ -870,7 +907,7 @@ mod tests {
 
         // A subsequent still-larger growth does NOT re-flag — the segment already
         // sits past the quarter, so only the FIRST crossing warns.
-        match decide_channel_egress_admission(100_000, ceiling, &mut refused, &mut slot) {
+        match decide_channel_egress_admission(100_000, ceiling, &mut slot) {
             ChannelEgressAdmission::Admitted {
                 grew_to: Some(growth),
             } => assert!(
@@ -884,18 +921,16 @@ mod tests {
     #[test]
     fn egress_admission_admits_within_slot_without_growth() {
         let ceiling = 128 * 1024usize;
-        let mut refused = 0u64;
         let mut slot = 65_536usize;
         // A frame at or under the tracked slot neither grows nor flags.
         assert_eq!(
-            decide_channel_egress_admission(4096, ceiling, &mut refused, &mut slot),
+            decide_channel_egress_admission(4096, ceiling, &mut slot),
             ChannelEgressAdmission::Admitted { grew_to: None }
         );
         assert_eq!(
             slot, 65_536,
             "an in-slot frame leaves the tracked slot as-is"
         );
-        assert_eq!(refused, 0);
     }
 
     #[test]

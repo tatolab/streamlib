@@ -25,13 +25,14 @@ use std::ffi::c_void;
 use std::mem::MaybeUninit;
 use std::sync::Arc;
 
+use iceoryx2::port::SendError;
 use iceoryx2::port::notifier::Notifier;
-use iceoryx2::port::publisher::Publisher;
 use iceoryx2::prelude::*;
 use parking_lot::Mutex;
 use serde::Serialize;
 
-use super::{ChannelTrustTier, FRAME_HEADER_SIZE, FrameHeader};
+use super::dropped_bag_counters::{OutputPortRefusedBagCounter, RefusedBagCountsByOutputPort};
+use super::{ChannelDataServicePublisher, ChannelTrustTier, FRAME_HEADER_SIZE, FrameHeader};
 use crate::core::error::{ChannelTrustTierLabel, Error, Result};
 use crate::core::media_clock::MediaClock;
 
@@ -44,6 +45,21 @@ fn trust_tier_label(trust_tier: ChannelTrustTier) -> ChannelTrustTierLabel {
         ChannelTrustTier::Trusted => ChannelTrustTierLabel::Trusted,
         ChannelTrustTier::UntrustedSession => ChannelTrustTierLabel::UntrustedSession,
     }
+}
+
+/// Whether a failed send may have reached some subscriber, and so consumed its
+/// sequence number.
+///
+/// iceoryx2 does not say which subscribers a failed send reached. Only a failure
+/// before any delivery is known to have reached none; any other leaves a gap for
+/// whoever missed the bag, which is a real loss to that subscriber.
+fn a_failed_send_may_have_delivered(send_failure: SendError) -> bool {
+    !matches!(
+        send_failure,
+        SendError::ConnectionBrokenSinceSenderNoLongerExists
+            | SendError::ConnectionError(_)
+            | SendError::LoanError(_)
+    )
 }
 
 /// View initialized bytes as `MaybeUninit` for writing into a loaned iceoryx2
@@ -69,7 +85,10 @@ fn as_maybe_uninit_bytes(bytes: &[u8]) -> &[MaybeUninit<u8>] {
 /// (the notify service is destination-keyed for fd-multiplexed wakeups); the
 /// data itself is published ONCE.
 struct ChannelEgress {
-    publisher: Publisher<ipc::Service, [u8], ()>,
+    publisher: ChannelDataServicePublisher,
+    /// The sequence number the next send that may deliver carries in its user
+    /// header, counted from zero for this publisher's life.
+    next_sequence_number: u64,
     /// Every outbound `connect()` link from this source port. Its length — not
     /// the notifier count — is what decides when the last link went away and
     /// the publisher can be released, because a link whose destination never
@@ -83,15 +102,15 @@ struct ChannelEgress {
     /// untrusted-session).
     trust_tier: ChannelTrustTier,
     /// Per-channel payload ceiling in bytes. A frame above this is refused with
-    /// [`Error::PayloadExceedsChannelCeiling`], counted, and the stream
-    /// continues.
+    /// [`Error::PayloadExceedsChannelCeiling`], counted on
+    /// [`Self::refused_bag_counter`], and the stream continues.
     ceiling_bytes: usize,
     /// Best-effort tracking of the publisher's current data-segment capacity so
     /// a PowerOfTwo growth event is observable. Primed to the hint's slot size;
     /// bumped (to `next_power_of_two`) the first time a loan exceeds it.
     current_slot_capacity_bytes: usize,
-    /// Count of samples refused for crossing [`Self::ceiling_bytes`].
-    refused_over_ceiling_count: u64,
+    /// This port's share of the writer's refused-bag counts.
+    refused_bag_counter: OutputPortRefusedBagCounter,
 }
 
 /// One outbound `connect()` link from a source output port, and the notifier
@@ -140,6 +159,7 @@ pub struct OutputWriterInner {
     /// The output ports the processor declared. A write to one of these that
     /// has no channel yet is a drop; a write to any other name is a refusal.
     declared_output_ports: Mutex<HashSet<String>>,
+    refused_bag_counts: Arc<RefusedBagCountsByOutputPort>,
 }
 
 // SAFETY: `Publisher` and `Notifier` are not `Send`, so the `Mutex` alone does
@@ -155,6 +175,7 @@ impl OutputWriterInner {
         Self {
             channels: Mutex::new(HashMap::new()),
             declared_output_ports: Mutex::new(HashSet::new()),
+            refused_bag_counts: Arc::new(RefusedBagCountsByOutputPort::default()),
         }
     }
 
@@ -180,7 +201,7 @@ impl OutputWriterInner {
     pub fn set_channel_publisher(
         &self,
         output_port: &str,
-        publisher: Publisher<ipc::Service, [u8], ()>,
+        publisher: ChannelDataServicePublisher,
         egress_config: ChannelEgressConfig,
     ) {
         let ChannelEgressConfig {
@@ -193,24 +214,23 @@ impl OutputWriterInner {
             output_port.to_string(),
             ChannelEgress {
                 publisher,
+                next_sequence_number: 0,
                 links: Vec::new(),
                 channel_service_name: service_name,
                 trust_tier,
                 ceiling_bytes,
                 current_slot_capacity_bytes: expected_payload_bytes + FRAME_HEADER_SIZE,
-                refused_over_ceiling_count: 0,
+                refused_bag_counter: self.refused_bag_counts.counter_for_output_port(output_port),
             },
         );
     }
 
-    /// Number of samples this output port's channel refused for crossing its
-    /// per-channel ceiling. Observation surface for tests and diagnostics.
-    pub fn refused_over_ceiling_count(&self, output_port: &str) -> u64 {
-        self.channels
-            .lock()
-            .get(output_port)
-            .map(|e| e.refused_over_ceiling_count)
-            .unwrap_or(0)
+    /// This processor's per-output-port refused-bag counts, shared with the
+    /// graph node's [`ProcessorMetrics`] so `graph` reads them live.
+    ///
+    /// [`ProcessorMetrics`]: crate::core::graph::ProcessorMetrics
+    pub fn refused_bag_counts_by_output_port(&self) -> Arc<RefusedBagCountsByOutputPort> {
+        Arc::clone(&self.refused_bag_counts)
     }
 
     /// Record one outbound `connect()` link from this output port, with the
@@ -251,7 +271,8 @@ impl OutputWriterInner {
     /// whole [`ChannelEgress`] (publisher + data service) is released so this
     /// writer holds nothing against the channel once no link uses it, and a
     /// reconnect never exceeds the notify service's create-time `max_notifiers`
-    /// cap (`ExceedsMaxSupportedNotifiers`).
+    /// cap (`ExceedsMaxSupportedNotifiers`). The port's refused-bag count goes
+    /// with it.
     ///
     /// Returns `true` when that last link went away and the publisher was removed.
     pub fn remove_channel_link(&self, output_port: &str, link_id: &str) -> bool {
@@ -266,6 +287,7 @@ impl OutputWriterInner {
         egress.links.retain(|link| link.link_id != link_id);
         if egress.links.is_empty() {
             channels.remove(output_port);
+            self.refused_bag_counts.forget_output_port(output_port);
             true
         } else {
             false
@@ -278,6 +300,10 @@ impl OutputWriterInner {
     /// subprocess bridge). One zero-copy loan reaches every channel subscriber;
     /// the frame is built and sent ONCE, then every destination notifier is
     /// signalled.
+    ///
+    /// Every send that may deliver carries the port's next sequence number; a
+    /// refusal, a header failure, a failed loan and a send that failed before
+    /// reaching anyone consume none.
     pub fn write_raw(&self, port: &str, data: &[u8], timestamp_ns: i64) -> Result<()> {
         let mut channels = self.channels.lock();
         let Some(egress) = channels.get_mut(port) else {
@@ -300,9 +326,17 @@ impl OutputWriterInner {
         let admission = streamlib_ipc_types::decide_channel_egress_admission(
             total_len,
             egress.ceiling_bytes,
-            &mut egress.refused_over_ceiling_count,
             &mut egress.current_slot_capacity_bytes,
         );
+        let refused_over_ceiling = matches!(
+            admission,
+            streamlib_ipc_types::ChannelEgressAdmission::RefusedOverCeiling
+        );
+        let refused_bag_count = if refused_over_ceiling {
+            egress.refused_bag_counter.record_one_refused_bag()
+        } else {
+            egress.refused_bag_counter.refused_bag_count()
+        };
         streamlib_ipc_types::emit_channel_egress_admission_tracing(
             None,
             egress.trust_tier,
@@ -310,8 +344,9 @@ impl OutputWriterInner {
             egress.ceiling_bytes,
             total_len,
             &admission,
+            refused_bag_count,
         );
-        if let streamlib_ipc_types::ChannelEgressAdmission::RefusedOverCeiling { .. } = admission {
+        if refused_over_ceiling {
             return Err(Error::PayloadExceedsChannelCeiling {
                 channel: egress.channel_service_name.clone(),
                 payload_bytes: total_len,
@@ -331,6 +366,7 @@ impl OutputWriterInner {
             .publisher
             .loan_slice_uninit(total_len)
             .map_err(|e| Error::Link(format!("Failed to loan slice: {:?}", e)))?;
+        sample.user_header_mut().sequence_number = egress.next_sequence_number;
         let (loaned_header_bytes, loaned_payload_bytes) =
             sample.payload_mut().split_at_mut(FRAME_HEADER_SIZE);
         loaned_header_bytes.copy_from_slice(as_maybe_uninit_bytes(&header_bytes));
@@ -339,9 +375,11 @@ impl OutputWriterInner {
         // `FRAME_HEADER_SIZE + data.len()` bytes — exactly the `total_len` the
         // loan was taken for — or panicked on a length mismatch.
         let sample = unsafe { sample.assume_init() };
-        sample
-            .send()
-            .map_err(|e| Error::Link(format!("Failed to send sample: {:?}", e)))?;
+        let send_outcome = sample.send();
+        if send_outcome.map_or_else(a_failed_send_may_have_delivered, |_| true) {
+            egress.next_sequence_number += 1;
+        }
+        send_outcome.map_err(|e| Error::Link(format!("Failed to send sample: {:?}", e)))?;
 
         // Wake every downstream listener fd. notify() may transiently fail
         // (e.g. a listener not yet created) — log and continue rather than
@@ -540,6 +578,7 @@ impl Drop for OutputWriter {
 mod tests {
     use super::*;
     use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
+    use crate::iceoryx2::{Iceoryx2Node, Iceoryx2Service};
 
     /// Each test gets a unique service-name prefix so parallel invocations
     /// don't collide on iceoryx2's machine-global `/dev/shm` namespace.
@@ -550,24 +589,29 @@ mod tests {
         )
     }
 
+    /// The refused-bag count `graph` would render for `output_port`.
+    fn refused_bag_count_of(inner: &OutputWriterInner, output_port: &str) -> u64 {
+        inner
+            .refused_bag_counts_by_output_port()
+            .refused_bag_count_snapshot_by_output_port()[output_port]
+    }
+
+    /// A channel data service opened the way the engine opens one, sized for
+    /// `max_subscribers` rings of four.
+    fn open_channel_data_service(tag: &str, max_subscribers: usize) -> Iceoryx2Service {
+        Iceoryx2Node::for_this_test_process()
+            .open_or_create_service(&unique_suffix(tag), max_subscribers, 4)
+            .expect("open the channel data service")
+    }
+
     #[test]
     fn write_raw_calls_notifier() {
         let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
-        let pubsub_name = unique_suffix("pubsub");
         let notify_name = unique_suffix("notify");
 
-        let pubsub = node
-            .service_builder(&ServiceName::new(&pubsub_name).unwrap())
-            .publish_subscribe::<[u8]>()
-            .max_publishers(2)
-            .open_or_create()
-            .unwrap();
-        let publisher = pubsub
-            .publisher_builder()
-            .initial_max_slice_len(4096)
-            .create()
-            .unwrap();
-        let _subscriber = pubsub.subscriber_builder().create().unwrap();
+        let pubsub = open_channel_data_service("pubsub", 2);
+        let publisher = pubsub.create_publisher(4096).unwrap();
+        let _subscriber = pubsub.create_subscriber(4).unwrap();
 
         let notify = node
             .service_builder(&ServiceName::new(&notify_name).unwrap())
@@ -626,19 +670,10 @@ mod tests {
     #[test]
     fn a_fan_out_holds_its_publisher_until_the_last_link_goes_not_the_last_notifier() {
         let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
-        let pubsub_name = unique_suffix("mixed-fanout/pubsub");
         let notify_name = unique_suffix("mixed-fanout/notify");
 
-        let pubsub = node
-            .service_builder(&ServiceName::new(&pubsub_name).unwrap())
-            .publish_subscribe::<[u8]>()
-            .max_publishers(2)
-            .open_or_create()
-            .unwrap();
-        let publisher = pubsub
-            .publisher_builder()
-            .initial_max_slice_len(4096)
-            .create()
+        let publisher = open_channel_data_service("mixed-fanout/pubsub", 2)
+            .create_publisher(4096)
             .unwrap();
         let notify = node
             .service_builder(&ServiceName::new(&notify_name).unwrap())
@@ -766,22 +801,11 @@ mod tests {
     fn write_raw_fans_out_single_loan_to_all_subscribers() {
         const N: usize = 3;
         let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
-        let pubsub_name = unique_suffix("fanout/pubsub");
 
-        let pubsub = node
-            .service_builder(&ServiceName::new(&pubsub_name).unwrap())
-            .publish_subscribe::<[u8]>()
-            .max_publishers(2)
-            .max_subscribers(N + 1)
-            .open_or_create()
-            .unwrap();
-        let publisher = pubsub
-            .publisher_builder()
-            .initial_max_slice_len(4096)
-            .create()
-            .unwrap();
+        let pubsub = open_channel_data_service("fanout/pubsub", N + 1);
+        let publisher = pubsub.create_publisher(4096).unwrap();
         let subscribers: Vec<_> = (0..N)
-            .map(|_| pubsub.subscriber_builder().create().unwrap())
+            .map(|_| pubsub.create_subscriber(4).unwrap())
             .collect();
 
         let inner = Arc::new(OutputWriterInner::new());
@@ -859,17 +883,8 @@ mod tests {
     #[test]
     fn remove_channel_link_reclaims_per_link_then_drops_channel() {
         let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
-        let pubsub = node
-            .service_builder(&ServiceName::new(&unique_suffix("reclaim/pubsub")).unwrap())
-            .publish_subscribe::<[u8]>()
-            .max_publishers(2)
-            .max_subscribers(4)
-            .open_or_create()
-            .unwrap();
-        let publisher = pubsub
-            .publisher_builder()
-            .initial_max_slice_len(4096)
-            .create()
+        let publisher = open_channel_data_service("reclaim/pubsub", 4)
+            .create_publisher(4096)
             .unwrap();
 
         let inner = Arc::new(OutputWriterInner::new());
@@ -996,22 +1011,10 @@ mod tests {
     /// 100 KiB loan fails instead of delivering.
     #[test]
     fn write_raw_refuses_over_ceiling_and_grows_within_it() {
-        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
-        let pubsub = node
-            .service_builder(&ServiceName::new(&unique_suffix("ceiling/pubsub")).unwrap())
-            .publish_subscribe::<[u8]>()
-            .max_publishers(2)
-            .max_subscribers(2)
-            .open_or_create()
-            .unwrap();
+        let pubsub = open_channel_data_service("ceiling/pubsub", 2);
         // Prime tiny (4 KiB) under PowerOfTwo so a 100 KiB write must grow.
-        let publisher = pubsub
-            .publisher_builder()
-            .initial_max_slice_len(4096)
-            .allocation_strategy(AllocationStrategy::PowerOfTwo)
-            .create()
-            .unwrap();
-        let subscriber = pubsub.subscriber_builder().create().unwrap();
+        let publisher = pubsub.create_publisher(4096).unwrap();
+        let subscriber = pubsub.create_subscriber(4).unwrap();
 
         let inner = Arc::new(OutputWriterInner::new());
         let ceiling = 128 * 1024usize;
@@ -1032,7 +1035,7 @@ mod tests {
             .write_raw("out", &within, 111)
             .expect("in-bounds payload must grow the segment and send");
         assert_eq!(
-            inner.refused_over_ceiling_count("out"),
+            refused_bag_count_of(&inner, "out"),
             0,
             "an in-bounds payload must not be counted as refused"
         );
@@ -1041,6 +1044,8 @@ mod tests {
             .expect("receive")
             .expect("grown in-bounds frame must be delivered");
         assert_eq!(got.payload().len(), FRAME_HEADER_SIZE + within.len());
+        // A channel subscriber borrows one sample at a time.
+        drop(got);
 
         // Above ceiling — refused with the named error + counted, never a panic.
         let over = vec![0u8; ceiling + 1];
@@ -1062,7 +1067,7 @@ mod tests {
             other => panic!("expected PayloadExceedsChannelCeiling, got {other:?}"),
         }
         assert_eq!(
-            inner.refused_over_ceiling_count("out"),
+            refused_bag_count_of(&inner, "out"),
             1,
             "the refused sample must be counted"
         );
@@ -1078,6 +1083,101 @@ mod tests {
         assert_eq!(
             got.payload().len(),
             FRAME_HEADER_SIZE + b"still-alive".len()
+        );
+    }
+
+    /// Every send that may deliver carries the port's next sequence number,
+    /// and a write refused at the ceiling carries none: the subscriber reads
+    /// consecutive numbers either side of the refusal, so the refused bag —
+    /// which belongs to no link — is never read as a ring overwrite too.
+    ///
+    /// Fail-without-fix: advance the number on a refusal and the second bag
+    /// arrives numbered 2, a gap its destination would count.
+    #[test]
+    fn a_write_refused_at_the_ceiling_consumes_no_sequence_number() {
+        let pubsub = open_channel_data_service("sequence/pubsub", 2);
+        let subscriber = pubsub.create_subscriber(4).unwrap();
+        let inner = OutputWriterInner::new();
+        let ceiling = 1024usize;
+        inner.set_channel_publisher(
+            "out",
+            pubsub.create_publisher(64).unwrap(),
+            ChannelEgressConfig {
+                service_name: "test/sequence/out".to_string(),
+                trust_tier: ChannelTrustTier::Trusted,
+                expected_payload_bytes: 64,
+                ceiling_bytes: ceiling,
+            },
+        );
+
+        inner.write_raw("out", b"first", 1).unwrap();
+        inner
+            .write_raw("out", &vec![0u8; ceiling], 2)
+            .expect_err("a frame past the ceiling is refused");
+        inner.write_raw("out", b"second", 3).unwrap();
+
+        let mut sequence_numbers = Vec::new();
+        while let Some(sample) = subscriber.receive().unwrap() {
+            sequence_numbers.push(sample.user_header().sequence_number);
+        }
+        assert_eq!(sequence_numbers, vec![0, 1]);
+        assert_eq!(refused_bag_count_of(&inner, "out"), 1);
+    }
+
+    /// iceoryx2 does not say which subscribers a failed send reached, so only
+    /// a failure known to precede any delivery gives its number back.
+    #[test]
+    fn only_a_send_failing_before_any_delivery_gives_its_sequence_number_back() {
+        use iceoryx2::port::LoanError;
+
+        for failed_before_delivering in [
+            SendError::ConnectionBrokenSinceSenderNoLongerExists,
+            SendError::LoanError(LoanError::OutOfMemory),
+        ] {
+            assert!(
+                !a_failed_send_may_have_delivered(failed_before_delivering),
+                "{failed_before_delivering:?} reached no subscriber"
+            );
+        }
+        for failed_after_delivering_to_some in [
+            SendError::UnableToDeliver,
+            SendError::ConnectionCorrupted,
+            SendError::InternalError,
+        ] {
+            assert!(
+                a_failed_send_may_have_delivered(failed_after_delivering_to_some),
+                "{failed_after_delivering_to_some:?} may have reached a subscriber"
+            );
+        }
+    }
+
+    /// A port's refusals are counted for as long as its channel stays open, and
+    /// go with the publisher when its last link does.
+    #[test]
+    fn an_output_ports_refusals_leave_with_its_last_link() {
+        let pubsub = open_channel_data_service("refusals-leave/pubsub", 2);
+        let inner = OutputWriterInner::new();
+        inner.set_channel_publisher(
+            "out",
+            pubsub.create_publisher(64).unwrap(),
+            ChannelEgressConfig {
+                service_name: "test/refusals-leave/out".to_string(),
+                trust_tier: ChannelTrustTier::Trusted,
+                expected_payload_bytes: 64,
+                ceiling_bytes: 128,
+            },
+        );
+        inner.add_channel_link("out", "L-only", None);
+        let refused_bag_counts = inner.refused_bag_counts_by_output_port();
+        inner.write_raw("out", &[0u8; 128], 0).unwrap_err();
+        assert_eq!(refused_bag_count_of(&inner, "out"), 1);
+
+        assert!(inner.remove_channel_link("out", "L-only"));
+
+        assert!(
+            refused_bag_counts
+                .refused_bag_count_snapshot_by_output_port()
+                .is_empty()
         );
     }
 
@@ -1122,20 +1222,9 @@ mod tests {
     /// fresh bytes belong.
     #[test]
     fn a_frame_written_after_a_larger_one_carries_no_stale_bytes() {
-        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
-        let pubsub = node
-            .service_builder(&ServiceName::new(&unique_suffix("stale/pubsub")).unwrap())
-            .publish_subscribe::<[u8]>()
-            .max_publishers(2)
-            .max_subscribers(2)
-            .open_or_create()
-            .unwrap();
-        let publisher = pubsub
-            .publisher_builder()
-            .initial_max_slice_len(16 * 1024)
-            .create()
-            .unwrap();
-        let subscriber = pubsub.subscriber_builder().create().unwrap();
+        let pubsub = open_channel_data_service("stale/pubsub", 2);
+        let publisher = pubsub.create_publisher(16 * 1024).unwrap();
+        let subscriber = pubsub.create_subscriber(4).unwrap();
 
         let inner = Arc::new(OutputWriterInner::new());
         inner.set_channel_publisher(
