@@ -11,7 +11,7 @@ pub mod check_boundaries;
 pub mod check_bounded_apt_install;
 pub mod check_clock_usage;
 pub mod check_device_wait_idle;
-pub mod check_iceoryx2_node_construction;
+pub mod check_iceoryx2_construction;
 pub mod check_no_escalate_in_lifecycle;
 pub mod check_no_in_process_placement;
 pub mod check_no_inheritable_descriptor;
@@ -156,8 +156,8 @@ const ALL_SOURCE_WALKING_GATES: &[(&str, fn(&Path) -> Result<()>)] = &[
     ),
     ("check-device-wait-idle", check_device_wait_idle::run),
     (
-        "check-iceoryx2-node-construction",
-        check_iceoryx2_node_construction::run,
+        "check-iceoryx2-construction",
+        check_iceoryx2_construction::run,
     ),
     (
         "check-no-unbounded-cstr-from-ptr",
@@ -295,6 +295,8 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "streamlib-macros",
                 "-p",
                 "streamlib-processor-schema",
+                "-p",
+                "streamlib-ipc-types",
                 "--lib",
             ],
         ),
@@ -374,6 +376,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "linux::pipewire_video_source::tests::punctuation_collapses_rather_than_repeating",
                 "iceoryx2::dropped_bag_counters::tests::asking_twice_for_one_links_counter_shares_the_count",
                 "iceoryx2::dropped_bag_counters::tests::a_disconnected_links_count_leaves_with_it",
+                "iceoryx2::dropped_bag_counters::tests::a_released_output_ports_refusals_leave_with_it_and_a_reopened_port_starts_from_zero",
                 "iceoryx2::mailbox::tests::an_eviction_is_counted_against_the_link_whose_bag_was_lost",
                 "iceoryx2::mailbox::tests::a_hand_over_keeps_each_frames_inbound_link_and_its_order",
                 "iceoryx2::mailbox::tests::a_hand_over_re_measures_every_frame_by_the_replacements_own_measure",
@@ -394,9 +397,19 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "iceoryx2::input::tests::a_link_wired_and_unwired_in_a_loop_never_races_a_read_that_holds_no_processor_mutex",
                 "core::graph::components::processor_metrics::tests::a_processors_metrics_render_every_inbound_links_losses_by_name",
                 "core::graph::components::processor_metrics::tests::a_processor_that_has_lost_nothing_says_so_rather_than_staying_silent",
+                "core::graph::components::processor_metrics::tests::a_processors_metrics_render_every_output_ports_refusals_beside_its_inbound_losses",
                 "core::runtime::operations_runtime::connect_wires_without_inspecting_a_port_tests::connect_wires_a_producer_to_a_consumer_without_warning",
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_dropping_destinations_node_renders_each_inbound_links_losses",
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_helper_placed_destinations_node_carries_no_metrics_rather_than_a_zero",
+                "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::an_ordered_consumer_that_stops_reading_renders_exactly_the_bags_its_ring_overwrote",
+                "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_newest_consumer_renders_no_loss_for_bags_passed_over_in_its_ring_or_its_mailbox",
+                "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_producers_node_renders_the_writes_its_output_port_refused_at_the_ceiling",
+                "iceoryx2::input::tests::a_replacement_publisher_on_a_live_subscriber_reads_as_a_new_baseline_not_a_gap",
+                "iceoryx2::input::tests::a_frame_too_short_for_a_header_is_counted_on_the_link_it_arrived_on",
+                "iceoryx2::input::tests::a_frame_bound_to_a_port_with_no_mailbox_is_counted_on_its_link",
+                "iceoryx2::output::tests::a_write_refused_at_the_ceiling_consumes_no_sequence_number",
+                "iceoryx2::output::tests::a_send_consumes_its_sequence_number_unless_it_failed_before_any_delivery",
+                "iceoryx2::output::tests::an_output_ports_refusals_leave_with_its_last_link",
                 "core::runtime::tap::tests::stalled_downstream_never_blocks_the_drain_and_detach_returns_promptly",
                 "iceoryx2::node::tests::overflow_enabled_publisher_does_not_block_on_full_buffer",
                 "core::runtime::streamlib_runtime_directory",
@@ -418,6 +431,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "iceoryx2::node::tests::a_notify_service_admits_every_inbound_link_from_their_own_nodes_and_no_more",
                 "iceoryx2::node::tests::a_channel_service_lends_one_sample_at_a_time_and_replays_none",
                 "iceoryx2::node::tests::a_reopened_service_states_the_depth_it_was_created_at",
+                "iceoryx2::node::tests::a_channel_data_service_and_an_opener_disagreeing_on_the_user_header_are_refused_by_name",
                 "iceoryx2::delivery_profile::tests::newest_resolves_to_skip_drop_shallow",
                 "iceoryx2::delivery_profile::tests::ordered_resolves_to_fifo_drop_deep",
                 "iceoryx2::delivery_profile::tests::profile_parses_known_and_rejects_unknown",
@@ -815,10 +829,11 @@ enum Commands {
     CheckDeviceWaitIdle,
 
     /// CI gate for the engine-owned iceoryx2 domain. Fails on any
-    /// `NodeBuilder::new()` under `runtime/`, `sdk/` or `adapters/` outside
-    /// `iceoryx2/node.rs`, and on any `Config::global_config()` anywhere — tests
-    /// and benches included, since a node in another domain hangs a test silently.
-    CheckIceoryx2NodeConstruction,
+    /// `NodeBuilder::new()` or `publish_subscribe::<` under `runtime/`, `sdk/` or
+    /// `adapters/` outside `iceoryx2/node.rs`, and on any `Config::global_config()`
+    /// anywhere — tests and benches included, since a node in another domain hangs
+    /// a test silently and a service without the user header counts no loss.
+    CheckIceoryx2Construction,
 
     /// CI gate for the borrow-checked-C-string rule in the Vulkan RHI. Fails
     /// on any `CStr::from_ptr(<owner>.as_ptr())` under
@@ -956,8 +971,8 @@ fn main() -> Result<()> {
             check_no_escalate_in_lifecycle::run(&workspace_root()?)?
         }
         Commands::CheckDeviceWaitIdle => check_device_wait_idle::run(&workspace_root()?)?,
-        Commands::CheckIceoryx2NodeConstruction => {
-            check_iceoryx2_node_construction::run(&workspace_root()?)?
+        Commands::CheckIceoryx2Construction => {
+            check_iceoryx2_construction::run(&workspace_root()?)?
         }
         Commands::CheckNoUnboundedCstrFromPtr => {
             check_no_unbounded_cstr_from_ptr::run(&workspace_root()?)?

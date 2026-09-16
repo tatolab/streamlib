@@ -2,13 +2,17 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Bans building an iceoryx2 node anywhere but the body of the engine's one
-//! node constructor in `iceoryx2/node.rs`, and reading iceoryx2's global
-//! configuration anywhere at all, that file included.
+//! node constructor in `iceoryx2/node.rs`, building a publish-subscribe service
+//! anywhere but that file, and reading iceoryx2's global configuration anywhere
+//! at all, that file included.
 //!
 //! A node built any other way reads iceoryx2's ambient configuration and lands
 //! in a different domain from every engine-owned node, where no data flows and
-//! nothing errors — a partial migration hangs tests silently. So unlike every
-//! other gate, test modules, test files and benches are scanned too.
+//! nothing errors — a partial migration hangs tests silently. A channel data
+//! service built any other way lacks the sequence-number user header every
+//! opener must present, so it either fails to open against the engine's
+//! channels or carries bags no destination can count the loss of. So unlike
+//! every other gate, test modules, test files and benches are scanned too.
 
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
@@ -28,11 +32,28 @@ const NODE_BUILDER_CALL: &str = "NodeBuilder::new(";
 /// The call that reads iceoryx2's lookup-path configuration, allowed nowhere.
 const GLOBAL_CONFIG_CALL: &str = "Config::global_config(";
 
+/// The builder method that opens a publish-subscribe service, allowed only in [`ALLOWED_FILE`].
+///
+/// Matched as a whole identifier rather than as `publish_subscribe::<`, because
+/// the identifier is the one token no spelling of the call can split: spacing
+/// or a line break around `::<`, a comment between the tokens, a call whose
+/// payload type is inferred, and a macro rustfmt leaves unformatted all still
+/// carry it.
+const PUBLISH_SUBSCRIBE_BUILDER_METHOD: &str = "publish_subscribe";
+
+/// What a violating line built, and the fix the failure names for it.
+#[derive(Debug, PartialEq, Eq)]
+pub enum RefusedIceoryx2Construction {
+    NodeOrGlobalConfigurationOutsideTheEngineOwnedDomain,
+    PublishSubscribeServiceOutsideTheEngineWrapper,
+}
+
 #[derive(Debug)]
 pub struct Violation {
     pub path: PathBuf,
     pub line_no: usize,
     pub line_text: String,
+    pub refused_construction: RefusedIceoryx2Construction,
 }
 
 pub struct CheckReport {
@@ -43,7 +64,7 @@ pub struct CheckReport {
 pub fn run(workspace_root: &Path) -> Result<()> {
     let report = scan(workspace_root)?;
     crate::ensure_source_walking_gate_read_source(
-        "check-iceoryx2-node-construction",
+        "check-iceoryx2-construction",
         &format!("{SCAN_ROOTS:?}"),
         report.files_scanned,
         "an iceoryx2 node outside the engine-owned domain",
@@ -53,12 +74,27 @@ pub fn run(workspace_root: &Path) -> Result<()> {
         .violations
         .iter()
         .map(|violation| {
+            let refusal = match violation.refused_construction {
+                RefusedIceoryx2Construction::NodeOrGlobalConfigurationOutsideTheEngineOwnedDomain => {
+                    format!(
+                        "an iceoryx2 node built outside `{ALLOWED_CONSTRUCTOR_SIGNATURE}..)` in \
+                         {ALLOWED_FILE}, or any read of iceoryx2's global configuration, lands \
+                         outside the engine-owned domain. Use \
+                         `create_iceoryx2_node_in_engine_owned_domain` or `Iceoryx2Node::new` \
+                         (in a test, `Iceoryx2Node::for_this_test_process`)."
+                    )
+                }
+                RefusedIceoryx2Construction::PublishSubscribeServiceOutsideTheEngineWrapper => {
+                    format!(
+                        "a publish-subscribe service built outside {ALLOWED_FILE} lacks the \
+                         sequence-number user header every channel data service carries. Open \
+                         the channel through `Iceoryx2Node::open_or_create_service` and take its \
+                         ports from the returned service."
+                    )
+                }
+            };
             format!(
-                "{}:{}: an iceoryx2 node built outside `{ALLOWED_CONSTRUCTOR_SIGNATURE}..)` in \
-                 {ALLOWED_FILE}, or any read of iceoryx2's global configuration, lands outside \
-                 the engine-owned domain. Use \
-                 `create_iceoryx2_node_in_engine_owned_domain` or `Iceoryx2Node::new` (in a \
-                 test, `Iceoryx2Node::for_this_test_process`).\n    {}",
+                "{}:{}: {refusal}\n    {}",
                 violation.path.display(),
                 violation.line_no,
                 violation.line_text.trim(),
@@ -67,15 +103,16 @@ pub fn run(workspace_root: &Path) -> Result<()> {
         .collect();
     anyhow::ensure!(
         failure_lines.is_empty(),
-        "check-iceoryx2-node-construction found {} violation(s) across {} file(s):\n{}",
+        "check-iceoryx2-construction found {} violation(s) across {} file(s):\n{}",
         failure_lines.len(),
         report.files_scanned,
         failure_lines.join("\n"),
     );
 
     tracing::info!(
-        "check-iceoryx2-node-construction: {} files scanned across {SCAN_ROOTS:?}, no iceoryx2 \
-         node built outside `{ALLOWED_CONSTRUCTOR_SIGNATURE}..)` and no global configuration read",
+        "check-iceoryx2-construction: {} files scanned across {SCAN_ROOTS:?}, no iceoryx2 \
+         node built outside `{ALLOWED_CONSTRUCTOR_SIGNATURE}..)`, no publish-subscribe service \
+         built outside {ALLOWED_FILE} and no global configuration read",
         report.files_scanned,
     );
     Ok(())
@@ -107,7 +144,8 @@ pub fn scan(workspace_root: &Path) -> Result<CheckReport> {
 }
 
 fn collect_violations(relative_path: &Path, content: &str, violations: &mut Vec<Violation>) {
-    let allowed_constructor_body_lines = if relative_path == Path::new(ALLOWED_FILE) {
+    let is_the_allowed_file = relative_path == Path::new(ALLOWED_FILE);
+    let allowed_constructor_body_lines = if is_the_allowed_file {
         line_indices_of_the_allowed_constructor_body(content)
     } else {
         None
@@ -121,14 +159,34 @@ fn collect_violations(relative_path: &Path, content: &str, violations: &mut Vec<
             .is_some_and(|body_lines| body_lines.contains(&index));
         let builds_a_node_outside_the_allowed_constructor =
             !inside_the_allowed_constructor && line.contains(NODE_BUILDER_CALL);
-        if builds_a_node_outside_the_allowed_constructor || line.contains(GLOBAL_CONFIG_CALL) {
-            violations.push(Violation {
-                path: relative_path.to_path_buf(),
-                line_no: index + 1,
-                line_text: line.to_string(),
-            });
-        }
+        let refused_construction =
+            if builds_a_node_outside_the_allowed_constructor || line.contains(GLOBAL_CONFIG_CALL) {
+                RefusedIceoryx2Construction::NodeOrGlobalConfigurationOutsideTheEngineOwnedDomain
+            } else if !is_the_allowed_file
+                && contains_the_whole_identifier(line, PUBLISH_SUBSCRIBE_BUILDER_METHOD)
+            {
+                RefusedIceoryx2Construction::PublishSubscribeServiceOutsideTheEngineWrapper
+            } else {
+                continue;
+            };
+        violations.push(Violation {
+            path: relative_path.to_path_buf(),
+            line_no: index + 1,
+            line_text: line.to_string(),
+            refused_construction,
+        });
     }
+}
+
+/// Whether `identifier` appears in `line` as a whole identifier, not as part of
+/// a longer one.
+fn contains_the_whole_identifier(line: &str, identifier: &str) -> bool {
+    let continues_an_identifier = |character: char| character.is_alphanumeric() || character == '_';
+    line.match_indices(identifier).any(|(start, _)| {
+        let before = line[..start].chars().next_back();
+        let after = line[start + identifier.len()..].chars().next();
+        !before.is_some_and(continues_an_identifier) && !after.is_some_and(continues_an_identifier)
+    })
 }
 
 /// The zero-based line span from the allowed constructor's signature to its
@@ -202,6 +260,63 @@ mod tests {
     }
 
     #[test]
+    fn a_raw_publish_subscribe_builder_inside_a_unit_test_module_is_refused() {
+        let violations = violations_in(
+            "fn real() {}\n#[cfg(test)]\nmod tests {\n    fn open() {\n        node.service_builder(&name)\n            .publish_subscribe::<[u8]>()\n            .open_or_create();\n    }\n}\n",
+        );
+
+        assert_eq!(violations.len(), 1, "{violations:?}");
+        assert_eq!(violations[0].line_no, 6);
+        assert_eq!(
+            violations[0].refused_construction,
+            RefusedIceoryx2Construction::PublishSubscribeServiceOutsideTheEngineWrapper
+        );
+    }
+
+    #[test]
+    fn a_publish_subscribe_builder_spelled_across_lines_or_without_a_turbofish_is_refused() {
+        let violations = violations_in(
+            "let split = node.service_builder(&name)\n    .publish_subscribe\n    :: <[u8]>()\n    .open_or_create();\nlet commented = builder.publish_subscribe /* raw */ ::<[u8]>();\nlet inferred: Builder<[u8], (), ipc::Service> = builder.publish_subscribe();\n",
+        );
+
+        assert_eq!(
+            violations
+                .iter()
+                .map(|violation| violation.line_no)
+                .collect::<Vec<_>>(),
+            vec![2, 5, 6],
+            "{violations:?}"
+        );
+    }
+
+    #[test]
+    fn a_longer_identifier_containing_the_builder_method_is_not_a_builder() {
+        let violations = violations_in(
+            "let publish_subscribe_count = 2;\nlet raw_publish_subscribe = count_publish_subscribe_services();\n",
+        );
+
+        assert!(violations.is_empty(), "{violations:?}");
+    }
+
+    #[test]
+    fn a_channel_opened_through_the_engine_wrapper_passes() {
+        let violations = violations_in(
+            "let channel = node.open_or_create_service(&name, max_subscribers, depth)?;\nlet publisher = channel.create_publisher(expected_payload_bytes)?;\n// a raw `.publish_subscribe::<[u8]>()` carries no user header\n",
+        );
+
+        assert!(violations.is_empty(), "{violations:?}");
+    }
+
+    #[test]
+    fn a_publish_subscribe_builder_anywhere_in_the_constructors_file_passes() {
+        let violations = violations_in_the_allowed_file(&format!(
+            "{ALLOWED_CONSTRUCTOR_SOURCE}\nfn open() {{\n    node.service_builder(&name).publish_subscribe::<[u8]>().open_or_create();\n}}\n"
+        ));
+
+        assert!(violations.is_empty(), "{violations:?}");
+    }
+
+    #[test]
     fn a_node_built_through_the_engine_domain_function_passes() {
         let violations = violations_in(
             "let node = Iceoryx2Node::new(&root, \"streamlib-runtime/R\")?;\nlet raw = create_iceoryx2_node_in_engine_owned_domain(&root, \"x\")?;\n",
@@ -271,7 +386,7 @@ mod tests {
         std::fs::create_dir_all(bench.parent().unwrap()).unwrap();
         std::fs::write(
             &bench,
-            "let node = NodeBuilder::new().create::<ipc::Service>();\n",
+            "let node = NodeBuilder::new().create::<ipc::Service>();\nlet service = node.service_builder(&name).publish_subscribe::<[u8]>().create();\n",
         )
         .unwrap();
         std::process::Command::new("git")
@@ -284,10 +399,15 @@ mod tests {
         let report = scan(tmp.path()).unwrap();
 
         assert_eq!(report.files_scanned, 2);
-        assert_eq!(report.violations.len(), 1, "{:?}", report.violations);
-        assert_eq!(
-            report.violations[0].path,
-            PathBuf::from("runtime/streamlib-engine/benches/hop.rs")
+        assert_eq!(report.violations.len(), 2, "{:?}", report.violations);
+        assert!(
+            report
+                .violations
+                .iter()
+                .all(|violation| violation.path
+                    == Path::new("runtime/streamlib-engine/benches/hop.rs")),
+            "{:?}",
+            report.violations
         );
     }
 }

@@ -37,7 +37,7 @@ pub use channel_name::{
 };
 pub(crate) use delivery_profile::delivery_profile_for_input_port;
 pub use delivery_profile::{DeliveryProfile, DeliveryResolution};
-pub use dropped_bag_counters::DroppedBagCountsByInboundLink;
+pub use dropped_bag_counters::{DroppedBagCountsByInboundLink, RefusedBagCountsByOutputPort};
 #[cfg(any(test, feature = "test-support"))]
 pub use iceoryx2_domain_for_this_test_process::{
     Iceoryx2DomainForThisTestProcess, create_iceoryx2_node_for_this_test_process,
@@ -49,18 +49,19 @@ pub use mailbox::{
 };
 pub(crate) use node::ChannelSizing;
 pub use node::{
-    ChannelTapSubscribeError, ICEORYX2_DOMAIN_ROOT_AND_PREFIX_BUDGET_BYTES,
-    ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, Iceoryx2EventService, Iceoryx2Node,
-    Iceoryx2NotifyService, Iceoryx2Service, create_iceoryx2_node_in_engine_owned_domain,
-    engine_owned_iceoryx2_config, engine_owned_iceoryx2_prefix_for_this_user,
-    reclaim_dead_iceoryx2_nodes_in_engine_owned_domain,
+    ChannelDataServicePublisher, ChannelDataServiceSubscriber, ChannelTapSubscribeError,
+    ICEORYX2_DOMAIN_ROOT_AND_PREFIX_BUDGET_BYTES, ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE,
+    Iceoryx2EventService, Iceoryx2Node, Iceoryx2NotifyService, Iceoryx2Service,
+    create_iceoryx2_node_in_engine_owned_domain, engine_owned_iceoryx2_config,
+    engine_owned_iceoryx2_prefix_for_this_user, reclaim_dead_iceoryx2_nodes_in_engine_owned_domain,
 };
 pub use output::{ChannelEgressConfig, OutputWriter, OutputWriterInner};
 pub use payload::{
-    ChannelTrustTier, DEFAULT_EXPECTED_PAYLOAD_BYTES, EventPayload, FRAME_HEADER_PAYLOAD_LEN_SIZE,
-    FRAME_HEADER_SIZE, FRAME_HEADER_TIMESTAMP_NS_SIZE, FrameHeader, MAX_EVENT_PAYLOAD_SIZE,
-    MAX_PORT_KEY_SIZE, MAX_PUBLISHERS_PER_CHANNEL, MAX_TOPIC_KEY_SIZE, PortKey,
-    RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL, TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES, TopicKey,
+    ChannelTrustTier, DEFAULT_EXPECTED_PAYLOAD_BYTES, DataChannelBagSequenceNumberUserHeader,
+    EventPayload, FRAME_HEADER_PAYLOAD_LEN_SIZE, FRAME_HEADER_SIZE, FRAME_HEADER_TIMESTAMP_NS_SIZE,
+    FrameHeader, MAX_EVENT_PAYLOAD_SIZE, MAX_PORT_KEY_SIZE, MAX_PUBLISHERS_PER_CHANNEL,
+    MAX_TOPIC_KEY_SIZE, PortKey, RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL,
+    TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES, TopicKey,
     UNTRUSTED_SESSION_CHANNEL_PAYLOAD_CEILING_BYTES,
 };
 pub use read_mode::ReadMode;

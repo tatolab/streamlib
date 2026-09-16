@@ -20,6 +20,17 @@ pub enum ReadMode {
 }
 
 impl ReadMode {
+    /// Whether a bag a port read this way never hands its reader is a loss.
+    ///
+    /// A `newest` port passing over bags to reach the most recent is the
+    /// profile working; an `ordered` port promised every bag in turn.
+    pub fn a_bag_passed_over_is_lost(self) -> bool {
+        match self {
+            ReadMode::SkipToLatest => false,
+            ReadMode::ReadNextInOrder => true,
+        }
+    }
+
     /// The canonical manifest/envelope string — the wire form the subprocess
     /// SDKs map back to their `*_input_set_read_mode` integer.
     pub fn as_manifest_str(self) -> &'static str {

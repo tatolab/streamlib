@@ -12,9 +12,9 @@
 use std::time::{Duration, Instant};
 
 use crate::iceoryx2::{
-    DEFAULT_EXPECTED_PAYLOAD_BYTES, DeliveryProfile, FRAME_HEADER_SIZE, FrameHeader, Iceoryx2Node,
+    ChannelDataServiceSubscriber, DEFAULT_EXPECTED_PAYLOAD_BYTES, DeliveryProfile,
+    FRAME_HEADER_SIZE, FrameHeader, Iceoryx2Node,
 };
-use iceoryx2::prelude::*;
 
 /// Derived from the prime rather than written as a literal, so raising
 /// [`DEFAULT_EXPECTED_PAYLOAD_BYTES`] past it can never quietly turn the growth
@@ -24,7 +24,7 @@ const OVERSIZED_PAYLOAD_BYTES: usize = DEFAULT_EXPECTED_PAYLOAD_BYTES * 4;
 /// Poll a subscriber until it yields one sample or the deadline passes. A
 /// transport error is a failure in its own right, never a timeout.
 fn receive_one_sample_within(
-    subscriber: &iceoryx2::port::subscriber::Subscriber<ipc::Service, [u8], ()>,
+    subscriber: &ChannelDataServiceSubscriber,
     timeout: Duration,
 ) -> Option<Vec<u8>> {
     let deadline = Instant::now() + timeout;
@@ -44,17 +44,14 @@ fn receive_one_sample_within(
 /// reason a fixed prime is safe.
 #[test]
 fn loan_past_the_prime_fails_when_the_publisher_cannot_grow() {
-    let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
-    let service = node
-        .service_builder(&"streamlib/test/sizing-no-growth".try_into().unwrap())
-        .publish_subscribe::<[u8]>()
-        .open_or_create()
+    let service = Iceoryx2Node::for_this_test_process()
+        .open_or_create_service(
+            "streamlib/test/sizing-no-growth",
+            2,
+            DeliveryProfile::ORDERED_DEPTH,
+        )
         .unwrap();
-    let publisher = service
-        .publisher_builder()
-        .initial_max_slice_len(DEFAULT_EXPECTED_PAYLOAD_BYTES)
-        .create()
-        .unwrap();
+    let publisher = service.create_publisher_that_cannot_grow(DEFAULT_EXPECTED_PAYLOAD_BYTES);
 
     assert!(
         publisher

@@ -10,6 +10,7 @@ use crossbeam_queue::ArrayQueue;
 
 use super::channel_name::InboundLinkName;
 use super::dropped_bag_counters::InboundLinkDroppedBagCounter;
+use super::read_mode::ReadMode;
 
 /// A per-frame measure a port may install so it can ask what its mailbox holds
 /// without consuming any of it.
@@ -82,18 +83,23 @@ impl From<PortMailboxQueuedFrame> for PortMailboxDeliveredBag {
 pub struct PortMailbox {
     queue: ArrayQueue<PortMailboxQueuedFrame>,
     capacity: usize,
+    /// The read mode of the port this mailbox serves, which decides both which
+    /// bag a read takes and whether an eviction is counted.
+    read_mode: ReadMode,
     measure: Option<PortMailboxQueuedFrameMeasure>,
     queued_frame_measure_total: AtomicU64,
     eviction_notice: Option<PortMailboxEvictionNotice>,
 }
 
 impl PortMailbox {
-    /// Create a new mailbox with the given history depth.
-    pub fn new(history: usize) -> Self {
+    /// Create a new mailbox with the given history depth, for a port read in
+    /// `read_mode`.
+    pub fn new(history: usize, read_mode: ReadMode) -> Self {
         let capacity = history.max(1);
         Self {
             queue: ArrayQueue::new(capacity),
             capacity,
+            read_mode,
             measure: None,
             queued_frame_measure_total: AtomicU64::new(0),
             eviction_notice: None,
@@ -143,9 +149,9 @@ impl PortMailbox {
 
     /// Push a raw frame slice that arrived on `dropped_bag_counter`'s inbound link.
     ///
-    /// If the mailbox is full, the oldest entry is evicted to make room and
-    /// counted against the link *it* arrived on. Thread-safe: can be called
-    /// from any thread.
+    /// If the mailbox is full, the oldest entry is evicted to make room and, on
+    /// an `ordered` port, counted against the link *it* arrived on.
+    /// Thread-safe: can be called from any thread.
     pub fn push_frame_from_inbound_link(
         &self,
         payload: Vec<u8>,
@@ -197,7 +203,9 @@ impl PortMailbox {
                     frame = rejected;
                     if let Some(evicted) = self.queue.pop() {
                         self.take_out_of_the_total(&evicted);
-                        evicted.record_eviction();
+                        if self.read_mode.a_bag_passed_over_is_lost() {
+                            evicted.record_eviction();
+                        }
                         if let Some(notice) = &self.eviction_notice {
                             notice();
                         }
@@ -238,6 +246,11 @@ impl PortMailbox {
             latest = Some(PortMailboxDeliveredBag::from(frame));
         }
         latest
+    }
+
+    /// The read mode of the port this mailbox serves.
+    pub fn read_mode(&self) -> ReadMode {
+        self.read_mode
     }
 
     /// Check if the mailbox is empty.
@@ -305,7 +318,7 @@ mod tests {
         let from_second_link = counts.counter_for_inbound_link("L-b");
         let first_link_name = InboundLinkName::from("pfirst/out");
         let second_link_name = InboundLinkName::from("psecond/out");
-        let mailbox = PortMailbox::new(1);
+        let mailbox = PortMailbox::new(1, ReadMode::ReadNextInOrder);
 
         mailbox.push_frame_from_inbound_link(vec![1], &from_first_link, &first_link_name);
         mailbox.push_frame_from_inbound_link(vec![2], &from_second_link, &second_link_name);
@@ -327,7 +340,7 @@ mod tests {
     fn a_mailbox_with_room_counts_nothing() {
         let counts = DroppedBagCountsByInboundLink::default();
         let counter = counts.counter_for_inbound_link("L-roomy");
-        let mailbox = PortMailbox::new(4);
+        let mailbox = PortMailbox::new(4, ReadMode::ReadNextInOrder);
 
         for byte in 0..4u8 {
             mailbox.push_frame_from_inbound_link(vec![byte], &counter, &any_inbound_link_name());
@@ -347,12 +360,12 @@ mod tests {
         let from_second_link = counts.counter_for_inbound_link("L-b");
         let first_link_name = InboundLinkName::from("pfirst/out");
         let second_link_name = InboundLinkName::from("psecond/out");
-        let settling = PortMailbox::new(4);
+        let settling = PortMailbox::new(4, ReadMode::ReadNextInOrder);
         settling.push_frame_from_inbound_link(vec![1], &from_first_link, &first_link_name);
         settling.push_frame_from_inbound_link(vec![2], &from_first_link, &first_link_name);
         settling.push_frame_from_inbound_link(vec![3], &from_second_link, &second_link_name);
 
-        let replacement = PortMailbox::new(1);
+        let replacement = PortMailbox::new(1, ReadMode::ReadNextInOrder);
         settling.hand_every_queued_frame_over_to(&replacement);
 
         assert!(settling.is_empty(), "every frame moved");
@@ -382,7 +395,7 @@ mod tests {
     fn a_hand_over_re_measures_every_frame_by_the_replacements_own_measure() {
         let counts = DroppedBagCountsByInboundLink::default();
         let counter = counts.counter_for_inbound_link("L-unmeasured");
-        let settling = PortMailbox::new(4);
+        let settling = PortMailbox::new(4, ReadMode::ReadNextInOrder);
         for byte in 0..3u8 {
             settling.push_frame_from_inbound_link(vec![byte], &counter, &any_inbound_link_name());
         }
@@ -392,8 +405,8 @@ mod tests {
             "a mailbox with no measure totals nothing"
         );
 
-        let replacement =
-            PortMailbox::new(4).measuring_every_queued_frame_with(Arc::new(|payload: &[u8]| {
+        let replacement = PortMailbox::new(4, ReadMode::ReadNextInOrder)
+            .measuring_every_queued_frame_with(Arc::new(|payload: &[u8]| {
                 payload.len() as u64 * 10
             }));
         settling.hand_every_queued_frame_over_to(&replacement);
@@ -409,7 +422,7 @@ mod tests {
     fn every_bag_a_sustained_overrun_evicts_is_counted() {
         let counts = DroppedBagCountsByInboundLink::default();
         let counter = counts.counter_for_inbound_link("L-overrun");
-        let mailbox = PortMailbox::new(2);
+        let mailbox = PortMailbox::new(2, ReadMode::ReadNextInOrder);
 
         for byte in 0..10u8 {
             mailbox.push_frame_from_inbound_link(vec![byte], &counter, &any_inbound_link_name());
@@ -428,17 +441,18 @@ mod tests {
     fn passing_over_bags_to_reach_the_newest_is_not_a_drop_at_the_port() {
         let counts = DroppedBagCountsByInboundLink::default();
         let counter = counts.counter_for_inbound_link("L-newest");
-        let mailbox = PortMailbox::new(4);
+        let mailbox = PortMailbox::new(4, ReadMode::SkipToLatest);
 
-        for byte in 0..4u8 {
+        for byte in 0..10u8 {
             mailbox.push_frame_from_inbound_link(vec![byte], &counter, &any_inbound_link_name());
         }
 
-        assert_eq!(payload_of(mailbox.pop_latest()), Some(vec![3]));
+        assert_eq!(payload_of(mailbox.pop_latest()), Some(vec![9]));
         assert_eq!(
             counter.dropped_bag_count(),
             0,
-            "the `newest` read policy passing over bags is the profile working, never loss"
+            "ten bags into a depth-four `newest` mailbox evict six, and passing over them to \
+             reach the newest is the profile working, never loss"
         );
     }
 
@@ -451,9 +465,11 @@ mod tests {
         let counter = counts.counter_for_inbound_link("L-noticed");
         let evictions_heard = Arc::new(AtomicU64::new(0));
         let heard_by_the_notice = Arc::clone(&evictions_heard);
-        let mailbox = PortMailbox::new(2).reporting_every_eviction_to(Arc::new(move || {
-            heard_by_the_notice.fetch_add(1, Ordering::Relaxed);
-        }));
+        let mailbox = PortMailbox::new(2, ReadMode::ReadNextInOrder).reporting_every_eviction_to(
+            Arc::new(move || {
+                heard_by_the_notice.fetch_add(1, Ordering::Relaxed);
+            }),
+        );
 
         for byte in 0..2u8 {
             mailbox.push_frame_from_inbound_link(vec![byte], &counter, &any_inbound_link_name());
@@ -481,7 +497,7 @@ mod tests {
 
     #[test]
     fn a_manually_injected_frame_evicts_with_no_link_to_charge() {
-        let mailbox = PortMailbox::new(1);
+        let mailbox = PortMailbox::new(1, ReadMode::ReadNextInOrder);
 
         mailbox.push_frame_without_inbound_link_attribution(vec![1]);
         mailbox.push_frame_without_inbound_link_attribution(vec![2]);
