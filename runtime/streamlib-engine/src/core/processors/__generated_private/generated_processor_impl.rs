@@ -3,27 +3,80 @@
 
 //! Object-safe wrapper for GeneratedProcessor - DO NOT USE DIRECTLY.
 
+use std::sync::Arc;
+
 use super::GeneratedProcessor;
 use crate::core::ProcessorDescriptor;
 use crate::core::Result;
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::execution::ExecutionConfig;
+use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
+use crate::iceoryx2::{HelperPlacedProcessorLossCounts, Iceoryx2Node};
 use serde_json::Value as JsonValue;
 
 /// One processor's pending link wiring, for a transport the engine cannot
 /// reach into.
 ///
 /// The engine fills this as it opens each channel; whoever owns the far side —
-/// a helper process, a Deno subprocess — reads it back as the `ports` payload
-/// of the setup command and opens its own publisher, subscriber and notifier
-/// from the service names inside.
+/// a helper process — reads it back as the `ports` payload of the setup command
+/// and opens its own publisher, subscriber and notifier from the service names
+/// inside. It also holds which loss-count board slot each inbound link was
+/// given, and the board the far side writes them on.
 #[derive(Debug, Default)]
 pub struct OutOfProcessLinkWiringEnvelope {
     input_links: Vec<serde_json::Value>,
     output_links: Vec<serde_json::Value>,
+    loss_counts: Arc<HelperPlacedProcessorLossCounts>,
 }
 
 impl OutOfProcessLinkWiringEnvelope {
+    /// The loss counts this processor's far side writes, shared with its graph
+    /// node so `graph` reads them.
+    pub(crate) fn helper_placed_processor_loss_counts(
+        &self,
+    ) -> Arc<HelperPlacedProcessorLossCounts> {
+        Arc::clone(&self.loss_counts)
+    }
+
+    /// Create the loss-count board this helper spawn writes on, before the
+    /// child starts, and return the `loss_count_board` payload of its setup
+    /// command.
+    ///
+    /// Named per spawn rather than per processor, so a spawn never opens a
+    /// board an earlier one's dead writer still holds. The envelope keeps the
+    /// board until the processor is removed, whatever becomes of the child.
+    pub fn create_the_loss_count_board_for_this_helper_spawn(
+        &self,
+        ctx: &RuntimeContextFullAccess<'_>,
+        processor_id: &str,
+        output_port_names: Vec<String>,
+    ) -> Result<JsonValue> {
+        self.create_the_loss_count_board_for_this_helper_spawn_on(
+            ctx.host_base().iceoryx2_node(),
+            processor_id,
+            output_port_names,
+        )
+    }
+
+    pub(crate) fn create_the_loss_count_board_for_this_helper_spawn_on(
+        &self,
+        iceoryx2_node: &Iceoryx2Node,
+        processor_id: &str,
+        output_port_names: Vec<String>,
+    ) -> Result<JsonValue> {
+        let service_name = format!(
+            "streamlib/{processor_id}/loss-counts/{}",
+            mint_machine_global_unique_name_suffix()
+        );
+        let board = iceoryx2_node
+            .create_helper_process_loss_count_board(&service_name, output_port_names.clone())?;
+        self.loss_counts.hold_the_board_of_this_spawn(board)?;
+        Ok(serde_json::json!({
+            "service_name": service_name,
+            "output_ports": output_port_names,
+        }))
+    }
+
     /// Record one link, in the direction its port faces.
     ///
     /// One call per link. Fan-out out of one port records one entry per link:
@@ -54,6 +107,7 @@ impl OutOfProcessLinkWiringEnvelope {
         };
         self.input_links.retain(|link| !carries_link(link));
         self.output_links.retain(|link| !carries_link(link));
+        self.loss_counts.forget_link(link_id);
     }
 
     /// The `ports` payload of the setup command, as the far side reads it.
