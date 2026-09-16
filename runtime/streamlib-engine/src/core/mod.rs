@@ -75,6 +75,7 @@ pub use streamlib_home::{get_streamlib_data_dir, get_streamlib_home, get_uv_cach
 pub mod helper_process_transport {
     pub use super::compiler::compiler_ops::subprocess_bridge::{
         ENGINE_BUILD_ID, ENGINE_BUILD_ID_ENVIRONMENT_VARIABLE, EscalateTransport,
-        SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS, SubprocessBridge, spawn_fd_line_reader,
+        HelperProcessShutdownCommand, SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS, SubprocessBridge,
+        spawn_fd_line_reader,
     };
 }

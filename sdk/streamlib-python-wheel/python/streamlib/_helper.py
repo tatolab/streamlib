@@ -208,9 +208,16 @@ class ParentProcessBridge:
 
     def next_lifecycle_command(self) -> "Optional[dict[str, Any]]":
         """Block until the parent sends one, or `None` once it is gone."""
-        if self._the_parent_is_gone.is_set():
+        if not self._the_parent_is_gone.is_set():
+            return self._lifecycle_commands.get()
+        # Drained before the latch is believed: the reader sets it before it
+        # queues the end of the channel, so commands the parent sent before it
+        # let go — a `stop` and a `teardown` it wrote on its way out — are
+        # still waiting here and are still owed.
+        try:
+            return self._lifecycle_commands.get_nowait()
+        except queue.Empty:
             return None
-        return self._lifecycle_commands.get()
 
     def next_lifecycle_command_if_waiting(self) -> "tuple[bool, Optional[dict[str, Any]]]":
         """`(True, command)` when one was queued, `(False, None)` otherwise.

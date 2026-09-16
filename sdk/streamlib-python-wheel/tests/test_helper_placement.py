@@ -290,7 +290,7 @@ def a_pid_is_gone_within(pid: int, budget_seconds: float) -> bool:
 def test_a_processor_asleep_in_its_callback_still_runs_its_teardown(
     start_app_under_test,
 ):
-    """The ladder ARCHITECTURE.md:717-732 decides, end to end.
+    """The ladder `docs/plan/ARCHITECTURE.md` §Processor model decides, end to end.
 
     Fail-without-fix: with the old pair of five-second reply deadlines the
     sleeping callback misses `stopped`, the helper is marked gone, and its
@@ -327,7 +327,7 @@ def test_a_processor_asleep_in_its_callback_still_runs_its_teardown(
 def test_a_worker_a_processor_forked_goes_down_with_the_apps_helper(
     start_app_under_test,
 ):
-    """`:724` — a processor's descendants die with it.
+    """A processor's descendants die with it.
 
     Fail-without-fix: the kills target the helper's pid, the worker outlives
     the app holding whatever it inherited, and this finds it still running.

@@ -687,7 +687,7 @@ def test_an_interrupt_inside_a_callback_still_leaves_stop_and_teardown_to_run(
     stand_in_parent, hooks_the_interrupt_probes_reached
 ):
     """The parent's ladder interrupts a callback that outran its one-second
-    budget, and `:717-732` has `stop()` and `teardown()` still running after
+    budget, and the plan has `stop()` and `teardown()` still running after
     it — only the bag in flight is lost.
 
     Fail-without-fix: `call_hook` catches `Exception`, which a
@@ -722,7 +722,7 @@ def test_an_interrupt_inside_a_callback_still_leaves_stop_and_teardown_to_run(
 def test_an_interrupted_setup_is_answered_and_still_gets_its_teardown(
     stand_in_parent, hooks_the_interrupt_probes_reached
 ):
-    """`:722` reads literally — any callback interrupted at shutdown, `setup()`
+    """The plan reads literally — any callback interrupted at shutdown, `setup()`
     included, is followed by `teardown()`. A `setup()` that raises on its own
     keeps its own no-teardown rule, which lives in the parent: it never sends
     the command.
@@ -782,10 +782,35 @@ def test_a_closed_channel_answers_every_later_read_rather_than_the_first(
     assert bridge.next_lifecycle_command_if_waiting() == (True, None)
 
 
+def test_a_command_the_parent_sent_before_letting_go_is_still_delivered(
+    stand_in_parent,
+):
+    """The end of the channel is sticky, not a gate in front of what is queued.
+
+    Fail-without-fix: latch the end and answer it ahead of the queue, and the
+    `stop` and `teardown` a parent wrote on its way out are discarded — which
+    is the whole of a shutdown for a helper whose parent closed promptly.
+    """
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    stand_in_parent.send({"cmd": "stop", "capability": "full"})
+    stand_in_parent.send({"cmd": "teardown", "capability": "full"})
+    stand_in_parent.parent_end.close()
+
+    deadline = time.monotonic() + 5.0
+    delivered = []
+    while len(delivered) < 3:
+        assert time.monotonic() < deadline, f"only got {delivered}"
+        delivered.append(bridge.next_lifecycle_command())
+
+    assert [command["cmd"] for command in delivered[:2]] == ["stop", "teardown"]
+    assert delivered[2] is None
+
+
 def test_the_escalate_socket_is_not_inherited_by_anything_the_helper_starts(
     monkeypatch,
 ):
-    """`:726` gives a helper's descendants no descriptor of its own. The parent
+    """The plan gives a helper's descendants no descriptor of its own. The parent
     cleared `FD_CLOEXEC` on this fd to hand it over, and `socket.socket(fileno=)`
     leaves the flag exactly as it found it, so an `os.system` or `posix_spawn`
     child would inherit the channel every privileged operation rides.

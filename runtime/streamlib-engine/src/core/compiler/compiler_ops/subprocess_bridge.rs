@@ -134,6 +134,44 @@ impl EscalateTransport {
 /// rename refuse every window silently.
 pub const SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS: &str = "setup";
 
+/// A shutdown command the parent sends a helper, paired with the reply tag the
+/// helper answers it with.
+///
+/// The pairing lives beside [`SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS`] and
+/// the protocol this module's doc enumerates, so the two halves of one exchange
+/// cannot drift apart across the crate boundary the spawn host sits on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HelperProcessShutdownCommand {
+    /// Leave the execution loop and run the processor's `stop()`.
+    Stop,
+    /// Run the processor's `teardown()` and leave.
+    Teardown,
+}
+
+impl HelperProcessShutdownCommand {
+    /// Both commands, in the order the shutdown ladder sends them.
+    ///
+    /// `docs/plan/ARCHITECTURE.md` §Processor model, the `[shutdown-ladder]`
+    /// entry: "`stop` and `teardown` are sent together".
+    pub const BOTH_IN_THE_ORDER_THE_LADDER_SENDS_THEM: [Self; 2] = [Self::Stop, Self::Teardown];
+
+    /// What the parent writes as the frame's `cmd`.
+    pub fn command_tag(self) -> &'static str {
+        match self {
+            Self::Stop => "stop",
+            Self::Teardown => "teardown",
+        }
+    }
+
+    /// What the helper writes as the answering frame's `rpc`.
+    pub fn reply_tag(self) -> &'static str {
+        match self {
+            Self::Stop => "stopped",
+            Self::Teardown => "done",
+        }
+    }
+}
+
 /// Shared writer handle. The host's lifecycle path and the reader
 /// thread's escalate-response path both write through this mutex.
 type SharedWriter = Arc<Mutex<BufWriter<UnixStream>>>;
