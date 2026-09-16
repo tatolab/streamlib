@@ -763,7 +763,7 @@ impl InputMailboxesInner {
     pub fn mirror_an_inbound_links_loss_counts_into(
         &self,
         link_id: &str,
-        slot: InboundLinkLossCountBoardSlotMirror,
+        inbound_link_board_slot_mirror: InboundLinkLossCountBoardSlotMirror,
     ) -> Result<()> {
         let (dropped_bag_counter, discarded_sample_counter) = self
             .inbound_link_subscribers_and_listener
@@ -788,17 +788,16 @@ impl InputMailboxesInner {
                 "inbound link '{link_id}' already mirrors its loss counts onto a board slot"
             ))
         };
-        let slot = Arc::new(slot);
-        let dropped_bags_slot = Arc::clone(&slot);
+        let dropped_bags_board_slot_mirror = inbound_link_board_slot_mirror.clone();
         dropped_bag_counter
             .mirror_every_new_total_into(Box::new(move |dropped_bags| {
-                dropped_bags_slot.mirror_dropped_bags(dropped_bags)
+                dropped_bags_board_slot_mirror.mirror_dropped_bags(dropped_bags)
             }))
             .map_err(|_| already_mirrored())?;
         if let Some(discarded_sample_counter) = discarded_sample_counter {
             discarded_sample_counter
                 .mirror_every_new_total_into(Box::new(move |discarded_samples| {
-                    slot.mirror_discarded_samples(discarded_samples)
+                    inbound_link_board_slot_mirror.mirror_discarded_samples(discarded_samples)
                 }))
                 .map_err(|_| already_mirrored())?;
         }
@@ -1999,7 +1998,14 @@ mod tests {
         mailboxes
             .mirror_an_inbound_links_loss_counts_into(
                 "L-plain",
-                board_writer.claim_inbound_link_slot(0, 11).unwrap(),
+                board_writer
+                    .claim_inbound_link_slot(
+                        crate::iceoryx2::InboundLinkLossCountBoardSlotAndWiringGeneration {
+                            slot: 0,
+                            wiring_generation: 11,
+                        },
+                    )
+                    .unwrap(),
             )
             .expect("a bound link's counts mirror");
 
@@ -2019,7 +2025,14 @@ mod tests {
         mailboxes
             .mirror_an_inbound_links_loss_counts_into(
                 "L-windowed",
-                board_writer.claim_inbound_link_slot(1, 12).unwrap(),
+                board_writer
+                    .claim_inbound_link_slot(
+                        crate::iceoryx2::InboundLinkLossCountBoardSlotAndWiringGeneration {
+                            slot: 1,
+                            wiring_generation: 12,
+                        },
+                    )
+                    .unwrap(),
             )
             .expect("a windowed link's counts mirror");
 
@@ -2061,7 +2074,14 @@ mod tests {
             mailboxes
                 .mirror_an_inbound_links_loss_counts_into(
                     "L-plain",
-                    board_writer.claim_inbound_link_slot(2, 13).unwrap(),
+                    board_writer
+                        .claim_inbound_link_slot(
+                            crate::iceoryx2::InboundLinkLossCountBoardSlotAndWiringGeneration {
+                                slot: 2,
+                                wiring_generation: 13,
+                            }
+                        )
+                        .unwrap(),
                 )
                 .is_err(),
             "a link mirrors onto one slot"
@@ -2070,7 +2090,14 @@ mod tests {
             mailboxes
                 .mirror_an_inbound_links_loss_counts_into(
                     "L-never-wired",
-                    board_writer.claim_inbound_link_slot(3, 14).unwrap(),
+                    board_writer
+                        .claim_inbound_link_slot(
+                            crate::iceoryx2::InboundLinkLossCountBoardSlotAndWiringGeneration {
+                                slot: 3,
+                                wiring_generation: 14,
+                            }
+                        )
+                        .unwrap(),
                 )
                 .is_err(),
             "a link with no subscriber has no counts to mirror"

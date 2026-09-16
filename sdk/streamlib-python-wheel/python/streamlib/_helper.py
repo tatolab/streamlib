@@ -426,6 +426,7 @@ def wire_link_data_access(
             output_link["max_subscribers"],
             output_link["notify_max_notifiers"],
             output_link["link_id"],
+            output_port_wiring_generation=output_link["output_port_wiring_generation"],
         )
 
 

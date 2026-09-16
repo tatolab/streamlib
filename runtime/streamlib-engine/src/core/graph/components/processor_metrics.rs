@@ -78,22 +78,25 @@ impl ProcessorLossCounts {
             Self::CountedInItsHelperProcess(helper_placed) => helper_placed.loss_count_snapshot(),
         }
     }
+
+    /// Every inbound link's dropped bags summed.
+    pub fn total_dropped_bag_count(&self) -> u64 {
+        match self {
+            Self::CountedByPortsInThisProcess(counted_here) => counted_here
+                .dropped_bag_counts_by_inbound_link
+                .total_dropped_bag_count(),
+            Self::CountedInItsHelperProcess(helper_placed) => {
+                helper_placed.total_dropped_bag_count()
+            }
+        }
+    }
 }
 
 impl ProcessorMetrics {
     /// This processor's dropped bags across every inbound link. Derived from
     /// the per-link counts, which stay the record.
     pub fn total_dropped_bag_count(&self) -> u64 {
-        match &self.loss_counts {
-            ProcessorLossCounts::CountedByPortsInThisProcess(counted_here) => counted_here
-                .dropped_bag_counts_by_inbound_link
-                .total_dropped_bag_count(),
-            ProcessorLossCounts::CountedInItsHelperProcess(helper_placed) => helper_placed
-                .loss_count_snapshot()
-                .dropped_bags_by_inbound_link
-                .values()
-                .sum(),
-        }
+        self.loss_counts.total_dropped_bag_count()
     }
 }
 

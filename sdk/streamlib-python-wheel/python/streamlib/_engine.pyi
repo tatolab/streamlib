@@ -630,9 +630,10 @@ class ProcessorLinkDataAccess:
 
         Every link wired afterwards mirrors its losses onto it as they are
         counted — an input link onto the slot its wiring names, an output port
-        onto its entry — which is how the parent renders this helper's
-        `metrics` in `graph`. `output_port_names` is the board's output-port
-        section in key order. Raises `RuntimeError` for a second board.
+        onto its entry under its channel's generation — which is how the parent
+        renders this helper's `metrics` in `graph`. `output_port_names` is the
+        board's output-port section in key order. Raises `RuntimeError` for a
+        second board.
         """
 
     def wire_output_link(
@@ -646,7 +647,16 @@ class ProcessorLinkDataAccess:
         max_subscribers: int,
         notify_max_notifiers: int,
         link_id: str,
-    ) -> None: ...
+        output_port_wiring_generation: int | None = None,
+    ) -> None:
+        """Open this processor's publisher and one notifier for a link out of
+        `port_name`.
+
+        Once a loss-count board is open, `output_port_wiring_generation` names
+        the port's channel its refusals are mirrored under, and omitting it
+        raises `ValueError`; with no board it is unused.
+        """
+
     def wire_input_link(
         self,
         port_name: str,

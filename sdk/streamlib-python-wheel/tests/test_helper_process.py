@@ -153,6 +153,7 @@ def engine_shaped_link_wiring(direction: str, link_id: str) -> dict:
             "channel_service_creation_depth": 16,
             "max_subscribers": 2,
             "notify_max_notifiers": 1,
+            "output_port_wiring_generation": 1,
         }
     return {
         "name": "frames_from_upstream",

@@ -44,7 +44,7 @@ pub use delivery_profile::{DeliveryProfile, DeliveryResolution};
 pub(crate) use helper_process_loss_count_board::a_loss_count_board_and_its_helpers_writer_for_this_test_process;
 pub use helper_process_loss_count_board::{
     HelperPlacedProcessorLossCounts, HelperProcessLossCountBoard,
-    HelperProcessLossCountBoardWriter, INBOUND_LINK_SLOTS_PER_LOSS_COUNT_BOARD,
+    HelperProcessLossCountBoardWriter, InboundLinkLossCountBoardSlotAndWiringGeneration,
     InboundLinkLossCountBoardSlotMirror, OutputPortRefusedBagCountBoardMirror,
     ProcessorLossCountSnapshot,
 };

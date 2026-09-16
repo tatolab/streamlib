@@ -7,11 +7,13 @@
 //! One board per helper spawn: the parent creates it before the child starts
 //! and holds it until the processor is removed, so the counts a crashed helper
 //! last wrote stay readable. Its keys are fixed at creation and links are wired
-//! live, so the board declares a slot per permitted inbound link and the parent
-//! assigns each link a slot and a wiring generation; a slot renders as its link's
-//! only while the generation written there is the one the parent assigned.
+//! live, so the board declares a slot per permitted inbound link and an entry
+//! per declared output port, and the parent assigns each inbound link a slot and
+//! each output port's channel a wiring generation. An entry renders as its
+//! link's or port's only while the generation written there is the one the
+//! parent assigned.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
 
 use iceoryx2::port::reader::{EntryHandle, Reader};
@@ -28,20 +30,36 @@ use crate::core::error::{Error, Result};
 
 /// The inbound-link slots every board declares: one per inbound link a
 /// destination may hold.
-pub const INBOUND_LINK_SLOTS_PER_LOSS_COUNT_BOARD: usize = MAX_INBOUND_LINKS_PER_DESTINATION;
+pub(crate) const INBOUND_LINK_SLOTS_PER_LOSS_COUNT_BOARD: usize = MAX_INBOUND_LINKS_PER_DESTINATION;
 
 /// The blackboard service a loss-count board is.
 pub(crate) type HelperProcessLossCountBoardService =
     BlackboardPortFactory<ipc::Service, HelperProcessLossCountBoardKey>;
 
-/// The key of inbound-link slot `slot`.
-fn inbound_link_slot_key(slot: usize) -> HelperProcessLossCountBoardKey {
-    HelperProcessLossCountBoardKey::inbound_link_slot(slot as u32)
+/// Every inbound-link slot's key, in slot order — the board's first section.
+pub(super) fn inbound_link_slot_keys() -> impl Iterator<Item = HelperProcessLossCountBoardKey> {
+    (0..INBOUND_LINK_SLOTS_PER_LOSS_COUNT_BOARD)
+        .map(|slot| HelperProcessLossCountBoardKey::inbound_link_slot(slot as u32))
 }
 
-/// The key of the declared output port at `output_port_index`.
-fn output_port_key(output_port_index: usize) -> HelperProcessLossCountBoardKey {
-    HelperProcessLossCountBoardKey::output_port(output_port_index as u32)
+/// The keys of `output_port_count` declared output ports, in declaration order
+/// — the board's second section.
+pub(super) fn output_port_keys(
+    output_port_count: usize,
+) -> impl Iterator<Item = HelperProcessLossCountBoardKey> {
+    (0..output_port_count).map(|output_port_index| {
+        HelperProcessLossCountBoardKey::output_port(output_port_index as u32)
+    })
+}
+
+/// Where the parent assigned an inbound link's counts to go: its slot, and the
+/// generation of the wiring it holds that slot for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InboundLinkLossCountBoardSlotAndWiringGeneration {
+    /// The slot's index in the board's inbound-link section.
+    pub slot: usize,
+    /// The wiring's generation, never repeated for the processor's life.
+    pub wiring_generation: u64,
 }
 
 // =============================================================================
@@ -52,8 +70,7 @@ fn output_port_key(output_port_index: usize) -> HelperProcessLossCountBoardKey {
 /// created, and a read handle on every entry.
 pub struct HelperProcessLossCountBoard {
     service_name: String,
-    output_port_names: Vec<String>,
-    held: HelperProcessLossCountBoardReadHandles,
+    board_read_handles: HelperProcessLossCountBoardReadHandles,
 }
 
 /// The reader and its entry handles, dropped together.
@@ -64,25 +81,29 @@ struct HelperProcessLossCountBoardReadHandles {
     inbound_link_slots: Vec<
         EntryHandle<ipc::Service, HelperProcessLossCountBoardKey, InboundLinkLossCountBoardSlot>,
     >,
-    output_ports: Vec<
+    output_ports: Vec<(
+        String,
         EntryHandle<
             ipc::Service,
             HelperProcessLossCountBoardKey,
             OutputPortRefusedBagCountBoardEntry,
         >,
-    >,
+    )>,
     _reader: Reader<ipc::Service, HelperProcessLossCountBoardKey>,
     _service: HelperProcessLossCountBoardService,
 }
 
-// SAFETY: `Reader` and `EntryHandle` are `!Send` only through the reader's
-// shared state, which `ipc::Service`'s `SingleThreaded` policy keeps in a bare
-// `Rc` (iceoryx2 0.9.3). Every clone of that `Rc` is made while this struct is
-// built, on one thread, and every one is dropped when this struct drops, in one
-// `Drop` — so its count is never touched from two threads at once. A read,
+// SAFETY: `Reader` is the one field iceoryx2 0.9.3 leaves `!Send` and `!Sync`,
+// because `ipc::Service`'s `SingleThreaded` policy keeps its shared state in a
+// bare `Rc`. Every `EntryHandle` holds a clone of that same `Rc`; iceoryx2
+// declares the handle `Send + Sync` all the same, which is sound only while no
+// handle ever leaves this struct on its own — two handles dropped on two threads
+// race the count. Every clone is made while this struct is built, on one thread,
+// and every one is dropped when it drops, in one `Drop`. A read,
 // `EntryHandle::get`, loads the entry's lock-free atomic and never touches the
-// `Rc`, which is what lets `graph` read from a tokio worker. Re-check this
-// against the source on any iceoryx2 upgrade.
+// `Rc`, which is what lets `graph` read from a tokio worker. The blackboard
+// `PortFactory` is `Send + Sync` in its own right. Re-check this against the
+// source on any iceoryx2 upgrade.
 unsafe impl Send for HelperProcessLossCountBoardReadHandles {}
 unsafe impl Sync for HelperProcessLossCountBoardReadHandles {}
 
@@ -105,18 +126,18 @@ impl HelperProcessLossCountBoard {
                  declares: {refusal:?}"
             ))
         };
-        let inbound_link_slots = (0..INBOUND_LINK_SLOTS_PER_LOSS_COUNT_BOARD)
-            .map(|slot| reader.entry(&inbound_link_slot_key(slot)))
+        let inbound_link_slots = inbound_link_slot_keys()
+            .map(|key| reader.entry(&key))
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(unreadable_entry)?;
-        let output_ports = (0..output_port_names.len())
-            .map(|output_port_index| reader.entry(&output_port_key(output_port_index)))
+        let output_ports = output_port_keys(output_port_names.len())
+            .zip(output_port_names)
+            .map(|(key, output_port)| reader.entry(&key).map(|entry| (output_port, entry)))
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(unreadable_entry)?;
         Ok(Self {
             service_name,
-            output_port_names,
-            held: HelperProcessLossCountBoardReadHandles {
+            board_read_handles: HelperProcessLossCountBoardReadHandles {
                 inbound_link_slots,
                 output_ports,
                 _reader: reader,
@@ -131,25 +152,31 @@ impl HelperProcessLossCountBoard {
     }
 
     /// The declared output ports this board carries an entry for, in key order.
-    pub fn output_port_names(&self) -> &[String] {
-        &self.output_port_names
+    pub fn output_port_names(&self) -> impl Iterator<Item = &str> {
+        self.board_read_handles
+            .output_ports
+            .iter()
+            .map(|(output_port, _)| output_port.as_str())
     }
 
     /// What the helper last wrote on inbound-link slot `slot`.
     pub fn inbound_link_slot(&self, slot: usize) -> Option<InboundLinkLossCountBoardSlot> {
-        self.held
+        self.board_read_handles
             .inbound_link_slots
             .get(slot)
             .map(|entry| *entry.get())
     }
 
-    /// The refused-bag count the helper last wrote for `output_port`.
-    pub fn output_port_refused_bags(&self, output_port: &str) -> Option<u64> {
-        let output_port_index = self
-            .output_port_names
+    /// What the helper last wrote on `output_port`'s entry.
+    pub fn output_port_entry(
+        &self,
+        output_port: &str,
+    ) -> Option<OutputPortRefusedBagCountBoardEntry> {
+        self.board_read_handles
+            .output_ports
             .iter()
-            .position(|declared| declared == output_port)?;
-        Some(self.held.output_ports[output_port_index].get().refused_bags)
+            .find(|(declared, _)| declared == output_port)
+            .map(|(_, entry)| *entry.get())
     }
 }
 
@@ -162,7 +189,7 @@ impl HelperProcessLossCountBoard {
 /// read or wrote.
 pub struct HelperProcessLossCountBoardWriter {
     service_name: String,
-    held: HelperProcessLossCountBoardWriteHandles,
+    board_write_handles: HelperProcessLossCountBoardWriteHandles,
 }
 
 /// One inbound-link slot, and what was last written on it.
@@ -172,31 +199,36 @@ struct InboundLinkLossCountBoardSlotBeingWritten {
     last_written: InboundLinkLossCountBoardSlot,
 }
 
-/// One output port's entry, what was last written on it, and which claim of it
-/// is current.
+/// One output port's entry, and what was last written on it.
 struct OutputPortRefusedBagCountBoardEntryBeingWritten {
     entry: EntryHandleMut<
         ipc::Service,
         HelperProcessLossCountBoardKey,
         OutputPortRefusedBagCountBoardEntry,
     >,
-    last_written_refused_bags: u64,
-    current_claim: u64,
+    last_written: OutputPortRefusedBagCountBoardEntry,
 }
 
 /// The writer and its entry handles, dropped together.
 struct HelperProcessLossCountBoardWriteHandles {
     inbound_link_slots: Vec<Mutex<InboundLinkLossCountBoardSlotBeingWritten>>,
-    output_ports: HashMap<String, Mutex<OutputPortRefusedBagCountBoardEntryBeingWritten>>,
+    output_ports: Vec<(
+        String,
+        Mutex<OutputPortRefusedBagCountBoardEntryBeingWritten>,
+    )>,
     _writer: Writer<ipc::Service, HelperProcessLossCountBoardKey>,
     _service: HelperProcessLossCountBoardService,
 }
 
-// SAFETY: as for `HelperProcessLossCountBoardReadHandles`, with the writer's
-// `Rc` in place of the reader's: every clone is made while this struct is built
-// and dropped when it drops. A write, `EntryHandleMut::update_with_copy`, stores
-// through the entry's single producer and never touches the `Rc`; the producer
-// is single-writer, which is what each entry's `Mutex` serialises.
+// SAFETY: `Writer` is the one field iceoryx2 0.9.3 leaves `!Send` and `!Sync`,
+// for the `SingleThreaded` `Rc` its shared state sits in. Every `EntryHandleMut`
+// holds a clone of that `Rc` and is declared `Send + Sync` upstream regardless,
+// which is sound only while no handle leaves this struct on its own. Every
+// clone is made while this struct is built, on one thread, and dropped when it
+// drops, in one `Drop`. A write, `EntryHandleMut::update_with_copy`, stores
+// through the entry's producer and never touches the `Rc`; the producer is
+// single-writer, which each entry's `Mutex` serialises. The blackboard
+// `PortFactory` is `Send + Sync` in its own right.
 unsafe impl Send for HelperProcessLossCountBoardWriteHandles {}
 unsafe impl Sync for HelperProcessLossCountBoardWriteHandles {}
 
@@ -218,9 +250,9 @@ impl HelperProcessLossCountBoardWriter {
                  told it declares: {refusal:?}"
             ))
         };
-        let inbound_link_slots = (0..INBOUND_LINK_SLOTS_PER_LOSS_COUNT_BOARD)
-            .map(|slot| {
-                writer.entry(&inbound_link_slot_key(slot)).map(|entry| {
+        let inbound_link_slots = inbound_link_slot_keys()
+            .map(|key| {
+                writer.entry(&key).map(|entry| {
                     Mutex::new(InboundLinkLossCountBoardSlotBeingWritten {
                         entry,
                         last_written: InboundLinkLossCountBoardSlot::default(),
@@ -229,28 +261,24 @@ impl HelperProcessLossCountBoardWriter {
             })
             .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(unwritable_entry)?;
-        let output_ports = output_port_names
-            .iter()
-            .enumerate()
-            .map(|(output_port_index, output_port)| {
-                writer
-                    .entry(&output_port_key(output_port_index))
-                    .map(|entry| {
-                        (
-                            output_port.clone(),
-                            Mutex::new(OutputPortRefusedBagCountBoardEntryBeingWritten {
-                                entry,
-                                last_written_refused_bags: 0,
-                                current_claim: 0,
-                            }),
-                        )
-                    })
+        let output_ports = output_port_keys(output_port_names.len())
+            .zip(output_port_names)
+            .map(|(key, output_port)| {
+                writer.entry(&key).map(|entry| {
+                    (
+                        output_port.clone(),
+                        Mutex::new(OutputPortRefusedBagCountBoardEntryBeingWritten {
+                            entry,
+                            last_written: OutputPortRefusedBagCountBoardEntry::default(),
+                        }),
+                    )
+                })
             })
-            .collect::<std::result::Result<HashMap<_, _>, _>>()
+            .collect::<std::result::Result<Vec<_>, _>>()
             .map_err(unwritable_entry)?;
         Ok(Self {
             service_name,
-            held: HelperProcessLossCountBoardWriteHandles {
+            board_write_handles: HelperProcessLossCountBoardWriteHandles {
                 inbound_link_slots,
                 output_ports,
                 _writer: writer,
@@ -259,18 +287,21 @@ impl HelperProcessLossCountBoardWriter {
         })
     }
 
-    /// Claim inbound-link slot `slot` for the wiring `wiring_generation` names,
-    /// writing zero counts under it, and hand back the mirror that link's
+    /// Claim the slot the parent assigned an inbound link, writing zero counts
+    /// under its wiring's generation, and hand back the mirror that link's
     /// counters write through.
     ///
     /// Every mirror an earlier wiring of the slot handed out writes nothing from
     /// here on.
     pub fn claim_inbound_link_slot(
         self: &Arc<Self>,
-        slot: usize,
-        wiring_generation: u64,
+        assigned: InboundLinkLossCountBoardSlotAndWiringGeneration,
     ) -> Result<InboundLinkLossCountBoardSlotMirror> {
-        let Some(slot_being_written) = self.held.inbound_link_slots.get(slot) else {
+        let InboundLinkLossCountBoardSlotAndWiringGeneration {
+            slot,
+            wiring_generation,
+        } = assigned;
+        let Some(slot_being_written) = self.board_write_handles.inbound_link_slots.get(slot) else {
             return Err(Error::Configuration(format!(
                 "inbound-link slot {slot} is past the {INBOUND_LINK_SLOTS_PER_LOSS_COUNT_BOARD} \
                  slots the loss-count board '{}' declares",
@@ -293,32 +324,44 @@ impl HelperProcessLossCountBoardWriter {
         })
     }
 
-    /// Claim `output_port`'s entry for a channel just opened, writing a zero
-    /// count, and hand back the mirror its refused-bag counter writes through —
-    /// or `None` for a port this board carries no entry for.
+    /// Claim `output_port`'s entry for the channel `wiring_generation` names,
+    /// writing a zero count under it, and hand back the mirror its refused-bag
+    /// counter writes through — or `None` for a port this board carries no
+    /// entry for.
     ///
-    /// Every mirror an earlier claim of the port handed out writes nothing from
-    /// here on.
+    /// Every mirror an earlier channel of the port handed out writes nothing
+    /// from here on.
     pub fn claim_output_port_entry(
         self: &Arc<Self>,
         output_port: &str,
+        wiring_generation: u64,
     ) -> Option<OutputPortRefusedBagCountBoardMirror> {
-        let mut entry_being_written = self.held.output_ports.get(output_port)?.lock();
-        entry_being_written.current_claim += 1;
-        entry_being_written.last_written_refused_bags = 0;
+        let output_port_index = self
+            .board_write_handles
+            .output_ports
+            .iter()
+            .position(|(declared, _)| declared == output_port)?;
+        let mut entry_being_written = self.board_write_handles.output_ports[output_port_index]
+            .1
+            .lock();
+        entry_being_written.last_written = OutputPortRefusedBagCountBoardEntry {
+            wiring_generation,
+            refused_bags: 0,
+        };
         entry_being_written
             .entry
-            .update_with_copy(OutputPortRefusedBagCountBoardEntry { refused_bags: 0 });
+            .update_with_copy(entry_being_written.last_written);
         Some(OutputPortRefusedBagCountBoardMirror {
             board: Arc::clone(self),
-            output_port: output_port.to_string(),
-            claim: entry_being_written.current_claim,
+            output_port_index,
+            wiring_generation,
         })
     }
 }
 
 /// Where one wiring of an inbound link writes its loss counts: its slot, under
 /// its generation.
+#[derive(Clone)]
 pub struct InboundLinkLossCountBoardSlotMirror {
     board: Arc<HelperProcessLossCountBoardWriter>,
     slot: usize,
@@ -327,14 +370,14 @@ pub struct InboundLinkLossCountBoardSlotMirror {
 
 impl InboundLinkLossCountBoardSlotMirror {
     /// Write `dropped_bags` as this link's dropped-bag total.
-    pub fn mirror_dropped_bags(&self, dropped_bags: u64) {
+    pub(crate) fn mirror_dropped_bags(&self, dropped_bags: u64) {
         self.write_on_the_slot_while_it_is_this_wirings(|last_written| {
             last_written.dropped_bags = last_written.dropped_bags.max(dropped_bags);
         });
     }
 
     /// Write `discarded_samples` as this link's discarded-sample total.
-    pub fn mirror_discarded_samples(&self, discarded_samples: u64) {
+    pub(crate) fn mirror_discarded_samples(&self, discarded_samples: u64) {
         self.write_on_the_slot_while_it_is_this_wirings(|last_written| {
             last_written.discarded_samples = last_written.discarded_samples.max(discarded_samples);
         });
@@ -346,7 +389,8 @@ impl InboundLinkLossCountBoardSlotMirror {
         &self,
         update: impl FnOnce(&mut InboundLinkLossCountBoardSlot),
     ) {
-        let mut slot_being_written = self.board.held.inbound_link_slots[self.slot].lock();
+        let mut slot_being_written =
+            self.board.board_write_handles.inbound_link_slots[self.slot].lock();
         if slot_being_written.last_written.wiring_generation != self.wiring_generation {
             return;
         }
@@ -357,30 +401,32 @@ impl InboundLinkLossCountBoardSlotMirror {
     }
 }
 
-/// Where one channel of an output port writes its refused-bag count.
+/// Where one channel of an output port writes its refused-bag count: the
+/// port's entry, under the channel's generation.
 pub struct OutputPortRefusedBagCountBoardMirror {
     board: Arc<HelperProcessLossCountBoardWriter>,
-    output_port: String,
-    claim: u64,
+    output_port_index: usize,
+    wiring_generation: u64,
 }
 
 impl OutputPortRefusedBagCountBoardMirror {
-    /// Write `refused_bags` as the port's refused-bag total.
-    pub fn mirror_refused_bags(&self, refused_bags: u64) {
-        let Some(entry_being_written) = self.board.held.output_ports.get(&self.output_port) else {
-            return;
-        };
-        let mut entry_being_written = entry_being_written.lock();
-        if entry_being_written.current_claim != self.claim {
+    /// Write `refused_bags` as the port's refused-bag total, kept at its
+    /// largest for the reason an inbound slot's totals are.
+    pub(crate) fn mirror_refused_bags(&self, refused_bags: u64) {
+        let mut entry_being_written = self.board.board_write_handles.output_ports
+            [self.output_port_index]
+            .1
+            .lock();
+        if entry_being_written.last_written.wiring_generation != self.wiring_generation {
             return;
         }
-        entry_being_written.last_written_refused_bags = entry_being_written
-            .last_written_refused_bags
+        entry_being_written.last_written.refused_bags = entry_being_written
+            .last_written
+            .refused_bags
             .max(refused_bags);
-        let refused_bags = entry_being_written.last_written_refused_bags;
         entry_being_written
             .entry
-            .update_with_copy(OutputPortRefusedBagCountBoardEntry { refused_bags });
+            .update_with_copy(entry_being_written.last_written);
     }
 }
 
@@ -397,11 +443,18 @@ struct InboundLinkLossCountSlotAssignment {
     into_a_windowed_port: bool,
 }
 
+/// An output port with at least one outbound link, and the generation its
+/// channel was given when the first of them was noted.
+struct OutputPortWithOutboundLinks {
+    outbound_link_ids: Vec<String>,
+    wiring_generation: u64,
+}
+
 /// The slots and output ports a helper-placed processor's links hold.
 struct HelperPlacedProcessorLossCountWiring {
     inbound_link_slots: Vec<Option<InboundLinkLossCountSlotAssignment>>,
     last_assigned_wiring_generation: u64,
-    outbound_link_ids_by_output_port: BTreeMap<String, Vec<String>>,
+    output_ports_with_outbound_links: BTreeMap<String, OutputPortWithOutboundLinks>,
 }
 
 impl Default for HelperPlacedProcessorLossCountWiring {
@@ -409,8 +462,51 @@ impl Default for HelperPlacedProcessorLossCountWiring {
         Self {
             inbound_link_slots: vec![None; INBOUND_LINK_SLOTS_PER_LOSS_COUNT_BOARD],
             last_assigned_wiring_generation: 0,
-            outbound_link_ids_by_output_port: BTreeMap::new(),
+            output_ports_with_outbound_links: BTreeMap::new(),
         }
+    }
+}
+
+impl HelperPlacedProcessorLossCountWiring {
+    fn next_wiring_generation(&mut self) -> u64 {
+        self.last_assigned_wiring_generation += 1;
+        self.last_assigned_wiring_generation
+    }
+
+    fn release_inbound_link_slot(&mut self, link_id: &str) {
+        for slot in &mut self.inbound_link_slots {
+            if slot
+                .as_ref()
+                .is_some_and(|assignment| assignment.link_id == link_id)
+            {
+                *slot = None;
+            }
+        }
+    }
+
+    /// Each assigned slot with the counts written on it for its own wiring:
+    /// zero before the board exists, before the helper claimed the slot, and
+    /// after a write from a wiring the slot has moved past.
+    fn assigned_slots_with_their_wirings_counts<'a>(
+        &'a self,
+        board: Option<&'a HelperProcessLossCountBoard>,
+    ) -> impl Iterator<
+        Item = (
+            &'a InboundLinkLossCountSlotAssignment,
+            InboundLinkLossCountBoardSlot,
+        ),
+    > {
+        self.inbound_link_slots
+            .iter()
+            .enumerate()
+            .filter_map(move |(slot, assignment)| {
+                let assignment = assignment.as_ref()?;
+                let this_wirings_counts = board
+                    .and_then(|board| board.inbound_link_slot(slot))
+                    .filter(|written| written.wiring_generation == assignment.wiring_generation)
+                    .unwrap_or_default();
+                Some((assignment, this_wirings_counts))
+            })
     }
 }
 
@@ -451,8 +547,7 @@ pub struct ProcessorLossCountSnapshot {
 }
 
 impl HelperPlacedProcessorLossCounts {
-    /// Give `link_id` the lowest free slot and a generation no wiring has had,
-    /// and hand both back.
+    /// Give `link_id` the lowest free slot and a generation no wiring has had.
     ///
     /// A link already holding a slot gives it up first, so its counts start
     /// again from zero.
@@ -460,46 +555,58 @@ impl HelperPlacedProcessorLossCounts {
         &self,
         link_id: &str,
         into_a_windowed_port: bool,
-    ) -> Result<(usize, u64)> {
+    ) -> Result<InboundLinkLossCountBoardSlotAndWiringGeneration> {
         let mut wiring = self.wiring.lock();
-        release_inbound_link_slot(&mut wiring, link_id);
+        wiring.release_inbound_link_slot(link_id);
         let Some(slot) = wiring.inbound_link_slots.iter().position(Option::is_none) else {
             return Err(Error::Configuration(format!(
                 "link '{link_id}' would be a helper-placed processor's inbound link past the \
                  {INBOUND_LINK_SLOTS_PER_LOSS_COUNT_BOARD} its loss-count board has slots for"
             )));
         };
-        wiring.last_assigned_wiring_generation += 1;
-        let wiring_generation = wiring.last_assigned_wiring_generation;
+        let wiring_generation = wiring.next_wiring_generation();
         wiring.inbound_link_slots[slot] = Some(InboundLinkLossCountSlotAssignment {
             link_id: link_id.to_string(),
             wiring_generation,
             into_a_windowed_port,
         });
-        Ok((slot, wiring_generation))
+        Ok(InboundLinkLossCountBoardSlotAndWiringGeneration {
+            slot,
+            wiring_generation,
+        })
     }
 
-    /// Note an outbound link out of `output_port`, so the port renders its
-    /// refused-bag count while it has one.
-    pub(crate) fn note_outbound_link(&self, output_port: &str, link_id: &str) {
+    /// Note an outbound link out of `output_port`, and hand back the generation
+    /// of the port's channel: a new one when the port had no link, the one it
+    /// already has otherwise.
+    pub(crate) fn note_outbound_link(&self, output_port: &str, link_id: &str) -> u64 {
         let mut wiring = self.wiring.lock();
-        let links = wiring
-            .outbound_link_ids_by_output_port
-            .entry(output_port.to_string())
-            .or_default();
-        if !links.iter().any(|noted| noted == link_id) {
-            links.push(link_id.to_string());
+        if let Some(port) = wiring.output_ports_with_outbound_links.get_mut(output_port) {
+            if !port.outbound_link_ids.iter().any(|noted| noted == link_id) {
+                port.outbound_link_ids.push(link_id.to_string());
+            }
+            return port.wiring_generation;
         }
+        let wiring_generation = wiring.next_wiring_generation();
+        wiring.output_ports_with_outbound_links.insert(
+            output_port.to_string(),
+            OutputPortWithOutboundLinks {
+                outbound_link_ids: vec![link_id.to_string()],
+                wiring_generation,
+            },
+        );
+        wiring_generation
     }
 
-    /// Forget a disconnected link in both directions: its slot goes free and an
-    /// output port it was the last link of stops rendering.
+    /// Forget a disconnected link in both directions: its slot goes free, and
+    /// an output port it was the last link of stops rendering and takes a new
+    /// generation when it is linked again.
     pub(crate) fn forget_link(&self, link_id: &str) {
         let mut wiring = self.wiring.lock();
-        release_inbound_link_slot(&mut wiring, link_id);
-        wiring.outbound_link_ids_by_output_port.retain(|_, links| {
-            links.retain(|noted| noted != link_id);
-            !links.is_empty()
+        wiring.release_inbound_link_slot(link_id);
+        wiring.output_ports_with_outbound_links.retain(|_, port| {
+            port.outbound_link_ids.retain(|noted| noted != link_id);
+            !port.outbound_link_ids.is_empty()
         });
     }
 
@@ -517,22 +624,14 @@ impl HelperPlacedProcessorLossCounts {
         })
     }
 
-    /// Every count as it stands: a slot's counts are its link's only while the
-    /// generation written there is the one this link was assigned, and zero
-    /// otherwise — before the board exists, before the helper wired the link,
-    /// and after a write from a wiring the slot has moved past.
+    /// Every count as it stands, each read only for the wiring it belongs to.
     pub fn loss_count_snapshot(&self) -> ProcessorLossCountSnapshot {
         let wiring = self.wiring.lock();
         let board = self.board.get();
         let mut snapshot = ProcessorLossCountSnapshot::default();
-        for (slot, assignment) in wiring.inbound_link_slots.iter().enumerate() {
-            let Some(assignment) = assignment else {
-                continue;
-            };
-            let this_wirings_counts = board
-                .and_then(|board| board.inbound_link_slot(slot))
-                .filter(|written| written.wiring_generation == assignment.wiring_generation)
-                .unwrap_or_default();
+        for (assignment, this_wirings_counts) in
+            wiring.assigned_slots_with_their_wirings_counts(board)
+        {
             snapshot
                 .dropped_bags_by_inbound_link
                 .insert(assignment.link_id.clone(), this_wirings_counts.dropped_bags);
@@ -543,26 +642,26 @@ impl HelperPlacedProcessorLossCounts {
                 );
             }
         }
-        for output_port in wiring.outbound_link_ids_by_output_port.keys() {
-            snapshot.refused_bags_by_output_port.insert(
-                output_port.clone(),
-                board
-                    .and_then(|board| board.output_port_refused_bags(output_port))
-                    .unwrap_or(0),
-            );
+        for (output_port, port) in &wiring.output_ports_with_outbound_links {
+            let refused_bags = board
+                .and_then(|board| board.output_port_entry(output_port))
+                .filter(|written| written.wiring_generation == port.wiring_generation)
+                .map_or(0, |written| written.refused_bags);
+            snapshot
+                .refused_bags_by_output_port
+                .insert(output_port.clone(), refused_bags);
         }
         snapshot
     }
-}
 
-fn release_inbound_link_slot(wiring: &mut HelperPlacedProcessorLossCountWiring, link_id: &str) {
-    for slot in &mut wiring.inbound_link_slots {
-        if slot
-            .as_ref()
-            .is_some_and(|assignment| assignment.link_id == link_id)
-        {
-            *slot = None;
-        }
+    /// This processor's dropped bags across every inbound link, each read for
+    /// its link's own wiring.
+    pub fn total_dropped_bag_count(&self) -> u64 {
+        self.wiring
+            .lock()
+            .assigned_slots_with_their_wirings_counts(self.board.get())
+            .map(|(_, this_wirings_counts)| this_wirings_counts.dropped_bags)
+            .sum()
     }
 }
 
@@ -599,21 +698,24 @@ pub(crate) fn a_loss_count_board_and_its_helpers_writer_for_this_test_process(
 mod tests {
     use super::*;
 
-    fn a_board_and_its_helpers_writer(
-        output_port_names: &[&str],
-    ) -> (
-        HelperProcessLossCountBoard,
-        Arc<HelperProcessLossCountBoardWriter>,
-        crate::iceoryx2::Iceoryx2Node,
-    ) {
-        a_loss_count_board_and_its_helpers_writer_for_this_test_process(output_port_names)
+    fn slot_and_generation(
+        slot: usize,
+        wiring_generation: u64,
+    ) -> InboundLinkLossCountBoardSlotAndWiringGeneration {
+        InboundLinkLossCountBoardSlotAndWiringGeneration {
+            slot,
+            wiring_generation,
+        }
     }
 
     #[test]
     fn a_count_written_on_a_claimed_slot_is_what_the_parent_reads() {
-        let (board, writer, _helper_node) = a_board_and_its_helpers_writer(&["video"]);
+        let (board, writer, _helper_node) =
+            a_loss_count_board_and_its_helpers_writer_for_this_test_process(&["video"]);
 
-        let mirror = writer.claim_inbound_link_slot(3, 7).unwrap();
+        let mirror = writer
+            .claim_inbound_link_slot(slot_and_generation(3, 7))
+            .unwrap();
         assert_eq!(
             board.inbound_link_slot(3),
             Some(InboundLinkLossCountBoardSlot {
@@ -637,20 +739,33 @@ mod tests {
             "a total that arrives late never lowers the count"
         );
 
-        let video = writer.claim_output_port_entry("video").unwrap();
-        video.mirror_refused_bags(2);
-        assert_eq!(board.output_port_refused_bags("video"), Some(2));
-        assert_eq!(board.output_port_refused_bags("audio"), None);
-        assert!(writer.claim_output_port_entry("audio").is_none());
+        writer
+            .claim_output_port_entry("video", 8)
+            .unwrap()
+            .mirror_refused_bags(2);
+        assert_eq!(
+            board.output_port_entry("video"),
+            Some(OutputPortRefusedBagCountBoardEntry {
+                wiring_generation: 8,
+                refused_bags: 2,
+            })
+        );
+        assert_eq!(board.output_port_entry("audio"), None);
+        assert!(writer.claim_output_port_entry("audio", 9).is_none());
     }
 
     #[test]
     fn a_write_from_a_wiring_the_slot_has_moved_past_lands_nothing() {
-        let (board, writer, _helper_node) = a_board_and_its_helpers_writer(&[]);
-        let first_wiring = writer.claim_inbound_link_slot(0, 1).unwrap();
+        let (board, writer, _helper_node) =
+            a_loss_count_board_and_its_helpers_writer_for_this_test_process(&[]);
+        let first_wiring = writer
+            .claim_inbound_link_slot(slot_and_generation(0, 1))
+            .unwrap();
         first_wiring.mirror_dropped_bags(9);
 
-        let second_wiring = writer.claim_inbound_link_slot(0, 2).unwrap();
+        let second_wiring = writer
+            .claim_inbound_link_slot(slot_and_generation(0, 2))
+            .unwrap();
         first_wiring.mirror_dropped_bags(12);
         second_wiring.mirror_dropped_bags(1);
 
@@ -667,27 +782,34 @@ mod tests {
 
     #[test]
     fn an_output_port_claimed_again_starts_from_zero_and_its_earlier_mirror_lands_nothing() {
-        let (board, writer, _helper_node) = a_board_and_its_helpers_writer(&["video"]);
-        let first_channel = writer.claim_output_port_entry("video").unwrap();
+        let (board, writer, _helper_node) =
+            a_loss_count_board_and_its_helpers_writer_for_this_test_process(&["video"]);
+        let video_entry = || {
+            board
+                .output_port_entry("video")
+                .map(|written| (written.wiring_generation, written.refused_bags))
+        };
+        let first_channel = writer.claim_output_port_entry("video", 1).unwrap();
         first_channel.mirror_refused_bags(3);
 
-        let second_channel = writer.claim_output_port_entry("video").unwrap();
-        assert_eq!(board.output_port_refused_bags("video"), Some(0));
+        let second_channel = writer.claim_output_port_entry("video", 2).unwrap();
+        assert_eq!(video_entry(), Some((2, 0)));
         first_channel.mirror_refused_bags(4);
-        assert_eq!(board.output_port_refused_bags("video"), Some(0));
+        assert_eq!(video_entry(), Some((2, 0)));
         second_channel.mirror_refused_bags(1);
-        assert_eq!(board.output_port_refused_bags("video"), Some(1));
+        assert_eq!(video_entry(), Some((2, 1)));
     }
 
     #[test]
     fn the_last_counts_stay_readable_after_the_helpers_writer_is_gone() {
-        let (board, writer, helper_node) = a_board_and_its_helpers_writer(&["video"]);
+        let (board, writer, helper_node) =
+            a_loss_count_board_and_its_helpers_writer_for_this_test_process(&["video"]);
         writer
-            .claim_inbound_link_slot(1, 4)
+            .claim_inbound_link_slot(slot_and_generation(1, 4))
             .unwrap()
             .mirror_dropped_bags(6);
         writer
-            .claim_output_port_entry("video")
+            .claim_output_port_entry("video", 5)
             .unwrap()
             .mirror_refused_bags(2);
 
@@ -698,7 +820,12 @@ mod tests {
             board.inbound_link_slot(1).map(|slot| slot.dropped_bags),
             Some(6)
         );
-        assert_eq!(board.output_port_refused_bags("video"), Some(2));
+        assert_eq!(
+            board
+                .output_port_entry("video")
+                .map(|written| written.refused_bags),
+            Some(2)
+        );
     }
 
     #[test]
@@ -706,21 +833,21 @@ mod tests {
         let counts = HelperPlacedProcessorLossCounts::default();
         assert_eq!(
             counts.assign_inbound_link_slot("L-a", false).unwrap(),
-            (0, 1)
+            slot_and_generation(0, 1)
         );
         assert_eq!(
             counts.assign_inbound_link_slot("L-b", false).unwrap(),
-            (1, 2)
+            slot_and_generation(1, 2)
         );
 
         counts.forget_link("L-a");
         assert_eq!(
             counts.assign_inbound_link_slot("L-c", false).unwrap(),
-            (0, 3)
+            slot_and_generation(0, 3)
         );
         assert_eq!(
             counts.assign_inbound_link_slot("L-b", true).unwrap(),
-            (1, 4),
+            slot_and_generation(1, 4),
             "a link wired again gives up its slot and takes a new generation"
         );
 
@@ -734,6 +861,57 @@ mod tests {
             snapshot.discarded_samples_by_inbound_link,
             BTreeMap::from([("L-b".to_string(), 0)]),
             "only a link into a windowed port carries a sample count"
+        );
+    }
+
+    /// Fail-without-fix: render an output port's entry whatever generation is
+    /// written on it, and a port whose channel was reopened shows the three
+    /// bags its earlier channel refused.
+    #[test]
+    fn the_parent_reads_each_entry_only_for_the_wiring_it_assigned() {
+        let (board, writer, _helper_node) =
+            a_loss_count_board_and_its_helpers_writer_for_this_test_process(&["video"]);
+        let counts = HelperPlacedProcessorLossCounts::default();
+        counts.hold_the_board_of_this_spawn(board).unwrap();
+        let refused_bags_of_video = || counts.loss_count_snapshot().refused_bags_by_output_port;
+
+        let first_channel = counts.note_outbound_link("video", "L-first-out");
+        writer
+            .claim_output_port_entry("video", first_channel)
+            .unwrap()
+            .mirror_refused_bags(3);
+        assert_eq!(
+            refused_bags_of_video(),
+            BTreeMap::from([("video".to_string(), 3)])
+        );
+
+        counts.forget_link("L-first-out");
+        let second_channel = counts.note_outbound_link("video", "L-second-out");
+        assert_eq!(
+            refused_bags_of_video(),
+            BTreeMap::from([("video".to_string(), 0)]),
+            "the earlier channel's total is not the reopened channel's"
+        );
+        writer
+            .claim_output_port_entry("video", second_channel)
+            .unwrap()
+            .mirror_refused_bags(1);
+        assert_eq!(
+            refused_bags_of_video(),
+            BTreeMap::from([("video".to_string(), 1)])
+        );
+
+        let inbound = counts.assign_inbound_link_slot("L-in", false).unwrap();
+        writer
+            .claim_inbound_link_slot(inbound)
+            .unwrap()
+            .mirror_dropped_bags(4);
+        assert_eq!(counts.total_dropped_bag_count(), 4);
+        counts.assign_inbound_link_slot("L-in", false).unwrap();
+        assert_eq!(
+            counts.total_dropped_bag_count(),
+            0,
+            "the total reads each link for its own wiring"
         );
     }
 
@@ -755,21 +933,31 @@ mod tests {
     }
 
     #[test]
-    fn an_output_port_renders_while_it_has_a_link_and_not_after_its_last_goes() {
+    fn an_output_port_keeps_its_generation_while_it_has_a_link_and_takes_a_new_one_after_its_last_goes()
+     {
         let counts = HelperPlacedProcessorLossCounts::default();
-        counts.note_outbound_link("video", "L-first");
-        counts.note_outbound_link("video", "L-second");
+        let first_channel = counts.note_outbound_link("video", "L-first");
+        assert_eq!(
+            counts.note_outbound_link("video", "L-second"),
+            first_channel
+        );
         counts.forget_link("L-first");
         assert_eq!(
             counts.loss_count_snapshot().refused_bags_by_output_port,
             BTreeMap::from([("video".to_string(), 0)])
         );
+
         counts.forget_link("L-second");
         assert!(
             counts
                 .loss_count_snapshot()
                 .refused_bags_by_output_port
                 .is_empty()
+        );
+        assert_ne!(
+            counts.note_outbound_link("video", "L-third"),
+            first_channel,
+            "a reopened channel is a new wiring"
         );
     }
 }

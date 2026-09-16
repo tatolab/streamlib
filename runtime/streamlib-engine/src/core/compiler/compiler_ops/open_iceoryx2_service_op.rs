@@ -1059,7 +1059,7 @@ fn wire_subprocess_source(
     // `enable_safe_overflow` is a wire fact, not a knob: iceoryx2 verifies it on
     // every reopen, so an SDK opening this service from its own bindings must
     // request the same value the engine did.
-    let entry = serde_json::json!({
+    let mut entry = serde_json::json!({
         "name": source_port,
         "link_id": link_id.to_string(),
         "enable_safe_overflow": true,
@@ -1084,9 +1084,12 @@ fn wire_subprocess_source(
              link-wiring envelope; its output port '{source_port}' would never be wired"
         )));
     };
-    link_wiring.record(crate::core::PortDirection::Output, entry.clone());
+    // The generation rides the entry, so the far side writes this channel's
+    // refusals where the parent reads them for this channel and no earlier one.
     let loss_counts = link_wiring.helper_placed_processor_loss_counts();
-    loss_counts.note_outbound_link(source_port, link_id.as_str());
+    entry["output_port_wiring_generation"] =
+        serde_json::json!(loss_counts.note_outbound_link(source_port, link_id.as_str()));
+    link_wiring.record(crate::core::PortDirection::Output, entry.clone());
     // The envelope is read once, at setup; a far side already past it is
     // handed the entry directly.
     let wire_reply =
@@ -1181,10 +1184,9 @@ fn wire_subprocess_dest(
     // The slot and generation ride the entry, so the far side writes this
     // link's counts where the parent reads them for this wiring and no other.
     let loss_counts = link_wiring.helper_placed_processor_loss_counts();
-    let (loss_count_slot, wiring_generation) =
-        loss_counts.assign_inbound_link_slot(link_id.as_str(), into_a_windowed_port)?;
-    entry["loss_count_slot"] = serde_json::json!(loss_count_slot);
-    entry["wiring_generation"] = serde_json::json!(wiring_generation);
+    let assigned = loss_counts.assign_inbound_link_slot(link_id.as_str(), into_a_windowed_port)?;
+    entry["loss_count_slot"] = serde_json::json!(assigned.slot);
+    entry["wiring_generation"] = serde_json::json!(assigned.wiring_generation);
     link_wiring.record(crate::core::PortDirection::Input, entry.clone());
     let wire_reply =
         dest_processor.wire_out_of_process_link(crate::core::PortDirection::Input, &entry)?;
@@ -1565,7 +1567,12 @@ mod tests {
         let (dest_board_writer, _dest_helper_node) =
             board_of_a_helper_stub_spawn(&dest_instance, &dest_id, &[]);
         dest_board_writer
-            .claim_inbound_link_slot(0, 1)
+            .claim_inbound_link_slot(
+                crate::iceoryx2::InboundLinkLossCountBoardSlotAndWiringGeneration {
+                    slot: 0,
+                    wiring_generation: 1,
+                },
+            )
             .unwrap()
             .mirror_dropped_bags(5);
         assert_eq!(
@@ -1577,10 +1584,19 @@ mod tests {
             })),
         );
 
+        let output_entry = source_instance
+            .lock()
+            .out_of_process_link_wiring()
+            .expect("the stub records its own wiring")
+            .as_setup_command_ports()["outputs"][0]
+            .clone();
+        let output_port_wiring_generation = output_entry["output_port_wiring_generation"]
+            .as_u64()
+            .expect("the output entry carries its channel's generation");
         let (source_board_writer, _source_helper_node) =
             board_of_a_helper_stub_spawn(&source_instance, &source_id, &["out1"]);
         source_board_writer
-            .claim_output_port_entry("out1")
+            .claim_output_port_entry("out1", output_port_wiring_generation)
             .expect("the source's board carries its declared port")
             .mirror_refused_bags(2);
         assert_eq!(
@@ -1619,7 +1635,14 @@ mod tests {
         record_wiring_for_both_out_of_process_endpoints(&mut graph, &source_id, &dest_id, &link_id);
         let (board_writer, _helper_node) =
             board_of_a_helper_stub_spawn(&dest_instance, &dest_id, &[]);
-        let first_wiring = board_writer.claim_inbound_link_slot(0, 1).unwrap();
+        let first_wiring = board_writer
+            .claim_inbound_link_slot(
+                crate::iceoryx2::InboundLinkLossCountBoardSlotAndWiringGeneration {
+                    slot: 0,
+                    wiring_generation: 1,
+                },
+            )
+            .unwrap();
         first_wiring.mirror_dropped_bags(7);
 
         close_iceoryx2_service(&mut graph, &link_id).expect("the disconnect succeeds");
@@ -1636,7 +1659,12 @@ mod tests {
         assert_eq!(entry["wiring_generation"], serde_json::json!(2));
 
         board_writer
-            .claim_inbound_link_slot(0, 1)
+            .claim_inbound_link_slot(
+                crate::iceoryx2::InboundLinkLossCountBoardSlotAndWiringGeneration {
+                    slot: 0,
+                    wiring_generation: 1,
+                },
+            )
             .unwrap()
             .mirror_dropped_bags(9);
         assert_eq!(
@@ -1647,7 +1675,12 @@ mod tests {
         );
 
         board_writer
-            .claim_inbound_link_slot(0, 2)
+            .claim_inbound_link_slot(
+                crate::iceoryx2::InboundLinkLossCountBoardSlotAndWiringGeneration {
+                    slot: 0,
+                    wiring_generation: 2,
+                },
+            )
             .unwrap()
             .mirror_dropped_bags(1);
         assert_eq!(

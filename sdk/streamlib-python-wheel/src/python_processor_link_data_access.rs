@@ -24,16 +24,16 @@ use streamlib::sdk::descriptors::AudioWindowContractDeclaredValues;
 use streamlib::sdk::error::Error;
 use streamlib::sdk::iceoryx2::{
     ChannelEgressConfig, ChannelTrustTier, HelperProcessLossCountBoardWriter,
-    ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, Iceoryx2Node, InboundLinkName, InputMailboxesInner,
+    ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, Iceoryx2Node,
+    InboundLinkLossCountBoardSlotAndWiringGeneration, InboundLinkName, InputMailboxesInner,
     OutputWriterInner, ReadMode, ResolvedAudioWindowContract,
 };
 
 use crate::python_bag_conversion::{
     cast_decoded_bag_into_read_target, decode_msgpack_to_python_object, encode_bag_to_msgpack,
 };
-use crate::python_helper_process_pixel_exchange::warn_through_the_childs_log_module;
 use crate::python_helper_process_spawn_host::HELPER_PROCESS_PROCESSOR_ID_ENVIRONMENT_VARIABLE;
-use crate::python_logging::monotonic_clock_now_ns;
+use crate::python_logging::{monotonic_clock_now_ns, warn_through_the_childs_log_module};
 use crate::python_processor_context::PythonGpuContextLimitedAccess;
 use crate::python_processor_declaration::read_a_channel_count_or_the_source_spelling;
 
@@ -320,6 +320,7 @@ impl PythonProcessorLinkDataAccess {
         max_subscribers,
         notify_max_notifiers,
         link_id,
+        output_port_wiring_generation = None,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn wire_output_link(
@@ -334,8 +335,27 @@ impl PythonProcessorLinkDataAccess {
         max_subscribers: usize,
         notify_max_notifiers: usize,
         link_id: &str,
+        output_port_wiring_generation: Option<u64>,
     ) -> PyResult<()> {
         let (node, output_writer) = self.helper_process_output_plane()?;
+        // A helper mirroring onto its parent's board must be told which of the
+        // port's channels this is; one with no board has nowhere to mirror.
+        let board_writer_and_output_port_wiring_generation = match (
+            self.loss_count_board_writer.get(),
+            output_port_wiring_generation,
+        ) {
+            (None, _) => None,
+            (Some(board_writer), Some(output_port_wiring_generation)) => {
+                Some((board_writer, output_port_wiring_generation))
+            }
+            (Some(_), None) => {
+                return Err(PyValueError::new_err(format!(
+                    "output link {link_id:?} was wired without an \
+                         `output_port_wiring_generation`, so this helper cannot mirror port \
+                         {port_name:?}'s refusals onto its loss-count board"
+                )));
+            }
+        };
 
         python
             .detach(|| -> Result<(), Error> {
@@ -356,14 +376,19 @@ impl PythonProcessorLinkDataAccess {
                             ceiling_bytes: max_payload_bytes_per_channel,
                         },
                     );
-                    if let Some(refused_bag_entry) = self
-                        .loss_count_board_writer
-                        .get()
-                        .and_then(|board_writer| board_writer.claim_output_port_entry(port_name))
+                    if let Some(refused_bag_board_entry_mirror) =
+                        board_writer_and_output_port_wiring_generation.and_then(
+                            |(board_writer, output_port_wiring_generation)| {
+                                board_writer.claim_output_port_entry(
+                                    port_name,
+                                    output_port_wiring_generation,
+                                )
+                            },
+                        )
                     {
                         output_writer.mirror_an_output_ports_refused_bag_count_into(
                             port_name,
-                            refused_bag_entry,
+                            refused_bag_board_entry_mirror,
                         )?;
                     }
                 }
@@ -498,7 +523,12 @@ impl PythonProcessorLinkDataAccess {
                 {
                     input_mailboxes.mirror_an_inbound_links_loss_counts_into(
                         link_id,
-                        board_writer.claim_inbound_link_slot(loss_count_slot, wiring_generation)?,
+                        board_writer.claim_inbound_link_slot(
+                            InboundLinkLossCountBoardSlotAndWiringGeneration {
+                                slot: loss_count_slot,
+                                wiring_generation,
+                            },
+                        )?,
                     )?;
                 }
                 if !input_mailboxes.has_listener() {
@@ -666,14 +696,9 @@ impl PythonProcessorLinkDataAccess {
                 channel,
                 payload_bytes,
                 ceiling_bytes,
+                refused_bags_on_the_output_port: refused_bags,
                 ..
             }) => {
-                let refused_bags = output_writer
-                    .refused_bag_counts_by_output_port()
-                    .refused_bag_count_snapshot_by_output_port()
-                    .get(port_name)
-                    .copied()
-                    .unwrap_or(0);
                 warn_through_the_childs_log_module(
                     python,
                     format!(
@@ -754,6 +779,7 @@ mod tests {
                     2,
                     1,
                     "link-1",
+                    None,
                 )
                 .unwrap();
 
@@ -830,6 +856,7 @@ mod tests {
                     2,
                     1,
                     "link-onward",
+                    Some(31),
                 )
                 .unwrap();
             source
@@ -844,6 +871,7 @@ mod tests {
                     2,
                     1,
                     "link-1",
+                    None,
                 )
                 .unwrap();
 
@@ -900,8 +928,10 @@ mod tests {
                 )
                 .expect("a refusal at the ceiling is never raised");
             assert_eq!(
-                parent_board.output_port_refused_bags("frames_to_downstream"),
-                Some(1)
+                parent_board
+                    .output_port_entry("frames_to_downstream")
+                    .map(|written| (written.wiring_generation, written.refused_bags)),
+                Some((31, 1))
             );
 
             let refusal = destination
@@ -982,6 +1012,7 @@ mod tests {
                     2,
                     1,
                     "link-1",
+                    None,
                 )
                 .unwrap();
 
@@ -1064,6 +1095,7 @@ mod tests {
                     2,
                     1,
                     "link-1",
+                    None,
                 )
                 .unwrap();
             source
@@ -1078,6 +1110,7 @@ mod tests {
                     2,
                     1,
                     "link-2",
+                    None,
                 )
                 .expect("a second link out of one port must not reopen the publisher");
         });
@@ -1104,6 +1137,7 @@ mod tests {
                     2,
                     1,
                     "link-1",
+                    None,
                 )
                 .unwrap_err();
             assert!(

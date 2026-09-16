@@ -19,8 +19,8 @@ use iceoryx2::service::builder::publish_subscribe::{
 };
 
 use super::helper_process_loss_count_board::{
-    HelperProcessLossCountBoard, HelperProcessLossCountBoardWriter,
-    INBOUND_LINK_SLOTS_PER_LOSS_COUNT_BOARD,
+    HelperProcessLossCountBoard, HelperProcessLossCountBoardWriter, inbound_link_slot_keys,
+    output_port_keys,
 };
 use super::{
     DataChannelBagSequenceNumberUserHeader, EventPayload, FRAME_HEADER_SIZE,
@@ -44,7 +44,8 @@ const ICEORYX2_NODES_ADMITTED_PER_PORT_SLOT: usize = 2;
 const LOSS_COUNT_BOARD_MAX_READERS: usize = 1;
 
 /// Nodes a helper's loss-count board admits: its parent's and its helper's,
-/// each with a crashed predecessor's place held until a sweep reclaims it.
+/// with the same headroom a channel gives each port slot for a node a crash left
+/// behind.
 const LOSS_COUNT_BOARD_MAX_NODES: usize = 2 * ICEORYX2_NODES_ADMITTED_PER_PORT_SLOT;
 
 /// Samples a channel subscriber borrows at once: the receive path copies each
@@ -367,9 +368,6 @@ impl Iceoryx2Node {
             ))),
         }
     }
-}
-
-impl Iceoryx2Node {
     /// Create the loss-count board a helper spawn writes on: every inbound-link
     /// slot and an entry per declared output port, all zero.
     pub fn create_helper_process_loss_count_board(
@@ -385,15 +383,11 @@ impl Iceoryx2Node {
                 .blackboard_creator::<HelperProcessLossCountBoardKey>()
                 .max_readers(LOSS_COUNT_BOARD_MAX_READERS)
                 .max_nodes(LOSS_COUNT_BOARD_MAX_NODES);
-            for slot in 0..INBOUND_LINK_SLOTS_PER_LOSS_COUNT_BOARD {
-                creator = creator.add_with_default::<InboundLinkLossCountBoardSlot>(
-                    HelperProcessLossCountBoardKey::inbound_link_slot(slot as u32),
-                );
+            for key in inbound_link_slot_keys() {
+                creator = creator.add_with_default::<InboundLinkLossCountBoardSlot>(key);
             }
-            for output_port_index in 0..output_port_names.len() {
-                creator = creator.add_with_default::<OutputPortRefusedBagCountBoardEntry>(
-                    HelperProcessLossCountBoardKey::output_port(output_port_index as u32),
-                );
+            for key in output_port_keys(output_port_names.len()) {
+                creator = creator.add_with_default::<OutputPortRefusedBagCountBoardEntry>(key);
             }
             creator.create().map_err(|refusal| {
                 Error::Runtime(format!(

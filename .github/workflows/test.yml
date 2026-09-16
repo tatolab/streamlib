@@ -320,7 +320,8 @@ jobs:
             iceoryx2::helper_process_loss_count_board::tests::the_last_counts_stay_readable_after_the_helpers_writer_is_gone \
             iceoryx2::helper_process_loss_count_board::tests::slots_are_reused_lowest_first_and_every_wiring_gets_a_new_generation \
             iceoryx2::helper_process_loss_count_board::tests::a_destination_past_the_slot_count_is_refused_by_name \
-            iceoryx2::helper_process_loss_count_board::tests::an_output_port_renders_while_it_has_a_link_and_not_after_its_last_goes \
+            iceoryx2::helper_process_loss_count_board::tests::an_output_port_keeps_its_generation_while_it_has_a_link_and_takes_a_new_one_after_its_last_goes \
+            iceoryx2::helper_process_loss_count_board::tests::the_parent_reads_each_entry_only_for_the_wiring_it_assigned \
             iceoryx2::loss_counters::tests::a_mirrored_count_writes_the_total_it_had_and_every_new_total_through_its_mirror \
             iceoryx2::input::tests::every_loss_counted_on_a_mirrored_link_reaches_its_board_slot_as_it_is_counted \
             iceoryx2::output::tests::a_refusal_on_a_mirrored_output_port_reaches_its_board_entry_as_it_is_counted \

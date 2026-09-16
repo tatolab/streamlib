@@ -69,12 +69,13 @@ impl OutOfProcessLinkWiringEnvelope {
             mint_machine_global_unique_name_suffix()
         );
         let board = iceoryx2_node
-            .create_helper_process_loss_count_board(&service_name, output_port_names.clone())?;
+            .create_helper_process_loss_count_board(&service_name, output_port_names)?;
+        let setup_command_loss_count_board = serde_json::json!({
+            "service_name": board.service_name(),
+            "output_ports": board.output_port_names().collect::<Vec<_>>(),
+        });
         self.loss_counts.hold_the_board_of_this_spawn(board)?;
-        Ok(serde_json::json!({
-            "service_name": service_name,
-            "output_ports": output_port_names,
-        }))
+        Ok(setup_command_loss_count_board)
     }
 
     /// Record one link, in the direction its port faces.
