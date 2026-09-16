@@ -412,6 +412,8 @@ def wire_link_data_access(
             # resolved: a `match_device` sentinel settles in the parent, which is
             # where the device stream is.
             input_link.get("audio_window"),
+            loss_count_slot=input_link["loss_count_slot"],
+            wiring_generation=input_link["wiring_generation"],
         )
     for output_link in port_wiring.get("outputs", []):
         link_data_access.wire_output_link(
@@ -642,6 +644,13 @@ class HelperProcessLifecycle:
                     )
                 ],
             )
+            # Opened before any link is wired, so every link mirrors its losses
+            # from its first. Only a stand-in parent sends no board.
+            loss_count_board = command.get("loss_count_board")
+            if loss_count_board is not None:
+                self._link_data_access.open_loss_count_board(
+                    loss_count_board["service_name"], loss_count_board["output_ports"]
+                )
             wire_link_data_access(self._link_data_access, command.get("ports") or {})
             self._hosted = construct_hosted_processor(
                 self._processor_class,

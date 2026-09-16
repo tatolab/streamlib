@@ -63,8 +63,7 @@ use streamlib::sdk::rhi::PixelFormat;
 ///
 /// This process installs no tracing subscriber, so `tracing` here reaches
 /// nobody; `streamlib.log` rides the escalate `Log` op into the unified JSONL.
-#[cfg(target_os = "linux")]
-fn warn_through_the_childs_log_module(python: Python<'_>, message: String) {
+pub(crate) fn warn_through_the_childs_log_module(python: Python<'_>, message: String) {
     let _ = python
         .import("streamlib.log")
         .and_then(|log_module| log_module.call_method1("warn", (message,)));

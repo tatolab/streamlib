@@ -905,6 +905,26 @@ impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
         #[cfg(not(target_os = "linux"))]
         let surface_socket_path: Option<&Path> = None;
 
+        // Before the child exists, so its first counts have a board to land on
+        // and the board outlives whatever becomes of it.
+        let loss_count_board = self
+            .link_wiring
+            .create_the_loss_count_board_for_this_helper_spawn(
+                ctx,
+                &self.processor_id,
+                self.descriptor
+                    .outputs
+                    .iter()
+                    .map(|output_port| output_port.name.clone())
+                    .collect(),
+            )
+            .map_err(|board_failure| {
+                Error::Runtime(format!(
+                    "[{}] could not create the board its helper process writes loss counts on: \
+                     {board_failure}",
+                    self.processor_display_name
+                ))
+            })?;
         let iceoryx2_domain_root = ctx.runtime_directory().iceoryx2_domain_root();
         let mut command = self.build_helper_process_command(
             &ctx.runtime_id(),
@@ -973,6 +993,7 @@ impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
                 .unwrap_or(serde_json::Value::Null),
             "processor_id": self.processor_id,
             "ports": self.link_wiring.as_setup_command_ports(),
+            "loss_count_board": loss_count_board,
         }));
         if let Err(setup_command_send_failure) = setup_command_sent {
             // The child's end is already closed: it refused its own start

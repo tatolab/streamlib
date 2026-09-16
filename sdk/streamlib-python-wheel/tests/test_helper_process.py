@@ -165,6 +165,8 @@ def engine_shaped_link_wiring(direction: str, link_id: str) -> dict:
         "input_port_ring_depth": 16,
         "max_subscribers": 2,
         "notify_max_notifiers": 1,
+        "loss_count_slot": 0,
+        "wiring_generation": 1,
     }
 
 
