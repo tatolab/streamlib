@@ -84,8 +84,9 @@ def test_no_survivors_are_left_in_the_process_group(app_under_test):
 
     A `waitpid` check cannot show this — the parent has already reaped the
     child, so it raises `ChildProcessError` for any exited process whatsoever.
-    The engine spawns threads rather than children today, so this is a forward
-    lock for #1714, which places processors in child interpreters.
+    Every Python processor runs in a child interpreter of its own, and each is
+    stopped on the shutdown ladder that ends by terminating and killing its
+    whole process group, so a survivor here is that ladder failing to reach one.
     """
     app = app_under_test("ctrl_c")
     process_group = os.getpgid(app.process.pid)
