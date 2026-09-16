@@ -35,6 +35,11 @@ const TEARDOWN_BUDGET: Duration = Duration::from_secs(5);
 /// out, and terminating it mid-finalization would cut short the teardown the
 /// ladder just waited for — and leave the iceoryx2 node its engine half holds
 /// registered as a dead one.
+///
+/// Measured `done`-to-exit on a real helper: 15.3 ms for a bare processor and
+/// 15.3–31.4 ms for one holding a 16 MiB array, over three runs each. The
+/// budget is set well above that rather than at it, because what it covers is
+/// an interpreter finalizing whatever a processor imported.
 const CHILD_SELF_EXIT_GRACE: Duration = Duration::from_millis(500);
 
 /// How long the helper's process group has to leave on `SIGTERM` before it is
