@@ -880,9 +880,13 @@ def test_a_link_wired_after_setup_opens_its_port_mid_run(stand_in_parent):
         {"outputs": [engine_shaped_link_wiring("output", inbound_link_id)]},
     )
 
+    wire_answers = {
+        answer["link_id"]: answer
+        for answer in (stand_in_parent.receive(), stand_in_parent.receive())
+    }
+
     # A bag published before the child's subscriber is up is dropped by the
-    # channel, and nothing announces when the child has acted on the wire, so
-    # publish until one comes back.
+    # channel, so publish until one comes back.
     deadline = time.monotonic() + 10.0
     forwarded = None
     while forwarded is None and time.monotonic() < deadline:
@@ -895,11 +899,99 @@ def test_a_link_wired_after_setup_opens_its_port_mid_run(stand_in_parent):
         "output wired after setup"
     )
 
+    assert wire_answers == {
+        outbound_link_id: {"rpc": "link_wired", "link_id": outbound_link_id},
+        inbound_link_id: {"rpc": "link_wired", "link_id": inbound_link_id},
+    }, "each wire is answered for the link it names, and both ports did open"
+
     stand_in_parent.send({"cmd": "teardown", "capability": "full"})
     assert stand_in_parent.receive()["rpc"] == "done", (
-        "an unanswered wire must leave the next command's reply the next thing "
-        "the parent reads"
+        "a wire's answer rides its own link-scoped tag, so the next lifecycle "
+        "command's reply is still the next lifecycle frame the parent reads"
     )
+    lifecycle_thread.join(timeout=5.0)
+    assert not lifecycle_thread.is_alive()
+
+
+def test_a_wire_the_helper_cannot_open_is_answered_with_the_reason(stand_in_parent):
+    """The engine reports a link `wired` only on this answer, so a port that
+    could not open has to say so rather than only logging: the reason is what
+    `graph` renders against the link, and the caller of a live `connect` reads
+    it there.
+
+    The refusal here is a port whose ring is deeper than the channel it is
+    joining, which iceoryx2 refuses at `create_subscriber` — the shape a live
+    connect onto a shallower channel takes.
+
+    Fail-without-fix: log the failure and answer nothing, and the parent waits
+    on an answer that never comes while `graph` reports the link pending
+    forever.
+    """
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    lifecycle_thread = drive_lifecycle_on_a_thread(
+        bridge, load_processor_class(f"{PROBE_MODULE}:PassThroughProbe")
+    )
+
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    assert stand_in_parent.receive()["rpc"] == "ready"
+    stand_in_parent.send({"cmd": "run", "execution": "reactive", "interval_ms": 0})
+
+    unopenable = engine_shaped_link_wiring("input", "L-unopenable")
+    unopenable["channel_service_creation_depth"] = 4
+    unopenable["input_port_ring_depth"] = 64
+    stand_in_parent.send({"cmd": "wire_link", "direction": "input", "link": unopenable})
+
+    answer = stand_in_parent.receive()
+    assert answer["rpc"] == "link_wire_failed", (
+        f"a port that could not open must be refused rather than reported open; got {answer}"
+    )
+    assert answer["link_id"] == "L-unopenable"
+    assert "frames_from_upstream" in answer["reason"], (
+        "`graph` renders this reason, so it has to name what could not open; "
+        f"got {answer['reason']!r}"
+    )
+
+    stand_in_parent.send({"cmd": "teardown", "capability": "full"})
+    assert stand_in_parent.receive()["rpc"] == "done", (
+        "a refusal is link-scoped too, so it never becomes the reply to the "
+        "next lifecycle command"
+    )
+    lifecycle_thread.join(timeout=5.0)
+    assert not lifecycle_thread.is_alive()
+
+
+def test_a_wire_in_an_unknown_direction_is_refused_rather_than_left_unanswered(
+    stand_in_parent,
+):
+    """A direction the helper cannot act on is still a link the parent is
+    waiting on. Answered as a refusal, the link reaches `error` in `graph`;
+    left unanswered it would sit pending for the life of the runtime.
+    """
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    lifecycle_thread = drive_lifecycle_on_a_thread(
+        bridge, load_processor_class(f"{PROBE_MODULE}:PassThroughProbe")
+    )
+
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    assert stand_in_parent.receive()["rpc"] == "ready"
+    stand_in_parent.send({"cmd": "run", "execution": "reactive", "interval_ms": 0})
+
+    stand_in_parent.send(
+        {
+            "cmd": "wire_link",
+            "direction": "sideways",
+            "link": engine_shaped_link_wiring("input", "L-sideways"),
+        }
+    )
+
+    answer = stand_in_parent.receive()
+    assert answer["rpc"] == "link_wire_failed"
+    assert answer["link_id"] == "L-sideways"
+
+    stand_in_parent.send({"cmd": "teardown", "capability": "full"})
+    assert stand_in_parent.receive()["rpc"] == "done"
     lifecycle_thread.join(timeout=5.0)
     assert not lifecycle_thread.is_alive()
 
