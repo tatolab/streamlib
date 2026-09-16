@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.12](https://github.com/tatolab/streamlib/compare/v0.22.11...v0.22.12) (2026-09-16)
+
+
+### Features
+
+* **engine:** report a helper link wired only when the helper confirms it ([#2306](https://github.com/tatolab/streamlib/issues/2306)) ([9bbc9c2](https://github.com/tatolab/streamlib/commit/9bbc9c2f5989afc63c893f40361859ce946e13e1))
+
 ## [0.22.11](https://github.com/tatolab/streamlib/compare/v0.22.10...v0.22.11) (2026-09-16)
 
 
