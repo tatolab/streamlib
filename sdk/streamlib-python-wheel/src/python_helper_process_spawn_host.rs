@@ -410,7 +410,11 @@ impl PythonHelperProcessSpawnHostProcessor {
                 let reported = reply
                     .get("error")
                     .and_then(|error| error.as_str())
-                    .unwrap_or("it reported no reason");
+                    .unwrap_or("it reported no reason")
+                    .to_string();
+                // A helper that refused its own setup is never run and never
+                // torn down, so this is the only place its group goes.
+                self.take_the_helper_process_group_down();
                 Err(Error::Runtime(format!(
                     "[{}] could not set itself up in its helper process:\n{reported}",
                     self.processor_display_name
@@ -426,7 +430,11 @@ impl PythonHelperProcessSpawnHostProcessor {
     /// parent's, a missing variable — before its log channel exists, so raw
     /// standard error is the only place its reason is written.
     fn refuse_the_helper_process_that_died_while_setting_up(&mut self) -> Error {
-        self.child_is_gone = true;
+        // The group first, so nothing the helper started is still holding the
+        // standard-error pipe the tail below waits on — and so a refused start
+        // leaves no survivor, which `:724` owes at every helper exit and not
+        // only at the ones that reach teardown.
+        self.take_the_helper_process_group_down();
         let standard_error_tail = self
             .child_standard_error_tail
             .as_ref()
