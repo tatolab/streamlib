@@ -21,6 +21,14 @@ from pathlib import Path
 import pytest
 
 from streamlib import ProcessorLinkDataAccess
+from test_cli_launch import (  # noqa: F401 — the two fixtures are used by name
+    NODE_READY_TIMEOUT_SECONDS,
+    await_sole_registry_entry,
+    free_port,
+    isolated_runtime_directory,
+    launch_node,
+)
+from test_helper_loss_counts import await_metrics_satisfying, mcp_json, the_link_into
 
 pytestmark = pytest.mark.usefixtures("private_iceoryx2_domain_for_this_test_process")
 
@@ -208,6 +216,125 @@ def test_a_helper_placed_consumer_with_no_declared_count_reads_the_sources_own(
         )
         assert reading["shape"] == [SOURCE_FOLLOWING_WINDOW_SIZE, 1]
     assert_windows_are_contiguous_once_the_run_has_settled(declared_mono)
+
+
+GAPPED_AUDIO_PROCESSORS_SOURCE = '''\
+"""A mono source whose every block starts a second after the last one ended."""
+
+from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
+    AudioBlock,
+    AudioWindowContract,
+    RuntimeContextLimitedAccess,
+    input,
+    monotonic_now_ns,
+    output,
+    processor,
+)
+
+SAMPLE_RATE = 16_000
+FRAMES_PER_BLOCK = 300
+GAP_BETWEEN_BLOCKS_NS = 1_000_000_000
+
+
+@processor(execution="continuous", interval_ms=20)
+class GappedMonoSource:
+    """Each block is short of a 512-sample window, and each one's stamp is a
+    discontinuity, so the windowed consumer flushes what the last block left."""
+
+    def __init__(self) -> None:
+        self.blocks = 0
+        self.anchor_ns = monotonic_now_ns()
+
+    @output()
+    def audio(self) -> None: ...
+
+    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+        ctx.outputs.write(
+            "audio",
+            {
+                "samples": bytes(4 * FRAMES_PER_BLOCK),
+                "sample_rate": SAMPLE_RATE,
+                "channels": 1,
+                "sample_count": FRAMES_PER_BLOCK,
+                "dtype": "f32",
+                "first_sample_timestamp_ns": self.anchor_ns
+                + self.blocks * GAP_BETWEEN_BLOCKS_NS,
+            },
+        )
+        self.blocks += 1
+
+
+@processor
+class WindowedMonoConsumer:
+    @input(
+        delivery_profile="ordered",
+        audio_window=AudioWindowContract(
+            sample_rate=SAMPLE_RATE, channels=1, dtype="f32", window_size=512
+        ),
+    )
+    def audio(self) -> None: ...
+
+    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+        ctx.inputs.read("audio", into=AudioBlock)
+'''
+
+GAPPED_AUDIO_APP_SOURCE = '''\
+from streamlib import Runtime
+
+from processors.gapped_audio import GappedMonoSource, WindowedMonoConsumer
+
+
+def setup(rt: Runtime) -> None:
+    source = rt.add(GappedMonoSource, display_name="gapped source")
+    consumer = rt.add(WindowedMonoConsumer, display_name="windowed consumer")
+    rt.connect(source.output("audio"), consumer.input("audio"))
+'''
+
+
+@pytest.mark.requires_gpu
+def test_a_helper_placed_windowed_consumers_flush_renders_its_discarded_samples_on_its_link(
+    tmp_path: Path, isolated_runtime_directory: Path, launch_node
+):
+    """A Python windowed consumer flushes in its own process, and its node
+    renders the samples each flush discarded on the one link feeding the port,
+    beside a bag count the flushes never enter.
+
+    Fail-without-fix: mirror only the dropped-bag count onto the board, and
+    `discarded_samples_by_link` renders zero however many flushes ran.
+    """
+    app_directory = tmp_path / "app"
+    (app_directory / "processors").mkdir(parents=True)
+    (app_directory / "processors" / "__init__.py").write_text("")
+    (app_directory / "processors" / "gapped_audio.py").write_text(
+        GAPPED_AUDIO_PROCESSORS_SOURCE
+    )
+    (app_directory / "app.py").write_text(GAPPED_AUDIO_APP_SOURCE)
+    node = launch_node("run", app_directory, free_port(), capture_output=True)
+    control_url = await_sole_registry_entry(
+        isolated_runtime_directory, NODE_READY_TIMEOUT_SECONDS
+    )["control_url"]
+    node.await_captured_output_containing("[start] Runtime started", NODE_READY_TIMEOUT_SECONDS)
+    link_id = the_link_into(mcp_json(control_url, "graph", {}), "windowed consumer")
+
+    metrics = await_metrics_satisfying(
+        control_url,
+        "windowed consumer",
+        lambda metrics: metrics.get("discarded_samples_by_link", {}).get(link_id, 0) > 0,
+        f"discarded samples on {link_id}",
+        node,
+    )
+
+    assert set(metrics) == {
+        "frames_dropped",
+        "dropped_bags_by_link",
+        "discarded_samples_by_link",
+        "refused_bags_by_output_port",
+    }, metrics
+    assert list(metrics["discarded_samples_by_link"]) == [link_id]
+    assert metrics["discarded_samples_by_link"][link_id] % 300 == 0, (
+        "each flush discards the one 300-sample block the last gap left staged: "
+        f"{metrics}"
+    )
 
 
 # ---- the child's own reading of the envelope (no device, no GPU) ------------
