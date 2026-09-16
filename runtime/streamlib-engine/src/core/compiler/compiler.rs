@@ -14,7 +14,7 @@ use crate::core::context::RuntimeContext;
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkStateComponent,
-    ProcessorReadyBarrierHandle, ProcessorUniqueId,
+    OutOfProcessLinkWireRepliesComponent, ProcessorReadyBarrierHandle, ProcessorUniqueId,
 };
 use crate::core::processors::PROCESSOR_REGISTRY;
 use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent, topics};
@@ -149,10 +149,7 @@ impl Compiler {
                     let graph = graph_arc.read();
                     let link = graph.traversal().e(&id).first();
                     let exists = link.is_some();
-                    let wired = link
-                        .and_then(|l| l.get::<LinkStateComponent>())
-                        .map(|s| matches!(s.0, crate::core::graph::LinkState::Wired))
-                        .unwrap_or(false);
+                    let wired = link.is_some_and(this_link_was_already_wired);
                     let pending_deletion = link
                         .map(|l| l.has::<PendingDeletionComponent>())
                         .unwrap_or(false);
@@ -516,5 +513,52 @@ impl Compiler {
         tracing::info!("Compile complete: {}", result);
 
         Ok(())
+    }
+}
+
+/// Whether an `AddLink` names a link this graph has already wired, so the plan
+/// passes it over rather than wiring it a second time.
+///
+/// A link handed to an out-of-process end counts as wired while that end's
+/// answer is still outstanding: it reads `Pending` until the helper says it
+/// opened its port, and re-planning it as unadded would open a second
+/// subscriber and notifier against the channel's caps for a link the helper is
+/// already opening.
+fn this_link_was_already_wired(link: &crate::core::graph::Link) -> bool {
+    link.get::<LinkStateComponent>()
+        .is_some_and(|state| matches!(state.0, crate::core::graph::LinkState::Wired))
+        || link.has::<OutOfProcessLinkWireRepliesComponent>()
+}
+
+#[cfg(test)]
+mod already_wired_tests {
+    use super::*;
+    use crate::core::graph::{Link, LinkState, OutOfProcessLinkWireRepliesComponent};
+    use crate::core::processors::OutOfProcessLinkWireReply;
+
+    #[test]
+    fn a_link_nothing_has_wired_yet_is_planned() {
+        let link = Link::new("Psrc.out1", "Pdst.in1");
+        assert!(!this_link_was_already_wired(&link));
+    }
+
+    #[test]
+    fn a_wired_link_is_not_planned_again() {
+        let mut link = Link::new("Psrc.out1", "Pdst.in1");
+        link.insert(LinkStateComponent(LinkState::Wired));
+        assert!(this_link_was_already_wired(&link));
+    }
+
+    /// Fail-without-fix: read `LinkStateComponent` alone and this link — the
+    /// ordinary state of a live `connect` onto a running helper — is planned
+    /// again on the next compile, wiring one link twice.
+    #[test]
+    fn a_link_a_helper_has_not_answered_for_is_not_planned_again() {
+        let mut link = Link::new("Psrc.out1", "Pdst.in1");
+        link.insert(LinkStateComponent(LinkState::Pending));
+        link.insert_component_without_rendering_it(OutOfProcessLinkWireRepliesComponent(vec![
+            OutOfProcessLinkWireReply::awaiting_the_far_sides_answer(),
+        ]));
+        assert!(this_link_was_already_wired(&link));
     }
 }

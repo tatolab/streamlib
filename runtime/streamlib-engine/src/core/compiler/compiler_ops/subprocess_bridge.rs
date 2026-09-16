@@ -10,18 +10,24 @@
 //! child inherits the other via `STREAMLIB_ESCALATE_FD`, freeing fd1/fd2
 //! to be captured as intercepted log pipes by the host.
 //!
-//! Two roles travel over the same socket:
+//! Three roles travel over the same socket:
 //! 1. Lifecycle RPC (`setup`, `run`, `stop`, `teardown`, `on_pause`,
 //!    `on_resume`, …) — initiated by the host, the subprocess replies with
 //!    `rpc: "ready" | "stopped" | "ok" | "done" | "error"`.
 //! 2. Escalate-on-behalf (`rpc: "escalate_request"`) — initiated by the
 //!    subprocess, the host replies with `rpc: "escalate_response"`.
+//! 3. A link's wire answer ([`OUT_OF_PROCESS_LINK_WIRED_RPC`],
+//!    [`OUT_OF_PROCESS_LINK_WIRE_FAILED_RPC`]) — the subprocess's answer to a
+//!    `wire_link` the host sent after setup, naming the link it is about.
 //!
 //! A dedicated reader thread (`br-…`) owns the parent-side read half and
 //! demultiplexes incoming messages: escalate requests are dispatched
-//! inline through [`subprocess_escalate::process_bridge_message`], and
-//! anything else is forwarded to the main thread over an mpsc channel for
-//! the lifecycle RPC to consume. Writes in both directions serialize
+//! inline through [`subprocess_escalate::process_bridge_message`], a link's
+//! wire answer lands on that link's own cell, and anything else is forwarded
+//! to the main thread over an mpsc channel for the lifecycle RPC to consume.
+//! The third role has its own tags for exactly that reason: an answer routed
+//! to the lifecycle queue would be read as the reply to whatever command the
+//! host sends next. Writes in both directions serialize
 //! through a shared `Arc<Mutex<BufWriter<UnixStream>>>` so the main
 //! thread and the reader thread can't interleave halves of a
 //! length-prefixed frame.
@@ -38,6 +44,9 @@ use std::time::Duration;
 
 use crate::core::context::GpuContextLimitedAccess;
 use crate::core::error::{Error, Result};
+use crate::core::processors::{
+    LinksAwaitingTheirOutOfProcessWireReply, OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply,
+};
 
 use super::subprocess_escalate::{
     EscalateHandleRegistry, process_bridge_message,
@@ -172,6 +181,62 @@ impl HelperProcessShutdownCommand {
     }
 }
 
+/// The rpc tag a subprocess answers a late `wire_link` with once it has opened
+/// its own port for the link. Carries `link_id`.
+pub const OUT_OF_PROCESS_LINK_WIRED_RPC: &str = "link_wired";
+
+/// The rpc tag a subprocess answers a late `wire_link` with when it could not
+/// open its port. Carries `link_id` and `reason`.
+pub const OUT_OF_PROCESS_LINK_WIRE_FAILED_RPC: &str = "link_wire_failed";
+
+/// Where one frame arriving from the subprocess belongs.
+///
+/// Classified on the `rpc` tag alone, never on what a handler makes of the
+/// frame: the routing decision is the wire contract's, and a frame that fell
+/// through to the lifecycle queue by accident is read as the answer to the next
+/// command the host sends.
+#[derive(Debug, PartialEq, Eq)]
+enum IncomingSubprocessFrame {
+    /// An escalate request, dispatched inline on the reader thread.
+    EscalateRequest,
+    /// One link's answer to a `wire_link` the host sent after setup.
+    LinkWireAnswer {
+        link_id: String,
+        outcome: OutOfProcessLinkWireOutcome,
+    },
+    /// A link's answer that names no link, so nothing can be routed to.
+    LinkWireAnswerNamingNoLink,
+    /// The answer to a lifecycle command, forwarded to the main thread.
+    LifecycleReply,
+}
+
+fn classify_an_incoming_subprocess_frame(msg: &serde_json::Value) -> IncomingSubprocessFrame {
+    let rpc = msg.get("rpc").and_then(|rpc| rpc.as_str());
+    if rpc == Some(super::subprocess_escalate::ESCALATE_REQUEST_RPC) {
+        return IncomingSubprocessFrame::EscalateRequest;
+    }
+    let outcome = match rpc {
+        Some(OUT_OF_PROCESS_LINK_WIRED_RPC) => OutOfProcessLinkWireOutcome::OpenedByTheFarSide,
+        Some(OUT_OF_PROCESS_LINK_WIRE_FAILED_RPC) => {
+            OutOfProcessLinkWireOutcome::RefusedByTheFarSide {
+                reason: msg
+                    .get("reason")
+                    .and_then(|reason| reason.as_str())
+                    .unwrap_or("it did not say why")
+                    .to_string(),
+            }
+        }
+        _ => return IncomingSubprocessFrame::LifecycleReply,
+    };
+    match msg.get("link_id").and_then(|link_id| link_id.as_str()) {
+        Some(link_id) => IncomingSubprocessFrame::LinkWireAnswer {
+            link_id: link_id.to_string(),
+            outcome,
+        },
+        None => IncomingSubprocessFrame::LinkWireAnswerNamingNoLink,
+    }
+}
+
 /// Shared writer handle. The host's lifecycle path and the reader
 /// thread's escalate-response path both write through this mutex.
 type SharedWriter = Arc<Mutex<BufWriter<UnixStream>>>;
@@ -184,6 +249,10 @@ pub struct SubprocessBridge {
     writer: SharedWriter,
     lifecycle_rx: Receiver<serde_json::Value>,
     registry: Arc<EscalateHandleRegistry>,
+    /// Every link handed to this subprocess after its setup and not yet
+    /// answered for. Shared with the reader thread, which is where the answers
+    /// arrive.
+    links_awaiting_their_wire_reply: Arc<LinksAwaitingTheirOutOfProcessWireReply>,
     /// Held for teardown: the drop path evicts what the registry's acquires
     /// entered into the parent's texture cache, which needs the same
     /// capability the reader thread dispatches against.
@@ -213,11 +282,15 @@ impl SubprocessBridge {
         let (tx, rx) = mpsc::channel();
         let dead = Arc::new(Mutex::new(false));
 
+        let links_awaiting_their_wire_reply =
+            Arc::new(LinksAwaitingTheirOutOfProcessWireReply::default());
+
         let thread_name = thread_name(&processor_id);
         let reader_writer = Arc::clone(&writer);
         let reader_registry = Arc::clone(&registry);
         let reader_dead = Arc::clone(&dead);
         let reader_processor_id = processor_id.clone();
+        let reader_links_awaiting = Arc::clone(&links_awaiting_their_wire_reply);
         let teardown_sandbox = sandbox.clone();
 
         let reader = thread::Builder::new()
@@ -231,6 +304,7 @@ impl SubprocessBridge {
                     tx,
                     reader_dead,
                     reader_processor_id,
+                    reader_links_awaiting,
                 );
             })
             .expect("failed to spawn bridge reader thread");
@@ -240,10 +314,33 @@ impl SubprocessBridge {
             writer,
             lifecycle_rx: rx,
             registry,
+            links_awaiting_their_wire_reply,
             sandbox: teardown_sandbox,
             reader: Some(reader),
             dead,
         })
+    }
+
+    /// Wait on one link's answer, so the reader thread can route it when it
+    /// arrives.
+    ///
+    /// Called by the host as it sends the `wire_link`, before the answer can
+    /// come back: registering after the send would race the reader.
+    pub fn await_the_subprocesss_wire_answer_for_link(
+        &self,
+        link_id: String,
+        reply: Arc<OutOfProcessLinkWireReply>,
+    ) {
+        self.links_awaiting_their_wire_reply
+            .await_an_answer_for_link(link_id, reply);
+    }
+
+    /// Stop waiting on a link that is being disconnected before its answer
+    /// arrived, so a dead subprocess does not refuse a link the graph no
+    /// longer has.
+    pub fn stop_awaiting_the_subprocesss_wire_answer_for_link(&self, link_id: &str) {
+        self.links_awaiting_their_wire_reply
+            .stop_awaiting_an_answer_for_link(link_id);
     }
 
     /// Write a length-prefixed JSON message to the subprocess.
@@ -293,10 +390,21 @@ impl SubprocessBridge {
     }
 
     /// Mark the bridge dead; subsequent sends return immediately.
+    ///
+    /// Every link this subprocess was still to answer for is refused here: a
+    /// link whose far side died with the answer outstanding never reads
+    /// `wired`, and a caller that asked `graph` would otherwise wait on an
+    /// answer nothing can send.
     pub fn mark_dead(&self) {
         if let Ok(mut dead) = self.dead.lock() {
             *dead = true;
         }
+        self.links_awaiting_their_wire_reply
+            .refuse_every_link_still_awaiting_an_answer(&format!(
+                "the helper process hosting '{}' is gone, so it never opened its port for this \
+                 link",
+                self.processor_id
+            ));
     }
 
     pub fn is_dead(&self) -> bool {
@@ -371,6 +479,7 @@ fn reader_loop(
     lifecycle_tx: mpsc::Sender<serde_json::Value>,
     dead: Arc<Mutex<bool>>,
     processor_id: String,
+    links_awaiting_their_wire_reply: Arc<LinksAwaitingTheirOutOfProcessWireReply>,
 ) {
     loop {
         let msg = match read_frame(&mut reader) {
@@ -391,10 +500,31 @@ fn reader_loop(
         // an escalate request" signal — that would silently re-route
         // every log message to the lifecycle queue and trip the
         // setup/teardown waiters.
-        let is_escalate_request = msg.get("rpc").and_then(|v| v.as_str())
-            == Some(super::subprocess_escalate::ESCALATE_REQUEST_RPC);
+        let frame_route = classify_an_incoming_subprocess_frame(&msg);
 
-        if is_escalate_request {
+        if let IncomingSubprocessFrame::LinkWireAnswer { link_id, outcome } = &frame_route {
+            if !links_awaiting_their_wire_reply
+                .note_the_far_sides_answer_for_link(link_id, outcome.clone())
+            {
+                tracing::warn!(
+                    "[{}] its helper process answered for link '{}', which no link is waiting on",
+                    processor_id,
+                    link_id
+                );
+            }
+            continue;
+        }
+
+        if frame_route == IncomingSubprocessFrame::LinkWireAnswerNamingNoLink {
+            tracing::warn!(
+                "[{}] its helper process answered a wire with no link named, so the link it \
+                 meant stays unanswered",
+                processor_id
+            );
+            continue;
+        }
+
+        if frame_route == IncomingSubprocessFrame::EscalateRequest {
             if let Some(response) = process_bridge_message(&sandbox, &registry, &msg) {
                 // Escalate request handled inline. Write response with the
                 // shared writer lock.
@@ -438,6 +568,15 @@ fn reader_loop(
             break;
         }
     }
+
+    // Every way out of the loop above is this reader giving up on the
+    // subprocess, so the refusal sits here rather than on each `break`: a link
+    // still waiting on an answer is refused once, whichever way the reader
+    // stopped, and never reads `wired`.
+    links_awaiting_their_wire_reply.refuse_every_link_still_awaiting_an_answer(&format!(
+        "the helper process hosting '{processor_id}' stopped answering before it opened its port \
+         for this link"
+    ));
 }
 
 /// Per-line reader that tags each non-empty line with
@@ -564,6 +703,90 @@ mod tests {
 
     use crate::core::context::{GpuContext, GpuContextLimitedAccess};
     use std::sync::mpsc::RecvTimeoutError;
+
+    /// The routing decision, taken on the rpc tag alone and testable without a
+    /// device: `SubprocessBridge` needs a GPU capability to construct, so the
+    /// classification these cover would otherwise only run on the rig.
+    mod incoming_frame_routing {
+        use super::*;
+
+        #[test]
+        fn a_lifecycle_reply_is_routed_to_the_lifecycle_queue() {
+            assert_eq!(
+                classify_an_incoming_subprocess_frame(&serde_json::json!({"rpc": "ready"})),
+                IncomingSubprocessFrame::LifecycleReply
+            );
+        }
+
+        #[test]
+        fn an_escalate_request_is_routed_to_the_escalate_dispatch() {
+            assert_eq!(
+                classify_an_incoming_subprocess_frame(&log_frame()),
+                IncomingSubprocessFrame::EscalateRequest
+            );
+        }
+
+        #[test]
+        fn a_wire_answer_is_routed_to_its_link_rather_than_to_the_lifecycle_queue() {
+            assert_eq!(
+                classify_an_incoming_subprocess_frame(&serde_json::json!({
+                    "rpc": OUT_OF_PROCESS_LINK_WIRED_RPC,
+                    "link_id": "L-late",
+                })),
+                IncomingSubprocessFrame::LinkWireAnswer {
+                    link_id: "L-late".to_string(),
+                    outcome: OutOfProcessLinkWireOutcome::OpenedByTheFarSide,
+                },
+                "routed to the lifecycle queue it would be read as the answer to the next \
+                 command the host sends"
+            );
+        }
+
+        #[test]
+        fn a_refused_wire_carries_the_subprocesss_own_reason() {
+            assert_eq!(
+                classify_an_incoming_subprocess_frame(&serde_json::json!({
+                    "rpc": OUT_OF_PROCESS_LINK_WIRE_FAILED_RPC,
+                    "link_id": "L-late",
+                    "reason": "ExceedsMaxSupportedSubscribers",
+                })),
+                IncomingSubprocessFrame::LinkWireAnswer {
+                    link_id: "L-late".to_string(),
+                    outcome: OutOfProcessLinkWireOutcome::RefusedByTheFarSide {
+                        reason: "ExceedsMaxSupportedSubscribers".to_string(),
+                    },
+                }
+            );
+        }
+
+        #[test]
+        fn a_refusal_that_says_nothing_still_carries_a_reason() {
+            let IncomingSubprocessFrame::LinkWireAnswer {
+                outcome: OutOfProcessLinkWireOutcome::RefusedByTheFarSide { reason },
+                ..
+            } = classify_an_incoming_subprocess_frame(&serde_json::json!({
+                "rpc": OUT_OF_PROCESS_LINK_WIRE_FAILED_RPC,
+                "link_id": "L-late",
+            }))
+            else {
+                panic!("a refusal must classify as one whether or not it said why");
+            };
+            assert!(
+                !reason.is_empty(),
+                "`graph` renders this reason, so an empty one tells a reader nothing"
+            );
+        }
+
+        #[test]
+        fn a_wire_answer_naming_no_link_is_never_read_as_a_lifecycle_reply() {
+            assert_eq!(
+                classify_an_incoming_subprocess_frame(&serde_json::json!({
+                    "rpc": OUT_OF_PROCESS_LINK_WIRED_RPC,
+                })),
+                IncomingSubprocessFrame::LinkWireAnswerNamingNoLink
+            );
+        }
+    }
 
     fn gpu_or_skip(test_name: &str) -> Option<GpuContext> {
         match GpuContext::init_for_platform_sync() {

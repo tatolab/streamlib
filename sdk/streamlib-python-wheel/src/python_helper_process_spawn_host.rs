@@ -36,7 +36,9 @@ use streamlib::sdk::helper_process_transport::{
     spawn_fd_line_reader,
 };
 use streamlib::sdk::iceoryx2::ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE;
-use streamlib::sdk::processors::{DynGeneratedProcessor, OutOfProcessLinkWiringEnvelope};
+use streamlib::sdk::processors::{
+    DynGeneratedProcessor, OutOfProcessLinkWireReply, OutOfProcessLinkWiringEnvelope,
+};
 
 /// The module CPython is launched with in a helper process.
 const HELPER_PROCESS_MODULE: &str = "streamlib._helper";
@@ -1104,6 +1106,12 @@ impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
         local_port_name: &str,
         link_id: &str,
     ) -> Result<()> {
+        if let Some(bridge) = self.bridge.as_ref() {
+            // A link on its way out is one this child owes no answer for. Left
+            // waiting, a child that dies later would refuse a link the graph no
+            // longer has.
+            bridge.stop_awaiting_the_subprocesss_wire_answer_for_link(link_id);
+        }
         if self.has_failed_unrecoverably() || self.bridge.is_none() {
             return Ok(());
         }
@@ -1115,32 +1123,63 @@ impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
         }))
     }
 
-    /// Hand the child one link wired after its setup — unanswered, for the
-    /// same reasons `unwire_out_of_process_link` is.
+    /// Hand the child one link wired after its setup, and hand back the cell
+    /// its answer will land in.
+    ///
+    /// The send itself does not wait — the compiler calls this holding the
+    /// graph's write lock, and a child reads commands only between callbacks,
+    /// so waiting would park every other graph operation behind user code. The
+    /// child answers on its own rpc tag, which the bridge routes to this cell,
+    /// and `graph` is where the caller reads the outcome.
     ///
     /// Before `setup` there is no bridge and nothing to send: the setup command
-    /// reads the envelope, which already carries this link. A child that has
-    /// died is refused instead, so the compile wiring the link fails and its
-    /// caller hears it rather than reading a wired link nothing will cross.
+    /// reads the envelope, which already carries this link, and the child's
+    /// `ready` confirms it — so that link waits on no cell of its own. A child
+    /// that has died is refused instead, so the compile wiring the link fails
+    /// and its caller hears it rather than reading a wired link nothing will
+    /// cross.
     fn wire_out_of_process_link(
         &mut self,
         port_direction: streamlib::sdk::error::PortDirection,
         link_wiring: &serde_json::Value,
-    ) -> Result<()> {
+    ) -> Result<Option<Arc<OutOfProcessLinkWireReply>>> {
         if self.has_failed_unrecoverably() {
             return Err(Error::Runtime(format!(
                 "processor '{}' ({}) has failed, so no link can be wired into it",
                 self.processor_display_name, self.processor_id
             )));
         }
-        if self.bridge.is_none() {
-            return Ok(());
-        }
-        self.send_to_child(&serde_json::json!({
+        let Some(bridge) = self.bridge.as_ref() else {
+            return Ok(None);
+        };
+        let Some(link_id) = link_wiring.get("link_id").and_then(|id| id.as_str()) else {
+            return Err(Error::Configuration(format!(
+                "the wiring handed to processor '{}' ({}) names no link, so its helper process                  could not answer for one",
+                self.processor_display_name, self.processor_id
+            )));
+        };
+        let reply = OutOfProcessLinkWireReply::awaiting_the_far_sides_answer();
+        // Registered before the send, never after: the child can answer the
+        // moment the frame lands, and a cell registered afterwards would miss
+        // an answer already routed.
+        bridge.await_the_subprocesss_wire_answer_for_link(link_id.to_string(), Arc::clone(&reply));
+        let link_id = link_id.to_string();
+        match self.send_to_child(&serde_json::json!({
             "cmd": "wire_link",
             "direction": port_direction.as_wire_str(),
             "link": link_wiring,
-        }))
+        })) {
+            Ok(()) => Ok(Some(reply)),
+            Err(send_failure) => {
+                // A send that never left is an answer that never comes. The
+                // caller hears the failure, and the cell is taken back out so
+                // a later death refuses nothing on this link's behalf.
+                if let Some(bridge) = self.bridge.as_ref() {
+                    bridge.stop_awaiting_the_subprocesss_wire_answer_for_link(&link_id);
+                }
+                Err(send_failure)
+            }
+        }
     }
 
     fn set_iceoryx2_resources(

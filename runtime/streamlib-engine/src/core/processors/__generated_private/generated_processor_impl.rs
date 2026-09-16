@@ -208,14 +208,15 @@ pub trait DynGeneratedProcessor: Send + 'static {
         )))
     }
 
-    /// Hand the far side one link wired after its setup already ran.
+    /// Hand the far side one link wired after its setup already ran, and hand
+    /// back the cell its answer will land in.
     ///
     /// The envelope is read once, as the `ports` payload of the setup command;
     /// a link the compiler wires later is recorded on the envelope and then
     /// pushed through this, so a processor that is already running opens its
     /// port for it. Before setup the far side does not exist yet and the
-    /// setup command will carry the entry, so a host answers `Ok` without
-    /// sending anything.
+    /// setup command will carry the entry — `None` says so, and that link is
+    /// confirmed by the far side's `ready` rather than by an answer of its own.
     ///
     /// The default refuses for the same reason [`unwire_out_of_process_link`]
     /// does: a host that records wiring but cannot deliver it late leaves a
@@ -226,7 +227,7 @@ pub trait DynGeneratedProcessor: Send + 'static {
         &mut self,
         _port_direction: crate::core::PortDirection,
         _link_wiring: &serde_json::Value,
-    ) -> Result<()> {
+    ) -> Result<Option<std::sync::Arc<crate::core::processors::OutOfProcessLinkWireReply>>> {
         Err(crate::core::error::Error::Configuration(format!(
             "processor '{}' records out-of-process link wiring but cannot deliver a \
              link wired after its setup, so a late connect would never reach it; \

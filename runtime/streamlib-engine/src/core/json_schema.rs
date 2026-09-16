@@ -135,6 +135,14 @@ pub struct LinkOutput {
     /// Current state of the link.
     #[serde(default)]
     pub state: LinkStateOutput,
+    /// Why the link is in the `error` state, in the words of whoever refused
+    /// it — today always the helper process that could not open its port.
+    ///
+    /// Absent in every other state, so a reader that finds it knows the link
+    /// carries nothing and will not start to: disconnect it and wire again.
+    /// `state` stays a plain string so a check against `"wired"` is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_reason: Option<String>,
     /// Runtime components (dynamic, varies based on link state).
     pub components: serde_json::Map<String, serde_json::Value>,
 }
@@ -149,7 +157,9 @@ pub struct LinkPortRefOutput {
 }
 
 /// State of a link in the graph.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum LinkStateOutput {
     /// Link exists in graph but not yet wired.
@@ -347,18 +357,49 @@ impl From<crate::core::graph::PortKind> for PortKindOutput {
 
 impl From<&crate::core::graph::Link> for LinkOutput {
     fn from(link: &crate::core::graph::Link) -> Self {
+        let (state, error_reason) = link_state_of(link);
         Self {
             id: link.id.to_string(),
             source: LinkPortRefOutput::from(&link.source),
             target: LinkPortRefOutput::from(&link.target),
             capacity: link.capacity.get(),
-            // Wiring records its outcome on the component; the field is the
-            // state the link was created in.
-            state: link
-                .get::<crate::core::graph::LinkStateComponent>()
-                .map(|wired| LinkStateOutput::from(wired.0))
-                .unwrap_or_else(|| LinkStateOutput::from(link.state)),
+            state,
+            error_reason,
             components: link.serialize_components(),
+        }
+    }
+}
+
+/// What a link reports as its state, and why where that is `error`.
+///
+/// Wiring records its outcome on the component; the field is the state the link
+/// was created in. A link handed to an out-of-process end sits at `Pending`
+/// there until that end answers — the answer lands on a cell its bridge's
+/// reader thread fills, which holds no graph lock — so a link still carrying
+/// those cells reads its state off them instead. Once the disconnect path has
+/// moved the component past `Pending`, that stamp is the answer: a link on its
+/// way out is not `wired` because a helper once said so.
+fn link_state_of(link: &crate::core::graph::Link) -> (LinkStateOutput, Option<String>) {
+    let stamped = link
+        .get::<crate::core::graph::LinkStateComponent>()
+        .map(|state| state.0)
+        .unwrap_or(link.state);
+    if stamped != crate::core::graph::LinkState::Pending {
+        return (LinkStateOutput::from(stamped), None);
+    }
+    let Some(replies) = link.get::<crate::core::graph::OutOfProcessLinkWireRepliesComponent>()
+    else {
+        return (LinkStateOutput::from(stamped), None);
+    };
+    match replies.what_its_out_of_process_ends_have_answered() {
+        crate::core::graph::OutOfProcessLinkWireProgress::AnEndHasNotAnsweredYet => {
+            (LinkStateOutput::Pending, None)
+        }
+        crate::core::graph::OutOfProcessLinkWireProgress::EveryEndOpenedItsPort => {
+            (LinkStateOutput::Wired, None)
+        }
+        crate::core::graph::OutOfProcessLinkWireProgress::AnEndRefused { reason } => {
+            (LinkStateOutput::Error, Some(reason))
         }
     }
 }

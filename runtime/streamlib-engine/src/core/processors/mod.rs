@@ -9,6 +9,7 @@ pub mod traits;
 pub mod __generated_private;
 
 mod empty_config;
+mod out_of_process_link_wire_reply;
 mod processor_instance_factory;
 mod processor_spec;
 // Re-export graph types — `ProcessorState` and `ProcessorStateComponent`
@@ -28,6 +29,9 @@ pub use __generated_private::{
 };
 
 pub use empty_config::EmptyConfig;
+pub use out_of_process_link_wire_reply::{
+    LinksAwaitingTheirOutOfProcessWireReply, OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply,
+};
 pub use processor_instance_factory::{
     DynamicProcessorConstructorFn, PROCESSOR_REGISTRY, ProcessorInstance, ProcessorInstanceFactory,
 };
