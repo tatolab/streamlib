@@ -1175,7 +1175,7 @@ impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
                 // caller hears the failure, and the cell is taken back out so
                 // a later death refuses nothing on this link's behalf.
                 if let Some(bridge) = self.bridge.as_ref() {
-                    bridge.stop_awaiting_the_subprocess_wire_answer_for_link(&link_id);
+                    bridge.stop_awaiting_the_subprocess_wire_answer_for_link(link_id);
                 }
                 Err(send_failure)
             }
