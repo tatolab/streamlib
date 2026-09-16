@@ -449,7 +449,7 @@ impl PythonHelperProcessSpawnHostProcessor {
         let ladder =
             HelperProcessShutdownLadder::taking_over(self.processor_display_name.clone(), child);
         let bridge = self.bridge.as_ref();
-        let (outcome, _) = ladder.walk_every_rung(|reply, budget| {
+        let outcome = ladder.walk_every_rung(|reply, budget| {
             bridge.is_some_and(|bridge| await_a_lifecycle_reply_tagged(bridge, reply, budget))
         });
         self.close_the_engines_end_of_the_helper_process(Some(outcome));
