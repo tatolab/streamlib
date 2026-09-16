@@ -1,8 +1,9 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Bans a raw `libc` call that creates a file descriptor a spawned process
-//! would inherit.
+//! Bans the raw `libc` calls that create a file descriptor a spawned process
+//! would inherit: `dup` and `pipe` outright, and `pipe2`, `epoll_create1`,
+//! `timerfd_create`, `eventfd` and `recvmsg` without their close-on-exec flag.
 //!
 //! `docs/plan/ARCHITECTURE.md` §Processor model: nothing an app starts may hold
 //! the app's output open or delay its exit. A descriptor created without
@@ -13,16 +14,20 @@
 //! never afterwards with `fcntl`: a spawn on another thread can land between the
 //! two calls.
 //!
-//! Cheap substring scan (no `syn`/compile) over every tracked Rust file under
-//! `runtime/`, `sdk/` and `adapters/`, test code included — a test that leaks
-//! an inheritable pipe into a child it spawns hangs on the same shape. Whole-line
-//! comments are skipped. There is no per-line pragma: no descriptor in the tree
-//! is meant to be inherited by accident, and the one a helper is owed has its
-//! flag cleared deliberately in `pre_exec`.
+//! `open`, `openat`, `memfd_create`, `socket`, `socketpair` and `accept` are
+//! not gated.
+//!
+//! Cheap substring scan (no `syn`/compile) over every Rust file git knows under
+//! `runtime/`, `sdk/` and `adapters/`, test code included — a test that leaks an
+//! inheritable pipe into a child it spawns hangs on the same shape. Whole-line
+//! comments are skipped. There is no per-line pragma: a test that means a child
+//! to inherit a descriptor clears the flag on it by name.
 
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
+
+use crate::source_call_site_scan::{blank_out_lines, call_sites_of, is_a_whole_line_comment};
 
 /// Workspace trees whose descriptor creation this gate owns.
 const SCAN_ROOTS: &[&str] = &["runtime", "sdk", "adapters"];
@@ -104,34 +109,34 @@ pub fn run(workspace_root: &Path) -> Result<()> {
     )?;
     ensure_every_scan_root_contributed(&report)?;
 
-    if report.violations.is_empty() {
-        println!(
-            "✓ check-no-inheritable-descriptor: {} Rust file(s) scanned, every raw \
-             descriptor is created close-on-exec",
-            report.files_scanned,
-        );
-        return Ok(());
-    }
+    let failure_lines: Vec<String> = report
+        .violations
+        .iter()
+        .map(|violation| {
+            format!(
+                "  {}:{}: `{}` creates a descriptor every process this one spawns inherits, \
+                 so a grandchild can hold it open past this process's exit. Create it \
+                 close-on-exec: `{}`.",
+                violation.file.display(),
+                violation.line,
+                violation.call_text,
+                violation.close_on_exec_spelling,
+            )
+        })
+        .collect();
+    anyhow::ensure!(
+        failure_lines.is_empty(),
+        "check-no-inheritable-descriptor found {} inheritable descriptor(s) created:\n{}",
+        failure_lines.len(),
+        failure_lines.join("\n"),
+    );
 
-    eprintln!(
-        "✗ check-no-inheritable-descriptor: {} violation(s)",
-        report.violations.len()
+    tracing::info!(
+        "check-no-inheritable-descriptor: {} Rust file(s) scanned, every raw descriptor is \
+         created close-on-exec",
+        report.files_scanned,
     );
-    for violation in &report.violations {
-        eprintln!(
-            "  {}:{}: `{}` creates a descriptor every process this one spawns inherits, \
-             so a grandchild can hold it open past this process's exit. Create it \
-             close-on-exec: `{}`.",
-            violation.file.display(),
-            violation.line,
-            violation.call_text,
-            violation.close_on_exec_spelling,
-        );
-    }
-    anyhow::bail!(
-        "check-no-inheritable-descriptor: {} inheritable descriptor(s) created",
-        report.violations.len()
-    );
+    Ok(())
 }
 
 /// A renamed or moved root would leave the others carrying the whole gate,
@@ -148,36 +153,16 @@ fn ensure_every_scan_root_contributed(report: &InheritableDescriptorScanReport) 
 }
 
 pub fn scan(workspace_root: &Path) -> Result<InheritableDescriptorScanReport> {
-    let tracked = tracked_rust_files_under_scan_roots(workspace_root)?;
-    scan_files(workspace_root, &tracked)
-}
-
-/// Workspace-relative Rust paths git tracks under the scan roots.
-///
-/// A filesystem walk would descend build trees and virtualenvs, gating
-/// third-party sources the project does not own.
-fn tracked_rust_files_under_scan_roots(workspace_root: &Path) -> Result<Vec<PathBuf>> {
-    let output = std::process::Command::new("git")
-        .args(["ls-files", "-z", "--"])
-        .args(SCAN_ROOTS)
-        .current_dir(workspace_root)
-        .output()
-        .context("failed to run `git ls-files` for check-no-inheritable-descriptor")?;
-
-    anyhow::ensure!(
-        output.status.success(),
-        "`git ls-files` failed ({}) — check-no-inheritable-descriptor cannot enumerate its \
-         scan roots",
-        output.status
-    );
-
-    let listing =
-        String::from_utf8(output.stdout).context("`git ls-files` emitted a non-UTF-8 path")?;
-    Ok(listing
-        .split('\0')
-        .filter(|path| path.ends_with(".rs"))
-        .map(PathBuf::from)
-        .collect())
+    let mut tracked_rust_files = Vec::new();
+    for root in SCAN_ROOTS {
+        tracked_rust_files.extend(
+            crate::list_repository_files_under(workspace_root, root)?
+                .into_iter()
+                .filter(|path| path.ends_with(".rs"))
+                .map(PathBuf::from),
+        );
+    }
+    scan_files(workspace_root, &tracked_rust_files)
 }
 
 pub fn scan_files(
@@ -190,6 +175,12 @@ pub fn scan_files(
     };
 
     for relative_path in relative_paths {
+        let path = workspace_root.join(relative_path);
+        // `git ls-files --cached` lists a file deleted from the worktree but not
+        // yet from the index.
+        if !path.is_file() {
+            continue;
+        }
         let Some(scan_root_count) = report
             .files_scanned_per_scan_root
             .iter_mut()
@@ -198,8 +189,7 @@ pub fn scan_files(
             continue;
         };
         scan_root_count.1 += 1;
-
-        let body = fs::read_to_string(workspace_root.join(relative_path))
+        let body = fs::read_to_string(&path)
             .with_context(|| format!("failed to read {}", relative_path.display()))?;
         report.files_scanned += 1;
 
@@ -218,67 +208,28 @@ pub fn scan_files(
 /// Every descriptor-creating call in `body` that is not close-on-exec, as
 /// `(1-based line, whitespace-collapsed call text, the close-on-exec spelling)`.
 fn inheritable_descriptor_calls(body: &str) -> Vec<(usize, String, &'static str)> {
-    let code = blank_out_comment_lines(body);
-    let mut calls = Vec::new();
-    for descriptor_creating_call in DESCRIPTOR_CREATING_CALLS {
-        let mut search_from = 0usize;
-        while let Some(offset) = code[search_from..].find(descriptor_creating_call.call_prefix) {
-            let call_start = search_from + offset;
-            let open_paren = call_start + descriptor_creating_call.call_prefix.len() - 1;
-            let Some(close_paren) = matching_close_paren(&code, open_paren) else {
-                break;
-            };
-            let arguments = &code[open_paren + 1..close_paren];
-            let is_close_on_exec = descriptor_creating_call
-                .close_on_exec_flag
-                .is_some_and(|flag| arguments.contains(flag));
-            if !is_close_on_exec {
-                calls.push((
-                    code[..call_start].matches('\n').count() + 1,
-                    code[call_start..=close_paren]
-                        .split_whitespace()
-                        .collect::<Vec<_>>()
-                        .join(" "),
-                    descriptor_creating_call.close_on_exec_spelling,
-                ));
-            }
-            search_from = close_paren + 1;
-        }
-    }
+    let code = blank_out_lines(body, is_a_whole_line_comment);
+    let mut calls: Vec<(usize, String, &'static str)> = DESCRIPTOR_CREATING_CALLS
+        .iter()
+        .flat_map(|descriptor_creating_call| {
+            call_sites_of(&code, descriptor_creating_call.call_prefix)
+                .into_iter()
+                .filter(|call_site| {
+                    !descriptor_creating_call
+                        .close_on_exec_flag
+                        .is_some_and(|flag| call_site.argument_text.contains(flag))
+                })
+                .map(|call_site| {
+                    (
+                        call_site.line,
+                        call_site.collapsed_call_text,
+                        descriptor_creating_call.close_on_exec_spelling,
+                    )
+                })
+        })
+        .collect();
     calls.sort_by_key(|(line, _, _)| *line);
     calls
-}
-
-/// Blank whole-line comments while keeping the line count, so a reported line
-/// number still points at the source.
-fn blank_out_comment_lines(body: &str) -> String {
-    body.lines()
-        .map(|line| {
-            if line.trim_start().starts_with("//") {
-                ""
-            } else {
-                line
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn matching_close_paren(code: &str, open_paren: usize) -> Option<usize> {
-    let mut depth = 0usize;
-    for (offset, byte) in code.as_bytes().iter().enumerate().skip(open_paren) {
-        match byte {
-            b'(' => depth += 1,
-            b')' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(offset);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
 }
 
 #[cfg(test)]

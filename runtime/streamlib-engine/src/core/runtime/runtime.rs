@@ -62,32 +62,33 @@ const OWNED_TOKIO_RUNTIME_SHUTDOWN_BUDGET: Duration = Duration::from_secs(2);
 
 /// A tokio runtime the engine owns, shut down within
 /// [`OWNED_TOKIO_RUNTIME_SHUTDOWN_BUDGET`] when dropped.
-pub(crate) struct TokioRuntimeShutDownWithinItsBudget(Option<tokio::runtime::Runtime>);
+pub(crate) struct TokioRuntimeShutDownWithinItsBudget(
+    std::mem::ManuallyDrop<tokio::runtime::Runtime>,
+);
 
 impl TokioRuntimeShutDownWithinItsBudget {
     pub(crate) fn owning(runtime: tokio::runtime::Runtime) -> Self {
-        Self(Some(runtime))
+        Self(std::mem::ManuallyDrop::new(runtime))
     }
-}
 
-impl std::ops::Deref for TokioRuntimeShutDownWithinItsBudget {
-    type Target = tokio::runtime::Runtime;
+    pub(crate) fn handle(&self) -> &tokio::runtime::Handle {
+        self.0.handle()
+    }
 
-    fn deref(&self) -> &Self::Target {
-        self.0
-            .as_ref()
-            .expect("the runtime is taken only by the drop that ends this value")
+    pub(crate) fn block_on<F: std::future::Future>(&self, future: F) -> F::Output {
+        self.0.block_on(future)
     }
 }
 
 impl Drop for TokioRuntimeShutDownWithinItsBudget {
     fn drop(&mut self) {
-        if let Some(runtime) = self.0.take() {
-            crate::core::runtime::note_what_the_engine_teardown_is_waiting_on(
-                "the engine's tokio runtime",
-            );
-            runtime.shutdown_timeout(OWNED_TOKIO_RUNTIME_SHUTDOWN_BUDGET);
-        }
+        crate::core::runtime::note_what_the_engine_teardown_is_waiting_on(
+            "the engine's tokio runtime",
+        );
+        // SAFETY: taken once, here, as this value is dropped; nothing reads the
+        // runtime afterwards.
+        let runtime = unsafe { std::mem::ManuallyDrop::take(&mut self.0) };
+        runtime.shutdown_timeout(OWNED_TOKIO_RUNTIME_SHUTDOWN_BUDGET);
     }
 }
 
@@ -665,11 +666,18 @@ impl Runner {
         processor_removal_outcome
     }
 
+    /// Hand fds 1 and 2 back to the process now, for a caller about to leave
+    /// this engine alive rather than drop it.
+    pub fn stop_intercepting_the_standard_streams(&self) {
+        #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
+        self._logging_guard.stop_intercepting_the_standard_streams();
+    }
+
     /// The processors whose threads were abandoned past their shutdown budget
     /// and have not returned since. Each one holds this engine alive.
     pub fn processor_threads_abandoned_and_still_running(
         &self,
-    ) -> Vec<crate::core::runtime::AbandonedProcessorThread> {
+    ) -> Vec<crate::core::runtime::ProcessorDisplayNameAndId> {
         self.compiler
             .processor_threads_abandoned_and_still_running()
     }

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 mod capability_extensions;
+mod end_the_process_at_once;
 mod engine_teardown_watchdog;
 mod graph_change_listener;
 mod helper_process_group_registry;
@@ -19,15 +20,15 @@ mod surface_image_exchange;
 mod tap;
 
 pub use crate::core::compiler::{
-    AbandonedProcessorThread, refusal_naming_the_abandoned_processor_threads,
+    ProcessorDisplayNameAndId, description_of_the_abandoned_processor_threads,
 };
 pub use crate::core::signals::ScopedShutdownSignalOwnership;
 pub use capability_extensions::{LoadedCapabilityExtension, LoadedCapabilityExtensionRegistry};
+pub(crate) use end_the_process_at_once::kill_every_helper_process_group_and_end_the_process_at_once;
 pub use engine_teardown_watchdog::{
     ArmedEngineTeardownWatchdog, EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED,
     note_what_the_engine_teardown_is_waiting_on,
 };
-#[cfg(unix)]
 pub(crate) use helper_process_group_registry::kill_every_registered_helper_process_group;
 pub use helper_process_group_registry::{
     deregister_a_helper_process_group, register_a_helper_process_group,

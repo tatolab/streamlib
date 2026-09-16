@@ -105,12 +105,20 @@ fn reported_process_id(reported: &libc::siginfo_t) -> libc::pid_t {
     reported.si_pid
 }
 
+/// What waiting one slice of a cooperative rung for a helper's reply found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LifecycleReplyAwaited {
+    Arrived,
+    SliceElapsed,
+    /// The channel the reply would arrive on has closed.
+    NoReplyCanArrive,
+}
+
 /// How a cooperative rung ended.
 #[derive(Debug, PartialEq, Eq)]
 enum CooperativeRungEnded {
     ReplyArrived,
     BudgetSpent,
-    /// The channel answered at once without the reply — it has closed.
     NoReplyCanArrive,
     ChildAlreadyExited,
     ShutdownForced,
@@ -151,13 +159,16 @@ impl HelperProcessShutdownLadder {
     ///
     /// Both commands are already on the wire when this is called — the host
     /// sends them together — so `await_lifecycle_reply` only answers whether
-    /// that command's reply arrived inside the budget it was handed, draining
+    /// that command's reply arrived inside the slice it was handed, draining
     /// whatever else the helper sent on the way. A closure rather than the
     /// bridge itself, so the rungs are drivable against a stub child with no
     /// engine behind it.
     pub(crate) fn walk_every_rung(
         mut self,
-        mut await_lifecycle_reply: impl FnMut(HelperProcessShutdownCommand, Duration) -> bool,
+        mut await_lifecycle_reply: impl FnMut(
+            HelperProcessShutdownCommand,
+            Duration,
+        ) -> LifecycleReplyAwaited,
     ) -> HelperProcessShutdownOutcome {
         // A helper that is already gone answers nothing and needs no interrupt.
         // Skipped rather than waited out, so a crash before shutdown does not
@@ -177,7 +188,10 @@ impl HelperProcessShutdownLadder {
 
     fn walk_the_cooperative_rungs(
         &mut self,
-        await_lifecycle_reply: &mut impl FnMut(HelperProcessShutdownCommand, Duration) -> bool,
+        await_lifecycle_reply: &mut impl FnMut(
+            HelperProcessShutdownCommand,
+            Duration,
+        ) -> LifecycleReplyAwaited,
     ) {
         match self.walk_one_cooperative_rung(
             await_lifecycle_reply,
@@ -234,7 +248,10 @@ impl HelperProcessShutdownLadder {
     /// would hold the rung for its whole budget.
     fn walk_one_cooperative_rung(
         &self,
-        await_lifecycle_reply: &mut impl FnMut(HelperProcessShutdownCommand, Duration) -> bool,
+        await_lifecycle_reply: &mut impl FnMut(
+            HelperProcessShutdownCommand,
+            Duration,
+        ) -> LifecycleReplyAwaited,
         command: HelperProcessShutdownCommand,
         budget: Duration,
     ) -> CooperativeRungEnded {
@@ -250,13 +267,15 @@ impl HelperProcessShutdownLadder {
             if remaining.is_zero() {
                 return CooperativeRungEnded::BudgetSpent;
             }
-            let slice = remaining.min(COOPERATIVE_RUNG_OBSERVATION_INTERVAL);
-            let asked_at = Instant::now();
-            if await_lifecycle_reply(command, slice) {
-                return CooperativeRungEnded::ReplyArrived;
-            }
-            if asked_at.elapsed() < slice {
-                return CooperativeRungEnded::NoReplyCanArrive;
+            match await_lifecycle_reply(
+                command,
+                remaining.min(COOPERATIVE_RUNG_OBSERVATION_INTERVAL),
+            ) {
+                LifecycleReplyAwaited::Arrived => return CooperativeRungEnded::ReplyArrived,
+                LifecycleReplyAwaited::NoReplyCanArrive => {
+                    return CooperativeRungEnded::NoReplyCanArrive;
+                }
+                LifecycleReplyAwaited::SliceElapsed => {}
             }
         }
     }
@@ -448,33 +467,36 @@ signal.signal(signal.SIGTERM, signal.SIG_IGN)
 "#;
 
     /// Neither rung is ever answered, and each budget is spent in full.
-    fn never_answers(_: HelperProcessShutdownCommand, budget: Duration) -> bool {
-        std::thread::sleep(budget);
-        false
+    fn never_answers(_: HelperProcessShutdownCommand, slice: Duration) -> LifecycleReplyAwaited {
+        std::thread::sleep(slice);
+        LifecycleReplyAwaited::SliceElapsed
     }
 
-    /// Neither rung is answered and the answer comes back at once, as it does
-    /// from a closed channel, which is how a test reaches the group rungs
-    /// without waiting six seconds for them.
-    fn never_answers_without_waiting(_: HelperProcessShutdownCommand, _: Duration) -> bool {
-        false
+    /// Neither rung is answered because the channel has closed, which is how a
+    /// test reaches the group rungs without waiting six seconds for them.
+    fn never_answers_without_waiting(
+        _: HelperProcessShutdownCommand,
+        _: Duration,
+    ) -> LifecycleReplyAwaited {
+        LifecycleReplyAwaited::NoReplyCanArrive
     }
 
-    /// Neither rung is answered, but the teardown rung spends a slice of its
-    /// budget — which is what gives an interrupted callback time to unwind. The
-    /// ladder's own five seconds, shortened so the test is not five seconds.
+    /// The stop rung's channel has closed; the teardown rung waits half a
+    /// second — which is what gives an interrupted callback time to unwind —
+    /// and the helper is gone before its next slice.
     fn never_answers_but_lets_an_interrupted_callback_unwind(
         command: HelperProcessShutdownCommand,
         _: Duration,
-    ) -> bool {
+    ) -> LifecycleReplyAwaited {
         if command == HelperProcessShutdownCommand::Teardown {
             std::thread::sleep(Duration::from_millis(500));
+            return LifecycleReplyAwaited::SliceElapsed;
         }
-        false
+        LifecycleReplyAwaited::NoReplyCanArrive
     }
 
-    fn answers_at_once(_: HelperProcessShutdownCommand, _: Duration) -> bool {
-        true
+    fn answers_at_once(_: HelperProcessShutdownCommand, _: Duration) -> LifecycleReplyAwaited {
+        LifecycleReplyAwaited::Arrived
     }
 
     /// The exit code a stub's own `SIGINT` handler leaves through, so a test

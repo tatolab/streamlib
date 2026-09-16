@@ -24,6 +24,16 @@ const HELPER_PROCESS_GROUP_REGISTRY_CAPACITY: usize = 1024;
 /// own process group, which is the app itself.
 const FREE_HELPER_PROCESS_GROUP_SLOT: i32 = 0;
 
+/// Whether `process_group_id` could be a helper's own group.
+///
+/// Never zero, one or a negative, and never the app's own group: a third
+/// interrupt killing that would take the shell job the app runs in with it —
+/// `python app.py | tee log` included.
+fn is_a_registrable_helper_process_group_id(process_group_id: i32) -> bool {
+    // SAFETY: `getpgrp` takes no arguments and cannot fail.
+    process_group_id > 1 && process_group_id != unsafe { libc::getpgrp() }
+}
+
 static REGISTERED_HELPER_PROCESS_GROUP_IDS: [AtomicI32; HELPER_PROCESS_GROUP_REGISTRY_CAPACITY] =
     [const { AtomicI32::new(FREE_HELPER_PROCESS_GROUP_SLOT) };
         HELPER_PROCESS_GROUP_REGISTRY_CAPACITY];
@@ -31,10 +41,11 @@ static REGISTERED_HELPER_PROCESS_GROUP_IDS: [AtomicI32; HELPER_PROCESS_GROUP_REG
 /// Register a helper's process group for the third interrupt to kill, and say
 /// whether it was taken.
 ///
-/// Refused for an id that cannot name a helper's own group — zero, one or a
-/// negative — and when every slot is taken.
+/// Refused for an id that cannot name a helper's own group, and when every slot
+/// is taken.
+#[must_use = "a refused registration leaves the group out of the third interrupt's kill"]
 pub fn register_a_helper_process_group(process_group_id: i32) -> bool {
-    if process_group_id <= 1 {
+    if !is_a_registrable_helper_process_group_id(process_group_id) {
         return false;
     }
     REGISTERED_HELPER_PROCESS_GROUP_IDS.iter().any(|slot| {
@@ -51,7 +62,7 @@ pub fn register_a_helper_process_group(process_group_id: i32) -> bool {
 /// Take a helper's process group out of the registry. A group that was never
 /// registered is left alone.
 pub fn deregister_a_helper_process_group(process_group_id: i32) {
-    if process_group_id == FREE_HELPER_PROCESS_GROUP_SLOT {
+    if !is_a_registrable_helper_process_group_id(process_group_id) {
         return;
     }
     for slot in &REGISTERED_HELPER_PROCESS_GROUP_IDS {
@@ -71,7 +82,6 @@ pub fn deregister_a_helper_process_group(process_group_id: i32) {
 
 /// `SIGKILL` every registered helper process group, returning how many were
 /// signalled.
-#[cfg(unix)]
 pub(crate) fn kill_every_registered_helper_process_group() -> usize {
     let mut signalled = 0usize;
     for slot in &REGISTERED_HELPER_PROCESS_GROUP_IDS {
@@ -90,6 +100,7 @@ pub(crate) fn kill_every_registered_helper_process_group() -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::test_support::a_process_parked_in_a_process_group_of_its_own;
     use serial_test::serial;
     use std::time::{Duration, Instant};
 
@@ -102,26 +113,6 @@ mod tests {
                 deregister_a_helper_process_group(*process_group_id);
             }
         }
-    }
-
-    fn a_process_parked_in_a_group_of_its_own() -> std::process::Child {
-        use std::os::unix::process::CommandExt;
-        let mut command = std::process::Command::new("sleep");
-        command
-            .arg("120")
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
-        // SAFETY: `setpgid` is async-signal-safe, the contract for `pre_exec`.
-        unsafe {
-            command.pre_exec(|| {
-                if libc::setpgid(0, 0) < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-        command.spawn().expect("a parked process starts")
     }
 
     fn has_exited_within(child: &mut std::process::Child, budget: Duration) -> bool {
@@ -140,8 +131,8 @@ mod tests {
     #[test]
     #[serial]
     fn a_registered_group_is_killed_and_one_that_left_the_registry_is_not() {
-        let mut registered = a_process_parked_in_a_group_of_its_own();
-        let mut departed = a_process_parked_in_a_group_of_its_own();
+        let mut registered = a_process_parked_in_a_process_group_of_its_own();
+        let mut departed = a_process_parked_in_a_process_group_of_its_own();
         let registered_group = registered.id() as i32;
         let departed_group = departed.id() as i32;
         let _cleanup = EveryRegisteredHelperProcessGroupDeregisteredOnDrop(vec![
@@ -168,12 +159,14 @@ mod tests {
     }
 
     /// Fail-without-fix: registering zero makes the third interrupt
-    /// `killpg(0, SIGKILL)`, which kills the app's own process group — the
-    /// terminal session and whatever launched the app included.
+    /// `killpg(0, SIGKILL)`, and registering the app's own group id does the
+    /// same by name — either kills the app's whole shell job.
     #[test]
     #[serial]
     fn no_id_that_could_name_the_apps_own_group_is_registered() {
-        for unregistrable_id in [0, 1, -1, -4242] {
+        // SAFETY: `getpgrp` takes no arguments and cannot fail.
+        let the_apps_own_group = unsafe { libc::getpgrp() };
+        for unregistrable_id in [0, 1, -1, -4242, the_apps_own_group] {
             assert!(
                 !register_a_helper_process_group(unregistrable_id),
                 "{unregistrable_id} was registered"

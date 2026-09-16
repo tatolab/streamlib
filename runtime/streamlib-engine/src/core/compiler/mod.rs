@@ -26,5 +26,5 @@ pub(crate) mod scheduling;
 pub use compiler::Compiler;
 pub use pending_operation::PendingOperation;
 pub use processor_thread_shutdown::{
-    AbandonedProcessorThread, refusal_naming_the_abandoned_processor_threads,
+    ProcessorDisplayNameAndId, ProcessorThreadKind, description_of_the_abandoned_processor_threads,
 };

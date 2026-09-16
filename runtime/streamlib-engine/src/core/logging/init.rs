@@ -41,7 +41,7 @@ pub struct StreamlibLoggingGuard {
     /// worker so the reader threads' tail events drain into the
     /// worker queue before shutdown.
     #[cfg(unix)]
-    interceptor: Option<StdioInterceptor>,
+    interceptor: parking_lot::Mutex<Option<StdioInterceptor>>,
 }
 
 impl StreamlibLoggingGuard {
@@ -51,13 +51,24 @@ impl StreamlibLoggingGuard {
             jsonl_path: None,
             default_scope: None,
             #[cfg(unix)]
-            interceptor: None,
+            interceptor: parking_lot::Mutex::new(None),
         }
     }
 
     /// Path of the JSONL log file this runtime is writing to, if any.
     pub fn jsonl_path(&self) -> Option<&std::path::Path> {
         self.jsonl_path.as_deref()
+    }
+
+    /// Hand fds 1 and 2 back to the process, before this guard drops.
+    ///
+    /// For an engine that is never dropped, so whatever the process writes to
+    /// its standard streams on its way out — an error naming what kept the
+    /// engine alive — reaches them rather than a reader that may not forward
+    /// it before the process ends. Idempotent.
+    pub fn stop_intercepting_the_standard_streams(&self) {
+        #[cfg(unix)]
+        drop(self.interceptor.lock().take());
     }
 
     /// Request a best-effort flush without shutting down the worker.
@@ -82,7 +93,7 @@ impl Drop for StreamlibLoggingGuard {
         // intercepted events land in the worker queue while the
         // worker is still draining.
         #[cfg(unix)]
-        drop(self.interceptor.take());
+        self.stop_intercepting_the_standard_streams();
         if let Some(mut worker) = self.worker.take() {
             worker.shutdown_and_join();
         }
@@ -287,7 +298,7 @@ fn build_components(config: StreamlibLoggingConfig) -> Result<(Dispatch, Streaml
         jsonl_path,
         default_scope: None,
         #[cfg(unix)]
-        interceptor,
+        interceptor: parking_lot::Mutex::new(interceptor),
     };
 
     Ok((dispatch, guard))

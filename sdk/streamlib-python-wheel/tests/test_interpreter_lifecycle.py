@@ -12,6 +12,7 @@ interpreter finalization, a non-zero exit — are only visible to a parent.
 import os
 import re
 import signal
+import threading
 import time
 from pathlib import Path
 
@@ -488,7 +489,8 @@ def test_a_process_the_app_started_never_holds_the_apps_output_past_its_exit(
     """Whatever the app starts inherits no copy of the app's own output.
 
     The survivor sleeps thirty seconds holding every descriptor it could
-    inherit. Reading the app's output to its end must finish when the app does.
+    inherit. Reading the app's output to its end must finish within a second of
+    the app's own exit.
 
     Fail-without-fix: the stdio interceptor's copies of the app's stdout were
     inheritable, so the survivor held this pipe for its whole thirty seconds;
@@ -498,22 +500,37 @@ def test_a_process_the_app_started_never_holds_the_apps_output_past_its_exit(
     app = app_under_test("a_process_the_app_started_outlives_it")
     app.await_output_containing("MARKER:SURVIVOR_PID", "the app to start its survivor")
     survivor_pid = matched_pid(SURVIVOR_PID_MARKER, app)
+    exited_at: "list[float]" = []
+
+    def record_when_the_app_exits() -> None:
+        app.process.wait()
+        exited_at.append(time.monotonic())
+
+    waiter = threading.Thread(target=record_when_the_app_exits, daemon=True)
     try:
         app.await_engine_ready()
-        interrupted_at = time.monotonic()
+        waiter.start()
         app.interrupt()
-        app.await_clean_exit()
-        output_ended_in = time.monotonic() - interrupted_at
+        output_ended_at = app.await_end_of_output()
+        waiter.join(timeout=CLEAN_EXIT_BUDGET_AFTER_OUTPUT_ENDS_SECONDS)
 
-        assert output_ended_in < 10.0, (
-            f"the app's output ended {output_ended_in:.1f}s after Ctrl-C — something it "
-            f"started held it open:\n{app.output}"
+        assert exited_at, f"the app never exited:\n{app.output}"
+        assert app.process.returncode == 0, (
+            f"the app exited with {app.process.returncode}:\n{app.output}"
+        )
+        assert output_ended_at - exited_at[0] < 1.0, (
+            f"the app's output ended {output_ended_at - exited_at[0]:.1f}s after it exited — "
+            f"something it started held it open:\n{app.output}"
         )
     finally:
         try:
             os.kill(survivor_pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+
+
+# How long the app may take to be reaped once its output has ended.
+CLEAN_EXIT_BUDGET_AFTER_OUTPUT_ENDS_SECONDS = 10.0
 
 
 @pytest.mark.requires_gpu

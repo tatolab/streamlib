@@ -18,8 +18,8 @@ use pyo3::types::PyDict;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::{
-    AbandonedProcessorThread, ArmedEngineTeardownWatchdog, Runner,
-    refusal_naming_the_abandoned_processor_threads, request_runtime_shutdown,
+    ArmedEngineTeardownWatchdog, ProcessorDisplayNameAndId, Runner,
+    description_of_the_abandoned_processor_threads, request_runtime_shutdown,
     take_runtime_shutdown_escalation,
 };
 
@@ -75,7 +75,7 @@ enum EngineTeardownIncomplete {
     /// returning late would otherwise run the engine's drop — tokio's shutdown,
     /// the stdio restore, device wait-idle — on its own thread during
     /// interpreter finalization.
-    ProcessorThreadsAbandoned(Vec<AbandonedProcessorThread>),
+    ProcessorThreadsAbandoned(Vec<ProcessorDisplayNameAndId>),
     /// Something else still held a reference, so the threads were not joined.
     EngineStillReferenced,
 }
@@ -83,11 +83,9 @@ enum EngineTeardownIncomplete {
 impl std::fmt::Display for EngineTeardownIncomplete {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::ProcessorThreadsAbandoned(abandoned) => write!(
-                formatter,
-                "{}",
-                refusal_naming_the_abandoned_processor_threads(abandoned)
-            ),
+            Self::ProcessorThreadsAbandoned(abandoned) => {
+                formatter.write_str(&description_of_the_abandoned_processor_threads(abandoned))
+            }
             Self::EngineStillReferenced => formatter.write_str(
                 "engine teardown left a live reference behind — engine threads may outlive \
                  interpreter finalization",
@@ -218,27 +216,30 @@ impl PythonRuntimeHandle {
     ) -> Result<(), EngineTeardownIncomplete> {
         python.detach(move || {
             let watchdog = ArmedEngineTeardownWatchdog::arm(teardown_name);
-            Self::stop_and_drop_the_engine(engine, &watchdog)
+            // `start()` parks an `Arc<Runner>` inside the `RuntimeContext` it
+            // stores on the runner, and only `stop()` clears it. Without this
+            // the cycle survives every path where the run loop did not stop the
+            // engine itself — a failed `start()`, or a handle torn down before
+            // it ever ran — and `into_inner` below would join nothing.
+            if let Err(stop_failure) = engine.stop() {
+                tracing::warn!(%stop_failure, "engine stop reported a failure during teardown");
+            }
+            Self::drop_the_stopped_engine_unless_threads_were_abandoned(engine, &watchdog)
         })
     }
 
-    /// Stop the engine and drop it, or leave it to the processor threads that
-    /// were abandoned beneath it.
-    fn stop_and_drop_the_engine(
+    /// Drop a stopped engine, or leave it alive beneath the processor threads
+    /// abandoned on it.
+    fn drop_the_stopped_engine_unless_threads_were_abandoned(
         engine: Arc<Runner>,
         _watched_by: &ArmedEngineTeardownWatchdog,
     ) -> Result<(), EngineTeardownIncomplete> {
-        // `start()` parks an `Arc<Runner>` inside the `RuntimeContext` it
-        // stores on the runner, and only `stop()` clears it. Without this the
-        // cycle survives every path where the run loop did not stop the engine
-        // itself — a failed `start()`, or a handle torn down before it ever
-        // ran — and `into_inner` below would join nothing.
-        if let Err(stop_failure) = engine.stop() {
-            tracing::warn!(%stop_failure, "engine stop reported a failure during teardown");
-        }
-
         let abandoned = engine.processor_threads_abandoned_and_still_running();
         if !abandoned.is_empty() {
+            // The error naming them is written to the process's standard
+            // streams on its way out, which the engine would otherwise go on
+            // intercepting until nothing is left to forward it.
+            engine.stop_intercepting_the_standard_streams();
             std::mem::forget(engine);
             return Err(EngineTeardownIncomplete::ProcessorThreadsAbandoned(
                 abandoned,
@@ -481,7 +482,8 @@ impl PythonRuntimeHandle {
             // reference, and a readiness wait upgrading the running state's weak
             // one would otherwise find the engine still borrowed.
             self.transition_to_torn_down();
-            let teardown_outcome = Self::stop_and_drop_the_engine(engine, &watchdog);
+            let teardown_outcome =
+                Self::drop_the_stopped_engine_unless_threads_were_abandoned(engine, &watchdog);
             drop(shutdown_signals);
             drop(watchdog);
             (run_outcome.and(stop_outcome), teardown_outcome)

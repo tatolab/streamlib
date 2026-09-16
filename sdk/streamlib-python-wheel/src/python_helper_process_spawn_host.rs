@@ -21,7 +21,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::helper_process_shutdown_ladder::{
-    HelperProcessShutdownLadder, HelperProcessShutdownOutcome,
+    HelperProcessShutdownLadder, HelperProcessShutdownOutcome, LifecycleReplyAwaited,
     a_helper_process_has_exited_without_being_reaped,
 };
 use pyo3::prelude::*;
@@ -509,8 +509,9 @@ impl PythonHelperProcessSpawnHostProcessor {
         let outcome = self.child.take().map(|child| {
             let bridge = self.bridge.as_ref();
             HelperProcessShutdownLadder::taking_over(self.processor_display_name.clone(), child)
-                .walk_every_rung(|command, budget| {
-                    bridge.is_some_and(|bridge| await_the_reply_to(bridge, command, budget))
+                .walk_every_rung(|command, slice| match bridge {
+                    Some(bridge) => await_the_reply_to(bridge, command, slice),
+                    None => LifecycleReplyAwaited::NoReplyCanArrive,
                 })
         });
         self.close_the_engines_end_of_the_helper_process(outcome);
@@ -594,7 +595,7 @@ fn reported_reason(reply: &serde_json::Value) -> &str {
         .unwrap_or("it reported no reason")
 }
 
-/// Wait up to `budget` for the reply this command is answered with, reading
+/// Wait up to `slice` for the reply this command is answered with, reading
 /// past whatever the helper sent ahead of it.
 ///
 /// Draining rather than taking the first frame: both commands are on the wire
@@ -604,20 +605,25 @@ fn reported_reason(reply: &serde_json::Value) -> &str {
 fn await_the_reply_to(
     bridge: &SubprocessBridge,
     command: HelperProcessShutdownCommand,
-    budget: Duration,
-) -> bool {
-    let deadline = Instant::now() + budget;
+    slice: Duration,
+) -> LifecycleReplyAwaited {
+    let deadline = Instant::now() + slice;
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
-            return false;
+            return LifecycleReplyAwaited::SliceElapsed;
         }
-        let Ok(reply) = bridge.recv_lifecycle_timeout(remaining) else {
-            // Timed out, or the socket reached EOF because the helper is gone.
-            return false;
-        };
-        if lifecycle_reply_tag(&reply) == Some(command.reply_tag()) {
-            return true;
+        match bridge.recv_lifecycle_timeout(remaining) {
+            Ok(reply) if lifecycle_reply_tag(&reply) == Some(command.reply_tag()) => {
+                return LifecycleReplyAwaited::Arrived;
+            }
+            Ok(_reply_to_an_earlier_command) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                return LifecycleReplyAwaited::SliceElapsed;
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                return LifecycleReplyAwaited::NoReplyCanArrive;
+            }
         }
     }
 }

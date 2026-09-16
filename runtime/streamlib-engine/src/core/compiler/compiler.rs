@@ -11,8 +11,8 @@ use crate::core::compiler::compile_phase::CompilePhase;
 use crate::core::compiler::compile_result::CompileResult;
 use crate::core::compiler::compiler_transaction::CompilerTransactionHandle;
 use crate::core::compiler::processor_thread_shutdown::{
-    AbandonedProcessorThread, AbandonedProcessorThreadStillRunning, ProcessorThreadJoinBudgets,
-    refusal_naming_the_abandoned_processor_threads,
+    AbandonedProcessorThreadStillRunning, ProcessorDisplayNameAndId, ProcessorThreadJoinBudgets,
+    description_of_the_abandoned_processor_threads,
     remove_processors_signalling_every_thread_before_joining_any,
 };
 use crate::core::context::RuntimeContext;
@@ -57,12 +57,12 @@ impl Compiler {
 
     /// The processors whose threads a removal abandoned and that have not
     /// returned since.
-    pub fn processor_threads_abandoned_and_still_running(&self) -> Vec<AbandonedProcessorThread> {
+    pub fn processor_threads_abandoned_and_still_running(&self) -> Vec<ProcessorDisplayNameAndId> {
         let mut abandoned = self.abandoned_processor_threads.lock();
         abandoned.retain(|thread| !thread.join_handle.is_finished());
         abandoned
             .iter()
-            .map(|thread| thread.abandoned.clone())
+            .map(|thread| thread.processor.clone())
             .collect()
     }
 
@@ -132,7 +132,7 @@ impl Compiler {
         use crate::core::graph::{PendingDeletionComponent, ProcessorInstanceComponent};
 
         let mut result = CompileResult::default();
-        let mut abandoned_in_this_compile: Vec<AbandonedProcessorThread> = Vec::new();
+        let mut abandoned_in_this_compile: Vec<ProcessorDisplayNameAndId> = Vec::new();
 
         // =====================================================================
         // 1. Validate and categorize operations
@@ -292,22 +292,15 @@ impl Compiler {
                 }
             }
 
-            let abandoned_by_this_removal =
+            abandoned_in_this_compile =
                 remove_processors_signalling_every_thread_before_joining_any(
                     &graph_arc,
                     &plan.processors_to_remove,
                     ProcessorThreadJoinBudgets::ENGINE_CHOSEN,
                     crate::core::runtime::is_runtime_shutdown_forced,
+                    abandoned_processor_threads,
                 )?;
             result.processors_removed += plan.processors_to_remove.len();
-            abandoned_in_this_compile.extend(
-                abandoned_by_this_removal
-                    .iter()
-                    .map(|thread| thread.abandoned.clone()),
-            );
-            abandoned_processor_threads
-                .lock()
-                .extend(abandoned_by_this_removal);
         }
 
         // =====================================================================
@@ -487,8 +480,8 @@ impl Compiler {
         tracing::info!("Compile complete: {}", result);
 
         if !abandoned_in_this_compile.is_empty() {
-            return Err(refusal_naming_the_abandoned_processor_threads(
-                &abandoned_in_this_compile,
+            return Err(Error::Runtime(
+                description_of_the_abandoned_processor_threads(&abandoned_in_this_compile),
             ));
         }
         Ok(())

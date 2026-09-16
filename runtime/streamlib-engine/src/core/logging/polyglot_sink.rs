@@ -89,9 +89,13 @@ pub(crate) fn uninstall() {
 /// Ask the drain worker to flush what it holds, without waiting for it.
 ///
 /// For a path that is about to `_exit`, where no guard will ever drop.
+///
+/// Never blocks and never panics: its callers are the paths that must not.
 pub(crate) fn request_a_best_effort_flush() {
-    let guard = GLOBAL.read().expect("polyglot sink lock poisoned");
-    if let Some(sink) = guard.as_ref() {
+    let Ok(installed_sink) = GLOBAL.try_read() else {
+        return;
+    };
+    if let Some(sink) = installed_sink.as_ref() {
         let _ = sink.doorbell.try_send(WorkerSignal::Flush);
     }
 }

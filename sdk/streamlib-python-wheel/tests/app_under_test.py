@@ -144,8 +144,8 @@ class AppUnderTest:
     def interrupt(self) -> None:
         self.process.send_signal(signal.SIGINT)
 
-    def await_exit_status(self) -> int:
-        """Drain the remaining output, wait for a timely exit, and return its status."""
+    def await_end_of_output(self) -> float:
+        """Drain the remaining output, and return the monotonic time it ended."""
         deadline = time.monotonic() + CLEAN_EXIT_TIMEOUT_SECONDS
         try:
             while self._next_line(deadline) is not None:
@@ -153,10 +153,16 @@ class AppUnderTest:
         except TimeoutError:
             self.process.kill()
             raise AssertionError(
-                f"the app did not exit within {CLEAN_EXIT_TIMEOUT_SECONDS}s — engine teardown "
-                f"hung, or the interpreter hung at finalization; output:\n{self.output}"
+                f"the app's output did not end within {CLEAN_EXIT_TIMEOUT_SECONDS}s — engine "
+                f"teardown hung, the interpreter hung at finalization, or something the app "
+                f"started holds its output open; output:\n{self.output}"
             ) from None
-        return self.process.wait(timeout=max(0.0, deadline - time.monotonic()))
+        return time.monotonic()
+
+    def await_exit_status(self) -> int:
+        """Drain the remaining output, wait for a timely exit, and return its status."""
+        self.await_end_of_output()
+        return self.process.wait(timeout=CLEAN_EXIT_TIMEOUT_SECONDS)
 
     def await_clean_exit(self) -> "AppUnderTest":
         """Drain the remaining output and require a clean, timely exit."""

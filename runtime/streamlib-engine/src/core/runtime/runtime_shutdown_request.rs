@@ -87,19 +87,22 @@ pub fn request_runtime_shutdown(reason: &str) -> Result<()> {
 /// Escalate shutdown one step for a delivered signal, returning the step it
 /// reached. The caller acts on [`RuntimeShutdownEscalation::ExitAtOnce`];
 /// everything below it is read by the run loop and the ladder.
+///
+/// Only the first step publishes the `RuntimeShutdown` event. A later step
+/// reaches a run loop that is already tearing down, and a publish that blocked
+/// here would leave the next interrupt unread.
 pub(crate) fn escalate_runtime_shutdown_for_a_delivered_signal(
     signal_name: &str,
 ) -> RuntimeShutdownEscalation {
-    let mut reached = RuntimeShutdownEscalation::NotRequested;
-    let _ =
+    let (Ok(previous) | Err(previous)) =
         RUNTIME_SHUTDOWN_ESCALATION.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |stored| {
-            reached = RuntimeShutdownEscalation::from_stored(stored).next_for_a_delivered_signal();
-            Some(reached as u8)
+            Some(RuntimeShutdownEscalation::from_stored(stored).next_for_a_delivered_signal() as u8)
         });
+    let reached = RuntimeShutdownEscalation::from_stored(previous).next_for_a_delivered_signal();
     match reached {
-        RuntimeShutdownEscalation::NotRequested => {}
-        RuntimeShutdownEscalation::Graceful => {
+        RuntimeShutdownEscalation::NotRequested | RuntimeShutdownEscalation::Graceful => {
             tracing::info!(signal_name, "runtime shutdown requested");
+            publish_the_runtime_shutdown_event();
         }
         RuntimeShutdownEscalation::Forced => tracing::warn!(
             signal_name,
@@ -112,7 +115,6 @@ pub(crate) fn escalate_runtime_shutdown_for_a_delivered_signal(
             "a third interrupt: killing every helper's process group and exiting with status 130"
         ),
     }
-    publish_the_runtime_shutdown_event();
     reached
 }
 

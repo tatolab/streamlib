@@ -25,6 +25,7 @@ pub mod lint_logging;
 mod mp4_inspect;
 pub mod normal_build_dep_graph;
 pub mod psnr;
+pub mod source_call_site_scan;
 
 /// Rust source roots a workspace crate may hold: the classic `src/` and the
 /// folder-backed `processors/`. `lint_logging` walks these by name rather
@@ -638,6 +639,22 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "h264_decoder_completes_the_round_trip",
                 "--test",
                 "h265_decoder_completes_the_round_trip",
+                "--no-run",
+            ],
+        ),
+        // Compiled only: an abandoned processor thread reaching the caller of
+        // `Runner::stop()` and of a live `remove_processor` needs a started
+        // `Runner`, and so a GpuContext no CI runner has.
+        (
+            "the abandoned processor thread integration binary compiles",
+            "cargo",
+            &[
+                "test",
+                "--locked",
+                "-p",
+                "streamlib-engine",
+                "--test",
+                "a_processor_thread_that_ignores_shutdown_is_abandoned_and_named",
                 "--no-run",
             ],
         ),

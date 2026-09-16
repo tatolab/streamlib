@@ -26,6 +26,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
+use crate::source_call_site_scan::{blank_out_lines, call_sites_of, is_a_whole_line_comment};
+
 /// Workspace-relative roots that own every `vulkanalia` call.
 const SCAN_ROOTS: &[&str] = &[
     "runtime/streamlib-engine/src/vulkan",
@@ -148,59 +150,18 @@ pub fn scan(workspace_root: &Path) -> Result<UnboundedCStrFromPtrScanReport> {
 /// Every `CStr::from_ptr(…)` in `body` whose argument reaches through
 /// `.as_ptr()`, as `(1-based line, whitespace-collapsed call text)`.
 fn unbounded_cstr_from_ptr_calls(body: &str) -> Vec<(usize, String)> {
-    let code = blank_out_exempt_lines(body);
-    let mut calls = Vec::new();
-    let mut search_from = 0usize;
-    while let Some(offset) = code[search_from..].find(UNBOUNDED_CSTR_CONSTRUCTOR) {
-        let call_start = search_from + offset;
-        let open_paren = call_start + UNBOUNDED_CSTR_CONSTRUCTOR.len() - 1;
-        let Some(close_paren) = matching_close_paren(&code, open_paren) else {
-            break;
-        };
-        if code[open_paren + 1..close_paren].contains(OWNED_STORAGE_POINTER_ACCESSOR) {
-            calls.push((
-                code[..call_start].matches('\n').count() + 1,
-                code[call_start..=close_paren]
-                    .split_whitespace()
-                    .collect::<Vec<_>>()
-                    .join(" "),
-            ));
-        }
-        search_from = close_paren + 1;
-    }
-    calls
-}
-
-/// Blank the lines the gate does not read while keeping the line count, so a
-/// reported line number still points at the source.
-fn blank_out_exempt_lines(body: &str) -> String {
-    body.lines()
-        .map(|line| {
-            if line.trim_start().starts_with("//") || line.contains(ALLOW_LINE_PRAGMA) {
-                ""
-            } else {
-                line
-            }
+    let code = blank_out_lines(body, |line| {
+        is_a_whole_line_comment(line) || line.contains(ALLOW_LINE_PRAGMA)
+    });
+    call_sites_of(&code, UNBOUNDED_CSTR_CONSTRUCTOR)
+        .into_iter()
+        .filter(|call_site| {
+            call_site
+                .argument_text
+                .contains(OWNED_STORAGE_POINTER_ACCESSOR)
         })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn matching_close_paren(code: &str, open_paren: usize) -> Option<usize> {
-    let mut depth = 0usize;
-    for (offset, byte) in code.as_bytes().iter().enumerate().skip(open_paren) {
-        match byte {
-            b'(' => depth += 1,
-            b')' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(offset);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
+        .map(|call_site| (call_site.line, call_site.collapsed_call_text))
+        .collect()
 }
 
 #[cfg(test)]

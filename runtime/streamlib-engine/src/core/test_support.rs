@@ -274,3 +274,60 @@ impl<S: tracing::Subscriber> Layer<S> for CapturedTracingWarnings {
             .push(rendered);
     }
 }
+
+/// A `sleep` parked in a process group of its own, standing in for a helper
+/// process.
+pub(crate) fn a_process_parked_in_a_process_group_of_its_own() -> std::process::Child {
+    use std::os::unix::process::CommandExt;
+    let mut command = std::process::Command::new("sleep");
+    command
+        .arg("120")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    // SAFETY: `setpgid` is async-signal-safe, the contract for `pre_exec`.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setpgid(0, 0) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    command.spawn().expect("a parked process starts")
+}
+
+/// Whether every member of `process_group_id` is gone inside `budget`.
+///
+/// Signal 0 rather than a wait: a group's members are not necessarily this
+/// process's children.
+pub(crate) fn a_process_group_is_gone_within(
+    process_group_id: libc::pid_t,
+    budget: std::time::Duration,
+) -> bool {
+    let deadline = std::time::Instant::now() + budget;
+    // SAFETY: signal 0 delivers nothing; it only asks whether a member is left.
+    while unsafe { libc::killpg(process_group_id, 0) } == 0 {
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    true
+}
+
+/// Re-run the test at `test_path` in a child process of this test binary with
+/// `environment_variable` set to `value`, and wait for it — for a test whose
+/// passing ends the process it runs in.
+pub(crate) fn rerun_this_test_in_a_child_process(
+    test_path: &str,
+    environment_variable: &str,
+    value: &std::ffi::OsStr,
+) -> std::process::Output {
+    std::process::Command::new(std::env::current_exe().expect("the test binary's own path"))
+        .args([test_path, "--exact", "--test-threads=1", "--nocapture"])
+        .env(environment_variable, value)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("the test binary re-runs this test in a child process")
+}

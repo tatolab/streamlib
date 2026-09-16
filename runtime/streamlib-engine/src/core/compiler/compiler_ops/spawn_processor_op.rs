@@ -8,6 +8,7 @@ use std::os::fd::OwnedFd;
 
 use parking_lot::{Mutex, RwLock};
 
+use crate::core::compiler::ProcessorThreadKind;
 use crate::core::compiler::scheduling::{SchedulingStrategy, scheduling_strategy_for_processor};
 
 use crate::core::context::{
@@ -162,7 +163,10 @@ fn spawn_dedicated_thread(
     };
 
     let processor_arc_clone = Arc::clone(&processor_arc);
-    let hosts_a_helper_process = matches!(runtime, ProcessorRuntime::Python);
+    let thread_kind = match runtime {
+        ProcessorRuntime::Rust => ProcessorThreadKind::NativeProcessor,
+        ProcessorRuntime::Python => ProcessorThreadKind::HelperProcessHost,
+    };
 
     // Gates every FullAccess mint on this thread (setup / start / stop /
     // teardown). Not derived: every processor the engine can spawn is compiled
@@ -432,7 +436,7 @@ fn spawn_dedicated_thread(
             })?;
         node.insert(ThreadHandleComponent {
             join_handle: thread,
-            hosts_a_helper_process,
+            kind: thread_kind,
         });
     }
 

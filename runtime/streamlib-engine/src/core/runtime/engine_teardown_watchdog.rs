@@ -29,10 +29,6 @@ pub const EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED: i32 = 124;
 /// The thread holding it may be the one that is stuck.
 const PROGRESS_NOTE_READ_BUDGET: Duration = Duration::from_millis(100);
 
-/// How long the watchdog gives the log's drain worker to write why the process
-/// is going.
-const LOG_FLUSH_GRACE_BEFORE_ENDING_THE_PROCESS: Duration = Duration::from_millis(100);
-
 /// What the teardown in progress is waiting on, in words, for the watchdog to
 /// report if it fires.
 static WHAT_THE_ENGINE_TEARDOWN_IS_WAITING_ON: parking_lot::Mutex<String> =
@@ -93,12 +89,9 @@ fn watch_the_teardown(teardown_name: &str, budget: Duration, disarmed: Receiver<
             "{}",
             the_watchdogs_expiry_message(teardown_name, budget, &waiting_on)
         );
-        crate::core::logging::request_a_best_effort_flush();
-        std::thread::sleep(LOG_FLUSH_GRACE_BEFORE_ENDING_THE_PROCESS);
-        // SAFETY: `_exit` takes a scalar status and does not return. Not
-        // `exit`: an `atexit` hook or a destructor would re-enter the teardown
-        // that has just hung.
-        unsafe { libc::_exit(EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED) }
+        crate::core::runtime::kill_every_helper_process_group_and_end_the_process_at_once(
+            EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED,
+        );
     }
 }
 
@@ -113,22 +106,14 @@ fn the_watchdogs_expiry_message(teardown_name: &str, budget: Duration, waiting_o
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::test_support::rerun_this_test_in_a_child_process;
 
-    /// Set in the child process a watchdog test re-runs itself in, naming what
-    /// the child does there.
-    const WATCHDOG_CHILD_SCENARIO_ENVIRONMENT_VARIABLE: &str =
-        "STREAMLIB_TEST_ENGINE_TEARDOWN_WATCHDOG_CHILD_SCENARIO";
+    /// Set in the child process a watchdog test re-runs itself in, naming the
+    /// file the child records what it needs the parent to check.
+    const WATCHDOG_CHILD_RECORD_PATH_ENVIRONMENT_VARIABLE: &str =
+        "STREAMLIB_TEST_ENGINE_TEARDOWN_WATCHDOG_CHILD_RECORD_PATH";
 
     const A_WATCHDOG_BUDGET_A_TEST_CAN_OUTLIVE: Duration = Duration::from_millis(300);
-
-    fn run_this_test_in_a_child_process(test_path: &str, scenario: &str) -> std::process::Output {
-        std::process::Command::new(std::env::current_exe().unwrap())
-            .args([test_path, "--exact", "--test-threads=1", "--nocapture"])
-            .env(WATCHDOG_CHILD_SCENARIO_ENVIRONMENT_VARIABLE, scenario)
-            .stdin(std::process::Stdio::null())
-            .output()
-            .expect("the test binary re-runs this test in a child process")
-    }
 
     /// A subscriber that writes each record to stderr as it is emitted, so the
     /// watchdog's line is on the pipe before `_exit`.
@@ -141,10 +126,21 @@ mod tests {
         );
     }
 
+    /// A hung teardown ends with 124, names what it waited on, and takes every
+    /// helper's process group with it — a helper's descendants included, which
+    /// the kernel's parent-death signal never reaches.
     #[test]
     fn a_teardown_that_outlives_the_watchdog_ends_the_process_naming_what_it_waited_on() {
-        if std::env::var_os(WATCHDOG_CHILD_SCENARIO_ENVIRONMENT_VARIABLE).is_some() {
+        if let Some(record_path) = std::env::var_os(WATCHDOG_CHILD_RECORD_PATH_ENVIRONMENT_VARIABLE)
+        {
             log_straight_to_standard_error();
+            let stand_in_helper =
+                crate::core::test_support::a_process_parked_in_a_process_group_of_its_own();
+            std::fs::write(&record_path, stand_in_helper.id().to_string())
+                .expect("the record is written");
+            assert!(crate::core::runtime::register_a_helper_process_group(
+                stand_in_helper.id() as i32
+            ));
             let _armed = ArmedEngineTeardownWatchdog::arm_with_budget(
                 "the test's teardown",
                 A_WATCHDOG_BUDGET_A_TEST_CAN_OUTLIVE,
@@ -154,10 +150,13 @@ mod tests {
             panic!("the watchdog did not end a teardown that outlived it");
         }
 
+        let record = tempfile::tempdir().expect("a temporary directory");
+        let record_path = record.path().join("helper-process-group");
         let started = std::time::Instant::now();
-        let child = run_this_test_in_a_child_process(
+        let child = rerun_this_test_in_a_child_process(
             "core::runtime::engine_teardown_watchdog::tests::a_teardown_that_outlives_the_watchdog_ends_the_process_naming_what_it_waited_on",
-            "hung",
+            WATCHDOG_CHILD_RECORD_PATH_ENVIRONMENT_VARIABLE,
+            record_path.as_os_str(),
         );
         let stderr = String::from_utf8_lossy(&child.stderr);
 
@@ -176,11 +175,23 @@ mod tests {
             stderr.contains("the processor thread of HungProbe"),
             "the watchdog did not say what the teardown was waiting on:\n{stderr}"
         );
+        let helper_process_group: libc::pid_t = std::fs::read_to_string(&record_path)
+            .expect("the child recorded its helper's process group")
+            .trim()
+            .parse()
+            .expect("the record is a process group id");
+        assert!(
+            crate::core::test_support::a_process_group_is_gone_within(
+                helper_process_group,
+                Duration::from_secs(5)
+            ),
+            "a helper's process group outlived the watchdog's exit"
+        );
     }
 
     #[test]
     fn a_teardown_that_finishes_disarms_the_watchdog() {
-        if std::env::var_os(WATCHDOG_CHILD_SCENARIO_ENVIRONMENT_VARIABLE).is_some() {
+        if std::env::var_os(WATCHDOG_CHILD_RECORD_PATH_ENVIRONMENT_VARIABLE).is_some() {
             let armed = ArmedEngineTeardownWatchdog::arm_with_budget(
                 "the test's teardown",
                 A_WATCHDOG_BUDGET_A_TEST_CAN_OUTLIVE,
@@ -190,9 +201,10 @@ mod tests {
             return;
         }
 
-        let child = run_this_test_in_a_child_process(
+        let child = rerun_this_test_in_a_child_process(
             "core::runtime::engine_teardown_watchdog::tests::a_teardown_that_finishes_disarms_the_watchdog",
-            "finished",
+            WATCHDOG_CHILD_RECORD_PATH_ENVIRONMENT_VARIABLE,
+            std::ffi::OsStr::new("unused"),
         );
         assert!(
             child.status.success(),

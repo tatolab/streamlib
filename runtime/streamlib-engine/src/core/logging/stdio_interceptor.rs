@@ -144,13 +144,9 @@ fn join_intercept_readers_within(
     let deadline = Instant::now() + budget;
     let mut still_reading: Vec<JoinHandle<()>> = readers.into_iter().collect();
     loop {
-        let (returned, reading): (Vec<_>, Vec<_>) = still_reading
-            .into_iter()
-            .partition(|reader| reader.is_finished());
-        for reader in returned {
-            let _ = reader.join();
+        for returned in still_reading.extract_if(.., |reader| reader.is_finished()) {
+            let _ = returned.join();
         }
-        still_reading = reading;
         if still_reading.is_empty() || Instant::now() >= deadline {
             break;
         }
@@ -158,7 +154,8 @@ fn join_intercept_readers_within(
     }
     if !still_reading.is_empty() {
         tracing::warn!(
-            "{} stdio intercept reader(s) left running: a process this app started still              holds the app's standard output or error",
+            "{} stdio intercept reader(s) left running: a process this app started still \
+             holds the app's standard output or error",
             still_reading.len()
         );
     }
