@@ -93,6 +93,10 @@ const WINDOWED_PORT_MAILBOX_DEPTH_MARGIN: usize = 4;
 /// of a channel's depth up front.
 pub(crate) const WINDOWED_PORT_SUBSCRIBER_RING_DEPTH: usize = 64;
 
+// A channel created for a windowed destination must still hold every profile's
+// ring.
+const _: () = assert!(WINDOWED_PORT_SUBSCRIBER_RING_DEPTH >= DeliveryProfile::ORDERED_DEPTH);
+
 impl ResolvedAudioWindowContract {
     /// Read the values a declaration states, refusing one the stage could not
     /// honour.

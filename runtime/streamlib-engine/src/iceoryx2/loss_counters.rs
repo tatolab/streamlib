@@ -127,11 +127,6 @@ impl InboundLinkDiscardedSampleCounter {
     pub fn record_discarded_samples(&self, discarded_sample_count: u64) {
         self.0.fetch_add(discarded_sample_count, Ordering::Relaxed);
     }
-
-    /// How many of this link's samples flushes have discarded since it was wired.
-    pub fn discarded_sample_count(&self) -> u64 {
-        self.0.load(Ordering::Relaxed)
-    }
 }
 
 /// Every windowed inbound link's discarded-sample counter for one destination

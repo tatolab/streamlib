@@ -73,8 +73,13 @@ impl JsonSerializableComponent for ProcessorMetrics {
         let discarded_samples_by_link = self
             .discarded_sample_counts_by_inbound_link
             .discarded_sample_count_snapshot_by_inbound_link();
-        if !discarded_samples_by_link.is_empty() {
-            rendered["discarded_samples_by_link"] = serde_json::json!(discarded_samples_by_link);
+        if !discarded_samples_by_link.is_empty()
+            && let Some(rendered_keys) = rendered.as_object_mut()
+        {
+            rendered_keys.insert(
+                "discarded_samples_by_link".to_string(),
+                serde_json::json!(discarded_samples_by_link),
+            );
         }
         rendered
     }

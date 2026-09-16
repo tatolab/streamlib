@@ -391,20 +391,29 @@ fn notify_service_name_for(dest_proc_id: &ProcessorUniqueId) -> String {
     format!("streamlib/{}/notify", dest_proc_id)
 }
 
-/// How many `connect()` links leave `source_port` — the destinations its
-/// channel feeds, since a channel keys on its source output port.
-fn channel_destination_count(
-    graph: &mut Graph,
+/// Every `connect()` link leaving `source_port` — the links of the one channel
+/// that port publishes to, since a channel keys on its source output port.
+fn links_out_of_source_output_port<'a>(
+    graph: &'a Graph,
     source_proc_id: &ProcessorUniqueId,
-    source_port: &str,
-) -> usize {
+    source_port: &'a str,
+) -> impl Iterator<Item = &'a Link> + use<'a> {
     graph
-        .traversal_mut()
+        .traversal()
         .v(source_proc_id)
         .out_e()
         .iter()
-        .filter(|link| link.from_port().port_name == source_port)
-        .count()
+        .filter(move |link| link.from_port().port_name == source_port)
+}
+
+/// How many `connect()` links leave `source_port` — the destinations its
+/// channel feeds.
+fn channel_destination_count(
+    graph: &Graph,
+    source_proc_id: &ProcessorUniqueId,
+    source_port: &str,
+) -> usize {
+    links_out_of_source_output_port(graph, source_proc_id, source_port).count()
 }
 
 /// The `max_subscribers` every channel data service is created with:
@@ -471,12 +480,7 @@ fn channel_service_creation_depth(
     {
         return Ok(live_creation_depth);
     }
-    for link in graph
-        .traversal()
-        .v(source_proc_id)
-        .out_e()
-        .iter()
-        .filter(|link| link.from_port().port_name == source_port)
+    for link in links_out_of_source_output_port(graph, source_proc_id, source_port)
         .filter(|link| link_still_counts_toward_its_ports(link))
     {
         let destination = link.to_port();
@@ -505,12 +509,7 @@ fn creation_depth_of_the_live_channel(
     source_proc_id: &ProcessorUniqueId,
     source_port: &str,
 ) -> Result<Option<usize>> {
-    let held_open_by_a_link = graph
-        .traversal()
-        .v(source_proc_id)
-        .out_e()
-        .iter()
-        .filter(|link| link.from_port().port_name == source_port)
+    let held_open_by_a_link = links_out_of_source_output_port(graph, source_proc_id, source_port)
         .find_map(|link| {
             link.get::<Iceoryx2ServicesHeldOpenForLinkComponent>()
                 .map(|held| held.channel_data_service.channel_service_creation_depth())
@@ -518,10 +517,9 @@ fn creation_depth_of_the_live_channel(
     if held_open_by_a_link.is_some() {
         return Ok(held_open_by_a_link);
     }
-    iceoryx2_node.creation_depth_of_an_existing_channel_service(&channel_service_name(
-        source_proc_id,
-        source_port,
-    )?)
+    Ok(iceoryx2_node
+        .open_existing_channel_service(&channel_service_name(source_proc_id, source_port)?)?
+        .map(|held_elsewhere| held_elsewhere.channel_service_creation_depth()))
 }
 
 /// The ring a destination input port's subscriber takes: the windowed ring for a
@@ -2810,7 +2808,7 @@ mod tests {
         let (channel, _) = open_test_link_services(
             "match-device-graph",
             false,
-            crate::iceoryx2::WINDOWED_PORT_SUBSCRIBER_RING_DEPTH,
+            WINDOWED_PORT_SUBSCRIBER_RING_DEPTH,
         );
         wire_rust_dest(
             &mut graph,
@@ -3097,9 +3095,9 @@ mod tests {
     }
 
     /// The depth the channel a wired link holds open was created at.
-    fn creation_depth_of_the_channel_held_by(graph: &mut Graph, link_id: &LinkUniqueId) -> usize {
+    fn creation_depth_of_the_channel_held_by(graph: &Graph, link_id: &LinkUniqueId) -> usize {
         graph
-            .traversal_mut()
+            .traversal()
             .e(link_id)
             .first()
             .expect("the link is in the graph")
@@ -3123,6 +3121,44 @@ mod tests {
         .expect("an audio block encodes")
     }
 
+    /// An app-process windowed consumer added to the graph and linked, unwired,
+    /// from a source's `out1` into its `audio` port.
+    struct WindowedConsumerLinkedFromOut1 {
+        dest_id: String,
+        link_id: LinkUniqueId,
+        dest_input: Arc<crate::iceoryx2::InputMailboxesInner>,
+    }
+
+    fn add_a_windowed_consumer_linked_from_out1(
+        graph: &mut Graph,
+        source_id: &str,
+    ) -> WindowedConsumerLinkedFromOut1 {
+        use crate::core::test_support::MockWindowedAudioConsumerProcessor;
+
+        let dest_id = add_mock_windowed_audio_consumer(graph);
+        let (_, _, dest_input) =
+            attach_mock_instance::<MockWindowedAudioConsumerProcessor::Processor>(graph, &dest_id);
+        let link_id = add_link_from_out1_to(graph, source_id, &dest_id, "audio");
+        WindowedConsumerLinkedFromOut1 {
+            dest_id,
+            link_id,
+            dest_input: dest_input.expect("a windowed consumer holds input mailboxes"),
+        }
+    }
+
+    /// An app-process source whose `out1` is linked, unwired, to an app-process
+    /// `newest` consumer. Hands back the source's id and the link.
+    fn add_a_source_linked_to_a_plain_consumer(graph: &mut Graph) -> (String, LinkUniqueId) {
+        use crate::core::test_support::{MockInputOnlyProcessor, MockOutputOnlyProcessor};
+
+        let source_id = add_mock_output_only(graph);
+        attach_mock_instance::<MockOutputOnlyProcessor::Processor>(graph, &source_id);
+        let plain_consumer_id = add_mock_input_only(graph);
+        attach_mock_instance::<MockInputOnlyProcessor::Processor>(graph, &plain_consumer_id);
+        let plain_link = add_link_from_out1_to_in1(graph, &source_id, &plain_consumer_id);
+        (source_id, plain_link)
+    }
+
     /// An app-process source wired through the op to an app-process windowed
     /// consumer, with the handles a test drives the link through.
     struct NativeLinkIntoAWindowedPort {
@@ -3135,34 +3171,32 @@ mod tests {
 
     impl NativeLinkIntoAWindowedPort {
         fn wire() -> Self {
-            use crate::core::test_support::{
-                MockOutputOnlyProcessor, MockWindowedAudioConsumerProcessor,
-            };
+            use crate::core::test_support::MockOutputOnlyProcessor;
 
             let mut graph = Graph::new();
             let source_id = add_mock_output_only(&mut graph);
             let (_, source_output, _) =
                 attach_mock_instance::<MockOutputOnlyProcessor::Processor>(&mut graph, &source_id);
-            let dest_id = add_mock_windowed_audio_consumer(&mut graph);
-            let (_, _, dest_input) = attach_mock_instance::<
-                MockWindowedAudioConsumerProcessor::Processor,
-            >(&mut graph, &dest_id);
-            let link_id = add_link_from_out1_to(&mut graph, &source_id, &dest_id, "audio");
-            open_iceoryx2_service(&mut graph, &link_id, &Iceoryx2Node::for_this_test_process())
-                .expect("the windowed consumer wires");
+            let windowed = add_a_windowed_consumer_linked_from_out1(&mut graph, &source_id);
+            open_iceoryx2_service(
+                &mut graph,
+                &windowed.link_id,
+                &Iceoryx2Node::for_this_test_process(),
+            )
+            .expect("the windowed consumer wires");
 
             Self {
                 graph,
-                dest_id: dest_id.as_str().into(),
-                link_id,
+                dest_id: windowed.dest_id.as_str().into(),
+                link_id: windowed.link_id,
                 source_output: source_output.expect("an output-only mock holds an output writer"),
-                dest_input: dest_input.expect("a windowed consumer holds input mailboxes"),
+                dest_input: windowed.dest_input,
             }
         }
 
-        fn rendered_metrics_of_the_destination(&mut self) -> serde_json::Value {
+        fn rendered_metrics_of_the_destination(&self) -> serde_json::Value {
             self.graph
-                .traversal_mut()
+                .traversal()
                 .v(&self.dest_id)
                 .first()
                 .expect("the destination's node must be in the graph")
@@ -3178,11 +3212,11 @@ mod tests {
     /// held service states 16.
     #[test]
     fn a_channel_created_for_a_windowed_destination_holds_the_windowed_ring_depth() {
-        let mut link = NativeLinkIntoAWindowedPort::wire();
+        let link = NativeLinkIntoAWindowedPort::wire();
 
         assert_eq!(
-            creation_depth_of_the_channel_held_by(&mut link.graph, &link.link_id),
-            crate::iceoryx2::WINDOWED_PORT_SUBSCRIBER_RING_DEPTH,
+            creation_depth_of_the_channel_held_by(&link.graph, &link.link_id),
+            WINDOWED_PORT_SUBSCRIBER_RING_DEPTH,
         );
     }
 
@@ -3192,32 +3226,18 @@ mod tests {
     #[test]
     fn a_windowed_consumer_added_beside_a_plain_one_sizes_the_channel_even_when_the_plain_link_opens_first()
      {
-        use crate::core::test_support::{
-            MockInputOnlyProcessor, MockOutputOnlyProcessor, MockWindowedAudioConsumerProcessor,
-        };
-
         let node = Iceoryx2Node::for_this_test_process();
         let mut graph = Graph::new();
-        let source_id = add_mock_output_only(&mut graph);
-        attach_mock_instance::<MockOutputOnlyProcessor::Processor>(&mut graph, &source_id);
-        let plain_consumer_id = add_mock_input_only(&mut graph);
-        attach_mock_instance::<MockInputOnlyProcessor::Processor>(&mut graph, &plain_consumer_id);
-        let windowed_consumer_id = add_mock_windowed_audio_consumer(&mut graph);
-        attach_mock_instance::<MockWindowedAudioConsumerProcessor::Processor>(
-            &mut graph,
-            &windowed_consumer_id,
-        );
-        let plain_link = add_link_from_out1_to_in1(&mut graph, &source_id, &plain_consumer_id);
-        let windowed_link =
-            add_link_from_out1_to(&mut graph, &source_id, &windowed_consumer_id, "audio");
+        let (source_id, plain_link) = add_a_source_linked_to_a_plain_consumer(&mut graph);
+        let windowed = add_a_windowed_consumer_linked_from_out1(&mut graph, &source_id);
 
         open_iceoryx2_service(&mut graph, &plain_link, &node).expect("the plain consumer wires");
-        open_iceoryx2_service(&mut graph, &windowed_link, &node)
+        open_iceoryx2_service(&mut graph, &windowed.link_id, &node)
             .expect("the windowed consumer joins the channel created for it");
 
         assert_eq!(
-            creation_depth_of_the_channel_held_by(&mut graph, &plain_link),
-            crate::iceoryx2::WINDOWED_PORT_SUBSCRIBER_RING_DEPTH,
+            creation_depth_of_the_channel_held_by(&graph, &plain_link),
+            WINDOWED_PORT_SUBSCRIBER_RING_DEPTH,
         );
     }
 
@@ -3229,38 +3249,22 @@ mod tests {
     #[test]
     fn a_windowed_consumer_connected_onto_a_running_shallower_channel_is_refused_naming_both_depths()
      {
-        use crate::core::test_support::{
-            MockInputOnlyProcessor, MockOutputOnlyProcessor, MockWindowedAudioConsumerProcessor,
-        };
-
         let node = Iceoryx2Node::for_this_test_process();
         let mut graph = Graph::new();
-        let source_id = add_mock_output_only(&mut graph);
-        attach_mock_instance::<MockOutputOnlyProcessor::Processor>(&mut graph, &source_id);
-        let plain_consumer_id = add_mock_input_only(&mut graph);
-        attach_mock_instance::<MockInputOnlyProcessor::Processor>(&mut graph, &plain_consumer_id);
-        let plain_link = add_link_from_out1_to_in1(&mut graph, &source_id, &plain_consumer_id);
+        let (source_id, plain_link) = add_a_source_linked_to_a_plain_consumer(&mut graph);
         open_iceoryx2_service(&mut graph, &plain_link, &node).expect("the plain consumer wires");
+        let windowed = add_a_windowed_consumer_linked_from_out1(&mut graph, &source_id);
 
-        let windowed_consumer_id = add_mock_windowed_audio_consumer(&mut graph);
-        let (_, _, windowed_consumer_input) = attach_mock_instance::<
-            MockWindowedAudioConsumerProcessor::Processor,
-        >(&mut graph, &windowed_consumer_id);
-        let windowed_link =
-            add_link_from_out1_to(&mut graph, &source_id, &windowed_consumer_id, "audio");
-
-        let refusal = open_iceoryx2_service(&mut graph, &windowed_link, &node)
+        let refusal = open_iceoryx2_service(&mut graph, &windowed.link_id, &node)
             .expect_err("a windowed port cannot read through a ring its channel cannot hold")
             .to_string();
 
         assert_the_refusal_names_the_port_the_link_both_depths_and_the_fix(
             &refusal,
-            &windowed_link,
+            &windowed.link_id,
         );
         assert!(
-            !windowed_consumer_input
-                .expect("a windowed consumer holds input mailboxes")
-                .has_subscribers(),
+            !windowed.dest_input.has_subscribers(),
             "a refused link leaves no port half-wired"
         );
     }
@@ -3273,10 +3277,7 @@ mod tests {
         windowed_link: &LinkUniqueId,
     ) {
         let channel_depth = format!("created {} bags deep", DeliveryProfile::ORDERED_DEPTH);
-        let ring_depth = format!(
-            "{}-bag ring",
-            crate::iceoryx2::WINDOWED_PORT_SUBSCRIBER_RING_DEPTH
-        );
+        let ring_depth = format!("{}-bag ring", WINDOWED_PORT_SUBSCRIBER_RING_DEPTH);
         assert!(
             refusal.contains("'audio'")
                 && refusal.contains(windowed_link.as_str())
@@ -3298,17 +3299,9 @@ mod tests {
     #[test]
     fn a_windowed_consumer_onto_a_shallower_channel_only_a_tap_still_holds_is_refused_naming_both_depths()
      {
-        use crate::core::test_support::{
-            MockInputOnlyProcessor, MockOutputOnlyProcessor, MockWindowedAudioConsumerProcessor,
-        };
-
         let node = Iceoryx2Node::for_this_test_process();
         let mut graph = Graph::new();
-        let source_id = add_mock_output_only(&mut graph);
-        attach_mock_instance::<MockOutputOnlyProcessor::Processor>(&mut graph, &source_id);
-        let plain_consumer_id = add_mock_input_only(&mut graph);
-        attach_mock_instance::<MockInputOnlyProcessor::Processor>(&mut graph, &plain_consumer_id);
-        let plain_link = add_link_from_out1_to_in1(&mut graph, &source_id, &plain_consumer_id);
+        let (source_id, plain_link) = add_a_source_linked_to_a_plain_consumer(&mut graph);
         open_iceoryx2_service(&mut graph, &plain_link, &node).expect("the plain consumer wires");
         let _held_open_the_way_a_tap_holds_it = node
             .open_or_create_service(
@@ -3319,22 +3312,15 @@ mod tests {
             )
             .expect("a tap joins the running channel");
         close_iceoryx2_service(&mut graph, &plain_link).expect("the plain consumer disconnects");
+        let windowed = add_a_windowed_consumer_linked_from_out1(&mut graph, &source_id);
 
-        let windowed_consumer_id = add_mock_windowed_audio_consumer(&mut graph);
-        attach_mock_instance::<MockWindowedAudioConsumerProcessor::Processor>(
-            &mut graph,
-            &windowed_consumer_id,
-        );
-        let windowed_link =
-            add_link_from_out1_to(&mut graph, &source_id, &windowed_consumer_id, "audio");
-
-        let refusal = open_iceoryx2_service(&mut graph, &windowed_link, &node)
+        let refusal = open_iceoryx2_service(&mut graph, &windowed.link_id, &node)
             .expect_err("the channel the tap holds is still 16 deep")
             .to_string();
 
         assert_the_refusal_names_the_port_the_link_both_depths_and_the_fix(
             &refusal,
-            &windowed_link,
+            &windowed.link_id,
         );
     }
 
@@ -3347,7 +3333,7 @@ mod tests {
     #[test]
     fn a_stalled_windowed_consumer_counts_what_its_sixty_four_bag_ring_overwrote() {
         const BAGS_PAST_THE_RING: usize = 6;
-        let mut link = NativeLinkIntoAWindowedPort::wire();
+        let link = NativeLinkIntoAWindowedPort::wire();
 
         let write_one_block = || {
             link.source_output
@@ -3356,7 +3342,7 @@ mod tests {
         };
         write_one_block();
         link.dest_input.receive_pending();
-        for _ in 0..crate::iceoryx2::WINDOWED_PORT_SUBSCRIBER_RING_DEPTH + BAGS_PAST_THE_RING {
+        for _ in 0..WINDOWED_PORT_SUBSCRIBER_RING_DEPTH + BAGS_PAST_THE_RING {
             write_one_block();
         }
         link.dest_input.receive_pending();
@@ -3375,7 +3361,7 @@ mod tests {
     /// and the link renders no loss for a run that threw audio away.
     #[test]
     fn a_gap_flush_at_a_windowed_destination_renders_its_discarded_samples_under_its_link() {
-        let mut link = NativeLinkIntoAWindowedPort::wire();
+        let link = NativeLinkIntoAWindowedPort::wire();
         let link_id = link.link_id.to_string();
 
         assert_eq!(
@@ -3451,8 +3437,7 @@ mod tests {
             DeliveryProfile::Ordered.resolve(),
             ChannelSizing {
                 max_subscribers: 2,
-                channel_service_creation_depth:
-                    crate::iceoryx2::WINDOWED_PORT_SUBSCRIBER_RING_DEPTH,
+                channel_service_creation_depth: WINDOWED_PORT_SUBSCRIBER_RING_DEPTH,
             },
             1,
             &"L-helper-windowed-ring".into(),
@@ -3467,7 +3452,7 @@ mod tests {
             .as_setup_command_ports();
         assert_eq!(
             recorded["inputs"][0]["input_port_ring_depth"],
-            serde_json::json!(crate::iceoryx2::WINDOWED_PORT_SUBSCRIBER_RING_DEPTH),
+            serde_json::json!(WINDOWED_PORT_SUBSCRIBER_RING_DEPTH),
         );
     }
 

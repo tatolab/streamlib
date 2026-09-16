@@ -598,6 +598,57 @@ fn a_format_change_flush_counts_the_remainder_in_per_channel_samples() {
     );
 }
 
+/// A bag the stage refuses flushes nothing, so the remainder a later flush
+/// discards is still there to be counted.
+///
+/// Three hundred four-channel frames sit in the remainder when four hundred
+/// stereo frames, which a four-channel contract cannot convert, arrive and are
+/// refused. The next four-channel block lands where the refused one ended, well
+/// past half a block from where the remainder's run expects, and its flush
+/// counts the 300. Flushing before
+/// the refusal throws those 300 away with no count and no warning.
+#[test]
+fn a_refused_block_flushes_nothing_and_the_next_flush_counts_what_it_left() {
+    let mut stage = stage_on(contract(16_000, 4, "f32", 512, 512));
+
+    stage
+        .accept(&source_block(
+            &interleaved_sine(0, 300, 4, 16_000, 440.0),
+            16_000,
+            4,
+            0,
+        ))
+        .expect("accepted");
+
+    stage
+        .accept(&source_block(
+            &interleaved_sine(300, 400, 2, 16_000, 440.0),
+            16_000,
+            2,
+            nanoseconds_for(300, 16_000),
+        ))
+        .expect_err("two channels cannot reach a four-channel contract");
+
+    let flush = stage
+        .accept(&source_block(
+            &interleaved_sine(700, 100, 4, 16_000, 440.0),
+            16_000,
+            4,
+            nanoseconds_for(700, 16_000),
+        ))
+        .expect("accepted")
+        .expect("the refused block's span left a gap in the run");
+
+    assert_eq!(
+        flush.cause,
+        AudioWindowStageFlushCause::BlockArrivedAwayFromWhereThePreviousEnded
+    );
+    assert_eq!(
+        flush.discarded_per_channel_samples_at_the_declared_rate,
+        300
+    );
+}
+
 /// A flush on a rolling window counts only the samples no window has carried:
 /// the last window's overlap is still in the remainder, and the reader already
 /// has it.

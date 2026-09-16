@@ -341,6 +341,15 @@ impl AudioWindowAccumulator {
             });
         }
 
+        // Every refusal comes before the flush, so a flush always reaches the
+        // caller that counts it.
+        let rate_conversion_inputs = RateConversionInputs::for_a_source_in(arriving, self.contract);
+        self.refuse_a_channel_pair_neither_side_of_which_is_one(
+            arriving.channels,
+            rate_conversion_inputs.channels_converted,
+        )?;
+        self.build_the_rate_conversion_if_its_inputs_are_new(rate_conversion_inputs)?;
+
         let source_changed_format = self
             .source_format
             .is_some_and(|running| running != arriving);
@@ -357,8 +366,6 @@ impl AudioWindowAccumulator {
             None
         };
         self.source_format = Some(arriving);
-        let rate_conversion_inputs = RateConversionInputs::for_a_source_in(arriving, self.contract);
-        self.build_the_rate_conversion_if_its_inputs_are_new(rate_conversion_inputs)?;
 
         if self.run_anchor_timestamp_ns.is_none() {
             self.run_anchor_timestamp_ns = Some(block.first_sample_timestamp_ns);
@@ -370,7 +377,7 @@ impl AudioWindowAccumulator {
         self.append_the_blocks_samples_in_the_count_windows_are_emitted_in(
             &block,
             rate_conversion_inputs.channels_converted,
-        )?;
+        );
 
         let block_duration_ns =
             frames_as_nanoseconds(u64::from(block.sample_count), arriving.sample_rate);
@@ -695,14 +702,32 @@ impl AudioWindowAccumulator {
         }
     }
 
+    /// Refuse an N→M channel pair with neither side at one, naming both counts.
+    ///
+    /// The source count arrives with the bags, so declaration could not have
+    /// seen it. Under a contract following its source the two counts are equal
+    /// by construction, so this never refuses there.
+    fn refuse_a_channel_pair_neither_side_of_which_is_one(
+        &self,
+        source_channels: u32,
+        contract_channels: u32,
+    ) -> Result<()> {
+        if source_channels != contract_channels && contract_channels != 1 && source_channels != 1 {
+            return Err(Error::AudioWindowStageChannelConversionRefused {
+                port: self.port_name.clone(),
+                source_channels,
+                contract_channels,
+            });
+        }
+        Ok(())
+    }
+
     /// Append this block's samples to the staging buffer in the count windows
-    /// are emitted in.
+    /// are emitted in, for a channel pair already checked convertible.
     ///
     /// A contract that declared no count converts nothing: the block's samples
     /// are already in the count its windows carry. A declared count converts
-    /// both directions by fixed rule — N→1 averages, 1→N duplicates, and any
-    /// other N→M is refused naming both counts. The source count arrives with
-    /// the bags, so declaration could not have seen it.
+    /// both directions by fixed rule — N→1 averages, 1→N duplicates.
     ///
     /// Written straight into the buffer the stage keeps, from the decode's own
     /// iterator: the samples are being reshaped anyway, so neither the decoded
@@ -711,18 +736,8 @@ impl AudioWindowAccumulator {
         &mut self,
         block: &AudioBlockReadFromTheWire<'_>,
         contract_channels: u32,
-    ) -> Result<()> {
+    ) {
         let source_channels = block.channels;
-        // Under a contract following its source the two counts are equal by
-        // construction, so neither the refusal nor either conversion arm below
-        // is reachable — the equality arm passes the samples through.
-        if source_channels != contract_channels && contract_channels != 1 && source_channels != 1 {
-            return Err(Error::AudioWindowStageChannelConversionRefused {
-                port: self.port_name.clone(),
-                source_channels,
-                contract_channels,
-            });
-        }
 
         let staging = &mut self.channel_converted_source_scalars;
         let mut samples = block.interleaved_samples_as_f32();
@@ -741,7 +756,6 @@ impl AudioWindowAccumulator {
                 samples.flat_map(|sample| std::iter::repeat_n(sample, contract_channels as usize)),
             );
         }
-        Ok(())
     }
 
     /// Run every whole chunk the staging buffer holds through the rate

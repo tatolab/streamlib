@@ -194,8 +194,8 @@ impl InboundLinkSubscribersAndListener {
         local_port: &'a str,
     ) -> Option<&'a PortBoundSubscriber> {
         let mut feeding = self.bound_to_local_port(local_port);
-        let first = feeding.next();
-        first.filter(|_| feeding.next().is_none())
+        let only = feeding.next()?;
+        feeding.next().is_none().then_some(only)
     }
 
     /// The bindings feeding one local input port, in wiring order — a
@@ -770,14 +770,11 @@ impl InputMailboxesInner {
         } = flush;
         let feeding_link_id_and_channel = {
             let subscribers_and_listener = self.inbound_link_subscribers_and_listener.lock();
-            subscribers_and_listener
-                .the_only_subscriber_bound_to_local_port(port)
-                .map(|only| {
-                    if let Some(counter) = &only.discarded_sample_counter {
-                        counter.record_discarded_samples(discarded_samples);
-                    }
-                    (only.link_id.clone(), only.inbound_link_name.clone())
-                })
+            let feeding = subscribers_and_listener.the_only_subscriber_bound_to_local_port(port);
+            if let Some(counter) = feeding.and_then(|only| only.discarded_sample_counter.as_ref()) {
+                counter.record_discarded_samples(discarded_samples);
+            }
+            feeding.map(|only| (only.link_id.clone(), only.inbound_link_name.clone()))
         };
         let (link, channel) = feeding_link_id_and_channel.unzip();
         tracing::warn!(
