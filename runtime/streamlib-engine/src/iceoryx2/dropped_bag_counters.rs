@@ -1,9 +1,10 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The bags a processor's ports lost, counted where `graph` reads them: per
-//! inbound link at a destination, and per output port refused at a producer's
-//! channel ceiling.
+//! What a processor's ports lost, counted where `graph` reads them: bags per
+//! inbound link at a destination, samples a windowed port's flush discarded per
+//! inbound link, and bags per output port refused at a producer's channel
+//! ceiling.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
@@ -17,11 +18,11 @@ use parking_lot::Mutex;
 /// lost nothing reports zero rather than going missing, and forgetting a name
 /// takes its count with it: a handle still held keeps counting into nothing.
 #[derive(Default)]
-struct CumulativeBagCountsByName {
+struct CumulativeCountsByName {
     per_name: Mutex<HashMap<String, Arc<AtomicU64>>>,
 }
 
-impl CumulativeBagCountsByName {
+impl CumulativeCountsByName {
     fn count_for(&self, name: &str) -> Arc<AtomicU64> {
         Arc::clone(self.per_name.lock().entry(name.to_string()).or_default())
     }
@@ -83,7 +84,7 @@ impl InboundLinkDroppedBagCounter {
 /// outliving its link would name something `graph` no longer has.
 #[derive(Default)]
 pub struct DroppedBagCountsByInboundLink {
-    per_inbound_link: CumulativeBagCountsByName,
+    per_inbound_link: CumulativeCountsByName,
 }
 
 impl DroppedBagCountsByInboundLink {
@@ -114,6 +115,57 @@ impl DroppedBagCountsByInboundLink {
     }
 }
 
+/// One inbound link's cumulative count of samples its windowed port's flushes
+/// discarded, in per-channel samples at the port's declared rate. Cloning shares
+/// the count.
+#[derive(Clone, Default)]
+pub struct InboundLinkDiscardedSampleCounter(Arc<AtomicU64>);
+
+impl InboundLinkDiscardedSampleCounter {
+    /// Record `discarded_sample_count` of this link's samples, discarded by a
+    /// flush.
+    pub fn record_discarded_samples(&self, discarded_sample_count: u64) {
+        self.0.fetch_add(discarded_sample_count, Ordering::Relaxed);
+    }
+
+    /// How many of this link's samples flushes have discarded since it was wired.
+    pub fn discarded_sample_count(&self) -> u64 {
+        self.0.load(Ordering::Relaxed)
+    }
+}
+
+/// Every windowed inbound link's discarded-sample counter for one destination
+/// processor.
+///
+/// Only a link into a windowed port is given a counter, so a link into any other
+/// port carries no sample count rather than a zero. A count lives as long as one
+/// wiring, as a link's dropped-bag count does.
+#[derive(Default)]
+pub struct DiscardedSampleCountsByInboundLink {
+    per_inbound_link: CumulativeCountsByName,
+}
+
+impl DiscardedSampleCountsByInboundLink {
+    /// The counter for `inbound_link_id`, minting a zeroed one on first ask.
+    pub fn counter_for_inbound_link(
+        &self,
+        inbound_link_id: &str,
+    ) -> InboundLinkDiscardedSampleCounter {
+        InboundLinkDiscardedSampleCounter(self.per_inbound_link.count_for(inbound_link_id))
+    }
+
+    /// Forget a disconnected link's count.
+    pub fn forget_inbound_link(&self, inbound_link_id: &str) {
+        self.per_inbound_link.forget(inbound_link_id);
+    }
+
+    /// Every windowed inbound link's count as it stands right now, ordered by
+    /// link id.
+    pub fn discarded_sample_count_snapshot_by_inbound_link(&self) -> BTreeMap<String, u64> {
+        self.per_inbound_link.snapshot_by_name()
+    }
+}
+
 /// One output port's cumulative count of bags refused at its channel's payload
 /// ceiling. Cloning shares the count.
 #[derive(Clone, Default)]
@@ -139,7 +191,7 @@ impl OutputPortRefusedBagCounter {
 /// link, the same life a link's count has.
 #[derive(Default)]
 pub struct RefusedBagCountsByOutputPort {
-    per_output_port: CumulativeBagCountsByName,
+    per_output_port: CumulativeCountsByName,
 }
 
 impl RefusedBagCountsByOutputPort {

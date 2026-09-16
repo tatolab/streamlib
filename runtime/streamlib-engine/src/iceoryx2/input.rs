@@ -30,12 +30,15 @@ use iceoryx2::prelude::*;
 use serde::de::DeserializeOwned;
 
 use super::audio_window::{
-    AudioWindowAccumulator, AudioWindowContractMatchingADeviceStream,
+    AudioWindowAccumulator, AudioWindowContractMatchingADeviceStream, AudioWindowStageFlush,
     DeviceMatchedAudioWindowContractsByInputPort, LatestQueuedSourceAudioFormat,
     ResolvedAudioWindowContract, queued_audio_window_frame_measure,
 };
 use super::channel_name::InboundLinkName;
-use super::dropped_bag_counters::{DroppedBagCountsByInboundLink, InboundLinkDroppedBagCounter};
+use super::dropped_bag_counters::{
+    DiscardedSampleCountsByInboundLink, DroppedBagCountsByInboundLink,
+    InboundLinkDiscardedSampleCounter, InboundLinkDroppedBagCounter,
+};
 use super::mailbox::{PortMailbox, PortMailboxEvictionNotice};
 use super::read_mode::ReadMode;
 use super::{ChannelDataServiceSubscriber, FRAME_HEADER_SIZE, FrameHeader};
@@ -98,6 +101,9 @@ struct PortBoundSubscriber {
     /// this subscriber delivers is queued holding it, so an eviction names the
     /// link the evicted bag came in on rather than the one that made room.
     dropped_bag_counter: InboundLinkDroppedBagCounter,
+    /// This link's share of the destination's discarded-sample counts, held only
+    /// by a link into a windowed port.
+    discarded_sample_counter: Option<InboundLinkDiscardedSampleCounter>,
     /// The sequence number of the last sample this subscriber received, and the
     /// id of the publisher that numbered it; `None` until the first sample after
     /// wiring.
@@ -179,6 +185,17 @@ impl InboundLinkSubscribersAndListener {
     /// Whether any remaining subscriber is still bound to `local_port`.
     fn local_port_still_bound(&self, local_port: &str) -> bool {
         self.bound_to_local_port(local_port).next().is_some()
+    }
+
+    /// The one binding feeding `local_port`, or `None` where it has none or
+    /// several.
+    fn the_only_one_bound_to_local_port<'a>(
+        &'a self,
+        local_port: &'a str,
+    ) -> Option<&'a PortBoundSubscriber> {
+        let mut feeding = self.bound_to_local_port(local_port);
+        let first = feeding.next();
+        first.filter(|_| feeding.next().is_none())
     }
 
     /// The bindings feeding one local input port, in wiring order — a
@@ -329,6 +346,11 @@ enum InstalledInputPortAudioWindowing {
 }
 
 impl InstalledInputPortAudioWindowing {
+    /// Whether the port declared a window contract, settled or not.
+    fn is_windowed(&self) -> bool {
+        !matches!(self, InstalledInputPortAudioWindowing::NotWindowed)
+    }
+
     /// Why this port cannot take a contract settled from a device stream, or
     /// `None` when it is waiting for exactly that.
     ///
@@ -440,6 +462,7 @@ pub struct InputMailboxesInner {
     /// created after its last link went away from the one it registered.
     listener_generation: std::sync::atomic::AtomicU64,
     dropped_bag_counts: Arc<DroppedBagCountsByInboundLink>,
+    discarded_sample_counts: Arc<DiscardedSampleCountsByInboundLink>,
     device_matched_audio_window_contracts: Arc<DeviceMatchedAudioWindowContractsByInputPort>,
 }
 
@@ -451,6 +474,7 @@ impl InputMailboxesInner {
             ports: parking_lot::Mutex::new(HashMap::new()),
             listener_generation: std::sync::atomic::AtomicU64::new(0),
             dropped_bag_counts: Arc::new(DroppedBagCountsByInboundLink::default()),
+            discarded_sample_counts: Arc::new(DiscardedSampleCountsByInboundLink::default()),
             device_matched_audio_window_contracts: Arc::new(
                 DeviceMatchedAudioWindowContractsByInputPort::default(),
             ),
@@ -673,6 +697,9 @@ impl InputMailboxesInner {
     /// channels holds N subscribers. The receive path routes every frame a
     /// subscriber delivers into `local_port`'s mailbox (binding-based routing;
     /// see [`PortBoundSubscriber`]).
+    ///
+    /// Bind after adding the port: a link into a windowed port is given its
+    /// discarded-sample count here, from the port it finds.
     pub fn add_channel_subscriber(
         &self,
         local_port: &str,
@@ -681,6 +708,15 @@ impl InputMailboxesInner {
         subscriber: ChannelDataServiceSubscriber,
     ) {
         let dropped_bag_counter = self.dropped_bag_counts.counter_for_inbound_link(link_id);
+        let into_a_windowed_port = self
+            .ports
+            .lock()
+            .get(local_port)
+            .is_some_and(|port| port.audio_windowing.is_windowed());
+        let discarded_sample_counter = into_a_windowed_port.then(|| {
+            self.discarded_sample_counts
+                .counter_for_inbound_link(link_id)
+        });
         self.inbound_link_subscribers_and_listener
             .lock()
             .subscribers
@@ -690,6 +726,7 @@ impl InputMailboxesInner {
                 inbound_link_name: inbound_link_name.clone(),
                 subscriber,
                 dropped_bag_counter,
+                discarded_sample_counter,
                 last_received_sequence_number: None,
             });
     }
@@ -716,13 +753,35 @@ impl InputMailboxesInner {
     /// port takes exactly one link (a second is refused at wire time), so the
     /// port itself answers.
     fn the_single_inbound_link_name_of(&self, port: &str) -> Option<InboundLinkName> {
+        self.inbound_link_subscribers_and_listener
+            .lock()
+            .the_only_one_bound_to_local_port(port)
+            .map(|only| only.inbound_link_name.clone())
+    }
+
+    /// Count a windowed port's flush on the one link feeding it, and say so.
+    ///
+    /// A port with no single link — a manually injected frame's — has nowhere
+    /// to count it, and still says what went.
+    fn count_a_flush_on_the_link_feeding(&self, port: &str, flush: AudioWindowStageFlush) {
+        let AudioWindowStageFlush {
+            why_the_stage_flushed,
+            discarded_per_channel_samples_at_the_declared_rate: discarded_samples,
+        } = flush;
         let subscribers_and_listener = self.inbound_link_subscribers_and_listener.lock();
-        let mut feeding = subscribers_and_listener.bound_to_local_port(port);
-        let only = feeding.next()?;
-        feeding
-            .next()
-            .is_none()
-            .then(|| only.inbound_link_name.clone())
+        let feeding = subscribers_and_listener.the_only_one_bound_to_local_port(port);
+        if let Some(counter) = feeding.and_then(|only| only.discarded_sample_counter.as_ref()) {
+            counter.record_discarded_samples(discarded_samples);
+        }
+        tracing::warn!(
+            port,
+            link = feeding.map_or("<no single inbound link>", |only| only.link_id.as_str()),
+            channel = feeding.map_or("<none>", |only| only.inbound_link_name.as_str()),
+            discarded_samples,
+            "audio window stage: {why_the_stage_flushed}, so the accumulator and the resampler's \
+             filter state were flushed, discarding {discarded_samples} samples rather than \
+             emitting a window that spans the gap"
+        );
     }
 
     /// This processor's per-inbound-link dropped-bag counts, shared with the
@@ -731,6 +790,16 @@ impl InputMailboxesInner {
     /// [`ProcessorMetrics`]: crate::core::graph::ProcessorMetrics
     pub fn dropped_bag_counts_by_inbound_link(&self) -> Arc<DroppedBagCountsByInboundLink> {
         Arc::clone(&self.dropped_bag_counts)
+    }
+
+    /// This processor's per-inbound-link counts of samples its windowed ports'
+    /// flushes discarded, shared with the graph node's [`ProcessorMetrics`].
+    ///
+    /// [`ProcessorMetrics`]: crate::core::graph::ProcessorMetrics
+    pub fn discarded_sample_counts_by_inbound_link(
+        &self,
+    ) -> Arc<DiscardedSampleCountsByInboundLink> {
+        Arc::clone(&self.discarded_sample_counts)
     }
 
     /// Reclaim the destination-side ports for one disconnected `connect()` link.
@@ -745,6 +814,7 @@ impl InputMailboxesInner {
             return;
         };
         self.dropped_bag_counts.forget_inbound_link(link_id);
+        self.discarded_sample_counts.forget_inbound_link(link_id);
         if !subscribers_and_listener.local_port_still_bound(&local_port) {
             self.ports.lock().remove(&local_port);
         }
@@ -1014,7 +1084,10 @@ impl InputMailboxesInner {
             let Some(bag) = self.pop_one_bag_off_the_mailbox(port)? else {
                 return Ok(None);
             };
-            stage.lock().accept(&bag.body)?;
+            let flush = stage.lock().accept(&bag.body)?;
+            if let Some(flush) = flush {
+                self.count_a_flush_on_the_link_feeding(port, flush);
+            }
         }
     }
 

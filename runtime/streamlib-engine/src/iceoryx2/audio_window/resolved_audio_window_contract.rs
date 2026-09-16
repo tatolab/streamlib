@@ -86,6 +86,14 @@ const MOST_SLOTS_ONE_WINDOWED_PORT_HOLDS: usize = 8_192;
 /// needs.
 const WINDOWED_PORT_MAILBOX_DEPTH_MARGIN: usize = 4;
 
+/// The iceoryx2 subscriber ring in front of every windowed port, and the depth a
+/// channel feeding one is created at.
+///
+/// Never sized from the contract: iceoryx2 commits publisher heap for every slot
+/// of a channel's depth up front, about 141 MiB at a one-second window's 8,000
+/// slots against 1.45 MiB at 64.
+pub(crate) const WINDOWED_PORT_SUBSCRIBER_RING_DEPTH: usize = 64;
+
 impl ResolvedAudioWindowContract {
     /// Read the values a declaration states, refusing one the stage could not
     /// honour.

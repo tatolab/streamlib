@@ -34,15 +34,20 @@ mod audio_window_stage_tests;
 use std::sync::Arc;
 
 pub(crate) use audio_window_accumulator::{
-    AudioWindowAccumulator, LatestQueuedSourceAudioFormat, SourceAudioFormat,
+    AudioWindowAccumulator, AudioWindowStageFlush, LatestQueuedSourceAudioFormat, SourceAudioFormat,
 };
 pub use device_matched_audio_window_contracts::{
     AudioWindowContractMatchingADeviceStream, DeviceMatchedAudioWindowContractsByInputPort,
 };
 pub use resolved_audio_window_contract::ResolvedAudioWindowContract;
 pub(crate) use resolved_audio_window_contract::{
-    AudioWindowDeclarationOfAnInputPort, audio_windowing_declared_by_input_port,
-    refuse_an_unsettled_match_device_sentinel,
+    AudioWindowDeclarationOfAnInputPort, WINDOWED_PORT_SUBSCRIBER_RING_DEPTH,
+    audio_windowing_declared_by_input_port, refuse_an_unsettled_match_device_sentinel,
+};
+
+#[cfg(test)]
+pub(crate) use audio_block_bag_wire_codec::{
+    AudioBlockSampleDtype, encode_an_audio_block_onto_the_wire,
 };
 
 use audio_block_bag_wire_codec::read_an_audio_block_off_the_wire;

@@ -515,6 +515,80 @@ fn a_stamp_jittering_inside_half_a_quantum_does_not_flush_the_run() {
     }
 }
 
+/// A gap flush counts what it discarded in the samples the consumer would have
+/// received: per-channel samples at the port's declared rate.
+///
+/// A hundred stereo frames at 48 kHz sit staged, short of one resampler chunk,
+/// when the gap arrives. At the declared 16 kHz they were worth 33⅓ samples, so
+/// the flush counts 33. Counting the source's frames gives 100, its interleaved
+/// scalars 200, and rounding up 34.
+#[test]
+fn a_gap_flush_counts_its_staged_source_frames_as_samples_at_the_declared_rate() {
+    let mut stage = stage_on(contract(16_000, 1, "f32", 512, 512));
+
+    let flush_before_the_gap = stage
+        .accept(&source_block(
+            &interleaved_sine(0, 100, 2, 48_000, 440.0),
+            48_000,
+            2,
+            0,
+        ))
+        .expect("accepted");
+    assert!(
+        flush_before_the_gap.is_none(),
+        "the first block of a run flushes nothing"
+    );
+
+    let flush = stage
+        .accept(&source_block(
+            &interleaved_sine(0, 100, 2, 48_000, 440.0),
+            48_000,
+            2,
+            NANOSECONDS_PER_SECOND,
+        ))
+        .expect("accepted")
+        .expect("a block a second past where the last one ended flushes");
+
+    assert_eq!(flush.discarded_per_channel_samples_at_the_declared_rate, 33);
+}
+
+/// A format-change flush counts the output remainder per channel, never per
+/// interleaved scalar.
+///
+/// Three hundred stereo frames already at the contract's rate pass straight into
+/// the remainder, short of a 512-sample window, when the source drops to mono.
+/// The flush counts 300; counting the scalars the remainder holds gives 600.
+#[test]
+fn a_format_change_flush_counts_the_remainder_in_per_channel_samples() {
+    let mut stage = stage_on(contract_following_the_sources_channels(
+        16_000, "f32", 512, 512,
+    ));
+
+    stage
+        .accept(&source_block(
+            &interleaved_sine(0, 300, 2, 16_000, 440.0),
+            16_000,
+            2,
+            0,
+        ))
+        .expect("accepted");
+
+    let flush = stage
+        .accept(&source_block(
+            &interleaved_sine(300, 100, 1, 16_000, 440.0),
+            16_000,
+            1,
+            nanoseconds_for(300, 16_000),
+        ))
+        .expect("accepted")
+        .expect("a block in another channel count flushes, however contiguous its stamp");
+
+    assert_eq!(
+        flush.discarded_per_channel_samples_at_the_declared_rate,
+        300
+    );
+}
+
 #[test]
 fn a_stereo_source_reaching_a_mono_contract_is_averaged_across_its_channels() {
     let contract = contract(16_000, 1, "f32", 512, 512);
