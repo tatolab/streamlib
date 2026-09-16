@@ -23,6 +23,7 @@ from helper_placement_processors import (
     ReportsItsOwnProcessSource,
     ReportsItsOwnProcessVideoSink,
     ReportsUpstreamProcessSink,
+    SleepsThroughItsOwnSetupProbe,
     SleepsThroughItsOwnShutdownProbe,
 )
 from streamlib._engine import (
@@ -250,6 +251,20 @@ def scenario_a_helper_that_forked_a_worker_leaves_nothing_behind() -> None:
     """
     runtime = streamlib.Runtime()
     runtime.add(ForksAWorkerThatOutlivesItProbe)
+    marker(f"APP_PID={os.getpid()}")
+    runtime.run()
+    marker("CLEAN_EXIT")
+
+
+def scenario_a_processor_interrupted_while_still_setting_up_tears_down() -> None:
+    """Shutdown reaches a helper that is still inside `setup()`.
+
+    Its registration is cut short rather than held for the sixty-second budget,
+    and the ladder still gives it the `teardown()` the plan owes any callback
+    interrupted at shutdown.
+    """
+    runtime = streamlib.Runtime()
+    runtime.add(SleepsThroughItsOwnSetupProbe)
     marker(f"APP_PID={os.getpid()}")
     runtime.run()
     marker("CLEAN_EXIT")

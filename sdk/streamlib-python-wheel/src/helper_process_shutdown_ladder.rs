@@ -427,6 +427,38 @@ signal.signal(signal.SIGINT, leave_through_the_interrupt)
     }
 
     #[test]
+    fn a_helper_that_leaves_on_its_own_is_never_signalled_at_all() {
+        // The self-exit grace, which is what keeps a cooperative shutdown from
+        // ending in a SIGTERM through the middle of interpreter finalization —
+        // and from leaving the iceoryx2 node that finalization drops
+        // registered as a dead one.
+        //
+        // Fail-without-fix: take the grace out and the group signal lands
+        // while this stub is still on its way out, so it is reaped with a
+        // terminating signal rather than its own exit code.
+        let mut stub = StubHelperChild::running(
+            r#"
+import sys, time
+sys.stdout.write("ready\n")
+sys.stdout.flush()
+time.sleep(0.2)
+raise SystemExit(0)
+"#,
+        );
+        assert_eq!(stub.next_reported_line(), "ready");
+
+        let ladder = stub.into_ladder("LeavesOnItsOwnProbe");
+        let outcome = ladder.walk_every_rung(answers_at_once);
+
+        assert_eq!(
+            terminating_signal_of(&outcome),
+            None,
+            "a helper on its way out was signalled before it got there: {outcome:?}"
+        );
+        assert_eq!(exit_code_of(&outcome), Some(0));
+    }
+
+    #[test]
     fn a_helper_that_ignores_the_interrupt_and_the_termination_is_killed_and_reaped() {
         let mut stub = a_stub_parking_after(IGNORES_EVERY_CATCHABLE_SIGNAL);
         assert_eq!(stub.next_reported_line(), "ready");

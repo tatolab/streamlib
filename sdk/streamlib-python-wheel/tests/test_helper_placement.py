@@ -324,6 +324,43 @@ def test_a_processor_asleep_in_its_callback_still_runs_its_teardown(
     )
 
 
+def test_a_processor_interrupted_while_still_setting_up_still_tears_down(
+    start_app_under_test,
+):
+    """The route onto the ladder the engine's `stop()` hook never reaches.
+
+    A helper still inside `setup()` has never had `stop()` called on it, so the
+    commands whose replies the ladder waits for are only on the wire because
+    the ladder asks for them itself.
+
+    Fail-without-fix: leave the ask in `stop()` alone and this helper is
+    SIGINT'd, answers its refusal, and is then killed with its group — its
+    `teardown()` never asked for and never run.
+    """
+    app = start_app_under_test(
+        APP, "a_processor_interrupted_while_still_setting_up_tears_down"
+    )
+    app.await_output_containing(
+        "MARKER:ASLEEP_IN_SETUP", "the processor to park inside its setup"
+    )
+    interrupted_at = time.monotonic()
+    app.interrupt()
+    app.await_marker("CLEAN_EXIT")
+    app.await_clean_exit()
+    ended_in = time.monotonic() - interrupted_at
+
+    assert "MARKER:INTERRUPTED_SETUP_TORE_DOWN" in app.output, (
+        f"an interrupted `setup()` was never given its `teardown()`:\n{app.output}"
+    )
+    assert "MARKER:SLEPT_THE_WHOLE_SETUP" not in app.output, (
+        f"`setup()` returned on its own, so nothing interrupted it:\n{app.output}"
+    )
+    assert ended_in < LADDER_BUDGET_SECONDS, (
+        f"the app took {ended_in:.1f}s to end, which is the registration budget rather "
+        f"than the ladder's:\n{app.output}"
+    )
+
+
 def test_a_worker_a_processor_forked_goes_down_with_the_apps_helper(
     start_app_under_test,
 ):

@@ -191,9 +191,9 @@ pub(crate) struct PythonHelperProcessSpawnHostProcessor {
     /// graph shows this processor in error; the frame in flight is lost, and
     /// is never silently replayed.
     child_is_gone: bool,
-    /// Set once both shutdown commands have gone out, so the ladder's own
-    /// belt-and-braces send cannot ask a second time.
-    the_helper_was_asked_to_stop_and_tear_down: bool,
+    /// Set once this helper has been through the shutdown ask, so the ladder's
+    /// own belt-and-braces call cannot make it a second time.
+    shutdown_was_already_asked_of_this_helper: bool,
     link_wiring: OutOfProcessLinkWiringEnvelope,
 }
 
@@ -467,10 +467,18 @@ impl PythonHelperProcessSpawnHostProcessor {
     /// ladder: a helper interrupted while it was still importing never reached
     /// that hook, and the plan owes it a `teardown()` all the same.
     fn ask_the_helper_to_stop_and_tear_down(&mut self) {
-        if self.the_helper_was_asked_to_stop_and_tear_down {
+        if self.shutdown_was_already_asked_of_this_helper {
             return;
         }
-        self.the_helper_was_asked_to_stop_and_tear_down = true;
+        self.shutdown_was_already_asked_of_this_helper = true;
+        // No channel is no failure to report: a helper whose crash was already
+        // noticed had its bridge dropped then, and warning twice more about a
+        // command nobody could have taken is the stream of noise
+        // `exchange_with_child` exists to avoid. A helper that is merely
+        // unresponsive still has its bridge, and is still asked.
+        if self.bridge.is_none() {
+            return;
+        }
         for command in HelperProcessShutdownCommand::BOTH_IN_THE_ORDER_THE_LADDER_SENDS_THEM {
             let asked = self.send_to_child(&serde_json::json!({
                 "cmd": command.command_tag(),
@@ -1229,7 +1237,7 @@ pub(crate) fn spawn_host_for_processor_node(
         child_standard_error_tail: None,
         bridge: None,
         child_is_gone: false,
-        the_helper_was_asked_to_stop_and_tear_down: false,
+        shutdown_was_already_asked_of_this_helper: false,
         link_wiring: OutOfProcessLinkWiringEnvelope::default(),
     })
 }
@@ -1325,6 +1333,78 @@ if os.fork() == 0:
         );
     }
 
+    /// Set only in the child process the sweep-placement test re-runs itself in.
+    const DEAD_NODE_CHILD_DOMAIN_ROOT_ENVIRONMENT_VARIABLE: &str =
+        "STREAMLIB_TEST_HOST_SWEEP_CHILD_ICEORYX2_DOMAIN_ROOT";
+
+    #[test]
+    fn a_helper_exit_reclaims_the_iceoryx2_nodes_it_left_whatever_ended_it() {
+        // A node is dead only once the process holding it is gone, so it is
+        // opened in a child test process that is then killed where it stands.
+        if let Some(domain_root) =
+            std::env::var_os(DEAD_NODE_CHILD_DOMAIN_ROOT_ENVIRONMENT_VARIABLE)
+        {
+            let _node = streamlib::sdk::iceoryx2::Iceoryx2Node::new(
+                Path::new(&domain_root),
+                "streamlib-test/host-sweep-placement",
+            )
+            .expect("a node opens in the engine-owned domain");
+            // SAFETY: this process signalling itself, which is what leaves the
+            // node registered with no process behind it.
+            unsafe { libc::kill(std::process::id() as libc::pid_t, libc::SIGKILL) };
+            unreachable!("SIGKILL to self does not return");
+        }
+
+        // Named from this test process's own pid rather than through a
+        // temp-directory crate, so the one test needing a private domain adds
+        // no dependency to the wheel.
+        let domain =
+            std::env::temp_dir().join(format!("streamlib-host-sweep-{}", std::process::id()));
+        let domain_root = domain.join("iox2");
+        std::fs::create_dir_all(&domain_root).expect("a private domain root");
+        let dead_node_owner = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "python_helper_process_spawn_host::tests::\
+                 a_helper_exit_reclaims_the_iceoryx2_nodes_it_left_whatever_ended_it",
+                "--exact",
+                "--test-threads=1",
+            ])
+            .env(
+                DEAD_NODE_CHILD_DOMAIN_ROOT_ENVIRONMENT_VARIABLE,
+                &domain_root,
+            )
+            .output()
+            .expect("the test binary re-runs this test in a child process");
+        assert!(
+            !dead_node_owner.status.success(),
+            "the child must die where it stood rather than report a result"
+        );
+
+        // A host whose own helper has already left, closed the ordinary way.
+        let mut host = spawn_host_for_test(None);
+        host.iceoryx2_domain_root = Some(domain_root.clone());
+        host.child = Some(
+            Command::new("true")
+                .spawn()
+                .expect("a stand-in helper that is already done"),
+        );
+
+        host.take_the_helper_process_group_down();
+
+        let left_for_somebody_else =
+            streamlib::sdk::iceoryx2::reclaim_dead_iceoryx2_nodes_in_engine_owned_domain(
+                &domain_root,
+            )
+            .expect("the domain can be swept");
+        std::fs::remove_dir_all(&domain).ok();
+
+        assert_eq!(
+            left_for_somebody_else, 0,
+            "the helper's exit left a dead node for somebody else to reclaim — the sweep runs \
+             at every exit, not only at a crash the engine detected"
+        );
+    }
+
     #[test]
     fn every_path_onto_the_ladder_asks_the_helper_to_stop_and_tear_down_exactly_once() {
         // The plan owes a `teardown()` to any callback interrupted at
@@ -1337,17 +1417,17 @@ if os.fork() == 0:
         // that were never sent, then warns that a teardown it never asked for
         // did not finish.
         let mut host = spawn_host_for_test(None);
-        assert!(!host.the_helper_was_asked_to_stop_and_tear_down);
+        assert!(!host.shutdown_was_already_asked_of_this_helper);
 
         // No bridge, so the sends fail and are logged — what is under test is
         // that the ask happens at all, and happens once.
         host.ask_the_helper_to_stop_and_tear_down();
-        assert!(host.the_helper_was_asked_to_stop_and_tear_down);
+        assert!(host.shutdown_was_already_asked_of_this_helper);
 
-        host.the_helper_was_asked_to_stop_and_tear_down = false;
+        host.shutdown_was_already_asked_of_this_helper = false;
         host.stop_the_helper_process_on_the_shutdown_ladder();
         assert!(
-            host.the_helper_was_asked_to_stop_and_tear_down,
+            host.shutdown_was_already_asked_of_this_helper,
             "the ladder walked without ever asking the helper to stop or tear down"
         );
     }
@@ -1488,7 +1568,7 @@ sys.exit(0)
             child_standard_error_tail: None,
             bridge: None,
             child_is_gone: false,
-            the_helper_was_asked_to_stop_and_tear_down: false,
+            shutdown_was_already_asked_of_this_helper: false,
             link_wiring: OutOfProcessLinkWiringEnvelope::default(),
         }
     }

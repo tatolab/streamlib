@@ -177,3 +177,23 @@ class ForksAWorkerThatOutlivesItProbe:
                 time.sleep(120)
                 os._exit(0)
             log.info(f"MARKER:WORKER_PID {self.worker_pid} HELPER_PID {os.getpid()}")
+
+
+@processor(execution="manual")
+class SleepsThroughItsOwnSetupProbe:
+    """Parks in `setup()`, so shutdown finds it still registering.
+
+    That is the one route onto the ladder the engine's `stop()` hook never
+    reaches, and the plan still owes this processor its `teardown()`.
+    """
+
+    @output()
+    def frames_to_downstream(self) -> None: ...
+
+    def setup(self, ctx) -> None:
+        log.info(f"MARKER:ASLEEP_IN_SETUP {os.getpid()}")
+        time.sleep(120)
+        log.info("MARKER:SLEPT_THE_WHOLE_SETUP")
+
+    def teardown(self, ctx) -> None:
+        log.info("MARKER:INTERRUPTED_SETUP_TORE_DOWN")
