@@ -336,14 +336,13 @@ impl HelperProcessLossCountBoardWriter {
         output_port: &str,
         wiring_generation: u64,
     ) -> Option<OutputPortRefusedBagCountBoardMirror> {
-        let output_port_index = self
+        let (output_port_index, (_, entry_being_written)) = self
             .board_write_handles
             .output_ports
             .iter()
-            .position(|(declared, _)| declared == output_port)?;
-        let mut entry_being_written = self.board_write_handles.output_ports[output_port_index]
-            .1
-            .lock();
+            .enumerate()
+            .find(|(_, (declared, _))| declared == output_port)?;
+        let mut entry_being_written = entry_being_written.lock();
         entry_being_written.last_written = OutputPortRefusedBagCountBoardEntry {
             wiring_generation,
             refused_bags: 0,
@@ -413,10 +412,9 @@ impl OutputPortRefusedBagCountBoardMirror {
     /// Write `refused_bags` as the port's refused-bag total, kept at its
     /// largest for the reason an inbound slot's totals are.
     pub(crate) fn mirror_refused_bags(&self, refused_bags: u64) {
-        let mut entry_being_written = self.board.board_write_handles.output_ports
-            [self.output_port_index]
-            .1
-            .lock();
+        let (_, entry_being_written) =
+            &self.board.board_write_handles.output_ports[self.output_port_index];
+        let mut entry_being_written = entry_being_written.lock();
         if entry_being_written.last_written.wiring_generation != self.wiring_generation {
             return;
         }

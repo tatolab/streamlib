@@ -108,6 +108,28 @@ impl PythonProcessorLinkDataAccess {
         }
     }
 
+    /// The open loss-count board and where a link being wired mirrors onto it,
+    /// or `None` with no board open, where there is nowhere to mirror.
+    ///
+    /// A helper with a board open must be told where every link's counts go, so
+    /// a link wired without it is refused naming what was missing.
+    fn loss_count_board_writer_with_where_a_link_mirrors_to<MirrorTarget>(
+        &self,
+        link_direction: &str,
+        link_id: &str,
+        mirror_target: Option<MirrorTarget>,
+        missing_arguments: &str,
+    ) -> PyResult<Option<(&Arc<HelperProcessLossCountBoardWriter>, MirrorTarget)>> {
+        match (self.loss_count_board_writer.get(), mirror_target) {
+            (None, _) => Ok(None),
+            (Some(board_writer), Some(mirror_target)) => Ok(Some((board_writer, mirror_target))),
+            (Some(_), None) => Err(PyValueError::new_err(format!(
+                "{link_direction} link {link_id:?} was wired without {missing_arguments}, so this \
+                 helper cannot mirror the link's losses onto its loss-count board"
+            ))),
+        }
+    }
+
     fn helper_process_output_plane(&self) -> PyResult<(&Iceoryx2Node, &Arc<OutputWriterInner>)> {
         match (self.iceoryx2_node.get(), self.output_writer.get()) {
             (Some(node), Some(output_writer)) => Ok((node, output_writer)),
@@ -340,22 +362,13 @@ impl PythonProcessorLinkDataAccess {
         let (node, output_writer) = self.helper_process_output_plane()?;
         // A helper mirroring onto its parent's board must be told which of the
         // port's channels this is; one with no board has nowhere to mirror.
-        let board_writer_and_output_port_wiring_generation = match (
-            self.loss_count_board_writer.get(),
-            output_port_wiring_generation,
-        ) {
-            (None, _) => None,
-            (Some(board_writer), Some(output_port_wiring_generation)) => {
-                Some((board_writer, output_port_wiring_generation))
-            }
-            (Some(_), None) => {
-                return Err(PyValueError::new_err(format!(
-                    "output link {link_id:?} was wired without an \
-                         `output_port_wiring_generation`, so this helper cannot mirror port \
-                         {port_name:?}'s refusals onto its loss-count board"
-                )));
-            }
-        };
+        let board_writer_and_output_port_wiring_generation = self
+            .loss_count_board_writer_with_where_a_link_mirrors_to(
+                "output",
+                link_id,
+                output_port_wiring_generation,
+                "an `output_port_wiring_generation`",
+            )?;
 
         python
             .detach(|| -> Result<(), Error> {
@@ -473,23 +486,13 @@ impl PythonProcessorLinkDataAccess {
             .transpose()?;
         // A helper mirroring onto its parent's board must be told where this
         // link's counts go; one with no board has nowhere to mirror them.
-        let loss_count_slot_and_generation = match (
-            self.loss_count_board_writer.get(),
-            loss_count_slot,
-            wiring_generation,
-        ) {
-            (None, _, _) => None,
-            (Some(board_writer), Some(loss_count_slot), Some(wiring_generation)) => {
-                Some((board_writer, loss_count_slot, wiring_generation))
-            }
-            (Some(_), _, _) => {
-                return Err(PyValueError::new_err(format!(
-                    "input link {link_id:?} was wired without a `loss_count_slot` and a \
-                     `wiring_generation`, so this helper has no slot on its loss-count board to \
-                     mirror the link's losses onto"
-                )));
-            }
-        };
+        let loss_count_slot_and_generation = self
+            .loss_count_board_writer_with_where_a_link_mirrors_to(
+                "input",
+                link_id,
+                loss_count_slot.zip(wiring_generation),
+                "a `loss_count_slot` and a `wiring_generation`",
+            )?;
 
         python
             .detach(|| -> Result<(), Error> {
@@ -518,7 +521,7 @@ impl PythonProcessorLinkDataAccess {
                     &InboundLinkName::from(channel_service_name),
                     channel.create_subscriber(input_port_ring_depth)?,
                 );
-                if let Some((board_writer, loss_count_slot, wiring_generation)) =
+                if let Some((board_writer, (loss_count_slot, wiring_generation))) =
                     loss_count_slot_and_generation
                 {
                     input_mailboxes.mirror_an_inbound_links_loss_counts_into(
@@ -954,6 +957,32 @@ mod tests {
             assert!(
                 refusal.to_string().contains("link-with-no-slot")
                     && refusal.to_string().contains("loss_count_slot"),
+                "the refusal names the link and what it was wired without: {refusal}"
+            );
+            let refusal = destination
+                .wire_output_link(
+                    python,
+                    "frames_to_downstream",
+                    &format!("{channel}_onward_again"),
+                    "",
+                    64,
+                    1024,
+                    8,
+                    2,
+                    1,
+                    "link-with-no-channel-generation",
+                    None,
+                )
+                .expect_err(
+                    "a helper with a board open is told which channel a port's refusals belong to",
+                );
+            assert!(
+                refusal
+                    .to_string()
+                    .contains("link-with-no-channel-generation")
+                    && refusal
+                        .to_string()
+                        .contains("output_port_wiring_generation"),
                 "the refusal names the link and what it was wired without: {refusal}"
             );
         });
