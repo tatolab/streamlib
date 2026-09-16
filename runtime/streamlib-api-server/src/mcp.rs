@@ -256,7 +256,7 @@ fn initialize_result() -> Value {
             "prompts": { "listChanged": false },
         },
         "serverInfo": { "name": MCP_SERVER_NAME, "version": MCP_SERVER_VERSION },
-        "instructions": "StreamLib runtime control plane for one running node. Observe it with `graph` (processors, their ids, port names and links), `tap` (raw bags on a channel spelled `<processor id, lowercased>/<output port>`), `logs` and `exchange` (a published frame's pixels). Change its live graph with `add_processor`, `connect`, `disconnect` and `remove_processor`: a Python processor class written to a module the app can import — a file beside `app.py`, or a pip-installed package — is added by its `module:ClassName` path and runs in its own helper process; a link is spliced in by connecting the new processor on both sides, then disconnecting the link it replaces. Read `graph` first for ids and port names, and again afterwards to confirm a link's state is `wired` and the processor is `Running`. The resource `streamlib://processor-catalog` lists every type `add_processor` can take with its config schema and ports, and `streamlib://graph` is the live graph. The prompts are step-by-step recipes over these tools: inserting a processor into a link, fanning an output to another consumer, showing a channel on a virtual camera, and looking at what a channel carries.",
+        "instructions": "StreamLib runtime control plane for one running node. Observe it with `graph` (processors, their ids, port names and links), `tap` (raw bags on a channel spelled `<processor id, lowercased>/<output port>`), `logs` and `exchange` (a published frame's pixels). Change its live graph with `add_processor`, `connect`, `disconnect` and `remove_processor`: a Python processor class written to a module the app can import — a file beside `app.py`, or a pip-installed package — is added by its `module:ClassName` path and runs in its own helper process; a link is spliced in by connecting the new processor on both sides, then disconnecting the link it replaces. Read `graph` first for ids and port names, and again afterwards to confirm a link's state is `wired` and the processor is `Running`. A `connect` onto a processor in a helper process returns before that helper has opened its port, so its link reads `pending` until the helper answers and then `wired`; a link that reads `error` carries the helper's own reason in `error_reason` and will never carry a bag — read the reason, `disconnect` it, and fix what it names. The resource `streamlib://processor-catalog` lists every type `add_processor` can take with its config schema and ports, and `streamlib://graph` is the live graph. The prompts are step-by-step recipes over these tools: inserting a processor into a link, fanning an output to another consumer, showing a channel on a virtual camera, and looking at what a channel carries.",
     })
 }
 
@@ -2005,6 +2005,90 @@ mod tests {
             }],
             "extensions": []
         })
+    }
+
+    /// The same graph after the helper that was to open the link refused it —
+    /// what a live `connect` onto a helper-placed processor leaves behind when
+    /// that helper's port could not open.
+    ///
+    /// Kept beside the wired fixture rather than replacing its link: the
+    /// prompts pick a link out of the graph they are rendered against, and an
+    /// errored one has no business in the recipes' happy path.
+    fn two_linked_processors_graph_whose_link_a_helper_refused() -> Value {
+        let mut graph = two_linked_processors_graph();
+        graph["links"][0]["state"] = json!("error");
+        graph["links"][0]["error_reason"] = json!(
+            "could not wire input port \"video\": BufferSizeExceedsMaxSupportedBufferSizeOfService"
+        );
+        graph
+    }
+
+    /// An agent is told to read a link's state, so a refused link has to reach
+    /// it with the helper's own reason rather than a bare `error`.
+    #[tokio::test]
+    async fn tools_call_graph_carries_the_reason_a_helper_refused_a_link_for() {
+        let runtime = ControlPlaneMcpDispatchStubRuntime::new();
+        *runtime.exported_graph.lock() = two_linked_processors_graph_whose_link_a_helper_refused();
+
+        let (status, body) = mcp_call(
+            Arc::new(runtime),
+            json!({ "jsonrpc": "2.0", "id": 9, "method": "tools/call", "params": { "name": "graph", "arguments": {} } }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        let text = body["result"]["content"][0]["text"].as_str().unwrap();
+        let graph: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(graph["links"][0]["state"], "error");
+        assert!(
+            graph["links"][0]["error_reason"]
+                .as_str()
+                .is_some_and(|reason| reason.contains("BufferSizeExceeds")),
+            "the helper's own reason is what tells an agent what to fix; got {graph}"
+        );
+    }
+
+    /// The control vocabulary tells an agent to confirm `wired` in `graph`. A
+    /// link onto a helper is not wired when `connect` returns, so the same text
+    /// has to say what `pending` and `error` mean or the confirmation is a
+    /// guess.
+    #[tokio::test]
+    async fn the_instructions_and_every_wiring_prompt_say_what_pending_and_error_mean() {
+        register_a_virtual_camera_sink_probe_once();
+        let mut texts = vec![(
+            "instructions",
+            initialize_result()["instructions"]
+                .as_str()
+                .expect("the handshake carries instructions")
+                .to_string(),
+        )];
+        for (recipe, arguments) in [
+            (
+                "insert_processor_between_linked_processors",
+                json!({ "link_id": "link-pattern-to-window", "processor_type": "effects:Blur" }),
+            ),
+            (
+                "fan_output_to_another_consumer",
+                json!({ "from_processor_id": "PatternSourceId", "from_port": "video", "processor_type": "effects:Blur" }),
+            ),
+            (
+                "show_channel_on_virtual_camera",
+                json!({ "from_processor_id": "PatternSourceId", "from_port": "video" }),
+            ),
+        ] {
+            texts.push((
+                recipe,
+                prompt_text(stub_serving_two_linked_processors(), recipe, arguments).await,
+            ));
+        }
+        for (name, text) in texts {
+            assert!(
+                text.contains("pending") && text.contains("error_reason"),
+                "{name} tells an agent to confirm a link's state but not what a link left \
+                 `pending` by a helper that has not answered, or refused with a reason, \
+                 means:\n{text}"
+            );
+        }
     }
 
     fn stub_serving_two_linked_processors() -> Arc<ControlPlaneMcpDispatchStubRuntime> {
