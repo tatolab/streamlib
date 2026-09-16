@@ -7,10 +7,57 @@
 //! ceiling.
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, OnceLock};
 
 use parking_lot::Mutex;
+
+/// Where every new total of one count is also written, for a reader in another
+/// process — a helper process's loss-count board, which its parent reads.
+///
+/// Called at the site that moved the count, under whatever lock that caller
+/// holds, so a mirror takes no lock but its own.
+pub type LossCountMirror = Box<dyn Fn(u64) + Send + Sync>;
+
+/// One cumulative count, and the mirror its every new total is written through
+/// once one is installed.
+#[derive(Default)]
+struct CumulativeCount {
+    total: AtomicU64,
+    mirror: OnceLock<LossCountMirror>,
+}
+
+impl CumulativeCount {
+    /// Add `amount`, mirror the new total, and return it.
+    fn add(&self, amount: u64) -> u64 {
+        let total = self
+            .total
+            .fetch_add(amount, Ordering::Relaxed)
+            .wrapping_add(amount);
+        if let Some(mirror) = self.mirror.get() {
+            mirror(total);
+        }
+        total
+    }
+
+    fn total(&self) -> u64 {
+        self.total.load(Ordering::Relaxed)
+    }
+
+    /// Install `mirror` and write the total as it stands through it, or hand
+    /// `mirror` back where this count already has one.
+    ///
+    /// The total is written after the install rather than before, so an
+    /// increment landing between the two reaches the mirror either way; a
+    /// mirror keeps the largest total it was handed.
+    fn mirror_every_new_total_into(&self, mirror: LossCountMirror) -> Result<(), LossCountMirror> {
+        self.mirror.set(mirror)?;
+        if let Some(mirror) = self.mirror.get() {
+            mirror(self.total());
+        }
+        Ok(())
+    }
+}
 
 /// Named cumulative counts, each shared live with whoever records into it.
 ///
@@ -19,11 +66,11 @@ use parking_lot::Mutex;
 /// takes its count with it: a handle still held keeps counting into nothing.
 #[derive(Default)]
 struct CumulativeCountsByName {
-    per_name: Mutex<HashMap<String, Arc<AtomicU64>>>,
+    per_name: Mutex<HashMap<String, Arc<CumulativeCount>>>,
 }
 
 impl CumulativeCountsByName {
-    fn count_for(&self, name: &str) -> Arc<AtomicU64> {
+    fn count_for(&self, name: &str) -> Arc<CumulativeCount> {
         Arc::clone(self.per_name.lock().entry(name.to_string()).or_default())
     }
 
@@ -35,7 +82,7 @@ impl CumulativeCountsByName {
         self.per_name
             .lock()
             .iter()
-            .map(|(name, count)| (name.clone(), count.load(Ordering::Relaxed)))
+            .map(|(name, count)| (name.clone(), count.total()))
             .collect()
     }
 
@@ -43,7 +90,7 @@ impl CumulativeCountsByName {
         self.per_name
             .lock()
             .values()
-            .map(|count| count.load(Ordering::Relaxed))
+            .map(|count| count.total())
             .sum()
     }
 }
@@ -55,7 +102,7 @@ impl CumulativeCountsByName {
 /// on that link, so an eviction is attributed to the link whose bag was lost
 /// rather than to the link that happened to push. Cloning shares the count.
 #[derive(Clone, Default)]
-pub struct InboundLinkDroppedBagCounter(Arc<AtomicU64>);
+pub struct InboundLinkDroppedBagCounter(Arc<CumulativeCount>);
 
 impl InboundLinkDroppedBagCounter {
     /// Record one bag of this link's, lost before anything read it.
@@ -66,12 +113,21 @@ impl InboundLinkDroppedBagCounter {
     /// Record `dropped_bag_count` of this link's bags, lost before anything read
     /// them.
     pub fn record_dropped_bags(&self, dropped_bag_count: u64) {
-        self.0.fetch_add(dropped_bag_count, Ordering::Relaxed);
+        self.0.add(dropped_bag_count);
     }
 
     /// How many of this link's bags have been lost since it was wired.
     pub fn dropped_bag_count(&self) -> u64 {
-        self.0.load(Ordering::Relaxed)
+        self.0.total()
+    }
+
+    /// Write this count's every new total through `mirror`, or hand it back
+    /// where the count is already mirrored.
+    pub(crate) fn mirror_every_new_total_into(
+        &self,
+        mirror: LossCountMirror,
+    ) -> Result<(), LossCountMirror> {
+        self.0.mirror_every_new_total_into(mirror)
     }
 }
 
@@ -119,13 +175,22 @@ impl DroppedBagCountsByInboundLink {
 /// discarded, in per-channel samples at the port's declared rate. Cloning shares
 /// the count.
 #[derive(Clone, Default)]
-pub struct InboundLinkDiscardedSampleCounter(Arc<AtomicU64>);
+pub struct InboundLinkDiscardedSampleCounter(Arc<CumulativeCount>);
 
 impl InboundLinkDiscardedSampleCounter {
     /// Record `discarded_sample_count` of this link's samples, discarded by a
     /// flush.
     pub fn record_discarded_samples(&self, discarded_sample_count: u64) {
-        self.0.fetch_add(discarded_sample_count, Ordering::Relaxed);
+        self.0.add(discarded_sample_count);
+    }
+
+    /// Write this count's every new total through `mirror`, or hand it back
+    /// where the count is already mirrored.
+    pub(crate) fn mirror_every_new_total_into(
+        &self,
+        mirror: LossCountMirror,
+    ) -> Result<(), LossCountMirror> {
+        self.0.mirror_every_new_total_into(mirror)
     }
 }
 
@@ -164,17 +229,26 @@ impl DiscardedSampleCountsByInboundLink {
 /// One output port's cumulative count of bags refused at its channel's payload
 /// ceiling. Cloning shares the count.
 #[derive(Clone, Default)]
-pub struct OutputPortRefusedBagCounter(Arc<AtomicU64>);
+pub struct OutputPortRefusedBagCounter(Arc<CumulativeCount>);
 
 impl OutputPortRefusedBagCounter {
     /// Record one bag this port refused, and return the port's total after it.
     pub fn record_one_refused_bag(&self) -> u64 {
-        self.0.fetch_add(1, Ordering::Relaxed) + 1
+        self.0.add(1)
     }
 
     /// How many bags this port has refused since its channel was opened.
     pub fn refused_bag_count(&self) -> u64 {
-        self.0.load(Ordering::Relaxed)
+        self.0.total()
+    }
+
+    /// Write this count's every new total through `mirror`, or hand it back
+    /// where the count is already mirrored.
+    pub(crate) fn mirror_every_new_total_into(
+        &self,
+        mirror: LossCountMirror,
+    ) -> Result<(), LossCountMirror> {
+        self.0.mirror_every_new_total_into(mirror)
     }
 }
 
@@ -227,6 +301,37 @@ mod tests {
                 .dropped_bag_count(),
             2,
             "the second ask must reach the same counter, not mint a fresh one"
+        );
+    }
+
+    #[test]
+    fn a_mirrored_count_writes_the_total_it_had_and_every_new_total_through_its_mirror() {
+        let counts = DroppedBagCountsByInboundLink::default();
+        let counter = counts.counter_for_inbound_link("L-mirrored");
+        counter.record_dropped_bags(3);
+        let mirrored_totals = Arc::new(Mutex::new(Vec::new()));
+        let mirror_sink = Arc::clone(&mirrored_totals);
+
+        assert!(
+            counter
+                .mirror_every_new_total_into(Box::new(move |total| mirror_sink.lock().push(total)))
+                .is_ok()
+        );
+        counter.record_one_dropped_bag();
+        counts
+            .counter_for_inbound_link("L-mirrored")
+            .record_dropped_bags(2);
+
+        assert_eq!(
+            *mirrored_totals.lock(),
+            [3, 4, 6],
+            "the total at install, then each total a record reached, through any handle"
+        );
+        assert!(
+            counter
+                .mirror_every_new_total_into(Box::new(|_| {}))
+                .is_err(),
+            "a count takes one mirror, and a second is handed back rather than replacing it"
         );
     }
 

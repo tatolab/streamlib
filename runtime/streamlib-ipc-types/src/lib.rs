@@ -478,6 +478,72 @@ pub struct DataChannelBagSequenceNumberUserHeader {
     pub sequence_number: u64,
 }
 
+/// The board section a [`HelperProcessLossCountBoardKey`] names an inbound-link slot in.
+const HELPER_PROCESS_LOSS_COUNT_BOARD_INBOUND_LINK_SLOT_SECTION: u32 = 0;
+
+/// The board section a [`HelperProcessLossCountBoardKey`] names an output port in.
+const HELPER_PROCESS_LOSS_COUNT_BOARD_OUTPUT_PORT_SECTION: u32 = 1;
+
+/// The key of one entry on a helper process's loss-count blackboard: an
+/// inbound-link slot, or a declared output port by its index.
+///
+/// The iceoryx2 type name is pinned for the reason
+/// [`DataChannelBagSequenceNumberUserHeader`]'s is: the parent creates the board
+/// and the helper opens it, and both must present the same key type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, ZeroCopySend)]
+#[type_name("HelperProcessLossCountBoardKey")]
+#[repr(C)]
+pub struct HelperProcessLossCountBoardKey {
+    section: u32,
+    index_within_section: u32,
+}
+
+impl HelperProcessLossCountBoardKey {
+    /// The key of inbound-link slot `slot`.
+    pub const fn inbound_link_slot(slot: u32) -> Self {
+        Self {
+            section: HELPER_PROCESS_LOSS_COUNT_BOARD_INBOUND_LINK_SLOT_SECTION,
+            index_within_section: slot,
+        }
+    }
+
+    /// The key of the declared output port at `output_port_index`.
+    pub const fn output_port(output_port_index: u32) -> Self {
+        Self {
+            section: HELPER_PROCESS_LOSS_COUNT_BOARD_OUTPUT_PORT_SECTION,
+            index_within_section: output_port_index,
+        }
+    }
+}
+
+/// One inbound link's loss counts as a helper process last wrote them, beside
+/// the wiring generation the parent assigned that link.
+///
+/// The parent reads a slot as its link's only while the generation matches, so
+/// a write for a link since unwired never lands on the link that reused the slot.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ZeroCopySend)]
+#[type_name("InboundLinkLossCountBoardSlot")]
+#[repr(C)]
+pub struct InboundLinkLossCountBoardSlot {
+    /// The generation of the wiring these counts belong to; zero before any
+    /// write.
+    pub wiring_generation: u64,
+    /// Bags lost on the link before anything read them.
+    pub dropped_bags: u64,
+    /// Samples a windowed port's flushes discarded on the link.
+    pub discarded_samples: u64,
+}
+
+/// One output port's count of bags refused at its channel ceiling, as a helper
+/// process last wrote it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ZeroCopySend)]
+#[type_name("OutputPortRefusedBagCountBoardEntry")]
+#[repr(C)]
+pub struct OutputPortRefusedBagCountBoardEntry {
+    /// Bags refused since the port's channel was opened.
+    pub refused_bags: u64,
+}
+
 /// Fixed-size topic name for event pub/sub IPC.
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug, ZeroCopySend)]
 #[repr(C)]
@@ -667,6 +733,74 @@ mod tests {
             unsafe { <DataChannelBagSequenceNumberUserHeader as ZeroCopySend>::type_name() },
             "DataChannelBagSequenceNumberUserHeader",
             "the iceoryx2 type name every opener must present, independent of the module path"
+        );
+    }
+
+    #[test]
+    fn the_loss_count_board_key_is_two_u32s_under_its_pinned_name() {
+        assert_eq!(std::mem::size_of::<HelperProcessLossCountBoardKey>(), 8);
+        assert_eq!(std::mem::align_of::<HelperProcessLossCountBoardKey>(), 4);
+        assert_eq!(
+            std::mem::offset_of!(HelperProcessLossCountBoardKey, section),
+            0
+        );
+        assert_eq!(
+            std::mem::offset_of!(HelperProcessLossCountBoardKey, index_within_section),
+            4
+        );
+        assert_ne!(
+            HelperProcessLossCountBoardKey::inbound_link_slot(3),
+            HelperProcessLossCountBoardKey::output_port(3),
+            "a slot and an output port at one index are two entries"
+        );
+        assert_eq!(
+            // SAFETY: reads the pinned name; the layout it vouches for is asserted above.
+            unsafe { <HelperProcessLossCountBoardKey as ZeroCopySend>::type_name() },
+            "HelperProcessLossCountBoardKey"
+        );
+    }
+
+    #[test]
+    fn an_inbound_link_slot_is_three_u64s_at_their_documented_offsets_under_its_pinned_name() {
+        assert_eq!(std::mem::size_of::<InboundLinkLossCountBoardSlot>(), 24);
+        assert_eq!(std::mem::align_of::<InboundLinkLossCountBoardSlot>(), 8);
+        assert_eq!(
+            std::mem::offset_of!(InboundLinkLossCountBoardSlot, wiring_generation),
+            0
+        );
+        assert_eq!(
+            std::mem::offset_of!(InboundLinkLossCountBoardSlot, dropped_bags),
+            8
+        );
+        assert_eq!(
+            std::mem::offset_of!(InboundLinkLossCountBoardSlot, discarded_samples),
+            16
+        );
+        assert_eq!(
+            // SAFETY: reads the pinned name; the layout it vouches for is asserted above.
+            unsafe { <InboundLinkLossCountBoardSlot as ZeroCopySend>::type_name() },
+            "InboundLinkLossCountBoardSlot"
+        );
+    }
+
+    #[test]
+    fn an_output_ports_refused_bag_entry_is_one_u64_under_its_pinned_name() {
+        assert_eq!(
+            std::mem::size_of::<OutputPortRefusedBagCountBoardEntry>(),
+            8
+        );
+        assert_eq!(
+            std::mem::align_of::<OutputPortRefusedBagCountBoardEntry>(),
+            8
+        );
+        assert_eq!(
+            std::mem::offset_of!(OutputPortRefusedBagCountBoardEntry, refused_bags),
+            0
+        );
+        assert_eq!(
+            // SAFETY: reads the pinned name; the layout it vouches for is asserted above.
+            unsafe { <OutputPortRefusedBagCountBoardEntry as ZeroCopySend>::type_name() },
+            "OutputPortRefusedBagCountBoardEntry"
         );
     }
 
