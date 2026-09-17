@@ -23,17 +23,18 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use streamlib::sdk::logging::{
-    EngineLogRecordForTheParentProcess, HelperProcessEngineLogRecordRing, LogLevel,
-    capture_this_helper_processes_engine_log_records, emit_app_process_python_log_record, log_dir,
+    self as engine_logging, EngineLogRecordForTheParentProcess, HelperProcessEngineLogRecordRing,
+    LogLevel, emit_app_process_python_log_record, log_dir,
 };
 
 use crate::python_bag_conversion::{json_value_to_python_object, python_object_to_json_value};
 
-/// This process's captured engine records, waiting for the thread that
-/// forwards them. Set once: one process holds one `tracing` subscriber, so a
-/// second capture has nothing to install.
-static ENGINE_LOG_RECORDS_THIS_HELPER_CAPTURED: OnceLock<HelperProcessEngineLogRecordRing> =
-    OnceLock::new();
+/// The ring this helper's captured engine records queue in, waiting for the
+/// thread that forwards them. Set once: one process holds one `tracing`
+/// subscriber, so a second capture has nothing to install.
+static THE_RING_THIS_HELPERS_ENGINE_LOG_RECORDS_QUEUE_IN: OnceLock<
+    HelperProcessEngineLogRecordRing,
+> = OnceLock::new();
 
 /// Start capturing this helper process's engine `tracing` records, iceoryx2's
 /// own included, for [`drain_the_engine_log_records_this_helper_captured`] to
@@ -44,17 +45,15 @@ static ENGINE_LOG_RECORDS_THIS_HELPER_CAPTURED: OnceLock<HelperProcessEngineLogR
 /// records of a process that already installed a subscriber are already going
 /// somewhere.
 #[pyfunction]
-pub(crate) fn capture_this_processes_engine_log_records(python: Python<'_>) -> PyResult<()> {
-    if ENGINE_LOG_RECORDS_THIS_HELPER_CAPTURED.get().is_some() {
-        return Err(PyRuntimeError::new_err(
-            "this process is already capturing the engine's log records",
-        ));
-    }
+pub(crate) fn capture_this_helper_processes_engine_log_records(python: Python<'_>) -> PyResult<()> {
     let ring = python
-        .detach(capture_this_helper_processes_engine_log_records)
+        .detach(engine_logging::capture_this_helper_processes_engine_log_records)
         .map_err(|capture_failure| PyRuntimeError::new_err(capture_failure.to_string()))?;
-    let _ = ENGINE_LOG_RECORDS_THIS_HELPER_CAPTURED.set(ring);
-    Ok(())
+    THE_RING_THIS_HELPERS_ENGINE_LOG_RECORDS_QUEUE_IN
+        .set(ring)
+        .map_err(|_| {
+            PyRuntimeError::new_err("this process is already capturing the engine's log records")
+        })
 }
 
 /// Take every engine record captured so far, waiting up to `wait_seconds` for
@@ -68,13 +67,19 @@ pub(crate) fn drain_the_engine_log_records_this_helper_captured(
     python: Python<'_>,
     wait_seconds: f64,
 ) -> PyResult<(Py<PyList>, u64)> {
-    let ring = ENGINE_LOG_RECORDS_THIS_HELPER_CAPTURED.get().ok_or_else(|| {
-        PyRuntimeError::new_err(
-            "this process is not capturing the engine's log records, so there are none to drain",
-        )
-    })?;
-    let drained = python
-        .detach(|| ring.drain_waiting_at_most(Duration::from_secs_f64(wait_seconds.max(0.0))));
+    let ring = THE_RING_THIS_HELPERS_ENGINE_LOG_RECORDS_QUEUE_IN
+        .get()
+        .ok_or_else(|| {
+            PyRuntimeError::new_err(
+                "this process is not capturing the engine's log records, so there are none to \
+                 drain",
+            )
+        })?;
+    // A wait that is not a duration — infinite, or past what `Duration` holds
+    // — waits no time at all rather than panicking through the binding.
+    let wait_for_the_first_record =
+        Duration::try_from_secs_f64(wait_seconds).unwrap_or(Duration::ZERO);
+    let drained = python.detach(|| ring.drain_waiting_at_most(wait_for_the_first_record));
     let records = PyList::empty(python);
     for record in drained.records {
         records.append(engine_log_record_as_python_mapping(python, record)?)?;

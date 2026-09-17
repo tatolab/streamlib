@@ -41,6 +41,12 @@ use crate::core::logging::worker::WorkerSignal;
 /// burst — a storm of receive failures — rather than a sustained flood.
 const ENGINE_LOG_RECORDS_A_HELPER_PROCESS_HOLDS_FOR_ITS_PARENT: usize = 4_096;
 
+/// How many unanswered doorbell signals the drain's channel holds.
+///
+/// A signal says only "look at the ring", so what matters is that one still
+/// fits when the ring goes from empty to occupied; the drain clears the rest.
+const DOORBELL_SIGNALS_HELD_FOR_THE_DRAIN: usize = 256;
+
 /// One engine `tracing` record a helper process owes its parent.
 ///
 /// The parent stamps receipt time and owns the runtime id, so neither travels
@@ -85,7 +91,7 @@ impl HelperProcessEngineLogRecordRing {
         let queue = Arc::new(ArrayQueue::new(capacity));
         let dropped = Arc::new(AtomicU64::new(0));
         let (doorbell_sender, doorbell): (Sender<WorkerSignal>, Receiver<WorkerSignal>) =
-            bounded(256);
+            bounded(DOORBELL_SIGNALS_HELD_FOR_THE_DRAIN);
         let layer = JsonlSinkLayer::new(Arc::clone(&queue), doorbell_sender, Arc::clone(&dropped));
         (
             Self {
@@ -98,22 +104,33 @@ impl HelperProcessEngineLogRecordRing {
         )
     }
 
-    /// Take every record the ring holds, waiting up to `wait` for the first
-    /// one.
+    /// Take every record the ring holds, waiting up to
+    /// `wait_for_the_first_record` for one to arrive.
     ///
     /// Returns as soon as a record arrives; an empty answer means the wait
     /// elapsed with the ring empty, which is what a quiet helper looks like.
     pub fn drain_waiting_at_most(
         &self,
-        wait: Duration,
+        wait_for_the_first_record: Duration,
     ) -> EngineLogRecordsDrainedForTheParentProcess {
         let mut records = self.take_every_record_the_ring_holds();
         if records.is_empty() {
             // A doorbell ring can outlive the record that sent it — the
             // drain before this one may have taken it — so the pop after the
             // wait is what decides, not the signal.
-            let _ = self.doorbell.recv_timeout(wait);
+            let _ = self.doorbell.recv_timeout(wait_for_the_first_record);
             records = self.take_every_record_the_ring_holds();
+        }
+        if !records.is_empty() {
+            // One signal reaches the doorbell per captured record, and a
+            // drain that took its records without waiting took none of them.
+            // Left behind they fill a bounded channel, whose sends are
+            // dropped from then on — and the record that would have woken the
+            // next wait rings a doorbell nobody hears. Cleared here rather
+            // than before the wait: a signal still standing there is the one
+            // for a record pushed since the pop, and waiting it out would
+            // hold that record for the whole wait.
+            while self.doorbell.try_recv().is_ok() {}
         }
         let dropped = self.dropped.load(Ordering::Relaxed);
         let records_dropped_since_the_last_drain = dropped.saturating_sub(
@@ -127,20 +144,29 @@ impl HelperProcessEngineLogRecordRing {
     }
 
     fn take_every_record_the_ring_holds(&self) -> Vec<EngineLogRecordForTheParentProcess> {
-        let mut records = Vec::new();
+        let mut records = Vec::with_capacity(self.queue.len());
         while let Some(record) = self.queue.pop() {
-            records.push(EngineLogRecordForTheParentProcess {
-                level: record.level,
-                target: record.target,
-                message: record.message,
-                pipeline_id: record.pipeline_id,
-                processor_id: record.processor_id,
-                rhi_op: record.rhi_op,
-                attrs: record.attrs,
-                emitted_at_wall_clock_nanoseconds: record.host_ts,
-            });
+            records.push(record.into());
         }
         records
+    }
+}
+
+impl From<LogRecord> for EngineLogRecordForTheParentProcess {
+    /// The five columns the parent owns — `intercepted`, `channel`, `source`,
+    /// `source_ts` and `source_seq` — are filled by the helper's sink and its
+    /// parent on receipt, so a record crossing home carries none of them.
+    fn from(record: LogRecord) -> Self {
+        Self {
+            level: record.level,
+            target: record.target,
+            message: record.message,
+            pipeline_id: record.pipeline_id,
+            processor_id: record.processor_id,
+            rhi_op: record.rhi_op,
+            attrs: record.attrs,
+            emitted_at_wall_clock_nanoseconds: record.host_ts,
+        }
     }
 }
 
@@ -246,6 +272,46 @@ mod tests {
                 .records_dropped_since_the_last_drain,
             0,
             "a loss already reported must not be reported again"
+        );
+    }
+
+    /// A record still wakes the wait after a long quiet run of busy drains.
+    ///
+    /// Every captured record rings the doorbell, and a drain that never
+    /// waited never answered it; past the doorbell's capacity those unanswered
+    /// signals would swallow every later one, and the next record would sit in
+    /// the ring until the wait ran out instead of ending it.
+    #[test]
+    fn a_record_arriving_after_a_run_of_busy_drains_still_ends_the_wait() {
+        let (ring, layer) = HelperProcessEngineLogRecordRing::with_capacity(8);
+        // A `Dispatch` rather than a thread-local default: the record that has
+        // to end the wait is made on another thread, as every record a helper
+        // captures from its own processor's threads is.
+        let dispatch = Dispatch::new(Registry::default().with(layer));
+
+        for _ in 0..(DOORBELL_SIGNALS_HELD_FOR_THE_DRAIN * 2) {
+            tracing::dispatcher::with_default(&dispatch, || {
+                tracing::error!(target: "iceoryx2", "a record nobody waited for");
+            });
+            assert_eq!(ring.drain_waiting_at_most(Duration::ZERO).records.len(), 1);
+        }
+
+        let waiting_drain_started = std::time::Instant::now();
+        std::thread::scope(|threads| {
+            let emitting_dispatch = dispatch.clone();
+            threads.spawn(move || {
+                std::thread::sleep(Duration::from_millis(20));
+                tracing::dispatcher::with_default(&emitting_dispatch, || {
+                    tracing::error!(target: "iceoryx2", "the record that must end the wait");
+                });
+            });
+            let drained = ring.drain_waiting_at_most(Duration::from_secs(10));
+            assert_eq!(drained.records.len(), 1);
+        });
+        assert!(
+            waiting_drain_started.elapsed() < Duration::from_secs(5),
+            "the record woke nothing: the drain waited {:?} for a record sent after 20ms",
+            waiting_drain_started.elapsed()
         );
     }
 

@@ -13,7 +13,7 @@ pub use helper_process_engine_log_capture::{
     EngineLogRecordForTheParentProcess, EngineLogRecordsDrainedForTheParentProcess,
     HelperProcessEngineLogRecordRing, capture_this_helper_processes_engine_log_records,
 };
-pub use iceoryx2_log_bridge::install_iceoryx2_log_bridge_at_the_engines_configured_level;
+pub(crate) use iceoryx2_log_bridge::install_iceoryx2_log_bridge_at_the_engines_configured_level;
 pub use init::{StreamlibLoggingGuard, init, init_for_tests};
 pub use paths::{log_dir, runtime_log_path};
 pub(crate) use polyglot_sink::{push_polyglot_record, request_a_best_effort_flush};

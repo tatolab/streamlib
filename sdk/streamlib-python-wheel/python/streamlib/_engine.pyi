@@ -68,7 +68,7 @@ __all__ = [
     "await_test_harness_bag",
     "capability_extension_host_for_the_app_process",
     "capability_extension_host_for_the_helper_process",
-    "capture_this_processes_engine_log_records",
+    "capture_this_helper_processes_engine_log_records",
     "close_test_harness_channel",
     "decode_msgpack_bytes_to_python_object",
     "decode_tapped_channel_bag_frame_to_python_object",
@@ -1751,7 +1751,7 @@ def log_event(
 ) -> None:
     """Emit one record on the engine's log pipeline, with structured attrs."""
 
-def capture_this_processes_engine_log_records() -> None:
+def capture_this_helper_processes_engine_log_records() -> None:
     """Start capturing this helper process's engine `tracing` records,
     iceoryx2's own included, into the ring
     `drain_the_engine_log_records_this_helper_captured` empties.

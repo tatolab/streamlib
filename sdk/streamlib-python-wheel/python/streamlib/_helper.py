@@ -42,7 +42,7 @@ from ._engine import (
     ProcessorLinkDataAccess,
     RuntimeContextFullAccess,
     capability_extension_host_for_the_helper_process,
-    capture_this_processes_engine_log_records,
+    capture_this_helper_processes_engine_log_records,
     drain_the_engine_log_records_this_helper_captured,
     engine_build_id_compiled_into_this_extension,
 )
@@ -603,7 +603,7 @@ class CapturedEngineLogRecordForwarder:
         failing over the logging around it.
         """
         try:
-            capture_this_processes_engine_log_records()
+            capture_this_helper_processes_engine_log_records()
         except Exception as capture_failure:
             self._sink(
                 "warn",
