@@ -268,6 +268,13 @@ jobs:
           # a dead helper still owed, the link state derived from them, and the
           # plan check that never wires an unanswered link twice. The helper's
           # half of the exchange is the wheel's `test_helper_process.py`.
+          # Transport hygiene. The ceiling and the segment-growth log measured
+          # against the shared-memory sample iceoryx2 buckets rather than the
+          # frame alone; the shared-memory headroom reading, which never refuses
+          # a start; the tap's idle backoff, which is what keeps an attached tap
+          # on a quiet channel off a core; and a deeper open getting past a
+          # shallow service a dead holder left behind, which iceoryx2's own
+          # sweep-after-a-successful-open never clears.
           # The runtime event bus as an in-process fan-out: no listener or
           # publisher cap, no payload ceiling, one order for every listener, a
           # full queue that drops and counts rather than blocking the publisher,
@@ -361,6 +368,10 @@ jobs:
             iceoryx2::node::tests::two_test_process_domains_share_neither_files_nor_shared_memory \
             iceoryx2::node::tests::a_node_whose_process_was_killed_is_reclaimed_by_the_sweep \
             iceoryx2::node::tests::the_sweep_reads_the_engine_owned_domain_and_never_the_ambient_one \
+            iceoryx2::output::tests::write_raw_refuses_over_ceiling_and_grows_within_it \
+            iceoryx2::posix_shared_memory_headroom \
+            core::runtime::tap::tests::an_idle_tap_backs_off_toward_the_ceiling_and_snaps_back_when_a_bag_arrives \
+            iceoryx2::node::tests::a_deeper_open_survives_a_shallow_service_a_dead_holder_left_behind \
             iceoryx2::iceoryx2_domain_for_this_test_process \
             core::runtime::runtime::tests::runtime_internal_surface_share::a_runtime_started_with_xdg_runtime_dir_unset_keeps_its_socket_and_domain_in_the_per_user_fallback \
             core::pubsub \
