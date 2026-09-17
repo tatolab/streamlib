@@ -62,6 +62,10 @@ ESCALATE_REQUEST_TIMEOUT_SECONDS = 60.0
 # callback.
 LIFECYCLE_POLL_INTERVAL_MILLISECONDS = 100
 
+# The interval a continuous processor declaring none runs at: the same 100 µs
+# the engine's native continuous runner waits between calls.
+CONTINUOUS_INTERVAL_FLOOR_NANOSECONDS = 100_000
+
 
 class HelperProcessProtocolError(Exception):
     """The parent sent something this helper cannot act on."""
@@ -772,19 +776,21 @@ class HelperProcessLifecycle:
 
     def _run_continuous(self, interval_ms: int) -> None:
         assert self._hosted is not None
-        if interval_ms <= 0:
+        interval_ns = (
+            interval_ms * 1_000_000
+            if interval_ms > 0
+            else CONTINUOUS_INTERVAL_FLOOR_NANOSECONDS
+        )
+        with MonotonicTimer(interval_ns) as timer:
             while self._running:
-                self._hosted.call_hook("process", self._hosted.limited_access_context)
-                self._drain_commands_arriving_mid_run()
-            return
-        with MonotonicTimer(interval_ms * 1_000_000) as timer:
-            while self._running:
-                self._hosted.call_hook("process", self._hosted.limited_access_context)
-                # A tick already consumed by this iteration is not caught up
-                # on — drift-free pacing, not backlog replay.
-                if timer.wait(LIFECYCLE_POLL_INTERVAL_MILLISECONDS) < 0:
+                expirations = timer.wait(LIFECYCLE_POLL_INTERVAL_MILLISECONDS)
+                if expirations < 0:
                     log.error("the interval timer failed; leaving the continuous loop")
                     self._running = False
+                elif expirations > 0:
+                    # Once per wake however many ticks it covered — drift-free
+                    # pacing, not backlog replay.
+                    self._hosted.call_hook("process", self._hosted.limited_access_context)
                 self._drain_commands_arriving_mid_run()
 
     def _wait_for_a_notify_or_a_command(self, listener_fd: int) -> None:
@@ -921,14 +927,22 @@ class HelperProcessLifecycle:
             )
 
     def _update_config(self, command: "dict[str, Any]") -> None:
-        if self._hosted is not None:
-            try:
-                apply_configuration(self._hosted.instance, command.get("config"))
-            except Exception as configuration_failure:
-                log.error(
-                    "the processor refused a configuration update",
-                    error=str(configuration_failure),
-                )
+        # Answered with the cause rather than logged: the parent keeps the
+        # graph's previous configuration only when it hears the refusal.
+        if self._hosted is None or not self._set_up_succeeded:
+            self._bridge.send(
+                {
+                    "rpc": "error",
+                    "error": "this processor's setup did not succeed, so it takes no "
+                    "configuration",
+                }
+            )
+            return
+        try:
+            apply_configuration(self._hosted.instance, command.get("config"))
+        except Exception as configuration_failure:
+            self._bridge.send({"rpc": "error", "error": str(configuration_failure)})
+            return
         self._bridge.send({"rpc": "ok"})
 
 

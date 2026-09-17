@@ -1320,6 +1320,142 @@ def test_a_helper_that_cannot_keep_up_still_drains_its_listener_every_pass(stand
 
 
 # =============================================================================
+# The continuous loop's pacing
+# =============================================================================
+
+
+@pytest.fixture
+def when_the_pacing_probe_processed_ns():
+    """The pacing probe's record, emptied around each test that reads it."""
+    from helper_process_probes import WHEN_THE_PACING_PROBE_PROCESSED_NS
+
+    WHEN_THE_PACING_PROBE_PROCESSED_NS.clear()
+    yield WHEN_THE_PACING_PROBE_PROCESSED_NS
+    WHEN_THE_PACING_PROBE_PROCESSED_NS.clear()
+
+
+def run_the_pacing_probe(stand_in_parent, interval_ms: int, running_seconds: float) -> None:
+    """Set the pacing probe up, run it continuous at `interval_ms` for
+    `running_seconds`, then stop and tear it down the way the ladder does."""
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    lifecycle_thread = drive_lifecycle_on_a_thread(
+        bridge, load_processor_class(f"{PROBE_MODULE}:ContinuousPacingProbe")
+    )
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    assert stand_in_parent.receive() == {"rpc": "ready"}
+
+    stand_in_parent.send(
+        {"cmd": "run", "execution": "continuous", "interval_ms": interval_ms}
+    )
+    time.sleep(running_seconds)
+
+    stand_in_parent.send({"cmd": "stop", "capability": "full"})
+    stand_in_parent.send({"cmd": "teardown", "capability": "full"})
+    assert stand_in_parent.receive()["rpc"] == "stopped"
+    assert stand_in_parent.receive()["rpc"] == "done"
+    lifecycle_thread.join(timeout=5.0)
+    assert not lifecycle_thread.is_alive()
+
+
+def test_a_continuous_processor_runs_once_per_interval_longer_than_the_command_wait(
+    stand_in_parent, when_the_pacing_probe_processed_ns
+):
+    """A 250 ms interval over 1.1 s is four ticks, so four `process()` calls.
+
+    Fail-without-fix: the loop reads the timer wait's own 100 ms timeout as a
+    tick and calls `process()` after every one, so the probe runs eleven or
+    more times — about ten a second, whatever interval above 100 ms it asked for.
+    """
+    run_the_pacing_probe(stand_in_parent, interval_ms=250, running_seconds=1.1)
+
+    process_calls = len(when_the_pacing_probe_processed_ns)
+    assert 3 <= process_calls <= 5, (
+        f"a 250 ms interval ran process() {process_calls} times in 1.1 s; four is right"
+    )
+
+
+def test_a_continuous_processor_with_no_interval_never_runs_faster_than_the_floor(
+    stand_in_parent, when_the_pacing_probe_processed_ns
+):
+    """An interval of zero runs as often as the engine's floor allows and no
+    more, so a processor with nothing to do does not take a whole core.
+
+    Fail-without-fix: the zero-interval loop calls `process()` back to back
+    with no wait at all, hundreds of thousands of times a second.
+    """
+    run_the_pacing_probe(stand_in_parent, interval_ms=0, running_seconds=0.5)
+
+    process_calls = len(when_the_pacing_probe_processed_ns)
+    assert process_calls >= 2, "the zero-interval loop never ran the processor"
+    measured_span_seconds = (
+        when_the_pacing_probe_processed_ns[-1] - when_the_pacing_probe_processed_ns[0]
+    ) / 1_000_000_000
+    calls_per_second = (process_calls - 1) / measured_span_seconds
+    floor_calls_per_second = (
+        1_000_000_000 / _helper.CONTINUOUS_INTERVAL_FLOOR_NANOSECONDS
+    )
+    assert calls_per_second <= floor_calls_per_second * 1.2, (
+        f"a zero interval ran process() {calls_per_second:.0f} times a second; the "
+        f"floor allows {floor_calls_per_second:.0f}"
+    )
+
+
+# =============================================================================
+# Reconfiguration
+# =============================================================================
+
+
+def reconfigure_a_set_up_probe(stand_in_parent, probe_name: str, configuration: dict) -> dict:
+    """Set `probe_name` up, hand it `configuration`, and return the answer."""
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    lifecycle_thread = drive_lifecycle_on_a_thread(
+        bridge, load_processor_class(f"{PROBE_MODULE}:{probe_name}")
+    )
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    stand_in_parent.receive()
+
+    stand_in_parent.send({"cmd": "update_config", "config": configuration})
+    answer = stand_in_parent.receive()
+
+    stand_in_parent.send({"cmd": "teardown", "capability": "full"})
+    assert stand_in_parent.receive()["rpc"] == "done"
+    lifecycle_thread.join(timeout=5.0)
+    assert not lifecycle_thread.is_alive()
+    return answer
+
+
+def test_a_configuration_the_processor_takes_is_answered_ok(stand_in_parent):
+    answer = reconfigure_a_set_up_probe(
+        stand_in_parent, "TakesReconfigurationProbe", {"gain": 3}
+    )
+    assert answer == {"rpc": "ok"}
+
+
+@pytest.mark.parametrize(
+    ("probe_name", "the_cause_named"),
+    [
+        ("PassThroughProbe", "cannot be reconfigured while running"),
+        ("RefusesReconfigurationProbe", "a gain of 3 is out of range"),
+        ("RefusesSetupProbe", "setup did not succeed"),
+    ],
+)
+def test_a_configuration_the_processor_does_not_take_is_refused_naming_the_cause(
+    stand_in_parent, probe_name, the_cause_named
+):
+    """The parent reports a refused update to its caller and keeps the graph's
+    previous configuration, which it can only do if the refusal reaches it.
+
+    Fail-without-fix: the helper logs the refusal and answers `ok`, so the
+    parent reports a configuration the processor never took.
+    """
+    answer = reconfigure_a_set_up_probe(stand_in_parent, probe_name, {"gain": 3})
+    assert answer["rpc"] == "error"
+    assert the_cause_named in answer["error"]
+
+
+# =============================================================================
 # Bootstrap refusals
 # =============================================================================
 
