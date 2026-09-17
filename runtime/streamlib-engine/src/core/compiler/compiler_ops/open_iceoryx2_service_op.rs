@@ -1296,15 +1296,13 @@ mod tests {
         proc_id: &str,
         instance: ProcessorInstance,
     ) -> Arc<Mutex<ProcessorInstance>> {
-        let processor_to_attach = ProcessorInstanceWithItsOutOfProcessLinkWiring::from(instance);
-        processor_to_attach.attach_to(
+        ProcessorInstanceWithItsOutOfProcessLinkWiring::from(instance).attach_to(
             graph
                 .traversal_mut()
                 .v(proc_id)
                 .first_mut()
                 .expect("the node must exist"),
-        );
-        processor_to_attach.processor_instance
+        )
     }
 
     /// Record one link's wiring on both out-of-process endpoints, exactly as

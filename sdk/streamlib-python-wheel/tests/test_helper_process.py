@@ -1139,6 +1139,41 @@ def test_a_wire_the_helper_cannot_open_is_answered_with_the_reason(stand_in_pare
     assert not lifecycle_thread.is_alive()
 
 
+def test_a_wire_after_a_failed_setup_is_refused_rather_than_opened(stand_in_parent):
+    """The engine can hand a link over while `setup` is still running, and the
+    child reads it only once `setup` has answered. A processor whose setup
+    failed opens no port for it, so the link must read error rather than wired.
+
+    Fail-without-fix: open the port anyway and the child answers `link_wired`
+    for a processor that never came up.
+    """
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    lifecycle_thread = drive_lifecycle_on_a_thread(
+        bridge, load_processor_class(f"{PROBE_MODULE}:RefusesSetupProbe")
+    )
+
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    stand_in_parent.send(
+        {
+            "cmd": "wire_link",
+            "direction": "output",
+            "link": engine_shaped_link_wiring("output", "L-during-a-failed-setup"),
+        }
+    )
+    assert stand_in_parent.receive()["rpc"] == "error"
+
+    answer = stand_in_parent.receive()
+    assert answer["rpc"] == "link_wire_failed", answer
+    assert answer["link_id"] == "L-during-a-failed-setup"
+    assert "setup did not succeed" in answer["reason"]
+
+    stand_in_parent.send({"cmd": "teardown", "capability": "full"})
+    assert stand_in_parent.receive()["rpc"] == "done"
+    lifecycle_thread.join(timeout=5.0)
+    assert not lifecycle_thread.is_alive()
+
+
 def test_a_wire_in_an_unknown_direction_is_refused_rather_than_left_unanswered(
     stand_in_parent,
 ):

@@ -591,6 +591,23 @@ impl PythonHelperProcessSpawnHostProcessor {
         }
     }
 
+    /// Hold every link recorded from now on behind the setup command, run
+    /// `start_the_helper_process`, and give the helper up if that fails — so a
+    /// link held behind a setup command that never went out is refused rather
+    /// than pending for good.
+    fn set_up_holding_every_later_link_until_the_setup_command_goes_out(
+        &mut self,
+        start_the_helper_process: impl FnOnce(&mut Self) -> Result<()>,
+    ) -> Result<()> {
+        self.link_wiring
+            .hold_every_later_link_until_the_setup_command_goes_out();
+        let set_up = start_the_helper_process(self);
+        if set_up.is_err() {
+            self.give_up_on_the_helper_process();
+        }
+        set_up
+    }
+
     /// Start the child and wait for its `ready` — everything `setup` does once
     /// later links are held.
     fn start_the_helper_process_and_await_its_registration(
@@ -1036,15 +1053,9 @@ unsafe fn mark_each_descriptor_past_stdio_close_on_exec(highest_descriptor: libc
 
 impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
     fn __generated_setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        // A link the compiler records from here on waits to be handed over
-        // behind the setup command and reads pending until the child answers.
-        self.link_wiring
-            .hold_every_later_link_until_the_setup_command_goes_out();
-        let set_up = self.start_the_helper_process_and_await_its_registration(ctx);
-        if set_up.is_err() {
-            self.give_up_on_the_helper_process();
-        }
-        set_up
+        self.set_up_holding_every_later_link_until_the_setup_command_goes_out(|host| {
+            host.start_the_helper_process_and_await_its_registration(ctx)
+        })
     }
 
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
@@ -1699,6 +1710,46 @@ sys.exit(0)
             carried.is_none(),
             "a link riding the setup command waits on no answer of its own"
         );
+    }
+
+    /// A link recorded while the helper sets up waits on its own answer, and a
+    /// setup that fails before its setup command goes out refuses that link
+    /// rather than leaving it pending.
+    ///
+    /// Fail-without-fix: drop the hold and the link rides a setup command that
+    /// never goes out; drop the give-up and it reads pending for good.
+    #[test]
+    fn a_link_held_during_a_setup_that_fails_is_refused_rather_than_left_pending() {
+        let mut host = spawn_host_for_test(None);
+        let mut held_answer_cell = None;
+
+        host.set_up_holding_every_later_link_until_the_setup_command_goes_out(|host| {
+            held_answer_cell = host
+                .out_of_process_link_wiring()
+                .expect("a helper host carries an envelope")
+                .record_a_link_and_hand_it_to_a_far_side_past_its_setup_command(
+                    streamlib::sdk::error::PortDirection::Input,
+                    serde_json::json!({"link_id": "L-live", "name": "frames_from_upstream"}),
+                )
+                .expect("a helper still setting up takes the link");
+            Err(Error::Runtime(
+                "the helper process could not be started".to_string(),
+            ))
+        })
+        .expect_err("the setup failed");
+
+        let held_answer_cell =
+            held_answer_cell.expect("a link recorded during setup waits on its own answer");
+        match held_answer_cell.the_far_sides_answer() {
+            Some(
+                streamlib::sdk::processors::OutOfProcessLinkWireOutcome::RefusedByTheFarSide {
+                    reason,
+                },
+            ) => assert!(reason.contains("has failed"), "{reason}"),
+            unanswered_or_opened => {
+                panic!("the held link must be refused; got {unanswered_or_opened:?}")
+            }
+        }
     }
 
     /// The child is an exec of the app's own interpreter running the helper

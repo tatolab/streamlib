@@ -39,9 +39,9 @@ pub trait OutOfProcessFarSideLinkDelivery: Send {
         link_id: &str,
     ) -> Result<()>;
 
-    /// Refuse every link the far side still owes an answer for, because its
-    /// host gave up on it.
-    fn refuse_every_link_still_awaiting_the_far_sides_answer(&self);
+    /// Refuse every link the far side still owes an answer for with `reason`,
+    /// because its host gave up on it.
+    fn refuse_every_link_still_awaiting_the_far_sides_answer(&self, reason: &str);
 }
 
 /// A link recorded after the far side's setup began, waiting to be handed over
@@ -91,15 +91,23 @@ impl RecordedLinksAndHowTheNextReachesTheFarSide {
     }
 }
 
-fn refuse_the_link_waiting_for_the_setup_command(
-    waiting: LinkAwaitingHandoverBehindTheSetupCommand,
+impl LinkAwaitingHandoverBehindTheSetupCommand {
+    fn refuse_because(self, reason: &str) {
+        self.answer_cell.note_the_far_sides_answer(
+            OutOfProcessLinkWireOutcome::RefusedByTheFarSide {
+                reason: reason.to_string(),
+            },
+        );
+    }
+}
+
+fn refuse_every_link_waiting_behind_the_setup_command(
+    waiting: Vec<LinkAwaitingHandoverBehindTheSetupCommand>,
     reason: &str,
 ) {
-    waiting.answer_cell.note_the_far_sides_answer(
-        OutOfProcessLinkWireOutcome::RefusedByTheFarSide {
-            reason: reason.to_string(),
-        },
-    );
+    for waiting_link in waiting {
+        waiting_link.refuse_because(reason);
+    }
 }
 
 /// One out-of-process processor's link wiring, shared between the host of its
@@ -320,29 +328,31 @@ impl OutOfProcessLinkWiringEnvelope {
         let mut recorded = self
             .recorded_links_and_how_the_next_reaches_the_far_side
             .lock();
+        match &recorded.how_a_link_reaches_the_far_side {
+            HowALinkReachesTheFarSide::HandedOverTo(_) => {
+                return Err(crate::core::error::Error::Runtime(
+                    "this far side's setup command was already sent".to_string(),
+                ));
+            }
+            HowALinkReachesTheFarSide::RefusedBecauseTheFarSideIsGone(reason) => {
+                return Err(crate::core::error::Error::Runtime(reason.clone()));
+            }
+            HowALinkReachesTheFarSide::RidesTheSetupCommand
+            | HowALinkReachesTheFarSide::WaitsForTheSetupCommandToGoOut(_) => {}
+        }
         let waiting = match std::mem::replace(
             &mut recorded.how_a_link_reaches_the_far_side,
             HowALinkReachesTheFarSide::RidesTheSetupCommand,
         ) {
-            HowALinkReachesTheFarSide::RidesTheSetupCommand => Vec::new(),
             HowALinkReachesTheFarSide::WaitsForTheSetupCommandToGoOut(waiting) => waiting,
-            already_past_setup @ (HowALinkReachesTheFarSide::HandedOverTo(_)
-            | HowALinkReachesTheFarSide::RefusedBecauseTheFarSideIsGone(_)) => {
-                recorded.how_a_link_reaches_the_far_side = already_past_setup;
-                return Err(crate::core::error::Error::Runtime(
-                    "this far side's setup command was already sent, or the far side is gone"
-                        .to_string(),
-                ));
-            }
+            _ => Vec::new(),
         };
 
         if let Err(send_failure) =
             send_the_setup_command_carrying_these_ports(recorded.as_setup_command_ports())
         {
             let reason = format!("the far side's setup command could not be sent: {send_failure}");
-            for waiting_link in waiting {
-                refuse_the_link_waiting_for_the_setup_command(waiting_link, &reason);
-            }
+            refuse_every_link_waiting_behind_the_setup_command(waiting, &reason);
             recorded.how_a_link_reaches_the_far_side =
                 HowALinkReachesTheFarSide::RefusedBecauseTheFarSideIsGone(reason);
             return Err(send_failure);
@@ -358,10 +368,7 @@ impl OutOfProcessLinkWiringEnvelope {
                 Ok(()) => recorded
                     .links_facing(waiting_link.port_direction)
                     .push(waiting_link.link_wiring),
-                Err(handover_failure) => refuse_the_link_waiting_for_the_setup_command(
-                    waiting_link,
-                    &handover_failure.to_string(),
-                ),
+                Err(handover_failure) => waiting_link.refuse_because(&handover_failure.to_string()),
             }
         }
         recorded.how_a_link_reaches_the_far_side =
@@ -381,12 +388,10 @@ impl OutOfProcessLinkWiringEnvelope {
         );
         match how_links_reached_it {
             HowALinkReachesTheFarSide::WaitsForTheSetupCommandToGoOut(waiting) => {
-                for waiting_link in waiting {
-                    refuse_the_link_waiting_for_the_setup_command(waiting_link, &reason);
-                }
+                refuse_every_link_waiting_behind_the_setup_command(waiting, &reason);
             }
             HowALinkReachesTheFarSide::HandedOverTo(delivery) => {
-                delivery.refuse_every_link_still_awaiting_the_far_sides_answer();
+                delivery.refuse_every_link_still_awaiting_the_far_sides_answer(&reason);
             }
             HowALinkReachesTheFarSide::RidesTheSetupCommand
             | HowALinkReachesTheFarSide::RefusedBecauseTheFarSideIsGone(_) => {}
@@ -394,7 +399,8 @@ impl OutOfProcessLinkWiringEnvelope {
     }
 
     /// The `ports` payload a setup command sent now would carry.
-    pub fn as_setup_command_ports(&self) -> JsonValue {
+    #[cfg(test)]
+    pub(crate) fn as_setup_command_ports(&self) -> JsonValue {
         self.recorded_links_and_how_the_next_reaches_the_far_side
             .lock()
             .as_setup_command_ports()
@@ -827,7 +833,9 @@ mod tests {
             .expect("the setup command goes out");
 
         envelope.refuse_every_later_link_because_the_far_side_is_gone(
-            "processor 'Blur' (Pblur) has failed, so no link can be wired into it".to_string(),
+            crate::core::helper_process_transport::refusal_of_a_link_into_a_helper_process_that_failed(
+                "Blur", "Pblur",
+            ),
         );
 
         let refused = envelope
@@ -976,7 +984,9 @@ mod tests {
             .unwrap();
 
         envelope.refuse_every_later_link_because_the_far_side_is_gone(
-            "processor 'Blur' (Pblur) has failed, so no link can be wired into it".to_string(),
+            crate::core::helper_process_transport::refusal_of_a_link_into_a_helper_process_that_failed(
+                "Blur", "Pblur",
+            ),
         );
 
         assert!(refusal_reason_of(&given_up).is_some_and(|reason| reason.contains("has failed")));

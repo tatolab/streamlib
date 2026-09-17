@@ -19,7 +19,6 @@ pub struct OutOfProcessLinkWiringComponent(pub Arc<OutOfProcessLinkWiringEnvelop
 
 /// A created processor instance, with the out-of-process link wiring it carries
 /// taken while nothing else can hold its lock.
-#[derive(Clone)]
 pub(crate) struct ProcessorInstanceWithItsOutOfProcessLinkWiring {
     pub(crate) processor_instance: Arc<Mutex<ProcessorInstance>>,
     out_of_process_link_wiring: Option<Arc<OutOfProcessLinkWiringEnvelope>>,
@@ -39,14 +38,15 @@ impl ProcessorInstanceWithItsOutOfProcessLinkWiring {
     /// Attach the instance to its node, and its wiring beside it when it has
     /// some — the one attach every path takes, since the wiring's presence is
     /// what classifies the processor.
-    pub(crate) fn attach_to(&self, node: &mut ProcessorNode) {
+    pub(crate) fn attach_to(self, node: &mut ProcessorNode) -> Arc<Mutex<ProcessorInstance>> {
         node.insert(ProcessorInstanceComponent(Arc::clone(
             &self.processor_instance,
         )));
-        if let Some(out_of_process_link_wiring) = &self.out_of_process_link_wiring {
+        if let Some(out_of_process_link_wiring) = self.out_of_process_link_wiring {
             node.insert_component_without_rendering_it(OutOfProcessLinkWiringComponent(
-                Arc::clone(out_of_process_link_wiring),
+                out_of_process_link_wiring,
             ));
         }
+        self.processor_instance
     }
 }

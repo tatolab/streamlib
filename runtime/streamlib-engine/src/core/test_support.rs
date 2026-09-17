@@ -334,11 +334,11 @@ impl crate::core::processors::OutOfProcessFarSideLinkDelivery
         Ok(())
     }
 
-    fn refuse_every_link_still_awaiting_the_far_sides_answer(&self) {
+    fn refuse_every_link_still_awaiting_the_far_sides_answer(&self, reason: &str) {
         for answer_cell in self.wire_answers_owed.lock().iter() {
             answer_cell.note_the_far_sides_answer(
                 crate::core::processors::OutOfProcessLinkWireOutcome::RefusedByTheFarSide {
-                    reason: "its host gave up on it".to_string(),
+                    reason: reason.to_string(),
                 },
             );
         }

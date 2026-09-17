@@ -4384,6 +4384,22 @@ fn release_surface_share_surface(sandbox: &GpuContextLimitedAccess, handle_id: &
     }
 }
 
+/// The response refusing one escalate request by its frame, carrying `message`
+/// — what a bridge answers a request it will not dispatch.
+pub(crate) fn refusal_of_an_escalate_request(
+    request_frame: &serde_json::Value,
+    message: String,
+) -> serde_json::Value {
+    envelope_response(EscalateResponse::Err(EscalateResponseErr {
+        request_id: request_frame
+            .get("request_id")
+            .and_then(|request_id| request_id.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        message,
+    }))
+}
+
 /// Wrap an [`EscalateResponse`] in the outer `{ rpc, payload… }` envelope the
 /// bridge's escalate worker writes to the subprocess.
 pub(crate) fn envelope_response(result: EscalateResponse) -> serde_json::Value {

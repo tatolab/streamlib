@@ -612,6 +612,7 @@ class HelperProcessLifecycle:
         self._processor_id = processor_id
         self._link_data_access = link_data_access
         self._hosted: Optional[HostedProcessor] = None
+        self._set_up_succeeded = False
         self._running = False
         self._torn_down = False
 
@@ -725,6 +726,7 @@ class HelperProcessLifecycle:
                 }
             )
             return
+        self._set_up_succeeded = True
         self._bridge.send({"rpc": "ready"})
 
     def _run(self, command: "dict[str, Any]") -> None:
@@ -864,6 +866,14 @@ class HelperProcessLifecycle:
         direction = command.get("direction")
         link = command.get("link") or {}
         link_id = link.get("link_id")
+        if not self._set_up_succeeded:
+            # The engine can hand a link over while `setup` is still running;
+            # it reaches this loop only once `setup` has answered, and a
+            # processor whose setup failed must not report a port open.
+            self._answer_the_parents_wire_link(
+                link_id, "this processor's setup did not succeed, so it opens no port"
+            )
+            return
         if direction == "input":
             port_wiring = {"inputs": [link]}
         elif direction == "output":
