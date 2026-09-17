@@ -86,11 +86,7 @@ impl HelperProcessEngineLogRecordRing {
         let dropped = Arc::new(AtomicU64::new(0));
         let (doorbell_sender, doorbell): (Sender<WorkerSignal>, Receiver<WorkerSignal>) =
             bounded(256);
-        let layer = JsonlSinkLayer::new(
-            Arc::clone(&queue),
-            doorbell_sender,
-            Arc::clone(&dropped),
-        );
+        let layer = JsonlSinkLayer::new(Arc::clone(&queue), doorbell_sender, Arc::clone(&dropped));
         (
             Self {
                 queue,
@@ -120,8 +116,10 @@ impl HelperProcessEngineLogRecordRing {
             records = self.take_every_record_the_ring_holds();
         }
         let dropped = self.dropped.load(Ordering::Relaxed);
-        let records_dropped_since_the_last_drain =
-            dropped.saturating_sub(self.dropped_already_reported.swap(dropped, Ordering::Relaxed));
+        let records_dropped_since_the_last_drain = dropped.saturating_sub(
+            self.dropped_already_reported
+                .swap(dropped, Ordering::Relaxed),
+        );
         EngineLogRecordsDrainedForTheParentProcess {
             records,
             records_dropped_since_the_last_drain,
@@ -238,7 +236,8 @@ mod tests {
             .map(|record| record.message.as_str())
             .collect();
         assert_eq!(
-            messages, ["second", "third"],
+            messages,
+            ["second", "third"],
             "the oldest record is the one a full ring gives up"
         );
         assert_eq!(drained.records_dropped_since_the_last_drain, 1);
@@ -282,7 +281,11 @@ mod tests {
         let record = drained.records.first().expect("the event was captured");
         assert_eq!(record.level, LogLevel::Warn);
         assert_eq!(record.target, "streamlib_engine::iceoryx2::input");
-        assert!(record.message.starts_with("InputMailboxes: channel delivered"));
+        assert!(
+            record
+                .message
+                .starts_with("InputMailboxes: channel delivered")
+        );
         assert_eq!(
             record.attrs.get("port").and_then(|port| port.as_str()),
             Some("frames_from_upstream")

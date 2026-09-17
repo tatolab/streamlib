@@ -73,9 +73,8 @@ pub(crate) fn drain_the_engine_log_records_this_helper_captured(
             "this process is not capturing the engine's log records, so there are none to drain",
         )
     })?;
-    let drained = python.detach(|| {
-        ring.drain_waiting_at_most(Duration::from_secs_f64(wait_seconds.max(0.0)))
-    });
+    let drained = python
+        .detach(|| ring.drain_waiting_at_most(Duration::from_secs_f64(wait_seconds.max(0.0))));
     let records = PyList::empty(python);
     for record in drained.records {
         records.append(engine_log_record_as_python_mapping(python, record)?)?;
