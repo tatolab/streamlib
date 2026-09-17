@@ -202,7 +202,8 @@ impl Runner {
         // Load a local .env if present (RUST_LOG and other dev overrides).
         let _ = dotenvy::dotenv();
 
-        // Generate runtime ID first — used as service_name for telemetry.
+        // The id names the log file opened below, so a pinned one is refused
+        // before the runtime writes anything.
         let runtime_id = Arc::new(RuntimeUniqueId::from_env_or_generate()?);
 
         // Stand up the runtime's unified logging pathway: `tracing` →
@@ -1429,9 +1430,9 @@ mod tests {
     // All Runner::new() tests are `#[serial]` because the runtime
     // reads/writes process-global env vars (XDG_RUNTIME_DIR,
     // STREAMLIB_RUNTIME_ID) and every runtime's listeners share the
-    // process-wide event bus. The test
-    // module's `#[serial]` default group serializes every test that
-    // constructs a Runner so nobody reads env mid-mutation.
+    // process-wide event bus. The test module's `#[serial]` default group
+    // serializes every test that constructs a Runner so nobody reads env
+    // mid-mutation.
 
     #[test]
     #[serial]
@@ -1811,9 +1812,8 @@ mod tests {
             nodes
         }
 
-        /// Mental-revert: parking a clone of the runner's node anywhere static —
-        /// as the event bus's `init` once did — keeps the node alive past the
-        /// drop, and its files stay in the domain.
+        /// Mental-revert: parking a clone of the runner's node anywhere static
+        /// keeps the node alive past the drop, and its files stay in the domain.
         #[test]
         #[serial]
         fn a_dropped_runtime_leaves_no_iceoryx2_node_in_its_domain() {
@@ -1847,20 +1847,20 @@ mod tests {
                 .tempdir_in("/tmp")
                 .expect("tempdir under /tmp");
             let domain_root_suffix = "/streamlib/iox2";
-            let runtime_directory_parent_bytes =
+            let xdg_runtime_dir_bytes =
                 crate::iceoryx2::ICEORYX2_DOMAIN_ROOT_AND_PREFIX_BUDGET_BYTES
                     - crate::iceoryx2::engine_owned_iceoryx2_prefix_for_this_user().len()
                     - domain_root_suffix.len()
                     + 1;
             let base_bytes = base.path().as_os_str().len();
             assert!(
-                runtime_directory_parent_bytes > base_bytes + 1,
+                xdg_runtime_dir_bytes > base_bytes + 1,
                 "{} is too long to build a runtime directory past the budget under",
                 base.path().display()
             );
             let xdg = base
                 .path()
-                .join("x".repeat(runtime_directory_parent_bytes - base_bytes - 1));
+                .join("x".repeat(xdg_runtime_dir_bytes - base_bytes - 1));
             let pinned_id = format!("duplicate-{}", std::process::id());
             std::fs::create_dir_all(xdg.join("streamlib")).expect("runtime directory");
             let live_runtimes_socket = std::os::unix::net::UnixListener::bind(

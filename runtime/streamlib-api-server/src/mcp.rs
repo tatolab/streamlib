@@ -1596,8 +1596,8 @@ mod tests {
         );
     }
 
-    /// Mental-revert: the old transport delivered nothing to a process whose
-    /// bus was never initialized, so this sample came back empty.
+    /// Mental-revert: a bus that drops publishes until a runtime initializes
+    /// it returns this sample empty.
     #[tokio::test]
     async fn tools_call_logs_samples_events_published_on_the_process_wide_bus() {
         let topic = "tools-call-logs-sampled-topic";

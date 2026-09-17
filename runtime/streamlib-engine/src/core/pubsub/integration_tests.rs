@@ -88,8 +88,8 @@ fn an_event_published_the_instant_subscribe_returns_is_delivered() {
 
 /// The bus needs no runtime, no transport and no initialization step.
 ///
-/// Mental-revert: dropping publishes made before a runtime exists (the old
-/// `init` gate) loses this event.
+/// Mental-revert: dropping a publish made before a runtime exists loses this
+/// event.
 #[test]
 fn a_bus_no_runtime_has_touched_delivers_what_is_published_to_it() {
     let bus = PubSub::new();
@@ -124,8 +124,8 @@ fn a_listener_hears_nothing_published_to_another_topic() {
     assert!(received_before_the_sentinel(&keyboard_received).is_empty());
 }
 
-/// Mental-revert: delivering once for the topic and again for the wildcard —
-/// the old transport's two sends — hands this listener every event twice.
+/// Mental-revert: delivering once for the topic and again for the wildcard
+/// hands this listener every event twice.
 #[test]
 fn a_wildcard_listener_hears_every_topic_exactly_once() {
     let bus = PubSub::new();
@@ -146,7 +146,7 @@ fn a_wildcard_listener_hears_every_topic_exactly_once() {
     assert_eq!(received_before_the_sentinel(&received), published);
 }
 
-/// The iceoryx2 transport refused its ninth subscriber.
+/// A topic takes any number of listeners.
 #[test]
 fn a_hundred_listeners_on_one_topic_each_receive_the_event() {
     let bus = PubSub::new();
@@ -168,8 +168,8 @@ fn a_hundred_listeners_on_one_topic_each_receive_the_event() {
     }
 }
 
-/// The iceoryx2 transport refused a seventeenth publishing thread, and could
-/// lose a fresh thread's first events while its publisher connected.
+/// Any number of threads may publish, and a thread's first event is never
+/// lost to setting up its publisher.
 #[test]
 fn thirty_two_threads_publishing_at_once_lose_nothing() {
     const PUBLISHING_THREADS: usize = 32;
@@ -267,9 +267,9 @@ fn every_listener_sees_events_from_many_threads_in_one_and_the_same_order() {
     assert_eq!(first_order, second_order);
 }
 
-/// The iceoryx2 transport refused a serialized event past 8 KiB.
+/// An event has no size ceiling.
 #[test]
-fn an_event_past_the_old_eight_kibibyte_ceiling_arrives_whole() {
+fn a_sixty_four_kibibyte_event_arrives_whole() {
     let bus = PubSub::new();
     let (listener, received) = forwarding_listener();
     bus.subscribe("large", Arc::clone(&listener))
