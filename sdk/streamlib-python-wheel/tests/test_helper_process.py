@@ -1858,6 +1858,11 @@ ENGINE_BUILD_ID_OF_ANOTHER_BUILD = (
 #: Long enough for a cold interpreter to import the whole wheel.
 SECONDS_A_REAL_HELPER_HAS_TO_START = 30.0
 
+# How long a helper has to send nothing before a test reads it as having sent
+# everything it is going to. Comfortably past the forwarder's own 0.25 s pass,
+# so a record it is holding is never mistaken for a record it never made.
+SECONDS_A_QUIET_HELPER_SENDS_NOTHING_IN = 2.0
+
 
 @pytest.fixture
 def empty_iceoryx2_domain_root():
@@ -2021,22 +2026,50 @@ def test_the_helper_module_is_runnable_as_a_module():
 
 
 def frames_a_real_helper_sends(
-    parent: StandInParent, *, until: "Callable[[dict], bool]", seconds: float
+    parent: StandInParent,
+    *,
+    until_each_of: "list[Callable[[dict], bool]]",
+    seconds: float,
 ) -> "list[dict]":
-    """Every frame the helper sends until `until` matches one, or the wait ends.
+    """Every frame the helper sends until each matcher has seen one of its own,
+    or the wait ends.
 
-    The whole run is returned either way, so a failure reads as what the helper
-    did send rather than as a bare timeout.
+    Each of, never the first of: a helper's lifecycle answers come from its main
+    thread and its forwarded engine records from another, so neither is a
+    barrier for the other and a frame a test wants can arrive after the frame it
+    would have stopped on. The whole run is returned either way, so a failure
+    reads as what the helper did send rather than as a bare timeout.
     """
     frames: "list[dict]" = []
+    still_waiting = list(until_each_of)
     deadline = time.monotonic() + seconds
-    while time.monotonic() < deadline:
+    while still_waiting and time.monotonic() < deadline:
         frame = parent.receive(timeout_seconds=deadline - time.monotonic())
         if frame is None:
             break
         frames.append(frame)
-        if until(frame):
+        still_waiting = [matches for matches in still_waiting if not matches(frame)]
+    return frames
+
+
+def every_frame_a_real_helper_sends_before_it_falls_quiet(
+    parent: StandInParent, *, quiet_seconds: float, seconds: float
+) -> "list[dict]":
+    """Every frame the helper sends until it has sent none for `quiet_seconds`.
+
+    What a test asserts is absent needs this rather than a frame to stop on: a
+    record the forwarder sends after the answer a test would have stopped on is
+    a record that test never saw.
+    """
+    frames: "list[dict]" = []
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        frame = parent.receive(
+            timeout_seconds=min(quiet_seconds, deadline - time.monotonic())
+        )
+        if frame is None:
             break
+        frames.append(frame)
     return frames
 
 
@@ -2082,7 +2115,9 @@ def test_a_helpers_own_engine_records_reach_its_parent_as_rust_records(
 
         frames = frames_a_real_helper_sends(
             stand_in_parent,
-            until=a_captured_engine_record_whose_target_holds("iceoryx2::input"),
+            until_each_of=[
+                a_captured_engine_record_whose_target_holds("iceoryx2::input")
+            ],
             seconds=SECONDS_A_REAL_HELPER_HAS_TO_START,
         )
 
@@ -2146,7 +2181,10 @@ def test_iceoryx2s_own_records_inside_a_helper_reach_the_parent_rather_than_stde
 
         frames = frames_a_real_helper_sends(
             stand_in_parent,
-            until=lambda frame: frame.get("rpc") == "link_wire_failed",
+            until_each_of=[
+                lambda frame: frame.get("rpc") == "link_wire_failed",
+                lambda frame: frame.get("target") == "iceoryx2",
+            ],
             seconds=SECONDS_A_REAL_HELPER_HAS_TO_START,
         )
 
@@ -2207,9 +2245,9 @@ def test_a_helper_at_the_engines_default_level_sends_no_debug_records(
             }
         )
 
-        frames = frames_a_real_helper_sends(
+        frames = every_frame_a_real_helper_sends_before_it_falls_quiet(
             stand_in_parent,
-            until=lambda frame: frame.get("rpc") == "link_wired",
+            quiet_seconds=SECONDS_A_QUIET_HELPER_SENDS_NOTHING_IN,
             seconds=SECONDS_A_REAL_HELPER_HAS_TO_START,
         )
 

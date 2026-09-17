@@ -73,8 +73,10 @@ CONTINUOUS_INTERVAL_FLOOR_NANOSECONDS = 100_000
 # wakes the wait at once.
 SECONDS_THE_ENGINE_LOG_FORWARDER_WAITS_FOR_A_RECORD = 0.25
 
-# How long the forwarder is given to leave its wait at shutdown. Whatever it
-# has not sent by then is sent by the thread that stopped it.
+# How long the forwarder is given to make its last pass at shutdown. A
+# forwarder still going then is wedged in a write to a parent that has stopped
+# reading, which no second sender would get past either, so what it was
+# carrying is lost with it rather than holding up the helper's exit.
 SECONDS_TO_STOP_THE_ENGINE_LOG_FORWARDER = 1.0
 
 # How long `teardown` waits, before answering, for the releases already queued to
@@ -619,23 +621,32 @@ class CapturedEngineLogRecordForwarder:
         self._capturing = True
         self._thread.start()
 
-    def stop_and_forward_what_is_left(self) -> None:
-        """Stop the thread and send whatever the ring still holds.
+    def stop_after_forwarding_what_is_left(self) -> None:
+        """Stop the thread, waiting for it to send what the ring still holds.
 
         Called on every way out of `main`, so the records explaining a helper
         that could not start are in the parent's hands before it exits.
+
+        The thread makes that last pass itself rather than being raced for it:
+        a record it has taken from the ring but not yet sent is in no ring for
+        a second drainer to find, and a second drainer would block behind the
+        first on the bridge's write lock — so a forwarder wedged in a write
+        would hold up the helper's exit instead of costing it the diagnostics
+        the wedged write was carrying.
         """
         if not self._capturing:
             return
         self._stopping.set()
         self._thread.join(timeout=SECONDS_TO_STOP_THE_ENGINE_LOG_FORWARDER)
-        self._forward_what_the_ring_holds(wait_seconds=0.0)
 
     def _forward_until_stopped(self) -> None:
         while not self._stopping.is_set():
             self._forward_what_the_ring_holds(
                 wait_seconds=SECONDS_THE_ENGINE_LOG_FORWARDER_WAITS_FOR_A_RECORD
             )
+        # The pass that empties the ring for the last time, so the records a
+        # helper made on its way out travel with the ones before them.
+        self._forward_what_the_ring_holds(wait_seconds=0.0)
 
     def _forward_what_the_ring_holds(self, wait_seconds: float) -> None:
         records, dropped = drain_the_engine_log_records_this_helper_captured(wait_seconds)
@@ -1289,7 +1300,7 @@ def main() -> None:
             capability_extension_host_for_the_helper_process
         )
     except Exception as extension_failure:
-        engine_log_forwarder.stop_and_forward_what_is_left()
+        engine_log_forwarder.stop_after_forwarding_what_is_left()
         log.error(
             "the helper could not load a capability extension",
             entrypoint=import_path,
@@ -1302,7 +1313,7 @@ def main() -> None:
         processor_class = load_processor_class(import_path)
         link_data_access = ProcessorLinkDataAccess()
     except Exception as startup_failure:
-        engine_log_forwarder.stop_and_forward_what_is_left()
+        engine_log_forwarder.stop_after_forwarding_what_is_left()
         log.error(
             "the helper could not load its processor",
             entrypoint=import_path,
@@ -1315,7 +1326,7 @@ def main() -> None:
     HelperProcessLifecycle(
         bridge, processor_class, runtime_id, processor_id, link_data_access
     ).run_until_the_parent_is_done()
-    engine_log_forwarder.stop_and_forward_what_is_left()
+    engine_log_forwarder.stop_after_forwarding_what_is_left()
     log.info("helper process exiting")
 
 
