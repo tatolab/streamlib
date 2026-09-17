@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.23.0](https://github.com/tatolab/streamlib/compare/v0.22.19...v0.23.0) (2026-09-17)
+
+
+### ⚠ BREAKING CHANGES
+
+* **engine:** make the runtime event bus an in-process fan-out and drop the runtime's iceoryx2 node at teardown ([#2322](https://github.com/tatolab/streamlib/issues/2322))
+
+### Bug Fixes
+
+* **engine:** make the runtime event bus an in-process fan-out and drop the runtime's iceoryx2 node at teardown ([#2322](https://github.com/tatolab/streamlib/issues/2322)) ([91f8f20](https://github.com/tatolab/streamlib/commit/91f8f20a836a8d6a7d2bc0e2aa4adc521f794731))
+
 ## [0.22.19](https://github.com/tatolab/streamlib/compare/v0.22.18...v0.22.19) (2026-09-17)
 
 
