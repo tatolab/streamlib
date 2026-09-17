@@ -1126,6 +1126,12 @@ impl Drop for HelperForeignSurfaceUnregisterDebt {
 #[cfg(target_os = "linux")]
 const SURFACE_SHARE_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
+/// How many connections a helper sets aside after a timeout before it stops
+/// asking the service anything: each one stays open, and a service that has
+/// outwaited the timeout this often has stopped answering.
+#[cfg(target_os = "linux")]
+const SURFACE_SHARE_CONNECTIONS_SET_ASIDE_AT_MOST: usize = 4;
+
 /// The child-side client that fulfills `ctx.gpu_limited_access` calls by
 /// crossing to the parent: escalate for allocation, surface-share for the
 /// memory, one consumer Vulkan device per child for the import.
@@ -2199,6 +2205,19 @@ impl HelperProcessGpuExchangeClient {
         let stream = match connection.take() {
             Some(open_stream) => open_stream,
             None => {
+                let connections_set_aside = self
+                    .surface_share_connections_set_aside_after_a_timeout
+                    .lock()
+                    .len();
+                if connections_set_aside >= SURFACE_SHARE_CONNECTIONS_SET_ASIDE_AT_MOST {
+                    return Err(PyRuntimeError::new_err(format!(
+                        "the surface-share service has outwaited the {} s response timeout \
+                         {connections_set_aside} times, so this helper asks it nothing more; the \
+                         connections it set aside stay open, keeping the frames claimed on them \
+                         held, until this helper stops",
+                        SURFACE_SHARE_RESPONSE_TIMEOUT.as_secs()
+                    )));
+                }
                 let opened_stream = streamlib_surface_client::connect_to_surface_share_socket(
                     &self.surface_socket_path,
                 )
@@ -3498,6 +3517,38 @@ mod surface_share_response_timeout_tests {
                 .lock()
                 .len(),
             1
+        );
+    }
+
+    /// Fail-without-fix: every timeout set one more connection aside, so a
+    /// service that never answered held a descriptor, a service thread and
+    /// their claims per request until the helper stopped.
+    #[test]
+    fn a_helper_that_set_aside_its_limit_of_connections_asks_the_service_nothing_more() {
+        let exchange_client =
+            exchange_client_reaching(PathBuf::from("/nonexistent/streamlib-surface.sock"));
+        for _ in 0..SURFACE_SHARE_CONNECTIONS_SET_ASIDE_AT_MOST {
+            let (set_aside_end, _peer_end) = UnixStream::pair().expect("a socket pair");
+            exchange_client
+                .surface_share_connections_set_aside_after_a_timeout
+                .lock()
+                .push(set_aside_end);
+        }
+
+        let refusal = exchange_client
+            .release_check_out("surface-under-test#1")
+            .expect_err("the helper has given up on the service");
+
+        assert!(
+            refusal.to_string().contains("asks it nothing more"),
+            "the refusal names the limit rather than trying to connect: {refusal}"
+        );
+        assert_eq!(
+            exchange_client
+                .surface_share_connections_set_aside_after_a_timeout
+                .lock()
+                .len(),
+            SURFACE_SHARE_CONNECTIONS_SET_ASIDE_AT_MOST
         );
     }
 }
