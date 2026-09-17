@@ -18,6 +18,7 @@ import json
 import re
 import time
 from pathlib import Path
+from typing import Callable, TypeVar
 
 import pytest
 
@@ -383,7 +384,10 @@ class SlowlyImportingSink:
 '''
 
 
-def seconds_taken_by(call) -> "tuple[float, object]":
+Returned = TypeVar("Returned")
+
+
+def seconds_taken_by(call: Callable[[], Returned]) -> "tuple[float, Returned]":
     started = time.monotonic()
     returned = call()
     return time.monotonic() - started, returned
