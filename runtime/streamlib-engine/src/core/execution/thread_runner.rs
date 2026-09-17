@@ -710,10 +710,6 @@ fn run_manual_mode(
     }
 }
 
-// Helper dispatchers for on_pause / on_resume — shared across Continuous,
-// Reactive, and Manual modes. Each builds a fresh RuntimeContextLimitedAccess
-// for the call. Keeping these tiny avoids duplicating the tokio-block-on +
-// logging boilerplate in every branch above.
 fn dispatch_on_pause(
     id: &ProcessorUniqueId,
     processor: &Arc<Mutex<ProcessorInstance>>,

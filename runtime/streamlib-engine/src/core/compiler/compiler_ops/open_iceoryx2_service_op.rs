@@ -117,13 +117,13 @@ pub fn open_iceoryx2_service(
     // input wiring opens a listener whatever mode it runs in and refuses an
     // empty name, so a helper destination is always handed the service and
     // only its sources go without.
-    let destination_drains_its_listener = destination_consumes_notifications(graph, &dest_proc_id);
-    let notify_service_name_for_the_destination = (destination_drains_its_listener
+    let sources_notify_the_destination = destination_consumes_notifications(graph, &dest_proc_id);
+    let notify_service_name_for_the_destination = (sources_notify_the_destination
         || dest_is_subprocess)
         .then(|| notify_service_name_for(&dest_proc_id));
     let notify_service_name_for_the_source = notify_service_name_for_the_destination
         .as_deref()
-        .filter(|_| destination_drains_its_listener);
+        .filter(|_| sources_notify_the_destination);
 
     tracing::info!(
         channel = %channel_service_name,
@@ -168,7 +168,7 @@ pub fn open_iceoryx2_service(
         .transpose()?;
     let notify_service_for_the_source = notify_service_for_the_destination
         .as_ref()
-        .filter(|_| destination_drains_its_listener);
+        .filter(|_| sources_notify_the_destination);
 
     // Every out-of-process end this link was handed to and has not answered
     // for. Empty is a link wholly in the app process, or one carried in a far

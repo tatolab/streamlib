@@ -638,10 +638,9 @@ def test_a_reactive_helper_survives_losing_the_link_it_was_waiting_on(stand_in_p
     drops the listener.
 
     Fail-without-fix: cache `input_listener_fd()` outside the loop and every
-    later wait polls a closed descriptor,
-    which `poll` reports invalid at once, so the loop spins where it should
-    park — or, once the OS recycles the number, silently waits on an unrelated
-    object.
+    later wait polls a closed descriptor, which `poll` reports invalid at once,
+    so the loop spins where it should park — or, once the OS recycles the
+    number, silently waits on an unrelated object.
 
     A processor left with no inputs has nothing to wake it but the parent,
     which is exactly what it must fall back to.

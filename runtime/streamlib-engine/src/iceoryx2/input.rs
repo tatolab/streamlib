@@ -1742,7 +1742,7 @@ mod tests {
 
     /// Driving the iceoryx2 Event service end-to-end: notify must transition
     /// the Listener fd to readable within a short bounded window so an epoll
-    /// or select wait wakes promptly.
+    /// or poll wait wakes promptly.
     #[test]
     fn listener_fd_is_valid_and_readable_after_notify() {
         let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
