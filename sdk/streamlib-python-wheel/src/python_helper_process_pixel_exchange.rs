@@ -1117,6 +1117,14 @@ impl Drop for HelperForeignSurfaceUnregisterDebt {
     }
 }
 
+/// How long a request on the surface-share connection waits for its answer.
+///
+/// The service answers from in-memory state and duplicated fds, never GPU
+/// work, so this bounds only a service that has stopped answering — and with
+/// it the time every other thread waits on the connection's lock.
+#[cfg(target_os = "linux")]
+const SURFACE_SHARE_RESPONSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// The child-side client that fulfills `ctx.gpu_limited_access` calls by
 /// crossing to the parent: escalate for allocation, surface-share for the
 /// memory, one consumer Vulkan device per child for the import.
@@ -2188,16 +2196,28 @@ impl HelperProcessGpuExchangeClient {
         let mut connection = self.surface_share_connection.lock();
         let stream = match connection.take() {
             Some(open_stream) => open_stream,
-            None => streamlib_surface_client::connect_to_surface_share_socket(
-                &self.surface_socket_path,
-            )
-            .map_err(|connect_failure| {
-                PyRuntimeError::new_err(format!(
-                    "could not reach the surface-share socket at {}: {connect_failure}. The \
-                     parent runtime owns that socket; if it is gone, this helper is orphaned",
-                    self.surface_socket_path.display(),
-                ))
-            })?,
+            None => {
+                let opened_stream = streamlib_surface_client::connect_to_surface_share_socket(
+                    &self.surface_socket_path,
+                )
+                .map_err(|connect_failure| {
+                    PyRuntimeError::new_err(format!(
+                        "could not reach the surface-share socket at {}: {connect_failure}. The \
+                         parent runtime owns that socket; if it is gone, this helper is orphaned",
+                        self.surface_socket_path.display(),
+                    ))
+                })?;
+                opened_stream
+                    .set_read_timeout(Some(SURFACE_SHARE_RESPONSE_TIMEOUT))
+                    .map_err(|timeout_failure| {
+                        PyRuntimeError::new_err(format!(
+                            "could not bound how long the surface-share socket at {} may take \
+                             to answer: {timeout_failure}",
+                            self.surface_socket_path.display(),
+                        ))
+                    })?;
+                opened_stream
+            }
         };
         let (response, received_raw_fds) = streamlib_surface_client::send_request_with_fds(
             &stream,
@@ -2205,10 +2225,17 @@ impl HelperProcessGpuExchangeClient {
             outbound_fds,
             streamlib_surface_client::MAX_SCM_RIGHTS_FDS,
         )
-        .map_err(|io_failure| {
-            PyRuntimeError::new_err(format!(
+        .map_err(|io_failure| match io_failure.kind() {
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => {
+                PyRuntimeError::new_err(format!(
+                    "the surface-share service did not answer within {} s; this helper dropped \
+                     the connection and opens a new one on its next request",
+                    SURFACE_SHARE_RESPONSE_TIMEOUT.as_secs()
+                ))
+            }
+            _ => PyRuntimeError::new_err(format!(
                 "the surface-share request failed mid-stream: {io_failure}"
-            ))
+            )),
         })?;
         *connection = Some(stream);
         // SAFETY: adopting kernel-delivered fds the recvmsg just placed in
@@ -2852,6 +2879,29 @@ mod surface_check_out_lease_debt_tests {
                 "helper:lease-debt-under-test".to_string(),
             ))
         })
+    }
+
+    /// Fail-without-fix: the connection had no read timeout, so a service that
+    /// stopped answering held the calling thread — and every thread waiting on
+    /// this client's connection lock behind it — for good.
+    #[test]
+    fn the_connection_to_the_service_stops_waiting_for_an_answer_past_its_timeout() {
+        let share = SurfaceShareUnderTest::start("timeout");
+        let surface_id = share.publish_one_surface();
+        let exchange_client = exchange_client_on(&share);
+
+        exchange_client
+            .check_out_surface(&surface_id)
+            .expect("the checkout round trip");
+
+        let read_timeout = exchange_client
+            .surface_share_connection
+            .lock()
+            .as_ref()
+            .expect("a completed exchange keeps its connection")
+            .read_timeout()
+            .expect("the connection's read timeout is readable");
+        assert_eq!(read_timeout, Some(SURFACE_SHARE_RESPONSE_TIMEOUT));
     }
 
     /// The checkout claims the frame; dropping the debt — the last share of

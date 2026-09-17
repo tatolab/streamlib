@@ -120,9 +120,11 @@ jobs:
         run: |
           # `streamlib-ipc-types` holds the wire's layout locks: the frame
           # header's offsets and the sequence-number user header every data
-          # sample carries.
+          # sample carries. `streamlib-surface-client` holds the surface-share
+          # socket's framing, SCM_RIGHTS round trips and read-failure reporting.
           cargo test --locked -p streamlib -p streamlib-macros \
-            -p streamlib-processor-schema -p streamlib-ipc-types --lib
+            -p streamlib-processor-schema -p streamlib-ipc-types \
+            -p streamlib-surface-client --lib
           cargo test --locked -p streamlib-engine --test attribute_macro_test
           # The compile-fail half of the same locks. The descriptor carries the
           # config type's schema, so the derive is a requirement, and the note

@@ -203,13 +203,19 @@ pub fn recv_message_with_fds(
             )
         };
         if n <= 0 {
+            // Taken before the closes below, which can overwrite `errno`.
+            let read_failure = if n < 0 {
+                std::io::Error::last_os_error()
+            } else {
+                std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "Connection closed during message read",
+                )
+            };
             for fd in &received_fds {
                 unsafe { libc::close(*fd) };
             }
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::UnexpectedEof,
-                "Connection closed during message read",
-            ));
+            return Err(read_failure);
         }
         total_read += n as usize;
     }
@@ -274,7 +280,10 @@ pub fn send_request_with_fds(
                     4 - total,
                 )
             };
-            if n <= 0 {
+            if n < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if n == 0 {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::UnexpectedEof,
                     "Failed to read response length",
@@ -645,5 +654,88 @@ mod tests {
         }
 
         let _ = std::fs::remove_file(&socket_path);
+    }
+
+    /// A server that takes a request and then holds its connection open,
+    /// writing `partial_response` and nothing after it, until `hang_up` drops.
+    fn server_that_stops_answering_after(
+        listener: UnixListener,
+        partial_response: Vec<u8>,
+        hang_up: std::sync::mpsc::Receiver<()>,
+    ) -> std::thread::JoinHandle<()> {
+        use std::io::Write;
+
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut len_buf = [0u8; 4];
+            stream.read_exact(&mut len_buf).expect("read len");
+            let mut request = vec![0u8; u32::from_be_bytes(len_buf) as usize];
+            stream.read_exact(&mut request).expect("read request");
+            stream
+                .write_all(&partial_response)
+                .expect("write partial response");
+            let _ = hang_up.recv();
+        })
+    }
+
+    /// Fail-without-fix: every failed read was reported as the peer closing,
+    /// so a caller could not tell a service that stopped answering from one
+    /// that went away.
+    #[test]
+    fn a_response_that_never_starts_inside_the_read_timeout_is_reported_as_a_timeout() {
+        let (_socket_dir, socket_path) = tmp_socket_path("never-answers");
+        let listener = UnixListener::bind(&socket_path).expect("bind");
+        let (hang_up, hung_up) = std::sync::mpsc::channel();
+        let server = server_that_stops_answering_after(listener, Vec::new(), hung_up);
+
+        let client = connect_to_surface_share_socket(&socket_path).expect("connect");
+        client
+            .set_read_timeout(Some(std::time::Duration::from_millis(50)))
+            .expect("set the read timeout");
+        let failure = send_request_with_fds(
+            &client,
+            &serde_json::json!({"op": "check_out"}),
+            &[],
+            MAX_SCM_RIGHTS_FDS,
+        )
+        .expect_err("nothing answers");
+
+        assert_eq!(
+            failure.kind(),
+            std::io::ErrorKind::WouldBlock,
+            "got {failure:?}"
+        );
+        drop(hang_up);
+        server.join().expect("server thread");
+    }
+
+    #[test]
+    fn a_response_that_stops_part_way_inside_the_read_timeout_is_reported_as_a_timeout() {
+        let (_socket_dir, socket_path) = tmp_socket_path("stops-part-way");
+        let listener = UnixListener::bind(&socket_path).expect("bind");
+        let (hang_up, hung_up) = std::sync::mpsc::channel();
+        let mut partial_response = 64u32.to_be_bytes().to_vec();
+        partial_response.extend_from_slice(br#"{"surface_id":"#);
+        let server = server_that_stops_answering_after(listener, partial_response, hung_up);
+
+        let client = connect_to_surface_share_socket(&socket_path).expect("connect");
+        client
+            .set_read_timeout(Some(std::time::Duration::from_millis(50)))
+            .expect("set the read timeout");
+        let failure = send_request_with_fds(
+            &client,
+            &serde_json::json!({"op": "check_out"}),
+            &[],
+            MAX_SCM_RIGHTS_FDS,
+        )
+        .expect_err("the answer never completes");
+
+        assert_eq!(
+            failure.kind(),
+            std::io::ErrorKind::WouldBlock,
+            "got {failure:?}"
+        );
+        drop(hang_up);
+        server.join().expect("server thread");
     }
 }
