@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.23.1](https://github.com/tatolab/streamlib/compare/v0.23.0...v0.23.1) (2026-09-17)
+
+
+### Bug Fixes
+
+* **wheel:** a helper's engine and iceoryx2 records reach the runtime log, and iceoryx2's level follows the engine's ([#2325](https://github.com/tatolab/streamlib/issues/2325)) ([e7057ab](https://github.com/tatolab/streamlib/commit/e7057ab2ba24f1619ab2c990cb8ba6e50f268c17))
+
 ## [0.23.0](https://github.com/tatolab/streamlib/compare/v0.22.19...v0.23.0) (2026-09-17)
 
 
