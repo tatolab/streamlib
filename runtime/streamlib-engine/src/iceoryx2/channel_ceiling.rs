@@ -42,7 +42,10 @@ pub fn effective_channel_ceiling_bytes(trust_tier: ChannelTrustTier) -> usize {
         return default_bytes;
     };
     match raw.trim().parse::<usize>() {
-        Ok(bytes) if bytes > 0 => bytes,
+        Ok(bytes) if bytes > 0 => {
+            warn_when_an_override_cannot_bound_the_shared_memory_chunk(env_key, trust_tier, bytes);
+            bytes
+        }
         _ => {
             tracing::warn!(
                 env_var = env_key,
@@ -54,6 +57,39 @@ pub fn effective_channel_ceiling_bytes(trust_tier: ChannelTrustTier) -> usize {
             default_bytes
         }
     }
+}
+
+/// Say so once when an override is not a power of two.
+///
+/// iceoryx2's pool allocator buckets a data segment at `next_power_of_two` of
+/// the sample layout, so only a power-of-two ceiling is also the size of the
+/// chunk a ceiling-sized bag takes. Both tier defaults are one. An override that
+/// is not still bounds the payload — the ceiling's own job — but its chunk
+/// rounds up past it, which is worth knowing on a host whose shared memory is
+/// the reason the operator reached for the knob.
+fn warn_when_an_override_cannot_bound_the_shared_memory_chunk(
+    env_key: &str,
+    trust_tier: ChannelTrustTier,
+    override_bytes: usize,
+) {
+    if override_bytes.is_power_of_two() {
+        return;
+    }
+    tracing::warn!(
+        env_var = env_key,
+        tier = trust_tier.as_str(),
+        chunk_ceiling_bytes = override_bytes,
+        chunk_bytes_a_ceiling_sized_bag_takes =
+            streamlib_ipc_types::iceoryx2_sample_bytes_for_a_channel_frame(
+                streamlib_ipc_types::largest_channel_frame_bytes_under_a_chunk_ceiling(
+                    override_bytes,
+                ),
+            )
+            .next_power_of_two(),
+        "a per-channel ceiling that is not a power of two still bounds each bag, but iceoryx2 \
+         rounds the shared-memory chunk behind it up past the ceiling; set a power of two to \
+         make the ceiling the chunk size too"
+    );
 }
 
 #[cfg(test)]

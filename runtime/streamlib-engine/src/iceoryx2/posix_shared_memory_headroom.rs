@@ -45,7 +45,7 @@ pub fn warn_when_posix_shared_memory_is_short_for_a_runtime() {
         let mount_point = Path::new(POSIX_SHARED_MEMORY_MOUNT_POINT);
         match free_bytes_on_the_filesystem_holding(mount_point) {
             Some(free_bytes) => {
-                emit_the_shared_memory_headroom_reading(mount_point, free_bytes);
+                let _ = emit_the_shared_memory_headroom_reading(mount_point, free_bytes);
             }
             None => tracing::debug!(
                 "could not read the free space on {}; a runtime does not depend on the reading",
@@ -56,18 +56,15 @@ pub fn warn_when_posix_shared_memory_is_short_for_a_runtime() {
 }
 
 /// Raise the warning when `free_bytes` is short of what a runtime wants.
-///
-/// Split from the `statvfs` call so the threshold is testable without a
-/// filesystem of a chosen size.
 #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
-fn emit_the_shared_memory_headroom_reading(mount_point: &Path, free_bytes: u64) {
+fn emit_the_shared_memory_headroom_reading(mount_point: &Path, free_bytes: u64) -> bool {
     if free_bytes >= POSIX_SHARED_MEMORY_FREE_BYTES_A_RUNTIME_WANTS as u64 {
         tracing::debug!(
             shared_memory = %mount_point.display(),
             free_bytes,
             "POSIX shared memory has the headroom a runtime wants"
         );
-        return;
+        return false;
     }
     tracing::warn!(
         shared_memory = %mount_point.display(),
@@ -79,6 +76,7 @@ fn emit_the_shared_memory_headroom_reading(mount_point: &Path, free_bytes: u64) 
          container more (docker `--shm-size`, Kubernetes an `emptyDir` medium `Memory` volume) \
          or keep every bag well under the per-channel ceiling"
     );
+    true
 }
 
 /// Free bytes on the filesystem holding `path`, or `None` where it cannot be read.
@@ -101,7 +99,15 @@ fn free_bytes_on_the_filesystem_holding(path: &Path) -> Option<u64> {
     }
     // SAFETY: `statvfs` returned success, so it initialized the struct.
     let filesystem_statistics = unsafe { filesystem_statistics.assume_init() };
-    (filesystem_statistics.f_bsize as u64).checked_mul(filesystem_statistics.f_bavail as u64)
+    // POSIX counts `f_bavail` in `f_frsize` units — the fundamental block size —
+    // never in `f_bsize`, which is only the preferred I/O size. They are equal on
+    // tmpfs, so reading the wrong one is right here by coincidence rather than by
+    // contract. A filesystem reporting no fundamental size falls back to it.
+    let block_bytes = match filesystem_statistics.f_frsize {
+        0 => filesystem_statistics.f_bsize,
+        fundamental_block_bytes => fundamental_block_bytes,
+    };
+    (block_bytes as u64).checked_mul(filesystem_statistics.f_bavail as u64)
 }
 
 #[cfg(test)]
@@ -123,6 +129,32 @@ mod tests {
         assert!(
             POSIX_SHARED_MEMORY_FREE_BYTES_A_RUNTIME_WANTS > TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
             "the threshold must want more than one ceiling-sized chunk"
+        );
+    }
+
+    /// The threshold itself, over a chosen free-space reading rather than over
+    /// whatever this machine happens to have mounted.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_warning_fires_below_the_headroom_a_runtime_wants_and_not_at_or_above_it() {
+        let mount_point = Path::new("/dev/shm");
+        let wanted = POSIX_SHARED_MEMORY_FREE_BYTES_A_RUNTIME_WANTS as u64;
+
+        assert!(
+            emit_the_shared_memory_headroom_reading(mount_point, 64 * 1000 * 1000),
+            "a default container's shared memory must be reported short"
+        );
+        assert!(
+            emit_the_shared_memory_headroom_reading(mount_point, wanted - 1),
+            "one byte under the threshold is still short"
+        );
+        assert!(
+            !emit_the_shared_memory_headroom_reading(mount_point, wanted),
+            "exactly the headroom a runtime wants is not short"
+        );
+        assert!(
+            !emit_the_shared_memory_headroom_reading(mount_point, u64::MAX),
+            "a host with room to spare must not warn"
         );
     }
 

@@ -57,48 +57,71 @@ use crate::iceoryx2::{ChannelSizing, ChannelTapSubscribeError, Iceoryx2Node};
 /// channel's next bag is picked up immediately.
 const TAP_SHORTEST_IDLE_POLL_BACKOFF: Duration = Duration::from_micros(500);
 
-/// The longest sleep the backoff climbs to while a channel stays quiet.
+/// The longest sleep the backoff climbs to once a channel has gone quiet.
 ///
 /// The floor alone costs about 2,000 wake-ups a second for as long as a tap is
-/// attached to a channel carrying nothing. Doubling up to here bounds a quiet
-/// tap at about fifty, and bounds what it costs a live one: a channel that
-/// starts carrying after an idle stretch is drained within this, under one
-/// frame at camera cadence.
+/// attached to a channel carrying nothing. Climbing to here bounds that at about
+/// fifty, and bounds what it costs: a channel that starts carrying again is
+/// drained within this, and a detach arriving mid-sleep joins within it — the
+/// forwarder reads the stop flag once per loop.
 const TAP_LONGEST_IDLE_POLL_BACKOFF: Duration = Duration::from_millis(20);
+
+/// How long a channel must carry nothing before the backoff starts climbing.
+///
+/// Held well above any ordinary inter-bag gap on purpose. Climbing from the
+/// first empty poll would reach the ceiling inside a single 30 fps frame
+/// interval, so every frame on a live channel would be observed up to a ceiling
+/// late — a latency cost paid by exactly the taps that are not idle. Past this,
+/// a channel is quiet rather than merely between bags, and no observer is
+/// waiting on a cadence.
+const TAP_QUIET_BEFORE_THE_BACKOFF_CLIMBS: Duration = Duration::from_millis(250);
 
 /// Emit a drop warning on the first drop then once per this many subsequent
 /// drops, so a persistently-slow downstream is visible without spamming a log
 /// line per dropped bag on a hot channel.
 const TAP_DROP_WARN_INTERVAL: u64 = 256;
 
-/// How long the forwarder thread sleeps after a poll that found nothing, growing
-/// while the channel stays quiet and snapping back the moment it carries again.
+/// How long the forwarder thread sleeps after a poll that found nothing: the
+/// floor until the channel has been quiet a while, then climbing to the ceiling,
+/// and back to the floor the moment a bag arrives.
 ///
-/// A tap's wake-up rate follows the channel it observes rather than the clock,
-/// so an attached-but-idle tap costs a machine nothing measurable while a busy
-/// one never sleeps at all — its polls are never empty.
-#[derive(Debug, Clone, Copy)]
+/// A tap's wake-up rate follows the channel it observes rather than the clock. A
+/// channel carrying at any ordinary cadence never leaves the floor, because the
+/// gap between its bags never reaches
+/// [`TAP_QUIET_BEFORE_THE_BACKOFF_CLIMBS`] — so the saving is taken from idle
+/// taps only, and a live one is observed exactly as promptly as before.
+#[derive(Debug)]
 struct TapIdlePollBackoff {
+    /// How long this quiet stretch has lasted, counted from the sleeps taken in
+    /// it. The forwarder's own poll costs nothing worth counting beside them.
+    quiet_for: Duration,
+    /// The sleep the next empty poll takes.
     next_sleep: Duration,
 }
 
 impl TapIdlePollBackoff {
     fn starting_at_the_shortest_sleep() -> Self {
         Self {
+            quiet_for: Duration::ZERO,
             next_sleep: TAP_SHORTEST_IDLE_POLL_BACKOFF,
         }
     }
 
-    /// The sleep this empty poll earns, doubling toward the ceiling for the next.
+    /// The sleep this empty poll earns, climbing for the next one once the
+    /// channel has been quiet past [`TAP_QUIET_BEFORE_THE_BACKOFF_CLIMBS`].
     fn sleep_this_empty_poll_earns(&mut self) -> Duration {
         let sleeping_for = self.next_sleep;
-        self.next_sleep = (self.next_sleep * 2).min(TAP_LONGEST_IDLE_POLL_BACKOFF);
+        self.quiet_for += sleeping_for;
+        if self.quiet_for >= TAP_QUIET_BEFORE_THE_BACKOFF_CLIMBS {
+            self.next_sleep = (self.next_sleep * 2).min(TAP_LONGEST_IDLE_POLL_BACKOFF);
+        }
         sleeping_for
     }
 
-    /// Back to the floor: the channel is carrying, so the next quiet moment must
-    /// not inherit however long the last one had grown to.
+    /// Back to the floor: the channel is carrying, so neither this quiet stretch
+    /// nor the sleep it had grown to outlives the bag that ended it.
     fn reset_after_a_bag_arrived(&mut self) {
+        self.quiet_for = Duration::ZERO;
         self.next_sleep = TAP_SHORTEST_IDLE_POLL_BACKOFF;
     }
 }
@@ -583,48 +606,6 @@ mod tests {
     /// Drop): the forwarder parks the moment the bounded mpsc fills, never bumps
     /// `dropped_bags`, and — because Drop joins while the receiver is still
     /// alive — `drop(tap)` blocks forever, tripping the recv_timeout below.
-    /// Mental-revert guard for the idle backoff: hand every empty poll the floor
-    /// instead of a growing sleep, and an attached tap on a channel carrying
-    /// nothing costs about 2,000 wake-ups a second for as long as it stays
-    /// attached.
-    #[test]
-    fn an_idle_tap_backs_off_toward_the_ceiling_and_snaps_back_when_a_bag_arrives() {
-        let mut backoff = TapIdlePollBackoff::starting_at_the_shortest_sleep();
-
-        assert_eq!(
-            backoff.sleep_this_empty_poll_earns(),
-            TAP_SHORTEST_IDLE_POLL_BACKOFF,
-            "the first empty poll must not cost a live channel any latency"
-        );
-        assert_eq!(
-            backoff.sleep_this_empty_poll_earns(),
-            TAP_SHORTEST_IDLE_POLL_BACKOFF * 2,
-            "a channel that stays quiet must be polled less often"
-        );
-
-        // However long it stays quiet, the sleep is bounded — a channel that
-        // starts carrying again is drained within the ceiling.
-        for _ in 0..64 {
-            let sleeping_for = backoff.sleep_this_empty_poll_earns();
-            assert!(
-                sleeping_for <= TAP_LONGEST_IDLE_POLL_BACKOFF,
-                "an idle sleep of {sleeping_for:?} is past the ceiling"
-            );
-        }
-        assert_eq!(
-            backoff.sleep_this_empty_poll_earns(),
-            TAP_LONGEST_IDLE_POLL_BACKOFF,
-            "a long-quiet channel settles at the ceiling"
-        );
-
-        backoff.reset_after_a_bag_arrived();
-        assert_eq!(
-            backoff.sleep_this_empty_poll_earns(),
-            TAP_SHORTEST_IDLE_POLL_BACKOFF,
-            "a gap between two bags must not inherit an earlier idle stretch's sleep"
-        );
-    }
-
     #[test]
     fn stalled_downstream_never_blocks_the_drain_and_detach_returns_promptly() {
         let max_subscribers = RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL;
@@ -675,5 +656,103 @@ mod tests {
             .recv_timeout(Duration::from_secs(5))
             .expect("drop(tap) must return promptly, not hang on a parked forwarder");
         joiner.join().expect("detach thread joins");
+    }
+
+    /// The backoff policy itself: the floor for as long as a channel is merely
+    /// between bags, climbing only once it has gone quiet, and back to the floor
+    /// on the bag that ends the quiet.
+    ///
+    /// Mental-revert guard for the quiet threshold: drop it and climb from the
+    /// first empty poll, and a 30 fps channel reaches the ceiling inside every
+    /// frame interval — so a LIVE tap pays the latency the change was supposed to
+    /// charge idle ones. This pins the policy; the forwarder's use of it is
+    /// covered by `a_bag_published_after_a_quiet_stretch_still_reaches_a_tap`.
+    #[test]
+    fn the_idle_backoff_holds_the_floor_through_an_ordinary_gap_and_climbs_only_once_quiet() {
+        let mut backoff = TapIdlePollBackoff::starting_at_the_shortest_sleep();
+
+        // A 30 fps inter-frame gap: every poll inside it must still be at the
+        // floor, so a live channel is observed exactly as promptly as before.
+        let one_frame_at_thirty_fps = Duration::from_micros(33_333);
+        let mut slept_inside_the_gap = Duration::ZERO;
+        while slept_inside_the_gap < one_frame_at_thirty_fps {
+            let sleeping_for = backoff.sleep_this_empty_poll_earns();
+            assert_eq!(
+                sleeping_for, TAP_SHORTEST_IDLE_POLL_BACKOFF,
+                "a poll {slept_inside_the_gap:?} into an ordinary gap must stay at the floor"
+            );
+            slept_inside_the_gap += sleeping_for;
+        }
+
+        // Past the quiet threshold it climbs, and never past the ceiling.
+        let mut kept_quiet_for = slept_inside_the_gap;
+        while kept_quiet_for < TAP_QUIET_BEFORE_THE_BACKOFF_CLIMBS * 4 {
+            let sleeping_for = backoff.sleep_this_empty_poll_earns();
+            assert!(
+                sleeping_for <= TAP_LONGEST_IDLE_POLL_BACKOFF,
+                "an idle sleep of {sleeping_for:?} is past the ceiling"
+            );
+            kept_quiet_for += sleeping_for;
+        }
+        assert_eq!(
+            backoff.sleep_this_empty_poll_earns(),
+            TAP_LONGEST_IDLE_POLL_BACKOFF,
+            "a long-quiet channel settles at the ceiling"
+        );
+
+        backoff.reset_after_a_bag_arrived();
+        assert_eq!(
+            backoff.sleep_this_empty_poll_earns(),
+            TAP_SHORTEST_IDLE_POLL_BACKOFF,
+            "the bag that ends a quiet stretch must not leave its sleep behind"
+        );
+    }
+
+    /// The forwarder's own use of the backoff: a channel left quiet long enough
+    /// for the sleep to reach its ceiling still hands the next bag over.
+    ///
+    /// What it catches: a backoff with no ceiling. Remove the `min` and a quiet
+    /// channel's sleep doubles without bound, so the first bag below never
+    /// arrives inside the timeout. What it does NOT catch, stated rather than
+    /// implied: a missing `reset_after_a_bag_arrived` — that leaves the sleep at
+    /// its ceiling, which is 20 ms against a 2 s bound. The reset is pinned by
+    /// the policy test above; discriminating it here would mean timing a 20 ms
+    /// sleep against a 1 ms one, which is a flake in CI rather than a guard.
+    #[test]
+    fn a_bag_published_after_a_quiet_stretch_still_reaches_a_tap() {
+        let max_subscribers = RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL;
+        let node = Iceoryx2Node::for_this_test_process();
+        let channel = unique_channel_name("quiet-then-carrying");
+        let service = open_channel(&node, &channel, max_subscribers);
+        let publisher = service.create_publisher(64).expect("channel publisher");
+
+        let mut tap = start_channel_tap(
+            node.clone(),
+            channel.clone(),
+            tap_channel_sizing_matching_open_channel(max_subscribers),
+            None,
+        )
+        .expect("tap attaches");
+
+        // Long enough that the forwarder is sleeping at its ceiling by now.
+        std::thread::sleep(TAP_QUIET_BEFORE_THE_BACKOFF_CLIMBS * 3);
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("current-thread runtime");
+        runtime.block_on(async {
+            for marker in [7u8, 9u8] {
+                publish_marker(&publisher, marker);
+                let bag = tokio::time::timeout(Duration::from_secs(2), tap.recv())
+                    .await
+                    .expect("a bag after a quiet stretch must not be stranded by the backoff")
+                    .expect("the tap stream must still be open");
+                assert_eq!(
+                    bag[FRAME_HEADER_SIZE], marker,
+                    "the tap must forward the bag that ended the quiet stretch"
+                );
+            }
+        });
     }
 }

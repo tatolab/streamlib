@@ -120,7 +120,7 @@ fn output_writer_inner_publishing_to(publisher: ChannelDataServicePublisher) -> 
             service_name: "bench/out".to_string(),
             trust_tier: ChannelTrustTier::Trusted,
             expected_payload_bytes: 4096,
-            ceiling_bytes: TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+            chunk_ceiling_bytes: TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
         },
     );
     output_writer_inner

@@ -390,7 +390,7 @@ impl PythonProcessorLinkDataAccess {
                             // ceiling riding the envelope beside it.
                             trust_tier: ChannelTrustTier::UntrustedSession,
                             expected_payload_bytes,
-                            ceiling_bytes: max_payload_bytes_per_channel,
+                            chunk_ceiling_bytes: max_payload_bytes_per_channel,
                         },
                     );
                     if let Some(refused_bag_board_entry_mirror) =
@@ -702,14 +702,15 @@ impl PythonProcessorLinkDataAccess {
             Err(Error::PayloadExceedsChannelCeiling {
                 channel,
                 payload_bytes,
-                ceiling_bytes,
+                largest_admitted_frame_bytes,
+                tier,
                 refused_bags_on_the_output_port: refused_bags,
                 ..
             }) => {
                 tracing::warn!(
-                    "output port {port_name:?} refused a {payload_bytes}-byte bag over the \
-                     {ceiling_bytes}-byte ceiling of channel {channel:?}; the bag was dropped, \
-                     and the port has refused {refused_bags} so far"
+                    "output port {port_name:?} refused a {payload_bytes}-byte bag past the \
+                     {largest_admitted_frame_bytes} bytes channel {channel:?} admits ({tier} \
+                     tier); the bag was dropped, and the port has refused {refused_bags} so far"
                 );
                 Ok(())
             }

@@ -209,7 +209,7 @@ pub fn open_iceoryx2_service(
                 service_name: channel_service_name.clone(),
                 trust_tier,
                 expected_payload_bytes: DEFAULT_EXPECTED_PAYLOAD_BYTES,
-                ceiling_bytes: channel_ceiling_bytes,
+                chunk_ceiling_bytes: channel_ceiling_bytes,
             },
         )?;
     }
@@ -1975,7 +1975,7 @@ mod tests {
                 service_name: unique_service_name("mixed-endpoints"),
                 trust_tier: ChannelTrustTier::UntrustedSession,
                 expected_payload_bytes: 4096,
-                ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+                chunk_ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
             },
         )
         .expect("the engine-side source wires");
@@ -2324,7 +2324,7 @@ mod tests {
                 service_name: unique_service_name(tag),
                 trust_tier: ChannelTrustTier::Trusted,
                 expected_payload_bytes: 4096,
-                ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+                chunk_ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
             },
         )
         .expect("the source side wires");
@@ -2387,7 +2387,7 @@ mod tests {
                     service_name: unique_service_name(tag),
                     trust_tier: ChannelTrustTier::Trusted,
                     expected_payload_bytes: 4096,
-                    ceiling_bytes: source_ceiling_bytes,
+                    chunk_ceiling_bytes: source_ceiling_bytes,
                 },
             )
             .expect("the source side wires");

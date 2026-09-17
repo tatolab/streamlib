@@ -1403,7 +1403,7 @@ mod tests {
                         service_name: data_name.clone(),
                         trust_tier: ChannelTrustTier::Trusted,
                         expected_payload_bytes: 64,
-                        ceiling_bytes: TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+                        chunk_ceiling_bytes: TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
                     },
                 );
             }
