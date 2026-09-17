@@ -16,6 +16,13 @@ stream on disk (`<STREAMLIB_HOME>/.streamlib/logs/<runtime_id>-<started_at_milli
 rotated by size — see `docs/logging-schema.md` §Files and rotation) and mirror to stdout. The host handler (escalate IPC `{op:"log"}`)
 forwards helper-process records to the subscriber that owns the file.
 
+`tracing` is the one way in a helper process too: the helper captures the
+engine's records — iceoryx2's own among them, through the log bridge — into a
+bounded ring, and a thread hands each one to the parent over that same
+`{op:"log"}` op, carrying its `tracing` target and `source: "rust"`. A helper
+captures at the level `RUST_LOG` configures, which is also the level iceoryx2
+itself is set to, in every process that takes an engine role.
+
 **Don't reach for `eprintln!` / `println!` / `print` /
 `logging.basicConfig`.** They're banned in library code.
 Use the API above instead.
