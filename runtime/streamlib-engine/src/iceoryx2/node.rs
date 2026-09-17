@@ -59,6 +59,19 @@ const CHANNEL_PUBLISHER_MAX_LOANED_SAMPLES: usize = 1;
 /// replayed bag is stale by the time it arrives.
 const CHANNEL_HISTORY_SIZE: usize = 0;
 
+/// How long a channel open refused for depth keeps sweeping for the dead holder
+/// behind it before giving up.
+///
+/// A process that has just died is not reclaimable the instant it goes —
+/// measured at about 10 ms on Linux 7.0 — so a single sweep loses the race with
+/// a link rewired right after a helper crashed. Bounded because this runs inside
+/// a wiring call the caller is waiting on, and generous against that measurement
+/// because the cost of giving up early is a link that never carries again.
+const DEAD_HOLDER_RECLAIM_BUDGET: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// How long to wait between sweeps inside [`DEAD_HOLDER_RECLAIM_BUDGET`].
+const DEAD_HOLDER_RECLAIM_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(5);
+
 /// The environment variable a parent hands its helper the iceoryx2 domain root in.
 pub const ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_ICEORYX2_DOMAIN_ROOT";
 
@@ -297,52 +310,40 @@ impl Iceoryx2Node {
     /// every holder has died: iceoryx2 sweeps dead nodes only after a
     /// *successful* open, so a long-lived node keeps failing the same reopen
     /// until some new node is created anywhere on the machine. This therefore
-    /// sweeps its own domain once and retries, which is what turns that
-    /// permanent failure back into the transient it is.
+    /// sweeps its own domain and retries, which turns that permanent failure
+    /// back into the transient it is.
+    ///
+    /// The sweep is given a budget rather than one shot: a process that has just
+    /// died is not reclaimable the instant it goes, so a helper whose link is
+    /// rewired immediately after it crashed would otherwise sweep nothing,
+    /// retry once, and fail for the rest of the run.
     pub fn open_or_create_service(
         &self,
         service_name: &str,
         max_subscribers: usize,
         channel_service_creation_depth: usize,
     ) -> Result<Iceoryx2Service> {
-        let node = self.inner.lock();
         let service_name = iceoryx2_service_name_of(service_name)?;
-
+        // Locked per attempt rather than across the whole recovery, so the
+        // budget below never holds this node's other openers behind it.
         let open_or_create_once = || {
-            channel_data_service_builder(&node, &service_name)
-                .max_publishers(MAX_PUBLISHERS_PER_CHANNEL)
-                .max_subscribers(max_subscribers)
-                .max_nodes(max_subscribers * ICEORYX2_NODES_ADMITTED_PER_PORT_SLOT)
-                .subscriber_max_buffer_size(channel_service_creation_depth)
-                .subscriber_max_borrowed_samples(CHANNEL_SUBSCRIBER_MAX_BORROWED_SAMPLES)
-                .history_size(CHANNEL_HISTORY_SIZE)
-                .enable_safe_overflow(true)
-                .open_or_create()
+            let node = self.inner.lock();
+            channel_data_service_builder_under_the_channel_policy(
+                &node,
+                &service_name,
+                max_subscribers,
+                channel_service_creation_depth,
+            )
+            .open_or_create()
         };
 
-        let service = match open_or_create_once() {
-            Ok(service) => service,
+        let first_failure = match open_or_create_once() {
+            Ok(service) => return Ok(Iceoryx2Service { inner: service }),
             Err(
-                first_failure @ PublishSubscribeOpenOrCreateError::PublishSubscribeOpenError(
+                failure @ PublishSubscribeOpenOrCreateError::PublishSubscribeOpenError(
                     PublishSubscribeOpenError::DoesNotSupportRequestedMinBufferSize,
                 ),
-            ) => {
-                let reclaimed = reclaim_dead_iceoryx2_nodes_in(node.config());
-                tracing::info!(
-                    service = service_name.as_str(),
-                    channel_service_creation_depth,
-                    reclaimed_dead_nodes = reclaimed,
-                    "a live channel service is shallower than this open asks for; swept the \
-                     engine's domain for dead holders and retrying once"
-                );
-                open_or_create_once().map_err(|retry_failure| {
-                    channel_data_service_open_failure(
-                        &service_name,
-                        &retry_failure,
-                        Some(&first_failure),
-                    )
-                })?
-            }
+            ) => failure,
             Err(failure) => {
                 return Err(channel_data_service_open_failure(
                     &service_name,
@@ -352,7 +353,33 @@ impl Iceoryx2Node {
             }
         };
 
-        Ok(Iceoryx2Service { inner: service })
+        let engine_owned_domain_config = self.inner.lock().config().clone();
+        let started_recovering = std::time::Instant::now();
+        let mut swept_dead_nodes = 0u64;
+        loop {
+            swept_dead_nodes += reclaim_dead_iceoryx2_nodes_in(&engine_owned_domain_config);
+            if swept_dead_nodes > 0 {
+                if let Ok(service) = open_or_create_once() {
+                    tracing::info!(
+                        service = service_name.as_str(),
+                        channel_service_creation_depth,
+                        reclaimed_dead_nodes = swept_dead_nodes,
+                        recovered_in_ms = started_recovering.elapsed().as_millis() as u64,
+                        "a channel service was held shallower than this open asks for by a node \
+                         whose process is gone; swept the engine's domain and reopened it"
+                    );
+                    return Ok(Iceoryx2Service { inner: service });
+                }
+            }
+            if started_recovering.elapsed() >= DEAD_HOLDER_RECLAIM_BUDGET {
+                return Err(channel_data_service_open_failure(
+                    &service_name,
+                    &first_failure,
+                    Some(swept_dead_nodes),
+                ));
+            }
+            std::thread::sleep(DEAD_HOLDER_RECLAIM_POLL_INTERVAL);
+        }
     }
 
     /// The channel data service named `service_name`, or `None` when nothing
@@ -464,12 +491,34 @@ fn channel_data_service_builder(
         .user_header::<DataChannelBagSequenceNumberUserHeader>()
 }
 
+/// The channel data service builder carrying the whole channel policy every
+/// opener presents — the fixed slot counts, the creation depth, and the
+/// one-sample, no-history, safe-overflow limits iceoryx2 verifies on each open.
+///
+/// One spelling, because a test that re-states the chain to reproduce an open
+/// failure stops reproducing it the moment a setting moves on one side only.
+fn channel_data_service_builder_under_the_channel_policy(
+    node: &Node<ipc::Service>,
+    service_name: &ServiceName,
+    max_subscribers: usize,
+    channel_service_creation_depth: usize,
+) -> PublishSubscribeServiceBuilder<[u8], DataChannelBagSequenceNumberUserHeader, ipc::Service> {
+    channel_data_service_builder(node, service_name)
+        .max_publishers(MAX_PUBLISHERS_PER_CHANNEL)
+        .max_subscribers(max_subscribers)
+        .max_nodes(max_subscribers * ICEORYX2_NODES_ADMITTED_PER_PORT_SLOT)
+        .subscriber_max_buffer_size(channel_service_creation_depth)
+        .subscriber_max_borrowed_samples(CHANNEL_SUBSCRIBER_MAX_BORROWED_SAMPLES)
+        .history_size(CHANNEL_HISTORY_SIZE)
+        .enable_safe_overflow(true)
+}
+
 /// The refusal for a failed open-or-create of a channel data service, naming the
 /// failure the sweep-and-retry started from when there was one.
 fn channel_data_service_open_failure(
     service_name: &ServiceName,
     failure: &PublishSubscribeOpenOrCreateError,
-    failure_before_the_dead_node_sweep: Option<&PublishSubscribeOpenOrCreateError>,
+    dead_nodes_swept_while_retrying: Option<u64>,
 ) -> Error {
     if let PublishSubscribeOpenOrCreateError::PublishSubscribeOpenError(
         PublishSubscribeOpenError::IncompatibleTypes,
@@ -480,12 +529,13 @@ fn channel_data_service_open_failure(
             failure,
         );
     }
-    match failure_before_the_dead_node_sweep {
+    match dead_nodes_swept_while_retrying {
         None => Error::Runtime(format!("Failed to open/create service: {failure:?}")),
-        Some(first_failure) => Error::Runtime(format!(
-            "Failed to open/create service: {failure:?} (still {first_failure:?} after sweeping \
-             the engine's iceoryx2 domain for dead holders, so a live holder is genuinely \
-             shallower than this open asks for)"
+        Some(swept) => Error::Runtime(format!(
+            "Failed to open/create service: {failure:?} (still refused after {:?} of sweeping \
+             the engine's iceoryx2 domain, which reclaimed {swept} dead node(s), so a live \
+             holder is genuinely shallower than this open asks for)",
+            DEAD_HOLDER_RECLAIM_BUDGET
         )),
     }
 }
@@ -1638,15 +1688,13 @@ mod tests {
         {
             let raw_node = long_lived_node.inner.lock();
             let service_name = iceoryx2_service_name_of(STALE_HOLDER_CHANNEL_SERVICE_NAME).unwrap();
-            let unswept_failure = channel_data_service_builder(&raw_node, &service_name)
-                .max_publishers(MAX_PUBLISHERS_PER_CHANNEL)
-                .max_subscribers(STALE_HOLDER_MAX_SUBSCRIBERS)
-                .max_nodes(STALE_HOLDER_MAX_SUBSCRIBERS * ICEORYX2_NODES_ADMITTED_PER_PORT_SLOT)
-                .subscriber_max_buffer_size(STALE_HOLDER_DEEPER_DEPTH)
-                .subscriber_max_borrowed_samples(CHANNEL_SUBSCRIBER_MAX_BORROWED_SAMPLES)
-                .history_size(CHANNEL_HISTORY_SIZE)
-                .enable_safe_overflow(true)
-                .open_or_create();
+            let unswept_failure = channel_data_service_builder_under_the_channel_policy(
+                &raw_node,
+                &service_name,
+                STALE_HOLDER_MAX_SUBSCRIBERS,
+                STALE_HOLDER_DEEPER_DEPTH,
+            )
+            .open_or_create();
             assert!(
                 matches!(
                     unswept_failure,
