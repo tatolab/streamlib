@@ -1812,11 +1812,12 @@ impl PythonRuntimeContextFullAccess {
     /// The context a helper process hands its own processor's privileged
     /// hooks.
     ///
-    /// `escalate_request_to_parent` is the bridge's blocking round trip; with
-    /// it and the surface-share socket the parent's env names, the GPU
-    /// surface works here — without either, GPU calls refuse by name.
+    /// `escalate_request_to_parent` is the bridge's blocking round trip and
+    /// `release_to_parent_without_waiting` its door for releases a drop owes;
+    /// with both and the surface-share socket the parent's env names, the GPU
+    /// surface works here — without any of them, GPU calls refuse by name.
     #[staticmethod]
-    #[pyo3(signature = (configuration, link_data_access, runtime_id, processor_id, escalate_request_to_parent = None))]
+    #[pyo3(signature = (configuration, link_data_access, runtime_id, processor_id, escalate_request_to_parent = None, release_to_parent_without_waiting = None))]
     fn open_for_helper_process(
         python: Python<'_>,
         configuration: &Bound<'_, PyAny>,
@@ -1824,15 +1825,18 @@ impl PythonRuntimeContextFullAccess {
         runtime_id: String,
         processor_id: String,
         escalate_request_to_parent: Option<&Bound<'_, PyAny>>,
+        release_to_parent_without_waiting: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         let link_data_access = link_data_access.clone().unbind();
         let helper_process_exchange_client = match (
             escalate_request_to_parent,
+            release_to_parent_without_waiting,
             std::env::var("STREAMLIB_SURFACE_SOCKET").ok(),
         ) {
-            (Some(requester), Some(surface_socket_path)) => {
+            (Some(requester), Some(releaser), Some(surface_socket_path)) => {
                 Some(Arc::new(HelperProcessGpuExchangeClient::new(
                     requester.clone().unbind(),
+                    releaser.clone().unbind(),
                     surface_socket_path.into(),
                     // Child-scoped, never the node's own runtime id — the
                     // service's crash watchdog sweeps registrations by
@@ -3740,9 +3744,10 @@ class FrameSomebodyElseWrote:
             )
             .unwrap();
 
-        // The capability a helper's context carries: the escalate callable is
+        // The capability a helper's context carries: the escalate callables are
         // never reached, because a claim speaks only to the surface socket.
         let exchange_client = Arc::new(HelperProcessGpuExchangeClient::new(
+            python.None(),
             python.None(),
             share.socket_path.clone(),
             "helper:read-under-test".to_string(),

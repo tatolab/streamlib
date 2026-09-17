@@ -86,7 +86,10 @@ mod tests {
         let mut queue = PendingOperationQueue::new();
         queue.push(PendingOperation::AddProcessor("proc_1".into()));
         queue.push(PendingOperation::AddProcessor("proc_2".into()));
-        queue.push(PendingOperation::UpdateProcessorConfig("proc_1".into()));
+        queue.push(PendingOperation::UpdateProcessorConfig {
+            processor_id: "proc_1".into(),
+            config_to_apply: serde_json::Value::Null,
+        });
 
         queue.remove_processor_operations(&"proc_1".into());
 

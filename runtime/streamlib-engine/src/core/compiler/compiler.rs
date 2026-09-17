@@ -9,6 +9,7 @@ use crate::core::compiler::PendingOperation;
 use crate::core::compiler::compilation_plan::CompilationPlan;
 use crate::core::compiler::compile_phase::CompilePhase;
 use crate::core::compiler::compile_result::CompileResult;
+use crate::core::compiler::compiler_ops::ProcessorConfigUpdateOutcome;
 use crate::core::compiler::compiler_transaction::CompilerTransactionHandle;
 use crate::core::compiler::processor_thread_shutdown::{
     AbandonedProcessorThreadStillRunning, DescriptionOfTheAbandonedProcessorThreads,
@@ -196,8 +197,11 @@ impl Compiler {
                 PendingOperation::RemoveLink(id) => {
                     plan.links_to_remove.push(id);
                 }
-                PendingOperation::UpdateProcessorConfig(id) => {
-                    plan.config_updates.push(id);
+                PendingOperation::UpdateProcessorConfig {
+                    processor_id,
+                    config_to_apply,
+                } => {
+                    plan.config_updates.push((processor_id, config_to_apply));
                 }
             }
         }
@@ -211,6 +215,7 @@ impl Compiler {
             let graph = graph_arc.read();
             plan.drop_link_adds_into_removed_processors(&graph);
         }
+        plan.hand_config_updates_to_processors_this_batch_constructs(&mut graph_arc.write());
 
         // Early return if nothing to do
         if plan.is_empty() {
@@ -432,45 +437,24 @@ impl Compiler {
         // =====================================================================
         // 8. Config updates - for each config_update
         // =====================================================================
-        for proc_id in plan.config_updates {
-            let graph = graph_arc.read();
-            let config_json = match graph.traversal().v(&proc_id).first() {
-                Some(node) => match &node.config {
-                    Some(config) => config.clone(),
-                    None => {
-                        tracing::debug!("[CONFIG] {} has no config to update", proc_id);
-                        continue;
-                    }
-                },
-                None => {
-                    tracing::warn!("[CONFIG] Processor {} not found in graph", proc_id);
-                    continue;
+        for (proc_id, config_to_apply) in plan.config_updates {
+            match super::compiler_ops::apply_processor_config_update(
+                &graph_arc,
+                &proc_id,
+                config_to_apply,
+            )? {
+                ProcessorConfigUpdateOutcome::TakenAndRecordedOnTheNode => {
+                    tracing::info!("[CONFIG] Updated config for {}", proc_id);
+                    result.configs_updated += 1;
+                    PUBSUB.publish(
+                        topics::RUNTIME_GLOBAL,
+                        &Event::RuntimeGlobal(RuntimeEvent::ProcessorConfigDidChange {
+                            processor_id: proc_id,
+                        }),
+                    );
                 }
-            };
-
-            let processor_arc = graph
-                .traversal()
-                .v(&proc_id)
-                .first()
-                .and_then(|node| {
-                    node.get::<ProcessorInstanceComponent>()
-                        .map(|i| i.0.clone())
-                })
-                .ok_or_else(|| {
-                    Error::ProcessorNotFound(format!(
-                        "Processor '{}' not found for config update",
-                        proc_id
-                    ))
-                })?;
-            drop(graph);
-
-            {
-                let mut guard = processor_arc.lock();
-                guard.apply_config_json(&config_json)?;
+                ProcessorConfigUpdateOutcome::ProcessorNoLongerInTheGraph => {}
             }
-
-            tracing::info!("[CONFIG] Updated config for {}", proc_id);
-            result.configs_updated += 1;
         }
 
         // Mark the graph as compiled

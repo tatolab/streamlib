@@ -62,6 +62,28 @@ ESCALATE_REQUEST_TIMEOUT_SECONDS = 60.0
 # callback.
 LIFECYCLE_POLL_INTERVAL_MILLISECONDS = 100
 
+# The interval a continuous processor declaring none runs at: the same 100 µs
+# the engine's native continuous runner waits between calls.
+CONTINUOUS_INTERVAL_FLOOR_NANOSECONDS = 100_000
+
+# How long `teardown` waits, before answering, for the releases already queued to
+# reach the parent. The parent gives a helper up the moment it answers, and a
+# release still queued then is never taken; bounded well inside the shutdown
+# ladder's five-second teardown budget.
+RELEASES_SENT_BEFORE_TEARDOWN_ANSWERS_TIMEOUT_SECONDS = 1.0
+
+# What an answer to each escalate op creates in the app process, as the op that
+# releases it and the field that op names it by. Wire contract: an answer this
+# helper stopped waiting on is released through it, because nothing else would
+# hand it back before the helper stops.
+RELEASE_OWED_BY_AN_ANSWER_TO_ESCALATE_OP = {
+    "acquire_pixel_buffer": ("release_handle", "handle_id"),
+    "acquire_texture": ("release_handle", "handle_id"),
+    "register_acceleration_structure_blas": ("release_handle", "handle_id"),
+    "register_acceleration_structure_tlas": ("release_handle", "handle_id"),
+    "create_processor_owned_window": ("close_processor_owned_window", "window_id"),
+}
+
 
 class HelperProcessProtocolError(Exception):
     """The parent sent something this helper cannot act on."""
@@ -103,6 +125,10 @@ class ParentProcessBridge:
 
     Every command queued also makes a pipe readable, so a loop parked on a
     file descriptor wakes for a command the moment it arrives.
+
+    A release worker sends every release that must not wait on its answer where
+    it was asked for — what a freed object owes, and what an answer nobody was
+    still waiting on created — one round trip at a time.
     """
 
     _FRAME_LENGTH_PREFIX = struct.Struct(">I")
@@ -114,7 +140,16 @@ class ParentProcessBridge:
         self._write_lock = threading.Lock()
         self._lifecycle_commands: "queue.Queue[Optional[dict[str, Any]]]" = queue.Queue()
         self._pending_escalate_responses: "dict[str, _PendingEscalateResponse]" = {}
+        # The op of each request whose caller stopped waiting before its answer
+        # arrived, for the ops an answer creates something for.
+        self._abandoned_escalate_ops_by_request_id: "dict[str, str]" = {}
         self._pending_lock = threading.Lock()
+        # `SimpleQueue`, never `Queue`: its `put` is safe from a finalizer that
+        # interrupts another `put` on the same thread. An `Event` is set once the
+        # worker reaches it; `None` ends the worker.
+        self._releases_owed_to_the_parent: (
+            "queue.SimpleQueue[dict[str, Any] | threading.Event | None]"
+        ) = queue.SimpleQueue()
         self._channel_closed = False
         self._the_parent_is_gone = threading.Event()
         # Non-inheritable by default, so nothing the processor starts holds it.
@@ -127,6 +162,11 @@ class ParentProcessBridge:
         self._reader = threading.Thread(
             target=self._demultiplex_frames_from_parent,
             name="streamlib-parent-bridge",
+            daemon=True,
+        )
+        self._release_worker = threading.Thread(
+            target=self._send_every_release_owed_to_the_parent,
+            name="streamlib-parent-release",
             daemon=True,
         )
 
@@ -153,6 +193,8 @@ class ParentProcessBridge:
         return cls(socket.socket(fileno=inherited_fd))
 
     def start_reading(self) -> None:
+        """Start the reader and the release worker."""
+        self._release_worker.start()
         self._reader.start()
 
     def send(self, message: "dict[str, Any]") -> None:
@@ -196,11 +238,19 @@ class ParentProcessBridge:
             self.send({"rpc": "escalate_request", "request_id": request_id, **op})
             arrived = slot.arrived.wait(timeout=timeout_seconds)
         finally:
+            # Read under the lock the reader delivers under, so an answer is
+            # either in hand here or finds no slot and is released by the
+            # reader — never both, and never neither. Whatever ended the wait,
+            # a timeout or an interrupt, abandons the answer the same way.
             with self._pending_lock:
                 self._pending_escalate_responses.pop(request_id, None)
-        # `slot.message` rather than the wait result decides: a delivery can
-        # land between the wait timing out and the slot being popped.
-        response = slot.message
+                response = slot.message
+                if (
+                    response is None
+                    and not self._channel_closed
+                    and op.get("op") in RELEASE_OWED_BY_AN_ANSWER_TO_ESCALATE_OP
+                ):
+                    self._abandoned_escalate_ops_by_request_id[request_id] = op["op"]
         if response is None:
             if not arrived:
                 raise EscalateRequestError(
@@ -215,6 +265,45 @@ class ParentProcessBridge:
         raise EscalateRequestError(
             response.get("message") or f"the parent refused {op.get('op')!r}"
         )
+
+    def release_to_parent_without_waiting(self, release_op: "dict[str, Any]") -> None:
+        """Queue one release escalate for the release worker and return at once.
+
+        The door a release owed by a freed object takes. That object can be
+        freed by a garbage-collector finalizer on any thread, this bridge's
+        reader included — and a round trip there would wait out its whole
+        timeout, because only the reader delivers the answer.
+        """
+        self._releases_owed_to_the_parent.put(release_op)
+
+    def wait_for_every_release_queued_so_far(self, timeout_seconds: float) -> bool:
+        """Block until the release worker has sent every release queued before
+        this call, or `timeout_seconds` pass. `False` when some may not have."""
+        if not self._release_worker.is_alive():
+            return False
+        every_earlier_release_sent = threading.Event()
+        self._releases_owed_to_the_parent.put(every_earlier_release_sent)
+        return every_earlier_release_sent.wait(timeout=timeout_seconds)
+
+    def _send_every_release_owed_to_the_parent(self) -> None:
+        while True:
+            release_op = self._releases_owed_to_the_parent.get()
+            if release_op is None:
+                return
+            if isinstance(release_op, threading.Event):
+                release_op.set()
+                continue
+            try:
+                self.request_from_parent(release_op)
+            except Exception as release_failure:
+                # Any failure, not only a refused escalate: a worker that died
+                # here would leave every later release queued behind it.
+                log.warn(
+                    "the parent did not take a release from this helper; what it "
+                    "names may stay allocated until the runtime stops",
+                    op=release_op.get("op"),
+                    error=str(release_failure),
+                )
 
     def lifecycle_command_arrival_fd(self) -> int:
         """A descriptor that is readable once a command has been queued.
@@ -264,6 +353,7 @@ class ParentProcessBridge:
             frame = self._read_next_frame()
             if frame is None:
                 self._wake_every_pending_escalate_caller()
+                self._releases_owed_to_the_parent.put(None)
                 # Latched rather than queued once: a mid-run drain consumes
                 # whatever is on the queue, and a single end-of-channel
                 # consumed there would leave the outer read blocked on a
@@ -300,11 +390,32 @@ class ParentProcessBridge:
             return False
         with self._pending_lock:
             slot = self._pending_escalate_responses.get(request_id)
-        if slot is None:
+            if slot is not None:
+                slot.message = response
+                slot.arrived.set()
+                return True
+            abandoned_op = self._abandoned_escalate_ops_by_request_id.pop(request_id, None)
+        if abandoned_op is None:
             return False
-        slot.message = response
-        slot.arrived.set()
+        self._release_what_an_abandoned_answer_created(abandoned_op, response)
         return True
+
+    def _release_what_an_abandoned_answer_created(
+        self, abandoned_op: str, response: "dict[str, Any]"
+    ) -> None:
+        created_id = response.get("handle_id")
+        if response.get("result") != "ok" or not isinstance(created_id, str) or not created_id:
+            return
+        release_op, released_id_field = RELEASE_OWED_BY_AN_ANSWER_TO_ESCALATE_OP[abandoned_op]
+        log.warn(
+            "the parent answered an escalate request after this helper stopped "
+            "waiting on it; releasing what the answer created",
+            op=abandoned_op,
+            request_id=response.get("request_id"),
+        )
+        self.release_to_parent_without_waiting(
+            {"op": release_op, released_id_field: created_id}
+        )
 
     def _wake_every_pending_escalate_caller(self) -> None:
         """A closed channel fails every in-flight request rather than hanging it."""
@@ -312,8 +423,10 @@ class ParentProcessBridge:
             self._channel_closed = True
             orphaned = list(self._pending_escalate_responses.values())
             self._pending_escalate_responses.clear()
+            self._abandoned_escalate_ops_by_request_id.clear()
+        # An answer already delivered is left in its slot: its caller has not
+        # read it yet, and what it created is released through that caller.
         for slot in orphaned:
-            slot.message = None
             slot.arrived.set()
 
     def _read_next_frame(self) -> "Optional[dict[str, Any]]":
@@ -587,6 +700,7 @@ def construct_hosted_processor(
         runtime_id,
         processor_id,
         bridge.request_from_parent,
+        bridge.release_to_parent_without_waiting,
     )
     return HostedProcessor(
         construct_processor_instance(processor_class, configuration, link_data_access),
@@ -772,19 +886,25 @@ class HelperProcessLifecycle:
 
     def _run_continuous(self, interval_ms: int) -> None:
         assert self._hosted is not None
-        if interval_ms <= 0:
+        interval_ns = (
+            interval_ms * 1_000_000
+            if interval_ms > 0
+            else CONTINUOUS_INTERVAL_FLOOR_NANOSECONDS
+        )
+        with MonotonicTimer(interval_ns) as timer:
+            # Once at the start and then once per tick, as the native runner
+            # paces a continuous processor.
+            self._hosted.call_hook("process", self._hosted.limited_access_context)
+            self._drain_commands_arriving_mid_run()
             while self._running:
-                self._hosted.call_hook("process", self._hosted.limited_access_context)
-                self._drain_commands_arriving_mid_run()
-            return
-        with MonotonicTimer(interval_ms * 1_000_000) as timer:
-            while self._running:
-                self._hosted.call_hook("process", self._hosted.limited_access_context)
-                # A tick already consumed by this iteration is not caught up
-                # on — drift-free pacing, not backlog replay.
-                if timer.wait(LIFECYCLE_POLL_INTERVAL_MILLISECONDS) < 0:
+                expirations = timer.wait(LIFECYCLE_POLL_INTERVAL_MILLISECONDS)
+                if expirations < 0:
                     log.error("the interval timer failed; leaving the continuous loop")
                     self._running = False
+                elif expirations > 0:
+                    # Once per wake however many ticks it covered — drift-free
+                    # pacing, not backlog replay.
+                    self._hosted.call_hook("process", self._hosted.limited_access_context)
                 self._drain_commands_arriving_mid_run()
 
     def _wait_for_a_notify_or_a_command(self, listener_fd: int) -> None:
@@ -839,6 +959,19 @@ class HelperProcessLifecycle:
         self._torn_down = True
         if self._hosted is not None:
             self._hosted.call_hook("teardown", self._hosted.full_access_context)
+        try:
+            every_release_sent = self._bridge.wait_for_every_release_queued_so_far(
+                RELEASES_SENT_BEFORE_TEARDOWN_ANSWERS_TIMEOUT_SECONDS
+            )
+        except KeyboardInterrupt:
+            # The ladder's interrupt ends the wait, never the answer: the
+            # parent is still owed `done`.
+            every_release_sent = False
+        if not every_release_sent:
+            log.warn(
+                "this helper answered teardown with releases still unsent; what they "
+                "name may stay allocated until the runtime stops"
+            )
         self._bridge.send({"rpc": "done"})
 
     def _note_pause(self, verb: str) -> None:
@@ -921,14 +1054,22 @@ class HelperProcessLifecycle:
             )
 
     def _update_config(self, command: "dict[str, Any]") -> None:
-        if self._hosted is not None:
-            try:
-                apply_configuration(self._hosted.instance, command.get("config"))
-            except Exception as configuration_failure:
-                log.error(
-                    "the processor refused a configuration update",
-                    error=str(configuration_failure),
-                )
+        # Answered with the cause rather than logged: the parent keeps the
+        # graph's previous configuration only when it hears the refusal.
+        if self._hosted is None or not self._set_up_succeeded:
+            self._bridge.send(
+                {
+                    "rpc": "error",
+                    "error": "this processor's setup did not succeed, so it takes no "
+                    "configuration",
+                }
+            )
+            return
+        try:
+            apply_configuration(self._hosted.instance, command.get("config"))
+        except Exception as configuration_failure:
+            self._bridge.send({"rpc": "error", "error": str(configuration_failure)})
+            return
         self._bridge.send({"rpc": "ok"})
 
 

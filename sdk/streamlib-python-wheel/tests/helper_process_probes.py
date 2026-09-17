@@ -122,3 +122,69 @@ class InterruptedInSetupProbe:
 
     def teardown(self, ctx) -> None:
         HOOKS_THE_INTERRUPT_PROBES_REACHED.append("teardown")
+
+
+# When the pacing probe's `process()` ran, in monotonic nanoseconds. A test
+# reads it to measure how often a continuous loop called the processor.
+WHEN_THE_PACING_PROBE_PROCESSED_NS: list[int] = []
+
+
+@processor(execution="continuous", interval_ms=250)
+class ContinuousPacingProbe:
+    """Records when each `process()` ran, so the interval the loop kept is
+    measurable. The interval under test is the one the parent's `run` names."""
+
+    @output()
+    def frames_to_downstream(self) -> None: ...
+
+    def process(self, ctx) -> None:
+        WHEN_THE_PACING_PROBE_PROCESSED_NS.append(time.monotonic_ns())
+
+
+class ReconfigurableProbeConfig(TypedDict, total=False):
+    gain: int
+
+
+@processor(execution="manual")
+class RefusesReconfigurationProbe:
+    """Defines `configure` and refuses every configuration handed to it."""
+
+    @output()
+    def frames_to_downstream(self) -> None: ...
+
+    def __init__(self, config: ReconfigurableProbeConfig) -> None:
+        self.gain = config.get("gain", 1)
+
+    def configure(self, config: ReconfigurableProbeConfig) -> None:
+        raise ValueError(f"a gain of {config.get('gain')} is out of range")
+
+
+@processor(execution="manual")
+class TakesReconfigurationProbe:
+    """Defines `configure` and takes whatever it is handed."""
+
+    @output()
+    def frames_to_downstream(self) -> None: ...
+
+    def __init__(self, config: ReconfigurableProbeConfig) -> None:
+        self.gain = config.get("gain", 1)
+
+    def configure(self, config: ReconfigurableProbeConfig) -> None:
+        self.gain = config.get("gain", 1)
+
+
+@processor(execution="manual")
+class ReleasesAStructureInTeardownProbe:
+    """Builds an acceleration structure in `setup` and lets go of it in
+    `teardown`, so the structure's release is owed while teardown answers."""
+
+    @output()
+    def frames_to_downstream(self) -> None: ...
+
+    def setup(self, ctx) -> None:
+        self.structure = ctx.gpu_full_access.build_triangles_blas(
+            [0.0] * 9, [0, 1, 2], label="released-in-teardown"
+        )
+
+    def teardown(self, ctx) -> None:
+        self.structure = None

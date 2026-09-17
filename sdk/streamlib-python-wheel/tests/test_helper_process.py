@@ -8,6 +8,7 @@ loader, the lifecycle machine — against a stand-in parent, so what the loop
 does is asserted directly rather than inferred from a running graph.
 """
 
+import gc
 import json
 import os
 import select
@@ -474,6 +475,272 @@ def test_log_sequence_numbers_are_per_process_monotonic(stand_in_parent):
     sink("info", "second", None)
     assert int(stand_in_parent.receive()["source_seq"]) == 1
     assert int(stand_in_parent.receive()["source_seq"]) == 2
+
+
+# =============================================================================
+# Releases
+# =============================================================================
+
+
+@pytest.mark.parametrize(
+    ("escalate_op", "release_op", "released_id_field"),
+    [
+        ("acquire_pixel_buffer", "release_handle", "handle_id"),
+        ("register_acceleration_structure_blas", "release_handle", "handle_id"),
+        ("create_processor_owned_window", "close_processor_owned_window", "window_id"),
+    ],
+)
+def test_what_an_answer_the_helper_stopped_waiting_on_created_is_released(
+    stand_in_parent, escalate_op, release_op, released_id_field
+):
+    """An escalate keeps running in the app process after the helper's wait
+    for it ends, and what its answer creates belongs to nobody.
+
+    Fail-without-fix: the late answer is logged as one nothing waits on and
+    dropped, so no release reaches the parent and what it created stays until
+    the helper stops.
+    """
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    with pytest.raises(_helper.EscalateRequestError):
+        bridge.request_from_parent({"op": escalate_op}, timeout_seconds=0.1)
+    request = stand_in_parent.receive()
+    assert request["op"] == escalate_op
+
+    stand_in_parent.send(
+        {
+            "rpc": "escalate_response",
+            "request_id": request["request_id"],
+            "result": "ok",
+            "handle_id": "created-after-the-wait-ended",
+        }
+    )
+
+    release = stand_in_parent.receive()
+    assert release is not None, "nothing released what the late answer created"
+    assert release["op"] == release_op
+    assert release[released_id_field] == "created-after-the-wait-ended"
+
+
+def test_a_late_refusal_created_nothing_so_nothing_is_released(stand_in_parent):
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    with pytest.raises(_helper.EscalateRequestError):
+        bridge.request_from_parent({"op": "acquire_pixel_buffer"}, timeout_seconds=0.1)
+    request = stand_in_parent.receive()
+
+    stand_in_parent.send(
+        {
+            "rpc": "escalate_response",
+            "request_id": request["request_id"],
+            "result": "err",
+            "message": "the pool is at its cap",
+        }
+    )
+
+    assert stand_in_parent.receive(timeout_seconds=0.5) is None
+
+
+def test_an_answer_delivered_before_the_channel_closes_is_still_its_callers(
+    stand_in_parent,
+):
+    """An answer already in its slot belongs to its caller even when the
+    channel closes before the caller reads it; otherwise what the answer
+    created is neither handed back nor released."""
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    slot = _helper._PendingEscalateResponse()
+    bridge._pending_escalate_responses["r-delivered"] = slot
+    answer = {
+        "rpc": "escalate_response",
+        "request_id": "r-delivered",
+        "result": "ok",
+        "handle_id": "created-before-the-close",
+    }
+
+    assert bridge._deliver_escalate_response(answer)
+    bridge._wake_every_pending_escalate_caller()
+
+    assert slot.arrived.is_set()
+    assert slot.message == answer
+
+
+def test_teardown_is_answered_only_after_the_releases_its_hook_owed(
+    stand_in_parent, monkeypatch
+):
+    """The parent gives a helper up the moment it answers `teardown`, and a
+    release still queued then is never taken. An acceleration structure lives
+    on the app process's GPU context rather than on this helper's handles, so
+    nothing else ever frees it.
+
+    Fail-without-fix: `done` goes out while the structure's release is still
+    queued, so the parent reads it before the release is answered.
+    """
+    monkeypatch.setenv("STREAMLIB_SURFACE_SOCKET", "/nonexistent/streamlib-surface.sock")
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    lifecycle_thread = drive_lifecycle_on_a_thread(
+        bridge, load_processor_class(f"{PROBE_MODULE}:ReleasesAStructureInTeardownProbe")
+    )
+
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    register = stand_in_parent.receive()
+    assert register["op"] == "register_acceleration_structure_blas"
+    stand_in_parent.send(
+        {
+            "rpc": "escalate_response",
+            "request_id": register["request_id"],
+            "result": "ok",
+            "handle_id": "blas-released-in-teardown",
+        }
+    )
+    assert stand_in_parent.receive() == {"rpc": "ready"}
+
+    stand_in_parent.send({"cmd": "teardown", "capability": "full"})
+    release = stand_in_parent.receive()
+    assert release is not None and release.get("op") == "release_handle", (
+        f"teardown answered before the structure's release went out: {release}"
+    )
+    assert release["handle_id"] == "blas-released-in-teardown"
+    assert stand_in_parent.receive(timeout_seconds=0.3) is None, (
+        "teardown was answered while its release was still unanswered"
+    )
+    stand_in_parent.send(
+        {
+            "rpc": "escalate_response",
+            "request_id": release["request_id"],
+            "result": "ok",
+            "handle_id": "blas-released-in-teardown",
+        }
+    )
+    assert stand_in_parent.receive() == {"rpc": "done"}
+    lifecycle_thread.join(timeout=5.0)
+    assert not lifecycle_thread.is_alive()
+
+
+def test_an_interrupt_during_teardowns_wait_for_releases_still_answers_teardown(
+    stand_in_parent, monkeypatch
+):
+    """The shutdown ladder's interrupt can land while teardown waits for its
+    releases to go out; the parent is still owed `done`, or it waits out its
+    budget and kills a helper that had finished."""
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+
+    def interrupted_while_waiting(timeout_seconds: float) -> bool:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(
+        bridge, "wait_for_every_release_queued_so_far", interrupted_while_waiting
+    )
+    lifecycle_thread = drive_lifecycle_on_a_thread(
+        bridge, load_processor_class(f"{PROBE_MODULE}:PassThroughProbe")
+    )
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    assert stand_in_parent.receive() == {"rpc": "ready"}
+
+    stand_in_parent.send({"cmd": "teardown", "capability": "full"})
+
+    assert stand_in_parent.receive() == {"rpc": "done"}
+    lifecycle_thread.join(timeout=5.0)
+    assert not lifecycle_thread.is_alive()
+
+
+def test_a_release_a_finalizer_owes_on_the_bridge_reader_never_holds_the_reader(
+    stand_in_parent, monkeypatch
+):
+    """The collector runs a cycle's finalizers on whichever thread crossed its
+    threshold, and the reader allocates for every frame it decodes, so a GPU
+    handle's release can come due on the reader itself.
+
+    Fail-without-fix: the handle's drop waits for its release's answer on the
+    reader, the one thread that delivers answers, so every frame behind it —
+    the parent's next command included — waits out the escalate timeout.
+    """
+    from streamlib import ProcessorLinkDataAccess, RuntimeContextFullAccess
+
+    monkeypatch.setenv("STREAMLIB_SURFACE_SOCKET", "/nonexistent/streamlib-surface.sock")
+    decode_the_frame = _helper._decode_frame_payload
+
+    def decode_the_frame_collecting_garbage_on_the_marker(payload: bytes):
+        frame = decode_the_frame(payload)
+        if frame.get("cmd") == "collect_garbage_on_the_reader":
+            gc.collect()
+        return frame
+
+    monkeypatch.setattr(
+        _helper, "_decode_frame_payload", decode_the_frame_collecting_garbage_on_the_marker
+    )
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    context = RuntimeContextFullAccess.open_for_helper_process(
+        {},
+        ProcessorLinkDataAccess(),
+        "R-helper-test",
+        "P-helper-test",
+        bridge.request_from_parent,
+        bridge.release_to_parent_without_waiting,
+    )
+
+    built_handles: list = []
+    builder = threading.Thread(
+        target=lambda: built_handles.append(
+            context.gpu_full_access.build_triangles_blas(
+                [0.0] * 9, [0, 1, 2], label="freed-on-the-reader"
+            )
+        ),
+        name="builds-the-structure",
+    )
+    builder.start()
+    register = stand_in_parent.receive()
+    assert register["op"] == "register_acceleration_structure_blas"
+    stand_in_parent.send(
+        {
+            "rpc": "escalate_response",
+            "request_id": register["request_id"],
+            "result": "ok",
+            "handle_id": "blas-freed-on-the-reader",
+        }
+    )
+    builder.join(timeout=5.0)
+    assert len(built_handles) == 1, "the structure was never built"
+
+    gc.disable()
+    try:
+        # Reachable only through a cycle, so only the collector frees it — and
+        # the marker below runs the collector on the reader.
+        cycle: list = [built_handles.pop()]
+        cycle.append(cycle)
+        del cycle
+        stand_in_parent.send({"cmd": "collect_garbage_on_the_reader"})
+        stand_in_parent.send({"cmd": "teardown"})
+
+        release = stand_in_parent.receive()
+        assert release is not None, "the freed structure was never released"
+        assert release["op"] == "release_handle"
+        assert release["handle_id"] == "blas-freed-on-the-reader"
+        stand_in_parent.send(
+            {
+                "rpc": "escalate_response",
+                "request_id": release["request_id"],
+                "result": "ok",
+                "handle_id": "blas-freed-on-the-reader",
+            }
+        )
+
+        delivered: list = []
+        deadline = time.monotonic() + 5.0
+        while len(delivered) < 2 and time.monotonic() < deadline:
+            was_waiting, command = bridge.next_lifecycle_command_if_waiting()
+            if was_waiting:
+                delivered.append(command)
+            else:
+                time.sleep(0.01)
+        assert [command["cmd"] for command in delivered] == [
+            "collect_garbage_on_the_reader",
+            "teardown",
+        ], "the reader stalled behind the release a finalizer owed on it"
+    finally:
+        gc.enable()
 
 
 # =============================================================================
@@ -1317,6 +1584,166 @@ def test_a_helper_that_cannot_keep_up_still_drains_its_listener_every_pass(stand
     assert stand_in_parent.receive()["rpc"] == "done"
     lifecycle_thread.join(timeout=5.0)
     assert not lifecycle_thread.is_alive()
+
+
+# =============================================================================
+# The continuous loop's pacing
+# =============================================================================
+
+
+@pytest.fixture
+def when_the_pacing_probe_processed_ns():
+    """The pacing probe's record, emptied around each test that reads it."""
+    from helper_process_probes import WHEN_THE_PACING_PROBE_PROCESSED_NS
+
+    WHEN_THE_PACING_PROBE_PROCESSED_NS.clear()
+    yield WHEN_THE_PACING_PROBE_PROCESSED_NS
+    WHEN_THE_PACING_PROBE_PROCESSED_NS.clear()
+
+
+def run_the_pacing_probe(stand_in_parent, interval_ms: int, running_seconds: float) -> int:
+    """Set the pacing probe up, run it continuous at `interval_ms` for
+    `running_seconds`, then stop and tear it down the way the ladder does.
+
+    Returns when `run` was sent, in monotonic nanoseconds.
+    """
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    lifecycle_thread = drive_lifecycle_on_a_thread(
+        bridge, load_processor_class(f"{PROBE_MODULE}:ContinuousPacingProbe")
+    )
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    assert stand_in_parent.receive() == {"rpc": "ready"}
+
+    run_sent_ns = time.monotonic_ns()
+    stand_in_parent.send(
+        {"cmd": "run", "execution": "continuous", "interval_ms": interval_ms}
+    )
+    time.sleep(running_seconds)
+
+    stand_in_parent.send({"cmd": "stop", "capability": "full"})
+    stand_in_parent.send({"cmd": "teardown", "capability": "full"})
+    assert stand_in_parent.receive()["rpc"] == "stopped"
+    assert stand_in_parent.receive()["rpc"] == "done"
+    lifecycle_thread.join(timeout=5.0)
+    assert not lifecycle_thread.is_alive()
+    return run_sent_ns
+
+
+def test_a_continuous_processor_runs_once_per_interval_longer_than_the_command_wait(
+    stand_in_parent, when_the_pacing_probe_processed_ns
+):
+    """A 250 ms interval over 1.1 s is a call at the start and four ticks, so
+    five `process()` calls.
+
+    Fail-without-fix: the loop reads the timer wait's own 100 ms timeout as a
+    tick and calls `process()` after every one, so the probe runs eleven or
+    more times — about ten a second, whatever interval above 100 ms it asked for.
+    """
+    run_the_pacing_probe(stand_in_parent, interval_ms=250, running_seconds=1.1)
+
+    process_calls = len(when_the_pacing_probe_processed_ns)
+    assert 4 <= process_calls <= 6, (
+        f"a 250 ms interval ran process() {process_calls} times in 1.1 s; five is right"
+    )
+
+
+def test_a_continuous_processor_runs_at_the_start_rather_than_one_interval_in(
+    stand_in_parent, when_the_pacing_probe_processed_ns
+):
+    """The native runner calls a continuous processor at once and then paces
+    it, so a Python source's first bag does not trail a Rust one's by an
+    interval."""
+    run_sent_ns = run_the_pacing_probe(
+        stand_in_parent, interval_ms=1000, running_seconds=0.6
+    )
+
+    assert when_the_pacing_probe_processed_ns, "process() never ran"
+    first_call_after_run_ms = (when_the_pacing_probe_processed_ns[0] - run_sent_ns) / 1e6
+    assert first_call_after_run_ms < 500, (
+        f"the first process() came {first_call_after_run_ms:.0f} ms after run; a "
+        f"continuous processor runs at the start"
+    )
+
+
+def test_a_continuous_processor_with_no_interval_never_runs_faster_than_the_floor(
+    stand_in_parent, when_the_pacing_probe_processed_ns
+):
+    """An interval of zero runs as often as the engine's floor allows and no
+    more, so a processor with nothing to do does not take a whole core.
+
+    Fail-without-fix: the zero-interval loop calls `process()` back to back
+    with no wait at all, hundreds of thousands of times a second.
+    """
+    run_the_pacing_probe(stand_in_parent, interval_ms=0, running_seconds=0.5)
+
+    process_calls = len(when_the_pacing_probe_processed_ns)
+    assert process_calls >= 2, "the zero-interval loop never ran the processor"
+    measured_span_seconds = (
+        when_the_pacing_probe_processed_ns[-1] - when_the_pacing_probe_processed_ns[0]
+    ) / 1_000_000_000
+    calls_per_second = (process_calls - 1) / measured_span_seconds
+    floor_calls_per_second = (
+        1_000_000_000 / _helper.CONTINUOUS_INTERVAL_FLOOR_NANOSECONDS
+    )
+    assert calls_per_second <= floor_calls_per_second * 1.2, (
+        f"a zero interval ran process() {calls_per_second:.0f} times a second; the "
+        f"floor allows {floor_calls_per_second:.0f}"
+    )
+
+
+# =============================================================================
+# Reconfiguration
+# =============================================================================
+
+
+def reconfigure_a_set_up_probe(stand_in_parent, probe_name: str, configuration: dict) -> dict:
+    """Set `probe_name` up, hand it `configuration`, and return the answer."""
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    lifecycle_thread = drive_lifecycle_on_a_thread(
+        bridge, load_processor_class(f"{PROBE_MODULE}:{probe_name}")
+    )
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    stand_in_parent.receive()
+
+    stand_in_parent.send({"cmd": "update_config", "config": configuration})
+    answer = stand_in_parent.receive()
+
+    stand_in_parent.send({"cmd": "teardown", "capability": "full"})
+    assert stand_in_parent.receive()["rpc"] == "done"
+    lifecycle_thread.join(timeout=5.0)
+    assert not lifecycle_thread.is_alive()
+    return answer
+
+
+def test_a_configuration_the_processor_takes_is_answered_ok(stand_in_parent):
+    answer = reconfigure_a_set_up_probe(
+        stand_in_parent, "TakesReconfigurationProbe", {"gain": 3}
+    )
+    assert answer == {"rpc": "ok"}
+
+
+@pytest.mark.parametrize(
+    ("probe_name", "the_cause_named"),
+    [
+        ("PassThroughProbe", "cannot be reconfigured while running"),
+        ("RefusesReconfigurationProbe", "a gain of 3 is out of range"),
+        ("RefusesSetupProbe", "setup did not succeed"),
+    ],
+)
+def test_a_configuration_the_processor_does_not_take_is_refused_naming_the_cause(
+    stand_in_parent, probe_name, the_cause_named
+):
+    """The parent reports a refused update to its caller and keeps the graph's
+    previous configuration, which it can only do if the refusal reaches it.
+
+    Fail-without-fix: the helper logs the refusal and answers `ok`, so the
+    parent reports a configuration the processor never took.
+    """
+    answer = reconfigure_a_set_up_probe(stand_in_parent, probe_name, {"gain": 3})
+    assert answer["rpc"] == "error"
+    assert the_cause_named in answer["error"]
 
 
 # =============================================================================

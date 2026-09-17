@@ -12,7 +12,8 @@ pub(super) struct CompilationPlan {
     pub(super) processors_to_remove: Vec<ProcessorUniqueId>,
     pub(super) links_to_add: Vec<LinkUniqueId>,
     pub(super) links_to_remove: Vec<LinkUniqueId>,
-    pub(super) config_updates: Vec<ProcessorUniqueId>,
+    /// Each processor to reconfigure, beside the configuration it is handed.
+    pub(super) config_updates: Vec<(ProcessorUniqueId, serde_json::Value)>,
 }
 
 impl CompilationPlan {
@@ -23,6 +24,34 @@ impl CompilationPlan {
             && self.links_to_add.is_empty()
             && self.links_to_remove.is_empty()
             && self.config_updates.is_empty()
+    }
+
+    /// Record each config update for a processor this same batch constructs on
+    /// that processor's graph node, and take it out of `config_updates`.
+    ///
+    /// Such a processor is built from its node's config, so construction is
+    /// where it takes the update. Built from the old config and then asked to
+    /// reconfigure instead, a processor that takes no reconfiguration refuses
+    /// and fails the very commit that adds it.
+    pub(super) fn hand_config_updates_to_processors_this_batch_constructs(
+        &mut self,
+        graph: &mut Graph,
+    ) {
+        let Self {
+            processors_to_add,
+            config_updates,
+            ..
+        } = self;
+        if processors_to_add.is_empty() || config_updates.is_empty() {
+            return;
+        }
+        for (processor_id, config_to_apply) in config_updates.extract_if(.., |(processor_id, _)| {
+            processors_to_add.contains(processor_id)
+        }) {
+            if let Some(node) = graph.traversal_mut().v(&processor_id).first_mut() {
+                node.set_config(config_to_apply);
+            }
+        }
     }
 
     /// Drop any queued link wiring whose endpoint processor this same batch
@@ -131,6 +160,48 @@ mod tests {
             "a link whose endpoint processor is removed in the same batch must not \
              stay queued for the WIRE phase",
         );
+    }
+
+    /// Fail-without-fix: a processor added and reconfigured in one batch — every
+    /// update requested before the runtime starts — was built from its old
+    /// config and then asked to reconfigure, which a processor that takes no
+    /// reconfiguration refuses, failing the start.
+    #[test]
+    fn a_config_update_for_a_processor_this_batch_constructs_lands_on_its_node_before_it_is_built()
+    {
+        let (mut graph, constructed_in_this_batch, _link_id) = graph_with_one_link();
+        let already_running: ProcessorUniqueId = "P-already-running".into();
+
+        let mut plan = CompilationPlan {
+            processors_to_add: vec![constructed_in_this_batch.clone()],
+            config_updates: vec![
+                (
+                    constructed_in_this_batch.clone(),
+                    serde_json::json!({"gain": 2}),
+                ),
+                (already_running.clone(), serde_json::json!({"gain": 5})),
+                (
+                    constructed_in_this_batch.clone(),
+                    serde_json::json!({"gain": 3}),
+                ),
+            ],
+            ..Default::default()
+        };
+        plan.hand_config_updates_to_processors_this_batch_constructs(&mut graph);
+
+        assert_eq!(
+            plan.config_updates,
+            vec![(already_running, serde_json::json!({"gain": 5}))],
+            "only a processor that is already running is asked to reconfigure",
+        );
+        let config_on_the_node = graph
+            .traversal()
+            .v(&constructed_in_this_batch)
+            .first()
+            .expect("the node is in the graph")
+            .config
+            .clone();
+        assert_eq!(config_on_the_node, Some(serde_json::json!({"gain": 3})));
     }
 
     /// A link whose endpoints both survive the batch stays queued — the

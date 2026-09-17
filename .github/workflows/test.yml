@@ -120,9 +120,11 @@ jobs:
         run: |
           # `streamlib-ipc-types` holds the wire's layout locks: the frame
           # header's offsets and the sequence-number user header every data
-          # sample carries.
+          # sample carries. `streamlib-surface-client` holds the surface-share
+          # socket's framing, SCM_RIGHTS round trips and read-failure reporting.
           cargo test --locked -p streamlib -p streamlib-macros \
-            -p streamlib-processor-schema -p streamlib-ipc-types --lib
+            -p streamlib-processor-schema -p streamlib-ipc-types \
+            -p streamlib-surface-client --lib
           cargo test --locked -p streamlib-engine --test attribute_macro_test
           # The compile-fail half of the same locks. The descriptor carries the
           # config type's schema, so the derive is a requirement, and the note
@@ -551,7 +553,10 @@ jobs:
             core::runtime::helper_process_group_registry \
             core::runtime::engine_teardown_watchdog \
             core::compiler::processor_thread_shutdown \
-            core::runtime::runtime::tests::an_owned_tokio_runtime_whose_blocking_task_never_returns_still_drops_within_its_budget
+            core::runtime::runtime::tests::an_owned_tokio_runtime_whose_blocking_task_never_returns_still_drops_within_its_budget \
+            core::compiler::compiler_ops::apply_processor_config_update_op \
+            core::compiler::compilation_plan::tests::a_config_update_for_a_processor_this_batch_constructs_lands_on_its_node_before_it_is_built \
+            core::runtime::runtime::tests::a_requested_configuration_waits_for_the_commit_rather_than_landing_on_the_graph_node
           # The two arms' own liveness tests are named one by one rather than
           # by module: their modules also hold tests that dlopen libasound and
           # walk a real PCM, which this runner has no `/dev/snd` for. These

@@ -23,8 +23,12 @@ pub enum PendingOperation {
     /// Unwire and remove a link that is currently wired.
     RemoveLink(LinkUniqueId),
 
-    /// Update a processor's configuration.
-    UpdateProcessorConfig(ProcessorUniqueId),
+    /// Hand a running processor a configuration, recorded on its graph node
+    /// only once the processor takes it.
+    UpdateProcessorConfig {
+        processor_id: ProcessorUniqueId,
+        config_to_apply: serde_json::Value,
+    },
 }
 
 impl PendingOperation {
@@ -33,7 +37,7 @@ impl PendingOperation {
         match self {
             PendingOperation::AddProcessor(id) => Some(id),
             PendingOperation::RemoveProcessor(id) => Some(id),
-            PendingOperation::UpdateProcessorConfig(id) => Some(id),
+            PendingOperation::UpdateProcessorConfig { processor_id, .. } => Some(processor_id),
             PendingOperation::AddLink(_) | PendingOperation::RemoveLink(_) => None,
         }
     }
@@ -45,7 +49,7 @@ impl PendingOperation {
             PendingOperation::RemoveLink(id) => Some(id),
             PendingOperation::AddProcessor(_)
             | PendingOperation::RemoveProcessor(_)
-            | PendingOperation::UpdateProcessorConfig(_) => None,
+            | PendingOperation::UpdateProcessorConfig { .. } => None,
         }
     }
 
@@ -73,8 +77,8 @@ impl std::fmt::Display for PendingOperation {
             PendingOperation::RemoveProcessor(id) => write!(f, "RemoveProcessor({})", id),
             PendingOperation::AddLink(id) => write!(f, "AddLink({})", id),
             PendingOperation::RemoveLink(id) => write!(f, "RemoveLink({})", id),
-            PendingOperation::UpdateProcessorConfig(id) => {
-                write!(f, "UpdateProcessorConfig({})", id)
+            PendingOperation::UpdateProcessorConfig { processor_id, .. } => {
+                write!(f, "UpdateProcessorConfig({})", processor_id)
             }
         }
     }

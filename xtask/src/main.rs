@@ -297,6 +297,8 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "streamlib-processor-schema",
                 "-p",
                 "streamlib-ipc-types",
+                "-p",
+                "streamlib-surface-client",
                 "--lib",
             ],
         ),
@@ -659,6 +661,9 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::runtime::engine_teardown_watchdog",
                 "core::compiler::processor_thread_shutdown",
                 "core::runtime::runtime::tests::an_owned_tokio_runtime_whose_blocking_task_never_returns_still_drops_within_its_budget",
+                "core::compiler::compiler_ops::apply_processor_config_update_op",
+                "core::compiler::compilation_plan::tests::a_config_update_for_a_processor_this_batch_constructs_lands_on_its_node_before_it_is_built",
+                "core::runtime::runtime::tests::a_requested_configuration_waits_for_the_commit_rather_than_landing_on_the_graph_node",
             ],
         ),
         // The rig-tier integration binary that drives the two `match_device`

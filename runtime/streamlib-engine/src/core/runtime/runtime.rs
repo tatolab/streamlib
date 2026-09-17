@@ -353,24 +353,12 @@ impl Runner {
         let config_json =
             serde_json::to_value(&config).map_err(|e| crate::core::Error::Config(e.to_string()))?;
 
-        // Update config in graph and queue operation
-        self.compiler.scope(|graph, tx| {
-            if let Some(processor) = graph.traversal_mut().v(processor_id).first_mut() {
-                processor.set_config(config_json);
-            }
-
-            tx.log(PendingOperation::UpdateProcessorConfig(
-                processor_id.clone(),
-            ));
-        });
-
-        // Publish event
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::ProcessorConfigDidChange {
+        self.compiler.scope(|_graph, tx| {
+            tx.log(PendingOperation::UpdateProcessorConfig {
                 processor_id: processor_id.clone(),
-            }),
-        );
+                config_to_apply: config_json,
+            });
+        });
 
         // Notify listeners that graph changed (triggers commit via GraphChangeListener)
         PUBSUB.publish(
@@ -1594,6 +1582,47 @@ mod tests {
             runtime.tokio_runtime_variant,
             TokioRuntimeVariant::ExternalTokioHandle(_)
         ));
+    }
+
+    /// Fail-without-fix: the request wrote the configuration onto the node
+    /// before the processor was asked, so one it refused at commit stayed in
+    /// `graph` as though it had been taken.
+    #[test]
+    #[serial]
+    fn a_requested_configuration_waits_for_the_commit_rather_than_landing_on_the_graph_node() {
+        use crate::core::test_support::{MockOutputOnlyProcessor, ensure_test_mocks_registered};
+
+        ensure_test_mocks_registered();
+        let runtime = Runner::new().expect("Runner::new");
+        let processor_id = runtime
+            .add_processor(ProcessorSpec::new(
+                MockOutputOnlyProcessor::processor_class_import_path(),
+                serde_json::Value::Null,
+            ))
+            .expect("the mock is added");
+
+        runtime
+            .update_processor_config(&processor_id, serde_json::json!({"gain": 3}))
+            .expect("the update is queued");
+
+        let config_on_the_node = runtime.compiler.scope(|graph, _tx| {
+            graph
+                .traversal()
+                .v(&processor_id)
+                .first()
+                .expect("the node is in the graph")
+                .config
+                .clone()
+        });
+        assert_eq!(config_on_the_node, Some(serde_json::Value::Null));
+        assert!(
+            runtime.compiler.logged_pending_operations().iter().any(|op| matches!(
+                op,
+                PendingOperation::UpdateProcessorConfig { processor_id: queued_for, config_to_apply }
+                    if *queued_for == processor_id && *config_to_apply == serde_json::json!({"gain": 3})
+            )),
+            "the update carries its configuration to the commit"
+        );
     }
 
     #[test]
