@@ -115,7 +115,7 @@ impl PubSub {
     /// loss is counted and logged.
     pub fn publish(&self, topic: &str, event: &Event) {
         let mut shared_event: Option<Arc<Event>> = None;
-        let mut full_queues: Vec<(String, u64)> = Vec::new();
+        let mut full_queues_to_report: Vec<(String, u64)> = Vec::new();
         {
             let mut subscriptions = self.subscriptions.lock();
             subscriptions.retain_mut(|subscription| {
@@ -137,24 +137,27 @@ impl PubSub {
                         subscription.events_dropped_at_this_full_queue += 1;
                         self.events_dropped_at_full_subscription_queues
                             .fetch_add(1, Ordering::Relaxed);
-                        full_queues.push((
-                            subscription.topic.clone(),
-                            subscription.events_dropped_at_this_full_queue,
-                        ));
+                        if subscription
+                            .events_dropped_at_this_full_queue
+                            .is_power_of_two()
+                        {
+                            full_queues_to_report.push((
+                                subscription.topic.clone(),
+                                subscription.events_dropped_at_this_full_queue,
+                            ));
+                        }
                         true
                     }
                 }
             });
         }
 
-        for (subscribed_topic, dropped_so_far) in full_queues {
-            if dropped_so_far.is_power_of_two() {
-                tracing::warn!(
-                    "a listener subscribed to '{subscribed_topic}' has {EVENTS_QUEUED_PER_SUBSCRIPTION} \
-                     events undelivered, so {} was dropped; {dropped_so_far} dropped for it so far",
-                    event.log_name(),
-                );
-            }
+        for (subscribed_topic, dropped_so_far) in full_queues_to_report {
+            tracing::warn!(
+                "a listener subscribed to '{subscribed_topic}' has {EVENTS_QUEUED_PER_SUBSCRIPTION} \
+                 events undelivered, so {} was dropped; {dropped_so_far} dropped for it so far",
+                event.log_name(),
+            );
         }
 
         tracing::debug!("Published [{}] to topic [{}]", event.log_name(), topic);
@@ -180,10 +183,10 @@ fn deliver_queued_events_to_listener(
     topic: &str,
 ) {
     for event in queued_events_from_bus {
-        let Some(listener) = listener.upgrade() else {
+        let Some(listener_held_for_this_event) = listener.upgrade() else {
             return;
         };
-        if let Err(failure) = listener.lock().on_event(&event) {
+        if let Err(failure) = listener_held_for_this_event.lock().on_event(&event) {
             tracing::warn!(
                 "a listener subscribed to '{topic}' failed on {}: {failure}",
                 event.log_name()

@@ -376,6 +376,9 @@ impl EventListener for RepublishingListener {
     }
 }
 
+/// The publish runs on its own thread, so a deadlock fails the receive below
+/// by name rather than hanging the test.
+///
 /// Mental-revert: calling listeners inside `publish`, under the bus lock,
 /// deadlocks the moment a listener publishes.
 #[test]
@@ -390,7 +393,10 @@ fn a_listener_may_publish_from_inside_its_own_callback() {
     bus.subscribe("downstream", Arc::clone(&downstream_listener))
         .expect("subscribe");
 
-    bus.publish("upstream", &numbered_event("upstream", 7));
+    let bus_for_the_publish = Arc::clone(&bus);
+    std::thread::spawn(move || {
+        bus_for_the_publish.publish("upstream", &numbered_event("upstream", 7));
+    });
 
     let downstream_event = downstream_received
         .recv_timeout(DELIVERY_DEADLINE)

@@ -1646,24 +1646,42 @@ mod tests {
         use std::os::unix::net::UnixStream;
         use streamlib_surface_client::{MAX_DMA_BUF_PLANES, send_request_with_fds};
 
+        /// Set each variable for the duration of the closure, restoring what was
+        /// there before. Tests using this must be `#[serial]`.
+        fn with_environment_variables_set<F: FnOnce() -> R, R>(
+            variables: &[(&str, &std::ffi::OsStr)],
+            f: F,
+        ) -> R {
+            let previous: Vec<_> = variables
+                .iter()
+                .map(|(name, _)| (*name, std::env::var_os(name)))
+                .collect();
+            // SAFETY: serialized via #[serial]; no concurrent env mutation.
+            unsafe {
+                for (name, value) in variables {
+                    std::env::set_var(name, value);
+                }
+            }
+            let result = f();
+            unsafe {
+                for (name, value) in previous {
+                    match value {
+                        Some(value) => std::env::set_var(name, value),
+                        None => std::env::remove_var(name),
+                    }
+                }
+            }
+            result
+        }
+
         /// Replace XDG_RUNTIME_DIR with a fresh tempdir for the duration of the
         /// closure. Tests using this must be `#[serial]` so no other runtime
         /// construct reads the mutated env.
         fn with_isolated_xdg_runtime_dir<F: FnOnce(&std::path::Path) -> R, R>(f: F) -> R {
-            let prev = std::env::var_os("XDG_RUNTIME_DIR");
             let tmp = tempfile::tempdir().expect("tempdir");
-            // SAFETY: tests are serialized via #[serial]; no concurrent env mutation.
-            unsafe {
-                std::env::set_var("XDG_RUNTIME_DIR", tmp.path());
-            }
-            let result = f(tmp.path());
-            unsafe {
-                match prev {
-                    Some(v) => std::env::set_var("XDG_RUNTIME_DIR", v),
-                    None => std::env::remove_var("XDG_RUNTIME_DIR"),
-                }
-            }
-            result
+            with_environment_variables_set(&[("XDG_RUNTIME_DIR", tmp.path().as_os_str())], || {
+                f(tmp.path())
+            })
         }
 
         #[test]
@@ -1772,34 +1790,6 @@ mod tests {
             });
         }
 
-        /// Set each variable for the duration of the closure, restoring what was
-        /// there before. Tests using this must be `#[serial]`.
-        fn with_environment_variables_set<F: FnOnce() -> R, R>(
-            variables: &[(&str, &std::ffi::OsStr)],
-            f: F,
-        ) -> R {
-            let previous: Vec<_> = variables
-                .iter()
-                .map(|(name, _)| (*name, std::env::var_os(name)))
-                .collect();
-            // SAFETY: serialized via #[serial]; no concurrent env mutation.
-            unsafe {
-                for (name, value) in variables {
-                    std::env::set_var(name, value);
-                }
-            }
-            let result = f();
-            unsafe {
-                for (name, value) in previous {
-                    match value {
-                        Some(value) => std::env::set_var(name, value),
-                        None => std::env::remove_var(name),
-                    }
-                }
-            }
-            result
-        }
-
         fn iceoryx2_nodes_in_domain(domain_root: &std::path::Path) -> usize {
             let config = crate::iceoryx2::engine_owned_iceoryx2_config(domain_root)
                 .expect("the test domain root fits the socket-path budget");
@@ -1812,17 +1802,42 @@ mod tests {
             nodes
         }
 
+        /// Set in the child process this test re-runs itself in.
+        const RUNTIME_BUILT_AND_DROPPED_IN_A_CHILD_PROCESS_ENVIRONMENT_VARIABLE: &str =
+            "STREAMLIB_TEST_BUILD_AND_DROP_ONE_RUNTIME";
+
+        /// A child process builds and drops the only runtime it ever makes, then
+        /// exits, and the parent reads the domain it leaves. A child keeps the
+        /// check independent of every runtime this test binary built before:
+        /// a static that pins only the first runtime's node pins this one.
+        ///
         /// Mental-revert: parking a clone of the runner's node anywhere static
-        /// keeps the node alive past the drop, and its files stay in the domain.
+        /// keeps the node past the drop, and the exited child leaves its files.
         #[test]
         #[serial]
         fn a_dropped_runtime_leaves_no_iceoryx2_node_in_its_domain() {
-            with_isolated_xdg_runtime_dir(|xdg| {
-                let domain_root = xdg.join("streamlib").join("iox2");
-                let runtime = Runner::new().expect("runtime");
-                assert_eq!(iceoryx2_nodes_in_domain(&domain_root), 1);
+            if std::env::var_os(RUNTIME_BUILT_AND_DROPPED_IN_A_CHILD_PROCESS_ENVIRONMENT_VARIABLE)
+                .is_some()
+            {
+                drop(Runner::new().expect("runtime"));
+                return;
+            }
 
-                drop(runtime);
+            with_isolated_xdg_runtime_dir(|_| {
+                let domain_root = StreamlibRuntimeDirectory::resolve()
+                    .expect("the isolated runtime directory")
+                    .iceoryx2_domain_root();
+                let child = crate::core::test_support::rerun_this_test_in_a_child_process(
+                    "core::runtime::runtime::tests::runtime_internal_surface_share::a_dropped_runtime_leaves_no_iceoryx2_node_in_its_domain",
+                    RUNTIME_BUILT_AND_DROPPED_IN_A_CHILD_PROCESS_ENVIRONMENT_VARIABLE,
+                    std::ffi::OsStr::new("1"),
+                );
+                assert!(
+                    child.status.success(),
+                    "the child failed to build and drop a runtime: {}\n{}",
+                    String::from_utf8_lossy(&child.stdout),
+                    String::from_utf8_lossy(&child.stderr),
+                );
 
                 assert_eq!(
                     iceoryx2_nodes_in_domain(&domain_root),
@@ -1862,12 +1877,15 @@ mod tests {
                 .path()
                 .join("x".repeat(xdg_runtime_dir_bytes - base_bytes - 1));
             let pinned_id = format!("duplicate-{}", std::process::id());
-            std::fs::create_dir_all(xdg.join("streamlib")).expect("runtime directory");
-            let live_runtimes_socket = std::os::unix::net::UnixListener::bind(
-                xdg.join("streamlib")
-                    .join(format!("surface-share-{pinned_id}.sock")),
+            let live_runtimes_socket_path = with_environment_variables_set(
+                &[("XDG_RUNTIME_DIR", xdg.as_os_str())],
+                StreamlibRuntimeDirectory::resolve,
             )
-            .expect("bind the live runtime's socket");
+            .expect("the runtime directory under the padded XDG_RUNTIME_DIR")
+            .surface_share_socket_path(&RuntimeUniqueId::from(pinned_id.as_str()));
+            let live_runtimes_socket =
+                std::os::unix::net::UnixListener::bind(&live_runtimes_socket_path)
+                    .expect("bind the live runtime's socket");
 
             let refusal = with_environment_variables_set(
                 &[

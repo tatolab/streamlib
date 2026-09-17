@@ -398,12 +398,10 @@ async fn handle_websocket(socket: WebSocket) {
     // Channel to bridge sync EventListener -> async WebSocket
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
 
-    // Listener that forwards events to channel
-    let listener = Arc::new(Mutex::new(WebSocketEventForwarder { tx }));
-
-    let listener_for_subscription: Arc<Mutex<dyn EventListener>> = listener.clone();
+    let listener: Arc<Mutex<dyn EventListener>> =
+        Arc::new(Mutex::new(WebSocketEventForwarder { tx }));
     // Closing beats serving a client that would receive nothing forever.
-    if let Err(subscribe_error) = PUBSUB.subscribe(topics::ALL, listener_for_subscription) {
+    if let Err(subscribe_error) = PUBSUB.subscribe(topics::ALL, Arc::clone(&listener)) {
         tracing::warn!("WebSocket client not subscribed, closing: {subscribe_error}");
         return;
     }

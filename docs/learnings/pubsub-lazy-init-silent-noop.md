@@ -85,10 +85,11 @@ match done_rx.recv_timeout(Duration::from_secs(5)) {
    > now returns only once its subscriber is registered, so no sleep is needed
    > between subscribing and publishing. What still needs waiting on is a
    > *spawned thread reaching* its `subscribe()` call — wait on an observable
-   > effect of the thread having got there, never on a duration. The async-open
+   > effect of the thread having got there, never on a duration. ~~The async-open
    > premise does still hold for a hand-rolled subscriber built directly on
    > `Iceoryx2Node` below `PubSub`, as in sections B and C of the pubsub
-   > integration tests.
+   > integration tests.~~ — Superseded 2026-09-17 by #2276: those sections went
+   > with the iceoryx2 event service the bus no longer uses.
 
 ## Where this hits
 

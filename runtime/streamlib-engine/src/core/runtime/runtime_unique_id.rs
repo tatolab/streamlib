@@ -14,8 +14,10 @@ pub const RUNTIME_ID_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_RUNTIME_ID";
 
 /// The most bytes a pinned runtime id may take.
 ///
-/// The id names the runtime's log file, its surface-sharing socket and its
-/// iceoryx2 node, and the socket path is the tightest of the three.
+/// A bound well inside a file name and an iceoryx2 node name. The id also
+/// names the surface-sharing socket, whose whole path must fit `sun_path`, so
+/// how much of this the socket leaves depends on the runtime directory — a
+/// path past it is refused when the socket binds, naming the path.
 pub const PINNED_RUNTIME_ID_MAX_BYTES: usize = 64;
 
 /// Unique identifier for a runtime instance.
