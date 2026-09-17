@@ -177,9 +177,6 @@ pub(crate) struct PythonHelperProcessSpawnHostProcessor {
     processor_id: String,
     processor_configuration: Option<serde_json::Value>,
     descriptor: ProcessorDescriptor,
-    /// The mode the *child* drives its processor in. This host is always
-    /// Manual on the engine's side.
-    child_execution_config: ExecutionConfig,
     interpreter_path: PathBuf,
     app_entry_directory: Option<PathBuf>,
     child: Option<Child>,
@@ -268,7 +265,7 @@ impl PythonHelperProcessSpawnHostProcessor {
 
     /// The mode string the child drives its own loop in.
     fn child_execution_mode(&self) -> &'static str {
-        match self.child_execution_config.execution {
+        match self.link_wiring.far_side_process_execution() {
             ProcessExecution::Reactive => "reactive",
             ProcessExecution::Continuous { .. } => "continuous",
             ProcessExecution::Manual => "manual",
@@ -1019,8 +1016,8 @@ impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
             "capability": "limited",
             "execution": self.child_execution_mode(),
             "interval_ms": self
-                .child_execution_config
-                .execution
+                .link_wiring
+                .far_side_process_execution()
                 .interval_ms()
                 .unwrap_or(0),
         }))
@@ -1308,7 +1305,6 @@ pub(crate) fn spawn_host_for_processor_node(
         processor_id: node.id.to_string(),
         processor_configuration: node.config.clone(),
         descriptor: descriptor.clone(),
-        child_execution_config,
         interpreter_path: launch_environment.interpreter_path.clone(),
         app_entry_directory: launch_environment.app_entry_directory.clone(),
         child: None,
@@ -1317,7 +1313,9 @@ pub(crate) fn spawn_host_for_processor_node(
         bridge: None,
         child_is_gone: false,
         shutdown_was_already_asked_of_this_helper: false,
-        link_wiring: OutOfProcessLinkWiringEnvelope::default(),
+        link_wiring: OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(
+            child_execution_config.execution,
+        ),
     })
 }
 
@@ -1658,7 +1656,6 @@ sys.exit(0)
                 .unwrap(),
                 "a test double",
             ),
-            child_execution_config: ExecutionConfig::new(ProcessExecution::Reactive),
             interpreter_path: PathBuf::from("/venv/bin/python"),
             app_entry_directory,
             child: None,
@@ -1667,7 +1664,54 @@ sys.exit(0)
             bridge: None,
             child_is_gone: false,
             shutdown_was_already_asked_of_this_helper: false,
-            link_wiring: OutOfProcessLinkWiringEnvelope::default(),
+            link_wiring: OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(
+                ProcessExecution::Reactive,
+            ),
+        }
+    }
+
+    /// The engine decides whether a helper destination's sources notify it from
+    /// the envelope, and this host reports `Manual` whatever the class declared,
+    /// so the envelope has to carry the child's own mode.
+    ///
+    /// Fail-without-fix: build the envelope as `Reactive` regardless and a
+    /// `continuous` helper with an input gets a notifier it never drains again.
+    #[test]
+    fn the_wiring_envelope_carries_the_mode_the_child_drives_its_processor_in() {
+        let _ = captured_launch_environment().set(HelperProcessLaunchEnvironment {
+            interpreter_path: PathBuf::from("/venv/bin/python"),
+            app_entry_directory: None,
+        });
+        let import_path = streamlib::sdk::descriptors::ProcessorClassImportPath::new(
+            "my_app.sinks:PollingSinkProcessor",
+        )
+        .unwrap();
+        let descriptor = ProcessorDescriptor::new(
+            streamlib::sdk::descriptors::ProcessorClassShortName::new("PollingSinkProcessor")
+                .unwrap(),
+            import_path.clone(),
+            "a test double",
+        );
+        let node = ProcessorNode::new(import_path, "PollingSinkProcessor", None, vec![], vec![]);
+
+        for child_execution in [
+            ProcessExecution::Continuous { interval_ms: 5 },
+            ProcessExecution::Manual,
+            ProcessExecution::Reactive,
+        ] {
+            let mut host = spawn_host_for_processor_node(
+                "my_app.sinks:PollingSinkProcessor",
+                &descriptor,
+                ExecutionConfig::new(child_execution),
+                &node,
+            )
+            .expect("the launch environment is captured");
+            assert_eq!(
+                host.out_of_process_link_wiring()
+                    .expect("a helper host carries an envelope")
+                    .far_side_process_execution(),
+                child_execution,
+            );
         }
     }
 

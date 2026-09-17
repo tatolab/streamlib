@@ -149,13 +149,7 @@ fn run_continuous_mode(
             continue;
         }
 
-        {
-            let limited_ctx = RuntimeContextLimitedAccess::new(runtime_ctx);
-            let mut guard = processor.lock();
-            if let Err(e) = guard.process(&limited_ctx) {
-                tracing::warn!("[{}] process() failed: {}", id, e);
-            }
-        }
+        dispatch_process(id, processor, runtime_ctx);
 
         std::thread::sleep(sleep_duration);
     }
@@ -168,6 +162,45 @@ fn run_reactive_mode(
     #[cfg(unix)] shutdown_eventfd: Option<OwnedFd>,
     pause_gate: &Arc<AtomicBool>,
     runtime_ctx: &RuntimeContext,
+) {
+    run_reactive_scheduling_loop(
+        id,
+        processor,
+        shutdown_rx,
+        #[cfg(unix)]
+        shutdown_eventfd,
+        pause_gate,
+        |callback| match callback {
+            ReactiveRunnerProcessorCallback::OnPause => {
+                dispatch_on_pause(id, processor, runtime_ctx)
+            }
+            ReactiveRunnerProcessorCallback::OnResume => {
+                dispatch_on_resume(id, processor, runtime_ctx)
+            }
+            ReactiveRunnerProcessorCallback::Process => {
+                dispatch_process(id, processor, runtime_ctx)
+            }
+        },
+    );
+}
+
+/// One of the processor's own callbacks the reactive runner decides to make.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReactiveRunnerProcessorCallback {
+    OnPause,
+    OnResume,
+    Process,
+}
+
+/// The reactive runner's scheduling: when to wait, when to drain the listener,
+/// and when to call the processor, which `call_processor` does.
+fn run_reactive_scheduling_loop(
+    id: &ProcessorUniqueId,
+    processor: &Arc<Mutex<ProcessorInstance>>,
+    shutdown_rx: &crossbeam_channel::Receiver<()>,
+    #[cfg(unix)] shutdown_eventfd: Option<OwnedFd>,
+    pause_gate: &AtomicBool,
+    mut call_processor: impl FnMut(ReactiveRunnerProcessorCallback),
 ) {
     // Reactive mode waits on two fds via epoll: the destination's iceoryx2
     // Listener fd (any upstream Notifier::notify() wakes the loop) and the
@@ -229,10 +262,10 @@ fn run_reactive_mode(
         let is_paused = pause_gate.load(Ordering::Acquire);
 
         if is_paused && !was_paused {
-            dispatch_on_pause(id, processor, runtime_ctx);
+            call_processor(ReactiveRunnerProcessorCallback::OnPause);
             was_paused = true;
         } else if !is_paused && was_paused {
-            dispatch_on_resume(id, processor, runtime_ctx);
+            call_processor(ReactiveRunnerProcessorCallback::OnResume);
             was_paused = false;
         }
 
@@ -248,33 +281,57 @@ fn run_reactive_mode(
             continue;
         }
 
-        // Block until an upstream notify, a shutdown signal, or (in the
-        // no-waiter and epoll-error fallbacks) the next channel-poll tick.
-        #[cfg(target_os = "linux")]
-        match waiter.as_ref() {
-            Some(w) => match w.wait() {
-                ReactiveLoopWakeOutcome::Notified => drain_input_listener(processor),
-                ReactiveLoopWakeOutcome::Shutdown => {
-                    tracing::info!("[{}] Received shutdown via eventfd", id);
-                    break;
-                }
-                ReactiveLoopWakeOutcome::Interrupted | ReactiveLoopWakeOutcome::TimedOut => {
-                    continue;
-                }
-                ReactiveLoopWakeOutcome::Error => {
+        // A bag can be waiting with no notification left to wake on it: one
+        // that arrived during a pause, whose notifications the paused ticks
+        // drained, or one published after a first link's subscriber existed
+        // and before its listener did, which notified nobody. So the runner
+        // asks before it waits. A bag that lands after the check notifies, and
+        // the wait below ends for it — at the latest at its bound, when the
+        // listener was replaced since the waiter was built.
+        let a_read_is_already_waiting = ports_would_return_something(processor).unwrap_or(false);
+
+        if !a_read_is_already_waiting {
+            // Block until an upstream notify, a shutdown signal, or (in the
+            // no-waiter and epoll-error fallbacks) the next channel-poll tick.
+            #[cfg(target_os = "linux")]
+            match waiter.as_ref() {
+                Some(w) => match w.wait() {
+                    ReactiveLoopWakeOutcome::Notified => drain_input_listener(processor),
+                    ReactiveLoopWakeOutcome::Shutdown => {
+                        tracing::info!("[{}] Received shutdown via eventfd", id);
+                        break;
+                    }
+                    ReactiveLoopWakeOutcome::Interrupted | ReactiveLoopWakeOutcome::TimedOut => {
+                        continue;
+                    }
+                    ReactiveLoopWakeOutcome::Error => {
+                        std::thread::sleep(NO_WAITER_FALLBACK_SLEEP);
+                        drain_input_listener(processor);
+                    }
+                },
+                None => {
                     std::thread::sleep(NO_WAITER_FALLBACK_SLEEP);
                     drain_input_listener(processor);
                 }
-            },
-            None => {
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
                 std::thread::sleep(NO_WAITER_FALLBACK_SLEEP);
                 drain_input_listener(processor);
             }
-        }
-        #[cfg(not(target_os = "linux"))]
-        {
-            std::thread::sleep(NO_WAITER_FALLBACK_SLEEP);
-            drain_input_listener(processor);
+
+            // The first dispatch after a wait is gated on readiness like every
+            // later one. A wake is not evidence that a read would return
+            // anything: an audio input port declaring a window contract reports
+            // data only when a full window can be emitted, so a bag that does
+            // not complete one wakes this loop and must not dispatch. The helper
+            // loop already gates every dispatch this way; this is the
+            // app-process half of the same rule. A processor with no mailboxes
+            // to ask has nothing to gate on, and gating on an absent answer
+            // would stop it running at all.
+            if !ports_would_return_something(processor).unwrap_or(true) {
+                continue;
+            }
         }
 
         // Drain-loop dispatch: iceoryx2's Event service coalesces
@@ -296,32 +353,21 @@ fn run_reactive_mode(
         // drain (sustained back-pressure) doesn't starve the runner's
         // shutdown signaling — without it, the outer loop's
         // shutdown_rx.try_recv at the top never fires.
-        //
-        // The first dispatch is gated on readiness like every later one. A
-        // wake is not evidence that a read would return anything: an audio
-        // input port declaring a window contract reports data only when a full
-        // window can be emitted, so a bag that does not complete one wakes this
-        // loop and must not dispatch. The helper loop already gates every
-        // dispatch this way; this is the app-process half of the same rule.
-        // A processor with no mailboxes to ask has nothing to gate on, and
-        // gating on an absent answer would stop it running at all.
-        if !ports_would_return_something(processor).unwrap_or(true) {
-            continue;
-        }
-
         loop {
-            {
-                let limited_ctx = RuntimeContextLimitedAccess::new(runtime_ctx);
-                let mut guard = processor.lock();
-                if let Err(e) = guard.process(&limited_ctx) {
-                    tracing::warn!("[{}] process() failed: {}", id, e);
-                }
-            }
+            call_processor(ReactiveRunnerProcessorCallback::Process);
 
             if shutdown_rx.try_recv().is_ok() {
                 tracing::info!("[{}] Received shutdown signal mid-drain", id);
                 return;
             }
+
+            // Drained on every dispatch, not only on a wake: a processor slower
+            // than its upstream stays in this loop for as long as bags keep
+            // arriving, each one notifies, and a listener left undrained here
+            // fills within a few hundred of them. Drained before the readiness
+            // check below, so a bag whose notify this clears is one that check
+            // sees.
+            drain_input_listener(processor);
 
             // A processor with no mailboxes drains in one dispatch, which is
             // the single-`process()` shape this loop's doc describes.
@@ -335,10 +381,10 @@ fn run_reactive_mode(
 /// Whether any of this processor's input ports would hand a reader something.
 ///
 /// `None` when there are no mailboxes to ask — a processor that declared no
-/// input ports, or whose handle is not wired yet. The two callers want opposite
+/// input ports, or whose handle is not wired yet. Callers want different
 /// defaults for that case and each says which, rather than this picking one:
-/// the pre-dispatch gate must not silence a processor it cannot ask, and the
-/// drain loop must not spin on one.
+/// the gate after a wait must not silence a processor it cannot ask, while the
+/// check before a wait and the drain loop must not spin on one.
 fn ports_would_return_something(processor: &Arc<Mutex<ProcessorInstance>>) -> Option<bool> {
     let guard = processor.lock();
     guard
@@ -664,10 +710,6 @@ fn run_manual_mode(
     }
 }
 
-// Helper dispatchers for on_pause / on_resume — shared across Continuous,
-// Reactive, and Manual modes. Each builds a fresh RuntimeContextLimitedAccess
-// for the call. Keeping these tiny avoids duplicating the tokio-block-on +
-// logging boilerplate in every branch above.
 fn dispatch_on_pause(
     id: &ProcessorUniqueId,
     processor: &Arc<Mutex<ProcessorInstance>>,
@@ -680,6 +722,18 @@ fn dispatch_on_pause(
     match guard.on_pause(&limited_ctx) {
         Ok(()) => tracing::info!("[{}] on_pause() completed successfully", id),
         Err(e) => tracing::warn!("[{}] on_pause() failed: {}", id, e),
+    }
+}
+
+fn dispatch_process(
+    id: &ProcessorUniqueId,
+    processor: &Arc<Mutex<ProcessorInstance>>,
+    runtime_ctx: &RuntimeContext,
+) {
+    let limited_ctx = RuntimeContextLimitedAccess::new(runtime_ctx);
+    let mut guard = processor.lock();
+    if let Err(e) = guard.process(&limited_ctx) {
+        tracing::warn!("[{}] process() failed: {}", id, e);
     }
 }
 
@@ -813,7 +867,7 @@ mod tests {
         assert_eq!(
             ports_would_return_something(&processor),
             None,
-            "there is nothing to gate on, and the two callers each say what that means"
+            "there is nothing to gate on, and each caller says what that means"
         );
     }
 
@@ -837,8 +891,6 @@ mod tests {
         frames: usize,
         first_sample_timestamp_ns: i64,
     ) -> Vec<u8> {
-        use crate::iceoryx2::{FRAME_HEADER_SIZE, FrameHeader};
-
         #[derive(serde::Serialize)]
         struct AudioBlockBag<'a> {
             #[serde(rename = "samples", with = "serde_bytes")]
@@ -862,12 +914,298 @@ mod tests {
         })
         .expect("an audio block bag encodes");
 
+        one_wire_frame_stamped_for(port, first_sample_timestamp_ns, &body)
+    }
+
+    /// `body` behind a frame header stamped for `port` — the shape
+    /// `InputMailboxesInner::route` injects.
+    fn one_wire_frame_stamped_for(port: &str, timestamp_ns: i64, body: &[u8]) -> Vec<u8> {
+        use crate::iceoryx2::{FRAME_HEADER_SIZE, FrameHeader};
+
         let mut frame = vec![0u8; FRAME_HEADER_SIZE + body.len()];
-        FrameHeader::new(port, first_sample_timestamp_ns, body.len() as u32)
+        FrameHeader::new(port, timestamp_ns, body.len() as u32)
             .expect("port fits PortKey")
             .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
-        frame[FRAME_HEADER_SIZE..].copy_from_slice(&body);
+        frame[FRAME_HEADER_SIZE..].copy_from_slice(body);
         frame
+    }
+
+    /// A reactive processor's scheduling loop running on its own thread, as the
+    /// runner runs it, with its processor callbacks recorded and each dispatch
+    /// reading one bag off `in1`.
+    struct ReactiveSchedulingLoopOnItsOwnThread {
+        processor_callbacks: Arc<Mutex<Vec<ReactiveRunnerProcessorCallback>>>,
+        shutdown_sender: crossbeam_channel::Sender<()>,
+        /// A duplicate of the eventfd the loop owns, so a write never lands on
+        /// a number the loop already closed on its way out.
+        shutdown_eventfd_duplicate: OwnedFd,
+        pause_gate: Arc<AtomicBool>,
+        loop_thread: std::thread::JoinHandle<()>,
+    }
+
+    /// Whether the pause gate is already closed when the loop's thread starts.
+    #[derive(Clone, Copy)]
+    enum PauseGateAtLoopStart {
+        Open,
+        Closed,
+    }
+
+    impl ReactiveSchedulingLoopOnItsOwnThread {
+        fn start(
+            processor: Arc<Mutex<ProcessorInstance>>,
+            mailboxes: Arc<crate::iceoryx2::InputMailboxesInner>,
+            each_dispatch_takes: std::time::Duration,
+            pause_gate_at_loop_start: PauseGateAtLoopStart,
+        ) -> Self {
+            let processor_callbacks: Arc<Mutex<Vec<ReactiveRunnerProcessorCallback>>> =
+                Arc::default();
+            let (shutdown_sender, shutdown_receiver) = crossbeam_channel::bounded(1);
+            let shutdown_eventfd = make_eventfd();
+            let shutdown_eventfd_duplicate = shutdown_eventfd
+                .try_clone()
+                .expect("the shutdown eventfd duplicates");
+            let pause_gate = Arc::new(AtomicBool::new(matches!(
+                pause_gate_at_loop_start,
+                PauseGateAtLoopStart::Closed
+            )));
+            let loop_thread = std::thread::spawn({
+                let processor_callbacks = Arc::clone(&processor_callbacks);
+                let pause_gate = Arc::clone(&pause_gate);
+                move || {
+                    run_reactive_scheduling_loop(
+                        &"Preactive-scheduling".into(),
+                        &processor,
+                        &shutdown_receiver,
+                        Some(shutdown_eventfd),
+                        &pause_gate,
+                        |callback| {
+                            if callback == ReactiveRunnerProcessorCallback::Process {
+                                let _ = mailboxes.read_raw("in1");
+                                std::thread::sleep(each_dispatch_takes);
+                            }
+                            processor_callbacks.lock().push(callback);
+                        },
+                    )
+                }
+            });
+            Self {
+                processor_callbacks,
+                shutdown_sender,
+                shutdown_eventfd_duplicate,
+                pause_gate,
+                loop_thread,
+            }
+        }
+
+        fn count_of(&self, callback: ReactiveRunnerProcessorCallback) -> usize {
+            self.processor_callbacks
+                .lock()
+                .iter()
+                .filter(|made| **made == callback)
+                .count()
+        }
+
+        /// Whether `callback` has been made `times` times within `deadline`.
+        fn made_within(
+            &self,
+            callback: ReactiveRunnerProcessorCallback,
+            times: usize,
+            deadline: std::time::Duration,
+        ) -> bool {
+            let started = std::time::Instant::now();
+            while started.elapsed() < deadline {
+                if self.count_of(callback) >= times {
+                    return true;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            self.count_of(callback) >= times
+        }
+
+        fn stop(self) {
+            write_eventfd(self.shutdown_eventfd_duplicate.as_raw_fd());
+            let _ = self.shutdown_sender.send(());
+            self.loop_thread
+                .join()
+                .expect("the scheduling loop must not panic");
+        }
+    }
+
+    /// An input-only processor with a plain `in1` mailbox and, when given one,
+    /// the listener its runner waits on.
+    fn input_only_processor_with_plain_port(
+        listener: Option<iceoryx2::port::listener::Listener<ipc::Service>>,
+    ) -> (
+        Arc<Mutex<ProcessorInstance>>,
+        Arc<crate::iceoryx2::InputMailboxesInner>,
+    ) {
+        use crate::core::test_support::MockInputOnlyProcessor;
+
+        let mut instance = ProcessorInstance::new(Box::new(
+            <MockInputOnlyProcessor::Processor as crate::core::GeneratedProcessor>::from_config(
+                Default::default(),
+            )
+            .expect("the mock constructs from its default config"),
+        ));
+        instance
+            .install_iceoryx2_resources()
+            .expect("the mock accepts its iceoryx2 resources");
+        let mailboxes = instance
+            .iceoryx2_input_mailboxes_inner()
+            .expect("an input-only mock holds input mailboxes");
+        mailboxes.add_port("in1", 16, crate::iceoryx2::ReadMode::ReadNextInOrder);
+        if let Some(listener) = listener {
+            mailboxes.set_listener(listener);
+        }
+        (Arc::new(Mutex::new(instance)), mailboxes)
+    }
+
+    /// One wire frame stamped for `in1`, carrying four opaque bytes.
+    fn one_frame_for_in1() -> Vec<u8> {
+        one_wire_frame_stamped_for("in1", 0, &[0; 4])
+    }
+
+    fn open_one_listener_event_service(
+        node: &iceoryx2::node::Node<ipc::Service>,
+        tag: &str,
+    ) -> iceoryx2::service::port_factory::event::PortFactory<ipc::Service> {
+        node.service_builder(&ServiceName::new(&unique_suffix(tag)).unwrap())
+            .event()
+            .max_notifiers(1)
+            .max_listeners(1)
+            .open_or_create()
+            .unwrap()
+    }
+
+    /// A reactive processor slower than its upstream never leaves its dispatch
+    /// loop while bags keep arriving, and every bag notifies — so the loop
+    /// drains the listener on every dispatch, or the listener's queue fills and
+    /// every later notify reaches nobody, one iceoryx2 warning per frame.
+    ///
+    /// The ticket's repro: a 2 ms `process()` against a 1 kHz source.
+    /// Fail-without-fix: drop the drain from the dispatch loop and about 280
+    /// frames in, every notify comes back undelivered.
+    #[test]
+    fn a_processor_slower_than_its_upstream_keeps_every_notify_deliverable() {
+        const FRAMES_AT_ONE_KILOHERTZ: usize = 1000;
+
+        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
+        let service = open_one_listener_event_service(&node, "slow-consumer");
+        let notifier = service.notifier_builder().create().unwrap();
+        let (processor, mailboxes) = input_only_processor_with_plain_port(Some(
+            service.listener_builder().create().unwrap(),
+        ));
+        let running = ReactiveSchedulingLoopOnItsOwnThread::start(
+            processor,
+            Arc::clone(&mailboxes),
+            std::time::Duration::from_millis(2),
+            PauseGateAtLoopStart::Open,
+        );
+
+        let mut undelivered_notifies = 0;
+        for _ in 0..FRAMES_AT_ONE_KILOHERTZ {
+            mailboxes.route(one_frame_for_in1());
+            if notifier.notify().unwrap() == 0 {
+                undelivered_notifies += 1;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let dispatches = running.count_of(ReactiveRunnerProcessorCallback::Process);
+        running.stop();
+
+        assert!(
+            dispatches >= 100,
+            "the consumer must have been kept busy for the burst; it dispatched {dispatches} times"
+        );
+        assert_eq!(
+            undelivered_notifies, 0,
+            "{undelivered_notifies} of {FRAMES_AT_ONE_KILOHERTZ} notifies reached nobody"
+        );
+    }
+
+    /// Bags that arrive while a reactive processor is paused are notified, and
+    /// the paused ticks drain those notifications — so after the resume there
+    /// is nothing left to wake on, and the runner has to ask before it waits.
+    ///
+    /// The ticket's repro: pause, publish three bags, resume, publish nothing
+    /// more. Fail-without-fix: drop the check before the wait and `process()`
+    /// never runs.
+    #[test]
+    fn bags_that_arrived_during_a_pause_are_dispatched_after_the_resume_with_nothing_more_published()
+     {
+        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
+        let service = open_one_listener_event_service(&node, "paused-consumer");
+        let notifier = service.notifier_builder().create().unwrap();
+        let (processor, mailboxes) = input_only_processor_with_plain_port(Some(
+            service.listener_builder().create().unwrap(),
+        ));
+        let running = ReactiveSchedulingLoopOnItsOwnThread::start(
+            processor,
+            Arc::clone(&mailboxes),
+            std::time::Duration::ZERO,
+            PauseGateAtLoopStart::Closed,
+        );
+        assert!(
+            running.made_within(
+                ReactiveRunnerProcessorCallback::OnPause,
+                1,
+                std::time::Duration::from_secs(5)
+            ),
+            "the loop must see the pause"
+        );
+
+        for _ in 0..3 {
+            mailboxes.route(one_frame_for_in1());
+            notifier.notify().unwrap();
+        }
+        // Several paused ticks, each of which drains the listener.
+        std::thread::sleep(PAUSE_CHECK_INTERVAL * 5);
+        running.pause_gate.store(false, Ordering::Release);
+
+        let dispatched = running.made_within(
+            ReactiveRunnerProcessorCallback::Process,
+            3,
+            std::time::Duration::from_secs(2),
+        );
+        let dispatches = running.count_of(ReactiveRunnerProcessorCallback::Process);
+        running.stop();
+        assert!(
+            dispatched,
+            "three bags were waiting at the resume and {dispatches} were dispatched"
+        );
+    }
+
+    /// A first live link creates its subscriber before its listener, so a bag
+    /// published in between notifies nobody and waits in the subscriber. The
+    /// runner reaches its next pass with that bag queued and a listener holding
+    /// nothing, which is the state built here before the loop starts.
+    ///
+    /// Fail-without-fix: drop the check before the wait and the runner sleeps
+    /// on the empty listener until the upstream publishes again.
+    #[test]
+    fn a_bag_queued_before_the_listener_existed_is_dispatched_with_no_notify() {
+        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
+        let service = open_one_listener_event_service(&node, "first-link-gap");
+        let (processor, mailboxes) = input_only_processor_with_plain_port(None);
+        mailboxes.route(one_frame_for_in1());
+        mailboxes.set_listener(service.listener_builder().create().unwrap());
+
+        let running = ReactiveSchedulingLoopOnItsOwnThread::start(
+            processor,
+            mailboxes,
+            std::time::Duration::ZERO,
+            PauseGateAtLoopStart::Open,
+        );
+        let dispatched = running.made_within(
+            ReactiveRunnerProcessorCallback::Process,
+            1,
+            std::time::Duration::from_secs(2),
+        );
+        running.stop();
+        assert!(
+            dispatched,
+            "the queued bag must be dispatched without waiting for a notify"
+        );
     }
 
     /// Every reactive tick that is not an fd wake still has to drain, because

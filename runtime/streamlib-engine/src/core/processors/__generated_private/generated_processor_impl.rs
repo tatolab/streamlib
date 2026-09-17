@@ -9,7 +9,7 @@ use super::GeneratedProcessor;
 use crate::core::ProcessorDescriptor;
 use crate::core::Result;
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
-use crate::core::execution::ExecutionConfig;
+use crate::core::execution::{ExecutionConfig, ProcessExecution};
 use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
 use crate::iceoryx2::{HelperPlacedProcessorLossCounts, Iceoryx2Node};
 use serde_json::Value as JsonValue;
@@ -22,14 +22,33 @@ use serde_json::Value as JsonValue;
 /// and opens its own publisher, subscriber and notifier from the service names
 /// inside. It also holds which loss-count board slot each inbound link was
 /// given, and the board the far side writes them on.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct OutOfProcessLinkWiringEnvelope {
     input_links: Vec<serde_json::Value>,
     output_links: Vec<serde_json::Value>,
     loss_counts: Arc<HelperPlacedProcessorLossCounts>,
+    far_side_process_execution: ProcessExecution,
 }
 
 impl OutOfProcessLinkWiringEnvelope {
+    /// An empty envelope for a far side that drives its processor in
+    /// `far_side_process_execution` — the child's declared mode, never the
+    /// host thread's own.
+    pub fn for_a_far_side_driven_in(far_side_process_execution: ProcessExecution) -> Self {
+        Self {
+            input_links: Vec::new(),
+            output_links: Vec::new(),
+            loss_counts: Arc::default(),
+            far_side_process_execution,
+        }
+    }
+
+    /// The mode the far side drives its processor in, which decides whether
+    /// it ever drains the listener its sources would notify.
+    pub fn far_side_process_execution(&self) -> ProcessExecution {
+        self.far_side_process_execution
+    }
+
     /// The loss counts this processor's far side writes, shared with its graph
     /// node so `graph` reads them.
     pub(crate) fn helper_placed_processor_loss_counts(
@@ -408,7 +427,8 @@ mod tests {
     /// the reconnect's own entry — two subscribers, two notifiers, one link.
     #[test]
     fn a_removed_link_leaves_the_envelope_and_its_neighbours_stay() {
-        let mut envelope = OutOfProcessLinkWiringEnvelope::default();
+        let mut envelope =
+            OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(ProcessExecution::Reactive);
         envelope.record(PortDirection::Input, link_wiring_entry("L-gone", "in1"));
         envelope.record(PortDirection::Input, link_wiring_entry("L-stays", "in1"));
         envelope.record(PortDirection::Output, link_wiring_entry("L-gone", "out1"));
@@ -434,7 +454,8 @@ mod tests {
     /// was never wired.
     #[test]
     fn removing_an_unknown_link_leaves_the_envelope_alone() {
-        let mut envelope = OutOfProcessLinkWiringEnvelope::default();
+        let mut envelope =
+            OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(ProcessExecution::Reactive);
         envelope.record(PortDirection::Output, link_wiring_entry("L-only", "out1"));
 
         envelope.remove_link("L-never-recorded");

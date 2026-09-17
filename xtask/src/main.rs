@@ -449,6 +449,9 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_disconnected_link_releases_the_services_it_held",
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::channel_max_subscribers_is_the_fixed_cap_plus_tap_and_refuses_past_it",
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::destination_max_notifiers_is_the_fixed_cap_and_refuses_past_it",
+                "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::only_a_reactive_destination_consumes_notifications_in_or_out_of_process",
+                "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_helper_destination_that_never_drains_is_notified_by_no_source_and_still_opens_its_listener",
+                "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_reactive_helper_destination_is_still_notified_by_both_kinds_of_source",
                 "iceoryx2::node::tests::a_channel_admits_every_destination_and_the_tap_from_their_own_nodes_and_no_more",
                 "iceoryx2::node::tests::a_notify_service_admits_every_inbound_link_from_their_own_nodes_and_no_more",
                 "iceoryx2::node::tests::a_channel_service_lends_one_sample_at_a_time_and_replays_none",
@@ -498,6 +501,9 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "iceoryx2::audio_window::resolved_audio_window_contract::tests::every_windows_depth_holds_a_windows_worth_of_the_assumed_quantum",
                 "core::execution::thread_runner::tests::a_bag_that_does_not_complete_a_window_does_not_dispatch_the_reactive_runner",
                 "core::execution::thread_runner::tests::a_processor_with_no_input_mailboxes_is_not_gated_at_all",
+                "core::execution::thread_runner::tests::a_processor_slower_than_its_upstream_keeps_every_notify_deliverable",
+                "core::execution::thread_runner::tests::bags_that_arrived_during_a_pause_are_dispatched_after_the_resume_with_nothing_more_published",
+                "core::execution::thread_runner::tests::a_bag_queued_before_the_listener_existed_is_dispatched_with_no_notify",
                 "iceoryx2::input::tests::read_raw_bounded_stages_oversized_frame_and_redelivers",
                 // The audio window contract's read-side stage — the stage's
                 // exactness, its overlap, the flush that resets the

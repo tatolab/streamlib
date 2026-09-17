@@ -432,9 +432,9 @@ impl PythonProcessorLinkDataAccess {
     /// one listener every input shares.
     ///
     /// `notify_service_name` is always a real name here, unlike the output
-    /// side's: a helper-hosted destination drains its own listener whatever
-    /// execution mode the class declares, so the engine never tells one to
-    /// skip it.
+    /// side's: a helper-hosted destination opens its listener whatever
+    /// execution mode the class declares, and the engine withholds only its
+    /// sources' notifiers when that mode never drains it.
     ///
     /// One call per link. The mailbox and the destination-keyed listener are
     /// installed once — fan-in appends subscribers to the same port, and
@@ -585,7 +585,7 @@ impl PythonProcessorLinkDataAccess {
     /// The fd that becomes readable when any upstream publishes.
     ///
     /// Owned by the listener: the caller must not close it, and must stop
-    /// selecting on it before this object is dropped.
+    /// polling it before this object is dropped.
     fn input_listener_fd(&self) -> Option<i32> {
         self.input_mailboxes.get()?.listener_fd()
     }

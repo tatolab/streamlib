@@ -12,7 +12,9 @@ import json
 import os
 import select
 import shutil
+import resource
 import socket
+import statistics
 import struct
 import subprocess
 import sys
@@ -502,6 +504,33 @@ def drive_lifecycle_on_a_thread(bridge, processor_class):
     return lifecycle_thread
 
 
+def drive_lifecycle_on_a_thread_and_hand_it_back(bridge, processor_class):
+    """The same, with the lifecycle object once its thread has built it, so a
+    test can swap in a counting data plane after `setup` has handed the real
+    one to the engine's context."""
+    from streamlib import ProcessorLinkDataAccess
+
+    lifecycle_holder: "list[HelperProcessLifecycle]" = []
+    lifecycle_built = threading.Event()
+
+    def drive() -> None:
+        lifecycle = HelperProcessLifecycle(
+            bridge,
+            processor_class,
+            "R-helper-test",
+            "P-helper-test",
+            ProcessorLinkDataAccess(),
+        )
+        lifecycle_holder.append(lifecycle)
+        lifecycle_built.set()
+        lifecycle.run_until_the_parent_is_done()
+
+    lifecycle_thread = threading.Thread(target=drive, name="helper-lifecycle")
+    lifecycle_thread.start()
+    assert lifecycle_built.wait(timeout=5.0), "the lifecycle thread never built its loop"
+    return lifecycle_thread, lifecycle_holder[0]
+
+
 def test_setup_answers_ready_and_run_answers_nothing_at_all(stand_in_parent):
     """A helper that replied to `run` would desynchronize every later command:
     the parent reads that reply as the answer to whatever it sends next."""
@@ -605,21 +634,22 @@ def test_unwire_link_is_dispatched_mid_run_and_answers_nothing(stand_in_parent):
 
 def test_a_reactive_helper_survives_losing_the_link_it_was_waiting_on(stand_in_parent):
     """Unwiring a reactive processor's LAST inbound link closes the very fd its
-    loop is selecting on — the listener owns it, and dropping the last
-    subscriber drops the listener.
+    loop is polling — the listener owns it, and dropping the last subscriber
+    drops the listener.
 
-    Fail-without-fix: cache `input_listener_fd()` outside the loop (as
-    `_run_reactive` did before this change) and the next `select` raises
-    `OSError: [Errno 9] Bad file descriptor`, killing the child mid-run — or,
-    once the OS recycles the number, silently waits on an unrelated object.
-    Nothing between `_run_reactive` and `main()` catches it.
+    Fail-without-fix: cache `input_listener_fd()` outside the loop and every
+    later wait polls a closed descriptor, which `poll` reports invalid at once,
+    so the loop spins where it should park — or, once the OS recycles the
+    number, silently waits on an unrelated object.
 
     A processor left with no inputs has nothing to wake it but the parent,
     which is exactly what it must fall back to.
     """
+    from streamlib import ProcessorLinkDataAccess
+
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
-    lifecycle_thread = drive_lifecycle_on_a_thread(
+    lifecycle_thread, lifecycle = drive_lifecycle_on_a_thread_and_hand_it_back(
         bridge, load_processor_class(f"{PROBE_MODULE}:PassThroughProbe")
     )
 
@@ -633,19 +663,24 @@ def test_a_reactive_helper_survives_losing_the_link_it_was_waiting_on(stand_in_p
         }
     )
     assert stand_in_parent.receive()["rpc"] == "ready"
+    counting = _CountingLinkDataAccess(lifecycle._link_data_access)
+    # A duck-typed stand-in: the loop only ever calls methods on it.
+    lifecycle._link_data_access = cast(ProcessorLinkDataAccess, counting)
     stand_in_parent.send({"cmd": "run", "execution": "reactive", "interval_ms": 0})
 
     stand_in_parent.send(
         {"cmd": "unwire_link", "direction": "input", "link_id": link_id}
     )
     # The wait is load-bearing, not just the unanswered-command assertion: it
-    # is what lets the loop go round again on the fd the unwire just closed,
-    # several times over at a 0.1s poll interval. Send `teardown` immediately
-    # instead and both commands drain in one batch, the loop leaves before it
-    # ever selects again, and the bug hides.
+    # is what lets the loop go round again on the fd the unwire just closed.
+    # Send `teardown` immediately instead and both commands drain in one batch,
+    # the loop leaves before it ever waits again, and the bug hides.
     assert stand_in_parent.receive(timeout_seconds=0.5) is None
+    assert counting.readiness_checks < 50, (
+        f"the loop asked for data {counting.readiness_checks} times in half a second "
+        f"with no input left — it must park on the parent, not spin"
+    )
 
-    # A loop that died of EBADF answers nothing from here on.
     stand_in_parent.send({"cmd": "on_pause", "capability": "limited"})
     assert stand_in_parent.receive() == {"rpc": "ok"}, (
         "the loop must survive losing the fd it was waiting on"
@@ -655,6 +690,146 @@ def test_a_reactive_helper_survives_losing_the_link_it_was_waiting_on(stand_in_p
     assert stand_in_parent.receive()["rpc"] == "done"
     lifecycle_thread.join(timeout=5.0)
     assert not lifecycle_thread.is_alive()
+
+
+def test_an_idle_reactive_helper_answers_a_command_the_moment_it_arrives(stand_in_parent):
+    """A reactive helper parked on its listener wakes for a parent's command as
+    well as for a notify, so an idle processor hears `stop` or `on_pause` at
+    once rather than when its wait next times out.
+
+    Fail-without-fix: wait on the listener alone with the old 100 ms bound and
+    each command sent to the parked loop waits out most of that bound, putting
+    the median round trip near 100 ms.
+    """
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    lifecycle_thread = drive_lifecycle_on_a_thread(
+        bridge, load_processor_class(f"{PROBE_MODULE}:PassThroughProbe")
+    )
+    stand_in_parent.send(
+        {
+            "cmd": "setup",
+            "capability": "full",
+            "config": {},
+            "ports": {"inputs": [engine_shaped_link_wiring("input", "L-idle-commands")]},
+        }
+    )
+    assert stand_in_parent.receive()["rpc"] == "ready"
+    stand_in_parent.send({"cmd": "run", "execution": "reactive", "interval_ms": 0})
+
+    round_trip_seconds = []
+    for index in range(20):
+        verb = "on_pause" if index % 2 == 0 else "on_resume"
+        sent_at = time.monotonic()
+        stand_in_parent.send({"cmd": verb, "capability": "limited"})
+        assert stand_in_parent.receive() == {"rpc": "ok"}
+        round_trip_seconds.append(time.monotonic() - sent_at)
+
+    median_round_trip_seconds = statistics.median(round_trip_seconds)
+    assert median_round_trip_seconds < 0.05, (
+        f"an idle helper took a median {median_round_trip_seconds * 1000:.1f} ms to answer; "
+        f"a command must wake its wait"
+    )
+
+    stand_in_parent.send({"cmd": "teardown", "capability": "full"})
+    assert stand_in_parent.receive()["rpc"] == "done"
+    lifecycle_thread.join(timeout=5.0)
+    assert not lifecycle_thread.is_alive()
+
+
+def test_a_reactive_helper_whose_descriptors_sit_above_1024_keeps_running(stand_in_parent):
+    """A live unwire and rewire recreates the listener at the lowest free
+    descriptor, which in a long-running app with many open files can be 1024
+    or above. The loop must keep waiting on it.
+
+    Here every descriptor below 1024 is held before the helper opens anything,
+    so its listener and its command-arrival pipe both land above.
+
+    Fail-without-fix: wait with `select.select`, which refuses any descriptor
+    of 1024 or above with `ValueError: filedescriptor out of range in
+    select()`; it escapes the loop, the helper's thread dies, and neither the
+    bag nor the `on_pause` below is ever answered.
+    """
+    from streamlib import ProcessorLinkDataAccess
+
+    soft_limit, hard_limit = resource.getrlimit(resource.RLIMIT_NOFILE)
+    descriptors_needed = 2048
+    if hard_limit != resource.RLIM_INFINITY and hard_limit < descriptors_needed:
+        pytest.skip(f"the hard descriptor limit {hard_limit} leaves no room above 1024")
+    resource.setrlimit(
+        resource.RLIMIT_NOFILE, (max(soft_limit, descriptors_needed), hard_limit)
+    )
+    descriptors_holding_every_number_below_1024: "list[int]" = []
+    try:
+        while (
+            not descriptors_holding_every_number_below_1024
+            or descriptors_holding_every_number_below_1024[-1] < 1024
+        ):
+            descriptors_holding_every_number_below_1024.append(
+                os.open(os.devnull, os.O_RDONLY)
+            )
+
+        bridge = ParentProcessBridge(stand_in_parent.child_end)
+        assert bridge.lifecycle_command_arrival_fd() > 1024
+        bridge.start_reading()
+        lifecycle_thread = drive_lifecycle_on_a_thread(
+            bridge, load_processor_class(f"{PROBE_MODULE}:PassThroughProbe")
+        )
+
+        inbound_link_id = "L-high-fd-in"
+        outbound_link_id = "L-high-fd-out"
+        downstream = ProcessorLinkDataAccess()
+        _helper.wire_link_data_access(
+            downstream,
+            {"inputs": [engine_shaped_link_wiring("input", outbound_link_id)]},
+        )
+        stand_in_parent.send(
+            {
+                "cmd": "setup",
+                "capability": "full",
+                "config": {},
+                "ports": {
+                    "inputs": [engine_shaped_link_wiring("input", inbound_link_id)],
+                    "outputs": [engine_shaped_link_wiring("output", outbound_link_id)],
+                },
+            }
+        )
+        assert stand_in_parent.receive()["rpc"] == "ready"
+        stand_in_parent.send({"cmd": "run", "execution": "reactive", "interval_ms": 0})
+
+        upstream = ProcessorLinkDataAccess()
+        _helper.wire_link_data_access(
+            upstream,
+            {"outputs": [engine_shaped_link_wiring("output", inbound_link_id)]},
+        )
+        # The helper is parked on its listener by now, so the bag arrives by
+        # waking the wait — the path that raised.
+        time.sleep(0.2)
+        upstream.write_to_output_port("frames_to_downstream", {"frame_index": 3})
+        deadline = time.monotonic() + 5.0
+        forwarded = None
+        while forwarded is None and time.monotonic() < deadline:
+            if downstream.any_input_port_has_data():
+                forwarded = downstream.read_from_input_port("frames_from_upstream")
+            else:
+                time.sleep(0.01)
+        assert forwarded == {"frame_index": 3, "tag": "untagged"}, (
+            "a notify on a listener above descriptor 1024 must wake the helper"
+        )
+
+        stand_in_parent.send({"cmd": "on_pause", "capability": "limited"})
+        assert stand_in_parent.receive() == {"rpc": "ok"}, (
+            "a command must reach a helper waiting on descriptors above 1024"
+        )
+
+        stand_in_parent.send({"cmd": "teardown", "capability": "full"})
+        assert stand_in_parent.receive()["rpc"] == "done"
+        lifecycle_thread.join(timeout=5.0)
+        assert not lifecycle_thread.is_alive()
+    finally:
+        for descriptor in descriptors_holding_every_number_below_1024:
+            os.close(descriptor)
+        resource.setrlimit(resource.RLIMIT_NOFILE, (soft_limit, hard_limit))
 
 
 def test_an_unknown_lifecycle_command_is_survived(stand_in_parent):
@@ -1005,10 +1180,15 @@ class _CountingLinkDataAccess:
     def __init__(self, real) -> None:
         self._real = real
         self.drain_calls = 0
+        self.readiness_checks = 0
 
     def drain_input_listener(self) -> None:
         self.drain_calls += 1
         self._real.drain_input_listener()
+
+    def any_input_port_has_data(self) -> bool:
+        self.readiness_checks += 1
+        return self._real.any_input_port_has_data()
 
     def __getattr__(self, name: str):
         return getattr(self._real, name)
