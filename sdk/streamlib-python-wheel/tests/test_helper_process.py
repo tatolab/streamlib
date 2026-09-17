@@ -8,6 +8,7 @@ loader, the lifecycle machine — against a stand-in parent, so what the loop
 does is asserted directly rather than inferred from a running graph.
 """
 
+import gc
 import json
 import os
 import select
@@ -474,6 +475,168 @@ def test_log_sequence_numbers_are_per_process_monotonic(stand_in_parent):
     sink("info", "second", None)
     assert int(stand_in_parent.receive()["source_seq"]) == 1
     assert int(stand_in_parent.receive()["source_seq"]) == 2
+
+
+# =============================================================================
+# Releases
+# =============================================================================
+
+
+@pytest.mark.parametrize(
+    ("escalate_op", "release_op", "released_id_field"),
+    [
+        ("acquire_pixel_buffer", "release_handle", "handle_id"),
+        ("register_acceleration_structure_blas", "release_handle", "handle_id"),
+        ("create_processor_owned_window", "close_processor_owned_window", "window_id"),
+    ],
+)
+def test_what_an_answer_the_helper_stopped_waiting_on_created_is_released(
+    stand_in_parent, escalate_op, release_op, released_id_field
+):
+    """An escalate keeps running in the app process after the helper's wait
+    for it ends, and what its answer creates belongs to nobody.
+
+    Fail-without-fix: the late answer is logged as one nothing waits on and
+    dropped, so no release reaches the parent and what it created stays until
+    the helper stops.
+    """
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    with pytest.raises(_helper.EscalateRequestError):
+        bridge.request_from_parent({"op": escalate_op}, timeout_seconds=0.1)
+    request = stand_in_parent.receive()
+    assert request["op"] == escalate_op
+
+    stand_in_parent.send(
+        {
+            "rpc": "escalate_response",
+            "request_id": request["request_id"],
+            "result": "ok",
+            "handle_id": "created-after-the-wait-ended",
+        }
+    )
+
+    release = stand_in_parent.receive()
+    assert release is not None, "nothing released what the late answer created"
+    assert release["op"] == release_op
+    assert release[released_id_field] == "created-after-the-wait-ended"
+
+
+def test_a_late_refusal_created_nothing_so_nothing_is_released(stand_in_parent):
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    with pytest.raises(_helper.EscalateRequestError):
+        bridge.request_from_parent({"op": "acquire_pixel_buffer"}, timeout_seconds=0.1)
+    request = stand_in_parent.receive()
+
+    stand_in_parent.send(
+        {
+            "rpc": "escalate_response",
+            "request_id": request["request_id"],
+            "result": "err",
+            "message": "the pool is at its cap",
+        }
+    )
+
+    assert stand_in_parent.receive(timeout_seconds=0.5) is None
+
+
+def test_a_release_a_finalizer_owes_on_the_bridge_reader_never_holds_the_reader(
+    stand_in_parent, monkeypatch
+):
+    """The collector runs a cycle's finalizers on whichever thread crossed its
+    threshold, and the reader allocates for every frame it decodes, so a GPU
+    handle's release can come due on the reader itself.
+
+    Fail-without-fix: the handle's drop waits for its release's answer on the
+    reader, the one thread that delivers answers, so every frame behind it —
+    the parent's next command included — waits out the escalate timeout.
+    """
+    from streamlib import ProcessorLinkDataAccess, RuntimeContextFullAccess
+
+    monkeypatch.setenv("STREAMLIB_SURFACE_SOCKET", "/nonexistent/streamlib-surface.sock")
+    decode_the_frame = _helper._decode_frame_payload
+
+    def decode_the_frame_collecting_garbage_on_the_marker(payload: bytes):
+        frame = decode_the_frame(payload)
+        if frame.get("cmd") == "collect_garbage_on_the_reader":
+            gc.collect()
+        return frame
+
+    monkeypatch.setattr(
+        _helper, "_decode_frame_payload", decode_the_frame_collecting_garbage_on_the_marker
+    )
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    context = RuntimeContextFullAccess.open_for_helper_process(
+        {},
+        ProcessorLinkDataAccess(),
+        "R-helper-test",
+        "P-helper-test",
+        bridge.request_from_parent,
+        bridge.release_to_parent_without_waiting,
+    )
+
+    built_handles: list = []
+    builder = threading.Thread(
+        target=lambda: built_handles.append(
+            context.gpu_full_access.build_triangles_blas(
+                [0.0] * 9, [0, 1, 2], label="freed-on-the-reader"
+            )
+        ),
+        name="builds-the-structure",
+    )
+    builder.start()
+    register = stand_in_parent.receive()
+    assert register["op"] == "register_acceleration_structure_blas"
+    stand_in_parent.send(
+        {
+            "rpc": "escalate_response",
+            "request_id": register["request_id"],
+            "result": "ok",
+            "handle_id": "blas-freed-on-the-reader",
+        }
+    )
+    builder.join(timeout=5.0)
+    assert len(built_handles) == 1, "the structure was never built"
+
+    gc.disable()
+    try:
+        # Reachable only through a cycle, so only the collector frees it — and
+        # the marker below runs the collector on the reader.
+        cycle: list = [built_handles.pop()]
+        cycle.append(cycle)
+        del cycle
+        stand_in_parent.send({"cmd": "collect_garbage_on_the_reader"})
+        stand_in_parent.send({"cmd": "teardown"})
+
+        release = stand_in_parent.receive()
+        assert release is not None, "the freed structure was never released"
+        assert release["op"] == "release_handle"
+        assert release["handle_id"] == "blas-freed-on-the-reader"
+        stand_in_parent.send(
+            {
+                "rpc": "escalate_response",
+                "request_id": release["request_id"],
+                "result": "ok",
+                "handle_id": "blas-freed-on-the-reader",
+            }
+        )
+
+        delivered: list = []
+        deadline = time.monotonic() + 5.0
+        while len(delivered) < 2 and time.monotonic() < deadline:
+            was_waiting, command = bridge.next_lifecycle_command_if_waiting()
+            if was_waiting:
+                delivered.append(command)
+            else:
+                time.sleep(0.01)
+        assert [command["cmd"] for command in delivered] == [
+            "collect_garbage_on_the_reader",
+            "teardown",
+        ], "the reader stalled behind the release a finalizer owed on it"
+    finally:
+        gc.enable()
 
 
 # =============================================================================
