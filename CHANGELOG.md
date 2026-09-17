@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.16](https://github.com/tatolab/streamlib/compare/v0.22.15...v0.22.16) (2026-09-17)
+
+
+### Features
+
+* **wheel:** show a Python processor's loss counts in graph through a per-spawn blackboard ([#2314](https://github.com/tatolab/streamlib/issues/2314)) ([5eb8c04](https://github.com/tatolab/streamlib/commit/5eb8c047e0aa62963402f3743203598f3469ae3a))
+
 ## [0.22.15](https://github.com/tatolab/streamlib/compare/v0.22.14...v0.22.15) (2026-09-16)
 
 
