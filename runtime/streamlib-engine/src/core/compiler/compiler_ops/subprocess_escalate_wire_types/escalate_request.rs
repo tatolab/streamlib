@@ -239,13 +239,17 @@ pub(crate) enum EscalateRequestLogLevel {
     Warn,
 }
 
-/// Origin runtime of the record. Always "python" on the wire — Rust never
-/// routes through escalate; Rust call sites hit `tracing::*!()` directly on
-/// the host.
+/// Origin runtime of the record: "python" for a `streamlib.log` call in the
+/// helper, "rust" for an engine `tracing` record the helper captured and
+/// drained. An engine record made in the app process never comes this way —
+/// it reaches the pipeline through `tracing::*!()` directly.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) enum EscalateRequestLogSource {
     #[serde(rename = "python")]
     Python,
+
+    #[serde(rename = "rust")]
+    Rust,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -278,9 +282,14 @@ pub(crate) struct EscalateRequestLog {
     /// Processor identifier. Null outside a processor.
     pub(crate) processor_id: Option<String>,
 
-    /// Origin runtime of the record. Always "python" on the wire — Rust never
-    /// routes through escalate; Rust call sites hit `tracing::*!()` directly on
-    /// the host.
+    /// RHI operation the record was made inside, for a captured engine
+    /// record that names one. Absent from a record that names none, and from
+    /// every `streamlib.log` call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) rhi_op: Option<String>,
+
+    /// Origin runtime of the record: "python" for a `streamlib.log` call,
+    /// "rust" for an engine `tracing` record the helper captured.
     pub(crate) source: EscalateRequestLogSource,
 
     /// Subprocess-monotonic sequence number (u64 as string — JSON has no
@@ -293,6 +302,11 @@ pub(crate) struct EscalateRequestLog {
     /// ordering; the host stamps `host_ts` on receipt as the authoritative
     /// sort key.
     pub(crate) source_ts: String,
+
+    /// The record's `tracing` target, for a captured engine record. Absent
+    /// from a `streamlib.log` call, whose target is the source's own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) target: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
