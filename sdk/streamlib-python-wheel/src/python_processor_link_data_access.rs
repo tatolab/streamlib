@@ -384,7 +384,11 @@ impl PythonProcessorLinkDataAccess {
                         publisher,
                         ChannelEgressConfig {
                             service_name: channel_service_name.to_string(),
-                            trust_tier: ChannelTrustTier::Trusted,
+                            // A helper's egress crosses the subprocess boundary
+                            // by construction, which is the tier the parent
+                            // classified this channel under when it chose the
+                            // ceiling riding the envelope beside it.
+                            trust_tier: ChannelTrustTier::UntrustedSession,
                             expected_payload_bytes,
                             ceiling_bytes: max_payload_bytes_per_channel,
                         },
@@ -801,6 +805,56 @@ mod tests {
                     .unwrap(),
                 7
             );
+        });
+    }
+
+    /// A helper's egress crosses the subprocess boundary by construction, so the
+    /// tier it labels a ceiling refusal with is the one the parent classified
+    /// this channel under when it chose the ceiling the envelope carries. The
+    /// value was always the untrusted-session one; the label said `trusted`.
+    ///
+    /// Fail-without-fix: the refusal a helper's author reads names a
+    /// trusted-tier limit no helper link ever has.
+    #[test]
+    fn a_ceiling_refusal_on_a_helpers_egress_names_the_untrusted_session_tier() {
+        Python::initialize();
+        Python::attach(|python| {
+            let (channel, notify) = unique_channel_names("egress-tier");
+            let ceiling_bytes = 1 << 20;
+            let source = helper_plane();
+            source
+                .wire_output_link(
+                    python,
+                    "frames_to_downstream",
+                    &channel,
+                    &notify,
+                    1024,
+                    ceiling_bytes,
+                    8,
+                    2,
+                    1,
+                    "link-egress-tier",
+                    None,
+                )
+                .unwrap();
+
+            let output_writer = source
+                .output_writer
+                .get()
+                .expect("a wired output plane holds its writer");
+            let over_the_ceiling = vec![0u8; ceiling_bytes + 1];
+            let refusal = output_writer
+                .write_raw("frames_to_downstream", &over_the_ceiling, 1)
+                .expect_err("a bag past the channel ceiling must be refused");
+
+            match refusal {
+                Error::PayloadExceedsChannelCeiling { tier, .. } => assert_eq!(
+                    tier.to_string(),
+                    "untrusted-session",
+                    "a helper's egress is an untrusted-session channel"
+                ),
+                other => panic!("expected a ceiling refusal, got {other:?}"),
+            }
         });
     }
 

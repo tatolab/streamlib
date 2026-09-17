@@ -148,7 +148,6 @@ def engine_shaped_link_wiring(direction: str, link_id: str) -> dict:
         return {
             "name": "frames_to_downstream",
             "link_id": link_id,
-            "enable_safe_overflow": True,
             "channel_service_name": channel_service_name,
             "dest_notify_service_name": notify_service_name,
             "expected_payload_bytes": 1024,
@@ -161,7 +160,6 @@ def engine_shaped_link_wiring(direction: str, link_id: str) -> dict:
     return {
         "name": "frames_from_upstream",
         "link_id": link_id,
-        "enable_safe_overflow": True,
         "channel_service_name": channel_service_name,
         "notify_service_name": notify_service_name,
         "read_mode": "read_next_in_order",

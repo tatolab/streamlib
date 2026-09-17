@@ -178,9 +178,10 @@ fn read_port_descriptors(
             .cast_into::<PyDict>()
             .map_err(|_| PyTypeError::new_err(format!("{attribute} must hold dicts")))?;
 
-        let mut port = PortDescriptor::iceoryx2(
+        let mut port = PortDescriptor::new(
             read_dict_string(&declaration, "name")?,
             read_dict_string(&declaration, "description")?,
+            true,
         );
         if let Some(delivery_profile) = declaration
             .get_item("delivery_profile")?

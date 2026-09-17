@@ -588,7 +588,6 @@ fn generate_descriptor_from_schema(
                     name: #port_name.to_string(),
                     description: #port_desc.to_string(),
                     required: true,
-                    is_iceoryx2: true,
                     delivery_profile: #delivery_profile_tokens,
                     audio_window: #audio_window_tokens,
                 })
@@ -609,7 +608,6 @@ fn generate_descriptor_from_schema(
                     name: #port_name.to_string(),
                     description: #port_desc.to_string(),
                     required: true,
-                    is_iceoryx2: true,
                     delivery_profile: ::std::option::Option::None,
                     audio_window: #no_audio_window_tokens,
                 })

@@ -745,7 +745,7 @@ mod connect_wires_without_inspecting_a_port_tests {
             );
             producer
                 .outputs
-                .push(PortDescriptor::iceoryx2("out", "output"));
+                .push(PortDescriptor::new("out", "output", true));
             PROCESSOR_REGISTRY
                 .register_descriptor_only(producer)
                 .expect("register producer descriptor");
@@ -757,7 +757,7 @@ mod connect_wires_without_inspecting_a_port_tests {
             );
             consumer
                 .inputs
-                .push(PortDescriptor::iceoryx2("in", "input").with_delivery_profile("newest"));
+                .push(PortDescriptor::new("in", "input", true).with_delivery_profile("newest"));
             PROCESSOR_REGISTRY
                 .register_descriptor_only(consumer)
                 .expect("register consumer descriptor");
