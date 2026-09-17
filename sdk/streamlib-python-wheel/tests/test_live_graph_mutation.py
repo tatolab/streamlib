@@ -18,6 +18,7 @@ import json
 import re
 import time
 from pathlib import Path
+from typing import Callable, TypeVar
 
 import pytest
 
@@ -174,6 +175,26 @@ def await_link_state(control_url: str, link_id: str, wanted: str) -> str:
     return f"still {link['state'] if link else 'absent'} after {LINK_ANSWER_TIMEOUT_SECONDS}s"
 
 
+def await_node_state(control_url: str, display_name: str, wanted: str) -> str:
+    """Poll `graph` until one node reaches `wanted`, and report what it reached.
+
+    A helper-placed node reads `Running` only once its helper has finished
+    setting up, which is also when every link its setup command carried is
+    confirmed — so waiting for it first is what makes a later `wired` the
+    helper's own answer rather than a link read before the helper was up.
+    """
+    deadline = time.monotonic() + FIRST_FRAME_TIMEOUT_SECONDS
+    state = "absent"
+    while time.monotonic() < deadline:
+        state = node_named(mcp_json(control_url, "graph", {}), display_name)["components"][
+            "state"
+        ]
+        if state == wanted:
+            return state
+        time.sleep(0.05)
+    return f"still {state} after {FIRST_FRAME_TIMEOUT_SECONDS}s"
+
+
 def tap_channel_of(processor_id: str, output_port: str) -> str:
     """The channel name `tap` takes: the source id lowercased, then the port."""
     return f"{processor_id.lower()}/{output_port}"
@@ -255,12 +276,12 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
         "`connect` onto a helper returns before that helper has opened its "
         f"port, so the link reads pending or wired and nothing else: {upstream_link}"
     )
+    assert await_node_state(control_url, "effect", "Running") == "Running"
     assert await_link_state(control_url, upstream_link_id, "wired") == "wired", (
         "the helper's own answer is what makes the link wired; a link stuck "
         "pending is a helper that never opened its port, and one in error "
         "carries the helper's reason"
     )
-    assert node_named(graph_after_connect, "effect")["components"]["state"] == "Running"
 
     # The processor reports from its own helper process, so a marker in the
     # node's output is a frame that crossed the late-wired link.
@@ -336,6 +357,133 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     # The rest of the graph is untouched by the removal.
     assert node_named(graph_after_remove, "second effect")["components"]["state"] == "Running"
     assert node_named(graph_after_remove, "window")["components"]["state"] == "Running"
+
+    node.interrupt()
+    assert node.await_exit(CLEAN_EXIT_TIMEOUT_SECONDS) == 0, node.recent_output()
+
+
+# How long the slowly importing helper below sleeps at import. The calls made
+# meanwhile must each return inside half of it, which a call waiting on the
+# import cannot.
+HELPER_IMPORT_SECONDS = 8.0
+MOST_A_CALL_MAY_TAKE_WHILE_A_HELPER_IMPORTS = HELPER_IMPORT_SECONDS / 2
+
+SLOWLY_IMPORTING_SINK_MODULE = "processors.slowly_importing_sink"
+SLOWLY_IMPORTING_SINK_CLASS = "SlowlyImportingSink"
+# Only its helper sleeps: `STREAMLIB_ENTRYPOINT` is set in a helper process and
+# nowhere else, so the app process's own import for the catalog stays quick and
+# the wait lands on the helper's setup, where a torch import would.
+SLOWLY_IMPORTING_SINK_SOURCE = f'''\
+"""A sink whose helper takes {HELPER_IMPORT_SECONDS} s to import it."""
+
+import os
+import time
+
+from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
+    RuntimeContextLimitedAccess,
+    input,
+    processor,
+)
+
+if "STREAMLIB_ENTRYPOINT" in os.environ:
+    time.sleep({HELPER_IMPORT_SECONDS})
+
+
+@processor
+class SlowlyImportingSink:
+    """Reads and drops every frame."""
+
+    @input(delivery_profile="newest")
+    def video_from_upstream(self) -> None: ...
+
+    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+        ctx.inputs.read("video_from_upstream")
+'''
+
+
+Returned = TypeVar("Returned")
+
+
+def seconds_taken_by(call: Callable[[], Returned]) -> "tuple[float, Returned]":
+    started = time.monotonic()
+    returned = call()
+    return time.monotonic() - started, returned
+
+
+def test_graph_calls_made_while_a_helper_imports_never_wait_for_its_import(
+    tmp_path: Path, isolated_runtime_directory: Path, launch_node
+):
+    """The documented live recipe — add a Python processor, connect it at once.
+
+    The connect lands while the helper is still importing. It returns with the
+    link pending rather than holding the graph until the import ends, and
+    meanwhile `graph` answers and another processor is added; the link reads
+    wired once the helper is up.
+    """
+    app_directory = tmp_path / "app"
+    (app_directory / "processors").mkdir(parents=True)
+    (app_directory / "app.py").write_text(APP_WITH_ONE_PATTERN_SOURCE)
+    (app_directory / "processors" / "__init__.py").write_text("")
+    (app_directory / "processors" / "slowly_importing_sink.py").write_text(
+        SLOWLY_IMPORTING_SINK_SOURCE
+    )
+
+    node = launch_node("run", app_directory, free_port(), capture_output=True)
+    entry = await_sole_registry_entry(isolated_runtime_directory, NODE_READY_TIMEOUT_SECONDS)
+    control_url = entry["control_url"]
+    node.await_captured_output_containing("[start] Runtime started", NODE_READY_TIMEOUT_SECONDS)
+    pattern = node_named(mcp_json(control_url, "graph", {}), "pattern")
+
+    sink = mcp_json(
+        control_url,
+        "add_processor",
+        {
+            "type": f"{SLOWLY_IMPORTING_SINK_MODULE}:{SLOWLY_IMPORTING_SINK_CLASS}",
+            "display_name": "sink",
+        },
+    )
+
+    connect_seconds, connected = seconds_taken_by(
+        lambda: mcp_json(
+            control_url,
+            "connect",
+            {
+                "from_processor_id": pattern["id"],
+                "from_port": "video",
+                "to_processor_id": sink["processor_id"],
+                "to_port": "video_from_upstream",
+            },
+        )
+    )
+    assert connect_seconds < MOST_A_CALL_MAY_TAKE_WHILE_A_HELPER_IMPORTS, (
+        f"connect took {connect_seconds:.1f}s, waiting on a helper still importing"
+    )
+
+    graph_seconds, graph_while_importing = seconds_taken_by(
+        lambda: mcp_json(control_url, "graph", {})
+    )
+    assert graph_seconds < MOST_A_CALL_MAY_TAKE_WHILE_A_HELPER_IMPORTS, (
+        f"graph took {graph_seconds:.1f}s, waiting on a helper still importing"
+    )
+    link_while_importing = link_with_id(graph_while_importing, connected["link_id"])
+    assert link_while_importing is not None
+    assert link_while_importing["state"] in ("pending", "wired"), link_while_importing
+
+    add_seconds, _ = seconds_taken_by(
+        lambda: mcp_json(
+            control_url,
+            "add_processor",
+            {"type": pattern["type"], "display_name": "second pattern"},
+        )
+    )
+    assert add_seconds < MOST_A_CALL_MAY_TAKE_WHILE_A_HELPER_IMPORTS, (
+        f"add_processor took {add_seconds:.1f}s, waiting on a helper still importing"
+    )
+
+    assert await_node_state(control_url, "sink", "Running") == "Running"
+    assert await_link_state(control_url, connected["link_id"], "wired") == "wired", (
+        "the link connected during the import is wired once the helper is up"
+    )
 
     node.interrupt()
     assert node.await_exit(CLEAN_EXIT_TIMEOUT_SECONDS) == 0, node.recent_output()

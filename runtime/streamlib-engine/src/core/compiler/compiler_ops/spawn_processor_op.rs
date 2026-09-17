@@ -6,7 +6,7 @@ use std::sync::Arc;
 #[cfg(unix)]
 use std::os::fd::OwnedFd;
 
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 
 use crate::core::compiler::ProcessorThreadKind;
 use crate::core::compiler::scheduling::{SchedulingStrategy, scheduling_strategy_for_processor};
@@ -18,9 +18,10 @@ use crate::core::descriptors::ProcessorRuntime;
 use crate::core::error::{Error, Result};
 use crate::core::execution::run_processor_loop;
 use crate::core::graph::{
-    Graph, GraphNodeWithComponents, ObservableProcessorState, ProcessorInstanceComponent,
-    ProcessorPauseGateComponent, ProcessorReadyBarrierComponent, ProcessorUniqueId,
-    ShutdownChannelComponent, StateComponent, ThreadHandleComponent,
+    Graph, GraphNodeWithComponents, ObservableProcessorState,
+    ProcessorInstanceWithItsOutOfProcessLinkWiring, ProcessorPauseGateComponent,
+    ProcessorReadyBarrierComponent, ProcessorUniqueId, ShutdownChannelComponent, StateComponent,
+    ThreadHandleComponent,
 };
 use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorInstanceFactory, ProcessorState};
 
@@ -153,16 +154,19 @@ fn spawn_dedicated_thread(
 
     // Create processor instance now (with lock) since factory needs node
     // reference.
-    let (processor_arc, processor_type) = {
+    let (processor_to_attach, processor_type) = {
         let graph = graph_arc.read();
         let node = graph.traversal().v(&processor_id).first().ok_or_else(|| {
             Error::ProcessorNotFound(format!("Processor '{}' not found", processor_id))
         })?;
         let processor_type = node.processor_type().clone();
-        (Arc::new(Mutex::new(factory.create(node)?)), processor_type)
+        (
+            ProcessorInstanceWithItsOutOfProcessLinkWiring::from(factory.create(node)?),
+            processor_type,
+        )
     };
 
-    let processor_arc_clone = Arc::clone(&processor_arc);
+    let processor_arc_clone = Arc::clone(&processor_to_attach.processor_instance);
     let thread_kind = match runtime {
         ProcessorRuntime::Rust => ProcessorThreadKind::NativeProcessor,
         ProcessorRuntime::Python => ProcessorThreadKind::HelperProcessHost,
@@ -252,7 +256,7 @@ fn spawn_dedicated_thread(
             {
                 let mut graph = graph_arc_clone.write();
                 if let Some(node) = graph.traversal_mut().v(&proc_id_clone).first_mut() {
-                    node.insert(ProcessorInstanceComponent(processor_arc_clone.clone()));
+                    processor_to_attach.attach_to(node);
                 }
             }
             tracing::trace!("[{}] ProcessorInstanceComponent attached", proc_id_clone);
@@ -508,7 +512,7 @@ fn full_access_grant_or_mark_untrusted_error(
 /// gate's same-thread re-entry panic when a setup body that itself
 /// uses `.escalate(...)` also tried to acquire it, and wrapping a
 /// subprocess host's IPC wait would deadlock against the
-/// bridge-reader thread's per-call escalates (#867).
+/// bridge's escalate worker (#867).
 fn run_setup_phase<F>(runtime: ProcessorRuntime, gpu: &GpuContext, setup_body: F) -> Result<()>
 where
     F: FnOnce() -> Result<()>,
@@ -727,12 +731,12 @@ mod tests {
 
     /// Regression for #867 — subprocess host setup must not hold the
     /// escalate gate against a concurrent escalate from the
-    /// bridge-reader thread.
+    /// bridge's escalate worker.
     ///
     /// Reproduces the deadlock the engine fix prevents: a setup body
     /// (simulating a subprocess host's `__generated_setup` IPC wait)
     /// blocks on another thread that's trying to acquire its own
-    /// `sandbox.escalate` (simulating a bridge-reader handler). With
+    /// `sandbox.escalate` (simulating the bridge's escalate worker). With
     /// the fix, `run_setup_phase` for `Python` / `TypeScript` skips
     /// the outer wrap so the concurrent escalate proceeds and the
     /// setup body completes. Mentally revert the runtime branch
@@ -760,8 +764,8 @@ mod tests {
                         Error::Runtime(format!(
                             "{TEST}: concurrent escalate did not complete within 5s \
                              (runtime={runtime:?}) — outer setup-phase wrap is holding \
-                             processor_setup_lock against bridge-reader-thread escalate \
-                             dispatch (#867)"
+                             processor_setup_lock against the bridge's escalate worker \
+                             (#867)"
                         ))
                     })?
                     .map_err(|e| Error::Runtime(format!("{TEST}: inner escalate failed: {e}")))

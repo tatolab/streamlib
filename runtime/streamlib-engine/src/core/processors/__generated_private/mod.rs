@@ -10,4 +10,6 @@ mod generated_processor;
 mod generated_processor_impl;
 
 pub use generated_processor::GeneratedProcessor;
-pub use generated_processor_impl::{DynGeneratedProcessor, OutOfProcessLinkWiringEnvelope};
+pub use generated_processor_impl::{
+    DynGeneratedProcessor, OutOfProcessFarSideLinkDelivery, OutOfProcessLinkWiringEnvelope,
+};

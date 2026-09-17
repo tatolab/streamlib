@@ -23,10 +23,12 @@ use crate::core::graph::{
     DeviceMatchedAudioWindowContractsComponent, Graph, GraphEdgeWithComponents,
     GraphNodeWithComponents, Iceoryx2ServicesHeldOpenForLinkComponent, Link, LinkState,
     LinkStateComponent, LinkUniqueId, LossCountsOfPortsInThisProcess,
-    OutOfProcessLinkWireRepliesComponent, ProcessorInstanceComponent, ProcessorLossCounts,
-    ProcessorMetrics,
+    OutOfProcessLinkWireRepliesComponent, OutOfProcessLinkWiringComponent,
+    ProcessorInstanceComponent, ProcessorLossCounts, ProcessorMetrics,
 };
-use crate::core::processors::{OutOfProcessLinkWireReply, ProcessorInstance};
+use crate::core::processors::{
+    OutOfProcessLinkWireReply, OutOfProcessLinkWiringEnvelope, ProcessorInstance,
+};
 use crate::iceoryx2::{
     AudioWindowDeclarationOfAnInputPort, ChannelEgressConfig, ChannelSizing, ChannelTrustTier,
     DEFAULT_EXPECTED_PAYLOAD_BYTES, DeliveryProfile, DeliveryResolution, Iceoryx2Node,
@@ -74,8 +76,10 @@ pub fn open_iceoryx2_service(
         (from_port.processor_id.clone(), from_port.port_name.clone());
     let (dest_proc_id, dest_port) = (to_port.processor_id.clone(), to_port.port_name.clone());
 
-    let source_is_subprocess = is_subprocess_processor(graph, &source_proc_id);
-    let dest_is_subprocess = is_subprocess_processor(graph, &dest_proc_id);
+    let source_link_wiring = out_of_process_link_wiring_of(graph, &source_proc_id);
+    let dest_link_wiring = out_of_process_link_wiring_of(graph, &dest_proc_id);
+    let source_is_subprocess = source_link_wiring.is_some();
+    let dest_is_subprocess = dest_link_wiring.is_some();
 
     // A windowed destination is read and refused before any service is opened:
     // a second link into a port that windows, or one onto a channel too shallow
@@ -177,9 +181,10 @@ pub fn open_iceoryx2_service(
 
     // Source side: install the single channel publisher (first link out of this
     // port) and append this link's destination notifier.
-    if source_is_subprocess {
+    if let Some(source_link_wiring) = &source_link_wiring {
         wire_replies_awaited_from_its_out_of_process_ends.extend(wire_subprocess_source(
             graph,
+            source_link_wiring,
             &source_proc_id,
             &source_port,
             &channel_service_name,
@@ -211,9 +216,10 @@ pub fn open_iceoryx2_service(
 
     // Destination side: subscribe to the channel bound to this local input port,
     // and ensure the destination's single listener exists.
-    if dest_is_subprocess {
+    if let Some(dest_link_wiring) = &dest_link_wiring {
         wire_replies_awaited_from_its_out_of_process_ends.extend(wire_subprocess_dest(
             graph,
+            dest_link_wiring,
             &dest_proc_id,
             &dest_port,
             &channel_service_name,
@@ -288,11 +294,9 @@ pub fn open_iceoryx2_service(
 /// (`ExceedsMaxSupportedNotifiers`).
 ///
 /// An endpoint whose ports live out of process owns them itself, so its half is
-/// reclaimed through [`DynGeneratedProcessor::unwire_out_of_process_link`] —
-/// the host drops the far side's port and forgets the wiring envelope entry a
-/// reconnect would otherwise be set up with twice.
-///
-/// [`DynGeneratedProcessor::unwire_out_of_process_link`]: crate::core::processors::DynGeneratedProcessor::unwire_out_of_process_link
+/// reclaimed through its wiring envelope — which forgets the entry a reconnect
+/// would otherwise be set up with twice and asks a running far side to drop its
+/// port — without taking that processor's lock.
 #[tracing::instrument(name = "compiler.close_iceoryx2_service", skip(graph), fields(link_id = %link_id))]
 pub fn close_iceoryx2_service(graph: &mut Graph, link_id: &LinkUniqueId) -> Result<()> {
     tracing::info!("Closing iceoryx2 service: {}", link_id);
@@ -314,22 +318,19 @@ pub fn close_iceoryx2_service(graph: &mut Graph, link_id: &LinkUniqueId) -> Resu
         return Ok(());
     };
 
-    let source_is_subprocess = is_subprocess_processor(graph, &source_proc_id);
-    let dest_is_subprocess = is_subprocess_processor(graph, &dest_proc_id);
-
     // Source side: drop this link's destination notifier (and the channel
     // publisher when this was the source port's last outbound link).
-    if let Some(source_processor) = processor_to_reclaim_from(graph, &source_proc_id) {
-        let mut source_guard = source_processor.lock();
-        if source_is_subprocess {
-            unwire_out_of_process_endpoint(
-                &mut source_guard,
-                crate::core::PortDirection::Output,
-                &source_proc_id,
-                &source_port,
-                link_id,
-            );
-        } else if let Some(output_inner) = source_guard.iceoryx2_output_writer_inner() {
+    if let Some(source_link_wiring) = out_of_process_link_wiring_of(graph, &source_proc_id) {
+        unwire_out_of_process_endpoint(
+            &source_link_wiring,
+            crate::core::PortDirection::Output,
+            &source_proc_id,
+            &source_port,
+            link_id,
+        );
+    } else if let Some(source_processor) = processor_to_reclaim_from(graph, &source_proc_id) {
+        let source_guard = source_processor.lock();
+        if let Some(output_inner) = source_guard.iceoryx2_output_writer_inner() {
             let channel_released = output_inner.remove_channel_link(&source_port, link_id.as_str());
             tracing::debug!(
                 source = %source_proc_id,
@@ -342,17 +343,17 @@ pub fn close_iceoryx2_service(graph: &mut Graph, link_id: &LinkUniqueId) -> Resu
 
     // Destination side: drop this link's channel subscriber (and the port
     // mailbox / shared listener when their last inbound link went away).
-    if let Some(dest_processor) = processor_to_reclaim_from(graph, &dest_proc_id) {
-        let mut dest_guard = dest_processor.lock();
-        if dest_is_subprocess {
-            unwire_out_of_process_endpoint(
-                &mut dest_guard,
-                crate::core::PortDirection::Input,
-                &dest_proc_id,
-                &dest_port,
-                link_id,
-            );
-        } else if let Some(input_inner) = dest_guard.iceoryx2_input_mailboxes_inner() {
+    if let Some(dest_link_wiring) = out_of_process_link_wiring_of(graph, &dest_proc_id) {
+        unwire_out_of_process_endpoint(
+            &dest_link_wiring,
+            crate::core::PortDirection::Input,
+            &dest_proc_id,
+            &dest_port,
+            link_id,
+        );
+    } else if let Some(dest_processor) = processor_to_reclaim_from(graph, &dest_proc_id) {
+        let dest_guard = dest_processor.lock();
+        if let Some(input_inner) = dest_guard.iceoryx2_input_mailboxes_inner() {
             input_inner.remove_channel_link(link_id.as_str());
             tracing::debug!(
                 dest = %dest_proc_id,
@@ -593,16 +594,18 @@ fn destination_max_notifiers(graph: &mut Graph, dest_proc_id: &ProcessorUniqueId
 /// A helper host reports `Manual` for its own thread whatever the class
 /// declared, so a destination out of process is asked through its envelope.
 fn destination_consumes_notifications(graph: &mut Graph, dest_proc_id: &ProcessorUniqueId) -> bool {
+    if let Some(link_wiring) = out_of_process_link_wiring_of(graph, dest_proc_id) {
+        return link_wiring.far_side_process_execution().is_reactive();
+    }
     // A destination the graph cannot resolve is wired as before; the wiring
     // path itself reports the missing processor.
     get_single_processor(graph, dest_proc_id)
         .map(|dest_processor| {
-            let mut dest_processor = dest_processor.lock();
-            let execution = match dest_processor.out_of_process_link_wiring() {
-                Some(link_wiring) => link_wiring.far_side_process_execution(),
-                None => dest_processor.execution_config().execution,
-            };
-            execution.is_reactive()
+            dest_processor
+                .lock()
+                .execution_config()
+                .execution
+                .is_reactive()
         })
         .unwrap_or(true)
 }
@@ -733,42 +736,41 @@ fn link_still_counts_toward_its_ports(link: &Link) -> bool {
         .unwrap_or(true)
 }
 
-/// Check if a processor is a subprocess.
-fn is_subprocess_processor(graph: &mut Graph, proc_id: &ProcessorUniqueId) -> bool {
+/// The link wiring the node of a processor whose ports live out of process
+/// carries, or `None` for one the engine wires itself — read off the node, never
+/// through the processor's own lock, which a helper holds across its setup.
+fn out_of_process_link_wiring_of(
+    graph: &Graph,
+    proc_id: &ProcessorUniqueId,
+) -> Option<Arc<OutOfProcessLinkWiringEnvelope>> {
     graph
-        .traversal_mut()
+        .traversal()
         .v(proc_id)
-        .first_mut()
-        .and_then(|node| {
-            node.get::<ProcessorInstanceComponent>()
-                .map(|i| i.0.clone())
-        })
-        .is_some_and(|proc_arc| proc_arc.lock().out_of_process_link_wiring().is_some())
+        .first()
+        .and_then(|node| node.get::<OutOfProcessLinkWiringComponent>())
+        .map(|component| Arc::clone(&component.0))
 }
 
 /// Reclaim one link on an endpoint that owns its ports out of process: forget
-/// the wiring the far side would be set up with again, then ask it to drop the
-/// port it opened from that wiring.
-///
-/// The envelope is pruned here rather than by the host, so the record and the
-/// erase stay on the same side of the seam — a host supplies the envelope and
-/// the compiler op is the only thing that ever writes to it.
+/// the wiring the far side would be set up with again, and ask a running far
+/// side to drop the port it opened from that wiring.
 ///
 /// A failure is reported and swallowed, like every other reclaim failure here:
 /// the disconnect is already happening, the other endpoint still has ports to
 /// release, and refusing to stamp the link `Disconnected` over an unreachable
 /// far side would leave the graph claiming a link that no longer carries data.
 fn unwire_out_of_process_endpoint(
-    processor: &mut ProcessorInstance,
+    link_wiring: &OutOfProcessLinkWiringEnvelope,
     port_direction: crate::core::PortDirection,
     proc_id: &ProcessorUniqueId,
     local_port_name: &str,
     link_id: &LinkUniqueId,
 ) {
-    if let Some(link_wiring) = processor.out_of_process_link_wiring() {
-        link_wiring.remove_link(link_id.as_str());
-    }
-    match processor.unwire_out_of_process_link(port_direction, local_port_name, link_id.as_str()) {
+    match link_wiring.forget_a_link_and_tell_a_far_side_past_its_setup_command(
+        port_direction,
+        local_port_name,
+        link_id.as_str(),
+    ) {
         Ok(()) => tracing::debug!(
             proc_id = %proc_id,
             port = %local_port_name,
@@ -1034,6 +1036,7 @@ fn publish_device_matched_audio_window_contracts_on_destination_node(
 #[allow(clippy::too_many_arguments)]
 fn wire_subprocess_source(
     graph: &mut Graph,
+    link_wiring: &OutOfProcessLinkWiringEnvelope,
     source_proc_id: &ProcessorUniqueId,
     source_port: &str,
     channel_service_name: &str,
@@ -1060,29 +1063,15 @@ fn wire_subprocess_source(
         "notify_max_notifiers": notify_max_notifiers,
     });
 
-    let source_proc_arc = get_single_processor(graph, source_proc_id)?;
-    let mut source_processor = source_proc_arc.lock();
-    let Some(link_wiring) = source_processor.out_of_process_link_wiring() else {
-        // Classification and capability must agree: a processor reaches here
-        // because `is_subprocess_processor` said so, and an instance that then
-        // exposes no envelope would leave the link marked wired with nothing
-        // ever recorded — no frames, no error, nothing to debug from.
-        return Err(Error::Configuration(format!(
-            "processor '{source_proc_id}' is classified as out-of-process but exposes no \
-             link-wiring envelope; its output port '{source_port}' would never be wired"
-        )));
-    };
     // The generation rides the entry, so the far side writes this channel's
     // refusals where the parent reads them for this channel and no earlier one.
     let loss_counts = link_wiring.helper_placed_processor_loss_counts();
     entry["output_port_wiring_generation"] =
         serde_json::json!(loss_counts.note_outbound_link(source_port, link_id.as_str()));
-    link_wiring.record(crate::core::PortDirection::Output, entry.clone());
-    // The envelope is read once, at setup; a far side already past it is
-    // handed the entry directly.
-    let wire_reply =
-        source_processor.wire_out_of_process_link(crate::core::PortDirection::Output, &entry)?;
-    drop(source_processor);
+    let wire_reply = link_wiring.record_a_link_and_hand_it_to_a_far_side_past_its_setup_command(
+        crate::core::PortDirection::Output,
+        entry,
+    )?;
     insert_loss_counts_on_processor_node_once(
         graph,
         source_proc_id,
@@ -1100,6 +1089,7 @@ fn wire_subprocess_source(
 #[allow(clippy::too_many_arguments)]
 fn wire_subprocess_dest(
     graph: &mut Graph,
+    link_wiring: &OutOfProcessLinkWiringEnvelope,
     dest_proc_id: &ProcessorUniqueId,
     dest_port: &str,
     channel_service_name: &str,
@@ -1161,24 +1151,16 @@ fn wire_subprocess_dest(
         }
     }
 
-    let dest_proc_arc = get_single_processor(graph, dest_proc_id)?;
-    let mut dest_processor = dest_proc_arc.lock();
-    let Some(link_wiring) = dest_processor.out_of_process_link_wiring() else {
-        return Err(Error::Configuration(format!(
-            "processor '{dest_proc_id}' is classified as out-of-process but exposes no \
-             link-wiring envelope; its input port '{dest_port}' would never be wired"
-        )));
-    };
     // The slot and generation ride the entry, so the far side writes this
     // link's counts where the parent reads them for this wiring and no other.
     let loss_counts = link_wiring.helper_placed_processor_loss_counts();
     let assigned = loss_counts.assign_inbound_link_slot(link_id.as_str(), into_a_windowed_port)?;
     entry["loss_count_slot"] = serde_json::json!(assigned.slot);
     entry["wiring_generation"] = serde_json::json!(assigned.wiring_generation);
-    link_wiring.record(crate::core::PortDirection::Input, entry.clone());
-    let wire_reply =
-        dest_processor.wire_out_of_process_link(crate::core::PortDirection::Input, &entry)?;
-    drop(dest_processor);
+    let wire_reply = link_wiring.record_a_link_and_hand_it_to_a_far_side_past_its_setup_command(
+        crate::core::PortDirection::Input,
+        entry,
+    )?;
     insert_loss_counts_on_processor_node_once(
         graph,
         dest_proc_id,
@@ -1191,60 +1173,50 @@ fn wire_subprocess_dest(
 mod tests {
     use super::*;
     use crate::core::execution::{ExecutionConfig, ProcessExecution};
+    use crate::core::graph::ProcessorInstanceWithItsOutOfProcessLinkWiring;
     use crate::core::graph::{InputLinkPortRef, OutputLinkPortRef};
     use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
     use crate::core::processors::{
         DynGeneratedProcessor, OutOfProcessLinkWireOutcome, ProcessorSpec,
     };
-    use crate::core::test_support::CapturedTracingWarnings;
+    use crate::core::test_support::{
+        CapturedTracingWarnings, ReclaimedLink, RecordingOutOfProcessFarSideLinkDelivery,
+    };
     use crate::core::{ProcessorDescriptor, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
-
-    /// One reclaim the engine asked an out-of-process endpoint for. Named
-    /// rather than a tuple so a swapped port and link id fails the assert
-    /// instead of passing it.
-    #[derive(Debug, PartialEq, Eq)]
-    struct ReclaimedLink {
-        port_direction: crate::core::PortDirection,
-        local_port_name: String,
-        link_id: String,
-    }
 
     /// A host whose transport lives out of process and which is neither of the
     /// engine's own subprocess hosts — the shape the wheel's helper spawn host
-    /// has, from a crate this one cannot name.
+    /// has, from a crate this one cannot name — with its far side already past
+    /// its setup command.
     struct OutOfCrateHelperSpawnHostStub {
-        link_wiring: crate::core::processors::OutOfProcessLinkWiringEnvelope,
-        /// Shared with the test, which is the only way to see what the engine
-        /// asked of a host it cannot downcast to.
-        reclaimed_links: Arc<Mutex<Vec<ReclaimedLink>>>,
-        /// Every link the engine handed this host after its setup, with the
-        /// direction it was wired in.
-        late_wired_links: Arc<Mutex<Vec<(crate::core::PortDirection, serde_json::Value)>>>,
-        /// The answer cells this host handed back, in the order the engine
-        /// asked for them — how a test plays a far side that has not answered
-        /// yet, opened its port, or refused.
-        wire_answers_owed: Arc<Mutex<Vec<Arc<OutOfProcessLinkWireReply>>>>,
+        link_wiring: Arc<OutOfProcessLinkWiringEnvelope>,
     }
 
     impl OutOfCrateHelperSpawnHostStub {
-        /// A stub whose far side drives its processor in `far_side_process_execution`.
-        fn driving_its_processor_in(far_side_process_execution: ProcessExecution) -> Self {
-            Self {
-                link_wiring:
-                    crate::core::processors::OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(
-                        far_side_process_execution,
-                    ),
-                reclaimed_links: Arc::default(),
-                late_wired_links: Arc::default(),
-                wire_answers_owed: Arc::default(),
-            }
+        /// A stub whose far side drives its processor in
+        /// `far_side_process_execution` and records what it is handed in
+        /// `far_side`.
+        fn with_a_far_side_past_its_setup_command(
+            far_side: RecordingOutOfProcessFarSideLinkDelivery,
+            far_side_process_execution: ProcessExecution,
+        ) -> Self {
+            let link_wiring = Arc::new(OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(
+                far_side_process_execution,
+            ));
+            link_wiring
+                .send_the_setup_command_then_hand_every_later_link_over(|_| Ok(()), far_side)
+                .expect("a stub's setup command always goes out");
+            Self { link_wiring }
         }
     }
 
     /// Reactive, the mode a Python class with inputs takes unless it says otherwise.
     impl Default for OutOfCrateHelperSpawnHostStub {
         fn default() -> Self {
-            Self::driving_its_processor_in(ProcessExecution::Reactive)
+            Self::with_a_far_side_past_its_setup_command(
+                RecordingOutOfProcessFarSideLinkDelivery::default(),
+                ProcessExecution::Reactive,
+            )
         }
     }
 
@@ -1300,35 +1272,8 @@ mod tests {
         ) -> Option<Arc<crate::iceoryx2::InputMailboxesInner>> {
             None
         }
-        fn out_of_process_link_wiring(
-            &mut self,
-        ) -> Option<&mut crate::core::processors::OutOfProcessLinkWiringEnvelope> {
-            Some(&mut self.link_wiring)
-        }
-        fn unwire_out_of_process_link(
-            &mut self,
-            port_direction: crate::core::PortDirection,
-            local_port_name: &str,
-            link_id: &str,
-        ) -> Result<()> {
-            self.reclaimed_links.lock().push(ReclaimedLink {
-                port_direction,
-                local_port_name: local_port_name.to_string(),
-                link_id: link_id.to_string(),
-            });
-            Ok(())
-        }
-        fn wire_out_of_process_link(
-            &mut self,
-            port_direction: crate::core::PortDirection,
-            link_wiring: &serde_json::Value,
-        ) -> Result<Option<Arc<OutOfProcessLinkWireReply>>> {
-            self.late_wired_links
-                .lock()
-                .push((port_direction, link_wiring.clone()));
-            let reply = OutOfProcessLinkWireReply::awaiting_the_far_sides_answer();
-            self.wire_answers_owed.lock().push(Arc::clone(&reply));
-            Ok(Some(reply))
+        fn out_of_process_link_wiring(&self) -> Option<Arc<OutOfProcessLinkWiringEnvelope>> {
+            Some(Arc::clone(&self.link_wiring))
         }
         fn apply_config_json(&mut self, _config_json: &serde_json::Value) -> Result<()> {
             Ok(())
@@ -1344,21 +1289,20 @@ mod tests {
         }
     }
 
-    /// Attach `instance` to `proc_id` the way the spawn op does, so the wiring
-    /// path can reach it.
+    /// Attach `instance` to `proc_id` through the attach the spawn op takes, so
+    /// the wiring path can reach it.
     fn attach_processor_instance(
         graph: &mut Graph,
         proc_id: &str,
         instance: ProcessorInstance,
     ) -> Arc<Mutex<ProcessorInstance>> {
-        let instance = Arc::new(Mutex::new(instance));
-        graph
-            .traversal_mut()
-            .v(proc_id)
-            .first_mut()
-            .expect("the node must exist")
-            .insert(ProcessorInstanceComponent(instance.clone()));
-        instance
+        ProcessorInstanceWithItsOutOfProcessLinkWiring::from(instance).attach_to(
+            graph
+                .traversal_mut()
+                .v(proc_id)
+                .first_mut()
+                .expect("the node must exist"),
+        )
     }
 
     /// Record one link's wiring on both out-of-process endpoints, exactly as
@@ -1374,8 +1318,11 @@ mod tests {
         dest_id: &str,
         link_id: &LinkUniqueId,
     ) {
+        let source_link_wiring = out_of_process_link_wiring_of(graph, &source_id.into())
+            .expect("a helper stub's node carries its link wiring");
         wire_subprocess_source(
             graph,
+            &source_link_wiring,
             &source_id.into(),
             "out1",
             "pabc/out1",
@@ -1387,8 +1334,11 @@ mod tests {
             link_id,
         )
         .expect("recording source wiring must succeed");
+        let dest_link_wiring = out_of_process_link_wiring_of(graph, &dest_id.into())
+            .expect("a helper stub's node carries its link wiring");
         wire_subprocess_dest(
             graph,
+            &dest_link_wiring,
             &dest_id.into(),
             "in1",
             "pabc/out1",
@@ -1756,8 +1706,12 @@ mod tests {
             "audio",
         )
         .expect("the mock's contract resolves");
+        let dest_link_wiring =
+            out_of_process_link_wiring_of(&graph, &helper_windowed_id.as_str().into())
+                .expect("a helper stub's node carries its link wiring");
         wire_subprocess_dest(
             &mut graph,
+            &dest_link_wiring,
             &helper_windowed_id.as_str().into(),
             "audio",
             "pabc/out1",
@@ -1794,11 +1748,11 @@ mod tests {
     /// local port and direction — and each host's envelope forgets the link, so
     /// the next setup does not re-send it beside the reconnect's own entry.
     ///
-    /// Revert lock: restore either `if !source_is_subprocess` /
-    /// `if !dest_is_subprocess` guard and that side records no reclaim at all,
-    /// which is the leak — a live helper child keeps the notifier and appends
-    /// another on reconnect, until the notify service's create-time
-    /// `max_notifiers` cap is exhausted (`ExceedsMaxSupportedNotifiers`).
+    /// Revert lock: reclaim either endpoint through engine-side ports instead
+    /// of its envelope and that side records no reclaim at all, which is the
+    /// leak — a live helper child keeps the notifier and appends another on
+    /// reconnect, until the notify service's create-time `max_notifiers` cap
+    /// is exhausted (`ExceedsMaxSupportedNotifiers`).
     #[test]
     fn disconnecting_an_out_of_process_link_reclaims_both_endpoints() {
         let mut graph = Graph::new();
@@ -1810,18 +1764,28 @@ mod tests {
         let source_instance = attach_processor_instance(
             &mut graph,
             &source_id,
-            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub {
-                reclaimed_links: source_reclaims.clone(),
-                ..Default::default()
-            })),
+            ProcessorInstance::new(Box::new(
+                OutOfCrateHelperSpawnHostStub::with_a_far_side_past_its_setup_command(
+                    RecordingOutOfProcessFarSideLinkDelivery {
+                        reclaimed_links: source_reclaims.clone(),
+                        ..Default::default()
+                    },
+                    ProcessExecution::Reactive,
+                ),
+            )),
         );
         let dest_instance = attach_processor_instance(
             &mut graph,
             &dest_id,
-            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub {
-                reclaimed_links: dest_reclaims.clone(),
-                ..Default::default()
-            })),
+            ProcessorInstance::new(Box::new(
+                OutOfCrateHelperSpawnHostStub::with_a_far_side_past_its_setup_command(
+                    RecordingOutOfProcessFarSideLinkDelivery {
+                        reclaimed_links: dest_reclaims.clone(),
+                        ..Default::default()
+                    },
+                    ProcessExecution::Reactive,
+                ),
+            )),
         );
 
         let link_id = graph
@@ -1872,11 +1836,11 @@ mod tests {
         }
     }
 
-    /// Wiring a link records it on the envelope AND hands the same entry to
-    /// the host, so a far side that already read its envelope at setup opens
-    /// the port now. Revert lock: drop the `wire_out_of_process_link` call
-    /// after `record` and both vectors stay empty — the link the graph then
-    /// reports `Wired` never reaches a running helper.
+    /// Wiring a link records it on the envelope AND hands the same entry to a
+    /// far side past its setup command, so a far side that already read its
+    /// envelope opens the port now. Revert lock: record the entry without
+    /// handing it over and both vectors stay empty — the link never reaches a
+    /// running helper.
     #[test]
     fn wiring_an_out_of_process_link_hands_each_endpoint_its_entry() {
         let mut graph = Graph::new();
@@ -1890,18 +1854,28 @@ mod tests {
         let source_instance = attach_processor_instance(
             &mut graph,
             &source_id,
-            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub {
-                late_wired_links: source_late_wired.clone(),
-                ..Default::default()
-            })),
+            ProcessorInstance::new(Box::new(
+                OutOfCrateHelperSpawnHostStub::with_a_far_side_past_its_setup_command(
+                    RecordingOutOfProcessFarSideLinkDelivery {
+                        late_wired_links: source_late_wired.clone(),
+                        ..Default::default()
+                    },
+                    ProcessExecution::Reactive,
+                ),
+            )),
         );
         let dest_instance = attach_processor_instance(
             &mut graph,
             &dest_id,
-            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub {
-                late_wired_links: dest_late_wired.clone(),
-                ..Default::default()
-            })),
+            ProcessorInstance::new(Box::new(
+                OutOfCrateHelperSpawnHostStub::with_a_far_side_past_its_setup_command(
+                    RecordingOutOfProcessFarSideLinkDelivery {
+                        late_wired_links: dest_late_wired.clone(),
+                        ..Default::default()
+                    },
+                    ProcessExecution::Reactive,
+                ),
+            )),
         );
 
         let link_id: LinkUniqueId = "L-wired-late".into();
@@ -1950,16 +1924,14 @@ mod tests {
             &helper_hosted_id,
             ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
         );
-        assert!(is_subprocess_processor(
-            &mut graph,
-            &helper_hosted_id.as_str().into()
-        ));
+        assert!(out_of_process_link_wiring_of(&graph, &helper_hosted_id.as_str().into()).is_some());
 
         let engine_hosted_id = add_mock_input_only(&mut graph);
-        assert!(!is_subprocess_processor(
+        attach_mock_instance::<crate::core::test_support::MockInputOnlyProcessor::Processor>(
             &mut graph,
-            &engine_hosted_id.as_str().into()
-        ));
+            &engine_hosted_id,
+        );
+        assert!(out_of_process_link_wiring_of(&graph, &engine_hosted_id.as_str().into()).is_none());
     }
 
     /// A link with one endpoint in each world reclaims each end its own way —
@@ -1985,10 +1957,15 @@ mod tests {
         attach_processor_instance(
             &mut graph,
             &dest_id,
-            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub {
-                reclaimed_links: dest_reclaims.clone(),
-                ..Default::default()
-            })),
+            ProcessorInstance::new(Box::new(
+                OutOfCrateHelperSpawnHostStub::with_a_far_side_past_its_setup_command(
+                    RecordingOutOfProcessFarSideLinkDelivery {
+                        reclaimed_links: dest_reclaims.clone(),
+                        ..Default::default()
+                    },
+                    ProcessExecution::Reactive,
+                ),
+            )),
         );
 
         let link_id = graph
@@ -2020,8 +1997,11 @@ mod tests {
             },
         )
         .expect("the engine-side source wires");
+        let dest_link_wiring = out_of_process_link_wiring_of(&graph, &dest_id.as_str().into())
+            .expect("a helper stub's node carries its link wiring");
         wire_subprocess_dest(
             &mut graph,
+            &dest_link_wiring,
             &dest_id.as_str().into(),
             "in1",
             "pabc/out1",
@@ -2164,7 +2144,8 @@ mod tests {
                 &mut graph,
                 &helper_hosted_id,
                 ProcessorInstance::new(Box::new(
-                    OutOfCrateHelperSpawnHostStub::driving_its_processor_in(
+                    OutOfCrateHelperSpawnHostStub::with_a_far_side_past_its_setup_command(
+                        RecordingOutOfProcessFarSideLinkDelivery::default(),
                         far_side_process_execution,
                     ),
                 )),
@@ -2213,7 +2194,10 @@ mod tests {
             &mut graph,
             &dest_id,
             ProcessorInstance::new(Box::new(
-                OutOfCrateHelperSpawnHostStub::driving_its_processor_in(far_side_process_execution),
+                OutOfCrateHelperSpawnHostStub::with_a_far_side_past_its_setup_command(
+                    RecordingOutOfProcessFarSideLinkDelivery::default(),
+                    far_side_process_execution,
+                ),
             )),
         );
 
@@ -2803,10 +2787,15 @@ mod tests {
             attach_processor_instance(
                 &mut graph,
                 helper_id,
-                ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub {
-                    wire_answers_owed: answers_owed.clone(),
-                    ..Default::default()
-                })),
+                ProcessorInstance::new(Box::new(
+                    OutOfCrateHelperSpawnHostStub::with_a_far_side_past_its_setup_command(
+                        RecordingOutOfProcessFarSideLinkDelivery {
+                            wire_answers_owed: answers_owed.clone(),
+                            ..Default::default()
+                        },
+                        ProcessExecution::Reactive,
+                    ),
+                )),
             );
         }
         let link_id = add_link_from_out1_to_in1(&mut graph, &source_id, &dest_id);
@@ -3112,10 +3101,15 @@ mod tests {
         attach_processor_instance(
             &mut graph,
             &helper_id,
-            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub {
-                wire_answers_owed: answers_owed.clone(),
-                ..Default::default()
-            })),
+            ProcessorInstance::new(Box::new(
+                OutOfCrateHelperSpawnHostStub::with_a_far_side_past_its_setup_command(
+                    RecordingOutOfProcessFarSideLinkDelivery {
+                        wire_answers_owed: answers_owed.clone(),
+                        ..Default::default()
+                    },
+                    ProcessExecution::Reactive,
+                ),
+            )),
         );
         let link_id = add_link_from_out1_to_in1(&mut graph, &helper_id, &helper_id);
 
@@ -3144,6 +3138,155 @@ mod tests {
         assert_eq!(
             link_state_in_graph(&graph, &link_id),
             (LinkStateOutput::Wired, None)
+        );
+    }
+
+    /// How long the op may take while a helper's processor lock is held before
+    /// it counts as waiting on that lock.
+    const LONGEST_A_WIRING_OP_MAY_TAKE_BESIDE_A_HELPER_SETTING_UP: std::time::Duration =
+        std::time::Duration::from_secs(5);
+
+    /// Run `wiring_op` on another thread while this one holds both processor
+    /// locks, the way each helper's spawn thread holds its own across a setup
+    /// still importing, and hand back what it returned — or `None` if it was
+    /// still waiting when the budget ran out, once the locks are let go.
+    fn run_while_both_processor_locks_are_held<T: Send>(
+        source: &Arc<Mutex<ProcessorInstance>>,
+        dest: &Arc<Mutex<ProcessorInstance>>,
+        wiring_op: impl FnOnce() -> T + Send,
+    ) -> Option<T> {
+        let source_setting_up = source.lock();
+        let dest_setting_up = dest.lock();
+        std::thread::scope(|scope| {
+            let (wiring_op_returned_tx, wiring_op_returned_rx) = std::sync::mpsc::channel();
+            scope.spawn(move || {
+                let _ = wiring_op_returned_tx.send(wiring_op());
+            });
+            let returned = wiring_op_returned_rx
+                .recv_timeout(LONGEST_A_WIRING_OP_MAY_TAKE_BESIDE_A_HELPER_SETTING_UP)
+                .ok();
+            drop(source_setting_up);
+            drop(dest_setting_up);
+            returned
+        })
+    }
+
+    /// Two helper stubs whose far sides record into one delivery, and a link
+    /// from the source's `out1` to the destination's `in1` not yet wired.
+    struct TwoHelperStubsAndAnUnwiredLinkBetweenThem {
+        graph: Graph,
+        source: Arc<Mutex<ProcessorInstance>>,
+        dest: Arc<Mutex<ProcessorInstance>>,
+        link_id: LinkUniqueId,
+        far_side: RecordingOutOfProcessFarSideLinkDelivery,
+    }
+
+    impl TwoHelperStubsAndAnUnwiredLinkBetweenThem {
+        fn new() -> Self {
+            let mut graph = Graph::new();
+            let source_id = add_mock_output_only(&mut graph);
+            let dest_id = add_mock_input_only(&mut graph);
+            let far_side = RecordingOutOfProcessFarSideLinkDelivery::default();
+            let mut attach_a_helper_stub = |proc_id: &str| {
+                attach_processor_instance(
+                    &mut graph,
+                    proc_id,
+                    ProcessorInstance::new(Box::new(
+                        OutOfCrateHelperSpawnHostStub::with_a_far_side_past_its_setup_command(
+                            far_side.clone(),
+                            ProcessExecution::Reactive,
+                        ),
+                    )),
+                )
+            };
+            let source = attach_a_helper_stub(&source_id);
+            let dest = attach_a_helper_stub(&dest_id);
+            let link_id = add_link_from_out1_to_in1(&mut graph, &source_id, &dest_id);
+            Self {
+                graph,
+                source,
+                dest,
+                link_id,
+                far_side,
+            }
+        }
+    }
+
+    /// A live `connect` onto helpers still inside their setup — their processor
+    /// locks held — wires the link without waiting for either lock, so the
+    /// graph lock the compiler holds around it is never held across an import.
+    ///
+    /// Fail-without-fix: classify an out-of-process endpoint through its
+    /// processor's lock and the op waits out the budget.
+    #[test]
+    fn a_link_between_helpers_still_setting_up_is_handed_over_without_their_processor_locks() {
+        use crate::core::json_schema::LinkStateOutput;
+        let TwoHelperStubsAndAnUnwiredLinkBetweenThem {
+            mut graph,
+            source,
+            dest,
+            link_id,
+            far_side,
+        } = TwoHelperStubsAndAnUnwiredLinkBetweenThem::new();
+
+        let wired = run_while_both_processor_locks_are_held(&source, &dest, || {
+            open_iceoryx2_service(&mut graph, &link_id, &Iceoryx2Node::for_this_test_process())
+        })
+        .expect("the op returns while both helpers still hold their processor locks");
+
+        wired.expect("the link wires");
+        assert_eq!(
+            link_state_in_graph(&graph, &link_id),
+            (LinkStateOutput::Pending, None)
+        );
+        let handed_over = far_side.late_wired_links.lock();
+        let directions: Vec<crate::core::PortDirection> = handed_over
+            .iter()
+            .map(|(direction, _)| *direction)
+            .collect();
+        assert_eq!(
+            directions,
+            [
+                crate::core::PortDirection::Output,
+                crate::core::PortDirection::Input
+            ],
+            "both helpers are handed their end of the link"
+        );
+    }
+
+    /// A disconnect of a link between helpers whose processor locks are held
+    /// reclaims both ends without waiting for either lock.
+    ///
+    /// Fail-without-fix: reclaim an out-of-process endpoint through its
+    /// processor's lock and the op waits out the budget.
+    #[test]
+    fn a_disconnect_between_helpers_still_setting_up_reclaims_both_ends_without_their_processor_locks()
+     {
+        use crate::core::json_schema::LinkStateOutput;
+        let TwoHelperStubsAndAnUnwiredLinkBetweenThem {
+            mut graph,
+            source,
+            dest,
+            link_id,
+            far_side,
+        } = TwoHelperStubsAndAnUnwiredLinkBetweenThem::new();
+        open_iceoryx2_service(&mut graph, &link_id, &Iceoryx2Node::for_this_test_process())
+            .expect("the link wires");
+
+        let closed = run_while_both_processor_locks_are_held(&source, &dest, || {
+            close_iceoryx2_service(&mut graph, &link_id)
+        })
+        .expect("the op returns while both helpers still hold their processor locks");
+
+        closed.expect("the disconnect succeeds");
+        assert_eq!(
+            link_state_in_graph(&graph, &link_id),
+            (LinkStateOutput::Disconnected, None)
+        );
+        assert_eq!(
+            far_side.reclaimed_links.lock().len(),
+            2,
+            "both helpers are told to drop their end of the link"
         );
     }
 
@@ -3375,8 +3518,11 @@ mod tests {
             ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
         );
 
+        let dest_link_wiring = out_of_process_link_wiring_of(&graph, &dest_id.as_str().into())
+            .expect("a helper stub's node carries its link wiring");
         let refusal = wire_subprocess_dest(
             &mut graph,
+            &dest_link_wiring,
             &dest_id.as_str().into(),
             "audio",
             "pabc/out1",
@@ -3423,8 +3569,11 @@ mod tests {
         )
         .expect("a device format settles a contract");
 
+        let dest_link_wiring = out_of_process_link_wiring_of(&graph, &dest_id.as_str().into())
+            .expect("a helper stub's node carries its link wiring");
         wire_subprocess_dest(
             &mut graph,
+            &dest_link_wiring,
             &dest_id.as_str().into(),
             "audio",
             "pabc/out1",
@@ -3906,8 +4055,11 @@ mod tests {
             panic!("the mock's audio port declares a window contract");
         };
 
+        let dest_link_wiring = out_of_process_link_wiring_of(&graph, &dest_id.as_str().into())
+            .expect("a helper stub's node carries its link wiring");
         wire_subprocess_dest(
             &mut graph,
+            &dest_link_wiring,
             &dest_id.as_str().into(),
             "audio",
             "pabc/out1",

@@ -9,7 +9,7 @@ use parking_lot::RwLock;
 use crate::core::ProcessorDescriptor;
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::descriptors::ProcessorClassImportPath;
-use crate::core::error::{Error, PortDirection, Result};
+use crate::core::error::{Error, Result};
 use crate::core::execution::ExecutionConfig;
 use crate::core::graph::{PortInfo, ProcessorNode};
 use crate::core::processors::{Config, DynGeneratedProcessor, GeneratedProcessor};
@@ -103,40 +103,8 @@ impl ProcessorInstance {
     /// itself.
     ///
     /// Only a subprocess-host registration can be out of process.
-    pub fn out_of_process_link_wiring(
-        &mut self,
-    ) -> Option<&mut super::OutOfProcessLinkWiringEnvelope> {
+    pub fn out_of_process_link_wiring(&self) -> Option<Arc<super::OutOfProcessLinkWiringEnvelope>> {
         self.0.out_of_process_link_wiring()
-    }
-
-    /// Ask a processor whose ports live outside the engine to reclaim one
-    /// disconnected link.
-    ///
-    /// Only for a processor the compiler op already classified out of process.
-    /// One the engine wires itself keeps the trait default, which refuses
-    /// rather than answering `Ok` to a reclaim nobody performed.
-    pub fn unwire_out_of_process_link(
-        &mut self,
-        port_direction: PortDirection,
-        local_port_name: &str,
-        link_id: &str,
-    ) -> Result<()> {
-        self.0
-            .unwire_out_of_process_link(port_direction, local_port_name, link_id)
-    }
-
-    /// Hand a processor whose ports live outside the engine one link wired
-    /// after its setup ran, so it opens its own port for it now rather than
-    /// never, and hand back the cell its answer will land in.
-    ///
-    /// `None` is a link the far side's setup command will carry instead, which
-    /// its `ready` confirms.
-    pub fn wire_out_of_process_link(
-        &mut self,
-        port_direction: PortDirection,
-        link_wiring: &serde_json::Value,
-    ) -> Result<Option<Arc<super::OutOfProcessLinkWireReply>>> {
-        self.0.wire_out_of_process_link(port_direction, link_wiring)
     }
 
     /// Borrow the host-side `OutputWriterInner` Arc this processor

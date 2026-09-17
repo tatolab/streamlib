@@ -33,12 +33,10 @@ use streamlib::sdk::graph::ProcessorNode;
 use streamlib::sdk::helper_process_transport::{
     ENGINE_BUILD_ID, ENGINE_BUILD_ID_ENVIRONMENT_VARIABLE, EscalateTransport,
     HelperProcessShutdownCommand, SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS, SubprocessBridge,
-    spawn_fd_line_reader,
+    refusal_of_a_link_into_a_helper_process_that_failed, spawn_fd_line_reader,
 };
 use streamlib::sdk::iceoryx2::ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE;
-use streamlib::sdk::processors::{
-    DynGeneratedProcessor, OutOfProcessLinkWireReply, OutOfProcessLinkWiringEnvelope,
-};
+use streamlib::sdk::processors::{DynGeneratedProcessor, OutOfProcessLinkWiringEnvelope};
 
 /// The module CPython is launched with in a helper process.
 const HELPER_PROCESS_MODULE: &str = "streamlib._helper";
@@ -193,7 +191,7 @@ pub(crate) struct PythonHelperProcessSpawnHostProcessor {
     /// Set once this helper has been through the shutdown ask, so the ladder's
     /// own belt-and-braces call cannot make it a second time.
     shutdown_was_already_asked_of_this_helper: bool,
-    link_wiring: OutOfProcessLinkWiringEnvelope,
+    link_wiring: Arc<OutOfProcessLinkWiringEnvelope>,
 }
 
 impl PythonHelperProcessSpawnHostProcessor {
@@ -279,9 +277,24 @@ impl PythonHelperProcessSpawnHostProcessor {
                 self.processor_display_name
             ))
         })?;
-        bridge.send(message).inspect_err(|_| {
-            self.child_is_gone = true;
-        })
+        let sent = bridge.send(message);
+        if sent.is_err() {
+            self.give_up_on_the_helper_process();
+        }
+        sent
+    }
+
+    /// Stop treating the child as reachable: no lifecycle command is exchanged
+    /// with it again, and every link wired into it from now on is refused.
+    fn give_up_on_the_helper_process(&mut self) {
+        self.child_is_gone = true;
+        self.link_wiring
+            .refuse_every_later_link_because_the_far_side_is_gone(
+                refusal_of_a_link_into_a_helper_process_that_failed(
+                    &self.processor_display_name,
+                    &self.processor_id,
+                ),
+            );
     }
 
     /// Send a command, wait a bounded time for the child's reply, and give up
@@ -310,7 +323,7 @@ impl PythonHelperProcessSpawnHostProcessor {
                  {send_failure}",
                 self.processor_display_name
             );
-            self.child_is_gone = true;
+            self.give_up_on_the_helper_process();
             return None;
         }
         let reply = self
@@ -326,7 +339,7 @@ impl PythonHelperProcessSpawnHostProcessor {
                     self.processor_display_name,
                     REPLY_DEADLINE.as_secs(),
                 );
-                self.child_is_gone = true;
+                self.give_up_on_the_helper_process();
                 None
             }
             None => None,
@@ -536,7 +549,7 @@ impl PythonHelperProcessSpawnHostProcessor {
         &mut self,
         outcome: Option<HelperProcessShutdownOutcome>,
     ) {
-        self.child_is_gone = true;
+        self.give_up_on_the_helper_process();
         self.bridge.take();
         if let Some(HelperProcessShutdownOutcome::Reaped(exit_status)) = outcome {
             tracing::debug!(
@@ -576,6 +589,149 @@ impl PythonHelperProcessSpawnHostProcessor {
                 self.processor_display_name,
             ),
         }
+    }
+
+    /// Hold every link recorded from now on behind the setup command, run
+    /// `start_the_helper_process`, and give the helper up if that fails — so a
+    /// link held behind a setup command that never went out is refused rather
+    /// than pending for good.
+    fn set_up_holding_every_later_link_until_the_setup_command_goes_out(
+        &mut self,
+        start_the_helper_process: impl FnOnce(&mut Self) -> Result<()>,
+    ) -> Result<()> {
+        self.link_wiring
+            .hold_every_later_link_until_the_setup_command_goes_out();
+        let set_up = start_the_helper_process(self);
+        if set_up.is_err() {
+            self.give_up_on_the_helper_process();
+        }
+        set_up
+    }
+
+    /// Start the child and wait for its `ready` — everything `setup` does once
+    /// later links are held.
+    fn start_the_helper_process_and_await_its_registration(
+        &mut self,
+        ctx: &RuntimeContextFullAccess<'_>,
+    ) -> Result<()> {
+        #[cfg(target_os = "linux")]
+        let surface_socket_path = Some(ctx.surface_socket_path());
+        #[cfg(not(target_os = "linux"))]
+        let surface_socket_path: Option<&Path> = None;
+
+        // Before the child exists, so its first counts have a board to land on
+        // and the board outlives whatever becomes of it.
+        let loss_count_board = self
+            .link_wiring
+            .create_the_loss_count_board_for_this_helper_spawn(
+                ctx,
+                &self.processor_id,
+                self.descriptor
+                    .outputs
+                    .iter()
+                    .map(|output_port| output_port.name.clone())
+                    .collect(),
+            )
+            .map_err(|board_failure| {
+                Error::Runtime(format!(
+                    "[{}] could not create the board its helper process writes loss counts on: \
+                     {board_failure}",
+                    self.processor_display_name
+                ))
+            })?;
+        let iceoryx2_domain_root = ctx.runtime_directory().iceoryx2_domain_root();
+        let mut command = self.build_helper_process_command(
+            &ctx.runtime_id(),
+            &iceoryx2_domain_root,
+            surface_socket_path,
+        );
+        self.iceoryx2_domain_root = Some(iceoryx2_domain_root);
+        let mut escalate_transport = EscalateTransport::attach(&mut command)?;
+
+        let mut child = command.spawn().map_err(|spawn_failure| {
+            Error::Runtime(format!(
+                "[{}] could not start its helper process with `{} -m {HELPER_PROCESS_MODULE}`: \
+                 {spawn_failure}",
+                self.processor_display_name,
+                self.interpreter_path.display(),
+            ))
+        })?;
+        // After the spawn, so the child is the only holder of its end and sees
+        // EOF when this process lets go.
+        escalate_transport.release_child_end();
+
+        tracing::info!(
+            "[{}] helper process started: pid={}, entrypoint={}",
+            self.processor_display_name,
+            child.id(),
+            self.processor_class_import_path,
+        );
+        // `pre_exec` made the child the leader of a group whose id is its pid.
+        if !streamlib::sdk::runtime::register_a_helper_process_group(child.id() as i32) {
+            tracing::warn!(
+                "[{}] its helper process group could not be registered, so a third interrupt \
+                 will not kill it; the kernel still kills the helper itself when the app exits",
+                self.processor_display_name,
+            );
+        }
+
+        // fd1/fd2 carry anything that bypasses `streamlib.log` — a raw
+        // `os.write`, a C extension's `printf`, an interpreter-level fatal —
+        // and each line becomes an `intercepted` record in the unified JSONL.
+        if let Some(child_stdout) = child.stdout.take() {
+            spawn_fd_line_reader(child_stdout, "py-stdout", "fd1", &self.processor_id);
+        }
+        if let Some(child_stderr) = child.stderr.take() {
+            self.child_standard_error_tail = Some(spawn_standard_error_reader_keeping_its_tail(
+                child_stderr,
+                &self.processor_id,
+            ));
+        }
+
+        self.child = Some(child);
+        let bridge = SubprocessBridge::new(
+            escalate_transport.into_parent_stream(),
+            ctx.gpu_limited_access().clone(),
+            self.processor_id.clone(),
+        )?;
+
+        let config = self
+            .processor_configuration
+            .clone()
+            .unwrap_or(serde_json::Value::Null);
+        // Through the envelope, so the links it carries go out with this
+        // command and every link held behind it is handed over after.
+        let setup_command_sent = self
+            .link_wiring
+            .send_the_setup_command_then_hand_every_later_link_over(
+                |ports| {
+                    bridge.send(&serde_json::json!({
+                        // The engine's own constant: the escalate dispatch reads
+                        // this exact spelling to decide that a window may be
+                        // minted, and a rename on one side alone would refuse
+                        // every window silently.
+                        "cmd": SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS,
+                        "capability": "full",
+                        "config": config,
+                        "processor_id": self.processor_id,
+                        "ports": ports,
+                        "loss_count_board": loss_count_board,
+                    }))
+                },
+                bridge.link_delivery_to_this_subprocess(&self.processor_display_name),
+            );
+        self.bridge = Some(bridge);
+        if let Err(setup_command_send_failure) = setup_command_sent {
+            // The child's end is already closed: it refused its own start
+            // before reading anything.
+            tracing::debug!(
+                "[{}] could not send its helper process the setup command: \
+                 {setup_command_send_failure}",
+                self.processor_display_name
+            );
+            return Err(self.refuse_the_helper_process_that_died_while_setting_up());
+        }
+        self.await_child_registration()
     }
 }
 
@@ -897,112 +1053,9 @@ unsafe fn mark_each_descriptor_past_stdio_close_on_exec(highest_descriptor: libc
 
 impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
     fn __generated_setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        #[cfg(target_os = "linux")]
-        let surface_socket_path = Some(ctx.surface_socket_path());
-        #[cfg(not(target_os = "linux"))]
-        let surface_socket_path: Option<&Path> = None;
-
-        // Before the child exists, so its first counts have a board to land on
-        // and the board outlives whatever becomes of it.
-        let loss_count_board = self
-            .link_wiring
-            .create_the_loss_count_board_for_this_helper_spawn(
-                ctx,
-                &self.processor_id,
-                self.descriptor
-                    .outputs
-                    .iter()
-                    .map(|output_port| output_port.name.clone())
-                    .collect(),
-            )
-            .map_err(|board_failure| {
-                Error::Runtime(format!(
-                    "[{}] could not create the board its helper process writes loss counts on: \
-                     {board_failure}",
-                    self.processor_display_name
-                ))
-            })?;
-        let iceoryx2_domain_root = ctx.runtime_directory().iceoryx2_domain_root();
-        let mut command = self.build_helper_process_command(
-            &ctx.runtime_id(),
-            &iceoryx2_domain_root,
-            surface_socket_path,
-        );
-        self.iceoryx2_domain_root = Some(iceoryx2_domain_root);
-        let mut escalate_transport = EscalateTransport::attach(&mut command)?;
-
-        let mut child = command.spawn().map_err(|spawn_failure| {
-            Error::Runtime(format!(
-                "[{}] could not start its helper process with `{} -m {HELPER_PROCESS_MODULE}`: \
-                 {spawn_failure}",
-                self.processor_display_name,
-                self.interpreter_path.display(),
-            ))
-        })?;
-        // After the spawn, so the child is the only holder of its end and sees
-        // EOF when this process lets go.
-        escalate_transport.release_child_end();
-
-        tracing::info!(
-            "[{}] helper process started: pid={}, entrypoint={}",
-            self.processor_display_name,
-            child.id(),
-            self.processor_class_import_path,
-        );
-        // `pre_exec` made the child the leader of a group whose id is its pid.
-        if !streamlib::sdk::runtime::register_a_helper_process_group(child.id() as i32) {
-            tracing::warn!(
-                "[{}] its helper process group could not be registered, so a third interrupt \
-                 will not kill it; the kernel still kills the helper itself when the app exits",
-                self.processor_display_name,
-            );
-        }
-
-        // fd1/fd2 carry anything that bypasses `streamlib.log` — a raw
-        // `os.write`, a C extension's `printf`, an interpreter-level fatal —
-        // and each line becomes an `intercepted` record in the unified JSONL.
-        if let Some(child_stdout) = child.stdout.take() {
-            spawn_fd_line_reader(child_stdout, "py-stdout", "fd1", &self.processor_id);
-        }
-        if let Some(child_stderr) = child.stderr.take() {
-            self.child_standard_error_tail = Some(spawn_standard_error_reader_keeping_its_tail(
-                child_stderr,
-                &self.processor_id,
-            ));
-        }
-
-        self.child = Some(child);
-        self.bridge = Some(SubprocessBridge::new(
-            escalate_transport.into_parent_stream(),
-            ctx.gpu_limited_access().clone(),
-            self.processor_id.clone(),
-        )?);
-
-        let setup_command_sent = self.send_to_child(&serde_json::json!({
-            // The engine's own constant: the escalate dispatch reads this
-            // exact spelling to decide that a window may be minted, and a
-            // rename on one side alone would refuse every window silently.
-            "cmd": SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS,
-            "capability": "full",
-            "config": self
-                .processor_configuration
-                .clone()
-                .unwrap_or(serde_json::Value::Null),
-            "processor_id": self.processor_id,
-            "ports": self.link_wiring.as_setup_command_ports(),
-            "loss_count_board": loss_count_board,
-        }));
-        if let Err(setup_command_send_failure) = setup_command_sent {
-            // The child's end is already closed: it refused its own start
-            // before reading anything.
-            tracing::debug!(
-                "[{}] could not send its helper process the setup command: \
-                 {setup_command_send_failure}",
-                self.processor_display_name
-            );
-            return Err(self.refuse_the_helper_process_that_died_while_setting_up());
-        }
-        self.await_child_registration()
+        self.set_up_holding_every_later_link_until_the_setup_command_goes_out(|host| {
+            host.start_the_helper_process_and_await_its_registration(ctx)
+        })
     }
 
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
@@ -1113,105 +1166,8 @@ impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
         false
     }
 
-    fn out_of_process_link_wiring(&mut self) -> Option<&mut OutOfProcessLinkWiringEnvelope> {
-        Some(&mut self.link_wiring)
-    }
-
-    /// Tell the child to drop the port it opened for a disconnected link.
-    ///
-    /// Unanswered, like `run`. The compiler calls this holding the graph's
-    /// write lock, so waiting out `REPLY_DEADLINE` on a child that is busy in
-    /// a callback would park every other graph operation behind it — and a
-    /// reply nobody reads is read as the answer to the next command, which is
-    /// the desync `exchange_with_child_expecting` warns about.
-    ///
-    /// A child that is not there needs no telling, and that is the ordinary
-    /// case rather than a failure — its ports went with the process, or were
-    /// never opened. Three windows: before `setup` builds the bridge, after
-    /// `teardown` takes it, and any point a child died on its own, which
-    /// leaves the bridge in place and is noticed only by its reader thread
-    /// seeing EOF. Reporting any of them as a refused reclaim would put a
-    /// leak warning in front of an operator on a clean shutdown.
-    fn unwire_out_of_process_link(
-        &mut self,
-        port_direction: streamlib::sdk::error::PortDirection,
-        local_port_name: &str,
-        link_id: &str,
-    ) -> Result<()> {
-        if let Some(bridge) = self.bridge.as_ref() {
-            // A link on its way out is one this child owes no answer for. Left
-            // waiting, a child that dies later would refuse a link the graph no
-            // longer has.
-            bridge.stop_awaiting_the_subprocess_wire_answer_for_link(link_id);
-        }
-        if self.has_failed_unrecoverably() || self.bridge.is_none() {
-            return Ok(());
-        }
-        self.send_to_child(&serde_json::json!({
-            "cmd": "unwire_link",
-            "direction": port_direction.as_wire_str(),
-            "port": local_port_name,
-            "link_id": link_id,
-        }))
-    }
-
-    /// Hand the child one link wired after its setup, and hand back the cell
-    /// its answer will land in.
-    ///
-    /// The send itself does not wait — the compiler calls this holding the
-    /// graph's write lock, and a child reads commands only between callbacks,
-    /// so waiting would park every other graph operation behind user code. The
-    /// child answers on its own rpc tag, which the bridge routes to this cell,
-    /// and `graph` is where the caller reads the outcome.
-    ///
-    /// Before `setup` there is no bridge and nothing to send: the setup command
-    /// reads the envelope, which already carries this link, and the child's
-    /// `ready` confirms it — so that link waits on no cell of its own. A child
-    /// that has died is refused instead, so the compile wiring the link fails
-    /// and its caller hears it rather than reading a wired link nothing will
-    /// cross.
-    fn wire_out_of_process_link(
-        &mut self,
-        port_direction: streamlib::sdk::error::PortDirection,
-        link_wiring: &serde_json::Value,
-    ) -> Result<Option<Arc<OutOfProcessLinkWireReply>>> {
-        if self.has_failed_unrecoverably() {
-            return Err(Error::Runtime(format!(
-                "processor '{}' ({}) has failed, so no link can be wired into it",
-                self.processor_display_name, self.processor_id
-            )));
-        }
-        let Some(bridge) = self.bridge.as_ref() else {
-            return Ok(None);
-        };
-        let Some(link_id) = link_wiring.get("link_id").and_then(|id| id.as_str()) else {
-            return Err(Error::Configuration(format!(
-                "the wiring handed to processor '{}' ({}) names no link, so its helper \
-                 process could not answer for one",
-                self.processor_display_name, self.processor_id
-            )));
-        };
-        let reply = OutOfProcessLinkWireReply::awaiting_the_far_sides_answer();
-        // Registered before the send, never after: the child can answer the
-        // moment the frame lands, and a cell registered afterwards would miss
-        // an answer already routed.
-        bridge.await_the_subprocess_wire_answer_for_link(link_id.to_string(), Arc::clone(&reply));
-        match self.send_to_child(&serde_json::json!({
-            "cmd": "wire_link",
-            "direction": port_direction.as_wire_str(),
-            "link": link_wiring,
-        })) {
-            Ok(()) => Ok(Some(reply)),
-            Err(send_failure) => {
-                // A send that never left is an answer that never comes. The
-                // caller hears the failure, and the cell is taken back out so
-                // a later death refuses nothing on this link's behalf.
-                if let Some(bridge) = self.bridge.as_ref() {
-                    bridge.stop_awaiting_the_subprocess_wire_answer_for_link(link_id);
-                }
-                Err(send_failure)
-            }
-        }
+    fn out_of_process_link_wiring(&self) -> Option<Arc<OutOfProcessLinkWiringEnvelope>> {
+        Some(Arc::clone(&self.link_wiring))
     }
 
     fn set_iceoryx2_resources(
@@ -1313,9 +1269,9 @@ pub(crate) fn spawn_host_for_processor_node(
         bridge: None,
         child_is_gone: false,
         shutdown_was_already_asked_of_this_helper: false,
-        link_wiring: OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(
+        link_wiring: Arc::new(OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(
             child_execution_config.execution,
-        ),
+        )),
     })
 }
 
@@ -1664,9 +1620,9 @@ sys.exit(0)
             bridge: None,
             child_is_gone: false,
             shutdown_was_already_asked_of_this_helper: false,
-            link_wiring: OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(
+            link_wiring: Arc::new(OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(
                 ProcessExecution::Reactive,
-            ),
+            )),
         }
     }
 
@@ -1699,7 +1655,7 @@ sys.exit(0)
             ProcessExecution::Manual,
             ProcessExecution::Reactive,
         ] {
-            let mut host = spawn_host_for_processor_node(
+            let host = spawn_host_for_processor_node(
                 "my_app.sinks:PollingSinkProcessor",
                 &descriptor,
                 ExecutionConfig::new(child_execution),
@@ -1715,27 +1671,85 @@ sys.exit(0)
         }
     }
 
-    /// A link wired into a helper that has died is refused, so the compile
-    /// wiring it fails and the caller hears it; before setup the same call is
-    /// a no-op, because the setup command carries the envelope.
+    /// A link wired into a helper the host gave up on is refused, so the
+    /// compile wiring it fails and the caller hears it; before setup the same
+    /// link rides the setup command instead.
+    ///
+    /// Fail-without-fix: set only `child_is_gone` when giving up and the
+    /// envelope, which the compiler reaches without this host's lock, goes on
+    /// recording links nothing will ever open.
     #[test]
-    fn a_late_link_into_a_failed_helper_is_refused_and_one_before_setup_is_not() {
+    fn a_late_link_into_a_helper_the_host_gave_up_on_is_refused_and_one_before_setup_is_not() {
         let link_wiring = serde_json::json!({"link_id": "L-late", "name": "frames_from_upstream"});
 
         let mut failed = spawn_host_for_test(None);
-        failed.child_is_gone = true;
+        failed.give_up_on_the_helper_process();
         let refused = failed
-            .wire_out_of_process_link(streamlib::sdk::error::PortDirection::Input, &link_wiring)
+            .out_of_process_link_wiring()
+            .expect("a helper host carries an envelope")
+            .record_a_link_and_hand_it_to_a_far_side_past_its_setup_command(
+                streamlib::sdk::error::PortDirection::Input,
+                link_wiring.clone(),
+            )
             .expect_err("a dead child can open no port");
         assert!(
             refused.to_string().contains("has failed"),
             "the refusal names the failure; got {refused}"
         );
 
-        let mut not_yet_set_up = spawn_host_for_test(None);
-        not_yet_set_up
-            .wire_out_of_process_link(streamlib::sdk::error::PortDirection::Input, &link_wiring)
+        let not_yet_set_up = spawn_host_for_test(None);
+        let carried = not_yet_set_up
+            .out_of_process_link_wiring()
+            .expect("a helper host carries an envelope")
+            .record_a_link_and_hand_it_to_a_far_side_past_its_setup_command(
+                streamlib::sdk::error::PortDirection::Input,
+                link_wiring,
+            )
             .expect("before setup the envelope carries the link");
+        assert!(
+            carried.is_none(),
+            "a link riding the setup command waits on no answer of its own"
+        );
+    }
+
+    /// A link recorded while the helper sets up waits on its own answer, and a
+    /// setup that fails before its setup command goes out refuses that link
+    /// rather than leaving it pending.
+    ///
+    /// Fail-without-fix: drop the hold and the link rides a setup command that
+    /// never goes out; drop the give-up and it reads pending for good.
+    #[test]
+    fn a_link_held_during_a_setup_that_fails_is_refused_rather_than_left_pending() {
+        let mut host = spawn_host_for_test(None);
+        let mut held_answer_cell = None;
+
+        host.set_up_holding_every_later_link_until_the_setup_command_goes_out(|host| {
+            held_answer_cell = host
+                .out_of_process_link_wiring()
+                .expect("a helper host carries an envelope")
+                .record_a_link_and_hand_it_to_a_far_side_past_its_setup_command(
+                    streamlib::sdk::error::PortDirection::Input,
+                    serde_json::json!({"link_id": "L-live", "name": "frames_from_upstream"}),
+                )
+                .expect("a helper still setting up takes the link");
+            Err(Error::Runtime(
+                "the helper process could not be started".to_string(),
+            ))
+        })
+        .expect_err("the setup failed");
+
+        let held_answer_cell =
+            held_answer_cell.expect("a link recorded during setup waits on its own answer");
+        match held_answer_cell.the_far_sides_answer() {
+            Some(
+                streamlib::sdk::processors::OutOfProcessLinkWireOutcome::RefusedByTheFarSide {
+                    reason,
+                },
+            ) => assert!(reason.contains("has failed"), "{reason}"),
+            unanswered_or_opened => {
+                panic!("the held link must be refused; got {unanswered_or_opened:?}")
+            }
+        }
     }
 
     /// The child is an exec of the app's own interpreter running the helper
