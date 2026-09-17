@@ -19,6 +19,16 @@ use streamlib::sdk::logging::{LogLevel, emit_app_process_python_log_record, log_
 
 use crate::python_bag_conversion::python_object_to_json_value;
 
+/// Warn through the child's own log module.
+///
+/// A helper process installs no tracing subscriber, so `tracing` there reaches
+/// nobody; `streamlib.log` rides the escalate `Log` op into the unified JSONL.
+pub(crate) fn warn_through_the_childs_log_module(python: Python<'_>, message: String) {
+    let _ = python
+        .import("streamlib.log")
+        .and_then(|log_module| log_module.call_method1("warn", (message,)));
+}
+
 /// Current monotonic time in nanoseconds via `clock_gettime(CLOCK_MONOTONIC)`.
 ///
 /// The kernel's `CLOCK_MONOTONIC` epoch, so values are comparable across

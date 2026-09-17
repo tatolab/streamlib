@@ -549,7 +549,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   fresh board. A helper's write refused at the per-link ceiling is
   counted the same way. The node's `metrics` key then renders for a helper-placed processor
   as it does for an app-process one. [loss-visibility]
-  <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_helper_placed_destinations_node_carries_no_metrics_rather_than_a_zero -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_helper_placed_destinations_node_renders_the_counts_its_helper_wrote_on_its_slot -->
 - **DECIDED** — No link ever blocks a producer. Producer-blocking is deleted, not merely
   unreachable: no profile resolves to it and the overflow policy it was the second half
   of goes with it. A processor publishing to a slow consumer loses bags at that

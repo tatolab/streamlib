@@ -22,8 +22,9 @@ use crate::core::error::{Error, Result};
 use crate::core::graph::{
     DeviceMatchedAudioWindowContractsComponent, Graph, GraphEdgeWithComponents,
     GraphNodeWithComponents, Iceoryx2ServicesHeldOpenForLinkComponent, Link, LinkState,
-    LinkStateComponent, LinkUniqueId, OutOfProcessLinkWireRepliesComponent,
-    ProcessorInstanceComponent, ProcessorMetrics,
+    LinkStateComponent, LinkUniqueId, LossCountsOfPortsInThisProcess,
+    OutOfProcessLinkWireRepliesComponent, ProcessorInstanceComponent, ProcessorLossCounts,
+    ProcessorMetrics,
 };
 use crate::core::processors::{OutOfProcessLinkWireReply, ProcessorInstance};
 use crate::iceoryx2::{
@@ -962,14 +963,37 @@ fn wire_rust_dest(
 /// after: each count is one shared object for the whole processor, and a link or
 /// channel wired later mints its own zeroed entry inside it. A producer that only
 /// produces carries its node's metrics as a destination does.
-///
-/// A processor whose ports live out of process never reaches here — it counts in
-/// its own process, and its node carries no metrics at all rather than a zero
-/// the parent cannot stand behind.
 fn publish_loss_counts_on_processor_node(
     graph: &mut Graph,
     proc_id: &ProcessorUniqueId,
     processor: &ProcessorInstance,
+) {
+    let input_inner = processor.iceoryx2_input_mailboxes_inner();
+    insert_loss_counts_on_processor_node_once(
+        graph,
+        proc_id,
+        ProcessorLossCounts::CountedByPortsInThisProcess(LossCountsOfPortsInThisProcess {
+            dropped_bag_counts_by_inbound_link: input_inner
+                .as_ref()
+                .map(|input_inner| input_inner.dropped_bag_counts_by_inbound_link())
+                .unwrap_or_default(),
+            discarded_sample_counts_by_inbound_link: input_inner
+                .map(|input_inner| input_inner.discarded_sample_counts_by_inbound_link())
+                .unwrap_or_default(),
+            refused_bag_counts_by_output_port: processor
+                .iceoryx2_output_writer_inner()
+                .map(|output_inner| output_inner.refused_bag_counts_by_output_port())
+                .unwrap_or_default(),
+        }),
+    );
+}
+
+/// Insert `loss_counts` as `proc_id`'s node metrics, unless its first wired link
+/// already did.
+fn insert_loss_counts_on_processor_node_once(
+    graph: &mut Graph,
+    proc_id: &ProcessorUniqueId,
+    loss_counts: ProcessorLossCounts,
 ) {
     let Some(node) = graph.traversal_mut().v(proc_id).first_mut() else {
         return;
@@ -977,19 +1001,8 @@ fn publish_loss_counts_on_processor_node(
     if node.has::<ProcessorMetrics>() {
         return;
     }
-    let input_inner = processor.iceoryx2_input_mailboxes_inner();
     node.insert(ProcessorMetrics {
-        dropped_bag_counts_by_inbound_link: input_inner
-            .as_ref()
-            .map(|input_inner| input_inner.dropped_bag_counts_by_inbound_link())
-            .unwrap_or_default(),
-        discarded_sample_counts_by_inbound_link: input_inner
-            .map(|input_inner| input_inner.discarded_sample_counts_by_inbound_link())
-            .unwrap_or_default(),
-        refused_bag_counts_by_output_port: processor
-            .iceoryx2_output_writer_inner()
-            .map(|output_inner| output_inner.refused_bag_counts_by_output_port())
-            .unwrap_or_default(),
+        loss_counts,
         ..Default::default()
     });
 }
@@ -1046,7 +1059,7 @@ fn wire_subprocess_source(
     // `enable_safe_overflow` is a wire fact, not a knob: iceoryx2 verifies it on
     // every reopen, so an SDK opening this service from its own bindings must
     // request the same value the engine did.
-    let entry = serde_json::json!({
+    let mut entry = serde_json::json!({
         "name": source_port,
         "link_id": link_id.to_string(),
         "enable_safe_overflow": true,
@@ -1071,10 +1084,23 @@ fn wire_subprocess_source(
              link-wiring envelope; its output port '{source_port}' would never be wired"
         )));
     };
+    // The generation rides the entry, so the far side writes this channel's
+    // refusals where the parent reads them for this channel and no earlier one.
+    let loss_counts = link_wiring.helper_placed_processor_loss_counts();
+    entry["output_port_wiring_generation"] =
+        serde_json::json!(loss_counts.note_outbound_link(source_port, link_id.as_str()));
     link_wiring.record(crate::core::PortDirection::Output, entry.clone());
     // The envelope is read once, at setup; a far side already past it is
     // handed the entry directly.
-    source_processor.wire_out_of_process_link(crate::core::PortDirection::Output, &entry)
+    let wire_reply =
+        source_processor.wire_out_of_process_link(crate::core::PortDirection::Output, &entry)?;
+    drop(source_processor);
+    insert_loss_counts_on_processor_node_once(
+        graph,
+        source_proc_id,
+        ProcessorLossCounts::CountedInItsHelperProcess(loss_counts),
+    );
+    Ok(wire_reply)
 }
 
 /// Record this link's dest-side wiring on a processor whose transport lives out
@@ -1127,6 +1153,7 @@ fn wire_subprocess_dest(
     // opens in the app process, and nothing crosses to say so. A sentinel on a
     // helper-placed port is therefore refused here, where the destination's
     // placement is known.
+    let into_a_windowed_port = audio_windowing.is_some();
     match audio_windowing {
         None => {}
         Some(AudioWindowDeclarationOfAnInputPort::StatedOutright(contract)) => {
@@ -1154,8 +1181,22 @@ fn wire_subprocess_dest(
              link-wiring envelope; its input port '{dest_port}' would never be wired"
         )));
     };
+    // The slot and generation ride the entry, so the far side writes this
+    // link's counts where the parent reads them for this wiring and no other.
+    let loss_counts = link_wiring.helper_placed_processor_loss_counts();
+    let assigned = loss_counts.assign_inbound_link_slot(link_id.as_str(), into_a_windowed_port)?;
+    entry["loss_count_slot"] = serde_json::json!(assigned.slot);
+    entry["wiring_generation"] = serde_json::json!(assigned.wiring_generation);
     link_wiring.record(crate::core::PortDirection::Input, entry.clone());
-    dest_processor.wire_out_of_process_link(crate::core::PortDirection::Input, &entry)
+    let wire_reply =
+        dest_processor.wire_out_of_process_link(crate::core::PortDirection::Input, &entry)?;
+    drop(dest_processor);
+    insert_loss_counts_on_processor_node_once(
+        graph,
+        dest_proc_id,
+        ProcessorLossCounts::CountedInItsHelperProcess(loss_counts),
+    );
+    Ok(wire_reply)
 }
 
 #[cfg(test)]
@@ -1413,49 +1454,329 @@ mod tests {
         );
     }
 
-    /// A helper-placed destination's node carries no metrics at all.
+    /// What `graph` renders under `metrics` for `proc_id`, or `None` for no key.
+    fn rendered_metrics_in(graph: &mut Graph, proc_id: &str) -> Option<serde_json::Value> {
+        graph
+            .traversal_mut()
+            .v(proc_id)
+            .first()
+            .expect("the processor's node must be in the graph")
+            .serialize_components()
+            .get("metrics")
+            .cloned()
+    }
+
+    /// The input entry a helper stub was handed for `link_id`.
+    fn input_entry_recorded_on(
+        instance: &Arc<Mutex<ProcessorInstance>>,
+        link_id: &LinkUniqueId,
+    ) -> serde_json::Value {
+        instance
+            .lock()
+            .out_of_process_link_wiring()
+            .expect("the stub records its own wiring")
+            .as_setup_command_ports()["inputs"]
+            .as_array()
+            .expect("the envelope renders its inputs as an array")
+            .iter()
+            .find(|entry| entry["link_id"] == serde_json::json!(link_id.as_str()))
+            .cloned()
+            .expect("the link's entry is on the envelope")
+    }
+
+    /// Create a helper stub's board as its spawn would, and open its writer as
+    /// its helper would, from a node of the helper's own.
+    fn board_of_a_helper_stub_spawn(
+        instance: &Arc<Mutex<ProcessorInstance>>,
+        proc_id: &str,
+        output_port_names: &[&str],
+    ) -> (
+        Arc<crate::iceoryx2::HelperProcessLossCountBoardWriter>,
+        Iceoryx2Node,
+    ) {
+        let output_port_names: Vec<String> = output_port_names
+            .iter()
+            .map(|name| name.to_string())
+            .collect();
+        let setup_command_board = instance
+            .lock()
+            .out_of_process_link_wiring()
+            .expect("the stub records its own wiring")
+            .create_the_loss_count_board_for_this_helper_spawn_on(
+                &Iceoryx2Node::for_this_test_process(),
+                proc_id,
+                output_port_names.clone(),
+            )
+            .expect("the spawn creates its board");
+        assert_eq!(
+            setup_command_board["output_ports"],
+            serde_json::json!(output_port_names),
+        );
+        let helper_node = Iceoryx2Node::for_this_test_process();
+        let writer = helper_node
+            .open_helper_process_loss_count_board_writer(
+                setup_command_board["service_name"]
+                    .as_str()
+                    .expect("the setup command names the board"),
+                &output_port_names,
+            )
+            .expect("the helper opens the board its setup command names");
+        (Arc::new(writer), helper_node)
+    }
+
+    /// A helper-placed destination's node renders the counts its helper wrote
+    /// on the slot its link was given, and a helper-placed producer's node the
+    /// refusals its helper wrote per output port — zero before the helper has
+    /// written anything, never an absent key.
     ///
-    /// Its mailboxes are its own process's, so the parent counts none of its
-    /// evictions and has nothing to render. Rendering an empty map or a zero
-    /// here would say "this processor lost nothing", which the parent cannot
-    /// know — the absent key is what makes it readable as unanswered rather
-    /// than as healthy. The gap itself is plan-level (ARCHITECTURE.md's
-    /// counting entry is unconditional); this locks the shape chosen for it so
-    /// nobody closes it later with a zero.
+    /// Fail-without-fix: leave `wire_subprocess_dest` publishing nothing and
+    /// the destination renders no `metrics` key at all, so a helper that lost
+    /// most of its bags reads like a healthy one.
     #[test]
-    fn a_helper_placed_destinations_node_carries_no_metrics_rather_than_a_zero() {
+    fn a_helper_placed_destinations_node_renders_the_counts_its_helper_wrote_on_its_slot() {
         let mut graph = Graph::new();
         let source_id = add_mock_output_only(&mut graph);
         let dest_id = add_mock_input_only(&mut graph);
-        let dest_unique_id: ProcessorUniqueId = dest_id.as_str().into();
+        let source_instance = attach_processor_instance(
+            &mut graph,
+            &source_id,
+            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
+        );
+        let dest_instance = attach_processor_instance(
+            &mut graph,
+            &dest_id,
+            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
+        );
+        let link_id: LinkUniqueId = "L-helper-placed".into();
+        record_wiring_for_both_out_of_process_endpoints(&mut graph, &source_id, &dest_id, &link_id);
+
+        assert_eq!(
+            rendered_metrics_in(&mut graph, &dest_id),
+            Some(serde_json::json!({
+                "frames_dropped": 0,
+                "dropped_bags_by_link": { "L-helper-placed": 0 },
+                "refused_bags_by_output_port": {}
+            })),
+            "a wired link renders zero before its helper's board exists"
+        );
+
+        let entry = input_entry_recorded_on(&dest_instance, &link_id);
+        assert_eq!(entry["loss_count_slot"], serde_json::json!(0));
+        assert_eq!(entry["wiring_generation"], serde_json::json!(1));
+
+        let (dest_board_writer, _dest_helper_node) =
+            board_of_a_helper_stub_spawn(&dest_instance, &dest_id, &[]);
+        dest_board_writer
+            .claim_inbound_link_slot(
+                crate::iceoryx2::InboundLinkLossCountBoardSlotAndWiringGeneration {
+                    slot: 0,
+                    wiring_generation: 1,
+                },
+            )
+            .unwrap()
+            .mirror_dropped_bags(5);
+        assert_eq!(
+            rendered_metrics_in(&mut graph, &dest_id),
+            Some(serde_json::json!({
+                "frames_dropped": 5,
+                "dropped_bags_by_link": { "L-helper-placed": 5 },
+                "refused_bags_by_output_port": {}
+            })),
+        );
+
+        let output_entry = source_instance
+            .lock()
+            .out_of_process_link_wiring()
+            .expect("the stub records its own wiring")
+            .as_setup_command_ports()["outputs"][0]
+            .clone();
+        let output_port_wiring_generation = output_entry["output_port_wiring_generation"]
+            .as_u64()
+            .expect("the output entry carries its channel's generation");
+        let (source_board_writer, _source_helper_node) =
+            board_of_a_helper_stub_spawn(&source_instance, &source_id, &["out1"]);
+        source_board_writer
+            .claim_output_port_entry("out1", output_port_wiring_generation)
+            .expect("the source's board carries its declared port")
+            .mirror_refused_bags(2);
+        assert_eq!(
+            rendered_metrics_in(&mut graph, &source_id),
+            Some(serde_json::json!({
+                "frames_dropped": 0,
+                "dropped_bags_by_link": {},
+                "refused_bags_by_output_port": { "out1": 2 }
+            })),
+        );
+    }
+
+    /// A link disconnected and connected again takes the slot it had with a new
+    /// generation, renders from zero, and ignores a write its helper made under
+    /// the old wiring.
+    ///
+    /// Fail-without-fix: render a slot whatever generation is written on it and
+    /// the reconnected link shows the old wiring's nine bags, a count outliving
+    /// the link it named.
+    #[test]
+    fn a_reconnected_link_reuses_its_slot_from_zero_and_a_write_from_the_old_wiring_is_ignored() {
+        let mut graph = Graph::new();
+        let source_id = add_mock_output_only(&mut graph);
+        let dest_id = add_mock_input_only(&mut graph);
         attach_processor_instance(
             &mut graph,
             &source_id,
             ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
         );
-        attach_processor_instance(
+        let dest_instance = attach_processor_instance(
             &mut graph,
             &dest_id,
             ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
         );
+        let link_id = add_link_from_out1_to_in1(&mut graph, &source_id, &dest_id);
+        record_wiring_for_both_out_of_process_endpoints(&mut graph, &source_id, &dest_id, &link_id);
+        let (board_writer, _helper_node) =
+            board_of_a_helper_stub_spawn(&dest_instance, &dest_id, &[]);
+        let first_wiring = board_writer
+            .claim_inbound_link_slot(
+                crate::iceoryx2::InboundLinkLossCountBoardSlotAndWiringGeneration {
+                    slot: 0,
+                    wiring_generation: 1,
+                },
+            )
+            .unwrap();
+        first_wiring.mirror_dropped_bags(7);
 
+        close_iceoryx2_service(&mut graph, &link_id).expect("the disconnect succeeds");
+        assert_eq!(
+            rendered_metrics_in(&mut graph, &dest_id)
+                .map(|metrics| metrics["dropped_bags_by_link"].clone()),
+            Some(serde_json::json!({})),
+            "a disconnected link's count goes with it"
+        );
+
+        record_wiring_for_both_out_of_process_endpoints(&mut graph, &source_id, &dest_id, &link_id);
+        let entry = input_entry_recorded_on(&dest_instance, &link_id);
+        assert_eq!(entry["loss_count_slot"], serde_json::json!(0));
+        assert_eq!(entry["wiring_generation"], serde_json::json!(2));
+
+        board_writer
+            .claim_inbound_link_slot(
+                crate::iceoryx2::InboundLinkLossCountBoardSlotAndWiringGeneration {
+                    slot: 0,
+                    wiring_generation: 1,
+                },
+            )
+            .unwrap()
+            .mirror_dropped_bags(9);
+        assert_eq!(
+            rendered_metrics_in(&mut graph, &dest_id)
+                .map(|metrics| metrics["dropped_bags_by_link"].clone()),
+            Some(serde_json::json!({ link_id.as_str(): 0 })),
+            "a slot written under the old generation renders nothing for the new wiring"
+        );
+
+        board_writer
+            .claim_inbound_link_slot(
+                crate::iceoryx2::InboundLinkLossCountBoardSlotAndWiringGeneration {
+                    slot: 0,
+                    wiring_generation: 2,
+                },
+            )
+            .unwrap()
+            .mirror_dropped_bags(1);
+        assert_eq!(
+            rendered_metrics_in(&mut graph, &dest_id)
+                .map(|metrics| metrics["dropped_bags_by_link"].clone()),
+            Some(serde_json::json!({ link_id.as_str(): 1 })),
+        );
+    }
+
+    /// The keys of `rendered`, sorted.
+    fn rendered_metrics_keys(rendered: &serde_json::Value) -> Vec<String> {
+        let mut keys: Vec<String> = rendered
+            .as_object()
+            .expect("metrics render as an object")
+            .keys()
+            .cloned()
+            .collect();
+        keys.sort();
+        keys
+    }
+
+    /// A helper-placed processor's node renders exactly the keys an
+    /// app-process one does, into a plain port and into a windowed one alike.
+    ///
+    /// Fail-without-fix: give a helper's windowed link no sample count, or
+    /// every helper link one, and the key sets differ.
+    #[test]
+    fn a_helper_placed_processors_metrics_carry_exactly_the_keys_an_app_process_ones_do() {
+        let mut native_plain = NativeLinkWiredForLossCounting::wire(
+            "metrics-keys-plain",
+            DeliveryProfile::Ordered.resolve(),
+            crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+        );
+        let dest_id = native_plain.dest_id.clone();
+        let native_plain_keys = rendered_metrics_keys(
+            &native_plain
+                .rendered_metrics_of(&dest_id)
+                .expect("an app-process destination renders metrics"),
+        );
+        let native_windowed_keys = rendered_metrics_keys(
+            &NativeLinkIntoAWindowedPort::wire().rendered_metrics_of_the_destination(),
+        );
+
+        let mut graph = Graph::new();
+        let source_id = add_mock_output_only(&mut graph);
+        let helper_plain_id = add_mock_input_only(&mut graph);
+        let helper_windowed_id = add_mock_windowed_audio_consumer(&mut graph);
+        for proc_id in [&source_id, &helper_plain_id, &helper_windowed_id] {
+            attach_processor_instance(
+                &mut graph,
+                proc_id,
+                ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
+            );
+        }
         record_wiring_for_both_out_of_process_endpoints(
             &mut graph,
             &source_id,
-            &dest_id,
-            &"L-helper-placed".into(),
+            &helper_plain_id,
+            &"L-helper-plain".into(),
         );
+        let declared = audio_windowing_declared_by_input_port_of(
+            &graph,
+            &helper_windowed_id.as_str().into(),
+            "audio",
+        )
+        .expect("the mock's contract resolves");
+        wire_subprocess_dest(
+            &mut graph,
+            &helper_windowed_id.as_str().into(),
+            "audio",
+            "pabc/out1",
+            "pdef/notify",
+            DeliveryProfile::Ordered.resolve(),
+            ChannelSizing {
+                max_subscribers: 2,
+                channel_service_creation_depth: WINDOWED_PORT_SUBSCRIBER_RING_DEPTH,
+            },
+            1,
+            &"L-helper-windowed".into(),
+            declared,
+        )
+        .expect("a windowed helper port wires");
 
+        let helper_plain_keys = rendered_metrics_keys(
+            &rendered_metrics_in(&mut graph, &helper_plain_id)
+                .expect("a helper-placed destination renders metrics"),
+        );
+        let helper_windowed_keys = rendered_metrics_keys(
+            &rendered_metrics_in(&mut graph, &helper_windowed_id)
+                .expect("a helper-placed windowed destination renders metrics"),
+        );
+        assert_eq!(helper_plain_keys, native_plain_keys);
+        assert_eq!(helper_windowed_keys, native_windowed_keys);
         assert!(
-            graph
-                .traversal_mut()
-                .v(&dest_unique_id)
-                .first()
-                .expect("the destination node must be in the graph")
-                .serialize_components()
-                .get("metrics")
-                .is_none(),
-            "a destination the parent holds no mailboxes for must render no metrics key",
+            helper_windowed_keys.contains(&"discarded_samples_by_link".to_string()),
+            "the windowed rendering is the one carrying a sample count: {helper_windowed_keys:?}"
         );
     }
 

@@ -35,6 +35,7 @@ use super::audio_window::{
     ResolvedAudioWindowContract, queued_audio_window_frame_measure,
 };
 use super::channel_name::InboundLinkName;
+use super::helper_process_loss_count_board::InboundLinkLossCountBoardSlotMirror;
 use super::loss_counters::{
     DiscardedSampleCountsByInboundLink, DroppedBagCountsByInboundLink,
     InboundLinkDiscardedSampleCounter, InboundLinkDroppedBagCounter,
@@ -752,6 +753,55 @@ impl InputMailboxesInner {
                 discarded_sample_counter,
                 last_received_sequence_number: None,
             });
+    }
+
+    /// Write every new total of `link_id`'s dropped-bag and discarded-sample
+    /// counts onto `slot`, as the counts move.
+    ///
+    /// How a helper process's counts reach its parent. Refused for a link no
+    /// subscriber is bound for, and for one already mirrored.
+    pub fn mirror_an_inbound_links_loss_counts_into(
+        &self,
+        link_id: &str,
+        inbound_link_board_slot_mirror: InboundLinkLossCountBoardSlotMirror,
+    ) -> Result<()> {
+        let (dropped_bag_counter, discarded_sample_counter) = self
+            .inbound_link_subscribers_and_listener
+            .lock()
+            .subscribers
+            .iter()
+            .find(|bound| bound.link_id == link_id)
+            .map(|bound| {
+                (
+                    bound.dropped_bag_counter.clone(),
+                    bound.discarded_sample_counter.clone(),
+                )
+            })
+            .ok_or_else(|| {
+                Error::Link(format!(
+                    "inbound link '{link_id}' has no subscriber bound, so there are no loss \
+                     counts of it to mirror"
+                ))
+            })?;
+        let already_mirrored = || {
+            Error::Link(format!(
+                "inbound link '{link_id}' already mirrors its loss counts onto a board slot"
+            ))
+        };
+        let dropped_bags_board_slot_mirror = inbound_link_board_slot_mirror.clone();
+        dropped_bag_counter
+            .mirror_every_new_total_into(Box::new(move |dropped_bags| {
+                dropped_bags_board_slot_mirror.mirror_dropped_bags(dropped_bags)
+            }))
+            .map_err(|_| already_mirrored())?;
+        if let Some(discarded_sample_counter) = discarded_sample_counter {
+            discarded_sample_counter
+                .mirror_every_new_total_into(Box::new(move |discarded_samples| {
+                    inbound_link_board_slot_mirror.mirror_discarded_samples(discarded_samples)
+                }))
+                .map_err(|_| already_mirrored())?;
+        }
+        Ok(())
     }
 
     /// Every inbound link feeding `port`, in wiring order.
@@ -1921,6 +1971,136 @@ mod tests {
             counts.values().sum::<u64>() + delivered as u64,
             (FRAMES_PER_LINK * 2) as u64,
             "counted plus delivered must account for every bag published",
+        );
+    }
+
+    /// A helper's losses reach its board as they are counted, with nothing
+    /// pumping them there: a mailbox eviction lands on the evicted bag's link's
+    /// slot, and a windowed port's flush on its one link's slot.
+    ///
+    /// Fail-without-fix: mirror nothing, or only on a pass the helper's loop
+    /// makes, and both slots still read zero when the loss has already
+    /// happened.
+    #[test]
+    fn every_loss_counted_on_a_mirrored_link_reaches_its_board_slot_as_it_is_counted() {
+        let (board, board_writer, _helper_node) =
+            crate::iceoryx2::a_loss_count_board_and_its_helpers_writer_for_this_test_process(&[]);
+        let mailboxes = InputMailboxesInner::new();
+
+        let (plain_publisher, plain_subscriber) = open_channel_for_one_link("mirrored/plain", 5);
+        mailboxes.add_port("in", 2, ReadMode::ReadNextInOrder);
+        mailboxes.add_channel_subscriber(
+            "in",
+            "L-plain",
+            &InboundLinkName::from("pplain/out"),
+            plain_subscriber,
+        );
+        mailboxes
+            .mirror_an_inbound_links_loss_counts_into(
+                "L-plain",
+                board_writer
+                    .claim_inbound_link_slot(
+                        crate::iceoryx2::InboundLinkLossCountBoardSlotAndWiringGeneration {
+                            slot: 0,
+                            wiring_generation: 11,
+                        },
+                    )
+                    .unwrap(),
+            )
+            .expect("a bound link's counts mirror");
+
+        let (windowed_publisher, windowed_subscriber) =
+            open_channel_for_one_link("mirrored/windowed", 4);
+        mailboxes.add_windowed_port(
+            "audio",
+            ReadMode::ReadNextInOrder,
+            a_512_512_contract_at(16_000, 1),
+        );
+        mailboxes.add_channel_subscriber(
+            "audio",
+            "L-windowed",
+            &InboundLinkName::from("pwindowed/out"),
+            windowed_subscriber,
+        );
+        mailboxes
+            .mirror_an_inbound_links_loss_counts_into(
+                "L-windowed",
+                board_writer
+                    .claim_inbound_link_slot(
+                        crate::iceoryx2::InboundLinkLossCountBoardSlotAndWiringGeneration {
+                            slot: 1,
+                            wiring_generation: 12,
+                        },
+                    )
+                    .unwrap(),
+            )
+            .expect("a windowed link's counts mirror");
+
+        for _ in 0..5 {
+            publish_one_frame(&plain_publisher, "src_out", b"bag");
+            mailboxes.receive_pending();
+        }
+        assert_eq!(
+            board.inbound_link_slot(0),
+            Some(streamlib_ipc_types::InboundLinkLossCountBoardSlot {
+                wiring_generation: 11,
+                dropped_bags: 3,
+                discarded_samples: 0,
+            }),
+        );
+
+        publish_one_frame(
+            &windowed_publisher,
+            "src_out",
+            &mono_audio_block_body(300, 16_000, 0),
+        );
+        assert!(mailboxes.read_raw("audio").unwrap().is_none());
+        publish_one_frame(
+            &windowed_publisher,
+            "src_out",
+            &mono_audio_block_body(300, 16_000, 1_000_000_000),
+        );
+        let _ = mailboxes.read_raw("audio").unwrap();
+        assert_eq!(
+            board.inbound_link_slot(1),
+            Some(streamlib_ipc_types::InboundLinkLossCountBoardSlot {
+                wiring_generation: 12,
+                dropped_bags: 0,
+                discarded_samples: 300,
+            }),
+        );
+
+        assert!(
+            mailboxes
+                .mirror_an_inbound_links_loss_counts_into(
+                    "L-plain",
+                    board_writer
+                        .claim_inbound_link_slot(
+                            crate::iceoryx2::InboundLinkLossCountBoardSlotAndWiringGeneration {
+                                slot: 2,
+                                wiring_generation: 13,
+                            }
+                        )
+                        .unwrap(),
+                )
+                .is_err(),
+            "a link mirrors onto one slot"
+        );
+        assert!(
+            mailboxes
+                .mirror_an_inbound_links_loss_counts_into(
+                    "L-never-wired",
+                    board_writer
+                        .claim_inbound_link_slot(
+                            crate::iceoryx2::InboundLinkLossCountBoardSlotAndWiringGeneration {
+                                slot: 3,
+                                wiring_generation: 14,
+                            }
+                        )
+                        .unwrap(),
+                )
+                .is_err(),
+            "a link with no subscriber has no counts to mirror"
         );
     }
 

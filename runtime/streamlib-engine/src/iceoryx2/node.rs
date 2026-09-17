@@ -18,12 +18,20 @@ use iceoryx2::service::builder::publish_subscribe::{
     PublishSubscribeOpenOrCreateError,
 };
 
+use super::helper_process_loss_count_board::{
+    HelperProcessLossCountBoard, HelperProcessLossCountBoardWriter, inbound_link_slot_keys,
+    output_port_keys,
+};
 use super::{
     DataChannelBagSequenceNumberUserHeader, EventPayload, FRAME_HEADER_SIZE,
     MAX_PUBLISHERS_PER_CHANNEL,
 };
 use crate::core::error::{Error, Result};
 use crate::core::runtime::current_process_uid;
+use streamlib_ipc_types::{
+    HelperProcessLossCountBoardKey, InboundLinkLossCountBoardSlot,
+    OutputPortRefusedBagCountBoardEntry,
+};
 
 /// Nodes a channel or notify service admits per subscriber or notifier slot.
 ///
@@ -31,6 +39,14 @@ use crate::core::runtime::current_process_uid;
 /// node that died holds its place until a sweep reclaims it, so the headroom is
 /// what keeps a crashed helper from locking a live one out of a channel.
 const ICEORYX2_NODES_ADMITTED_PER_PORT_SLOT: usize = 2;
+
+/// Readers a helper's loss-count board admits: its parent's.
+const LOSS_COUNT_BOARD_MAX_READERS: usize = 1;
+
+/// Nodes a helper's loss-count board admits: its parent's and its helper's,
+/// with the same headroom a channel gives each port slot for a node a crash left
+/// behind.
+const LOSS_COUNT_BOARD_MAX_NODES: usize = 2 * ICEORYX2_NODES_ADMITTED_PER_PORT_SLOT;
 
 /// Samples a channel subscriber borrows at once: the receive path copies each
 /// sample out and drops it before taking the next.
@@ -351,6 +367,62 @@ impl Iceoryx2Node {
                 service_name.as_str()
             ))),
         }
+    }
+    /// Create the loss-count board a helper spawn writes on: every inbound-link
+    /// slot and an entry per declared output port, all zero.
+    pub fn create_helper_process_loss_count_board(
+        &self,
+        service_name: &str,
+        output_port_names: Vec<String>,
+    ) -> Result<HelperProcessLossCountBoard> {
+        let service = {
+            let node = self.inner.lock();
+            let iceoryx2_service_name = iceoryx2_service_name_of(service_name)?;
+            let mut creator = node
+                .service_builder(&iceoryx2_service_name)
+                .blackboard_creator::<HelperProcessLossCountBoardKey>()
+                .max_readers(LOSS_COUNT_BOARD_MAX_READERS)
+                .max_nodes(LOSS_COUNT_BOARD_MAX_NODES);
+            for key in inbound_link_slot_keys() {
+                creator = creator.add_with_default::<InboundLinkLossCountBoardSlot>(key);
+            }
+            for key in output_port_keys(output_port_names.len()) {
+                creator = creator.add_with_default::<OutputPortRefusedBagCountBoardEntry>(key);
+            }
+            creator.create().map_err(|refusal| {
+                Error::Runtime(format!(
+                    "could not create the loss-count board '{service_name}': {refusal:?}"
+                ))
+            })?
+        };
+        HelperProcessLossCountBoard::reading(service_name.to_string(), output_port_names, service)
+    }
+
+    /// Open the loss-count board a helper's parent created and named, as the
+    /// one writer it admits.
+    pub fn open_helper_process_loss_count_board_writer(
+        &self,
+        service_name: &str,
+        output_port_names: &[String],
+    ) -> Result<HelperProcessLossCountBoardWriter> {
+        let service = {
+            let node = self.inner.lock();
+            let iceoryx2_service_name = iceoryx2_service_name_of(service_name)?;
+            node.service_builder(&iceoryx2_service_name)
+                .blackboard_opener::<HelperProcessLossCountBoardKey>()
+                .open()
+                .map_err(|refusal| {
+                    Error::Runtime(format!(
+                        "could not open the loss-count board '{service_name}' its parent \
+                         named: {refusal:?}"
+                    ))
+                })?
+        };
+        HelperProcessLossCountBoardWriter::writing(
+            service_name.to_string(),
+            output_port_names,
+            service,
+        )
     }
 }
 

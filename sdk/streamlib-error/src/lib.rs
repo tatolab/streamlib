@@ -178,6 +178,8 @@ pub enum Error {
         payload_bytes: usize,
         ceiling_bytes: usize,
         tier: ChannelTrustTierLabel,
+        /// The refusing output port's refused-bag total, this refusal included.
+        refused_bags_on_the_output_port: u64,
     },
 
     #[error(

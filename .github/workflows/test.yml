@@ -314,7 +314,20 @@ jobs:
             core::graph::components::processor_metrics::tests::a_processors_metrics_render_discarded_samples_only_for_links_into_windowed_ports \
             core::runtime::operations_runtime::connect_wires_without_inspecting_a_port_tests::connect_wires_a_producer_to_a_consumer_without_warning \
             core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_dropping_destinations_node_renders_each_inbound_links_losses \
-            core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_helper_placed_destinations_node_carries_no_metrics_rather_than_a_zero \
+            iceoryx2::helper_process_loss_count_board::tests::a_count_written_on_a_claimed_slot_is_what_the_parent_reads \
+            iceoryx2::helper_process_loss_count_board::tests::a_write_from_a_wiring_the_slot_has_moved_past_lands_nothing \
+            iceoryx2::helper_process_loss_count_board::tests::an_output_port_claimed_again_starts_from_zero_and_its_earlier_mirror_lands_nothing \
+            iceoryx2::helper_process_loss_count_board::tests::the_last_counts_stay_readable_after_the_helpers_writer_is_gone \
+            iceoryx2::helper_process_loss_count_board::tests::slots_are_reused_lowest_first_and_every_wiring_gets_a_new_generation \
+            iceoryx2::helper_process_loss_count_board::tests::a_destination_past_the_slot_count_is_refused_by_name \
+            iceoryx2::helper_process_loss_count_board::tests::an_output_port_keeps_its_generation_while_it_has_a_link_and_takes_a_new_one_after_its_last_goes \
+            iceoryx2::helper_process_loss_count_board::tests::the_parent_reads_each_entry_only_for_the_wiring_it_assigned \
+            iceoryx2::loss_counters::tests::a_mirrored_count_writes_the_total_it_had_and_every_new_total_through_its_mirror \
+            iceoryx2::input::tests::every_loss_counted_on_a_mirrored_link_reaches_its_board_slot_as_it_is_counted \
+            iceoryx2::output::tests::a_refusal_on_a_mirrored_output_port_reaches_its_board_entry_as_it_is_counted \
+            core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_helper_placed_destinations_node_renders_the_counts_its_helper_wrote_on_its_slot \
+            core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_reconnected_link_reuses_its_slot_from_zero_and_a_write_from_the_old_wiring_is_ignored \
+            core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_helper_placed_processors_metrics_carry_exactly_the_keys_an_app_process_ones_do \
             core::compiler::compiler_ops::open_iceoryx2_service_op::tests::an_ordered_consumer_that_stops_reading_renders_exactly_the_bags_its_ring_overwrote \
             core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_newest_consumer_renders_no_loss_for_bags_passed_over_in_its_ring_or_its_mailbox \
             core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_producers_node_renders_the_writes_its_output_port_refused_at_the_ceiling \

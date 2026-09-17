@@ -31,6 +31,7 @@ use iceoryx2::prelude::*;
 use parking_lot::Mutex;
 use serde::Serialize;
 
+use super::helper_process_loss_count_board::OutputPortRefusedBagCountBoardMirror;
 use super::loss_counters::{OutputPortRefusedBagCounter, RefusedBagCountsByOutputPort};
 use super::{ChannelDataServicePublisher, ChannelTrustTier, FRAME_HEADER_SIZE, FrameHeader};
 use crate::core::error::{ChannelTrustTierLabel, Error, Result};
@@ -242,6 +243,39 @@ impl OutputWriterInner {
         );
     }
 
+    /// Write every new total of `output_port`'s refused-bag count onto
+    /// `entry`, as the count moves.
+    ///
+    /// How a helper process's refusals reach its parent. Refused for a port
+    /// with no channel publisher, and for one whose channel already mirrors.
+    pub fn mirror_an_output_ports_refused_bag_count_into(
+        &self,
+        output_port: &str,
+        refused_bag_board_entry_mirror: OutputPortRefusedBagCountBoardMirror,
+    ) -> Result<()> {
+        let refused_bag_counter = self
+            .channels
+            .lock()
+            .get(output_port)
+            .map(|egress| egress.refused_bag_counter.clone())
+            .ok_or_else(|| {
+                Error::Link(format!(
+                    "output port '{output_port}' has no channel publisher, so there is no \
+                     refused-bag count of it to mirror"
+                ))
+            })?;
+        refused_bag_counter
+            .mirror_every_new_total_into(Box::new(move |refused_bags| {
+                refused_bag_board_entry_mirror.mirror_refused_bags(refused_bags)
+            }))
+            .map_err(|_| {
+                Error::Link(format!(
+                    "output port '{output_port}' already mirrors its refused-bag count onto a \
+                     board entry"
+                ))
+            })
+    }
+
     /// This processor's per-output-port refused-bag counts, shared with the
     /// graph node's [`ProcessorMetrics`] so `graph` reads them live.
     ///
@@ -350,12 +384,15 @@ impl OutputWriterInner {
             total_len,
             &admission,
         );
-        if let streamlib_ipc_types::ChannelEgressAdmission::RefusedOverCeiling { .. } = admission {
+        if let streamlib_ipc_types::ChannelEgressAdmission::RefusedOverCeiling { refused_count } =
+            admission
+        {
             return Err(Error::PayloadExceedsChannelCeiling {
                 channel: egress.channel_service_name.clone(),
                 payload_bytes: total_len,
                 ceiling_bytes: egress.ceiling_bytes,
                 tier: trust_tier_label(egress.trust_tier),
+                refused_bags_on_the_output_port: refused_count,
             });
         }
 
@@ -1081,11 +1118,13 @@ mod tests {
                 payload_bytes,
                 ceiling_bytes,
                 tier,
+                refused_bags_on_the_output_port,
             } => {
                 assert_eq!(channel, "test/ceiling/out");
                 assert_eq!(payload_bytes, FRAME_HEADER_SIZE + over.len());
                 assert_eq!(ceiling_bytes, ceiling);
                 assert_eq!(tier, ChannelTrustTierLabel::UntrustedSession);
+                assert_eq!(refused_bags_on_the_output_port, 1);
             }
             other => panic!("expected PayloadExceedsChannelCeiling, got {other:?}"),
         }
@@ -1106,6 +1145,74 @@ mod tests {
         assert_eq!(
             got.payload().len(),
             FRAME_HEADER_SIZE + b"still-alive".len()
+        );
+    }
+
+    /// A helper's refusals reach its board as they are counted, and a port
+    /// whose channel was released and opened again mirrors from zero through
+    /// its new claim alone.
+    ///
+    /// Fail-without-fix: mirror nothing at `write_raw`, and the entry still
+    /// reads zero after two refusals.
+    #[test]
+    fn a_refusal_on_a_mirrored_output_port_reaches_its_board_entry_as_it_is_counted() {
+        let (board, board_writer, _helper_node) =
+            crate::iceoryx2::a_loss_count_board_and_its_helpers_writer_for_this_test_process(&[
+                "out",
+            ]);
+        let refused_bags_on_the_board = || {
+            board
+                .output_port_entry("out")
+                .map(|written| (written.wiring_generation, written.refused_bags))
+        };
+        let pubsub = open_channel_data_service("mirrored-refusal", 2);
+        let inner = OutputWriterInner::new();
+        let install_the_channel = |wiring_generation: u64| {
+            inner.set_channel_publisher(
+                "out",
+                pubsub.create_publisher(64).unwrap(),
+                ChannelEgressConfig {
+                    service_name: "test/mirrored-refusal/out".to_string(),
+                    trust_tier: ChannelTrustTier::UntrustedSession,
+                    expected_payload_bytes: 64,
+                    ceiling_bytes: 1024,
+                },
+            );
+            inner.add_channel_link("out", "L-out", None);
+            inner
+                .mirror_an_output_ports_refused_bag_count_into(
+                    "out",
+                    board_writer
+                        .claim_output_port_entry("out", wiring_generation)
+                        .expect("the board carries the declared port"),
+                )
+                .expect("a port with a channel mirrors its refusals");
+        };
+        let over_the_ceiling = vec![0u8; 2048];
+
+        install_the_channel(1);
+        inner.write_raw("out", &over_the_ceiling, 0).unwrap_err();
+        inner.write_raw("out", &over_the_ceiling, 1).unwrap_err();
+        assert_eq!(refused_bags_on_the_board(), Some((1, 2)));
+
+        assert!(inner.remove_channel_link("out", "L-out"));
+        install_the_channel(2);
+        assert_eq!(
+            refused_bags_on_the_board(),
+            Some((2, 0)),
+            "a port's reopened channel counts from zero, as its native count does"
+        );
+        inner.write_raw("out", &over_the_ceiling, 2).unwrap_err();
+        assert_eq!(refused_bags_on_the_board(), Some((2, 1)));
+
+        assert!(
+            inner
+                .mirror_an_output_ports_refused_bag_count_into(
+                    "never-opened",
+                    board_writer.claim_output_port_entry("out", 3).unwrap(),
+                )
+                .is_err(),
+            "a port with no channel has no refused-bag count to mirror"
         );
     }
 

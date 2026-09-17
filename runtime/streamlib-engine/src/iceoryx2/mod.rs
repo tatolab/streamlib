@@ -9,6 +9,7 @@ mod channel_name;
 #[cfg(test)]
 mod channel_sizing_tests;
 mod delivery_profile;
+mod helper_process_loss_count_board;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) mod iceoryx2_domain_for_this_test_process;
 mod input;
@@ -39,6 +40,14 @@ pub use channel_name::{
 };
 pub(crate) use delivery_profile::delivery_profile_for_input_port;
 pub use delivery_profile::{DeliveryProfile, DeliveryResolution};
+#[cfg(test)]
+pub(crate) use helper_process_loss_count_board::a_loss_count_board_and_its_helpers_writer_for_this_test_process;
+pub use helper_process_loss_count_board::{
+    HelperPlacedProcessorLossCounts, HelperProcessLossCountBoard,
+    HelperProcessLossCountBoardWriter, InboundLinkLossCountBoardSlotAndWiringGeneration,
+    InboundLinkLossCountBoardSlotMirror, OutputPortRefusedBagCountBoardMirror,
+    ProcessorLossCountSnapshot,
+};
 #[cfg(any(test, feature = "test-support"))]
 pub use iceoryx2_domain_for_this_test_process::{
     Iceoryx2DomainForThisTestProcess, create_iceoryx2_node_for_this_test_process,

@@ -623,6 +623,19 @@ class ProcessorLinkDataAccess:
         written to it; only an undeclared name is refused.
         """
 
+    def open_loss_count_board(
+        self, service_name: str, output_port_names: list[str]
+    ) -> None:
+        """Open the loss-count board the parent created for this spawn.
+
+        Every link wired afterwards mirrors its losses onto it as they are
+        counted — an input link onto the slot its wiring names, an output port
+        onto its entry under its channel's generation — which is how the parent
+        renders this helper's `metrics` in `graph`. `output_port_names` is the
+        board's output-port section in key order. Raises `RuntimeError` for a
+        second board.
+        """
+
     def wire_output_link(
         self,
         port_name: str,
@@ -634,7 +647,16 @@ class ProcessorLinkDataAccess:
         max_subscribers: int,
         notify_max_notifiers: int,
         link_id: str,
-    ) -> None: ...
+        output_port_wiring_generation: int | None = None,
+    ) -> None:
+        """Open this processor's publisher and one notifier for a link out of
+        `port_name`.
+
+        Once a loss-count board is open, `output_port_wiring_generation` names
+        the port's channel its refusals are mirrored under, and omitting it
+        raises `ValueError`; with no board it is unused.
+        """
+
     def wire_input_link(
         self,
         port_name: str,
@@ -647,7 +669,15 @@ class ProcessorLinkDataAccess:
         notify_max_notifiers: int,
         link_id: str,
         audio_window: dict[str, Any] | None = None,
-    ) -> None: ...
+        loss_count_slot: int | None = None,
+        wiring_generation: int | None = None,
+    ) -> None:
+        """Open this processor's subscriber for one link into `port_name`.
+
+        Once a loss-count board is open, `loss_count_slot` and
+        `wiring_generation` name where the link's losses are mirrored, and
+        omitting either raises `ValueError`; with no board they are unused.
+        """
     def unwire_output_link(self, port_name: str, link_id: str) -> None: ...
     def unwire_input_link(self, link_id: str) -> None: ...
     def input_listener_fd(self) -> int | None: ...

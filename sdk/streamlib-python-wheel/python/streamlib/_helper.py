@@ -412,6 +412,10 @@ def wire_link_data_access(
             # resolved: a `match_device` sentinel settles in the parent, which is
             # where the device stream is.
             input_link.get("audio_window"),
+            # Read with `get` so a helper with its board open names the key the
+            # binding was not given, rather than raising a bare `KeyError`.
+            loss_count_slot=input_link.get("loss_count_slot"),
+            wiring_generation=input_link.get("wiring_generation"),
         )
     for output_link in port_wiring.get("outputs", []):
         link_data_access.wire_output_link(
@@ -424,6 +428,7 @@ def wire_link_data_access(
             output_link["max_subscribers"],
             output_link["notify_max_notifiers"],
             output_link["link_id"],
+            output_port_wiring_generation=output_link.get("output_port_wiring_generation"),
         )
 
 
@@ -642,6 +647,13 @@ class HelperProcessLifecycle:
                     )
                 ],
             )
+            # Opened before any link is wired, so every link mirrors its losses
+            # from its first. Only a stand-in parent sends no board.
+            loss_count_board = command.get("loss_count_board")
+            if loss_count_board is not None:
+                self._link_data_access.open_loss_count_board(
+                    loss_count_board["service_name"], loss_count_board["output_ports"]
+                )
             wire_link_data_access(self._link_data_access, command.get("ports") or {})
             self._hosted = construct_hosted_processor(
                 self._processor_class,

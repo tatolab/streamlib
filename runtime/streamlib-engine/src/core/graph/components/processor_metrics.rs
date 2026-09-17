@@ -7,7 +7,8 @@ use serde_json::Value as JsonValue;
 
 use super::JsonSerializableComponent;
 use crate::iceoryx2::{
-    DiscardedSampleCountsByInboundLink, DroppedBagCountsByInboundLink, RefusedBagCountsByOutputPort,
+    DiscardedSampleCountsByInboundLink, DroppedBagCountsByInboundLink,
+    HelperPlacedProcessorLossCounts, ProcessorLossCountSnapshot, RefusedBagCountsByOutputPort,
 };
 
 /// Runtime metrics for a processor.
@@ -21,6 +22,29 @@ pub struct ProcessorMetrics {
     pub latency_p99_ms: f64,
     /// Total frames processed.
     pub frames_processed: u64,
+    /// What this processor's ports lost, read live from wherever they count it.
+    pub loss_counts: ProcessorLossCounts,
+}
+
+/// Where a processor's loss counts are counted, and so where `graph` reads them.
+#[derive(Clone)]
+pub enum ProcessorLossCounts {
+    /// Counted by ports in this process.
+    CountedByPortsInThisProcess(LossCountsOfPortsInThisProcess),
+    /// Counted in the processor's helper process and read off the board it
+    /// writes them on.
+    CountedInItsHelperProcess(Arc<HelperPlacedProcessorLossCounts>),
+}
+
+impl Default for ProcessorLossCounts {
+    fn default() -> Self {
+        Self::CountedByPortsInThisProcess(LossCountsOfPortsInThisProcess::default())
+    }
+}
+
+/// The loss counts a processor's ports in this process share with its node.
+#[derive(Default, Clone)]
+pub struct LossCountsOfPortsInThisProcess {
     /// Bags lost on the way to this processor's input ports, counted per
     /// inbound link.
     ///
@@ -36,12 +60,43 @@ pub struct ProcessorMetrics {
     pub refused_bag_counts_by_output_port: Arc<RefusedBagCountsByOutputPort>,
 }
 
+impl ProcessorLossCounts {
+    /// Every count as it stands right now.
+    pub fn loss_count_snapshot(&self) -> ProcessorLossCountSnapshot {
+        match self {
+            Self::CountedByPortsInThisProcess(counted_here) => ProcessorLossCountSnapshot {
+                dropped_bags_by_inbound_link: counted_here
+                    .dropped_bag_counts_by_inbound_link
+                    .dropped_bag_count_snapshot_by_inbound_link(),
+                discarded_samples_by_inbound_link: counted_here
+                    .discarded_sample_counts_by_inbound_link
+                    .discarded_sample_count_snapshot_by_inbound_link(),
+                refused_bags_by_output_port: counted_here
+                    .refused_bag_counts_by_output_port
+                    .refused_bag_count_snapshot_by_output_port(),
+            },
+            Self::CountedInItsHelperProcess(helper_placed) => helper_placed.loss_count_snapshot(),
+        }
+    }
+
+    /// Every inbound link's dropped bags summed.
+    pub fn total_dropped_bag_count(&self) -> u64 {
+        match self {
+            Self::CountedByPortsInThisProcess(counted_here) => counted_here
+                .dropped_bag_counts_by_inbound_link
+                .total_dropped_bag_count(),
+            Self::CountedInItsHelperProcess(helper_placed) => {
+                helper_placed.total_dropped_bag_count()
+            }
+        }
+    }
+}
+
 impl ProcessorMetrics {
     /// This processor's dropped bags across every inbound link. Derived from
     /// the per-link counts, which stay the record.
     pub fn total_dropped_bag_count(&self) -> u64 {
-        self.dropped_bag_counts_by_inbound_link
-            .total_dropped_bag_count()
+        self.loss_counts.total_dropped_bag_count()
     }
 }
 
@@ -57,28 +112,25 @@ impl JsonSerializableComponent for ProcessorMetrics {
     /// `graph`'s first-ever `metrics` key. A reader could not tell an idle
     /// processor from an uninstrumented one.
     fn to_json(&self) -> JsonValue {
-        // One snapshot for both keys: taken twice, an eviction landing between
+        // One snapshot for every key: taken apart, an eviction landing between
         // them renders a total smaller than the per-link counts it claims to be
         // the sum of.
-        let by_inbound_link = self
-            .dropped_bag_counts_by_inbound_link
-            .dropped_bag_count_snapshot_by_inbound_link();
+        let ProcessorLossCountSnapshot {
+            dropped_bags_by_inbound_link,
+            discarded_samples_by_inbound_link,
+            refused_bags_by_output_port,
+        } = self.loss_counts.loss_count_snapshot();
         let mut rendered = serde_json::json!({
-            "frames_dropped": by_inbound_link.values().sum::<u64>(),
-            "dropped_bags_by_link": by_inbound_link,
-            "refused_bags_by_output_port": self
-                .refused_bag_counts_by_output_port
-                .refused_bag_count_snapshot_by_output_port()
+            "frames_dropped": dropped_bags_by_inbound_link.values().sum::<u64>(),
+            "dropped_bags_by_link": dropped_bags_by_inbound_link,
+            "refused_bags_by_output_port": refused_bags_by_output_port,
         });
-        let discarded_samples_by_link = self
-            .discarded_sample_counts_by_inbound_link
-            .discarded_sample_count_snapshot_by_inbound_link();
-        if !discarded_samples_by_link.is_empty()
+        if !discarded_samples_by_inbound_link.is_empty()
             && let Some(rendered_keys) = rendered.as_object_mut()
         {
             rendered_keys.insert(
                 "discarded_samples_by_link".to_string(),
-                serde_json::json!(discarded_samples_by_link),
+                serde_json::json!(discarded_samples_by_inbound_link),
             );
         }
         rendered
@@ -88,6 +140,13 @@ impl JsonSerializableComponent for ProcessorMetrics {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn metrics_counted_here(counted_here: LossCountsOfPortsInThisProcess) -> ProcessorMetrics {
+        ProcessorMetrics {
+            loss_counts: ProcessorLossCounts::CountedByPortsInThisProcess(counted_here),
+            ..Default::default()
+        }
+    }
 
     #[test]
     fn a_processors_metrics_render_every_inbound_links_losses_by_name() {
@@ -99,10 +158,10 @@ mod tests {
         }
         from_second_link.record_one_dropped_bag();
 
-        let rendered = ProcessorMetrics {
+        let rendered = metrics_counted_here(LossCountsOfPortsInThisProcess {
             dropped_bag_counts_by_inbound_link: counts,
             ..Default::default()
-        }
+        })
         .to_json();
 
         assert_eq!(
@@ -124,10 +183,10 @@ mod tests {
         video.record_one_refused_bag();
         video.record_one_refused_bag();
 
-        let rendered = ProcessorMetrics {
+        let rendered = metrics_counted_here(LossCountsOfPortsInThisProcess {
             refused_bag_counts_by_output_port: refused,
             ..Default::default()
-        }
+        })
         .to_json();
 
         assert_eq!(
@@ -153,11 +212,11 @@ mod tests {
             .counter_for_inbound_link("L-windowed")
             .record_discarded_samples(480);
 
-        let rendered = ProcessorMetrics {
+        let rendered = metrics_counted_here(LossCountsOfPortsInThisProcess {
             dropped_bag_counts_by_inbound_link: Arc::clone(&dropped),
             discarded_sample_counts_by_inbound_link: discarded,
             ..Default::default()
-        }
+        })
         .to_json();
         assert_eq!(
             rendered,
@@ -170,10 +229,10 @@ mod tests {
             "samples stay out of the bag total, and the unwindowed link carries none"
         );
 
-        let with_no_windowed_link = ProcessorMetrics {
+        let with_no_windowed_link = metrics_counted_here(LossCountsOfPortsInThisProcess {
             dropped_bag_counts_by_inbound_link: dropped,
             ..Default::default()
-        }
+        })
         .to_json();
         assert!(
             with_no_windowed_link
@@ -189,10 +248,10 @@ mod tests {
         let counts = Arc::new(DroppedBagCountsByInboundLink::default());
         let _ = counts.counter_for_inbound_link("L-healthy");
 
-        let rendered = ProcessorMetrics {
+        let rendered = metrics_counted_here(LossCountsOfPortsInThisProcess {
             dropped_bag_counts_by_inbound_link: counts,
             ..Default::default()
-        }
+        })
         .to_json();
 
         assert_eq!(
