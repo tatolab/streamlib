@@ -66,6 +66,12 @@ LIFECYCLE_POLL_INTERVAL_MILLISECONDS = 100
 # the engine's native continuous runner waits between calls.
 CONTINUOUS_INTERVAL_FLOOR_NANOSECONDS = 100_000
 
+# How long `teardown` waits, before answering, for the releases already queued to
+# reach the parent. The parent gives a helper up the moment it answers, and a
+# release still queued then is never taken; bounded well inside the shutdown
+# ladder's five-second teardown budget.
+RELEASES_SENT_BEFORE_TEARDOWN_ANSWERS_TIMEOUT_SECONDS = 1.0
+
 # What an answer to each escalate op creates in the app process, as the op that
 # releases it and the field that op names it by. Wire contract: an answer this
 # helper stopped waiting on is released through it, because nothing else would
@@ -139,10 +145,11 @@ class ParentProcessBridge:
         self._abandoned_escalate_ops_by_request_id: "dict[str, str]" = {}
         self._pending_lock = threading.Lock()
         # `SimpleQueue`, never `Queue`: its `put` is safe from a finalizer that
-        # interrupts another `put` on the same thread. `None` ends the worker.
-        self._releases_owed_to_the_parent: "queue.SimpleQueue[Optional[dict[str, Any]]]" = (
-            queue.SimpleQueue()
-        )
+        # interrupts another `put` on the same thread. An `Event` is set once the
+        # worker reaches it; `None` ends the worker.
+        self._releases_owed_to_the_parent: (
+            "queue.SimpleQueue[dict[str, Any] | threading.Event | None]"
+        ) = queue.SimpleQueue()
         self._channel_closed = False
         self._the_parent_is_gone = threading.Event()
         # Non-inheritable by default, so nothing the processor starts holds it.
@@ -269,17 +276,31 @@ class ParentProcessBridge:
         """
         self._releases_owed_to_the_parent.put(release_op)
 
+    def wait_for_every_release_queued_so_far(self, timeout_seconds: float) -> bool:
+        """Block until the release worker has sent every release queued before
+        this call, or `timeout_seconds` pass. `False` when some may not have."""
+        if not self._release_worker.is_alive():
+            return False
+        every_earlier_release_sent = threading.Event()
+        self._releases_owed_to_the_parent.put(every_earlier_release_sent)
+        return every_earlier_release_sent.wait(timeout=timeout_seconds)
+
     def _send_every_release_owed_to_the_parent(self) -> None:
         while True:
             release_op = self._releases_owed_to_the_parent.get()
             if release_op is None:
                 return
+            if isinstance(release_op, threading.Event):
+                release_op.set()
+                continue
             try:
                 self.request_from_parent(release_op)
-            except EscalateRequestError as release_failure:
+            except Exception as release_failure:
+                # Any failure, not only a refused escalate: a worker that died
+                # here would leave every later release queued behind it.
                 log.warn(
                     "the parent did not take a release from this helper; what it "
-                    "names returns when this helper stops",
+                    "names may stay allocated until the runtime stops",
                     op=release_op.get("op"),
                     error=str(release_failure),
                 )
@@ -403,8 +424,9 @@ class ParentProcessBridge:
             orphaned = list(self._pending_escalate_responses.values())
             self._pending_escalate_responses.clear()
             self._abandoned_escalate_ops_by_request_id.clear()
+        # An answer already delivered is left in its slot: its caller has not
+        # read it yet, and what it created is released through that caller.
         for slot in orphaned:
-            slot.message = None
             slot.arrived.set()
 
     def _read_next_frame(self) -> "Optional[dict[str, Any]]":
@@ -870,6 +892,10 @@ class HelperProcessLifecycle:
             else CONTINUOUS_INTERVAL_FLOOR_NANOSECONDS
         )
         with MonotonicTimer(interval_ns) as timer:
+            # Once at the start and then once per tick, as the native runner
+            # paces a continuous processor.
+            self._hosted.call_hook("process", self._hosted.limited_access_context)
+            self._drain_commands_arriving_mid_run()
             while self._running:
                 expirations = timer.wait(LIFECYCLE_POLL_INTERVAL_MILLISECONDS)
                 if expirations < 0:
@@ -933,6 +959,13 @@ class HelperProcessLifecycle:
         self._torn_down = True
         if self._hosted is not None:
             self._hosted.call_hook("teardown", self._hosted.full_access_context)
+        if not self._bridge.wait_for_every_release_queued_so_far(
+            RELEASES_SENT_BEFORE_TEARDOWN_ANSWERS_TIMEOUT_SECONDS
+        ):
+            log.warn(
+                "this helper answered teardown with releases still unsent; what they "
+                "name may stay allocated until the runtime stops"
+            )
         self._bridge.send({"rpc": "done"})
 
     def _note_pause(self, verb: str) -> None:

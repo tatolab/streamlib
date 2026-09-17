@@ -541,6 +541,82 @@ def test_a_late_refusal_created_nothing_so_nothing_is_released(stand_in_parent):
     assert stand_in_parent.receive(timeout_seconds=0.5) is None
 
 
+def test_an_answer_delivered_before_the_channel_closes_is_still_its_callers(
+    stand_in_parent,
+):
+    """An answer already in its slot belongs to its caller even when the
+    channel closes before the caller reads it; otherwise what the answer
+    created is neither handed back nor released."""
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    slot = _helper._PendingEscalateResponse()
+    bridge._pending_escalate_responses["r-delivered"] = slot
+    answer = {
+        "rpc": "escalate_response",
+        "request_id": "r-delivered",
+        "result": "ok",
+        "handle_id": "created-before-the-close",
+    }
+
+    assert bridge._deliver_escalate_response(answer)
+    bridge._wake_every_pending_escalate_caller()
+
+    assert slot.arrived.is_set()
+    assert slot.message == answer
+
+
+def test_teardown_is_answered_only_after_the_releases_its_hook_owed(
+    stand_in_parent, monkeypatch
+):
+    """The parent gives a helper up the moment it answers `teardown`, and a
+    release still queued then is never taken. An acceleration structure lives
+    on the app process's GPU context rather than on this helper's handles, so
+    nothing else ever frees it.
+
+    Fail-without-fix: `done` goes out while the structure's release is still
+    queued, so the parent reads it before the release is answered.
+    """
+    monkeypatch.setenv("STREAMLIB_SURFACE_SOCKET", "/nonexistent/streamlib-surface.sock")
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    lifecycle_thread = drive_lifecycle_on_a_thread(
+        bridge, load_processor_class(f"{PROBE_MODULE}:ReleasesAStructureInTeardownProbe")
+    )
+
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    register = stand_in_parent.receive()
+    assert register["op"] == "register_acceleration_structure_blas"
+    stand_in_parent.send(
+        {
+            "rpc": "escalate_response",
+            "request_id": register["request_id"],
+            "result": "ok",
+            "handle_id": "blas-released-in-teardown",
+        }
+    )
+    assert stand_in_parent.receive() == {"rpc": "ready"}
+
+    stand_in_parent.send({"cmd": "teardown", "capability": "full"})
+    release = stand_in_parent.receive()
+    assert release is not None and release.get("op") == "release_handle", (
+        f"teardown answered before the structure's release went out: {release}"
+    )
+    assert release["handle_id"] == "blas-released-in-teardown"
+    assert stand_in_parent.receive(timeout_seconds=0.3) is None, (
+        "teardown was answered while its release was still unanswered"
+    )
+    stand_in_parent.send(
+        {
+            "rpc": "escalate_response",
+            "request_id": release["request_id"],
+            "result": "ok",
+            "handle_id": "blas-released-in-teardown",
+        }
+    )
+    assert stand_in_parent.receive() == {"rpc": "done"}
+    lifecycle_thread.join(timeout=5.0)
+    assert not lifecycle_thread.is_alive()
+
+
 def test_a_release_a_finalizer_owes_on_the_bridge_reader_never_holds_the_reader(
     stand_in_parent, monkeypatch
 ):
@@ -1497,9 +1573,12 @@ def when_the_pacing_probe_processed_ns():
     WHEN_THE_PACING_PROBE_PROCESSED_NS.clear()
 
 
-def run_the_pacing_probe(stand_in_parent, interval_ms: int, running_seconds: float) -> None:
+def run_the_pacing_probe(stand_in_parent, interval_ms: int, running_seconds: float) -> int:
     """Set the pacing probe up, run it continuous at `interval_ms` for
-    `running_seconds`, then stop and tear it down the way the ladder does."""
+    `running_seconds`, then stop and tear it down the way the ladder does.
+
+    Returns when `run` was sent, in monotonic nanoseconds.
+    """
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
@@ -1508,6 +1587,7 @@ def run_the_pacing_probe(stand_in_parent, interval_ms: int, running_seconds: flo
     stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
     assert stand_in_parent.receive() == {"rpc": "ready"}
 
+    run_sent_ns = time.monotonic_ns()
     stand_in_parent.send(
         {"cmd": "run", "execution": "continuous", "interval_ms": interval_ms}
     )
@@ -1519,12 +1599,14 @@ def run_the_pacing_probe(stand_in_parent, interval_ms: int, running_seconds: flo
     assert stand_in_parent.receive()["rpc"] == "done"
     lifecycle_thread.join(timeout=5.0)
     assert not lifecycle_thread.is_alive()
+    return run_sent_ns
 
 
 def test_a_continuous_processor_runs_once_per_interval_longer_than_the_command_wait(
     stand_in_parent, when_the_pacing_probe_processed_ns
 ):
-    """A 250 ms interval over 1.1 s is four ticks, so four `process()` calls.
+    """A 250 ms interval over 1.1 s is a call at the start and four ticks, so
+    five `process()` calls.
 
     Fail-without-fix: the loop reads the timer wait's own 100 ms timeout as a
     tick and calls `process()` after every one, so the probe runs eleven or
@@ -1533,8 +1615,26 @@ def test_a_continuous_processor_runs_once_per_interval_longer_than_the_command_w
     run_the_pacing_probe(stand_in_parent, interval_ms=250, running_seconds=1.1)
 
     process_calls = len(when_the_pacing_probe_processed_ns)
-    assert 3 <= process_calls <= 5, (
-        f"a 250 ms interval ran process() {process_calls} times in 1.1 s; four is right"
+    assert 4 <= process_calls <= 6, (
+        f"a 250 ms interval ran process() {process_calls} times in 1.1 s; five is right"
+    )
+
+
+def test_a_continuous_processor_runs_at_the_start_rather_than_one_interval_in(
+    stand_in_parent, when_the_pacing_probe_processed_ns
+):
+    """The native runner calls a continuous processor at once and then paces
+    it, so a Python source's first bag does not trail a Rust one's by an
+    interval."""
+    run_sent_ns = run_the_pacing_probe(
+        stand_in_parent, interval_ms=1000, running_seconds=0.6
+    )
+
+    assert when_the_pacing_probe_processed_ns, "process() never ran"
+    first_call_after_run_ms = (when_the_pacing_probe_processed_ns[0] - run_sent_ns) / 1e6
+    assert first_call_after_run_ms < 500, (
+        f"the first process() came {first_call_after_run_ms:.0f} ms after run; a "
+        f"continuous processor runs at the start"
     )
 
 

@@ -171,3 +171,20 @@ class TakesReconfigurationProbe:
 
     def configure(self, config: ReconfigurableProbeConfig) -> None:
         self.gain = config.get("gain", 1)
+
+
+@processor(execution="manual")
+class ReleasesAStructureInTeardownProbe:
+    """Builds an acceleration structure in `setup` and lets go of it in
+    `teardown`, so the structure's release is owed while teardown answers."""
+
+    @output()
+    def frames_to_downstream(self) -> None: ...
+
+    def setup(self, ctx) -> None:
+        self.structure = ctx.gpu_full_access.build_triangles_blas(
+            [0.0] * 9, [0, 1, 2], label="released-in-teardown"
+        )
+
+    def teardown(self, ctx) -> None:
+        self.structure = None
