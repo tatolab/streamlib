@@ -214,6 +214,7 @@ impl Compiler {
             let graph = graph_arc.read();
             plan.drop_link_adds_into_removed_processors(&graph);
         }
+        plan.hand_config_updates_to_processors_this_batch_constructs(&mut graph_arc.write());
 
         // Early return if nothing to do
         if plan.is_empty() {
@@ -436,13 +437,23 @@ impl Compiler {
         // 8. Config updates - for each config_update
         // =====================================================================
         for (proc_id, config_to_apply) in plan.config_updates {
-            super::compiler_ops::apply_processor_config_update(
+            match super::compiler_ops::apply_processor_config_update(
                 &graph_arc,
                 &proc_id,
                 config_to_apply,
-            )?;
-            tracing::info!("[CONFIG] Updated config for {}", proc_id);
-            result.configs_updated += 1;
+            )? {
+                super::compiler_ops::ProcessorConfigUpdateOutcome::TakenAndRecordedOnTheNode => {
+                    tracing::info!("[CONFIG] Updated config for {}", proc_id);
+                    result.configs_updated += 1;
+                    PUBSUB.publish(
+                        topics::RUNTIME_GLOBAL,
+                        &Event::RuntimeGlobal(RuntimeEvent::ProcessorConfigDidChange {
+                            processor_id: proc_id.clone(),
+                        }),
+                    );
+                }
+                super::compiler_ops::ProcessorConfigUpdateOutcome::ProcessorNoLongerInTheGraph => {}
+            }
         }
 
         // Mark the graph as compiled

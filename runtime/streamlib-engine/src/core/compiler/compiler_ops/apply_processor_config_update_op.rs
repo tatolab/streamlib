@@ -8,6 +8,16 @@ use crate::core::graph::{
     Graph, GraphNodeWithComponents, ProcessorInstanceComponent, ProcessorUniqueId,
 };
 
+/// What handing a processor a configuration came to, short of a refusal.
+#[must_use]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ProcessorConfigUpdateOutcome {
+    /// The processor took the configuration and its graph node records it.
+    TakenAndRecordedOnTheNode,
+    /// The processor left the graph before the update reached it.
+    ProcessorNoLongerInTheGraph,
+}
+
 /// Hand a running processor `config_to_apply`, and record it on the processor's
 /// graph node only once the processor has taken it.
 ///
@@ -17,12 +27,12 @@ pub(crate) fn apply_processor_config_update(
     graph: &RwLock<Graph>,
     processor_id: &ProcessorUniqueId,
     config_to_apply: serde_json::Value,
-) -> Result<()> {
+) -> Result<ProcessorConfigUpdateOutcome> {
     let processor_instance = {
         let graph = graph.read();
         let Some(node) = graph.traversal().v(processor_id).first() else {
             tracing::warn!("[CONFIG] Processor {} not found in graph", processor_id);
-            return Ok(());
+            return Ok(ProcessorConfigUpdateOutcome::ProcessorNoLongerInTheGraph);
         };
         node.get::<ProcessorInstanceComponent>()
             .map(|instance| instance.0.clone())
@@ -41,23 +51,20 @@ pub(crate) fn apply_processor_config_update(
     if let Some(node) = graph.write().traversal_mut().v(processor_id).first_mut() {
         node.set_config(config_to_apply);
     }
-    Ok(())
+    Ok(ProcessorConfigUpdateOutcome::TakenAndRecordedOnTheNode)
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use parking_lot::Mutex;
-
     use super::*;
+    use crate::core::graph::ProcessorInstanceWithItsOutOfProcessLinkWiring;
     use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
     use crate::core::test_support::{MockOutputOnlyProcessor, ensure_test_mocks_registered};
 
-    /// A graph holding one running mock processor that declares no config, so
-    /// it takes an empty configuration and refuses any key.
-    fn graph_with_a_running_processor_that_declares_no_config() -> (RwLock<Graph>, ProcessorUniqueId)
-    {
+    /// A graph holding one instantiated mock processor that declares no
+    /// config, so it takes an empty configuration and refuses any key.
+    fn graph_with_an_instantiated_processor_that_declares_no_config()
+    -> (RwLock<Graph>, ProcessorUniqueId) {
         ensure_test_mocks_registered();
         let mut graph = Graph::new();
         let node = graph
@@ -71,9 +78,7 @@ mod tests {
         let processor_instance = PROCESSOR_REGISTRY
             .create(node)
             .expect("the mock constructs from its node");
-        node.insert(ProcessorInstanceComponent(Arc::new(Mutex::new(
-            processor_instance,
-        ))));
+        ProcessorInstanceWithItsOutOfProcessLinkWiring::from(processor_instance).attach_to(node);
         let processor_id = node.id.clone();
         (RwLock::new(graph), processor_id)
     }
@@ -97,7 +102,7 @@ mod tests {
     /// configuration it never took.
     #[test]
     fn a_configuration_the_processor_refuses_never_reaches_its_graph_node() {
-        let (graph, processor_id) = graph_with_a_running_processor_that_declares_no_config();
+        let (graph, processor_id) = graph_with_an_instantiated_processor_that_declares_no_config();
 
         let refusal =
             apply_processor_config_update(&graph, &processor_id, serde_json::json!({"gain": 3}))
@@ -115,14 +120,36 @@ mod tests {
 
     #[test]
     fn a_configuration_the_processor_takes_is_recorded_on_its_graph_node() {
-        let (graph, processor_id) = graph_with_a_running_processor_that_declares_no_config();
+        let (graph, processor_id) = graph_with_an_instantiated_processor_that_declares_no_config();
 
-        apply_processor_config_update(&graph, &processor_id, serde_json::json!({}))
+        let outcome = apply_processor_config_update(&graph, &processor_id, serde_json::json!({}))
             .expect("an empty configuration is taken");
+
+        assert_eq!(
+            outcome,
+            ProcessorConfigUpdateOutcome::TakenAndRecordedOnTheNode
+        );
 
         assert_eq!(
             config_on_the_node(&graph, &processor_id),
             Some(serde_json::json!({}))
+        );
+    }
+
+    #[test]
+    fn an_update_for_a_processor_no_longer_in_the_graph_is_passed_over_not_counted_as_taken() {
+        let (graph, _processor_id) = graph_with_an_instantiated_processor_that_declares_no_config();
+
+        let outcome = apply_processor_config_update(
+            &graph,
+            &"P-removed-before-the-commit".into(),
+            serde_json::json!({}),
+        )
+        .expect("a processor that left the graph is not an error");
+
+        assert_eq!(
+            outcome,
+            ProcessorConfigUpdateOutcome::ProcessorNoLongerInTheGraph
         );
     }
 }

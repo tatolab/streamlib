@@ -353,21 +353,12 @@ impl Runner {
         let config_json =
             serde_json::to_value(&config).map_err(|e| crate::core::Error::Config(e.to_string()))?;
 
-        // The graph node takes the config at commit, once the processor has.
         self.compiler.scope(|_graph, tx| {
             tx.log(PendingOperation::UpdateProcessorConfig {
                 processor_id: processor_id.clone(),
                 config_to_apply: config_json,
             });
         });
-
-        // Publish event
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::ProcessorConfigDidChange {
-                processor_id: processor_id.clone(),
-            }),
-        );
 
         // Notify listeners that graph changed (triggers commit via GraphChangeListener)
         PUBSUB.publish(
