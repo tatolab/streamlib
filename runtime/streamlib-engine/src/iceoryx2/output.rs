@@ -119,13 +119,14 @@ struct ChannelEgress {
     /// process boundary (host-to-host is trusted; a subprocess destination is
     /// untrusted-session).
     trust_tier: ChannelTrustTier,
-    /// Per-channel payload ceiling in bytes. A frame above this is refused with
-    /// [`Error::PayloadExceedsChannelCeiling`], counted on
-    /// [`Self::refused_bag_counter`], and the stream continues.
+    /// Per-channel shared-memory chunk ceiling in bytes. A frame whose sample
+    /// does not fit it is refused with [`Error::PayloadExceedsChannelCeiling`],
+    /// counted on [`Self::refused_bag_counter`], and the stream continues.
     ceiling_bytes: usize,
     /// Best-effort tracking of the publisher's current data-segment capacity so
-    /// a PowerOfTwo growth event is observable. Primed to the hint's slot size;
-    /// bumped (to `next_power_of_two`) the first time a loan exceeds it.
+    /// a PowerOfTwo growth event is observable. Sample bytes, never frame bytes:
+    /// primed to the hint's own sample size, and bumped (to `next_power_of_two`)
+    /// the first time a loan's sample exceeds it.
     current_slot_capacity_bytes: usize,
     /// This port's share of the writer's refused-bag counts.
     refused_bag_counter: OutputPortRefusedBagCounter,
@@ -237,7 +238,10 @@ impl OutputWriterInner {
                 channel_service_name: service_name,
                 trust_tier,
                 ceiling_bytes,
-                current_slot_capacity_bytes: expected_payload_bytes + FRAME_HEADER_SIZE,
+                current_slot_capacity_bytes:
+                    streamlib_ipc_types::iceoryx2_sample_bytes_for_a_channel_frame(
+                        expected_payload_bytes + FRAME_HEADER_SIZE,
+                    ),
                 refused_bag_counter: self.refused_bag_counts.counter_for_output_port(output_port),
             },
         );
@@ -390,7 +394,13 @@ impl OutputWriterInner {
             return Err(Error::PayloadExceedsChannelCeiling {
                 channel: egress.channel_service_name.clone(),
                 payload_bytes: total_len,
-                ceiling_bytes: egress.ceiling_bytes,
+                // The frame ceiling, not the chunk ceiling: the difference is
+                // iceoryx2's sample headers, and a producer can only act on the
+                // number that bounds what it writes.
+                ceiling_bytes:
+                    streamlib_ipc_types::largest_channel_frame_bytes_under_a_chunk_ceiling(
+                        egress.ceiling_bytes,
+                    ),
                 tier: trust_tier_label(egress.trust_tier),
                 refused_bags_on_the_output_port: refused_count,
             });
@@ -1122,7 +1132,13 @@ mod tests {
             } => {
                 assert_eq!(channel, "test/ceiling/out");
                 assert_eq!(payload_bytes, FRAME_HEADER_SIZE + over.len());
-                assert_eq!(ceiling_bytes, ceiling);
+                // The frame ceiling the producer can act on, which sits
+                // iceoryx2's sample headers below the channel's chunk ceiling.
+                assert_eq!(
+                    ceiling_bytes,
+                    streamlib_ipc_types::largest_channel_frame_bytes_under_a_chunk_ceiling(ceiling)
+                );
+                assert!(ceiling_bytes < ceiling);
                 assert_eq!(tier, ChannelTrustTierLabel::UntrustedSession);
                 assert_eq!(refused_bags_on_the_output_port, 1);
             }

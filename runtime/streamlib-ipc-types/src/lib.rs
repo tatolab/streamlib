@@ -27,20 +27,74 @@ use iceoryx2::prelude::*;
 pub const DEFAULT_EXPECTED_PAYLOAD_BYTES: usize = 65536;
 pub const MAX_PORT_KEY_SIZE: usize = 64;
 
-/// Per-channel payload ceiling for a trusted (in-process host) data channel —
-/// the graceful, observable layer in front of the subprocess cgroup
-/// `memory.max` hard backstop. A payload above this is refused with a named
-/// `PayloadExceedsChannelCeiling` error, counted, and the stream continues;
-/// the process never dies.
+/// Per-channel shared-memory chunk ceiling for a trusted (in-process host) data
+/// channel — the graceful, observable layer in front of the subprocess cgroup
+/// `memory.max` hard backstop. A frame whose sample is above this is refused
+/// with a named `PayloadExceedsChannelCeiling` error, counted, and the stream
+/// continues; the process never dies.
+///
+/// A power of two, because iceoryx2's pool allocator buckets a data segment at
+/// `next_power_of_two` of the sample layout: the ceiling is the bucket a
+/// ceiling-sized frame must stay inside, which is what
+/// [`largest_channel_frame_bytes_under_a_chunk_ceiling`] subtracts the sample
+/// overhead from.
 pub const TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES: usize = 64 * 1024 * 1024;
 
-/// Per-channel payload ceiling for an untrusted-session (subprocess) data
-/// channel. Tighter than the trusted tier because a subprocess payload crosses
-/// a trust boundary and a runaway producer must be bounded well below host RAM.
+/// Per-channel shared-memory chunk ceiling for an untrusted-session (subprocess)
+/// data channel. Tighter than the trusted tier because a subprocess payload
+/// crosses a trust boundary and a runaway producer must be bounded well below
+/// host RAM.
 pub const UNTRUSTED_SESSION_CHANNEL_PAYLOAD_CEILING_BYTES: usize = 16 * 1024 * 1024;
 
+/// Bytes iceoryx2 lays out ahead of a channel frame in the shared-memory sample
+/// that carries it: its own publish-subscribe header, this crate's
+/// [`DataChannelBagSequenceNumberUserHeader`], and the padding aligning them.
+///
+/// Mirrors `MessageTypeDetails::sample_layout`, which is crate-private upstream:
+/// `header + user_header + user_header_alignment - 1 + payload`, the whole
+/// aligned to the header's alignment. The payload term contributes
+/// `alignment - 1 = 0` for a `[u8]` slice. Composed from the real types rather
+/// than written out, so a size change upstream moves this with it.
+const ICEORYX2_SAMPLE_BYTES_AHEAD_OF_A_CHANNEL_FRAME: usize =
+    size_of::<iceoryx2::service::header::publish_subscribe::Header>()
+        + size_of::<DataChannelBagSequenceNumberUserHeader>()
+        + align_of::<DataChannelBagSequenceNumberUserHeader>()
+        - 1;
+
+/// The alignment iceoryx2 rounds a whole channel sample up to.
+const ICEORYX2_SAMPLE_ALIGNMENT_BYTES: usize =
+    align_of::<iceoryx2::service::header::publish_subscribe::Header>();
+
+/// The shared-memory sample a channel frame of `frame_total_bytes` occupies —
+/// the layout iceoryx2's pool allocator buckets, never the frame alone.
+///
+/// The distinction is load-bearing at the ceiling: under
+/// [`iceoryx2::prelude::AllocationStrategy::PowerOfTwo`] a segment grows to
+/// `next_power_of_two` of THIS, so a frame sized to a power-of-two ceiling
+/// exactly would take a bucket twice that size.
+pub const fn iceoryx2_sample_bytes_for_a_channel_frame(frame_total_bytes: usize) -> usize {
+    let unaligned = ICEORYX2_SAMPLE_BYTES_AHEAD_OF_A_CHANNEL_FRAME + frame_total_bytes;
+    unaligned.next_multiple_of(ICEORYX2_SAMPLE_ALIGNMENT_BYTES)
+}
+
+/// The largest channel frame whose sample still fits inside `channel_ceiling_bytes`.
+///
+/// What an output port admits, and the number a refusal reports: a producer can
+/// act on "your bag must be at most N bytes", where the tier's own chunk ceiling
+/// would leave it wondering why a bag of exactly that size was refused.
+pub const fn largest_channel_frame_bytes_under_a_chunk_ceiling(
+    channel_ceiling_bytes: usize,
+) -> usize {
+    // Round the ceiling down to a whole sample alignment first: a frame is
+    // admitted when its aligned-up sample fits, so the last admitted frame sits
+    // at the largest aligned size at or below the ceiling.
+    let largest_whole_sample = channel_ceiling_bytes
+        - (channel_ceiling_bytes % ICEORYX2_SAMPLE_ALIGNMENT_BYTES);
+    largest_whole_sample.saturating_sub(ICEORYX2_SAMPLE_BYTES_AHEAD_OF_A_CHANNEL_FRAME)
+}
+
 /// Trust tier of an iceoryx2 data channel, selecting the default per-channel
-/// payload ceiling.
+/// shared-memory chunk ceiling.
 ///
 /// Determined structurally by the process boundary at wire time: an in-process
 /// host link is [`ChannelTrustTier::Trusted`]; a link crossing a subprocess
@@ -54,7 +108,9 @@ pub enum ChannelTrustTier {
 }
 
 impl ChannelTrustTier {
-    /// The default per-channel payload ceiling in bytes for this tier.
+    /// The default per-channel shared-memory chunk ceiling in bytes for this
+    /// tier. The frames it admits are bounded by
+    /// [`largest_channel_frame_bytes_under_a_chunk_ceiling`].
     pub const fn default_ceiling_bytes(self) -> usize {
         match self {
             Self::Trusted => TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
@@ -72,8 +128,10 @@ impl ChannelTrustTier {
 }
 
 /// A PowerOfTwo data-segment growth event a channel publisher observed while
-/// admitting a frame: the tracked slot capacity crossed the frame size and was
-/// advanced from `old_segment_bytes` to `new_segment_bytes` (`next_power_of_two`).
+/// admitting a frame: the tracked slot capacity crossed the frame's sample size
+/// and was advanced from `old_segment_bytes` to `new_segment_bytes`
+/// (`next_power_of_two`). Both are sample bytes — the layout iceoryx2 buckets,
+/// [`iceoryx2_sample_bytes_for_a_channel_frame`] — never the frame alone.
 ///
 /// `crossed_quarter_ceiling` is `true` when this growth is the one that first
 /// pushed the segment past a quarter of the channel's ceiling (`old <= ceiling/4
@@ -94,16 +152,17 @@ pub struct ChannelSegmentGrowth {
 /// publisher is about to loan should be published or dropped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChannelEgressAdmission {
-    /// The frame is above the channel's per-channel payload ceiling and was
+    /// The frame's sample is above the channel's chunk ceiling and the frame was
     /// refused. The caller drops it, surfaces the refusal as a typed
     /// `PayloadExceedsChannelCeiling` error and logs it; `refused_count` is the
     /// running total the caller's counter reported after recording this
     /// refusal.
     RefusedOverCeiling { refused_count: u64 },
     /// The frame fits under the ceiling; the caller publishes it. When `grew_to`
-    /// is `Some(growth)` the tracked data-segment capacity crossed the frame size
-    /// and was advanced — a PowerOfTwo growth the caller logs, additionally
-    /// raising a `warn` when [`ChannelSegmentGrowth::crossed_quarter_ceiling`].
+    /// is `Some(growth)` the tracked data-segment capacity crossed the frame's
+    /// sample size and was advanced — a PowerOfTwo growth the caller logs,
+    /// additionally raising a `warn` when
+    /// [`ChannelSegmentGrowth::crossed_quarter_ceiling`].
     Admitted {
         grew_to: Option<ChannelSegmentGrowth>,
     },
@@ -122,20 +181,27 @@ pub enum ChannelEgressAdmission {
 /// crossed a quarter of the ceiling. The shared diagnostics live in
 /// [`emit_channel_egress_admission_tracing`] beside this decision so they cannot
 /// drift from it.
+///
+/// Both the refusal and the growth are measured on the frame's shared-memory
+/// SAMPLE, never the frame alone: the sample is what iceoryx2's pool buckets, so
+/// measuring the frame would admit a ceiling-sized bag into a bucket twice the
+/// ceiling and report a segment half its real size.
 pub fn decide_channel_egress_admission(
     frame_total_bytes: usize,
     channel_ceiling_bytes: usize,
     current_slot_capacity_bytes: &mut usize,
     record_one_refused_frame: impl FnOnce() -> u64,
 ) -> ChannelEgressAdmission {
-    if frame_total_bytes > channel_ceiling_bytes {
+    if frame_total_bytes > largest_channel_frame_bytes_under_a_chunk_ceiling(channel_ceiling_bytes)
+    {
         return ChannelEgressAdmission::RefusedOverCeiling {
             refused_count: record_one_refused_frame(),
         };
     }
-    let grew_to = if frame_total_bytes > *current_slot_capacity_bytes {
+    let frame_sample_bytes = iceoryx2_sample_bytes_for_a_channel_frame(frame_total_bytes);
+    let grew_to = if frame_sample_bytes > *current_slot_capacity_bytes {
         let old_segment_bytes = *current_slot_capacity_bytes;
-        let new_segment_bytes = frame_total_bytes.next_power_of_two();
+        let new_segment_bytes = frame_sample_bytes.next_power_of_two();
         *current_slot_capacity_bytes = new_segment_bytes;
         let quarter_ceiling_bytes = channel_ceiling_bytes / 4;
         Some(ChannelSegmentGrowth {
@@ -175,7 +241,9 @@ pub fn emit_channel_egress_admission_tracing(
             tracing::warn!(
                 channel = channel_service_name,
                 payload_bytes = payload_total_bytes,
-                ceiling_bytes = channel_ceiling_bytes,
+                ceiling_bytes =
+                    largest_channel_frame_bytes_under_a_chunk_ceiling(channel_ceiling_bytes),
+                chunk_ceiling_bytes = channel_ceiling_bytes,
                 tier = trust_tier.as_str(),
                 refused_count = *refused_count,
                 "{}output channel refused a payload above its per-channel ceiling",
@@ -885,6 +953,115 @@ mod tests {
         assert_eq!(FrameHeader::read_port_from_slice(&well_formed), "cam");
     }
 
+    /// The shape of `MessageTypeDetails::sample_layout`, spelled out here so the
+    /// mirror in this crate is checked against the formula rather than against
+    /// itself. A change upstream reddens this rather than silently re-sizing
+    /// every channel's ceiling.
+    #[test]
+    fn a_channel_samples_layout_is_iceoryx2s_own_over_the_two_headers_and_the_payload() {
+        type Iceoryx2PublishSubscribeHeader = iceoryx2::service::header::publish_subscribe::Header;
+        for frame_total_bytes in [0usize, 1, 7, 8, 9, 4096, 65_536, 1_000_003] {
+            let upstream_formula = (size_of::<Iceoryx2PublishSubscribeHeader>()
+                + size_of::<DataChannelBagSequenceNumberUserHeader>()
+                + align_of::<DataChannelBagSequenceNumberUserHeader>()
+                - 1
+                + size_of::<u8>() * frame_total_bytes
+                + align_of::<u8>()
+                - 1)
+                .next_multiple_of(align_of::<Iceoryx2PublishSubscribeHeader>());
+            assert_eq!(
+                iceoryx2_sample_bytes_for_a_channel_frame(frame_total_bytes),
+                upstream_formula,
+                "the sample size for a {frame_total_bytes}-byte frame must be iceoryx2's own"
+            );
+        }
+    }
+
+    /// Mental-revert guard for the ceiling half of the shared-memory accounting:
+    /// compare the FRAME against the ceiling instead of its sample, and a
+    /// ceiling-sized bag is admitted into a chunk twice the ceiling — the
+    /// container `/dev/shm` SIGBUS this subtraction exists to keep away from.
+    #[test]
+    fn a_frame_at_the_admitted_ceiling_keeps_its_sample_inside_one_ceiling_sized_chunk() {
+        for chunk_ceiling_bytes in [
+            TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+            UNTRUSTED_SESSION_CHANNEL_PAYLOAD_CEILING_BYTES,
+        ] {
+            let largest_admitted_frame_bytes =
+                largest_channel_frame_bytes_under_a_chunk_ceiling(chunk_ceiling_bytes);
+            assert!(
+                largest_admitted_frame_bytes < chunk_ceiling_bytes,
+                "the admitted frame must leave room for iceoryx2's sample headers"
+            );
+            assert_eq!(
+                iceoryx2_sample_bytes_for_a_channel_frame(largest_admitted_frame_bytes)
+                    .next_power_of_two(),
+                chunk_ceiling_bytes,
+                "the largest admitted frame must bucket at exactly the ceiling"
+            );
+            assert_eq!(
+                iceoryx2_sample_bytes_for_a_channel_frame(chunk_ceiling_bytes).next_power_of_two(),
+                chunk_ceiling_bytes * 2,
+                "a frame sized to the ceiling itself is what takes a double-sized chunk"
+            );
+        }
+    }
+
+    #[test]
+    fn a_frame_one_byte_past_the_admitted_ceiling_is_refused_and_the_admitted_one_is_not() {
+        let chunk_ceiling_bytes = TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES;
+        let largest_admitted_frame_bytes =
+            largest_channel_frame_bytes_under_a_chunk_ceiling(chunk_ceiling_bytes);
+        let mut slot = DEFAULT_EXPECTED_PAYLOAD_BYTES;
+
+        assert!(
+            matches!(
+                decide_channel_egress_admission(
+                    largest_admitted_frame_bytes,
+                    chunk_ceiling_bytes,
+                    &mut slot,
+                    || panic!("the largest admitted frame must not be refused"),
+                ),
+                ChannelEgressAdmission::Admitted { .. }
+            ),
+            "the largest frame whose sample fits the chunk must be admitted"
+        );
+        assert_eq!(
+            slot, chunk_ceiling_bytes,
+            "the tracked slot is the sample's bucket, which is the ceiling itself"
+        );
+
+        assert_eq!(
+            decide_channel_egress_admission(
+                largest_admitted_frame_bytes + 1,
+                chunk_ceiling_bytes,
+                &mut slot,
+                || 1,
+            ),
+            ChannelEgressAdmission::RefusedOverCeiling { refused_count: 1 },
+            "one byte more would need a chunk twice the ceiling"
+        );
+    }
+
+    /// The logging half of the same accounting: a frame that fits a power of two
+    /// exactly still needs a sample larger than it, so the segment it grows to is
+    /// the next bucket up. Measuring the frame alone under-reports by 2× here.
+    #[test]
+    fn a_growth_reports_the_bucket_the_sample_takes_and_not_the_frames_own_rounding() {
+        let mut slot = 4096usize;
+        match decide_channel_egress_admission(65_536, 128 * 1024, &mut slot, || {
+            panic!("an admitted frame records no refusal")
+        }) {
+            ChannelEgressAdmission::Admitted {
+                grew_to: Some(growth),
+            } => assert_eq!(
+                growth.new_segment_bytes, 131_072,
+                "a 64 KiB frame's sample is past 64 KiB, so its bucket is 128 KiB"
+            ),
+            other => panic!("expected an Admitted growth, got {other:?}"),
+        }
+    }
+
     #[test]
     fn egress_admission_refuses_over_ceiling_and_counts() {
         let ceiling = 128 * 1024usize;
@@ -1013,3 +1190,4 @@ mod tests {
         ));
     }
 }
+

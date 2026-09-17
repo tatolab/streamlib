@@ -18,6 +18,7 @@ mod mailbox;
 mod node;
 mod output;
 mod payload;
+mod posix_shared_memory_headroom;
 mod read_mode;
 
 #[cfg(test)]
@@ -76,4 +77,5 @@ pub use payload::{
     RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL, TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
     UNTRUSTED_SESSION_CHANNEL_PAYLOAD_CEILING_BYTES,
 };
+pub use posix_shared_memory_headroom::warn_when_posix_shared_memory_is_short_for_a_runtime;
 pub use read_mode::ReadMode;
