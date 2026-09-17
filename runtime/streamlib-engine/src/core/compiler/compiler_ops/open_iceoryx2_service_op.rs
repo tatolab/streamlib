@@ -76,8 +76,10 @@ pub fn open_iceoryx2_service(
         (from_port.processor_id.clone(), from_port.port_name.clone());
     let (dest_proc_id, dest_port) = (to_port.processor_id.clone(), to_port.port_name.clone());
 
-    let source_is_subprocess = is_subprocess_processor(graph, &source_proc_id);
-    let dest_is_subprocess = is_subprocess_processor(graph, &dest_proc_id);
+    let source_link_wiring = out_of_process_link_wiring_of(graph, &source_proc_id);
+    let dest_link_wiring = out_of_process_link_wiring_of(graph, &dest_proc_id);
+    let source_is_subprocess = source_link_wiring.is_some();
+    let dest_is_subprocess = dest_link_wiring.is_some();
 
     // A windowed destination is read and refused before any service is opened:
     // a second link into a port that windows, or one onto a channel too shallow
@@ -179,9 +181,10 @@ pub fn open_iceoryx2_service(
 
     // Source side: install the single channel publisher (first link out of this
     // port) and append this link's destination notifier.
-    if source_is_subprocess {
+    if let Some(source_link_wiring) = &source_link_wiring {
         wire_replies_awaited_from_its_out_of_process_ends.extend(wire_subprocess_source(
             graph,
+            source_link_wiring,
             &source_proc_id,
             &source_port,
             &channel_service_name,
@@ -213,9 +216,10 @@ pub fn open_iceoryx2_service(
 
     // Destination side: subscribe to the channel bound to this local input port,
     // and ensure the destination's single listener exists.
-    if dest_is_subprocess {
+    if let Some(dest_link_wiring) = &dest_link_wiring {
         wire_replies_awaited_from_its_out_of_process_ends.extend(wire_subprocess_dest(
             graph,
+            dest_link_wiring,
             &dest_proc_id,
             &dest_port,
             &channel_service_name,
@@ -732,15 +736,9 @@ fn link_still_counts_toward_its_ports(link: &Link) -> bool {
         .unwrap_or(true)
 }
 
-/// Whether a processor's ports live out of process — read off the wiring its
-/// node carries, never through the processor's own lock, which a helper holds
-/// across its whole setup.
-fn is_subprocess_processor(graph: &mut Graph, proc_id: &ProcessorUniqueId) -> bool {
-    out_of_process_link_wiring_of(graph, proc_id).is_some()
-}
-
 /// The link wiring the node of a processor whose ports live out of process
-/// carries, or `None` for one the engine wires itself.
+/// carries, or `None` for one the engine wires itself — read off the node, never
+/// through the processor's own lock, which a helper holds across its setup.
 fn out_of_process_link_wiring_of(
     graph: &Graph,
     proc_id: &ProcessorUniqueId,
@@ -1038,6 +1036,7 @@ fn publish_device_matched_audio_window_contracts_on_destination_node(
 #[allow(clippy::too_many_arguments)]
 fn wire_subprocess_source(
     graph: &mut Graph,
+    link_wiring: &OutOfProcessLinkWiringEnvelope,
     source_proc_id: &ProcessorUniqueId,
     source_port: &str,
     channel_service_name: &str,
@@ -1064,15 +1063,6 @@ fn wire_subprocess_source(
         "notify_max_notifiers": notify_max_notifiers,
     });
 
-    let Some(link_wiring) = out_of_process_link_wiring_of(graph, source_proc_id) else {
-        // Classification and capability must agree: a node with no envelope
-        // would leave the link marked wired with nothing ever recorded — no
-        // frames, no error, nothing to debug from.
-        return Err(Error::Configuration(format!(
-            "processor '{source_proc_id}' carries no out-of-process link wiring on its graph \
-             node; its output port '{source_port}' would never be wired"
-        )));
-    };
     // The generation rides the entry, so the far side writes this channel's
     // refusals where the parent reads them for this channel and no earlier one.
     let loss_counts = link_wiring.helper_placed_processor_loss_counts();
@@ -1099,6 +1089,7 @@ fn wire_subprocess_source(
 #[allow(clippy::too_many_arguments)]
 fn wire_subprocess_dest(
     graph: &mut Graph,
+    link_wiring: &OutOfProcessLinkWiringEnvelope,
     dest_proc_id: &ProcessorUniqueId,
     dest_port: &str,
     channel_service_name: &str,
@@ -1160,12 +1151,6 @@ fn wire_subprocess_dest(
         }
     }
 
-    let Some(link_wiring) = out_of_process_link_wiring_of(graph, dest_proc_id) else {
-        return Err(Error::Configuration(format!(
-            "processor '{dest_proc_id}' carries no out-of-process link wiring on its graph \
-             node; its input port '{dest_port}' would never be wired"
-        )));
-    };
     // The slot and generation ride the entry, so the far side writes this
     // link's counts where the parent reads them for this wiring and no other.
     let loss_counts = link_wiring.helper_placed_processor_loss_counts();
@@ -1188,6 +1173,7 @@ fn wire_subprocess_dest(
 mod tests {
     use super::*;
     use crate::core::execution::{ExecutionConfig, ProcessExecution};
+    use crate::core::graph::ProcessorInstanceWithItsOutOfProcessLinkWiring;
     use crate::core::graph::{InputLinkPortRef, OutputLinkPortRef};
     use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
     use crate::core::processors::{
@@ -1222,25 +1208,15 @@ mod tests {
                 .expect("a stub's setup command always goes out");
             Self { link_wiring }
         }
-
-        /// A stub whose far side drives its processor in `far_side_process_execution`.
-        fn driving_its_processor_in(far_side_process_execution: ProcessExecution) -> Self {
-            Self::with_a_far_side_past_its_setup_command(
-                RecordingOutOfProcessFarSideLinkDelivery::default(),
-                far_side_process_execution,
-            )
-        }
-
-        /// A reactive stub whose far side records what it is handed in `far_side`.
-        fn handing_links_to(far_side: RecordingOutOfProcessFarSideLinkDelivery) -> Self {
-            Self::with_a_far_side_past_its_setup_command(far_side, ProcessExecution::Reactive)
-        }
     }
 
     /// Reactive, the mode a Python class with inputs takes unless it says otherwise.
     impl Default for OutOfCrateHelperSpawnHostStub {
         fn default() -> Self {
-            Self::driving_its_processor_in(ProcessExecution::Reactive)
+            Self::with_a_far_side_past_its_setup_command(
+                RecordingOutOfProcessFarSideLinkDelivery::default(),
+                ProcessExecution::Reactive,
+            )
         }
     }
 
@@ -1313,27 +1289,22 @@ mod tests {
         }
     }
 
-    /// Attach `instance` to `proc_id` the way the spawn op does, so the wiring
-    /// path can reach it.
+    /// Attach `instance` to `proc_id` through the attach the spawn op takes, so
+    /// the wiring path can reach it.
     fn attach_processor_instance(
         graph: &mut Graph,
         proc_id: &str,
         instance: ProcessorInstance,
     ) -> Arc<Mutex<ProcessorInstance>> {
-        let out_of_process_link_wiring = instance.out_of_process_link_wiring();
-        let instance = Arc::new(Mutex::new(instance));
-        let node = graph
-            .traversal_mut()
-            .v(proc_id)
-            .first_mut()
-            .expect("the node must exist");
-        node.insert(ProcessorInstanceComponent(instance.clone()));
-        if let Some(out_of_process_link_wiring) = out_of_process_link_wiring {
-            node.insert_component_without_rendering_it(OutOfProcessLinkWiringComponent(
-                out_of_process_link_wiring,
-            ));
-        }
-        instance
+        let processor_to_attach = ProcessorInstanceWithItsOutOfProcessLinkWiring::from(instance);
+        processor_to_attach.attach_to(
+            graph
+                .traversal_mut()
+                .v(proc_id)
+                .first_mut()
+                .expect("the node must exist"),
+        );
+        processor_to_attach.processor_instance
     }
 
     /// Record one link's wiring on both out-of-process endpoints, exactly as
@@ -1349,8 +1320,11 @@ mod tests {
         dest_id: &str,
         link_id: &LinkUniqueId,
     ) {
+        let source_link_wiring = out_of_process_link_wiring_of(graph, &source_id.into())
+            .expect("a helper stub's node carries its link wiring");
         wire_subprocess_source(
             graph,
+            &source_link_wiring,
             &source_id.into(),
             "out1",
             "pabc/out1",
@@ -1362,8 +1336,11 @@ mod tests {
             link_id,
         )
         .expect("recording source wiring must succeed");
+        let dest_link_wiring = out_of_process_link_wiring_of(graph, &dest_id.into())
+            .expect("a helper stub's node carries its link wiring");
         wire_subprocess_dest(
             graph,
+            &dest_link_wiring,
             &dest_id.into(),
             "in1",
             "pabc/out1",
@@ -1731,8 +1708,12 @@ mod tests {
             "audio",
         )
         .expect("the mock's contract resolves");
+        let dest_link_wiring =
+            out_of_process_link_wiring_of(&graph, &helper_windowed_id.as_str().into())
+                .expect("a helper stub's node carries its link wiring");
         wire_subprocess_dest(
             &mut graph,
+            &dest_link_wiring,
             &helper_windowed_id.as_str().into(),
             "audio",
             "pabc/out1",
@@ -1785,22 +1766,28 @@ mod tests {
         let source_instance = attach_processor_instance(
             &mut graph,
             &source_id,
-            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::handing_links_to(
-                RecordingOutOfProcessFarSideLinkDelivery {
-                    reclaimed_links: source_reclaims.clone(),
-                    ..Default::default()
-                },
-            ))),
+            ProcessorInstance::new(Box::new(
+                OutOfCrateHelperSpawnHostStub::with_a_far_side_past_its_setup_command(
+                    RecordingOutOfProcessFarSideLinkDelivery {
+                        reclaimed_links: source_reclaims.clone(),
+                        ..Default::default()
+                    },
+                    ProcessExecution::Reactive,
+                ),
+            )),
         );
         let dest_instance = attach_processor_instance(
             &mut graph,
             &dest_id,
-            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::handing_links_to(
-                RecordingOutOfProcessFarSideLinkDelivery {
-                    reclaimed_links: dest_reclaims.clone(),
-                    ..Default::default()
-                },
-            ))),
+            ProcessorInstance::new(Box::new(
+                OutOfCrateHelperSpawnHostStub::with_a_far_side_past_its_setup_command(
+                    RecordingOutOfProcessFarSideLinkDelivery {
+                        reclaimed_links: dest_reclaims.clone(),
+                        ..Default::default()
+                    },
+                    ProcessExecution::Reactive,
+                ),
+            )),
         );
 
         let link_id = graph
@@ -1869,22 +1856,28 @@ mod tests {
         let source_instance = attach_processor_instance(
             &mut graph,
             &source_id,
-            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::handing_links_to(
-                RecordingOutOfProcessFarSideLinkDelivery {
-                    late_wired_links: source_late_wired.clone(),
-                    ..Default::default()
-                },
-            ))),
+            ProcessorInstance::new(Box::new(
+                OutOfCrateHelperSpawnHostStub::with_a_far_side_past_its_setup_command(
+                    RecordingOutOfProcessFarSideLinkDelivery {
+                        late_wired_links: source_late_wired.clone(),
+                        ..Default::default()
+                    },
+                    ProcessExecution::Reactive,
+                ),
+            )),
         );
         let dest_instance = attach_processor_instance(
             &mut graph,
             &dest_id,
-            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::handing_links_to(
-                RecordingOutOfProcessFarSideLinkDelivery {
-                    late_wired_links: dest_late_wired.clone(),
-                    ..Default::default()
-                },
-            ))),
+            ProcessorInstance::new(Box::new(
+                OutOfCrateHelperSpawnHostStub::with_a_far_side_past_its_setup_command(
+                    RecordingOutOfProcessFarSideLinkDelivery {
+                        late_wired_links: dest_late_wired.clone(),
+                        ..Default::default()
+                    },
+                    ProcessExecution::Reactive,
+                ),
+            )),
         );
 
         let link_id: LinkUniqueId = "L-wired-late".into();
@@ -1933,16 +1926,14 @@ mod tests {
             &helper_hosted_id,
             ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
         );
-        assert!(is_subprocess_processor(
-            &mut graph,
-            &helper_hosted_id.as_str().into()
-        ));
+        assert!(out_of_process_link_wiring_of(&graph, &helper_hosted_id.as_str().into()).is_some());
 
         let engine_hosted_id = add_mock_input_only(&mut graph);
-        assert!(!is_subprocess_processor(
+        attach_mock_instance::<crate::core::test_support::MockInputOnlyProcessor::Processor>(
             &mut graph,
-            &engine_hosted_id.as_str().into()
-        ));
+            &engine_hosted_id,
+        );
+        assert!(out_of_process_link_wiring_of(&graph, &engine_hosted_id.as_str().into()).is_none());
     }
 
     /// A link with one endpoint in each world reclaims each end its own way —
@@ -1968,12 +1959,15 @@ mod tests {
         attach_processor_instance(
             &mut graph,
             &dest_id,
-            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::handing_links_to(
-                RecordingOutOfProcessFarSideLinkDelivery {
-                    reclaimed_links: dest_reclaims.clone(),
-                    ..Default::default()
-                },
-            ))),
+            ProcessorInstance::new(Box::new(
+                OutOfCrateHelperSpawnHostStub::with_a_far_side_past_its_setup_command(
+                    RecordingOutOfProcessFarSideLinkDelivery {
+                        reclaimed_links: dest_reclaims.clone(),
+                        ..Default::default()
+                    },
+                    ProcessExecution::Reactive,
+                ),
+            )),
         );
 
         let link_id = graph
@@ -2005,8 +1999,11 @@ mod tests {
             },
         )
         .expect("the engine-side source wires");
+        let dest_link_wiring = out_of_process_link_wiring_of(&graph, &dest_id.as_str().into())
+            .expect("a helper stub's node carries its link wiring");
         wire_subprocess_dest(
             &mut graph,
+            &dest_link_wiring,
             &dest_id.as_str().into(),
             "in1",
             "pabc/out1",
@@ -2149,7 +2146,8 @@ mod tests {
                 &mut graph,
                 &helper_hosted_id,
                 ProcessorInstance::new(Box::new(
-                    OutOfCrateHelperSpawnHostStub::driving_its_processor_in(
+                    OutOfCrateHelperSpawnHostStub::with_a_far_side_past_its_setup_command(
+                        RecordingOutOfProcessFarSideLinkDelivery::default(),
                         far_side_process_execution,
                     ),
                 )),
@@ -2198,7 +2196,10 @@ mod tests {
             &mut graph,
             &dest_id,
             ProcessorInstance::new(Box::new(
-                OutOfCrateHelperSpawnHostStub::driving_its_processor_in(far_side_process_execution),
+                OutOfCrateHelperSpawnHostStub::with_a_far_side_past_its_setup_command(
+                    RecordingOutOfProcessFarSideLinkDelivery::default(),
+                    far_side_process_execution,
+                ),
             )),
         );
 
@@ -2788,12 +2789,15 @@ mod tests {
             attach_processor_instance(
                 &mut graph,
                 helper_id,
-                ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::handing_links_to(
-                    RecordingOutOfProcessFarSideLinkDelivery {
-                        wire_answers_owed: answers_owed.clone(),
-                        ..Default::default()
-                    },
-                ))),
+                ProcessorInstance::new(Box::new(
+                    OutOfCrateHelperSpawnHostStub::with_a_far_side_past_its_setup_command(
+                        RecordingOutOfProcessFarSideLinkDelivery {
+                            wire_answers_owed: answers_owed.clone(),
+                            ..Default::default()
+                        },
+                        ProcessExecution::Reactive,
+                    ),
+                )),
             );
         }
         let link_id = add_link_from_out1_to_in1(&mut graph, &source_id, &dest_id);
@@ -3099,12 +3103,15 @@ mod tests {
         attach_processor_instance(
             &mut graph,
             &helper_id,
-            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::handing_links_to(
-                RecordingOutOfProcessFarSideLinkDelivery {
-                    wire_answers_owed: answers_owed.clone(),
-                    ..Default::default()
-                },
-            ))),
+            ProcessorInstance::new(Box::new(
+                OutOfCrateHelperSpawnHostStub::with_a_far_side_past_its_setup_command(
+                    RecordingOutOfProcessFarSideLinkDelivery {
+                        wire_answers_owed: answers_owed.clone(),
+                        ..Default::default()
+                    },
+                    ProcessExecution::Reactive,
+                ),
+            )),
         );
         let link_id = add_link_from_out1_to_in1(&mut graph, &helper_id, &helper_id);
 
@@ -3167,48 +3174,62 @@ mod tests {
     }
 
     /// Two helper stubs whose far sides record into one delivery, and a link
-    /// from the first's `out1` to the second's `in1` not yet wired.
-    fn two_helper_stubs_and_an_unwired_link_between_them() -> (
-        Graph,
-        Arc<Mutex<ProcessorInstance>>,
-        Arc<Mutex<ProcessorInstance>>,
-        LinkUniqueId,
-        RecordingOutOfProcessFarSideLinkDelivery,
-    ) {
-        let mut graph = Graph::new();
-        let source_id = add_mock_output_only(&mut graph);
-        let dest_id = add_mock_input_only(&mut graph);
-        let far_side = RecordingOutOfProcessFarSideLinkDelivery::default();
-        let source = attach_processor_instance(
-            &mut graph,
-            &source_id,
-            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::handing_links_to(
-                far_side.clone(),
-            ))),
-        );
-        let dest = attach_processor_instance(
-            &mut graph,
-            &dest_id,
-            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::handing_links_to(
-                far_side.clone(),
-            ))),
-        );
-        let link_id = add_link_from_out1_to_in1(&mut graph, &source_id, &dest_id);
-        (graph, source, dest, link_id, far_side)
+    /// from the source's `out1` to the destination's `in1` not yet wired.
+    struct TwoHelperStubsAndAnUnwiredLinkBetweenThem {
+        graph: Graph,
+        source: Arc<Mutex<ProcessorInstance>>,
+        dest: Arc<Mutex<ProcessorInstance>>,
+        link_id: LinkUniqueId,
+        far_side: RecordingOutOfProcessFarSideLinkDelivery,
+    }
+
+    impl TwoHelperStubsAndAnUnwiredLinkBetweenThem {
+        fn new() -> Self {
+            let mut graph = Graph::new();
+            let source_id = add_mock_output_only(&mut graph);
+            let dest_id = add_mock_input_only(&mut graph);
+            let far_side = RecordingOutOfProcessFarSideLinkDelivery::default();
+            let mut attach_a_helper_stub = |proc_id: &str| {
+                attach_processor_instance(
+                    &mut graph,
+                    proc_id,
+                    ProcessorInstance::new(Box::new(
+                        OutOfCrateHelperSpawnHostStub::with_a_far_side_past_its_setup_command(
+                            far_side.clone(),
+                            ProcessExecution::Reactive,
+                        ),
+                    )),
+                )
+            };
+            let source = attach_a_helper_stub(&source_id);
+            let dest = attach_a_helper_stub(&dest_id);
+            let link_id = add_link_from_out1_to_in1(&mut graph, &source_id, &dest_id);
+            Self {
+                graph,
+                source,
+                dest,
+                link_id,
+                far_side,
+            }
+        }
     }
 
     /// A live `connect` onto helpers still inside their setup — their processor
     /// locks held — wires the link without waiting for either lock, so the
     /// graph lock the compiler holds around it is never held across an import.
     ///
-    /// Fail-without-fix: ask the processor whether it is out of process through
-    /// its lock again, as `is_subprocess_processor` did, and the op waits out
-    /// the budget.
+    /// Fail-without-fix: classify an out-of-process endpoint through its
+    /// processor's lock and the op waits out the budget.
     #[test]
     fn a_link_between_helpers_still_setting_up_is_handed_over_without_their_processor_locks() {
         use crate::core::json_schema::LinkStateOutput;
-        let (mut graph, source, dest, link_id, far_side) =
-            two_helper_stubs_and_an_unwired_link_between_them();
+        let TwoHelperStubsAndAnUnwiredLinkBetweenThem {
+            mut graph,
+            source,
+            dest,
+            link_id,
+            far_side,
+        } = TwoHelperStubsAndAnUnwiredLinkBetweenThem::new();
 
         let wired = run_while_both_processor_locks_are_held(&source, &dest, || {
             open_iceoryx2_service(&mut graph, &link_id, &Iceoryx2Node::for_this_test_process())
@@ -3238,15 +3259,19 @@ mod tests {
     /// A disconnect of a link between helpers whose processor locks are held
     /// reclaims both ends without waiting for either lock.
     ///
-    /// Fail-without-fix: reach an out-of-process endpoint through its
-    /// processor's lock again, as `close_iceoryx2_service` did, and the op
-    /// waits out the budget.
+    /// Fail-without-fix: reclaim an out-of-process endpoint through its
+    /// processor's lock and the op waits out the budget.
     #[test]
     fn a_disconnect_between_helpers_still_setting_up_reclaims_both_ends_without_their_processor_locks()
      {
         use crate::core::json_schema::LinkStateOutput;
-        let (mut graph, source, dest, link_id, far_side) =
-            two_helper_stubs_and_an_unwired_link_between_them();
+        let TwoHelperStubsAndAnUnwiredLinkBetweenThem {
+            mut graph,
+            source,
+            dest,
+            link_id,
+            far_side,
+        } = TwoHelperStubsAndAnUnwiredLinkBetweenThem::new();
         open_iceoryx2_service(&mut graph, &link_id, &Iceoryx2Node::for_this_test_process())
             .expect("the link wires");
 
@@ -3495,8 +3520,11 @@ mod tests {
             ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
         );
 
+        let dest_link_wiring = out_of_process_link_wiring_of(&graph, &dest_id.as_str().into())
+            .expect("a helper stub's node carries its link wiring");
         let refusal = wire_subprocess_dest(
             &mut graph,
+            &dest_link_wiring,
             &dest_id.as_str().into(),
             "audio",
             "pabc/out1",
@@ -3543,8 +3571,11 @@ mod tests {
         )
         .expect("a device format settles a contract");
 
+        let dest_link_wiring = out_of_process_link_wiring_of(&graph, &dest_id.as_str().into())
+            .expect("a helper stub's node carries its link wiring");
         wire_subprocess_dest(
             &mut graph,
+            &dest_link_wiring,
             &dest_id.as_str().into(),
             "audio",
             "pabc/out1",
@@ -4026,8 +4057,11 @@ mod tests {
             panic!("the mock's audio port declares a window contract");
         };
 
+        let dest_link_wiring = out_of_process_link_wiring_of(&graph, &dest_id.as_str().into())
+            .expect("a helper stub's node carries its link wiring");
         wire_subprocess_dest(
             &mut graph,
+            &dest_link_wiring,
             &dest_id.as_str().into(),
             "audio",
             "pabc/out1",

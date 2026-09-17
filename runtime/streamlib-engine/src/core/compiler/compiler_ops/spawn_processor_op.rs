@@ -6,7 +6,7 @@ use std::sync::Arc;
 #[cfg(unix)]
 use std::os::fd::OwnedFd;
 
-use parking_lot::{Mutex, RwLock};
+use parking_lot::RwLock;
 
 use crate::core::compiler::ProcessorThreadKind;
 use crate::core::compiler::scheduling::{SchedulingStrategy, scheduling_strategy_for_processor};
@@ -18,9 +18,10 @@ use crate::core::descriptors::ProcessorRuntime;
 use crate::core::error::{Error, Result};
 use crate::core::execution::run_processor_loop;
 use crate::core::graph::{
-    Graph, GraphNodeWithComponents, ObservableProcessorState, OutOfProcessLinkWiringComponent,
-    ProcessorInstanceComponent, ProcessorPauseGateComponent, ProcessorReadyBarrierComponent,
-    ProcessorUniqueId, ShutdownChannelComponent, StateComponent, ThreadHandleComponent,
+    Graph, GraphNodeWithComponents, ObservableProcessorState,
+    ProcessorInstanceWithItsOutOfProcessLinkWiring, ProcessorPauseGateComponent,
+    ProcessorReadyBarrierComponent, ProcessorUniqueId, ShutdownChannelComponent, StateComponent,
+    ThreadHandleComponent,
 };
 use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorInstanceFactory, ProcessorState};
 
@@ -153,22 +154,19 @@ fn spawn_dedicated_thread(
 
     // Create processor instance now (with lock) since factory needs node
     // reference.
-    let (processor_arc, processor_type, out_of_process_link_wiring) = {
+    let (processor_to_attach, processor_type) = {
         let graph = graph_arc.read();
         let node = graph.traversal().v(&processor_id).first().ok_or_else(|| {
             Error::ProcessorNotFound(format!("Processor '{}' not found", processor_id))
         })?;
         let processor_type = node.processor_type().clone();
-        let processor = factory.create(node)?;
-        let out_of_process_link_wiring = processor.out_of_process_link_wiring();
         (
-            Arc::new(Mutex::new(processor)),
+            ProcessorInstanceWithItsOutOfProcessLinkWiring::from(factory.create(node)?),
             processor_type,
-            out_of_process_link_wiring,
         )
     };
 
-    let processor_arc_clone = Arc::clone(&processor_arc);
+    let processor_arc_clone = Arc::clone(&processor_to_attach.processor_instance);
     let thread_kind = match runtime {
         ProcessorRuntime::Rust => ProcessorThreadKind::NativeProcessor,
         ProcessorRuntime::Python => ProcessorThreadKind::HelperProcessHost,
@@ -258,12 +256,7 @@ fn spawn_dedicated_thread(
             {
                 let mut graph = graph_arc_clone.write();
                 if let Some(node) = graph.traversal_mut().v(&proc_id_clone).first_mut() {
-                    node.insert(ProcessorInstanceComponent(processor_arc_clone.clone()));
-                    if let Some(out_of_process_link_wiring) = out_of_process_link_wiring {
-                        node.insert_component_without_rendering_it(
-                            OutOfProcessLinkWiringComponent(out_of_process_link_wiring),
-                        );
-                    }
+                    processor_to_attach.attach_to(node);
                 }
             }
             tracing::trace!("[{}] ProcessorInstanceComponent attached", proc_id_clone);

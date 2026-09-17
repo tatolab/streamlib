@@ -642,6 +642,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::compiler::compiler_ops::subprocess_bridge::tests::incoming_frame_routing",
                 "core::compiler::compiler_ops::subprocess_bridge::tests::reader_and_escalate_worker",
                 "core::compiler::compiler_ops::subprocess_bridge::tests::link_delivery_to_a_subprocess_past_its_setup_command",
+                "core::compiler::compiler_ops::subprocess_escalate::tests::log_frame_parses_as_escalate_request_log_variant",
                 "core::processors::__generated_private::generated_processor_impl::tests",
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_link_between_helpers_still_setting_up_is_handed_over_without_their_processor_locks",
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_disconnect_between_helpers_still_setting_up_reclaims_both_ends_without_their_processor_locks",

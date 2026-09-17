@@ -33,17 +33,17 @@
 //! and the helper's writes never back up behind it. The third role has its own
 //! tags for the same reason the lifecycle queue is kept clean: an answer routed
 //! there would be read as the reply to whatever command the host sends next.
-//! Writes in both directions serialize through a shared
-//! `Arc<Mutex<BufWriter<UnixStream>>>` so no two threads interleave halves of
-//! a length-prefixed frame.
+//! Every frame the parent writes goes through one writer lock, so no two
+//! threads interleave halves of a length-prefixed frame.
 
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::process::Command;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
-use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -55,7 +55,7 @@ use crate::core::processors::{
 };
 
 use super::subprocess_escalate::{
-    EscalateHandleRegistry, process_bridge_message,
+    ESCALATE_OP_ANSWERED_BY_NOTHING, EscalateHandleRegistry, process_bridge_message,
     release_surface_share_and_texture_cache_for_handle,
 };
 
@@ -195,9 +195,13 @@ pub const OUT_OF_PROCESS_LINK_WIRED_RPC: &str = "link_wired";
 /// open its port. Carries `link_id` and `reason`.
 pub const OUT_OF_PROCESS_LINK_WIRE_FAILED_RPC: &str = "link_wire_failed";
 
-/// The one escalate op a helper sends without waiting on an answer: a log
-/// record. Every other op is answered with a correlated `escalate_response`.
-const ESCALATE_OP_ANSWERED_BY_NOTHING: &str = "log";
+/// How many escalate requests one helper may have queued for its worker before
+/// its reader waits for room.
+///
+/// The shipped helper blocks each calling thread on its answer, so the queue
+/// holds one request per thread; the bound only stops a helper that writes
+/// requests without waiting from growing the app process's memory.
+const ESCALATE_REQUESTS_QUEUED_PER_HELPER: usize = 256;
 
 /// What handles an escalate request's frame and returns the frame to answer it
 /// with, or `None` for an op answered by nothing.
@@ -209,7 +213,7 @@ type EscalateRequestDispatch =
 
 /// Where one frame arriving from the subprocess belongs.
 ///
-/// Classified on the `rpc` tag alone, never on what a handler makes of the
+/// Classified on the frame's tags alone, never on what a handler makes of the
 /// frame: the routing decision is the wire contract's, and a frame that fell
 /// through to the lifecycle queue by accident is read as the answer to the next
 /// command the host sends.
@@ -264,37 +268,96 @@ fn classify_an_incoming_subprocess_frame(msg: &serde_json::Value) -> IncomingSub
     }
 }
 
-/// Shared writer handle. The host's lifecycle path and the reader
-/// thread's escalate-response path both write through this mutex.
-type SharedWriter = Arc<Mutex<BufWriter<UnixStream>>>;
+/// What a link wired into a helper process that has failed is refused with.
+pub fn refusal_of_a_link_into_a_helper_process_that_failed(
+    processor_display_name: &str,
+    processor_id: &str,
+) -> String {
+    format!(
+        "processor '{processor_display_name}' ({processor_id}) has failed, so no link can be \
+         wired into it"
+    )
+}
 
-/// Bridge for one subprocess. Drop the value to tear the reader thread
-/// down cleanly (shutdown the parent-side socket read half; reader
-/// thread exits on EOF).
-pub struct SubprocessBridge {
+/// The parent's write half of one subprocess's socket, whether the parent has
+/// given up on that subprocess, and the links it still owes an answer for —
+/// which giving up refuses.
+///
+/// Shared by every thread that writes a frame: the host's lifecycle path, the
+/// escalate worker, the reader's refusal of a malformed log record, and link
+/// delivery. The writer's lock keeps two threads from interleaving halves of a
+/// length-prefixed frame.
+struct WriteHalfOfOneSubprocessBridge {
     processor_id: String,
-    writer: SharedWriter,
+    framed_socket_writer: parking_lot::Mutex<BufWriter<UnixStream>>,
+    the_subprocess_was_given_up_on: AtomicBool,
+    links_awaiting_their_wire_reply: LinksAwaitingTheirOutOfProcessWireReply,
+}
+
+impl WriteHalfOfOneSubprocessBridge {
+    fn over(parent_end: UnixStream, processor_id: String) -> Self {
+        Self {
+            processor_id,
+            framed_socket_writer: parking_lot::Mutex::new(BufWriter::new(parent_end)),
+            the_subprocess_was_given_up_on: AtomicBool::new(false),
+            links_awaiting_their_wire_reply: LinksAwaitingTheirOutOfProcessWireReply::default(),
+        }
+    }
+
+    fn the_subprocess_was_given_up_on(&self) -> bool {
+        self.the_subprocess_was_given_up_on.load(Ordering::SeqCst)
+    }
+
+    /// Give the subprocess up and refuse every link it still owed an answer
+    /// for: a link whose far side is gone with the answer outstanding never
+    /// reads `wired`.
+    fn give_up_on_the_subprocess(&self, how_the_subprocess_was_noticed_gone: &str) {
+        self.the_subprocess_was_given_up_on
+            .store(true, Ordering::SeqCst);
+        refuse_every_link_this_subprocess_still_owed(
+            &self.links_awaiting_their_wire_reply,
+            &self.processor_id,
+            how_the_subprocess_was_noticed_gone,
+        );
+    }
+
+    /// Write one frame whole, giving the subprocess up when it cannot be
+    /// written.
+    fn write_frame_or_give_up_on_the_subprocess(&self, frame: &serde_json::Value) -> Result<()> {
+        let written = write_frame(&mut *self.framed_socket_writer.lock(), frame);
+        if written.is_err() {
+            self.give_up_on_the_subprocess("is gone");
+        }
+        written
+    }
+
+    fn shut_the_socket_down(&self) {
+        let _ = self
+            .framed_socket_writer
+            .lock()
+            .get_ref()
+            .shutdown(std::net::Shutdown::Both);
+    }
+}
+
+/// Bridge for one subprocess. Drop the value to tear its threads down: the
+/// socket is shut down, the reader sees EOF, and the escalate worker leaves
+/// once the reader has.
+pub struct SubprocessBridge {
+    write_half: Arc<WriteHalfOfOneSubprocessBridge>,
     lifecycle_rx: Receiver<serde_json::Value>,
     registry: Arc<EscalateHandleRegistry>,
-    /// Every link handed to this subprocess after its setup and not yet
-    /// answered for. Shared with the reader thread, which is where the answers
-    /// arrive.
-    links_awaiting_their_wire_reply: Arc<LinksAwaitingTheirOutOfProcessWireReply>,
     /// Held for teardown: the drop path evicts what the registry's acquires
     /// entered into the parent's texture cache, which needs the same
-    /// capability the reader thread dispatches against.
+    /// capability the escalate worker dispatches against.
     sandbox: GpuContextLimitedAccess,
-    reader: Option<JoinHandle<()>>,
-    dead: Arc<Mutex<bool>>,
+    frame_demultiplexing_reader_thread: Option<JoinHandle<()>>,
+    escalate_worker_thread: Option<JoinHandle<()>>,
 }
 
 impl SubprocessBridge {
     /// Wrap a socketpair parent end and spawn the reader thread and the
-    /// escalate worker.
-    ///
-    /// `sandbox` is what the worker dispatches escalate requests against, off
-    /// the main thread and off the reader. `processor_id` is used for thread
-    /// naming and tracing.
+    /// escalate worker, which dispatches against `sandbox`.
     pub fn new(
         stream: UnixStream,
         sandbox: GpuContextLimitedAccess,
@@ -305,88 +368,57 @@ impl SubprocessBridge {
                 "failed to clone escalate socketpair for reader: {e}"
             ))
         })?;
-        let writer: SharedWriter = Arc::new(Mutex::new(BufWriter::new(stream)));
+        let write_half = Arc::new(WriteHalfOfOneSubprocessBridge::over(stream, processor_id));
         let registry = EscalateHandleRegistry::new();
-        let (tx, rx) = mpsc::channel();
-        let dead = Arc::new(Mutex::new(false));
-
-        let links_awaiting_their_wire_reply =
-            Arc::new(LinksAwaitingTheirOutOfProcessWireReply::default());
+        let (lifecycle_tx, lifecycle_rx) = mpsc::channel();
 
         let dispatch_registry = Arc::clone(&registry);
         let dispatch_sandbox = sandbox.clone();
         let escalate_request_dispatch: EscalateRequestDispatch = Arc::new(move |frame| {
             process_bridge_message(&dispatch_sandbox, &dispatch_registry, frame)
         });
-        let SubprocessBridgeThreads { reader, .. } = spawn_the_reader_and_the_escalate_worker(
+        let SubprocessBridgeThreads {
+            frame_demultiplexing_reader_thread,
+            escalate_worker_thread,
+        } = spawn_the_reader_and_the_escalate_worker(
             BufReader::new(read_half),
-            Arc::clone(&writer),
+            Arc::clone(&write_half),
             escalate_request_dispatch,
-            tx,
-            Arc::clone(&dead),
-            processor_id.clone(),
-            Arc::clone(&links_awaiting_their_wire_reply),
+            lifecycle_tx,
         )?;
 
         Ok(Self {
-            processor_id,
-            writer,
-            lifecycle_rx: rx,
+            write_half,
+            lifecycle_rx,
             registry,
-            links_awaiting_their_wire_reply,
             sandbox,
-            reader: Some(reader),
-            dead,
+            frame_demultiplexing_reader_thread: Some(frame_demultiplexing_reader_thread),
+            escalate_worker_thread: Some(escalate_worker_thread),
         })
     }
 
-    /// Wait on one link's answer, so the reader thread can route it when it
-    /// arrives.
+    /// Write a length-prefixed JSON lifecycle command to the subprocess.
     ///
-    /// Called by the host as it sends the `wire_link`, before the answer can
-    /// come back: registering after the send would race the reader.
-    pub fn await_the_subprocess_wire_answer_for_link(
-        &self,
-        link_id: String,
-        reply: Arc<OutOfProcessLinkWireReply>,
-    ) {
-        self.links_awaiting_their_wire_reply
-            .await_an_answer_for_link(link_id, reply);
-    }
-
-    /// Stop waiting on a link that is being disconnected before its answer
-    /// arrived, so a dead subprocess does not refuse a link the graph no
-    /// longer has.
-    pub fn stop_awaiting_the_subprocess_wire_answer_for_link(&self, link_id: &str) {
-        self.links_awaiting_their_wire_reply
-            .stop_awaiting_an_answer_for_link(link_id);
-    }
-
-    /// Write a length-prefixed JSON message to the subprocess.
+    /// Link wiring never comes through here — see
+    /// [`SubprocessBridgeLinkDelivery`] — because every command sent here is
+    /// noted as the last lifecycle command the subprocess was sent.
     pub fn send(&self, msg: &serde_json::Value) -> Result<()> {
-        if self.is_dead() {
+        if self.write_half.the_subprocess_was_given_up_on() {
             return Err(Error::Runtime(format!(
                 "[{}] bridge marked dead, cannot send",
-                self.processor_id
+                self.write_half.processor_id
             )));
         }
-        // The lifecycle command is the engine's only reading of which hook the
-        // child is inside, and this is the one seam every command crosses.
+        // The engine's only reading of which hook the child is inside.
         // Setup-phase-only escalate ops (minting a processor-owned window)
-        // refuse on it, dispatched from the reader thread while the hook that
-        // is allowed to ask is still running.
+        // refuse on it, dispatched from the escalate worker while the hook
+        // that is allowed to ask is still running.
         if let Some(lifecycle_command) = msg.get("cmd").and_then(|c| c.as_str()) {
             self.registry
                 .note_lifecycle_command_sent_to_the_helper_process(lifecycle_command);
         }
-        let mut writer = self
-            .writer
-            .lock()
-            .map_err(|_| Error::Runtime("subprocess writer mutex poisoned".to_string()))?;
-        write_frame(&mut *writer, msg).map_err(|e| {
-            self.mark_dead();
-            e
-        })
+        self.write_half
+            .write_frame_or_give_up_on_the_subprocess(msg)
     }
 
     /// Block until the next lifecycle-tagged message arrives.
@@ -395,7 +427,7 @@ impl SubprocessBridge {
             self.mark_dead();
             Error::Runtime(format!(
                 "[{}] subprocess escalate socket closed before reply",
-                self.processor_id
+                self.write_half.processor_id
             ))
         })
     }
@@ -408,22 +440,14 @@ impl SubprocessBridge {
         self.lifecycle_rx.recv_timeout(timeout)
     }
 
-    /// Mark the bridge dead; subsequent sends return immediately.
-    ///
-    /// Every link this subprocess was still to answer for is refused here: a
-    /// link whose far side died with the answer outstanding never reads
-    /// `wired`, and a caller that asked `graph` would otherwise wait on an
-    /// answer nothing can send.
+    /// Mark the bridge dead; subsequent sends return immediately, and every
+    /// link this subprocess was still to answer for is refused.
     pub fn mark_dead(&self) {
-        give_up_on_the_subprocess(
-            &self.dead,
-            &self.links_awaiting_their_wire_reply,
-            &self.processor_id,
-        );
+        self.write_half.give_up_on_the_subprocess("is gone");
     }
 
     pub fn is_dead(&self) -> bool {
-        self.dead.lock().map(|g| *g).unwrap_or(true)
+        self.write_half.the_subprocess_was_given_up_on()
     }
 
     /// How a link wired after this subprocess's setup command reaches it, for
@@ -434,10 +458,7 @@ impl SubprocessBridge {
     ) -> SubprocessBridgeLinkDelivery {
         SubprocessBridgeLinkDelivery {
             processor_display_name: processor_display_name.to_string(),
-            processor_id: self.processor_id.clone(),
-            writer: Arc::clone(&self.writer),
-            links_awaiting_their_wire_reply: Arc::clone(&self.links_awaiting_their_wire_reply),
-            dead: Arc::clone(&self.dead),
+            write_half: Arc::clone(&self.write_half),
         }
     }
 
@@ -448,147 +469,108 @@ impl SubprocessBridge {
     }
 }
 
-/// Mark a bridge dead and refuse every link its subprocess was still to answer
-/// for.
-fn give_up_on_the_subprocess(
-    dead: &Mutex<bool>,
-    links_awaiting_their_wire_reply: &LinksAwaitingTheirOutOfProcessWireReply,
-    processor_id: &str,
-) {
-    if let Ok(mut dead) = dead.lock() {
-        *dead = true;
-    }
-    refuse_every_link_this_subprocess_still_owed(
-        links_awaiting_their_wire_reply,
-        processor_id,
-        "is gone",
-    );
-}
-
 /// How links wired after a subprocess's setup command reach it: `wire_link`
 /// and `unwire_link` frames written straight onto its bridge's socket.
 ///
-/// Never through [`SubprocessBridge::send`], which notes every command it
-/// carries as the last lifecycle command the subprocess was sent. A link can be
-/// handed over while the subprocess is still inside its `setup()` hook, and
-/// noting `wire_link` then would read it as past setup and refuse the window
-/// that hook is allowed to mint.
+/// Never through [`SubprocessBridge::send`]: a link can be handed over while
+/// the subprocess is still inside `setup()`, and noting `wire_link` as its last
+/// lifecycle command would refuse the window that hook may mint.
 pub struct SubprocessBridgeLinkDelivery {
     processor_display_name: String,
-    processor_id: String,
-    writer: SharedWriter,
-    links_awaiting_their_wire_reply: Arc<LinksAwaitingTheirOutOfProcessWireReply>,
-    dead: Arc<Mutex<bool>>,
-}
-
-impl SubprocessBridgeLinkDelivery {
-    fn the_bridge_gave_up(&self) -> bool {
-        self.dead.lock().map(|dead| *dead).unwrap_or(true)
-    }
-
-    fn write_link_command(&self, link_command: &serde_json::Value) -> Result<()> {
-        let written = match self.writer.lock() {
-            Ok(mut writer) => write_frame(&mut *writer, link_command),
-            Err(_) => Err(Error::Runtime(
-                "subprocess writer mutex poisoned".to_string(),
-            )),
-        };
-        written.inspect_err(|_| {
-            give_up_on_the_subprocess(
-                &self.dead,
-                &self.links_awaiting_their_wire_reply,
-                &self.processor_id,
-            );
-        })
-    }
+    write_half: Arc<WriteHalfOfOneSubprocessBridge>,
 }
 
 impl OutOfProcessFarSideLinkDelivery for SubprocessBridgeLinkDelivery {
-    /// The link's answer arrives on its own rpc tag, which the reader routes to
-    /// the cell handed back here. The send itself never waits: the compiler
-    /// hands links over holding the graph's write lock, and a subprocess reads
-    /// commands only between callbacks.
+    /// The answer arrives on its own rpc tag, which the reader routes to
+    /// `answer_cell`. The send never waits on that answer: the compiler hands
+    /// links over holding the graph's write lock.
     fn hand_over_a_link_wired_after_setup(
         &self,
         port_direction: PortDirection,
         link_wiring: &serde_json::Value,
-    ) -> Result<Arc<OutOfProcessLinkWireReply>> {
-        if self.the_bridge_gave_up() {
-            return Err(Error::Runtime(format!(
-                "processor '{}' ({}) has failed, so no link can be wired into it",
-                self.processor_display_name, self.processor_id
-            )));
+        answer_cell: Arc<OutOfProcessLinkWireReply>,
+    ) -> Result<()> {
+        if self.write_half.the_subprocess_was_given_up_on() {
+            return Err(Error::Runtime(
+                refusal_of_a_link_into_a_helper_process_that_failed(
+                    &self.processor_display_name,
+                    &self.write_half.processor_id,
+                ),
+            ));
         }
         let Some(link_id) = link_wiring.get("link_id").and_then(|id| id.as_str()) else {
             return Err(Error::Configuration(format!(
                 "the wiring handed to processor '{}' ({}) names no link, so its helper \
                  process could not answer for one",
-                self.processor_display_name, self.processor_id
+                self.processor_display_name, self.write_half.processor_id
             )));
         };
-        let reply = OutOfProcessLinkWireReply::awaiting_the_far_sides_answer();
-        // Registered before the send, never after: the subprocess can answer
-        // the moment the frame lands, and a cell registered afterwards would
-        // miss an answer already routed.
-        self.links_awaiting_their_wire_reply
-            .await_an_answer_for_link(link_id.to_string(), Arc::clone(&reply));
-        match self.write_link_command(&serde_json::json!({
-            "cmd": "wire_link",
-            "direction": port_direction.as_wire_str(),
-            "link": link_wiring,
-        })) {
-            Ok(()) => Ok(reply),
-            Err(send_failure) => {
-                // A send that never left is an answer that never comes. The
-                // caller hears the failure, and the cell is taken back out so
-                // a later death refuses nothing on this link's behalf.
-                self.links_awaiting_their_wire_reply
-                    .stop_awaiting_an_answer_for_link(link_id);
-                Err(send_failure)
-            }
+        // Registered before the send: the subprocess can answer the moment the
+        // frame lands.
+        self.write_half
+            .links_awaiting_their_wire_reply
+            .await_an_answer_for_link(link_id.to_string(), answer_cell);
+        let handed_over =
+            self.write_half
+                .write_frame_or_give_up_on_the_subprocess(&serde_json::json!({
+                    "cmd": "wire_link",
+                    "direction": port_direction.as_wire_str(),
+                    "link": link_wiring,
+                }));
+        if handed_over.is_err() {
+            // A send that never left is an answer that never comes, and the
+            // caller hears the failure rather than a refusal on the cell.
+            self.write_half
+                .links_awaiting_their_wire_reply
+                .stop_awaiting_an_answer_for_link(link_id);
         }
+        handed_over
     }
 
     /// Unanswered, like `run`: a reply nobody reads is read as the answer to
-    /// the next lifecycle command. A subprocess whose bridge gave up needs no
-    /// telling — its ports went with the process.
+    /// the next lifecycle command.
     fn tell_the_far_side_a_link_was_unwired(
         &self,
         port_direction: PortDirection,
         local_port_name: &str,
         link_id: &str,
     ) -> Result<()> {
-        // A link on its way out is one this subprocess owes no answer for.
-        // Left waiting, a subprocess that dies later would refuse a link the
-        // graph no longer has.
-        self.links_awaiting_their_wire_reply
+        // A link on its way out is owed no answer; left waiting, a subprocess
+        // that dies later would refuse a link the graph no longer has.
+        self.write_half
+            .links_awaiting_their_wire_reply
             .stop_awaiting_an_answer_for_link(link_id);
-        if self.the_bridge_gave_up() {
+        if self.write_half.the_subprocess_was_given_up_on() {
             return Ok(());
         }
-        self.write_link_command(&serde_json::json!({
-            "cmd": "unwire_link",
-            "direction": port_direction.as_wire_str(),
-            "port": local_port_name,
-            "link_id": link_id,
-        }))
+        self.write_half
+            .write_frame_or_give_up_on_the_subprocess(&serde_json::json!({
+                "cmd": "unwire_link",
+                "direction": port_direction.as_wire_str(),
+                "port": local_port_name,
+                "link_id": link_id,
+            }))
+    }
+
+    fn refuse_every_link_still_awaiting_the_far_sides_answer(&self) {
+        refuse_every_link_this_subprocess_still_owed(
+            &self.write_half.links_awaiting_their_wire_reply,
+            &self.write_half.processor_id,
+            "was given up on",
+        );
     }
 }
 
 impl Drop for SubprocessBridge {
     fn drop(&mut self) {
         self.mark_dead();
-        // Marked dead and shut down before draining: the escalate worker passes
-        // over every request still queued once the bridge is dead, and the
-        // reader queues nothing past EOF, because an acquire landing after the
-        // drain would strand its cache entry — the very leak the drain exists
-        // to close. A request the worker is already executing can still slip
+        // Given up on and shut down before draining: the escalate worker passes
+        // over every request still queued, and the reader queues nothing past
+        // EOF, because an acquire landing after the drain would strand its
+        // cache entry. A request the worker is already executing can still slip
         // through; closing that too would mean joining the worker, which this
-        // path deliberately never blocks on. The OS reaps both threads on
-        // process exit.
-        if let Ok(writer) = self.writer.lock() {
-            let _ = writer.get_ref().shutdown(std::net::Shutdown::Both);
-        }
+        // path deliberately never blocks on.
+        self.write_half.shut_the_socket_down();
         // Windows first: each present thread resolves surface ids against the
         // same capability the handle release below evicts from, and dropping
         // one closes its window and joins its thread. A helper that never
@@ -598,11 +580,11 @@ impl Drop for SubprocessBridge {
         for (window_id, present_loop) in self.registry.drain_processor_owned_windows() {
             tracing::debug!(
                 "[{}] closing processor-owned window '{}' at teardown",
-                self.processor_id,
+                self.write_half.processor_id,
                 window_id
             );
             // Closed explicitly rather than by dropping the `Arc`: a request
-            // still in flight on the reader thread can hold the last
+            // still in flight on the escalate worker can hold the last
             // reference, and teardown must close the window rather than hand
             // that decision to whoever lets go last. The close is bounded and
             // detaches, so this path still never blocks indefinitely.
@@ -621,51 +603,38 @@ impl Drop for SubprocessBridge {
                 &removed_handle,
             );
         }
-        if let Some(reader) = self.reader.take() {
-            drop(reader);
-        }
+        // Detached, never joined: the OS reaps both on process exit.
+        self.frame_demultiplexing_reader_thread.take();
+        self.escalate_worker_thread.take();
     }
 }
 
 /// The two threads one bridge runs.
 struct SubprocessBridgeThreads {
-    reader: JoinHandle<()>,
-    /// Detached in production, where nothing waits on it; a test joins it to
-    /// know every queued request has been either dispatched or passed over.
-    #[cfg_attr(not(test), allow(dead_code))]
-    escalate_worker: JoinHandle<()>,
+    frame_demultiplexing_reader_thread: JoinHandle<()>,
+    escalate_worker_thread: JoinHandle<()>,
 }
 
 /// Spawn the escalate worker, then the reader that feeds it.
 ///
-/// The worker is spawned first because the reader owns the only sender of its
-/// queue: the worker leaves once the reader does and every request the reader
-/// queued has been taken off, so no request outlives the socket it arrived on.
+/// The reader owns the only sender of the worker's queue, so the worker leaves
+/// once the reader has and every queued request is taken off.
 fn spawn_the_reader_and_the_escalate_worker(
     reader: BufReader<UnixStream>,
-    writer: SharedWriter,
+    write_half: Arc<WriteHalfOfOneSubprocessBridge>,
     escalate_request_dispatch: EscalateRequestDispatch,
     lifecycle_tx: mpsc::Sender<serde_json::Value>,
-    dead: Arc<Mutex<bool>>,
-    processor_id: String,
-    links_awaiting_their_wire_reply: Arc<LinksAwaitingTheirOutOfProcessWireReply>,
 ) -> Result<SubprocessBridgeThreads> {
-    let (escalate_requests_tx, escalate_requests_rx) = mpsc::channel();
+    let (escalate_requests_tx, escalate_requests_rx) =
+        mpsc::sync_channel(ESCALATE_REQUESTS_QUEUED_PER_HELPER);
+    let processor_id = write_half.processor_id.clone();
 
-    let worker_writer = Arc::clone(&writer);
+    let worker_write_half = Arc::clone(&write_half);
     let worker_dispatch = Arc::clone(&escalate_request_dispatch);
-    let worker_dead = Arc::clone(&dead);
-    let worker_processor_id = processor_id.clone();
-    let escalate_worker = thread::Builder::new()
-        .name(escalate_worker_thread_name(&processor_id))
+    let escalate_worker_thread = thread::Builder::new()
+        .name(bridge_escalate_worker_thread_name(&processor_id))
         .spawn(move || {
-            escalate_worker_loop(
-                escalate_requests_rx,
-                worker_writer,
-                worker_dispatch,
-                worker_dead,
-                worker_processor_id,
-            );
+            escalate_worker_loop(escalate_requests_rx, &worker_write_half, &worker_dispatch);
         })
         .map_err(|spawn_failure| {
             Error::Runtime(format!(
@@ -673,19 +642,15 @@ fn spawn_the_reader_and_the_escalate_worker(
             ))
         })?;
 
-    let reader_processor_id = processor_id.clone();
-    let reader = thread::Builder::new()
-        .name(thread_name(&processor_id))
+    let frame_demultiplexing_reader_thread = thread::Builder::new()
+        .name(bridge_reader_thread_name(&processor_id))
         .spawn(move || {
             reader_loop(
                 reader,
-                writer,
-                escalate_request_dispatch,
+                &write_half,
+                &escalate_request_dispatch,
                 escalate_requests_tx,
                 lifecycle_tx,
-                dead,
-                reader_processor_id,
-                links_awaiting_their_wire_reply,
             );
         })
         .map_err(|spawn_failure| {
@@ -695,32 +660,26 @@ fn spawn_the_reader_and_the_escalate_worker(
         })?;
 
     Ok(SubprocessBridgeThreads {
-        reader,
-        escalate_worker,
+        frame_demultiplexing_reader_thread,
+        escalate_worker_thread,
     })
 }
 
 /// Reader loop: drain the parent-side socket and route every frame, never
 /// waiting on the work a frame asks for.
-#[allow(clippy::too_many_arguments)]
 fn reader_loop(
     mut reader: BufReader<UnixStream>,
-    writer: SharedWriter,
-    escalate_request_dispatch: EscalateRequestDispatch,
-    escalate_requests_tx: mpsc::Sender<serde_json::Value>,
+    write_half: &WriteHalfOfOneSubprocessBridge,
+    escalate_request_dispatch: &EscalateRequestDispatch,
+    escalate_requests_tx: mpsc::SyncSender<serde_json::Value>,
     lifecycle_tx: mpsc::Sender<serde_json::Value>,
-    dead: Arc<Mutex<bool>>,
-    processor_id: String,
-    links_awaiting_their_wire_reply: Arc<LinksAwaitingTheirOutOfProcessWireReply>,
 ) {
+    let processor_id = &write_half.processor_id;
     loop {
         let msg = match read_frame(&mut reader) {
             Ok(v) => v,
             Err(e) => {
                 tracing::debug!("[{}] bridge reader exiting: {}", processor_id, e);
-                if let Ok(mut dead) = dead.lock() {
-                    *dead = true;
-                }
                 break;
             }
         };
@@ -735,7 +694,8 @@ fn reader_loop(
         // classification exists to prevent.
         match classify_an_incoming_subprocess_frame(&msg) {
             IncomingSubprocessFrame::LinkWireAnswer { link_id, outcome } => {
-                if !links_awaiting_their_wire_reply
+                if !write_half
+                    .links_awaiting_their_wire_reply
                     .note_the_far_sides_answer_for_link(&link_id, outcome)
                 {
                     tracing::warn!(
@@ -764,25 +724,24 @@ fn reader_loop(
                 // device. Only a record that failed to decode is answered, with
                 // the refusal.
                 if let Some(refusal) = escalate_request_dispatch(&msg)
-                    && !write_escalate_response(&writer, &refusal, &dead, &processor_id)
+                    && write_half
+                        .write_frame_or_give_up_on_the_subprocess(&refusal)
+                        .is_err()
                 {
                     break;
                 }
                 continue;
             }
             IncomingSubprocessFrame::EscalateRequestAwaitingAnAnswer => {
-                // The worker only leaves before this sender is dropped by
+                // The worker leaves before this sender is dropped only by
                 // panicking, and a helper whose requests nothing can answer is
-                // given up on the way a failed write gives it up.
+                // given up on.
                 if escalate_requests_tx.send(msg).is_err() {
                     tracing::warn!(
                         "[{}] its bridge's escalate worker is gone, so no escalate request it \
                          sends can be answered; giving up on the helper process",
                         processor_id
                     );
-                    if let Ok(mut dead) = dead.lock() {
-                        *dead = true;
-                    }
                     break;
                 }
                 continue;
@@ -801,79 +760,41 @@ fn reader_loop(
     }
 
     // Every way out of the loop above is this reader giving up on the
-    // subprocess, so the refusal sits here rather than on each `break`: a link
-    // still waiting on an answer is refused once, whichever way the reader
-    // stopped, and never reads `wired`.
-    refuse_every_link_this_subprocess_still_owed(
-        &links_awaiting_their_wire_reply,
-        &processor_id,
-        "stopped answering",
-    );
+    // subprocess, so it is said once here rather than on each `break`.
+    write_half.give_up_on_the_subprocess("stopped answering");
 }
 
 /// Escalate worker loop: dispatch each queued request in the order the helper
-/// sent it and write its answer, one at a time.
+/// sent it and write its answer, one at a time — a release never overtakes the
+/// acquire it releases, and the helper holds the escalate gate for at most one
+/// op.
 ///
-/// One request at a time is the ordering the helper relies on — a release
-/// never overtakes the acquire it releases — and it keeps each helper holding
-/// the runtime-wide escalate gate for at most one op.
-///
-/// A request still queued once the bridge has given up is passed over rather
-/// than dispatched: the bridge's teardown releases whatever the helper still
-/// held, and an acquire dispatched after that would strand what it acquired.
+/// A request still queued once the subprocess was given up on is passed over:
+/// teardown's drain has released or will release what the helper held, and an
+/// acquire dispatched after it would strand what it acquired.
 fn escalate_worker_loop(
     escalate_requests_rx: Receiver<serde_json::Value>,
-    writer: SharedWriter,
-    escalate_request_dispatch: EscalateRequestDispatch,
-    dead: Arc<Mutex<bool>>,
-    processor_id: String,
+    write_half: &WriteHalfOfOneSubprocessBridge,
+    escalate_request_dispatch: &EscalateRequestDispatch,
 ) {
     for request in escalate_requests_rx {
-        if dead.lock().map(|dead| *dead).unwrap_or(true) {
+        if write_half.the_subprocess_was_given_up_on() {
             continue;
         }
         let Some(response) = escalate_request_dispatch(&request) else {
             continue;
         };
-        // A failed write has given the bridge up, so every later request is
-        // passed over by the check above until the reader lets go.
-        write_escalate_response(&writer, &response, &dead, &processor_id);
+        if let Err(write_failure) = write_half.write_frame_or_give_up_on_the_subprocess(&response) {
+            tracing::warn!(
+                "[{}] bridge failed to write escalate response: {}",
+                write_half.processor_id,
+                write_failure
+            );
+        }
     }
-}
-
-/// Write one escalate answer through the shared writer, giving the bridge up
-/// when it cannot be written. Returns whether it was.
-fn write_escalate_response(
-    writer: &SharedWriter,
-    response: &serde_json::Value,
-    dead: &Mutex<bool>,
-    processor_id: &str,
-) -> bool {
-    let written = match writer.lock() {
-        Ok(mut writer) => write_frame(&mut *writer, response),
-        Err(_) => Err(Error::Runtime(
-            "subprocess writer mutex poisoned".to_string(),
-        )),
-    };
-    let Err(write_failure) = written else {
-        return true;
-    };
-    tracing::warn!(
-        "[{}] bridge failed to write escalate response: {}",
-        processor_id,
-        write_failure
-    );
-    if let Ok(mut dead) = dead.lock() {
-        *dead = true;
-    }
-    false
 }
 
 /// Refuse every link this subprocess was still to answer for, and say so once.
-///
-/// Both ways a bridge gives up reach here — the reader thread's exit and
-/// `mark_dead` — so a link whose helper is gone is refused whichever noticed
-/// first, and the log names how many links it cost.
 fn refuse_every_link_this_subprocess_still_owed(
     links_awaiting_their_wire_reply: &LinksAwaitingTheirOutOfProcessWireReply,
     processor_id: &str,
@@ -916,8 +837,11 @@ where
     R: Read + Send + 'static,
 {
     let proc_id = processor_id.to_string();
-    let short = &proc_id[..8.min(proc_id.len())];
-    let name = format!("{}-{}", thread_prefix, short);
+    let name = format!(
+        "{}-{}",
+        thread_prefix,
+        processor_id_shortened_for_a_thread_name(processor_id)
+    );
     let (source, target): (&'static str, &'static str) = if thread_prefix.starts_with("py") {
         ("python", "streamlib::polyglot::python")
     } else {
@@ -976,16 +900,28 @@ fn emit_intercepted_line(
     }
 }
 
-fn thread_name(processor_id: &str) -> String {
-    // Thread names are limited to 15 chars on Linux; truncate the
-    // processor id the same way the Python stderr-forwarder thread does.
-    let short = &processor_id[..8.min(processor_id.len())];
-    format!("br-{}", short)
+/// At most the first eight characters of a processor id, cut on a character
+/// boundary: Linux thread names are limited to 15 bytes.
+fn processor_id_shortened_for_a_thread_name(processor_id: &str) -> &str {
+    let end = processor_id
+        .char_indices()
+        .nth(8)
+        .map_or(processor_id.len(), |(byte_index, _)| byte_index);
+    &processor_id[..end]
 }
 
-fn escalate_worker_thread_name(processor_id: &str) -> String {
-    let short = &processor_id[..8.min(processor_id.len())];
-    format!("br-esc-{}", short)
+fn bridge_reader_thread_name(processor_id: &str) -> String {
+    format!(
+        "br-{}",
+        processor_id_shortened_for_a_thread_name(processor_id)
+    )
+}
+
+fn bridge_escalate_worker_thread_name(processor_id: &str) -> String {
+    format!(
+        "br-esc-{}",
+        processor_id_shortened_for_a_thread_name(processor_id)
+    )
 }
 
 fn write_frame<W: Write>(writer: &mut W, msg: &serde_json::Value) -> Result<()> {
@@ -1125,6 +1061,7 @@ mod tests {
     /// on is provable without a device.
     mod reader_and_escalate_worker {
         use super::*;
+        use std::sync::Mutex;
         use std::sync::atomic::{AtomicUsize, Ordering};
 
         const LONGEST_THE_READER_MAY_TAKE_TO_ROUTE_A_FRAME: Duration = Duration::from_secs(5);
@@ -1135,7 +1072,7 @@ mod tests {
             helper_end_writer: BufWriter<UnixStream>,
             helper_end_reader: BufReader<UnixStream>,
             lifecycle_rx: Receiver<serde_json::Value>,
-            dead: Arc<Mutex<bool>>,
+            write_half: Arc<WriteHalfOfOneSubprocessBridge>,
             threads: SubprocessBridgeThreads,
         }
 
@@ -1144,15 +1081,15 @@ mod tests {
                 let (parent_end, helper_end) = UnixStream::pair().expect("socketpair");
                 let parent_read_half = parent_end.try_clone().expect("clone the parent end");
                 let (lifecycle_tx, lifecycle_rx) = mpsc::channel();
-                let dead = Arc::new(Mutex::new(false));
+                let write_half = Arc::new(WriteHalfOfOneSubprocessBridge::over(
+                    parent_end,
+                    "p-escalate-worker-test".to_string(),
+                ));
                 let threads = spawn_the_reader_and_the_escalate_worker(
                     BufReader::new(parent_read_half),
-                    Arc::new(Mutex::new(BufWriter::new(parent_end))),
+                    Arc::clone(&write_half),
                     escalate_request_dispatch,
                     lifecycle_tx,
-                    Arc::clone(&dead),
-                    "p-escalate-worker-test".to_string(),
-                    Arc::default(),
                 )
                 .expect("spawn the bridge's threads");
                 Self {
@@ -1161,7 +1098,7 @@ mod tests {
                     ),
                     helper_end_reader: BufReader::new(helper_end),
                     lifecycle_rx,
-                    dead,
+                    write_half,
                     threads,
                 }
             }
@@ -1318,7 +1255,7 @@ mod tests {
             );
         }
 
-        /// Fail-without-fix: drop the dead check in the worker and the queued
+        /// Fail-without-fix: drop the given-up check in the worker and the queued
         /// acquire is dispatched after the bridge gave up, past the teardown
         /// drain that would have released it.
         #[test]
@@ -1341,7 +1278,7 @@ mod tests {
                 "r-held"
             );
 
-            *bridge.dead.lock().unwrap() = true;
+            bridge.write_half.give_up_on_the_subprocess("is gone");
             dispatch
                 .let_the_held_request_go
                 .send(())
@@ -1354,9 +1291,12 @@ mod tests {
             } = bridge;
             drop(helper_end_writer);
             drop(helper_end_reader);
-            threads.reader.join().expect("the reader leaves at EOF");
             threads
-                .escalate_worker
+                .frame_demultiplexing_reader_thread
+                .join()
+                .expect("the reader leaves at EOF");
+            threads
+                .escalate_worker_thread
                 .join()
                 .expect("the worker leaves once the reader has");
 
@@ -1374,6 +1314,9 @@ mod tests {
     /// socketpair, with no GPU capability in reach.
     mod link_delivery_to_a_subprocess_past_its_setup_command {
         use super::*;
+        use crate::core::execution::ProcessExecution;
+        use crate::core::processors::OutOfProcessLinkWiringEnvelope;
+        use crate::core::test_support::CapturedTracingWarnings;
 
         struct LinkDeliveryWithTheSubprocessEndInHand {
             delivery: SubprocessBridgeLinkDelivery,
@@ -1389,10 +1332,10 @@ mod tests {
             LinkDeliveryWithTheSubprocessEndInHand {
                 delivery: SubprocessBridgeLinkDelivery {
                     processor_display_name: "BlurProcessor".to_string(),
-                    processor_id: "Pblur".to_string(),
-                    writer: Arc::new(Mutex::new(BufWriter::new(parent_end))),
-                    links_awaiting_their_wire_reply: Arc::default(),
-                    dead: Arc::new(Mutex::new(false)),
+                    write_half: Arc::new(WriteHalfOfOneSubprocessBridge::over(
+                        parent_end,
+                        "Pblur".to_string(),
+                    )),
                 },
                 subprocess_end_reader: BufReader::new(subprocess_end),
             }
@@ -1409,8 +1352,13 @@ mod tests {
                 mut subprocess_end_reader,
             } = link_delivery_with_the_subprocess_end_in_hand();
 
-            let reply = delivery
-                .hand_over_a_link_wired_after_setup(PortDirection::Input, &late_input_link())
+            let reply = OutOfProcessLinkWireReply::awaiting_the_far_sides_answer();
+            delivery
+                .hand_over_a_link_wired_after_setup(
+                    PortDirection::Input,
+                    &late_input_link(),
+                    Arc::clone(&reply),
+                )
                 .expect("a live subprocess takes the link");
 
             assert_eq!(
@@ -1423,6 +1371,7 @@ mod tests {
             );
             assert!(
                 delivery
+                    .write_half
                     .links_awaiting_their_wire_reply
                     .note_the_far_sides_answer_for_link(
                         "L-late",
@@ -1443,7 +1392,11 @@ mod tests {
                 mut subprocess_end_reader,
             } = link_delivery_with_the_subprocess_end_in_hand();
             delivery
-                .hand_over_a_link_wired_after_setup(PortDirection::Input, &late_input_link())
+                .hand_over_a_link_wired_after_setup(
+                    PortDirection::Input,
+                    &late_input_link(),
+                    OutOfProcessLinkWireReply::awaiting_the_far_sides_answer(),
+                )
                 .expect("a live subprocess takes the link");
             read_frame(&mut subprocess_end_reader).expect("the wire_link frame");
 
@@ -1466,6 +1419,7 @@ mod tests {
             );
             assert!(
                 !delivery
+                    .write_half
                     .links_awaiting_their_wire_reply
                     .note_the_far_sides_answer_for_link(
                         "L-late",
@@ -1481,10 +1435,14 @@ mod tests {
                 delivery,
                 mut subprocess_end_reader,
             } = link_delivery_with_the_subprocess_end_in_hand();
-            *delivery.dead.lock().unwrap() = true;
+            delivery.write_half.give_up_on_the_subprocess("is gone");
 
             let refused = delivery
-                .hand_over_a_link_wired_after_setup(PortDirection::Input, &late_input_link())
+                .hand_over_a_link_wired_after_setup(
+                    PortDirection::Input,
+                    &late_input_link(),
+                    OutOfProcessLinkWireReply::awaiting_the_far_sides_answer(),
+                )
                 .expect_err("a subprocess the bridge gave up on opens no port");
             assert!(
                 refused
@@ -1502,6 +1460,66 @@ mod tests {
             assert!(
                 read_frame(&mut subprocess_end_reader).is_err(),
                 "nothing was written to a subprocess the bridge gave up on"
+            );
+        }
+
+        /// A helper its host gave up on while still alive refuses the links it
+        /// still owed an answer for, so a later disconnect leaves nothing
+        /// waiting and the helper's eventual death refuses nothing.
+        ///
+        /// Fail-without-fix: give up without refusing what the helper owed, and
+        /// the link reads pending until the death refuses a link the graph no
+        /// longer has.
+        #[test]
+        fn a_helper_given_up_on_refuses_what_it_owed_and_its_death_refuses_nothing_after() {
+            let LinkDeliveryWithTheSubprocessEndInHand {
+                delivery,
+                mut subprocess_end_reader,
+            } = link_delivery_with_the_subprocess_end_in_hand();
+            let write_half = Arc::clone(&delivery.write_half);
+            let envelope = OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(
+                ProcessExecution::Reactive,
+            );
+            envelope
+                .send_the_setup_command_then_hand_every_later_link_over(|_| Ok(()), delivery)
+                .expect("the setup command goes out");
+            let answer_cell = envelope
+                .record_a_link_and_hand_it_to_a_far_side_past_its_setup_command(
+                    PortDirection::Input,
+                    late_input_link(),
+                )
+                .expect("a live subprocess takes the link")
+                .expect("a link handed over waits on its answer");
+            read_frame(&mut subprocess_end_reader).expect("the wire_link frame");
+
+            envelope.refuse_every_later_link_because_the_far_side_is_gone(
+                refusal_of_a_link_into_a_helper_process_that_failed("BlurProcessor", "Pblur"),
+            );
+            assert!(
+                matches!(
+                    answer_cell.the_far_sides_answer(),
+                    Some(OutOfProcessLinkWireOutcome::RefusedByTheFarSide { .. })
+                ),
+                "a link its helper still owed an answer for reads error once the host gives up"
+            );
+
+            envelope
+                .forget_a_link_and_tell_a_far_side_past_its_setup_command(
+                    PortDirection::Input,
+                    "frames_from_upstream",
+                    "L-late",
+                )
+                .expect("a far side given up on needs no telling");
+            assert!(
+                read_frame(&mut subprocess_end_reader).is_err(),
+                "a helper given up on is told nothing"
+            );
+            let ((), warnings) = CapturedTracingWarnings::captured_while(|| {
+                write_half.give_up_on_the_subprocess("is gone")
+            });
+            assert!(
+                warnings.is_empty(),
+                "the helper's death refuses no link: {warnings:?}"
             );
         }
     }
@@ -1530,6 +1548,7 @@ mod tests {
             .hand_over_a_link_wired_after_setup(
                 PortDirection::Input,
                 &serde_json::json!({"link_id": "L-during-setup", "name": "in1"}),
+                OutOfProcessLinkWireReply::awaiting_the_far_sides_answer(),
             )
             .expect("the link is handed over");
 

@@ -175,6 +175,26 @@ def await_link_state(control_url: str, link_id: str, wanted: str) -> str:
     return f"still {link['state'] if link else 'absent'} after {LINK_ANSWER_TIMEOUT_SECONDS}s"
 
 
+def await_node_state(control_url: str, display_name: str, wanted: str) -> str:
+    """Poll `graph` until one node reaches `wanted`, and report what it reached.
+
+    A helper-placed node reads `Running` only once its helper has finished
+    setting up, which is also when every link its setup command carried is
+    confirmed — so waiting for it first is what makes a later `wired` the
+    helper's own answer rather than a link read before the helper was up.
+    """
+    deadline = time.monotonic() + FIRST_FRAME_TIMEOUT_SECONDS
+    state = "absent"
+    while time.monotonic() < deadline:
+        state = node_named(mcp_json(control_url, "graph", {}), display_name)["components"][
+            "state"
+        ]
+        if state == wanted:
+            return state
+        time.sleep(0.05)
+    return f"still {state} after {FIRST_FRAME_TIMEOUT_SECONDS}s"
+
+
 def tap_channel_of(processor_id: str, output_port: str) -> str:
     """The channel name `tap` takes: the source id lowercased, then the port."""
     return f"{processor_id.lower()}/{output_port}"
@@ -256,15 +276,12 @@ def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
         "`connect` onto a helper returns before that helper has opened its "
         f"port, so the link reads pending or wired and nothing else: {upstream_link}"
     )
+    assert await_node_state(control_url, "effect", "Running") == "Running"
     assert await_link_state(control_url, upstream_link_id, "wired") == "wired", (
         "the helper's own answer is what makes the link wired; a link stuck "
         "pending is a helper that never opened its port, and one in error "
         "carries the helper's reason"
     )
-    # Read again: `connect` does not wait for the helper's setup, so the graph
-    # taken right after it can still show the effect setting up.
-    graph_once_wired = mcp_json(control_url, "graph", {})
-    assert node_named(graph_once_wired, "effect")["components"]["state"] == "Running"
 
     # The processor reports from its own helper process, so a marker in the
     # node's output is a frame that crossed the late-wired link.
@@ -463,6 +480,7 @@ def test_graph_calls_made_while_a_helper_imports_never_wait_for_its_import(
         f"add_processor took {add_seconds:.1f}s, waiting on a helper still importing"
     )
 
+    assert await_node_state(control_url, "sink", "Running") == "Running"
     assert await_link_state(control_url, connected["link_id"], "wired") == "wired", (
         "the link connected during the import is wired once the helper is up"
     )

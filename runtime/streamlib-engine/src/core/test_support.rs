@@ -285,7 +285,8 @@ pub(crate) struct ReclaimedLink {
 }
 
 /// A far side past its setup command that records every link it is handed and
-/// every port it is told to drop, and owes an answer per link it was handed.
+/// every port it is told to drop, holding each handed link's answer cell for the
+/// test to answer.
 ///
 /// Clones share what they record, which is how a test reads what the engine
 /// asked of a far side it handed to an envelope.
@@ -294,9 +295,9 @@ pub(crate) struct RecordingOutOfProcessFarSideLinkDelivery {
     /// Every link handed over, with the direction it was wired in.
     pub(crate) late_wired_links:
         Arc<parking_lot::Mutex<Vec<(crate::core::PortDirection, serde_json::Value)>>>,
-    /// The answer cells handed back, in the order the links were handed over
-    /// — how a test plays a far side that has not answered yet, opened its
-    /// port, or refused.
+    /// The answer cells handed over, in the order their links were — how a
+    /// test plays a far side that has not answered yet, opened its port, or
+    /// refused.
     pub(crate) wire_answers_owed:
         Arc<parking_lot::Mutex<Vec<Arc<crate::core::processors::OutOfProcessLinkWireReply>>>>,
     /// Every port the far side was told to drop.
@@ -310,14 +311,13 @@ impl crate::core::processors::OutOfProcessFarSideLinkDelivery
         &self,
         port_direction: crate::core::PortDirection,
         link_wiring: &serde_json::Value,
-    ) -> crate::core::Result<Arc<crate::core::processors::OutOfProcessLinkWireReply>> {
+        answer_cell: Arc<crate::core::processors::OutOfProcessLinkWireReply>,
+    ) -> crate::core::Result<()> {
         self.late_wired_links
             .lock()
             .push((port_direction, link_wiring.clone()));
-        let reply =
-            crate::core::processors::OutOfProcessLinkWireReply::awaiting_the_far_sides_answer();
-        self.wire_answers_owed.lock().push(Arc::clone(&reply));
-        Ok(reply)
+        self.wire_answers_owed.lock().push(answer_cell);
+        Ok(())
     }
 
     fn tell_the_far_side_a_link_was_unwired(
@@ -332,6 +332,16 @@ impl crate::core::processors::OutOfProcessFarSideLinkDelivery
             link_id: link_id.to_string(),
         });
         Ok(())
+    }
+
+    fn refuse_every_link_still_awaiting_the_far_sides_answer(&self) {
+        for answer_cell in self.wire_answers_owed.lock().iter() {
+            answer_cell.note_the_far_sides_answer(
+                crate::core::processors::OutOfProcessLinkWireOutcome::RefusedByTheFarSide {
+                    reason: "its host gave up on it".to_string(),
+                },
+            );
+        }
     }
 }
 

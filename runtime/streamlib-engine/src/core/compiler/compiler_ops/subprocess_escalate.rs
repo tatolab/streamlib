@@ -106,6 +106,11 @@ pub(crate) const ESCALATE_REQUEST_RPC: &str = "escalate_request";
 /// Wire tag for responses written back to the subprocess.
 pub(crate) const ESCALATE_RESPONSE_RPC: &str = "escalate_response";
 
+/// The `op` tag of the one escalate request answered by nothing,
+/// [`EscalateRequest::Log`] — the bridge dispatches it on its reader rather
+/// than queueing it behind GPU work.
+pub(crate) const ESCALATE_OP_ANSWERED_BY_NOTHING: &str = "log";
+
 /// Extract `request_id` from a request/response-shaped op. Returns `None`
 /// for fire-and-forget ops ([`EscalateRequest::Log`]), which carry no
 /// correlation token because the host never writes a reply.
@@ -4742,17 +4747,14 @@ mod tests {
         assert!(err.message.contains("failed to decode"));
     }
 
+    /// The `op` tag the bridge dispatches on its reader decodes as
+    /// [`EscalateRequest::Log`]. Fail-without-fix: rename the variant's serde
+    /// tag alone and log records queue behind GPU work again, unnoticed.
     #[test]
     fn log_frame_parses_as_escalate_request_log_variant() {
-        // Parser-shape assertion: the wire-format `log` frame must carry
-        // `rpc == "escalate_request"` and decode as `EscalateRequest::Log`.
-        // This locks the `op` discriminator tag — the actual "bridge does not
-        // forward log frames to the lifecycle channel" contract is locked by
-        // `subprocess_bridge::tests::log_frame_does_not_leak_to_lifecycle_channel`,
-        // which drives a real reader_loop over a socketpair.
         let log_frame = serde_json::json!({
             "rpc": "escalate_request",
-            "op": "log",
+            "op": ESCALATE_OP_ANSWERED_BY_NOTHING,
             "source": "python",
             "source_seq": "1",
             "source_ts": "1970-01-01T00:00:00Z",
