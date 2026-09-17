@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.17](https://github.com/tatolab/streamlib/compare/v0.22.16...v0.22.17) (2026-09-17)
+
+
+### Bug Fixes
+
+* **engine:** notify only draining destinations, drain the reactive runner every dispatch, and poll helper wake-ups ([#2316](https://github.com/tatolab/streamlib/issues/2316)) ([684f442](https://github.com/tatolab/streamlib/commit/684f4426dd4d51f1133b4ff1be96bda72b955a39))
+
 ## [0.22.16](https://github.com/tatolab/streamlib/compare/v0.22.15...v0.22.16) (2026-09-17)
 
 
