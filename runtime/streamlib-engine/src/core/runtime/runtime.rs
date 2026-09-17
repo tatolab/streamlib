@@ -1646,32 +1646,45 @@ mod tests {
         use std::os::unix::net::UnixStream;
         use streamlib_surface_client::{MAX_DMA_BUF_PLANES, send_request_with_fds};
 
+        /// Each variable's value before a test set it, put back on drop — so a test
+        /// that panics still leaves the environment as it found it.
+        struct EnvironmentVariablesRestoredOnDrop {
+            previous_values: Vec<(String, Option<std::ffi::OsString>)>,
+        }
+
+        impl Drop for EnvironmentVariablesRestoredOnDrop {
+            fn drop(&mut self) {
+                // SAFETY: serialized via #[serial]; no concurrent env mutation.
+                unsafe {
+                    for (name, previous_value) in self.previous_values.drain(..) {
+                        match previous_value {
+                            Some(value) => std::env::set_var(name, value),
+                            None => std::env::remove_var(name),
+                        }
+                    }
+                }
+            }
+        }
+
         /// Set each variable for the duration of the closure, restoring what was
         /// there before. Tests using this must be `#[serial]`.
         fn with_environment_variables_set<F: FnOnce() -> R, R>(
             variables: &[(&str, &std::ffi::OsStr)],
             f: F,
         ) -> R {
-            let previous: Vec<_> = variables
-                .iter()
-                .map(|(name, _)| (*name, std::env::var_os(name)))
-                .collect();
+            let _restored_on_drop = EnvironmentVariablesRestoredOnDrop {
+                previous_values: variables
+                    .iter()
+                    .map(|(name, _)| (name.to_string(), std::env::var_os(name)))
+                    .collect(),
+            };
             // SAFETY: serialized via #[serial]; no concurrent env mutation.
             unsafe {
                 for (name, value) in variables {
                     std::env::set_var(name, value);
                 }
             }
-            let result = f();
-            unsafe {
-                for (name, value) in previous {
-                    match value {
-                        Some(value) => std::env::set_var(name, value),
-                        None => std::env::remove_var(name),
-                    }
-                }
-            }
-            result
+            f()
         }
 
         /// Replace XDG_RUNTIME_DIR with a fresh tempdir for the duration of the
