@@ -5,29 +5,106 @@
 
 use std::sync::Arc;
 
+use parking_lot::Mutex;
+
 use super::GeneratedProcessor;
 use crate::core::ProcessorDescriptor;
 use crate::core::Result;
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
 use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
+use crate::core::processors::OutOfProcessLinkWireReply;
 use crate::iceoryx2::{HelperPlacedProcessorLossCounts, Iceoryx2Node};
 use serde_json::Value as JsonValue;
 
-/// One processor's pending link wiring, for a transport the engine cannot
-/// reach into.
+/// How a link wired after a far side's setup command went out reaches that far
+/// side, which opens its own port for it.
+///
+/// Implemented by the far side's transport — the helper bridge in production —
+/// and handed to the envelope once the setup command is on its way, so nothing
+/// that delivers a link ever needs the lock of the processor hosting it.
+pub trait OutOfProcessFarSideLinkDelivery: Send {
+    /// Hand the far side one link wired after its setup command, and hand back
+    /// the cell its answer will land in.
+    fn hand_over_a_link_wired_after_setup(
+        &self,
+        port_direction: crate::core::PortDirection,
+        link_wiring: &JsonValue,
+    ) -> Result<Arc<OutOfProcessLinkWireReply>>;
+
+    /// Ask the far side to drop the port it opened for one link the engine is
+    /// disconnecting. `local_port_name` is the port on the processor this far
+    /// side hosts.
+    fn tell_the_far_side_a_link_was_unwired(
+        &self,
+        port_direction: crate::core::PortDirection,
+        local_port_name: &str,
+        link_id: &str,
+    ) -> Result<()>;
+}
+
+/// How a link recorded on an envelope now reaches its far side.
+enum HowALinkReachesTheFarSide {
+    /// The setup command has not gone out, and carries every link recorded
+    /// before it does; the far side's `ready` confirms them.
+    RidesTheSetupCommand,
+    /// The setup command has gone out, so a later link is handed over through
+    /// this and answered for on its own.
+    HandedOverTo(Box<dyn OutOfProcessFarSideLinkDelivery>),
+    /// The far side is gone, so a later link is refused for this reason.
+    RefusedBecauseTheFarSideIsGone(String),
+}
+
+/// The links an envelope carries, and how the next one reaches the far side —
+/// held under one lock so a link can never land between the setup command's
+/// snapshot and the far side starting to take links one at a time.
+struct RecordedLinksAndHowTheNextReachesTheFarSide {
+    input_links: Vec<JsonValue>,
+    output_links: Vec<JsonValue>,
+    how_a_link_reaches_the_far_side: HowALinkReachesTheFarSide,
+}
+
+impl RecordedLinksAndHowTheNextReachesTheFarSide {
+    fn as_setup_command_ports(&self) -> JsonValue {
+        serde_json::json!({
+            "inputs": self.input_links,
+            "outputs": self.output_links,
+        })
+    }
+}
+
+/// One processor's link wiring, for a transport the engine cannot reach into,
+/// shared between the processor that hosts the far side and the processor's
+/// graph node.
 ///
 /// The engine fills this as it opens each channel; whoever owns the far side —
 /// a helper process — reads it back as the `ports` payload of the setup command
 /// and opens its own publisher, subscriber and notifier from the service names
-/// inside. It also holds which loss-count board slot each inbound link was
-/// given, and the board the far side writes them on.
-#[derive(Debug)]
+/// inside, and every link wired after that is handed over as it is recorded. It
+/// also holds which loss-count board slot each inbound link was given, and the
+/// board the far side writes them on.
+///
+/// Its lock is its own and never the hosting processor's: a helper's processor
+/// lock is held across its whole setup, a cold import that can take the
+/// registration budget, and wiring a link into it must not wait on that.
 pub struct OutOfProcessLinkWiringEnvelope {
-    input_links: Vec<serde_json::Value>,
-    output_links: Vec<serde_json::Value>,
+    recorded_links_and_how_the_next_reaches_the_far_side:
+        Mutex<RecordedLinksAndHowTheNextReachesTheFarSide>,
     loss_counts: Arc<HelperPlacedProcessorLossCounts>,
     far_side_process_execution: ProcessExecution,
+}
+
+impl std::fmt::Debug for OutOfProcessLinkWiringEnvelope {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OutOfProcessLinkWiringEnvelope")
+            .field("ports", &self.as_setup_command_ports())
+            .field(
+                "far_side_process_execution",
+                &self.far_side_process_execution,
+            )
+            .finish_non_exhaustive()
+    }
 }
 
 impl OutOfProcessLinkWiringEnvelope {
@@ -36,8 +113,14 @@ impl OutOfProcessLinkWiringEnvelope {
     /// host thread's own.
     pub fn for_a_far_side_driven_in(far_side_process_execution: ProcessExecution) -> Self {
         Self {
-            input_links: Vec::new(),
-            output_links: Vec::new(),
+            recorded_links_and_how_the_next_reaches_the_far_side: Mutex::new(
+                RecordedLinksAndHowTheNextReachesTheFarSide {
+                    input_links: Vec::new(),
+                    output_links: Vec::new(),
+                    how_a_link_reaches_the_far_side:
+                        HowALinkReachesTheFarSide::RidesTheSetupCommand,
+                },
+            ),
             loss_counts: Arc::default(),
             far_side_process_execution,
         }
@@ -97,45 +180,121 @@ impl OutOfProcessLinkWiringEnvelope {
         Ok(setup_command_loss_count_board)
     }
 
-    /// Record one link, in the direction its port faces.
+    /// Record one link, in the direction its port faces, and hand it to a far
+    /// side already past its setup command.
     ///
     /// One call per link. Fan-out out of one port records one entry per link:
     /// the far side installs its single publisher once and appends a notifier
     /// per entry, because iceoryx2 admits exactly one publisher per channel.
-    pub fn record(&mut self, port_direction: crate::core::PortDirection, link_wiring: JsonValue) {
+    ///
+    /// `None` is a link the setup command will carry, which the far side's
+    /// `ready` confirms; `Some` is the cell the far side's own answer lands in.
+    /// A far side that is gone refuses the link, so the compile wiring it fails
+    /// and its caller hears it rather than reading a wired link nothing will
+    /// cross.
+    ///
+    /// The compiler op is the only production caller: a host supplies the
+    /// envelope and never records on it.
+    pub fn record_a_link_and_hand_it_to_a_far_side_past_its_setup_command(
+        &self,
+        port_direction: crate::core::PortDirection,
+        link_wiring: JsonValue,
+    ) -> Result<Option<Arc<OutOfProcessLinkWireReply>>> {
+        let mut recorded = self
+            .recorded_links_and_how_the_next_reaches_the_far_side
+            .lock();
         match port_direction {
-            crate::core::PortDirection::Input => self.input_links.push(link_wiring),
-            crate::core::PortDirection::Output => self.output_links.push(link_wiring),
+            crate::core::PortDirection::Input => recorded.input_links.push(link_wiring.clone()),
+            crate::core::PortDirection::Output => recorded.output_links.push(link_wiring.clone()),
+        }
+        match &recorded.how_a_link_reaches_the_far_side {
+            HowALinkReachesTheFarSide::RidesTheSetupCommand => Ok(None),
+            HowALinkReachesTheFarSide::HandedOverTo(delivery) => delivery
+                .hand_over_a_link_wired_after_setup(port_direction, &link_wiring)
+                .map(Some),
+            HowALinkReachesTheFarSide::RefusedBecauseTheFarSideIsGone(reason) => {
+                Err(crate::core::error::Error::Runtime(reason.clone()))
+            }
         }
     }
 
-    /// Forget one link, in both directions, on disconnect.
+    /// Forget one link, in both directions, on disconnect, and ask a far side
+    /// already past its setup command to drop the port it opened for it.
     ///
     /// A reconnect re-records the link from scratch, so an entry left here
     /// would be sent again the next time the far side is set up — a second
     /// subscriber or notifier for one link, which is what exhausts the notify
     /// service's create-time `max_notifiers` cap.
     ///
-    /// Crate-internal for the same reason [`record`] is only ever called by the
-    /// compiler op: the engine owns both sides of this bookkeeping, so no host
-    /// can forget to do it.
-    ///
-    /// [`record`]: OutOfProcessLinkWiringEnvelope::record
-    pub(crate) fn remove_link(&mut self, link_id: &str) {
+    /// The far side is asked whether or not the envelope still carried the
+    /// link: both ends of a link between one far side's own ports are
+    /// forgotten under one link id, and each end's port is its own to drop. A
+    /// far side that has not had its setup command, or that is gone, needs no
+    /// telling — its ports were never opened, or went with the process.
+    pub(crate) fn forget_a_link_and_tell_a_far_side_past_its_setup_command(
+        &self,
+        port_direction: crate::core::PortDirection,
+        local_port_name: &str,
+        link_id: &str,
+    ) -> Result<()> {
+        let mut recorded = self
+            .recorded_links_and_how_the_next_reaches_the_far_side
+            .lock();
         let carries_link = |link_wiring: &JsonValue| {
             link_wiring.get("link_id").and_then(JsonValue::as_str) == Some(link_id)
         };
-        self.input_links.retain(|link| !carries_link(link));
-        self.output_links.retain(|link| !carries_link(link));
+        recorded.input_links.retain(|link| !carries_link(link));
+        recorded.output_links.retain(|link| !carries_link(link));
         self.loss_counts.forget_link(link_id);
+        match &recorded.how_a_link_reaches_the_far_side {
+            HowALinkReachesTheFarSide::HandedOverTo(delivery) => delivery
+                .tell_the_far_side_a_link_was_unwired(port_direction, local_port_name, link_id),
+            HowALinkReachesTheFarSide::RidesTheSetupCommand
+            | HowALinkReachesTheFarSide::RefusedBecauseTheFarSideIsGone(_) => Ok(()),
+        }
+    }
+
+    /// Send the far side its setup command carrying every link recorded so far,
+    /// then hand every later link over through `later_link_delivery`.
+    ///
+    /// Both happen under the envelope's lock, so a link recorded concurrently
+    /// is either in the setup command's `ports` or handed over behind it — never
+    /// in neither, and never ahead of the command that sets the far side up.
+    /// A setup command that could not be sent leaves later links riding a setup
+    /// command that never goes out, which the host's refusal of the far side
+    /// then turns into a refusal of each.
+    ///
+    /// `send_the_setup_command_carrying_these_ports` runs under the envelope's
+    /// lock, so it must not call back into this envelope.
+    pub fn send_the_setup_command_then_hand_every_later_link_over(
+        &self,
+        send_the_setup_command_carrying_these_ports: impl FnOnce(JsonValue) -> Result<()>,
+        later_link_delivery: impl OutOfProcessFarSideLinkDelivery + 'static,
+    ) -> Result<()> {
+        let mut recorded = self
+            .recorded_links_and_how_the_next_reaches_the_far_side
+            .lock();
+        send_the_setup_command_carrying_these_ports(recorded.as_setup_command_ports())?;
+        recorded.how_a_link_reaches_the_far_side =
+            HowALinkReachesTheFarSide::HandedOverTo(Box::new(later_link_delivery));
+        Ok(())
+    }
+
+    /// Refuse every link recorded from now on, because the far side is gone,
+    /// with `reason` as what the compile wiring it reports; and let go of how
+    /// links were being handed over.
+    pub fn refuse_every_later_link_because_the_far_side_is_gone(&self, reason: String) {
+        self.recorded_links_and_how_the_next_reaches_the_far_side
+            .lock()
+            .how_a_link_reaches_the_far_side =
+            HowALinkReachesTheFarSide::RefusedBecauseTheFarSideIsGone(reason);
     }
 
     /// The `ports` payload of the setup command, as the far side reads it.
     pub fn as_setup_command_ports(&self) -> JsonValue {
-        serde_json::json!({
-            "inputs": self.input_links,
-            "outputs": self.output_links,
-        })
+        self.recorded_links_and_how_the_next_reaches_the_far_side
+            .lock()
+            .as_setup_command_ports()
     }
 }
 
@@ -236,79 +395,13 @@ pub trait DynGeneratedProcessor: Send + 'static {
     /// healthy, and moves no frames. One method, so it cannot be half
     /// implemented.
     ///
-    /// Both the record and the erase run through this one accessor, from the
-    /// compiler op alone — a host supplies the envelope and never writes to it,
-    /// so it cannot forget half of the bookkeeping. Answering `Some` here is
-    /// also what commits a host to [`unwire_out_of_process_link`], which is
-    /// why that one refuses rather than defaulting quietly.
-    ///
-    /// [`unwire_out_of_process_link`]: DynGeneratedProcessor::unwire_out_of_process_link
-    fn out_of_process_link_wiring(&mut self) -> Option<&mut OutOfProcessLinkWiringEnvelope> {
+    /// Asked once, when the instance is attached to its graph node, which then
+    /// carries the envelope: the compiler op reaches it there and never through
+    /// this processor's lock. A host supplies the envelope and never records on
+    /// it; it arms the envelope with how a later link reaches its far side once
+    /// that far side's setup command is on its way.
+    fn out_of_process_link_wiring(&self) -> Option<Arc<OutOfProcessLinkWiringEnvelope>> {
         None
-    }
-
-    /// Ask the far side to drop the iceoryx2 port it opened for one link the
-    /// engine is disconnecting.
-    ///
-    /// The engine cannot drop that port itself — it belongs to the process that
-    /// opened it from the envelope — so this is the one part of the reclaim its
-    /// owner has to do. The envelope entry is pruned by the compiler op
-    /// through [`out_of_process_link_wiring`], not here.
-    ///
-    /// `local_port_name` is the port on *this* processor: the source output
-    /// port for [`PortDirection::Output`], the destination input port for
-    /// [`PortDirection::Input`].
-    ///
-    /// The default refuses rather than succeeding quietly. Only a processor
-    /// the compiler op already classified out-of-process ever reaches this, so
-    /// arriving at the default means a host takes the wiring and leaves the
-    /// reclaim, which is the exact leak this exists to close. A silent `Ok`
-    /// would have the engine log a reclaim that never happened.
-    ///
-    /// [`out_of_process_link_wiring`]: DynGeneratedProcessor::out_of_process_link_wiring
-    /// [`PortDirection::Output`]: crate::core::PortDirection::Output
-    /// [`PortDirection::Input`]: crate::core::PortDirection::Input
-    fn unwire_out_of_process_link(
-        &mut self,
-        _port_direction: crate::core::PortDirection,
-        _local_port_name: &str,
-        _link_id: &str,
-    ) -> Result<()> {
-        Err(crate::core::error::Error::Configuration(format!(
-            "processor '{}' records out-of-process link wiring but implements no \
-             reclaim for it, so every disconnected link leaks the port its far side \
-             opened; implement `unwire_out_of_process_link`",
-            self.name()
-        )))
-    }
-
-    /// Hand the far side one link wired after its setup already ran, and hand
-    /// back the cell its answer will land in.
-    ///
-    /// The envelope is read once, as the `ports` payload of the setup command;
-    /// a link the compiler wires later is recorded on the envelope and then
-    /// pushed through this, so a processor that is already running opens its
-    /// port for it. Before setup the far side does not exist yet and the
-    /// setup command will carry the entry — `None` says so, and that link is
-    /// confirmed by the far side's `ready` rather than by an answer of its own.
-    ///
-    /// The default refuses for the same reason [`unwire_out_of_process_link`]
-    /// does: a host that records wiring but cannot deliver it late leaves a
-    /// link nothing will ever carry a bag over, stuck `Pending` for as long as
-    /// the graph holds it.
-    ///
-    /// [`unwire_out_of_process_link`]: DynGeneratedProcessor::unwire_out_of_process_link
-    fn wire_out_of_process_link(
-        &mut self,
-        _port_direction: crate::core::PortDirection,
-        _link_wiring: &serde_json::Value,
-    ) -> Result<Option<std::sync::Arc<crate::core::processors::OutOfProcessLinkWireReply>>> {
-        Err(crate::core::error::Error::Configuration(format!(
-            "processor '{}' records out-of-process link wiring but cannot deliver a \
-             link wired after its setup, so a late connect would never reach it; \
-             implement `wire_out_of_process_link`",
-            self.name()
-        )))
     }
 
     /// Apply a JSON config update at runtime.
@@ -417,9 +510,28 @@ where
 mod tests {
     use super::*;
     use crate::core::PortDirection;
+    use crate::core::test_support::{ReclaimedLink, RecordingOutOfProcessFarSideLinkDelivery};
 
     fn link_wiring_entry(link_id: &str, port_name: &str) -> JsonValue {
         serde_json::json!({ "name": port_name, "link_id": link_id })
+    }
+
+    fn link_ids_the_setup_command_carries(ports: &JsonValue, direction: &str) -> Vec<String> {
+        ports[direction]
+            .as_array()
+            .expect("the envelope renders both directions as arrays")
+            .iter()
+            .map(|link| link["link_id"].as_str().unwrap().to_string())
+            .collect()
+    }
+
+    fn record(envelope: &OutOfProcessLinkWiringEnvelope, direction: PortDirection, link_id: &str) {
+        envelope
+            .record_a_link_and_hand_it_to_a_far_side_past_its_setup_command(
+                direction,
+                link_wiring_entry(link_id, "port"),
+            )
+            .expect("a far side that is not gone takes the link");
     }
 
     /// A disconnected link leaves the envelope in both directions, and only
@@ -427,26 +539,30 @@ mod tests {
     /// the reconnect's own entry — two subscribers, two notifiers, one link.
     #[test]
     fn a_removed_link_leaves_the_envelope_and_its_neighbours_stay() {
-        let mut envelope =
+        let envelope =
             OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(ProcessExecution::Reactive);
-        envelope.record(PortDirection::Input, link_wiring_entry("L-gone", "in1"));
-        envelope.record(PortDirection::Input, link_wiring_entry("L-stays", "in1"));
-        envelope.record(PortDirection::Output, link_wiring_entry("L-gone", "out1"));
-        envelope.record(PortDirection::Output, link_wiring_entry("L-stays", "out1"));
+        record(&envelope, PortDirection::Input, "L-gone");
+        record(&envelope, PortDirection::Input, "L-stays");
+        record(&envelope, PortDirection::Output, "L-gone");
+        record(&envelope, PortDirection::Output, "L-stays");
 
-        envelope.remove_link("L-gone");
+        envelope
+            .forget_a_link_and_tell_a_far_side_past_its_setup_command(
+                PortDirection::Input,
+                "port",
+                "L-gone",
+            )
+            .expect("a far side that was never set up needs no telling");
 
         let ports = envelope.as_setup_command_ports();
-        let surviving_link_ids = |direction: &str| -> Vec<String> {
-            ports[direction]
-                .as_array()
-                .expect("the envelope renders both directions as arrays")
-                .iter()
-                .map(|link| link["link_id"].as_str().unwrap().to_string())
-                .collect()
-        };
-        assert_eq!(surviving_link_ids("inputs"), ["L-stays"]);
-        assert_eq!(surviving_link_ids("outputs"), ["L-stays"]);
+        assert_eq!(
+            link_ids_the_setup_command_carries(&ports, "inputs"),
+            ["L-stays"]
+        );
+        assert_eq!(
+            link_ids_the_setup_command_carries(&ports, "outputs"),
+            ["L-stays"]
+        );
     }
 
     /// Removing a link the envelope never carried changes nothing — the
@@ -454,18 +570,212 @@ mod tests {
     /// was never wired.
     #[test]
     fn removing_an_unknown_link_leaves_the_envelope_alone() {
-        let mut envelope =
+        let envelope =
             OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(ProcessExecution::Reactive);
-        envelope.record(PortDirection::Output, link_wiring_entry("L-only", "out1"));
+        record(&envelope, PortDirection::Output, "L-only");
 
-        envelope.remove_link("L-never-recorded");
+        envelope
+            .forget_a_link_and_tell_a_far_side_past_its_setup_command(
+                PortDirection::Output,
+                "port",
+                "L-never-recorded",
+            )
+            .expect("a far side that was never set up needs no telling");
 
         assert_eq!(
-            envelope.as_setup_command_ports()["outputs"]
-                .as_array()
-                .unwrap()
-                .len(),
-            1
+            link_ids_the_setup_command_carries(&envelope.as_setup_command_ports(), "outputs"),
+            ["L-only"]
+        );
+    }
+
+    /// A link recorded before the setup command goes out rides it and waits on
+    /// no answer of its own; one recorded after is handed to the far side and
+    /// answered for.
+    ///
+    /// Fail-without-fix: leave the envelope riding the setup command once it
+    /// has gone out and the later link is recorded where nothing reads it — a
+    /// link `graph` reports wired that no port was ever opened for.
+    #[test]
+    fn a_link_recorded_before_the_setup_command_rides_it_and_one_recorded_after_is_handed_over() {
+        let envelope =
+            OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(ProcessExecution::Reactive);
+        let before = envelope
+            .record_a_link_and_hand_it_to_a_far_side_past_its_setup_command(
+                PortDirection::Input,
+                link_wiring_entry("L-before", "in1"),
+            )
+            .expect("a far side not yet set up takes the link");
+        assert!(before.is_none());
+
+        let far_side = RecordingOutOfProcessFarSideLinkDelivery::default();
+        let mut setup_command_ports = None;
+        envelope
+            .send_the_setup_command_then_hand_every_later_link_over(
+                |ports| {
+                    setup_command_ports = Some(ports);
+                    Ok(())
+                },
+                far_side.clone(),
+            )
+            .expect("the setup command goes out");
+        assert_eq!(
+            link_ids_the_setup_command_carries(&setup_command_ports.unwrap(), "inputs"),
+            ["L-before"]
+        );
+
+        let after = envelope
+            .record_a_link_and_hand_it_to_a_far_side_past_its_setup_command(
+                PortDirection::Input,
+                link_wiring_entry("L-after", "in1"),
+            )
+            .expect("a far side past its setup command takes the link");
+        assert!(
+            after.is_some(),
+            "a link handed over waits on its far side's answer"
+        );
+        let handed_over = far_side.late_wired_links.lock();
+        let [(PortDirection::Input, entry)] = &handed_over[..] else {
+            panic!("exactly the later link is handed over; got {handed_over:?}");
+        };
+        assert_eq!(entry["link_id"], "L-after");
+    }
+
+    /// A link recorded while the setup command is going out waits for it, then
+    /// is handed over behind it — never recorded into a snapshot already taken
+    /// and never handed to a far side that has not been set up.
+    ///
+    /// Fail-without-fix: take the setup command's `ports` outside the lock and
+    /// the link recorded meanwhile is neither in them nor handed over.
+    #[test]
+    fn a_link_recorded_while_the_setup_command_goes_out_is_handed_over_behind_it() {
+        let envelope = Arc::new(OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(
+            ProcessExecution::Reactive,
+        ));
+        let far_side = RecordingOutOfProcessFarSideLinkDelivery::default();
+        let (setup_command_is_going_out_tx, setup_command_is_going_out_rx) =
+            std::sync::mpsc::channel();
+        let (let_the_setup_command_finish_tx, let_the_setup_command_finish_rx) =
+            std::sync::mpsc::channel::<()>();
+
+        std::thread::scope(|scope| {
+            let setup_envelope = Arc::clone(&envelope);
+            let setup_far_side = far_side.clone();
+            let setup_thread = scope.spawn(move || {
+                let mut setup_command_ports = None;
+                setup_envelope
+                    .send_the_setup_command_then_hand_every_later_link_over(
+                        |ports| {
+                            setup_command_is_going_out_tx.send(()).unwrap();
+                            let_the_setup_command_finish_rx.recv().unwrap();
+                            setup_command_ports = Some(ports);
+                            Ok(())
+                        },
+                        setup_far_side,
+                    )
+                    .expect("the setup command goes out");
+                setup_command_ports.unwrap()
+            });
+            setup_command_is_going_out_rx.recv().unwrap();
+
+            let (recorded_tx, recorded_rx) = std::sync::mpsc::channel();
+            let recording_envelope = Arc::clone(&envelope);
+            let recording_thread = scope.spawn(move || {
+                let reply = recording_envelope
+                    .record_a_link_and_hand_it_to_a_far_side_past_its_setup_command(
+                        PortDirection::Output,
+                        link_wiring_entry("L-meanwhile", "out1"),
+                    )
+                    .expect("the link is taken");
+                recorded_tx.send(()).unwrap();
+                reply
+            });
+            assert!(
+                recorded_rx
+                    .recv_timeout(std::time::Duration::from_millis(200))
+                    .is_err(),
+                "a link recorded while the setup command goes out waits for it"
+            );
+
+            let_the_setup_command_finish_tx.send(()).unwrap();
+            let setup_command_ports = setup_thread.join().unwrap();
+            let reply = recording_thread.join().unwrap();
+
+            assert!(
+                link_ids_the_setup_command_carries(&setup_command_ports, "outputs").is_empty(),
+                "the snapshot was taken before the link was recorded"
+            );
+            assert!(
+                reply.is_some(),
+                "so the link is handed over behind the command"
+            );
+            assert_eq!(far_side.late_wired_links.lock().len(), 1);
+        });
+    }
+
+    /// Once the host gives its far side up, a link recorded after is refused
+    /// with the host's reason, and a disconnect tells nobody.
+    #[test]
+    fn a_link_recorded_once_the_far_side_is_gone_is_refused_naming_why() {
+        let envelope =
+            OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(ProcessExecution::Reactive);
+        let far_side = RecordingOutOfProcessFarSideLinkDelivery::default();
+        envelope
+            .send_the_setup_command_then_hand_every_later_link_over(|_| Ok(()), far_side.clone())
+            .expect("the setup command goes out");
+
+        envelope.refuse_every_later_link_because_the_far_side_is_gone(
+            "processor 'Blur' (Pblur) has failed, so no link can be wired into it".to_string(),
+        );
+
+        let refused = envelope
+            .record_a_link_and_hand_it_to_a_far_side_past_its_setup_command(
+                PortDirection::Input,
+                link_wiring_entry("L-too-late", "in1"),
+            )
+            .expect_err("a far side that is gone can open no port");
+        assert!(refused.to_string().contains("has failed"), "{refused}");
+        envelope
+            .forget_a_link_and_tell_a_far_side_past_its_setup_command(
+                PortDirection::Input,
+                "in1",
+                "L-too-late",
+            )
+            .expect("a far side that is gone needs no telling");
+        assert!(far_side.late_wired_links.lock().is_empty());
+        assert!(far_side.reclaimed_links.lock().is_empty());
+    }
+
+    /// A disconnect asks a far side past its setup command to drop its port, by
+    /// its own port and direction.
+    #[test]
+    fn forgetting_a_link_tells_a_far_side_past_its_setup_command_which_port_to_drop() {
+        let envelope =
+            OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(ProcessExecution::Reactive);
+        let far_side = RecordingOutOfProcessFarSideLinkDelivery::default();
+        envelope
+            .send_the_setup_command_then_hand_every_later_link_over(|_| Ok(()), far_side.clone())
+            .expect("the setup command goes out");
+        record(&envelope, PortDirection::Output, "L-out");
+
+        envelope
+            .forget_a_link_and_tell_a_far_side_past_its_setup_command(
+                PortDirection::Output,
+                "out1",
+                "L-out",
+            )
+            .expect("the far side is told");
+
+        assert_eq!(
+            *far_side.reclaimed_links.lock(),
+            [ReclaimedLink {
+                port_direction: PortDirection::Output,
+                local_port_name: "out1".to_string(),
+                link_id: "L-out".to_string(),
+            }]
+        );
+        assert!(
+            link_ids_the_setup_command_carries(&envelope.as_setup_command_ports(), "outputs")
+                .is_empty()
         );
     }
 }

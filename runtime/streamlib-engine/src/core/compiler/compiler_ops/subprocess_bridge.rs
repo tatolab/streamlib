@@ -16,9 +16,11 @@
 //!    `rpc: "ready" | "stopped" | "ok" | "done" | "error"`.
 //! 2. Escalate-on-behalf (`rpc: "escalate_request"`) — initiated by the
 //!    subprocess, the host replies with `rpc: "escalate_response"`.
-//! 3. A link's wire answer ([`OUT_OF_PROCESS_LINK_WIRED_RPC`],
-//!    [`OUT_OF_PROCESS_LINK_WIRE_FAILED_RPC`]) — the subprocess's answer to a
-//!    `wire_link` the host sent after setup, naming the link it is about.
+//! 3. Link wiring after setup (`wire_link`, `unwire_link`) — sent by
+//!    [`SubprocessBridgeLinkDelivery`]; the subprocess answers a `wire_link`
+//!    with [`OUT_OF_PROCESS_LINK_WIRED_RPC`] or
+//!    [`OUT_OF_PROCESS_LINK_WIRE_FAILED_RPC`], naming the link it is about, and
+//!    leaves an `unwire_link` unanswered.
 //!
 //! A dedicated reader thread (`br-…`) owns the parent-side read half and only
 //! demultiplexes: a log record is handed to the log pipeline, a link's wire
@@ -46,9 +48,10 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use crate::core::context::GpuContextLimitedAccess;
-use crate::core::error::{Error, Result};
+use crate::core::error::{Error, PortDirection, Result};
 use crate::core::processors::{
-    LinksAwaitingTheirOutOfProcessWireReply, OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply,
+    LinksAwaitingTheirOutOfProcessWireReply, OutOfProcessFarSideLinkDelivery,
+    OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply,
 };
 
 use super::subprocess_escalate::{
@@ -412,13 +415,10 @@ impl SubprocessBridge {
     /// `wired`, and a caller that asked `graph` would otherwise wait on an
     /// answer nothing can send.
     pub fn mark_dead(&self) {
-        if let Ok(mut dead) = self.dead.lock() {
-            *dead = true;
-        }
-        refuse_every_link_this_subprocess_still_owed(
+        give_up_on_the_subprocess(
+            &self.dead,
             &self.links_awaiting_their_wire_reply,
             &self.processor_id,
-            "is gone",
         );
     }
 
@@ -426,10 +426,152 @@ impl SubprocessBridge {
         self.dead.lock().map(|g| *g).unwrap_or(true)
     }
 
+    /// How a link wired after this subprocess's setup command reaches it, for
+    /// its wiring envelope to hand links over through.
+    pub fn link_delivery_to_this_subprocess(
+        &self,
+        processor_display_name: &str,
+    ) -> SubprocessBridgeLinkDelivery {
+        SubprocessBridgeLinkDelivery {
+            processor_display_name: processor_display_name.to_string(),
+            processor_id: self.processor_id.clone(),
+            writer: Arc::clone(&self.writer),
+            links_awaiting_their_wire_reply: Arc::clone(&self.links_awaiting_their_wire_reply),
+            dead: Arc::clone(&self.dead),
+        }
+    }
+
     /// Count of escalate-acquired handles the host still holds. Used by
     /// teardown logging and tests.
     pub(crate) fn registry(&self) -> &Arc<EscalateHandleRegistry> {
         &self.registry
+    }
+}
+
+/// Mark a bridge dead and refuse every link its subprocess was still to answer
+/// for.
+fn give_up_on_the_subprocess(
+    dead: &Mutex<bool>,
+    links_awaiting_their_wire_reply: &LinksAwaitingTheirOutOfProcessWireReply,
+    processor_id: &str,
+) {
+    if let Ok(mut dead) = dead.lock() {
+        *dead = true;
+    }
+    refuse_every_link_this_subprocess_still_owed(
+        links_awaiting_their_wire_reply,
+        processor_id,
+        "is gone",
+    );
+}
+
+/// How links wired after a subprocess's setup command reach it: `wire_link`
+/// and `unwire_link` frames written straight onto its bridge's socket.
+///
+/// Never through [`SubprocessBridge::send`], which notes every command it
+/// carries as the last lifecycle command the subprocess was sent. A link can be
+/// handed over while the subprocess is still inside its `setup()` hook, and
+/// noting `wire_link` then would read it as past setup and refuse the window
+/// that hook is allowed to mint.
+pub struct SubprocessBridgeLinkDelivery {
+    processor_display_name: String,
+    processor_id: String,
+    writer: SharedWriter,
+    links_awaiting_their_wire_reply: Arc<LinksAwaitingTheirOutOfProcessWireReply>,
+    dead: Arc<Mutex<bool>>,
+}
+
+impl SubprocessBridgeLinkDelivery {
+    fn the_bridge_gave_up(&self) -> bool {
+        self.dead.lock().map(|dead| *dead).unwrap_or(true)
+    }
+
+    fn write_link_command(&self, link_command: &serde_json::Value) -> Result<()> {
+        let written = match self.writer.lock() {
+            Ok(mut writer) => write_frame(&mut *writer, link_command),
+            Err(_) => Err(Error::Runtime(
+                "subprocess writer mutex poisoned".to_string(),
+            )),
+        };
+        written.inspect_err(|_| {
+            give_up_on_the_subprocess(
+                &self.dead,
+                &self.links_awaiting_their_wire_reply,
+                &self.processor_id,
+            );
+        })
+    }
+}
+
+impl OutOfProcessFarSideLinkDelivery for SubprocessBridgeLinkDelivery {
+    /// The link's answer arrives on its own rpc tag, which the reader routes to
+    /// the cell handed back here. The send itself never waits: the compiler
+    /// hands links over holding the graph's write lock, and a subprocess reads
+    /// commands only between callbacks.
+    fn hand_over_a_link_wired_after_setup(
+        &self,
+        port_direction: PortDirection,
+        link_wiring: &serde_json::Value,
+    ) -> Result<Arc<OutOfProcessLinkWireReply>> {
+        if self.the_bridge_gave_up() {
+            return Err(Error::Runtime(format!(
+                "processor '{}' ({}) has failed, so no link can be wired into it",
+                self.processor_display_name, self.processor_id
+            )));
+        }
+        let Some(link_id) = link_wiring.get("link_id").and_then(|id| id.as_str()) else {
+            return Err(Error::Configuration(format!(
+                "the wiring handed to processor '{}' ({}) names no link, so its helper \
+                 process could not answer for one",
+                self.processor_display_name, self.processor_id
+            )));
+        };
+        let reply = OutOfProcessLinkWireReply::awaiting_the_far_sides_answer();
+        // Registered before the send, never after: the subprocess can answer
+        // the moment the frame lands, and a cell registered afterwards would
+        // miss an answer already routed.
+        self.links_awaiting_their_wire_reply
+            .await_an_answer_for_link(link_id.to_string(), Arc::clone(&reply));
+        match self.write_link_command(&serde_json::json!({
+            "cmd": "wire_link",
+            "direction": port_direction.as_wire_str(),
+            "link": link_wiring,
+        })) {
+            Ok(()) => Ok(reply),
+            Err(send_failure) => {
+                // A send that never left is an answer that never comes. The
+                // caller hears the failure, and the cell is taken back out so
+                // a later death refuses nothing on this link's behalf.
+                self.links_awaiting_their_wire_reply
+                    .stop_awaiting_an_answer_for_link(link_id);
+                Err(send_failure)
+            }
+        }
+    }
+
+    /// Unanswered, like `run`: a reply nobody reads is read as the answer to
+    /// the next lifecycle command. A subprocess whose bridge gave up needs no
+    /// telling — its ports went with the process.
+    fn tell_the_far_side_a_link_was_unwired(
+        &self,
+        port_direction: PortDirection,
+        local_port_name: &str,
+        link_id: &str,
+    ) -> Result<()> {
+        // A link on its way out is one this subprocess owes no answer for.
+        // Left waiting, a subprocess that dies later would refuse a link the
+        // graph no longer has.
+        self.links_awaiting_their_wire_reply
+            .stop_awaiting_an_answer_for_link(link_id);
+        if self.the_bridge_gave_up() {
+            return Ok(());
+        }
+        self.write_link_command(&serde_json::json!({
+            "cmd": "unwire_link",
+            "direction": port_direction.as_wire_str(),
+            "port": local_port_name,
+            "link_id": link_id,
+        }))
     }
 }
 
@@ -1226,6 +1368,178 @@ mod tests {
                  {started_after_the_bridge_gave_up:?}"
             );
         }
+    }
+
+    /// Links handed to a subprocess after its setup command, over a real
+    /// socketpair, with no GPU capability in reach.
+    mod link_delivery_to_a_subprocess_past_its_setup_command {
+        use super::*;
+
+        struct LinkDeliveryWithTheSubprocessEndInHand {
+            delivery: SubprocessBridgeLinkDelivery,
+            subprocess_end_reader: BufReader<UnixStream>,
+        }
+
+        fn link_delivery_with_the_subprocess_end_in_hand() -> LinkDeliveryWithTheSubprocessEndInHand
+        {
+            let (parent_end, subprocess_end) = UnixStream::pair().expect("socketpair");
+            subprocess_end
+                .set_read_timeout(Some(Duration::from_millis(200)))
+                .expect("a read timeout on the subprocess end");
+            LinkDeliveryWithTheSubprocessEndInHand {
+                delivery: SubprocessBridgeLinkDelivery {
+                    processor_display_name: "BlurProcessor".to_string(),
+                    processor_id: "Pblur".to_string(),
+                    writer: Arc::new(Mutex::new(BufWriter::new(parent_end))),
+                    links_awaiting_their_wire_reply: Arc::default(),
+                    dead: Arc::new(Mutex::new(false)),
+                },
+                subprocess_end_reader: BufReader::new(subprocess_end),
+            }
+        }
+
+        fn late_input_link() -> serde_json::Value {
+            serde_json::json!({"link_id": "L-late", "name": "frames_from_upstream"})
+        }
+
+        #[test]
+        fn a_link_handed_over_goes_out_as_a_wire_link_frame_and_its_answer_lands_on_its_cell() {
+            let LinkDeliveryWithTheSubprocessEndInHand {
+                delivery,
+                mut subprocess_end_reader,
+            } = link_delivery_with_the_subprocess_end_in_hand();
+
+            let reply = delivery
+                .hand_over_a_link_wired_after_setup(PortDirection::Input, &late_input_link())
+                .expect("a live subprocess takes the link");
+
+            assert_eq!(
+                read_frame(&mut subprocess_end_reader).expect("the frame reached the subprocess"),
+                serde_json::json!({
+                    "cmd": "wire_link",
+                    "direction": "input",
+                    "link": late_input_link(),
+                })
+            );
+            assert!(
+                delivery
+                    .links_awaiting_their_wire_reply
+                    .note_the_far_sides_answer_for_link(
+                        "L-late",
+                        OutOfProcessLinkWireOutcome::OpenedByTheFarSide
+                    ),
+                "the cell is registered for the answer the reader routes"
+            );
+            assert_eq!(
+                reply.the_far_sides_answer(),
+                Some(OutOfProcessLinkWireOutcome::OpenedByTheFarSide)
+            );
+        }
+
+        #[test]
+        fn an_unwired_link_goes_out_unanswered_and_stops_waiting_on_its_answer() {
+            let LinkDeliveryWithTheSubprocessEndInHand {
+                delivery,
+                mut subprocess_end_reader,
+            } = link_delivery_with_the_subprocess_end_in_hand();
+            delivery
+                .hand_over_a_link_wired_after_setup(PortDirection::Input, &late_input_link())
+                .expect("a live subprocess takes the link");
+            read_frame(&mut subprocess_end_reader).expect("the wire_link frame");
+
+            delivery
+                .tell_the_far_side_a_link_was_unwired(
+                    PortDirection::Input,
+                    "frames_from_upstream",
+                    "L-late",
+                )
+                .expect("a live subprocess is told");
+
+            assert_eq!(
+                read_frame(&mut subprocess_end_reader).expect("the frame reached the subprocess"),
+                serde_json::json!({
+                    "cmd": "unwire_link",
+                    "direction": "input",
+                    "port": "frames_from_upstream",
+                    "link_id": "L-late",
+                })
+            );
+            assert!(
+                !delivery
+                    .links_awaiting_their_wire_reply
+                    .note_the_far_sides_answer_for_link(
+                        "L-late",
+                        OutOfProcessLinkWireOutcome::OpenedByTheFarSide
+                    ),
+                "a link on its way out is owed no answer"
+            );
+        }
+
+        #[test]
+        fn a_bridge_that_gave_up_refuses_a_link_and_tells_nobody_of_an_unwire() {
+            let LinkDeliveryWithTheSubprocessEndInHand {
+                delivery,
+                mut subprocess_end_reader,
+            } = link_delivery_with_the_subprocess_end_in_hand();
+            *delivery.dead.lock().unwrap() = true;
+
+            let refused = delivery
+                .hand_over_a_link_wired_after_setup(PortDirection::Input, &late_input_link())
+                .expect_err("a subprocess the bridge gave up on opens no port");
+            assert!(
+                refused
+                    .to_string()
+                    .contains("'BlurProcessor' (Pblur) has failed"),
+                "the refusal names the processor; got {refused}"
+            );
+            delivery
+                .tell_the_far_side_a_link_was_unwired(
+                    PortDirection::Input,
+                    "frames_from_upstream",
+                    "L-late",
+                )
+                .expect("a subprocess that is gone needs no telling");
+            assert!(
+                read_frame(&mut subprocess_end_reader).is_err(),
+                "nothing was written to a subprocess the bridge gave up on"
+            );
+        }
+    }
+
+    /// A link handed over while the helper is still inside `setup()` leaves the
+    /// engine reading it as in setup, so the window that hook may mint is not
+    /// refused. GPU-gated: a bridge needs a GPU capability to construct.
+    ///
+    /// Fail-without-fix: hand links over through `SubprocessBridge::send` and
+    /// `wire_link` becomes the last lifecycle command the helper was sent.
+    #[test]
+    fn a_link_handed_over_during_setup_leaves_the_helper_read_as_in_setup() {
+        const TEST: &str = "a_link_handed_over_during_setup_leaves_the_helper_read_as_in_setup";
+        let Some(sandbox) = gpu_sandbox_or_skip(TEST) else {
+            return;
+        };
+        let (parent_end, subprocess_end) = UnixStream::pair().expect("socketpair");
+        let bridge = SubprocessBridge::new(parent_end, sandbox, "p-setup-phase-test".into())
+            .expect("bridge construction");
+
+        bridge
+            .send(&serde_json::json!({"cmd": SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS}))
+            .expect("the setup command goes out");
+        bridge
+            .link_delivery_to_this_subprocess("SetupPhaseTestProcessor")
+            .hand_over_a_link_wired_after_setup(
+                PortDirection::Input,
+                &serde_json::json!({"link_id": "L-during-setup", "name": "in1"}),
+            )
+            .expect("the link is handed over");
+
+        assert!(
+            bridge
+                .registry()
+                .the_last_lifecycle_command_sent_to_the_helper_process_was_setup(),
+            "a link handed over is not a lifecycle command"
+        );
+        drop(subprocess_end);
     }
 
     fn escalate_request_awaiting_an_answer(op: &str, request_id: &str) -> serde_json::Value {

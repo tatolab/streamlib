@@ -275,6 +275,66 @@ impl<S: tracing::Subscriber> Layer<S> for CapturedTracingWarnings {
     }
 }
 
+/// One port a far side was asked to drop. Named rather than a tuple so a
+/// swapped port and link id fails the assert instead of passing it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReclaimedLink {
+    pub(crate) port_direction: crate::core::PortDirection,
+    pub(crate) local_port_name: String,
+    pub(crate) link_id: String,
+}
+
+/// A far side past its setup command that records every link it is handed and
+/// every port it is told to drop, and owes an answer per link it was handed.
+///
+/// Clones share what they record, which is how a test reads what the engine
+/// asked of a far side it handed to an envelope.
+#[derive(Clone, Default)]
+pub(crate) struct RecordingOutOfProcessFarSideLinkDelivery {
+    /// Every link handed over, with the direction it was wired in.
+    pub(crate) late_wired_links:
+        Arc<parking_lot::Mutex<Vec<(crate::core::PortDirection, serde_json::Value)>>>,
+    /// The answer cells handed back, in the order the links were handed over
+    /// — how a test plays a far side that has not answered yet, opened its
+    /// port, or refused.
+    pub(crate) wire_answers_owed:
+        Arc<parking_lot::Mutex<Vec<Arc<crate::core::processors::OutOfProcessLinkWireReply>>>>,
+    /// Every port the far side was told to drop.
+    pub(crate) reclaimed_links: Arc<parking_lot::Mutex<Vec<ReclaimedLink>>>,
+}
+
+impl crate::core::processors::OutOfProcessFarSideLinkDelivery
+    for RecordingOutOfProcessFarSideLinkDelivery
+{
+    fn hand_over_a_link_wired_after_setup(
+        &self,
+        port_direction: crate::core::PortDirection,
+        link_wiring: &serde_json::Value,
+    ) -> crate::core::Result<Arc<crate::core::processors::OutOfProcessLinkWireReply>> {
+        self.late_wired_links
+            .lock()
+            .push((port_direction, link_wiring.clone()));
+        let reply =
+            crate::core::processors::OutOfProcessLinkWireReply::awaiting_the_far_sides_answer();
+        self.wire_answers_owed.lock().push(Arc::clone(&reply));
+        Ok(reply)
+    }
+
+    fn tell_the_far_side_a_link_was_unwired(
+        &self,
+        port_direction: crate::core::PortDirection,
+        local_port_name: &str,
+        link_id: &str,
+    ) -> crate::core::Result<()> {
+        self.reclaimed_links.lock().push(ReclaimedLink {
+            port_direction,
+            local_port_name: local_port_name.to_string(),
+            link_id: link_id.to_string(),
+        });
+        Ok(())
+    }
+}
+
 /// A `sleep` parked in a process group of its own, standing in for a helper
 /// process.
 pub(crate) fn a_process_parked_in_a_process_group_of_its_own() -> std::process::Child {

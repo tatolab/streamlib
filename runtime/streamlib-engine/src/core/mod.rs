@@ -76,6 +76,6 @@ pub mod helper_process_transport {
     pub use super::compiler::compiler_ops::subprocess_bridge::{
         ENGINE_BUILD_ID, ENGINE_BUILD_ID_ENVIRONMENT_VARIABLE, EscalateTransport,
         HelperProcessShutdownCommand, SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS, SubprocessBridge,
-        spawn_fd_line_reader,
+        SubprocessBridgeLinkDelivery, spawn_fd_line_reader,
     };
 }
