@@ -1,5 +1,11 @@
 # PUBSUB silently no-ops without init(), causing test hangs
 
+> ~~`PUBSUB` silently no-ops without `init()`.~~ — Superseded 2026-09-17 by #2276. The
+> event bus is an in-process fan-out with no `init()` and no iceoryx2 service: a publish
+> reaches every listener subscribed at that moment whether or not a runtime exists, so
+> neither the hang nor the compound failure below can happen. What survives is part 2 of
+> the fix — wait on a delivered event with a timeout, never on a bare `join()`.
+
 ## Symptom
 
 A test that uses `PUBSUB.subscribe()` + `PUBSUB.publish()` hangs
@@ -42,7 +48,9 @@ event. The event is published to... nothing. `join()` may complete
 
 ## Fix (all three parts)
 
-1. **Initialize PUBSUB in the test** if a `StreamRuntime` isn't being created:
+1. > ~~**Initialize PUBSUB in the test** if a `StreamRuntime` isn't being created:~~ —
+   > Superseded 2026-09-17 by #2276: there is no `init()` to call.
+
 ```rust
 if let Ok(node) = Iceoryx2Node::new() {
     PUBSUB.init("test-name", node);
