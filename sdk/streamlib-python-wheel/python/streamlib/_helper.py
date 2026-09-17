@@ -542,31 +542,35 @@ class ParentProcessLogSink:
         target: "Optional[str]" = None,
         rhi_op: "Optional[str]" = None,
     ) -> None:
+        # Numbered and sent under one lock. Two threads send a helper's
+        # records — its processor's and the engine-log forwarder's — and a
+        # number taken here but sent after the next one's frame would put the
+        # sequence out of order on the wire, where a reader takes a step
+        # backwards for records lost.
         with self._sequence_lock:
             self._next_sequence_number += 1
-            sequence_number = self._next_sequence_number
-        record: "dict[str, Any]" = {
-            "rpc": "escalate_request",
-            "op": "log",
-            "source": source,
-            "source_seq": str(sequence_number),
-            "source_ts": source_ts,
-            "level": level,
-            "message": message,
-            "intercepted": False,
-            "channel": None,
-            "pipeline_id": pipeline_id,
-            "processor_id": processor_id,
-            "attrs": attrs,
-        }
-        # Named only where there is one to name: the two columns an engine
-        # record fills are absent from every `streamlib.log` document, which
-        # is the document helpers have always sent.
-        if target is not None:
-            record["target"] = target
-        if rhi_op is not None:
-            record["rhi_op"] = rhi_op
-        self._bridge.send(record)
+            record: "dict[str, Any]" = {
+                "rpc": "escalate_request",
+                "op": "log",
+                "source": source,
+                "source_seq": str(self._next_sequence_number),
+                "source_ts": source_ts,
+                "level": level,
+                "message": message,
+                "intercepted": False,
+                "channel": None,
+                "pipeline_id": pipeline_id,
+                "processor_id": processor_id,
+                "attrs": attrs,
+            }
+            # Named only where there is one to name: the two columns an engine
+            # record fills are absent from every `streamlib.log` document,
+            # which is the document helpers have always sent.
+            if target is not None:
+                record["target"] = target
+            if rhi_op is not None:
+                record["rhi_op"] = rhi_op
+            self._bridge.send(record)
 
 
 def _wall_clock_nanoseconds_as_iso8601(wall_clock_nanoseconds: int) -> str:

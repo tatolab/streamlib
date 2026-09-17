@@ -73,8 +73,10 @@ static THIS_PROCESSES_ICEORYX2_LOGGER_IS_THE_BRIDGE: AtomicBool = AtomicBool::ne
 /// Idempotent — `iceoryx2_log::set_logger` is `Once`-guarded and answers
 /// `false` on every later call. The level is set whatever the logger call
 /// answers, and reading it from `tracing` rather than from `IOX2_LOG_LEVEL`
-/// keeps one knob: iceoryx2 formats a record exactly when `RUST_LOG` would
-/// admit one at that level.
+/// keeps one knob: `RUST_LOG` decides how much iceoryx2 says. The knob is the
+/// most verbose level any target is configured for, not the `iceoryx2`
+/// target's own, so a per-target filter has iceoryx2 format records the
+/// subscriber then drops.
 pub fn install_iceoryx2_log_bridge_at_the_engines_configured_level() {
     if iceoryx2_log::set_logger(&HOST_BRIDGE) {
         THIS_PROCESSES_ICEORYX2_LOGGER_IS_THE_BRIDGE.store(true, Ordering::Relaxed);
@@ -84,22 +86,28 @@ pub fn install_iceoryx2_log_bridge_at_the_engines_configured_level() {
              iceoryx2's records go to this process's standard error instead of into the log"
         );
     }
-    iceoryx2_log::set_log_level(iceoryx2_log_level_for(LevelFilter::current()));
+    if let Some(level) = iceoryx2_log_level_for(LevelFilter::current()) {
+        iceoryx2_log::set_log_level(level);
+    }
 }
 
-/// The iceoryx2 level that lets through exactly what `tracing_level` admits.
+/// The iceoryx2 level that lets through exactly what `tracing_level` admits,
+/// or `None` where nothing has said yet.
 ///
-/// `OFF` has no iceoryx2 counterpart — `Fatal` is as quiet as iceoryx2 gets —
-/// so a record iceoryx2 still formats there is dropped by the subscriber
-/// instead.
-fn iceoryx2_log_level_for(tracing_level: LevelFilter) -> LogLevel {
+/// A process whose subscriber admits nothing has usually installed none:
+/// `LevelFilter::current()` reads `OFF` until a dispatcher registers, which is
+/// the state `STREAMLIB_DANGEROUSLY_DEFER_LOGGING_TO_HOST` leaves the engine
+/// in. Pinning iceoryx2 to its quietest level on that reading would silence it
+/// for a host that installs its own subscriber a moment later, so iceoryx2
+/// keeps its own default instead.
+fn iceoryx2_log_level_for(tracing_level: LevelFilter) -> Option<LogLevel> {
     match tracing_level {
-        LevelFilter::TRACE => LogLevel::Trace,
-        LevelFilter::DEBUG => LogLevel::Debug,
-        LevelFilter::INFO => LogLevel::Info,
-        LevelFilter::WARN => LogLevel::Warn,
-        LevelFilter::ERROR => LogLevel::Error,
-        _ => LogLevel::Fatal,
+        LevelFilter::TRACE => Some(LogLevel::Trace),
+        LevelFilter::DEBUG => Some(LogLevel::Debug),
+        LevelFilter::INFO => Some(LogLevel::Info),
+        LevelFilter::WARN => Some(LogLevel::Warn),
+        LevelFilter::ERROR => Some(LogLevel::Error),
+        _ => None,
     }
 }
 
@@ -111,18 +119,34 @@ mod tests {
     /// lets exactly that much through.
     #[test]
     fn each_tracing_level_maps_onto_the_iceoryx2_level_admitting_the_same_records() {
-        assert_eq!(iceoryx2_log_level_for(LevelFilter::TRACE), LogLevel::Trace);
-        assert_eq!(iceoryx2_log_level_for(LevelFilter::DEBUG), LogLevel::Debug);
-        assert_eq!(iceoryx2_log_level_for(LevelFilter::INFO), LogLevel::Info);
-        assert_eq!(iceoryx2_log_level_for(LevelFilter::WARN), LogLevel::Warn);
-        assert_eq!(iceoryx2_log_level_for(LevelFilter::ERROR), LogLevel::Error);
+        assert_eq!(
+            iceoryx2_log_level_for(LevelFilter::TRACE),
+            Some(LogLevel::Trace)
+        );
+        assert_eq!(
+            iceoryx2_log_level_for(LevelFilter::DEBUG),
+            Some(LogLevel::Debug)
+        );
+        assert_eq!(
+            iceoryx2_log_level_for(LevelFilter::INFO),
+            Some(LogLevel::Info)
+        );
+        assert_eq!(
+            iceoryx2_log_level_for(LevelFilter::WARN),
+            Some(LogLevel::Warn)
+        );
+        assert_eq!(
+            iceoryx2_log_level_for(LevelFilter::ERROR),
+            Some(LogLevel::Error)
+        );
     }
 
-    /// A subscriber admitting nothing leaves iceoryx2 at its quietest level
-    /// rather than at its default, which would be the noisiest setting of the
-    /// six reaching a subscriber that wants none of them.
+    /// Nothing admitted is also what a process with no subscriber yet reads,
+    /// which is the host-owned-logging escape hatch: iceoryx2 keeps its own
+    /// default there rather than being silenced for a host that installs its
+    /// subscriber a moment later.
     #[test]
-    fn a_subscriber_admitting_nothing_leaves_iceoryx2_at_its_quietest_level() {
-        assert_eq!(iceoryx2_log_level_for(LevelFilter::OFF), LogLevel::Fatal);
+    fn a_process_whose_subscriber_admits_nothing_leaves_iceoryx2_level_alone() {
+        assert_eq!(iceoryx2_log_level_for(LevelFilter::OFF), None);
     }
 }

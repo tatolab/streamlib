@@ -477,6 +477,91 @@ def test_log_sequence_numbers_are_per_process_monotonic(stand_in_parent):
     assert int(stand_in_parent.receive()["source_seq"]) == 2
 
 
+class StandInBridgeWatchingTheSequenceLock:
+    """A bridge that records whether the sink still held its sequence lock.
+
+    The race this guards is not reproducible on demand — CPython rarely
+    switches threads between numbering a record and writing it — so the test
+    below asserts the invariant that makes the race impossible instead of
+    trying to lose it.
+    """
+
+    def __init__(self, sequence_lock_of_the_sink_under_test) -> None:
+        self._sequence_lock = sequence_lock_of_the_sink_under_test
+        self.frames_sent_without_the_sequence_lock: "list[dict]" = []
+        self.sequence_numbers_sent: "list[int]" = []
+        self._order_lock = threading.Lock()
+
+    def send(self, message: dict) -> None:
+        # `locked()` is true for any holder, and the only thread that can be
+        # inside this call is the one that took it.
+        holding_the_sequence_lock = self._sequence_lock.locked()
+        with self._order_lock:
+            if not holding_the_sequence_lock:
+                self.frames_sent_without_the_sequence_lock.append(message)
+            self.sequence_numbers_sent.append(int(message["source_seq"]))
+
+
+def test_a_record_goes_out_under_the_lock_that_numbered_it(stand_in_parent):
+    """A helper has two threads sending records — its processor's and the
+    engine-log forwarder's — and one sequence between them. A number taken
+    before a frame that goes out after the next one's would put the sequence
+    backwards on the wire, where a reader reads a step backwards as a new
+    helper process and a jump as records lost. Numbering and sending under one
+    lock is what makes that impossible.
+
+    Fail-without-fix: number under the lock and send outside it, and every
+    frame here arrives with the lock already released.
+    """
+    sink = ParentProcessLogSink(
+        cast(ParentProcessBridge, None), "P-helper-test"
+    )
+    bridge = StandInBridgeWatchingTheSequenceLock(sink._sequence_lock)
+    sink._bridge = cast(ParentProcessBridge, bridge)
+    records_each_sender_sends = 20
+
+    def send_the_processors_records() -> None:
+        for _ in range(records_each_sender_sends):
+            sink("info", "from the processor", None)
+
+    def send_the_forwarders_records() -> None:
+        for _ in range(records_each_sender_sends):
+            sink.send_a_captured_engine_record(
+                {
+                    "level": "warn",
+                    "target": "iceoryx2",
+                    "message": "from the forwarder",
+                    "pipeline_id": None,
+                    "processor_id": None,
+                    "rhi_op": None,
+                    "attrs": {},
+                    "emitted_at_wall_clock_nanoseconds": 1_700_000_000_000_000_000,
+                }
+            )
+
+    senders = [
+        threading.Thread(target=send_the_processors_records),
+        threading.Thread(target=send_the_forwarders_records),
+    ]
+    for sender in senders:
+        sender.start()
+    for sender in senders:
+        sender.join(timeout=30.0)
+        assert not sender.is_alive()
+
+    assert not bridge.frames_sent_without_the_sequence_lock, (
+        "a record numbered under the lock and sent outside it can reach the parent "
+        "after a later one: "
+        f"{bridge.frames_sent_without_the_sequence_lock}"
+    )
+    assert bridge.sequence_numbers_sent == list(
+        range(1, records_each_sender_sends * 2 + 1)
+    ), (
+        "one sequence covers both senders, climbing in wire order with no number "
+        f"spent twice: {bridge.sequence_numbers_sent}"
+    )
+
+
 # =============================================================================
 # Releases
 # =============================================================================
@@ -2098,9 +2183,12 @@ def test_a_helper_at_the_engines_default_level_sends_no_debug_records(
     own choosing: with nothing configured that is `info`, and the debug records
     a wiring makes stay unsent.
 
-    Fail-without-fix: capture at a fixed level and every helper pays for every
-    debug record the engine and iceoryx2 make, on the channel its data plane
-    shares.
+    It says nothing on its own — a helper that captures nothing at all passes
+    it too — and holds the other half of the pair: the test above has the same
+    wiring send those records at `RUST_LOG=debug`, so together they say the
+    level is read rather than fixed. Fail-without-fix for this one is capture
+    pinned to trace, where every helper pays for every debug record the engine
+    and iceoryx2 make, on the channel its data plane shares.
     """
     helper = start_a_real_helper_process(
         stand_in_parent,
