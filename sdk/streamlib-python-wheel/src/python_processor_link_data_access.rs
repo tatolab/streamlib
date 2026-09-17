@@ -33,7 +33,7 @@ use crate::python_bag_conversion::{
     cast_decoded_bag_into_read_target, decode_msgpack_to_python_object, encode_bag_to_msgpack,
 };
 use crate::python_helper_process_spawn_host::HELPER_PROCESS_PROCESSOR_ID_ENVIRONMENT_VARIABLE;
-use crate::python_logging::{monotonic_clock_now_ns, warn_through_the_childs_log_module};
+use crate::python_logging::monotonic_clock_now_ns;
 use crate::python_processor_context::PythonGpuContextLimitedAccess;
 use crate::python_processor_declaration::read_a_channel_count_or_the_source_spelling;
 
@@ -702,13 +702,10 @@ impl PythonProcessorLinkDataAccess {
                 refused_bags_on_the_output_port: refused_bags,
                 ..
             }) => {
-                warn_through_the_childs_log_module(
-                    python,
-                    format!(
-                        "output port {port_name:?} refused a {payload_bytes}-byte bag over the \
-                         {ceiling_bytes}-byte ceiling of channel {channel:?}; the bag was \
-                         dropped, and the port has refused {refused_bags} so far"
-                    ),
+                tracing::warn!(
+                    "output port {port_name:?} refused a {payload_bytes}-byte bag over the \
+                     {ceiling_bytes}-byte ceiling of channel {channel:?}; the bag was dropped, \
+                     and the port has refused {refused_bags} so far"
                 );
                 Ok(())
             }

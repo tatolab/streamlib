@@ -9,24 +9,106 @@
 //! instead of arriving as captured stdout. A processor's records take the
 //! other route: its helper process forwards them over the escalate `Log` op,
 //! and the parent stamps and enqueues them into this same pipeline.
+//!
+//! The engine's own records made inside a helper take that same route: the
+//! helper installs the capture below, and its forwarding thread drains what
+//! the engine wrote into the ring and sends each record on as the parent's
+//! `source: "rust"`.
 
 use std::collections::BTreeMap;
+use std::sync::OnceLock;
+use std::time::Duration;
 
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
-use streamlib::sdk::logging::{LogLevel, emit_app_process_python_log_record, log_dir};
+use pyo3::types::{PyDict, PyList};
+use streamlib::sdk::logging::{
+    EngineLogRecordForTheParentProcess, HelperProcessEngineLogRecordRing, LogLevel,
+    capture_this_helper_processes_engine_log_records, emit_app_process_python_log_record, log_dir,
+};
 
-use crate::python_bag_conversion::python_object_to_json_value;
+use crate::python_bag_conversion::{json_value_to_python_object, python_object_to_json_value};
 
-/// Warn through the child's own log module.
+/// This process's captured engine records, waiting for the thread that
+/// forwards them. Set once: one process holds one `tracing` subscriber, so a
+/// second capture has nothing to install.
+static ENGINE_LOG_RECORDS_THIS_HELPER_CAPTURED: OnceLock<HelperProcessEngineLogRecordRing> =
+    OnceLock::new();
+
+/// Start capturing this helper process's engine `tracing` records, iceoryx2's
+/// own included, for [`drain_the_engine_log_records_this_helper_captured`] to
+/// hand the parent.
 ///
-/// A helper process installs no tracing subscriber, so `tracing` there reaches
-/// nobody; `streamlib.log` rides the escalate `Log` op into the unified JSONL.
-pub(crate) fn warn_through_the_childs_log_module(python: Python<'_>, message: String) {
-    let _ = python
-        .import("streamlib.log")
-        .and_then(|log_module| log_module.call_method1("warn", (message,)));
+/// Called by `streamlib._helper` once its channel to the parent is up and
+/// before it opens anything, and by nothing else. Refuses a second call: the
+/// records of a process that already installed a subscriber are already going
+/// somewhere.
+#[pyfunction]
+pub(crate) fn capture_this_processes_engine_log_records(python: Python<'_>) -> PyResult<()> {
+    if ENGINE_LOG_RECORDS_THIS_HELPER_CAPTURED.get().is_some() {
+        return Err(PyRuntimeError::new_err(
+            "this process is already capturing the engine's log records",
+        ));
+    }
+    let ring = python
+        .detach(capture_this_helper_processes_engine_log_records)
+        .map_err(|capture_failure| PyRuntimeError::new_err(capture_failure.to_string()))?;
+    let _ = ENGINE_LOG_RECORDS_THIS_HELPER_CAPTURED.set(ring);
+    Ok(())
+}
+
+/// Take every engine record captured so far, waiting up to `wait_seconds` for
+/// the first one, and say how many the ring dropped since the last drain.
+///
+/// Answers `(records, dropped_record_count)`, each record a mapping of the
+/// JSONL columns it fills. The wait happens with the GIL released, so the
+/// forwarding thread parks here instead of holding up the processor's own.
+#[pyfunction]
+pub(crate) fn drain_the_engine_log_records_this_helper_captured(
+    python: Python<'_>,
+    wait_seconds: f64,
+) -> PyResult<(Py<PyList>, u64)> {
+    let ring = ENGINE_LOG_RECORDS_THIS_HELPER_CAPTURED.get().ok_or_else(|| {
+        PyRuntimeError::new_err(
+            "this process is not capturing the engine's log records, so there are none to drain",
+        )
+    })?;
+    let drained = python.detach(|| {
+        ring.drain_waiting_at_most(Duration::from_secs_f64(wait_seconds.max(0.0)))
+    });
+    let records = PyList::empty(python);
+    for record in drained.records {
+        records.append(engine_log_record_as_python_mapping(python, record)?)?;
+    }
+    Ok((
+        records.unbind(),
+        drained.records_dropped_since_the_last_drain,
+    ))
+}
+
+/// One captured record as the mapping the forwarding thread reads its columns
+/// off.
+fn engine_log_record_as_python_mapping<'py>(
+    python: Python<'py>,
+    record: EngineLogRecordForTheParentProcess,
+) -> PyResult<Bound<'py, PyDict>> {
+    let attrs = PyDict::new(python);
+    for (key, value) in record.attrs.iter() {
+        attrs.set_item(key, json_value_to_python_object(python, value)?)?;
+    }
+    let mapping = PyDict::new(python);
+    mapping.set_item("level", record.level.as_str())?;
+    mapping.set_item("target", record.target)?;
+    mapping.set_item("message", record.message)?;
+    mapping.set_item("pipeline_id", record.pipeline_id)?;
+    mapping.set_item("processor_id", record.processor_id)?;
+    mapping.set_item("rhi_op", record.rhi_op)?;
+    mapping.set_item("attrs", attrs)?;
+    mapping.set_item(
+        "emitted_at_wall_clock_nanoseconds",
+        record.emitted_at_wall_clock_nanoseconds,
+    )?;
+    Ok(mapping)
 }
 
 /// Current monotonic time in nanoseconds via `clock_gettime(CLOCK_MONOTONIC)`.

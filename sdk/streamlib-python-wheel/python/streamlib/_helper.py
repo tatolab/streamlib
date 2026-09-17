@@ -42,6 +42,8 @@ from ._engine import (
     ProcessorLinkDataAccess,
     RuntimeContextFullAccess,
     capability_extension_host_for_the_helper_process,
+    capture_this_processes_engine_log_records,
+    drain_the_engine_log_records_this_helper_captured,
     engine_build_id_compiled_into_this_extension,
 )
 from ._processor_hosting import apply_configuration, construct_processor_instance
@@ -65,6 +67,15 @@ LIFECYCLE_POLL_INTERVAL_MILLISECONDS = 100
 # The interval a continuous processor declaring none runs at: the same 100 µs
 # the engine's native continuous runner waits between calls.
 CONTINUOUS_INTERVAL_FLOOR_NANOSECONDS = 100_000
+
+# How long the engine-log forwarder parks waiting for a record before it looks
+# at its own stop flag again. It bounds nothing a user sees: a record arriving
+# wakes the wait at once.
+SECONDS_THE_ENGINE_LOG_FORWARDER_WAITS_FOR_A_RECORD = 0.25
+
+# How long the forwarder is given to leave its wait at shutdown. Whatever it
+# has not sent by then is sent by the thread that stopped it.
+SECONDS_TO_STOP_THE_ENGINE_LOG_FORWARDER = 1.0
 
 # How long `teardown` waits, before answering, for the releases already queued to
 # reach the parent. The parent gives a helper up the moment it answers, and a
@@ -482,27 +493,136 @@ class ParentProcessLogSink:
     def __call__(
         self, level: str, message: str, attrs: "Optional[dict[str, Any]]"
     ) -> None:
+        self._send(
+            source="python",
+            level=level,
+            message=message,
+            attrs=attrs or {},
+            # Advisory only — the parent's receipt stamp is what orders the
+            # merged stream. Wall clock is what a human reads.
+            source_ts=datetime.now(timezone.utc).isoformat(),
+            pipeline_id=None,
+            processor_id=self._processor_id,
+        )
+
+    def send_a_captured_engine_record(self, record: "dict[str, Any]") -> None:
+        """Send one engine `tracing` record this helper captured.
+
+        It travels as the Rust record it is — its own target, its own level —
+        so a call site inside a helper reads in the runtime's log exactly as
+        the same call site reads from the app process. Its stamp is when the
+        engine made it, not when this thread got to it.
+        """
+        self._send(
+            source="rust",
+            level=record["level"],
+            message=record["message"],
+            attrs=record["attrs"],
+            source_ts=_wall_clock_nanoseconds_as_iso8601(
+                record["emitted_at_wall_clock_nanoseconds"]
+            ),
+            pipeline_id=record["pipeline_id"],
+            # One helper hosts one processor, so a record that names none is
+            # still this processor's.
+            processor_id=record["processor_id"] or self._processor_id,
+            target=record["target"],
+            rhi_op=record["rhi_op"],
+        )
+
+    def _send(
+        self,
+        *,
+        source: str,
+        level: str,
+        message: str,
+        attrs: "dict[str, Any]",
+        source_ts: str,
+        pipeline_id: "Optional[str]",
+        processor_id: "Optional[str]",
+        target: "Optional[str]" = None,
+        rhi_op: "Optional[str]" = None,
+    ) -> None:
         with self._sequence_lock:
             self._next_sequence_number += 1
             sequence_number = self._next_sequence_number
-        self._bridge.send(
-            {
-                "rpc": "escalate_request",
-                "op": "log",
-                "source": "python",
-                "source_seq": str(sequence_number),
-                # Advisory only — the parent's receipt stamp is what orders
-                # the merged stream. Wall clock is what a human reads.
-                "source_ts": datetime.now(timezone.utc).isoformat(),
-                "level": level,
-                "message": message,
-                "intercepted": False,
-                "channel": None,
-                "pipeline_id": None,
-                "processor_id": self._processor_id,
-                "attrs": attrs or {},
-            }
+        record: "dict[str, Any]" = {
+            "rpc": "escalate_request",
+            "op": "log",
+            "source": source,
+            "source_seq": str(sequence_number),
+            "source_ts": source_ts,
+            "level": level,
+            "message": message,
+            "intercepted": False,
+            "channel": None,
+            "pipeline_id": pipeline_id,
+            "processor_id": processor_id,
+            "attrs": attrs,
+        }
+        # Named only where there is one to name: the two columns an engine
+        # record fills are absent from every `streamlib.log` document, which
+        # is the document helpers have always sent.
+        if target is not None:
+            record["target"] = target
+        if rhi_op is not None:
+            record["rhi_op"] = rhi_op
+        self._bridge.send(record)
+
+
+def _wall_clock_nanoseconds_as_iso8601(wall_clock_nanoseconds: int) -> str:
+    return datetime.fromtimestamp(
+        wall_clock_nanoseconds / 1_000_000_000, timezone.utc
+    ).isoformat()
+
+
+class CapturedEngineLogRecordForwarder:
+    """Sends the engine's own records, made inside this helper, to the parent.
+
+    A helper hosts no engine and writes no log of its own, so the records the
+    engine and iceoryx2 make here queue in a ring the engine owns and this
+    thread drains. The crossing is one-way by construction: a `tracing` event
+    lands on whatever thread emitted it — a garbage-collector finalizer's, a
+    `Drop` path's — and Rust calling Python from one of those deadlocks.
+    """
+
+    def __init__(self, sink: ParentProcessLogSink) -> None:
+        self._sink = sink
+        self._stopping = threading.Event()
+        self._thread = threading.Thread(
+            target=self._forward_until_stopped,
+            name="streamlib-engine-log-forwarder",
+            daemon=True,
         )
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop_and_forward_what_is_left(self) -> None:
+        """Stop the thread and send whatever the ring still holds.
+
+        Called on every way out of `main`, so the records explaining a helper
+        that could not start are in the parent's hands before it exits.
+        """
+        self._stopping.set()
+        self._thread.join(timeout=SECONDS_TO_STOP_THE_ENGINE_LOG_FORWARDER)
+        self._forward_what_the_ring_holds(wait_seconds=0.0)
+
+    def _forward_until_stopped(self) -> None:
+        while not self._stopping.is_set():
+            self._forward_what_the_ring_holds(
+                wait_seconds=SECONDS_THE_ENGINE_LOG_FORWARDER_WAITS_FOR_A_RECORD
+            )
+
+    def _forward_what_the_ring_holds(self, wait_seconds: float) -> None:
+        records, dropped = drain_the_engine_log_records_this_helper_captured(wait_seconds)
+        for record in records:
+            self._sink.send_a_captured_engine_record(record)
+        if dropped:
+            self._sink(
+                "warn",
+                f"dropped {dropped} engine log records before this helper could send them",
+                {"dropped": dropped},
+            )
 
 
 # =============================================================================
@@ -1111,6 +1231,16 @@ def _refuse_an_engine_built_other_than_the_parents() -> None:
         )
 
 
+def _forward_this_helpers_engine_log_records_to_its_parent(
+    log_sink: ParentProcessLogSink,
+) -> CapturedEngineLogRecordForwarder:
+    """Capture the engine's records in this process and start sending them on."""
+    capture_this_processes_engine_log_records()
+    forwarder = CapturedEngineLogRecordForwarder(log_sink)
+    forwarder.start()
+    return forwarder
+
+
 def main() -> None:
     """Run one processor until its parent tears it down."""
     try:
@@ -1127,7 +1257,14 @@ def main() -> None:
         sys.exit(1)
 
     bridge.start_reading()
-    log.install_helper_process_sink(ParentProcessLogSink(bridge, processor_id))
+    log_sink = ParentProcessLogSink(bridge, processor_id)
+    log.install_helper_process_sink(log_sink)
+
+    # Before this helper opens anything: the engine's own records, iceoryx2's
+    # included, reach nobody in a child until the capture is up, and what an
+    # iceoryx2 node or port refuses on the way up is exactly what explains a
+    # helper that never gets further.
+    engine_log_forwarder = _forward_this_helpers_engine_log_records_to_its_parent(log_sink)
 
     # Before the processor's own module is imported: its class may reach for a
     # stack an extension in the same wheel brings up, and a hook that fails
@@ -1137,6 +1274,7 @@ def main() -> None:
             capability_extension_host_for_the_helper_process
         )
     except Exception as extension_failure:
+        engine_log_forwarder.stop_and_forward_what_is_left()
         log.error(
             "the helper could not load a capability extension",
             entrypoint=import_path,
@@ -1149,6 +1287,7 @@ def main() -> None:
         processor_class = load_processor_class(import_path)
         link_data_access = ProcessorLinkDataAccess()
     except Exception as startup_failure:
+        engine_log_forwarder.stop_and_forward_what_is_left()
         log.error(
             "the helper could not load its processor",
             entrypoint=import_path,
@@ -1161,6 +1300,7 @@ def main() -> None:
     HelperProcessLifecycle(
         bridge, processor_class, runtime_id, processor_id, link_data_access
     ).run_until_the_parent_is_done()
+    engine_log_forwarder.stop_and_forward_what_is_left()
     log.info("helper process exiting")
 
 
