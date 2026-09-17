@@ -444,6 +444,11 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "iceoryx2::node::tests::the_sweep_reads_the_engine_owned_domain_and_never_the_ambient_one",
                 "iceoryx2::iceoryx2_domain_for_this_test_process",
                 "core::runtime::runtime::tests::runtime_internal_surface_share::a_runtime_started_with_xdg_runtime_dir_unset_keeps_its_socket_and_domain_in_the_per_user_fallback",
+                "core::pubsub",
+                "core::runtime::runtime_unique_id",
+                "core::runtime::runtime::tests::runtime_internal_surface_share::a_dropped_runtime_leaves_no_iceoryx2_node_in_its_domain",
+                "core::runtime::runtime::tests::runtime_internal_surface_share::a_runtime_pinned_to_a_live_runtimes_id_is_refused_before_it_creates_an_iceoryx2_node",
+                "core::runtime::runtime::tests::runtime_internal_surface_share::a_malformed_pinned_runtime_id_is_refused_before_the_runtime_makes_anything",
                 "iceoryx2::channel_sizing_tests::every_channel_service_opens_under_safe_overflow",
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_newest_and_an_ordered_consumer_share_one_running_output_port_each_at_its_own_depth",
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_channel_first_wired_to_a_newest_consumer_is_created_deep_enough_for_any_consumer",
@@ -902,13 +907,12 @@ enum Commands {
     /// CI gate for the wall-clock allowlist. Fails on a wall-clock read
     /// (`SystemTime::now`, `Utc::now`, `time.time_ns`, `datetime.now`, …)
     /// anywhere under `runtime/ sdk/ adapters/ xtask/ packages/test-fixtures/`
-    /// outside the four
-    /// observability surfaces the plan permits it on: log record `host_ts`
-    /// and `source_ts`, log file naming, and the control-plane pubsub event
-    /// timestamp. Monotonic is the only legal clock on the data plane — a
-    /// wall-clock value and a media timestamp share a unit and are different
-    /// quantities, so subtracting across them is always a bug. There is no
-    /// per-line pragma: widening the list is a plan change. See
+    /// outside the three observability surfaces the plan permits it on: log
+    /// record `host_ts` and `source_ts`, and log file naming. Monotonic is the
+    /// only legal clock on the data plane — a wall-clock value and a media
+    /// timestamp share a unit and are different quantities, so subtracting
+    /// across them is always a bug. There is no per-line pragma: widening the
+    /// list is a plan change. See
     /// `docs/decisions/one-monotonic-clock.md`.
     CheckClockUsage,
 

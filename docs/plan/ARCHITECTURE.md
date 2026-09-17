@@ -1168,18 +1168,18 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   (`CLOCK_MONOTONIC` on Linux, `mach_absolute_time` on Apple), the same epoch the V4L2
   and ALSA driver stamps carry, comparable across every node on a host. No
   process-relative epoch anywhere, and each language exports exactly one name for it.
-  Wall clock is permitted on exactly four observability surfaces and nowhere else: log
-  record `host_ts` and `source_ts`, log file naming, and the control-plane pubsub event
-  timestamp — their job is correlating with the outside world, which monotonic time
-  cannot do. A wall-clock value never enters the data plane and is never compared against
-  a media timestamp; a fifth surface is a plan change, not a judgement call. The list is
-  mechanically enforced, with no per-line pragma and no opt-out attribute: the permitted
-  surfaces are a closed set in the gate, so a fifth is a source change that surfaces in
-  review rather than a line quietly appended, and an entry whose file stops reading a
-  wall clock is a licence the gate makes you hand back. The allowlist is per-file, which
-  is why a data-plane file never joins it — a machine-global unique name comes from the
-  engine's unique-name primitive, never from reading a clock.
-  [one-monotonic-clock — SHIPPED #1725, #1726, #1727, #1728]
+  Wall clock is permitted on exactly three observability surfaces and nowhere else: log
+  record `host_ts` and `source_ts`, and log file naming — their job is correlating with
+  the outside world, which monotonic time cannot do. A wall-clock value never enters the
+  data plane and is never compared against a media timestamp; a fourth surface is a plan
+  change, not a judgement call. The list is mechanically enforced, with no per-line pragma
+  and no opt-out attribute: the permitted surfaces are a closed set in the gate, so a fourth
+  is a source change that surfaces in review rather than a line quietly appended, and an
+  entry whose file stops reading a wall clock is a licence the gate makes you hand back. The
+  allowlist is per-file, which is why a data-plane file never joins it — a machine-global
+  unique name comes from the engine's unique-name primitive, never from reading a clock.
+  [one-monotonic-clock — SHIPPED #1725, #1726, #1727, #1728; the pubsub event timestamp no
+  listener ever received left the list with the in-process event bus, #2276]
   <!-- verify: cargo test -p streamlib-engine --lib now_lands_in_the_kernel_monotonic_domain -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_clock_and_log.py::test_monotonic_now_ns_reads_the_kernel_monotonic_clock -->
   <!-- verify: cargo run -p xtask -- check-clock-usage -->
@@ -1895,7 +1895,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   name. At `setup()` the sink enumerates its inbound links, refusing by name when there
   are none; it opens `path` (required, created or truncated) and refuses by name a path it
   cannot open, the named-device shape. Truncating is the call: an app is re-run from the
-  same `app.py`, wall-clock file naming would be a fifth surface the clock entry bans, and
+  same `app.py`, wall-clock file naming would be a fourth surface the clock entry bans, and
   refusing an existing file fails every second run.
   [opus-mp4-recording-rung — SHIPPED #2127]
   <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_sink::tests::the_only_port_is_one_ordered_input_and_there_is_no_output -->

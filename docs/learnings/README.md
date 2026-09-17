@@ -78,7 +78,8 @@ Avoid the two failure modes:
 - [@docs/learnings/vulkanalia-empty-slice-cast.md](vulkanalia-empty-slice-cast.md) —
   Cryptic `Cast` trait error when passing `&[]` to vulkanalia Vulkan methods
 - [@docs/learnings/pubsub-lazy-init-silent-noop.md](pubsub-lazy-init-silent-noop.md) —
-  Test hangs indefinitely because PUBSUB silently no-ops without `init()`
+  Test hangs indefinitely because PUBSUB silently no-ops without `init()` (superseded:
+  the in-process bus has no `init()` since #2276)
 - [@docs/learnings/cdylib-make-borrow-cached-fields.md](cdylib-make-borrow-cached-fields.md) —
   Plugin pipeline runs end-to-end clean but produces zero/black output
   when host-side `make_*_borrow` helpers leave the PluginAbiObject's cached

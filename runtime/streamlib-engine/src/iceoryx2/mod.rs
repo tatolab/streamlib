@@ -64,17 +64,16 @@ pub(crate) use node::ChannelSizing;
 pub use node::{
     ChannelDataServicePublisher, ChannelDataServiceSubscriber, ChannelTapSubscribeError,
     ICEORYX2_DOMAIN_ROOT_AND_PREFIX_BUDGET_BYTES, ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE,
-    Iceoryx2EventService, Iceoryx2Node, Iceoryx2NotifyService, Iceoryx2Service,
+    Iceoryx2Node, Iceoryx2NotifyService, Iceoryx2Service,
     create_iceoryx2_node_in_engine_owned_domain, engine_owned_iceoryx2_config,
     engine_owned_iceoryx2_prefix_for_this_user, reclaim_dead_iceoryx2_nodes_in_engine_owned_domain,
 };
 pub use output::{ChannelEgressConfig, OutputWriter, OutputWriterInner};
 pub use payload::{
     ChannelTrustTier, DEFAULT_EXPECTED_PAYLOAD_BYTES, DataChannelBagSequenceNumberUserHeader,
-    EventPayload, FRAME_HEADER_PAYLOAD_LEN_SIZE, FRAME_HEADER_SIZE, FRAME_HEADER_TIMESTAMP_NS_SIZE,
-    FrameHeader, MAX_EVENT_PAYLOAD_SIZE, MAX_PORT_KEY_SIZE, MAX_PUBLISHERS_PER_CHANNEL,
-    MAX_TOPIC_KEY_SIZE, PortKey, RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL,
-    TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES, TopicKey,
+    FRAME_HEADER_PAYLOAD_LEN_SIZE, FRAME_HEADER_SIZE, FRAME_HEADER_TIMESTAMP_NS_SIZE, FrameHeader,
+    MAX_PORT_KEY_SIZE, MAX_PUBLISHERS_PER_CHANNEL, PortKey,
+    RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL, TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
     UNTRUSTED_SESSION_CHANNEL_PAYLOAD_CEILING_BYTES,
 };
 pub use read_mode::ReadMode;

@@ -42,8 +42,8 @@ read `zenoh` 1.10.1's source and probed it on the rig.
   **Nothing reads it** — not the registry, `graph`, `/health`, logs or MCP — and nothing tests it.
 - `streamlib run`/`dev --name` sets `dest="node_name"` (`cli.py:840-845`), passed after `setup` at
   `:254-256`. No test covers it.
-- `runtime_id` comes from `STREAMLIB_RUNTIME_ID` verbatim, or else `R` plus a cuid2
-  (`runtime_unique_id.rs:24-35`), and is minted once in `Runner::new` (`runtime.rs:163`).
+- `runtime_id` comes from `STREAMLIB_RUNTIME_ID`, refused by name unless it is 1–64 bytes of
+  `[A-Za-z0-9._-]` not starting with `.` (since #2276), or else `R` plus a cuid2, once per `Runner::new`.
 - The registry entry is `{schema_version, runtime_id, control_url, pid, hint}`
   (`node_registry.rs:27-38`, mirrored at `_node_registry.py:35-42`).
   - `control_url` is hardcoded to `http://127.0.0.1:{port}` (`api_server.rs:260-270`).
@@ -62,8 +62,8 @@ read `zenoh` 1.10.1's source and probed it on the rig.
 
 **Lifecycle and control plane**
 - `Runner::new()` needs no GPU: tokio `:146-157`, runtime id `:163`, logging `:173`, init hooks
-  `:184`, iceoryx2 node `:199`, event bus `:204`, surface socket `:212`, whose
-  `bring_up_surface_service` already refuses a live duplicate (`:1290-1318`). `start()` fails
+  `:184`, then the surface socket, whose `bring_up_surface_service` refuses a live duplicate
+  before the iceoryx2 node is made (#2276; the event bus needs no init since). `start()` fails
   without Vulkan at `:353`. `stop()` is `:519-599`; `Runner` has no `Drop` impl.
 - `GraphResponse` is `{nodes, links, extensions}` (`core/json_schema.rs:30-38`), its key list pinned
   by `a_graph_with_no_extensions_still_carries_the_key_as_an_empty_list` (`:804-808`) and
@@ -241,7 +241,7 @@ the fix. The refusal applies in Rust, in `rt.add`, and in MCP `add_processor`.
      absent until the description answers, so each is optional on the peer type, and the key-list
      test, the strict fixture and the schema cover both shapes.
    - `local_only_reason` is present only when the session is local-only.
-   - No peer carries a last-seen time: a wall-clock one would be a fifth surface (`:1171-1181`), and
+   - No peer carries a last-seen time: a wall-clock one would be a fourth surface (`:1171-1181`), and
      a monotonic one means nothing to another machine.
    - The key list test, `mcp_prompts.rs:172`'s strict fixture and `generate_schemas.rs` follow.
 2. **The registry entry gains `runtime_name`** and bumps `schema_version`.

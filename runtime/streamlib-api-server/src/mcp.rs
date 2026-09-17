@@ -502,23 +502,10 @@ async fn call_logs(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Va
     let sample = bounded_sample_count(count, DEFAULT_LOGS_SAMPLE_COUNT);
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
-    let listener = Arc::new(Mutex::new(McpEventForwarder { tx }));
-    // `subscribe` blocks until its iceoryx2 subscriber is registered, so it
-    // must not run on an async worker.
-    let listener_for_subscription: Arc<Mutex<dyn EventListener>> = listener.clone();
-    match tokio::task::spawn_blocking(move || {
-        PUBSUB.subscribe(topics::ALL, listener_for_subscription)
-    })
-    .await
-    {
-        Ok(Ok(())) => {}
-        // Without a subscriber the sample would be an honest-looking zero.
-        Ok(Err(subscribe_error)) => {
-            return tool_error(format!("logs subscription: {subscribe_error}"));
-        }
-        Err(join_error) => {
-            return tool_error(format!("event subscribe task failed to join: {join_error}"));
-        }
+    let listener: Arc<Mutex<dyn EventListener>> = Arc::new(Mutex::new(McpEventForwarder { tx }));
+    // Without a subscriber the sample would be an honest-looking zero.
+    if let Err(subscribe_error) = PUBSUB.subscribe(topics::ALL, Arc::clone(&listener)) {
+        return tool_error(format!("logs subscription: {subscribe_error}"));
     }
 
     let mut events: Vec<Value> = Vec::with_capacity(sample);
@@ -530,7 +517,8 @@ async fn call_logs(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Va
             Ok(None) | Err(_) => break,
         }
     }
-    drop(listener); // Weak-ref cleanup on the next publish.
+    // The bus removes the subscription at its next publish or subscribe.
+    drop(listener);
 
     tool_ok(json!({
         "requested": sample,
@@ -1576,10 +1564,9 @@ mod tests {
 
     #[tokio::test]
     async fn tools_call_logs_returns_bounded_window_sample() {
-        // Hermetic: PUBSUB is uninitialized here, so no event is delivered and
-        // the collection is bounded by the monotonic sample window, returning an
-        // empty sample rather than hanging. Live event delivery rides iceoryx2
-        // and is exercised by the engine's pubsub integration tests, not here.
+        // Tests beside this one publish on the one process-wide bus, so the
+        // sample may fill before the window ends; either way the call returns
+        // rather than hanging.
         let started = tokio::time::Instant::now();
         let (status, body) = mcp_call(
             Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
@@ -1596,7 +1583,6 @@ mod tests {
         let text = body["result"]["content"][0]["text"].as_str().unwrap();
         let sample: Value = serde_json::from_str(text).unwrap();
         assert_eq!(sample["requested"], 4);
-        assert_eq!(sample["received"], 0);
         assert_eq!(
             sample["window_ms"].as_u64().unwrap(),
             LOGS_SAMPLE_WINDOW.as_millis() as u64
@@ -1604,6 +1590,43 @@ mod tests {
         assert!(
             elapsed < LOGS_SAMPLE_WINDOW * 4,
             "logs must return within its sample window, not hang; took {elapsed:?}"
+        );
+    }
+
+    /// Mental-revert: a bus that drops publishes until a runtime initializes
+    /// it returns this sample empty.
+    #[tokio::test]
+    async fn tools_call_logs_samples_events_published_on_the_process_wide_bus() {
+        let topic = "tools-call-logs-sampled-topic";
+        let publisher = tokio::spawn(async move {
+            loop {
+                PUBSUB.publish(topic, &Event::custom(topic, json!({ "sampled": true })));
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        });
+
+        let (status, body) = mcp_call(
+            Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
+            json!({
+                "jsonrpc": "2.0", "id": 13, "method": "tools/call",
+                "params": { "name": "logs", "arguments": { "count": 4 } }
+            }),
+        )
+        .await;
+        publisher.abort();
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["result"]["isError"], false, "body={body}");
+        let text = body["result"]["content"][0]["text"].as_str().unwrap();
+        let sample: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(sample["received"], 4, "sample={sample}");
+        assert!(
+            sample["events"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|event| event["topic"] == topic),
+            "an event published while logs sampled must be in the sample: {sample}"
         );
     }
 

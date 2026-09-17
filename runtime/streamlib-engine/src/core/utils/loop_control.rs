@@ -140,19 +140,10 @@ mod tests {
     #[test]
     #[serial]
     fn test_shutdown_event_exits_loop() {
-        use crate::iceoryx2::Iceoryx2Node;
         use std::sync::Arc;
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::mpsc;
         use std::time::{Duration, Instant};
-
-        // Ensure PUBSUB has an iceoryx2 backend. If PUBSUB was already
-        // initialized by another test in this process, init() is a no-op
-        // (OnceLock), and the existing runtime_id is used.
-        let runtime_id = format!("test-loop-control-{}", uuid::Uuid::new_v4());
-        PUBSUB
-            .init(&runtime_id, Iceoryx2Node::for_this_test_process())
-            .expect("init establishes pending subscriptions");
 
         let counter = Arc::new(AtomicUsize::new(0));
         let counter_clone = Arc::clone(&counter);
@@ -185,14 +176,11 @@ mod tests {
         let shutdown_event = Event::RuntimeGlobal(RuntimeEvent::RuntimeShutdown);
         PUBSUB.publish(&shutdown_event.topic(), &shutdown_event);
 
-        // Wait for loop to exit with a hard timeout so the test fails clearly
-        // rather than hanging indefinitely when PUBSUB is not functional.
         match done_rx.recv_timeout(Duration::from_secs(5)) {
             Ok(result) => assert!(result.is_ok(), "Loop returned an error"),
             Err(_) => panic!(
                 "test_shutdown_event_exits_loop: loop did not exit within 5 s \
-                 after shutdown event — PUBSUB may be uninitialized or the \
-                 iceoryx2 subscriber thread failed to open its service"
+                 after the shutdown event was published"
             ),
         }
 
