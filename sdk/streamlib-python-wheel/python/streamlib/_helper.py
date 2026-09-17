@@ -587,6 +587,7 @@ class CapturedEngineLogRecordForwarder:
 
     def __init__(self, sink: ParentProcessLogSink) -> None:
         self._sink = sink
+        self._capturing = False
         self._stopping = threading.Event()
         self._thread = threading.Thread(
             target=self._forward_until_stopped,
@@ -594,7 +595,24 @@ class CapturedEngineLogRecordForwarder:
             daemon=True,
         )
 
-    def start(self) -> None:
+    def capture_and_start(self) -> None:
+        """Capture this process's engine records and start sending them on.
+
+        A process that cannot capture keeps running without them, and says so:
+        the records are a diagnostic, and a processor that works is not worth
+        failing over the logging around it.
+        """
+        try:
+            capture_this_processes_engine_log_records()
+        except Exception as capture_failure:
+            self._sink(
+                "warn",
+                "this helper could not capture the engine's own log records, so they stay "
+                "in this process; its Python records are unaffected",
+                {"error": str(capture_failure)},
+            )
+            return
+        self._capturing = True
         self._thread.start()
 
     def stop_and_forward_what_is_left(self) -> None:
@@ -603,6 +621,8 @@ class CapturedEngineLogRecordForwarder:
         Called on every way out of `main`, so the records explaining a helper
         that could not start are in the parent's hands before it exits.
         """
+        if not self._capturing:
+            return
         self._stopping.set()
         self._thread.join(timeout=SECONDS_TO_STOP_THE_ENGINE_LOG_FORWARDER)
         self._forward_what_the_ring_holds(wait_seconds=0.0)
@@ -1231,16 +1251,6 @@ def _refuse_an_engine_built_other_than_the_parents() -> None:
         )
 
 
-def _forward_this_helpers_engine_log_records_to_its_parent(
-    log_sink: ParentProcessLogSink,
-) -> CapturedEngineLogRecordForwarder:
-    """Capture the engine's records in this process and start sending them on."""
-    capture_this_processes_engine_log_records()
-    forwarder = CapturedEngineLogRecordForwarder(log_sink)
-    forwarder.start()
-    return forwarder
-
-
 def main() -> None:
     """Run one processor until its parent tears it down."""
     try:
@@ -1264,7 +1274,8 @@ def main() -> None:
     # included, reach nobody in a child until the capture is up, and what an
     # iceoryx2 node or port refuses on the way up is exactly what explains a
     # helper that never gets further.
-    engine_log_forwarder = _forward_this_helpers_engine_log_records_to_its_parent(log_sink)
+    engine_log_forwarder = CapturedEngineLogRecordForwarder(log_sink)
+    engine_log_forwarder.capture_and_start()
 
     # Before the processor's own module is imported: its class may reach for a
     # stack an extension in the same wheel brings up, and a hook that fails

@@ -59,8 +59,6 @@ use crate::python_processor_owned_window::{
 
 use streamlib::sdk::rhi::PixelFormat;
 
-#[cfg(target_os = "linux")]
-
 /// One escalate round trip to the parent, called with the GIL attached.
 ///
 /// The callable is the bridge's `request_from_parent`, whose wait on the
