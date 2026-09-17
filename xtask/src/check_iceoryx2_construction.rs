@@ -41,6 +41,16 @@ const GLOBAL_CONFIG_CALL: &str = "Config::global_config(";
 /// carry it.
 const PUBLISH_SUBSCRIBE_BUILDER_METHOD: &str = "publish_subscribe";
 
+/// The module path to iceoryx2's publish-subscribe SAMPLE HEADER type, the one
+/// other place the identifier appears.
+///
+/// Naming that type is how a caller accounts for the bytes iceoryx2 lays out
+/// ahead of a frame — which is the opposite of the construction this gate bans,
+/// and is owed by the ceiling arithmetic in `streamlib-ipc-types`, a crate the
+/// allowed file's own crate depends on. Only this exact path is exempt: a line
+/// that names it AND builds a service still trips.
+const PUBLISH_SUBSCRIBE_SAMPLE_HEADER_PATH: &str = "header::publish_subscribe";
+
 /// What a violating line built, and the fix the failure names for it.
 #[derive(Debug, PartialEq, Eq)]
 pub enum RefusedIceoryx2Construction {
@@ -162,9 +172,7 @@ fn collect_violations(relative_path: &Path, content: &str, violations: &mut Vec<
         let refused_construction =
             if builds_a_node_outside_the_allowed_constructor || line.contains(GLOBAL_CONFIG_CALL) {
                 RefusedIceoryx2Construction::NodeOrGlobalConfigurationOutsideTheEngineOwnedDomain
-            } else if !is_the_allowed_file
-                && contains_the_whole_identifier(line, PUBLISH_SUBSCRIBE_BUILDER_METHOD)
-            {
+            } else if !is_the_allowed_file && builds_a_publish_subscribe_service(line) {
                 RefusedIceoryx2Construction::PublishSubscribeServiceOutsideTheEngineWrapper
             } else {
                 continue;
@@ -176,6 +184,18 @@ fn collect_violations(relative_path: &Path, content: &str, violations: &mut Vec<
             refused_construction,
         });
     }
+}
+
+/// Whether `line` opens a publish-subscribe service — the builder identifier
+/// anywhere but inside [`PUBLISH_SUBSCRIBE_SAMPLE_HEADER_PATH`], which names a
+/// type rather than building anything.
+fn builds_a_publish_subscribe_service(line: &str) -> bool {
+    let line_without_the_sample_header_path =
+        line.replace(PUBLISH_SUBSCRIBE_SAMPLE_HEADER_PATH, "");
+    contains_the_whole_identifier(
+        &line_without_the_sample_header_path,
+        PUBLISH_SUBSCRIBE_BUILDER_METHOD,
+    )
 }
 
 /// Whether `identifier` appears in `line` as a whole identifier, not as part of
@@ -267,6 +287,33 @@ mod tests {
 
         assert_eq!(violations.len(), 1, "{violations:?}");
         assert_eq!(violations[0].line_no, 6);
+        assert_eq!(
+            violations[0].refused_construction,
+            RefusedIceoryx2Construction::PublishSubscribeServiceOutsideTheEngineWrapper
+        );
+    }
+
+    /// Naming the sample header is how a caller accounts for the bytes iceoryx2
+    /// lays out ahead of a frame, which builds nothing. Refuse it and the
+    /// per-channel ceiling has no way to subtract the overhead it must.
+    #[test]
+    fn naming_the_publish_subscribe_sample_header_type_builds_nothing_and_is_allowed() {
+        let violations = violations_in(
+            "const AHEAD: usize = size_of::<iceoryx2::service::header::publish_subscribe::Header>();\ntype H = iceoryx2::service::header::publish_subscribe::Header;\nuse iceoryx2::service::header::publish_subscribe::Header;\n",
+        );
+
+        assert!(violations.is_empty(), "{violations:?}");
+    }
+
+    /// The exemption is the path and nothing more: a line that names the header
+    /// type and also opens a service is still opening a service.
+    #[test]
+    fn a_builder_beside_the_sample_header_path_on_one_line_is_still_refused() {
+        let violations = violations_in(
+            "let h = size_of::<iceoryx2::service::header::publish_subscribe::Header>(); let s = node.service_builder(&name).publish_subscribe::<[u8]>();\n",
+        );
+
+        assert_eq!(violations.len(), 1, "{violations:?}");
         assert_eq!(
             violations[0].refused_construction,
             RefusedIceoryx2Construction::PublishSubscribeServiceOutsideTheEngineWrapper

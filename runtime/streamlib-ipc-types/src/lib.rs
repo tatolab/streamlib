@@ -88,8 +88,8 @@ pub const fn largest_channel_frame_bytes_under_a_chunk_ceiling(
     // Round the ceiling down to a whole sample alignment first: a frame is
     // admitted when its aligned-up sample fits, so the last admitted frame sits
     // at the largest aligned size at or below the ceiling.
-    let largest_whole_sample = channel_ceiling_bytes
-        - (channel_ceiling_bytes % ICEORYX2_SAMPLE_ALIGNMENT_BYTES);
+    let largest_whole_sample =
+        channel_ceiling_bytes - (channel_ceiling_bytes % ICEORYX2_SAMPLE_ALIGNMENT_BYTES);
     largest_whole_sample.saturating_sub(ICEORYX2_SAMPLE_BYTES_AHEAD_OF_A_CHANNEL_FRAME)
 }
 
@@ -968,7 +968,7 @@ mod tests {
                 + size_of::<u8>() * frame_total_bytes
                 + align_of::<u8>()
                 - 1)
-                .next_multiple_of(align_of::<Iceoryx2PublishSubscribeHeader>());
+            .next_multiple_of(align_of::<Iceoryx2PublishSubscribeHeader>());
             assert_eq!(
                 iceoryx2_sample_bytes_for_a_channel_frame(frame_total_bytes),
                 upstream_formula,
@@ -1190,4 +1190,3 @@ mod tests {
         ));
     }
 }
-

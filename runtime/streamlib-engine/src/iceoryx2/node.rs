@@ -1650,9 +1650,11 @@ mod tests {
             assert!(
                 matches!(
                     unswept_failure,
-                    Err(PublishSubscribeOpenOrCreateError::PublishSubscribeOpenError(
-                        PublishSubscribeOpenError::DoesNotSupportRequestedMinBufferSize
-                    ))
+                    Err(
+                        PublishSubscribeOpenOrCreateError::PublishSubscribeOpenError(
+                            PublishSubscribeOpenError::DoesNotSupportRequestedMinBufferSize
+                        )
+                    )
                 ),
                 "the dead holder's shallow service must be what blocks the deeper open, \
                  got {unswept_failure:?}"

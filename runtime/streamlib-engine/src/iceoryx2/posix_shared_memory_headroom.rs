@@ -116,7 +116,8 @@ mod tests {
     fn dockers_default_shared_memory_is_short_of_what_a_runtime_wants() {
         const DOCKER_DEFAULT_SHARED_MEMORY_BYTES: u64 = 64 * 1000 * 1000;
         assert!(
-            DOCKER_DEFAULT_SHARED_MEMORY_BYTES < POSIX_SHARED_MEMORY_FREE_BYTES_A_RUNTIME_WANTS as u64,
+            DOCKER_DEFAULT_SHARED_MEMORY_BYTES
+                < POSIX_SHARED_MEMORY_FREE_BYTES_A_RUNTIME_WANTS as u64,
             "a default container must trip the headroom warning"
         );
         assert!(
