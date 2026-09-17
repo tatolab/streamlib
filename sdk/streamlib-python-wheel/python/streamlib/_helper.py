@@ -57,9 +57,9 @@ ENGINE_BUILD_ID_ENV = "STREAMLIB_ENGINE_BUILD_ID"
 # a wedged parent surfaces as an error instead of a hung processor callback.
 ESCALATE_REQUEST_TIMEOUT_SECONDS = 60.0
 
-# How long a blocking wait may park before the lifecycle queue is drained
-# again. Teardown latency is bounded by this plus one callback.
-LIFECYCLE_POLL_INTERVAL_SECONDS = 0.1
+# How long a continuous processor's interval wait may park before the lifecycle
+# queue is drained again. Teardown latency there is bounded by this plus one
+# callback.
 LIFECYCLE_POLL_INTERVAL_MILLISECONDS = 100
 
 
@@ -100,6 +100,9 @@ class ParentProcessBridge:
     else to the lifecycle queue the main thread drains. Requests are safe
     from any thread, concurrently — each waits on its own slot, so callers
     cannot steal each other's responses.
+
+    Every command queued also makes a pipe readable, so a loop parked on a
+    file descriptor wakes for a command the moment it arrives.
     """
 
     _FRAME_LENGTH_PREFIX = struct.Struct(">I")
@@ -114,6 +117,13 @@ class ParentProcessBridge:
         self._pending_lock = threading.Lock()
         self._channel_closed = False
         self._the_parent_is_gone = threading.Event()
+        # Non-inheritable by default, so nothing the processor starts holds it.
+        (
+            self._lifecycle_command_arrival_read_fd,
+            self._lifecycle_command_arrival_write_fd,
+        ) = os.pipe()
+        os.set_blocking(self._lifecycle_command_arrival_read_fd, False)
+        os.set_blocking(self._lifecycle_command_arrival_write_fd, False)
         self._reader = threading.Thread(
             target=self._demultiplex_frames_from_parent,
             name="streamlib-parent-bridge",
@@ -206,6 +216,25 @@ class ParentProcessBridge:
             response.get("message") or f"the parent refused {op.get('op')!r}"
         )
 
+    def lifecycle_command_arrival_fd(self) -> int:
+        """A descriptor that is readable once a command has been queued.
+
+        Readable is a hint, not a count: it can stay readable after the command
+        that made it so was already taken, so a waiter that wakes clears it with
+        [`clear_lifecycle_command_arrivals`] and then drains the queue, in that
+        order.
+        """
+        return self._lifecycle_command_arrival_read_fd
+
+    def clear_lifecycle_command_arrivals(self) -> None:
+        """Empty the arrival pipe, ahead of draining the queue it signals."""
+        while True:
+            try:
+                if not os.read(self._lifecycle_command_arrival_read_fd, 4096):
+                    return
+            except BlockingIOError:
+                return
+
     def next_lifecycle_command(self) -> "Optional[dict[str, Any]]":
         """Block until the parent sends one, or `None` once it is gone."""
         if not self._the_parent_is_gone.is_set():
@@ -240,7 +269,7 @@ class ParentProcessBridge:
                 # consumed there would leave the outer read blocked on a
                 # queue no writer is left to fill.
                 self._the_parent_is_gone.set()
-                self._lifecycle_commands.put(None)
+                self._queue_lifecycle_command(None)
                 return
             if frame.get("rpc") == "escalate_response":
                 # Never forwarded to the lifecycle queue: it would be read as
@@ -252,7 +281,18 @@ class ParentProcessBridge:
                         request_id=frame.get("request_id"),
                     )
                 continue
-            self._lifecycle_commands.put(frame)
+            self._queue_lifecycle_command(frame)
+
+    def _queue_lifecycle_command(self, command: "Optional[dict[str, Any]]") -> None:
+        # Queued before the pipe is written: a waiter clears the pipe and then
+        # drains the queue, so a byte written first could be cleared by a drain
+        # that ran before the command was there to take.
+        self._lifecycle_commands.put(command)
+        try:
+            os.write(self._lifecycle_command_arrival_write_fd, b"\x01")
+        except BlockingIOError:
+            # A full pipe is already readable, which is all the byte says.
+            pass
 
     def _deliver_escalate_response(self, response: "dict[str, Any]") -> bool:
         request_id = response.get("request_id")
@@ -585,7 +625,7 @@ class HelperProcessLifecycle:
                 self._dispatch(command)
             except KeyboardInterrupt:
                 # The ladder's interrupt can land anywhere the main thread is,
-                # not only inside a hook — a `select`, a queue wait, a native
+                # not only inside a hook — a `poll`, a queue wait, a native
                 # call returning. Wherever it lands it leaves the execution
                 # loop and never the process: `stop` and `teardown` are already
                 # queued behind it.
@@ -716,16 +756,12 @@ class HelperProcessLifecycle:
                 continue
             # Re-read before every wait, never cached across one: the listener
             # owns this fd, and an `unwire_link` taking this processor's last
-            # inbound link drops the listener and closes it. Selecting on the
-            # stale number raises EBADF — or, once the OS recycles it, waits on
+            # inbound link drops the listener and closes it. Polling the stale
+            # number reports it invalid — or, once the OS recycles it, waits on
             # something else entirely.
             listener_fd = self._link_data_access.input_listener_fd()
             if listener_fd is not None and listener_fd >= 0:
-                readable, _, _ = select.select(
-                    [listener_fd], [], [], LIFECYCLE_POLL_INTERVAL_SECONDS
-                )
-                if readable:
-                    self._link_data_access.drain_input_listener()
+                self._wait_for_a_notify_or_a_command(listener_fd)
             else:
                 # No inputs left: nothing will ever wake this loop, so the only
                 # thing left to wait on is the parent.
@@ -748,6 +784,24 @@ class HelperProcessLifecycle:
                     log.error("the interval timer failed; leaving the continuous loop")
                     self._running = False
                 self._drain_commands_arriving_mid_run()
+
+    def _wait_for_a_notify_or_a_command(self, listener_fd: int) -> None:
+        """Park until upstream notifies or the parent sends a command.
+
+        `poll`, never `select`: `select` refuses a descriptor of 1024 or above,
+        and a live rewire can recreate the listener there. No timeout — only
+        this thread replaces the listener, and only by dispatching a command,
+        which wakes the wait first.
+        """
+        command_arrival_fd = self._bridge.lifecycle_command_arrival_fd()
+        poller = select.poll()
+        poller.register(listener_fd, select.POLLIN)
+        poller.register(command_arrival_fd, select.POLLIN)
+        for ready_fd, _ in poller.poll():
+            if ready_fd == listener_fd:
+                self._link_data_access.drain_input_listener()
+            elif ready_fd == command_arrival_fd:
+                self._bridge.clear_lifecycle_command_arrivals()
 
     def _park_until_a_command_arrives(self) -> None:
         command = self._bridge.next_lifecycle_command()
