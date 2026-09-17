@@ -187,6 +187,15 @@ pub fn init_for_tests(config: StreamlibLoggingConfig) -> Result<StreamlibLogging
     Ok(guard)
 }
 
+/// The level and target filtering every engine process runs at: `RUST_LOG`,
+/// or `info` where it says nothing.
+///
+/// One spelling for the app process and for a helper, so a record captured in
+/// a child is the record the same call site would make in the parent.
+pub(crate) fn the_engines_configured_tracing_filter() -> EnvFilter {
+    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"))
+}
+
 fn build_components(config: StreamlibLoggingConfig) -> Result<(Dispatch, StreamlibLoggingGuard)> {
     let tunables = ResolvedTunables::from_config(&config.tunables);
 
@@ -280,7 +289,7 @@ fn build_components(config: StreamlibLoggingConfig) -> Result<(Dispatch, Streaml
     // bypasses `tracing::*!()` rather than routing through it.
     polyglot_sink::install(Arc::new(PolyglotLogSink::from_worker(&worker)));
 
-    let env_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let env_filter = the_engines_configured_tracing_filter();
     let layer = JsonlSinkLayer::new(
         Arc::clone(&worker.queue),
         worker.doorbell.clone(),

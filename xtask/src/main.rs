@@ -481,6 +481,8 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::runtime::runtime::tests::to_json_renders_every_capability_this_process_registered",
                 "core::logging::writer",
                 "core::logging::config",
+                "core::logging::helper_process_engine_log_capture",
+                "core::logging::iceoryx2_log_bridge",
                 "core::logging::paths::tests::a_rotated_segment_is_named_with_a_dot_separated_sequence",
                 "core::logging::paths::tests::a_runtime_id_carrying_dots_and_dashes_keeps_its_whole_name_when_rotated",
                 "core::logging::paths::tests::filename_shape_round_trips",
