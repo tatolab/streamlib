@@ -77,11 +77,15 @@ pub const fn iceoryx2_sample_bytes_for_a_channel_frame(frame_total_bytes: usize)
     unaligned.next_multiple_of(ICEORYX2_SAMPLE_ALIGNMENT_BYTES)
 }
 
-/// The largest channel frame whose sample still fits inside `channel_ceiling_bytes`.
+/// The largest channel frame whose sample still fits inside `channel_ceiling_bytes`,
+/// or `0` where the ceiling cannot hold even an empty frame's sample headers.
 ///
 /// What an output port admits, and the number a refusal reports: a producer can
 /// act on "your bag must be at most N bytes", where the tier's own chunk ceiling
-/// would leave it wondering why a bag of exactly that size was refused.
+/// would leave it wondering why a bag of exactly that size was refused. The `0`
+/// arm is reachable only through a per-tier env override set below the sample
+/// headers, and it refuses everything anyway: a frame always carries a
+/// [`FRAME_HEADER_SIZE`] header, so none is ever `0` bytes.
 pub const fn largest_channel_frame_bytes_under_a_chunk_ceiling(
     channel_ceiling_bytes: usize,
 ) -> usize {
@@ -973,6 +977,45 @@ mod tests {
                 iceoryx2_sample_bytes_for_a_channel_frame(frame_total_bytes),
                 upstream_formula,
                 "the sample size for a {frame_total_bytes}-byte frame must be iceoryx2's own"
+            );
+        }
+    }
+
+    /// The ceiling arithmetic is exact for any ceiling an operator's per-tier
+    /// override can set, not only for the two powers of two the tiers default
+    /// to: the admitted frame's sample fits and the next byte's does not.
+    #[test]
+    fn the_admitted_frame_is_exact_at_every_ceiling_an_override_can_set() {
+        for chunk_ceiling_bytes in [
+            1usize,
+            55,
+            56,
+            57,
+            64,
+            100,
+            4095,
+            4096,
+            100_003,
+            TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+            TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES + 1,
+        ] {
+            let largest_admitted_frame_bytes =
+                largest_channel_frame_bytes_under_a_chunk_ceiling(chunk_ceiling_bytes);
+            if largest_admitted_frame_bytes == 0 {
+                // The degenerate arm: a ceiling under the sample headers admits
+                // nothing, since no frame is smaller than its own header.
+                assert!(chunk_ceiling_bytes < FRAME_HEADER_SIZE);
+                continue;
+            }
+            assert!(
+                iceoryx2_sample_bytes_for_a_channel_frame(largest_admitted_frame_bytes)
+                    <= chunk_ceiling_bytes,
+                "the admitted frame's sample must fit a {chunk_ceiling_bytes}-byte ceiling"
+            );
+            assert!(
+                iceoryx2_sample_bytes_for_a_channel_frame(largest_admitted_frame_bytes + 1)
+                    > chunk_ceiling_bytes,
+                "one byte more must not fit a {chunk_ceiling_bytes}-byte ceiling"
             );
         }
     }
