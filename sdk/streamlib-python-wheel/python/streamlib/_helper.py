@@ -412,8 +412,10 @@ def wire_link_data_access(
             # resolved: a `match_device` sentinel settles in the parent, which is
             # where the device stream is.
             input_link.get("audio_window"),
-            loss_count_slot=input_link["loss_count_slot"],
-            wiring_generation=input_link["wiring_generation"],
+            # Read with `get` so a helper with its board open names the key the
+            # binding was not given, rather than raising a bare `KeyError`.
+            loss_count_slot=input_link.get("loss_count_slot"),
+            wiring_generation=input_link.get("wiring_generation"),
         )
     for output_link in port_wiring.get("outputs", []):
         link_data_access.wire_output_link(
@@ -426,7 +428,7 @@ def wire_link_data_access(
             output_link["max_subscribers"],
             output_link["notify_max_notifiers"],
             output_link["link_id"],
-            output_port_wiring_generation=output_link["output_port_wiring_generation"],
+            output_port_wiring_generation=output_link.get("output_port_wiring_generation"),
         )
 
 
