@@ -51,17 +51,57 @@ use std::time::Duration;
 use crate::core::error::{Error, Result};
 use crate::iceoryx2::{ChannelSizing, ChannelTapSubscribeError, Iceoryx2Node};
 
-/// Idle backoff between empty `subscriber.receive()` polls on the forwarder
-/// thread. The tap has no notify-listener slot of its own (the notify service
-/// is destination-keyed and sized to fan-in), so it polls the channel ring; a
-/// short backoff keeps a quiet channel from busy-spinning a core while still
-/// draining a live channel promptly.
-const TAP_IDLE_POLL_BACKOFF: Duration = Duration::from_micros(500);
+/// The first sleep after a poll finds the channel ring empty. The tap has no
+/// notify-listener slot of its own (the notify service is destination-keyed and
+/// sized to fan-in), so it polls the ring; this is short enough that a live
+/// channel's next bag is picked up immediately.
+const TAP_SHORTEST_IDLE_POLL_BACKOFF: Duration = Duration::from_micros(500);
+
+/// The longest sleep the backoff climbs to while a channel stays quiet.
+///
+/// The floor alone costs about 2,000 wake-ups a second for as long as a tap is
+/// attached to a channel carrying nothing. Doubling up to here bounds a quiet
+/// tap at about fifty, and bounds what it costs a live one: a channel that
+/// starts carrying after an idle stretch is drained within this, under one
+/// frame at camera cadence.
+const TAP_LONGEST_IDLE_POLL_BACKOFF: Duration = Duration::from_millis(20);
 
 /// Emit a drop warning on the first drop then once per this many subsequent
 /// drops, so a persistently-slow downstream is visible without spamming a log
 /// line per dropped bag on a hot channel.
 const TAP_DROP_WARN_INTERVAL: u64 = 256;
+
+/// How long the forwarder thread sleeps after a poll that found nothing, growing
+/// while the channel stays quiet and snapping back the moment it carries again.
+///
+/// A tap's wake-up rate follows the channel it observes rather than the clock,
+/// so an attached-but-idle tap costs a machine nothing measurable while a busy
+/// one never sleeps at all — its polls are never empty.
+#[derive(Debug, Clone, Copy)]
+struct TapIdlePollBackoff {
+    next_sleep: Duration,
+}
+
+impl TapIdlePollBackoff {
+    fn starting_at_the_shortest_sleep() -> Self {
+        Self {
+            next_sleep: TAP_SHORTEST_IDLE_POLL_BACKOFF,
+        }
+    }
+
+    /// The sleep this empty poll earns, doubling toward the ceiling for the next.
+    fn sleep_this_empty_poll_earns(&mut self) -> Duration {
+        let sleeping_for = self.next_sleep;
+        self.next_sleep = (self.next_sleep * 2).min(TAP_LONGEST_IDLE_POLL_BACKOFF);
+        sleeping_for
+    }
+
+    /// Back to the floor: the channel is carrying, so the next quiet moment must
+    /// not inherit however long the last one had grown to.
+    fn reset_after_a_bag_arrived(&mut self) {
+        self.next_sleep = TAP_SHORTEST_IDLE_POLL_BACKOFF;
+    }
+}
 
 /// The two Arc handles shared between a [`TapSubscription`] and its forwarder
 /// thread: the stop flag the owner raises on detach, and the counter the
@@ -251,6 +291,7 @@ fn run_forwarder(
     let _ = ready_tx.send(Ok(()));
 
     let mut delivered: usize = 0;
+    let mut idle_poll_backoff = TapIdlePollBackoff::starting_at_the_shortest_sleep();
     loop {
         if signals.stop_flag.load(Ordering::Acquire) {
             break;
@@ -267,6 +308,7 @@ fn run_forwarder(
         match subscriber.receive() {
             Ok(Some(sample)) => {
                 use tokio::sync::mpsc::error::TrySendError;
+                idle_poll_backoff.reset_after_a_bag_arrived();
                 match forward_tx.try_send(sample.payload().to_vec()) {
                     Ok(()) => {
                         delivered += 1;
@@ -290,7 +332,7 @@ fn run_forwarder(
                     Err(TrySendError::Closed(_)) => break,
                 }
             }
-            Ok(None) => std::thread::sleep(TAP_IDLE_POLL_BACKOFF),
+            Ok(None) => std::thread::sleep(idle_poll_backoff.sleep_this_empty_poll_earns()),
             Err(receive_error) => {
                 tracing::warn!(
                     channel = %channel,
@@ -541,6 +583,48 @@ mod tests {
     /// Drop): the forwarder parks the moment the bounded mpsc fills, never bumps
     /// `dropped_bags`, and — because Drop joins while the receiver is still
     /// alive — `drop(tap)` blocks forever, tripping the recv_timeout below.
+    /// Mental-revert guard for the idle backoff: hand every empty poll the floor
+    /// instead of a growing sleep, and an attached tap on a channel carrying
+    /// nothing costs about 2,000 wake-ups a second for as long as it stays
+    /// attached.
+    #[test]
+    fn an_idle_tap_backs_off_toward_the_ceiling_and_snaps_back_when_a_bag_arrives() {
+        let mut backoff = TapIdlePollBackoff::starting_at_the_shortest_sleep();
+
+        assert_eq!(
+            backoff.sleep_this_empty_poll_earns(),
+            TAP_SHORTEST_IDLE_POLL_BACKOFF,
+            "the first empty poll must not cost a live channel any latency"
+        );
+        assert_eq!(
+            backoff.sleep_this_empty_poll_earns(),
+            TAP_SHORTEST_IDLE_POLL_BACKOFF * 2,
+            "a channel that stays quiet must be polled less often"
+        );
+
+        // However long it stays quiet, the sleep is bounded — a channel that
+        // starts carrying again is drained within the ceiling.
+        for _ in 0..64 {
+            let sleeping_for = backoff.sleep_this_empty_poll_earns();
+            assert!(
+                sleeping_for <= TAP_LONGEST_IDLE_POLL_BACKOFF,
+                "an idle sleep of {sleeping_for:?} is past the ceiling"
+            );
+        }
+        assert_eq!(
+            backoff.sleep_this_empty_poll_earns(),
+            TAP_LONGEST_IDLE_POLL_BACKOFF,
+            "a long-quiet channel settles at the ceiling"
+        );
+
+        backoff.reset_after_a_bag_arrived();
+        assert_eq!(
+            backoff.sleep_this_empty_poll_earns(),
+            TAP_SHORTEST_IDLE_POLL_BACKOFF,
+            "a gap between two bags must not inherit an earlier idle stretch's sleep"
+        );
+    }
+
     #[test]
     fn stalled_downstream_never_blocks_the_drain_and_detach_returns_promptly() {
         let max_subscribers = RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL;
