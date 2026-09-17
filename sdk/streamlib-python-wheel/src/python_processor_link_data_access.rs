@@ -432,9 +432,9 @@ impl PythonProcessorLinkDataAccess {
     /// one listener every input shares.
     ///
     /// `notify_service_name` is always a real name here, unlike the output
-    /// side's: a helper-hosted destination drains its own listener whatever
-    /// execution mode the class declares, so the engine never tells one to
-    /// skip it.
+    /// side's: a helper-hosted destination opens its listener whatever
+    /// execution mode the class declares, and the engine withholds only its
+    /// sources' notifiers when that mode never drains it.
     ///
     /// One call per link. The mailbox and the destination-keyed listener are
     /// installed once — fan-in appends subscribers to the same port, and
