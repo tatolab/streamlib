@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.18](https://github.com/tatolab/streamlib/compare/v0.22.17...v0.22.18) (2026-09-17)
+
+
+### Bug Fixes
+
+* **engine:** never hold the graph behind a helper's import, and run a helper's escalates off its bridge reader ([#2318](https://github.com/tatolab/streamlib/issues/2318)) ([2e225ed](https://github.com/tatolab/streamlib/commit/2e225ed7603b47d744d7f7fd4773c14aeb4f6712))
+
 ## [0.22.17](https://github.com/tatolab/streamlib/compare/v0.22.16...v0.22.17) (2026-09-17)
 
 
