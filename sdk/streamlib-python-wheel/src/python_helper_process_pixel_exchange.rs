@@ -1043,7 +1043,10 @@ impl Drop for HelperSurfaceReleaseDebt {
 }
 
 /// The checkout lease a surface owes the surface-share service: one
-/// `release_check_out`, over the connection the checkout was minted on.
+/// `release_check_out`, over this helper's current connection. The service
+/// frees only a lease the asking connection took, so a lease taken on a
+/// connection set aside after a timeout is freed by nothing until this helper
+/// stops.
 ///
 /// Unlike [`HelperSurfaceReleaseDebt`] this unregisters nothing — it says only
 /// "I am done reading". Owned by the surface, so it settles when the surface's
@@ -1071,7 +1074,8 @@ impl Drop for HelperSurfaceCheckOutLeaseDebt {
                     python,
                     format!(
                         "releasing the checkout of surface {} failed ({release_failure}); its pool \
-                         slot returns when this helper's connection closes",
+                         slot returns when the connection it was claimed on closes, at the latest \
+                         when this helper stops",
                         self.surface_id
                     ),
                 );

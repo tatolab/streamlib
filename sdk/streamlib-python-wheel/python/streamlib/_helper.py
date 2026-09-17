@@ -959,9 +959,15 @@ class HelperProcessLifecycle:
         self._torn_down = True
         if self._hosted is not None:
             self._hosted.call_hook("teardown", self._hosted.full_access_context)
-        if not self._bridge.wait_for_every_release_queued_so_far(
-            RELEASES_SENT_BEFORE_TEARDOWN_ANSWERS_TIMEOUT_SECONDS
-        ):
+        try:
+            every_release_sent = self._bridge.wait_for_every_release_queued_so_far(
+                RELEASES_SENT_BEFORE_TEARDOWN_ANSWERS_TIMEOUT_SECONDS
+            )
+        except KeyboardInterrupt:
+            # The ladder's interrupt ends the wait, never the answer: the
+            # parent is still owed `done`.
+            every_release_sent = False
+        if not every_release_sent:
             log.warn(
                 "this helper answered teardown with releases still unsent; what they "
                 "name may stay allocated until the runtime stops"

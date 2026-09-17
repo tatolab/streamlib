@@ -45,14 +45,9 @@ impl CompilationPlan {
         if processors_to_add.is_empty() || config_updates.is_empty() {
             return;
         }
-        let (updates_for_processors_this_batch_constructs, updates_for_running_processors): (
-            Vec<_>,
-            Vec<_>,
-        ) = std::mem::take(config_updates)
-            .into_iter()
-            .partition(|(processor_id, _)| processors_to_add.contains(processor_id));
-        *config_updates = updates_for_running_processors;
-        for (processor_id, config_to_apply) in updates_for_processors_this_batch_constructs {
+        for (processor_id, config_to_apply) in config_updates.extract_if(.., |(processor_id, _)| {
+            processors_to_add.contains(processor_id)
+        }) {
             if let Some(node) = graph.traversal_mut().v(&processor_id).first_mut() {
                 node.set_config(config_to_apply);
             }

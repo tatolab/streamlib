@@ -617,6 +617,34 @@ def test_teardown_is_answered_only_after_the_releases_its_hook_owed(
     assert not lifecycle_thread.is_alive()
 
 
+def test_an_interrupt_during_teardowns_wait_for_releases_still_answers_teardown(
+    stand_in_parent, monkeypatch
+):
+    """The shutdown ladder's interrupt can land while teardown waits for its
+    releases to go out; the parent is still owed `done`, or it waits out its
+    budget and kills a helper that had finished."""
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+
+    def interrupted_while_waiting(timeout_seconds: float) -> bool:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(
+        bridge, "wait_for_every_release_queued_so_far", interrupted_while_waiting
+    )
+    lifecycle_thread = drive_lifecycle_on_a_thread(
+        bridge, load_processor_class(f"{PROBE_MODULE}:PassThroughProbe")
+    )
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    assert stand_in_parent.receive() == {"rpc": "ready"}
+
+    stand_in_parent.send({"cmd": "teardown", "capability": "full"})
+
+    assert stand_in_parent.receive() == {"rpc": "done"}
+    lifecycle_thread.join(timeout=5.0)
+    assert not lifecycle_thread.is_alive()
+
+
 def test_a_release_a_finalizer_owes_on_the_bridge_reader_never_holds_the_reader(
     stand_in_parent, monkeypatch
 ):

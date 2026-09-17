@@ -9,6 +9,7 @@ use crate::core::compiler::PendingOperation;
 use crate::core::compiler::compilation_plan::CompilationPlan;
 use crate::core::compiler::compile_phase::CompilePhase;
 use crate::core::compiler::compile_result::CompileResult;
+use crate::core::compiler::compiler_ops::ProcessorConfigUpdateOutcome;
 use crate::core::compiler::compiler_transaction::CompilerTransactionHandle;
 use crate::core::compiler::processor_thread_shutdown::{
     AbandonedProcessorThreadStillRunning, DescriptionOfTheAbandonedProcessorThreads,
@@ -442,17 +443,17 @@ impl Compiler {
                 &proc_id,
                 config_to_apply,
             )? {
-                super::compiler_ops::ProcessorConfigUpdateOutcome::TakenAndRecordedOnTheNode => {
+                ProcessorConfigUpdateOutcome::TakenAndRecordedOnTheNode => {
                     tracing::info!("[CONFIG] Updated config for {}", proc_id);
                     result.configs_updated += 1;
                     PUBSUB.publish(
                         topics::RUNTIME_GLOBAL,
                         &Event::RuntimeGlobal(RuntimeEvent::ProcessorConfigDidChange {
-                            processor_id: proc_id.clone(),
+                            processor_id: proc_id,
                         }),
                     );
                 }
-                super::compiler_ops::ProcessorConfigUpdateOutcome::ProcessorNoLongerInTheGraph => {}
+                ProcessorConfigUpdateOutcome::ProcessorNoLongerInTheGraph => {}
             }
         }
 
