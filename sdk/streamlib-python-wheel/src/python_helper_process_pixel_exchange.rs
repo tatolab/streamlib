@@ -83,19 +83,22 @@ fn escalate_round_trip_to_parent<'py>(
         })
 }
 
-/// Hand one release to the bridge's release worker and return without waiting
-/// on the parent's answer.
+/// Hand the parent's `release_handle` for `handle_id` to the bridge's release
+/// worker and return without waiting on its answer.
 ///
 /// The callable is the bridge's `release_to_parent_without_waiting`. Every
 /// release a drop owes goes this way: the drop can be a garbage-collector
 /// finalizer on the bridge's reader, which a round trip would stall for the
 /// whole escalate timeout, since only that thread delivers the answer.
 #[cfg(target_os = "linux")]
-fn hand_a_release_to_the_release_worker(
+fn hand_a_release_handle_to_the_release_worker(
     python: Python<'_>,
     release_to_parent_without_waiting: &Py<PyAny>,
-    release_op: &Bound<'_, PyDict>,
+    handle_id: &str,
 ) -> PyResult<()> {
+    let release_op = PyDict::new(python);
+    release_op.set_item("op", "release_handle")?;
+    release_op.set_item("handle_id", handle_id)?;
     release_to_parent_without_waiting
         .bind(python)
         .call1((release_op,))?;
@@ -1021,17 +1024,11 @@ impl Drop for HelperSurfaceReleaseDebt {
     /// with the connection, so a failure here is logged, never raised.
     fn drop(&mut self) {
         Python::attach(|python| {
-            let release_outcome: PyResult<()> = (|| {
-                let op = PyDict::new(python);
-                op.set_item("op", "release_handle")?;
-                op.set_item("handle_id", self.handle_id.as_str())?;
-                hand_a_release_to_the_release_worker(
-                    python,
-                    &self.release_to_parent_without_waiting,
-                    &op,
-                )
-            })();
-            if let Err(release_failure) = release_outcome {
+            if let Err(release_failure) = hand_a_release_handle_to_the_release_worker(
+                python,
+                &self.release_to_parent_without_waiting,
+                &self.handle_id,
+            ) {
                 warn_through_the_childs_log_module(
                     python,
                     format!(
@@ -1151,6 +1148,12 @@ pub(crate) struct HelperProcessGpuExchangeClient {
     /// frame in it is dropped rather than reused.
     #[cfg(target_os = "linux")]
     surface_share_connection: Mutex<Option<UnixStream>>,
+    /// Connections whose answer outwaited [`SURFACE_SHARE_RESPONSE_TIMEOUT`],
+    /// held open and never used again: the service releases every claim a
+    /// connection holds once it closes, and frames this helper still reads
+    /// were claimed on them.
+    #[cfg(target_os = "linux")]
+    surface_share_connections_set_aside_after_a_timeout: Mutex<Vec<UnixStream>>,
     /// One Vulkan device per child, created at first import.
     #[cfg(target_os = "linux")]
     consumer_vulkan_device: Mutex<Option<Arc<ConsumerVulkanDevice>>>,
@@ -1294,6 +1297,8 @@ impl HelperProcessGpuExchangeClient {
             foreign_surface_registration_runtime_id,
             #[cfg(target_os = "linux")]
             surface_share_connection: Mutex::new(None),
+            #[cfg(target_os = "linux")]
+            surface_share_connections_set_aside_after_a_timeout: Mutex::new(Vec::new()),
             #[cfg(target_os = "linux")]
             consumer_vulkan_device: Mutex::new(None),
             #[cfg(target_os = "linux")]
@@ -1710,31 +1715,24 @@ impl HelperProcessGpuExchangeClient {
     /// memory the structure holds.
     ///
     /// Best-effort: this runs from the handle's drop, which has no caller to
-    /// raise into, and a parent that is already gone released everything with
-    /// the connection — so a failure is logged, never raised.
+    /// raise into — so a failure is logged, never raised.
     #[cfg(target_os = "linux")]
     pub(crate) fn release_acceleration_structure(
         &self,
         python: Python<'_>,
         acceleration_structure_id: &str,
     ) {
-        let released: PyResult<()> = (|| {
-            let op = PyDict::new(python);
-            op.set_item("op", "release_handle")?;
-            op.set_item("handle_id", acceleration_structure_id)?;
-            hand_a_release_to_the_release_worker(
-                python,
-                &self.release_to_parent_without_waiting,
-                &op,
-            )
-        })();
-        if let Err(release_failure) = released {
+        if let Err(release_failure) = hand_a_release_handle_to_the_release_worker(
+            python,
+            &self.release_to_parent_without_waiting,
+            acceleration_structure_id,
+        ) {
             warn_through_the_childs_log_module(
                 python,
                 format!(
                     "releasing acceleration structure {acceleration_structure_id} to the parent \
-                     failed ({release_failure}); its device memory returns when this helper's \
-                     connection closes"
+                     failed ({release_failure}); its device memory stays allocated until the \
+                     runtime stops"
                 ),
             );
         }
@@ -2219,24 +2217,35 @@ impl HelperProcessGpuExchangeClient {
                 opened_stream
             }
         };
-        let (response, received_raw_fds) = streamlib_surface_client::send_request_with_fds(
+        let (response, received_raw_fds) = match streamlib_surface_client::send_request_with_fds(
             &stream,
             request,
             outbound_fds,
             streamlib_surface_client::MAX_SCM_RIGHTS_FDS,
-        )
-        .map_err(|io_failure| match io_failure.kind() {
-            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => {
-                PyRuntimeError::new_err(format!(
-                    "the surface-share service did not answer within {} s; this helper dropped \
-                     the connection and opens a new one on its next request",
+        ) {
+            Ok(answered) => answered,
+            Err(io_failure)
+                if matches!(
+                    io_failure.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                self.surface_share_connections_set_aside_after_a_timeout
+                    .lock()
+                    .push(stream);
+                return Err(PyRuntimeError::new_err(format!(
+                    "the surface-share service did not answer within {} s; this helper set that \
+                     connection aside, keeping the frames it claimed on it held until it stops, \
+                     and opens a new one on its next request",
                     SURFACE_SHARE_RESPONSE_TIMEOUT.as_secs()
-                ))
+                )));
             }
-            _ => PyRuntimeError::new_err(format!(
-                "the surface-share request failed mid-stream: {io_failure}"
-            )),
-        })?;
+            Err(io_failure) => {
+                return Err(PyRuntimeError::new_err(format!(
+                    "the surface-share request failed mid-stream: {io_failure}"
+                )));
+            }
+        };
         *connection = Some(stream);
         // SAFETY: adopting kernel-delivered fds the recvmsg just placed in
         // this process's fd table; nothing else holds them.
@@ -2881,29 +2890,6 @@ mod surface_check_out_lease_debt_tests {
         })
     }
 
-    /// Fail-without-fix: the connection had no read timeout, so a service that
-    /// stopped answering held the calling thread — and every thread waiting on
-    /// this client's connection lock behind it — for good.
-    #[test]
-    fn the_connection_to_the_service_stops_waiting_for_an_answer_past_its_timeout() {
-        let share = SurfaceShareUnderTest::start("timeout");
-        let surface_id = share.publish_one_surface();
-        let exchange_client = exchange_client_on(&share);
-
-        exchange_client
-            .check_out_surface(&surface_id)
-            .expect("the checkout round trip");
-
-        let read_timeout = exchange_client
-            .surface_share_connection
-            .lock()
-            .as_ref()
-            .expect("a completed exchange keeps its connection")
-            .read_timeout()
-            .expect("the connection's read timeout is readable");
-        assert_eq!(read_timeout, Some(SURFACE_SHARE_RESPONSE_TIMEOUT));
-    }
-
     /// The checkout claims the frame; dropping the debt — the last share of
     /// the surface going away — is what returns the slot to its producer.
     #[test]
@@ -3407,5 +3393,107 @@ mod texture_check_out_registration_metadata_tests {
                 "the refusal must name the staging it is about: {refusal:?}"
             );
         }
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod surface_share_response_timeout_tests {
+    use std::io::Read as _;
+    use std::os::unix::net::UnixListener;
+
+    use super::*;
+    use crate::python_surface_share_service_for_tests::SurfaceShareUnderTest;
+
+    fn exchange_client_reaching(socket_path: PathBuf) -> HelperProcessGpuExchangeClient {
+        Python::initialize();
+        Python::attach(|python| {
+            HelperProcessGpuExchangeClient::new(
+                python.None(),
+                python.None(),
+                socket_path,
+                "helper:response-timeout-under-test".to_string(),
+            )
+        })
+    }
+
+    /// Fail-without-fix: the connection had no read timeout, so a service that
+    /// stopped answering held the calling thread — and every thread waiting on
+    /// this client's connection lock behind it — for good.
+    #[test]
+    fn a_surface_share_connection_is_opened_with_the_response_timeout() {
+        let share = SurfaceShareUnderTest::start("timeout");
+        let surface_id = share.publish_one_surface();
+        let exchange_client = exchange_client_reaching(share.socket_path.clone());
+
+        exchange_client
+            .check_out_surface(&surface_id)
+            .expect("the checkout round trip");
+
+        let read_timeout = exchange_client
+            .surface_share_connection
+            .lock()
+            .as_ref()
+            .expect("a completed exchange keeps its connection")
+            .read_timeout()
+            .expect("the connection's read timeout is readable");
+        assert_eq!(read_timeout, Some(SURFACE_SHARE_RESPONSE_TIMEOUT));
+    }
+
+    /// Waits out the whole response timeout against a server that never
+    /// answers.
+    ///
+    /// Fail-without-fix: the timed-out connection was closed, and the service
+    /// releases every claim a connection holds once it closes — so frames the
+    /// helper was still reading lost their claims under it.
+    #[test]
+    fn a_connection_whose_answer_outwaits_the_timeout_is_set_aside_rather_than_closed() {
+        // Only for its short socket directory, which it removes on drop.
+        let share = SurfaceShareUnderTest::start("never-answers");
+        let socket_path = share.socket_path.with_file_name("never-answers.sock");
+        let listener = UnixListener::bind(&socket_path).expect("bind");
+        let (the_client_gave_up, the_server_hears_the_client_gave_up) = std::sync::mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut length_prefix = [0u8; 4];
+            stream
+                .read_exact(&mut length_prefix)
+                .expect("read the length");
+            let mut request = vec![0u8; u32::from_be_bytes(length_prefix) as usize];
+            stream.read_exact(&mut request).expect("read the request");
+            the_server_hears_the_client_gave_up
+                .recv()
+                .expect("the client gives up");
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_millis(200)))
+                .expect("set the probe's timeout");
+            let mut probe = [0u8; 1];
+            match stream.read(&mut probe) {
+                Ok(0) => false,
+                Err(error) => error.kind() == std::io::ErrorKind::WouldBlock,
+                Ok(_) => true,
+            }
+        });
+
+        let exchange_client = exchange_client_reaching(socket_path);
+        let refusal = exchange_client
+            .release_check_out("surface-under-test#1")
+            .expect_err("nothing answers");
+        the_client_gave_up.send(()).expect("the server is waiting");
+
+        assert!(
+            refusal.to_string().contains("did not answer within"),
+            "the refusal names the timeout: {refusal}"
+        );
+        assert!(
+            server.join().expect("server thread"),
+            "the helper closed the connection its claims were held on"
+        );
+        assert_eq!(
+            exchange_client
+                .surface_share_connections_set_aside_after_a_timeout
+                .lock()
+                .len(),
+            1
+        );
     }
 }

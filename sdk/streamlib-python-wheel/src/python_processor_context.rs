@@ -3744,7 +3744,7 @@ class FrameSomebodyElseWrote:
             )
             .unwrap();
 
-        // The capability a helper's context carries: the escalate callable is
+        // The capability a helper's context carries: the escalate callables are
         // never reached, because a claim speaks only to the surface socket.
         let exchange_client = Arc::new(HelperProcessGpuExchangeClient::new(
             python.None(),
