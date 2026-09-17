@@ -627,12 +627,12 @@ fn spawn_the_reader_and_the_escalate_worker(
         mpsc::sync_channel(ESCALATE_REQUESTS_QUEUED_PER_HELPER);
     let processor_id = parent_side.processor_id.clone();
 
-    let worker_write_half = Arc::clone(&parent_side);
+    let worker_parent_side = Arc::clone(&parent_side);
     let worker_dispatch = Arc::clone(&escalate_request_dispatch);
     let escalate_worker_thread = thread::Builder::new()
         .name(bridge_escalate_worker_thread_name(&processor_id))
         .spawn(move || {
-            escalate_worker_loop(escalate_requests_rx, &worker_write_half, &worker_dispatch);
+            escalate_worker_loop(escalate_requests_rx, &worker_parent_side, &worker_dispatch);
         })
         .map_err(|spawn_failure| {
             Error::Runtime(format!(

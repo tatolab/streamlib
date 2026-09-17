@@ -345,7 +345,9 @@ impl OutOfProcessLinkWiringEnvelope {
             HowALinkReachesTheFarSide::RidesTheSetupCommand,
         ) {
             HowALinkReachesTheFarSide::WaitsForTheSetupCommandToGoOut(waiting) => waiting,
-            _ => Vec::new(),
+            HowALinkReachesTheFarSide::RidesTheSetupCommand
+            | HowALinkReachesTheFarSide::HandedOverTo(_)
+            | HowALinkReachesTheFarSide::RefusedBecauseTheFarSideIsGone(_) => Vec::new(),
         };
 
         if let Err(send_failure) =
