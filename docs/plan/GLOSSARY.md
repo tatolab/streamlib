@@ -140,9 +140,9 @@ driver stamps. The default; anything a processor stamps or compares uses it. _Av
 "media clock" for the epoch (`MediaClock` is the Rust naming seam, not a second clock),
 "timestamp" unqualified where the epoch matters.
 
-**Wall clock**: UNIX time — permitted only on the four observability surfaces (log
-`host_ts`, log `source_ts`, log file naming, control-plane event timestamp), because they
-correlate with the outside world. Never on the data plane, never compared against a
+**Wall clock**: UNIX time — permitted only on the three observability surfaces (log
+`host_ts`, log `source_ts`, log file naming), because they correlate with the outside
+world. Never on the data plane, never compared against a
 monotonic timestamp. _Avoid_: "system time", "real time".
 
 **Engine primitive**: a hardware capability the engine owns and exposes through its

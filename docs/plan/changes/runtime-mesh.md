@@ -241,7 +241,7 @@ the fix. The refusal applies in Rust, in `rt.add`, and in MCP `add_processor`.
      absent until the description answers, so each is optional on the peer type, and the key-list
      test, the strict fixture and the schema cover both shapes.
    - `local_only_reason` is present only when the session is local-only.
-   - No peer carries a last-seen time: a wall-clock one would be a fifth surface (`:1171-1181`), and
+   - No peer carries a last-seen time: a wall-clock one would be a fourth surface (`:1171-1181`), and
      a monotonic one means nothing to another machine.
    - The key list test, `mcp_prompts.rs:172`'s strict fixture and `generate_schemas.rs` follow.
 2. **The registry entry gains `runtime_name`** and bumps `schema_version`.
