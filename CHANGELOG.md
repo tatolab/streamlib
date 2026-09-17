@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.19](https://github.com/tatolab/streamlib/compare/v0.22.18...v0.22.19) (2026-09-17)
+
+
+### Bug Fixes
+
+* **wheel:** pace continuous helpers by their ticks, refuse config updates a processor rejects, and release what abandoned escalates and freed handles owe ([#2320](https://github.com/tatolab/streamlib/issues/2320)) ([ccf059d](https://github.com/tatolab/streamlib/commit/ccf059dadc85b9dd75aeb2e2d821b11b326e8834))
+
 ## [0.22.18](https://github.com/tatolab/streamlib/compare/v0.22.17...v0.22.18) (2026-09-17)
 
 
