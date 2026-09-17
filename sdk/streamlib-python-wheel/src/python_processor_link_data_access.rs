@@ -585,7 +585,7 @@ impl PythonProcessorLinkDataAccess {
     /// The fd that becomes readable when any upstream publishes.
     ///
     /// Owned by the listener: the caller must not close it, and must stop
-    /// selecting on it before this object is dropped.
+    /// polling it before this object is dropped.
     fn input_listener_fd(&self) -> Option<i32> {
         self.input_mailboxes.get()?.listener_fd()
     }

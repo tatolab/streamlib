@@ -637,8 +637,8 @@ def test_a_reactive_helper_survives_losing_the_link_it_was_waiting_on(stand_in_p
     loop is polling — the listener owns it, and dropping the last subscriber
     drops the listener.
 
-    Fail-without-fix: cache `input_listener_fd()` outside the loop (as
-    `_run_reactive` once did) and every later wait polls a closed descriptor,
+    Fail-without-fix: cache `input_listener_fd()` outside the loop and every
+    later wait polls a closed descriptor,
     which `poll` reports invalid at once, so the loop spins where it should
     park — or, once the OS recycles the number, silently waits on an unrelated
     object.

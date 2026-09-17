@@ -946,8 +946,9 @@ impl InputMailboxesInner {
     ///
     /// The fd is owned by the [`Listener`] — callers must NOT `close()` it and
     /// MUST stop using it before [`InputMailboxesInner`] is dropped. Suitable
-    /// for registering with `epoll_ctl(EPOLL_CTL_ADD)` or `select` from the
-    /// processor's execution thread.
+    /// for registering with `epoll_ctl(EPOLL_CTL_ADD)` or `poll` from the
+    /// processor's execution thread — never `select`, which refuses a
+    /// descriptor of 1024 or above.
     pub fn listener_fd(&self) -> Option<i32> {
         // SAFETY: native_handle() is unsafe per iceoryx2-bb-posix because storing
         // the value across the Listener's lifetime would dangle. We return the

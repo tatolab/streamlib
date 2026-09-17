@@ -113,18 +113,17 @@ pub fn open_iceoryx2_service(
 
     // A notifier aimed at a destination that never drains its listener fills
     // that listener's queue and then silently stops being delivered for the
-    // rest of the run, one iceoryx2 warning per frame (#1764). So only a
-    // destination that waits on its listener is notified. A helper's own input
-    // wiring opens a listener whatever mode it runs in, and refuses an empty
-    // name, so a helper destination is always handed the service and only its
-    // sources go without.
-    let destination_consumes_notifications =
-        destination_consumes_notifications(graph, &dest_proc_id);
-    let notify_service_name = (destination_consumes_notifications || dest_is_subprocess)
+    // rest of the run, one iceoryx2 warning per frame (#1764). A helper's own
+    // input wiring opens a listener whatever mode it runs in and refuses an
+    // empty name, so a helper destination is always handed the service and
+    // only its sources go without.
+    let destination_drains_its_listener = destination_consumes_notifications(graph, &dest_proc_id);
+    let notify_service_name_for_the_destination = (destination_drains_its_listener
+        || dest_is_subprocess)
         .then(|| notify_service_name_for(&dest_proc_id));
-    let notify_service_name_for_the_source = notify_service_name
+    let notify_service_name_for_the_source = notify_service_name_for_the_destination
         .as_deref()
-        .filter(|_| destination_consumes_notifications);
+        .filter(|_| destination_drains_its_listener);
 
     tracing::info!(
         channel = %channel_service_name,
@@ -163,13 +162,13 @@ pub fn open_iceoryx2_service(
         channel_sizing.max_subscribers,
         channel_sizing.channel_service_creation_depth,
     )?;
-    let notify_service = notify_service_name
+    let notify_service_for_the_destination = notify_service_name_for_the_destination
         .as_deref()
         .map(|name| iceoryx2_node.open_or_create_notify_service(name, max_notifiers))
         .transpose()?;
-    let notify_service_for_the_source = notify_service
+    let notify_service_for_the_source = notify_service_for_the_destination
         .as_ref()
-        .filter(|_| destination_consumes_notifications);
+        .filter(|_| destination_drains_its_listener);
 
     // Every out-of-process end this link was handed to and has not answered
     // for. Empty is a link wholly in the app process, or one carried in a far
@@ -218,7 +217,9 @@ pub fn open_iceoryx2_service(
             &dest_proc_id,
             &dest_port,
             &channel_service_name,
-            notify_service_name.as_deref().unwrap_or(""),
+            notify_service_name_for_the_destination
+                .as_deref()
+                .unwrap_or(""),
             dest_input_port_delivery,
             channel_sizing,
             max_notifiers,
@@ -236,7 +237,7 @@ pub fn open_iceoryx2_service(
             &InboundLinkName::from(channel_service_name.as_str()),
             dest_input_port_delivery,
             &service,
-            notify_service.as_ref(),
+            notify_service_for_the_destination.as_ref(),
             dest_audio_windowing,
         )?;
     }
@@ -248,7 +249,7 @@ pub fn open_iceoryx2_service(
         .ok_or_else(|| Error::LinkNotFound(link_id.to_string()))?;
     link.insert_component_without_rendering_it(Iceoryx2ServicesHeldOpenForLinkComponent {
         channel_data_service: service,
-        destination_notify_service: notify_service,
+        destination_notify_service: notify_service_for_the_destination,
     });
 
     // A link an out-of-process end has not answered for is `Pending`, not
@@ -586,20 +587,11 @@ fn destination_max_notifiers(graph: &mut Graph, dest_proc_id: &ProcessorUniqueId
     Ok(MAX_INBOUND_LINKS_PER_DESTINATION)
 }
 
-/// Whether the destination ever drains the listener its sources would notify.
-///
-/// Reactive is the sole execution mode that waits on the listener, in the app
-/// process and in a helper alike. Continuous and Manual drive themselves and
-/// poll their mailboxes, so a notifier pointed at them fills the listener's
-/// queue and then stops being delivered for the rest of the run, one iceoryx2
-/// warning per frame (#1764).
+/// Whether the destination ever drains the listener its sources would notify —
+/// true of a reactive one only.
 ///
 /// A helper host reports `Manual` for its own thread whatever the class
-/// declared, so a destination out of process is asked through its envelope,
-/// which carries the mode the child drives its processor in.
-///
-/// The answer is a property of the destination's class, so it is the same for
-/// every inbound link and the incremental `open_or_create` calls agree.
+/// declared, so a destination out of process is asked through its envelope.
 fn destination_consumes_notifications(graph: &mut Graph, dest_proc_id: &ProcessorUniqueId) -> bool {
     // A destination the graph cannot resolve is wired as before; the wiring
     // path itself reports the missing processor.
@@ -1198,7 +1190,7 @@ fn wire_subprocess_dest(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::execution::ExecutionConfig;
+    use crate::core::execution::{ExecutionConfig, ProcessExecution};
     use crate::core::graph::{InputLinkPortRef, OutputLinkPortRef};
     use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
     use crate::core::processors::{
@@ -1236,9 +1228,7 @@ mod tests {
 
     impl OutOfCrateHelperSpawnHostStub {
         /// A stub whose far side drives its processor in `far_side_process_execution`.
-        fn driving_its_processor_in(
-            far_side_process_execution: crate::core::execution::ProcessExecution,
-        ) -> Self {
+        fn driving_its_processor_in(far_side_process_execution: ProcessExecution) -> Self {
             Self {
                 link_wiring:
                     crate::core::processors::OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(
@@ -1254,7 +1244,7 @@ mod tests {
     /// Reactive, the mode a Python class with inputs takes unless it says otherwise.
     impl Default for OutOfCrateHelperSpawnHostStub {
         fn default() -> Self {
-            Self::driving_its_processor_in(crate::core::execution::ProcessExecution::Reactive)
+            Self::driving_its_processor_in(ProcessExecution::Reactive)
         }
     }
 
@@ -1287,7 +1277,7 @@ mod tests {
             None
         }
         fn execution_config(&self) -> ExecutionConfig {
-            ExecutionConfig::new(crate::core::execution::ProcessExecution::Manual)
+            ExecutionConfig::new(ProcessExecution::Manual)
         }
         fn has_iceoryx2_outputs(&self) -> bool {
             false
@@ -2146,7 +2136,6 @@ mod tests {
     /// helper again and a `continuous` Python sink is.
     #[test]
     fn only_a_reactive_destination_consumes_notifications_in_or_out_of_process() {
-        use crate::core::execution::ProcessExecution;
         use crate::core::test_support::{MockInputOnlyProcessor, MockReactiveInputOnlyProcessor};
 
         let mut graph = Graph::new();
@@ -2202,7 +2191,7 @@ mod tests {
     /// destination whose child runs `far_side_process_execution`, through the op
     /// the compiler runs.
     fn wire_both_kinds_of_source_into_a_helper_destination_driven_in(
-        far_side_process_execution: crate::core::execution::ProcessExecution,
+        far_side_process_execution: ProcessExecution,
     ) -> HelperDestinationFedByBothKindsOfSource {
         use crate::core::test_support::MockOutputOnlyProcessor;
 
@@ -2271,8 +2260,6 @@ mod tests {
     #[test]
     fn a_helper_destination_that_never_drains_is_notified_by_no_source_and_still_opens_its_listener()
      {
-        use crate::core::execution::ProcessExecution;
-
         for far_side_process_execution in [
             ProcessExecution::Continuous { interval_ms: 0 },
             ProcessExecution::Manual,
@@ -2303,7 +2290,7 @@ mod tests {
     #[test]
     fn a_reactive_helper_destination_is_still_notified_by_both_kinds_of_source() {
         let wired = wire_both_kinds_of_source_into_a_helper_destination_driven_in(
-            crate::core::execution::ProcessExecution::Reactive,
+            ProcessExecution::Reactive,
         );
         assert_eq!(wired.notifiers_the_engine_source_holds, 1);
         assert_eq!(
@@ -2311,10 +2298,8 @@ mod tests {
             vec![
                 wired
                     .dest_notify_service_name_the_helper_source_was_handed
-                    .clone(),
-                wired
-                    .dest_notify_service_name_the_helper_source_was_handed
-                    .clone(),
+                    .clone();
+                2
             ],
             "the helper source notifies the service the destination listens on"
         );

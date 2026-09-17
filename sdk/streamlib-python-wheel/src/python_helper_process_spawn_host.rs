@@ -177,9 +177,6 @@ pub(crate) struct PythonHelperProcessSpawnHostProcessor {
     processor_id: String,
     processor_configuration: Option<serde_json::Value>,
     descriptor: ProcessorDescriptor,
-    /// The mode the *child* drives its processor in. This host is always
-    /// Manual on the engine's side.
-    child_execution_config: ExecutionConfig,
     interpreter_path: PathBuf,
     app_entry_directory: Option<PathBuf>,
     child: Option<Child>,
@@ -268,7 +265,7 @@ impl PythonHelperProcessSpawnHostProcessor {
 
     /// The mode string the child drives its own loop in.
     fn child_execution_mode(&self) -> &'static str {
-        match self.child_execution_config.execution {
+        match self.link_wiring.far_side_process_execution() {
             ProcessExecution::Reactive => "reactive",
             ProcessExecution::Continuous { .. } => "continuous",
             ProcessExecution::Manual => "manual",
@@ -1019,8 +1016,8 @@ impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
             "capability": "limited",
             "execution": self.child_execution_mode(),
             "interval_ms": self
-                .child_execution_config
-                .execution
+                .link_wiring
+                .far_side_process_execution()
                 .interval_ms()
                 .unwrap_or(0),
         }))
@@ -1308,7 +1305,6 @@ pub(crate) fn spawn_host_for_processor_node(
         processor_id: node.id.to_string(),
         processor_configuration: node.config.clone(),
         descriptor: descriptor.clone(),
-        child_execution_config,
         interpreter_path: launch_environment.interpreter_path.clone(),
         app_entry_directory: launch_environment.app_entry_directory.clone(),
         child: None,
@@ -1660,7 +1656,6 @@ sys.exit(0)
                 .unwrap(),
                 "a test double",
             ),
-            child_execution_config: ExecutionConfig::new(ProcessExecution::Reactive),
             interpreter_path: PathBuf::from("/venv/bin/python"),
             app_entry_directory,
             child: None,
