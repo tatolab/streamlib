@@ -118,7 +118,7 @@ const LOGS_SAMPLE_WINDOW: Duration = Duration::from_millis(500);
 
 /// Upper bound on how long the `tap` tool waits to fill its bag sample before
 /// returning what it has collected. The tap forwarder sends nothing on an idle,
-/// slow, or paused channel (it idles on `TAP_IDLE_POLL_BACKOFF`), so without
+/// slow, or paused channel (it backs off between empty polls), so without
 /// this window a request/response tool call would block until `count` bags
 /// actually flow. A quiet channel returns the partial sample (0..N bags)
 /// instead. Monotonic (tokio timer), never wall-clock; mirrors
