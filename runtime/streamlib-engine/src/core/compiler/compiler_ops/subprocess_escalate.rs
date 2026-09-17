@@ -4380,7 +4380,7 @@ fn release_surface_share_surface(sandbox: &GpuContextLimitedAccess, handle_id: &
 }
 
 /// Wrap an [`EscalateResponse`] in the outer `{ rpc, payload… }` envelope the
-/// bridge reader writes to the subprocess stdin.
+/// bridge's escalate worker writes to the subprocess.
 pub(crate) fn envelope_response(result: EscalateResponse) -> serde_json::Value {
     let mut obj = serde_json::to_value(&result).unwrap_or(serde_json::Value::Null);
     if let Some(map) = obj.as_object_mut() {
@@ -10854,7 +10854,7 @@ void main() {
         ///
         /// Reads length-prefixed JSON frames from the subprocess stdout
         /// and feeds each through `try_parse_escalate_request` →
-        /// `handle_escalate_op`, mirroring what the real bridge reader
+        /// `handle_escalate_op`, mirroring what the bridge's escalate worker
         /// does on a live host.
         fn run_and_drain(snippet: &str) -> Option<usize> {
             let py = python3()?;

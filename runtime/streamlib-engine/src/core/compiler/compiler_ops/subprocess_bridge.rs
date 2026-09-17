@@ -20,17 +20,20 @@
 //!    [`OUT_OF_PROCESS_LINK_WIRE_FAILED_RPC`]) — the subprocess's answer to a
 //!    `wire_link` the host sent after setup, naming the link it is about.
 //!
-//! A dedicated reader thread (`br-…`) owns the parent-side read half and
-//! demultiplexes incoming messages: escalate requests are dispatched
-//! inline through [`subprocess_escalate::process_bridge_message`], a link's
-//! wire answer lands on that link's own cell, and anything else is forwarded
-//! to the main thread over an mpsc channel for the lifecycle RPC to consume.
-//! The third role has its own tags for exactly that reason: an answer routed
-//! to the lifecycle queue would be read as the reply to whatever command the
-//! host sends next. Writes in both directions serialize
-//! through a shared `Arc<Mutex<BufWriter<UnixStream>>>` so the main
-//! thread and the reader thread can't interleave halves of a
-//! length-prefixed frame.
+//! A dedicated reader thread (`br-…`) owns the parent-side read half and only
+//! demultiplexes: a log record is handed to the log pipeline, a link's wire
+//! answer lands on that link's own cell, a lifecycle reply is forwarded to the
+//! main thread over an mpsc channel, and an escalate request that waits on an
+//! answer is queued for the helper's one escalate worker (`br-esc-…`), which
+//! dispatches through [`subprocess_escalate::process_bridge_message`] in
+//! arrival order. Nothing the reader does waits on GPU work, so one slow
+//! escalate never delays the helper's log records or its lifecycle replies,
+//! and the helper's writes never back up behind it. The third role has its own
+//! tags for the same reason the lifecycle queue is kept clean: an answer routed
+//! there would be read as the reply to whatever command the host sends next.
+//! Writes in both directions serialize through a shared
+//! `Arc<Mutex<BufWriter<UnixStream>>>` so no two threads interleave halves of
+//! a length-prefixed frame.
 
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::os::unix::io::{AsRawFd, RawFd};
@@ -189,6 +192,18 @@ pub const OUT_OF_PROCESS_LINK_WIRED_RPC: &str = "link_wired";
 /// open its port. Carries `link_id` and `reason`.
 pub const OUT_OF_PROCESS_LINK_WIRE_FAILED_RPC: &str = "link_wire_failed";
 
+/// The one escalate op a helper sends without waiting on an answer: a log
+/// record. Every other op is answered with a correlated `escalate_response`.
+const ESCALATE_OP_ANSWERED_BY_NOTHING: &str = "log";
+
+/// What handles an escalate request's frame and returns the frame to answer it
+/// with, or `None` for an op answered by nothing.
+///
+/// The escalate dispatch in production; a stand-in under test, so the reader
+/// and the worker are exercised without a GPU device.
+type EscalateRequestDispatch =
+    Arc<dyn Fn(&serde_json::Value) -> Option<serde_json::Value> + Send + Sync>;
+
 /// Where one frame arriving from the subprocess belongs.
 ///
 /// Classified on the `rpc` tag alone, never on what a handler makes of the
@@ -197,8 +212,12 @@ pub const OUT_OF_PROCESS_LINK_WIRE_FAILED_RPC: &str = "link_wire_failed";
 /// command the host sends.
 #[derive(Debug, PartialEq, Eq)]
 enum IncomingSubprocessFrame {
-    /// An escalate request, dispatched inline on the reader thread.
-    EscalateRequest,
+    /// An escalate request the helper waits on no answer for — a log record —
+    /// dispatched on the reader thread the moment it arrives.
+    EscalateRequestAnsweredByNothing,
+    /// An escalate request the helper waits on an answer for, queued for the
+    /// helper's escalate worker.
+    EscalateRequestAwaitingAnAnswer,
     /// One link's answer to a `wire_link` the host sent after setup.
     LinkWireAnswer {
         link_id: String,
@@ -213,7 +232,12 @@ enum IncomingSubprocessFrame {
 fn classify_an_incoming_subprocess_frame(msg: &serde_json::Value) -> IncomingSubprocessFrame {
     let rpc = msg.get("rpc").and_then(|rpc| rpc.as_str());
     if rpc == Some(super::subprocess_escalate::ESCALATE_REQUEST_RPC) {
-        return IncomingSubprocessFrame::EscalateRequest;
+        return match msg.get("op").and_then(|op| op.as_str()) {
+            Some(ESCALATE_OP_ANSWERED_BY_NOTHING) => {
+                IncomingSubprocessFrame::EscalateRequestAnsweredByNothing
+            }
+            _ => IncomingSubprocessFrame::EscalateRequestAwaitingAnAnswer,
+        };
     }
     let outcome = match rpc {
         Some(OUT_OF_PROCESS_LINK_WIRED_RPC) => OutOfProcessLinkWireOutcome::OpenedByTheFarSide,
@@ -262,11 +286,12 @@ pub struct SubprocessBridge {
 }
 
 impl SubprocessBridge {
-    /// Wrap a socketpair parent end and spawn the reader thread.
+    /// Wrap a socketpair parent end and spawn the reader thread and the
+    /// escalate worker.
     ///
-    /// `sandbox` is cloned into the reader thread so escalate requests
-    /// can be dispatched without blocking the main thread. `processor_id`
-    /// is used for thread naming and tracing.
+    /// `sandbox` is what the worker dispatches escalate requests against, off
+    /// the main thread and off the reader. `processor_id` is used for thread
+    /// naming and tracing.
     pub fn new(
         stream: UnixStream,
         sandbox: GpuContextLimitedAccess,
@@ -285,29 +310,20 @@ impl SubprocessBridge {
         let links_awaiting_their_wire_reply =
             Arc::new(LinksAwaitingTheirOutOfProcessWireReply::default());
 
-        let thread_name = thread_name(&processor_id);
-        let reader_writer = Arc::clone(&writer);
-        let reader_registry = Arc::clone(&registry);
-        let reader_dead = Arc::clone(&dead);
-        let reader_processor_id = processor_id.clone();
-        let reader_links_awaiting = Arc::clone(&links_awaiting_their_wire_reply);
-        let teardown_sandbox = sandbox.clone();
-
-        let reader = thread::Builder::new()
-            .name(thread_name)
-            .spawn(move || {
-                reader_loop(
-                    BufReader::new(read_half),
-                    reader_writer,
-                    sandbox,
-                    reader_registry,
-                    tx,
-                    reader_dead,
-                    reader_processor_id,
-                    reader_links_awaiting,
-                );
-            })
-            .expect("failed to spawn bridge reader thread");
+        let dispatch_registry = Arc::clone(&registry);
+        let dispatch_sandbox = sandbox.clone();
+        let escalate_request_dispatch: EscalateRequestDispatch = Arc::new(move |frame| {
+            process_bridge_message(&dispatch_sandbox, &dispatch_registry, frame)
+        });
+        let SubprocessBridgeThreads { reader, .. } = spawn_the_reader_and_the_escalate_worker(
+            BufReader::new(read_half),
+            Arc::clone(&writer),
+            escalate_request_dispatch,
+            tx,
+            Arc::clone(&dead),
+            processor_id.clone(),
+            Arc::clone(&links_awaiting_their_wire_reply),
+        )?;
 
         Ok(Self {
             processor_id,
@@ -315,7 +331,7 @@ impl SubprocessBridge {
             lifecycle_rx: rx,
             registry,
             links_awaiting_their_wire_reply,
-            sandbox: teardown_sandbox,
+            sandbox,
             reader: Some(reader),
             dead,
         })
@@ -420,13 +436,14 @@ impl SubprocessBridge {
 impl Drop for SubprocessBridge {
     fn drop(&mut self) {
         self.mark_dead();
-        // Shut the socket down before draining: until the reader thread sees
-        // EOF it keeps dispatching escalate requests, and an acquire landing
-        // after the drain would strand its cache entry — the very leak the
-        // drain exists to close. A request already executing when the
-        // shutdown lands can still slip through; closing that too would mean
-        // joining the reader, which this path deliberately never blocks on.
-        // The OS reaps the thread on process exit.
+        // Marked dead and shut down before draining: the escalate worker passes
+        // over every request still queued once the bridge is dead, and the
+        // reader queues nothing past EOF, because an acquire landing after the
+        // drain would strand its cache entry — the very leak the drain exists
+        // to close. A request the worker is already executing can still slip
+        // through; closing that too would mean joining the worker, which this
+        // path deliberately never blocks on. The OS reaps both threads on
+        // process exit.
         if let Ok(writer) = self.writer.lock() {
             let _ = writer.get_ref().shutdown(std::net::Shutdown::Both);
         }
@@ -468,13 +485,87 @@ impl Drop for SubprocessBridge {
     }
 }
 
-/// Reader loop: drain the parent-side socket, dispatch escalate traffic,
-/// forward lifecycle responses to `lifecycle_tx`.
+/// The two threads one bridge runs.
+struct SubprocessBridgeThreads {
+    reader: JoinHandle<()>,
+    /// Detached in production, where nothing waits on it; a test joins it to
+    /// know every queued request has been either dispatched or passed over.
+    #[cfg_attr(not(test), allow(dead_code))]
+    escalate_worker: JoinHandle<()>,
+}
+
+/// Spawn the escalate worker, then the reader that feeds it.
+///
+/// The worker is spawned first because the reader owns the only sender of its
+/// queue: the worker leaves once the reader does and every request the reader
+/// queued has been taken off, so no request outlives the socket it arrived on.
+fn spawn_the_reader_and_the_escalate_worker(
+    reader: BufReader<UnixStream>,
+    writer: SharedWriter,
+    escalate_request_dispatch: EscalateRequestDispatch,
+    lifecycle_tx: mpsc::Sender<serde_json::Value>,
+    dead: Arc<Mutex<bool>>,
+    processor_id: String,
+    links_awaiting_their_wire_reply: Arc<LinksAwaitingTheirOutOfProcessWireReply>,
+) -> Result<SubprocessBridgeThreads> {
+    let (escalate_requests_tx, escalate_requests_rx) = mpsc::channel();
+
+    let worker_writer = Arc::clone(&writer);
+    let worker_dispatch = Arc::clone(&escalate_request_dispatch);
+    let worker_dead = Arc::clone(&dead);
+    let worker_processor_id = processor_id.clone();
+    let escalate_worker = thread::Builder::new()
+        .name(escalate_worker_thread_name(&processor_id))
+        .spawn(move || {
+            escalate_worker_loop(
+                escalate_requests_rx,
+                worker_writer,
+                worker_dispatch,
+                worker_dead,
+                worker_processor_id,
+            );
+        })
+        .map_err(|spawn_failure| {
+            Error::Runtime(format!(
+                "[{processor_id}] could not start its bridge's escalate worker: {spawn_failure}"
+            ))
+        })?;
+
+    let reader_processor_id = processor_id.clone();
+    let reader = thread::Builder::new()
+        .name(thread_name(&processor_id))
+        .spawn(move || {
+            reader_loop(
+                reader,
+                writer,
+                escalate_request_dispatch,
+                escalate_requests_tx,
+                lifecycle_tx,
+                dead,
+                reader_processor_id,
+                links_awaiting_their_wire_reply,
+            );
+        })
+        .map_err(|spawn_failure| {
+            Error::Runtime(format!(
+                "[{processor_id}] could not start its bridge's reader: {spawn_failure}"
+            ))
+        })?;
+
+    Ok(SubprocessBridgeThreads {
+        reader,
+        escalate_worker,
+    })
+}
+
+/// Reader loop: drain the parent-side socket and route every frame, never
+/// waiting on the work a frame asks for.
+#[allow(clippy::too_many_arguments)]
 fn reader_loop(
     mut reader: BufReader<UnixStream>,
     writer: SharedWriter,
-    sandbox: GpuContextLimitedAccess,
-    registry: Arc<EscalateHandleRegistry>,
+    escalate_request_dispatch: EscalateRequestDispatch,
+    escalate_requests_tx: mpsc::Sender<serde_json::Value>,
     lifecycle_tx: mpsc::Sender<serde_json::Value>,
     dead: Arc<Mutex<bool>>,
     processor_id: String,
@@ -492,16 +583,14 @@ fn reader_loop(
             }
         };
 
-        // Classify the frame on the rpc tag, not the handler's reply
-        // shape: fire-and-forget escalate ops (e.g. log) consume the
-        // message but produce no response, so a `None` from
-        // `process_bridge_message` cannot be used as the "this wasn't
-        // an escalate request" signal — that would silently re-route
-        // every log message to the lifecycle queue and trip the
+        // Classify the frame on its tags, not the handler's reply shape: a log
+        // record produces no response, so a `None` from the dispatch cannot be
+        // the "this wasn't an escalate request" signal — that would silently
+        // re-route every log record to the lifecycle queue and trip the
         // setup/teardown waiters.
-        // Matched rather than compared arm by arm: a fifth route added later
-        // must not fall through to the lifecycle queue, which is the exact
-        // failure this classification exists to prevent.
+        // Matched rather than compared arm by arm: a route added later must not
+        // fall through to the lifecycle queue, which is the exact failure this
+        // classification exists to prevent.
         match classify_an_incoming_subprocess_frame(&msg) {
             IncomingSubprocessFrame::LinkWireAnswer { link_id, outcome } => {
                 if !links_awaiting_their_wire_reply
@@ -528,37 +617,32 @@ fn reader_loop(
                 // Forwarded to the main thread below, where `msg` is still in
                 // hand — the one route that needs the frame itself.
             }
-            IncomingSubprocessFrame::EscalateRequest => {
-                if let Some(response) = process_bridge_message(&sandbox, &registry, &msg) {
-                    // Escalate request handled inline. Write response with the
-                    // shared writer lock.
-                    let send_result: Result<()> = {
-                        let mut writer = match writer.lock() {
-                            Ok(g) => g,
-                            Err(_) => {
-                                tracing::warn!(
-                                    "[{}] bridge reader saw poisoned writer mutex",
-                                    processor_id
-                                );
-                                break;
-                            }
-                        };
-                        write_frame(&mut *writer, &response)
-                    };
-                    if let Err(e) = send_result {
-                        tracing::warn!(
-                            "[{}] bridge reader failed to write escalate response: {}",
-                            processor_id,
-                            e
-                        );
-                        if let Ok(mut dead) = dead.lock() {
-                            *dead = true;
-                        }
-                        break;
-                    }
+            IncomingSubprocessFrame::EscalateRequestAnsweredByNothing => {
+                // A log record lands in the log pipeline without touching the
+                // device. Only a record that failed to decode is answered, with
+                // the refusal.
+                if let Some(refusal) = escalate_request_dispatch(&msg)
+                    && !write_escalate_response(&writer, &refusal, &dead, &processor_id)
+                {
+                    break;
                 }
-                // Fire-and-forget ops (log) leave nothing to write. Either way,
-                // never forward escalate traffic to the lifecycle channel.
+                continue;
+            }
+            IncomingSubprocessFrame::EscalateRequestAwaitingAnAnswer => {
+                // The worker only leaves before this sender is dropped by
+                // panicking, and a helper whose requests nothing can answer is
+                // given up on the way a failed write gives it up.
+                if escalate_requests_tx.send(msg).is_err() {
+                    tracing::warn!(
+                        "[{}] its bridge's escalate worker is gone, so no escalate request it \
+                         sends can be answered; giving up on the helper process",
+                        processor_id
+                    );
+                    if let Ok(mut dead) = dead.lock() {
+                        *dead = true;
+                    }
+                    break;
+                }
                 continue;
             }
         }
@@ -583,6 +667,64 @@ fn reader_loop(
         &processor_id,
         "stopped answering",
     );
+}
+
+/// Escalate worker loop: dispatch each queued request in the order the helper
+/// sent it and write its answer, one at a time.
+///
+/// One request at a time is the ordering the helper relies on — a release
+/// never overtakes the acquire it releases — and it keeps each helper holding
+/// the runtime-wide escalate gate for at most one op.
+///
+/// A request still queued once the bridge has given up is passed over rather
+/// than dispatched: the bridge's teardown releases whatever the helper still
+/// held, and an acquire dispatched after that would strand what it acquired.
+fn escalate_worker_loop(
+    escalate_requests_rx: Receiver<serde_json::Value>,
+    writer: SharedWriter,
+    escalate_request_dispatch: EscalateRequestDispatch,
+    dead: Arc<Mutex<bool>>,
+    processor_id: String,
+) {
+    for request in escalate_requests_rx {
+        if dead.lock().map(|dead| *dead).unwrap_or(true) {
+            continue;
+        }
+        let Some(response) = escalate_request_dispatch(&request) else {
+            continue;
+        };
+        // A failed write has given the bridge up, so every later request is
+        // passed over by the check above until the reader lets go.
+        write_escalate_response(&writer, &response, &dead, &processor_id);
+    }
+}
+
+/// Write one escalate answer through the shared writer, giving the bridge up
+/// when it cannot be written. Returns whether it was.
+fn write_escalate_response(
+    writer: &SharedWriter,
+    response: &serde_json::Value,
+    dead: &Mutex<bool>,
+    processor_id: &str,
+) -> bool {
+    let written = match writer.lock() {
+        Ok(mut writer) => write_frame(&mut *writer, response),
+        Err(_) => Err(Error::Runtime(
+            "subprocess writer mutex poisoned".to_string(),
+        )),
+    };
+    let Err(write_failure) = written else {
+        return true;
+    };
+    tracing::warn!(
+        "[{}] bridge failed to write escalate response: {}",
+        processor_id,
+        write_failure
+    );
+    if let Ok(mut dead) = dead.lock() {
+        *dead = true;
+    }
+    false
 }
 
 /// Refuse every link this subprocess was still to answer for, and say so once.
@@ -699,6 +841,11 @@ fn thread_name(processor_id: &str) -> String {
     format!("br-{}", short)
 }
 
+fn escalate_worker_thread_name(processor_id: &str) -> String {
+    let short = &processor_id[..8.min(processor_id.len())];
+    format!("br-esc-{}", short)
+}
+
 fn write_frame<W: Write>(writer: &mut W, msg: &serde_json::Value) -> Result<()> {
     let bytes = serde_json::to_vec(msg)
         .map_err(|e| Error::Runtime(format!("failed to serialize bridge message: {e}")))?;
@@ -751,10 +898,21 @@ mod tests {
         }
 
         #[test]
-        fn an_escalate_request_is_routed_to_the_escalate_dispatch() {
+        fn a_log_record_is_dispatched_on_the_reader_the_moment_it_arrives() {
             assert_eq!(
                 classify_an_incoming_subprocess_frame(&log_frame()),
-                IncomingSubprocessFrame::EscalateRequest
+                IncomingSubprocessFrame::EscalateRequestAnsweredByNothing
+            );
+        }
+
+        #[test]
+        fn an_escalate_request_awaiting_an_answer_is_queued_for_the_escalate_worker() {
+            assert_eq!(
+                classify_an_incoming_subprocess_frame(&escalate_request_awaiting_an_answer(
+                    "run_compute_kernel",
+                    "r-queued"
+                )),
+                IncomingSubprocessFrame::EscalateRequestAwaitingAnAnswer
             );
         }
 
@@ -818,6 +976,264 @@ mod tests {
                 IncomingSubprocessFrame::LinkWireAnswerNamingNoLink
             );
         }
+    }
+
+    /// The reader and the escalate worker over a real socketpair, with a
+    /// stand-in dispatch in place of the GPU one, so what the reader never waits
+    /// on is provable without a device.
+    mod reader_and_escalate_worker {
+        use super::*;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        const LONGEST_THE_READER_MAY_TAKE_TO_ROUTE_A_FRAME: Duration = Duration::from_secs(5);
+
+        /// One bridge's two threads, with the helper's end of the socket in the
+        /// test's hands.
+        struct BridgeThreadsDrivenFromTheHelperEnd {
+            helper_end_writer: BufWriter<UnixStream>,
+            helper_end_reader: BufReader<UnixStream>,
+            lifecycle_rx: Receiver<serde_json::Value>,
+            dead: Arc<Mutex<bool>>,
+            threads: SubprocessBridgeThreads,
+        }
+
+        impl BridgeThreadsDrivenFromTheHelperEnd {
+            fn dispatching_through(escalate_request_dispatch: EscalateRequestDispatch) -> Self {
+                let (parent_end, helper_end) = UnixStream::pair().expect("socketpair");
+                let parent_read_half = parent_end.try_clone().expect("clone the parent end");
+                let (lifecycle_tx, lifecycle_rx) = mpsc::channel();
+                let dead = Arc::new(Mutex::new(false));
+                let threads = spawn_the_reader_and_the_escalate_worker(
+                    BufReader::new(parent_read_half),
+                    Arc::new(Mutex::new(BufWriter::new(parent_end))),
+                    escalate_request_dispatch,
+                    lifecycle_tx,
+                    Arc::clone(&dead),
+                    "p-escalate-worker-test".to_string(),
+                    Arc::default(),
+                )
+                .expect("spawn the bridge's threads");
+                Self {
+                    helper_end_writer: BufWriter::new(
+                        helper_end.try_clone().expect("clone the helper end"),
+                    ),
+                    helper_end_reader: BufReader::new(helper_end),
+                    lifecycle_rx,
+                    dead,
+                    threads,
+                }
+            }
+
+            fn send_from_the_helper(&mut self, frame: &serde_json::Value) {
+                write_frame(&mut self.helper_end_writer, frame).expect("write from the helper end");
+            }
+
+            fn request_id_of_the_next_answer_the_helper_reads(&mut self) -> String {
+                read_frame(&mut self.helper_end_reader)
+                    .expect("read an answer at the helper end")
+                    .get("request_id")
+                    .and_then(|request_id| request_id.as_str())
+                    .expect("the answer names its request")
+                    .to_string()
+            }
+        }
+
+        /// A stand-in dispatch that holds any request for `HELD_OP` until the
+        /// test lets it go, reports every log record and every request it
+        /// starts, and answers each request with its own id.
+        struct EscalateDispatchHoldingOneOp {
+            escalate_request_dispatch: EscalateRequestDispatch,
+            let_the_held_request_go: mpsc::Sender<()>,
+            request_ids_started: Receiver<String>,
+            log_records_dispatched: Receiver<String>,
+        }
+
+        const HELD_OP: &str = "register_compute_kernel";
+
+        impl EscalateDispatchHoldingOneOp {
+            fn new() -> Self {
+                let (let_the_held_request_go, held_request_gate) = mpsc::channel::<()>();
+                let held_request_gate = Mutex::new(held_request_gate);
+                let (request_started_tx, request_ids_started) = mpsc::channel();
+                let request_started_tx = Mutex::new(request_started_tx);
+                let (log_record_tx, log_records_dispatched) = mpsc::channel();
+                let log_record_tx = Mutex::new(log_record_tx);
+                let escalate_request_dispatch: EscalateRequestDispatch = Arc::new(move |frame| {
+                    let op = frame.get("op").and_then(|op| op.as_str()).unwrap_or("");
+                    if op == ESCALATE_OP_ANSWERED_BY_NOTHING {
+                        let message = frame["message"].as_str().unwrap_or("").to_string();
+                        let _ = log_record_tx.lock().unwrap().send(message);
+                        return None;
+                    }
+                    let request_id = frame["request_id"].as_str().unwrap_or("").to_string();
+                    let _ = request_started_tx.lock().unwrap().send(request_id.clone());
+                    if op == HELD_OP {
+                        let _ = held_request_gate.lock().unwrap().recv();
+                    }
+                    Some(serde_json::json!({
+                        "rpc": "escalate_response",
+                        "request_id": request_id,
+                        "result": "ok",
+                    }))
+                });
+                Self {
+                    escalate_request_dispatch,
+                    let_the_held_request_go,
+                    request_ids_started,
+                    log_records_dispatched,
+                }
+            }
+        }
+
+        /// Fail-without-fix: dispatch escalates inline on the reader and neither
+        /// the log record nor `ready` is routed until the held op returns, so
+        /// both waits below run out.
+        #[test]
+        fn a_slow_escalate_never_delays_a_log_record_or_a_lifecycle_reply_sent_behind_it() {
+            let dispatch = EscalateDispatchHoldingOneOp::new();
+            let mut bridge = BridgeThreadsDrivenFromTheHelperEnd::dispatching_through(Arc::clone(
+                &dispatch.escalate_request_dispatch,
+            ));
+
+            bridge.send_from_the_helper(&escalate_request_awaiting_an_answer(HELD_OP, "r-slow"));
+            bridge.send_from_the_helper(&log_frame());
+            bridge.send_from_the_helper(&serde_json::json!({"rpc": "ready"}));
+
+            assert_eq!(
+                dispatch
+                    .request_ids_started
+                    .recv_timeout(LONGEST_THE_READER_MAY_TAKE_TO_ROUTE_A_FRAME)
+                    .expect("the slow request reaches the worker"),
+                "r-slow"
+            );
+            assert_eq!(
+                dispatch
+                    .log_records_dispatched
+                    .recv_timeout(LONGEST_THE_READER_MAY_TAKE_TO_ROUTE_A_FRAME)
+                    .expect(
+                        "a log record sent behind a held escalate is dispatched while it is held"
+                    ),
+                "hello from subprocess"
+            );
+            let lifecycle_reply = bridge
+                .lifecycle_rx
+                .recv_timeout(LONGEST_THE_READER_MAY_TAKE_TO_ROUTE_A_FRAME)
+                .expect("a lifecycle reply sent behind a held escalate is routed while it is held");
+            assert_eq!(lifecycle_reply["rpc"], "ready");
+
+            dispatch
+                .let_the_held_request_go
+                .send(())
+                .expect("the held request is still waiting");
+            assert_eq!(
+                bridge.request_id_of_the_next_answer_the_helper_reads(),
+                "r-slow",
+                "the held request is still answered once it returns"
+            );
+        }
+
+        /// Fail-without-fix: dispatch each request on its own thread and the
+        /// requests overlap and answer out of the order they arrived in.
+        #[test]
+        fn escalates_from_one_helper_are_answered_one_at_a_time_in_the_order_they_arrived() {
+            let requests_in_flight = Arc::new(AtomicUsize::new(0));
+            let most_requests_ever_in_flight = Arc::new(AtomicUsize::new(0));
+            let escalate_request_dispatch: EscalateRequestDispatch = {
+                let requests_in_flight = Arc::clone(&requests_in_flight);
+                let most_requests_ever_in_flight = Arc::clone(&most_requests_ever_in_flight);
+                Arc::new(move |frame| {
+                    let in_flight = requests_in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                    most_requests_ever_in_flight.fetch_max(in_flight, Ordering::SeqCst);
+                    std::thread::sleep(Duration::from_millis(2));
+                    requests_in_flight.fetch_sub(1, Ordering::SeqCst);
+                    Some(serde_json::json!({
+                        "rpc": "escalate_response",
+                        "request_id": frame["request_id"],
+                        "result": "ok",
+                    }))
+                })
+            };
+            let mut bridge =
+                BridgeThreadsDrivenFromTheHelperEnd::dispatching_through(escalate_request_dispatch);
+
+            let request_ids: Vec<String> = (0..8).map(|index| format!("r-{index}")).collect();
+            for request_id in &request_ids {
+                bridge.send_from_the_helper(&escalate_request_awaiting_an_answer(
+                    "run_compute_kernel",
+                    request_id,
+                ));
+            }
+
+            let answered_in_order: Vec<String> = request_ids
+                .iter()
+                .map(|_| bridge.request_id_of_the_next_answer_the_helper_reads())
+                .collect();
+            assert_eq!(answered_in_order, request_ids);
+            assert_eq!(
+                most_requests_ever_in_flight.load(Ordering::SeqCst),
+                1,
+                "one helper's escalates never run concurrently"
+            );
+        }
+
+        /// Fail-without-fix: drop the dead check in the worker and the queued
+        /// acquire is dispatched after the bridge gave up, past the teardown
+        /// drain that would have released it.
+        #[test]
+        fn an_escalate_still_queued_when_its_bridge_gives_up_is_never_dispatched() {
+            let dispatch = EscalateDispatchHoldingOneOp::new();
+            let mut bridge = BridgeThreadsDrivenFromTheHelperEnd::dispatching_through(Arc::clone(
+                &dispatch.escalate_request_dispatch,
+            ));
+
+            bridge.send_from_the_helper(&escalate_request_awaiting_an_answer(HELD_OP, "r-held"));
+            bridge.send_from_the_helper(&escalate_request_awaiting_an_answer(
+                "acquire_pixel_buffer",
+                "r-queued-behind-it",
+            ));
+            assert_eq!(
+                dispatch
+                    .request_ids_started
+                    .recv_timeout(LONGEST_THE_READER_MAY_TAKE_TO_ROUTE_A_FRAME)
+                    .expect("the held request reaches the worker"),
+                "r-held"
+            );
+
+            *bridge.dead.lock().unwrap() = true;
+            dispatch
+                .let_the_held_request_go
+                .send(())
+                .expect("the held request is still waiting");
+            let BridgeThreadsDrivenFromTheHelperEnd {
+                helper_end_writer,
+                helper_end_reader,
+                threads,
+                ..
+            } = bridge;
+            drop(helper_end_writer);
+            drop(helper_end_reader);
+            threads.reader.join().expect("the reader leaves at EOF");
+            threads
+                .escalate_worker
+                .join()
+                .expect("the worker leaves once the reader has");
+
+            let started_after_the_bridge_gave_up: Vec<String> =
+                dispatch.request_ids_started.try_iter().collect();
+            assert!(
+                started_after_the_bridge_gave_up.is_empty(),
+                "a request queued behind the give-up was dispatched: \
+                 {started_after_the_bridge_gave_up:?}"
+            );
+        }
+    }
+
+    fn escalate_request_awaiting_an_answer(op: &str, request_id: &str) -> serde_json::Value {
+        serde_json::json!({
+            "rpc": "escalate_request",
+            "op": op,
+            "request_id": request_id,
+        })
     }
 
     fn gpu_or_skip(test_name: &str) -> Option<GpuContext> {

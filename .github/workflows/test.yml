@@ -533,6 +533,7 @@ jobs:
             core::graph::components::out_of_process_link_wire_replies_component \
             core::compiler::compiler::already_wired_tests \
             core::compiler::compiler_ops::subprocess_bridge::tests::incoming_frame_routing \
+            core::compiler::compiler_ops::subprocess_bridge::tests::reader_and_escalate_worker \
             core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_link_handed_to_a_helper_is_pending_until_the_helper_says_it_opened_its_port \
             core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_helper_that_cannot_open_its_port_leaves_the_link_in_error_with_its_reason \
             core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_disconnected_link_stops_rendering_the_reason_it_was_refused_for \

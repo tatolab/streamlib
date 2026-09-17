@@ -508,7 +508,7 @@ fn full_access_grant_or_mark_untrusted_error(
 /// gate's same-thread re-entry panic when a setup body that itself
 /// uses `.escalate(...)` also tried to acquire it, and wrapping a
 /// subprocess host's IPC wait would deadlock against the
-/// bridge-reader thread's per-call escalates (#867).
+/// bridge's escalate worker (#867).
 fn run_setup_phase<F>(runtime: ProcessorRuntime, gpu: &GpuContext, setup_body: F) -> Result<()>
 where
     F: FnOnce() -> Result<()>,
@@ -727,12 +727,12 @@ mod tests {
 
     /// Regression for #867 — subprocess host setup must not hold the
     /// escalate gate against a concurrent escalate from the
-    /// bridge-reader thread.
+    /// bridge's escalate worker.
     ///
     /// Reproduces the deadlock the engine fix prevents: a setup body
     /// (simulating a subprocess host's `__generated_setup` IPC wait)
     /// blocks on another thread that's trying to acquire its own
-    /// `sandbox.escalate` (simulating a bridge-reader handler). With
+    /// `sandbox.escalate` (simulating the bridge's escalate worker). With
     /// the fix, `run_setup_phase` for `Python` / `TypeScript` skips
     /// the outer wrap so the concurrent escalate proceeds and the
     /// setup body completes. Mentally revert the runtime branch
@@ -760,8 +760,8 @@ mod tests {
                         Error::Runtime(format!(
                             "{TEST}: concurrent escalate did not complete within 5s \
                              (runtime={runtime:?}) — outer setup-phase wrap is holding \
-                             processor_setup_lock against bridge-reader-thread escalate \
-                             dispatch (#867)"
+                             processor_setup_lock against the bridge's escalate worker \
+                             (#867)"
                         ))
                     })?
                     .map_err(|e| Error::Runtime(format!("{TEST}: inner escalate failed: {e}")))
