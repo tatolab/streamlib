@@ -12,7 +12,8 @@ pub(super) struct CompilationPlan {
     pub(super) processors_to_remove: Vec<ProcessorUniqueId>,
     pub(super) links_to_add: Vec<LinkUniqueId>,
     pub(super) links_to_remove: Vec<LinkUniqueId>,
-    pub(super) config_updates: Vec<ProcessorUniqueId>,
+    /// Each processor to reconfigure, beside the configuration it is handed.
+    pub(super) config_updates: Vec<(ProcessorUniqueId, serde_json::Value)>,
 }
 
 impl CompilationPlan {

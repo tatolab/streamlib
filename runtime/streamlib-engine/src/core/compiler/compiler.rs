@@ -196,8 +196,11 @@ impl Compiler {
                 PendingOperation::RemoveLink(id) => {
                     plan.links_to_remove.push(id);
                 }
-                PendingOperation::UpdateProcessorConfig(id) => {
-                    plan.config_updates.push(id);
+                PendingOperation::UpdateProcessorConfig {
+                    processor_id,
+                    config_to_apply,
+                } => {
+                    plan.config_updates.push((processor_id, config_to_apply));
                 }
             }
         }
@@ -432,43 +435,12 @@ impl Compiler {
         // =====================================================================
         // 8. Config updates - for each config_update
         // =====================================================================
-        for proc_id in plan.config_updates {
-            let graph = graph_arc.read();
-            let config_json = match graph.traversal().v(&proc_id).first() {
-                Some(node) => match &node.config {
-                    Some(config) => config.clone(),
-                    None => {
-                        tracing::debug!("[CONFIG] {} has no config to update", proc_id);
-                        continue;
-                    }
-                },
-                None => {
-                    tracing::warn!("[CONFIG] Processor {} not found in graph", proc_id);
-                    continue;
-                }
-            };
-
-            let processor_arc = graph
-                .traversal()
-                .v(&proc_id)
-                .first()
-                .and_then(|node| {
-                    node.get::<ProcessorInstanceComponent>()
-                        .map(|i| i.0.clone())
-                })
-                .ok_or_else(|| {
-                    Error::ProcessorNotFound(format!(
-                        "Processor '{}' not found for config update",
-                        proc_id
-                    ))
-                })?;
-            drop(graph);
-
-            {
-                let mut guard = processor_arc.lock();
-                guard.apply_config_json(&config_json)?;
-            }
-
+        for (proc_id, config_to_apply) in plan.config_updates {
+            super::compiler_ops::apply_processor_config_update(
+                &graph_arc,
+                &proc_id,
+                config_to_apply,
+            )?;
             tracing::info!("[CONFIG] Updated config for {}", proc_id);
             result.configs_updated += 1;
         }
