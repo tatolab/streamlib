@@ -124,7 +124,7 @@ pub struct Runner {
     /// Stored to keep subscription alive for runtime lifetime.
     _graph_change_listener: Arc<Mutex<dyn EventListener>>,
     /// iceoryx2 Node for creating Services, Publishers, and Subscribers.
-    /// Created in new() so PUBSUB can initialize before start().
+    /// Created in new(); cloned into the RuntimeContext during start().
     pub(crate) iceoryx2_node: Iceoryx2Node,
     /// Per-runtime surface-sharing service. Bound to a unique Unix socket in
     /// `new()`; polyglot subprocesses connect to it via the
@@ -203,7 +203,7 @@ impl Runner {
         let _ = dotenvy::dotenv();
 
         // Generate runtime ID first — used as service_name for telemetry.
-        let runtime_id = Arc::new(RuntimeUniqueId::from_env_or_generate());
+        let runtime_id = Arc::new(RuntimeUniqueId::from_env_or_generate()?);
 
         // Stand up the runtime's unified logging pathway: `tracing` →
         // bounded lossy channel → drain worker → line-buffered pretty
@@ -242,26 +242,21 @@ impl Runner {
         // construction time lands in the unified JSONL pipeline.
         crate::core::logging::iceoryx2_log_bridge::install_iceoryx2_log_bridge();
 
-        // Create iceoryx2 Node early so PUBSUB can initialize before start().
-        // The node is cloned into RuntimeContext during start().
+        // Bring up the per-runtime surface-sharing service. Each runtime owns
+        // a unique Unix socket in the runtime directory that its polyglot
+        // subprocesses connect to via STREAMLIB_SURFACE_SOCKET. Binding it is
+        // also the refusal of a second live runtime with this id, so it runs
+        // before the runtime creates its iceoryx2 node.
+        #[cfg(target_os = "linux")]
+        let (surface_service, surface_socket_path, surface_check_out_leases) =
+            bring_up_surface_service(&runtime_directory, &runtime_id)?;
+
         tracing::info!("[new] Creating iceoryx2 Node...");
         let iceoryx2_node = Iceoryx2Node::new(
             &runtime_directory.iceoryx2_domain_root(),
             &format!("streamlib-runtime/{runtime_id}"),
         )?;
         tracing::info!("[new] iceoryx2 Node created");
-
-        // Initialize global PUBSUB with iceoryx2 backend.
-        // Must happen before any subscribe() calls (GraphChangeListener below).
-        PUBSUB.init(&runtime_id, iceoryx2_node.clone())?;
-
-        // Bring up the per-runtime surface-sharing service. Each runtime owns
-        // a unique Unix socket in the runtime directory that its polyglot
-        // subprocesses connect to via STREAMLIB_SURFACE_SOCKET. No external
-        // daemon is required.
-        #[cfg(target_os = "linux")]
-        let (surface_service, surface_socket_path, surface_check_out_leases) =
-            bring_up_surface_service(&runtime_directory, &runtime_id)?;
 
         // Create Arc-wrapped components
         let compiler = Arc::new(Compiler::new());
@@ -471,7 +466,6 @@ impl Runner {
         // Create shared timing context - clock starts now
         let time = Arc::new(TimeContext::new());
 
-        // Clone iceoryx2 Node (created in new() for early PUBSUB initialization)
         let iceoryx2_node = self.iceoryx2_node.clone();
 
         // Create audio clock - platform-specific for best precision. It paces
@@ -1434,8 +1428,8 @@ mod tests {
 
     // All Runner::new() tests are `#[serial]` because the runtime
     // reads/writes process-global env vars (XDG_RUNTIME_DIR,
-    // STREAMLIB_RUNTIME_ID) and its PUBSUB/iceoryx2/telemetry plumbing
-    // races when multiple runtimes construct concurrently. The test
+    // STREAMLIB_RUNTIME_ID) and every runtime's listeners share the
+    // process-wide event bus. The test
     // module's `#[serial]` default group serializes every test that
     // constructs a Runner so nobody reads env mid-mutation.
 
@@ -1774,6 +1768,145 @@ mod tests {
                         .expect("round-trip");
                     assert!(resp.get("error").is_some());
                 }
+            });
+        }
+
+        /// Set each variable for the duration of the closure, restoring what was
+        /// there before. Tests using this must be `#[serial]`.
+        fn with_environment_variables_set<F: FnOnce() -> R, R>(
+            variables: &[(&str, &std::ffi::OsStr)],
+            f: F,
+        ) -> R {
+            let previous: Vec<_> = variables
+                .iter()
+                .map(|(name, _)| (*name, std::env::var_os(name)))
+                .collect();
+            // SAFETY: serialized via #[serial]; no concurrent env mutation.
+            unsafe {
+                for (name, value) in variables {
+                    std::env::set_var(name, value);
+                }
+            }
+            let result = f();
+            unsafe {
+                for (name, value) in previous {
+                    match value {
+                        Some(value) => std::env::set_var(name, value),
+                        None => std::env::remove_var(name),
+                    }
+                }
+            }
+            result
+        }
+
+        fn iceoryx2_nodes_in_domain(domain_root: &std::path::Path) -> usize {
+            let config = crate::iceoryx2::engine_owned_iceoryx2_config(domain_root)
+                .expect("the test domain root fits the socket-path budget");
+            let mut nodes = 0;
+            iceoryx2::node::Node::<iceoryx2::prelude::ipc::Service>::list(&config, |_| {
+                nodes += 1;
+                iceoryx2::prelude::CallbackProgression::Continue
+            })
+            .expect("list the domain's iceoryx2 nodes");
+            nodes
+        }
+
+        /// Mental-revert: parking a clone of the runner's node anywhere static —
+        /// as the event bus's `init` once did — keeps the node alive past the
+        /// drop, and its files stay in the domain.
+        #[test]
+        #[serial]
+        fn a_dropped_runtime_leaves_no_iceoryx2_node_in_its_domain() {
+            with_isolated_xdg_runtime_dir(|xdg| {
+                let domain_root = xdg.join("streamlib").join("iox2");
+                let runtime = Runner::new().expect("runtime");
+                assert_eq!(iceoryx2_nodes_in_domain(&domain_root), 1);
+
+                drop(runtime);
+
+                assert_eq!(
+                    iceoryx2_nodes_in_domain(&domain_root),
+                    0,
+                    "a runtime torn down gracefully must take its iceoryx2 node's files with it"
+                );
+            });
+        }
+
+        /// The runtime directory is placed so its iceoryx2 domain root sits one
+        /// byte past the socket-path budget: creating a node there is refused by
+        /// name, so a refusal naming the live runtime instead is proof the
+        /// duplicate check ran before any node was attempted.
+        ///
+        /// Mental-revert: creating the node before binding the surface socket
+        /// turns the refusal below into the budget refusal.
+        #[test]
+        #[serial]
+        fn a_runtime_pinned_to_a_live_runtimes_id_is_refused_before_it_creates_an_iceoryx2_node() {
+            let base = tempfile::Builder::new()
+                .prefix("sl")
+                .tempdir_in("/tmp")
+                .expect("tempdir under /tmp");
+            let domain_root_suffix = "/streamlib/iox2";
+            let runtime_directory_parent_bytes =
+                crate::iceoryx2::ICEORYX2_DOMAIN_ROOT_AND_PREFIX_BUDGET_BYTES
+                    - crate::iceoryx2::engine_owned_iceoryx2_prefix_for_this_user().len()
+                    - domain_root_suffix.len()
+                    + 1;
+            let base_bytes = base.path().as_os_str().len();
+            assert!(
+                runtime_directory_parent_bytes > base_bytes + 1,
+                "{} is too long to build a runtime directory past the budget under",
+                base.path().display()
+            );
+            let xdg = base
+                .path()
+                .join("x".repeat(runtime_directory_parent_bytes - base_bytes - 1));
+            let pinned_id = format!("duplicate-{}", std::process::id());
+            std::fs::create_dir_all(xdg.join("streamlib")).expect("runtime directory");
+            let live_runtimes_socket = std::os::unix::net::UnixListener::bind(
+                xdg.join("streamlib")
+                    .join(format!("surface-share-{pinned_id}.sock")),
+            )
+            .expect("bind the live runtime's socket");
+
+            let refusal = with_environment_variables_set(
+                &[
+                    ("XDG_RUNTIME_DIR", xdg.as_os_str()),
+                    ("STREAMLIB_RUNTIME_ID", std::ffi::OsStr::new(&pinned_id)),
+                ],
+                || Runner::new().map(|_| ()),
+            )
+            .expect_err("a second runtime with a live runtime's id must be refused")
+            .to_string();
+
+            assert!(
+                refusal.contains("already bound by a live process"),
+                "the refusal must name the live runtime, not a node failure: {refusal}"
+            );
+            drop(live_runtimes_socket);
+        }
+
+        /// Mental-revert: validating the pinned id after the runtime directory
+        /// resolves leaves that directory behind for a runtime that never ran.
+        #[test]
+        #[serial]
+        fn a_malformed_pinned_runtime_id_is_refused_before_the_runtime_makes_anything() {
+            with_isolated_xdg_runtime_dir(|xdg| {
+                let refusal = with_environment_variables_set(
+                    &[("STREAMLIB_RUNTIME_ID", std::ffi::OsStr::new("../escape"))],
+                    || Runner::new().map(|_| ()),
+                )
+                .expect_err("a runtime id that could leave its directory must be refused")
+                .to_string();
+
+                assert!(
+                    refusal.contains("STREAMLIB_RUNTIME_ID") && refusal.contains("'/'"),
+                    "{refusal}"
+                );
+                assert!(
+                    !xdg.join("streamlib").exists(),
+                    "a refused runtime must not have made its runtime directory"
+                );
             });
         }
 

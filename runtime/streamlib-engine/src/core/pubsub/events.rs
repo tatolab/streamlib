@@ -319,9 +319,7 @@ pub enum RuntimeEvent {
     RuntimeDidRegisterProcessorType {
         processor_type: ProcessorClassImportPath,
     },
-    /// Emitted when a processor type is unregistered from the factory
-    /// (`remove_module`). Additive variant — appended so existing msgpack
-    /// consumers keep decoding earlier variants unchanged.
+    /// Emitted when a processor type is unregistered from the factory (`remove_module`).
     RuntimeDidUnregisterProcessorType {
         processor_type: ProcessorClassImportPath,
     },
@@ -661,14 +659,10 @@ mod tests {
         assert!(with_meta.only_meta());
     }
 
+    /// The JSON the WebSocket event stream and MCP `logs` hand clients reads
+    /// back as the same event, discriminator and all.
     #[test]
     fn test_event_serialization_roundtrip() {
-        // Verify events can be serialized/deserialized via MessagePack
-        // (critical for iceoryx2 transport). Locks **full** value
-        // equality, not just topic/log_name — a regression where a
-        // discriminator is lost on the wire but topic()/log_name() are
-        // computed from a fallback variant would slip past the older
-        // assertion.
         let events = vec![
             Event::RuntimeGlobal(RuntimeEvent::RuntimeStarted),
             Event::RuntimeGlobal(RuntimeEvent::GraphDidChange),
@@ -689,8 +683,8 @@ mod tests {
         ];
 
         for event in events {
-            let bytes = rmp_serde::to_vec_named(&event).unwrap();
-            let deserialized: Event = rmp_serde::from_slice(&bytes).unwrap();
+            let json = serde_json::to_string(&event).unwrap();
+            let deserialized: Event = serde_json::from_str(&json).unwrap();
             assert_eq!(event, deserialized, "round-trip mismatch");
         }
     }
