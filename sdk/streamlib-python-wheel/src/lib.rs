@@ -116,6 +116,14 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(python_logging::monotonic_now_ns, module)?)?;
     module.add_function(wrap_pyfunction!(python_logging::log_event, module)?)?;
     module.add_function(wrap_pyfunction!(
+        python_logging::capture_this_helper_processes_engine_log_records,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        python_logging::drain_the_engine_log_records_this_helper_captured,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
         python_logging::runtime_log_directory,
         module
     )?)?;

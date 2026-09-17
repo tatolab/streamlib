@@ -115,7 +115,7 @@ fn escalate_request_vectors_round_trip() {
         CopyDeviceExportStagingBackToSurface => r#"{"op":"copy_device_export_staging_back_to_surface","request_id":"copy_device_export_staging_back_to_surface.request_id-15","surface_id":"copy_device_export_staging_back_to_surface.surface_id-16"}"#,
         CreateProcessorOwnedWindow => r#"{"op":"create_processor_owned_window","initial_height_in_physical_pixels":238,"initial_width_in_physical_pixels":239,"request_id":"create_processor_owned_window.request_id-240","window_title":"create_processor_owned_window.window_title-241"}"#,
         DrainProcessorOwnedWindowEvents => r#"{"op":"drain_processor_owned_window_events","request_id":"drain_processor_owned_window_events.request_id-242","window_id":"drain_processor_owned_window_events.window_id-243"}"#,
-        Log => r#"{"op":"log","attrs":{"attr":"log.attrs.attr-17"},"channel":"log.channel-18","intercepted":false,"level":"debug","message":"log.message-21","pipeline_id":"log.pipeline_id-22","processor_id":"log.processor_id-23","source":"python","source_seq":"log.source_seq-25","source_ts":"log.source_ts-26"}"#,
+        Log => r#"{"op":"log","attrs":{"attr":"log.attrs.attr-17"},"channel":"log.channel-18","intercepted":false,"level":"debug","message":"log.message-21","pipeline_id":"log.pipeline_id-22","processor_id":"log.processor_id-23","rhi_op":"log.rhi_op-244","source":"python","source_seq":"log.source_seq-25","source_ts":"log.source_ts-26","target":"log.target-245"}"#,
         OpenCpuReadbackStaging => r#"{"op":"open_cpu_readback_staging","request_id":"open_cpu_readback_staging.request_id-201","surface_id":"open_cpu_readback_staging.surface_id-202"}"#,
         OpenDeviceExportStaging => r#"{"op":"open_device_export_staging","request_id":"open_device_export_staging.request_id-27","surface_id":"open_device_export_staging.surface_id-28"}"#,
         RefillDeviceExportStaging => r#"{"op":"refill_device_export_staging","request_id":"refill_device_export_staging.request_id-29","surface_id":"refill_device_export_staging.surface_id-30"}"#,
@@ -157,6 +157,7 @@ fn escalate_enum_variants_keep_their_wire_spelling() {
         }
         EscalateRequestLogSource {
             Python => "python",
+            Rust => "rust",
         }
         EscalateRequestShowSurfaceOnProcessorOwnedWindowColorPrimaries {
             Bt709 => "bt709",
@@ -420,6 +421,8 @@ fn absent_optionals_are_omitted_on_a_response() {
 /// The log record's three nullable-required fields are the exception: they
 /// carry an explicit null rather than dropping out of the document, because a
 /// runtime-level record has no pipeline and an uncaptured one has no channel.
+/// Its two engine-record fields follow the ordinary rule — a `streamlib.log`
+/// call names neither, and its document is the one helpers have always sent.
 #[test]
 fn a_log_records_nullable_required_fields_encode_as_null() {
     let golden = r#"{"op":"log","attrs":{},"channel":null,"intercepted":false,"level":"info","message":"hello","pipeline_id":null,"processor_id":null,"source":"python","source_seq":"1","source_ts":"2"}"#;

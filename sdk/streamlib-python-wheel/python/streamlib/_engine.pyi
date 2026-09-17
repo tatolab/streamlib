@@ -68,9 +68,11 @@ __all__ = [
     "await_test_harness_bag",
     "capability_extension_host_for_the_app_process",
     "capability_extension_host_for_the_helper_process",
+    "capture_this_helper_processes_engine_log_records",
     "close_test_harness_channel",
     "decode_msgpack_bytes_to_python_object",
     "decode_tapped_channel_bag_frame_to_python_object",
+    "drain_the_engine_log_records_this_helper_captured",
     "encode_bag_to_msgpack_bytes",
     "engine_build_id_compiled_into_this_extension",
     "feed_test_harness_bag",
@@ -1748,4 +1750,25 @@ def log_event(
     level: str, message: str, attrs: dict[str, Any] | None = None
 ) -> None:
     """Emit one record on the engine's log pipeline, with structured attrs."""
+
+def capture_this_helper_processes_engine_log_records() -> None:
+    """Start capturing this helper process's engine `tracing` records,
+    iceoryx2's own included, into the ring
+    `drain_the_engine_log_records_this_helper_captured` empties.
+
+    Called by `streamlib._helper` once its channel to the parent is up and
+    before it opens anything, and by nothing else. Raises on a second call and
+    on a process that already has a `tracing` subscriber.
+    """
+
+def drain_the_engine_log_records_this_helper_captured(
+    wait_seconds: float,
+) -> tuple[list[dict[str, Any]], int]:
+    """The engine records captured so far and how many the ring dropped since
+    the last drain, waiting up to `wait_seconds` for the first record.
+
+    Each record carries `level`, `target`, `message`, `pipeline_id`,
+    `processor_id`, `rhi_op`, `attrs` and
+    `emitted_at_wall_clock_nanoseconds`. The wait releases the GIL.
+    """
 

@@ -59,9 +59,6 @@ use crate::python_processor_owned_window::{
 
 use streamlib::sdk::rhi::PixelFormat;
 
-#[cfg(target_os = "linux")]
-use crate::python_logging::warn_through_the_childs_log_module;
-
 /// One escalate round trip to the parent, called with the GIL attached.
 ///
 /// The callable is the bridge's `request_from_parent`, whose wait on the
@@ -751,15 +748,11 @@ impl Drop for HelperCheckedOutTextureSurface {
                 release_failures
             });
             if !release_failures.is_empty() {
-                warn_through_the_childs_log_module(
-                    python,
-                    format!(
-                        "releasing texture surface {} left the crossing uncoordinated \
-                         ({}); the service reclaims the claim when this helper's connection \
-                         closes",
-                        self.surface_id,
-                        release_failures.join("; ")
-                    ),
+                tracing::warn!(
+                    "releasing texture surface {} left the crossing uncoordinated ({}); the \
+                     service reclaims the claim when this helper's connection closes",
+                    self.surface_id,
+                    release_failures.join("; ")
                 );
             }
         });
@@ -1029,13 +1022,10 @@ impl Drop for HelperSurfaceReleaseDebt {
                 &self.release_to_parent_without_waiting,
                 &self.handle_id,
             ) {
-                warn_through_the_childs_log_module(
-                    python,
-                    format!(
-                        "releasing surface {} to the parent failed ({release_failure}); its pool \
-                         slot returns at teardown",
-                        self.handle_id
-                    ),
+                tracing::warn!(
+                    "releasing surface {} to the parent failed ({release_failure}); its pool \
+                     slot returns at teardown",
+                    self.handle_id
                 );
             }
         });
@@ -1070,14 +1060,11 @@ impl Drop for HelperSurfaceCheckOutLeaseDebt {
             let released =
                 python.detach(|| self.exchange_client.release_check_out(&self.surface_id));
             if let Err(release_failure) = released {
-                warn_through_the_childs_log_module(
-                    python,
-                    format!(
-                        "releasing the checkout of surface {} failed ({release_failure}); its pool \
-                         slot returns when the connection it was claimed on closes, at the latest \
-                         when this helper stops",
-                        self.surface_id
-                    ),
+                tracing::warn!(
+                    "releasing the checkout of surface {} failed ({release_failure}); its pool \
+                     slot returns when the connection it was claimed on closes, at the latest \
+                     when this helper stops",
+                    self.surface_id
                 );
             }
         });
@@ -1105,13 +1092,10 @@ impl Drop for HelperForeignSurfaceUnregisterDebt {
                     .unregister_foreign_surface(&self.surface_id)
             });
             if let Err(release_failure) = released {
-                warn_through_the_childs_log_module(
-                    python,
-                    format!(
-                        "unregistering adopted surface {} failed ({release_failure}); the \
-                         service's dup of the foreign fd stays open until this node stops",
-                        self.surface_id
-                    ),
+                tracing::warn!(
+                    "unregistering adopted surface {} failed ({release_failure}); the service's \
+                     dup of the foreign fd stays open until this node stops",
+                    self.surface_id
                 );
             }
         });
@@ -1737,13 +1721,10 @@ impl HelperProcessGpuExchangeClient {
             &self.release_to_parent_without_waiting,
             acceleration_structure_id,
         ) {
-            warn_through_the_childs_log_module(
-                python,
-                format!(
-                    "releasing acceleration structure {acceleration_structure_id} to the parent \
-                     failed ({release_failure}); its device memory stays allocated until the \
-                     runtime stops"
-                ),
+            tracing::warn!(
+                "releasing acceleration structure {acceleration_structure_id} to the parent \
+                 failed ({release_failure}); its device memory stays allocated until the runtime \
+                 stops"
             );
         }
     }

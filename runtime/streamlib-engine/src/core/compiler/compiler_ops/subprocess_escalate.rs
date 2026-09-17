@@ -1295,6 +1295,7 @@ fn unknown_processor_owned_window_error(
 fn log_record_from_wire(log: EscalateRequestLog) -> LogRecord {
     let source = match log.source {
         EscalateRequestLogSource::Python => Source::Python,
+        EscalateRequestLogSource::Rust => Source::Rust,
     };
     let level = match log.level {
         EscalateRequestLogLevel::Trace => LogLevel::Trace,
@@ -1303,10 +1304,16 @@ fn log_record_from_wire(log: EscalateRequestLog) -> LogRecord {
         EscalateRequestLogLevel::Warn => LogLevel::Warn,
         EscalateRequestLogLevel::Error => LogLevel::Error,
     };
-    let target = match source {
-        Source::Python => "streamlib::polyglot::python",
-        Source::Rust => "streamlib::polyglot",
-    };
+    // A captured engine record carries the target of the call site that made
+    // it, so it reads in the log exactly as it would from the app process; a
+    // `streamlib.log` call has no target of its own and takes its source's.
+    let target = log.target.unwrap_or_else(|| {
+        match source {
+            Source::Python => "streamlib::polyglot::python",
+            Source::Rust => "streamlib::polyglot",
+        }
+        .to_string()
+    });
     let source_seq = log.source_seq.parse::<u64>().ok();
     let attrs: BTreeMap<String, serde_json::Value> = log
         .attrs
@@ -1317,11 +1324,11 @@ fn log_record_from_wire(log: EscalateRequestLog) -> LogRecord {
     LogRecord {
         host_ts: now_ns(),
         level,
-        target: target.to_string(),
+        target,
         message: log.message,
         pipeline_id: log.pipeline_id,
         processor_id: log.processor_id,
-        rhi_op: None,
+        rhi_op: log.rhi_op,
         intercepted: log.intercepted,
         channel: log.channel,
         attrs,
@@ -10526,6 +10533,8 @@ void main() {
                 channel: None,
                 pipeline_id: Some("pl-1".into()),
                 processor_id: Some("pr-1".into()),
+                rhi_op: None,
+                target: None,
                 attrs: HashMap::new(),
             }
         }
@@ -10548,6 +10557,8 @@ void main() {
                 channel: Some("fd1".into()),
                 pipeline_id: Some("pl-42".into()),
                 processor_id: Some("camera-1".into()),
+                rhi_op: None,
+                target: None,
                 attrs: attrs.clone(),
             };
             let wrapped = EscalateRequest::Log(original.clone());
@@ -10601,6 +10612,63 @@ void main() {
             assert_eq!(record.pipeline_id.as_deref(), Some("pl-1"));
             assert_eq!(record.processor_id.as_deref(), Some("pr-1"));
             assert!(record.host_ts > 0, "host stamp must be non-zero");
+        }
+
+        /// An engine record a helper captured reaches the JSONL as the Rust
+        /// record it is — its own target and `rhi_op`, `source: "rust"` —
+        /// rather than as the helper's Python output, so `logs --target` finds
+        /// a call site in a child by the same name it has in the parent.
+        #[test]
+        #[serial]
+        fn a_captured_engine_record_lands_as_rust_with_its_own_target() {
+            let (_tmp, guard) = install_logging("RlogOpRs");
+            let path = guard.jsonl_path().unwrap().to_path_buf();
+
+            dispatch_log(EscalateRequestLog {
+                source: EscalateRequestLogSource::Rust,
+                source_seq: "7".into(),
+                source_ts: "2026-09-17T14:00:00Z".into(),
+                level: EscalateRequestLogLevel::Warn,
+                message: "InputMailboxes: bound local port has no mailbox".into(),
+                intercepted: false,
+                channel: None,
+                pipeline_id: None,
+                processor_id: Some("Pcamera".into()),
+                rhi_op: Some("acquire_texture".into()),
+                target: Some("streamlib_engine::iceoryx2::input".into()),
+                attrs: HashMap::new(),
+            });
+
+            drop(guard);
+
+            let events = read_jsonl(&path);
+            let record = events
+                .iter()
+                .find(|e| e.message.starts_with("InputMailboxes:"))
+                .unwrap_or_else(|| panic!("no captured engine record; got {events:#?}"));
+            assert_eq!(record.source, Source::Rust);
+            assert_eq!(record.target, "streamlib_engine::iceoryx2::input");
+            assert_eq!(record.rhi_op.as_deref(), Some("acquire_texture"));
+            assert_eq!(record.processor_id.as_deref(), Some("Pcamera"));
+            assert_eq!(
+                record.source_seq,
+                Some(7),
+                "a captured record shares the helper's sequence, so a gap in it still reads as loss"
+            );
+        }
+
+        /// A record naming no target keeps the one its source implies — the
+        /// shape every `streamlib.log` call takes, and the only shape helpers
+        /// sent before engine records rode this op.
+        #[test]
+        fn a_record_naming_no_target_takes_its_sources_own() {
+            let record = log_record_from_wire(sample_log(
+                "1",
+                "2026-09-17T14:00:00Z",
+                EscalateRequestLogLevel::Info,
+            ));
+
+            assert_eq!(record.target, "streamlib::polyglot::python");
         }
 
         /// Two records with identical `source_ts` receive distinct
@@ -10729,6 +10797,8 @@ void main() {
                     channel: None,
                     pipeline_id: Some("pl-merge".into()),
                     processor_id: Some("pr-merge".into()),
+                    rhi_op: None,
+                    target: None,
                     attrs: HashMap::new(),
                 };
                 dispatch_log(py_log);

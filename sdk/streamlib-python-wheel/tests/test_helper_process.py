@@ -23,7 +23,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
-from typing import cast
+from typing import Callable, cast
 
 import pytest
 
@@ -475,6 +475,91 @@ def test_log_sequence_numbers_are_per_process_monotonic(stand_in_parent):
     sink("info", "second", None)
     assert int(stand_in_parent.receive()["source_seq"]) == 1
     assert int(stand_in_parent.receive()["source_seq"]) == 2
+
+
+class StandInBridgeWatchingTheSequenceLock:
+    """A bridge that records whether the sink still held its sequence lock.
+
+    The race this guards is not reproducible on demand — CPython rarely
+    switches threads between numbering a record and writing it — so the test
+    below asserts the invariant that makes the race impossible instead of
+    trying to lose it.
+    """
+
+    def __init__(self, sequence_lock_of_the_sink_under_test) -> None:
+        self._sequence_lock = sequence_lock_of_the_sink_under_test
+        self.frames_sent_without_the_sequence_lock: "list[dict]" = []
+        self.sequence_numbers_sent: "list[int]" = []
+        self._order_lock = threading.Lock()
+
+    def send(self, message: dict) -> None:
+        # `locked()` is true for any holder, and the only thread that can be
+        # inside this call is the one that took it.
+        holding_the_sequence_lock = self._sequence_lock.locked()
+        with self._order_lock:
+            if not holding_the_sequence_lock:
+                self.frames_sent_without_the_sequence_lock.append(message)
+            self.sequence_numbers_sent.append(int(message["source_seq"]))
+
+
+def test_a_record_goes_out_under_the_lock_that_numbered_it(stand_in_parent):
+    """A helper has two threads sending records — its processor's and the
+    engine-log forwarder's — and one sequence between them. A number taken
+    before a frame that goes out after the next one's would put the sequence
+    backwards on the wire, where a reader reads a step backwards as a new
+    helper process and a jump as records lost. Numbering and sending under one
+    lock is what makes that impossible.
+
+    Fail-without-fix: number under the lock and send outside it, and every
+    frame here arrives with the lock already released.
+    """
+    sink = ParentProcessLogSink(
+        cast(ParentProcessBridge, None), "P-helper-test"
+    )
+    bridge = StandInBridgeWatchingTheSequenceLock(sink._sequence_lock)
+    sink._bridge = cast(ParentProcessBridge, bridge)
+    records_each_sender_sends = 20
+
+    def send_the_processors_records() -> None:
+        for _ in range(records_each_sender_sends):
+            sink("info", "from the processor", None)
+
+    def send_the_forwarders_records() -> None:
+        for _ in range(records_each_sender_sends):
+            sink.send_a_captured_engine_record(
+                {
+                    "level": "warn",
+                    "target": "iceoryx2",
+                    "message": "from the forwarder",
+                    "pipeline_id": None,
+                    "processor_id": None,
+                    "rhi_op": None,
+                    "attrs": {},
+                    "emitted_at_wall_clock_nanoseconds": 1_700_000_000_000_000_000,
+                }
+            )
+
+    senders = [
+        threading.Thread(target=send_the_processors_records),
+        threading.Thread(target=send_the_forwarders_records),
+    ]
+    for sender in senders:
+        sender.start()
+    for sender in senders:
+        sender.join(timeout=30.0)
+        assert not sender.is_alive()
+
+    assert not bridge.frames_sent_without_the_sequence_lock, (
+        "a record numbered under the lock and sent outside it can reach the parent "
+        "after a later one: "
+        f"{bridge.frames_sent_without_the_sequence_lock}"
+    )
+    assert bridge.sequence_numbers_sent == list(
+        range(1, records_each_sender_sends * 2 + 1)
+    ), (
+        "one sequence covers both senders, climbing in wire order with no number "
+        f"spent twice: {bridge.sequence_numbers_sent}"
+    )
 
 
 # =============================================================================
@@ -1773,6 +1858,11 @@ ENGINE_BUILD_ID_OF_ANOTHER_BUILD = (
 #: Long enough for a cold interpreter to import the whole wheel.
 SECONDS_A_REAL_HELPER_HAS_TO_START = 30.0
 
+# How long a helper has to send nothing before a test reads it as having sent
+# everything it is going to. Comfortably past the forwarder's own 0.25 s pass,
+# so a record it is holding is never mistaken for a record it never made.
+SECONDS_A_QUIET_HELPER_SENDS_NOTHING_IN = 2.0
+
 
 @pytest.fixture
 def empty_iceoryx2_domain_root():
@@ -1791,17 +1881,25 @@ def start_a_real_helper_process(
     parent: StandInParent,
     domain_root: Path,
     parent_engine_build_id: "str | None",
+    *,
+    rust_log: "str | None" = None,
 ) -> subprocess.Popen:
     """`python -m streamlib._helper` as the spawn host starts it — its channel,
     its class, its domain — handed `parent_engine_build_id`, or no id at all.
 
     Everything a helper needs to reach its own iceoryx2 node is supplied, so a
-    helper that let its start through would open one and wait on `parent`."""
+    helper that let its start through would open one and wait on `parent`.
+
+    `rust_log` is the level the child runs at, and is the environment's own
+    only when a test names it: a developer's `RUST_LOG` would otherwise decide
+    what the helper says."""
     environment = {
         name: value
         for name, value in os.environ.items()
-        if name != _helper.ENGINE_BUILD_ID_ENV
+        if name not in (_helper.ENGINE_BUILD_ID_ENV, "RUST_LOG")
     }
+    if rust_log is not None:
+        environment["RUST_LOG"] = rust_log
     if parent_engine_build_id is not None:
         environment[_helper.ENGINE_BUILD_ID_ENV] = parent_engine_build_id
     environment.update(
@@ -1920,3 +2018,247 @@ def test_the_helper_module_is_runnable_as_a_module():
     helper_source = os.path.join(os.path.dirname(_helper.__file__), "_helper.py")
     with open(helper_source, encoding="utf-8") as source:
         assert '__name__ == "__main__"' in source.read()
+
+
+# =============================================================================
+# The engine's own records, made inside a helper
+# =============================================================================
+
+
+def frames_a_real_helper_sends(
+    parent: StandInParent,
+    *,
+    until_each_of: "list[Callable[[dict], bool]]",
+    seconds: float,
+) -> "list[dict]":
+    """Every frame the helper sends until each matcher has seen one of its own,
+    or the wait ends.
+
+    Each of, never the first of: a helper's lifecycle answers come from its main
+    thread and its forwarded engine records from another, so neither is a
+    barrier for the other and a frame a test wants can arrive after the frame it
+    would have stopped on. The whole run is returned either way, so a failure
+    reads as what the helper did send rather than as a bare timeout.
+    """
+    frames: "list[dict]" = []
+    still_waiting = list(until_each_of)
+    deadline = time.monotonic() + seconds
+    while still_waiting and time.monotonic() < deadline:
+        frame = parent.receive(timeout_seconds=deadline - time.monotonic())
+        if frame is None:
+            break
+        frames.append(frame)
+        still_waiting = [matches for matches in still_waiting if not matches(frame)]
+    return frames
+
+
+def every_frame_a_real_helper_sends_before_it_falls_quiet(
+    parent: StandInParent, *, quiet_seconds: float, seconds: float
+) -> "list[dict]":
+    """Every frame the helper sends until it has sent none for `quiet_seconds`.
+
+    What a test asserts is absent needs this rather than a frame to stop on: a
+    record the forwarder sends after the answer a test would have stopped on is
+    a record that test never saw.
+    """
+    frames: "list[dict]" = []
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        frame = parent.receive(
+            timeout_seconds=min(quiet_seconds, deadline - time.monotonic())
+        )
+        if frame is None:
+            break
+        frames.append(frame)
+    return frames
+
+
+def a_captured_engine_record_whose_target_holds(text: str) -> "Callable[[dict], bool]":
+    def matches(frame: dict) -> bool:
+        return (
+            frame.get("op") == "log"
+            and frame.get("source") == "rust"
+            and text in frame.get("target", "")
+        )
+
+    return matches
+
+
+def test_a_helpers_own_engine_records_reach_its_parent_as_rust_records(
+    stand_in_parent, empty_iceoryx2_domain_root
+):
+    """A helper hosts no engine and writes no log, so an engine record made in
+    one reaches a reader only by riding the channel home. It travels as the
+    Rust record it is — its own target, its own level, its processor — so the
+    same call site reads in the runtime's log wherever it ran.
+
+    Fail-without-fix: the child has no tracing subscriber, the record reaches
+    nobody, and the run that a helper's input wiring explains is silent.
+    """
+    helper = start_a_real_helper_process(
+        stand_in_parent,
+        empty_iceoryx2_domain_root,
+        engine_build_id_compiled_into_this_extension(),
+        rust_log="debug",
+    )
+    try:
+        stand_in_parent.send(
+            {"cmd": "setup", "capability": "full", "config": {}, "ports": {}}
+        )
+        stand_in_parent.send(
+            {
+                "cmd": "wire_link",
+                "direction": "input",
+                "link": engine_shaped_link_wiring("input", "L-engine-records"),
+            }
+        )
+
+        frames = frames_a_real_helper_sends(
+            stand_in_parent,
+            until_each_of=[
+                a_captured_engine_record_whose_target_holds("iceoryx2::input")
+            ],
+            seconds=SECONDS_A_REAL_HELPER_HAS_TO_START,
+        )
+
+        captured = [
+            frame
+            for frame in frames
+            if a_captured_engine_record_whose_target_holds("iceoryx2::input")(frame)
+        ]
+        assert captured, (
+            "the engine's own record of the port it opened never reached the parent; "
+            f"the helper sent {frames}"
+        )
+        record = captured[0]
+        assert record["level"] == "debug", (
+            "a captured record keeps the level its call site gave it, so a debug "
+            f"record never arrives as a warning; got {record}"
+        )
+        assert record["processor_id"] == "Pbuildid", (
+            "one helper hosts one processor, so its engine records name it"
+        )
+        assert int(record["source_seq"]) >= 1, (
+            "a captured record shares the helper's sequence, so a gap in it still "
+            "reads as records lost on the way home"
+        )
+        assert record["intercepted"] is False, (
+            "a record handed over on the channel was never captured off a descriptor"
+        )
+    finally:
+        helper.kill()
+        helper.communicate()
+
+
+def test_iceoryx2s_own_records_inside_a_helper_reach_the_parent_rather_than_stderr(
+    stand_in_parent, empty_iceoryx2_domain_root
+):
+    """iceoryx2 refuses a port whose ring is deeper than the channel, and says
+    why through its own logger. In a helper that logger is the engine's bridge,
+    at the level the engine is configured to, so the reason reaches the log
+    instead of a stderr line the parent re-emits as somebody else's warning.
+
+    Fail-without-fix: with no bridge and no level set, iceoryx2 stays at its
+    default and writes to stderr, so the refusal is either never made or
+    arrives as an intercepted `fd2` warning attributed to nothing.
+    """
+    helper = start_a_real_helper_process(
+        stand_in_parent,
+        empty_iceoryx2_domain_root,
+        engine_build_id_compiled_into_this_extension(),
+        rust_log="debug",
+    )
+    try:
+        stand_in_parent.send(
+            {"cmd": "setup", "capability": "full", "config": {}, "ports": {}}
+        )
+        unopenable = engine_shaped_link_wiring("input", "L-unopenable")
+        unopenable["channel_service_creation_depth"] = 4
+        unopenable["input_port_ring_depth"] = 64
+        stand_in_parent.send(
+            {"cmd": "wire_link", "direction": "input", "link": unopenable}
+        )
+
+        frames = frames_a_real_helper_sends(
+            stand_in_parent,
+            until_each_of=[
+                lambda frame: frame.get("rpc") == "link_wire_failed",
+                lambda frame: frame.get("target") == "iceoryx2",
+            ],
+            seconds=SECONDS_A_REAL_HELPER_HAS_TO_START,
+        )
+
+        assert any(frame.get("rpc") == "link_wire_failed" for frame in frames), (
+            f"the port was expected to refuse to open; the helper sent {frames}"
+        )
+        from_iceoryx2 = [
+            frame
+            for frame in frames
+            if a_captured_engine_record_whose_target_holds("iceoryx2")(frame)
+            and frame.get("target") == "iceoryx2"
+        ]
+        assert from_iceoryx2, (
+            "iceoryx2's own account of the refusal never reached the parent; the "
+            f"helper sent {frames}"
+        )
+        assert all("origin" in frame["attrs"] for frame in from_iceoryx2), (
+            "the bridge carries iceoryx2's origin field, which is what says which "
+            f"port object refused; got {from_iceoryx2}"
+        )
+    finally:
+        helper.kill()
+        standard_output, standard_error = helper.communicate()
+        assert "iceoryx2" not in standard_error.lower(), (
+            "iceoryx2's records go through the bridge, so none are written to the "
+            f"helper's stderr for the parent to re-emit as a warning: {standard_error}"
+        )
+
+
+def test_a_helper_at_the_engines_default_level_sends_no_debug_records(
+    stand_in_parent, empty_iceoryx2_domain_root
+):
+    """The level a helper captures at is the engine's own, not a level of its
+    own choosing: with nothing configured that is `info`, and the debug records
+    a wiring makes stay unsent.
+
+    It says nothing on its own — a helper that captures nothing at all passes
+    it too — and holds the other half of the pair: the test above has the same
+    wiring send those records at `RUST_LOG=debug`, so together they say the
+    level is read rather than fixed. Fail-without-fix for this one is capture
+    pinned to trace, where every helper pays for every debug record the engine
+    and iceoryx2 make, on the channel its data plane shares.
+    """
+    helper = start_a_real_helper_process(
+        stand_in_parent,
+        empty_iceoryx2_domain_root,
+        engine_build_id_compiled_into_this_extension(),
+    )
+    try:
+        stand_in_parent.send(
+            {"cmd": "setup", "capability": "full", "config": {}, "ports": {}}
+        )
+        stand_in_parent.send(
+            {
+                "cmd": "wire_link",
+                "direction": "input",
+                "link": engine_shaped_link_wiring("input", "L-default-level"),
+            }
+        )
+
+        frames = every_frame_a_real_helper_sends_before_it_falls_quiet(
+            stand_in_parent,
+            quiet_seconds=SECONDS_A_QUIET_HELPER_SENDS_NOTHING_IN,
+            seconds=SECONDS_A_REAL_HELPER_HAS_TO_START,
+        )
+
+        assert any(frame.get("rpc") == "link_wired" for frame in frames), (
+            f"the port was expected to open; the helper sent {frames}"
+        )
+        assert not [
+            frame
+            for frame in frames
+            if frame.get("op") == "log" and frame.get("level") in ("debug", "trace")
+        ], f"a helper at the default level sends nothing below info; got {frames}"
+    finally:
+        helper.kill()
+        helper.communicate()

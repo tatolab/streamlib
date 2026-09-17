@@ -241,7 +241,7 @@ impl Runner {
         // Bridge iceoryx2's internal log records into streamlib tracing
         // before creating the iceoryx2 Node so any iceoryx2 emit at
         // construction time lands in the unified JSONL pipeline.
-        crate::core::logging::iceoryx2_log_bridge::install_iceoryx2_log_bridge();
+        crate::core::logging::install_iceoryx2_log_bridge_at_the_engines_configured_level();
 
         // Bring up the per-runtime surface-sharing service. Each runtime owns
         // a unique Unix socket in the runtime directory that its polyglot
