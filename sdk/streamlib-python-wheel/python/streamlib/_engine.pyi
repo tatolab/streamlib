@@ -499,9 +499,9 @@ class Runtime:
         address other runtimes wire against, so it may not depend on start
         order. A name another live runtime already holds is refused here,
         naming that runtime's host and pid and both ways out — stop it, or start
-        this one under another name. `streamlib nodes` finds it when it is on
-        this machine and hosts a control plane; otherwise the host and pid in
-        the refusal are what there is to go on, and renaming is the way through.
+        this one under another name. `streamlib nodes --mesh-name <mesh>` lists
+        it wherever it is running: the mesh table carries every runtime on the
+        mesh, on any machine, control plane or not.
 
         The one exception is a runtime on this very machine whose process is
         gone, so restarting an app that was killed is never refused. "This

@@ -139,8 +139,8 @@ fn why_this_name_is_not_available(
     format!(
         "Runtime name {} is already live on the {mesh_name} mesh, held by {} (pid {}). A runtime \
          name is the address other runtimes wire against, so two runtimes may not hold one. \
-         Either stop that runtime — `streamlib nodes` lists it when it is on this machine and \
-         hosts a control plane — or start this one under another name: `--runtime-name <name>` \
+         Either stop that runtime — `streamlib nodes --mesh-name {mesh_name}` lists it wherever \
+         it is running — or start this one under another name: `--runtime-name <name>` \
          on `streamlib run` / `dev`, the STREAMLIB_RUNTIME_NAME environment variable, or \
          Runtime(runtime_name=\"<name>\").",
         holder.runtime_name,

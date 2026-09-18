@@ -43,7 +43,7 @@ import subprocess
 import sys
 import traceback
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Optional, Sequence, TextIO
 
 from . import Runtime
 from ._control_plane_client import ControlPlaneError, call_tool, resolve_control_url
@@ -489,7 +489,7 @@ def print_discovered_nodes(
     return 0
 
 
-def _print_the_registry_table(stream: "Any") -> "set[str]":
+def _print_the_registry_table(stream: TextIO) -> "set[str]":
     """The on-disk registry, and the runtime ids it listed."""
     from ._node_registry import registry_directory, scan_check_and_prune
 
@@ -526,7 +526,7 @@ def _print_the_registry_table(stream: "Any") -> "set[str]":
 
 
 def _print_the_mesh_peers_table(
-    stream: "Any",
+    stream: TextIO,
     *,
     registered_runtime_ids: "set[str]",
     mesh_name: "Optional[str]",
