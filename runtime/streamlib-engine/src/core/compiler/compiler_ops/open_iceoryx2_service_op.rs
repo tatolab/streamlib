@@ -596,26 +596,38 @@ fn subscriber_ring_depth_of_input_port(
     }
 }
 
-/// Reverse-resolve a channel data-service name to the `(source_proc_id,
-/// source_port)` that publishes to it, by scanning the graph's links for the
-/// one whose source output port derives that channel name.
+/// Reverse-resolve what a caller named a channel by to the source that
+/// publishes to it: a channel data-service name
+/// (`{source processor id}/{source output port}`) or a port's mesh address
+/// (`<runtime name>/<display name>/<port>`).
 ///
 /// A channel's iceoryx2 data service only exists once a `connect()` has wired
-/// its source output port, so a channel with no outbound link is genuinely
-/// untappable — the caller maps `None` to [`Error::TapChannelNotFound`]. The
-/// derivation is the same [`crate::iceoryx2::source_channel_name`] the compiler
-/// op keys the service on, so a match here is exact (including the
-/// hash-legalized over-budget form).
-pub(crate) fn find_channel_source_port(
+/// its source, so a name no link carries from is genuinely untappable — the
+/// caller maps `None` to [`Error::TapChannelNotFound`]. The derivation is the
+/// same one the compiler op keys the service on, so a match here is exact
+/// (including the hash-legalized over-budget form and the hashed mesh-ingress
+/// form).
+///
+/// [`Error::TapChannelNotFound`]: crate::core::error::Error::TapChannelNotFound
+pub(crate) fn find_the_source_a_caller_named(
     graph: &mut Graph,
-    channel_service_name: &str,
-) -> Option<(ProcessorUniqueId, String)> {
+    channel_or_mesh_address: &str,
+) -> Option<OutputLinkPortRef> {
     graph.traversal_mut().e(()).iter().find_map(|link| {
-        let source = link.from_port().processor_id_on_this_runtime()?;
-        let source_port = link.from_port().port_name();
-        let derived = crate::iceoryx2::source_channel_name(source.as_str(), source_port).ok()?;
-        (derived.as_str() == channel_service_name)
-            .then(|| (source.clone(), source_port.to_string()))
+        let source = link.from_port();
+        match source.mesh_port_address() {
+            Some(address) => {
+                (address.to_string() == channel_or_mesh_address).then(|| source.clone())
+            }
+            None => {
+                let derived = crate::iceoryx2::source_channel_name(
+                    source.processor_id_on_this_runtime()?.as_str(),
+                    source.port_name(),
+                )
+                .ok()?;
+                (derived.as_str() == channel_or_mesh_address).then(|| source.clone())
+            }
+        }
     })
 }
 
@@ -4284,13 +4296,12 @@ mod tests {
         );
     }
 
-    /// A wired channel's data-service name reverse-resolves to the exact
-    /// `(source_proc, source_port)` that publishes to it; an unknown name
-    /// resolves to `None` (the tap op maps that to `TapChannelNotFound`).
-    /// Round-trips through the same `source_channel_name` the compiler op keys
-    /// the service on.
+    /// A wired channel's data-service name reverse-resolves to the exact source
+    /// that publishes to it; an unknown name resolves to `None` (the tap op
+    /// maps that to `TapChannelNotFound`). Round-trips through the same
+    /// `source_channel_name` the compiler op keys the service on.
     #[test]
-    fn find_channel_source_port_round_trips_and_misses() {
+    fn the_source_a_caller_named_round_trips_and_misses() {
         let mut graph = Graph::new();
         let src_id = add_mock_output_only(&mut graph);
         let dest_id = add_mock_input_only(&mut graph);
@@ -4306,14 +4317,44 @@ mod tests {
         // The reverse lookup returns the graph node's original processor id (the
         // channel name lowercases it only for the wire), so it round-trips to the
         // id we wired, not its lowercased channel form.
-        let (resolved_proc, resolved_port) =
-            find_channel_source_port(&mut graph, &channel_name).expect("wired channel resolves");
-        assert_eq!(resolved_proc.as_str(), src_id.as_str());
-        assert_eq!(resolved_port, "out1");
+        let resolved = find_the_source_a_caller_named(&mut graph, &channel_name)
+            .expect("wired channel resolves");
+        assert_eq!(
+            resolved
+                .processor_id_on_this_runtime()
+                .map(|id| id.as_str()),
+            Some(src_id.as_str())
+        );
+        assert_eq!(resolved.port_name(), "out1");
 
         assert!(
-            find_channel_source_port(&mut graph, "nosuch/channel").is_none(),
+            find_the_source_a_caller_named(&mut graph, "nosuch/channel").is_none(),
             "an unwired / unknown channel name must not resolve to any source port",
+        );
+    }
+
+    /// A port on another runtime is named by its mesh address, not by the
+    /// channel its ingress writes — which is hashed from that address and is
+    /// nothing a caller could be expected to spell.
+    #[test]
+    fn a_port_on_another_runtime_is_named_by_its_address_and_not_by_its_channel() {
+        let mut graph = Graph::new();
+        let dest_id = add_mock_input_only(&mut graph);
+        let address =
+            crate::core::graph::MeshPortAddress::new("bench-cam-a1b2", "Camera Source 2", "video")
+                .expect("a legal address");
+        graph
+            .traversal_mut()
+            .add_link_from_another_runtime(address.clone(), InputLinkPortRef::new(&dest_id, "in1"));
+
+        let resolved = find_the_source_a_caller_named(&mut graph, &address.to_string())
+            .expect("a remote link's address resolves");
+        assert_eq!(resolved.mesh_port_address(), Some(&address));
+
+        let its_channel = crate::iceoryx2::mesh_ingress_channel_name(&address.to_string());
+        assert!(
+            find_the_source_a_caller_named(&mut graph, its_channel.as_str()).is_none(),
+            "the hashed ingress channel is not what a caller names a remote port by"
         );
     }
 

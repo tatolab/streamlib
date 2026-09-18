@@ -653,21 +653,33 @@ impl RuntimeOperations for Runner {
         channel: String,
         count: Option<usize>,
     ) -> BoxFuture<'_, Result<crate::core::runtime::TapSubscription>> {
-        // Resolve the channel's source output port and its iceoryx2 sizing from
-        // the live graph BEFORE spawning: the same derivation the compiler op
-        // used to open the service, so the tap's publisher-free reopen requests
-        // identical, iceoryx2-verified parameters.
+        // Resolve what the caller named to the source that publishes to it,
+        // and that source's iceoryx2 sizing, from the live graph BEFORE
+        // spawning: the same derivation the compiler op used to open the
+        // service, so the tap's publisher-free reopen requests identical,
+        // iceoryx2-verified parameters. A port on another runtime is named by
+        // its mesh address and tapped on the channel its ingress writes — the
+        // channel name is hashed from that address and is nothing a caller
+        // could be expected to spell.
         let resolved = self.compiler.scope(
             |graph, _tx| -> Result<(String, crate::iceoryx2::ChannelSizing)> {
-                let (source_proc_id, source_port) =
-                    crate::core::compiler::compiler_ops::find_channel_source_port(graph, &channel)
-                        .ok_or_else(|| Error::TapChannelNotFound(channel.clone()))?;
+                let source = crate::core::compiler::compiler_ops::find_the_source_a_caller_named(
+                    graph, &channel,
+                )
+                .ok_or_else(|| Error::TapChannelNotFound(channel.clone()))?;
                 let sizing = crate::core::compiler::compiler_ops::resolve_channel_sizing(
                     graph,
                     &self.iceoryx2_node,
-                    &OutputLinkPortRef::new(source_proc_id.clone(), source_port.clone()),
+                    &source,
                 )?;
-                Ok((channel.clone(), sizing))
+                let channel_service_name = match source.mesh_port_address() {
+                    Some(address) => {
+                        let addressed: String = address.to_string();
+                        crate::iceoryx2::mesh_ingress_channel_name(&addressed).into_string()
+                    }
+                    None => channel.clone(),
+                };
+                Ok((channel_service_name, sizing))
             },
         );
 

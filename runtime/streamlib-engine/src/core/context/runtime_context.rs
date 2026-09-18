@@ -969,7 +969,7 @@ mod host_runtime_ops_wiring_tests {
     //! this test drives the branch through the SAME host-shaped
     //! `RuntimeContextFullAccess::new(&base, grant)` that lifecycle dispatch mints.
     //!
-    //! Channel resolution (`find_channel_source_port` over the live graph)
+    //! Channel resolution (`find_the_source_a_caller_named` over the live graph)
     //! runs BEFORE any iceoryx2 subscribe, so an unwired channel surfaces
     //! [`Error::TapChannelNotFound`] with no IPC work. Mentally revert the
     //! `host_callbacks().is_none()` branch in `runtime()` and the shim
