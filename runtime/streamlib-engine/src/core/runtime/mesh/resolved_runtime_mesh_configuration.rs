@@ -96,10 +96,8 @@ impl ResolvedRuntimeMeshConfiguration {
             },
         )?;
         if let Some(interface) = &self.multicast_interface {
-            configuration.insert_json5(
-                "scouting/multicast/interface",
-                &format!("\"{interface}\""),
-            )?;
+            configuration
+                .insert_json5("scouting/multicast/interface", &format!("\"{interface}\""))?;
         }
         Ok(configuration)
     }
@@ -141,7 +139,9 @@ fn as_a_json5_list(endpoints: &[RuntimeMeshEndpoint]) -> String {
 mod tests {
     use super::*;
 
-    fn resolved(configuration: RuntimeMeshConfiguration) -> Result<ResolvedRuntimeMeshConfiguration> {
+    fn resolved(
+        configuration: RuntimeMeshConfiguration,
+    ) -> Result<ResolvedRuntimeMeshConfiguration> {
         ResolvedRuntimeMeshConfiguration::resolve(configuration)
     }
 
@@ -208,16 +208,20 @@ mod tests {
     /// test that constructs a runtime cannot reach the owner's desk.
     #[test]
     fn the_engines_test_build_leaves_multicast_discovery_off_by_default() {
-        assert!(!resolved(RuntimeMeshConfiguration::default())
-            .expect("the defaults resolve")
-            .multicast_discovery);
+        assert!(
+            !resolved(RuntimeMeshConfiguration::default())
+                .expect("the defaults resolve")
+                .multicast_discovery
+        );
     }
 
     /// The constructor beats the environment, which beats the default.
     #[test]
     fn multicast_discovery_takes_the_constructors_answer_then_the_environments() {
-        assert!(resolve_multicast_discovery(Some(true), Some(OsString::from("0")))
-            .expect("a stated value wins"));
+        assert!(
+            resolve_multicast_discovery(Some(true), Some(OsString::from("0")))
+                .expect("a stated value wins")
+        );
         assert!(
             resolve_multicast_discovery(None, Some(OsString::from("1"))).expect("the environment")
         );

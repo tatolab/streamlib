@@ -100,7 +100,10 @@ fn refuse_a_stated_mesh_name(stated: &str, where_it_came_from: &str, what_is_wro
 mod tests {
     use super::*;
 
-    fn resolved(configured: Option<&str>, from_environment: Option<&str>) -> Result<RuntimeMeshName> {
+    fn resolved(
+        configured: Option<&str>,
+        from_environment: Option<&str>,
+    ) -> Result<RuntimeMeshName> {
         resolve_mesh_name(
             configured.map(str::to_string),
             from_environment.map(OsString::from),
@@ -112,7 +115,9 @@ mod tests {
     #[test]
     fn a_stated_mesh_beats_the_environment_which_beats_the_default() {
         assert_eq!(
-            resolved(Some("lab"), Some("desk")).expect("a legal name").as_str(),
+            resolved(Some("lab"), Some("desk"))
+                .expect("a legal name")
+                .as_str(),
             "lab"
         );
         assert_eq!(
@@ -129,7 +134,9 @@ mod tests {
     #[test]
     fn an_empty_environment_value_reads_as_unset_and_an_empty_stated_one_is_refused() {
         assert_eq!(
-            resolved(None, Some("")).expect("an empty variable is no variable").as_str(),
+            resolved(None, Some(""))
+                .expect("an empty variable is no variable")
+                .as_str(),
             DEFAULT_MESH_NAME
         );
         let refusal =
@@ -141,7 +148,9 @@ mod tests {
     /// both what is wrong and where the name came from.
     #[test]
     fn a_mesh_name_outside_the_chunk_grammar_is_refused_naming_its_source() {
-        for stated in ["Lab", "9lab", "lab/two", "lab.two", "lab two", "@lab", "lab*"] {
+        for stated in [
+            "Lab", "9lab", "lab/two", "lab.two", "lab two", "@lab", "lab*",
+        ] {
             let refusal = resolved(None, Some(stated))
                 .err()
                 .unwrap_or_else(|| panic!("{stated:?} must be refused as a mesh name"))

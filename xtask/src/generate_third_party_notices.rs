@@ -231,7 +231,8 @@ struct ProjectWhoseNoticeCargoAboutCannotProduce {
     roster: NoticeRosterCargoAboutCannotProduce,
 }
 
-const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE: &[ProjectWhoseNoticeCargoAboutCannotProduce] = &[
+const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
+    &[ProjectWhoseNoticeCargoAboutCannotProduce] = &[
     ProjectWhoseNoticeCargoAboutCannotProduce {
         display_name: "shaderc",
         upstream_repository_url: "https://github.com/google/shaderc",
@@ -439,7 +440,9 @@ pub fn run(workspace_root: &Path, target: &NoticesGenerationTarget) -> Result<()
                 workspace_root: workspace_root.to_path_buf(),
             };
             notices.push('\n');
-            notices.push_str(&render_the_appendix_cargo_about_cannot_produce(&source_trees)?);
+            notices.push_str(&render_the_appendix_cargo_about_cannot_produce(
+                &source_trees,
+            )?);
             PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE.len()
         }
         NoticesGenerationTarget::ExtensionPackage { .. } => 0,
@@ -587,7 +590,9 @@ fn registry_crate_root_in(
 /// failure mode this guards is a dependency bump or a re-vendor that renames or
 /// moves one of the trees — silently shipping the binary without its terms is
 /// the one outcome worse than a red build.
-fn render_the_appendix_cargo_about_cannot_produce(source_trees: &NoticeSourceTrees) -> Result<String> {
+fn render_the_appendix_cargo_about_cannot_produce(
+    source_trees: &NoticeSourceTrees,
+) -> Result<String> {
     let mut appendix = String::new();
     // The two rosters come off the table, and no count is stated at all. This
     // paragraph ships inside a legal notice: a seventh project must not be able
@@ -837,7 +842,8 @@ mod tests {
     #[test]
     fn the_appendix_reproduces_every_vendored_project_verbatim() {
         let (_fixture, source_trees) = notice_source_trees_fixture();
-        let appendix = render_the_appendix_cargo_about_cannot_produce(&source_trees).expect("render");
+        let appendix =
+            render_the_appendix_cargo_about_cannot_produce(&source_trees).expect("render");
 
         for project in PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE {
             assert!(
@@ -898,7 +904,8 @@ mod tests {
     #[test]
     fn the_appendix_rosters_between_them_name_every_project_in_the_table() {
         let (_fixture, source_trees) = notice_source_trees_fixture();
-        let appendix = render_the_appendix_cargo_about_cannot_produce(&source_trees).expect("render");
+        let appendix =
+            render_the_appendix_cargo_about_cannot_produce(&source_trees).expect("render");
 
         let rosters = NoticeRosterCargoAboutCannotProduce::ALL.map(joined_project_display_names);
         for roster in &rosters {

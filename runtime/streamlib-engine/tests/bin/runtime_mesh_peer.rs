@@ -22,7 +22,7 @@ use std::io::BufRead;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use streamlib_engine::core::runtime::{RuntimeMeshConfiguration, Runner};
+use streamlib_engine::core::runtime::{Runner, RuntimeMeshConfiguration};
 
 /// How often the peer reports what it currently sees.
 const HOW_OFTEN_THE_PEER_REPORTS: std::time::Duration = std::time::Duration::from_millis(100);
@@ -64,13 +64,15 @@ struct ReportChannelTakenBeforeTheRuntimeExists(std::os::fd::OwnedFd);
 
 impl ReportChannelTakenBeforeTheRuntimeExists {
     fn take() -> Self {
-        // SAFETY: fd 1 is open at process start and `dup` either returns a new
-        // owned descriptor or -1, which `OwnedFd::from_raw_fd` would then hold
-        // — so the failure is checked before the value is adopted.
-        let duplicated = unsafe { libc::dup(libc::STDOUT_FILENO) };
+        // Close-on-exec at birth rather than afterwards with a second `fcntl`:
+        // a spawn on another thread can land between the two calls, and this
+        // descriptor is a duplicate of the app's own stdout.
+        //
+        // SAFETY: fd 1 is open at process start, and the duplicate is checked
+        // before anything adopts it.
+        let duplicated = unsafe { libc::fcntl(libc::STDOUT_FILENO, libc::F_DUPFD_CLOEXEC, 0) };
         assert!(duplicated >= 0, "this process has no stdout to report on");
-        // SAFETY: `duplicated` is a fresh descriptor `dup` returned and nothing
-        // else owns it.
+        // SAFETY: `duplicated` is a fresh descriptor nothing else owns.
         Self(unsafe { std::os::fd::FromRawFd::from_raw_fd(duplicated) })
     }
 

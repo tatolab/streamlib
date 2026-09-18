@@ -138,11 +138,7 @@ pub(crate) fn read_one_mesh_endpoint(
     Ok(RuntimeMeshEndpoint(endpoint))
 }
 
-fn refuse_a_stated_endpoint(
-    stated: &str,
-    where_it_came_from: &str,
-    what_is_wrong: &str,
-) -> Error {
+fn refuse_a_stated_endpoint(stated: &str, where_it_came_from: &str, what_is_wrong: &str) -> Error {
     Error::Configuration(format!(
         "{where_it_came_from} names the mesh endpoint {stated:?}, which this runtime cannot \
          open: {what_is_wrong}. A mesh endpoint is udp/<host>:<port>?{RELIABILITY_METADATA_KEY}=\
@@ -188,7 +184,11 @@ mod tests {
     /// failing later as an unexplained open failure.
     #[test]
     fn a_transport_this_build_lacks_is_refused_naming_it() {
-        for absent in ["quic/127.0.0.1:7447", "tls/127.0.0.1:7447", "ws/127.0.0.1:7447"] {
+        for absent in [
+            "quic/127.0.0.1:7447",
+            "tls/127.0.0.1:7447",
+            "ws/127.0.0.1:7447",
+        ] {
             let refusal = read(absent)
                 .err()
                 .unwrap_or_else(|| panic!("{absent:?} must be refused"))
@@ -232,12 +232,17 @@ mod tests {
     fn the_environment_takes_a_comma_separated_list_and_an_empty_value_is_no_list() {
         let resolved = resolve_mesh_endpoints(
             None,
-            Some(OsString::from("tcp/127.0.0.1:7447, udp/127.0.0.1:7448?rel=1")),
+            Some(OsString::from(
+                "tcp/127.0.0.1:7447, udp/127.0.0.1:7448?rel=1",
+            )),
             MESH_PEER_ENDPOINTS_ENVIRONMENT_VARIABLE,
         )
         .expect("both endpoints are readable");
         assert_eq!(
-            resolved.iter().map(RuntimeMeshEndpoint::as_str).collect::<Vec<_>>(),
+            resolved
+                .iter()
+                .map(RuntimeMeshEndpoint::as_str)
+                .collect::<Vec<_>>(),
             ["tcp/127.0.0.1:7447", "udp/127.0.0.1:7448?rel=1"]
         );
 

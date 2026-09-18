@@ -58,7 +58,9 @@ pub struct RuntimeMeshOutput {
 }
 
 /// Whether a runtime reached its mesh at all.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeMeshSessionOutput {
     /// The session opened. It may still reach nobody.

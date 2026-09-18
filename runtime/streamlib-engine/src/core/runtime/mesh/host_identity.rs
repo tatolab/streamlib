@@ -178,7 +178,14 @@ mod tests {
     /// host that would then be compared against.
     #[test]
     fn a_chunk_this_engine_did_not_write_reads_as_no_identity() {
-        for foreign in ["", "kernel", "kernel.boot", "kernel.boot.notanumber", "kernel..7", "other.boot.7"] {
+        for foreign in [
+            "",
+            "kernel",
+            "kernel.boot",
+            "kernel.boot.notanumber",
+            "kernel..7",
+            "other.boot.7",
+        ] {
             assert_eq!(
                 HostIdentity::from_one_key_chunk(foreign),
                 None,

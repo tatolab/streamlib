@@ -92,7 +92,12 @@ fn control_plane_urls_for(
     let mut urls: Vec<String> = covered
         .into_iter()
         .filter(is_reachable_from_another_machine)
-        .map(|address| format!("http://{}:{bound_port}", bracketed_if_it_is_a_literal(address)))
+        .map(|address| {
+            format!(
+                "http://{}:{bound_port}",
+                bracketed_if_it_is_a_literal(address)
+            )
+        })
         .collect();
     urls.sort();
     urls.dedup();
@@ -132,7 +137,9 @@ fn every_address_of_this_hosts_interfaces() -> Vec<IpAddr> {
     // SAFETY: `getifaddrs` writes a list head into the pointer it is given and
     // returns non-zero without writing on failure.
     if unsafe { libc::getifaddrs(&mut first_interface) } != 0 || first_interface.is_null() {
-        tracing::debug!("this host reports no network interfaces; the mesh announces no control plane URL");
+        tracing::debug!(
+            "this host reports no network interfaces; the mesh announces no control plane URL"
+        );
         return Vec::new();
     }
 

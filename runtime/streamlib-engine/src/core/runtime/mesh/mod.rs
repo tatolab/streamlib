@@ -18,11 +18,12 @@ mod runtime_mesh_membership;
 mod runtime_mesh_name;
 mod runtime_mesh_peer_table;
 
+// Exported because something outside this module names it: the runtime and its
+// context hold the membership and the control-plane cell, `Runner::new()`
+// resolves the configuration, and the platform half of the host identity is in
+// `linux/`. Everything else the mesh is built from stays inside it.
 pub use host_identity::HostIdentity;
 pub use hosted_control_plane_endpoint::HostedControlPlaneEndpointRegistry;
 pub use resolved_runtime_mesh_configuration::ResolvedRuntimeMeshConfiguration;
-pub use runtime_mesh_description::RuntimeMeshDescription;
-pub use runtime_mesh_key::{AnnouncedRuntimeIdentity, RuntimeMeshKeySpace};
 pub use runtime_mesh_membership::RuntimeMeshMembership;
 pub use runtime_mesh_name::RuntimeMeshName;
-pub use runtime_mesh_peer_table::RuntimeMeshPeerTable;

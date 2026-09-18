@@ -85,7 +85,10 @@ impl RuntimeMeshPeerProcess {
         }
 
         let mut child = command
-            .env(MESH_MULTICAST_INTERFACE_ENVIRONMENT_VARIABLE, LOOPBACK_INTERFACE)
+            .env(
+                MESH_MULTICAST_INTERFACE_ENVIRONMENT_VARIABLE,
+                LOOPBACK_INTERFACE,
+            )
             // The peer reports down a duplicate of fd 1; the engine's own
             // pretty log mirror shares the real one, and this keeps it quiet.
             .env("STREAMLIB_QUIET", "1")
@@ -291,7 +294,9 @@ fn a_peer_answers_its_id_its_host_and_the_engine_version_it_runs() {
     });
 
     assert!(
-        described["runtime_id"].as_str().is_some_and(|id| !id.is_empty()),
+        described["runtime_id"]
+            .as_str()
+            .is_some_and(|id| !id.is_empty()),
         "{described}"
     );
     assert!(described["host_name"].as_str().is_some(), "{described}");
@@ -332,9 +337,10 @@ fn a_peer_that_leaves_is_gone_from_graph() {
 
     leaving.ask_it_to_leave_and_wait();
 
-    wait_until("the runtime that left is gone from the other's graph", || {
-        one.peer_names_it_sees().is_empty().then_some(())
-    });
+    wait_until(
+        "the runtime that left is gone from the other's graph",
+        || one.peer_names_it_sees().is_empty().then_some(()),
+    );
 }
 
 /// Two mesh names see nothing of each other, even scouting the same group on
@@ -362,7 +368,11 @@ fn two_mesh_names_see_nothing_of_each_other() {
     });
     std::thread::sleep(Duration::from_secs(3));
 
-    assert!(one.peer_names_it_sees().is_empty(), "{:?}", one.what_it_last_saw());
+    assert!(
+        one.peer_names_it_sees().is_empty(),
+        "{:?}",
+        one.what_it_last_saw()
+    );
     assert!(
         other.peer_names_it_sees().is_empty(),
         "{:?}",
@@ -390,8 +400,8 @@ fn a_runtime_with_discovery_off_and_no_peers_is_isolated_rather_than_local_only(
 /// the reason named — and the runtime is still constructed and still running.
 #[test]
 fn a_taken_listen_endpoint_gives_a_local_only_runtime_that_still_starts() {
-    let held = std::net::TcpListener::bind((LOOPBACK_INTERFACE, 0))
-        .expect("the loopback has a free port");
+    let held =
+        std::net::TcpListener::bind((LOOPBACK_INTERFACE, 0)).expect("the loopback has a free port");
     let taken = format!(
         "tcp/{LOOPBACK_INTERFACE}:{}",
         held.local_addr().expect("a bound listener").port()
@@ -409,10 +419,15 @@ fn a_taken_listen_endpoint_gives_a_local_only_runtime_that_still_starts() {
     });
     assert_eq!(mesh["session"], "local_only", "{mesh}");
     assert!(
-        mesh["local_only_reason"].as_str().is_some_and(|it| !it.is_empty()),
+        mesh["local_only_reason"]
+            .as_str()
+            .is_some_and(|it| !it.is_empty()),
         "a local-only runtime must say why: {mesh}"
     );
-    assert!(refused.why_it_refused.lock().is_none(), "the runtime must still be constructed");
+    assert!(
+        refused.why_it_refused.lock().is_none(),
+        "the runtime must still be constructed"
+    );
 }
 
 /// The mesh object `graph` carries has exactly the keys the plan states, and no
@@ -427,7 +442,11 @@ fn the_mesh_key_carries_exactly_what_the_plan_states() {
     });
 
     let mesh = wait_until("the runtime reports its mesh", || alone.what_it_last_saw());
-    let keys: Vec<&String> = mesh.as_object().expect("the mesh is an object").keys().collect();
+    let keys: Vec<&String> = mesh
+        .as_object()
+        .expect("the mesh is an object")
+        .keys()
+        .collect();
     assert_eq!(keys, ["mesh_name", "runtime_name", "session", "peers"]);
     assert_eq!(mesh["mesh_name"], mesh_name);
     assert_eq!(mesh["runtime_name"], "shaped");
@@ -457,6 +476,10 @@ fn an_endpoint_this_build_cannot_open_refuses_the_runtime_at_construction() {
             "the refusal of {endpoint} must name {what_the_refusal_must_name}: {refusal}"
         );
         let exit = refused.child.wait().expect("the refused peer exits");
-        assert_eq!(exit.code(), Some(2), "a refused runtime exits by its refusal");
+        assert_eq!(
+            exit.code(),
+            Some(2),
+            "a refused runtime exits by its refusal"
+        );
     }
 }

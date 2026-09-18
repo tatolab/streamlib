@@ -99,10 +99,7 @@ mod tests {
         table.record_that_a_peer_appeared(an_identity("lab-two", 7));
 
         let rendered = serde_json::to_value(table.render_for_graph()).expect("peers serialize");
-        assert_eq!(
-            rendered,
-            serde_json::json!([{ "runtime_name": "lab-two" }])
-        );
+        assert_eq!(rendered, serde_json::json!([{ "runtime_name": "lab-two" }]));
     }
 
     /// Once a peer answers, everything it said renders beside its name.

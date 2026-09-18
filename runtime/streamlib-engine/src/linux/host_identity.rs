@@ -21,7 +21,10 @@ const PID_NAMESPACE_PATH: &str = "/proc/self/ns/pid";
 /// runtime on another machine look like a local one, and no answer at all
 /// only costs the same-host exception.
 pub fn read_this_hosts_identity() -> HostIdentity {
-    read_the_identity_of(Path::new(KERNEL_BOOT_ID_PATH), Path::new(PID_NAMESPACE_PATH))
+    read_the_identity_of(
+        Path::new(KERNEL_BOOT_ID_PATH),
+        Path::new(PID_NAMESPACE_PATH),
+    )
 }
 
 /// The reader with both paths named, so the failure arms are testable without

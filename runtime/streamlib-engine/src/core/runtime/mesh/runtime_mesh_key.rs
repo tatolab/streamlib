@@ -125,10 +125,8 @@ mod tests {
 
     fn a_key_space(mesh_name: &str) -> RuntimeMeshKeySpace {
         RuntimeMeshKeySpace::of(
-            RuntimeMeshName::from_configuration_environment_or_default(Some(
-                mesh_name.to_string(),
-            ))
-            .expect("a legal mesh name"),
+            RuntimeMeshName::from_configuration_environment_or_default(Some(mesh_name.to_string()))
+                .expect("a legal mesh name"),
         )
     }
 
@@ -175,7 +173,8 @@ mod tests {
         let description_key = key_space.description_key_for(&identity);
         let subscription = key_space.every_liveliness_token_key();
 
-        let token_key = keyexpr::new(token_key.as_str()).expect("the token key is a key expression");
+        let token_key =
+            keyexpr::new(token_key.as_str()).expect("the token key is a key expression");
         keyexpr::new(description_key.as_str()).expect("the description key is a key expression");
         let subscription =
             keyexpr::new(subscription.as_str()).expect("the subscription is a key expression");
@@ -193,8 +192,7 @@ mod tests {
     fn a_wildcard_over_the_mesh_never_reaches_an_announcement() {
         let key_space = a_key_space("lab");
         let token_key = key_space.liveliness_token_key_for(&an_identity("rig-desk-a1b2", 4321));
-        let everything_under_the_mesh =
-            keyexpr::new("streamlib/lab/**").expect("a key expression");
+        let everything_under_the_mesh = keyexpr::new("streamlib/lab/**").expect("a key expression");
 
         assert!(
             !everything_under_the_mesh
@@ -215,9 +213,8 @@ mod tests {
         let description_key = key_space.description_key_for(&identity);
 
         assert!(
-            !subscription.includes(
-                keyexpr::new(description_key.as_str()).expect("a key expression")
-            ),
+            !subscription
+                .includes(keyexpr::new(description_key.as_str()).expect("a key expression")),
             "{subscription} must not reach {description_key}"
         );
     }

@@ -7,10 +7,11 @@
 //! mesh never fails a runtime's start: a session that cannot open leaves the
 //! runtime local-only, saying so once, and the runtime runs on.
 //!
-//! **No Zenoh call may run on one of the engine's current-thread tokio
-//! runtimes** — Zenoh resolves its builders by blocking on its own pool, which
-//! panics there. Every call below happens on the constructing thread, on
-//! `stop()`'s thread, or on this module's own discovery thread.
+//! **No Zenoh call may run on a current-thread tokio runtime** — Zenoh resolves
+//! its builders by blocking on its own pool, which panics there. `Runner::new()`
+//! and `stop()` are called from whatever thread an app happens to own, so
+//! neither assumes: both hand their Zenoh work to a thread of this module's own
+//! through [`off_any_current_thread_tokio_runtime`]. Discovery already has one.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -46,7 +47,9 @@ enum RuntimeMeshSessionState {
     Open(Box<AnnouncedOnTheMesh>),
     /// The session could not open, or has been closed. Either way this runtime
     /// reaches no other, which is the one thing `graph` has to say.
-    NotOnTheMesh { reason: String },
+    NotOnTheMesh {
+        reason: String,
+    },
 }
 
 /// What an open session holds. Dropped in declaration order at close: the
@@ -81,15 +84,17 @@ impl RuntimeMeshMembership {
         let announced_identity = AnnouncedRuntimeIdentity::of_this_runtime(runtime_name);
         let peers = Arc::new(RuntimeMeshPeerTable::default());
 
-        let session = match announce_on_the_mesh(
-            resolved,
-            &key_space,
-            &announced_identity,
-            &peers,
-            runtime_id,
-            host_name,
-            &hosted_control_plane,
-        ) {
+        let session = match off_any_current_thread_tokio_runtime("join", || {
+            announce_on_the_mesh(
+                resolved,
+                &key_space,
+                &announced_identity,
+                &peers,
+                runtime_id,
+                host_name,
+                &hosted_control_plane,
+            )
+        }) {
             Ok(announced) => {
                 tracing::info!(
                     "Runtime {runtime_name} is on the {} mesh",
@@ -137,32 +142,36 @@ impl RuntimeMeshMembership {
         let RuntimeMeshSessionState::Open(announced) = previous else {
             return;
         };
-        let AnnouncedOnTheMesh {
-            session,
-            liveliness_token,
-            description_queryable,
-            liveliness_subscriber,
-            discovery_thread,
-        } = *announced;
+        off_any_current_thread_tokio_runtime("leave", move || {
+            let AnnouncedOnTheMesh {
+                session,
+                liveliness_token,
+                description_queryable,
+                liveliness_subscriber,
+                discovery_thread,
+            } = *announced;
 
-        // The subscriber first: dropping it drops the callback that holds the
-        // discovery thread's sender, which is what ends that thread.
-        drop(liveliness_subscriber);
-        if discovery_thread.join().is_err() {
-            tracing::warn!("the mesh discovery thread panicked; its peers are stale");
-        }
+            // The subscriber first: dropping it drops the callback that holds
+            // the discovery thread's sender, which is what ends that thread.
+            drop(liveliness_subscriber);
+            if discovery_thread.join().is_err() {
+                tracing::warn!("the mesh discovery thread panicked; its peers are stale");
+            }
 
-        if let Err(undeclare_failure) = liveliness_token.undeclare().wait() {
-            tracing::warn!(
-                "this runtime's mesh token could not be undeclared, so peers see it leave when \
-                 its connections close instead: {undeclare_failure}"
-            );
-        }
-        drop(description_queryable);
+            if let Err(undeclare_failure) = liveliness_token.undeclare().wait() {
+                tracing::warn!(
+                    "this runtime's mesh token could not be undeclared, so peers see it leave \
+                     when its connections close instead: {undeclare_failure}"
+                );
+            }
+            drop(description_queryable);
 
-        if let Err(close_failure) = session.close().wait() {
-            tracing::warn!("this runtime's mesh session did not close cleanly: {close_failure}");
-        }
+            if let Err(close_failure) = session.close().wait() {
+                tracing::warn!(
+                    "this runtime's mesh session did not close cleanly: {close_failure}"
+                );
+            }
+        });
     }
 
     /// This runtime's place on the mesh, as `graph` renders it.
@@ -181,6 +190,32 @@ impl RuntimeMeshMembership {
             peers: self.peers.render_for_graph(),
         }
     }
+}
+
+/// Run `zenoh_work` on a thread that is nobody's tokio runtime.
+///
+/// A scoped thread rather than a detached one: the caller has to have the
+/// result before it goes on, and a panic inside comes back out unchanged rather
+/// than being reported as a join failure.
+fn off_any_current_thread_tokio_runtime<T: Send>(
+    mesh_step: &str,
+    zenoh_work: impl FnOnce() -> T + Send,
+) -> T {
+    std::thread::scope(|threads| {
+        match std::thread::Builder::new()
+            .name(format!("streamlib-mesh-{mesh_step}"))
+            .spawn_scoped(threads, zenoh_work)
+        {
+            Ok(thread) => match thread.join() {
+                Ok(done) => done,
+                Err(panicked) => std::panic::resume_unwind(panicked),
+            },
+            Err(cannot_spawn) => panic!(
+                "the thread this runtime's mesh {mesh_step} needs could not be spawned: \
+                 {cannot_spawn}"
+            ),
+        }
+    })
 }
 
 /// Open the session and take everything this runtime holds on the mesh.
