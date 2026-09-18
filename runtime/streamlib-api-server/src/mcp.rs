@@ -1122,15 +1122,16 @@ mod tests {
         assert_eq!(spec.display_name.as_deref(), Some("Gray"));
     }
 
-    /// A display name that cannot be one chunk of a processor's mesh address is
-    /// refused by the engine, and the MCP door carries that refusal back with
-    /// the offending character intact rather than reporting a success or
-    /// swallowing the reason.
+    /// What this locks is the door, not the grammar: an engine that refuses an
+    /// add reaches the MCP caller as a tool error carrying its own words, the
+    /// offending character intact, rather than as a success or a swallowed
+    /// reason. The refusal itself lives at `add_processor_impl`, and is locked
+    /// by the engine's own tests and by `rt.add`.
     #[tokio::test]
     async fn tools_call_add_processor_carries_back_a_refused_display_name_naming_the_character() {
         let runtime = Arc::new(
             ControlPlaneMcpDispatchStubRuntime::refusing_every_add_processor(
-                "display name \"a/b\" cannot be one chunk of a processor's mesh address:              it contains '/'",
+                "display name \"a/b\" cannot be one chunk of a processor's mesh address: it contains '/'",
             ),
         );
 

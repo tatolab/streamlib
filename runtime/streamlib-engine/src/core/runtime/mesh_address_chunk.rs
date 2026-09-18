@@ -6,8 +6,8 @@
 //! A port is addressed `<runtime name>/<display name>/<port>`, so each part has
 //! to be one legal Zenoh key chunk on its own.
 
-/// The characters a key chunk may not contain: the separator itself and the
-/// three the key-expression grammar reserves for matching.
+/// The characters a key chunk may not contain: the separator itself, and the
+/// four the key-expression grammar reserves for matching.
 pub(crate) const CHARACTERS_NO_MESH_ADDRESS_CHUNK_MAY_CONTAIN: [char; 5] =
     ['/', '*', '$', '#', '?'];
 

@@ -31,7 +31,10 @@ use std::os::fd::RawFd;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use streamlib::sdk::app_directory::resolve_the_app_directory_this_runtime_belongs_to;
+use streamlib::engine_internal::core::app_directory::resolve_the_app_directory_this_runtime_belongs_to;
+use streamlib::engine_internal::core::stable_short_id::{
+    fnv1a_64_hash_of, four_base36_characters_of,
+};
 use streamlib::sdk::color::{ColorSpaceKind, ResolvedColorInfo};
 use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
 use streamlib::sdk::engine::host_rhi::{
@@ -42,7 +45,6 @@ use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ReactiveProcessor;
 use streamlib::sdk::rhi::{PixelFormat, RhiColorConverter, VulkanLayout};
 use streamlib::sdk::schemars::JsonSchema;
-use streamlib::sdk::stable_short_id::{fnv1a_64_hash_of, four_base36_characters_of};
 
 use crate::cumulative_count_report_threshold::CumulativeCountReportThreshold;
 use crate::v4l2_color::resolved_color_to_v4l2_color;

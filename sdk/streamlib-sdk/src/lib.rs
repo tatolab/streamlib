@@ -76,7 +76,6 @@ pub mod sdk {
     // `pub use streamlib_engine::*` items below and the Tier-3
     // `engine_internal` namespace.
 
-    pub use streamlib_engine::core::app_directory;
     pub use streamlib_engine::core::color;
     pub use streamlib_engine::core::context;
     pub use streamlib_engine::core::descriptors;
@@ -92,7 +91,6 @@ pub mod sdk {
     pub use streamlib_engine::core::pubsub;
     pub use streamlib_engine::core::rhi;
     pub use streamlib_engine::core::runtime;
-    pub use streamlib_engine::core::stable_short_id;
 
     #[cfg(target_os = "linux")]
     pub use streamlib_engine::core::processor_owned_window;

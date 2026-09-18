@@ -55,12 +55,32 @@ fn resolve_app_directory(
     entry_directory_the_language_host_captured: Option<&Path>,
     working_directory: Option<PathBuf>,
 ) -> PathBuf {
-    app_directory_from_the_environment
+    let chosen = app_directory_from_the_environment
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .or_else(|| entry_directory_the_language_host_captured.map(Path::to_path_buf))
-        .or(working_directory)
-        .unwrap_or_default()
+        .or_else(|| working_directory.clone())
+        .unwrap_or_default();
+    the_one_spelling_of(chosen, working_directory.as_deref())
+}
+
+/// The single spelling of `chosen`, so a name hashed from it names the
+/// directory rather than how a caller happened to type it.
+///
+/// `--dir ./app` reaches the engine exactly as typed: without this, two
+/// checkouts each launched from their own parent would hash identical bytes
+/// and take the same mesh address, while one checkout launched two ways would
+/// take two.
+fn the_one_spelling_of(chosen: PathBuf, working_directory: Option<&Path>) -> PathBuf {
+    if let Ok(canonical) = chosen.canonicalize() {
+        return canonical;
+    }
+    // A directory that is not there to canonicalize is absolutized anyway, so a
+    // relative spelling never stands in for two different places.
+    match working_directory {
+        Some(working_directory) if chosen.is_relative() => working_directory.join(chosen),
+        _ => chosen,
+    }
 }
 
 #[cfg(test)]
@@ -123,5 +143,65 @@ mod tests {
     #[test]
     fn a_process_with_no_working_directory_still_resolves() {
         assert_eq!(resolve_app_directory(None, None, None), Path::new(""));
+    }
+
+    /// `--dir ./app` reaches the engine as typed, so two checkouts each
+    /// launched from their own parent must not hash the same bytes.
+    #[test]
+    fn one_relative_spelling_from_two_parents_resolves_to_two_directories() {
+        let from_one_parent = resolve_app_directory(
+            Some(OsString::from("./myapp")),
+            None,
+            Some(PathBuf::from("/work/a")),
+        );
+        let from_another = resolve_app_directory(
+            Some(OsString::from("./myapp")),
+            None,
+            Some(PathBuf::from("/work/b")),
+        );
+        assert!(from_one_parent.is_absolute() && from_another.is_absolute());
+        assert!(from_one_parent.starts_with("/work/a") && from_another.starts_with("/work/b"));
+        assert_ne!(
+            from_one_parent, from_another,
+            "two checkouts must not resolve to one directory"
+        );
+    }
+
+    /// And one checkout named two ways resolves to one directory, which is the
+    /// other half of the same property.
+    #[test]
+    fn a_real_directory_named_two_ways_resolves_to_one_spelling() {
+        let parent = tempfile::tempdir().expect("tempdir");
+        let app_directory = parent.path().join("myapp");
+        std::fs::create_dir(&app_directory).expect("create the app directory");
+
+        let named_relatively = resolve_app_directory(
+            Some(OsString::from("./myapp")),
+            None,
+            Some(parent.path().to_path_buf()),
+        );
+        let named_absolutely = resolve_app_directory(
+            Some(OsString::from(app_directory.as_os_str())),
+            None,
+            Some(PathBuf::from("/somewhere/else")),
+        );
+        assert_eq!(
+            named_relatively, named_absolutely,
+            "one directory takes one spelling however a caller reached it"
+        );
+    }
+
+    /// The captured entry directory takes the same spelling as an absolute
+    /// environment value naming the same place.
+    #[test]
+    fn every_arm_that_names_a_real_directory_agrees_on_its_spelling() {
+        let parent = tempfile::tempdir().expect("tempdir");
+        let app_directory = parent.path().join("myapp");
+        std::fs::create_dir(&app_directory).expect("create the app directory");
+
+        assert_eq!(
+            resolve_app_directory(None, Some(&app_directory), None),
+            resolve_app_directory(Some(OsString::from(app_directory.as_os_str())), None, None),
+        );
     }
 }

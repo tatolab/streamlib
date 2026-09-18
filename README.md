@@ -156,12 +156,13 @@ Edit a stage, re-run `dev`. Each stage runs `reactive` (the default once it has 
 
 ## Inspect a device that's already running
 
-Add `--url http://<host>:9000` to any of these and you're debugging the rig instead of your desk.
+Add `--url http://<host>:9000` to any of these and you're debugging the rig instead of your desk;
+`--node <runtime name>` picks a node by the name it carries on the runtime mesh.
 
 ```console
 $ streamlib nodes
-RUNTIME_ID                 CONTROL_URL            PID  ALIVE?  HINT
-Rq1w8xk3m2v0pz7ny4tbd6hsf  http://127.0.0.1:9000  48212  yes     streamlib (/home/you/my-rig)
+RUNTIME_NAME      RUNTIME_ID                 CONTROL_URL            PID  ALIVE?  HINT
+desk-my-rig-8kq3  Rq1w8xk3m2v0pz7ny4tbd6hsf  http://127.0.0.1:9000  48212  yes     streamlib (/home/you/my-rig)
 
 $ streamlib tap CameraSource/video --count 3
 {"channel": "CameraSource/video", "requested": 3, "window_ms": 500, "dropped_bags": 0,
