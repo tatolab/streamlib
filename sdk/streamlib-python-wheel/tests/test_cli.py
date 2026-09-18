@@ -735,6 +735,16 @@ def test_the_nodes_help_names_every_column_it_prints(capsys):
     for column in ("runtime_name", "runtime_id", "control_url", "pid", "alive?", "hint"):
         assert column in printed, f"`nodes --help` must document {column}"
 
+    # As one phrase rather than four `in` checks: `"host" in printed` is already
+    # satisfied by the word "hosting" in the registry sentence, so a per-column
+    # check would pass with the mesh table's columns undocumented. argparse
+    # rewraps the description, so the phrase is matched with its whitespace
+    # collapsed.
+    assert (
+        "runtime_name, host, control_plane_urls and engine_version"
+        in " ".join(printed.split())
+    ), f"`nodes --help` must document the mesh table's columns: {printed!r}"
+
 
 def _v4l2loopback_is_loaded() -> bool:
     try:

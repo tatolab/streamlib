@@ -1,14 +1,29 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! What a runtime answers about itself when a peer asks.
+//! What a runtime answers about itself when a peer asks, how a peer is asked,
+//! and how the answer renders.
 //!
 //! The wire is msgpack, the same codec every bag rides, and the field names
 //! are the contract — a peer of another engine version reads this document.
+//!
+//! Two readers ask and render: a runtime's own discovery worker, which keeps a
+//! peer table `graph` renders, and the observation `streamlib nodes` makes
+//! without joining the mesh at all. They share the asking and the rendering
+//! from here, so a peer reads the same either way.
+
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use zenoh::Wait;
 
+use crate::core::json_schema::RuntimeMeshPeerOutput;
 use crate::core::runtime::mesh::hosted_control_plane_endpoint::HostedControlPlaneEndpointRegistry;
+use crate::core::runtime::mesh::runtime_mesh_key::{AnnouncedRuntimeIdentity, RuntimeMeshKeySpace};
+
+/// How long a peer has to answer what it is before its description is left
+/// unread until whoever asked asks again. Engine-chosen; nothing authorable.
+const HOW_LONG_A_PEER_HAS_TO_DESCRIBE_ITSELF: Duration = Duration::from_secs(2);
 
 /// The document a runtime's description queryable answers with.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -52,6 +67,108 @@ impl RuntimeMeshDescription {
     /// What a peer answered, or the reason it could not be read.
     pub fn decode(wire_bytes: &[u8]) -> Result<Self, rmp_serde::decode::Error> {
         rmp_serde::from_slice(wire_bytes)
+    }
+}
+
+/// The channel one peer's answer arrives on, before anybody waits on it.
+type AnswersFromOnePeer = zenoh::handlers::FifoChannelHandler<zenoh::query::Reply>;
+
+/// What a peer says it is, or `None` when it did not answer in time or
+/// answered something this engine cannot read.
+pub(super) fn ask_a_peer_what_it_is(
+    session: &zenoh::Session,
+    key_space: &RuntimeMeshKeySpace,
+    announced: &AnnouncedRuntimeIdentity,
+) -> Option<RuntimeMeshDescription> {
+    let answers = send_the_what_are_you_question_to(session, key_space, announced)?;
+    wait_for_what_a_peer_answered(&announced.runtime_name, answers)
+}
+
+/// Ask every peer at once, then wait: one caller's whole round costs one
+/// timeout rather than one per peer.
+///
+/// The discovery worker asks one at a time because it runs for the life of a
+/// runtime and nobody waits on it. `streamlib nodes` is the other case — a
+/// person is waiting — and a mesh whose tokens outlive their processes, which
+/// a partition or a power loss leaves for the lease's ten seconds, would
+/// otherwise cost the reader two seconds a peer.
+pub(super) fn ask_every_peer_what_it_is(
+    session: &zenoh::Session,
+    key_space: &RuntimeMeshKeySpace,
+    every_peer: impl IntoIterator<Item = AnnouncedRuntimeIdentity>,
+) -> impl Iterator<Item = (AnnouncedRuntimeIdentity, Option<RuntimeMeshDescription>)> {
+    // Collected rather than left lazy, and that is the whole mechanism: every
+    // question is on the wire before the first answer is waited on.
+    let asked: Vec<_> = every_peer
+        .into_iter()
+        .map(|announced| {
+            let answers = send_the_what_are_you_question_to(session, key_space, &announced);
+            (announced, answers)
+        })
+        .collect();
+
+    asked.into_iter().map(|(announced, answers)| {
+        let described = answers
+            .and_then(|answers| wait_for_what_a_peer_answered(&announced.runtime_name, answers));
+        (announced, described)
+    })
+}
+
+/// Send one "what are you" query, and hand back the channel it answers on
+/// without waiting — which is what lets a caller ask several at once.
+fn send_the_what_are_you_question_to(
+    session: &zenoh::Session,
+    key_space: &RuntimeMeshKeySpace,
+    announced: &AnnouncedRuntimeIdentity,
+) -> Option<AnswersFromOnePeer> {
+    session
+        .get(key_space.announcement_key_for(announced))
+        .timeout(HOW_LONG_A_PEER_HAS_TO_DESCRIBE_ITSELF)
+        .wait()
+        .inspect_err(|query_failure| {
+            tracing::debug!(
+                "could not ask the mesh peer {} what it is: {query_failure}",
+                announced.runtime_name
+            );
+        })
+        .ok()
+}
+
+/// Wait out one peer's answer, or `None` when it did not answer in time or
+/// answered something this engine cannot read.
+fn wait_for_what_a_peer_answered(
+    runtime_name: &str,
+    answers: AnswersFromOnePeer,
+) -> Option<RuntimeMeshDescription> {
+    for reply in answers {
+        let Ok(answered) = reply.result() else {
+            continue;
+        };
+        match RuntimeMeshDescription::decode(&answered.payload().to_bytes()) {
+            Ok(described) => return Some(described),
+            Err(unreadable) => {
+                tracing::debug!(
+                    "the mesh peer {runtime_name} answered something this engine cannot read: \
+                     {unreadable}"
+                );
+            }
+        }
+    }
+    None
+}
+
+/// One peer as a reader renders it: its name off the token, and the four the
+/// peer itself answered — each absent until it does.
+pub(super) fn render_one_runtime_mesh_peer(
+    runtime_name: &str,
+    described: Option<&RuntimeMeshDescription>,
+) -> RuntimeMeshPeerOutput {
+    RuntimeMeshPeerOutput {
+        runtime_name: runtime_name.to_string(),
+        runtime_id: described.map(|it| it.runtime_id.clone()),
+        host_name: described.map(|it| it.host_name.clone()),
+        engine_version: described.map(|it| it.engine_version.clone()),
+        control_plane_urls: described.map(|it| it.control_plane_urls.clone()),
     }
 }
 

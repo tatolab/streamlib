@@ -7,6 +7,10 @@
 //! constructed, announces itself under its mesh name, discovers the other
 //! runtimes with nothing configured, and closes the session when it stops. A
 //! helper process opens none, because it never constructs a runtime.
+//!
+//! A process that only wants to *look* at a mesh joins none: `streamlib
+//! nodes` reads it through [`observe_a_runtime_mesh`], on a session that
+//! announces nothing.
 
 mod duplicate_runtime_name_on_the_mesh;
 mod host_identity;
@@ -17,7 +21,9 @@ mod runtime_mesh_endpoint;
 mod runtime_mesh_key;
 mod runtime_mesh_membership;
 mod runtime_mesh_name;
+mod runtime_mesh_observation;
 mod runtime_mesh_peer_table;
+mod zenoh_work_off_any_tokio_runtime;
 
 // Exported because something outside this module names it: the runtime and its
 // context hold the membership and the control-plane cell, `Runner::new()`
@@ -25,7 +31,8 @@ mod runtime_mesh_peer_table;
 // `linux/`. The announced identity and the key space are exported for the
 // mesh's own two-process fixture, which has to write the very key the
 // duplicate-name check reads rather than re-spell the grammar beside it.
-// Everything else the mesh is built from stays inside it.
+// The observation is exported because the wheel's `streamlib nodes` door
+// calls it. Everything else the mesh is built from stays inside it.
 pub use host_identity::HostIdentity;
 pub use hosted_control_plane_endpoint::HostedControlPlaneEndpointRegistry;
 pub use resolved_runtime_mesh_configuration::ResolvedRuntimeMeshConfiguration;
@@ -35,3 +42,6 @@ pub use resolved_runtime_mesh_configuration::ResolvedRuntimeMeshConfiguration;
 pub use runtime_mesh_key::{AnnouncedRuntimeIdentity, RuntimeMeshKeySpace};
 pub use runtime_mesh_membership::RuntimeMeshMembership;
 pub use runtime_mesh_name::RuntimeMeshName;
+pub use runtime_mesh_observation::{
+    RuntimeMeshObservation, RuntimeMeshObservationRequest, observe_a_runtime_mesh,
+};

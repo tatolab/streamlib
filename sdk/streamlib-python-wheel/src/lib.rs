@@ -28,6 +28,7 @@ mod python_processor_link_data_access;
 mod python_processor_owned_window;
 mod python_processor_registration;
 mod python_runtime_lifecycle;
+mod python_runtime_mesh_observation;
 #[cfg(all(test, target_os = "linux"))]
 mod python_surface_share_service_for_tests;
 mod python_test_harness_endpoints;
@@ -77,6 +78,8 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<python_processor_context::PythonLinkInputDataReader>()?;
     module.add_class::<python_processor_context::PythonLinkOutputDataWriter>()?;
     module.add_class::<python_monotonic_timer::PythonMonotonicTimer>()?;
+    module.add_class::<python_runtime_mesh_observation::PythonObservedRuntimeMesh>()?;
+    module.add_class::<python_runtime_mesh_observation::PythonObservedRuntimeMeshPeer>()?;
     module.add_function(wrap_pyfunction!(
         python_bag_conversion::gpu_limited_access_of_the_typed_read_in_progress,
         module
@@ -111,6 +114,10 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     module.add_function(wrap_pyfunction!(
         python_helper_process_spawn_host::engine_build_id_compiled_into_this_extension,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        python_runtime_mesh_observation::_observe_the_runtime_mesh,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(python_logging::monotonic_now_ns, module)?)?;

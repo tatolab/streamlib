@@ -13,6 +13,12 @@
 //! which undeclares its token before closing the session. A test that wants an
 //! abrupt exit kills it instead.
 //!
+//! With `--observe-only` it constructs no runtime at all and instead reads the
+//! mesh the way `streamlib nodes` does, reporting what it saw and exiting. That
+//! lives here rather than in the test process because the multicast interface
+//! is pinned through the environment, and a test binary cannot set its own
+//! environment without racing every other thread reading it.
+//!
 //! The report goes down a **duplicate of fd 1 taken before the runtime exists**,
 //! because a constructed runtime installs the fd-level stdio interceptor and
 //! every later `println!` would land in the log pipeline rather than reaching
@@ -22,7 +28,9 @@ use std::io::BufRead;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use streamlib_engine::core::runtime::{Runner, RuntimeMeshConfiguration};
+use streamlib_engine::core::runtime::{
+    Runner, RuntimeMeshConfiguration, RuntimeMeshObservationRequest, observe_a_runtime_mesh,
+};
 
 /// How often the peer reports what it currently sees.
 const HOW_OFTEN_THE_PEER_REPORTS: std::time::Duration = std::time::Duration::from_millis(100);
@@ -34,9 +42,17 @@ const READY_LINE: &str = "READY";
 /// What the peer writes instead when the runtime refused to be constructed.
 const REFUSED_LINE_PREFIX: &str = "REFUSED ";
 
+/// Read the mesh rather than joining it, and report what one look saw.
+const OBSERVE_ONLY_FLAG: &str = "--observe-only";
+
 fn main() {
     let report = ReportChannelTakenBeforeTheRuntimeExists::take();
     let configuration = read_the_mesh_configuration_from_the_command_line();
+
+    if std::env::args().any(|argument| argument == OBSERVE_ONLY_FLAG) {
+        report_what_one_look_at_the_mesh_saw(&report, configuration);
+        return;
+    }
 
     let runtime = match Runner::new_with_runtime_mesh_configuration(configuration) {
         Ok(runtime) => runtime,
@@ -57,6 +73,28 @@ fn main() {
     }
 
     runtime.stop().expect("the runtime stops");
+}
+
+/// Look at the mesh without joining it, and report the runtime names one look
+/// saw as a JSON array — the same shape the peer reports its own peers in, so
+/// the test reads both the same way.
+fn report_what_one_look_at_the_mesh_saw(
+    report: &ReportChannelTakenBeforeTheRuntimeExists,
+    configuration: RuntimeMeshConfiguration,
+) {
+    report.write_line(READY_LINE);
+    let looked = observe_a_runtime_mesh(RuntimeMeshObservationRequest {
+        mesh_name: configuration.mesh_name,
+        mesh_peer_endpoints: configuration.mesh_peer_endpoints,
+        mesh_multicast_discovery: configuration.mesh_multicast_discovery,
+    });
+    match looked {
+        Ok(looked) => report.write_line(&serde_json::json!({ "peers": looked.peers }).to_string()),
+        Err(look_failure) => {
+            report.write_line(&format!("{REFUSED_LINE_PREFIX}{look_failure}"));
+            std::process::exit(2);
+        }
+    }
 }
 
 /// A duplicate of fd 1, taken before anything replaces fd 1 itself.
@@ -106,6 +144,7 @@ fn read_the_mesh_configuration_from_the_command_line() -> RuntimeMeshConfigurati
             "--multicast-discovery" => {
                 configuration.mesh_multicast_discovery = Some(value() == "on")
             }
+            OBSERVE_ONLY_FLAG => {}
             unknown => panic!("unknown flag {unknown:?}"),
         }
     }
