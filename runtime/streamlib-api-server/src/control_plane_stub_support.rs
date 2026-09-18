@@ -138,9 +138,7 @@ macro_rules! graph_mutation_ops_record_the_call {
             let armed_refusal = self.armed_add_processor_refusal.lock().clone();
             Box::pin(async move {
                 match armed_refusal {
-                    Some(refusal) => {
-                        Err(::streamlib::sdk::error::Error::Configuration(refusal))
-                    }
+                    Some(refusal) => Err(::streamlib::sdk::error::Error::Configuration(refusal)),
                     None => Ok(::streamlib::sdk::graph::ProcessorUniqueId::from(
                         $crate::control_plane_stub_support::STUB_ADDED_PROCESSOR_ID,
                     )),

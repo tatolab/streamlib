@@ -37,10 +37,9 @@ pub use helper_process_group_registry::{
     deregister_a_helper_process_group, register_a_helper_process_group,
 };
 pub use operations::{BoxFuture, RuntimeOperations};
-pub use mesh_address_chunk::is_one_legal_mesh_address_chunk;
 pub use runtime::Runner;
 pub use runtime_mesh_configuration::RuntimeMeshConfiguration;
-pub use runtime_name::{RUNTIME_NAME_ENVIRONMENT_VARIABLE, RuntimeName};
+pub use runtime_name::RuntimeName;
 #[cfg(test)]
 pub(crate) use runtime_shutdown_request::RuntimeShutdownEscalationClearedOnDrop;
 pub(crate) use runtime_shutdown_request::escalate_runtime_shutdown_for_a_delivered_signal;

@@ -10,19 +10,20 @@ use crate::core::error::{Error, Result};
 
 /// The characters a key chunk may not contain: the separator itself and the
 /// three the key-expression grammar reserves for matching.
-pub const CHARACTERS_NO_MESH_ADDRESS_CHUNK_MAY_CONTAIN: [char; 5] = ['/', '*', '$', '#', '?'];
+pub(crate) const CHARACTERS_NO_MESH_ADDRESS_CHUNK_MAY_CONTAIN: [char; 5] =
+    ['/', '*', '$', '#', '?'];
 
 /// The character a key chunk may not begin with. A leading `@` makes a chunk
 /// verbatim, which `**` never matches, so an address carrying one would be
 /// unreachable by any subscription over the mesh.
-pub const CHARACTER_NO_MESH_ADDRESS_CHUNK_MAY_BEGIN_WITH: char = '@';
+pub(crate) const CHARACTER_NO_MESH_ADDRESS_CHUNK_MAY_BEGIN_WITH: char = '@';
 
 /// Whether `candidate` is one legal chunk of a port's mesh address.
 ///
 /// Non-empty, free of [`CHARACTERS_NO_MESH_ADDRESS_CHUNK_MAY_CONTAIN`], and not
 /// beginning with [`CHARACTER_NO_MESH_ADDRESS_CHUNK_MAY_BEGIN_WITH`]. Spaces and
 /// unicode are legal, as they are in a display name today.
-pub fn is_one_legal_mesh_address_chunk(candidate: &str) -> bool {
+pub(crate) fn is_one_legal_mesh_address_chunk(candidate: &str) -> bool {
     first_reason_this_is_not_one_mesh_address_chunk(candidate).is_none()
 }
 

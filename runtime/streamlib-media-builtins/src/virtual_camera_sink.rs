@@ -42,7 +42,7 @@ use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ReactiveProcessor;
 use streamlib::sdk::rhi::{PixelFormat, RhiColorConverter, VulkanLayout};
 use streamlib::sdk::schemars::JsonSchema;
-use streamlib::sdk::stable_short_id::{four_base36_characters_of, fnv1a_64_hash_of};
+use streamlib::sdk::stable_short_id::{fnv1a_64_hash_of, four_base36_characters_of};
 
 use crate::cumulative_count_report_threshold::CumulativeCountReportThreshold;
 use crate::v4l2_color::resolved_color_to_v4l2_color;

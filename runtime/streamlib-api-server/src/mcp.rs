@@ -1120,9 +1120,11 @@ mod tests {
     /// swallowing the reason.
     #[tokio::test]
     async fn tools_call_add_processor_carries_back_a_refused_display_name_naming_the_character() {
-        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::refusing_every_add_processor(
-            "display name \"a/b\" cannot be one chunk of a processor's mesh address:              it contains '/'",
-        ));
+        let runtime = Arc::new(
+            ControlPlaneMcpDispatchStubRuntime::refusing_every_add_processor(
+                "display name \"a/b\" cannot be one chunk of a processor's mesh address:              it contains '/'",
+            ),
+        );
 
         let (status, body) = mcp_call(
             runtime,
@@ -1139,8 +1141,14 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["result"]["isError"], true, "body={body}");
         let text = body["result"]["content"][0]["text"].as_str().unwrap();
-        assert!(text.contains("a/b"), "the refusal must name the display name: {text}");
-        assert!(text.contains("'/'"), "the refusal must name the character: {text}");
+        assert!(
+            text.contains("a/b"),
+            "the refusal must name the display name: {text}"
+        );
+        assert!(
+            text.contains("'/'"),
+            "the refusal must name the character: {text}"
+        );
     }
 
     #[tokio::test]

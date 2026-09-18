@@ -72,9 +72,7 @@ mod tests {
         for seed in 0..64u64 {
             let rendered = four_base36_characters_of(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15));
             assert!(
-                rendered
-                    .bytes()
-                    .all(|byte| BASE36_ALPHABET.contains(&byte)),
+                rendered.bytes().all(|byte| BASE36_ALPHABET.contains(&byte)),
                 "{rendered:?} left the alphabet"
             );
         }

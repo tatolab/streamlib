@@ -13,13 +13,13 @@ use std::path::Path;
 use crate::core::app_directory::resolve_the_app_directory_this_runtime_belongs_to;
 use crate::core::error::{Error, Result};
 use crate::core::runtime::mesh_address_chunk::{
-    CHARACTERS_NO_MESH_ADDRESS_CHUNK_MAY_CONTAIN, CHARACTER_NO_MESH_ADDRESS_CHUNK_MAY_BEGIN_WITH,
+    CHARACTER_NO_MESH_ADDRESS_CHUNK_MAY_BEGIN_WITH, CHARACTERS_NO_MESH_ADDRESS_CHUNK_MAY_CONTAIN,
     first_reason_this_is_not_one_mesh_address_chunk, what_one_mesh_address_chunk_may_be,
 };
 use crate::core::stable_short_id::stable_short_id_over;
 
 /// The environment variable that names a runtime when its constructor did not.
-pub const RUNTIME_NAME_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_RUNTIME_NAME";
+pub(crate) const RUNTIME_NAME_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_RUNTIME_NAME";
 
 /// What a forbidden character becomes in a default name.
 const REPLACEMENT_FOR_A_CHARACTER_A_DEFAULT_NAME_MAY_NOT_CARRY: char = '-';
@@ -70,7 +70,7 @@ impl std::fmt::Display for RuntimeName {
 
 /// The resolver with every input named, so each arm is testable without
 /// reaching into the process's environment.
-pub(crate) fn resolve_runtime_name(
+fn resolve_runtime_name(
     configured_runtime_name: Option<String>,
     runtime_name_from_the_environment: Option<OsString>,
     app_directory: &Path,
@@ -122,7 +122,7 @@ fn refuse_a_stated_runtime_name(
 /// The id hashes the directory's **full path**, so two checkouts of one app on
 /// one host get different names while every run of one checkout gets the same
 /// one.
-pub(crate) fn default_runtime_name_for(app_directory: &Path, host_name: &str) -> RuntimeName {
+fn default_runtime_name_for(app_directory: &Path, host_name: &str) -> RuntimeName {
     let app_directory_name = app_directory
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
@@ -207,9 +207,13 @@ mod tests {
     #[test]
     fn a_stated_name_beats_the_environment_which_beats_the_default() {
         assert_eq!(
-            resolved(Some("from-the-constructor"), Some("from-the-environment"), "/apps/desk")
-                .expect("a legal name")
-                .as_str(),
+            resolved(
+                Some("from-the-constructor"),
+                Some("from-the-environment"),
+                "/apps/desk"
+            )
+            .expect("a legal name")
+            .as_str(),
             "from-the-constructor"
         );
         assert_eq!(
@@ -269,7 +273,10 @@ mod tests {
             .expect_err("a name beginning with '@' must be refused");
         let refusal = refusal.to_string();
         assert!(refusal.contains("begins with '@'"), "{refusal}");
-        assert!(refusal.contains(RUNTIME_NAME_ENVIRONMENT_VARIABLE), "{refusal}");
+        assert!(
+            refusal.contains(RUNTIME_NAME_ENVIRONMENT_VARIABLE),
+            "{refusal}"
+        );
     }
 
     /// The default is host, directory name and the path's own id.
@@ -320,8 +327,9 @@ mod tests {
             "{name} must be one legal mesh address chunk"
         );
         assert!(
-            name.as_str()
-                .starts_with(&format!("rig-{APP_DIRECTORY_NAME_FOR_A_PATH_WITH_NO_FINAL_COMPONENT}-")),
+            name.as_str().starts_with(&format!(
+                "rig-{APP_DIRECTORY_NAME_FOR_A_PATH_WITH_NO_FINAL_COMPONENT}-"
+            )),
             "{name}"
         );
     }

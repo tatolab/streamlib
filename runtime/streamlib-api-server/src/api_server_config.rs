@@ -34,7 +34,8 @@ mod api_server_config_encoding_tests {
     use super::ApiServerConfig;
 
     /// Golden document: every field present, in declaration order.
-    const FULLY_POPULATED: &str = r#"{"host":"0.0.0.0","port":8080,"log_path":"/tmp/node.jsonl","require_auth":true}"#;
+    const FULLY_POPULATED: &str =
+        r#"{"host":"0.0.0.0","port":8080,"log_path":"/tmp/node.jsonl","require_auth":true}"#;
 
     /// A fully-populated config survives a decode/encode round trip unchanged.
     #[test]
