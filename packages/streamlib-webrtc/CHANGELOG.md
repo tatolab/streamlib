@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.3.0](https://github.com/tatolab/streamlib/compare/streamlib-webrtc-v0.2.2...streamlib-webrtc-v0.3.0) (2026-09-18)
+
+
+### ⚠ BREAKING CHANGES
+
+* **engine:** every runtime carries a stable name it owns — hashed default, set by constructor, environment or CLI ([#2329](https://github.com/tatolab/streamlib/issues/2329))
+
+### Features
+
+* **engine:** every runtime carries a stable name it owns — hashed default, set by constructor, environment or CLI ([#2329](https://github.com/tatolab/streamlib/issues/2329)) ([d8bd91e](https://github.com/tatolab/streamlib/commit/d8bd91e7414e5f1abc855827d059151693077091))
+
 ## [0.2.2](https://github.com/tatolab/streamlib/compare/streamlib-webrtc-v0.2.1...streamlib-webrtc-v0.2.2) (2026-09-15)
 
 
