@@ -1103,21 +1103,49 @@ fn a_look_with_no_endpoint_named_finds_a_runtime_by_multicast() {
     assert_eq!(peers[0]["control_plane_urls"], serde_json::json!([]));
 }
 
+/// An endpoint that takes the connection and then says nothing at all, the way
+/// a host behind a silent firewall does.
+///
+/// A real listener rather than an unroutable address: TEST-NET-1 was the first
+/// spelling of this and a machine with no route to it refuses at once, so the
+/// arm passed without ever reaching the bound it exists to measure. Accepting
+/// and never speaking Zenoh's handshake stalls the open on every machine.
+///
+/// The accepting thread holds each connection for the life of the test binary,
+/// because dropping one closes it and the dialler then fails fast — which is
+/// the opposite of what this endpoint is for.
+fn an_endpoint_that_accepts_and_never_answers() -> String {
+    let listener = std::net::TcpListener::bind((LOOPBACK_INTERFACE, 0))
+        .expect("the loopback takes a listener");
+    let address = listener
+        .local_addr()
+        .expect("a bound listener has an address");
+    std::thread::spawn(move || {
+        let mut held_open = Vec::new();
+        for accepted in listener.incoming() {
+            match accepted {
+                Ok(connection) => held_open.push(connection),
+                Err(_) => return,
+            }
+        }
+    });
+    format!("tcp/{address}")
+}
+
 /// A dialled endpoint that answers nothing at all does not hold a look for
 /// Zenoh's ten-second default.
 ///
 /// The bound is stated in `as_a_zenoh_configuration_for_one_question` and
 /// pinned there as a configuration key; this is the only place it is measured
-/// against a real socket. TEST-NET-1 is unroutable by RFC 5737, so a machine
-/// with no route to it refuses at once and this arm passes without exercising
-/// the bound — it is an upper wall that cannot false-positive, never a proof
-/// that the packet was dropped.
+/// against a real socket.
 #[test]
 fn an_endpoint_that_answers_nothing_does_not_hold_a_look_for_zenohs_own_default() {
+    let never_answers = an_endpoint_that_accepts_and_never_answers();
+
     let started_looking = Instant::now();
     let looked = observe_a_runtime_mesh(RuntimeMeshObservationRequest {
         mesh_name: Some(a_mesh_name_of_its_own("blackhole")),
-        mesh_peer_endpoints: Some(vec!["tcp/192.0.2.1:7447".to_string()]),
+        mesh_peer_endpoints: Some(vec![never_answers]),
         mesh_multicast_discovery: Some(false),
     })
     .expect("an endpoint nothing answers on never fails the look");

@@ -570,11 +570,14 @@ def _print_the_mesh_peers_table(
         )
         return
 
-    hosts = [peer.host_name or "" for peer in peers]
-    urls = [",".join(peer.control_plane_urls or []) for peer in peers]
-    runtime_name_width = max(
-        [len(peer.runtime_name) for peer in peers] + [len("RUNTIME_NAME")]
-    )
+    # Every column below is a string another machine chose for itself.
+    names = [_as_terminal_safe_text(peer.runtime_name) for peer in peers]
+    hosts = [_as_terminal_safe_text(peer.host_name or "") for peer in peers]
+    urls = [
+        _as_terminal_safe_text(",".join(peer.control_plane_urls or [])) for peer in peers
+    ]
+    versions = [_as_terminal_safe_text(peer.engine_version or "") for peer in peers]
+    runtime_name_width = max([len(name) for name in names] + [len("RUNTIME_NAME")])
     host_width = max([len(host) for host in hosts] + [len("HOST")])
     url_width = max([len(url) for url in urls] + [len("CONTROL_PLANE_URLS")])
 
@@ -584,12 +587,34 @@ def _print_the_mesh_peers_table(
         f"{'CONTROL_PLANE_URLS':<{url_width}}  ENGINE_VERSION",
         file=stream,
     )
-    for peer, host, url in zip(peers, hosts, urls):
+    for name, host, url, version in zip(names, hosts, urls, versions):
         print(
-            f"{peer.runtime_name:<{runtime_name_width}}  {host:<{host_width}}  "
-            f"{url:<{url_width}}  {peer.engine_version or ''}",
+            f"{name:<{runtime_name_width}}  {host:<{host_width}}  "
+            f"{url:<{url_width}}  {version}",
             file=stream,
         )
+
+
+def _as_terminal_safe_text(what_a_peer_calls_itself: str) -> str:
+    """One mesh peer's own words, made safe to print in a terminal.
+
+    The mesh carries no authentication, so a runtime name is whatever its host
+    says it is, and a name is free text past the few characters the address
+    grammar reserves. Printed raw, an escape sequence in one would rewrite the
+    table around it, and its invisible bytes would be counted into a column
+    width that no longer matches what is on screen.
+
+    Unicode names stay exactly as they are — `isprintable()` is false only for
+    what a terminal would act on rather than show.
+
+    The registry table above is deliberately left alone: its strings come from
+    a file written by a process running as this user, and an escape sequence
+    there means the machine is already lost.
+    """
+    return "".join(
+        character if character.isprintable() else "?"
+        for character in what_a_peer_calls_itself
+    )
 
 
 def call_observation_tool(

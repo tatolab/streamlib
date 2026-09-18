@@ -38,6 +38,7 @@ from typing import Any, Callable, Generator, NamedTuple, Optional, TextIO
 import pytest
 
 from streamlib import cli
+from streamlib import _engine as cli_engine_module
 from streamlib._control_plane_client import (
     ControlPlaneError,
     SurfaceImageExchangeRefusal,
@@ -1467,6 +1468,60 @@ def test_an_empty_mesh_says_so_and_names_the_mesh(isolated_registry, capsys):
     assert cli.main(["nodes", "--mesh-name", mesh_name, "--no-mesh-multicast-discovery"]) == 0
 
     assert f"No runtimes on the {mesh_name} mesh." in capsys.readouterr().out
+
+
+class APeerThatNamesItselfWhateverItLikes(NamedTuple):
+    """A mesh peer's four columns, as the engine door hands them over."""
+
+    runtime_name: str
+    runtime_id: "Optional[str]"
+    host_name: "Optional[str]"
+    engine_version: "Optional[str]"
+    control_plane_urls: "Optional[list[str]]"
+
+
+class AMeshOfPeersThatNameThemselves(NamedTuple):
+    mesh_name: str
+    peers: "list[APeerThatNamesItselfWhateverItLikes]"
+
+
+def test_a_peer_cannot_rewrite_the_table_around_it_with_an_escape_sequence(
+    isolated_registry, monkeypatch, capsys
+):
+    # The mesh carries no authentication, so every column is a string another
+    # machine chose. Rendered raw, these would clear the screen, colour the
+    # table and count eleven invisible bytes into a column width.
+    hostile = AMeshOfPeersThatNameThemselves(
+        mesh_name="lab",
+        peers=[
+            APeerThatNamesItselfWhateverItLikes(
+                runtime_name="rogue\x1b[2J\x1b[31m",
+                runtime_id="Rrogue",
+                host_name="somewhere\x07",
+                engine_version="0.0.0\r",
+                control_plane_urls=["http://198.51.100.9:9000\x1b[0m"],
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        cli_engine_module, "_observe_the_runtime_mesh", lambda **_: hostile
+    )
+
+    assert cli.main(["nodes", "--mesh-name", "lab"]) == 0
+
+    printed = capsys.readouterr().out
+    assert "\x1b" not in printed and "\x07" not in printed and "\r" not in printed, (
+        f"no peer-supplied control character may reach the terminal: {printed!r}"
+    )
+    assert "rogue?[2J?[31m" in printed, printed
+    # And the row still lines up: a width counted over the raw string would
+    # have been eleven columns wider than what is on screen.
+    header, peer_row = (
+        line for line in printed.splitlines() if line.startswith(("RUNTIME_NAME", "rogue"))
+    )
+    assert peer_row.index("somewhere") == header.index("HOST"), (
+        f"the host column must start where its header does:\n{header!r}\n{peer_row!r}"
+    )
 
 
 def test_a_mesh_peer_this_build_cannot_dial_is_a_usage_error(isolated_registry, capsys):
