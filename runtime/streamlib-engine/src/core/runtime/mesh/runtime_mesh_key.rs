@@ -457,4 +457,130 @@ mod tests {
             );
         }
     }
+
+    /// A reader token carries the whole of what the source runtime needs to
+    /// decide which port to send and to whom.
+    #[test]
+    fn a_reader_token_key_reads_back_as_the_port_and_the_reader() {
+        let key_space = a_key_space("lab");
+        let key = key_space.reader_token_key(
+            "bench-cam-a1b2",
+            "Camera Source 2",
+            "video",
+            "desk-viewer-c3d4",
+        );
+        assert_eq!(
+            key_space.read_a_reader_token_key(&key),
+            Some(ReaderOfAnOutputPort {
+                source_runtime_name: "bench-cam-a1b2".to_string(),
+                processor_display_name: "Camera Source 2".to_string(),
+                port_name: "video".to_string(),
+                reading_runtime_name: "desk-viewer-c3d4".to_string(),
+            })
+        );
+    }
+
+    /// A source runtime's reader subscription reaches every reader of every one
+    /// of its ports, and nobody else's.
+    #[test]
+    fn the_reader_subscription_reaches_every_reader_of_this_runtimes_ports_only() {
+        let key_space = a_key_space("lab");
+        let ours = keyexpr::new(key_space.every_reader_token_of("bench-cam-a1b2").as_str())
+            .expect("a key expression")
+            .to_owned();
+
+        for (display, port, reader) in [
+            ("CameraSource", "video", "desk-one"),
+            ("CameraSource", "video", "desk-two"),
+            ("MicrophoneSource", "audio", "desk-one"),
+        ] {
+            let held = key_space.reader_token_key("bench-cam-a1b2", display, port, reader);
+            assert!(
+                ours.includes(keyexpr::new(held.as_str()).expect("a key expression")),
+                "{ours} must reach {held}"
+            );
+        }
+
+        let anothers =
+            key_space.reader_token_key("bench-cam-c3d4", "CameraSource", "video", "desk-one");
+        assert!(
+            !ours.includes(keyexpr::new(anothers.as_str()).expect("a key expression")),
+            "{ours} must not reach {anothers}"
+        );
+    }
+
+    /// The announcement subscription never reaches the reader, egress or
+    /// offered-port keys, and the reader reader never reaches an announcement:
+    /// each hangs under a chunk beginning `@`, which no wildcard matches.
+    #[test]
+    fn the_at_chunks_keep_every_subtree_out_of_every_others_subscription() {
+        let key_space = a_key_space("lab");
+        let announcements = keyexpr::new(key_space.every_announcement_key().as_str())
+            .expect("a key expression")
+            .to_owned();
+
+        for out_of_reach in [
+            key_space.reader_token_key("bench", "CameraSource", "video", "desk"),
+            key_space.egress_token_key("bench", "CameraSource", "video"),
+            key_space.offered_output_ports_key_of("bench"),
+        ] {
+            assert!(
+                !announcements
+                    .includes(keyexpr::new(out_of_reach.as_str()).expect("a key expression")),
+                "{announcements} must not reach {out_of_reach}"
+            );
+            assert_eq!(
+                key_space.read_an_announcement_key(&out_of_reach),
+                None,
+                "{out_of_reach} must not read as an announcement"
+            );
+        }
+
+        assert_eq!(
+            key_space
+                .read_a_reader_token_key(&key_space.announcement_key_for(&an_identity("bench", 7))),
+            None,
+            "an announcement must not read as a reader token"
+        );
+    }
+
+    /// A port's own bags ride outside the `@runtime` subtree, at the address
+    /// the port is named by — so the data key is the address and nothing else.
+    #[test]
+    fn a_ports_bags_ride_at_the_address_the_port_is_named_by() {
+        let key_space = a_key_space("lab");
+        let data_key = key_space.data_key("bench-cam-a1b2", "Camera Source 2", "video");
+        assert_eq!(
+            data_key,
+            "streamlib/lab/bench-cam-a1b2/Camera Source 2/video"
+        );
+        keyexpr::new(data_key.as_str()).expect("the data key is a key expression");
+
+        assert_eq!(
+            a_key_space("other").data_key("bench-cam-a1b2", "Camera Source 2", "video"),
+            "streamlib/other/bench-cam-a1b2/Camera Source 2/video",
+            "two meshes never share a port's data key"
+        );
+    }
+
+    /// A key this engine did not write reads as no reader rather than as one
+    /// with half its parts invented.
+    #[test]
+    fn a_key_this_engine_did_not_write_reads_as_no_reader() {
+        let key_space = a_key_space("lab");
+        for foreign in [
+            "streamlib/lab/@runtime/bench/@readers",
+            "streamlib/lab/@runtime/bench/@readers/CameraSource",
+            "streamlib/lab/@runtime/bench/@readers/CameraSource/video",
+            "streamlib/lab/@runtime/bench/@readers/CameraSource/video/desk/extra",
+            "streamlib/lab/@runtime/bench/@egress/CameraSource/video",
+            "ros2/lab/@runtime/bench/@readers/CameraSource/video/desk",
+        ] {
+            assert_eq!(
+                key_space.read_a_reader_token_key(foreign),
+                None,
+                "{foreign:?} must read as no reader"
+            );
+        }
+    }
 }

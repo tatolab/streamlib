@@ -73,7 +73,7 @@ struct ResolvingEveryWaitingLink {
 
 impl MeshLinkIngressTable {
     /// A table for a runtime whose iceoryx2 node is `iceoryx2_node`.
-    pub(crate) fn of_this_runtime(iceoryx2_node: &Iceoryx2Node) -> Arc<Self> {
+    pub fn of_this_runtime(iceoryx2_node: &Iceoryx2Node) -> Arc<Self> {
         Arc::new(Self {
             iceoryx2_node: iceoryx2_node.clone(),
             carried: Arc::new(Mutex::new(
@@ -84,7 +84,7 @@ impl MeshLinkIngressTable {
     }
 
     /// Note a link `connect` has just applied, waiting on `address`.
-    pub(crate) fn note_a_link_waiting_on(
+    pub fn note_a_link_waiting_on(
         &self,
         address: MeshPortAddress,
         link_id: LinkUniqueId,
@@ -142,7 +142,7 @@ impl MeshLinkIngressTable {
     }
 
     /// Start resolving waiting links, now that this runtime is on a mesh.
-    pub(crate) fn start_resolving_every_waiting_link(
+    pub fn start_resolving_every_waiting_link(
         self: &Arc<Self>,
         session: &zenoh::Session,
         key_space: &RuntimeMeshKeySpace,
@@ -207,7 +207,7 @@ impl MeshLinkIngressTable {
 
     /// Stop resolving and stop carrying everything — a runtime leaving the
     /// mesh reads nothing from it.
-    pub(crate) fn stop(&self) {
+    pub fn stop(&self) {
         if let Some(mut resolving) = self.resolving.lock().take() {
             drop(resolving.announcement_subscriber.take());
             drop(resolving.wake_the_resolver.take());
@@ -310,12 +310,36 @@ fn why_this_address_cannot_be_carried_yet(
     resolving: &ResolvingLinksNeeds,
     address: &MeshPortAddress,
 ) -> Option<RemoteLinkResolution> {
-    let holders = resolving
-        .peers
-        .every_peer_holding_the_name(&address.runtime_name);
-    let [(_, described)] = holders.as_slice() else {
+    if let Err(not_yet) = what_the_runtimes_holding_the_name_say(
+        address,
+        &resolving
+            .peers
+            .every_peer_holding_the_name(&address.runtime_name),
+        env!("CARGO_PKG_VERSION"),
+    ) {
+        return Some(not_yet);
+    }
+    let offered = ask_a_runtime_what_output_ports_it_offers(
+        &resolving.session,
+        &resolving.key_space,
+        &address.runtime_name,
+    );
+    what_the_offered_ports_say(address, offered.as_ref()).err()
+}
+
+/// What the runtimes announced under this address's name mean for it: nothing
+/// to carry from, one to carry from, or an ambiguity that refuses the link.
+fn what_the_runtimes_holding_the_name_say(
+    address: &MeshPortAddress,
+    holders: &[(
+        crate::core::runtime::mesh::runtime_mesh_key::AnnouncedRuntimeIdentity,
+        Option<crate::core::runtime::mesh::runtime_mesh_description::RuntimeMeshDescription>,
+    )],
+    this_engines_version: &str,
+) -> std::result::Result<(), RemoteLinkResolution> {
+    let [(_, described)] = holders else {
         if holders.is_empty() {
-            return Some(RemoteLinkResolution::AwaitingRemote {
+            return Err(RemoteLinkResolution::AwaitingRemote {
                 reason: format!("the runtime {} is not on the mesh", address.runtime_name),
             });
         }
@@ -332,7 +356,7 @@ fn why_this_address_cannot_be_carried_yet(
                 )
             })
             .collect();
-        return Some(RemoteLinkResolution::Refused {
+        return Err(RemoteLinkResolution::Refused {
             reason: format!(
                 "{} live runtimes on this mesh are named {}, on {}. A link naming that runtime \
                  is ambiguous and carries from none of them until all but one leaves.",
@@ -343,16 +367,15 @@ fn why_this_address_cannot_be_carried_yet(
         });
     };
     let Some(described) = described else {
-        return Some(RemoteLinkResolution::AwaitingRemote {
+        return Err(RemoteLinkResolution::AwaitingRemote {
             reason: format!(
                 "the runtime {} is on the mesh and has not yet said what it is",
                 address.runtime_name
             ),
         });
     };
-    let this_engines_version = env!("CARGO_PKG_VERSION");
     if described.engine_version != this_engines_version {
-        return Some(RemoteLinkResolution::Refused {
+        return Err(RemoteLinkResolution::Refused {
             reason: format!(
                 "the runtime {} runs engine {} and this one runs engine {this_engines_version}. \
                  Before 1.0 there is no wire between two engine versions, so nothing is carried \
@@ -361,13 +384,16 @@ fn why_this_address_cannot_be_carried_yet(
             ),
         });
     }
+    Ok(())
+}
 
-    let Some(offered) = ask_a_runtime_what_output_ports_it_offers(
-        &resolving.session,
-        &resolving.key_space,
-        &address.runtime_name,
-    ) else {
-        return Some(RemoteLinkResolution::AwaitingRemote {
+/// What a runtime's answer about its output ports means for this address.
+fn what_the_offered_ports_say(
+    address: &MeshPortAddress,
+    offered: Option<&crate::core::runtime::mesh::OutputPortsOfferedOnTheMesh>,
+) -> std::result::Result<(), RemoteLinkResolution> {
+    let Some(offered) = offered else {
+        return Err(RemoteLinkResolution::AwaitingRemote {
             reason: format!(
                 "the runtime {} has not said which output ports it offers",
                 address.runtime_name
@@ -375,7 +401,7 @@ fn why_this_address_cannot_be_carried_yet(
         });
     };
     if !offered.offers(&address.processor_display_name, &address.port_name) {
-        return Some(RemoteLinkResolution::Refused {
+        return Err(RemoteLinkResolution::Refused {
             reason: format!(
                 "the runtime {} offers no output port {}/{}. It offers: {}.",
                 address.runtime_name,
@@ -385,7 +411,7 @@ fn why_this_address_cannot_be_carried_yet(
             ),
         });
     }
-    None
+    Ok(())
 }
 
 /// Start carrying `address`, and tell every link from it.
@@ -512,5 +538,181 @@ fn say_how_far_every_link_from(
         if *how_far_it_has_got != how_far {
             *how_far_it_has_got = how_far.clone();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::runtime::mesh::runtime_mesh_description::RuntimeMeshDescription;
+    use crate::core::runtime::mesh::runtime_mesh_key::AnnouncedRuntimeIdentity;
+    use crate::core::runtime::mesh::{HostIdentity, OutputPortOfferedOnTheMesh};
+
+    fn an_address() -> MeshPortAddress {
+        MeshPortAddress::new("bench-cam-a1b2", "CameraSource", "video").expect("a legal address")
+    }
+
+    fn a_runtime_on(
+        host: &str,
+        process_id: u32,
+        engine_version: &str,
+    ) -> (AnnouncedRuntimeIdentity, Option<RuntimeMeshDescription>) {
+        (
+            AnnouncedRuntimeIdentity {
+                runtime_name: "bench-cam-a1b2".to_string(),
+                host_identity: HostIdentity::ThisKernelBootAndPidNamespace {
+                    kernel_boot_id: host.to_string(),
+                    pid_namespace_inode: 4_026_531_836,
+                },
+                process_id,
+            },
+            Some(RuntimeMeshDescription {
+                runtime_id: "R7".to_string(),
+                host_name: host.to_string(),
+                pid: process_id,
+                engine_version: engine_version.to_string(),
+                control_plane_urls: vec![],
+            }),
+        )
+    }
+
+    fn a_listing_offering(
+        ports: &[(&str, &str)],
+    ) -> crate::core::runtime::mesh::OutputPortsOfferedOnTheMesh {
+        crate::core::runtime::mesh::OutputPortsOfferedOnTheMesh {
+            ports: ports
+                .iter()
+                .map(|(display, port)| OutputPortOfferedOnTheMesh {
+                    processor_display_name: display.to_string(),
+                    port_name: port.to_string(),
+                })
+                .collect(),
+        }
+    }
+
+    fn the_reason(outcome: std::result::Result<(), RemoteLinkResolution>) -> String {
+        match outcome.expect_err("this address cannot be carried") {
+            RemoteLinkResolution::AwaitingRemote { reason }
+            | RemoteLinkResolution::Refused { reason } => reason,
+            RemoteLinkResolution::Wired => panic!("a wired link has no reason"),
+        }
+    }
+
+    /// A runtime nobody has announced leaves the link waiting, naming the
+    /// runtime — which is what a reader has to go and start.
+    #[test]
+    fn a_runtime_that_is_not_on_the_mesh_leaves_the_link_waiting_naming_it() {
+        let outcome =
+            what_the_runtimes_holding_the_name_say(&an_address(), &[], env!("CARGO_PKG_VERSION"));
+        assert!(matches!(
+            outcome,
+            Err(RemoteLinkResolution::AwaitingRemote { .. })
+        ));
+        assert!(the_reason(outcome).contains("bench-cam-a1b2"));
+    }
+
+    /// A runtime whose token is here and which has not described itself yet is
+    /// still waiting rather than refused: the answer is on its way.
+    #[test]
+    fn a_runtime_that_has_not_described_itself_is_waited_on_rather_than_refused() {
+        let (announced, _) = a_runtime_on("desk", 7, env!("CARGO_PKG_VERSION"));
+        let outcome = what_the_runtimes_holding_the_name_say(
+            &an_address(),
+            &[(announced, None)],
+            env!("CARGO_PKG_VERSION"),
+        );
+        assert!(matches!(
+            outcome,
+            Err(RemoteLinkResolution::AwaitingRemote { .. })
+        ));
+    }
+
+    /// A different engine version refuses the link naming both versions. Before
+    /// 1.0 there is no wire between two of them.
+    #[test]
+    fn a_different_engine_version_refuses_the_link_naming_both() {
+        let outcome = what_the_runtimes_holding_the_name_say(
+            &an_address(),
+            &[a_runtime_on("desk", 7, "0.1.0-from-another-age")],
+            "0.25.2",
+        );
+        assert!(matches!(outcome, Err(RemoteLinkResolution::Refused { .. })));
+        let reason = the_reason(outcome);
+        assert!(reason.contains("0.1.0-from-another-age"), "{reason}");
+        assert!(reason.contains("0.25.2"), "{reason}");
+    }
+
+    /// A name two live runtimes hold refuses the link naming both hosts, and
+    /// carries from neither — one of them would be the wrong machine.
+    #[test]
+    fn a_name_two_live_runtimes_hold_refuses_the_link_naming_both_hosts() {
+        let outcome = what_the_runtimes_holding_the_name_say(
+            &an_address(),
+            &[
+                a_runtime_on("desk-boot-id", 7, env!("CARGO_PKG_VERSION")),
+                a_runtime_on("rig-boot-id", 9, env!("CARGO_PKG_VERSION")),
+            ],
+            env!("CARGO_PKG_VERSION"),
+        );
+        assert!(matches!(outcome, Err(RemoteLinkResolution::Refused { .. })));
+        let reason = the_reason(outcome);
+        assert!(reason.contains("desk-boot-id"), "{reason}");
+        assert!(reason.contains("rig-boot-id"), "{reason}");
+    }
+
+    /// Exactly one runtime, on this engine version, is carried from.
+    #[test]
+    fn one_runtime_on_this_engine_version_is_carried_from() {
+        assert!(
+            what_the_runtimes_holding_the_name_say(
+                &an_address(),
+                &[a_runtime_on("desk", 7, env!("CARGO_PKG_VERSION"))],
+                env!("CARGO_PKG_VERSION"),
+            )
+            .is_ok()
+        );
+    }
+
+    /// A runtime that has not listed its ports is waited on; one that has, and
+    /// offers no such port, is refused listing what it does offer.
+    #[test]
+    fn a_missing_port_is_refused_listing_what_the_runtime_does_offer() {
+        assert!(matches!(
+            what_the_offered_ports_say(&an_address(), None),
+            Err(RemoteLinkResolution::AwaitingRemote { .. })
+        ));
+
+        let outcome = what_the_offered_ports_say(
+            &an_address(),
+            Some(&a_listing_offering(&[
+                ("MicrophoneSource", "audio"),
+                ("CameraSource", "depth"),
+            ])),
+        );
+        assert!(matches!(outcome, Err(RemoteLinkResolution::Refused { .. })));
+        let reason = the_reason(outcome);
+        assert!(reason.contains("CameraSource/video"), "{reason}");
+        assert!(reason.contains("MicrophoneSource/audio"), "{reason}");
+        assert!(reason.contains("CameraSource/depth"), "{reason}");
+    }
+
+    /// A runtime offering the port is carried from.
+    #[test]
+    fn a_runtime_offering_the_port_is_carried_from() {
+        assert!(
+            what_the_offered_ports_say(
+                &an_address(),
+                Some(&a_listing_offering(&[("CameraSource", "video")])),
+            )
+            .is_ok()
+        );
+    }
+
+    /// A port that has never started being sent is not one that stopped: the
+    /// reader token has only just gone up and the egress is still coming.
+    #[test]
+    fn a_port_that_never_started_being_sent_is_not_one_that_stopped() {
+        let sending = crate::core::runtime::mesh::mesh_link_ingress::SourceSendingState::default();
+        assert!(!sending.it_was_sending_and_stopped());
     }
 }

@@ -67,12 +67,12 @@ pub use loss_counters::{
 pub use mailbox::{
     PortMailbox, PortMailboxDeliveredBag, PortMailboxEvictionNotice, PortMailboxQueuedFrameMeasure,
 };
-pub(crate) use node::ChannelSizing;
+
 pub use node::{
-    ChannelDataServicePublisher, ChannelDataServiceSubscriber, ChannelTapSubscribeError,
-    ICEORYX2_DOMAIN_ROOT_AND_PREFIX_BUDGET_BYTES, ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE,
-    Iceoryx2Node, Iceoryx2NotifyService, Iceoryx2Service,
-    create_iceoryx2_node_in_engine_owned_domain, engine_owned_iceoryx2_config,
+    ChannelDataServicePublisher, ChannelDataServiceSubscriber, ChannelSizing,
+    ChannelTapSubscribeError, ICEORYX2_DOMAIN_ROOT_AND_PREFIX_BUDGET_BYTES,
+    ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, Iceoryx2Node, Iceoryx2NotifyService,
+    Iceoryx2Service, create_iceoryx2_node_in_engine_owned_domain, engine_owned_iceoryx2_config,
     engine_owned_iceoryx2_prefix_for_this_user, reclaim_dead_iceoryx2_nodes_in_engine_owned_domain,
 };
 pub use output::{ChannelEgressConfig, OutputWriter, OutputWriterInner};

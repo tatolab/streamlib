@@ -792,7 +792,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
             ],
         ),
         (
-            "the mesh's two-process proof (the only CI test that runs two runtimes)",
+            "the mesh's two-process proof (one of the two CI tests that run two runtimes)",
             "cargo",
             &[
                 "test",
@@ -801,6 +801,18 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "streamlib-engine",
                 "--test",
                 "runtime_mesh_two_processes",
+            ],
+        ),
+        (
+            "the cross-runtime-link two-process proof (the other one)",
+            "cargo",
+            &[
+                "test",
+                "--locked",
+                "-p",
+                "streamlib-engine",
+                "--test",
+                "cross_runtime_links_two_processes",
             ],
         ),
         // The dependency closure's licences, against `deny.toml`'s allowlist.

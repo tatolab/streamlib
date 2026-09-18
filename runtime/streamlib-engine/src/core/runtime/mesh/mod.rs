@@ -46,7 +46,11 @@ pub use mesh_data_message_attachment::{
     MESH_DATA_MESSAGE_ATTACHMENT_BYTES, MeshDataMessageAttachment,
 };
 pub use mesh_link_ingress_table::MeshLinkIngressTable;
-pub(crate) use output_ports_offered_on_the_mesh::{
+// Reachable rather than supported, like the key grammar above: the
+// cross-runtime-link fixture stands two runtimes' mesh halves up without a
+// `Runner`, because CI has no GPU to start one with.
+#[doc(hidden)]
+pub use output_ports_offered_on_the_mesh::{
     HowToReadAnOfferedOutputPort, WhatThisRuntimeOffersOnTheMesh,
     WhatThisRuntimeOffersOnTheMeshRegistry,
 };

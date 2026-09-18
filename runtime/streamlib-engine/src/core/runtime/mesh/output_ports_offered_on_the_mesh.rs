@@ -81,7 +81,7 @@ impl OutputPortsOfferedOnTheMesh {
 /// The mesh joins in `Runner::new()` before the graph exists, so this arrives
 /// afterwards — the shape the hosted control plane's endpoint registry already
 /// uses for something the runtime learns after it is on the mesh.
-pub(crate) trait WhatThisRuntimeOffersOnTheMesh: Send + Sync {
+pub trait WhatThisRuntimeOffersOnTheMesh: Send + Sync {
     /// Every output port in this runtime's graph right now.
     fn output_ports_it_offers_right_now(&self) -> OutputPortsOfferedOnTheMesh;
 
@@ -98,7 +98,7 @@ pub(crate) trait WhatThisRuntimeOffersOnTheMesh: Send + Sync {
 /// channel: the iceoryx2 service name and the sizing the compiler opened it
 /// with.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct HowToReadAnOfferedOutputPort {
+pub struct HowToReadAnOfferedOutputPort {
     /// The channel data-service name the port publishes to.
     pub channel_service_name: String,
     /// The sizing every opener of that service must ask for.
@@ -111,13 +111,13 @@ pub(crate) struct HowToReadAnOfferedOutputPort {
 /// Empty until then, which answers a peer with an empty list rather than
 /// failing its query — a runtime still coming up genuinely offers nothing.
 #[derive(Default)]
-pub(crate) struct WhatThisRuntimeOffersOnTheMeshRegistry {
+pub struct WhatThisRuntimeOffersOnTheMeshRegistry {
     reader: Mutex<Option<std::sync::Arc<dyn WhatThisRuntimeOffersOnTheMesh>>>,
 }
 
 impl WhatThisRuntimeOffersOnTheMeshRegistry {
     /// Record how the mesh reads this runtime's graph.
-    pub(crate) fn record_how_to_read_this_runtimes_graph(
+    pub fn record_how_to_read_this_runtimes_graph(
         &self,
         reader: std::sync::Arc<dyn WhatThisRuntimeOffersOnTheMesh>,
     ) {
@@ -125,7 +125,7 @@ impl WhatThisRuntimeOffersOnTheMeshRegistry {
     }
 
     /// Every output port this runtime offers right now.
-    pub(crate) fn output_ports_it_offers_right_now(&self) -> OutputPortsOfferedOnTheMesh {
+    pub fn output_ports_it_offers_right_now(&self) -> OutputPortsOfferedOnTheMesh {
         self.reader
             .lock()
             .as_ref()
@@ -135,7 +135,7 @@ impl WhatThisRuntimeOffersOnTheMeshRegistry {
 
     /// How to read one offered port's channel, or `None` while this runtime has
     /// no graph yet or no such port is wired.
-    pub(crate) fn how_to_read_an_offered_output_port(
+    pub fn how_to_read_an_offered_output_port(
         &self,
         processor_display_name: &str,
         port_name: &str,

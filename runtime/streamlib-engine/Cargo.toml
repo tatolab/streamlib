@@ -259,6 +259,20 @@ path = "tests/bin/runtime_mesh_peer.rs"
 [[test]]
 name = "runtime_mesh_two_processes"
 path = "tests/runtime_mesh_two_processes.rs"
+
+# One end of a cross-runtime link in its own process, driven by the
+# `cross_runtime_links_two_processes` integration test. CI has no GPU, so it
+# stands a runtime's mesh half up without a `Runner`.
+[[bin]]
+name = "cross_runtime_link_peer"
+path = "tests/bin/cross_runtime_link_peer.rs"
+
+# The two-process cross-runtime-link proof. Named in
+# `.github/workflows/test.yml`'s engine slice and the `run_local_ci_gates`
+# mirror, or it runs nowhere.
+[[test]]
+name = "cross_runtime_links_two_processes"
+path = "tests/cross_runtime_links_two_processes.rs"
 # Strace-backed no-syscalls test child. Built under `cargo test` via
 # the path dep; not needed for normal builds.
 

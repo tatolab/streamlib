@@ -166,7 +166,7 @@ impl RuntimeMeshMembership {
     /// `Runner::new()` builds after the session is open. A runtime that never
     /// reached its mesh serves nothing and says nothing about it: it has no
     /// session to declare on, and `graph` already renders it local-only.
-    pub(crate) fn start_serving_this_runtimes_output_ports(
+    pub fn start_serving_this_runtimes_output_ports(
         &self,
         offered: &Arc<WhatThisRuntimeOffersOnTheMeshRegistry>,
         iceoryx2_node: &Iceoryx2Node,
@@ -224,7 +224,7 @@ impl RuntimeMeshMembership {
     /// A runtime that never reached its mesh resolves nothing: every link from
     /// another runtime stays waiting, saying so, which is what `graph` already
     /// renders beside a local-only session.
-    pub(crate) fn start_carrying_links_from_other_runtimes(
+    pub fn start_carrying_links_from_other_runtimes(
         &self,
         ingress_table: &Arc<MeshLinkIngressTable>,
     ) {
@@ -257,7 +257,7 @@ impl RuntimeMeshMembership {
 
     /// Note a link `connect` has just applied against a port on another
     /// runtime, so the mesh resolves it.
-    pub(crate) fn note_a_link_from_another_runtime(
+    pub fn note_a_link_from_another_runtime(
         &self,
         address: crate::core::graph::MeshPortAddress,
         link_id: crate::core::graph::LinkUniqueId,

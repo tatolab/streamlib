@@ -71,7 +71,7 @@ pub(super) struct MeshLinkIngress {
 
 /// Whether the source runtime is sending this port, and whether it ever was.
 #[derive(Default)]
-pub(super) struct SourceSendingState {
+pub(crate) struct SourceSendingState {
     sending_now: AtomicBool,
     has_ever_sent: AtomicBool,
 }
@@ -89,7 +89,7 @@ impl SourceSendingState {
     /// Whether the source has stopped sending a port it was sending. A port
     /// that has never started is not "stopped": the ingress has only just
     /// declared its reader token and the egress is still coming up.
-    pub(super) fn it_was_sending_and_stopped(&self) -> bool {
+    pub(crate) fn it_was_sending_and_stopped(&self) -> bool {
         self.has_ever_sent.load(Ordering::Acquire) && !self.sending_now.load(Ordering::Acquire)
     }
 }

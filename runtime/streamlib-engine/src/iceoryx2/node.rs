@@ -210,11 +210,11 @@ pub(crate) fn create_iceoryx2_node_in_domain(
 /// The sizing a channel data service is created with, and that every opener
 /// reopens it at — the parameters iceoryx2 verifies on each open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ChannelSizing {
+pub struct ChannelSizing {
     /// The fixed destination slot count plus the reserved tap slot.
-    pub(crate) max_subscribers: usize,
+    pub max_subscribers: usize,
     /// The deepest ring any subscriber on the channel may take.
-    pub(crate) channel_service_creation_depth: usize,
+    pub channel_service_creation_depth: usize,
 }
 
 /// The publisher of a channel data service: `[u8]` frames under the
