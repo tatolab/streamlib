@@ -85,6 +85,7 @@ crossbeam-queue = "0.3"  # Lock-free MPMC queue for thread-safe mailboxes
 iceoryx2 = "0.9.3"  # Zero-copy IPC pub/sub for cross-process communication
 iceoryx2-log = "0.9.3"  # Bridge iceoryx2's internal log records into streamlib tracing
 rmp-serde = "1.3"  # MessagePack serialization for frame payloads
+rmp.workspace = true  # Raw msgpack markers: the egress walk over a bag's top-level keys
 serde_bytes.workspace = true  # `samples` rides the wire as msgpack `bin`, not an array
 rubato.workspace = true  # Resampler behind the audio window contract's read-side stage
 signal-hook = "0.3"  # Native signal handling (SIGTERM, SIGINT) for event bus

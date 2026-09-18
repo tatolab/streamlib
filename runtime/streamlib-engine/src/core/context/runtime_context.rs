@@ -10,7 +10,7 @@ use super::{
     GpuContext, GpuContextFullAccess, GpuContextLimitedAccess, SharedAudioClock, TimeContext,
 };
 use crate::core::graph::ProcessorUniqueId;
-use crate::core::runtime::mesh::HostedControlPlaneEndpointRegistry;
+use crate::core::runtime::mesh::{HostedControlPlaneEndpointRegistry, MeshLinkIngressTable};
 use crate::core::runtime::{
     RuntimeName, RuntimeOperations, RuntimeUniqueId, StreamlibRuntimeDirectory,
 };
@@ -45,6 +45,10 @@ pub struct RuntimeContext {
     tokio_handle: tokio::runtime::Handle,
     /// iceoryx2 Node for creating Services, Publishers, and Subscribers.
     iceoryx2_node: Iceoryx2Node,
+    /// Every port on another runtime this runtime links from. The wiring op
+    /// tells it how each remote link's destination is woken; the mesh opens and
+    /// closes the ingresses that write those links' channels.
+    mesh_link_ingress_table: Arc<MeshLinkIngressTable>,
     /// Audio clock for synchronized audio timing.
     audio_clock: SharedAudioClock,
     /// The runtime directory this runtime resolved as it started.
@@ -70,6 +74,7 @@ impl RuntimeContext {
         runtime_ops: Arc<dyn RuntimeOperations>,
         tokio_handle: tokio::runtime::Handle,
         iceoryx2_node: Iceoryx2Node,
+        mesh_link_ingress_table: Arc<MeshLinkIngressTable>,
         audio_clock: SharedAudioClock,
         runtime_directory: StreamlibRuntimeDirectory,
         hosted_control_plane: Arc<HostedControlPlaneEndpointRegistry>,
@@ -86,6 +91,7 @@ impl RuntimeContext {
             runtime_ops,
             tokio_handle,
             iceoryx2_node,
+            mesh_link_ingress_table,
             audio_clock,
             runtime_directory,
             hosted_control_plane,
@@ -198,6 +204,11 @@ impl RuntimeContext {
         &self.iceoryx2_node
     }
 
+    /// Every port on another runtime this runtime links from.
+    pub(crate) fn mesh_link_ingress_table(&self) -> &Arc<MeshLinkIngressTable> {
+        &self.mesh_link_ingress_table
+    }
+
     /// Get the audio clock for synchronized audio timing.
     ///
     /// The audio clock provides timing callbacks for audio producers at
@@ -220,6 +231,7 @@ impl RuntimeContext {
             runtime_ops: Arc::clone(&self.runtime_ops),
             tokio_handle: self.tokio_handle.clone(),
             iceoryx2_node: self.iceoryx2_node.clone(),
+            mesh_link_ingress_table: Arc::clone(&self.mesh_link_ingress_table),
             audio_clock: Arc::clone(&self.audio_clock),
             runtime_directory: self.runtime_directory.clone(),
             hosted_control_plane: Arc::clone(&self.hosted_control_plane),
@@ -241,6 +253,7 @@ impl RuntimeContext {
             runtime_ops: Arc::clone(&self.runtime_ops),
             tokio_handle: self.tokio_handle.clone(),
             iceoryx2_node: self.iceoryx2_node.clone(),
+            mesh_link_ingress_table: Arc::clone(&self.mesh_link_ingress_table),
             audio_clock: Arc::clone(&self.audio_clock),
             runtime_directory: self.runtime_directory.clone(),
             hosted_control_plane: Arc::clone(&self.hosted_control_plane),

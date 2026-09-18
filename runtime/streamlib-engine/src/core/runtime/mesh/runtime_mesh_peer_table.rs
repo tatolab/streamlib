@@ -62,6 +62,24 @@ impl RuntimeMeshPeerTable {
         self.peers.read().keys().cloned().collect()
     }
 
+    /// Every peer announced under `runtime_name`, with what it last said about
+    /// itself.
+    ///
+    /// More than one is an address collision two runtimes that started inside
+    /// one discovery window can produce, so the caller gets them all rather
+    /// than one picked arbitrarily.
+    pub fn every_peer_holding_the_name(
+        &self,
+        runtime_name: &str,
+    ) -> Vec<(AnnouncedRuntimeIdentity, Option<RuntimeMeshDescription>)> {
+        self.peers
+            .read()
+            .iter()
+            .filter(|(announced, _)| announced.runtime_name == runtime_name)
+            .map(|(announced, described)| (announced.clone(), described.clone()))
+            .collect()
+    }
+
     /// Every peer, sorted by name — the order `graph` renders them in.
     pub fn render_for_graph(&self) -> Vec<RuntimeMeshPeerOutput> {
         self.peers

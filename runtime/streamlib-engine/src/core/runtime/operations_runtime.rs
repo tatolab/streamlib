@@ -451,7 +451,7 @@ fn apply_a_link_from_another_runtime(
         source.runtime_name,
         runtime_mesh.mesh_name()
     );
-    compiler.scope(|graph, _tx| -> Result<LinkUniqueId> {
+    let (link_id, how_far_it_has_got) = compiler.scope(|graph, tx| -> Result<_> {
         refuse_a_destination_this_graph_cannot_take(graph, &to)?;
 
         let link = graph
@@ -459,15 +459,28 @@ fn apply_a_link_from_another_runtime(
             .add_link_from_another_runtime(source.clone(), to)
             .first_mut()
             .ok_or_else(|| Error::GraphError("failed to create link after validation".into()))?;
+        // Wired like any other link: the destination subscribes to the
+        // engine-named channel the address derives, which the ingress publishes
+        // onto once the source runtime turns up. The state the link *reports*
+        // stays `awaiting_remote` until it does, off the cell below, because
+        // nothing carries before then.
         link.state = crate::core::graph::LinkState::AwaitingRemote;
         link.insert(crate::core::graph::LinkStateComponent(
             crate::core::graph::LinkState::AwaitingRemote,
         ));
-        link.insert_component_without_rendering_it(
-            crate::core::graph::RemoteLinkResolutionComponent::awaiting_remote(waiting_on),
-        );
-        Ok(link.id.clone())
-    })
+        let resolution =
+            crate::core::graph::RemoteLinkResolutionComponent::awaiting_remote(waiting_on);
+        let how_far_it_has_got = resolution.its_cell();
+        link.insert_component_without_rendering_it(resolution);
+        let link_id = link.id.clone();
+        tx.log(PendingOperation::AddLink(link_id.clone()));
+        Ok((link_id, how_far_it_has_got))
+    })?;
+
+    // The mesh takes it from here: it resolves the address, refuses by name
+    // what it cannot carry, and opens the ingress when it can.
+    runtime_mesh.note_a_link_from_another_runtime(source, link_id.clone(), how_far_it_has_got);
+    Ok(link_id)
 }
 
 /// Refuse a destination this graph has no processor or no such input port for,
@@ -652,8 +665,7 @@ impl RuntimeOperations for Runner {
                 let sizing = crate::core::compiler::compiler_ops::resolve_channel_sizing(
                     graph,
                     &self.iceoryx2_node,
-                    &source_proc_id,
-                    &source_port,
+                    &OutputLinkPortRef::new(source_proc_id.clone(), source_port.clone()),
                 )?;
                 Ok((channel.clone(), sizing))
             },
@@ -1187,11 +1199,12 @@ mod connect_wires_without_inspecting_a_port_tests {
             })
         );
         assert!(
-            !compiler
+            compiler
                 .logged_pending_operations()
                 .iter()
                 .any(|op| matches!(op, PendingOperation::AddLink(id) if *id == link_id)),
-            "nothing can be wired for a link whose source runtime is not here"
+            "the destination wires onto the channel the address derives, whether or not the \
+             source runtime is here yet"
         );
     }
 

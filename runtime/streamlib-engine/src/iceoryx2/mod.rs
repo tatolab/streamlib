@@ -5,6 +5,7 @@
 
 mod audio_window;
 mod channel_ceiling;
+mod channel_idle_poll_backoff;
 mod channel_name;
 #[cfg(test)]
 mod channel_sizing_tests;
@@ -35,10 +36,14 @@ pub use channel_ceiling::{
     ENV_MAX_PAYLOAD_BYTES_PER_CHANNEL_TRUSTED, ENV_MAX_PAYLOAD_BYTES_PER_CHANNEL_UNTRUSTED_SESSION,
     effective_channel_chunk_ceiling_bytes,
 };
+pub use channel_idle_poll_backoff::{
+    CHANNEL_LONGEST_IDLE_POLL_BACKOFF, CHANNEL_QUIET_BEFORE_THE_BACKOFF_CLIMBS,
+    CHANNEL_SHORTEST_IDLE_POLL_BACKOFF, ChannelIdlePollBackoff,
+};
 pub use channel_name::{
     CHANNEL_CHUNK_SEPARATOR, ChannelName, InboundLinkName, MAX_CHANNEL_NAME_BYTES,
-    THE_ONE_CHUNK_GRAMMAR, first_reason_this_is_not_one_channel_name_chunk, source_channel_name,
-    validate_channel_name,
+    THE_ONE_CHUNK_GRAMMAR, first_reason_this_is_not_one_channel_name_chunk,
+    mesh_ingress_channel_name, source_channel_name, validate_channel_name,
 };
 pub(crate) use delivery_profile::delivery_profile_for_input_port;
 pub use delivery_profile::{DeliveryProfile, DeliveryResolution};

@@ -32,6 +32,19 @@ const MESH_KEY_ROOT_CHUNK: &str = "streamlib";
 /// it, and a display name may not begin with `@`, so no address collides.
 const RUNTIME_ANNOUNCEMENT_CHUNK: &str = "@runtime";
 
+/// The chunk under a runtime's own name where it answers which output ports it
+/// offers. Verbatim like every `@` chunk, so `@runtime/**` — the announcement
+/// subscription — never reaches it.
+const OFFERED_OUTPUT_PORTS_CHUNK: &str = "@offered-ports";
+
+/// The chunk under a runtime's own name where the runtimes reading its ports
+/// hold their tokens: `@readers/<display name>/<port>/<reader's runtime name>`.
+const READERS_CHUNK: &str = "@readers";
+
+/// The chunk under a runtime's own name where it holds one token per port it is
+/// currently sending: `@egress/<display name>/<port>`.
+const EGRESS_CHUNK: &str = "@egress";
+
 /// What a runtime's own announcement is named by. Every field is on the token
 /// key, so a peer reads all three off a token whose runtime is already gone.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -53,6 +66,19 @@ impl AnnouncedRuntimeIdentity {
             process_id: std::process::id(),
         }
     }
+}
+
+/// One runtime reading one output port of another, as its token names it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ReaderOfAnOutputPort {
+    /// The runtime that owns the port being read.
+    pub source_runtime_name: String,
+    /// The display name of the processor that owns it.
+    pub processor_display_name: String,
+    /// The port's own name.
+    pub port_name: String,
+    /// The runtime doing the reading.
+    pub reading_runtime_name: String,
 }
 
 /// One mesh's key space.
@@ -81,6 +107,105 @@ impl RuntimeMeshKeySpace {
             announced.runtime_name,
             announced.host_identity.as_one_key_chunk(),
             announced.process_id
+        )
+    }
+
+    /// The key a runtime answers on when a peer asks which output ports it
+    /// offers.
+    ///
+    /// Under the runtime's name rather than its whole announced identity: a
+    /// peer knows the name it is pulling from and nothing else about the
+    /// process behind it. Two live runtimes holding one name is refused as an
+    /// address collision before a link is ever carried from either.
+    pub fn offered_output_ports_key_of(&self, runtime_name: &str) -> String {
+        format!(
+            "{}/{runtime_name}/{OFFERED_OUTPUT_PORTS_CHUNK}",
+            self.runtime_announcement_root()
+        )
+    }
+
+    /// The token a runtime declares to say it is reading one port of
+    /// `source_runtime_name`.
+    ///
+    /// The source runtime watches these: the first reader of a port creates its
+    /// egress, and the last reader leaving removes it, so a runtime does no
+    /// network work for a port nobody pulls.
+    pub fn reader_token_key(
+        &self,
+        source_runtime_name: &str,
+        processor_display_name: &str,
+        port_name: &str,
+        reading_runtime_name: &str,
+    ) -> String {
+        format!(
+            "{}/{source_runtime_name}/{READERS_CHUNK}/{processor_display_name}/{port_name}/\
+             {reading_runtime_name}",
+            self.runtime_announcement_root()
+        )
+    }
+
+    /// The key a source runtime subscribes to in order to see every reader of
+    /// every one of its ports.
+    pub fn every_reader_token_of(&self, source_runtime_name: &str) -> String {
+        format!(
+            "{}/{source_runtime_name}/{READERS_CHUNK}/**",
+            self.runtime_announcement_root()
+        )
+    }
+
+    /// Which port a reader token names, or `None` when the key is not one this
+    /// engine wrote.
+    pub fn read_a_reader_token_key(&self, key: &str) -> Option<ReaderOfAnOutputPort> {
+        let readers_root = format!("{}/", self.runtime_announcement_root());
+        let rest = key.strip_prefix(&readers_root)?;
+        let mut chunks = rest.split('/');
+        let source_runtime_name = chunks.next()?.to_string();
+        if chunks.next()? != READERS_CHUNK {
+            return None;
+        }
+        let processor_display_name = chunks.next()?.to_string();
+        let port_name = chunks.next()?.to_string();
+        let reading_runtime_name = chunks.next()?.to_string();
+        if chunks.next().is_some() {
+            return None;
+        }
+        Some(ReaderOfAnOutputPort {
+            source_runtime_name,
+            processor_display_name,
+            port_name,
+            reading_runtime_name,
+        })
+    }
+
+    /// The token a source runtime declares while it is sending one port.
+    ///
+    /// A reader watches this: the token going while the runtime stays says the
+    /// port stopped being sent, which returns the link to waiting.
+    pub fn egress_token_key(
+        &self,
+        source_runtime_name: &str,
+        processor_display_name: &str,
+        port_name: &str,
+    ) -> String {
+        format!(
+            "{}/{source_runtime_name}/{EGRESS_CHUNK}/{processor_display_name}/{port_name}",
+            self.runtime_announcement_root()
+        )
+    }
+
+    /// The key one port's bags ride on.
+    ///
+    /// Outside the `@runtime` subtree, because this is the port's own address:
+    /// `streamlib/<mesh name>/<runtime name>/<display name>/<port>`.
+    pub fn data_key(
+        &self,
+        source_runtime_name: &str,
+        processor_display_name: &str,
+        port_name: &str,
+    ) -> String {
+        format!(
+            "{MESH_KEY_ROOT_CHUNK}/{}/{source_runtime_name}/{processor_display_name}/{port_name}",
+            self.mesh_name
         )
     }
 
