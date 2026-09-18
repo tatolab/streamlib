@@ -4,8 +4,10 @@
 //! One runtime's membership of one runtime mesh.
 //!
 //! Opened in `Runner::new()` and closed at the end of `Runner::stop()`. The
-//! mesh never fails a runtime's start: a session that cannot open leaves the
-//! runtime local-only, saying so once, and the runtime runs on.
+//! mesh never fails a runtime's start for want of a network: a session that
+//! cannot open leaves the runtime local-only, saying so once, and the runtime
+//! runs on. It fails one for exactly one reason — a name another live runtime
+//! already holds, which is an address collision rather than a network failure.
 //!
 //! **No Zenoh call may run on a current-thread tokio runtime** — Zenoh resolves
 //! its builders by blocking on its own pool, which panics there. `Runner::new()`
@@ -13,6 +15,7 @@
 //! neither assumes: both hand their Zenoh work to a thread of this module's own
 //! through [`off_any_current_thread_tokio_runtime`]. Discovery already has one.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -21,8 +24,10 @@ use parking_lot::Mutex;
 use zenoh::Wait;
 use zenoh::sample::SampleKind;
 
+use crate::core::error::{Error, Result};
 use crate::core::json_schema::{RuntimeMeshOutput, RuntimeMeshSessionOutput};
 use crate::core::runtime::RuntimeName;
+use crate::core::runtime::mesh::duplicate_runtime_name_on_the_mesh::refuse_this_runtime_if_its_name_is_already_live;
 use crate::core::runtime::mesh::hosted_control_plane_endpoint::HostedControlPlaneEndpointRegistry;
 use crate::core::runtime::mesh::resolved_runtime_mesh_configuration::ResolvedRuntimeMeshConfiguration;
 use crate::core::runtime::mesh::runtime_mesh_description::RuntimeMeshDescription;
@@ -77,15 +82,15 @@ enum WhatTheMeshSaw {
 impl RuntimeMeshMembership {
     /// Join the mesh `resolved` names, or run local-only saying why once.
     ///
-    /// Never returns an error: a mesh that cannot be reached is not a reason a
-    /// runtime fails to start.
+    /// Errs for one reason only: another live runtime already holds this
+    /// runtime's name. A mesh that cannot be reached is never one.
     pub fn join(
         resolved: &ResolvedRuntimeMeshConfiguration,
         runtime_name: &Arc<RuntimeName>,
         runtime_id: &str,
         host_name: &str,
         hosted_control_plane: &Arc<HostedControlPlaneEndpointRegistry>,
-    ) -> Self {
+    ) -> Result<Self> {
         let key_space = RuntimeMeshKeySpace::of(resolved.mesh_name.clone());
         let announced_identity = AnnouncedRuntimeIdentity::of_this_runtime(runtime_name);
         let peers = Arc::new(RuntimeMeshPeerTable::default());
@@ -101,8 +106,11 @@ impl RuntimeMeshMembership {
                 hosted_control_plane,
             )
         })
-        .unwrap_or_else(|cannot_spawn| Err(cannot_spawn.into()))
-        {
+        .unwrap_or_else(|cannot_spawn| {
+            Err(WhyThisRuntimeIsNotAnnounced::ItsMeshCouldNotBeReached(
+                cannot_spawn.to_string(),
+            ))
+        }) {
             Ok(announced) => {
                 tracing::info!(
                     "Runtime {runtime_name} is on the {} mesh",
@@ -110,8 +118,8 @@ impl RuntimeMeshMembership {
                 );
                 RuntimeMeshSessionState::Open(Box::new(announced))
             }
-            Err(why_it_could_not_join) => {
-                let reason = why_it_could_not_join.to_string();
+            Err(WhyThisRuntimeIsNotAnnounced::ItsNameIsAlreadyLive(refusal)) => return Err(refusal),
+            Err(WhyThisRuntimeIsNotAnnounced::ItsMeshCouldNotBeReached(reason)) => {
                 tracing::warn!(
                     "Runtime {runtime_name} could not join the {} mesh and is running \
                      local-only: {reason}",
@@ -121,12 +129,12 @@ impl RuntimeMeshMembership {
             }
         };
 
-        Self {
+        Ok(Self {
             mesh_name: resolved.mesh_name.to_string(),
             announced_identity,
             peers,
             session: Mutex::new(session),
-        }
+        })
     }
 
     /// Leave the mesh: undeclare the token first, so peers see this runtime go
@@ -225,6 +233,28 @@ fn off_any_current_thread_tokio_runtime<T: Send>(
     })
 }
 
+/// Why this runtime is not announced on its mesh — which decides whether it
+/// runs local-only or does not run at all.
+enum WhyThisRuntimeIsNotAnnounced {
+    /// The session did not open, or something it declares did not. The runtime
+    /// runs local-only and says so once.
+    ItsMeshCouldNotBeReached(String),
+    /// Another live runtime holds this runtime's name. The runtime refuses.
+    ItsNameIsAlreadyLive(Error),
+}
+
+impl From<Box<dyn std::error::Error + Send + Sync>> for WhyThisRuntimeIsNotAnnounced {
+    fn from(zenoh_failure: Box<dyn std::error::Error + Send + Sync>) -> Self {
+        Self::ItsMeshCouldNotBeReached(zenoh_failure.to_string())
+    }
+}
+
+impl From<std::io::Error> for WhyThisRuntimeIsNotAnnounced {
+    fn from(cannot_spawn: std::io::Error) -> Self {
+        Self::ItsMeshCouldNotBeReached(cannot_spawn.to_string())
+    }
+}
+
 /// Open the session and take everything this runtime holds on the mesh.
 fn announce_on_the_mesh(
     resolved: &ResolvedRuntimeMeshConfiguration,
@@ -234,8 +264,24 @@ fn announce_on_the_mesh(
     runtime_id: &str,
     host_name: &str,
     hosted_control_plane: &Arc<HostedControlPlaneEndpointRegistry>,
-) -> zenoh::Result<AnnouncedOnTheMesh> {
+) -> std::result::Result<AnnouncedOnTheMesh, WhyThisRuntimeIsNotAnnounced> {
     let session = zenoh::open(resolved.as_a_zenoh_configuration()?).wait()?;
+
+    // Before anything is declared, so that a local `get` does not answer with
+    // this session's own token and a refused runtime leaves nothing behind.
+    if let Err(refusal) = refuse_this_runtime_if_its_name_is_already_live(
+        &session,
+        key_space,
+        &resolved.mesh_name,
+        announced_identity,
+    ) {
+        if let Err(close_failure) = session.close().wait() {
+            tracing::debug!(
+                "the session of a runtime refused its name did not close cleanly: {close_failure}"
+            );
+        }
+        return Err(WhyThisRuntimeIsNotAnnounced::ItsNameIsAlreadyLive(refusal));
+    }
 
     // The queryable before the token: a peer that sees the token and asks at
     // once must find somebody to answer.
@@ -259,6 +305,7 @@ fn announce_on_the_mesh(
         session.clone(),
         key_space.clone(),
         Arc::clone(peers),
+        announced_identity.clone(),
         what_the_discovery_thread_reads,
     )?;
 
@@ -362,11 +409,13 @@ fn spawn_the_discovery_thread(
     session: zenoh::Session,
     key_space: RuntimeMeshKeySpace,
     peers: Arc<RuntimeMeshPeerTable>,
+    this_runtime: AnnouncedRuntimeIdentity,
     what_the_discovery_thread_reads: Receiver<WhatTheMeshSaw>,
 ) -> std::io::Result<std::thread::JoinHandle<()>> {
     std::thread::Builder::new()
         .name("streamlib-mesh-discovery".to_string())
         .spawn(move || {
+            let mut said_about = SamedNamedPeersAlreadySaidOnce::default();
             loop {
                 // Ends when the subscriber is dropped, which drops the sender;
                 // a timeout is a round of asking every peer again.
@@ -374,6 +423,7 @@ fn spawn_the_discovery_thread(
                     .recv_timeout(HOW_OFTEN_EVERY_PEER_IS_ASKED_AGAIN)
                 {
                     Ok(WhatTheMeshSaw::APeerAppeared(announced)) => {
+                        said_about.say_it_once(&this_runtime, &announced);
                         peers.record_that_a_peer_appeared(announced.clone());
                         ask_a_peer_what_it_is_and_record_it(
                             &session, &key_space, &peers, &announced,
@@ -395,6 +445,8 @@ fn spawn_the_discovery_thread(
                             // the mesh said in the meantime on its way past.
                             if !the_subscriber_feeding_this_thread_is_still_there(
                                 &peers,
+                                &this_runtime,
+                                &mut said_about,
                                 &what_the_discovery_thread_reads,
                             ) {
                                 return;
@@ -418,17 +470,56 @@ fn spawn_the_discovery_thread(
 /// renders meanwhile, which is what an unanswered peer renders anyway.
 fn the_subscriber_feeding_this_thread_is_still_there(
     peers: &RuntimeMeshPeerTable,
+    this_runtime: &AnnouncedRuntimeIdentity,
+    said_about: &mut SamedNamedPeersAlreadySaidOnce,
     what_the_discovery_thread_reads: &Receiver<WhatTheMeshSaw>,
 ) -> bool {
     loop {
         match what_the_discovery_thread_reads.try_recv() {
             Ok(WhatTheMeshSaw::APeerAppeared(announced)) => {
+                said_about.say_it_once(this_runtime, &announced);
                 peers.record_that_a_peer_appeared(announced);
             }
             Ok(WhatTheMeshSaw::APeerLeft(announced)) => peers.record_that_a_peer_left(&announced),
             Err(TryRecvError::Empty) => return true,
             Err(TryRecvError::Disconnected) => return false,
         }
+    }
+}
+
+/// The same-named peers this runtime has already said something about.
+///
+/// The stated residual: two runtimes that start inside one discovery window, or
+/// that meet when a partition heals, are not refused — neither saw the other's
+/// token in time. Both keep running and `graph` lists both, so the collision
+/// has to be *said* or it is invisible. Said once per peer rather than on every
+/// re-ask round, and the set is never pruned: a peer that leaves and returns is
+/// the same collision, not a new one.
+#[derive(Default)]
+struct SamedNamedPeersAlreadySaidOnce(BTreeSet<AnnouncedRuntimeIdentity>);
+
+impl SamedNamedPeersAlreadySaidOnce {
+    /// Say that `announced` shares this runtime's name, the first time it does.
+    fn say_it_once(
+        &mut self,
+        this_runtime: &AnnouncedRuntimeIdentity,
+        announced: &AnnouncedRuntimeIdentity,
+    ) {
+        if announced.runtime_name != this_runtime.runtime_name {
+            return;
+        }
+        if !self.0.insert(announced.clone()) {
+            return;
+        }
+        tracing::warn!(
+            "Another runtime on this mesh is also named {}, on host {} as pid {}. Both are \
+             running and both are in `graph`; a port address naming {} is ambiguous until one of \
+             them restarts under another name.",
+            announced.runtime_name,
+            announced.host_identity.as_one_key_chunk(),
+            announced.process_id,
+            announced.runtime_name
+        );
     }
 }
 

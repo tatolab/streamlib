@@ -60,6 +60,25 @@ fn read_the_identity_of(kernel_boot_id_path: &Path, pid_namespace_path: &Path) -
     }
 }
 
+/// Whether the process `process_id` names has left this host's process table.
+///
+/// Only ever asked about a pid read off a token whose host identity equals this
+/// host's, so the pid is in this process's own namespace and `kill` can see it.
+/// A pid the kernel still knows — `EPERM`, another user's process, included —
+/// is still there, and anything but `ESRCH` is read that way: the refusal is
+/// the safe answer, and a name taken over from a live runtime is not
+/// recoverable.
+pub fn a_process_on_this_host_is_gone(process_id: u32) -> bool {
+    let Ok(process_id) = libc::pid_t::try_from(process_id) else {
+        return false;
+    };
+    // SAFETY: signal 0 delivers nothing; `kill` only reports reachability.
+    if unsafe { libc::kill(process_id, 0) } == 0 {
+        return false;
+    }
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -89,5 +108,32 @@ mod tests {
             read_the_identity_of(Path::new(KERNEL_BOOT_ID_PATH), absent),
             HostIdentity::Unidentified
         );
+    }
+
+    /// The probe the same-host exception rests on: a process that has exited
+    /// is gone, and one that is running — this very test — is not.
+    #[test]
+    fn a_reaped_process_is_gone_and_a_running_one_is_not() {
+        let mut exited = std::process::Command::new("true")
+            .spawn()
+            .expect("a process this host can run");
+        let reaped_process_id = exited.id();
+        exited.wait().expect("the process is reaped");
+
+        assert!(a_process_on_this_host_is_gone(reaped_process_id));
+        assert!(!a_process_on_this_host_is_gone(std::process::id()));
+    }
+
+    /// Pid 1 belongs to another user on every desktop and container this runs
+    /// in, so `kill` answers `EPERM` — which is a process that is still there.
+    #[test]
+    fn a_process_this_one_may_not_signal_is_still_there() {
+        assert!(!a_process_on_this_host_is_gone(1));
+    }
+
+    /// A number no pid could be is not read as a free name.
+    #[test]
+    fn a_number_that_is_no_pid_at_all_is_not_read_as_gone() {
+        assert!(!a_process_on_this_host_is_gone(u32::MAX));
     }
 }

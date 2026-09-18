@@ -80,6 +80,15 @@ impl RuntimeMeshKeySpace {
         format!("{}/**", self.runtime_announcement_root())
     }
 
+    /// The key a duplicate-name check names to see every runtime holding
+    /// `runtime_name` — whatever host it is on and whatever its pid.
+    ///
+    /// A runtime name is one legal key chunk, refused at construction
+    /// otherwise, so it carries no wildcard of its own.
+    pub fn every_announcement_key_under(&self, runtime_name: &str) -> String {
+        format!("{}/{runtime_name}/**", self.runtime_announcement_root())
+    }
+
     /// Who an announcement key names, or `None` when the key is not one this
     /// engine wrote.
     pub fn read_an_announcement_key(&self, key: &str) -> Option<AnnouncedRuntimeIdentity> {
@@ -167,6 +176,39 @@ mod tests {
         assert!(
             subscription.includes(announcement_key),
             "{subscription} must reach {announcement_key}"
+        );
+    }
+
+    /// The duplicate check's key reaches every holder of one name and nobody
+    /// else's, whatever host or pid the holder announces.
+    #[test]
+    fn the_key_for_one_name_reaches_every_holder_of_it_and_no_other_name() {
+        let key_space = a_key_space("lab");
+        let under_one_name =
+            keyexpr::new(key_space.every_announcement_key_under("rig-desk-a1b2").as_str())
+                .expect("a key expression")
+                .to_owned();
+
+        for holder in [
+            an_identity("rig-desk-a1b2", 4321),
+            an_identity("rig-desk-a1b2", 9999),
+            AnnouncedRuntimeIdentity {
+                host_identity: HostIdentity::Unidentified,
+                ..an_identity("rig-desk-a1b2", 1)
+            },
+        ] {
+            let held = key_space.announcement_key_for(&holder);
+            assert!(
+                under_one_name.includes(keyexpr::new(held.as_str()).expect("a key expression")),
+                "{under_one_name} must reach {held}"
+            );
+        }
+
+        let another_name = key_space.announcement_key_for(&an_identity("rig-desk-c3d4", 4321));
+        assert!(
+            !under_one_name
+                .includes(keyexpr::new(another_name.as_str()).expect("a key expression")),
+            "{under_one_name} must not reach {another_name}"
         );
     }
 

@@ -8,6 +8,7 @@
 //! runtimes with nothing configured, and closes the session when it stops. A
 //! helper process opens none, because it never constructs a runtime.
 
+mod duplicate_runtime_name_on_the_mesh;
 mod host_identity;
 mod hosted_control_plane_endpoint;
 mod resolved_runtime_mesh_configuration;
@@ -21,9 +22,13 @@ mod runtime_mesh_peer_table;
 // Exported because something outside this module names it: the runtime and its
 // context hold the membership and the control-plane cell, `Runner::new()`
 // resolves the configuration, and the platform half of the host identity is in
-// `linux/`. Everything else the mesh is built from stays inside it.
+// `linux/`. The announced identity and the key space are exported for the
+// mesh's own two-process fixture, which has to write the very key the
+// duplicate-name check reads rather than re-spell the grammar beside it.
+// Everything else the mesh is built from stays inside it.
 pub use host_identity::HostIdentity;
 pub use hosted_control_plane_endpoint::HostedControlPlaneEndpointRegistry;
 pub use resolved_runtime_mesh_configuration::ResolvedRuntimeMeshConfiguration;
+pub use runtime_mesh_key::{AnnouncedRuntimeIdentity, RuntimeMeshKeySpace};
 pub use runtime_mesh_membership::RuntimeMeshMembership;
 pub use runtime_mesh_name::RuntimeMeshName;

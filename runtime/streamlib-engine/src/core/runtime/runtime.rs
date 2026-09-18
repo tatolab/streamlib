@@ -286,7 +286,9 @@ impl Runner {
 
         // After logging, so a local-only warning reaches the log, and before the
         // iceoryx2 node, beside the runtime-id socket refusal — this is where a
-        // runtime's identity already comes up. `Runner::new()` needs no GPU, so
+        // runtime's identity already comes up. A name another live runtime
+        // already holds refuses here, so a refused runtime builds no iceoryx2
+        // node and no surface socket. `Runner::new()` needs no GPU, so
         // everything here is provable without one.
         let hosted_control_plane = Arc::new(HostedControlPlaneEndpointRegistry::default());
         let runtime_mesh = Arc::new(RuntimeMeshMembership::join(
@@ -295,7 +297,7 @@ impl Runner {
             runtime_id.as_str(),
             &crate::core::runtime::runtime_name::this_hosts_name(),
             &hosted_control_plane,
-        ));
+        )?);
 
         crate::iceoryx2::warn_when_posix_shared_memory_is_short_for_a_runtime();
 
