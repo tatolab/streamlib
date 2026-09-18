@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.25.2](https://github.com/tatolab/streamlib/compare/v0.25.1...v0.25.2) (2026-09-18)
+
+
+### Features
+
+* **engine:** refuse a second live runtime of the same name on the mesh, by name ([#2334](https://github.com/tatolab/streamlib/issues/2334)) ([cdff197](https://github.com/tatolab/streamlib/commit/cdff1974792df3044b9b0dc12f753af179692919))
+
 ## [0.25.1](https://github.com/tatolab/streamlib/compare/v0.25.0...v0.25.1) (2026-09-18)
 
 
