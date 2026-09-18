@@ -557,8 +557,17 @@ def _print_the_mesh_peers_table(
         for peer in observed.peers
         if peer.runtime_id is None or peer.runtime_id not in registered_runtime_ids
     ]
-    if not peers:
+    if not observed.peers:
         print(f"No runtimes on the {observed.mesh_name} mesh.", file=stream)
+        return
+    if not peers:
+        # Not the same answer as an empty mesh, and saying so would be a lie a
+        # reader could act on: every runtime announced is right there above,
+        # drivable, with a URL.
+        print(
+            f"Every runtime on the {observed.mesh_name} mesh is listed above.",
+            file=stream,
+        )
         return
 
     hosts = [peer.host_name or "" for peer in peers]
@@ -1020,9 +1029,13 @@ def build_argument_parser() -> argparse.ArgumentParser:
             "runtime_name, host, control_plane_urls and engine_version for "
             "each one the first table does not already carry. The session it "
             "reads through announces nothing, so listing a mesh is invisible "
-            "to every runtime on it. About a second with discovery on: Zenoh's "
-            "scouting delay plus the time each runtime found is given to say "
-            "what it is."
+            "to every runtime on it. About a second and a half with discovery "
+            "on — the session scouts for a fixed window before it asks, "
+            "because a runtime whose hello arrives after the window is one it "
+            "never reports — and near-instant with "
+            "--no-mesh-multicast-discovery and no --mesh-peer. Each "
+            "--mesh-peer that answers nothing at all costs up to two seconds "
+            "more, in turn."
         ),
     )
     nodes_command.add_argument(

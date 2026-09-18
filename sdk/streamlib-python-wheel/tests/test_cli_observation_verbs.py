@@ -1452,7 +1452,13 @@ def test_a_runtime_that_is_already_a_registry_row_is_not_repeated(
 
     assert printed.count("registered-runtime") == 1, printed
     assert server.url in printed, "the row a reader keeps is the drivable one"
-    assert f"No runtimes on {on_the_mesh.mesh_name}" not in printed
+    assert (
+        f"Every runtime on the {on_the_mesh.mesh_name} mesh is listed above." in printed
+    ), printed
+    # A mesh whose every runtime is already a registry row is not an empty mesh,
+    # and a reader told it was would go looking for a runtime that is in front
+    # of them.
+    assert f"No runtimes on the {on_the_mesh.mesh_name} mesh." not in printed, printed
 
 
 def test_an_empty_mesh_says_so_and_names_the_mesh(isolated_registry, capsys):

@@ -8,6 +8,7 @@
 //! to open its session runs local-only instead of reporting it.
 
 use std::ffi::OsString;
+use std::time::Duration;
 
 use crate::core::error::{Error, Result};
 use crate::core::runtime::RuntimeMeshConfiguration;
@@ -32,6 +33,23 @@ pub(crate) const MESH_MULTICAST_DISCOVERY_ENVIRONMENT_VARIABLE: &str =
 pub(crate) const MESH_MULTICAST_INTERFACE_ENVIRONMENT_VARIABLE: &str =
     "STREAMLIB_MESH_MULTICAST_INTERFACE";
 
+/// How long one dialled endpoint has to answer a session that asks one
+/// question, before that endpoint is given up on and the rest are tried.
+///
+/// Engine-chosen, and only for such a session: a runtime dials in the
+/// background and never waits, so the bound would buy it nothing.
+const HOW_LONG_ONE_DIALLED_ENDPOINT_HAS_TO_ANSWER: Duration = Duration::from_secs(2);
+
+/// How long a session that asks one question scouts before it asks.
+///
+/// Zenoh's own default is 500 ms, which a runtime can afford to treat as a
+/// floor because it goes on discovering for hours afterwards. A look has only
+/// this one window: a runtime whose hello arrives after it is a runtime the
+/// look never reports. So it scouts longer than a runtime does, and the whole
+/// of the difference is paid only when multicast discovery is on — `open`
+/// waits out no delay at all with scouting off.
+pub(crate) const HOW_LONG_ONE_LOOK_SCOUTS_BEFORE_IT_ASKS: Duration = Duration::from_millis(1_500);
+
 /// What the five values mean once every door has been read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedRuntimeMeshConfiguration {
@@ -44,6 +62,12 @@ pub struct ResolvedRuntimeMeshConfiguration {
 }
 
 impl ResolvedRuntimeMeshConfiguration {
+    /// Whether this session finds peers by multicast, which is the only case
+    /// in which a scouting window costs anything.
+    pub(crate) fn finds_peers_by_multicast(&self) -> bool {
+        self.multicast_discovery
+    }
+
     /// Read the constructor's values, then the environment's, then the
     /// engine's own defaults.
     pub fn resolve(configuration: RuntimeMeshConfiguration) -> Result<Self> {
@@ -122,10 +146,30 @@ impl ResolvedRuntimeMeshConfiguration {
     /// timeout makes `open` await one attempt per endpoint instead
     /// (`zenoh-1.10.1`, `net/runtime/orchestrator.rs:460-466`), and peer mode's
     /// `exit_on_failure` stays false either way, so an endpoint nothing answers
-    /// on still costs nothing but the attempt.
+    /// on never fails the look.
+    ///
+    /// Awaiting the attempt is what makes its cost the caller's problem, so the
+    /// attempt is bounded too. A dialled endpoint that answers nothing at all —
+    /// a dropped SYN, which is the ordinary failure on exactly the networks
+    /// `--mesh-peer` exists for — otherwise costs Zenoh's ten-second
+    /// `transport/unicast/open_timeout` each, in turn: measured at 10.5 s per
+    /// endpoint before this bound and 2.5 s after it. A refused endpoint
+    /// answers at once either way (0.5 s, measured).
     pub fn as_a_zenoh_configuration_for_one_question(&self) -> zenoh::Result<zenoh::Config> {
         let mut configuration = self.as_a_zenoh_configuration()?;
         configuration.insert_json5("connect/timeout_ms", "0")?;
+        configuration.insert_json5(
+            "transport/unicast/open_timeout",
+            &HOW_LONG_ONE_DIALLED_ENDPOINT_HAS_TO_ANSWER
+                .as_millis()
+                .to_string(),
+        )?;
+        configuration.insert_json5(
+            "scouting/delay",
+            &HOW_LONG_ONE_LOOK_SCOUTS_BEFORE_IT_ASKS
+                .as_millis()
+                .to_string(),
+        )?;
         Ok(configuration)
     }
 }
@@ -292,6 +336,18 @@ mod tests {
             Some("0"),
             "a runtime's own session keeps zenoh's background dialling; only the \
              one-question session awaits its attempts"
+        );
+        // Awaiting an attempt is only safe because the attempt is bounded:
+        // zenoh's own default is ten seconds per endpoint that answers nothing.
+        assert_eq!(
+            resolved
+                .as_a_zenoh_configuration_for_one_question()
+                .expect("zenoh takes every value")
+                .get_json("transport/unicast/open_timeout")
+                .expect("an open timeout"),
+            HOW_LONG_ONE_DIALLED_ENDPOINT_HAS_TO_ANSWER
+                .as_millis()
+                .to_string()
         );
     }
 

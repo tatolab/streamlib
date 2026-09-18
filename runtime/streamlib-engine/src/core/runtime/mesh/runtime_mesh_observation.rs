@@ -21,14 +21,16 @@
 //! second reader of the mesh, never a second mesh.
 
 use std::collections::BTreeSet;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use zenoh::Wait;
 
 use crate::core::error::{Error, Result};
 use crate::core::json_schema::RuntimeMeshPeerOutput;
 use crate::core::runtime::RuntimeMeshConfiguration;
-use crate::core::runtime::mesh::resolved_runtime_mesh_configuration::ResolvedRuntimeMeshConfiguration;
+use crate::core::runtime::mesh::resolved_runtime_mesh_configuration::{
+    HOW_LONG_ONE_LOOK_SCOUTS_BEFORE_IT_ASKS, ResolvedRuntimeMeshConfiguration,
+};
 use crate::core::runtime::mesh::runtime_mesh_description::{
     ask_every_peer_what_it_is, render_one_runtime_mesh_peer,
 };
@@ -118,12 +120,14 @@ fn read_every_runtime_announced_on(
                 resolved.mesh_name
             ))
         })?;
+    let started_scouting = Instant::now();
     let session = zenoh::open(configuration).wait().map_err(|open_failure| {
         Error::Runtime(format!(
             "the {} mesh could not be reached: {open_failure}",
             resolved.mesh_name
         ))
     })?;
+    spend_the_rest_of_the_scouting_window(resolved, started_scouting);
 
     let peers = ask_every_peer_what_it_is(
         &session,
@@ -139,6 +143,31 @@ fn read_every_runtime_announced_on(
         tracing::debug!("the session that read the mesh did not close cleanly: {close_failure}");
     }
     Ok(peers)
+}
+
+/// Wait out whatever is left of the scouting window before asking.
+///
+/// `zenoh::open` returns as soon as every peer connector it has *heard of* has
+/// terminated (`net/runtime/orchestrator.rs:271-279` over
+/// `StartConditions::terminate_peer_connector`), which on a busy multicast
+/// group is well before the runtimes whose hello has not arrived yet have
+/// answered. A runtime discovering for hours does not care; a look has this
+/// one window, and asking the instant `open` returns reports an empty mesh
+/// that is not empty.
+///
+/// Costs nothing with multicast off, where there is no window to wait out and
+/// nothing arrives unasked-for.
+fn spend_the_rest_of_the_scouting_window(
+    resolved: &ResolvedRuntimeMeshConfiguration,
+    started_scouting: Instant,
+) {
+    if !resolved.finds_peers_by_multicast() {
+        return;
+    }
+    let scouted_for = started_scouting.elapsed();
+    if let Some(left) = HOW_LONG_ONE_LOOK_SCOUTS_BEFORE_IT_ASKS.checked_sub(scouted_for) {
+        std::thread::sleep(left);
+    }
 }
 
 /// Every runtime announced on this mesh, in the order a peer table renders

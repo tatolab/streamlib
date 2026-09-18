@@ -105,6 +105,9 @@ struct HowToLaunchAPeer {
     /// Let the engine's own pretty log reach the parent beside the reports, for
     /// an arm whose subject is something the runtime only ever says in a log.
     report_what_it_logs: bool,
+    /// Read the mesh rather than joining it: the process constructs no runtime,
+    /// reports the names one look saw, and exits.
+    observe_only: bool,
 }
 
 impl RuntimeMeshPeerProcess {
@@ -122,6 +125,9 @@ impl RuntimeMeshPeerProcess {
         }
         for endpoint in &how.listen_endpoints {
             command.arg("--mesh-listen").arg(endpoint);
+        }
+        if how.observe_only {
+            command.arg("--observe-only");
         }
 
         command.env(
@@ -1056,3 +1062,76 @@ fn an_observation_lists_a_runtime_whole_and_that_runtime_never_sees_the_observer
         observed.every_peer_name_it_has_ever_seen()
     );
 }
+
+/// The mode `streamlib nodes` runs in when it is given no flags at all:
+/// multicast discovery, and no endpoint named by hand.
+///
+/// Its own arm because the observer is the only session in the tree that
+/// listens on nothing, and multicast autoconnect ends in dialling the *other*
+/// side's locators — so a runtime finding a runtime proves nothing about a
+/// look finding a runtime. Driven through the fixture binary rather than in
+/// this process, because scouting is pinned to the loopback through the
+/// environment and a test binary cannot set its own without racing every other
+/// thread reading it.
+#[test]
+fn a_look_with_no_endpoint_named_finds_a_runtime_by_multicast() {
+    let mesh_name = a_mesh_name_of_its_own("mcast-look");
+    let observed = RuntimeMeshPeerProcess::launch(HowToLaunchAPeer {
+        runtime_name: "multicast-observed".to_string(),
+        mesh_name: mesh_name.clone(),
+        multicast_discovery: true,
+        ..Default::default()
+    });
+    observed.wait_until_it_is_on_the_mesh();
+
+    let look = RuntimeMeshPeerProcess::launch(HowToLaunchAPeer {
+        mesh_name,
+        multicast_discovery: true,
+        observe_only: true,
+        ..Default::default()
+    });
+
+    let seen = wait_until("the look reports what it saw", || look.what_it_last_saw());
+    let peers = seen["peers"].as_array().expect("a look reports its peers");
+    assert_eq!(peers.len(), 1, "{seen}");
+    assert_eq!(peers[0]["runtime_name"], "multicast-observed");
+    // Whole rather than merely named: found by multicast and then asked what it
+    // is, over a link the look itself dialled.
+    assert_eq!(peers[0]["engine_version"], env!("CARGO_PKG_VERSION"));
+    assert!(peers[0]["runtime_id"].is_string(), "{seen}");
+    assert!(peers[0]["host_name"].is_string(), "{seen}");
+    assert_eq!(peers[0]["control_plane_urls"], serde_json::json!([]));
+}
+
+/// A dialled endpoint that answers nothing at all does not hold a look for
+/// Zenoh's ten-second default.
+///
+/// The bound is stated in `as_a_zenoh_configuration_for_one_question` and
+/// pinned there as a configuration key; this is the only place it is measured
+/// against a real socket. TEST-NET-1 is unroutable by RFC 5737, so a machine
+/// with no route to it refuses at once and this arm passes without exercising
+/// the bound — it is an upper wall that cannot false-positive, never a proof
+/// that the packet was dropped.
+#[test]
+fn an_endpoint_that_answers_nothing_does_not_hold_a_look_for_zenohs_own_default() {
+    let started_looking = Instant::now();
+    let looked = observe_a_runtime_mesh(RuntimeMeshObservationRequest {
+        mesh_name: Some(a_mesh_name_of_its_own("blackhole")),
+        mesh_peer_endpoints: Some(vec!["tcp/192.0.2.1:7447".to_string()]),
+        mesh_multicast_discovery: Some(false),
+    })
+    .expect("an endpoint nothing answers on never fails the look");
+
+    assert!(looked.peers.is_empty());
+    assert!(
+        started_looking.elapsed() < HOW_LONG_A_LOOK_MAY_TAKE_PAST_ONE_DEAD_ENDPOINT,
+        "a look past one endpoint answering nothing took {:?}",
+        started_looking.elapsed()
+    );
+}
+
+/// The wall the arm above holds the look under. Zenoh's own per-link default is
+/// ten seconds and the engine's bound is two, so six sits between them: a
+/// loaded runner does not red this and the regression it exists for cannot
+/// pass it.
+const HOW_LONG_A_LOOK_MAY_TAKE_PAST_ONE_DEAD_ENDPOINT: Duration = Duration::from_secs(6);

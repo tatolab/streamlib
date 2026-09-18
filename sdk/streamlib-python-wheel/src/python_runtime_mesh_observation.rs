@@ -18,7 +18,7 @@ use streamlib::sdk::error::Error;
 use streamlib::sdk::runtime::{RuntimeMeshObservationRequest, observe_a_runtime_mesh};
 
 /// One runtime seen on a mesh.
-#[pyclass(name = "ObservedRuntimeMeshPeer", module = "streamlib", frozen)]
+#[pyclass(name = "_ObservedRuntimeMeshPeer", module = "streamlib", frozen)]
 pub(crate) struct PythonObservedRuntimeMeshPeer {
     runtime_name: String,
     runtime_id: Option<String>,
@@ -76,14 +76,14 @@ impl PythonObservedRuntimeMeshPeer {
 
     fn __repr__(&self) -> String {
         format!(
-            "ObservedRuntimeMeshPeer(runtime_name={:?}, host_name={:?})",
+            "_ObservedRuntimeMeshPeer(runtime_name={:?}, host_name={:?})",
             self.runtime_name, self.host_name
         )
     }
 }
 
 /// One look at one mesh.
-#[pyclass(name = "ObservedRuntimeMesh", module = "streamlib", frozen)]
+#[pyclass(name = "_ObservedRuntimeMesh", module = "streamlib", frozen)]
 pub(crate) struct PythonObservedRuntimeMesh {
     mesh_name: String,
     peers: Vec<Py<PythonObservedRuntimeMeshPeer>>,
@@ -109,7 +109,7 @@ impl PythonObservedRuntimeMesh {
 
     fn __repr__(&self) -> String {
         format!(
-            "ObservedRuntimeMesh(mesh_name={:?}, peers={})",
+            "_ObservedRuntimeMesh(mesh_name={:?}, peers={})",
             self.mesh_name,
             self.peers.len()
         )

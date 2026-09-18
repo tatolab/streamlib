@@ -40,8 +40,6 @@ __all__ = [
     "LinkInputDataReader",
     "LinkOutputDataWriter",
     "MonotonicTimer",
-    "ObservedRuntimeMesh",
-    "ObservedRuntimeMeshPeer",
     "OpaqueFdTextureExport",
     "ProcessorInputPortReference",
     "ProcessorOwnedWindow",
@@ -80,6 +78,8 @@ __all__ = [
     "feed_test_harness_bag",
     "gpu_limited_access_of_the_typed_read_in_progress",
     "log_event",
+    "_ObservedRuntimeMesh",
+    "_ObservedRuntimeMeshPeer",
     "_observe_the_runtime_mesh",
     "monotonic_now_ns",
     "open_test_harness_channel",
@@ -1803,7 +1803,7 @@ def engine_build_id_compiled_into_this_extension() -> str:
     """
 
 @final
-class ObservedRuntimeMeshPeer:
+class _ObservedRuntimeMeshPeer:
     """One runtime seen on a mesh by `_observe_the_runtime_mesh`.
 
     `runtime_name` is always known — it is on the runtime's own announcement.
@@ -1831,7 +1831,7 @@ class ObservedRuntimeMeshPeer:
     def __repr__(self) -> str: ...
 
 @final
-class ObservedRuntimeMesh:
+class _ObservedRuntimeMesh:
     """One look at one mesh, taken from outside it."""
 
     @property
@@ -1840,7 +1840,7 @@ class ObservedRuntimeMesh:
         can still say which one it read."""
 
     @property
-    def peers(self) -> list[ObservedRuntimeMeshPeer]:
+    def peers(self) -> list[_ObservedRuntimeMeshPeer]:
         """Every runtime announced on it, sorted by name."""
 
     def __repr__(self) -> str: ...
@@ -1850,7 +1850,7 @@ def _observe_the_runtime_mesh(
     mesh_name: str | None = None,
     mesh_peer_endpoints: list[str] | None = None,
     mesh_multicast_discovery: bool | None = None,
-) -> ObservedRuntimeMesh:
+) -> _ObservedRuntimeMesh:
     """Look at a runtime mesh without joining it — what `streamlib nodes` reads.
 
     Internal, and `_`-prefixed to say so. An app that wants its own runtime's
@@ -1867,11 +1867,21 @@ def _observe_the_runtime_mesh(
     included. `runtime_name` and `mesh_listen_endpoints` have no counterpart
     here: an observer is addressed by nobody.
 
-    Costs about a second with discovery on — Zenoh's scouting delay plus the
-    time every runtime found is given to say what it is — and runs with the GIL
-    released throughout. Raises `ValueError` for a value it will not take (a
-    `quic/` endpoint, a mesh name outside the grammar) and `RuntimeError` when
-    the session will not open at all.
+    Costs about a second and a half with discovery on: the session scouts for a
+    fixed window before it asks, because `zenoh::open` returns as soon as the
+    peers it has already heard from have answered, and a runtime whose hello
+    arrives after that is one this would never report. With discovery off and
+    no endpoint named it is near-instant; each `mesh_peer_endpoints` entry that
+    answers nothing at all costs up to two seconds more, in turn. It runs with
+    the GIL released throughout.
+
+    A look is a snapshot of an eventually-consistent discovery, not a census:
+    on a busy multicast network a runtime still connecting is missed, and the
+    next look finds it.
+
+    Raises `ValueError` for a value it will not take (a `quic/` endpoint, a
+    mesh name outside the grammar) and `RuntimeError` when the session will not
+    open at all.
     """
 
 def monotonic_now_ns() -> int:
