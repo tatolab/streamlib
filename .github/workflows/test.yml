@@ -178,6 +178,10 @@ jobs:
           # rig runs unnoticed; running it needs the queues, a display server
           # and optionally a camera, so CI only compiles it.
           cargo build --locked -p streamlib-engine --example codec_roundtrip_rig
+          # The cross-runtime-link rig arm, engine-owned for the same reason:
+          # running it needs a GPU and two runtimes, so CI compiles it to stop
+          # it rotting between rig runs.
+          cargo build --locked -p streamlib-engine --example cross_runtime_link_rig
           # The present-class escalate ops' headless arm. `streamlib-engine`'s
           # lib tests are deliberately not run wholesale here (see
           # python-wheel.yml's carve-out, which says so), so a named slice is

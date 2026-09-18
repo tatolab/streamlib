@@ -774,6 +774,20 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "codec_roundtrip_rig",
             ],
         ),
+        // The engine-owned cross-runtime-link rig, for the same reason: running
+        // it needs a GPU and two whole runtimes, so nothing but this builds it.
+        (
+            "the cross-runtime-link rig example compiles",
+            "cargo",
+            &[
+                "build",
+                "--locked",
+                "-p",
+                "streamlib-engine",
+                "--example",
+                "cross_runtime_link_rig",
+            ],
+        ),
         // The deviceless arm's integration binaries, which the workflow runs
         // beside the slice. `attribute_macro_test` aside, these are the only
         // engine integration tests CI runs at all.

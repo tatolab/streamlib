@@ -4638,6 +4638,53 @@ mod tests {
             );
         }
 
+        /// A source port nothing on this runtime reads still gets its channel
+        /// and its publisher, because the mesh's egress is its first consumer.
+        ///
+        /// What it catches, found on the rig and invisible to every other
+        /// test here: a port's channel and publisher are otherwise made by the
+        /// first `connect` out of it, and across the mesh there is no
+        /// `connect` — so the producer drops every bag as a declared port with
+        /// nowhere to go, while `graph` reports the link `wired`.
+        #[test]
+        fn a_port_only_the_mesh_reads_still_gets_its_channel_and_its_publisher() {
+            use crate::core::test_support::MockOutputOnlyProcessor;
+
+            let mut graph = Graph::new();
+            let source_id = add_mock_output_only(&mut graph);
+            let (_, source_output, _) =
+                attach_mock_instance::<MockOutputOnlyProcessor::Processor>(&mut graph, &source_id);
+            let source_output = source_output.expect("the mock source has an output writer");
+            let source = OutputLinkPortRef::new(&source_id, "out1");
+
+            assert!(
+                !source_output.has_channel_publisher("out1"),
+                "nothing has connected to this port, so it has no publisher yet"
+            );
+
+            open_the_channel_of_an_output_port_nothing_local_reads(
+                &mut graph,
+                &Iceoryx2Node::for_this_test_process(),
+                &source,
+            )
+            .expect("a port with no local link opens its channel for the mesh");
+
+            assert!(
+                source_output.has_channel_publisher("out1"),
+                "a port the mesh reads must be able to publish"
+            );
+
+            // Idempotent: a second egress, or a `connect` arriving afterwards,
+            // must not replace the publisher the port is already using.
+            open_the_channel_of_an_output_port_nothing_local_reads(
+                &mut graph,
+                &Iceoryx2Node::for_this_test_process(),
+                &source,
+            )
+            .expect("opening it again is a no-op");
+            assert!(source_output.has_channel_publisher("out1"));
+        }
+
         /// Disconnecting it takes it off the ingress table, which is what stops
         /// this runtime reading the address once no link does.
         #[test]
