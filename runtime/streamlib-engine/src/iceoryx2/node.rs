@@ -1611,8 +1611,19 @@ mod tests {
             "the child must die where it stood rather than report a result"
         );
 
-        let reclaimed = reclaim_dead_iceoryx2_nodes_in_engine_owned_domain(&domain_root)
-            .expect("the sweep runs against the engine-owned domain");
+        // Swept until it lands rather than once: a process that has just died is
+        // not reclaimable the instant it goes — about 10 ms on Linux 7.0, wider
+        // under load — which is the same window `open_or_create_service` budgets
+        // for. Asserting on one sweep asserts the race, not the reclaim.
+        let mut reclaimed = 0u64;
+        let started_sweeping = std::time::Instant::now();
+        while reclaimed == 0 && started_sweeping.elapsed() < std::time::Duration::from_secs(5) {
+            reclaimed += reclaim_dead_iceoryx2_nodes_in_engine_owned_domain(&domain_root)
+                .expect("the sweep runs against the engine-owned domain");
+            if reclaimed == 0 {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        }
 
         assert_eq!(
             reclaimed, 1,
