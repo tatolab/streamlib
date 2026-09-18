@@ -39,6 +39,10 @@ struct ALinkFromAnotherRuntime {
     /// The cell `graph` reads. Held here so a resolution lands without the
     /// graph lock.
     how_far_it_has_got: Arc<Mutex<RemoteLinkResolution>>,
+    /// Whether the wiring op has opened this link's destination side. Until it
+    /// has, the link is not carrying whatever the mesh has managed: `wired`
+    /// means the ingress *and* the local destination, never one of the two.
+    its_destination_is_open: bool,
     /// The notify service the destination waits on, named by the wiring op —
     /// `None` for a destination that drains no listener. The name rather than
     /// a notifier: an iceoryx2 notifier is `!Send`, so it is minted on the
@@ -95,6 +99,7 @@ impl MeshLinkIngressTable {
             ALinkFromAnotherRuntime {
                 address,
                 how_far_it_has_got,
+                its_destination_is_open: false,
                 notify_service_name: None,
                 the_ingress_knows_about_it: false,
             },
@@ -107,7 +112,7 @@ impl MeshLinkIngressTable {
     ///
     /// `None` for a destination that drains no listener — a `manual` processor
     /// polls its own ports and is woken by nobody.
-    pub(crate) fn note_how_a_links_destination_is_woken(
+    pub fn note_how_a_links_destination_is_woken(
         &self,
         link_id: &LinkUniqueId,
         notify_service_name: Option<String>,
@@ -117,6 +122,7 @@ impl MeshLinkIngressTable {
             let Some(link) = carried.links.get_mut(link_id) else {
                 return;
             };
+            link.its_destination_is_open = true;
             link.notify_service_name = notify_service_name;
             link.the_ingress_knows_about_it = false;
         }
@@ -273,15 +279,16 @@ fn resolve_every_waiting_link_until_told_to_stop(
 
 /// Look at every address this runtime links from and move each one on.
 fn run_one_resolution_pass(resolving: &ResolvingLinksNeeds) {
-    let every_address: Vec<MeshPortAddress> = {
+    let every_address: std::collections::BTreeSet<MeshPortAddress> = {
         let carried = resolving.carried.lock();
-        let mut addresses: Vec<MeshPortAddress> = carried
+        // A set rather than a deduplicated list: the links are keyed by link
+        // id, so two reading one address are not adjacent, and each address is
+        // resolved once a pass however many links read it.
+        carried
             .links
             .values()
             .map(|link| link.address.clone())
-            .collect();
-        addresses.dedup();
-        addresses
+            .collect::<std::collections::BTreeSet<_>>()
     };
     for address in every_address {
         resolve_one_address(resolving, &address);
@@ -498,7 +505,10 @@ fn tell_the_ingress_about_every_link_from(
         return;
     };
     for (link_id, link) in carried.links.iter_mut() {
-        if &link.address != address || link.the_ingress_knows_about_it {
+        if &link.address != address
+            || link.the_ingress_knows_about_it
+            || !link.its_destination_is_open
+        {
             continue;
         }
         // Minted here rather than carried: an iceoryx2 notifier is `!Send`, so

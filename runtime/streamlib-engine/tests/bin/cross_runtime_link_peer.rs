@@ -193,11 +193,18 @@ fn run_as_the_reader(
     let how_far_it_has_got = Arc::new(Mutex::new(RemoteLinkResolution::AwaitingRemote {
         reason: "this peer has only just asked for the link".to_string(),
     }));
+    let link_id = streamlib_engine::core::graph::LinkUniqueId::new();
     membership.note_a_link_from_another_runtime(
         address,
-        streamlib_engine::core::graph::LinkUniqueId::new(),
+        link_id.clone(),
         Arc::clone(&how_far_it_has_got),
     );
+    // What the wiring op does in a real runtime, and what this peer does for
+    // itself because it has no compiler: the destination's side of the local
+    // channel is open, so the link is one the mesh may report as carrying. The
+    // notify service is `None` because this peer polls its own subscriber
+    // rather than waiting on a listener.
+    ingress_table.note_how_a_links_destination_is_woken(&link_id, None);
     report.write_line(READY_LINE);
 
     while !asked_to_leave.load(Ordering::Relaxed) {
