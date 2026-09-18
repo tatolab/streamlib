@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.25.0](https://github.com/tatolab/streamlib/compare/v0.24.0...v0.25.0) (2026-09-18)
+
+
+### ⚠ BREAKING CHANGES
+
+* **engine:** every runtime carries a stable name it owns — hashed default, set by constructor, environment or CLI ([#2329](https://github.com/tatolab/streamlib/issues/2329))
+
+### Features
+
+* **engine:** every runtime carries a stable name it owns — hashed default, set by constructor, environment or CLI ([#2329](https://github.com/tatolab/streamlib/issues/2329)) ([d8bd91e](https://github.com/tatolab/streamlib/commit/d8bd91e7414e5f1abc855827d059151693077091))
+
 ## [0.24.0](https://github.com/tatolab/streamlib/compare/v0.23.1...v0.24.0) (2026-09-18)
 
 
