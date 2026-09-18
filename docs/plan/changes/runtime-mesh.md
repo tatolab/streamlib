@@ -215,8 +215,14 @@ streamlib-specific file an app would author, which the zero-ceremony bar (`:33-4
      the same kernel is never mistaken for this host. The probe showed a killed runtime's token
      gone within milliseconds, so the exception covers a restart racing its predecessor's exit.
    - macOS has no host identity and no exception, so a duplicate there is refused until the old
-     token leaves. The check compiles on both platforms (`core/` plus a `linux/` and an `apple/`
-     half) and is cross-compile verified.
+     token leaves. The check compiles on both platforms and is cross-compile verified.
+     > ~~(`core/` plus a `linux/` and an `apple/` half)~~ — Superseded 2026-09-18 by #2284 as
+     > built. The check is `core/` plus a `linux/` half, with one `#[cfg]` in `core/` answering
+     > for every other platform — the shape #2283 already established for the sibling
+     > `HostIdentity::of_this_host()`. An `apple/` half would need a third `cfg` arm, since
+     > `apple/` is gated `any(macos, ios)` and the non-Linux arm has to cover the rest; no
+     > `#[cfg]` sits inside a platform directory either way, and the behaviour the plan states —
+     > no host identity, so no exception — is unchanged and tested.
 4. **Stated residual.** Two runtimes that start inside one discovery window, or meet when a
    partition heals, are not refused. Both keep running, each says so once naming the other's host,
    and `graph` lists both. Which one a remote link reaches is `cross-runtime-links`'s to settle.

@@ -1,7 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Two runtimes, two OS processes, one mesh — the proof the mesh exists at all.
+//! Two runtimes, two OS processes, one mesh — the proof the mesh exists at all,
+//! and that two of them never share one name while both are live.
 //!
 //! GPU-free: every arm constructs a `Runner` and never starts it, so this runs
 //! in CI. Each arm takes its own mesh name, so arms never see each other even
@@ -15,6 +16,12 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
+use streamlib_engine::core::runtime::RuntimeMeshConfiguration;
+use streamlib_engine::core::runtime::mesh::{
+    AnnouncedRuntimeIdentity, HostIdentity, ResolvedRuntimeMeshConfiguration, RuntimeMeshKeySpace,
+    RuntimeMeshName,
+};
+use zenoh::Wait;
 
 /// How long an arm waits for two runtimes to see each other. Generous: a
 /// scouting delay plus a description round trip on a loaded CI runner.
@@ -77,6 +84,7 @@ struct RuntimeMeshPeerProcess {
     child: Child,
     what_it_last_saw: Arc<Mutex<Option<serde_json::Value>>>,
     why_it_refused: Arc<Mutex<Option<String>>>,
+    what_it_logged: Arc<Mutex<Vec<String>>>,
 }
 
 /// How a peer is launched — every flag the fixture drives.
@@ -87,6 +95,9 @@ struct HowToLaunchAPeer {
     peer_endpoints: Vec<String>,
     listen_endpoints: Vec<String>,
     multicast_discovery: bool,
+    /// Let the engine's own pretty log reach the parent beside the reports, for
+    /// an arm whose subject is something the runtime only ever says in a log.
+    report_what_it_logs: bool,
 }
 
 impl RuntimeMeshPeerProcess {
@@ -106,14 +117,18 @@ impl RuntimeMeshPeerProcess {
             command.arg("--mesh-listen").arg(endpoint);
         }
 
+        command.env(
+            MESH_MULTICAST_INTERFACE_ENVIRONMENT_VARIABLE,
+            LOOPBACK_INTERFACE,
+        );
+        // The peer reports down a duplicate of fd 1 and the engine's own pretty
+        // log mirror shares the real one, so it is quiet unless an arm's subject
+        // is something the runtime only says in a log.
+        if !how.report_what_it_logs {
+            command.env("STREAMLIB_QUIET", "1");
+        }
+
         let mut child = command
-            .env(
-                MESH_MULTICAST_INTERFACE_ENVIRONMENT_VARIABLE,
-                LOOPBACK_INTERFACE,
-            )
-            // The peer reports down a duplicate of fd 1; the engine's own
-            // pretty log mirror shares the real one, and this keeps it quiet.
-            .env("STREAMLIB_QUIET", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -122,15 +137,21 @@ impl RuntimeMeshPeerProcess {
 
         let what_it_last_saw = Arc::new(Mutex::new(None));
         let why_it_refused = Arc::new(Mutex::new(None));
+        let what_it_logged = Arc::new(Mutex::new(Vec::new()));
         let reported = child.stdout.take().expect("the peer's stdout is piped");
         let saw = Arc::clone(&what_it_last_saw);
         let refused = Arc::clone(&why_it_refused);
+        let logged = Arc::clone(&what_it_logged);
         std::thread::spawn(move || {
             for line in BufReader::new(reported).lines().map_while(Result::ok) {
                 if let Some(refusal) = line.strip_prefix("REFUSED ") {
                     *refused.lock() = Some(refusal.to_string());
                 } else if let Ok(mesh) = serde_json::from_str::<serde_json::Value>(&line) {
                     *saw.lock() = Some(mesh);
+                } else {
+                    // Whatever is left is the engine's pretty log, which only
+                    // reaches here for an arm that asked for it.
+                    logged.lock().push(line);
                 }
             }
         });
@@ -139,6 +160,7 @@ impl RuntimeMeshPeerProcess {
             child,
             what_it_last_saw,
             why_it_refused,
+            what_it_logged,
         }
     }
 
@@ -188,6 +210,40 @@ impl RuntimeMeshPeerProcess {
     fn ask_it_to_leave_and_wait(&mut self) {
         drop(self.child.stdin.take());
         let _ = self.child.wait();
+    }
+
+    /// Kill the peer outright, with no chance to undeclare anything — the
+    /// crash a restart races.
+    fn kill_it_and_wait(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+
+    /// Wait until the peer is constructed and reporting what it sees.
+    fn wait_until_it_is_on_the_mesh(&self) {
+        wait_until("the runtime reports its mesh", || self.what_it_last_saw());
+    }
+
+    /// Why this peer refused to be constructed, once it says so.
+    fn wait_until_it_refuses(&self) -> String {
+        wait_until("the runtime refuses its name", || {
+            self.why_it_refused.lock().clone()
+        })
+    }
+
+    /// The exit status of a peer that has stopped on its own.
+    fn wait_for_its_exit_code(&mut self) -> Option<i32> {
+        self.child.wait().expect("the peer exits").code()
+    }
+
+    /// Every line this peer logged that carries `what_it_said`.
+    fn log_lines_carrying(&self, what_it_said: &str) -> Vec<String> {
+        self.what_it_logged
+            .lock()
+            .iter()
+            .filter(|line| line.contains(what_it_said))
+            .cloned()
+            .collect()
     }
 }
 
@@ -568,5 +624,320 @@ fn an_endpoint_this_build_cannot_open_refuses_the_runtime_at_construction() {
             Some(2),
             "a refused runtime exits by its refusal"
         );
+    }
+}
+
+/// A liveliness token this test holds on a mesh under a stated name, host and
+/// pid — the key a runtime's duplicate-name check reads.
+///
+/// It is written through the engine's own key space rather than spelled here:
+/// a second reading of the grammar beside the check would pass while the check
+/// looked somewhere else entirely, which is the one thing these arms exist to
+/// catch.
+struct ATokenHeldUnderAName {
+    _session: zenoh::Session,
+    _token: zenoh::liveliness::LivelinessToken,
+}
+
+impl ATokenHeldUnderAName {
+    /// Hold `runtime_name` on `mesh_name`, announced by `held_by`, over a
+    /// session listening at `listening` for the runtime under test to dial.
+    fn declared(
+        mesh_name: &str,
+        runtime_name: &str,
+        held_by: HostIdentity,
+        process_id: u32,
+        listening: &str,
+    ) -> Self {
+        let mesh_name =
+            RuntimeMeshName::from_configuration_environment_or_default(Some(mesh_name.to_string()))
+                .expect("a legal mesh name");
+        let key_space = RuntimeMeshKeySpace::of(mesh_name.clone());
+
+        // Every value stated, so nothing here is read out of the test process's
+        // own environment: this session must reach exactly the peer that dials
+        // it and nothing else on the machine.
+        let configuration = ResolvedRuntimeMeshConfiguration::resolve(RuntimeMeshConfiguration {
+            mesh_name: Some(mesh_name.to_string()),
+            mesh_peer_endpoints: Some(Vec::new()),
+            mesh_listen_endpoints: Some(vec![listening.to_string()]),
+            mesh_multicast_discovery: Some(false),
+            ..Default::default()
+        })
+        .expect("a resolvable mesh configuration");
+
+        let session = zenoh::open(
+            configuration
+                .as_a_zenoh_configuration()
+                .expect("a Zenoh configuration"),
+        )
+        .wait()
+        .expect("a session on the loopback");
+        let token = session
+            .liveliness()
+            .declare_token(key_space.announcement_key_for(&AnnouncedRuntimeIdentity {
+                runtime_name: runtime_name.to_string(),
+                host_identity: held_by,
+                process_id,
+            }))
+            .wait()
+            .expect("a liveliness token");
+
+        Self {
+            _session: session,
+            _token: token,
+        }
+    }
+}
+
+/// A pid this host has already reaped, so the same-host exception applies to it.
+fn a_process_id_on_this_host_that_has_exited() -> u32 {
+    let mut exited = std::process::Command::new("true")
+        .spawn()
+        .expect("this host runs a process");
+    let process_id = exited.id();
+    exited.wait().expect("the process is reaped");
+    process_id
+}
+
+/// A second runtime under a name a live one already holds does not start, and
+/// says enough for somebody to act on it.
+#[test]
+fn a_second_runtime_of_a_live_name_is_refused_naming_the_holders_host_and_pid() {
+    let mesh_name = a_mesh_name_of_its_own("duplicate");
+    let port = a_free_loopback_port();
+    let listening = format!("udp/{LOOPBACK_INTERFACE}:{port}?rel=1");
+
+    let holding_the_name = RuntimeMeshPeerProcess::launch(HowToLaunchAPeer {
+        runtime_name: "held-name".to_string(),
+        mesh_name: mesh_name.clone(),
+        listen_endpoints: vec![listening.clone()],
+        ..Default::default()
+    });
+    holding_the_name.wait_until_it_is_on_the_mesh();
+
+    let mut refused = RuntimeMeshPeerProcess::launch(HowToLaunchAPeer {
+        runtime_name: "held-name".to_string(),
+        mesh_name,
+        peer_endpoints: vec![listening],
+        ..Default::default()
+    });
+
+    let refusal = refused.wait_until_it_refuses();
+    assert!(refusal.contains("held-name"), "{refusal}");
+    assert!(
+        refusal.contains(&format!("pid {}", holding_the_name.child.id())),
+        "the refusal must name the pid holding the name: {refusal}"
+    );
+    assert!(
+        refusal.contains("this host"),
+        "the holder is on this host and the refusal must say so: {refusal}"
+    );
+    assert!(refusal.contains("streamlib nodes"), "{refusal}");
+    assert!(refusal.contains("--runtime-name"), "{refusal}");
+    assert_eq!(
+        refused.wait_for_its_exit_code(),
+        Some(2),
+        "a refused runtime exits by its refusal"
+    );
+    assert!(
+        holding_the_name.what_it_last_saw().is_some(),
+        "the runtime holding the name keeps running"
+    );
+}
+
+/// Killing the runtime holding a name frees it at once: the exception exists
+/// for exactly the restart that races its predecessor's exit.
+#[test]
+fn a_name_is_free_the_moment_the_runtime_holding_it_is_killed() {
+    let mesh_name = a_mesh_name_of_its_own("killed");
+    let port = a_free_loopback_port();
+    let listening = format!("udp/{LOOPBACK_INTERFACE}:{port}?rel=1");
+
+    let mut killed = RuntimeMeshPeerProcess::launch(HowToLaunchAPeer {
+        runtime_name: "restarted".to_string(),
+        mesh_name: mesh_name.clone(),
+        listen_endpoints: vec![listening.clone()],
+        ..Default::default()
+    });
+    killed.wait_until_it_is_on_the_mesh();
+
+    // Refused while it is alive, so the arm below is not passing for want of a
+    // check rather than for want of a holder.
+    let mut while_it_lives = RuntimeMeshPeerProcess::launch(HowToLaunchAPeer {
+        runtime_name: "restarted".to_string(),
+        mesh_name: mesh_name.clone(),
+        peer_endpoints: vec![listening.clone()],
+        ..Default::default()
+    });
+    while_it_lives.wait_until_it_refuses();
+    while_it_lives.wait_for_its_exit_code();
+
+    killed.kill_it_and_wait();
+
+    let restarted = RuntimeMeshPeerProcess::launch(HowToLaunchAPeer {
+        runtime_name: "restarted".to_string(),
+        mesh_name,
+        listen_endpoints: vec![listening],
+        ..Default::default()
+    });
+    restarted.wait_until_it_is_on_the_mesh();
+    assert!(
+        restarted.why_it_refused.lock().is_none(),
+        "the name must be free the moment its holder is gone"
+    );
+}
+
+/// A token left on the mesh by a process on this host that is gone is taken
+/// over, and the same token under a live pid is not — the control is what makes
+/// the arm above it non-vacuous.
+///
+/// Linux only, because the takeover is: no other platform reports a host
+/// identity, so no announced host equals this one and the name stays refused
+/// until the token leaves. Gated rather than left to time out on an assertion
+/// that platform cannot satisfy.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_token_left_by_a_dead_process_on_this_host_is_taken_over_and_a_live_one_is_not() {
+    for (what_holds_it, process_id, it_may_start) in [
+        (
+            "a process that has exited",
+            a_process_id_on_this_host_that_has_exited(),
+            true,
+        ),
+        ("this very test process", std::process::id(), false),
+    ] {
+        let mesh_name = a_mesh_name_of_its_own("stale");
+        let port = a_free_loopback_port();
+        let listening = format!("tcp/{LOOPBACK_INTERFACE}:{port}");
+
+        // Declared before the runtime dials, because a token declared onto an
+        // existing connection takes a moment to propagate — which is the
+        // discovery window the plan states as a residual.
+        let _held = ATokenHeldUnderAName::declared(
+            &mesh_name,
+            "left-behind",
+            HostIdentity::of_this_host(),
+            process_id,
+            &listening,
+        );
+
+        let mut taking_it_over = RuntimeMeshPeerProcess::launch(HowToLaunchAPeer {
+            runtime_name: "left-behind".to_string(),
+            mesh_name,
+            peer_endpoints: vec![listening],
+            ..Default::default()
+        });
+
+        if it_may_start {
+            taking_it_over.wait_until_it_is_on_the_mesh();
+            assert!(
+                taking_it_over.why_it_refused.lock().is_none(),
+                "a name held by {what_holds_it} must be free"
+            );
+        } else {
+            let refusal = taking_it_over.wait_until_it_refuses();
+            assert!(
+                refusal.contains("left-behind") && refusal.contains(&format!("pid {process_id}")),
+                "a name held by {what_holds_it} must be refused naming it: {refusal}"
+            );
+            assert_eq!(taking_it_over.wait_for_its_exit_code(), Some(2));
+        }
+    }
+}
+
+/// The stated residual: two runtimes that meet only after both have started are
+/// not refused. Both keep running, each says so once naming the other, and each
+/// lists the other under the one name.
+///
+/// Arranged rather than raced — the second runtime dials a port nothing is
+/// listening on yet, so its own check finds nobody, and the first appears
+/// afterwards and is connected to by the retry.
+///
+/// This is the one arm that reads the peers' logs, because saying so once is
+/// the whole of what the runtime does here: assert it on `graph` alone and the
+/// production call could be deleted with every test still green.
+#[test]
+fn two_runtimes_that_meet_after_both_started_both_run_and_each_says_so_once() {
+    let mesh_name = a_mesh_name_of_its_own("residual");
+    let port = a_free_loopback_port();
+    let listening = format!("tcp/{LOOPBACK_INTERFACE}:{port}");
+
+    let dialling_nobody_yet = RuntimeMeshPeerProcess::launch(HowToLaunchAPeer {
+        runtime_name: "one-name-two-runtimes".to_string(),
+        mesh_name: mesh_name.clone(),
+        peer_endpoints: vec![listening.clone()],
+        report_what_it_logs: true,
+        ..Default::default()
+    });
+    dialling_nobody_yet.wait_until_it_is_on_the_mesh();
+
+    let appearing_afterwards = RuntimeMeshPeerProcess::launch(HowToLaunchAPeer {
+        runtime_name: "one-name-two-runtimes".to_string(),
+        mesh_name,
+        listen_endpoints: vec![listening],
+        report_what_it_logs: true,
+        ..Default::default()
+    });
+    appearing_afterwards.wait_until_it_is_on_the_mesh();
+
+    each_lists_the_other(&dialling_nobody_yet, &appearing_afterwards);
+    assert_eq!(
+        dialling_nobody_yet.peer_names_it_sees(),
+        ["one-name-two-runtimes"]
+    );
+    assert_eq!(
+        appearing_afterwards.peer_names_it_sees(),
+        ["one-name-two-runtimes"]
+    );
+    for runtime in [&dialling_nobody_yet, &appearing_afterwards] {
+        assert!(
+            runtime.why_it_refused.lock().is_none(),
+            "neither runtime is refused: they never saw each other in time"
+        );
+    }
+
+    // Each names the *other* process, and says it once however many re-ask
+    // rounds go by — so both the naming and the once are locked.
+    for (runtime, the_other) in [
+        (&dialling_nobody_yet, &appearing_afterwards),
+        (&appearing_afterwards, &dialling_nobody_yet),
+    ] {
+        let said = wait_until("the runtime says it shares its name", || {
+            Some(runtime.log_lines_carrying("is also named one-name-two-runtimes"))
+                .filter(|lines| !lines.is_empty())
+        });
+        assert_eq!(said.len(), 1, "said more than once: {said:?}");
+        assert!(
+            said[0].contains(&format!("pid {}", the_other.child.id())),
+            "must name the other runtime's pid: {}",
+            said[0]
+        );
+    }
+}
+
+/// Isolated runtimes never refuse each other, however many share one name:
+/// with discovery off and no peers there is nobody to see, which is the
+/// isolation lever working rather than a hole in the check.
+#[test]
+fn isolated_runtimes_sharing_one_name_never_refuse_each_other() {
+    let mesh_name = a_mesh_name_of_its_own("isolated-namesakes");
+    let namesakes: Vec<RuntimeMeshPeerProcess> = (0..3)
+        .map(|_| {
+            RuntimeMeshPeerProcess::launch(HowToLaunchAPeer {
+                runtime_name: "one-name-many-isolated-runtimes".to_string(),
+                mesh_name: mesh_name.clone(),
+                ..Default::default()
+            })
+        })
+        .collect();
+
+    for runtime in &namesakes {
+        runtime.wait_until_it_is_on_the_mesh();
+        assert!(
+            runtime.why_it_refused.lock().is_none(),
+            "an isolated runtime has nobody to be refused by"
+        );
+        assert!(runtime.peer_names_it_sees().is_empty());
     }
 }

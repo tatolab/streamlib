@@ -74,6 +74,18 @@ impl HostIdentity {
         }
     }
 
+    /// Whether a runtime here is the same host as `announced_host`, in the
+    /// sense the same-host exception needs: a pid announced by that host is one
+    /// this host's process table can be asked about.
+    ///
+    /// [`HostIdentity::Unidentified`] is never this host, on either side. A
+    /// platform that recognises no host recognises none of its own runtimes
+    /// either, which is what makes the exception Linux-only without a `#[cfg]`
+    /// spelling it that way.
+    pub fn is_the_same_host_a_pid_can_be_checked_on(&self, announced_host: &Self) -> bool {
+        matches!(self, Self::ThisKernelBootAndPidNamespace { .. }) && self == announced_host
+    }
+
     /// The identity a key chunk carries, or `None` when the chunk is not one
     /// this engine wrote.
     pub fn from_one_key_chunk(chunk: &str) -> Option<Self> {
@@ -150,6 +162,25 @@ mod tests {
         assert_ne!(identified("boot", 1), identified("boot", 2));
         assert_ne!(identified("boot", 1), identified("other-boot", 1));
         assert_ne!(identified("boot", 1), HostIdentity::Unidentified);
+    }
+
+    /// The same-host question the duplicate-name exception asks, which is not
+    /// the peer table's equality: an unidentified host is never this host, so a
+    /// platform that recognises nothing never takes a name over.
+    #[test]
+    fn only_an_identified_host_is_ever_the_same_host_a_pid_can_be_checked_on() {
+        let here = identified("boot", 1);
+
+        assert!(here.is_the_same_host_a_pid_can_be_checked_on(&identified("boot", 1)));
+        assert!(!here.is_the_same_host_a_pid_can_be_checked_on(&identified("boot", 2)));
+        assert!(!here.is_the_same_host_a_pid_can_be_checked_on(&identified("other-boot", 1)));
+        assert!(!here.is_the_same_host_a_pid_can_be_checked_on(&HostIdentity::Unidentified));
+
+        assert!(
+            !HostIdentity::Unidentified
+                .is_the_same_host_a_pid_can_be_checked_on(&HostIdentity::Unidentified),
+            "a host that recognises nothing must not recognise itself"
+        );
     }
 
     /// A chunk this engine did not write reads as nothing, rather than as a

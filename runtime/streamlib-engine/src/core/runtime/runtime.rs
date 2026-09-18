@@ -275,6 +275,22 @@ impl Runner {
         // construction time lands in the unified JSONL pipeline.
         crate::core::logging::install_iceoryx2_log_bridge_at_the_engines_configured_level();
 
+        // After logging, so a local-only warning reaches the log, and ahead of
+        // both the surface socket and the iceoryx2 node: a runtime refused its
+        // name builds neither. It sits beside the runtime-id socket refusal
+        // below because this is where a runtime's identity comes up either way,
+        // and it runs first of the two because it is the only one of them that
+        // can refuse over something another machine holds. `Runner::new()`
+        // needs no GPU, so everything here is provable without one.
+        let hosted_control_plane = Arc::new(HostedControlPlaneEndpointRegistry::default());
+        let runtime_mesh = Arc::new(RuntimeMeshMembership::join(
+            &resolved_runtime_mesh_configuration,
+            &runtime_name,
+            runtime_id.as_str(),
+            &crate::core::runtime::runtime_name::this_hosts_name(),
+            &hosted_control_plane,
+        )?);
+
         // Bring up the per-runtime surface-sharing service. Each runtime owns
         // a unique Unix socket in the runtime directory that its polyglot
         // subprocesses connect to via STREAMLIB_SURFACE_SOCKET. Binding it is
@@ -283,19 +299,6 @@ impl Runner {
         #[cfg(target_os = "linux")]
         let (surface_service, surface_socket_path, surface_check_out_leases) =
             bring_up_surface_service(&runtime_directory, &runtime_id)?;
-
-        // After logging, so a local-only warning reaches the log, and before the
-        // iceoryx2 node, beside the runtime-id socket refusal — this is where a
-        // runtime's identity already comes up. `Runner::new()` needs no GPU, so
-        // everything here is provable without one.
-        let hosted_control_plane = Arc::new(HostedControlPlaneEndpointRegistry::default());
-        let runtime_mesh = Arc::new(RuntimeMeshMembership::join(
-            &resolved_runtime_mesh_configuration,
-            &runtime_name,
-            runtime_id.as_str(),
-            &crate::core::runtime::runtime_name::this_hosts_name(),
-            &hosted_control_plane,
-        ));
 
         crate::iceoryx2::warn_when_posix_shared_memory_is_short_for_a_runtime();
 
