@@ -18,6 +18,7 @@ mod mailbox;
 mod node;
 mod output;
 mod payload;
+mod posix_shared_memory_headroom;
 mod read_mode;
 
 #[cfg(test)]
@@ -32,7 +33,7 @@ pub(crate) use audio_window::{
 };
 pub use channel_ceiling::{
     ENV_MAX_PAYLOAD_BYTES_PER_CHANNEL_TRUSTED, ENV_MAX_PAYLOAD_BYTES_PER_CHANNEL_UNTRUSTED_SESSION,
-    effective_channel_ceiling_bytes,
+    effective_channel_chunk_ceiling_bytes,
 };
 pub use channel_name::{
     CHANNEL_CHUNK_SEPARATOR, ChannelName, InboundLinkName, MAX_CHANNEL_NAME_BYTES,
@@ -73,7 +74,8 @@ pub use payload::{
     ChannelTrustTier, DEFAULT_EXPECTED_PAYLOAD_BYTES, DataChannelBagSequenceNumberUserHeader,
     FRAME_HEADER_PAYLOAD_LEN_SIZE, FRAME_HEADER_SIZE, FRAME_HEADER_TIMESTAMP_NS_SIZE, FrameHeader,
     MAX_PORT_KEY_SIZE, MAX_PUBLISHERS_PER_CHANNEL, PortKey,
-    RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL, TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
-    UNTRUSTED_SESSION_CHANNEL_PAYLOAD_CEILING_BYTES,
+    RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL, TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
+    UNTRUSTED_SESSION_CHANNEL_CHUNK_CEILING_BYTES,
 };
+pub use posix_shared_memory_headroom::warn_when_posix_shared_memory_is_short_for_a_runtime;
 pub use read_mode::ReadMode;

@@ -27,9 +27,6 @@ pub struct PortDescriptor {
     pub name: String,
     pub description: String,
     pub required: bool,
-    /// Whether this port uses iceoryx2 IPC.
-    #[serde(default)]
-    pub is_iceoryx2: bool,
     /// Delivery profile declared by an *input* port (the destination of an
     /// iceoryx2 service) — `"newest"` or `"ordered"`. Required on every input
     /// port and always `None` on an output port.
@@ -49,17 +46,8 @@ impl PortDescriptor {
             name: name.into(),
             description: description.into(),
             required,
-            is_iceoryx2: false,
             delivery_profile: None,
             audio_window: None,
-        }
-    }
-
-    /// Create a port descriptor for an iceoryx2 port.
-    pub fn iceoryx2(name: impl Into<String>, description: impl Into<String>) -> Self {
-        Self {
-            is_iceoryx2: true,
-            ..Self::new(name, description, true)
         }
     }
 

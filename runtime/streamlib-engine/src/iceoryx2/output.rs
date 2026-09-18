@@ -119,13 +119,20 @@ struct ChannelEgress {
     /// process boundary (host-to-host is trusted; a subprocess destination is
     /// untrusted-session).
     trust_tier: ChannelTrustTier,
-    /// Per-channel payload ceiling in bytes. A frame above this is refused with
+    /// Per-channel shared-memory chunk ceiling in bytes: the tier default or its
+    /// operator override, and so the knob a refusal names.
+    chunk_ceiling_bytes: usize,
+    /// The most bytes one frame on this channel may carry — the chunk ceiling
+    /// less what iceoryx2 lays out ahead of a frame in its sample. Derived once
+    /// here rather than at each refusal, so the number the decision refuses on
+    /// and the number it reports cannot drift. A frame past it is refused with
     /// [`Error::PayloadExceedsChannelCeiling`], counted on
     /// [`Self::refused_bag_counter`], and the stream continues.
-    ceiling_bytes: usize,
+    largest_admitted_frame_bytes: usize,
     /// Best-effort tracking of the publisher's current data-segment capacity so
-    /// a PowerOfTwo growth event is observable. Primed to the hint's slot size;
-    /// bumped (to `next_power_of_two`) the first time a loan exceeds it.
+    /// a PowerOfTwo growth event is observable. Sample bytes, never frame bytes:
+    /// primed to the hint's own sample size, and bumped (to `next_power_of_two`)
+    /// the first time a loan's sample exceeds it.
     current_slot_capacity_bytes: usize,
     /// This port's share of the writer's refused-bag counts.
     refused_bag_counter: OutputPortRefusedBagCounter,
@@ -151,7 +158,7 @@ struct ChannelEgressLink {
 ///
 /// Reifying the trust-tier→ceiling coupling in one place: the `trust_tier`
 /// selects the process boundary (trusted host-to-host vs. untrusted-session
-/// subprocess) and `ceiling_bytes` is its per-channel payload ceiling.
+/// subprocess) and `chunk_ceiling_bytes` is its per-channel chunk ceiling.
 pub struct ChannelEgressConfig {
     /// iceoryx2 service name for this channel (`{source}/{output_port}`);
     /// carried for the growth / ceiling tracing fields.
@@ -161,8 +168,9 @@ pub struct ChannelEgressConfig {
     pub trust_tier: ChannelTrustTier,
     /// Initial expected-payload hint sizing the publisher's data segment.
     pub expected_payload_bytes: usize,
-    /// Per-channel payload ceiling in bytes; a frame above it is refused.
-    pub ceiling_bytes: usize,
+    /// Per-channel shared-memory chunk ceiling in bytes; a frame whose sample
+    /// does not fit it is refused.
+    pub chunk_ceiling_bytes: usize,
 }
 
 /// Inner state for an output writer. Owns the per-output-port
@@ -226,7 +234,7 @@ impl OutputWriterInner {
             service_name,
             trust_tier,
             expected_payload_bytes,
-            ceiling_bytes,
+            chunk_ceiling_bytes,
         } = egress_config;
         self.channels.lock().insert(
             output_port.to_string(),
@@ -236,8 +244,15 @@ impl OutputWriterInner {
                 links: Vec::new(),
                 channel_service_name: service_name,
                 trust_tier,
-                ceiling_bytes,
-                current_slot_capacity_bytes: expected_payload_bytes + FRAME_HEADER_SIZE,
+                chunk_ceiling_bytes,
+                largest_admitted_frame_bytes:
+                    streamlib_ipc_types::largest_channel_frame_bytes_under_a_chunk_ceiling(
+                        chunk_ceiling_bytes,
+                    ),
+                current_slot_capacity_bytes:
+                    streamlib_ipc_types::iceoryx2_sample_bytes_for_a_channel_frame(
+                        expected_payload_bytes + FRAME_HEADER_SIZE,
+                    ),
                 refused_bag_counter: self.refused_bag_counts.counter_for_output_port(output_port),
             },
         );
@@ -372,7 +387,7 @@ impl OutputWriterInner {
 
         let admission = streamlib_ipc_types::decide_channel_egress_admission(
             total_len,
-            egress.ceiling_bytes,
+            egress.chunk_ceiling_bytes,
             &mut egress.current_slot_capacity_bytes,
             || egress.refused_bag_counter.record_one_refused_bag(),
         );
@@ -380,7 +395,7 @@ impl OutputWriterInner {
             None,
             egress.trust_tier,
             &egress.channel_service_name,
-            egress.ceiling_bytes,
+            egress.chunk_ceiling_bytes,
             total_len,
             &admission,
         );
@@ -390,7 +405,8 @@ impl OutputWriterInner {
             return Err(Error::PayloadExceedsChannelCeiling {
                 channel: egress.channel_service_name.clone(),
                 payload_bytes: total_len,
-                ceiling_bytes: egress.ceiling_bytes,
+                largest_admitted_frame_bytes: egress.largest_admitted_frame_bytes,
+                chunk_ceiling_bytes: egress.chunk_ceiling_bytes,
                 tier: trust_tier_label(egress.trust_tier),
                 refused_bags_on_the_output_port: refused_count,
             });
@@ -637,10 +653,10 @@ mod tests {
     }
 
     /// A writer whose one output port `out` publishes onto `pubsub` under a
-    /// `ceiling_bytes` ceiling.
+    /// `chunk_ceiling_bytes` ceiling.
     fn output_writer_with_one_channel(
         pubsub: &Iceoryx2Service,
-        ceiling_bytes: usize,
+        chunk_ceiling_bytes: usize,
     ) -> OutputWriterInner {
         let inner = OutputWriterInner::new();
         inner.set_channel_publisher(
@@ -650,7 +666,7 @@ mod tests {
                 service_name: "test/out".to_string(),
                 trust_tier: ChannelTrustTier::Trusted,
                 expected_payload_bytes: 64,
-                ceiling_bytes,
+                chunk_ceiling_bytes,
             },
         );
         inner
@@ -691,7 +707,7 @@ mod tests {
                 service_name: "test/out".to_string(),
                 trust_tier: crate::iceoryx2::ChannelTrustTier::Trusted,
                 expected_payload_bytes: 4096,
-                ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+                chunk_ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
             },
         );
         inner.add_channel_link("out", "L-test-notify", Some(notifier));
@@ -751,7 +767,7 @@ mod tests {
                 service_name: "test/mixed-fanout".to_string(),
                 trust_tier: crate::iceoryx2::ChannelTrustTier::Trusted,
                 expected_payload_bytes: 4096,
-                ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+                chunk_ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
             },
         );
 
@@ -876,7 +892,7 @@ mod tests {
                 service_name: "test/out".to_string(),
                 trust_tier: crate::iceoryx2::ChannelTrustTier::Trusted,
                 expected_payload_bytes: 4096,
-                ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+                chunk_ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
             },
         );
 
@@ -955,7 +971,7 @@ mod tests {
                 service_name: "test/reclaim/out".to_string(),
                 trust_tier: ChannelTrustTier::Trusted,
                 expected_payload_bytes: 4096,
-                ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+                chunk_ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
             },
         );
 
@@ -1085,7 +1101,7 @@ mod tests {
                 service_name: "test/ceiling/out".to_string(),
                 trust_tier: ChannelTrustTier::UntrustedSession,
                 expected_payload_bytes: 64,
-                ceiling_bytes: ceiling,
+                chunk_ceiling_bytes: ceiling,
             },
         );
 
@@ -1116,13 +1132,22 @@ mod tests {
             Error::PayloadExceedsChannelCeiling {
                 ref channel,
                 payload_bytes,
-                ceiling_bytes,
+                largest_admitted_frame_bytes,
+                chunk_ceiling_bytes,
                 tier,
                 refused_bags_on_the_output_port,
             } => {
                 assert_eq!(channel, "test/ceiling/out");
                 assert_eq!(payload_bytes, FRAME_HEADER_SIZE + over.len());
-                assert_eq!(ceiling_bytes, ceiling);
+                // Both numbers, because they are not the same one: the producer
+                // fits inside the frame ceiling, the operator raises the chunk
+                // ceiling, and the refusal has to name each as itself.
+                assert_eq!(
+                    largest_admitted_frame_bytes,
+                    streamlib_ipc_types::largest_channel_frame_bytes_under_a_chunk_ceiling(ceiling)
+                );
+                assert_eq!(chunk_ceiling_bytes, ceiling);
+                assert!(largest_admitted_frame_bytes < chunk_ceiling_bytes);
                 assert_eq!(tier, ChannelTrustTierLabel::UntrustedSession);
                 assert_eq!(refused_bags_on_the_output_port, 1);
             }
@@ -1175,7 +1200,7 @@ mod tests {
                     service_name: "test/mirrored-refusal/out".to_string(),
                     trust_tier: ChannelTrustTier::UntrustedSession,
                     expected_payload_bytes: 64,
-                    ceiling_bytes: 1024,
+                    chunk_ceiling_bytes: 1024,
                 },
             );
             inner.add_channel_link("out", "L-out", None);
@@ -1359,7 +1384,7 @@ mod tests {
                 service_name: "test/stale/out".to_string(),
                 trust_tier: ChannelTrustTier::Trusted,
                 expected_payload_bytes: 4096,
-                ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+                chunk_ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
             },
         );
 

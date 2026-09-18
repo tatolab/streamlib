@@ -72,8 +72,6 @@ impl GraphInspector {
             source_port: link.source.port_name.clone(),
             target_processor: link.target.processor_id.clone(),
             target_port: link.target.port_name.clone(),
-            // iceoryx2 handles queuing internally
-            queue_depth: 0,
             capacity: link.capacity.into(),
             throughput_fps: 0.0,
         })

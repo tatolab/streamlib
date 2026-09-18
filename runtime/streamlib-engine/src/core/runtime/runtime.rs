@@ -252,6 +252,8 @@ impl Runner {
         let (surface_service, surface_socket_path, surface_check_out_leases) =
             bring_up_surface_service(&runtime_directory, &runtime_id)?;
 
+        crate::iceoryx2::warn_when_posix_shared_memory_is_short_for_a_runtime();
+
         tracing::info!("[new] Creating iceoryx2 Node...");
         let iceoryx2_node = Iceoryx2Node::new(
             &runtime_directory.iceoryx2_domain_root(),

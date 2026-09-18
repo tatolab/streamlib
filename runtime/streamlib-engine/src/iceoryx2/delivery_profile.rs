@@ -207,7 +207,7 @@ mod tests {
             declared_profile: Option<&str>,
         ) -> ProcessorClassImportPath {
             let import_path = class_path(type_name);
-            let mut port = PortDescriptor::iceoryx2(port_name, "input");
+            let mut port = PortDescriptor::new(port_name, "input", true);
             if let Some(profile) = declared_profile {
                 port = port.with_delivery_profile(profile);
             }

@@ -42,8 +42,6 @@ pub struct LinkSnapshot {
     pub target_processor: ProcessorUniqueId,
     /// Target port name.
     pub target_port: String,
-    /// Current queue depth.
-    pub queue_depth: usize,
     /// Queue capacity.
     pub capacity: usize,
     /// Throughput in frames per second.

@@ -883,7 +883,7 @@ mod port_rendering_tests {
     /// carrier the macro and the wheel's declaration bridge both fill.
     #[test]
     fn a_declared_contract_survives_the_descriptor_to_port_info_hop() {
-        let descriptor = crate::core::PortDescriptor::iceoryx2("audio", "Samples to frame")
+        let descriptor = crate::core::PortDescriptor::new("audio", "Samples to frame", true)
             .with_delivery_profile("ordered")
             .with_audio_window_contract(declared_window_contract());
 
@@ -894,7 +894,7 @@ mod port_rendering_tests {
 
     #[test]
     fn a_contract_bearing_descriptor_renders_its_contract_too() {
-        let descriptor = crate::core::PortDescriptor::iceoryx2("audio", "Samples to frame")
+        let descriptor = crate::core::PortDescriptor::new("audio", "Samples to frame", true)
             .with_delivery_profile("ordered")
             .with_audio_window_contract(
                 crate::core::descriptors::AudioWindowContract::MatchDevice {},

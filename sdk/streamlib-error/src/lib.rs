@@ -168,15 +168,22 @@ pub enum Error {
     BagEncodeFailed(String),
 
     #[error(
-        "payload of {payload_bytes} bytes on channel '{channel}' exceeds the \
-         per-channel ceiling of {ceiling_bytes} bytes ({tier} tier) — the sample \
-         was refused and counted, the stream continues; raise the node's \
-         max_payload_bytes_per_channel for this tier or split the payload"
+        "payload of {payload_bytes} bytes on channel '{channel}' is past the \
+         {largest_admitted_frame_bytes} bytes its {chunk_ceiling_bytes}-byte \
+         per-channel ceiling admits ({tier} tier) — the sample was refused and \
+         counted, the stream continues; split the payload, or raise this tier's \
+         max_payload_bytes_per_channel above {chunk_ceiling_bytes}"
     )]
     PayloadExceedsChannelCeiling {
         channel: String,
         payload_bytes: usize,
-        ceiling_bytes: usize,
+        /// The most bytes one frame may carry on this channel — the per-channel
+        /// shared-memory chunk ceiling less what iceoryx2 lays out ahead of a
+        /// frame in the sample carrying it. What a producer must fit inside.
+        largest_admitted_frame_bytes: usize,
+        /// The per-channel shared-memory chunk ceiling itself: the tier default
+        /// or its operator override, and so the knob to raise.
+        chunk_ceiling_bytes: usize,
         tier: ChannelTrustTierLabel,
         /// The refusing output port's refused-bag total, this refusal included.
         refused_bags_on_the_output_port: u64,
