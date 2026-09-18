@@ -1016,11 +1016,13 @@ def build_argument_parser() -> argparse.ArgumentParser:
             "ones that are gone, and prints runtime_name, runtime_id, "
             "control_url, pid, alive? and hint. Only runtimes hosting a "
             "control plane register. Then reads the runtime mesh — every "
-            "runtime on it, on any machine, control plane or not — through a "
-            "short-lived session that announces nothing, so listing a mesh is "
-            "invisible to every runtime on it. About a second with discovery "
-            "on: Zenoh's scouting delay plus the time each runtime found is "
-            "given to say what it is."
+            "runtime on it, on any machine, control plane or not — and prints "
+            "runtime_name, host, control_plane_urls and engine_version for "
+            "each one the first table does not already carry. The session it "
+            "reads through announces nothing, so listing a mesh is invisible "
+            "to every runtime on it. About a second with discovery on: Zenoh's "
+            "scouting delay plus the time each runtime found is given to say "
+            "what it is."
         ),
     )
     nodes_command.add_argument(
