@@ -209,6 +209,11 @@ pub(crate) fn create_iceoryx2_node_in_domain(
 
 /// The sizing a channel data service is created with, and that every opener
 /// reopens it at — the parameters iceoryx2 verifies on each open.
+///
+/// Reachable rather than supported: the cross-runtime-link fixture stands a
+/// runtime's mesh half up without a `Runner`, and an egress asks for exactly
+/// the sizing the compiler created the channel with.
+#[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChannelSizing {
     /// The fixed destination slot count plus the reserved tap slot.

@@ -45,6 +45,7 @@ pub use hosted_control_plane_endpoint::HostedControlPlaneEndpointRegistry;
 pub use mesh_data_message_attachment::{
     MESH_DATA_MESSAGE_ATTACHMENT_BYTES, MeshDataMessageAttachment,
 };
+#[doc(hidden)]
 pub use mesh_link_ingress_table::MeshLinkIngressTable;
 // Reachable rather than supported, like the key grammar above: the
 // cross-runtime-link fixture stands two runtimes' mesh halves up without a

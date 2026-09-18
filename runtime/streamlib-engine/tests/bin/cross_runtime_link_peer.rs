@@ -178,7 +178,8 @@ fn run_as_the_reader(
         .open_or_create_service(
             &local_channel,
             streamlib_ipc_types::MAX_DESTINATIONS_PER_CHANNEL
-                + streamlib_engine::iceoryx2::RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL,
+                + streamlib_engine::iceoryx2::RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL
+                + streamlib_engine::iceoryx2::RESERVED_MESH_EGRESS_SUBSCRIBER_SLOTS_PER_CHANNEL,
             streamlib_engine::iceoryx2::DeliveryProfile::ORDERED_DEPTH,
         )
         .map_err(|why| why.to_string())?;

@@ -437,10 +437,12 @@ fn apply_a_link_from_this_runtime(
 
 /// Apply a link carrying from a port on another runtime.
 ///
-/// Nothing is wired here and nothing is queued for the compiler: the link waits
-/// on the mesh, which opens its ingress when the source runtime turns up and
-/// says it offers the port. The destination is validated now, with the same
-/// typed refusals a local link meets.
+/// Its destination side is queued for the compiler like any other link's: the
+/// channel it subscribes to is derived from the address, so it is wired whether
+/// or not that runtime is here. Only the source side waits — the mesh opens the
+/// ingress that publishes onto that channel once the runtime turns up and says
+/// it offers the port. The destination is validated now, with the same typed
+/// refusals a local link meets.
 fn apply_a_link_from_another_runtime(
     compiler: &Arc<Compiler>,
     runtime_mesh: &RuntimeMeshMembership,
@@ -1169,10 +1171,11 @@ mod connect_wires_without_inspecting_a_port_tests {
     }
 
     /// A source on another runtime lands `awaiting_remote`, naming the runtime
-    /// it is waiting for, and queues nothing for the compiler — nothing can be
-    /// wired until that runtime turns up.
+    /// it is waiting for, while its destination side is queued for the compiler
+    /// like any other link's — the channel it subscribes to is derived from the
+    /// address, and nothing about it needs that runtime to be here.
     #[test]
-    fn a_source_on_another_runtime_waits_naming_the_runtime_and_queues_no_wiring() {
+    fn a_source_on_another_runtime_waits_naming_the_runtime_while_its_destination_wires() {
         register_producer_and_consumer_descriptors();
         let (compiler, _from, to) = compiler_holding_a_producer_and_consumer_node();
 

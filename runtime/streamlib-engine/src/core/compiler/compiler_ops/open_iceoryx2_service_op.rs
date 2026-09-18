@@ -38,7 +38,10 @@ use crate::iceoryx2::{
     audio_windowing_declared_by_input_port, delivery_profile_for_input_port,
     effective_channel_chunk_ceiling_bytes, refuse_an_unsettled_match_device_sentinel,
 };
-use streamlib_ipc_types::{MAX_DESTINATIONS_PER_CHANNEL, MAX_INBOUND_LINKS_PER_DESTINATION};
+use streamlib_ipc_types::{
+    MAX_DESTINATIONS_PER_CHANNEL, MAX_INBOUND_LINKS_PER_DESTINATION,
+    RESERVED_MESH_EGRESS_SUBSCRIBER_SLOTS_PER_CHANNEL,
+};
 
 /// Open an iceoryx2 channel for a `connect()` link in the graph.
 ///
@@ -488,9 +491,12 @@ fn channel_destination_count(graph: &Graph, source: &OutputLinkPortRef) -> usize
 
 /// The `max_subscribers` every channel data service is created with:
 /// [`MAX_DESTINATIONS_PER_CHANNEL`] destination slots plus
-/// [`RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL`] — fixed, never the current
-/// fan-out, because iceoryx2 pins the count at create time and a link
-/// connected to a running source must fit a slot that already exists.
+/// [`RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL`] and
+/// [`RESERVED_MESH_EGRESS_SUBSCRIBER_SLOTS_PER_CHANNEL`] — fixed, never the
+/// current fan-out, because iceoryx2 pins the count at create time and a link
+/// connected to a running source must fit a slot that already exists. The mesh
+/// egress takes its slot out of its own reservation rather than out of the
+/// destination cap, so a port at that cap still sends across the mesh.
 ///
 /// A source output port past the cap is refused here by name, before any
 /// service is touched.
@@ -502,7 +508,9 @@ fn channel_max_subscribers(graph: &Graph, source: &OutputLinkPortRef) -> Result<
              carries at most {MAX_DESTINATIONS_PER_CHANNEL}"
         )));
     }
-    Ok(MAX_DESTINATIONS_PER_CHANNEL + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL)
+    Ok(MAX_DESTINATIONS_PER_CHANNEL
+        + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL
+        + RESERVED_MESH_EGRESS_SUBSCRIBER_SLOTS_PER_CHANNEL)
 }
 
 /// Derive the [`ChannelSizing`] for the channel keyed on `(source_proc_id,
@@ -4230,7 +4238,7 @@ mod tests {
     /// the service. Past the cap the port is refused by name, before any
     /// service is touched.
     #[test]
-    fn channel_max_subscribers_is_the_fixed_cap_plus_tap_and_refuses_past_it() {
+    fn channel_max_subscribers_is_the_fixed_cap_plus_its_two_reservations_and_refuses_past_it() {
         let mut graph = Graph::new();
         let src_id = add_mock_output_only(&mut graph);
         let src_uid: ProcessorUniqueId = src_id.as_str().into();
@@ -4248,8 +4256,11 @@ mod tests {
         assert_eq!(
             channel_max_subscribers(&graph, &OutputLinkPortRef::new(src_uid.clone(), "out1"))
                 .expect("three destinations fit the cap"),
-            MAX_DESTINATIONS_PER_CHANNEL + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL,
-            "the channel is sized for the cap, not for the three it feeds today",
+            MAX_DESTINATIONS_PER_CHANNEL
+                + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL
+                + RESERVED_MESH_EGRESS_SUBSCRIBER_SLOTS_PER_CHANNEL,
+            "the channel is sized for the cap plus the tap's slot and the mesh egress's, not \
+             for the three destinations it feeds today",
         );
 
         for _ in 3..=MAX_DESTINATIONS_PER_CHANNEL {
@@ -4394,5 +4405,179 @@ mod tests {
             refused.to_string().contains("at most"),
             "the refusal names the cap; got {refused}"
         );
+    }
+
+    mod a_link_whose_source_is_on_another_runtime {
+        use super::*;
+        use crate::core::graph::MeshPortAddress;
+
+        /// An address of this test's own: two tests sharing one would derive
+        /// one ingress channel and meet each other's service in this process's
+        /// iceoryx2 domain.
+        fn an_address(arm: &str) -> MeshPortAddress {
+            MeshPortAddress::new(format!("bench-cam-{arm}"), "Camera Source 2", "video")
+                .expect("a legal address")
+        }
+
+        /// A graph holding one app-process destination and one link into it from
+        /// `an_address()`, wired through the op.
+        struct ALinkWiredFromAnotherRuntime {
+            _graph: Graph,
+            dest_input: Arc<crate::iceoryx2::InputMailboxesInner>,
+            ingress_table: Arc<MeshLinkIngressTable>,
+            link_id: LinkUniqueId,
+        }
+
+        fn wire_one(arm: &str) -> ALinkWiredFromAnotherRuntime {
+            use crate::core::test_support::MockInputOnlyProcessor;
+
+            let address = an_address(arm);
+            let mut graph = Graph::new();
+            let dest_id = add_mock_input_only(&mut graph);
+            let (_, _, dest_input) =
+                attach_mock_instance::<MockInputOnlyProcessor::Processor>(&mut graph, &dest_id);
+            let dest_input = dest_input.expect("the mock destination has input mailboxes");
+            let link_id = graph
+                .traversal_mut()
+                .add_link_from_another_runtime(
+                    address.clone(),
+                    InputLinkPortRef::new(&dest_id, "in1"),
+                )
+                .first()
+                .expect("the link is kept")
+                .id
+                .clone();
+
+            // What `connect` does before the commit reaches this op: the link
+            // is the mesh's to resolve from the moment it is applied.
+            let ingress_table = a_mesh_link_ingress_table();
+            ingress_table.note_a_link_waiting_on(
+                address,
+                link_id.clone(),
+                Arc::new(Mutex::new(
+                    crate::core::graph::RemoteLinkResolution::AwaitingRemote {
+                        reason: "a test has only just applied it".to_string(),
+                    },
+                )),
+            );
+
+            open_iceoryx2_service(
+                &mut graph,
+                &link_id,
+                &Iceoryx2Node::for_this_test_process(),
+                &ingress_table,
+            )
+            .expect("a link with no local source node still wires its destination");
+
+            ALinkWiredFromAnotherRuntime {
+                _graph: graph,
+                dest_input,
+                ingress_table,
+                link_id,
+            }
+        }
+
+        /// The destination subscribes to the channel the address derives — the
+        /// same derivation the ingress publishes onto, which is how the two meet
+        /// without either telling the other.
+        ///
+        /// Mental-revert: point `channel_service_name`'s remote arm at anything
+        /// else and the destination subscribes to a channel nobody writes.
+        #[test]
+        fn the_destination_subscribes_to_the_channel_the_address_derives() {
+            let wired = wire_one("subscribes");
+            let subscribed: Vec<String> = wired
+                .dest_input
+                .inbound_link_names("in1")
+                .iter()
+                .map(|name| name.to_string())
+                .collect();
+            assert_eq!(subscribed.len(), 1, "the destination has one inbound link");
+
+            let derived =
+                crate::iceoryx2::mesh_ingress_channel_name(&an_address("subscribes").to_string());
+            let held_open = Iceoryx2Node::for_this_test_process()
+                .open_existing_channel_service(derived.as_str())
+                .expect("the channel opens");
+            assert!(
+                held_open.is_some(),
+                "wiring the link must have created {derived}, which its ingress publishes onto"
+            );
+        }
+
+        /// The destination knows the link by the port's mesh address, not by the
+        /// channel — which is hashed from that address and names nothing a reader
+        /// could recognise. §Processor model, the link-naming read.
+        ///
+        /// Mental-revert: hand `wire_rust_dest` the channel name for a remote
+        /// source and a many-track sink fed across the mesh names its tracks by a
+        /// hash.
+        #[test]
+        fn the_destination_knows_the_link_by_the_address_and_not_by_the_channel() {
+            let wired = wire_one("named");
+            let known_as = wired.dest_input.inbound_link_names("in1");
+            assert_eq!(
+                known_as.first().map(|name| name.as_str()),
+                Some(an_address("named").to_string().as_str())
+            );
+            assert_ne!(
+                known_as.first().map(|name| name.as_str()),
+                Some(
+                    crate::iceoryx2::mesh_ingress_channel_name(&an_address("named").to_string())
+                        .as_str()
+                )
+            );
+        }
+
+        /// The op tells the ingress table how this link's destination is woken.
+        /// Without it the mesh never learns the destination is open, so the link
+        /// never reads `wired` and never gets its notifier.
+        ///
+        /// Mental-revert: delete the `note_how_a_links_destination_is_woken` call
+        /// and a remote link in a real runtime carries nothing, silently.
+        #[test]
+        fn the_ingress_table_learns_this_links_destination_is_open() {
+            let wired = wire_one("learns");
+            assert!(
+                wired
+                    .ingress_table
+                    .a_links_destination_is_open(&wired.link_id),
+                "the wiring op is what tells the mesh a remote link's destination is open"
+            );
+        }
+
+        /// Both arms of the link-naming read, side by side: a local source is known
+        /// by its channel and a remote one by its address.
+        #[test]
+        fn a_link_is_named_by_its_channel_at_home_and_by_its_address_across_the_mesh() {
+            assert_eq!(
+                inbound_link_name_of(&OutputLinkPortRef::new("Pcam", "video"), "pcam/video")
+                    .as_str(),
+                "pcam/video"
+            );
+            assert_eq!(
+                inbound_link_name_of(
+                    &OutputLinkPortRef::on_another_runtime(an_address("naming")),
+                    "meshlink-deadbeefdeadbeef/bags",
+                )
+                .as_str(),
+                "bench-cam-naming/Camera Source 2/video"
+            );
+        }
+
+        /// Disconnecting it takes it off the ingress table, which is what stops
+        /// this runtime reading the address once no link does.
+        #[test]
+        fn disconnecting_it_takes_it_off_the_ingress_table() {
+            let mut wired = wire_one("forgets");
+            close_iceoryx2_service(&mut wired._graph, &wired.link_id, &wired.ingress_table)
+                .expect("the disconnect succeeds");
+            assert!(
+                !wired
+                    .ingress_table
+                    .a_links_destination_is_open(&wired.link_id),
+                "a disconnected link is no longer one the mesh carries"
+            );
+        }
     }
 }

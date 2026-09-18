@@ -134,6 +134,17 @@ impl MeshLinkIngressTable {
         self.ask_the_resolver_to_look_again();
     }
 
+    /// Whether the wiring op has reported this link's destination open — the
+    /// half of `wired` that is not the mesh's.
+    #[cfg(test)]
+    pub fn a_links_destination_is_open(&self, link_id: &LinkUniqueId) -> bool {
+        self.carried
+            .lock()
+            .links
+            .get(link_id)
+            .is_some_and(|link| link.its_destination_is_open)
+    }
+
     /// Forget a link that has been disconnected, and stop carrying its address
     /// when it was the last link reading it.
     pub(crate) fn forget_a_link(&self, link_id: &LinkUniqueId) {

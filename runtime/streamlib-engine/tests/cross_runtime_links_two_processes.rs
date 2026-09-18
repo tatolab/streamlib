@@ -47,10 +47,10 @@ const THE_DISPLAY_NAME: &str = "Camera Source 2";
 
 /// The runtime names one arm's two peers take.
 ///
-/// Per arm rather than shared, and discovery is off throughout: the arms run in
-/// parallel, and two runtimes holding one name — even on two meshes — put eight
-/// scouting peers on one loopback interface, which converges far more slowly
-/// than the one pair each arm is actually about.
+/// Per arm rather than shared: an arm's peers leave at the end of it, but a
+/// session that has not finished tearing down is still on the transport when
+/// the next arm's peers come up, and a name reused across arms is one a peer
+/// can see twice. Discovery is off throughout for the same reason.
 fn the_two_runtimes_of(arm: &str) -> (String, String) {
     (format!("x-source-{arm}"), format!("x-reader-{arm}"))
 }
@@ -67,11 +67,11 @@ fn a_mesh_name_of_its_own(arm: &str) -> String {
 
 /// A loopback port no other arm will be handed.
 ///
-/// The TCP listener that found it is kept for the run rather than released: the
-/// arms run in parallel, and a released ephemeral port is handed straight back
-/// out — two arms on one port put a reader on another arm's source. Holding it
-/// costs nothing, because what the peers bind is the UDP port of the same
-/// number.
+/// The TCP listener that found it is kept for the whole run rather than
+/// released: a released ephemeral port is handed straight back out, so a later
+/// arm can be given the port an earlier arm's peers are still on — which puts a
+/// reader on another arm's source. Holding it costs nothing, because what the
+/// peers bind is the UDP port of the same number.
 fn a_free_loopback_port() -> u16 {
     static PORTS_ALREADY_HANDED_OUT: Mutex<Vec<std::net::TcpListener>> = Mutex::new(Vec::new());
     let held =

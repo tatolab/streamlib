@@ -318,6 +318,17 @@ pub const MAX_PUBLISHERS_PER_CHANNEL: usize = 1;
 /// so this is deliberately 1 (not the iceoryx2 default of 8).
 pub const RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL: usize = 1;
 
+/// Subscriber slots a channel's data service reserves for the runtime mesh's
+/// egress, beyond its destination cap and the tap's slot.
+///
+/// A port read from another runtime is drained by one egress, which takes an
+/// ordinary subscriber slot the way a destination does. Counting it against
+/// [`MAX_DESTINATIONS_PER_CHANNEL`] would make a port at its fan-out cap fail
+/// to send across the mesh — and fail on the *sending* machine, where the
+/// runtime that asked for the link cannot see it. One, because a port has at
+/// most one egress however many runtimes read it.
+pub const RESERVED_MESH_EGRESS_SUBSCRIBER_SLOTS_PER_CHANNEL: usize = 1;
+
 /// Destinations one channel — one source output port — may feed at once.
 ///
 /// iceoryx2 pins `max_subscribers` when the data service is created and
