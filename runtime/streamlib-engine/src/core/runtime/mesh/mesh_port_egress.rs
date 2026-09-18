@@ -8,8 +8,11 @@
 //! reader token for its port, and with none it holds no subscriber, no
 //! publisher and no token of its own.
 //!
-//! It takes one ordinary destination slot on the port's channel — counted like
-//! any other destination — and drains it FIFO on its own OS thread, because an
+//! It takes a subscriber slot on the port's channel and drains it FIFO on its
+//! own OS thread. The slot is its own reservation rather than one of the
+//! destination cap's: counting it there would make a port already feeding its
+//! cap fail to send across the mesh, and fail on the *sending* machine, where
+//! the runtime that asked for the link cannot see it. Its own thread, because an
 //! iceoryx2 subscriber is `!Send` and because a Zenoh put blocks its caller
 //! while a fragmented message queues. No producer ever waits on the network:
 //! the put runs here, never on the thread that wrote the bag.

@@ -148,19 +148,25 @@ impl MeshLinkIngressTable {
     /// Forget a link that has been disconnected, and stop carrying its address
     /// when it was the last link reading it.
     pub(crate) fn forget_a_link(&self, link_id: &LinkUniqueId) {
-        let mut carried = self.carried.lock();
-        let Some(forgotten) = carried.links.remove(link_id) else {
-            return;
-        };
-        let still_read = carried
-            .links
-            .values()
-            .any(|link| link.address == forgotten.address);
-        if !still_read {
+        // Taken out under the lock and dropped outside it: an ingress's drop
+        // undeclares a token over the network and joins a thread, and this runs
+        // under the graph lock too — a disconnect would hold both across it.
+        let stopped_reading = {
+            let mut carried = self.carried.lock();
+            let Some(forgotten) = carried.links.remove(link_id) else {
+                return;
+            };
+            let still_read = carried
+                .links
+                .values()
+                .any(|link| link.address == forgotten.address);
             // Dropping the ingress undeclares this runtime's reader token,
             // which is what makes the source stop sending the port.
-            carried.carrying.remove(&forgotten.address);
-        }
+            (!still_read)
+                .then(|| carried.carrying.remove(&forgotten.address))
+                .flatten()
+        };
+        drop(stopped_reading);
     }
 
     /// Start resolving waiting links, now that this runtime is on a mesh.

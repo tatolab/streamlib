@@ -216,7 +216,8 @@ pub(crate) fn create_iceoryx2_node_in_domain(
 #[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChannelSizing {
-    /// The fixed destination slot count plus the reserved tap slot.
+    /// The fixed destination slot count plus the two reserved slots — one for
+    /// a tap, one for the mesh's egress.
     pub max_subscribers: usize,
     /// The deepest ring any subscriber on the channel may take.
     pub channel_service_creation_depth: usize,
@@ -301,7 +302,9 @@ impl Iceoryx2Node {
     /// (`{source_processor}/{source_output_port}`). The service carries exactly
     /// [`MAX_PUBLISHERS_PER_CHANNEL`] (1) publisher — the source — and
     /// `max_subscribers` slots: the fixed destination cap plus the reserved tap
-    /// slot ([`crate::iceoryx2::RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL`]).
+    /// slot ([`crate::iceoryx2::RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL`]) and
+    /// the mesh egress's
+    /// ([`crate::iceoryx2::RESERVED_MESH_EGRESS_SUBSCRIBER_SLOTS_PER_CHANNEL`]).
     /// Every opener (the engine and every helper) must request the SAME
     /// `max_subscribers` — iceoryx2 verifies it on `open`.
     ///
@@ -645,9 +648,11 @@ impl Iceoryx2Service {
     /// Create the channel's reserved-slot tap subscriber, discriminating the
     /// slot-exhaustion case from every other transport failure.
     ///
-    /// A channel data service is opened with
-    /// `max_subscribers = MAX_DESTINATIONS_PER_CHANNEL + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL`.
-    /// Destination subscribers take their slots as links are wired; the reserved
+    /// A channel data service is opened with `max_subscribers =
+    /// MAX_DESTINATIONS_PER_CHANNEL + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL
+    /// + RESERVED_MESH_EGRESS_SUBSCRIBER_SLOTS_PER_CHANNEL`. Destination
+    /// subscribers take their slots as links are wired, the mesh's egress takes
+    /// its own when another runtime reads the port, and the remaining reserved
     /// slot is what a tap consumes here, with a ring `tap_ring_depth` deep.
     /// iceoryx2 fixes `max_subscribers` at create time, so a tap arriving when
     /// every slot is taken trips

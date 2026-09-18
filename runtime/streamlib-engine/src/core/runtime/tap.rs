@@ -12,8 +12,9 @@
 //! zero-copy DMA-BUF/VkImage frame descriptors (meaningless off-host), not pixels.
 //! It is not a realtime-video transport — that is the WebRTC/MoQ/display processors.
 //!
-//! A channel data service is opened with
-//! `max_subscribers = MAX_DESTINATIONS_PER_CHANNEL + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL`,
+//! A channel data service is opened with `max_subscribers =
+//! MAX_DESTINATIONS_PER_CHANNEL + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL +
+//! RESERVED_MESH_EGRESS_SUBSCRIBER_SLOTS_PER_CHANNEL`,
 //! so a tap is a pure subscriber-add onto the pre-sized reserved slot: it
 //! reopens the existing service publisher-free at the channel's creation depth
 //! (iceoryx2 verifies both) and creates a subscriber as deep as the channel. No
