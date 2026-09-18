@@ -148,19 +148,21 @@ fn spawn_the_egress_thread(
                         if sending.contains_key(&port) {
                             continue;
                         }
-                        // Only a port this runtime actually has: a reader
-                        // naming one it does not gets its refusal from the
-                        // offered-ports query it asked before it wired, and
-                        // nothing is created for it here.
+                        // A port this runtime cannot send — one it does not
+                        // have, or one whose channel it cannot open. Said
+                        // rather than passed over: the reader wired against the
+                        // offered-ports answer and will wait on an egress token
+                        // that never comes, and this log is where the reason
+                        // is. Why it could not open is said by the opener.
                         let Some(how_to_read_the_port) = offered
                             .how_to_read_an_offered_output_port(
                                 &port.processor_display_name,
                                 &port.port_name,
                             )
                         else {
-                            tracing::debug!(
-                                "{} is reading {port}, which this runtime does not offer; \
-                                 nothing is sent for it",
+                            tracing::warn!(
+                                "{} is reading {port} and this runtime cannot send it, so that \
+                                 link waits on an egress that never starts",
                                 reader.reading_runtime_name
                             );
                             continue;

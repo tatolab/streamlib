@@ -618,9 +618,10 @@ fn subscriber_ring_depth_of_input_port(
 /// reads it too — is left exactly as it is.
 ///
 /// A source whose ports live in a helper opens its own publisher from the
-/// wiring envelope that link gave it, which a port with no link never got. That
-/// is said by name rather than silently producing nothing; a helper-placed
-/// source read only across the mesh is #2287's.
+/// wiring envelope a link gave it, so one with a local link is already
+/// publishing and needs nothing here. One with no local link never got that
+/// envelope entry and there is no channel to send: said by name rather than
+/// silently producing nothing.
 pub(crate) fn open_the_channel_of_an_output_port_nothing_local_reads(
     graph: &mut Graph,
     iceoryx2_node: &Iceoryx2Node,
@@ -630,13 +631,19 @@ pub(crate) fn open_the_channel_of_an_output_port_nothing_local_reads(
         return Ok(());
     };
     let source_port = source.port_name().to_string();
+    let channel_service_name = channel_service_name(source)?;
     if out_of_process_link_wiring_of(graph, &source_proc_id).is_some() {
-        return Err(Error::Configuration(format!(
-            "'{source_proc_id}:{source_port}' is read across the mesh and its processor runs in \
-             a helper process, which opens its own publisher only for a link this runtime made. \
-             Connect it to something here as well, or wait for a helper-placed source to be \
-             carried on its own."
-        )));
+        // A helper publishes from the wiring envelope a link gave it, so a
+        // port something here already reads is live and needs nothing; one
+        // nothing reads has no envelope entry, and this side cannot make one.
+        return match iceoryx2_node.open_existing_channel_service(&channel_service_name)? {
+            Some(_) => Ok(()),
+            None => Err(Error::Configuration(format!(
+                "'{source_proc_id}:{source_port}' is read across the mesh and its processor runs \
+                 in a helper process, which publishes only for a link this runtime made. Connect \
+                 it to something here as well, and the mesh reads the same channel."
+            ))),
+        };
     }
 
     let source_processor = get_single_processor(graph, &source_proc_id)?;
@@ -648,12 +655,15 @@ pub(crate) fn open_the_channel_of_an_output_port_nothing_local_reads(
         return Ok(());
     }
 
-    let channel_service_name = channel_service_name(source)?;
-    let channel_sizing = resolve_channel_sizing(graph, iceoryx2_node, source)?;
+    // Deep enough for any consumer that connects later, windowed included: a
+    // channel keeps the depth it was created at, and this is the only place one
+    // is created with no destination to size it from, so sizing it from the
+    // destinations present — none — would refuse the first windowed local
+    // `connect` that ever followed.
     let service = iceoryx2_node.open_or_create_service(
         &channel_service_name,
-        channel_sizing.max_subscribers,
-        channel_sizing.channel_service_creation_depth,
+        channel_max_subscribers(graph, source)?,
+        WINDOWED_PORT_SUBSCRIBER_RING_DEPTH,
     )?;
     let publisher = service.create_publisher(DEFAULT_EXPECTED_PAYLOAD_BYTES)?;
     // Trusted: the writer is this runtime's own app-process processor, and the

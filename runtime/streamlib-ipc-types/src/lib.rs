@@ -310,7 +310,9 @@ pub const MAX_PUBLISHERS_PER_CHANNEL: usize = 1;
 /// destination slots.
 ///
 /// A channel's data service is created with `max_subscribers =
-/// MAX_DESTINATIONS_PER_CHANNEL + this`. The reserved slot lets the phase-3.5
+/// MAX_DESTINATIONS_PER_CHANNEL + this +
+/// [`RESERVED_MESH_EGRESS_SUBSCRIBER_SLOTS_PER_CHANNEL`]. The reserved slot lets
+/// the phase-3.5
 /// `tap` op attach a broadcast consumer as a pure subscriber-add with no service
 /// re-open — iceoryx2 fixes `max_subscribers` at create time, so the headroom
 /// must exist up front. iceoryx2 sizes each publisher's shared-memory data

@@ -693,6 +693,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::graph::edges",
                 "core::graph::graph_tests::links_from_another_runtime",
                 "core::runtime::operations_runtime::connect_wires_without_inspecting_a_port_tests",
+                "core::runtime::output_ports_in_this_runtimes_graph",
                 "iceoryx2::channel_name",
                 "core::runtime::stated_configuration_value",
                 "linux::host_identity",
