@@ -1134,6 +1134,40 @@ def test_a_record_caught_half_written_is_held_until_its_newline_lands(
     lines.close()
 
 
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        {"runtime_name": None},
+        {"runtime_name": ["desk", "rig"]},
+        {"runtime_id": {"nested": "object"}},
+        {"schema_version": 2.9},
+        {"pid": True},
+    ],
+    ids=["null-name", "array-name", "object-id", "fractional-version", "boolean-pid"],
+)
+def test_an_entry_whose_fields_are_the_wrong_shape_is_neither_listed_nor_deleted(
+    isolated_registry, malformed
+):
+    # Coercing would list a `null` name as the string "None" and let `--node
+    # None` resolve it; the reader skips what it cannot parse, which is also
+    # what keeps it out of the prune path.
+    isolated_registry.mkdir(parents=True, exist_ok=True)
+    entry_path = isolated_registry / "Rmalformed.json"
+    record = {
+        "schema_version": _node_registry.NODE_REGISTRY_SCHEMA_VERSION,
+        "runtime_id": "Rmalformed",
+        "runtime_name": "rig-app-a1b2",
+        "control_url": "http://127.0.0.1:1",
+        "pid": UNUSED_PID,
+        "hint": "hand-edited",
+    }
+    record.update(malformed)
+    entry_path.write_text(json.dumps(record), encoding="utf-8")
+
+    assert scan_check_and_prune() == []
+    assert entry_path.exists(), "a reader must not delete a record it cannot parse"
+
+
 def test_an_entry_whose_schema_version_is_unknown_is_neither_listed_nor_deleted(
     isolated_registry,
 ):

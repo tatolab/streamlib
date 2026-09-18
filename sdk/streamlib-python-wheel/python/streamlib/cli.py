@@ -241,7 +241,13 @@ def launch_app_node(
     # Constructed only once the app's code has run: a file that cannot even be
     # executed must not cost a GPU context and an engine boot on the way to its
     # error message.
-    runtime = Runtime(runtime_name=runtime_name)
+    try:
+        runtime = Runtime(runtime_name=runtime_name)
+    except RuntimeError as naming_failure:
+        # A name the engine cannot address a port with came off this command
+        # line, so it reads as a launcher error like every other wiring
+        # mistake rather than as a traceback at a user who typed one flag.
+        raise AppLaunchError(str(naming_failure)) from naming_failure
     try:
         app_setup_function(runtime)
     except Exception as setup_failure:  # noqa: BLE001 — reported as the app's own
@@ -877,8 +883,9 @@ def build_argument_parser() -> argparse.ArgumentParser:
         help="List the running StreamLib nodes on this machine.",
         description=(
             "Scans the node registry, liveness-checks every entry, prunes the "
-            "ones that are gone, and prints runtime_id, control_url, pid, "
-            "alive? and hint. Only runtimes hosting a control plane register."
+            "ones that are gone, and prints runtime_name, runtime_id, "
+            "control_url, pid, alive? and hint. Only runtimes hosting a "
+            "control plane register."
         ),
     )
 
