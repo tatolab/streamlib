@@ -73,10 +73,21 @@ pub fn a_process_on_this_host_is_gone(process_id: u32) -> bool {
         return false;
     };
     // SAFETY: signal 0 delivers nothing; `kill` only reports reachability.
-    if unsafe { libc::kill(process_id, 0) } == 0 {
-        return false;
-    }
-    std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+    let signalled = unsafe { libc::kill(process_id, 0) };
+    a_process_is_gone_when_signalling_it_said(
+        signalled,
+        std::io::Error::last_os_error().raw_os_error(),
+    )
+}
+
+/// What `kill`'s answer means, split out because the interesting arm is the one
+/// a test cannot choose to get: whether this process may signal pid 1 depends
+/// on whether it is root, so asking the kernel does not exercise `EPERM`.
+fn a_process_is_gone_when_signalling_it_said(
+    signalled: libc::c_int,
+    errno: Option<libc::c_int>,
+) -> bool {
+    signalled != 0 && errno == Some(libc::ESRCH)
 }
 
 #[cfg(test)]
@@ -124,10 +135,32 @@ mod tests {
         assert!(!a_process_on_this_host_is_gone(std::process::id()));
     }
 
-    /// Pid 1 belongs to another user on every desktop and container this runs
-    /// in, so `kill` answers `EPERM` — which is a process that is still there.
+    /// Only `ESRCH` frees a name. `EPERM` — a process this one may not signal —
+    /// is a process that is still there, and so is any other errno: the refusal
+    /// is the recoverable answer, and a name taken from a live runtime is not.
     #[test]
-    fn a_process_this_one_may_not_signal_is_still_there() {
+    fn only_no_such_process_means_gone_and_every_other_answer_means_still_there() {
+        assert!(a_process_is_gone_when_signalling_it_said(
+            -1,
+            Some(libc::ESRCH)
+        ));
+
+        assert!(!a_process_is_gone_when_signalling_it_said(0, None));
+        assert!(!a_process_is_gone_when_signalling_it_said(
+            -1,
+            Some(libc::EPERM)
+        ));
+        assert!(!a_process_is_gone_when_signalling_it_said(
+            -1,
+            Some(libc::EINVAL)
+        ));
+        assert!(!a_process_is_gone_when_signalling_it_said(-1, None));
+    }
+
+    /// Pid 1 is always there, whether this process may signal it or not — the
+    /// two answers the kernel gives for it are covered above.
+    #[test]
+    fn pid_one_is_never_read_as_gone() {
         assert!(!a_process_on_this_host_is_gone(1));
     }
 

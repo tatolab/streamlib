@@ -27,9 +27,12 @@ use crate::core::runtime::mesh::runtime_mesh_name::RuntimeMeshName;
 
 /// How long connected peers have to answer who holds this runtime's name.
 ///
-/// A ceiling rather than a cost: measured on the loopback, a peer already
-/// connected answers on the first query in about 140 µs, and a name nobody
-/// holds finalises in under 100 µs. Engine-chosen; nothing authorable.
+/// A ceiling, not part of startup: the answer comes from this session's own
+/// view of its connected peers' declarations rather than from the holder's
+/// process, so measured on the loopback a held name comes back in about 140 µs,
+/// an unheld one finalises in under 100 µs, and a holder that has been
+/// SIGSTOPped is still answered inside 336 µs. Engine-chosen; nothing
+/// authorable.
 const HOW_LONG_PEERS_HAVE_TO_SAY_WHO_HOLDS_THIS_NAME: Duration = Duration::from_secs(2);
 
 /// Refuse this runtime when its name is already live on the mesh.
@@ -136,9 +139,10 @@ fn why_this_name_is_not_available(
     format!(
         "Runtime name {} is already live on the {mesh_name} mesh, held by {} (pid {}). A runtime \
          name is the address other runtimes wire against, so two runtimes may not hold one. \
-         Either stop that runtime — `streamlib nodes` lists it — or start this one under another \
-         name: `--runtime-name <name>` on `streamlib run` / `dev`, the STREAMLIB_RUNTIME_NAME \
-         environment variable, or Runtime(runtime_name=\"<name>\").",
+         Either stop that runtime — `streamlib nodes` lists it when it is on this machine and \
+         hosts a control plane — or start this one under another name: `--runtime-name <name>` \
+         on `streamlib run` / `dev`, the STREAMLIB_RUNTIME_NAME environment variable, or \
+         Runtime(runtime_name=\"<name>\").",
         holder.runtime_name,
         where_the_holder_is(this_host, &holder.host_identity),
         holder.process_id

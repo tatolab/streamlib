@@ -495,12 +495,19 @@ class Runtime:
         A name is unique within a mesh, and never auto-suffixed: it is the
         address other runtimes wire against, so it may not depend on start
         order. A name another live runtime already holds is refused here,
-        naming that runtime's host and pid and both ways out — stop it
-        (`streamlib nodes` lists it), or start this one under another name. The
-        one exception is a runtime on this very machine whose process is gone,
-        so restarting an app that was killed is never refused — on Linux, which
-        is the only platform that can tell one host from another; on macOS a
-        killed app's name stays refused until its announcement leaves the mesh.
+        naming that runtime's host and pid and both ways out — stop it, or start
+        this one under another name. `streamlib nodes` finds it when it is on
+        this machine and hosts a control plane; otherwise the host and pid in
+        the refusal are what there is to go on, and renaming is the way through.
+
+        The one exception is a runtime on this very machine whose process is
+        gone, so restarting an app that was killed is never refused. "This
+        machine" means the same kernel boot and the same process-id namespace,
+        so a runtime in a container does not count as being on its host's
+        machine and neither takes the other's name over. Only Linux can tell
+        one host from another at all: on macOS a killed app's name stays
+        refused until its announcement leaves the mesh.
+
         Two runtimes that start at the same instant, before either can see the
         other, both run and each says so once: `graph` then lists both.
 

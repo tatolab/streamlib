@@ -62,10 +62,13 @@ Recorded with the `runtime-mesh` proposal. It reads `zenoh` 1.10.1 and the rig p
 - **The duplicate check needs the mesh before the runtime exists.** The session therefore opens
   in `Runner::new()`, beside the runtime-id socket refusal, which needs no GPU.
   - Cost: `Runtime()` takes Zenoh's 500 ms scouting delay while multicast discovery is on. The
-    check itself adds nothing measurable — a liveliness `get` is answered out of the local
-    session's own view of its connected peers' declarations, so on the loopback a name somebody
-    holds comes back in about 140 µs and a name nobody holds finalises in under 100 µs. Its
-    two-second bound is a ceiling for a peer whose process has stopped answering, never a cost.
+    check itself adds nothing measurable, because a liveliness `get` is answered out of the local
+    session's own view of its connected peers' declarations rather than by the holder's process.
+    Measured on the loopback: a name somebody holds comes back in about 140 µs, a name nobody
+    holds finalises in under 100 µs, a holder that has been SIGSTOPped is *still* answered in
+    64–336 µs, and a killed holder's token is gone within 363 µs. Its two-second bound is
+    therefore a ceiling with no reproduced case behind it — it would take a transport that
+    accepted the interest and never finalised — and not part of startup.
   - A same-host exception needs the pid in the key: a killed runtime's token is gone within
     milliseconds because the kernel closes TCP, but a restart can race that.
   - The check sees only peers this runtime is already connected to when it opens: `open` waits

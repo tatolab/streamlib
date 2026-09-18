@@ -791,6 +791,12 @@ fn a_name_is_free_the_moment_the_runtime_holding_it_is_killed() {
 /// A token left on the mesh by a process on this host that is gone is taken
 /// over, and the same token under a live pid is not — the control is what makes
 /// the arm above it non-vacuous.
+///
+/// Linux only, because the takeover is: no other platform reports a host
+/// identity, so no announced host equals this one and the name stays refused
+/// until the token leaves. Gated rather than left to time out on an assertion
+/// that platform cannot satisfy.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_token_left_by_a_dead_process_on_this_host_is_taken_over_and_a_live_one_is_not() {
     for (what_holds_it, process_id, it_may_start) in [
