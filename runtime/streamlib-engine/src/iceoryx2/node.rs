@@ -1851,6 +1851,16 @@ mod tests {
 
     #[test]
     fn two_test_process_domains_share_neither_files_nor_shared_memory() {
+        // Settle this process's own domain FIRST, because doing so runs the
+        // one-time sweep that deletes every `/dev/shm` segment whose prefix
+        // names a process that is gone — which is exactly the shape this test
+        // then creates. Left to happen on its own, that sweep fires whenever
+        // some sibling test first asks for the shared domain, and if that lands
+        // between the creates below and the reopen at the end it deletes this
+        // test's shared memory underneath it (`ServiceInCorruptedState`).
+        // `OnceLock`, so forcing it here means it cannot fire again.
+        let _ = crate::iceoryx2::iceoryx2_domain_for_this_test_process();
+
         let first_process = tempfile::tempdir().unwrap();
         let second_process = tempfile::tempdir().unwrap();
         let first_root = first_process.path().join("iox2");
