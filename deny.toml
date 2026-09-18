@@ -14,7 +14,7 @@
 # yet; regenerate on a dependency bump until it does.
 #
 # So the allowlist is deliberately exhaustive rather than categorical: there is
-# no "permissive licences are fine" rule here, only fifteen named identifiers.
+# no "permissive licences are fine" rule here, only sixteen named identifiers.
 # A new licence in the graph reds the gate and forces a decision, which is the
 # whole mechanism. Widening the list is that decision, made in a PR.
 #
@@ -48,6 +48,13 @@ allow = [
     "BSL-1.0",
     "BUSL-1.1",
     "CC0-1.0",
+    # `webpki-roots` and `webpki-root-certs`, reached through Zenoh's QUIC
+    # link. CDLA-Permissive-2.0 puts no condition on distributing the data or
+    # anything built from it and adds no patent or trademark grant to meet —
+    # permissive, and fine for commercial distribution (owner, 2026-09-14).
+    # Named here rather than inferred from the identifier's presence, the way
+    # MPL-2.0's reading is.
+    "CDLA-Permissive-2.0",
     "ISC",
     "MIT",
     "MIT-0",

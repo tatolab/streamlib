@@ -10,6 +10,7 @@ use petgraph::graph::DiGraph;
 use super::traversal::{TraversalSource, TraversalSourceMut};
 use crate::core::json_schema::{
     GraphResponse, LinkOutput, LoadedCapabilityExtensionOutput, ProcessorNodeOutput,
+    RuntimeMeshOutput,
 };
 
 /// Graph state.
@@ -127,13 +128,15 @@ impl std::fmt::Display for Graph {
 
 impl Graph {
     /// Render this graph as the `/api/graph` payload, carrying
-    /// `loaded_capability_extensions` alongside it.
+    /// `loaded_capability_extensions` and `runtime_mesh` alongside it.
     ///
-    /// The extensions are a property of the process, not of the graph, so the
-    /// runtime that reads the registry passes them in.
+    /// Neither is a property of the graph — the extensions belong to the
+    /// process and the mesh to the runtime — so the runtime that reads them
+    /// passes them in.
     pub(crate) fn to_graph_response(
         &self,
         loaded_capability_extensions: Vec<LoadedCapabilityExtensionOutput>,
+        runtime_mesh: RuntimeMeshOutput,
     ) -> GraphResponse {
         GraphResponse {
             nodes: self
@@ -147,6 +150,7 @@ impl Graph {
                 .map(|idx| LinkOutput::from(&self.digraph[idx]))
                 .collect(),
             extensions: loaded_capability_extensions,
+            mesh: runtime_mesh,
         }
     }
 }

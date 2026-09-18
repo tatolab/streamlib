@@ -28,6 +28,10 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  # No test joins whatever runtime mesh a CI runner happens to sit on. The
+  # engine's own lib tests get this from a test-only default; everything that
+  # runs a built wheel or an integration test gets it from here.
+  STREAMLIB_MESH_MULTICAST_DISCOVERY: "0"
 
 jobs:
   rust-tests-linux:
@@ -408,8 +412,8 @@ jobs:
             core::runtime::capability_extensions::tests::one_distribution_registering_two_capabilities_keeps_both_in_order \
             core::runtime::capability_extensions::tests::two_distributions_registering_one_capability_name_are_refused_naming_both \
             core::runtime::capability_extensions::tests::a_capability_registered_with_an_empty_name_is_refused_naming_its_distribution \
-            core::json_schema::capability_extension_rendering_tests::a_graph_with_no_extensions_still_carries_the_key_as_an_empty_list \
-            core::json_schema::capability_extension_rendering_tests::a_registered_extension_renders_its_name_version_and_distribution \
+            core::json_schema::capability_extension_and_mesh_rendering_tests::a_graph_with_no_extensions_still_carries_the_key_as_an_empty_list \
+            core::json_schema::capability_extension_and_mesh_rendering_tests::a_registered_extension_renders_its_name_version_and_distribution \
             core::runtime::runtime::tests::to_json_renders_every_capability_this_process_registered \
             core::logging::writer \
             core::logging::config \
@@ -589,7 +593,13 @@ jobs:
             core::stable_short_id \
             core::runtime::mesh_address_chunk \
             core::runtime::runtime_name \
-            core::app_directory
+            core::app_directory \
+            core::json_schema::capability_extension_and_mesh_rendering_tests::an_isolated_runtime_renders_an_open_session_with_no_peers_and_no_reason \
+            core::json_schema::capability_extension_and_mesh_rendering_tests::a_local_only_runtime_renders_the_reason_its_session_did_not_open \
+            core::json_schema::capability_extension_and_mesh_rendering_tests::a_peer_that_has_not_answered_still_deserializes_beside_one_that_has \
+            core::runtime::mesh \
+            core::runtime::stated_configuration_value \
+            linux::host_identity
           # The two arms' own liveness tests are named one by one rather than
           # by module: their modules also hold tests that dlopen libasound and
           # walk a real PCM, which this runner has no `/dev/snd` for. These
@@ -602,6 +612,15 @@ jobs:
           cargo test --locked -p streamlib-engine \
             --test silent_null_arm_plays_what_it_is_given \
             --test silent_null_arm_captures_without_ever_dying
+          # The mesh's own proof, and the only thing in CI that runs two
+          # runtimes at once: two OS processes under one test mesh name find
+          # each other by pinned multicast and by explicit QUIC and TCP peers,
+          # a peer that leaves is gone from `graph`, two mesh names see nothing
+          # of each other, and a taken listen endpoint gives a local-only
+          # runtime that is still constructed. GPU-free — every arm constructs
+          # a `Runner` and never starts it.
+          cargo test --locked -p streamlib-engine \
+            --test runtime_mesh_two_processes
           # streamlib-consumer-rhi was reached by no cargo invocation here for
           # the same reason the built-ins were: the clippy step builds default
           # targets and never its test target. Its unit tests are the no-GPU

@@ -7,6 +7,7 @@ mod engine_teardown_watchdog;
 mod graph_change_listener;
 mod helper_process_group_registry;
 mod local_processor_type_registration;
+pub mod mesh;
 pub(crate) mod mesh_address_chunk;
 mod operations;
 mod operations_runtime;
@@ -14,9 +15,10 @@ pub(crate) use operations_runtime::mark_this_thread_as_a_processor_execution_thr
 #[allow(clippy::module_inception)]
 mod runtime;
 mod runtime_mesh_configuration;
-mod runtime_name;
+pub(crate) mod runtime_name;
 mod runtime_shutdown_request;
 mod runtime_unique_id;
+mod stated_configuration_value;
 mod status;
 mod streamlib_runtime_directory;
 mod surface_image_exchange;
@@ -36,6 +38,7 @@ pub(crate) use helper_process_group_registry::kill_every_registered_helper_proce
 pub use helper_process_group_registry::{
     deregister_a_helper_process_group, register_a_helper_process_group,
 };
+pub use mesh::RuntimeMeshMembership;
 pub use mesh_address_chunk::what_one_mesh_address_chunk_may_be;
 pub use operations::{BoxFuture, RuntimeOperations};
 pub use runtime::Runner;

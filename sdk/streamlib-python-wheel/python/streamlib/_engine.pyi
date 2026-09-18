@@ -462,8 +462,23 @@ class TestBagCollector:
 class Runtime:
     """The engine, running in this process."""
 
-    def __new__(cls, *, runtime_name: str | None = None) -> Self:
-        """Build the engine, named `runtime_name` on the runtime mesh.
+    def __new__(
+        cls,
+        *,
+        runtime_name: str | None = None,
+        mesh_name: str | None = None,
+        mesh_peer_endpoints: list[str] | None = None,
+        mesh_listen_endpoints: list[str] | None = None,
+        mesh_multicast_discovery: bool | None = None,
+    ) -> Self:
+        """Build the engine, named `runtime_name` on the `mesh_name` mesh.
+
+        The engine opens one Zenoh session here, beside iceoryx2 — it announces
+        itself under its mesh name, finds the other runtimes with nothing
+        configured, and closes the session when the runtime stops. A session
+        that cannot open leaves the runtime local-only: it says so once and runs
+        on, and `graph`'s `mesh` key says which it is. With discovery on this
+        costs about half a second, Zenoh's own scouting delay.
 
         The name belongs to the runtime, is stable across runs of one app, and
         is one chunk of a port's mesh address `<runtime name>/<display
@@ -476,6 +491,26 @@ class Runtime:
         hashes the app directory's full path — so two checkouts of one app on
         one machine differ and every run of one checkout matches. `streamlib
         run` and `dev` pass their `--runtime-name` through to here.
+
+        `mesh_name` is one chunk of the channel-name grammar — non-empty,
+        beginning with a lowercase letter and otherwise carrying only lowercase
+        letters, digits, `-` and `_`. Left out, the engine reads
+        `STREAMLIB_MESH_NAME`, and failing that joins the `default` mesh; two
+        groups sharing one network separate by naming different meshes.
+
+        `mesh_peer_endpoints` names runtimes to dial for a network multicast
+        does not cross, and `mesh_listen_endpoints` replaces the engine's own
+        ephemeral QUIC-over-UDP listener. Each is a Zenoh locator,
+        `udp/<host>:<port>?rel=1` or `tcp/<host>:<port>`; anything else — a
+        transport this build does not carry, or plain best-effort `udp/` — is
+        refused here by name. An endpoint nothing answers on never fails the
+        runtime. Left out, the engine reads `STREAMLIB_MESH_PEER_ENDPOINTS` and
+        `STREAMLIB_MESH_LISTEN_ENDPOINTS`, each a comma-separated list.
+
+        `mesh_multicast_discovery` turns peer discovery by multicast off. Left
+        out, the engine reads `STREAMLIB_MESH_MULTICAST_DISCOVERY` (`0` or `1`)
+        and otherwise discovers. A runtime with discovery off and no peers is
+        isolated, not local-only: its session is open and reaches nobody.
         """
     def add(
         self,

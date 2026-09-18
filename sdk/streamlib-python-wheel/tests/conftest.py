@@ -14,10 +14,19 @@ import pytest
 from app_under_test import AppUnderTest, start_app
 
 ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE = "STREAMLIB_ICEORYX2_DOMAIN_ROOT"
+MESH_MULTICAST_DISCOVERY_ENVIRONMENT_VARIABLE = "STREAMLIB_MESH_MULTICAST_DISCOVERY"
 DOMAIN_ROOT_NAME_PREFIX = "sl-iox2-"
 # Not `tempfile.gettempdir()`: on macOS that is a `/var/folders/...` path long
 # enough to overrun the budget iceoryx2's socket paths leave a domain root.
 SHARED_TEMPORARY_DIRECTORY = Path("/tmp")
+
+
+# Every runtime this suite constructs — in this process and in every app it
+# launches — stays off whatever runtime mesh the machine is actually on. Set at
+# import rather than in a fixture because an app subprocess inherits the
+# environment as it is spawned, and a test that forgets to ask for a fixture
+# would otherwise join the owner's desk.
+os.environ.setdefault(MESH_MULTICAST_DISCOVERY_ENVIRONMENT_VARIABLE, "0")
 
 
 @pytest.fixture

@@ -149,12 +149,26 @@ _live_runtimes: "weakref.WeakSet[Runtime]" = weakref.WeakSet()
 class Runtime(_NativeRuntime):
     """The engine, running in this process."""
 
-    def __init__(self, *, runtime_name: Optional[str] = None) -> None:
-        # `runtime_name` is declared so this subclass accepts it and unused
+    def __init__(
+        self,
+        *,
+        runtime_name: Optional[str] = None,
+        mesh_name: Optional[str] = None,
+        mesh_peer_endpoints: Optional[list[str]] = None,
+        mesh_listen_endpoints: Optional[list[str]] = None,
+        mesh_multicast_discovery: Optional[bool] = None,
+    ) -> None:
+        # Every mesh value is declared so this subclass accepts it and unused
         # because the engine already has it: a `#[pyclass]`'s constructor is
         # `__new__`, which `type.__call__` hands the arguments before it calls
-        # this.
+        # this. A value missing here is refused at the call, whatever the
+        # engine's own signature says — so this list and `_engine.pyi`'s move
+        # together.
         del runtime_name
+        del mesh_name
+        del mesh_peer_endpoints
+        del mesh_listen_endpoints
+        del mesh_multicast_discovery
         super().__init__()
         # Registered before the hooks run, not after: a hook that raises leaves
         # a constructed engine behind whose threads still need joining, and the

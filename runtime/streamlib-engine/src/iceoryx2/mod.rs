@@ -37,7 +37,8 @@ pub use channel_ceiling::{
 };
 pub use channel_name::{
     CHANNEL_CHUNK_SEPARATOR, ChannelName, InboundLinkName, MAX_CHANNEL_NAME_BYTES,
-    source_channel_name, validate_channel_name,
+    THE_ONE_CHUNK_GRAMMAR, first_reason_this_is_not_one_channel_name_chunk, source_channel_name,
+    validate_channel_name,
 };
 pub(crate) use delivery_profile::delivery_profile_for_input_port;
 pub use delivery_profile::{DeliveryProfile, DeliveryResolution};

@@ -12,10 +12,10 @@
 # workspace closure, while this file is also pointed at each extension wheel's
 # closure — `cargo xtask generate-third-party-notices
 # --extension-package-directory <dir>` passes `--config` back to this one file so
-# every wheel ships one licensing posture. Today the difference is exactly
-# `CDLA-Permissive-2.0`, which no workspace crate reaches but `webpki-root-certs`
-# does inside `packages/streamlib-moq`. Deleting it to "reconcile" the two lists
-# breaks that wheel's notices outright.
+# every wheel ships one licensing posture. The two lists currently name the same
+# identifiers: `CDLA-Permissive-2.0` reached `packages/streamlib-moq` alone until
+# the runtime mesh brought `webpki-roots` into the workspace closure through
+# Zenoh's QUIC link, and it is on both lists now.
 #
 # Nothing is silently omitted if the two drift the other way: a licence in the
 # graph but not in `accepted` makes `cargo about generate` itself exit 1 with no
