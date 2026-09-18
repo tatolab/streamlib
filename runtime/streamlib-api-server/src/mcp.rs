@@ -2083,7 +2083,15 @@ mod tests {
                 "state": "wired",
                 "components": {}
             }],
-            "extensions": []
+            "extensions": [],
+            // A runtime that is on its mesh and sees nobody: the prompts parse
+            // a real node's answer, and `mesh` is always on one.
+            "mesh": {
+                "mesh_name": "default",
+                "runtime_name": "rig-desk-a1b2",
+                "session": "open",
+                "peers": []
+            }
         })
     }
 

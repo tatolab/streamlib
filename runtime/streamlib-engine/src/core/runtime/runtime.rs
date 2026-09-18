@@ -569,6 +569,7 @@ impl Runner {
             iceoryx2_node,
             Arc::clone(&audio_clock),
             self.runtime_directory.clone(),
+            Arc::clone(self.runtime_mesh.hosted_control_plane()),
             #[cfg(target_os = "linux")]
             self.surface_socket_path.clone(),
         ));

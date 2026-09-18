@@ -168,6 +168,13 @@ impl ManualProcessor for ApiServerProcessor::Processor {
             ctx.runtime_name(),
             control_url,
         );
+        // Beside the registry entry, and for the same reason: this is the
+        // moment the endpoint exists. The runtime mesh reads it when a peer
+        // asks what this runtime is, so a control plane hosted after the
+        // runtime was constructed reaches the next answer.
+        ctx.hosted_control_plane()
+            .record_what_the_control_plane_bound(&host, actual_port);
+
         match crate::node_registry::write_entry(
             &ctx.runtime_directory().node_registry_directory(),
             &entry,
@@ -197,6 +204,11 @@ impl ManualProcessor for ApiServerProcessor::Processor {
     }
 
     fn stop(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        // The mesh stops naming an endpoint nothing answers on, alongside the
+        // registry entry below.
+        ctx.hosted_control_plane()
+            .record_that_the_control_plane_is_gone();
+
         // Tear down the discovery entry alongside the control endpoint it
         // advertises. Non-fatal on failure — a stale entry is pruned by the
         // reader's liveness check.

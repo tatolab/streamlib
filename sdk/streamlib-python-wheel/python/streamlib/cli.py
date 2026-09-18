@@ -220,6 +220,10 @@ def launch_app_node(
     bind_host: str,
     bind_port: int,
     runtime_name: Optional[str],
+    mesh_name: Optional[str],
+    mesh_peer_endpoints: Optional[list[str]],
+    mesh_listen_endpoints: Optional[list[str]],
+    mesh_multicast_discovery: Optional[bool],
 ) -> int:
     """Boot the app's node and own its run loop until the user interrupts it."""
     anchor_directory = resolve_app_anchor_directory(requested_anchor_directory)
@@ -242,12 +246,19 @@ def launch_app_node(
     # executed must not cost a GPU context and an engine boot on the way to its
     # error message.
     try:
-        runtime = Runtime(runtime_name=runtime_name)
-    except RuntimeError as naming_failure:
-        # A name the engine cannot address a port with came off this command
-        # line, so it reads as a launcher error like every other wiring
-        # mistake rather than as a traceback at a user who typed one flag.
-        raise AppLaunchError(str(naming_failure)) from naming_failure
+        runtime = Runtime(
+            runtime_name=runtime_name,
+            mesh_name=mesh_name,
+            mesh_peer_endpoints=mesh_peer_endpoints,
+            mesh_listen_endpoints=mesh_listen_endpoints,
+            mesh_multicast_discovery=mesh_multicast_discovery,
+        )
+    except RuntimeError as mesh_configuration_failure:
+        # A name the engine cannot address a port with, or an endpoint it
+        # cannot open, came off this command line, so it reads as a launcher
+        # error like every other wiring mistake rather than as a traceback at a
+        # user who typed one flag.
+        raise AppLaunchError(str(mesh_configuration_failure)) from mesh_configuration_failure
     try:
         app_setup_function(runtime)
     except Exception as setup_failure:  # noqa: BLE001 — reported as the app's own
@@ -856,6 +867,45 @@ def build_argument_parser() -> argparse.ArgumentParser:
                 "reads STREAMLIB_RUNTIME_NAME, else names it after this host and app directory."
             ),
         )
+        launch_command.add_argument(
+            "--mesh-name",
+            dest="mesh_name",
+            metavar="NAME",
+            help=(
+                "Mesh this runtime joins. Omitted, the engine reads STREAMLIB_MESH_NAME, else "
+                "joins the 'default' mesh; groups sharing a network separate by naming meshes."
+            ),
+        )
+        launch_command.add_argument(
+            "--mesh-peer",
+            dest="mesh_peer_endpoints",
+            action="append",
+            metavar="ENDPOINT",
+            help=(
+                "Runtime or router to dial on the mesh, for a network multicast does not cross "
+                "(udp/<host>:<port>?rel=1 or tcp/<host>:<port>). Repeatable."
+            ),
+        )
+        launch_command.add_argument(
+            "--mesh-listen",
+            dest="mesh_listen_endpoints",
+            action="append",
+            metavar="ENDPOINT",
+            help=(
+                "Endpoint this runtime listens on, replacing the engine's own ephemeral "
+                "QUIC-over-UDP listener. Repeatable."
+            ),
+        )
+        launch_command.add_argument(
+            "--no-mesh-multicast-discovery",
+            dest="mesh_multicast_discovery",
+            action="store_false",
+            default=None,
+            help=(
+                "Do not find mesh peers by multicast. The session still opens; it reaches only "
+                "the endpoints --mesh-peer names."
+            ),
+        )
 
     def add_control_target_flags(command: argparse.ArgumentParser) -> None:
         """`--url` / `--node`: the two ways to pin which node a verb drives.
@@ -1259,6 +1309,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             bind_host=arguments.bind_host,
             bind_port=arguments.bind_port,
             runtime_name=arguments.runtime_name,
+            mesh_name=arguments.mesh_name,
+            mesh_peer_endpoints=arguments.mesh_peer_endpoints,
+            mesh_listen_endpoints=arguments.mesh_listen_endpoints,
+            mesh_multicast_discovery=arguments.mesh_multicast_discovery,
         )
     except (
         AppLaunchError,

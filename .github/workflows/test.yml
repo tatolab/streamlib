@@ -28,6 +28,10 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  # No test joins whatever runtime mesh a CI runner happens to sit on. The
+  # engine's own lib tests get this from a test-only default; everything that
+  # runs a built wheel or an integration test gets it from here.
+  STREAMLIB_MESH_MULTICAST_DISCOVERY: "0"
 
 jobs:
   rust-tests-linux:

@@ -10,6 +10,7 @@ use super::{
     GpuContext, GpuContextFullAccess, GpuContextLimitedAccess, SharedAudioClock, TimeContext,
 };
 use crate::core::graph::ProcessorUniqueId;
+use crate::core::runtime::mesh::HostedControlPlaneEndpointRegistry;
 use crate::core::runtime::{
     RuntimeName, RuntimeOperations, RuntimeUniqueId, StreamlibRuntimeDirectory,
 };
@@ -48,6 +49,10 @@ pub struct RuntimeContext {
     audio_clock: SharedAudioClock,
     /// The runtime directory this runtime resolved as it started.
     runtime_directory: StreamlibRuntimeDirectory,
+    /// Where the control plane this runtime hosts can be reached, for the
+    /// control plane to fill in once it has bound and for the runtime mesh to
+    /// read when a peer asks what this runtime is.
+    hosted_control_plane: Arc<HostedControlPlaneEndpointRegistry>,
     /// Per-runtime surface-sharing Unix socket path. Polyglot subprocesses
     /// receive this via the `STREAMLIB_SURFACE_SOCKET` env var so their
     /// `streamlib-surface-client` connects to the runtime-internal service
@@ -67,6 +72,7 @@ impl RuntimeContext {
         iceoryx2_node: Iceoryx2Node,
         audio_clock: SharedAudioClock,
         runtime_directory: StreamlibRuntimeDirectory,
+        hosted_control_plane: Arc<HostedControlPlaneEndpointRegistry>,
         #[cfg(target_os = "linux")] surface_socket_path: std::path::PathBuf,
     ) -> Self {
         Self {
@@ -82,6 +88,7 @@ impl RuntimeContext {
             iceoryx2_node,
             audio_clock,
             runtime_directory,
+            hosted_control_plane,
             #[cfg(target_os = "linux")]
             surface_socket_path,
         }
@@ -132,6 +139,15 @@ impl RuntimeContext {
     /// The runtime directory this runtime resolved as it started.
     pub fn runtime_directory(&self) -> &StreamlibRuntimeDirectory {
         &self.runtime_directory
+    }
+
+    /// Where the control plane this runtime hosts can be reached.
+    ///
+    /// The control plane records what it bound here at `start()` and clears it
+    /// at `stop()`; the runtime mesh reads it when a peer asks what this
+    /// runtime is, so a control plane hosted after construction shows up.
+    pub fn hosted_control_plane(&self) -> &Arc<HostedControlPlaneEndpointRegistry> {
+        &self.hosted_control_plane
     }
 
     /// Per-runtime surface-sharing Unix socket path. Polyglot subprocess
@@ -206,6 +222,7 @@ impl RuntimeContext {
             iceoryx2_node: self.iceoryx2_node.clone(),
             audio_clock: Arc::clone(&self.audio_clock),
             runtime_directory: self.runtime_directory.clone(),
+            hosted_control_plane: Arc::clone(&self.hosted_control_plane),
             #[cfg(target_os = "linux")]
             surface_socket_path: self.surface_socket_path.clone(),
         }
@@ -226,6 +243,7 @@ impl RuntimeContext {
             iceoryx2_node: self.iceoryx2_node.clone(),
             audio_clock: Arc::clone(&self.audio_clock),
             runtime_directory: self.runtime_directory.clone(),
+            hosted_control_plane: Arc::clone(&self.hosted_control_plane),
             #[cfg(target_os = "linux")]
             surface_socket_path: self.surface_socket_path.clone(),
         }
@@ -811,6 +829,12 @@ impl<'a> RuntimeContextFullAccess<'a> {
     /// control plane publishes and what a mesh address begins with.
     pub fn runtime_name(&self) -> &RuntimeName {
         self.host_base().runtime_name()
+    }
+
+    /// Where the control plane this runtime hosts can be reached, for the
+    /// control plane to record what it bound and clear it when it stops.
+    pub fn hosted_control_plane(&self) -> &Arc<HostedControlPlaneEndpointRegistry> {
+        self.host_base().hosted_control_plane()
     }
 }
 
