@@ -5,6 +5,8 @@ use crate::core::graph::{
     InputLinkPortRef, Link, LinkTraversalMut, OutputLinkPortRef, TraversalSourceMut,
 };
 
+use super::super::traversal_source::LinkLocation;
+
 impl<'a> TraversalSourceMut<'a> {
     /// Add a new edge (link) between two ports.
     ///
@@ -16,6 +18,7 @@ impl<'a> TraversalSourceMut<'a> {
             // `add_remote_sourced_link` is the door for one.
             return LinkTraversalMut {
                 graph: self.graph,
+                links_from_another_runtime: self.links_from_another_runtime,
                 ids: vec![],
             };
         };
@@ -26,6 +29,7 @@ impl<'a> TraversalSourceMut<'a> {
         else {
             return LinkTraversalMut {
                 graph: self.graph,
+                links_from_another_runtime: self.links_from_another_runtime,
                 ids: vec![],
             };
         };
@@ -37,6 +41,7 @@ impl<'a> TraversalSourceMut<'a> {
         else {
             return LinkTraversalMut {
                 graph: self.graph,
+                links_from_another_runtime: self.links_from_another_runtime,
                 ids: vec![],
             };
         };
@@ -46,6 +51,7 @@ impl<'a> TraversalSourceMut<'a> {
         if !from_node.has_output(from.port_name()) {
             return LinkTraversalMut {
                 graph: self.graph,
+                links_from_another_runtime: self.links_from_another_runtime,
                 ids: vec![],
             };
         }
@@ -54,6 +60,7 @@ impl<'a> TraversalSourceMut<'a> {
         if !to_node.has_input(&to.port_name) {
             return LinkTraversalMut {
                 graph: self.graph,
+                links_from_another_runtime: self.links_from_another_runtime,
                 ids: vec![],
             };
         }
@@ -66,7 +73,8 @@ impl<'a> TraversalSourceMut<'a> {
         // 4. Return traversal with new edge
         LinkTraversalMut {
             graph: self.graph,
-            ids: vec![edge_idx],
+            links_from_another_runtime: self.links_from_another_runtime,
+            ids: vec![LinkLocation::OnAnEdgeOfTheDigraph(edge_idx)],
         }
     }
 }

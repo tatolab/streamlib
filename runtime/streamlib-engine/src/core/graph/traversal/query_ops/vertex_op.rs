@@ -53,12 +53,15 @@ impl<'a> TraversalSource<'a> {
                 self.graph
                     .node_references()
                     .find(|(_, processor_node)| processor_node.id == id)
-                    .map(|(idx, _)| ProcessorTraversal {
+                    .map(|(idx, _)| vec![idx])
+                    .map(|ids| ProcessorTraversal {
                         graph: self.graph,
-                        ids: vec![idx],
+                        links_from_another_runtime: self.links_from_another_runtime,
+                        ids,
                     })
                     .unwrap_or_else(|| ProcessorTraversal {
                         graph: self.graph,
+                        links_from_another_runtime: self.links_from_another_runtime,
                         ids: vec![],
                     })
             }
@@ -70,6 +73,7 @@ impl<'a> TraversalSource<'a> {
                     .collect::<Vec<_>>();
                 ProcessorTraversal {
                     graph: self.graph,
+                    links_from_another_runtime: self.links_from_another_runtime,
                     ids,
                 }
             }
@@ -94,6 +98,7 @@ impl<'a> TraversalSourceMut<'a> {
                     .map(|(idx, _)| idx);
                 ProcessorTraversalMut {
                     graph: self.graph,
+                    links_from_another_runtime: self.links_from_another_runtime,
                     ids: found.map(|idx| vec![idx]).unwrap_or_default(),
                 }
             }
@@ -105,6 +110,7 @@ impl<'a> TraversalSourceMut<'a> {
                     .collect::<Vec<_>>();
                 ProcessorTraversalMut {
                     graph: self.graph,
+                    links_from_another_runtime: self.links_from_another_runtime,
                     ids,
                 }
             }
