@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.24.0](https://github.com/tatolab/streamlib/compare/v0.23.1...v0.24.0) (2026-09-18)
+
+
+### ⚠ BREAKING CHANGES
+
+* **engine:** transport hygiene — shared-memory capacity and /dev/shm, idle tap polling, stale-service reopen, trust-tier label and leftovers ([#2327](https://github.com/tatolab/streamlib/issues/2327))
+
+### Bug Fixes
+
+* **engine:** transport hygiene — shared-memory capacity and /dev/shm, idle tap polling, stale-service reopen, trust-tier label and leftovers ([#2327](https://github.com/tatolab/streamlib/issues/2327)) ([fefc78d](https://github.com/tatolab/streamlib/commit/fefc78dc6c021a7078e14db60e9de606317639b2))
+
 ## [0.23.1](https://github.com/tatolab/streamlib/compare/v0.23.0...v0.23.1) (2026-09-17)
 
 
