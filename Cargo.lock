@@ -5445,7 +5445,7 @@ checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
 name = "streamlib"
-version = "0.25.2"
+version = "0.25.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -5454,7 +5454,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-cpu-readback"
-version = "0.25.2"
+version = "0.25.3"
 dependencies = [
  "libc",
  "serde",
@@ -5473,7 +5473,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-cuda"
-version = "0.25.2"
+version = "0.25.3"
 dependencies = [
  "cudarc",
  "dlpark",
@@ -5494,7 +5494,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-opengl"
-version = "0.25.2"
+version = "0.25.3"
 dependencies = [
  "gl",
  "khronos-egl",
@@ -5517,7 +5517,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-skia"
-version = "0.25.2"
+version = "0.25.3"
 dependencies = [
  "libc",
  "libloading 0.8.9",
@@ -5540,7 +5540,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-vulkan"
-version = "0.25.2"
+version = "0.25.3"
 dependencies = [
  "libc",
  "serde",
@@ -5587,7 +5587,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-consumer-rhi"
-version = "0.25.2"
+version = "0.25.3"
 dependencies = [
  "libc",
  "streamlib-surface-client",
@@ -5598,7 +5598,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-engine"
-version = "0.25.2"
+version = "0.25.3"
 dependencies = [
  "ahash",
  "anyhow",
@@ -5682,7 +5682,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-error"
-version = "0.25.2"
+version = "0.25.3"
 dependencies = [
  "anyhow",
  "streamlib-consumer-rhi",
@@ -5692,7 +5692,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-ipc-types"
-version = "0.25.2"
+version = "0.25.3"
 dependencies = [
  "iceoryx2",
  "tracing",
@@ -5700,7 +5700,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-macros"
-version = "0.25.2"
+version = "0.25.3"
 dependencies = [
  "crossbeam-channel",
  "proc-macro-crate",
@@ -5713,7 +5713,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-media-builtins"
-version = "0.25.2"
+version = "0.25.3"
 dependencies = [
  "libc",
  "mp4",
@@ -5732,7 +5732,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-processor-schema"
-version = "0.25.2"
+version = "0.25.3"
 dependencies = [
  "rmp-serde",
  "schemars 0.8.22",
@@ -5745,7 +5745,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-python-wheel"
-version = "0.25.2"
+version = "0.25.3"
 dependencies = [
  "cudarc",
  "libc",
@@ -5766,7 +5766,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-surface-adapter"
-version = "0.25.2"
+version = "0.25.3"
 dependencies = [
  "bitflags 2.11.0",
  "libc",
@@ -5777,7 +5777,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-surface-client"
-version = "0.25.2"
+version = "0.25.3"
 dependencies = [
  "libc",
  "serde_json",
@@ -5786,7 +5786,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-test-fixtures"
-version = "0.25.2"
+version = "0.25.3"
 dependencies = [
  "serde",
  "serde_json",
@@ -6626,7 +6626,7 @@ dependencies = [
 
 [[package]]
 name = "vulkan-jpeg"
-version = "0.25.2"
+version = "0.25.3"
 dependencies = [
  "bytemuck",
  "jpeg-encoder",
