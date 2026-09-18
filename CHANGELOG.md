@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.25.3](https://github.com/tatolab/streamlib/compare/v0.25.2...v0.25.3) (2026-09-18)
+
+
+### Features
+
+* **wheel:** list mesh peers in streamlib nodes ([#2336](https://github.com/tatolab/streamlib/issues/2336)) ([3ee8545](https://github.com/tatolab/streamlib/commit/3ee85459cdc8f15fc74280a8854ea1404ee1e1ba))
+
 ## [0.25.2](https://github.com/tatolab/streamlib/compare/v0.25.1...v0.25.2) (2026-09-18)
 
 
