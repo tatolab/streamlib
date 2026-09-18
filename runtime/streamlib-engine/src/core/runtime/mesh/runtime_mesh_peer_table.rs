@@ -49,6 +49,12 @@ impl RuntimeMeshPeerTable {
         self.peers.write().remove(announced);
     }
 
+    /// Every peer this runtime currently sees, for the discovery thread to ask
+    /// again what they are.
+    pub fn every_peer_it_sees(&self) -> Vec<AnnouncedRuntimeIdentity> {
+        self.peers.read().keys().cloned().collect()
+    }
+
     /// Every peer, sorted by name — the order `graph` renders them in.
     pub fn render_for_graph(&self) -> Vec<RuntimeMeshPeerOutput> {
         self.peers
@@ -153,6 +159,22 @@ mod tests {
         table.record_that_a_peer_left(&one);
 
         assert_eq!(table.render_for_graph().len(), 1);
+    }
+
+    /// Every peer is askable again, so a control plane hosted after the peer
+    /// was first seen reaches the next answer.
+    #[test]
+    fn every_peer_can_be_asked_again_what_it_is() {
+        let table = RuntimeMeshPeerTable::default();
+        let answered = an_identity("answered", 7);
+        let unanswered = an_identity("unanswered", 8);
+        table.record_that_a_peer_appeared(answered.clone());
+        table.record_that_a_peer_appeared(unanswered.clone());
+        table.record_what_a_peer_answered(&answered, a_description("R7"));
+
+        let mut askable = table.every_peer_it_sees();
+        askable.sort();
+        assert_eq!(askable, [answered, unanswered]);
     }
 
     /// A description arriving after its peer left does not bring the peer

@@ -16,7 +16,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 use parking_lot::Mutex;
 use zenoh::Wait;
 use zenoh::sample::SampleKind;
@@ -30,8 +30,15 @@ use crate::core::runtime::mesh::runtime_mesh_key::{AnnouncedRuntimeIdentity, Run
 use crate::core::runtime::mesh::runtime_mesh_peer_table::RuntimeMeshPeerTable;
 
 /// How long a peer has to answer what it is before its description is left
-/// unread until the next time it appears. Engine-chosen; nothing authorable.
+/// unread until the next round. Engine-chosen; nothing authorable.
 const HOW_LONG_A_PEER_HAS_TO_DESCRIBE_ITSELF: Duration = Duration::from_secs(2);
+
+/// How often every known peer is asked again what it is.
+///
+/// Asking once when a token appears is not enough: a runtime hosts its control
+/// plane after it is constructed, so the first answer a peer gets names no URL
+/// at all. Engine-chosen; nothing authorable.
+const HOW_OFTEN_EVERY_PEER_IS_ASKED_AGAIN: Duration = Duration::from_secs(5);
 
 /// This runtime's place on its mesh.
 pub struct RuntimeMeshMembership {
@@ -360,24 +367,46 @@ fn spawn_the_discovery_thread(
     std::thread::Builder::new()
         .name("streamlib-mesh-discovery".to_string())
         .spawn(move || {
-            // Ends when the subscriber is dropped, which drops the sender.
-            while let Ok(saw) = what_the_discovery_thread_reads.recv() {
-                match saw {
-                    WhatTheMeshSaw::APeerAppeared(announced) => {
+            loop {
+                // Ends when the subscriber is dropped, which drops the sender;
+                // a timeout is a round of asking every peer again.
+                match what_the_discovery_thread_reads
+                    .recv_timeout(HOW_OFTEN_EVERY_PEER_IS_ASKED_AGAIN)
+                {
+                    Ok(WhatTheMeshSaw::APeerAppeared(announced)) => {
                         peers.record_that_a_peer_appeared(announced.clone());
-                        if let Some(described) =
-                            ask_a_peer_what_it_is(&session, &key_space, &announced)
-                        {
-                            peers.record_what_a_peer_answered(&announced, described);
-                        }
+                        ask_a_peer_what_it_is_and_record_it(
+                            &session, &key_space, &peers, &announced,
+                        );
                     }
-                    WhatTheMeshSaw::APeerLeft(announced) => {
+                    Ok(WhatTheMeshSaw::APeerLeft(announced)) => {
                         peers.record_that_a_peer_left(&announced);
                     }
+                    Err(RecvTimeoutError::Timeout) => {
+                        for announced in peers.every_peer_it_sees() {
+                            ask_a_peer_what_it_is_and_record_it(
+                                &session, &key_space, &peers, &announced,
+                            );
+                        }
+                    }
+                    Err(RecvTimeoutError::Disconnected) => return,
                 }
             }
         })
         .expect("spawning the mesh discovery thread")
+}
+
+/// Ask a peer what it is and record the answer, leaving what it last said in
+/// place when it does not answer this time.
+fn ask_a_peer_what_it_is_and_record_it(
+    session: &zenoh::Session,
+    key_space: &RuntimeMeshKeySpace,
+    peers: &RuntimeMeshPeerTable,
+    announced: &AnnouncedRuntimeIdentity,
+) {
+    if let Some(described) = ask_a_peer_what_it_is(session, key_space, announced) {
+        peers.record_what_a_peer_answered(announced, described);
+    }
 }
 
 /// What a peer says it is, or `None` when it did not answer in time or
