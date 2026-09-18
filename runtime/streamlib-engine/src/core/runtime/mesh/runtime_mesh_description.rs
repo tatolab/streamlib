@@ -70,6 +70,9 @@ impl RuntimeMeshDescription {
     }
 }
 
+/// The channel one peer's answer arrives on, before anybody waits on it.
+type AnswersFromOnePeer = zenoh::handlers::FifoChannelHandler<zenoh::query::Reply>;
+
 /// What a peer says it is, or `None` when it did not answer in time or
 /// answered something this engine cannot read.
 pub(super) fn ask_a_peer_what_it_is(
@@ -77,7 +80,50 @@ pub(super) fn ask_a_peer_what_it_is(
     key_space: &RuntimeMeshKeySpace,
     announced: &AnnouncedRuntimeIdentity,
 ) -> Option<RuntimeMeshDescription> {
-    let replies = session
+    let answers = send_the_question_to(session, key_space, announced)?;
+    wait_for_what_a_peer_answered(&announced.runtime_name, answers)
+}
+
+/// Ask every peer at once, then wait: one caller's whole round costs one
+/// timeout rather than one per peer.
+///
+/// The discovery worker asks one at a time because it runs for the life of a
+/// runtime and nobody waits on it. `streamlib nodes` is the other case — a
+/// person is waiting — and a mesh whose tokens outlive their processes, which
+/// a partition or a power loss leaves for the lease's ten seconds, would
+/// otherwise cost the reader two seconds a peer.
+pub(super) fn ask_every_peer_what_it_is(
+    session: &zenoh::Session,
+    key_space: &RuntimeMeshKeySpace,
+    every_peer: impl IntoIterator<Item = AnnouncedRuntimeIdentity>,
+) -> Vec<(AnnouncedRuntimeIdentity, Option<RuntimeMeshDescription>)> {
+    let asked: Vec<_> = every_peer
+        .into_iter()
+        .map(|announced| {
+            let answers = send_the_question_to(session, key_space, &announced);
+            (announced, answers)
+        })
+        .collect();
+
+    asked
+        .into_iter()
+        .map(|(announced, answers)| {
+            let described = answers.and_then(|answers| {
+                wait_for_what_a_peer_answered(&announced.runtime_name, answers)
+            });
+            (announced, described)
+        })
+        .collect()
+}
+
+/// Send one "what are you" query, and hand back the channel it answers on
+/// without waiting — which is what lets a caller ask several at once.
+fn send_the_question_to(
+    session: &zenoh::Session,
+    key_space: &RuntimeMeshKeySpace,
+    announced: &AnnouncedRuntimeIdentity,
+) -> Option<AnswersFromOnePeer> {
+    session
         .get(key_space.announcement_key_for(announced))
         .timeout(HOW_LONG_A_PEER_HAS_TO_DESCRIBE_ITSELF)
         .wait()
@@ -87,9 +133,16 @@ pub(super) fn ask_a_peer_what_it_is(
                 announced.runtime_name
             );
         })
-        .ok()?;
+        .ok()
+}
 
-    for reply in replies {
+/// Wait out one peer's answer, or `None` when it did not answer in time or
+/// answered something this engine cannot read.
+fn wait_for_what_a_peer_answered(
+    runtime_name: &str,
+    answers: AnswersFromOnePeer,
+) -> Option<RuntimeMeshDescription> {
+    for reply in answers {
         let Ok(answered) = reply.result() else {
             continue;
         };
@@ -97,8 +150,8 @@ pub(super) fn ask_a_peer_what_it_is(
             Ok(described) => return Some(described),
             Err(unreadable) => {
                 tracing::debug!(
-                    "the mesh peer {} answered something this engine cannot read: {unreadable}",
-                    announced.runtime_name
+                    "the mesh peer {runtime_name} answered something this engine cannot read: \
+                     {unreadable}"
                 );
             }
         }

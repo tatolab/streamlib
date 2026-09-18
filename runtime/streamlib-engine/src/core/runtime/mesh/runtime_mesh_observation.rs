@@ -28,7 +28,9 @@ use crate::core::error::{Error, Result};
 use crate::core::json_schema::RuntimeMeshPeerOutput;
 use crate::core::runtime::RuntimeMeshConfiguration;
 use crate::core::runtime::mesh::resolved_runtime_mesh_configuration::ResolvedRuntimeMeshConfiguration;
-use crate::core::runtime::mesh::runtime_mesh_description::{ask_a_peer_what_it_is, render_a_peer};
+use crate::core::runtime::mesh::runtime_mesh_description::{
+    ask_every_peer_what_it_is, render_a_peer,
+};
 use crate::core::runtime::mesh::runtime_mesh_key::{AnnouncedRuntimeIdentity, RuntimeMeshKeySpace};
 use crate::core::runtime::mesh::zenoh_work_off_any_tokio_runtime::off_any_current_thread_tokio_runtime;
 
@@ -96,15 +98,14 @@ fn read_every_runtime_announced_on(
         ))
     })?;
 
-    let peers = every_runtime_announced_on(&session, key_space)
-        .iter()
-        .map(|announced| {
-            render_a_peer(
-                &announced.runtime_name,
-                ask_a_peer_what_it_is(&session, key_space, announced).as_ref(),
-            )
-        })
-        .collect();
+    let peers = ask_every_peer_what_it_is(
+        &session,
+        key_space,
+        every_runtime_announced_on(&session, key_space),
+    )
+    .iter()
+    .map(|(announced, described)| render_a_peer(&announced.runtime_name, described.as_ref()))
+    .collect();
 
     if let Err(close_failure) = session.close().wait() {
         tracing::debug!("the session that read the mesh did not close cleanly: {close_failure}");
