@@ -18,16 +18,12 @@ pub(crate) const CHARACTERS_NO_MESH_ADDRESS_CHUNK_MAY_CONTAIN: [char; 5] =
 /// unreachable by any subscription over the mesh.
 pub(crate) const CHARACTER_NO_MESH_ADDRESS_CHUNK_MAY_BEGIN_WITH: char = '@';
 
-/// Whether `candidate` is one legal chunk of a port's mesh address.
+/// Why `candidate` is not one legal chunk of a port's mesh address — `None` when
+/// it is one, and otherwise the reason, named for a refusal.
 ///
-/// Non-empty, free of [`CHARACTERS_NO_MESH_ADDRESS_CHUNK_MAY_CONTAIN`], and not
-/// beginning with [`CHARACTER_NO_MESH_ADDRESS_CHUNK_MAY_BEGIN_WITH`]. Spaces and
-/// unicode are legal, as they are in a display name today.
-pub(crate) fn is_one_legal_mesh_address_chunk(candidate: &str) -> bool {
-    first_reason_this_is_not_one_mesh_address_chunk(candidate).is_none()
-}
-
-/// Why `candidate` is not one legal mesh address chunk, named for a refusal.
+/// One chunk is non-empty, free of [`CHARACTERS_NO_MESH_ADDRESS_CHUNK_MAY_CONTAIN`],
+/// and does not begin with [`CHARACTER_NO_MESH_ADDRESS_CHUNK_MAY_BEGIN_WITH`].
+/// Spaces and unicode are legal, as they are in a display name today.
 pub(crate) fn first_reason_this_is_not_one_mesh_address_chunk(candidate: &str) -> Option<String> {
     if candidate.is_empty() {
         return Some("it is empty".to_string());
@@ -78,6 +74,10 @@ pub(crate) fn refuse_a_display_name_that_is_not_one_mesh_address_chunk(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn is_one_legal_mesh_address_chunk(candidate: &str) -> bool {
+        first_reason_this_is_not_one_mesh_address_chunk(candidate).is_none()
+    }
 
     /// Every character the grammar forbids is refused, named in the refusal.
     #[test]
