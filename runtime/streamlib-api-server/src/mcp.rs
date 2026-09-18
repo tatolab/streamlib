@@ -282,7 +282,7 @@ fn tool_definitions() -> Vec<Value> {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "channel": { "type": "string", "description": "Channel data-service name, e.g. {source_processor}/{source_output_port}." },
+                    "channel": { "type": "string", "description": "What the port is named by: a channel data-service name for a port on this node, e.g. {source_processor}/{source_output_port}, or a port on another runtime by its mesh address {runtime_name}/{processor_display_name}/{port} — the channel a remote link lands on is hashed from that address and is nothing to spell." },
                     "count": { "type": "integer", "minimum": 1, "description": "Number of bags to collect before returning. Defaults to a small sample." },
                     "max_bag_bytes": { "type": "integer", "minimum": 1, "maximum": MAX_TAP_RESPONSE_BAG_BYTES, "description": "Per-bag ceiling on the bytes hex-encoded into the result. A bag over the cap comes back flagged `hex_truncated` and cannot be decoded, so raise this rather than accept one. Defaults high enough to carry any audio block whole." }
                 },

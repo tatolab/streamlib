@@ -604,6 +604,79 @@ fn subscriber_ring_depth_of_input_port(
     }
 }
 
+/// Open the channel of an output port nothing on this runtime reads, and
+/// install its publisher, so a port read only across the mesh publishes at all.
+///
+/// A source port's channel and its publisher are otherwise created by the first
+/// `connect` out of it: with no local link there is no channel, so the producer
+/// drops every bag as a declared port with nowhere to go. The mesh's egress is
+/// that port's first consumer, and this is the wiring it needs — the source
+/// half of [`wire_rust_source`], without the notifier or the link bookkeeping,
+/// because there is no link.
+///
+/// Idempotent: a port that already has a publisher — because something local
+/// reads it too — is left exactly as it is.
+///
+/// A source whose ports live in a helper opens its own publisher from the
+/// wiring envelope that link gave it, which a port with no link never got. That
+/// is said by name rather than silently producing nothing; a helper-placed
+/// source read only across the mesh is #2287's.
+pub(crate) fn open_the_channel_of_an_output_port_nothing_local_reads(
+    graph: &mut Graph,
+    iceoryx2_node: &Iceoryx2Node,
+    source: &OutputLinkPortRef,
+) -> Result<()> {
+    let Some(source_proc_id) = source.processor_id_on_this_runtime().cloned() else {
+        return Ok(());
+    };
+    let source_port = source.port_name().to_string();
+    if out_of_process_link_wiring_of(graph, &source_proc_id).is_some() {
+        return Err(Error::Configuration(format!(
+            "'{source_proc_id}:{source_port}' is read across the mesh and its processor runs in \
+             a helper process, which opens its own publisher only for a link this runtime made. \
+             Connect it to something here as well, or wait for a helper-placed source to be \
+             carried on its own."
+        )));
+    }
+
+    let source_processor = get_single_processor(graph, &source_proc_id)?;
+    let source_guard = source_processor.lock();
+    let Some(output_inner) = source_guard.iceoryx2_output_writer_inner() else {
+        return Ok(());
+    };
+    if output_inner.has_channel_publisher(&source_port) {
+        return Ok(());
+    }
+
+    let channel_service_name = channel_service_name(source)?;
+    let channel_sizing = resolve_channel_sizing(graph, iceoryx2_node, source)?;
+    let service = iceoryx2_node.open_or_create_service(
+        &channel_service_name,
+        channel_sizing.max_subscribers,
+        channel_sizing.channel_service_creation_depth,
+    )?;
+    let publisher = service.create_publisher(DEFAULT_EXPECTED_PAYLOAD_BYTES)?;
+    // Trusted: the writer is this runtime's own app-process processor, and the
+    // only reader is the engine's egress beside it.
+    let trust_tier = ChannelTrustTier::Trusted;
+    output_inner.set_channel_publisher(
+        &source_port,
+        publisher,
+        ChannelEgressConfig {
+            service_name: channel_service_name,
+            trust_tier,
+            expected_payload_bytes: DEFAULT_EXPECTED_PAYLOAD_BYTES,
+            chunk_ceiling_bytes: effective_channel_chunk_ceiling_bytes(trust_tier),
+        },
+    );
+    tracing::info!(
+        source = %source_proc_id,
+        port = %source_port,
+        "Opened the channel of an output port only the mesh reads"
+    );
+    Ok(())
+}
+
 /// Reverse-resolve what a caller named a channel by to the source that
 /// publishes to it: a channel data-service name
 /// (`{source processor id}/{source output port}`) or a port's mesh address

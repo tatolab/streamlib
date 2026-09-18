@@ -61,13 +61,31 @@ impl WhatThisRuntimeOffersOnTheMesh for OutputPortsInThisRuntimesGraph {
                 crate::iceoryx2::source_channel_name(source_processor_id.as_str(), port_name)
                     .ok()?
                     .into_string();
+            let source = OutputLinkPortRef::new(source_processor_id.clone(), port_name);
+            // A port nothing here reads has no channel and no publisher — the
+            // first `connect` out of it is what makes both, and across the mesh
+            // there is no `connect`. The egress is that port's first consumer,
+            // so this is where its channel comes from.
+            if let Err(cannot_open) =
+                crate::core::compiler::compiler_ops::open_the_channel_of_an_output_port_nothing_local_reads(
+                    graph,
+                    &self.iceoryx2_node,
+                    &source,
+                )
+            {
+                tracing::warn!(
+                    "{processor_display_name}/{port_name} is offered on the mesh and cannot be \
+                     sent: {cannot_open}"
+                );
+                return None;
+            }
             // The sizing the compiler opened the channel with: an egress
             // reopens that service and takes a destination slot on it, so it
             // asks for exactly what is already there.
             let channel_sizing = crate::core::compiler::compiler_ops::resolve_channel_sizing(
                 graph,
                 &self.iceoryx2_node,
-                &OutputLinkPortRef::new(source_processor_id.clone(), port_name),
+                &source,
             )
             .ok()?;
             Some(HowToReadAnOfferedOutputPort {
