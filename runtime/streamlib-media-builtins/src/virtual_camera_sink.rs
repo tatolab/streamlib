@@ -31,7 +31,7 @@ use std::os::fd::RawFd;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use streamlib::sdk::app_directory::APP_DIRECTORY_ENVIRONMENT_VARIABLE;
+use streamlib::sdk::app_directory::resolve_the_app_directory_this_runtime_belongs_to;
 use streamlib::sdk::color::{ColorSpaceKind, ResolvedColorInfo};
 use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
 use streamlib::sdk::engine::host_rhi::{
@@ -701,12 +701,7 @@ pub struct VirtualCameraSink {
 
 impl ReactiveProcessor for VirtualCameraSink::Processor {
     fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        // `streamlib run` / `dev` name the app's anchor directory; a hand-run
-        // script's directory is its working directory.
-        let app_directory = std::env::var_os(APP_DIRECTORY_ENVIRONMENT_VARIABLE)
-            .map(PathBuf::from)
-            .or_else(|| std::env::current_dir().ok())
-            .unwrap_or_default();
+        let app_directory = resolve_the_app_directory_this_runtime_belongs_to();
         let processor_display_name = ctx
             .processor_display_name()
             .or_else(|| ctx.processor_id())

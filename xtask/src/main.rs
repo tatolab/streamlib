@@ -682,6 +682,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::stable_short_id",
                 "core::runtime::mesh_address_chunk",
                 "core::runtime::runtime_name",
+                "core::app_directory",
             ],
         ),
         // The rig-tier integration binary that drives the two `match_device`
