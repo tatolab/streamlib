@@ -69,28 +69,31 @@ pub fn effective_channel_chunk_ceiling_bytes(trust_tier: ChannelTrustTier) -> us
 /// report whether it warned.
 ///
 /// iceoryx2's pool allocator buckets a data segment at `next_power_of_two` of
-/// the sample layout, so only a power-of-two ceiling is also the size of the
-/// chunk a ceiling-sized bag takes. Both tier defaults are one. An override that
-/// is not still bounds the payload — the ceiling's own job — but its chunk
-/// rounds up past it, which is worth knowing on a host whose shared memory is
-/// the reason the operator reached for the knob.
+/// the sample layout, so a ceiling is its own chunk size only when the sample of
+/// the largest frame it admits lands exactly on it. Both tier defaults do. The
+/// test is that equality and not `is_power_of_two`, which passes a ceiling too
+/// small to hold one sample's headers — `32` is a power of two, admits a
+/// zero-byte frame, and still takes a 64-byte chunk.
 fn warn_when_an_override_cannot_bound_the_shared_memory_chunk(
     env_key: &str,
     trust_tier: ChannelTrustTier,
     override_bytes: usize,
 ) -> bool {
-    if override_bytes.is_power_of_two() {
+    let chunk_bytes_a_ceiling_sized_bag_takes =
+        streamlib_ipc_types::chunk_bytes_a_ceiling_sized_bag_takes(override_bytes);
+    if chunk_bytes_a_ceiling_sized_bag_takes == Some(override_bytes) {
         return false;
     }
     tracing::warn!(
         env_var = env_key,
         tier = trust_tier.as_str(),
         chunk_ceiling_bytes = override_bytes,
-        chunk_bytes_a_ceiling_sized_bag_takes =
-            streamlib_ipc_types::chunk_bytes_a_ceiling_sized_bag_takes(override_bytes),
-        "a per-channel ceiling that is not a power of two still bounds each bag, but iceoryx2 \
-         rounds the shared-memory chunk behind it up past the ceiling; set a power of two to \
-         make the ceiling the chunk size too"
+        largest_admitted_frame_bytes =
+            streamlib_ipc_types::largest_channel_frame_bytes_under_a_chunk_ceiling(override_bytes),
+        chunk_bytes_a_ceiling_sized_bag_takes,
+        "a per-channel ceiling this size still bounds each bag, but iceoryx2 rounds the \
+         shared-memory chunk behind it up past the ceiling; set one a bag's whole sample lands \
+         exactly on to make the ceiling the chunk size too"
     );
     true
 }
@@ -99,35 +102,37 @@ fn warn_when_an_override_cannot_bound_the_shared_memory_chunk(
 mod tests {
     use super::*;
 
-    /// A ceiling that is not a power of two cannot be the size of the chunk
-    /// behind it, and an operator tuning shared memory is exactly who needs to
-    /// know. The extremes go through the same door, because a diagnostic that
-    /// panics the engine is worse than the misconfiguration it describes.
+    /// A ceiling that cannot be the size of the chunk behind it is worth saying
+    /// out loud to an operator tuning shared memory. Being a power of two is not
+    /// the test: `1` and `32` are, and each admits a zero-byte frame while still
+    /// taking a 64-byte chunk. The extremes go through the same door, because a
+    /// diagnostic that panics the engine is worse than the misconfiguration it
+    /// describes.
     #[test]
-    fn an_override_that_cannot_be_its_own_chunk_size_says_so_and_a_power_of_two_does_not() {
-        for power_of_two in [
+    fn an_override_that_cannot_be_its_own_chunk_size_says_so_and_one_that_can_does_not() {
+        for its_own_chunk_size in [
             ChannelTrustTier::Trusted.default_chunk_ceiling_bytes(),
             ChannelTrustTier::UntrustedSession.default_chunk_ceiling_bytes(),
-            1,
+            64,
             4096,
         ] {
             assert!(
                 !warn_when_an_override_cannot_bound_the_shared_memory_chunk(
                     "STREAMLIB_TEST",
                     ChannelTrustTier::Trusted,
-                    power_of_two,
+                    its_own_chunk_size,
                 ),
-                "{power_of_two} is its own chunk size, so there is nothing to say"
+                "{its_own_chunk_size} is its own chunk size, so there is nothing to say"
             );
         }
-        for not_a_power_of_two in [3usize, 100_000_000, usize::MAX] {
+        for takes_a_larger_chunk in [1usize, 3, 32, 100_000_000, usize::MAX] {
             assert!(
                 warn_when_an_override_cannot_bound_the_shared_memory_chunk(
                     "STREAMLIB_TEST",
                     ChannelTrustTier::UntrustedSession,
-                    not_a_power_of_two,
+                    takes_a_larger_chunk,
                 ),
-                "{not_a_power_of_two} takes a chunk larger than itself and must say so"
+                "{takes_a_larger_chunk} takes a chunk larger than itself and must say so"
             );
         }
     }
