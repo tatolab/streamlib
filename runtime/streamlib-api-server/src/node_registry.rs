@@ -18,6 +18,7 @@
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use streamlib::sdk::runtime::RuntimeName;
 
 /// Schema version stamped into every [`NodeRegistryEntry`]. A reader skips an
 /// entry whose `schema_version` it does not recognize.
@@ -47,13 +48,13 @@ impl NodeRegistryEntry {
     /// this process's arg0 and cwd.
     pub fn for_current_process(
         runtime_id: String,
-        runtime_name: String,
+        runtime_name: &RuntimeName,
         control_url: String,
     ) -> Self {
         Self {
             schema_version: NODE_REGISTRY_SCHEMA_VERSION,
             runtime_id,
-            runtime_name,
+            runtime_name: runtime_name.as_str().to_string(),
             control_url,
             pid: std::process::id(),
             hint: current_process_hint(),

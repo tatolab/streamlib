@@ -54,7 +54,9 @@ use streamlib::sdk::error::Result;
 use streamlib::sdk::graph::{InputLinkPortRef, LinkUniqueId, OutputLinkPortRef, ProcessorUniqueId};
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::pubsub::{Event, EventListener, PUBSUB, topics};
-use streamlib::sdk::runtime::{ExchangedPublishedSurfaceFramePngImage, RuntimeOperations};
+use streamlib::sdk::runtime::{
+    ExchangedPublishedSurfaceFramePngImage, RuntimeOperations, what_one_mesh_address_chunk_may_be,
+};
 
 use crate::state::{AppState, RuntimeShutdownRequest};
 
@@ -331,7 +333,13 @@ fn tool_definitions() -> Vec<Value> {
                 "properties": {
                     "type": { "type": "string", "description": "The processor class import path, e.g. `processors.grayscale_effect:GrayscaleEffect`." },
                     "config": { "type": "object", "description": "The processor's configuration, as the keys its config schema declares. Omit for none." },
-                    "display_name": { "type": "string", "description": "Human-facing label; defaults to the class's short name, disambiguated within the graph. It is also the processor's part of its address on the runtime mesh, so it must be non-empty, carry none of `/`, `*`, `$`, `#` or `?`, and not begin with `@`; spaces and unicode are fine, and one that breaks the rule is refused naming the character." }
+                    "display_name": { "type": "string", "description": format!(
+                        "Human-facing label; defaults to the class's short name, disambiguated \
+                         within the graph. It is also the processor's part of its address on the \
+                         runtime mesh: {}. Spaces and unicode are fine, and a label that breaks \
+                         the rule is refused naming the character.",
+                        what_one_mesh_address_chunk_may_be()
+                    ) }
                 },
                 "required": ["type"],
                 "additionalProperties": false

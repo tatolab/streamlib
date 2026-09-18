@@ -165,7 +165,7 @@ impl ManualProcessor for ApiServerProcessor::Processor {
         let control_url = format!("http://127.0.0.1:{}", actual_port);
         let entry = crate::node_registry::NodeRegistryEntry::for_current_process(
             handles.runtime_id.clone(),
-            ctx.runtime_name().to_string(),
+            ctx.runtime_name(),
             control_url,
         );
         match crate::node_registry::write_entry(

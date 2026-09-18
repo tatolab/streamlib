@@ -36,6 +36,7 @@ pub(crate) use helper_process_group_registry::kill_every_registered_helper_proce
 pub use helper_process_group_registry::{
     deregister_a_helper_process_group, register_a_helper_process_group,
 };
+pub use mesh_address_chunk::what_one_mesh_address_chunk_may_be;
 pub use operations::{BoxFuture, RuntimeOperations};
 pub use runtime::Runner;
 pub use runtime_mesh_configuration::RuntimeMeshConfiguration;

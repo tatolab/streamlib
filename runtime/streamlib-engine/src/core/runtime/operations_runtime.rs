@@ -5,7 +5,9 @@ use std::sync::Arc;
 
 use super::Runner;
 use super::RuntimeStatus;
-use super::mesh_address_chunk::refuse_a_display_name_that_is_not_one_mesh_address_chunk;
+use super::mesh_address_chunk::{
+    first_reason_this_is_not_one_mesh_address_chunk, what_one_mesh_address_chunk_may_be,
+};
 use super::operations::{BoxFuture, RuntimeOperations};
 use super::runtime::TokioRuntimeVariant;
 use super::surface_image_exchange::exchange_published_surface_id_for_png_image_bytes;
@@ -74,6 +76,24 @@ async fn commit_live_graph_change(compiler: &Arc<Compiler>, live: LiveCommitCont
 /// of the one `compiler.scope` that added the node, so a caller that needs the
 /// name never has to ask a second time — and never races a concurrent removal
 /// into being told its own successful add does not exist.
+/// Refuse `requested_display_name` unless it is one legal mesh address chunk.
+///
+/// Beside the add path rather than in the grammar module: the grammar knows
+/// nothing about processors, and the remedy this names is the add's own.
+fn refuse_a_display_name_that_is_not_one_mesh_address_chunk(
+    requested_display_name: &str,
+) -> Result<()> {
+    match first_reason_this_is_not_one_mesh_address_chunk(requested_display_name) {
+        None => Ok(()),
+        Some(what_is_wrong) => Err(Error::Configuration(format!(
+            "display name {requested_display_name:?} cannot be one chunk of a processor's mesh \
+             address: {what_is_wrong}. {}. Rename the processor, or leave `display_name` out to \
+             take the class's own short name",
+            what_one_mesh_address_chunk_may_be()
+        ))),
+    }
+}
+
 async fn add_processor_impl(
     compiler: Arc<Compiler>,
     live: LiveCommitContext,

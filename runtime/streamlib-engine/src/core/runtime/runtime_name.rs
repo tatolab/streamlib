@@ -51,8 +51,12 @@ impl RuntimeName {
         resolve_runtime_name(
             configured_runtime_name,
             std::env::var_os(RUNTIME_NAME_ENVIRONMENT_VARIABLE),
-            &resolve_the_app_directory_this_runtime_belongs_to(),
-            &this_hosts_name(),
+            || {
+                default_runtime_name_for(
+                    &resolve_the_app_directory_this_runtime_belongs_to(),
+                    &this_hosts_name(),
+                )
+            },
         )
     }
 
@@ -70,11 +74,14 @@ impl std::fmt::Display for RuntimeName {
 
 /// The resolver with every input named, so each arm is testable without
 /// reaching into the process's environment.
+///
+/// The default is a closure rather than a value because building one reads the
+/// host name and the working directory, and warns about a host that reports no
+/// name — none of which a runtime that was told its name should do.
 fn resolve_runtime_name(
     configured_runtime_name: Option<String>,
     runtime_name_from_the_environment: Option<OsString>,
-    app_directory: &Path,
-    host_name: &str,
+    default_runtime_name: impl FnOnce() -> RuntimeName,
 ) -> Result<RuntimeName> {
     if let Some(configured) = configured_runtime_name {
         return stated_runtime_name(&configured, "the runtime name it was constructed with");
@@ -91,7 +98,7 @@ fn resolve_runtime_name(
         };
         return stated_runtime_name(from_the_environment, RUNTIME_NAME_ENVIRONMENT_VARIABLE);
     }
-    Ok(default_runtime_name_for(app_directory, host_name))
+    Ok(default_runtime_name())
 }
 
 /// A name somebody stated, refused unless it is one mesh address chunk.
@@ -130,29 +137,29 @@ fn default_runtime_name_for(app_directory: &Path, host_name: &str) -> RuntimeNam
         .unwrap_or_else(|| APP_DIRECTORY_NAME_FOR_A_PATH_WITH_NO_FINAL_COMPONENT.to_string());
     let id = stable_short_id_over(app_directory.as_os_str().as_encoded_bytes());
 
-    RuntimeName(replace_every_character_a_mesh_address_chunk_may_not_carry(
-        &format!("{host_name}-{app_directory_name}-{id}"),
-    ))
+    RuntimeName(
+        replace_every_character_that_would_stop_this_being_one_chunk(&format!(
+            "{host_name}-{app_directory_name}-{id}"
+        )),
+    )
 }
 
-/// Make `assembled` one legal mesh address chunk by substitution alone.
-fn replace_every_character_a_mesh_address_chunk_may_not_carry(assembled: &str) -> String {
-    let substituted: String = assembled
-        .chars()
-        .map(|character| {
-            if CHARACTERS_NO_MESH_ADDRESS_CHUNK_MAY_CONTAIN.contains(&character) {
+/// Make a non-empty `assembled` one legal mesh address chunk by substitution
+/// alone — the forbidden characters anywhere, and `@` at the front, where the
+/// grammar is the one that forbids it.
+fn replace_every_character_that_would_stop_this_being_one_chunk(assembled: &str) -> String {
+    assembled
+        .char_indices()
+        .map(|(index, character)| {
+            let forbidden_here = CHARACTERS_NO_MESH_ADDRESS_CHUNK_MAY_CONTAIN.contains(&character)
+                || (index == 0 && character == CHARACTER_NO_MESH_ADDRESS_CHUNK_MAY_BEGIN_WITH);
+            if forbidden_here {
                 REPLACEMENT_FOR_A_CHARACTER_A_DEFAULT_NAME_MAY_NOT_CARRY
             } else {
                 character
             }
         })
-        .collect();
-    match substituted.strip_prefix(CHARACTER_NO_MESH_ADDRESS_CHUNK_MAY_BEGIN_WITH) {
-        Some(past_the_leading_character) => format!(
-            "{REPLACEMENT_FOR_A_CHARACTER_A_DEFAULT_NAME_MAY_NOT_CARRY}{past_the_leading_character}"
-        ),
-        None => substituted,
-    }
+        .collect()
 }
 
 /// This machine's host name, or [`HOST_NAME_FOR_A_MACHINE_THAT_REPORTS_NONE`].
@@ -197,8 +204,7 @@ mod tests {
         resolve_runtime_name(
             configured.map(str::to_string),
             from_environment.map(OsString::from),
-            Path::new(app_directory),
-            "rig",
+            || default_runtime_name_for(Path::new(app_directory), "rig"),
         )
     }
 

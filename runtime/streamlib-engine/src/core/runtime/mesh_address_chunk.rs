@@ -6,8 +6,6 @@
 //! A port is addressed `<runtime name>/<display name>/<port>`, so each part has
 //! to be one legal Zenoh key chunk on its own.
 
-use crate::core::error::{Error, Result};
-
 /// The characters a key chunk may not contain: the separator itself and the
 /// three the key-expression grammar reserves for matching.
 pub(crate) const CHARACTERS_NO_MESH_ADDRESS_CHUNK_MAY_CONTAIN: [char; 5] =
@@ -43,7 +41,7 @@ pub(crate) fn first_reason_this_is_not_one_mesh_address_chunk(candidate: &str) -
 }
 
 /// The sentence every refusal ends with, so both callers state the same rule.
-pub(crate) fn what_one_mesh_address_chunk_may_be() -> String {
+pub fn what_one_mesh_address_chunk_may_be() -> String {
     let listed = CHARACTERS_NO_MESH_ADDRESS_CHUNK_MAY_CONTAIN
         .iter()
         .map(|character| format!("'{character}'"))
@@ -56,21 +54,6 @@ pub(crate) fn what_one_mesh_address_chunk_may_be() -> String {
     )
 }
 
-/// Refuse `requested_display_name` unless it is one legal mesh address chunk.
-pub(crate) fn refuse_a_display_name_that_is_not_one_mesh_address_chunk(
-    requested_display_name: &str,
-) -> Result<()> {
-    match first_reason_this_is_not_one_mesh_address_chunk(requested_display_name) {
-        None => Ok(()),
-        Some(what_is_wrong) => Err(Error::Configuration(format!(
-            "display name {requested_display_name:?} cannot be one chunk of a processor's mesh \
-             address: {what_is_wrong}. {}. Rename the processor, or leave `display_name` out to \
-             take the class's own short name",
-            what_one_mesh_address_chunk_may_be()
-        ))),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -79,41 +62,35 @@ mod tests {
         first_reason_this_is_not_one_mesh_address_chunk(candidate).is_none()
     }
 
-    /// Every character the grammar forbids is refused, named in the refusal.
+    /// Every character the grammar forbids reads back as the reason, by name.
     #[test]
-    fn each_forbidden_character_is_refused_by_name() {
+    fn each_forbidden_character_is_named_as_the_reason() {
         for forbidden in CHARACTERS_NO_MESH_ADDRESS_CHUNK_MAY_CONTAIN {
             let candidate = format!("camera{forbidden}one");
-            let refusal = refuse_a_display_name_that_is_not_one_mesh_address_chunk(&candidate)
-                .expect_err("a chunk carrying a forbidden character must be refused");
+            let reason = first_reason_this_is_not_one_mesh_address_chunk(&candidate)
+                .expect("a chunk carrying a forbidden character is not one chunk");
             assert!(
-                refusal.to_string().contains(&format!("{forbidden:?}")),
-                "the refusal of {candidate:?} must name {forbidden:?}: {refusal}"
+                reason.contains(&format!("{forbidden:?}")),
+                "the reason {candidate:?} is not one chunk must name {forbidden:?}: {reason}"
             );
         }
     }
 
-    /// A leading `@` is refused; one anywhere else is not.
+    /// A leading `@` is not one chunk; one anywhere else is.
     #[test]
     fn a_leading_at_sign_is_refused_and_an_inner_one_is_not() {
-        let refusal = refuse_a_display_name_that_is_not_one_mesh_address_chunk("@runtime")
-            .expect_err("a chunk beginning with '@' must be refused");
-        assert!(
-            refusal.to_string().contains("begins with '@'"),
-            "the refusal must say what is wrong: {refusal}"
-        );
+        let reason = first_reason_this_is_not_one_mesh_address_chunk("@runtime")
+            .expect("a chunk beginning with '@' is not one chunk");
+        assert!(reason.contains("begins with '@'"), "{reason}");
         assert!(is_one_legal_mesh_address_chunk("cam@home"));
     }
 
-    /// An empty name is refused saying so, rather than by some character.
+    /// An empty name reads as empty, rather than as some character.
     #[test]
-    fn an_empty_name_is_refused_saying_it_is_empty() {
-        let refusal = refuse_a_display_name_that_is_not_one_mesh_address_chunk("")
-            .expect_err("an empty chunk must be refused");
-        assert!(
-            refusal.to_string().contains("it is empty"),
-            "the refusal must say the name was empty: {refusal}"
-        );
+    fn an_empty_name_reads_as_empty() {
+        let reason = first_reason_this_is_not_one_mesh_address_chunk("")
+            .expect("an empty chunk is not one chunk");
+        assert!(reason.contains("it is empty"), "{reason}");
     }
 
     /// Spaces and unicode stay legal — a display name is free text otherwise.

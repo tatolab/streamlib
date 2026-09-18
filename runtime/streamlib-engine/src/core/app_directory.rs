@@ -23,8 +23,10 @@ static APP_ENTRY_DIRECTORY_CAPTURED_BY_THE_LANGUAGE_HOST: OnceLock<PathBuf> = On
 ///
 /// The wheel calls this from `Runtime()`'s constructor with the directory it
 /// captured off `sys.path[0]`, which is the only thing that tells a hand-run
-/// `python app.py` apart from a `streamlib run`. The first call wins: the
-/// entry file does not move while the process lives.
+/// `python app.py` apart from a `streamlib run`. The first call wins and there
+/// is no way back — the entry file does not move while the process lives, which
+/// is also why no test records one: doing so would rename every runtime
+/// constructed later in the same binary.
 pub fn record_the_app_entry_directory_the_language_host_captured(entry_directory: PathBuf) {
     let _ = APP_ENTRY_DIRECTORY_CAPTURED_BY_THE_LANGUAGE_HOST.set(entry_directory);
 }
@@ -121,17 +123,5 @@ mod tests {
     #[test]
     fn a_process_with_no_working_directory_still_resolves() {
         assert_eq!(resolve_app_directory(None, None, None), Path::new(""));
-    }
-
-    /// The process-wide capture is read through the resolver, so the arm the
-    /// wheel fills is the arm the tests above drive.
-    #[test]
-    fn the_recorded_entry_directory_is_what_the_process_wide_resolver_reads() {
-        record_the_app_entry_directory_the_language_host_captured(PathBuf::from("/apps/recorded"));
-        assert_eq!(
-            APP_ENTRY_DIRECTORY_CAPTURED_BY_THE_LANGUAGE_HOST.get(),
-            Some(&PathBuf::from("/apps/recorded")),
-            "the first recording wins and is what the resolver's second arm reads"
-        );
     }
 }
