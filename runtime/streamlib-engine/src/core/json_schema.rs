@@ -1012,6 +1012,47 @@ mod capability_extension_and_mesh_rendering_tests {
         );
     }
 
+    /// A peer that has not answered yet renders its name alone, and the whole
+    /// response still deserializes — which is what the control plane's prompt
+    /// rendering does to every graph a node exports.
+    #[test]
+    fn a_peer_that_has_not_answered_still_deserializes_beside_one_that_has() {
+        let rendered = serde_json::to_value(Graph::new().to_graph_response(
+            Vec::new(),
+            RuntimeMeshOutput {
+                peers: vec![
+                    RuntimeMeshPeerOutput {
+                        runtime_name: "not-yet-answered".to_string(),
+                        runtime_id: None,
+                        host_name: None,
+                        engine_version: None,
+                        control_plane_urls: None,
+                    },
+                    RuntimeMeshPeerOutput {
+                        runtime_name: "answered".to_string(),
+                        runtime_id: Some("R7".to_string()),
+                        host_name: Some("rig".to_string()),
+                        engine_version: Some("0.25.0".to_string()),
+                        control_plane_urls: Some(vec!["http://198.51.100.7:9000".to_string()]),
+                    },
+                ],
+                ..an_isolated_mesh()
+            },
+        ))
+        .unwrap();
+
+        assert_eq!(
+            rendered["mesh"]["peers"][0],
+            serde_json::json!({ "runtime_name": "not-yet-answered" })
+        );
+
+        let read_back: GraphResponse =
+            serde_json::from_value(rendered).expect("both peer shapes deserialize");
+        assert_eq!(read_back.mesh.peers.len(), 2);
+        assert!(read_back.mesh.peers[0].runtime_id.is_none());
+        assert_eq!(read_back.mesh.peers[1].runtime_id.as_deref(), Some("R7"));
+    }
+
     /// A runtime whose session never opened says so, and says why.
     #[test]
     fn a_local_only_runtime_renders_the_reason_its_session_did_not_open() {
