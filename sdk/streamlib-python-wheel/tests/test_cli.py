@@ -687,6 +687,10 @@ def test_the_launcher_names_the_apps_directory_for_the_built_ins(tmp_path: Path,
         bind_host=cli.DEFAULT_CONTROL_PLANE_BIND_HOST,
         bind_port=cli.DEFAULT_CONTROL_PLANE_BIND_PORT,
         runtime_name=None,
+        mesh_name=None,
+        mesh_peer_endpoints=None,
+        mesh_listen_endpoints=None,
+        mesh_multicast_discovery=None,
     )
 
     assert exit_code == 1, "the entry file stopped the launch on purpose"
@@ -712,6 +716,10 @@ def test_a_runtime_name_the_engine_refuses_reads_as_a_launcher_error(tmp_path):
             bind_host=cli.DEFAULT_CONTROL_PLANE_BIND_HOST,
             bind_port=cli.DEFAULT_CONTROL_PLANE_BIND_PORT,
             runtime_name="a/b",
+            mesh_name=None,
+            mesh_peer_endpoints=None,
+            mesh_listen_endpoints=None,
+            mesh_multicast_discovery=None,
         )
 
     assert "a/b" in str(refusal.value), (
