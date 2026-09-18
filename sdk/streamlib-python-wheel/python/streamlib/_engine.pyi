@@ -876,7 +876,9 @@ class LinkInputDataReader:
         separate producer. This is how a many-input processor tells them
         apart: the name is the source channel the link subscribed to —
         `{source processor id}/{source output port}`, the name `graph` and
-        `tap` show — which the engine knows and a producer cannot misstate.
+        `tap` show — or, for a link carrying from another runtime, that port's
+        mesh address `{runtime name}/{display name}/{output port}`. Either way
+        the engine knows it and a producer cannot misstate it.
 
         Bags from one link arrive in that link's order. Nothing is promised
         about how two links interleave, so a reader that needs time order
