@@ -599,10 +599,7 @@ fn tell_the_ingress_about_every_link_from(
                 ),
             }
         };
-        let mut how_far_it_has_got = link.how_far_it_has_got.lock();
-        if *how_far_it_has_got != how_far {
-            *how_far_it_has_got = how_far;
-        }
+        *link.how_far_it_has_got.lock() = how_far;
     }
 }
 
