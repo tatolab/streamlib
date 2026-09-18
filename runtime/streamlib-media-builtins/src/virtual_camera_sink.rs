@@ -31,6 +31,7 @@ use std::os::fd::RawFd;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use streamlib::sdk::app_directory::APP_DIRECTORY_ENVIRONMENT_VARIABLE;
 use streamlib::sdk::color::{ColorSpaceKind, ResolvedColorInfo};
 use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
 use streamlib::sdk::engine::host_rhi::{
@@ -41,6 +42,7 @@ use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ReactiveProcessor;
 use streamlib::sdk::rhi::{PixelFormat, RhiColorConverter, VulkanLayout};
 use streamlib::sdk::schemars::JsonSchema;
+use streamlib::sdk::stable_short_id::{four_base36_characters_of, fnv1a_64_hash_of};
 
 use crate::cumulative_count_report_threshold::CumulativeCountReportThreshold;
 use crate::v4l2_color::resolved_color_to_v4l2_color;
@@ -54,10 +56,6 @@ pub(crate) const V4L2LOOPBACK_CONTROL_NODE_PATH: &str = "/dev/v4l2loopback";
 
 /// The one-time command that grants the loopback door.
 pub(crate) const ENABLE_VIRTUAL_CAMERA_VERB: &str = "streamlib enable-virtual-camera";
-
-/// Set by the CLI launcher to the app's anchor directory, so an unnamed
-/// camera's id is the app's rather than the shell's working directory.
-pub(crate) const APP_DIRECTORY_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_APP_DIRECTORY";
 
 /// What an unnamed camera is called, before its stable id.
 const DEFAULT_CAMERA_NAME_PREFIX: &str = "StreamLib Camera";
@@ -496,27 +494,12 @@ pub(crate) fn find_device_carrying_label(
     })
 }
 
-/// FNV-1a over the bytes, so the id is the same on every run and every
-/// Rust version.
-fn fnv1a_64(bytes: &[u8]) -> u64 {
-    bytes.iter().fold(0xcbf2_9ce4_8422_2325_u64, |hash, &b| {
-        (hash ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
-    })
-}
-
 /// Four base-36 characters of a hash over the app's directory and the
-/// instance's display name.
+/// instance's display name, on the engine's own stable-id recipe.
 fn stable_camera_id(app_directory: &Path, processor_display_name: &str) -> String {
-    let mut hash = fnv1a_64(app_directory.as_os_str().as_encoded_bytes());
-    hash = fnv1a_64(&[&hash.to_le_bytes()[..], processor_display_name.as_bytes()].concat());
-    const ALPHABET: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
-    (0..4)
-        .map(|_| {
-            let c = ALPHABET[(hash % 36) as usize] as char;
-            hash /= 36;
-            c
-        })
-        .collect()
+    let mut hash = fnv1a_64_hash_of(app_directory.as_os_str().as_encoded_bytes());
+    hash = fnv1a_64_hash_of(&[&hash.to_le_bytes()[..], processor_display_name.as_bytes()].concat());
+    four_base36_characters_of(hash)
 }
 
 /// The camera's label: the configured name, else the default prefix plus

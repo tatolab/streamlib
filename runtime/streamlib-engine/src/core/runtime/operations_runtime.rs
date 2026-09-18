@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use super::Runner;
 use super::RuntimeStatus;
+use super::mesh_address_chunk::refuse_a_display_name_that_is_not_one_mesh_address_chunk;
 use super::operations::{BoxFuture, RuntimeOperations};
 use super::runtime::TokioRuntimeVariant;
 use super::surface_image_exchange::exchange_published_surface_id_for_png_image_bytes;
@@ -95,6 +96,14 @@ async fn add_processor_impl(
             }),
         );
     };
+
+    // Before anything else: the display name is the processor's part of its
+    // mesh address, so a name that cannot be one address chunk is a wiring
+    // error whatever door the add came through — `rt.add`, Rust, or the
+    // control plane's `add_processor`.
+    if let Some(requested_display_name) = spec.display_name.as_deref() {
+        refuse_a_display_name_that_is_not_one_mesh_address_chunk(requested_display_name)?;
+    }
 
     // A type nobody registered may still be resolvable by name — the wheel
     // resolves a Python class import path the way `rt.add` would. A resolver

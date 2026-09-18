@@ -9,6 +9,8 @@ use std::time::Duration;
 use parking_lot::Mutex;
 use serde::Serialize;
 
+use super::RuntimeMeshConfiguration;
+use super::RuntimeName;
 use super::RuntimeOperations;
 use super::RuntimeStatus;
 use super::RuntimeUniqueId;
@@ -111,6 +113,8 @@ impl Drop for TokioRuntimeShutDownWithinItsBudget {
 pub struct Runner {
     /// Unique identifier for this runtime instance.
     pub(crate) runtime_id: Arc<RuntimeUniqueId>,
+    /// The name this runtime is addressed by on the runtime mesh.
+    pub(crate) runtime_name: Arc<RuntimeName>,
     /// Tokio runtime storage - either owned or external handle.
     pub(crate) tokio_runtime_variant: TokioRuntimeVariant,
     /// Compiles graph changes into running processors. Owns the graph and transaction.
@@ -165,7 +169,15 @@ pub struct Runner {
 }
 
 impl Runner {
+    /// Build a runtime with the default mesh configuration.
     pub fn new() -> Result<Arc<Self>> {
+        Self::new_with_runtime_mesh_configuration(RuntimeMeshConfiguration::default())
+    }
+
+    /// Build a runtime told where it sits on the runtime mesh.
+    pub fn new_with_runtime_mesh_configuration(
+        runtime_mesh_configuration: RuntimeMeshConfiguration,
+    ) -> Result<Arc<Self>> {
         // Cap per-thread timer slack at 1 ns on the calling thread before
         // spawning any worker. Linux defaults to 50 µs grouping for
         // `epoll_wait` / `nanosleep` / `futex` relative timeouts; new
@@ -206,6 +218,13 @@ impl Runner {
         // before the runtime writes anything.
         let runtime_id = Arc::new(RuntimeUniqueId::from_env_or_generate()?);
 
+        // Beside the id, and before the runtime writes anything: a name the
+        // caller cannot use as a mesh address is a wiring error, and refusing
+        // it here costs nothing that has to be undone.
+        let runtime_name = Arc::new(RuntimeName::from_configuration_environment_or_default(
+            runtime_mesh_configuration.runtime_name,
+        )?);
+
         // Stand up the runtime's unified logging pathway: `tracing` →
         // bounded lossy channel → drain worker → line-buffered pretty
         // stdout + batched JSONL file at
@@ -220,7 +239,7 @@ impl Runner {
                 Arc::clone(&runtime_id),
             ))
             .map_err(|e| Error::Runtime(format!("Failed to initialize logging: {}", e)))?;
-        tracing::info!("Creating Runner with ID: {}", runtime_id);
+        tracing::info!("Creating Runner named {runtime_name} with ID: {runtime_id}");
 
         let runtime_directory = StreamlibRuntimeDirectory::resolve()?;
         tracing::info!(
@@ -279,6 +298,7 @@ impl Runner {
 
         Ok(Arc::new(Self {
             runtime_id,
+            runtime_name,
             tokio_runtime_variant,
             compiler,
             runtime_context,
@@ -327,6 +347,11 @@ impl Runner {
     /// Unique identifier for this runtime instance.
     pub fn runtime_id(&self) -> &RuntimeUniqueId {
         &self.runtime_id
+    }
+
+    /// The name this runtime is addressed by on the runtime mesh.
+    pub fn runtime_name(&self) -> &RuntimeName {
+        &self.runtime_name
     }
 
     /// This runtime's iceoryx2 node.
@@ -516,6 +541,7 @@ impl Runner {
             gpu,
             time,
             Arc::clone(&self.runtime_id),
+            Arc::clone(&self.runtime_name),
             runtime_ops,
             self.tokio_runtime_variant.handle(),
             iceoryx2_node,

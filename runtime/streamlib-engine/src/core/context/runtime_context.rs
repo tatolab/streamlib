@@ -10,7 +10,9 @@ use super::{
     GpuContext, GpuContextFullAccess, GpuContextLimitedAccess, SharedAudioClock, TimeContext,
 };
 use crate::core::graph::ProcessorUniqueId;
-use crate::core::runtime::{RuntimeOperations, RuntimeUniqueId, StreamlibRuntimeDirectory};
+use crate::core::runtime::{
+    RuntimeName, RuntimeOperations, RuntimeUniqueId, StreamlibRuntimeDirectory,
+};
 use crate::iceoryx2::Iceoryx2Node;
 
 #[derive(Clone)]
@@ -25,6 +27,8 @@ pub struct RuntimeContext {
     pub time: Arc<TimeContext>,
     /// Unique identifier for this runtime instance.
     runtime_id: Arc<RuntimeUniqueId>,
+    /// The name this runtime is addressed by on the runtime mesh.
+    runtime_name: Arc<RuntimeName>,
     /// Unique identifier for this processor (None for shared/global context).
     processor_id: Option<ProcessorUniqueId>,
     /// The processor's disambiguated display name — the one string `add`
@@ -57,6 +61,7 @@ impl RuntimeContext {
         gpu: GpuContext,
         time: Arc<TimeContext>,
         runtime_id: Arc<RuntimeUniqueId>,
+        runtime_name: Arc<RuntimeName>,
         runtime_ops: Arc<dyn RuntimeOperations>,
         tokio_handle: tokio::runtime::Handle,
         iceoryx2_node: Iceoryx2Node,
@@ -68,6 +73,7 @@ impl RuntimeContext {
             gpu,
             time,
             runtime_id,
+            runtime_name,
             processor_id: None,
             processor_display_name: None,
             pause_gate: None,
@@ -116,6 +122,11 @@ impl RuntimeContext {
     /// Get the runtime's unique identifier.
     pub fn runtime_id(&self) -> &RuntimeUniqueId {
         &self.runtime_id
+    }
+
+    /// The name this runtime is addressed by on the runtime mesh.
+    pub fn runtime_name(&self) -> &RuntimeName {
+        &self.runtime_name
     }
 
     /// The runtime directory this runtime resolved as it started.
@@ -186,6 +197,7 @@ impl RuntimeContext {
             gpu: self.gpu.clone(),
             time: Arc::clone(&self.time),
             runtime_id: Arc::clone(&self.runtime_id),
+            runtime_name: Arc::clone(&self.runtime_name),
             processor_id: Some(processor_id),
             processor_display_name: self.processor_display_name.clone(),
             pause_gate: self.pause_gate.clone(),
@@ -205,6 +217,7 @@ impl RuntimeContext {
             gpu: self.gpu.clone(),
             time: Arc::clone(&self.time),
             runtime_id: Arc::clone(&self.runtime_id),
+            runtime_name: Arc::clone(&self.runtime_name),
             processor_id: self.processor_id.clone(),
             processor_display_name: self.processor_display_name.clone(),
             pause_gate: Some(pause_gate),
@@ -792,6 +805,12 @@ impl<'a> RuntimeContextFullAccess<'a> {
     /// iceoryx2 domain root.
     pub fn runtime_directory(&self) -> &StreamlibRuntimeDirectory {
         self.host_base().runtime_directory()
+    }
+
+    /// The name this runtime is addressed by on the runtime mesh — what a
+    /// control plane publishes and what a mesh address begins with.
+    pub fn runtime_name(&self) -> &RuntimeName {
+        self.host_base().runtime_name()
     }
 }
 
