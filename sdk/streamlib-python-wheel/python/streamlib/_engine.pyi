@@ -498,9 +498,11 @@ class Runtime:
         naming that runtime's host and pid and both ways out — stop it
         (`streamlib nodes` lists it), or start this one under another name. The
         one exception is a runtime on this very machine whose process is gone,
-        so restarting an app that was killed is never refused. Two runtimes
-        that start at the same instant, before either can see the other, both
-        run and each says so once: `graph` then lists both.
+        so restarting an app that was killed is never refused — on Linux, which
+        is the only platform that can tell one host from another; on macOS a
+        killed app's name stays refused until its announcement leaves the mesh.
+        Two runtimes that start at the same instant, before either can see the
+        other, both run and each says so once: `graph` then lists both.
 
         `mesh_name` is one chunk of the channel-name grammar — non-empty,
         beginning with a lowercase letter and otherwise carrying only lowercase

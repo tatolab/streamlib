@@ -84,6 +84,7 @@ struct RuntimeMeshPeerProcess {
     child: Child,
     what_it_last_saw: Arc<Mutex<Option<serde_json::Value>>>,
     why_it_refused: Arc<Mutex<Option<String>>>,
+    what_it_logged: Arc<Mutex<Vec<String>>>,
 }
 
 /// How a peer is launched — every flag the fixture drives.
@@ -94,6 +95,9 @@ struct HowToLaunchAPeer {
     peer_endpoints: Vec<String>,
     listen_endpoints: Vec<String>,
     multicast_discovery: bool,
+    /// Let the engine's own pretty log reach the parent beside the reports, for
+    /// an arm whose subject is something the runtime only ever says in a log.
+    report_what_it_logs: bool,
 }
 
 impl RuntimeMeshPeerProcess {
@@ -113,14 +117,18 @@ impl RuntimeMeshPeerProcess {
             command.arg("--mesh-listen").arg(endpoint);
         }
 
+        command.env(
+            MESH_MULTICAST_INTERFACE_ENVIRONMENT_VARIABLE,
+            LOOPBACK_INTERFACE,
+        );
+        // The peer reports down a duplicate of fd 1 and the engine's own pretty
+        // log mirror shares the real one, so it is quiet unless an arm's subject
+        // is something the runtime only says in a log.
+        if !how.report_what_it_logs {
+            command.env("STREAMLIB_QUIET", "1");
+        }
+
         let mut child = command
-            .env(
-                MESH_MULTICAST_INTERFACE_ENVIRONMENT_VARIABLE,
-                LOOPBACK_INTERFACE,
-            )
-            // The peer reports down a duplicate of fd 1; the engine's own
-            // pretty log mirror shares the real one, and this keeps it quiet.
-            .env("STREAMLIB_QUIET", "1")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -129,15 +137,21 @@ impl RuntimeMeshPeerProcess {
 
         let what_it_last_saw = Arc::new(Mutex::new(None));
         let why_it_refused = Arc::new(Mutex::new(None));
+        let what_it_logged = Arc::new(Mutex::new(Vec::new()));
         let reported = child.stdout.take().expect("the peer's stdout is piped");
         let saw = Arc::clone(&what_it_last_saw);
         let refused = Arc::clone(&why_it_refused);
+        let logged = Arc::clone(&what_it_logged);
         std::thread::spawn(move || {
             for line in BufReader::new(reported).lines().map_while(Result::ok) {
                 if let Some(refusal) = line.strip_prefix("REFUSED ") {
                     *refused.lock() = Some(refusal.to_string());
                 } else if let Ok(mesh) = serde_json::from_str::<serde_json::Value>(&line) {
                     *saw.lock() = Some(mesh);
+                } else {
+                    // Whatever is left is the engine's pretty log, which only
+                    // reaches here for an arm that asked for it.
+                    logged.lock().push(line);
                 }
             }
         });
@@ -146,6 +160,7 @@ impl RuntimeMeshPeerProcess {
             child,
             what_it_last_saw,
             why_it_refused,
+            what_it_logged,
         }
     }
 
@@ -219,6 +234,16 @@ impl RuntimeMeshPeerProcess {
     /// The exit status of a peer that has stopped on its own.
     fn wait_for_its_exit_code(&mut self) -> Option<i32> {
         self.child.wait().expect("the peer exits").code()
+    }
+
+    /// Every line this peer logged that carries `what_it_said`.
+    fn log_lines_carrying(&self, what_it_said: &str) -> Vec<String> {
+        self.what_it_logged
+            .lock()
+            .iter()
+            .filter(|line| line.contains(what_it_said))
+            .cloned()
+            .collect()
     }
 }
 
@@ -816,13 +841,18 @@ fn a_token_left_by_a_dead_process_on_this_host_is_taken_over_and_a_live_one_is_n
 }
 
 /// The stated residual: two runtimes that meet only after both have started are
-/// not refused. Both keep running and each lists the other under the one name.
+/// not refused. Both keep running, each says so once naming the other, and each
+/// lists the other under the one name.
 ///
 /// Arranged rather than raced — the second runtime dials a port nothing is
 /// listening on yet, so its own check finds nobody, and the first appears
 /// afterwards and is connected to by the retry.
+///
+/// This is the one arm that reads the peers' logs, because saying so once is
+/// the whole of what the runtime does here: assert it on `graph` alone and the
+/// production call could be deleted with every test still green.
 #[test]
-fn two_runtimes_that_meet_after_both_started_both_keep_running_and_list_each_other() {
+fn two_runtimes_that_meet_after_both_started_both_run_and_each_says_so_once() {
     let mesh_name = a_mesh_name_of_its_own("residual");
     let port = a_free_loopback_port();
     let listening = format!("tcp/{LOOPBACK_INTERFACE}:{port}");
@@ -831,6 +861,7 @@ fn two_runtimes_that_meet_after_both_started_both_keep_running_and_list_each_oth
         runtime_name: "one-name-two-runtimes".to_string(),
         mesh_name: mesh_name.clone(),
         peer_endpoints: vec![listening.clone()],
+        report_what_it_logs: true,
         ..Default::default()
     });
     dialling_nobody_yet.wait_until_it_is_on_the_mesh();
@@ -839,6 +870,7 @@ fn two_runtimes_that_meet_after_both_started_both_keep_running_and_list_each_oth
         runtime_name: "one-name-two-runtimes".to_string(),
         mesh_name,
         listen_endpoints: vec![listening],
+        report_what_it_logs: true,
         ..Default::default()
     });
     appearing_afterwards.wait_until_it_is_on_the_mesh();
@@ -856,6 +888,24 @@ fn two_runtimes_that_meet_after_both_started_both_keep_running_and_list_each_oth
         assert!(
             runtime.why_it_refused.lock().is_none(),
             "neither runtime is refused: they never saw each other in time"
+        );
+    }
+
+    // Each names the *other* process, and says it once however many re-ask
+    // rounds go by — so both the naming and the once are locked.
+    for (runtime, the_other) in [
+        (&dialling_nobody_yet, &appearing_afterwards),
+        (&appearing_afterwards, &dialling_nobody_yet),
+    ] {
+        let said = wait_until("the runtime says it shares its name", || {
+            Some(runtime.log_lines_carrying("is also named one-name-two-runtimes"))
+                .filter(|lines| !lines.is_empty())
+        });
+        assert_eq!(said.len(), 1, "said more than once: {said:?}");
+        assert!(
+            said[0].contains(&format!("pid {}", the_other.child.id())),
+            "must name the other runtime's pid: {}",
+            said[0]
         );
     }
 }
