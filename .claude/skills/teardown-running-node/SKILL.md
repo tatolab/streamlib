@@ -13,7 +13,7 @@ Stops the node the same way you started it — by ending its process. There is d
 ```bash
 streamlib nodes
 ```
-Find the row for your `RUNTIME_ID` and note its `PID` (the host process — typically the `streamlib run` / `streamlib dev` that launched the app). Confirm `ALIVE?` is `yes` before signaling.
+Find the row for your `RUNTIME_NAME` (or `RUNTIME_ID`) and note its `PID` (the host process — typically the `streamlib run` / `streamlib dev` that launched the app). Confirm `ALIVE?` is `yes` before signaling.
 
 ### 2. Signal the process to stop cleanly
 Send `SIGTERM` (the default) so the runtime tears down gracefully and removes its own registry entry:
@@ -26,7 +26,7 @@ If it is a node you launched in this session's foreground, `Ctrl-C` is equivalen
 ```bash
 streamlib nodes
 ```
-The `runtime_id` should no longer appear (or the whole table reports `No running nodes found`). Its camera / GPU / control-port claim is now released for the next run or another worktree.
+The node's row should no longer appear (or the whole table reports `No running nodes found`). Its camera / GPU / control-port claim is now released for the next run or another worktree.
 
 ## Notes
 - Get the pid from `streamlib nodes` — it is the authoritative source; do not guess.
