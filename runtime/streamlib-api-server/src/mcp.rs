@@ -331,7 +331,7 @@ fn tool_definitions() -> Vec<Value> {
                 "properties": {
                     "type": { "type": "string", "description": "The processor class import path, e.g. `processors.grayscale_effect:GrayscaleEffect`." },
                     "config": { "type": "object", "description": "The processor's configuration, as the keys its config schema declares. Omit for none." },
-                    "display_name": { "type": "string", "description": "Human-facing label; defaults to the class's short name, disambiguated within the graph." }
+                    "display_name": { "type": "string", "description": "Human-facing label; defaults to the class's short name, disambiguated within the graph. It is also the processor's part of its address on the runtime mesh, so it must be non-empty, carry none of `/`, `*`, `$`, `#` or `?`, and not begin with `@`; spaces and unicode are fine, and one that breaks the rule is refused naming the character." }
                 },
                 "required": ["type"],
                 "additionalProperties": false
