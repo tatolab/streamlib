@@ -14,7 +14,7 @@
 //! without any of those having to remember they exist. The one traversal that
 //! never yields one is `out_e()`, because no local node produces them.
 
-use crate::core::graph::{InputLinkPortRef, Link, LinkUniqueId, ProcessorUniqueId};
+use crate::core::graph::{Link, LinkUniqueId, ProcessorUniqueId};
 
 /// Every link on this runtime whose source is a port on another runtime, in
 /// the order they were connected.
@@ -68,14 +68,5 @@ impl LinksFromAnotherRuntime {
         self.0
             .iter()
             .filter(move |link| &link.to_port().processor_id == destination_processor_id)
-    }
-
-    /// Whether a link already carries into exactly `destination` — the check
-    /// `connect` makes before keeping a second one.
-    pub(in crate::core::graph) fn already_carries_into(
-        &self,
-        destination: &InputLinkPortRef,
-    ) -> bool {
-        self.0.iter().any(|link| link.to_port() == destination)
     }
 }

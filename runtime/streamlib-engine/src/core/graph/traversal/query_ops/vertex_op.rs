@@ -117,3 +117,24 @@ impl<'a> TraversalSourceMut<'a> {
         }
     }
 }
+
+impl<'a> TraversalSource<'a> {
+    /// Start traversal from the processor a display name labels.
+    ///
+    /// A display name is unique within a graph and is the processor's part of
+    /// its mesh address, which is what a peer names a port by — so this is how
+    /// an address is turned back into one of this runtime's own nodes.
+    pub fn v_with_display_name(self, display_name: &str) -> ProcessorTraversal<'a> {
+        let ids = self
+            .graph
+            .node_references()
+            .find(|(_, processor_node)| processor_node.display_name == display_name)
+            .map(|(idx, _)| vec![idx])
+            .unwrap_or_default();
+        ProcessorTraversal {
+            graph: self.graph,
+            links_from_another_runtime: self.links_from_another_runtime,
+            ids,
+        }
+    }
+}

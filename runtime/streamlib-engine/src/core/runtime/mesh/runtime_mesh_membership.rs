@@ -191,6 +191,37 @@ impl RuntimeMeshMembership {
         }
     }
 
+    /// A membership that never reached a mesh, for a test that needs a
+    /// runtime's name and mesh name and no network.
+    ///
+    /// The same state `join` lands in when a session cannot open, reached
+    /// without opening one.
+    #[cfg(test)]
+    pub(crate) fn that_never_reached_its_mesh(runtime_name: &str, mesh_name: &str) -> Self {
+        Self {
+            mesh_name: mesh_name.to_string(),
+            announced_identity: AnnouncedRuntimeIdentity {
+                runtime_name: runtime_name.to_string(),
+                host_identity: crate::core::runtime::mesh::HostIdentity::of_this_host(),
+                process_id: std::process::id(),
+            },
+            peers: Arc::new(RuntimeMeshPeerTable::default()),
+            session: Mutex::new(RuntimeMeshSessionState::NotOnTheMesh {
+                reason: "this membership was built for a test and opened no session".to_string(),
+            }),
+        }
+    }
+
+    /// The name this runtime is addressed by on its mesh.
+    pub fn runtime_name(&self) -> &str {
+        &self.announced_identity.runtime_name
+    }
+
+    /// The mesh this runtime is on.
+    pub fn mesh_name(&self) -> &str {
+        &self.mesh_name
+    }
+
     /// This runtime's place on the mesh, as `graph` renders it.
     pub fn render_for_graph(&self) -> RuntimeMeshOutput {
         let (session, local_only_reason) = match &*self.session.lock() {
