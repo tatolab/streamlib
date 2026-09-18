@@ -21,10 +21,6 @@ pub struct ApiServerConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub log_path: Option<String>,
 
-    /// Runtime name for surface-share registration; auto-generated when absent.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-
     /// Opt into bearer-token auth on the mutating control-plane routes. Absent
     /// or false leaves them open — a node runs locally with full permission;
     /// true auto-generates and 0600-persists a shared secret and gates every
@@ -38,7 +34,7 @@ mod api_server_config_encoding_tests {
     use super::ApiServerConfig;
 
     /// Golden document: every field present, in declaration order.
-    const FULLY_POPULATED: &str = r#"{"host":"0.0.0.0","port":8080,"log_path":"/tmp/node.jsonl","name":"node-a","require_auth":true}"#;
+    const FULLY_POPULATED: &str = r#"{"host":"0.0.0.0","port":8080,"log_path":"/tmp/node.jsonl","require_auth":true}"#;
 
     /// A fully-populated config survives a decode/encode round trip unchanged.
     #[test]
@@ -47,7 +43,6 @@ mod api_server_config_encoding_tests {
         assert_eq!(decoded.host, "0.0.0.0");
         assert_eq!(decoded.port, 8080);
         assert_eq!(decoded.log_path.as_deref(), Some("/tmp/node.jsonl"));
-        assert_eq!(decoded.name.as_deref(), Some("node-a"));
         assert_eq!(decoded.require_auth, Some(true));
         assert_eq!(serde_json::to_string(&decoded).unwrap(), FULLY_POPULATED);
     }

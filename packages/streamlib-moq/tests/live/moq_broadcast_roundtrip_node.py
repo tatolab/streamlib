@@ -148,7 +148,7 @@ def main() -> None:
     relay_url = _relay_url_from_the_environment()
     carries_a_data_track = arguments.container_format == "streamlib_bag"
 
-    runtime = streamlib.Runtime()
+    runtime = streamlib.Runtime(runtime_name="moq-broadcast-roundtrip-node")
 
     publisher_config: "dict[str, Any]" = {
         "relay_url": relay_url,
@@ -262,7 +262,6 @@ def main() -> None:
     runtime.host_control_plane(
         bind_host="127.0.0.1",
         bind_port=arguments.control_plane_port,
-        node_name="moq-broadcast-roundtrip-node",
     )
     runtime.run()
 

@@ -124,6 +124,15 @@ pub(crate) fn capture_helper_process_launch_environment(python: Python<'_>) -> P
     Ok(())
 }
 
+/// The entry directory the capture above found, if the interpreter reported
+/// one. Read by `Runtime()`'s constructor so the engine can name an unnamed
+/// runtime after the app rather than after the shell it was launched from.
+pub(crate) fn captured_app_entry_directory() -> Option<PathBuf> {
+    captured_launch_environment()
+        .get()
+        .and_then(|captured| captured.app_entry_directory.clone())
+}
+
 /// The directory a child should import the app's own modules from.
 ///
 /// `sys.path[0]` rather than `sys.argv[0]`'s parent, because it is the one slot

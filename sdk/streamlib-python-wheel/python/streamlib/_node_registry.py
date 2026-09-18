@@ -32,7 +32,7 @@ __all__ = [
     "live_nodes",
 ]
 
-NODE_REGISTRY_SCHEMA_VERSION = 1
+NODE_REGISTRY_SCHEMA_VERSION = 2
 
 
 class NodeRegistryEntry(NamedTuple):
@@ -40,6 +40,9 @@ class NodeRegistryEntry(NamedTuple):
 
     schema_version: int
     runtime_id: str
+    #: The name the runtime is addressed by on the runtime mesh — stable across
+    #: runs of one app, and what `--node` resolves alongside the id.
+    runtime_name: str
     control_url: str
     pid: int
     hint: str
@@ -131,6 +134,7 @@ def _read_entry_file(path: Path) -> "Optional[NodeRegistryEntry]":
         return NodeRegistryEntry(
             schema_version=int(record["schema_version"]),
             runtime_id=str(record["runtime_id"]),
+            runtime_name=str(record["runtime_name"]),
             control_url=str(record["control_url"]),
             pid=int(record["pid"]),
             hint=str(record.get("hint", "")),

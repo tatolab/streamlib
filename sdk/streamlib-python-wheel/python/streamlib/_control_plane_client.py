@@ -147,10 +147,12 @@ def resolve_control_url(
 ) -> str:
     """The control-plane URL a verb targets.
 
-    `--url` wins outright, registered or not. Otherwise `--node <runtime_id>`
-    resolves that node's URL from the registry. Otherwise the sole live node,
-    which is the zero-ceremony case. Zero live nodes, or more than one with
-    neither flag given, is an error that lists what it found.
+    `--url` wins outright, registered or not. Otherwise `--node` resolves that
+    node's URL from the registry, matching a runtime name first and a runtime_id
+    second — the name is the one an app chooses and keeps across runs. Otherwise
+    the sole live node, which is the zero-ceremony case. Zero live nodes, more
+    than one matching `--node`, or more than one live node with neither flag
+    given, is an error that lists what it found.
     """
     if requested_url:
         return requested_url
@@ -160,13 +162,7 @@ def resolve_control_url(
     nodes = live_nodes()
 
     if requested_node:
-        for node in nodes:
-            if node.runtime_id == requested_node:
-                return node.control_url
-        raise ControlPlaneError(
-            f"no live node with runtime_id `{requested_node}`."
-            + _live_node_hint(nodes)
-        )
+        return _sole_node_matching(nodes, requested_node)
 
     if len(nodes) == 1:
         return nodes[0].control_url
@@ -178,8 +174,35 @@ def resolve_control_url(
         )
 
     raise ControlPlaneError(
-        f"{len(nodes)} live nodes — pick one with `--node <runtime_id>` or "
+        f"{len(nodes)} live nodes — pick one with `--node <runtime name or id>` or "
         f"`--url <url>`." + _live_node_hint(nodes)
+    )
+
+
+def _sole_node_matching(
+    nodes: "list[NodeRegistryEntry]", requested_node: str
+) -> str:
+    """The control URL of the one live node `--node` names, or an error.
+
+    Names are matched before ids because a name is what an app chose; a name is
+    unique on a mesh but nothing stops two runtimes here from having been given
+    the same one, so a tie names both rather than picking the first.
+    """
+    for matching in (
+        [node for node in nodes if node.runtime_name == requested_node],
+        [node for node in nodes if node.runtime_id == requested_node],
+    ):
+        if len(matching) == 1:
+            return matching[0].control_url
+        if matching:
+            raise ControlPlaneError(
+                f"{len(matching)} live nodes answer to `{requested_node}` — pick one by "
+                f"runtime_id with `--node <runtime_id>` or by URL with `--url <url>`."
+                + _live_node_hint(matching)
+            )
+    raise ControlPlaneError(
+        f"no live node named `{requested_node}`, and none with that runtime_id."
+        + _live_node_hint(nodes)
     )
 
 
@@ -187,7 +210,9 @@ def _live_node_hint(nodes: "list[NodeRegistryEntry]") -> str:
     """A trailing ` Live nodes: ...` fragment for a resolver error message."""
     if not nodes:
         return ""
-    listed = ", ".join(f"{node.runtime_id} -> {node.control_url}" for node in nodes)
+    listed = ", ".join(
+        f"{node.runtime_name} ({node.runtime_id}) -> {node.control_url}" for node in nodes
+    )
     return f" Live nodes: {listed}"
 
 

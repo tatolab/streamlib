@@ -82,7 +82,7 @@ def main() -> None:
     parser.add_argument("--control-plane-port", type=int, default=9000)
     arguments = parser.parse_args()
 
-    runtime = streamlib.Runtime()
+    runtime = streamlib.Runtime(runtime_name="whip-whep-roundtrip-node")
 
     publisher = runtime.add(
         WhipPublisher,
@@ -152,7 +152,6 @@ def main() -> None:
     runtime.host_control_plane(
         bind_host="127.0.0.1",
         bind_port=arguments.control_plane_port,
-        node_name="whip-whep-roundtrip-node",
     )
     runtime.run()
 

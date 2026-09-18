@@ -1022,7 +1022,6 @@ mod linux_rig {
             streamlib_api_server::control_plane_host::ApiServerControlPlaneHostConfig {
                 bind_host: "127.0.0.1".to_string(),
                 bind_port: arguments.control_plane_port,
-                node_name: Some("codec-roundtrip-rig".to_string()),
             },
         )?;
 

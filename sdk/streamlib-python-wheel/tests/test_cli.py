@@ -686,7 +686,7 @@ def test_the_launcher_names_the_apps_directory_for_the_built_ins(tmp_path: Path,
         requested_entry_file=None,
         bind_host=cli.DEFAULT_CONTROL_PLANE_BIND_HOST,
         bind_port=cli.DEFAULT_CONTROL_PLANE_BIND_PORT,
-        node_name=None,
+        runtime_name=None,
     )
 
     assert exit_code == 1, "the entry file stopped the launch on purpose"

@@ -219,7 +219,7 @@ def launch_app_node(
     requested_entry_file: Optional[Path],
     bind_host: str,
     bind_port: int,
-    node_name: Optional[str],
+    runtime_name: Optional[str],
 ) -> int:
     """Boot the app's node and own its run loop until the user interrupts it."""
     anchor_directory = resolve_app_anchor_directory(requested_anchor_directory)
@@ -241,7 +241,7 @@ def launch_app_node(
     # Constructed only once the app's code has run: a file that cannot even be
     # executed must not cost a GPU context and an engine boot on the way to its
     # error message.
-    runtime = Runtime()
+    runtime = Runtime(runtime_name=runtime_name)
     try:
         app_setup_function(runtime)
     except Exception as setup_failure:  # noqa: BLE001 — reported as the app's own
@@ -252,9 +252,7 @@ def launch_app_node(
     try:
         # After `setup`, so an app that failed to build its graph publishes no
         # node entry for `streamlib nodes` to find.
-        runtime.host_control_plane(
-            bind_host=bind_host, bind_port=bind_port, node_name=node_name
-        )
+        runtime.host_control_plane(bind_host=bind_host, bind_port=bind_port)
         runtime.run()
     except RuntimeError as engine_failure:
         # The engine compiles the graph at `run()`, so the failures a user hits
@@ -457,6 +455,9 @@ def print_discovered_nodes() -> int:
         )
         return 0
 
+    runtime_name_width = max(
+        [len(node.entry.runtime_name) for node in nodes] + [len("RUNTIME_NAME")]
+    )
     runtime_id_width = max(
         [len(node.entry.runtime_id) for node in nodes] + [len("RUNTIME_ID")]
     )
@@ -464,12 +465,14 @@ def print_discovered_nodes() -> int:
         [len(node.entry.control_url) for node in nodes] + [len("CONTROL_URL")]
     )
     print(
-        f"{'RUNTIME_ID':<{runtime_id_width}}  {'CONTROL_URL':<{control_url_width}}  "
+        f"{'RUNTIME_NAME':<{runtime_name_width}}  {'RUNTIME_ID':<{runtime_id_width}}  "
+        f"{'CONTROL_URL':<{control_url_width}}  "
         f"{'PID':>7}  {'ALIVE?':<6}  HINT",
         file=stream,
     )
     for node in nodes:
         print(
+            f"{node.entry.runtime_name:<{runtime_name_width}}  "
             f"{node.entry.runtime_id:<{runtime_id_width}}  "
             f"{node.entry.control_url:<{control_url_width}}  "
             f"{node.entry.pid:>7}  {'yes' if node.reachable else 'no':<6}  "
@@ -839,10 +842,13 @@ def build_argument_parser() -> argparse.ArgumentParser:
             help="Port for the control plane; increments on collision.",
         )
         launch_command.add_argument(
-            "--name",
-            dest="node_name",
+            "--runtime-name",
+            dest="runtime_name",
             metavar="NAME",
-            help="Node name published to the registry (auto-generated when omitted).",
+            help=(
+                "Name this runtime is addressed by on the runtime mesh. Omitted, the engine "
+                "reads STREAMLIB_RUNTIME_NAME, else names it after this host and app directory."
+            ),
         )
 
     def add_control_target_flags(command: argparse.ArgumentParser) -> None:
@@ -862,8 +868,8 @@ def build_argument_parser() -> argparse.ArgumentParser:
         target.add_argument(
             "--node",
             dest="requested_node",
-            metavar="RUNTIME_ID",
-            help="Registered runtime_id to target (resolved via the node registry).",
+            metavar="RUNTIME_NAME_OR_ID",
+            help="Registered runtime name or runtime_id to target (resolved via the node registry).",
         )
 
     subcommands.add_parser(
@@ -1245,7 +1251,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             requested_entry_file=arguments.entry_file,
             bind_host=arguments.bind_host,
             bind_port=arguments.bind_port,
-            node_name=arguments.node_name,
+            runtime_name=arguments.runtime_name,
         )
     except (
         AppLaunchError,

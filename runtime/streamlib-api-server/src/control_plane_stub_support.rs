@@ -111,11 +111,18 @@ pub(crate) const STUB_ADDED_PROCESSOR_ID: &str = "stub-added-processor";
 /// The id the stub answers every `connect` with.
 pub(crate) const STUB_CREATED_LINK_ID: &str = "stub-created-link";
 
+/// What a stub runtime answers an `add_processor` with when the test has armed
+/// a refusal, standing in for an engine-side one — a display name that cannot
+/// be a mesh address chunk, an unknown class.
+pub(crate) type ArmedAddProcessorRefusal = ::std::sync::Arc<::parking_lot::Mutex<Option<String>>>;
+
 /// Implement the four async graph-mutating [`RuntimeOperations`] methods by
 /// recording the call on a `recorded_graph_mutations` field and answering a
 /// fixed id, so a front-end test can assert its tool reached the matching op
-/// with the arguments the caller sent. The blocking wrappers stay unreachable:
-/// a front end awaits, it never blocks a worker.
+/// with the arguments the caller sent. An `armed_add_processor_refusal` the
+/// test filled makes the add refuse instead, so a front end's handling of an
+/// engine refusal is testable without an engine. The blocking wrappers stay
+/// unreachable: a front end awaits, it never blocks a worker.
 macro_rules! graph_mutation_ops_record_the_call {
     () => {
         fn add_processor_async(
@@ -128,10 +135,16 @@ macro_rules! graph_mutation_ops_record_the_call {
             self.recorded_graph_mutations.lock().push(
                 $crate::control_plane_stub_support::RecordedGraphMutation::AddProcessor(spec),
             );
-            Box::pin(async {
-                Ok(::streamlib::sdk::graph::ProcessorUniqueId::from(
-                    $crate::control_plane_stub_support::STUB_ADDED_PROCESSOR_ID,
-                ))
+            let armed_refusal = self.armed_add_processor_refusal.lock().clone();
+            Box::pin(async move {
+                match armed_refusal {
+                    Some(refusal) => {
+                        Err(::streamlib::sdk::error::Error::Configuration(refusal))
+                    }
+                    None => Ok(::streamlib::sdk::graph::ProcessorUniqueId::from(
+                        $crate::control_plane_stub_support::STUB_ADDED_PROCESSOR_ID,
+                    )),
+                }
             })
         }
         fn remove_processor_async(

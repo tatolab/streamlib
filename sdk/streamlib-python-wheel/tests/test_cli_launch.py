@@ -232,7 +232,11 @@ def launch_node(isolated_runtime_directory: Path):
     launched: "list[LaunchedNode]" = []
 
     def launch(
-        verb: str, app_directory: Path, port: int, capture_output: bool = False
+        verb: str,
+        app_directory: Path,
+        port: int,
+        capture_output: bool = False,
+        extra_arguments: "tuple[str, ...]" = (),
     ) -> LaunchedNode:
         # A file rather than a pipe: nothing here reads the child while it runs,
         # and a full pipe buffer would wedge a node the test is still polling.
@@ -247,6 +251,7 @@ def launch_node(isolated_runtime_directory: Path):
                     "--dir", str(app_directory),
                     "--host", "127.0.0.1",
                     "--port", str(port),
+                    *extra_arguments,
                 ],
                 stdout=output_sink if output_sink is not None else subprocess.DEVNULL,
                 stderr=(
@@ -292,6 +297,10 @@ def test_a_launched_app_registers_as_a_node_and_tears_down(
     assert entry["control_url"].startswith("http://127.0.0.1:"), (
         f"the entry must carry a reachable control URL; got {entry['control_url']}"
     )
+    assert entry["runtime_name"].startswith(f"{socket.gethostname()}-app-"), (
+        "an unnamed runtime is named after this host and its app directory; got "
+        f"{entry['runtime_name']}"
+    )
 
     node.interrupt()
     assert node.await_exit(CLEAN_EXIT_TIMEOUT_SECONDS) == 0, (
@@ -300,6 +309,30 @@ def test_a_launched_app_registers_as_a_node_and_tears_down(
     assert registry_entry_paths(runtime_directory) == [], (
         "clean teardown must remove the node-registry entry"
     )
+
+
+def test_a_launched_app_takes_the_runtime_name_its_command_line_gave_it(
+    tmp_path: Path, isolated_runtime_directory: Path, launch_node
+):
+    """`--runtime-name` is the name the registry publishes, verbatim."""
+    app_directory = tmp_path / "app"
+    app_directory.mkdir()
+    (app_directory / "app.py").write_text(APP_WITH_ONE_NATIVE_SOURCE)
+
+    node = launch_node(
+        "run",
+        app_directory,
+        free_port(),
+        extra_arguments=("--runtime-name", "desk rig"),
+    )
+    entry = await_sole_registry_entry(
+        isolated_runtime_directory, NODE_READY_TIMEOUT_SECONDS
+    )
+
+    assert entry["runtime_name"] == "desk rig"
+
+    node.interrupt()
+    assert node.await_exit(CLEAN_EXIT_TIMEOUT_SECONDS) == 0
 
 
 def test_a_node_launched_with_xdg_runtime_dir_unset_keeps_everything_live_in_the_per_user_fallback(

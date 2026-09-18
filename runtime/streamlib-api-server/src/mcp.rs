@@ -871,6 +871,7 @@ mod tests {
         tap_plan: Option<StubTapPlan>,
         recorded_shutdown_reasons: Arc<Mutex<Vec<String>>>,
         recorded_graph_mutations: crate::control_plane_stub_support::RecordedGraphMutations,
+        armed_add_processor_refusal: crate::control_plane_stub_support::ArmedAddProcessorRefusal,
         exchange: StubSurfaceExchange,
     }
 
@@ -881,7 +882,17 @@ mod tests {
                 tap_plan: None,
                 recorded_shutdown_reasons: Arc::new(Mutex::new(Vec::new())),
                 recorded_graph_mutations: Arc::new(Mutex::new(Vec::new())),
+                armed_add_processor_refusal: Arc::new(Mutex::new(None)),
                 exchange: StubSurfaceExchange::default(),
+            }
+        }
+
+        /// A stub whose `add_processor` refuses with `refusal`, standing in for
+        /// an engine-side refusal the front end has to carry back.
+        fn refusing_every_add_processor(refusal: &str) -> Self {
+            Self {
+                armed_add_processor_refusal: Arc::new(Mutex::new(Some(refusal.to_string()))),
+                ..Self::new()
             }
         }
 
@@ -1101,6 +1112,35 @@ mod tests {
         );
         assert_eq!(spec.config["strength"], 0.5);
         assert_eq!(spec.display_name.as_deref(), Some("Gray"));
+    }
+
+    /// A display name that cannot be one chunk of a processor's mesh address is
+    /// refused by the engine, and the MCP door carries that refusal back with
+    /// the offending character intact rather than reporting a success or
+    /// swallowing the reason.
+    #[tokio::test]
+    async fn tools_call_add_processor_carries_back_a_refused_display_name_naming_the_character() {
+        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::refusing_every_add_processor(
+            "display name \"a/b\" cannot be one chunk of a processor's mesh address:              it contains '/'",
+        ));
+
+        let (status, body) = mcp_call(
+            runtime,
+            json!({
+                "jsonrpc": "2.0", "id": 32, "method": "tools/call",
+                "params": { "name": "add_processor", "arguments": {
+                    "type": "processors.grayscale_effect:GrayscaleEffect",
+                    "display_name": "a/b"
+                } }
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["result"]["isError"], true, "body={body}");
+        let text = body["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("a/b"), "the refusal must name the display name: {text}");
+        assert!(text.contains("'/'"), "the refusal must name the character: {text}");
     }
 
     #[tokio::test]

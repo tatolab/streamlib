@@ -55,7 +55,7 @@ def main() -> None:
         arguments.codec
     ]
 
-    runtime = streamlib.Runtime()
+    runtime = streamlib.Runtime(runtime_name="codec-roundtrip-node")
     camera = runtime.add(
         streamlib.CameraSource,
         config={"device_id": arguments.camera} if arguments.camera else {},
@@ -82,7 +82,6 @@ def main() -> None:
     runtime.host_control_plane(
         bind_host="127.0.0.1",
         bind_port=arguments.control_plane_port,
-        node_name="codec-roundtrip-node",
     )
     runtime.run()
 

@@ -462,7 +462,21 @@ class TestBagCollector:
 class Runtime:
     """The engine, running in this process."""
 
-    def __init__(self) -> None: ...
+    def __init__(self, *, runtime_name: str | None = None) -> None:
+        """Build the engine, named `runtime_name` on the runtime mesh.
+
+        The name belongs to the runtime, is stable across runs of one app, and
+        is one chunk of a port's mesh address `<runtime name>/<display
+        name>/<port>` — so it is non-empty, carries none of `/ * $ # ?`, and
+        does not begin with `@`; spaces and unicode are fine. A name breaking
+        that is refused here, naming the character.
+
+        Left out, the engine reads `STREAMLIB_RUNTIME_NAME`, and failing that
+        names the runtime `<hostname>-<app directory name>-<id>`, where the id
+        hashes the app directory's full path — so two checkouts of one app on
+        one machine differ and every run of one checkout matches. `streamlib
+        run` and `dev` pass their `--runtime-name` through to here.
+        """
     def add(
         self,
         processor_class: type,
@@ -493,13 +507,16 @@ class Runtime:
         *,
         bind_host: str = ...,
         bind_port: int = 9000,
-        node_name: str | None = None,
     ) -> None:
         """Host the control plane in this process, so the node is discoverable.
 
         Binds all interfaces (`0.0.0.0`) and port 9000 by default, incrementing
         the port on collision. Opt-in: a runtime that never calls this
         publishes no node-registry entry. Call it before `run()`.
+
+        The entry it publishes carries the runtime's own name, which
+        `streamlib nodes` lists and `--node` resolves; the control plane never
+        names the runtime, so there is nothing to pass here.
         """
 
     def run(self) -> None:
