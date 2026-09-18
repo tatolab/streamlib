@@ -29,6 +29,9 @@ mod runtime_mesh_peer_table;
 pub use host_identity::HostIdentity;
 pub use hosted_control_plane_endpoint::HostedControlPlaneEndpointRegistry;
 pub use resolved_runtime_mesh_configuration::ResolvedRuntimeMeshConfiguration;
+// Reachable rather than supported: `core::runtime` is a public module, and the
+// key grammar is the mesh's own business.
+#[doc(hidden)]
 pub use runtime_mesh_key::{AnnouncedRuntimeIdentity, RuntimeMeshKeySpace};
 pub use runtime_mesh_membership::RuntimeMeshMembership;
 pub use runtime_mesh_name::RuntimeMeshName;

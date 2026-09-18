@@ -106,11 +106,8 @@ impl RuntimeMeshMembership {
                 hosted_control_plane,
             )
         })
-        .unwrap_or_else(|cannot_spawn| {
-            Err(WhyThisRuntimeIsNotAnnounced::ItsMeshCouldNotBeReached(
-                cannot_spawn.to_string(),
-            ))
-        }) {
+        .unwrap_or_else(|cannot_spawn| Err(cannot_spawn.into()))
+        {
             Ok(announced) => {
                 tracing::info!(
                     "Runtime {runtime_name} is on the {} mesh",
@@ -496,7 +493,9 @@ fn the_subscriber_feeding_this_thread_is_still_there(
 /// token in time. Both keep running and `graph` lists both, so the collision
 /// has to be *said* or it is invisible. Said once per peer rather than on every
 /// re-ask round, and the set is never pruned: a peer that leaves and returns is
-/// the same collision, not a new one.
+/// the same collision, not a new one. A namesake restarting in a loop presents
+/// a new pid each time and is therefore said again each time — by design, since
+/// each of those really is a fresh process holding the name.
 #[derive(Default)]
 struct SameNamedPeersAlreadySaidOnce(BTreeSet<AnnouncedRuntimeIdentity>);
 
@@ -519,8 +518,10 @@ impl SameNamedPeersAlreadySaidOnce {
         this_runtime: &AnnouncedRuntimeIdentity,
         announced: &AnnouncedRuntimeIdentity,
     ) -> Option<String> {
-        if announced.runtime_name != this_runtime.runtime_name || !self.0.insert(announced.clone())
-        {
+        if announced == this_runtime || announced.runtime_name != this_runtime.runtime_name {
+            return None;
+        }
+        if !self.0.insert(announced.clone()) {
             return None;
         }
         Some(format!(
@@ -622,14 +623,19 @@ mod tests {
     }
 
     /// A peer under another name is not a collision, and this runtime's own
-    /// pid is never one either.
+    /// announcement is never one either — a local liveliness subscription is
+    /// delivered this runtime's own token.
     #[test]
-    fn a_peer_under_another_name_is_never_said() {
+    fn neither_another_name_nor_this_runtimes_own_announcement_is_ever_said() {
         let this_runtime = announced("rig-desk-a1b2", 100);
         let mut said_about = SameNamedPeersAlreadySaidOnce::default();
 
         assert_eq!(
             said_about.what_to_say_about(&this_runtime, &announced("rig-desk-c3d4", 4321)),
+            None
+        );
+        assert_eq!(
+            said_about.what_to_say_about(&this_runtime, &this_runtime.clone()),
             None
         );
     }

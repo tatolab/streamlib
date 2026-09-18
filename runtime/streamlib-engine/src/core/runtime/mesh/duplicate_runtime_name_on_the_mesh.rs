@@ -68,35 +68,30 @@ fn every_live_holder_of(
     key_space: &RuntimeMeshKeySpace,
     runtime_name: &str,
 ) -> Vec<AnnouncedRuntimeIdentity> {
-    let asked = session
+    // A mesh that cannot be asked is not a mesh that said yes, but it is also
+    // not grounds to fail a start the plan never lets the mesh fail. The
+    // duplicate then shows up as the stated residual.
+    let Ok(replies) = session
         .liveliness()
         .get(key_space.every_announcement_key_under(runtime_name))
         .timeout(HOW_LONG_PEERS_HAVE_TO_SAY_WHO_HOLDS_THIS_NAME)
-        .wait();
-    let replies = match asked {
-        Ok(replies) => replies,
-        Err(query_failure) => {
-            // A mesh that cannot be asked is not a mesh that said yes, but it
-            // is also not grounds to fail a start the plan never lets the mesh
-            // fail. The duplicate then shows up as the stated residual.
+        .wait()
+        .inspect_err(|query_failure| {
             tracing::warn!(
                 "could not ask the mesh who holds the runtime name {runtime_name}, so a live \
                  duplicate would go unrefused: {query_failure}"
             );
-            return Vec::new();
-        }
+        })
+    else {
+        return Vec::new();
     };
 
-    let mut holders = Vec::new();
-    for reply in replies {
-        let Ok(token) = reply.result() else {
-            continue;
-        };
-        if let Some(holder) = key_space.read_an_announcement_key(token.key_expr().as_str()) {
-            holders.push(holder);
-        }
-    }
-    holders
+    replies
+        .into_iter()
+        .filter_map(|reply| {
+            key_space.read_an_announcement_key(reply.result().ok()?.key_expr().as_str())
+        })
+        .collect()
 }
 
 /// The exception's decision, with the process probe named so the table is
@@ -110,10 +105,10 @@ fn every_live_holder_of(
 fn a_runtime_here_may_take_this_name_over(
     this_host: &HostIdentity,
     holder: &AnnouncedRuntimeIdentity,
-    a_process_here_is_gone: impl Fn(u32) -> bool,
+    ask_whether_a_process_here_is_gone: impl Fn(u32) -> bool,
 ) -> bool {
     this_host.is_the_same_host_a_pid_can_be_checked_on(&holder.host_identity)
-        && a_process_here_is_gone(holder.process_id)
+        && ask_whether_a_process_here_is_gone(holder.process_id)
 }
 
 /// Whether a pid on this host has left its process table.
@@ -154,10 +149,10 @@ fn why_this_name_is_not_available(
 /// carries an identity rather than a host name — a dead runtime answers no
 /// query — so this says what that identity means from here.
 fn where_the_holder_is(this_host: &HostIdentity, announced_host: &HostIdentity) -> String {
+    if this_host.is_the_same_host_a_pid_can_be_checked_on(announced_host) {
+        return "a process on this host".to_string();
+    }
     match announced_host {
-        _ if this_host.is_the_same_host_a_pid_can_be_checked_on(announced_host) => {
-            "a process on this host".to_string()
-        }
         HostIdentity::ThisKernelBootAndPidNamespace {
             kernel_boot_id,
             pid_namespace_inode,
@@ -193,6 +188,12 @@ mod tests {
     }
 
     /// The whole exception: only a token this host left behind frees the name.
+    ///
+    /// The host half of the table is the predicate's own — see
+    /// `HostIdentity::is_the_same_host_a_pid_can_be_checked_on`'s test. This
+    /// walks it again because the exception is what the ticket names, and
+    /// because the composition is the part that lives here: both halves must
+    /// hold, and neither alone is enough.
     #[test]
     fn only_a_dead_process_on_this_very_host_leaves_its_name_free() {
         let here = identified("this-boot", 4_026_531_836);

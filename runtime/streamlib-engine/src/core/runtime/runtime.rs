@@ -275,21 +275,13 @@ impl Runner {
         // construction time lands in the unified JSONL pipeline.
         crate::core::logging::install_iceoryx2_log_bridge_at_the_engines_configured_level();
 
-        // Bring up the per-runtime surface-sharing service. Each runtime owns
-        // a unique Unix socket in the runtime directory that its polyglot
-        // subprocesses connect to via STREAMLIB_SURFACE_SOCKET. Binding it is
-        // also the refusal of a second live runtime with this id, so it runs
-        // before the runtime creates its iceoryx2 node.
-        #[cfg(target_os = "linux")]
-        let (surface_service, surface_socket_path, surface_check_out_leases) =
-            bring_up_surface_service(&runtime_directory, &runtime_id)?;
-
-        // After logging, so a local-only warning reaches the log, and before the
-        // iceoryx2 node, beside the runtime-id socket refusal — this is where a
-        // runtime's identity already comes up. A name another live runtime
-        // already holds refuses here, so a refused runtime builds no iceoryx2
-        // node and no surface socket. `Runner::new()` needs no GPU, so
-        // everything here is provable without one.
+        // After logging, so a local-only warning reaches the log, and ahead of
+        // both the surface socket and the iceoryx2 node: a runtime refused its
+        // name builds neither. It sits beside the runtime-id socket refusal
+        // below because this is where a runtime's identity comes up either way,
+        // and it runs first of the two because it is the only one of them that
+        // can refuse over something another machine holds. `Runner::new()`
+        // needs no GPU, so everything here is provable without one.
         let hosted_control_plane = Arc::new(HostedControlPlaneEndpointRegistry::default());
         let runtime_mesh = Arc::new(RuntimeMeshMembership::join(
             &resolved_runtime_mesh_configuration,
@@ -298,6 +290,15 @@ impl Runner {
             &crate::core::runtime::runtime_name::this_hosts_name(),
             &hosted_control_plane,
         )?);
+
+        // Bring up the per-runtime surface-sharing service. Each runtime owns
+        // a unique Unix socket in the runtime directory that its polyglot
+        // subprocesses connect to via STREAMLIB_SURFACE_SOCKET. Binding it is
+        // also the refusal of a second live runtime with this id, so it runs
+        // before the runtime creates its iceoryx2 node.
+        #[cfg(target_os = "linux")]
+        let (surface_service, surface_socket_path, surface_check_out_leases) =
+            bring_up_surface_service(&runtime_directory, &runtime_id)?;
 
         crate::iceoryx2::warn_when_posix_shared_memory_is_short_for_a_runtime();
 
