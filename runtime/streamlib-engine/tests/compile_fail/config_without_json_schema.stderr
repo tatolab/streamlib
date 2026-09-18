@@ -11,6 +11,17 @@ help: the trait `JsonSchema` is not implemented for `ProbeConfigWithoutTheDerive
    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
    = note: add `#[derive(streamlib::sdk::schemars::JsonSchema)]` and `#[schemars(crate = "streamlib::sdk::schemars")]` to `ProbeConfigWithoutTheDerive`
    = note: the SDK re-exports `schemars` at `streamlib::sdk::schemars`, so the crate needs no new dependency
+note: there are multiple different versions of crate `schemars` in the dependency graph
+  --> $CARGO/schemars-$VERSION/src/lib.rs
+   |
+   | pub trait JsonSchema {
+   | ^^^^^^^^^^^^^^^^^^^^ this is the expected trait
+   |
+  ::: $CARGO/schemars-$VERSION/src/lib.rs
+   |
+   | pub trait JsonSchema {
+   | -------------------- this is the trait that was imported
+   = help: you can use `cargo tree` to explore your dependency tree
    = help: the following other types implement trait `JsonSchema`:
              &'a T
              &'a mut T
