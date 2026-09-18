@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.25.1](https://github.com/tatolab/streamlib/compare/v0.25.0...v0.25.1) (2026-09-18)
+
+
+### Features
+
+* **engine:** open one Zenoh session per runtime, announce it on its mesh and list its peers in graph ([#2332](https://github.com/tatolab/streamlib/issues/2332)) ([12600c3](https://github.com/tatolab/streamlib/commit/12600c3c0928bf6c432cce1f6a5b8730be9b4696))
+
 ## [0.25.0](https://github.com/tatolab/streamlib/compare/v0.24.0...v0.25.0) (2026-09-18)
 
 
