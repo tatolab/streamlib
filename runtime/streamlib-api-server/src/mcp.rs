@@ -1237,8 +1237,11 @@ mod tests {
         else {
             panic!("expected a connect then a disconnect, recorded {recorded:?}");
         };
-        assert_eq!(from.processor_id.as_str(), "cam-1");
-        assert_eq!(from.port_name, "video");
+        assert_eq!(
+            from.processor_id_on_this_runtime().map(|id| id.as_str()),
+            Some("cam-1")
+        );
+        assert_eq!(from.port_name(), "video");
         assert_eq!(to.processor_id.as_str(), "fx-1");
         assert_eq!(to.port_name, "video_from_upstream");
         assert_eq!(link_id.as_str(), "link-9");

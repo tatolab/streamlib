@@ -72,8 +72,15 @@ pub fn open_iceoryx2_service(
         (link.from_port().clone(), link.to_port().clone())
     };
 
-    let (source_proc_id, source_port) =
-        (from_port.processor_id.clone(), from_port.port_name.clone());
+    // A link whose source is on another runtime has no local source port to
+    // wire: its bags arrive through that address's ingress. `connect` refuses
+    // one before it reaches here until the ingress exists.
+    let Some(source_proc_id) = from_port.processor_id_on_this_runtime().cloned() else {
+        return Err(Error::InvalidLink(format!(
+            "link '{link_id}' carries from {from_port} on another runtime, which this runtime              cannot wire"
+        )));
+    };
+    let source_port = from_port.port_name().to_string();
     let (dest_proc_id, dest_port) = (to_port.processor_id.clone(), to_port.port_name.clone());
 
     let source_link_wiring = out_of_process_link_wiring_of(graph, &source_proc_id);
@@ -304,8 +311,11 @@ pub fn close_iceoryx2_service(graph: &mut Graph, link_id: &LinkUniqueId) -> Resu
     let Some((source_proc_id, source_port, dest_proc_id, dest_port)) =
         graph.traversal_mut().e(link_id).first().map(|link| {
             (
-                link.from_port().processor_id.clone(),
-                link.from_port().port_name.clone(),
+                link.from_port()
+                    .processor_id_on_this_runtime()
+                    .cloned()
+                    .unwrap_or_default(),
+                link.from_port().port_name().to_string(),
                 link.to_port().processor_id.clone(),
                 link.to_port().port_name.clone(),
             )
@@ -415,7 +425,7 @@ fn links_out_of_source_output_port<'a>(
         .v(source_proc_id)
         .out_e()
         .iter()
-        .filter(move |link| link.from_port().port_name == source_port)
+        .filter(move |link| link.from_port().port_name() == source_port)
 }
 
 /// How many `connect()` links leave `source_port` — the destinations its
@@ -562,12 +572,11 @@ pub(crate) fn find_channel_source_port(
     channel_service_name: &str,
 ) -> Option<(ProcessorUniqueId, String)> {
     graph.traversal_mut().e(()).iter().find_map(|link| {
-        let source = link.from_port();
-        let derived =
-            crate::iceoryx2::source_channel_name(source.processor_id.as_str(), &source.port_name)
-                .ok()?;
+        let source = link.from_port().processor_id_on_this_runtime()?;
+        let source_port = link.from_port().port_name();
+        let derived = crate::iceoryx2::source_channel_name(source.as_str(), source_port).ok()?;
         (derived.as_str() == channel_service_name)
-            .then(|| (source.processor_id.clone(), source.port_name.clone()))
+            .then(|| (source.clone(), source_port.to_string()))
     })
 }
 

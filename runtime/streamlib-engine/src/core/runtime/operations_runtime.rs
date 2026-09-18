@@ -272,8 +272,13 @@ async fn connect_impl(
     from: OutputLinkPortRef,
     to: InputLinkPortRef,
 ) -> Result<LinkUniqueId> {
-    let from_processor = from.processor_id.clone();
-    let from_port = from.port_name.clone();
+    let Some(from_processor) = from.processor_id_on_this_runtime().cloned() else {
+        return Err(Error::InvalidLink(format!(
+            "connect names the port {from} on another runtime, and this runtime does not carry a \
+             link across the mesh yet"
+        )));
+    };
+    let from_port = from.port_name().to_string();
     let to_processor = to.processor_id.clone();
     let to_port = to.port_name.clone();
 
@@ -298,13 +303,13 @@ async fn connect_impl(
             {
                 let from_node = graph
                     .traversal()
-                    .v(&from.processor_id)
+                    .v(&from_processor)
                     .first()
-                    .ok_or_else(|| Error::ProcessorNotFound(from.processor_id.to_string()))?;
-                if !from_node.has_output(&from.port_name) {
+                    .ok_or_else(|| Error::ProcessorNotFound(from_processor.to_string()))?;
+                if !from_node.has_output(&from_port) {
                     return Err(Error::ProcessorPortNotFound {
-                        processor_id: from.processor_id.to_string(),
-                        port_name: from.port_name.clone(),
+                        processor_id: from_processor.to_string(),
+                        port_name: from_port.clone(),
                         direction: PortDirection::Output,
                     });
                 }
@@ -334,9 +339,8 @@ async fn connect_impl(
             // `source_channel_name`; underscore is legal and rides through. Deriving
             // inside the transaction means an illegal port name rolls the pending
             // link back rather than committing a half-built edge.
-            let channel =
-                crate::iceoryx2::source_channel_name(from.processor_id.as_str(), &from.port_name)
-                    .map_err(|source| Error::InvalidLink(source.to_string()))?;
+            let channel = crate::iceoryx2::source_channel_name(from_processor.as_str(), &from_port)
+                .map_err(|source| Error::InvalidLink(source.to_string()))?;
 
             let link_id = graph
                 .traversal_mut()
@@ -391,7 +395,7 @@ async fn disconnect_impl(
             .ok_or_else(|| Error::NotFound(format!("Link '{}' not found", link_id)))?;
 
         let info = (
-            OutputLinkPortRef::new(from_value.processor_id.clone(), to_value.port_name.clone()),
+            from_value.clone(),
             InputLinkPortRef::new(to_value.processor_id.clone(), to_value.port_name.clone()),
         );
 

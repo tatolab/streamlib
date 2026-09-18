@@ -61,20 +61,28 @@ impl std::fmt::Debug for Link {
 }
 
 impl Link {
-    /// Create a new link from port addresses with default capacity. ID is generated automatically.
-    pub fn new(from_port: &str, to_port: &str) -> Self {
-        Self::with_capacity(from_port, to_port, LinkCapacity::default())
+    /// Create a link joining two ports, with default capacity. ID is generated
+    /// automatically.
+    pub fn between(source: OutputLinkPortRef, target: InputLinkPortRef) -> Self {
+        Self::between_with_capacity(source, target, LinkCapacity::default())
     }
 
-    /// Create a new link with explicit buffer capacity. ID is generated automatically using cuid2.
-    pub fn with_capacity(from_port: &str, to_port: &str, capacity: LinkCapacity) -> Self {
-        let (source_node, source_port) = from_port.split_once('.').unwrap_or((from_port, ""));
-        let (target_node, target_port) = to_port.split_once('.').unwrap_or((to_port, ""));
-
+    /// Create a link joining two ports with explicit buffer capacity. ID is
+    /// generated automatically using cuid2.
+    ///
+    /// The endpoints arrive as references rather than as `"<node>.<port>"`
+    /// text: a mesh address carries a display name a user chose, and splitting
+    /// one back apart on `.` would tear any address whose display name or port
+    /// carries one.
+    pub fn between_with_capacity(
+        source: OutputLinkPortRef,
+        target: InputLinkPortRef,
+        capacity: LinkCapacity,
+    ) -> Self {
         Self {
             id: LinkUniqueId::new(),
-            source: OutputLinkPortRef::new(source_node, source_port),
-            target: InputLinkPortRef::new(target_node, target_port),
+            source,
+            target,
             capacity,
             state: LinkState::Pending,
             components: ComponentMap::new(),
@@ -119,5 +127,38 @@ impl GraphEdgeWithComponents for Link {
 
     fn component_serializers_mut(&mut self) -> &mut Vec<ComponentSerializer> {
         &mut self.component_serializers
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::graph::MeshPortAddress;
+
+    /// A port name carrying a `.` survives into the link. The endpoints used to
+    /// arrive as `"<node>.<port>"` text and be split back apart on the first
+    /// `.`, which tore exactly this.
+    #[test]
+    fn a_port_name_carrying_a_dot_reaches_the_link_whole() {
+        let link = Link::between(
+            OutputLinkPortRef::new("Psrc", "video.raw"),
+            InputLinkPortRef::new("Pdst", "video.in"),
+        );
+        assert_eq!(link.from_port().port_name(), "video.raw");
+        assert_eq!(link.to_port().port_name, "video.in");
+    }
+
+    /// A source on another runtime reaches the link as its address, rather than
+    /// as a local reference built from whatever sat before the first `.`.
+    #[test]
+    fn a_source_on_another_runtime_reaches_the_link_as_its_address() {
+        let address = MeshPortAddress::new("bench-cam-a1b2", "Camera.Source", "video")
+            .expect("a legal address");
+        let link = Link::between(
+            OutputLinkPortRef::on_another_runtime(address.clone()),
+            InputLinkPortRef::new("Pdst", "video"),
+        );
+        assert_eq!(link.from_port().mesh_port_address(), Some(&address));
+        assert_eq!(link.from_port().processor_id_on_this_runtime(), None);
     }
 }

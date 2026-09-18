@@ -1341,12 +1341,27 @@ impl Runner {
 
             let mut connections: Vec<ConnectionDefinition> = Vec::new();
             for link in graph.traversal().e(()).iter() {
+                // A snapshot names every endpoint by an alias of a processor it
+                // also carries, so it has no way to spell a port on another
+                // runtime. Refused by name rather than written out a link
+                // short: a snapshot missing a link reads as a graph that never
+                // had one.
+                let source_on_this_runtime =
+                    link.source.processor_id_on_this_runtime().ok_or_else(|| {
+                        Error::GraphError(format!(
+                            "link '{}' carries from {} on another runtime, and a graph snapshot \
+                             names every port by the alias of a processor it also carries, so it \
+                             cannot spell one. Save a snapshot of a graph with no remote link, or \
+                             wire the remote link again after loading one.",
+                            link.id, link.source
+                        ))
+                    })?;
                 let from_alias = id_to_alias
-                    .get(link.source.processor_id.as_str())
+                    .get(source_on_this_runtime.as_str())
                     .ok_or_else(|| {
                         Error::GraphError(format!(
-                            "Link source processor '{}' missing from snapshot alias map",
-                            link.source.processor_id
+                            "Link source processor '{source_on_this_runtime}' missing from \
+                             snapshot alias map"
                         ))
                     })?;
                 let to_alias = id_to_alias
@@ -1358,7 +1373,7 @@ impl Runner {
                         ))
                     })?;
                 connections.push(ConnectionDefinition {
-                    from: format!("{}.{}", from_alias, link.source.port_name),
+                    from: format!("{}.{}", from_alias, link.source.port_name()),
                     to: format!("{}.{}", to_alias, link.target.port_name),
                 });
             }

@@ -201,13 +201,53 @@ pub struct LinkOutput {
     pub components: serde_json::Map<String, serde_json::Value>,
 }
 
-/// Reference to a port on a processor.
+/// Reference to a port on a processor — on this node, or on another runtime
+/// over the mesh.
+///
+/// One of two shapes, told apart by their keys and not by a tag: a port on this
+/// node carries `processor_id`, and a port on another runtime carries the three
+/// parts of its mesh address. A reader checking `processor_id` therefore finds
+/// nothing on a remote end rather than a processor id this node does not have.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
-pub struct LinkPortRefOutput {
-    /// Processor instance ID.
-    pub processor_id: String,
-    /// Port name on that processor.
-    pub port_name: String,
+#[serde(untagged)]
+pub enum LinkPortRefOutput {
+    /// A port on a processor this node holds.
+    OnThisRuntime {
+        /// Processor instance ID.
+        processor_id: String,
+        /// Port name on that processor.
+        port_name: String,
+    },
+    /// A port on a processor another runtime holds, addressed
+    /// `<runtime name>/<display name>/<port>`.
+    OnAnotherRuntime {
+        /// The name the owning runtime is addressed by on the mesh.
+        runtime_name: String,
+        /// The display name of the processor that owns the port, there.
+        processor_display_name: String,
+        /// The port's own name on that processor.
+        port_name: String,
+    },
+}
+
+impl LinkPortRefOutput {
+    /// The processor this port belongs to when this node holds it, and `None`
+    /// for a port on another runtime.
+    pub fn processor_id_on_this_runtime(&self) -> Option<&str> {
+        match self {
+            Self::OnThisRuntime { processor_id, .. } => Some(processor_id),
+            Self::OnAnotherRuntime { .. } => None,
+        }
+    }
+
+    /// The port's own name, wherever the port lives.
+    pub fn port_name(&self) -> &str {
+        match self {
+            Self::OnThisRuntime { port_name, .. } | Self::OnAnotherRuntime { port_name, .. } => {
+                port_name
+            }
+        }
+    }
 }
 
 /// State of a link in the graph.
@@ -471,16 +511,28 @@ fn rendered_link_state_and_the_reason_for_an_error(
 
 impl From<&crate::core::graph::OutputLinkPortRef> for LinkPortRefOutput {
     fn from(port_ref: &crate::core::graph::OutputLinkPortRef) -> Self {
-        Self {
-            processor_id: port_ref.processor_id.to_string(),
-            port_name: port_ref.port_name.clone(),
+        match port_ref {
+            crate::core::graph::OutputLinkPortRef::OnThisRuntime {
+                processor_id,
+                port_name,
+            } => Self::OnThisRuntime {
+                processor_id: processor_id.to_string(),
+                port_name: port_name.clone(),
+            },
+            crate::core::graph::OutputLinkPortRef::OnAnotherRuntime(address) => {
+                Self::OnAnotherRuntime {
+                    runtime_name: address.runtime_name.clone(),
+                    processor_display_name: address.processor_display_name.clone(),
+                    port_name: address.port_name.clone(),
+                }
+            }
         }
     }
 }
 
 impl From<&crate::core::graph::InputLinkPortRef> for LinkPortRefOutput {
     fn from(port_ref: &crate::core::graph::InputLinkPortRef) -> Self {
-        Self {
+        Self::OnThisRuntime {
             processor_id: port_ref.processor_id.to_string(),
             port_name: port_ref.port_name.clone(),
         }
@@ -553,7 +605,10 @@ impl From<&crate::core::CodeExamples> for CodeExamplesOutput {
 #[cfg(test)]
 mod link_rendering_tests {
     use super::*;
-    use crate::core::graph::{GraphEdgeWithComponents, Link, LinkState, LinkStateComponent};
+    use crate::core::graph::{
+        GraphEdgeWithComponents, InputLinkPortRef, Link, LinkState, LinkStateComponent,
+        OutputLinkPortRef,
+    };
 
     /// The field is the state a link was created in; wiring records its
     /// outcome on a component. Rendering reads the component first, so a
@@ -561,7 +616,10 @@ mod link_rendering_tests {
     /// a permanent `pending` beside a `components.state` that disagrees.
     #[test]
     fn a_wired_links_top_level_state_comes_from_its_wiring_component() {
-        let mut link = Link::new("Psrc.out1", "Pdst.in1");
+        let mut link = Link::between(
+            OutputLinkPortRef::new("Psrc", "out1"),
+            InputLinkPortRef::new("Pdst", "in1"),
+        );
         let rendered = |link: &Link| serde_json::to_value(LinkOutput::from(link)).unwrap();
         assert_eq!(rendered(&link)["state"], "pending");
 
@@ -580,7 +638,10 @@ mod link_rendering_tests {
         use crate::core::graph::OutOfProcessLinkWireRepliesComponent;
         use crate::core::processors::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
 
-        let mut link = Link::new("Psrc.out1", "Pdst.in1");
+        let mut link = Link::between(
+            OutputLinkPortRef::new("Psrc", "out1"),
+            InputLinkPortRef::new("Pdst", "in1"),
+        );
         link.insert(LinkStateComponent(LinkState::Pending));
         let helpers_answer = OutOfProcessLinkWireReply::awaiting_the_far_sides_answer();
         link.insert_component_without_rendering_it(OutOfProcessLinkWireRepliesComponent(vec![
@@ -602,7 +663,10 @@ mod link_rendering_tests {
         use crate::core::graph::OutOfProcessLinkWireRepliesComponent;
         use crate::core::processors::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
 
-        let mut link = Link::new("Psrc.out1", "Pdst.in1");
+        let mut link = Link::between(
+            OutputLinkPortRef::new("Psrc", "out1"),
+            InputLinkPortRef::new("Pdst", "in1"),
+        );
         link.insert(LinkStateComponent(LinkState::Pending));
         let helpers_answer = OutOfProcessLinkWireReply::awaiting_the_far_sides_answer();
         helpers_answer.note_the_far_sides_answer(
@@ -627,7 +691,10 @@ mod link_rendering_tests {
     /// all, so a reader that finds one knows the link is refused.
     #[test]
     fn a_link_that_was_never_refused_renders_no_reason_key() {
-        let mut link = Link::new("Psrc.out1", "Pdst.in1");
+        let mut link = Link::between(
+            OutputLinkPortRef::new("Psrc", "out1"),
+            InputLinkPortRef::new("Pdst", "in1"),
+        );
         link.insert(LinkStateComponent(LinkState::Wired));
         let rendered = serde_json::to_value(LinkOutput::from(&link)).unwrap();
         assert!(

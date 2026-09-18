@@ -11,10 +11,18 @@ impl<'a> TraversalSourceMut<'a> {
     /// Type-safe: `from` must be an output port, `to` must be an input port.
     pub fn add_e(self, from: OutputLinkPortRef, to: InputLinkPortRef) -> LinkTraversalMut<'a> {
         // 1. Find source and target node indices
+        let Some(source_on_this_runtime) = from.processor_id_on_this_runtime().cloned() else {
+            // A source on another runtime has no node here to hang an edge on.
+            // `add_remote_sourced_link` is the door for one.
+            return LinkTraversalMut {
+                graph: self.graph,
+                ids: vec![],
+            };
+        };
         let Some(from_idx) = self
             .graph
             .node_indices()
-            .find(|&idx| self.graph[idx].id.as_str() == from.processor_id.as_str())
+            .find(|&idx| self.graph[idx].id.as_str() == source_on_this_runtime.as_str())
         else {
             return LinkTraversalMut {
                 graph: self.graph,
@@ -35,7 +43,7 @@ impl<'a> TraversalSourceMut<'a> {
 
         // 2. Validate ports exist on the processors
         let from_node = &self.graph[from_idx];
-        if !from_node.has_output(&from.port_name) {
+        if !from_node.has_output(from.port_name()) {
             return LinkTraversalMut {
                 graph: self.graph,
                 ids: vec![],
@@ -51,8 +59,9 @@ impl<'a> TraversalSourceMut<'a> {
         }
 
         // 3. Create link and add edge
-        let link = Link::new(&format!("{}", from), &format!("{}", to));
-        let edge_idx = self.graph.add_edge(from_idx, to_idx, link);
+        let edge_idx = self
+            .graph
+            .add_edge(from_idx, to_idx, Link::between(from, to));
 
         // 4. Return traversal with new edge
         LinkTraversalMut {

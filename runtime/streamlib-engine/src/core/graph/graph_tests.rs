@@ -402,8 +402,13 @@ mod edge_query_ops {
 
         let link = graph.traversal().e(link_id.as_str()).first().unwrap();
 
-        assert_eq!(link.from_port().processor_id.as_str(), upstream_id);
-        assert_eq!(link.from_port().port_name, "out1");
+        assert_eq!(
+            link.from_port()
+                .processor_id_on_this_runtime()
+                .map(|id| id.as_str()),
+            Some(upstream_id.as_str())
+        );
+        assert_eq!(link.from_port().port_name(), "out1");
         assert_eq!(link.to_port().processor_id.as_str(), downstream_id);
         assert_eq!(link.to_port().port_name, "in1");
     }
