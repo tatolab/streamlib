@@ -20,7 +20,7 @@ from typing import Any, Literal, TypeVar, final, overload
 
 from .claimed_surface_pixel_access import ClaimedSurfacePixelAccess
 
-from typing_extensions import disjoint_base
+from typing_extensions import Self, disjoint_base
 
 _EscalateResult = TypeVar("_EscalateResult")
 _BagReadTarget = TypeVar("_BagReadTarget")
@@ -462,7 +462,7 @@ class TestBagCollector:
 class Runtime:
     """The engine, running in this process."""
 
-    def __init__(self, *, runtime_name: str | None = None) -> None:
+    def __new__(cls, *, runtime_name: str | None = None) -> Self:
         """Build the engine, named `runtime_name` on the runtime mesh.
 
         The name belongs to the runtime, is stable across runs of one app, and
