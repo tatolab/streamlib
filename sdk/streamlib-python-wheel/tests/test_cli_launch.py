@@ -297,9 +297,13 @@ def test_a_launched_app_registers_as_a_node_and_tears_down(
     assert entry["control_url"].startswith("http://127.0.0.1:"), (
         f"the entry must carry a reachable control URL; got {entry['control_url']}"
     )
-    assert entry["runtime_name"].startswith(f"{socket.gethostname()}-app-"), (
-        "an unnamed runtime is named after this host and its app directory; got "
-        f"{entry['runtime_name']}"
+    # The engine replaces every character a mesh address chunk may not carry,
+    # so a host whose own name carries one is compared against the same
+    # substitution rather than against the raw `gethostname`.
+    this_host = re.sub(r"[/*$#?]", "-", socket.gethostname())
+    assert re.fullmatch(rf"{re.escape(this_host)}-app-[0-9a-z]{{4}}", entry["runtime_name"]), (
+        "an unnamed runtime is named after this host, its app directory and that "
+        f"directory's path; got {entry['runtime_name']}"
     )
 
     node.interrupt()
