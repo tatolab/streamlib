@@ -14,18 +14,21 @@
 //! below them do not — one template, one prose block per target.
 //!
 //! Two halves that no single tool covers. `cargo about generate` walks the
-//! resolve graph and reproduces each crate's licence text; the vendored C++
-//! projects appended here are invisible to it for one shared reason — none of
-//! them is a package in that graph — even though every one ends up inside the
-//! wheel. [`VENDORED_CPP_PROJECTS`] is the roster; this doc does not repeat it,
-//! because a census in prose goes stale the moment the table grows.
+//! resolve graph and reproduces each crate's licence text; the projects
+//! appended here owe terms it cannot reach — most because they are no package
+//! in that graph at all, and one because what it owes is an upstream `NOTICE`,
+//! which cargo-about collects from no crate. Every one of them ships inside the
+//! wheel. [`PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE`] is the roster;
+//! this doc does not repeat it, because a census in prose goes stale the moment
+//! the table grows.
 //!
 //! The notice source is an enum because the trees genuinely differ.
 //! `shaderc-sys` extracts its C++ sources into its own build directory, each
 //! with a licence file. The trees `vendor/tatolab-vulkanalia-vma/build.rs`
 //! compiles `wrapper.cpp` against carry no licence file at all — their
 //! copyright line exists only in the comment block heading a header. The
-//! PipeWire/SPA headers are checked in here with their own `COPYING`.
+//! PipeWire/SPA headers are checked in here with their own `COPYING`, and so is
+//! Zenoh's upstream `NOTICE.md`, whose crates ship neither.
 //!
 //! Some of the shaderc-side texts reach the generated half by accident:
 //! `cargo about` scans a crate's own directory for licence files, and finds the
@@ -124,19 +127,21 @@ const OPUSIC_VENDORING_CRATE_NAME: &str = "opusic-sys";
 /// binary — and because [`Self::ALL`] is what keeps the bullet list and the
 /// check that nothing fell out of it from being two lists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum VendoredCppNoticeRoster {
+enum NoticeRosterCargoAboutCannotProduce {
     LinkedThroughShadercSys,
     LinkedThroughOpusicSys,
     CompiledByTheVulkanaliaVmaForksBuildScript,
     CompiledByTheEnginesBuildScript,
+    AnUpstreamNoticeCargoAboutDoesNotCollect,
 }
 
-impl VendoredCppNoticeRoster {
-    const ALL: [Self; 4] = [
+impl NoticeRosterCargoAboutCannotProduce {
+    const ALL: [Self; 5] = [
         Self::LinkedThroughShadercSys,
         Self::LinkedThroughOpusicSys,
         Self::CompiledByTheVulkanaliaVmaForksBuildScript,
         Self::CompiledByTheEnginesBuildScript,
+        Self::AnUpstreamNoticeCargoAboutDoesNotCollect,
     ];
 
     /// How the bullet introduces the projects it then names.
@@ -157,17 +162,22 @@ impl VendoredCppNoticeRoster {
                 "Checked into this repository as headers, compiled into the engine by \
                  `runtime/streamlib-engine/build.rs`"
             }
+            Self::AnUpstreamNoticeCargoAboutDoesNotCollect => {
+                "An ordinary Cargo dependency whose upstream `NOTICE` Apache-2.0 §4(d) \
+                 requires propagating, and which `cargo about` does not collect"
+            }
         }
     }
 }
 
-/// Where a vendored C++ project's notice text is read from.
+/// Where one project's notice text is read from.
 ///
 /// One shape per tree because they genuinely differ, not as a convenience: a
 /// build-script crate in the registry checkout ships a licence file, the trees
-/// the vulkanalia VMA fork vendors ship none, and `vendor/pipewire-headers/`
-/// carries its own.
-enum VendoredCppNoticeSource {
+/// the vulkanalia VMA fork vendors ship none, `vendor/pipewire-headers/`
+/// carries its own, and Zenoh's crates ship neither a licence nor a notice, so
+/// its upstream `NOTICE.md` is checked in beside them.
+enum NoticeSource {
     /// A licence file inside a build-script crate's own registry checkout,
     /// reproduced whole. The path is relative to the crate root rather than to
     /// any one crate's layout, because the two that use this differ:
@@ -182,7 +192,7 @@ enum VendoredCppNoticeSource {
     LeadingCommentBlockOf {
         header_path_relative_to_workspace_root: &'static str,
     },
-    /// A licence file checked into this repository's own `vendor/` tree,
+    /// A notice file checked into this repository's own `vendor/` tree,
     /// reproduced whole.
     VendoredLicenseFile {
         path_relative_to_workspace_root: &'static str,
@@ -193,7 +203,7 @@ enum VendoredCppNoticeSource {
 ///
 /// One argument rather than two adjacent `&Path`s: they are the same type, and
 /// a transposition would compile clean and reproduce the wrong file's text.
-struct VendoredCppSourceTrees {
+struct NoticeSourceTrees {
     /// Registry checkout root per vendoring crate, keyed by crate name.
     /// Resolved once per run for each distinct crate the roster names.
     registry_crate_roots: BTreeMap<&'static str, PathBuf>,
@@ -201,9 +211,11 @@ struct VendoredCppSourceTrees {
     workspace_root: PathBuf,
 }
 
-/// One C++ project compiled into the engine, with the notice that has to travel
-/// with the binary.
-struct VendoredCppProjectLinkedIntoTheEngine {
+/// One project whose notice has to travel with the binary and which
+/// `cargo about` cannot produce — because it is not a package in the resolve
+/// graph at all, or because what it owes is an upstream `NOTICE` cargo-about
+/// does not collect.
+struct ProjectWhoseNoticeCargoAboutCannotProduce {
     /// The upstream project's own name, not the directory it lands in.
     display_name: &'static str,
     upstream_repository_url: &'static str,
@@ -211,80 +223,80 @@ struct VendoredCppProjectLinkedIntoTheEngine {
     /// not a single licence: it is a manifest covering several, which is why
     /// it is 54 KB and the others are 11–23 KB.
     license_summary: &'static str,
-    notice_source: VendoredCppNoticeSource,
+    notice_source: NoticeSource,
     /// Which bullet of the roster this project is named under. Explicit
     /// rather than derived from `notice_source`, because where a notice is
     /// read from and how the code reached the binary are different questions
     /// — two crates now share one notice source and sit on different bullets.
-    roster: VendoredCppNoticeRoster,
+    roster: NoticeRosterCargoAboutCannotProduce,
 }
 
-const VENDORED_CPP_PROJECTS: &[VendoredCppProjectLinkedIntoTheEngine] = &[
-    VendoredCppProjectLinkedIntoTheEngine {
+const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE: &[ProjectWhoseNoticeCargoAboutCannotProduce] = &[
+    ProjectWhoseNoticeCargoAboutCannotProduce {
         display_name: "shaderc",
         upstream_repository_url: "https://github.com/google/shaderc",
         license_summary: "Apache-2.0",
-        notice_source: VendoredCppNoticeSource::RegistryCrateLicenseFile {
+        notice_source: NoticeSource::RegistryCrateLicenseFile {
             vendoring_crate_name: SHADERC_VENDORING_CRATE_NAME,
             path_relative_to_crate_root: "build/shaderc/LICENSE",
         },
-        roster: VendoredCppNoticeRoster::LinkedThroughShadercSys,
+        roster: NoticeRosterCargoAboutCannotProduce::LinkedThroughShadercSys,
     },
-    VendoredCppProjectLinkedIntoTheEngine {
+    ProjectWhoseNoticeCargoAboutCannotProduce {
         display_name: "glslang",
         upstream_repository_url: "https://github.com/KhronosGroup/glslang",
         license_summary: "BSD-3-Clause, BSD-2-Clause, MIT, Apache-2.0, and GPL-3.0 WITH Bison-exception-2.2",
         // `LICENSE.txt`, where the other three are `LICENSE`. Spelled out per
         // project rather than globbed for exactly this reason: a glob hides the
         // asymmetry, and hiding it is how a rename becomes a dropped notice.
-        notice_source: VendoredCppNoticeSource::RegistryCrateLicenseFile {
+        notice_source: NoticeSource::RegistryCrateLicenseFile {
             vendoring_crate_name: SHADERC_VENDORING_CRATE_NAME,
             path_relative_to_crate_root: "build/glslang/LICENSE.txt",
         },
-        roster: VendoredCppNoticeRoster::LinkedThroughShadercSys,
+        roster: NoticeRosterCargoAboutCannotProduce::LinkedThroughShadercSys,
     },
-    VendoredCppProjectLinkedIntoTheEngine {
+    ProjectWhoseNoticeCargoAboutCannotProduce {
         display_name: "SPIRV-Tools",
         upstream_repository_url: "https://github.com/KhronosGroup/SPIRV-Tools",
         license_summary: "Apache-2.0",
-        notice_source: VendoredCppNoticeSource::RegistryCrateLicenseFile {
+        notice_source: NoticeSource::RegistryCrateLicenseFile {
             vendoring_crate_name: SHADERC_VENDORING_CRATE_NAME,
             path_relative_to_crate_root: "build/spirv-tools/LICENSE",
         },
-        roster: VendoredCppNoticeRoster::LinkedThroughShadercSys,
+        roster: NoticeRosterCargoAboutCannotProduce::LinkedThroughShadercSys,
     },
-    VendoredCppProjectLinkedIntoTheEngine {
+    ProjectWhoseNoticeCargoAboutCannotProduce {
         display_name: "SPIRV-Headers",
         upstream_repository_url: "https://github.com/KhronosGroup/SPIRV-Headers",
         license_summary: "MIT, with an Apache-2.0 carve-out the file names",
-        notice_source: VendoredCppNoticeSource::RegistryCrateLicenseFile {
+        notice_source: NoticeSource::RegistryCrateLicenseFile {
             vendoring_crate_name: SHADERC_VENDORING_CRATE_NAME,
             path_relative_to_crate_root: "build/spirv-headers/LICENSE",
         },
-        roster: VendoredCppNoticeRoster::LinkedThroughShadercSys,
+        roster: NoticeRosterCargoAboutCannotProduce::LinkedThroughShadercSys,
     },
-    VendoredCppProjectLinkedIntoTheEngine {
+    ProjectWhoseNoticeCargoAboutCannotProduce {
         display_name: "VulkanMemoryAllocator",
         upstream_repository_url: "https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator",
         license_summary: "MIT",
-        notice_source: VendoredCppNoticeSource::LeadingCommentBlockOf {
+        notice_source: NoticeSource::LeadingCommentBlockOf {
             header_path_relative_to_workspace_root: "vendor/tatolab-vulkanalia-vma/vendor/VulkanMemoryAllocator/include/vk_mem_alloc.h",
         },
-        roster: VendoredCppNoticeRoster::CompiledByTheVulkanaliaVmaForksBuildScript,
+        roster: NoticeRosterCargoAboutCannotProduce::CompiledByTheVulkanaliaVmaForksBuildScript,
     },
-    VendoredCppProjectLinkedIntoTheEngine {
+    ProjectWhoseNoticeCargoAboutCannotProduce {
         display_name: "Vulkan-Headers",
         upstream_repository_url: "https://github.com/KhronosGroup/Vulkan-Headers",
         // The header states the identifier rather than carrying the terms, so
         // the notice below is the copyright line and the Apache-2.0 text it
         // points at is the one reproduced in full under "Apache License 2.0".
         license_summary: "Apache-2.0, whose full text is reproduced above",
-        notice_source: VendoredCppNoticeSource::LeadingCommentBlockOf {
+        notice_source: NoticeSource::LeadingCommentBlockOf {
             header_path_relative_to_workspace_root: "vendor/tatolab-vulkanalia-vma/vendor/Vulkan-Headers/include/vulkan/vulkan_core.h",
         },
-        roster: VendoredCppNoticeRoster::CompiledByTheVulkanaliaVmaForksBuildScript,
+        roster: NoticeRosterCargoAboutCannotProduce::CompiledByTheVulkanaliaVmaForksBuildScript,
     },
-    VendoredCppProjectLinkedIntoTheEngine {
+    ProjectWhoseNoticeCargoAboutCannotProduce {
         display_name: "PipeWire",
         upstream_repository_url: "https://gitlab.freedesktop.org/pipewire/pipewire",
         license_summary: "MIT",
@@ -293,12 +305,12 @@ const VENDORED_CPP_PROJECTS: &[VendoredCppProjectLinkedIntoTheEngine] = &[
         // builders and parsers, compiled into
         // `runtime/streamlib-engine/src/linux/pipewire_audio_shim.c`, which is
         // why the terms travel with the binary all the same.
-        notice_source: VendoredCppNoticeSource::VendoredLicenseFile {
+        notice_source: NoticeSource::VendoredLicenseFile {
             path_relative_to_workspace_root: "vendor/pipewire-headers/COPYING",
         },
-        roster: VendoredCppNoticeRoster::CompiledByTheEnginesBuildScript,
+        roster: NoticeRosterCargoAboutCannotProduce::CompiledByTheEnginesBuildScript,
     },
-    VendoredCppProjectLinkedIntoTheEngine {
+    ProjectWhoseNoticeCargoAboutCannotProduce {
         display_name: "libopus",
         upstream_repository_url: "https://gitlab.xiph.org/xiph/opus",
         license_summary: "BSD-3-Clause",
@@ -308,11 +320,25 @@ const VENDORED_CPP_PROJECTS: &[VendoredCppProjectLinkedIntoTheEngine] = &[
         // is opusic-sys's copy of the same text. Different layout, same
         // mechanism, which is why the path is relative to the crate root
         // rather than to any one crate's convention.
-        notice_source: VendoredCppNoticeSource::RegistryCrateLicenseFile {
+        notice_source: NoticeSource::RegistryCrateLicenseFile {
             vendoring_crate_name: OPUSIC_VENDORING_CRATE_NAME,
             path_relative_to_crate_root: "opus/COPYING",
         },
-        roster: VendoredCppNoticeRoster::LinkedThroughOpusicSys,
+        roster: NoticeRosterCargoAboutCannotProduce::LinkedThroughOpusicSys,
+    },
+    ProjectWhoseNoticeCargoAboutCannotProduce {
+        display_name: "Eclipse zenoh",
+        upstream_repository_url: "https://github.com/eclipse-zenoh/zenoh",
+        // Elected under Apache-2.0, whose §4(d) is what puts this project on
+        // this roster at all: its crates ship no `LICENSE` and no `NOTICE`, and
+        // `cargo about` collects no NOTICE files from any crate. So the
+        // upstream file is checked in and reproduced from here, while the
+        // Apache-2.0 terms themselves come off the generated half above.
+        license_summary: "Apache-2.0 (elected over EPL-2.0), whose full text is reproduced above",
+        notice_source: NoticeSource::VendoredLicenseFile {
+            path_relative_to_workspace_root: "vendor/zenoh-notice/NOTICE.md",
+        },
+        roster: NoticeRosterCargoAboutCannotProduce::AnUpstreamNoticeCargoAboutDoesNotCollect,
     },
 ];
 
@@ -406,15 +432,15 @@ pub fn run(workspace_root: &Path, target: &NoticesGenerationTarget) -> Result<()
     // One dispatch, whose value is what the log then reports: two matches on
     // one enum encode one fact — whether the appendix went on — and a third
     // variant could make them disagree.
-    let vendored_cpp_projects_appended = match target {
+    let notices_appended = match target {
         NoticesGenerationTarget::EngineWorkspace => {
-            let source_trees = VendoredCppSourceTrees {
+            let source_trees = NoticeSourceTrees {
                 registry_crate_roots: locate_registry_crate_roots(workspace_root)?,
                 workspace_root: workspace_root.to_path_buf(),
             };
             notices.push('\n');
-            notices.push_str(&render_vendored_cpp_appendix(&source_trees)?);
-            VENDORED_CPP_PROJECTS.len()
+            notices.push_str(&render_the_appendix_cargo_about_cannot_produce(&source_trees)?);
+            PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE.len()
         }
         NoticesGenerationTarget::ExtensionPackage { .. } => 0,
     };
@@ -424,7 +450,7 @@ pub fn run(workspace_root: &Path, target: &NoticesGenerationTarget) -> Result<()
         .with_context(|| format!("writing {}", notices_path.display()))?;
 
     tracing::info!(
-        "wrote {} ({vendored_cpp_projects_appended} vendored C++ projects appended)",
+        "wrote {} ({notices_appended} notices cargo about cannot produce appended)",
         notices_path.display(),
     );
     Ok(())
@@ -494,8 +520,8 @@ fn run_cargo_about_generate(workspace_root: &Path, project_root: &Path) -> Resul
 fn locate_registry_crate_roots(workspace_root: &Path) -> Result<BTreeMap<&'static str, PathBuf>> {
     let metadata = crate::run_cargo_metadata_resolve_document(workspace_root)?;
     let mut roots = BTreeMap::new();
-    for project in VENDORED_CPP_PROJECTS {
-        let VendoredCppNoticeSource::RegistryCrateLicenseFile {
+    for project in PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE {
+        let NoticeSource::RegistryCrateLicenseFile {
             vendoring_crate_name,
             ..
         } = project.notice_source
@@ -555,13 +581,13 @@ fn registry_crate_root_in(
         .to_path_buf())
 }
 
-/// Render the appended half: one section per vendored C++ project.
+/// Render the appended half: one section per project on the roster.
 ///
 /// A missing or unreadable notice is an error, never an omitted section. The
 /// failure mode this guards is a dependency bump or a re-vendor that renames or
 /// moves one of the trees — silently shipping the binary without its terms is
 /// the one outcome worse than a red build.
-fn render_vendored_cpp_appendix(source_trees: &VendoredCppSourceTrees) -> Result<String> {
+fn render_the_appendix_cargo_about_cannot_produce(source_trees: &NoticeSourceTrees) -> Result<String> {
     let mut appendix = String::new();
     // The two rosters come off the table, and no count is stated at all. This
     // paragraph ships inside a legal notice: a seventh project must not be able
@@ -569,19 +595,20 @@ fn render_vendored_cpp_appendix(source_trees: &VendoredCppSourceTrees) -> Result
     // nobody wrote down is a number that cannot go stale.
     write!(
         appendix,
-        "## Vendored C++ sources\n\
+        "## Notices `cargo about` cannot produce\n\
          \n\
-         The projects below are compiled into the engine from vendored sources rather than\n\
-         linked as Cargo packages, so none of them appears in the resolve graph `cargo about`\n\
-         walks — and every one of them ships inside the wheel. These sections are appended by\n\
+         Every project below ships inside the wheel and owes terms the generated half above\n\
+         cannot carry: most are compiled in from vendored sources and so appear in no resolve\n\
+         graph `cargo about` walks, and one is an ordinary Cargo dependency whose upstream\n\
+         `NOTICE` cargo-about does not collect. These sections are appended by\n\
          `cargo xtask generate-third-party-notices`.\n\
          \n\
          {}",
-        vendored_cpp_roster_bullets(),
+        roster_bullets(),
     )?;
 
-    for project in VENDORED_CPP_PROJECTS {
-        let notice = read_vendored_cpp_notice(project, source_trees)?;
+    for project in PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE {
+        let notice = read_one_notice(project, source_trees)?;
         write!(
             appendix,
             "\n### {} ({})\n\nUpstream: <{}>\n\n````text\n{}\n````\n",
@@ -596,17 +623,17 @@ fn render_vendored_cpp_appendix(source_trees: &VendoredCppSourceTrees) -> Result
 }
 
 /// One bullet per roster, each naming the projects that reach the binary that
-/// way. Rendered off [`VendoredCppNoticeRoster::ALL`] rather than written out,
+/// way. Rendered off [`NoticeRosterCargoAboutCannotProduce::ALL`] rather than written out,
 /// so an eighth project cannot land in a table the prose above it never
 /// mentions.
-fn vendored_cpp_roster_bullets() -> String {
-    VendoredCppNoticeRoster::ALL
+fn roster_bullets() -> String {
+    NoticeRosterCargoAboutCannotProduce::ALL
         .iter()
         .map(|roster| {
             format!(
                 "- {}: {}\n",
                 roster.how_the_code_reaches_the_binary(),
-                joined_vendored_cpp_project_display_names(*roster)
+                joined_project_display_names(*roster)
             )
         })
         .collect()
@@ -614,8 +641,8 @@ fn vendored_cpp_roster_bullets() -> String {
 
 /// The display names of every project in one roster, as an English list the
 /// surrounding sentence can take.
-fn joined_vendored_cpp_project_display_names(roster: VendoredCppNoticeRoster) -> String {
-    let names: Vec<&str> = VENDORED_CPP_PROJECTS
+fn joined_project_display_names(roster: NoticeRosterCargoAboutCannotProduce) -> String {
+    let names: Vec<&str> = PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE
         .iter()
         .filter(|project| project.roster == roster)
         .map(|project| project.display_name)
@@ -629,12 +656,12 @@ fn joined_vendored_cpp_project_display_names(roster: VendoredCppNoticeRoster) ->
 }
 
 /// Read one project's notice text from whichever tree holds it.
-fn read_vendored_cpp_notice(
-    project: &VendoredCppProjectLinkedIntoTheEngine,
-    source_trees: &VendoredCppSourceTrees,
+fn read_one_notice(
+    project: &ProjectWhoseNoticeCargoAboutCannotProduce,
+    source_trees: &NoticeSourceTrees,
 ) -> Result<String> {
     let (path, notice) = match project.notice_source {
-        VendoredCppNoticeSource::RegistryCrateLicenseFile {
+        NoticeSource::RegistryCrateLicenseFile {
             vendoring_crate_name,
             path_relative_to_crate_root,
         } => {
@@ -652,7 +679,7 @@ fn read_vendored_cpp_notice(
             let text = read_notice_file(&path, project.display_name)?;
             (path, text)
         }
-        VendoredCppNoticeSource::LeadingCommentBlockOf {
+        NoticeSource::LeadingCommentBlockOf {
             header_path_relative_to_workspace_root,
         } => {
             let path = source_trees
@@ -668,7 +695,7 @@ fn read_vendored_cpp_notice(
             })?;
             (path, text)
         }
-        VendoredCppNoticeSource::VendoredLicenseFile {
+        NoticeSource::VendoredLicenseFile {
             path_relative_to_workspace_root,
         } => {
             let path = source_trees
@@ -776,11 +803,11 @@ mod tests {
     /// Paired with the real workspace root, so the comment-block projects read
     /// the actual vendored headers — `check-vendored-trees` hashes those
     /// trees, so a re-vendor that drops a copyright line fails here.
-    fn vendored_cpp_source_trees_fixture() -> (TempDir, VendoredCppSourceTrees) {
+    fn notice_source_trees_fixture() -> (TempDir, NoticeSourceTrees) {
         let fixture = TempDir::new().expect("temp dir");
         let mut registry_crate_roots = BTreeMap::new();
-        for project in VENDORED_CPP_PROJECTS {
-            let VendoredCppNoticeSource::RegistryCrateLicenseFile {
+        for project in PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE {
+            let NoticeSource::RegistryCrateLicenseFile {
                 vendoring_crate_name,
                 path_relative_to_crate_root,
             } = project.notice_source
@@ -800,7 +827,7 @@ mod tests {
             )
             .expect("fixture licence file");
         }
-        let source_trees = VendoredCppSourceTrees {
+        let source_trees = NoticeSourceTrees {
             registry_crate_roots,
             workspace_root: workspace_root(),
         };
@@ -809,10 +836,10 @@ mod tests {
 
     #[test]
     fn the_appendix_reproduces_every_vendored_project_verbatim() {
-        let (_fixture, source_trees) = vendored_cpp_source_trees_fixture();
-        let appendix = render_vendored_cpp_appendix(&source_trees).expect("render");
+        let (_fixture, source_trees) = notice_source_trees_fixture();
+        let appendix = render_the_appendix_cargo_about_cannot_produce(&source_trees).expect("render");
 
-        for project in VENDORED_CPP_PROJECTS {
+        for project in PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE {
             assert!(
                 appendix.contains(&format!("### {} (", project.display_name)),
                 "{} has no section",
@@ -831,12 +858,12 @@ mod tests {
 
     #[test]
     fn a_moved_licence_file_fails_the_render_naming_the_project() {
-        let (fixture, source_trees) = vendored_cpp_source_trees_fixture();
-        let moved = VENDORED_CPP_PROJECTS
+        let (fixture, source_trees) = notice_source_trees_fixture();
+        let moved = PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE
             .iter()
             .find(|project| project.display_name == "glslang")
             .expect("glslang is one of the vendored projects");
-        let VendoredCppNoticeSource::RegistryCrateLicenseFile {
+        let NoticeSource::RegistryCrateLicenseFile {
             vendoring_crate_name,
             path_relative_to_crate_root,
         } = moved.notice_source
@@ -851,7 +878,7 @@ mod tests {
         )
         .expect("remove");
 
-        let failure = render_vendored_cpp_appendix(&source_trees)
+        let failure = render_the_appendix_cargo_about_cannot_produce(&source_trees)
             .expect_err("a missing licence file must not render as an omitted section");
         let reported = format!("{failure:#}");
         assert!(
@@ -870,10 +897,10 @@ mod tests {
     /// which is the paragraph claiming a coverage it no longer has.
     #[test]
     fn the_appendix_rosters_between_them_name_every_project_in_the_table() {
-        let (_fixture, source_trees) = vendored_cpp_source_trees_fixture();
-        let appendix = render_vendored_cpp_appendix(&source_trees).expect("render");
+        let (_fixture, source_trees) = notice_source_trees_fixture();
+        let appendix = render_the_appendix_cargo_about_cannot_produce(&source_trees).expect("render");
 
-        let rosters = VendoredCppNoticeRoster::ALL.map(joined_vendored_cpp_project_display_names);
+        let rosters = NoticeRosterCargoAboutCannotProduce::ALL.map(joined_project_display_names);
         for roster in &rosters {
             assert!(
                 !roster.is_empty(),
@@ -881,7 +908,7 @@ mod tests {
             );
             assert!(appendix.contains(roster.as_str()));
         }
-        for project in VENDORED_CPP_PROJECTS {
+        for project in PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE {
             assert!(
                 rosters
                     .iter()
@@ -897,12 +924,12 @@ mod tests {
         // Not trivia: it is the whole reason the paths are spelled out instead
         // of globbed, and a future reader deleting the "redundant" extension is
         // exactly the edit this locks.
-        let named_license_txt: Vec<&str> = VENDORED_CPP_PROJECTS
+        let named_license_txt: Vec<&str> = PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE
             .iter()
             .filter(|project| {
                 matches!(
                     project.notice_source,
-                    VendoredCppNoticeSource::RegistryCrateLicenseFile {
+                    NoticeSource::RegistryCrateLicenseFile {
                         path_relative_to_crate_root: path,
                         ..
                     } if path.ends_with("LICENSE.txt")
@@ -941,24 +968,24 @@ mod tests {
 
     #[test]
     fn a_leading_block_with_no_copyright_is_refused_rather_than_reproduced() {
-        let project = VendoredCppProjectLinkedIntoTheEngine {
+        let project = ProjectWhoseNoticeCargoAboutCannotProduce {
             display_name: "Nameless",
             upstream_repository_url: "https://example.invalid",
             license_summary: "none",
-            notice_source: VendoredCppNoticeSource::LeadingCommentBlockOf {
+            notice_source: NoticeSource::LeadingCommentBlockOf {
                 header_path_relative_to_workspace_root: "header.h",
             },
-            roster: VendoredCppNoticeRoster::CompiledByTheVulkanaliaVmaForksBuildScript,
+            roster: NoticeRosterCargoAboutCannotProduce::CompiledByTheVulkanaliaVmaForksBuildScript,
         };
         let workspace = TempDir::new().expect("temp dir");
         fs::write(workspace.path().join("header.h"), "// just a description\n").expect("write");
 
-        let source_trees = VendoredCppSourceTrees {
+        let source_trees = NoticeSourceTrees {
             registry_crate_roots: BTreeMap::new(),
             workspace_root: workspace.path().to_path_buf(),
         };
 
-        let failure = read_vendored_cpp_notice(&project, &source_trees)
+        let failure = read_one_notice(&project, &source_trees)
             .expect_err("a block with no copyright discharges nothing");
         assert!(
             format!("{failure:#}").contains("no copyright line"),
@@ -1028,8 +1055,8 @@ mod tests {
     /// prefixes are locked rather than left to a reviewer to notice.
     #[test]
     fn each_vendoring_crates_notice_paths_follow_that_crates_own_layout() {
-        for project in VENDORED_CPP_PROJECTS {
-            let VendoredCppNoticeSource::RegistryCrateLicenseFile {
+        for project in PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE {
+            let NoticeSource::RegistryCrateLicenseFile {
                 vendoring_crate_name,
                 path_relative_to_crate_root,
             } = project.notice_source

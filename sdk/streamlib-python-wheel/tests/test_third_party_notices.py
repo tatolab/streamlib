@@ -18,7 +18,8 @@ from importlib.metadata import distribution
 
 import pytest
 
-# The C++ projects compiled into the engine from vendored sources. Four arrive
+# The projects whose notices `cargo about` structurally cannot produce, appended
+# to the file by hand. Four arrive
 # through `shaderc-sys` as `libshaderc_combined.a`; libopus arrives through
 # `opusic-sys`, statically linked as `libopus.a` so the wheel carries the Opus
 # codec without a `DT_NEEDED` entry; VulkanMemoryAllocator and
@@ -26,10 +27,14 @@ import pytest
 # by its build script; PipeWire's SPA layer is checked into
 # `vendor/pipewire-headers/` and compiled by the engine's own build script — no
 # PipeWire library is linked, but its header-only inline code ships in the
-# binary. `cargo about` reads `cargo metadata`, and none of them is a package in
-# that graph, so tooling cannot find them — they reach the notices only because
-# the generator appends them by hand.
-VENDORED_CPP_PROJECT_NAMES = (
+# binary. `cargo about` reads `cargo metadata`, and none of those is a package
+# in that graph, so tooling cannot find them.
+#
+# Eclipse zenoh is the one entry that *is* an ordinary Cargo dependency: its
+# crates ship no `LICENSE` and no `NOTICE`, and `cargo about` collects no NOTICE
+# file from any crate, so the Apache-2.0 §4(d) obligation is met by the same
+# appending mechanism.
+NOTICES_CARGO_ABOUT_CANNOT_PRODUCE = (
     "shaderc",
     "glslang",
     "SPIRV-Tools",
@@ -38,13 +43,15 @@ VENDORED_CPP_PROJECT_NAMES = (
     "VulkanMemoryAllocator",
     "Vulkan-Headers",
     "PipeWire",
+    "Eclipse zenoh",
 )
 
-# A thin sample of the Rust closure, one per link shape: the IPC transport, the
-# binding layer this wheel is built on, and the GLSL compiler that pulled the
-# vendored C++ in. Enough to catch a notices file generated against the wrong
-# manifest; not so many that a dependency swap fails an unrelated test.
-SAMPLED_RUST_DEPENDENCY_NAMES = ("iceoryx2", "pyo3", "shaderc")
+# A thin sample of the Rust closure, one per link shape: the same-host IPC
+# transport, the binding layer this wheel is built on, the GLSL compiler that
+# pulled the vendored C++ in, and the runtime mesh's own transport. Enough to
+# catch a notices file generated against the wrong manifest; not so many that a
+# dependency swap fails an unrelated test.
+SAMPLED_RUST_DEPENDENCY_NAMES = ("iceoryx2", "pyo3", "shaderc", "zenoh")
 
 NOTICES_LICENSE_FILE_NAME = "THIRD-PARTY-NOTICES.md"
 BUSL_LICENSE_FILE_NAME = "LICENSE"
@@ -94,14 +101,14 @@ def test_the_shipped_busl_license_is_the_parameterized_text(
     assert "Jonathan Fontanez" in contents
 
 
-def test_the_shipped_notices_carry_the_vendored_cpp_projects(
+def test_the_shipped_notices_carry_what_cargo_about_cannot_produce(
     installed_streamlib_distribution,
 ):
     contents = read_shipped_license_file(
         installed_streamlib_distribution, NOTICES_LICENSE_FILE_NAME
     )
-    missing = [name for name in VENDORED_CPP_PROJECT_NAMES if name not in contents]
-    assert not missing, f"vendored C++ projects absent from the notices: {missing}"
+    missing = [name for name in NOTICES_CARGO_ABOUT_CANNOT_PRODUCE if name not in contents]
+    assert not missing, f"hand-appended notices absent from the file: {missing}"
     # Naming the project is not reproducing its notice — these two carry no
     # licence file at all, so the copyright line is the only thing that proves
     # the generator read the header rather than the directory name.

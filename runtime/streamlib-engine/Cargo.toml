@@ -244,6 +244,20 @@ path = "examples/codec_roundtrip_rig.rs"
 [[bin]]
 name = "log_emit_1000"
 path = "tests/bin/log_emit_1000.rs"
+
+# One runtime on a mesh in its own process, driven by the
+# `runtime_mesh_two_processes` integration test. A `[[bin]]` rather than a
+# helper module because the mesh is between processes by construction, and
+# `CARGO_BIN_EXE_*` is how a test reaches a second one.
+[[bin]]
+name = "runtime_mesh_peer"
+path = "tests/bin/runtime_mesh_peer.rs"
+
+# The two-process mesh proof. Named in `.github/workflows/test.yml`'s engine
+# slice and the `run_local_ci_gates` mirror, or it runs nowhere.
+[[test]]
+name = "runtime_mesh_two_processes"
+path = "tests/runtime_mesh_two_processes.rs"
 # Strace-backed no-syscalls test child. Built under `cargo test` via
 # the path dep; not needed for normal builds.
 

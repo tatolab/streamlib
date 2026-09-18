@@ -34,7 +34,6 @@ const HOW_LONG_A_PEER_HAS_TO_DESCRIBE_ITSELF: Duration = Duration::from_secs(2);
 
 /// This runtime's place on its mesh.
 pub struct RuntimeMeshMembership {
-    key_space: RuntimeMeshKeySpace,
     mesh_name: String,
     announced_identity: AnnouncedRuntimeIdentity,
     peers: Arc<RuntimeMeshPeerTable>,
@@ -110,7 +109,6 @@ impl RuntimeMeshMembership {
         };
 
         Self {
-            key_space,
             mesh_name: resolved.mesh_name.to_string(),
             announced_identity,
             peers,
@@ -182,13 +180,6 @@ impl RuntimeMeshMembership {
             local_only_reason,
             peers: self.peers.render_for_graph(),
         }
-    }
-
-    /// The key space this runtime announces itself in — the seam the
-    /// two-process fixture reads a peer's own key back through.
-    #[cfg(test)]
-    pub(crate) fn key_space(&self) -> &RuntimeMeshKeySpace {
-        &self.key_space
     }
 }
 
