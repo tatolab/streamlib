@@ -118,15 +118,20 @@ impl MeshLinkIngress {
         let writes_onto_the_local_channel = Arc::new(OutputWriterInner::new());
         writes_onto_the_local_channel.declare_output_ports([THE_INGRESS_OUTPUT_PORT.to_string()]);
 
-        // The channel the compiler opened for this address's destinations, at
-        // exactly the sizing it opened it with — an ingress publishes onto a
-        // channel its destinations are already subscribed to.
-        let service = iceoryx2_node.open_or_create_service(
-            &local_channel,
-            streamlib_ipc_types::MAX_DESTINATIONS_PER_CHANNEL
-                + crate::iceoryx2::RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL,
-            DeliveryProfile::ORDERED_DEPTH,
-        )?;
+        // The channel the compiler already opened for this address's
+        // destinations, opened rather than created: its depth is the one the
+        // compiler derived from those destinations — deeper when one of them
+        // windows — and iceoryx2 refuses an open that asks for another. A
+        // channel that is not there yet is a link this runtime has not
+        // committed the wiring of, which the next resolution pass picks up.
+        let service = iceoryx2_node
+            .open_existing_channel_service(&local_channel)?
+            .ok_or_else(|| {
+                crate::core::Error::Runtime(format!(
+                    "the channel {local_channel} that {address}'s bags land on is not open yet, \
+                     so this runtime has nothing to write them onto"
+                ))
+            })?;
         let publisher = service.create_publisher(DEFAULT_EXPECTED_PAYLOAD_BYTES)?;
         // Trusted: the writer is the engine itself, in the app process. What a
         // destination in a helper may take is the destination's own tier, which

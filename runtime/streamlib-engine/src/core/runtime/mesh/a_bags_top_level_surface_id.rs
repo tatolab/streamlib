@@ -31,10 +31,14 @@ pub fn a_bag_carries_a_top_level_surface_id(bag_bytes: &[u8]) -> bool {
         match walk.read_a_string_key() {
             Some(key) if key == SURFACE_ID_KEY => return true,
             Some(_) => {}
-            // A key that is not a string is legal msgpack and is not a bag key
-            // the codec writes, so the walk steps over it like any other value.
-            None if !walk.step_over_one_value() => return false,
-            None => {}
+            None => {
+                // A key that is not a string is legal msgpack and is not a key
+                // the bag codec writes, so the walk steps over it like any
+                // other value rather than refusing the bag.
+                if !walk.step_over_one_value() {
+                    return false;
+                }
+            }
         }
         if !walk.step_over_one_value() {
             return false;
