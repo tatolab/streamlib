@@ -60,7 +60,7 @@ fn main() {
 }
 
 /// A duplicate of fd 1, taken before anything replaces fd 1 itself.
-struct ReportChannelTakenBeforeTheRuntimeExists(std::os::fd::OwnedFd);
+struct ReportChannelTakenBeforeTheRuntimeExists(std::fs::File);
 
 impl ReportChannelTakenBeforeTheRuntimeExists {
     fn take() -> Self {
@@ -78,7 +78,8 @@ impl ReportChannelTakenBeforeTheRuntimeExists {
 
     fn write_line(&self, line: &str) {
         use std::io::Write as _;
-        let mut channel = std::fs::File::from(self.0.try_clone().expect("the report channel"));
+        // Through `&File`, which is itself a writer, so a line costs no `dup`.
+        let mut channel = &self.0;
         let _ = writeln!(channel, "{line}");
         let _ = channel.flush();
     }

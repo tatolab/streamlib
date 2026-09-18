@@ -9,6 +9,13 @@
 //! namespace, has a pid another runtime here can go and check.
 
 /// A host, as far as another runtime on the mesh can tell.
+///
+/// The derived equality is the peer table's: it keys on the whole announced
+/// identity, and two `Unidentified` hosts there are the same key. Stated
+/// residual: two macOS runtimes sharing a name *and* a pid collapse into one
+/// peer row. The same-host question a duplicate-name check asks is a different
+/// one — an unidentified host is never this host — and belongs with the check
+/// that asks it.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum HostIdentity {
     /// A host that can be recognised again: this kernel boot and this pid
@@ -50,26 +57,6 @@ impl HostIdentity {
         #[cfg(not(target_os = "linux"))]
         {
             Self::Unidentified
-        }
-    }
-
-    /// Whether `self` names the same host as `other`.
-    ///
-    /// Not `PartialEq`: an unidentified host equals nothing, itself included,
-    /// which is the opposite of what deriving equality would give.
-    pub fn names_the_same_host_as(&self, other: &Self) -> bool {
-        match (self, other) {
-            (
-                Self::ThisKernelBootAndPidNamespace {
-                    kernel_boot_id,
-                    pid_namespace_inode,
-                },
-                Self::ThisKernelBootAndPidNamespace {
-                    kernel_boot_id: other_boot_id,
-                    pid_namespace_inode: other_inode,
-                },
-            ) => kernel_boot_id == other_boot_id && pid_namespace_inode == other_inode,
-            _ => false,
         }
     }
 
@@ -155,23 +142,14 @@ mod tests {
         }
     }
 
-    /// An unidentified host is never this host — not even another unidentified
-    /// one, which is what stops a duplicate-name exception firing across two
-    /// machines that both report nothing.
+    /// A different boot or a different pid namespace is a different key, so a
+    /// container on this kernel never shares a peer row with its host.
     #[test]
-    fn an_unidentified_host_names_no_host_including_another_unidentified_one() {
-        assert!(!HostIdentity::Unidentified.names_the_same_host_as(&HostIdentity::Unidentified));
-        assert!(!HostIdentity::Unidentified.names_the_same_host_as(&identified("boot", 1)));
-        assert!(!identified("boot", 1).names_the_same_host_as(&HostIdentity::Unidentified));
-    }
-
-    /// Two identified hosts match only when both the boot and the pid
-    /// namespace do — a container on this kernel is another host.
-    #[test]
-    fn a_different_boot_or_pid_namespace_is_a_different_host() {
-        assert!(identified("boot", 1).names_the_same_host_as(&identified("boot", 1)));
-        assert!(!identified("boot", 1).names_the_same_host_as(&identified("boot", 2)));
-        assert!(!identified("boot", 1).names_the_same_host_as(&identified("other-boot", 1)));
+    fn a_different_boot_or_pid_namespace_is_a_different_identity() {
+        assert_eq!(identified("boot", 1), identified("boot", 1));
+        assert_ne!(identified("boot", 1), identified("boot", 2));
+        assert_ne!(identified("boot", 1), identified("other-boot", 1));
+        assert_ne!(identified("boot", 1), HostIdentity::Unidentified);
     }
 
     /// A chunk this engine did not write reads as nothing, rather than as a

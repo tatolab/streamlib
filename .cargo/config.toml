@@ -30,3 +30,18 @@ gates = "run --locked --release --package xtask -- check-all-source-gates"
 # `rm -rf target/debug/incremental` reclaims in seconds — a periodic prune, not a
 # 2.7x slower edit loop. CI sets CARGO_INCREMENTAL=0 in the workflows instead,
 # where it is unambiguously right: a runner never rebuilds after an edit.
+
+# No `cargo test` run joins whatever runtime mesh this machine is on. The
+# engine's lib tests get this from a test-only default, but an integration test
+# is its own binary linking the engine as an ordinary dependency, so `cfg!(test)`
+# never sees it — and without this every one of them that constructs a `Runner`
+# would scout on the real network and announce a liveliness token on the real
+# `default` mesh.
+#
+# Here rather than in each test: cargo applies `[env]` to every process it runs,
+# so the tenth integration test is covered by the same line as the first, and
+# `cargo ci` reproduces what `.github/workflows/test.yml` sets at workflow level.
+# Not `force`d, so `STREAMLIB_MESH_MULTICAST_DISCOVERY=1 cargo test …` still opts
+# a mesh test back in.
+[env]
+STREAMLIB_MESH_MULTICAST_DISCOVERY = "0"

@@ -121,6 +121,10 @@ pub struct Runner {
     /// This runtime's place on the runtime mesh. Joined in `new()`, left at the
     /// end of `stop()`.
     pub(crate) runtime_mesh: Arc<RuntimeMeshMembership>,
+    /// Where the control plane this runtime hosts can be reached. Filled in by
+    /// the control plane once it has bound, read by the mesh when a peer asks
+    /// what this runtime is, and handed to every processor's context.
+    pub(crate) hosted_control_plane: Arc<HostedControlPlaneEndpointRegistry>,
     /// Tokio runtime storage - either owned or external handle.
     pub(crate) tokio_runtime_variant: TokioRuntimeVariant,
     /// Compiles graph changes into running processors. Owns the graph and transaction.
@@ -284,12 +288,13 @@ impl Runner {
         // iceoryx2 node, beside the runtime-id socket refusal — this is where a
         // runtime's identity already comes up. `Runner::new()` needs no GPU, so
         // everything here is provable without one.
+        let hosted_control_plane = Arc::new(HostedControlPlaneEndpointRegistry::default());
         let runtime_mesh = Arc::new(RuntimeMeshMembership::join(
             &resolved_runtime_mesh_configuration,
             &runtime_name,
             runtime_id.as_str(),
             &crate::core::runtime::runtime_name::this_hosts_name(),
-            Arc::new(HostedControlPlaneEndpointRegistry::default()),
+            &hosted_control_plane,
         ));
 
         crate::iceoryx2::warn_when_posix_shared_memory_is_short_for_a_runtime();
@@ -321,6 +326,7 @@ impl Runner {
             runtime_id,
             runtime_name,
             runtime_mesh,
+            hosted_control_plane,
             tokio_runtime_variant,
             compiler,
             runtime_context,
@@ -569,7 +575,7 @@ impl Runner {
             iceoryx2_node,
             Arc::clone(&audio_clock),
             self.runtime_directory.clone(),
-            Arc::clone(self.runtime_mesh.hosted_control_plane()),
+            Arc::clone(&self.hosted_control_plane),
             #[cfg(target_os = "linux")]
             self.surface_socket_path.clone(),
         ));

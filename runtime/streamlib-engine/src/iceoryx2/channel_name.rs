@@ -117,11 +117,9 @@ pub fn first_reason_this_is_not_one_channel_name_chunk(candidate: &str) -> Optio
 
 /// The sentence a refusal of a single chunk ends with, so every caller states
 /// the same rule.
-pub fn describe_the_one_chunk_grammar() -> String {
-    "One chunk is non-empty, begins with a lowercase letter, and otherwise \
-     carries only lowercase letters, digits, '-' and '_'"
-        .to_string()
-}
+pub const THE_ONE_CHUNK_GRAMMAR: &str = "One chunk is non-empty, begins with a lowercase letter, \
+                                         and otherwise carries only lowercase letters, digits, \
+                                         '-' and '_'";
 
 /// Validate one `/`-separated chunk's charset grammar (`[a-z][a-z0-9_-]*`)
 /// without any length bound. A `/` inside `s` is itself an invalid character

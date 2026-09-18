@@ -18,6 +18,7 @@ mod runtime_mesh_configuration;
 pub(crate) mod runtime_name;
 mod runtime_shutdown_request;
 mod runtime_unique_id;
+mod stated_configuration_value;
 mod status;
 mod streamlib_runtime_directory;
 mod surface_image_exchange;

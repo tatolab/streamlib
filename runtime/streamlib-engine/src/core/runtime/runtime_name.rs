@@ -11,10 +11,13 @@ use std::ffi::OsString;
 use std::path::Path;
 
 use crate::core::app_directory::resolve_the_app_directory_this_runtime_belongs_to;
-use crate::core::error::{Error, Result};
+use crate::core::error::Result;
 use crate::core::runtime::mesh_address_chunk::{
     CHARACTER_NO_MESH_ADDRESS_CHUNK_MAY_BEGIN_WITH, CHARACTERS_NO_MESH_ADDRESS_CHUNK_MAY_CONTAIN,
     first_reason_this_is_not_one_mesh_address_chunk, what_one_mesh_address_chunk_may_be,
+};
+use crate::core::runtime::stated_configuration_value::{
+    refuse_a_stated_configuration_value, what_an_environment_door_says,
 };
 use crate::core::stable_short_id::stable_short_id_over;
 
@@ -86,17 +89,11 @@ fn resolve_runtime_name(
     if let Some(configured) = configured_runtime_name {
         return stated_runtime_name(&configured, "the runtime name it was constructed with");
     }
-    if let Some(from_the_environment) =
-        runtime_name_from_the_environment.filter(|value| !value.is_empty())
-    {
-        let Some(from_the_environment) = from_the_environment.to_str() else {
-            return Err(refuse_a_stated_runtime_name(
-                &from_the_environment.to_string_lossy(),
-                RUNTIME_NAME_ENVIRONMENT_VARIABLE,
-                "it is not UTF-8",
-            ));
-        };
-        return stated_runtime_name(from_the_environment, RUNTIME_NAME_ENVIRONMENT_VARIABLE);
+    if let Some(from_the_environment) = what_an_environment_door_says(
+        runtime_name_from_the_environment,
+        RUNTIME_NAME_ENVIRONMENT_VARIABLE,
+    )? {
+        return stated_runtime_name(&from_the_environment, RUNTIME_NAME_ENVIRONMENT_VARIABLE);
     }
     Ok(default_runtime_name())
 }
@@ -105,23 +102,14 @@ fn resolve_runtime_name(
 fn stated_runtime_name(stated: &str, where_it_came_from: &str) -> Result<RuntimeName> {
     match first_reason_this_is_not_one_mesh_address_chunk(stated) {
         None => Ok(RuntimeName(stated.to_string())),
-        Some(what_is_wrong) => Err(refuse_a_stated_runtime_name(
+        Some(what_is_wrong) => Err(refuse_a_stated_configuration_value(
+            "a runtime name",
             stated,
             where_it_came_from,
             &what_is_wrong,
+            &what_one_mesh_address_chunk_may_be(),
         )),
     }
-}
-
-fn refuse_a_stated_runtime_name(
-    stated: &str,
-    where_it_came_from: &str,
-    what_is_wrong: &str,
-) -> Error {
-    Error::Configuration(format!(
-        "{where_it_came_from} is {stated:?}, which is not a runtime name: {what_is_wrong}. {}",
-        what_one_mesh_address_chunk_may_be()
-    ))
 }
 
 /// `<host name>-<app directory name>-<id>`, every forbidden character replaced.

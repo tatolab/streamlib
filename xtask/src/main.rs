@@ -687,6 +687,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::json_schema::capability_extension_and_mesh_rendering_tests::a_local_only_runtime_renders_the_reason_its_session_did_not_open",
                 "core::json_schema::capability_extension_and_mesh_rendering_tests::a_peer_that_has_not_answered_still_deserializes_beside_one_that_has",
                 "core::runtime::mesh",
+                "core::runtime::stated_configuration_value",
                 "linux::host_identity",
             ],
         ),

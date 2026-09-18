@@ -13,6 +13,9 @@ use std::str::FromStr;
 use zenoh::config::EndPoint;
 
 use crate::core::error::{Error, Result};
+use crate::core::runtime::stated_configuration_value::{
+    refuse_a_stated_configuration_value, what_an_environment_door_says,
+};
 
 /// The environment variable naming the endpoints this runtime dials, comma
 /// separated.
@@ -84,14 +87,9 @@ pub(crate) fn resolve_mesh_endpoints(
             .collect();
     }
     let Some(from_the_environment) =
-        endpoints_from_the_environment.filter(|value| !value.is_empty())
+        what_an_environment_door_says(endpoints_from_the_environment, environment_variable_name)?
     else {
         return Ok(Vec::new());
-    };
-    let Some(from_the_environment) = from_the_environment.to_str() else {
-        return Err(Error::Configuration(format!(
-            "{environment_variable_name} is not UTF-8"
-        )));
     };
     from_the_environment
         .split(ENDPOINT_LIST_SEPARATOR)
@@ -139,11 +137,16 @@ pub(crate) fn read_one_mesh_endpoint(
 }
 
 fn refuse_a_stated_endpoint(stated: &str, where_it_came_from: &str, what_is_wrong: &str) -> Error {
-    Error::Configuration(format!(
-        "{where_it_came_from} names the mesh endpoint {stated:?}, which this runtime cannot \
-         open: {what_is_wrong}. A mesh endpoint is udp/<host>:<port>?{RELIABILITY_METADATA_KEY}=\
-         {RELIABLE_METADATA_VALUE} or tcp/<host>:<port>"
-    ))
+    refuse_a_stated_configuration_value(
+        "a mesh endpoint this runtime can open",
+        stated,
+        where_it_came_from,
+        what_is_wrong,
+        &format!(
+            "A mesh endpoint is udp/<host>:<port>?{RELIABILITY_METADATA_KEY}=\
+             {RELIABLE_METADATA_VALUE} or tcp/<host>:<port>"
+        ),
+    )
 }
 
 #[cfg(test)]

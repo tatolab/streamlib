@@ -27,6 +27,28 @@ const MESH_MULTICAST_INTERFACE_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_MESH_MULT
 /// Where scouting is pinned to.
 const LOOPBACK_INTERFACE: &str = "127.0.0.1";
 
+/// How many peers stop answering while their tokens stay live.
+///
+/// Each costs a stuck round the engine's own two-second description timeout.
+/// Five rather than one, because how far into a round the leave lands is not
+/// controllable — five leave a stuck round ahead of the leave however the phase
+/// falls.
+const HOW_MANY_PEERS_ARE_WEDGED: usize = 5;
+
+/// How long to wait before asking a runtime to leave, so that a re-ask round is
+/// already in flight and stuck. Past the engine's own five-second cadence.
+const HOW_LONG_UNTIL_A_RE_ASK_ROUND_IS_STUCK: Duration = Duration::from_millis(5_500);
+
+/// How long a runtime may take to leave the mesh.
+///
+/// Measured on this arm rather than chosen: a clean leave — stdin's end, the
+/// token undeclared, the session closed and the process gone — takes 1.40 s,
+/// reproducing to 0.04 s across runs, and a teardown that waits out the stuck
+/// round takes 4.40 s. Three seconds sits between them with about a second and
+/// a half either way, so a loaded runner does not red this and the regression
+/// it exists for cannot pass it.
+const HOW_LONG_A_TEARDOWN_MAY_TAKE: Duration = Duration::from_secs(3);
+
 /// A mesh name no other arm and no other machine uses.
 fn a_mesh_name_of_its_own(arm: &str) -> String {
     static NEXT: AtomicU32 = AtomicU32::new(0);
@@ -152,6 +174,15 @@ impl RuntimeMeshPeerProcess {
         })
     }
 
+    /// Stop the peer's process without taking it off the mesh: its transport
+    /// stays up so its token stays live, and it answers nothing.
+    fn stop_answering_without_leaving(&self) {
+        // SAFETY: `kill` takes a pid and a signal and reads nothing through a
+        // pointer; the pid is this fixture's own child, still unreaped.
+        let stopped = unsafe { libc::kill(self.child.id() as libc::pid_t, libc::SIGSTOP) };
+        assert_eq!(stopped, 0, "the peer must take a SIGSTOP");
+    }
+
     /// Ask the peer to leave cleanly: closing its stdin stops its runtime,
     /// which undeclares its token before closing the session.
     fn ask_it_to_leave_and_wait(&mut self) {
@@ -162,7 +193,8 @@ impl RuntimeMeshPeerProcess {
 
 impl Drop for RuntimeMeshPeerProcess {
     fn drop(&mut self) {
-        // Whatever an arm did or failed to do, no peer outlives the test.
+        // Whatever an arm did or failed to do, no peer outlives the test — a
+        // SIGSTOPped one included, which `SIGKILL` reaps without resuming.
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
@@ -189,10 +221,10 @@ fn wait_until<T: std::fmt::Debug>(
 /// Both peers list each other, whichever way they were told to find one.
 fn each_lists_the_other(one: &RuntimeMeshPeerProcess, other: &RuntimeMeshPeerProcess) {
     wait_until("the first runtime sees the second", || {
-        (!one.peer_names_it_sees().is_empty()).then(|| one.peer_names_it_sees())
+        Some(one.peer_names_it_sees()).filter(|names| !names.is_empty())
     });
     wait_until("the second runtime sees the first", || {
-        (!other.peer_names_it_sees().is_empty()).then(|| other.peer_names_it_sees())
+        Some(other.peer_names_it_sees()).filter(|names| !names.is_empty())
     });
 }
 
@@ -343,6 +375,63 @@ fn a_peer_that_leaves_is_gone_from_graph() {
     );
 }
 
+/// Peers whose tokens are live and whose processes have stopped answering do
+/// not hold another runtime's teardown open.
+///
+/// The discovery thread re-asks every known peer on a cadence, and an ask waits
+/// out its own timeout for a peer that never answers; `stop()` joins that
+/// thread. So the leave has to land *inside* a round that is already stuck —
+/// hence the wait past the cadence — and the round has to give up when the
+/// subscriber feeding it goes, or the wedged peers' timeouts are added to every
+/// teardown beside them.
+#[test]
+fn wedged_peers_do_not_hold_another_runtimes_teardown_open() {
+    let mesh_name = a_mesh_name_of_its_own("wedged");
+    let port = a_free_loopback_port();
+    let listening = format!("udp/{LOOPBACK_INTERFACE}:{port}?rel=1");
+
+    let mut leaving = RuntimeMeshPeerProcess::launch(HowToLaunchAPeer {
+        runtime_name: "leaving-beside-wedged-peers".to_string(),
+        mesh_name: mesh_name.clone(),
+        listen_endpoints: vec![listening.clone()],
+        ..Default::default()
+    });
+
+    let wedged: Vec<RuntimeMeshPeerProcess> = (0..HOW_MANY_PEERS_ARE_WEDGED)
+        .map(|which| {
+            RuntimeMeshPeerProcess::launch(HowToLaunchAPeer {
+                runtime_name: format!("wedged-{which}"),
+                mesh_name: mesh_name.clone(),
+                peer_endpoints: vec![listening.clone()],
+                ..Default::default()
+            })
+        })
+        .collect();
+    wait_until("the leaving runtime sees every wedged peer", || {
+        (leaving.peer_names_it_sees().len() == HOW_MANY_PEERS_ARE_WEDGED).then_some(())
+    });
+
+    // SIGSTOP, not a kill: each process stops answering its description query
+    // while its transport stays up, so its token never leaves. That is the
+    // partitioned peer, reproduced without a partition.
+    for peer in &wedged {
+        peer.stop_answering_without_leaving();
+    }
+    // Past the engine's re-ask cadence, so a round is in flight and stuck on
+    // the first wedged peer when the leave arrives. Without this the leave
+    // lands between rounds and the arm proves nothing.
+    std::thread::sleep(HOW_LONG_UNTIL_A_RE_ASK_ROUND_IS_STUCK);
+
+    let asked_to_leave_at = Instant::now();
+    leaving.ask_it_to_leave_and_wait();
+    let how_long_leaving_took = asked_to_leave_at.elapsed();
+
+    assert!(
+        how_long_leaving_took < HOW_LONG_A_TEARDOWN_MAY_TAKE,
+        "leaving took {how_long_leaving_took:?}, past the {HOW_LONG_A_TEARDOWN_MAY_TAKE:?} bound"
+    );
+}
+
 /// Two mesh names see nothing of each other, even scouting the same group on
 /// the same interface — the isolation lever the plan states.
 #[test]
@@ -362,9 +451,7 @@ fn two_mesh_names_see_nothing_of_each_other() {
 
     // Both are up and scouting; neither has anything to report.
     wait_until("both runtimes report their mesh", || {
-        one.what_it_last_saw()
-            .zip(other.what_it_last_saw())
-            .map(|(one, other)| (one, other))
+        one.what_it_last_saw().zip(other.what_it_last_saw())
     });
     std::thread::sleep(Duration::from_secs(3));
 

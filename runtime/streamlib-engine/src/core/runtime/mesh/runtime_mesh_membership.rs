@@ -16,7 +16,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
+use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, TryRecvError};
 use parking_lot::Mutex;
 use zenoh::Wait;
 use zenoh::sample::SampleKind;
@@ -45,7 +45,6 @@ pub struct RuntimeMeshMembership {
     mesh_name: String,
     announced_identity: AnnouncedRuntimeIdentity,
     peers: Arc<RuntimeMeshPeerTable>,
-    hosted_control_plane: Arc<HostedControlPlaneEndpointRegistry>,
     session: Mutex<RuntimeMeshSessionState>,
 }
 
@@ -85,7 +84,7 @@ impl RuntimeMeshMembership {
         runtime_name: &Arc<RuntimeName>,
         runtime_id: &str,
         host_name: &str,
-        hosted_control_plane: Arc<HostedControlPlaneEndpointRegistry>,
+        hosted_control_plane: &Arc<HostedControlPlaneEndpointRegistry>,
     ) -> Self {
         let key_space = RuntimeMeshKeySpace::of(resolved.mesh_name.clone());
         let announced_identity = AnnouncedRuntimeIdentity::of_this_runtime(runtime_name);
@@ -99,9 +98,11 @@ impl RuntimeMeshMembership {
                 &peers,
                 runtime_id,
                 host_name,
-                &hosted_control_plane,
+                hosted_control_plane,
             )
-        }) {
+        })
+        .unwrap_or_else(|cannot_spawn| Err(cannot_spawn.into()))
+        {
             Ok(announced) => {
                 tracing::info!(
                     "Runtime {runtime_name} is on the {} mesh",
@@ -124,15 +125,8 @@ impl RuntimeMeshMembership {
             mesh_name: resolved.mesh_name.to_string(),
             announced_identity,
             peers,
-            hosted_control_plane,
             session: Mutex::new(session),
         }
-    }
-
-    /// Where the control plane this runtime hosts can be reached, for the
-    /// control plane itself to fill in once it has bound.
-    pub fn hosted_control_plane(&self) -> &Arc<HostedControlPlaneEndpointRegistry> {
-        &self.hosted_control_plane
     }
 
     /// Leave the mesh: undeclare the token first, so peers see this runtime go
@@ -149,7 +143,12 @@ impl RuntimeMeshMembership {
         let RuntimeMeshSessionState::Open(announced) = previous else {
             return;
         };
-        off_any_current_thread_tokio_runtime("leave", move || {
+        // Beside the session: a runtime that has left reaches nobody, and a
+        // `graph` rendering `local_only` next to a list of peers would say two
+        // things at once.
+        self.peers.forget_every_peer();
+
+        let left = off_any_current_thread_tokio_runtime("leave", move || {
             let AnnouncedOnTheMesh {
                 session,
                 liveliness_token,
@@ -179,6 +178,12 @@ impl RuntimeMeshMembership {
                 );
             }
         });
+        if let Err(cannot_spawn) = left {
+            tracing::warn!(
+                "this runtime's mesh session could not be closed for want of a thread, so the \
+                 kernel closes it at process exit instead: {cannot_spawn}"
+            );
+        }
     }
 
     /// This runtime's place on the mesh, as `graph` renders it.
@@ -202,25 +207,20 @@ impl RuntimeMeshMembership {
 /// Run `zenoh_work` on a thread that is nobody's tokio runtime.
 ///
 /// A scoped thread rather than a detached one: the caller has to have the
-/// result before it goes on, and a panic inside comes back out unchanged rather
-/// than being reported as a join failure.
+/// result before it goes on. A thread the OS will not give is reported, because
+/// the mesh never fails a runtime's start; a panic inside comes back out
+/// unchanged, because that is not the mesh's to swallow.
 fn off_any_current_thread_tokio_runtime<T: Send>(
     mesh_step: &str,
     zenoh_work: impl FnOnce() -> T + Send,
-) -> T {
+) -> std::io::Result<T> {
     std::thread::scope(|threads| {
-        match std::thread::Builder::new()
+        let thread = std::thread::Builder::new()
             .name(format!("streamlib-mesh-{mesh_step}"))
-            .spawn_scoped(threads, zenoh_work)
-        {
-            Ok(thread) => match thread.join() {
-                Ok(done) => done,
-                Err(panicked) => std::panic::resume_unwind(panicked),
-            },
-            Err(cannot_spawn) => panic!(
-                "the thread this runtime's mesh {mesh_step} needs could not be spawned: \
-                 {cannot_spawn}"
-            ),
+            .spawn_scoped(threads, zenoh_work)?;
+        match thread.join() {
+            Ok(done) => Ok(done),
+            Err(panicked) => std::panic::resume_unwind(panicked),
         }
     })
 }
@@ -260,11 +260,11 @@ fn announce_on_the_mesh(
         key_space.clone(),
         Arc::clone(peers),
         what_the_discovery_thread_reads,
-    );
+    )?;
 
     let liveliness_token = session
         .liveliness()
-        .declare_token(key_space.liveliness_token_key_for(announced_identity))
+        .declare_token(key_space.announcement_key_for(announced_identity))
         .wait()?;
 
     Ok(AnnouncedOnTheMesh {
@@ -286,14 +286,14 @@ fn declare_the_description_queryable(
     host_name: &str,
     hosted_control_plane: &Arc<HostedControlPlaneEndpointRegistry>,
 ) -> zenoh::Result<zenoh::query::Queryable<()>> {
-    let description_key = key_space.description_key_for(announced_identity);
-    let answered_key = description_key.clone();
+    let announcement_key = key_space.announcement_key_for(announced_identity);
+    let answered_key = announcement_key.clone();
     let runtime_id = runtime_id.to_string();
     let host_name = host_name.to_string();
     let hosted_control_plane = Arc::clone(hosted_control_plane);
 
     session
-        .declare_queryable(description_key)
+        .declare_queryable(announcement_key)
         .callback(move |asked| {
             let described = RuntimeMeshDescription::of_this_runtime_right_now(
                 &runtime_id,
@@ -333,10 +333,10 @@ fn declare_the_liveliness_subscriber(
 
     session
         .liveliness()
-        .declare_subscriber(key_space.every_liveliness_token_key())
+        .declare_subscriber(key_space.every_announcement_key())
         .history(true)
         .callback(move |token| {
-            let Some(announced) = key_space.read_a_liveliness_token_key(token.key_expr().as_str())
+            let Some(announced) = key_space.read_an_announcement_key(token.key_expr().as_str())
             else {
                 return;
             };
@@ -363,7 +363,7 @@ fn spawn_the_discovery_thread(
     key_space: RuntimeMeshKeySpace,
     peers: Arc<RuntimeMeshPeerTable>,
     what_the_discovery_thread_reads: Receiver<WhatTheMeshSaw>,
-) -> std::thread::JoinHandle<()> {
+) -> std::io::Result<std::thread::JoinHandle<()>> {
     std::thread::Builder::new()
         .name("streamlib-mesh-discovery".to_string())
         .spawn(move || {
@@ -384,6 +384,21 @@ fn spawn_the_discovery_thread(
                     }
                     Err(RecvTimeoutError::Timeout) => {
                         for announced in peers.every_peer_it_sees() {
+                            // A round is serial and each ask waits out
+                            // `HOW_LONG_A_PEER_HAS_TO_DESCRIBE_ITSELF` for a
+                            // peer whose token is live and whose process is
+                            // not, so a round can outlast its own cadence.
+                            // `stop()` joins this thread, and a teardown that
+                            // waited out a whole round would eat the shutdown
+                            // budget — so the round gives up the moment the
+                            // subscriber feeding it is gone, and takes whatever
+                            // the mesh said in the meantime on its way past.
+                            if !the_subscriber_feeding_this_thread_is_still_there(
+                                &peers,
+                                &what_the_discovery_thread_reads,
+                            ) {
+                                return;
+                            }
                             ask_a_peer_what_it_is_and_record_it(
                                 &session, &key_space, &peers, &announced,
                             );
@@ -393,7 +408,28 @@ fn spawn_the_discovery_thread(
                 }
             }
         })
-        .expect("spawning the mesh discovery thread")
+}
+
+/// Apply whatever the mesh has said since the last look, and say whether the
+/// subscriber feeding this thread is still there.
+///
+/// A peer that appears here is recorded but not asked: the round it interrupted
+/// already holds the list it is walking, and the next round asks it. Its name
+/// renders meanwhile, which is what an unanswered peer renders anyway.
+fn the_subscriber_feeding_this_thread_is_still_there(
+    peers: &RuntimeMeshPeerTable,
+    what_the_discovery_thread_reads: &Receiver<WhatTheMeshSaw>,
+) -> bool {
+    loop {
+        match what_the_discovery_thread_reads.try_recv() {
+            Ok(WhatTheMeshSaw::APeerAppeared(announced)) => {
+                peers.record_that_a_peer_appeared(announced);
+            }
+            Ok(WhatTheMeshSaw::APeerLeft(announced)) => peers.record_that_a_peer_left(&announced),
+            Err(TryRecvError::Empty) => return true,
+            Err(TryRecvError::Disconnected) => return false,
+        }
+    }
 }
 
 /// Ask a peer what it is and record the answer, leaving what it last said in
@@ -417,7 +453,7 @@ fn ask_a_peer_what_it_is(
     announced: &AnnouncedRuntimeIdentity,
 ) -> Option<RuntimeMeshDescription> {
     let replies = session
-        .get(key_space.description_key_for(announced))
+        .get(key_space.announcement_key_for(announced))
         .timeout(HOW_LONG_A_PEER_HAS_TO_DESCRIBE_ITSELF)
         .wait()
         .inspect_err(|query_failure| {

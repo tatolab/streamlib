@@ -49,6 +49,11 @@ impl RuntimeMeshPeerTable {
         self.peers.write().remove(announced);
     }
 
+    /// Forget every peer, for a runtime that has left the mesh itself.
+    pub fn forget_every_peer(&self) {
+        self.peers.write().clear();
+    }
+
     /// Every peer this runtime currently sees, for the discovery thread to ask
     /// again what they are.
     pub fn every_peer_it_sees(&self) -> Vec<AnnouncedRuntimeIdentity> {
@@ -175,6 +180,19 @@ mod tests {
         let mut askable = table.every_peer_it_sees();
         askable.sort();
         assert_eq!(askable, [answered, unanswered]);
+    }
+
+    /// A runtime that has left the mesh sees nobody, rather than rendering the
+    /// peers it saw last beside a session that reaches none of them.
+    #[test]
+    fn forgetting_every_peer_leaves_nothing_to_render() {
+        let table = RuntimeMeshPeerTable::default();
+        table.record_that_a_peer_appeared(an_identity("lab-two", 7));
+        table.record_that_a_peer_appeared(an_identity("lab-three", 8));
+
+        table.forget_every_peer();
+
+        assert!(table.render_for_graph().is_empty());
     }
 
     /// A description arriving after its peer left does not bring the peer

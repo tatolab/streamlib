@@ -174,6 +174,10 @@ fn read_one_interface_address(socket_address: *const libc::sockaddr) -> Option<I
         match (*socket_address).sa_family as libc::c_int {
             libc::AF_INET => {
                 let address = &*(socket_address as *const libc::sockaddr_in);
+                // Native-endian, not big-endian: `s_addr` already holds the
+                // four address bytes in network order, so reading them out in
+                // this machine's order is what recovers `a.b.c.d`. Converting
+                // would reverse them on a little-endian host.
                 Some(IpAddr::from(address.sin_addr.s_addr.to_ne_bytes()))
             }
             libc::AF_INET6 => {

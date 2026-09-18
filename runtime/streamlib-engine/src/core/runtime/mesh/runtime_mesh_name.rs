@@ -8,10 +8,11 @@
 
 use std::ffi::OsString;
 
-use crate::core::error::{Error, Result};
-use crate::iceoryx2::{
-    describe_the_one_chunk_grammar, first_reason_this_is_not_one_channel_name_chunk,
+use crate::core::error::Result;
+use crate::core::runtime::stated_configuration_value::{
+    refuse_a_stated_configuration_value, what_an_environment_door_says,
 };
+use crate::iceoryx2::{THE_ONE_CHUNK_GRAMMAR, first_reason_this_is_not_one_channel_name_chunk};
 
 /// The environment variable that names a runtime's mesh when its constructor
 /// did not.
@@ -62,17 +63,11 @@ fn resolve_mesh_name(
     if let Some(configured) = configured_mesh_name {
         return stated_mesh_name(&configured, "the mesh name it was constructed with");
     }
-    if let Some(from_the_environment) =
-        mesh_name_from_the_environment.filter(|value| !value.is_empty())
-    {
-        let Some(from_the_environment) = from_the_environment.to_str() else {
-            return Err(refuse_a_stated_mesh_name(
-                &from_the_environment.to_string_lossy(),
-                MESH_NAME_ENVIRONMENT_VARIABLE,
-                "it is not UTF-8",
-            ));
-        };
-        return stated_mesh_name(from_the_environment, MESH_NAME_ENVIRONMENT_VARIABLE);
+    if let Some(from_the_environment) = what_an_environment_door_says(
+        mesh_name_from_the_environment,
+        MESH_NAME_ENVIRONMENT_VARIABLE,
+    )? {
+        return stated_mesh_name(&from_the_environment, MESH_NAME_ENVIRONMENT_VARIABLE);
     }
     Ok(RuntimeMeshName(DEFAULT_MESH_NAME.to_string()))
 }
@@ -81,19 +76,14 @@ fn resolve_mesh_name(
 fn stated_mesh_name(stated: &str, where_it_came_from: &str) -> Result<RuntimeMeshName> {
     match first_reason_this_is_not_one_channel_name_chunk(stated) {
         None => Ok(RuntimeMeshName(stated.to_string())),
-        Some(what_is_wrong) => Err(refuse_a_stated_mesh_name(
+        Some(what_is_wrong) => Err(refuse_a_stated_configuration_value(
+            "a mesh name",
             stated,
             where_it_came_from,
             &what_is_wrong,
+            THE_ONE_CHUNK_GRAMMAR,
         )),
     }
-}
-
-fn refuse_a_stated_mesh_name(stated: &str, where_it_came_from: &str, what_is_wrong: &str) -> Error {
-    Error::Configuration(format!(
-        "{where_it_came_from} is {stated:?}, which is not a mesh name: {what_is_wrong}. {}",
-        describe_the_one_chunk_grammar()
-    ))
 }
 
 #[cfg(test)]

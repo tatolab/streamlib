@@ -73,7 +73,7 @@ mod tests {
             matches!(identity, HostIdentity::ThisKernelBootAndPidNamespace { .. }),
             "a Linux host must identify itself: {identity:?}"
         );
-        assert!(identity.names_the_same_host_as(&read_this_hosts_identity()));
+        assert_eq!(identity, read_this_hosts_identity());
     }
 
     /// A host whose `/proc` does not answer is unidentified rather than given

@@ -17,6 +17,7 @@ use crate::core::runtime::mesh::runtime_mesh_endpoint::{
     resolve_mesh_endpoints,
 };
 use crate::core::runtime::mesh::runtime_mesh_name::RuntimeMeshName;
+use crate::core::runtime::stated_configuration_value::what_an_environment_door_says;
 
 /// The environment variable that turns multicast discovery off (`0`) or on
 /// (`1`) when the constructor did not say.
@@ -74,9 +75,10 @@ impl ResolvedRuntimeMeshConfiguration {
                 configuration.mesh_multicast_discovery,
                 std::env::var_os(MESH_MULTICAST_DISCOVERY_ENVIRONMENT_VARIABLE),
             )?,
-            multicast_interface: std::env::var_os(MESH_MULTICAST_INTERFACE_ENVIRONMENT_VARIABLE)
-                .filter(|value| !value.is_empty())
-                .map(|value| value.to_string_lossy().into_owned()),
+            multicast_interface: what_an_environment_door_says(
+                std::env::var_os(MESH_MULTICAST_INTERFACE_ENVIRONMENT_VARIABLE),
+                MESH_MULTICAST_INTERFACE_ENVIRONMENT_VARIABLE,
+            )?,
         })
     }
 
@@ -96,8 +98,10 @@ impl ResolvedRuntimeMeshConfiguration {
             },
         )?;
         if let Some(interface) = &self.multicast_interface {
-            configuration
-                .insert_json5("scouting/multicast/interface", &format!("\"{interface}\""))?;
+            configuration.insert_json5(
+                "scouting/multicast/interface",
+                &as_a_json5_string(interface),
+            )?;
         }
         Ok(configuration)
     }
@@ -113,14 +117,16 @@ fn resolve_multicast_discovery(
     if let Some(configured) = configured {
         return Ok(configured);
     }
-    if let Some(stated) = from_the_environment.filter(|value| !value.is_empty()) {
-        return match stated.to_str() {
-            Some("1") => Ok(true),
-            Some("0") => Ok(false),
+    if let Some(stated) = what_an_environment_door_says(
+        from_the_environment,
+        MESH_MULTICAST_DISCOVERY_ENVIRONMENT_VARIABLE,
+    )? {
+        return match stated.as_str() {
+            "1" => Ok(true),
+            "0" => Ok(false),
             _ => Err(Error::Configuration(format!(
-                "{MESH_MULTICAST_DISCOVERY_ENVIRONMENT_VARIABLE} is {:?}, which is neither \"1\" \
-                 nor \"0\"",
-                stated.to_string_lossy()
+                "{MESH_MULTICAST_DISCOVERY_ENVIRONMENT_VARIABLE} is {stated:?}, which is neither \
+                 \"1\" nor \"0\""
             ))),
         };
     }
@@ -130,9 +136,16 @@ fn resolve_multicast_discovery(
 fn as_a_json5_list(endpoints: &[RuntimeMeshEndpoint]) -> String {
     let quoted: Vec<String> = endpoints
         .iter()
-        .map(|endpoint| format!("{:?}", endpoint.as_str()))
+        .map(|endpoint| as_a_json5_string(endpoint.as_str()))
         .collect();
     format!("[{}]", quoted.join(","))
+}
+
+/// One quoting rule for every value this builds into JSON5, so an interface
+/// name carrying a quote cannot make a document an endpoint list would have
+/// escaped.
+fn as_a_json5_string(value: &str) -> String {
+    format!("{value:?}")
 }
 
 #[cfg(test)]
