@@ -12,6 +12,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
@@ -70,6 +71,9 @@ pub struct MeshLinkIngressTable {
 
 /// The thread that resolves waiting links, and what wakes it.
 struct ResolvingEveryWaitingLink {
+    /// Cleared to stop the thread. The wake-up channel cannot say so on its
+    /// own: every ingress holds a sender, and an ingress outlives this.
+    whether_to_keep_resolving: Arc<AtomicBool>,
     wake_the_resolver: Option<Sender<()>>,
     announcement_subscriber: Option<zenoh::pubsub::Subscriber<()>>,
     resolving_thread: Option<std::thread::JoinHandle<()>>,
@@ -178,6 +182,7 @@ impl MeshLinkIngressTable {
         peers: &Arc<RuntimeMeshPeerTable>,
     ) {
         let (wake_the_resolver, when_to_look_again) = crossbeam_channel::unbounded();
+        let whether_to_keep_resolving = Arc::new(AtomicBool::new(true));
 
         // A runtime appearing or leaving is the event every waiting link is
         // waiting on, so the pass runs the moment one does rather than on the
@@ -213,14 +218,21 @@ impl MeshLinkIngressTable {
             peers: Arc::clone(peers),
             carried: Arc::clone(&self.carried),
             iceoryx2_node: self.iceoryx2_node.clone(),
+            wake_the_resolver: wake_the_resolver.clone(),
         };
+        let whether_this_thread_keeps_resolving = Arc::clone(&whether_to_keep_resolving);
         match std::thread::Builder::new()
             .name("streamlib-mesh-ingress-table".to_string())
             .spawn(move || {
-                resolve_every_waiting_link_until_told_to_stop(resolving, when_to_look_again)
+                resolve_every_waiting_link_until_told_to_stop(
+                    resolving,
+                    when_to_look_again,
+                    &whether_this_thread_keeps_resolving,
+                )
             }) {
             Ok(resolving_thread) => {
                 *self.resolving.lock() = Some(ResolvingEveryWaitingLink {
+                    whether_to_keep_resolving,
                     wake_the_resolver: Some(wake_the_resolver),
                     announcement_subscriber: Some(announcement_subscriber),
                     resolving_thread: Some(resolving_thread),
@@ -238,7 +250,12 @@ impl MeshLinkIngressTable {
     pub fn stop(&self) {
         if let Some(mut resolving) = self.resolving.lock().take() {
             drop(resolving.announcement_subscriber.take());
-            drop(resolving.wake_the_resolver.take());
+            resolving
+                .whether_to_keep_resolving
+                .store(false, Ordering::Release);
+            if let Some(wake_the_resolver) = resolving.wake_the_resolver.take() {
+                let _ = wake_the_resolver.send(());
+            }
             if let Some(resolving_thread) = resolving.resolving_thread.take() {
                 if resolving_thread.join().is_err() {
                     tracing::warn!("the mesh ingress-resolving thread panicked");
@@ -281,14 +298,18 @@ struct ResolvingLinksNeeds {
     peers: Arc<RuntimeMeshPeerTable>,
     carried: Arc<Mutex<WhatThisRuntimeIsCarryingFromOtherRuntimes>>,
     iceoryx2_node: Iceoryx2Node,
+    /// Handed to each ingress, so the pass runs the moment the source starts or
+    /// stops sending rather than on the next tick.
+    wake_the_resolver: Sender<()>,
 }
 
 /// The resolving thread's body.
 fn resolve_every_waiting_link_until_told_to_stop(
     resolving: ResolvingLinksNeeds,
     when_to_look_again: Receiver<()>,
+    whether_to_keep_resolving: &AtomicBool,
 ) {
-    loop {
+    while whether_to_keep_resolving.load(Ordering::Acquire) {
         run_one_resolution_pass(&resolving);
         match when_to_look_again.recv_timeout(HOW_OFTEN_EVERY_WAITING_LINK_IS_LOOKED_AT_AGAIN) {
             Ok(()) => {
@@ -454,6 +475,7 @@ fn start_carrying(resolving: &ResolvingLinksNeeds, address: &MeshPortAddress) {
         &resolving.this_runtimes_name,
         address,
         &resolving.iceoryx2_node,
+        resolving.wake_the_resolver.clone(),
     ) {
         Ok(ingress) => ingress,
         Err(cannot_start) => {
@@ -521,7 +543,14 @@ fn keep_carrying_or_stop(resolving: &ResolvingLinksNeeds, address: &MeshPortAddr
 }
 
 /// Hand the ingress every destination of `address` it has not been told about,
-/// and mark those links carried.
+/// and say how far each link from it has got.
+///
+/// A link reads `wired` only once all three hold: this runtime's ingress is
+/// open, the wiring op has opened the link's destination, and the source
+/// runtime holds an egress token for the port. The third is what keeps "wired
+/// with nothing crossing" out of `graph` — a source that never manages to send
+/// the port, for any reason, leaves the link saying so rather than claiming to
+/// carry.
 fn tell_the_ingress_about_every_link_from(
     iceoryx2_node: &Iceoryx2Node,
     carried: &mut WhatThisRuntimeIsCarryingFromOtherRuntimes,
@@ -530,31 +559,50 @@ fn tell_the_ingress_about_every_link_from(
     let Some(ingress) = carried.carrying.get(address) else {
         return;
     };
+    let the_source_is_sending = ingress.the_source_is_sending();
     for (link_id, link) in carried.links.iter_mut() {
-        if &link.address != address
-            || link.the_ingress_knows_about_it
-            || !link.its_destination_is_open
-        {
+        if &link.address != address {
             continue;
         }
-        // Minted here rather than carried: an iceoryx2 notifier is `!Send`, so
-        // it is created on the thread that hands it to the ingress and never
-        // moves again.
-        let notifier = link.notify_service_name.as_deref().and_then(|notify| {
-            iceoryx2_node
-                .open_or_create_notify_service(notify, MAX_INBOUND_LINKS_PER_DESTINATION)
-                .and_then(|notify_service| notify_service.create_notifier())
-                .inspect_err(|cannot_notify| {
-                    tracing::warn!(
-                        "a destination of {address} will not be woken when a bag arrives, so a \
-                         reactive one reads only when something else wakes it: {cannot_notify}"
-                    );
-                })
-                .ok()
-        });
-        ingress.note_a_local_destination(link_id.as_str(), notifier);
-        link.the_ingress_knows_about_it = true;
-        *link.how_far_it_has_got.lock() = RemoteLinkResolution::Wired;
+        if link.its_destination_is_open && !link.the_ingress_knows_about_it {
+            // Minted here rather than carried: an iceoryx2 notifier is `!Send`,
+            // so it is created on the thread that hands it to the ingress and
+            // never moves again.
+            let notifier = link.notify_service_name.as_deref().and_then(|notify| {
+                iceoryx2_node
+                    .open_or_create_notify_service(notify, MAX_INBOUND_LINKS_PER_DESTINATION)
+                    .and_then(|notify_service| notify_service.create_notifier())
+                    .inspect_err(|cannot_notify| {
+                        tracing::warn!(
+                            "a destination of {address} will not be woken when a bag arrives, so \
+                             a reactive one reads only when something else wakes it: \
+                             {cannot_notify}"
+                        );
+                    })
+                    .ok()
+            });
+            ingress.note_a_local_destination(link_id.as_str(), notifier);
+            link.the_ingress_knows_about_it = true;
+        }
+
+        let how_far = if !link.its_destination_is_open {
+            RemoteLinkResolution::AwaitingRemote {
+                reason: format!("{address} is being read and this link is not wired to it yet"),
+            }
+        } else if the_source_is_sending {
+            RemoteLinkResolution::Wired
+        } else {
+            RemoteLinkResolution::AwaitingRemote {
+                reason: format!(
+                    "the runtime {} is on the mesh and offers {}/{}, and is not sending it",
+                    address.runtime_name, address.processor_display_name, address.port_name
+                ),
+            }
+        };
+        let mut how_far_it_has_got = link.how_far_it_has_got.lock();
+        if *how_far_it_has_got != how_far {
+            *how_far_it_has_got = how_far;
+        }
     }
 }
 

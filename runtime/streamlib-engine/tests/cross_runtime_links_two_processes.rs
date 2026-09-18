@@ -330,13 +330,14 @@ fn a_bag_crosses_the_mesh_byte_equal_under_the_stamp_its_producer_wrote() {
             "bag {published} crossed under a stamp its producer did not write"
         );
     }
-    assert!(
+    // A bag crossing and the link reading `wired` are two observations, not
+    // one: the reader can have a bag in hand before the pass that saw the
+    // source's egress token has written the resolution down.
+    reader.wait_until("the link that is carrying bags to read wired", || {
         reader
             .every_state_it_has_reported()
-            .contains(&"wired".to_string()),
-        "a link carrying bags must read as wired; it reported {:?}",
-        reader.every_state_it_has_reported()
-    );
+            .contains(&"wired".to_string())
+    });
 }
 
 /// A source runtime holds no egress token while nobody is reading its port, and

@@ -86,6 +86,11 @@ impl SourceSendingState {
         self.sending_now.store(false, Ordering::Release);
     }
 
+    /// Whether the source is sending this port right now.
+    pub(crate) fn it_is_sending(&self) -> bool {
+        self.sending_now.load(Ordering::Acquire)
+    }
+
     /// Whether the source has stopped sending a port it was sending. A port
     /// that has never started is not "stopped": the ingress has only just
     /// declared its reader token and the egress is still coming up.
@@ -113,6 +118,7 @@ impl MeshLinkIngress {
         this_runtimes_name: &str,
         address: &MeshPortAddress,
         iceoryx2_node: &Iceoryx2Node,
+        wake_the_resolver: crossbeam_channel::Sender<()>,
     ) -> crate::core::Result<Self> {
         let local_channel = mesh_ingress_channel_name(&address.to_string()).into_string();
         let writes_onto_the_local_channel = Arc::new(OutputWriterInner::new());
@@ -160,6 +166,7 @@ impl MeshLinkIngress {
             key_space,
             address,
             &the_source_is_sending,
+            wake_the_resolver,
         )?;
         let reader_token = session
             .liveliness()
@@ -196,6 +203,12 @@ impl MeshLinkIngress {
             }),
             writing_thread: Some(writing_thread),
         })
+    }
+
+    /// Whether the source is sending this port right now — it holds an egress
+    /// token for it.
+    pub(super) fn the_source_is_sending(&self) -> bool {
+        self.the_source_is_sending.it_is_sending()
     }
 
     /// Whether the source stopped sending a port it was sending.
@@ -307,6 +320,7 @@ fn declare_the_egress_token_subscriber(
     key_space: &RuntimeMeshKeySpace,
     address: &MeshPortAddress,
     the_source_is_sending: &Arc<SourceSendingState>,
+    wake_the_resolver: crossbeam_channel::Sender<()>,
 ) -> crate::core::Result<zenoh::pubsub::Subscriber<()>> {
     let the_source_is_sending = Arc::clone(the_source_is_sending);
     session
@@ -317,11 +331,19 @@ fn declare_the_egress_token_subscriber(
             &address.port_name,
         ))
         .history(true)
-        .callback(move |token| match token.kind() {
-            zenoh::sample::SampleKind::Put => the_source_is_sending.note_that_it_started_sending(),
-            zenoh::sample::SampleKind::Delete => {
-                the_source_is_sending.note_that_it_stopped_sending()
+        .callback(move |token| {
+            match token.kind() {
+                zenoh::sample::SampleKind::Put => {
+                    the_source_is_sending.note_that_it_started_sending()
+                }
+                zenoh::sample::SampleKind::Delete => {
+                    the_source_is_sending.note_that_it_stopped_sending()
+                }
             }
+            // Whether the source is sending decides whether the link reads
+            // `wired`, so the pass runs the moment that changes rather than on
+            // the next tick. A hand-off only: this is the link's receive loop.
+            let _ = wake_the_resolver.send(());
         })
         .wait()
         .map_err(|declare_failure| {
