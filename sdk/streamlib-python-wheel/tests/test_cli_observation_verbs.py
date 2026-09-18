@@ -21,10 +21,17 @@ import io
 import itertools
 import json
 import os
+import platform
+import shutil
+import socket
+import subprocess
+import sys
+import tempfile
 import threading
 import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from importlib.metadata import version
 from pathlib import Path
 from typing import Any, Callable, Generator, NamedTuple, Optional, TextIO
 
@@ -1247,6 +1254,222 @@ def test_nodes_renders_a_live_node_as_a_table(
     assert "rig-desk-a1b2" in printed
     assert "Rlisted" in printed and server.url in printed
     assert "yes" in printed
+
+
+# ─── The mesh-peers table ────────────────────────────────────────────────────
+#
+# The registry answers what this machine can be *driven* through; the mesh
+# answers what exists at all. A runtime hosting no control plane writes no
+# registry entry and is in the second table only — which is why these arms hold
+# a real `Runtime()` in a subprocess rather than writing a file: there is no
+# file to write, and the announcement is the whole subject.
+#
+# Every arm pins its own mesh name and dials an explicit loopback endpoint with
+# multicast off, so no arm can reach the machine's real mesh or another arm's.
+
+
+# Two things here are load-bearing and neither is obvious.
+#
+# The runtime is held in a name: dropping it tears the engine down, which takes
+# the announcement off the mesh again — the arm would then be reading a mesh
+# nobody is on and passing for the wrong reason.
+#
+# And `READY` goes down a duplicate of fd 1 taken *before* the runtime exists,
+# because a constructed runtime installs an fd-level stdio interceptor: a plain
+# `print` after it lands in the engine's log pipeline instead of reaching the
+# parent, and under `STREAMLIB_QUIET` it is never seen again at all.
+# Raw, so the newline this writes stays an escape for the child to read
+# rather than ending the literal here.
+A_RUNTIME_HOLDING_ITS_MESH_NAME = r"""
+import os
+import sys
+
+report = os.dup(1)
+from streamlib import Runtime
+
+runtime_name, mesh_name, listening = sys.argv[1:4]
+held_runtime = Runtime(
+    runtime_name=runtime_name,
+    mesh_name=mesh_name,
+    mesh_listen_endpoints=[listening],
+    mesh_multicast_discovery=False,
+)
+os.write(report, b"READY\n")
+sys.stdin.read()
+del held_runtime
+"""
+
+
+class RuntimeOnATestMesh(NamedTuple):
+    """A live runtime in its own process, and how to reach its mesh."""
+
+    runtime_name: str
+    mesh_name: str
+    listening_endpoint: str
+    runtime_id: str
+
+
+def a_free_loopback_port() -> int:
+    """A loopback port nothing is listening on, released before it is named."""
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+def a_mesh_name_of_its_own(arm: str) -> str:
+    """A mesh name no other arm and no other machine uses.
+
+    One chunk of the channel-name grammar the engine refuses anything else
+    against: a lowercase letter, then lowercase, digits, `-` and `_`.
+    """
+    return f"t-nodes-{arm}-{os.getpid()}-{next(_MESH_NAME_COUNTER)}"
+
+
+_MESH_NAME_COUNTER = itertools.count()
+
+
+@pytest.fixture
+def start_runtime_on_a_test_mesh():
+    """Hand out runtimes in their own processes and reap them however a test ends.
+
+    Each takes a pinned `runtime_id` so an arm can write the registry row that
+    runtime would have written for itself had it hosted a control plane —
+    which hosting one needs a GPU for, and these arms have none.
+
+    Each also takes a short runtime directory of its own, directly under
+    `/tmp`: the runtime opens a Unix socket inside it, and `pytest`'s own
+    `tmp_path` is long enough to overrun `SUN_LEN`. That directory is the
+    child's alone, so the registry an arm reads stays the isolated one the
+    parent points at.
+    """
+    started: "list[subprocess.Popen[str]]" = []
+    runtime_directories: "list[Path]" = []
+
+    def start(arm: str, runtime_name: str) -> RuntimeOnATestMesh:
+        mesh_name = a_mesh_name_of_its_own(arm)
+        listening = f"tcp/127.0.0.1:{a_free_loopback_port()}"
+        runtime_id = f"R{arm}{os.getpid()}"
+        runtime_directory = Path(
+            tempfile.mkdtemp(prefix=f"sl-nodes-{os.getpid()}-", dir="/tmp")
+        )
+        runtime_directories.append(runtime_directory)
+        runtime = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                A_RUNTIME_HOLDING_ITS_MESH_NAME,
+                runtime_name,
+                mesh_name,
+                listening,
+            ],
+            env=dict(
+                os.environ,
+                STREAMLIB_RUNTIME_ID=runtime_id,
+                XDG_RUNTIME_DIR=str(runtime_directory),
+                STREAMLIB_ICEORYX2_DOMAIN_ROOT=str(runtime_directory / "iox"),
+                # The engine mirrors its own log to stdout, which is where the
+                # runtime reports from; quiet leaves `READY` the only line.
+                STREAMLIB_QUIET="1",
+            ),
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        started.append(runtime)
+        assert runtime.stdout is not None
+        assert runtime.stdout.readline().strip() == "READY", (
+            "the runtime must reach its mesh before an arm reads it"
+        )
+        return RuntimeOnATestMesh(runtime_name, mesh_name, listening, runtime_id)
+
+    try:
+        yield start
+    finally:
+        for runtime in started:
+            runtime.kill()
+            runtime.wait()
+        for runtime_directory in runtime_directories:
+            shutil.rmtree(runtime_directory, ignore_errors=True)
+
+
+def nodes_output_for(on_the_mesh: "Optional[RuntimeOnATestMesh]", capsys, *, arm: str):
+    """Run `streamlib nodes` against one test mesh and hand back what it printed."""
+    if on_the_mesh is None:
+        argv = ["nodes", "--mesh-name", a_mesh_name_of_its_own(arm)]
+    else:
+        argv = [
+            "nodes",
+            "--mesh-name",
+            on_the_mesh.mesh_name,
+            "--mesh-peer",
+            on_the_mesh.listening_endpoint,
+        ]
+    assert cli.main([*argv, "--no-mesh-multicast-discovery"]) == 0
+    return capsys.readouterr().out
+
+
+def test_a_runtime_on_the_mesh_is_listed_once_with_what_it_says_it_is(
+    isolated_registry, start_runtime_on_a_test_mesh, capsys
+):
+    # A runtime hosting no control plane: nothing in the registry, everything
+    # in the mesh table. This is the case the second table exists for.
+    on_the_mesh = start_runtime_on_a_test_mesh("listed", "mesh-only-runtime")
+
+    printed = nodes_output_for(on_the_mesh, capsys, arm="listed")
+
+    assert "No running nodes found" in printed, (
+        "a runtime hosting no control plane registers nothing"
+    )
+    assert f"On the {on_the_mesh.mesh_name} mesh:" in printed
+    assert printed.count("mesh-only-runtime") == 1, printed
+    peer_row = next(
+        line for line in printed.splitlines() if line.startswith("mesh-only-runtime")
+    )
+    assert platform.node() in peer_row, (
+        f"the peer's host is a column a reader sees: {peer_row!r}"
+    )
+    assert version("streamlib") in peer_row, (
+        "the version a peer reports is the release the reader installed: "
+        f"{peer_row!r}"
+    )
+
+
+def test_a_runtime_that_is_already_a_registry_row_is_not_repeated(
+    isolated_registry, stub_control_plane, start_runtime_on_a_test_mesh, capsys
+):
+    # The same runtime seen twice — once through the file it wrote, once
+    # through its announcement. A reader must be told about it once.
+    on_the_mesh = start_runtime_on_a_test_mesh("dedup", "registered-runtime")
+    server = stub_control_plane()
+    write_registry_entry(
+        isolated_registry,
+        on_the_mesh.runtime_id,
+        server.url,
+        runtime_name=on_the_mesh.runtime_name,
+    )
+
+    printed = nodes_output_for(on_the_mesh, capsys, arm="dedup")
+
+    assert printed.count("registered-runtime") == 1, printed
+    assert server.url in printed, "the row a reader keeps is the drivable one"
+    assert f"No runtimes on {on_the_mesh.mesh_name}" not in printed
+
+
+def test_an_empty_mesh_says_so_and_names_the_mesh(isolated_registry, capsys):
+    mesh_name = a_mesh_name_of_its_own("empty")
+
+    assert cli.main(["nodes", "--mesh-name", mesh_name, "--no-mesh-multicast-discovery"]) == 0
+
+    assert f"No runtimes on the {mesh_name} mesh." in capsys.readouterr().out
+
+
+def test_a_mesh_peer_this_build_cannot_dial_is_a_usage_error(isolated_registry, capsys):
+    # The refusal comes from the same endpoint grammar `Runtime()` applies, and
+    # it is the caller's mistake rather than an unreachable mesh — so `nodes`
+    # fails on it instead of printing a table beside it.
+    assert cli.main(["nodes", "--mesh-peer", "quic/127.0.0.1:7447"]) == 1
+
+    assert "quic" in capsys.readouterr().err
 
 
 def test_a_verb_targets_a_node_by_its_runtime_name(

@@ -458,19 +458,45 @@ def scaffold_new_app(target_directory: Path, *, use_test_pattern_source: bool) -
 # ─── Observation verbs ───────────────────────────────────────────────────────
 
 
-def print_discovered_nodes() -> int:
-    """`streamlib nodes`: the running control planes, as an aligned table."""
+def print_discovered_nodes(
+    *,
+    mesh_name: "Optional[str]" = None,
+    mesh_peer_endpoints: "Optional[list[str]]" = None,
+    mesh_multicast_discovery: "Optional[bool]" = None,
+) -> int:
+    """`streamlib nodes`: two aligned tables — this machine's registered
+    control planes, then every runtime on the mesh.
+
+    The two answer different questions. The registry says what this machine can
+    be *driven* through, and only a runtime hosting a control plane writes to
+    it. The mesh says what exists at all, on any machine, control plane or not.
+    """
+    stream = sys.stdout
+    registered_runtime_ids = _print_the_registry_table(stream)
+    print(file=stream)
+    _print_the_mesh_peers_table(
+        stream,
+        registered_runtime_ids=registered_runtime_ids,
+        mesh_name=mesh_name,
+        mesh_peer_endpoints=mesh_peer_endpoints,
+        mesh_multicast_discovery=mesh_multicast_discovery,
+    )
+    print(
+        "\nOnly a runtime hosting a control plane is in the first table; one "
+        "without is on the mesh and not drivable.",
+        file=stream,
+    )
+    return 0
+
+
+def _print_the_registry_table(stream: "Any") -> "set[str]":
+    """The on-disk registry, and the runtime ids it listed."""
     from ._node_registry import registry_directory, scan_check_and_prune
 
-    stream = sys.stdout
     nodes = scan_check_and_prune()
     if not nodes:
         print(f"No running nodes found in {registry_directory()}.", file=stream)
-        print(
-            "(Only runtimes hosting a control plane appear here.)",
-            file=stream,
-        )
-        return 0
+        return set()
 
     runtime_name_width = max(
         [len(node.entry.runtime_name) for node in nodes] + [len("RUNTIME_NAME")]
@@ -496,12 +522,65 @@ def print_discovered_nodes() -> int:
             f"{node.entry.hint}",
             file=stream,
         )
+    return {node.entry.runtime_id for node in nodes}
+
+
+def _print_the_mesh_peers_table(
+    stream: "Any",
+    *,
+    registered_runtime_ids: "set[str]",
+    mesh_name: "Optional[str]",
+    mesh_peer_endpoints: "Optional[list[str]]",
+    mesh_multicast_discovery: "Optional[bool]",
+) -> None:
+    """Every runtime on the mesh that is not already a registry row.
+
+    A mesh that will not answer leaves the registry table standing and says so:
+    the first table is the local truth and does not depend on a network.
+    """
+    from ._engine import _observe_the_runtime_mesh
+
+    try:
+        observed = _observe_the_runtime_mesh(
+            mesh_name=mesh_name,
+            mesh_peer_endpoints=mesh_peer_endpoints,
+            mesh_multicast_discovery=mesh_multicast_discovery,
+        )
+    except ValueError as refused_value:
+        raise ObservationVerbUsageError(str(refused_value)) from refused_value
+    except RuntimeError as unreachable_mesh:
+        print(f"Mesh peers unavailable: {unreachable_mesh}", file=stream)
+        return
+
+    peers = [
+        peer
+        for peer in observed.peers
+        if peer.runtime_id is None or peer.runtime_id not in registered_runtime_ids
+    ]
+    if not peers:
+        print(f"No runtimes on the {observed.mesh_name} mesh.", file=stream)
+        return
+
+    hosts = [peer.host_name or "" for peer in peers]
+    urls = [",".join(peer.control_plane_urls or []) for peer in peers]
+    runtime_name_width = max(
+        [len(peer.runtime_name) for peer in peers] + [len("RUNTIME_NAME")]
+    )
+    host_width = max([len(host) for host in hosts] + [len("HOST")])
+    url_width = max([len(url) for url in urls] + [len("CONTROL_PLANE_URLS")])
+
+    print(f"On the {observed.mesh_name} mesh:", file=stream)
     print(
-        "\nOnly runtimes hosting a control plane appear here; a runtime without "
-        "a control endpoint is not listed (and is not missing).",
+        f"{'RUNTIME_NAME':<{runtime_name_width}}  {'HOST':<{host_width}}  "
+        f"{'CONTROL_PLANE_URLS':<{url_width}}  ENGINE_VERSION",
         file=stream,
     )
-    return 0
+    for peer, host, url in zip(peers, hosts, urls):
+        print(
+            f"{peer.runtime_name:<{runtime_name_width}}  {host:<{host_width}}  "
+            f"{url:<{url_width}}  {peer.engine_version or ''}",
+            file=stream,
+        )
 
 
 def call_observation_tool(
@@ -929,14 +1008,48 @@ def build_argument_parser() -> argparse.ArgumentParser:
             help="Registered runtime name or runtime_id to target (resolved via the node registry).",
         )
 
-    subcommands.add_parser(
+    nodes_command = subcommands.add_parser(
         "nodes",
-        help="List the running StreamLib nodes on this machine.",
+        help="List the running StreamLib nodes on this machine and on the mesh.",
         description=(
             "Scans the node registry, liveness-checks every entry, prunes the "
             "ones that are gone, and prints runtime_name, runtime_id, "
             "control_url, pid, alive? and hint. Only runtimes hosting a "
-            "control plane register."
+            "control plane register. Then reads the runtime mesh — every "
+            "runtime on it, on any machine, control plane or not — through a "
+            "short-lived session that announces nothing, so listing a mesh is "
+            "invisible to every runtime on it. About a second with discovery "
+            "on: Zenoh's scouting delay plus the time each runtime found is "
+            "given to say what it is."
+        ),
+    )
+    nodes_command.add_argument(
+        "--mesh-name",
+        dest="mesh_name",
+        metavar="NAME",
+        help=(
+            "Mesh to read. Omitted, reads STREAMLIB_MESH_NAME, else the 'default' mesh — "
+            "the same resolution `streamlib run` uses, so the flags match."
+        ),
+    )
+    nodes_command.add_argument(
+        "--mesh-peer",
+        dest="mesh_peer_endpoints",
+        action="append",
+        metavar="ENDPOINT",
+        help=(
+            "Runtime or router to dial on the mesh, for a network multicast does not cross "
+            "(udp/<host>:<port>?rel=1 or tcp/<host>:<port>). Repeatable."
+        ),
+    )
+    nodes_command.add_argument(
+        "--no-mesh-multicast-discovery",
+        dest="mesh_multicast_discovery",
+        action="store_false",
+        default=None,
+        help=(
+            "Do not find mesh peers by multicast. Only the endpoints --mesh-peer names "
+            "are read, which is what makes an empty mesh near-instant."
         ),
     )
 
@@ -1278,7 +1391,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 arguments.directory, use_test_pattern_source=arguments.test_pattern
             )
         if arguments.verb == "nodes":
-            return print_discovered_nodes()
+            return print_discovered_nodes(
+                mesh_name=arguments.mesh_name,
+                mesh_peer_endpoints=arguments.mesh_peer_endpoints,
+                mesh_multicast_discovery=arguments.mesh_multicast_discovery,
+            )
         if arguments.verb == "enable-virtual-camera":
             return enable_virtual_camera(print_only=arguments.print_only)
         if arguments.verb == "graph":
