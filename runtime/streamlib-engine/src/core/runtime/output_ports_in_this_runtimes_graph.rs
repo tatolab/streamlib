@@ -89,11 +89,10 @@ fn every_output_port_in(graph: &Graph) -> Vec<OutputPortOfferedOnTheMesh> {
             node.ports
                 .outputs
                 .iter()
-                .map(|port| OutputPortOfferedOnTheMesh {
+                .map(move |port| OutputPortOfferedOnTheMesh {
                     processor_display_name: node.display_name.clone(),
                     port_name: port.name.clone(),
                 })
-                .collect::<Vec<_>>()
         })
         .collect();
     // Sorted so two runs of one graph answer the same, and so a refusal that

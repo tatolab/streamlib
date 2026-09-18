@@ -22,7 +22,9 @@ use zenoh::Wait;
 use zenoh::sample::SampleKind;
 
 use crate::core::runtime::mesh::mesh_port_egress::{MeshPortEgress, WhatOneEgressSends};
-use crate::core::runtime::mesh::output_ports_offered_on_the_mesh::WhatThisRuntimeOffersOnTheMeshRegistry;
+use crate::core::runtime::mesh::output_ports_offered_on_the_mesh::{
+    OutputPortOfferedOnTheMesh, WhatThisRuntimeOffersOnTheMeshRegistry,
+};
 use crate::core::runtime::mesh::runtime_mesh_key::{ReaderOfAnOutputPort, RuntimeMeshKeySpace};
 use crate::iceoryx2::Iceoryx2Node;
 
@@ -31,9 +33,6 @@ enum WhatTheReadersDid {
     ARuntimeStartedReading(ReaderOfAnOutputPort),
     ARuntimeStoppedReading(ReaderOfAnOutputPort),
 }
-
-/// One of this runtime's output ports, as the readers address it.
-type OnePortsAddress = (String, String);
 
 /// This runtime's egresses, and the subscriber that decides which exist.
 ///
@@ -127,40 +126,42 @@ fn spawn_the_egress_thread(
     std::thread::Builder::new()
         .name("streamlib-mesh-egress-table".to_string())
         .spawn(move || {
-            let mut who_is_reading: BTreeMap<OnePortsAddress, BTreeSet<String>> = BTreeMap::new();
-            let mut sending: BTreeMap<OnePortsAddress, MeshPortEgress> = BTreeMap::new();
+            let mut who_is_reading: BTreeMap<OutputPortOfferedOnTheMesh, BTreeSet<String>> =
+                BTreeMap::new();
+            let mut sending: BTreeMap<OutputPortOfferedOnTheMesh, MeshPortEgress> = BTreeMap::new();
 
             // Ends when the subscriber is dropped, which drops the sender.
             while let Ok(did) = what_the_egress_thread_reads.recv() {
                 match did {
                     WhatTheReadersDid::ARuntimeStartedReading(reader) => {
-                        let address = (
-                            reader.processor_display_name.clone(),
-                            reader.port_name.clone(),
-                        );
+                        let port = OutputPortOfferedOnTheMesh {
+                            processor_display_name: reader.processor_display_name.clone(),
+                            port_name: reader.port_name.clone(),
+                        };
                         if !who_is_reading
-                            .entry(address.clone())
+                            .entry(port.clone())
                             .or_default()
                             .insert(reader.reading_runtime_name.clone())
                         {
                             continue;
                         }
-                        if sending.contains_key(&address) {
+                        if sending.contains_key(&port) {
                             continue;
                         }
                         // Only a port this runtime actually has: a reader
                         // naming one it does not gets its refusal from the
                         // offered-ports query it asked before it wired, and
                         // nothing is created for it here.
-                        let Some(how_to_read_the_port) =
-                            offered.how_to_read_an_offered_output_port(&address.0, &address.1)
+                        let Some(how_to_read_the_port) = offered
+                            .how_to_read_an_offered_output_port(
+                                &port.processor_display_name,
+                                &port.port_name,
+                            )
                         else {
                             tracing::debug!(
-                                "{} is reading {}/{}, which this runtime does not offer; nothing \
-                                 is sent for it",
-                                reader.reading_runtime_name,
-                                address.0,
-                                address.1
+                                "{} is reading {port}, which this runtime does not offer; \
+                                 nothing is sent for it",
+                                reader.reading_runtime_name
                             );
                             continue;
                         };
@@ -168,36 +169,34 @@ fn spawn_the_egress_thread(
                             session: session.clone(),
                             key_space: key_space.clone(),
                             this_runtimes_name: this_runtimes_name.clone(),
-                            processor_display_name: address.0.clone(),
-                            port_name: address.1.clone(),
+                            processor_display_name: port.processor_display_name.clone(),
+                            port_name: port.port_name.clone(),
                             how_to_read_the_port,
                             iceoryx2_node: iceoryx2_node.clone(),
                         }) {
                             Ok(egress) => {
-                                sending.insert(address, egress);
+                                sending.insert(port, egress);
                             }
                             Err(cannot_spawn) => tracing::warn!(
-                                "the mesh could not start sending {}/{} for want of a thread: \
-                                 {cannot_spawn}",
-                                address.0,
-                                address.1
+                                "the mesh could not start sending {port} for want of a thread: \
+                                 {cannot_spawn}"
                             ),
                         }
                     }
                     WhatTheReadersDid::ARuntimeStoppedReading(reader) => {
-                        let address = (
-                            reader.processor_display_name.clone(),
-                            reader.port_name.clone(),
-                        );
-                        let Some(readers) = who_is_reading.get_mut(&address) else {
+                        let port = OutputPortOfferedOnTheMesh {
+                            processor_display_name: reader.processor_display_name.clone(),
+                            port_name: reader.port_name.clone(),
+                        };
+                        let Some(readers) = who_is_reading.get_mut(&port) else {
                             continue;
                         };
                         readers.remove(&reader.reading_runtime_name);
                         if readers.is_empty() {
-                            who_is_reading.remove(&address);
+                            who_is_reading.remove(&port);
                             // Dropping the egress stops its thread, drops its
                             // channel subscriber and undeclares its token.
-                            sending.remove(&address);
+                            sending.remove(&port);
                         }
                     }
                 }

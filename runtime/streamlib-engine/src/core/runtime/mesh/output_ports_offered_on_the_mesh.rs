@@ -125,10 +125,13 @@ impl WhatThisRuntimeOffersOnTheMeshRegistry {
     }
 
     /// Every output port this runtime offers right now.
+    ///
+    /// The reader is cloned out from under the lock before it is called: it
+    /// reads the graph, which takes the lock a compile holds, and holding this
+    /// one across that would queue every other caller behind a compile.
     pub fn output_ports_it_offers_right_now(&self) -> OutputPortsOfferedOnTheMesh {
-        self.reader
-            .lock()
-            .as_ref()
+        let reader = self.reader.lock().clone();
+        reader
             .map(|reader| reader.output_ports_it_offers_right_now())
             .unwrap_or_default()
     }

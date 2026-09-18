@@ -39,7 +39,7 @@ pub const CHANNEL_QUIET_BEFORE_THE_BACKOFF_CLIMBS: Duration = Duration::from_mil
 ///
 /// A reader's wake-up rate follows the channel it reads rather than the clock. A
 /// channel carrying at any ordinary cadence never leaves the floor, because the
-/// gap between its bags never reaches [`QUIET_BEFORE_THE_BACKOFF_CLIMBS`] — so
+/// gap between its bags never reaches [`CHANNEL_QUIET_BEFORE_THE_BACKOFF_CLIMBS`] — so
 /// the saving is taken from idle readers only, and a live one is read exactly as
 /// promptly as before.
 #[derive(Debug)]
@@ -60,7 +60,7 @@ impl ChannelIdlePollBackoff {
     }
 
     /// The sleep this empty poll earns, climbing for the next one once the
-    /// channel has been quiet past [`QUIET_BEFORE_THE_BACKOFF_CLIMBS`].
+    /// channel has been quiet past [`CHANNEL_QUIET_BEFORE_THE_BACKOFF_CLIMBS`].
     ///
     /// `polled_at` is read from the monotonic clock by the caller rather than
     /// summed from the sleeps taken, which would undercount by every scheduler

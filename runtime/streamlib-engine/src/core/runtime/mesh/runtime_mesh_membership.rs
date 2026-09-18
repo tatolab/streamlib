@@ -159,6 +159,19 @@ impl RuntimeMeshMembership {
         })
     }
 
+    /// The session this runtime is announced on, or `None` while it is not on
+    /// its mesh.
+    ///
+    /// Cloned out from under the lock rather than borrowed: every caller goes
+    /// on to declare something, which talks to the network, and `leave` wants
+    /// this lock.
+    fn the_session_it_is_announced_on(&self) -> Option<zenoh::Session> {
+        match &*self.session.lock() {
+            RuntimeMeshSessionState::Open(announced) => Some(announced.session.clone()),
+            RuntimeMeshSessionState::NotOnTheMesh { .. } => None,
+        }
+    }
+
     /// Start serving this runtime's own output ports: answer a peer asking
     /// which it offers, and send one the moment another runtime reads it.
     ///
@@ -171,14 +184,8 @@ impl RuntimeMeshMembership {
         offered: &Arc<WhatThisRuntimeOffersOnTheMeshRegistry>,
         iceoryx2_node: &Iceoryx2Node,
     ) {
-        // Cloned out from under the lock rather than held across the declare:
-        // the declare talks to the network, and `leave` wants this lock.
-        let session = {
-            let held = self.session.lock();
-            let RuntimeMeshSessionState::Open(announced) = &*held else {
-                return;
-            };
-            announced.session.clone()
+        let Some(session) = self.the_session_it_is_announced_on() else {
+            return;
         };
         let key_space = self.key_space.clone();
         let this_runtimes_name = self.announced_identity.runtime_name.clone();
@@ -228,12 +235,8 @@ impl RuntimeMeshMembership {
         &self,
         ingress_table: &Arc<MeshLinkIngressTable>,
     ) {
-        let session = {
-            let held = self.session.lock();
-            let RuntimeMeshSessionState::Open(announced) = &*held else {
-                return;
-            };
-            announced.session.clone()
+        let Some(session) = self.the_session_it_is_announced_on() else {
+            return;
         };
         *self.carrying_links_from_other_runtimes.lock() = Some(Arc::clone(ingress_table));
         let key_space = self.key_space.clone();
@@ -276,8 +279,10 @@ impl RuntimeMeshMembership {
         // Before the session: dropping the egresses undeclares their tokens and
         // releases their channel slots while there is still a session to say so
         // on, so a reader sees every port stop rather than inferring it from a
-        // lease running out.
-        drop(self.serving_this_runtimes_output_ports.lock().take());
+        // lease running out. Taken out under the lock and dropped outside it,
+        // because that teardown joins threads and talks to the network.
+        let stopped_serving = self.serving_this_runtimes_output_ports.lock().take();
+        drop(stopped_serving);
         if let Some(carrying) = self.carrying_links_from_other_runtimes.lock().take() {
             carrying.stop();
         }

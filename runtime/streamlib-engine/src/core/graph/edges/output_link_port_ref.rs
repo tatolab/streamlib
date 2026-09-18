@@ -72,11 +72,6 @@ impl OutputLinkPortRef {
             Self::OnAnotherRuntime(address) => Some(address),
         }
     }
-
-    /// Whether the port this link carries from lives on another runtime.
-    pub fn is_on_another_runtime(&self) -> bool {
-        matches!(self, Self::OnAnotherRuntime(_))
-    }
 }
 
 impl fmt::Display for OutputLinkPortRef {
@@ -159,13 +154,11 @@ mod tests {
         );
         assert_eq!(on_this_runtime.mesh_port_address(), None);
         assert_eq!(on_this_runtime.port_name(), "video");
-        assert!(!on_this_runtime.is_on_another_runtime());
 
         let on_another = OutputLinkPortRef::on_another_runtime(a_mesh_address());
         assert_eq!(on_another.processor_id_on_this_runtime(), None);
         assert_eq!(on_another.mesh_port_address(), Some(&a_mesh_address()));
         assert_eq!(on_another.port_name(), "video");
-        assert!(on_another.is_on_another_runtime());
     }
 
     /// A remote reference renders as the mesh address a reader can paste back

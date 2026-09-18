@@ -68,12 +68,7 @@ impl GraphInspector {
 
         Some(LinkSnapshot {
             id: id.clone(),
-            source_processor: link
-                .source
-                .processor_id_on_this_runtime()
-                .cloned()
-                .unwrap_or_else(|| ProcessorUniqueId::from(link.source.to_string())),
-            source_port: link.source.port_name().to_string(),
+            source: link.source.clone(),
             target_processor: link.target.processor_id.clone(),
             target_port: link.target.port_name.clone(),
             capacity: link.capacity.into(),

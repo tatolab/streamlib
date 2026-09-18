@@ -112,6 +112,11 @@ impl MeshLinkIngressTable {
     ///
     /// `None` for a destination that drains no listener — a `manual` processor
     /// polls its own ports and is woken by nobody.
+    ///
+    /// Reachable rather than supported: the cross-runtime-link fixture stands a
+    /// runtime's mesh half up with no compiler, so it reports its own
+    /// destination the way the wiring op reports a real one.
+    #[doc(hidden)]
     pub fn note_how_a_links_destination_is_woken(
         &self,
         link_id: &LinkUniqueId,
@@ -223,14 +228,17 @@ impl MeshLinkIngressTable {
                 }
             }
         }
-        let mut carried = self.carried.lock();
-        carried.carrying.clear();
-        for link in carried.links.values_mut() {
-            link.the_ingress_knows_about_it = false;
-            *link.how_far_it_has_got.lock() = RemoteLinkResolution::AwaitingRemote {
-                reason: "this runtime has left the mesh".to_string(),
-            };
-        }
+        let stopped_reading = {
+            let mut carried = self.carried.lock();
+            for link in carried.links.values_mut() {
+                link.the_ingress_knows_about_it = false;
+                *link.how_far_it_has_got.lock() = RemoteLinkResolution::AwaitingRemote {
+                    reason: "this runtime has left the mesh".to_string(),
+                };
+            }
+            std::mem::take(&mut carried.carrying)
+        };
+        drop(stopped_reading);
     }
 
     fn ask_the_resolver_to_look_again(&self) {
@@ -470,9 +478,8 @@ fn keep_carrying_or_stop(resolving: &ResolvingLinksNeeds, address: &MeshPortAddr
                 address.runtime_name
             )
         };
-        {
+        let stopped_reading = {
             let mut carried = resolving.carried.lock();
-            carried.carrying.remove(address);
             for link in carried
                 .links
                 .values_mut()
@@ -480,7 +487,9 @@ fn keep_carrying_or_stop(resolving: &ResolvingLinksNeeds, address: &MeshPortAddr
             {
                 link.the_ingress_knows_about_it = false;
             }
-        }
+            carried.carrying.remove(address)
+        };
+        drop(stopped_reading);
         say_how_far_every_link_from(
             resolving,
             address,

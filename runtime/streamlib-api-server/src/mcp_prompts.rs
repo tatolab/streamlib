@@ -416,12 +416,16 @@ fn insert_processor_between_linked_processors_recipe(
         ))
     })?;
     let source = node_with_id(graph, source_processor_id)?;
-    let target = node_with_id(graph, link.target.processor_id_on_this_runtime().ok_or_else(|| {
+    // The engine only ever renders a target on this node, so this is defence
+    // against a graph document that came from somewhere else rather than a
+    // shape this runtime produces.
+    let target_processor_id = link.target.processor_id_on_this_runtime().ok_or_else(|| {
         RpcError::invalid_params(format!(
             "link `{link_id}` carries into a port on another runtime, and a processor cannot be \
              inserted into one from here"
         ))
-    })?)?;
+    })?;
+    let target = node_with_id(graph, target_processor_id)?;
     let source_port = link.source.port_name();
     let target_port = link.target.port_name();
     let source_label = processor_node_display_name_and_id_label(source);

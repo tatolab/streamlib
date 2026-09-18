@@ -290,11 +290,14 @@ async fn connect_impl(
         }),
     );
 
-    let link_id = match from.mesh_port_address().cloned() {
-        Some(address) => {
+    let link_id = match from.clone() {
+        OutputLinkPortRef::OnAnotherRuntime(address) => {
             apply_a_link_from_another_runtime(&compiler, &runtime_mesh, address, to.clone())?
         }
-        None => apply_a_link_from_this_runtime(&compiler, from.clone(), to.clone())?,
+        OutputLinkPortRef::OnThisRuntime {
+            processor_id,
+            port_name,
+        } => apply_a_link_from_this_runtime(&compiler, processor_id, port_name, to.clone())?,
     };
 
     commit_live_graph_change(&compiler, live).await?;
@@ -368,15 +371,10 @@ fn resolve_a_source_addressing_this_runtimes_own_port(
 /// link has always taken.
 fn apply_a_link_from_this_runtime(
     compiler: &Arc<Compiler>,
-    from: OutputLinkPortRef,
+    from_processor: ProcessorUniqueId,
+    from_port: String,
     to: InputLinkPortRef,
 ) -> Result<LinkUniqueId> {
-    let from_processor = from
-        .processor_id_on_this_runtime()
-        .cloned()
-        .expect("a source with no mesh address is on this runtime");
-    let from_port = from.port_name().to_string();
-
     let (link_id, channel) =
         compiler.scope(|graph, tx| -> Result<(LinkUniqueId, ChannelName)> {
             // Validate endpoints + ports FIRST — before the channel-name
@@ -415,7 +413,10 @@ fn apply_a_link_from_this_runtime(
 
             let link_id = graph
                 .traversal_mut()
-                .add_e(from, to)
+                .add_e(
+                    OutputLinkPortRef::new(from_processor.clone(), from_port.clone()),
+                    to,
+                )
                 .inspect(|link| tx.log(PendingOperation::AddLink(link.id.clone())))
                 .first()
                 .map(|link| link.id.clone())
