@@ -707,7 +707,7 @@ mod tests {
                 service_name: "test/out".to_string(),
                 trust_tier: crate::iceoryx2::ChannelTrustTier::Trusted,
                 expected_payload_bytes: 4096,
-                chunk_ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+                chunk_ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
             },
         );
         inner.add_channel_link("out", "L-test-notify", Some(notifier));
@@ -767,7 +767,7 @@ mod tests {
                 service_name: "test/mixed-fanout".to_string(),
                 trust_tier: crate::iceoryx2::ChannelTrustTier::Trusted,
                 expected_payload_bytes: 4096,
-                chunk_ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+                chunk_ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
             },
         );
 
@@ -892,7 +892,7 @@ mod tests {
                 service_name: "test/out".to_string(),
                 trust_tier: crate::iceoryx2::ChannelTrustTier::Trusted,
                 expected_payload_bytes: 4096,
-                chunk_ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+                chunk_ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
             },
         );
 
@@ -971,7 +971,7 @@ mod tests {
                 service_name: "test/reclaim/out".to_string(),
                 trust_tier: ChannelTrustTier::Trusted,
                 expected_payload_bytes: 4096,
-                chunk_ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+                chunk_ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
             },
         );
 
@@ -1384,7 +1384,7 @@ mod tests {
                 service_name: "test/stale/out".to_string(),
                 trust_tier: ChannelTrustTier::Trusted,
                 expected_payload_bytes: 4096,
-                chunk_ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+                chunk_ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
             },
         );
 

@@ -46,7 +46,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::core::error::{Error, Result};
 use crate::iceoryx2::{ChannelSizing, ChannelTapSubscribeError, Iceoryx2Node};
@@ -92,9 +92,9 @@ const TAP_DROP_WARN_INTERVAL: u64 = 256;
 /// taps only, and a live one is observed exactly as promptly as before.
 #[derive(Debug)]
 struct TapIdlePollBackoff {
-    /// How long this quiet stretch has lasted, counted from the sleeps taken in
-    /// it. The forwarder's own poll costs nothing worth counting beside them.
-    quiet_for: Duration,
+    /// When this quiet stretch began, on the machine's monotonic clock. `None`
+    /// until the first empty poll of the stretch marks it.
+    quiet_since: Option<Instant>,
     /// The sleep the next empty poll takes.
     next_sleep: Duration,
 }
@@ -102,17 +102,21 @@ struct TapIdlePollBackoff {
 impl TapIdlePollBackoff {
     fn starting_at_the_shortest_sleep() -> Self {
         Self {
-            quiet_for: Duration::ZERO,
+            quiet_since: None,
             next_sleep: TAP_SHORTEST_IDLE_POLL_BACKOFF,
         }
     }
 
     /// The sleep this empty poll earns, climbing for the next one once the
     /// channel has been quiet past [`TAP_QUIET_BEFORE_THE_BACKOFF_CLIMBS`].
-    fn sleep_this_empty_poll_earns(&mut self) -> Duration {
+    ///
+    /// `polled_at` is read from the monotonic clock by the caller rather than
+    /// summed from the sleeps taken, which would undercount by every scheduler
+    /// delay and let a channel stay at the floor well past the threshold.
+    fn sleep_this_empty_poll_earns(&mut self, polled_at: Instant) -> Duration {
+        let quiet_since = *self.quiet_since.get_or_insert(polled_at);
         let sleeping_for = self.next_sleep;
-        self.quiet_for += sleeping_for;
-        if self.quiet_for >= TAP_QUIET_BEFORE_THE_BACKOFF_CLIMBS {
+        if polled_at.saturating_duration_since(quiet_since) >= TAP_QUIET_BEFORE_THE_BACKOFF_CLIMBS {
             self.next_sleep = (self.next_sleep * 2).min(TAP_LONGEST_IDLE_POLL_BACKOFF);
         }
         sleeping_for
@@ -121,8 +125,7 @@ impl TapIdlePollBackoff {
     /// Back to the floor: the channel is carrying, so neither this quiet stretch
     /// nor the sleep it had grown to outlives the bag that ended it.
     fn reset_after_a_bag_arrived(&mut self) {
-        self.quiet_for = Duration::ZERO;
-        self.next_sleep = TAP_SHORTEST_IDLE_POLL_BACKOFF;
+        *self = Self::starting_at_the_shortest_sleep();
     }
 }
 
@@ -355,7 +358,9 @@ fn run_forwarder(
                     Err(TrySendError::Closed(_)) => break,
                 }
             }
-            Ok(None) => std::thread::sleep(idle_poll_backoff.sleep_this_empty_poll_earns()),
+            Ok(None) => {
+                std::thread::sleep(idle_poll_backoff.sleep_this_empty_poll_earns(Instant::now()))
+            }
             Err(receive_error) => {
                 tracing::warn!(
                     channel = %channel,
@@ -670,41 +675,50 @@ mod tests {
     #[test]
     fn the_idle_backoff_holds_the_floor_through_an_ordinary_gap_and_climbs_only_once_quiet() {
         let mut backoff = TapIdlePollBackoff::starting_at_the_shortest_sleep();
+        // The clock the forwarder reads, advanced here by exactly the sleeps the
+        // backoff asks for, so the policy is pinned without the test sleeping.
+        let mut polled_at = Instant::now();
 
         // A 30 fps inter-frame gap: every poll inside it must still be at the
         // floor, so a live channel is observed exactly as promptly as before.
         let one_frame_at_thirty_fps = Duration::from_micros(33_333);
-        let mut slept_inside_the_gap = Duration::ZERO;
-        while slept_inside_the_gap < one_frame_at_thirty_fps {
-            let sleeping_for = backoff.sleep_this_empty_poll_earns();
+        let quiet_began_at = polled_at;
+        while polled_at.duration_since(quiet_began_at) < one_frame_at_thirty_fps {
+            let sleeping_for = backoff.sleep_this_empty_poll_earns(polled_at);
             assert_eq!(
-                sleeping_for, TAP_SHORTEST_IDLE_POLL_BACKOFF,
-                "a poll {slept_inside_the_gap:?} into an ordinary gap must stay at the floor"
+                sleeping_for,
+                TAP_SHORTEST_IDLE_POLL_BACKOFF,
+                "a poll {:?} into an ordinary gap must stay at the floor",
+                polled_at.duration_since(quiet_began_at)
             );
-            slept_inside_the_gap += sleeping_for;
+            polled_at += sleeping_for;
         }
 
         // Past the quiet threshold it climbs, and never past the ceiling.
-        let mut kept_quiet_for = slept_inside_the_gap;
-        while kept_quiet_for < TAP_QUIET_BEFORE_THE_BACKOFF_CLIMBS * 4 {
-            let sleeping_for = backoff.sleep_this_empty_poll_earns();
+        while polled_at.duration_since(quiet_began_at) < TAP_QUIET_BEFORE_THE_BACKOFF_CLIMBS * 4 {
+            let sleeping_for = backoff.sleep_this_empty_poll_earns(polled_at);
             assert!(
                 sleeping_for <= TAP_LONGEST_IDLE_POLL_BACKOFF,
                 "an idle sleep of {sleeping_for:?} is past the ceiling"
             );
-            kept_quiet_for += sleeping_for;
+            polled_at += sleeping_for;
         }
         assert_eq!(
-            backoff.sleep_this_empty_poll_earns(),
+            backoff.sleep_this_empty_poll_earns(polled_at),
             TAP_LONGEST_IDLE_POLL_BACKOFF,
             "a long-quiet channel settles at the ceiling"
         );
 
         backoff.reset_after_a_bag_arrived();
         assert_eq!(
-            backoff.sleep_this_empty_poll_earns(),
+            backoff.sleep_this_empty_poll_earns(polled_at),
             TAP_SHORTEST_IDLE_POLL_BACKOFF,
             "the bag that ends a quiet stretch must not leave its sleep behind"
+        );
+        assert_eq!(
+            backoff.sleep_this_empty_poll_earns(polled_at + one_frame_at_thirty_fps),
+            TAP_SHORTEST_IDLE_POLL_BACKOFF,
+            "and the stretch it timed must not outlive it either"
         );
     }
 

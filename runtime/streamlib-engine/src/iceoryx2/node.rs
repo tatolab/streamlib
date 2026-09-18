@@ -59,18 +59,23 @@ const CHANNEL_PUBLISHER_MAX_LOANED_SAMPLES: usize = 1;
 /// replayed bag is stale by the time it arrives.
 const CHANNEL_HISTORY_SIZE: usize = 0;
 
-/// How long a channel open refused for depth keeps sweeping for the dead holder
+/// How many times a channel open refused for depth sweeps for the dead holder
 /// behind it before giving up.
 ///
 /// A process that has just died is not reclaimable the instant it goes —
 /// measured at about 10 ms on Linux 7.0 — so a single sweep loses the race with
-/// a link rewired right after a helper crashed. Bounded because this runs inside
-/// a wiring call the caller is waiting on, and generous against that measurement
-/// because the cost of giving up early is a link that never carries again.
-const DEAD_HOLDER_RECLAIM_BUDGET: std::time::Duration = std::time::Duration::from_millis(250);
+/// a link rewired right after a helper crashed. Kept to a handful rather than a
+/// poll loop because a sweep is domain-wide: every runtime and helper sharing
+/// this domain is opening in it, and reclaiming underneath one that is still
+/// creating its own node is a cost this recovery must not spread around. Three
+/// covers the measured window several times over.
+const DEAD_HOLDER_RECLAIM_ATTEMPTS: usize = 3;
 
-/// How long to wait between sweeps inside [`DEAD_HOLDER_RECLAIM_BUDGET`].
-const DEAD_HOLDER_RECLAIM_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(5);
+/// How long to wait after a sweep that did not get the holder back, doubling
+/// for the attempt after it. Holds the whole recovery to about 60 ms, so a
+/// wiring call the caller is waiting on is never parked long.
+const DEAD_HOLDER_RECLAIM_FIRST_RETRY_INTERVAL: std::time::Duration =
+    std::time::Duration::from_millis(20);
 
 /// The environment variable a parent hands its helper the iceoryx2 domain root in.
 pub const ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_ICEORYX2_DOMAIN_ROOT";
@@ -246,7 +251,6 @@ impl Iceoryx2Node {
     }
 
     /// The iceoryx2 configuration this node was created with.
-    #[cfg(test)]
     pub(crate) fn config(&self) -> Config {
         self.inner.lock().config().clone()
     }
@@ -310,13 +314,9 @@ impl Iceoryx2Node {
     /// every holder has died: iceoryx2 sweeps dead nodes only after a
     /// *successful* open, so a long-lived node keeps failing the same reopen
     /// until some new node is created anywhere on the machine. This therefore
-    /// sweeps its own domain and retries, which turns that permanent failure
-    /// back into the transient it is.
-    ///
-    /// The sweep is given a budget rather than one shot: a process that has just
-    /// died is not reclaimable the instant it goes, so a helper whose link is
-    /// rewired immediately after it crashed would otherwise sweep nothing,
-    /// retry once, and fail for the rest of the run.
+    /// sweeps its own domain and reopens, up to
+    /// [`DEAD_HOLDER_RECLAIM_ATTEMPTS`] times, which turns that permanent
+    /// failure back into the transient it is.
     pub fn open_or_create_service(
         &self,
         service_name: &str,
@@ -353,13 +353,20 @@ impl Iceoryx2Node {
             }
         };
 
-        let engine_owned_domain_config = self.inner.lock().config().clone();
+        let engine_owned_domain_config = self.config();
         let started_recovering = std::time::Instant::now();
         let mut swept_dead_nodes = 0u64;
-        loop {
+        let mut latest_failure = first_failure;
+        let mut retry_interval = DEAD_HOLDER_RECLAIM_FIRST_RETRY_INTERVAL;
+        for attempt in 1..=DEAD_HOLDER_RECLAIM_ATTEMPTS {
             swept_dead_nodes += reclaim_dead_iceoryx2_nodes_in(&engine_owned_domain_config);
-            if swept_dead_nodes > 0 {
-                if let Ok(service) = open_or_create_once() {
+            // Reopened whatever this sweep reclaimed, not only when it reclaimed
+            // something itself: the node lock is dropped between attempts, so a
+            // concurrent opener's sweep can be what frees the service, and
+            // gating on our own count would leave this call failing a service
+            // that is already openable.
+            match open_or_create_once() {
+                Ok(service) => {
                     tracing::info!(
                         service = service_name.as_str(),
                         channel_service_creation_depth,
@@ -370,16 +377,18 @@ impl Iceoryx2Node {
                     );
                     return Ok(Iceoryx2Service { inner: service });
                 }
+                Err(failure) => latest_failure = failure,
             }
-            if started_recovering.elapsed() >= DEAD_HOLDER_RECLAIM_BUDGET {
-                return Err(channel_data_service_open_failure(
-                    &service_name,
-                    &first_failure,
-                    Some(swept_dead_nodes),
-                ));
+            if attempt < DEAD_HOLDER_RECLAIM_ATTEMPTS {
+                std::thread::sleep(retry_interval);
+                retry_interval *= 2;
             }
-            std::thread::sleep(DEAD_HOLDER_RECLAIM_POLL_INTERVAL);
         }
+        Err(channel_data_service_open_failure(
+            &service_name,
+            &latest_failure,
+            Some(swept_dead_nodes),
+        ))
     }
 
     /// The channel data service named `service_name`, or `None` when nothing
@@ -532,10 +541,10 @@ fn channel_data_service_open_failure(
     match dead_nodes_swept_while_retrying {
         None => Error::Runtime(format!("Failed to open/create service: {failure:?}")),
         Some(swept) => Error::Runtime(format!(
-            "Failed to open/create service: {failure:?} (still refused after {:?} of sweeping \
-             the engine's iceoryx2 domain, which reclaimed {swept} dead node(s), so a live \
-             holder is genuinely shallower than this open asks for)",
-            DEAD_HOLDER_RECLAIM_BUDGET
+            "Failed to open/create service: {failure:?} (still refused after \
+             {DEAD_HOLDER_RECLAIM_ATTEMPTS} sweeps of the engine's iceoryx2 domain, which \
+             reclaimed {swept} dead node(s), so a live holder is genuinely shallower than this \
+             open asks for)"
         )),
     }
 }
@@ -1419,7 +1428,7 @@ mod tests {
     fn disconnect_reconnect_cycle_reclaims_notifier_and_data_service() {
         use crate::iceoryx2::{
             ChannelEgressConfig, ChannelTrustTier, InputMailboxesInner, OutputWriterInner,
-            ReadMode, TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+            ReadMode, TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
         };
         use streamlib_ipc_types::RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL;
 
@@ -1453,7 +1462,7 @@ mod tests {
                         service_name: data_name.clone(),
                         trust_tier: ChannelTrustTier::Trusted,
                         expected_payload_bytes: 64,
-                        chunk_ceiling_bytes: TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+                        chunk_ceiling_bytes: TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
                     },
                 );
             }

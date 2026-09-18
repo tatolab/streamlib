@@ -55,7 +55,7 @@ use streamlib_engine::core::runtime::StreamlibRuntimeDirectory;
 use streamlib_engine::iceoryx2::{
     ChannelDataServicePublisher, ChannelDataServiceSubscriber, ChannelEgressConfig,
     ChannelTrustTier, Iceoryx2Node, InboundLinkName, InputMailboxesInner, OutputWriter,
-    OutputWriterInner, ReadMode, TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+    OutputWriterInner, ReadMode, TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
 };
 
 /// Per-bench-run unique service-name suffix so parallel benches
@@ -120,7 +120,7 @@ fn output_writer_inner_publishing_to(publisher: ChannelDataServicePublisher) -> 
             service_name: "bench/out".to_string(),
             trust_tier: ChannelTrustTier::Trusted,
             expected_payload_bytes: 4096,
-            chunk_ceiling_bytes: TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+            chunk_ceiling_bytes: TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
         },
     );
     output_writer_inner

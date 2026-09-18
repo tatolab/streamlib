@@ -2128,7 +2128,7 @@ mod tests {
                 service_name: format!("test/input/{output_port}"),
                 trust_tier: crate::iceoryx2::ChannelTrustTier::Trusted,
                 expected_payload_bytes: 64,
-                chunk_ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+                chunk_ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
             },
         );
         output_writer.add_channel_link(output_port, "L-to-the-destination", None);

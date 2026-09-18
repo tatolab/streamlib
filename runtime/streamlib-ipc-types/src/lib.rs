@@ -40,13 +40,13 @@ pub const MAX_PORT_KEY_SIZE: usize = 64;
 /// overhead to reach. An operator override that is not a power of two still
 /// bounds each bag; its chunk rounds up past the ceiling, and the engine says so
 /// where the override is read.
-pub const TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES: usize = 64 * 1024 * 1024;
+pub const TRUSTED_CHANNEL_CHUNK_CEILING_BYTES: usize = 64 * 1024 * 1024;
 
 /// Per-channel shared-memory chunk ceiling for an untrusted-session (subprocess)
 /// data channel. Tighter than the trusted tier because a subprocess payload
 /// crosses a trust boundary and a runaway producer must be bounded well below
 /// host RAM.
-pub const UNTRUSTED_SESSION_CHANNEL_PAYLOAD_CEILING_BYTES: usize = 16 * 1024 * 1024;
+pub const UNTRUSTED_SESSION_CHANNEL_CHUNK_CEILING_BYTES: usize = 16 * 1024 * 1024;
 
 /// Bytes iceoryx2 lays out ahead of a channel frame in the shared-memory sample
 /// that carries it: its own publish-subscribe header, this crate's
@@ -99,6 +99,20 @@ pub const fn largest_channel_frame_bytes_under_a_chunk_ceiling(
     largest_whole_sample.saturating_sub(ICEORYX2_SAMPLE_BYTES_AHEAD_OF_A_CHANNEL_FRAME)
 }
 
+/// The shared-memory chunk iceoryx2 really gives a bag sized to the most
+/// `chunk_ceiling_bytes` admits — the ceiling itself where that is a power of
+/// two, and the next power of two above it where it is not.
+///
+/// `None` where the arithmetic would overflow, which only a ceiling within one
+/// sample layout of `usize::MAX` reaches; a caller reports the chunk as unknown
+/// rather than taking a panic from inside a diagnostic.
+pub const fn chunk_bytes_a_ceiling_sized_bag_takes(chunk_ceiling_bytes: usize) -> Option<usize> {
+    iceoryx2_sample_bytes_for_a_channel_frame(largest_channel_frame_bytes_under_a_chunk_ceiling(
+        chunk_ceiling_bytes,
+    ))
+    .checked_next_power_of_two()
+}
+
 /// Trust tier of an iceoryx2 data channel, selecting the default per-channel
 /// shared-memory chunk ceiling.
 ///
@@ -117,10 +131,10 @@ impl ChannelTrustTier {
     /// The default per-channel shared-memory chunk ceiling in bytes for this
     /// tier. The frames it admits are bounded by
     /// [`largest_channel_frame_bytes_under_a_chunk_ceiling`].
-    pub const fn default_ceiling_bytes(self) -> usize {
+    pub const fn default_chunk_ceiling_bytes(self) -> usize {
         match self {
-            Self::Trusted => TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
-            Self::UntrustedSession => UNTRUSTED_SESSION_CHANNEL_PAYLOAD_CEILING_BYTES,
+            Self::Trusted => TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
+            Self::UntrustedSession => UNTRUSTED_SESSION_CHANNEL_CHUNK_CEILING_BYTES,
         }
     }
 
@@ -133,11 +147,13 @@ impl ChannelTrustTier {
     }
 }
 
-/// A PowerOfTwo data-segment growth event a channel publisher observed while
-/// admitting a frame: the tracked slot capacity crossed the frame's sample size
-/// and was advanced from `old_segment_bytes` to `new_segment_bytes`
-/// (`next_power_of_two`). Both are sample bytes — the layout iceoryx2 buckets,
-/// [`iceoryx2_sample_bytes_for_a_channel_frame`] — never the frame alone.
+/// A PowerOfTwo growth event a channel publisher observed while admitting a
+/// frame: the tracked per-slot capacity crossed the frame's sample size and was
+/// advanced from `old_segment_bytes` to `new_segment_bytes`
+/// (`next_power_of_two`). Both are one slot's bucket in sample bytes — the
+/// layout iceoryx2 buckets, [`iceoryx2_sample_bytes_for_a_channel_frame`] —
+/// never the frame alone, and never the whole data segment, which holds one
+/// bucket per subscriber slot.
 ///
 /// `crossed_quarter_ceiling` is `true` when this growth is the one that first
 /// pushed the segment past a quarter of the channel's ceiling (`old <= ceiling/4
@@ -796,16 +812,16 @@ mod tests {
     #[test]
     fn channel_trust_tier_defaults_and_labels() {
         assert_eq!(
-            ChannelTrustTier::Trusted.default_ceiling_bytes(),
-            TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES
+            ChannelTrustTier::Trusted.default_chunk_ceiling_bytes(),
+            TRUSTED_CHANNEL_CHUNK_CEILING_BYTES
         );
         assert_eq!(
-            ChannelTrustTier::UntrustedSession.default_ceiling_bytes(),
-            UNTRUSTED_SESSION_CHANNEL_PAYLOAD_CEILING_BYTES
+            ChannelTrustTier::UntrustedSession.default_chunk_ceiling_bytes(),
+            UNTRUSTED_SESSION_CHANNEL_CHUNK_CEILING_BYTES
         );
         assert!(
-            ChannelTrustTier::UntrustedSession.default_ceiling_bytes()
-                < ChannelTrustTier::Trusted.default_ceiling_bytes(),
+            ChannelTrustTier::UntrustedSession.default_chunk_ceiling_bytes()
+                < ChannelTrustTier::Trusted.default_chunk_ceiling_bytes(),
             "untrusted-session ceiling must be tighter than trusted"
         );
         assert_eq!(ChannelTrustTier::Trusted.as_str(), "trusted");
@@ -998,8 +1014,8 @@ mod tests {
             4095,
             4096,
             100_003,
-            TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
-            TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES + 1,
+            TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
+            TRUSTED_CHANNEL_CHUNK_CEILING_BYTES + 1,
         ] {
             let largest_admitted_frame_bytes =
                 largest_channel_frame_bytes_under_a_chunk_ceiling(chunk_ceiling_bytes);
@@ -1029,8 +1045,8 @@ mod tests {
     #[test]
     fn a_frame_at_the_admitted_ceiling_keeps_its_sample_inside_one_ceiling_sized_chunk() {
         for chunk_ceiling_bytes in [
-            TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
-            UNTRUSTED_SESSION_CHANNEL_PAYLOAD_CEILING_BYTES,
+            TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
+            UNTRUSTED_SESSION_CHANNEL_CHUNK_CEILING_BYTES,
         ] {
             let largest_admitted_frame_bytes =
                 largest_channel_frame_bytes_under_a_chunk_ceiling(chunk_ceiling_bytes);
@@ -1039,9 +1055,8 @@ mod tests {
                 "the admitted frame must leave room for iceoryx2's sample headers"
             );
             assert_eq!(
-                iceoryx2_sample_bytes_for_a_channel_frame(largest_admitted_frame_bytes)
-                    .next_power_of_two(),
-                chunk_ceiling_bytes,
+                chunk_bytes_a_ceiling_sized_bag_takes(chunk_ceiling_bytes),
+                Some(chunk_ceiling_bytes),
                 "the largest admitted frame must bucket at exactly the ceiling"
             );
             assert_eq!(
@@ -1052,9 +1067,24 @@ mod tests {
         }
     }
 
+    /// The composite never panics on a ceiling an operator's env override can
+    /// set, however absurd — it is read from inside a warning, and a diagnostic
+    /// that kills the engine is worse than the misconfiguration it describes.
+    #[test]
+    fn the_chunk_a_ceiling_sized_bag_takes_is_unknown_rather_than_a_panic_at_the_extremes() {
+        assert_eq!(chunk_bytes_a_ceiling_sized_bag_takes(usize::MAX), None);
+        assert_eq!(
+            chunk_bytes_a_ceiling_sized_bag_takes(TRUSTED_CHANNEL_CHUNK_CEILING_BYTES),
+            Some(TRUSTED_CHANNEL_CHUNK_CEILING_BYTES)
+        );
+        // A ceiling under the sample headers admits no frame at all; the chunk an
+        // empty one would take is still a real, small number.
+        assert!(chunk_bytes_a_ceiling_sized_bag_takes(32).is_some());
+    }
+
     #[test]
     fn a_frame_one_byte_past_the_admitted_ceiling_is_refused_and_the_admitted_one_is_not() {
-        let chunk_ceiling_bytes = TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES;
+        let chunk_ceiling_bytes = TRUSTED_CHANNEL_CHUNK_CEILING_BYTES;
         let largest_admitted_frame_bytes =
             largest_channel_frame_bytes_under_a_chunk_ceiling(chunk_ceiling_bytes);
         let mut slot = DEFAULT_EXPECTED_PAYLOAD_BYTES;

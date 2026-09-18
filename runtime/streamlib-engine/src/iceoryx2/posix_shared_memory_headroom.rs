@@ -14,7 +14,7 @@
 
 use std::path::Path;
 
-use streamlib_ipc_types::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES;
+use streamlib_ipc_types::TRUSTED_CHANNEL_CHUNK_CEILING_BYTES;
 
 /// The tmpfs every POSIX `shm_open` on Linux lands in, which is where iceoryx2
 /// puts every data segment and every dynamic-config storage.
@@ -31,7 +31,7 @@ const TRUSTED_CEILING_CHUNKS_OF_HEADROOM_A_RUNTIME_WANTS: usize = 4;
 
 /// Free shared-memory bytes below which a runtime warns at start.
 pub const POSIX_SHARED_MEMORY_FREE_BYTES_A_RUNTIME_WANTS: usize =
-    TRUSTED_CEILING_CHUNKS_OF_HEADROOM_A_RUNTIME_WANTS * TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES;
+    TRUSTED_CEILING_CHUNKS_OF_HEADROOM_A_RUNTIME_WANTS * TRUSTED_CHANNEL_CHUNK_CEILING_BYTES;
 
 /// Warn once, at runtime start, when this machine's POSIX shared memory holds
 /// less than [`POSIX_SHARED_MEMORY_FREE_BYTES_A_RUNTIME_WANTS`].
@@ -44,9 +44,7 @@ pub fn warn_when_posix_shared_memory_is_short_for_a_runtime() {
     {
         let mount_point = Path::new(POSIX_SHARED_MEMORY_MOUNT_POINT);
         match free_bytes_on_the_filesystem_holding(mount_point) {
-            Some(free_bytes) => {
-                let _ = emit_the_shared_memory_headroom_reading(mount_point, free_bytes);
-            }
+            Some(free_bytes) => emit_the_shared_memory_headroom_reading(mount_point, free_bytes),
             None => tracing::debug!(
                 "could not read the free space on {}; a runtime does not depend on the reading",
                 mount_point.display()
@@ -55,28 +53,32 @@ pub fn warn_when_posix_shared_memory_is_short_for_a_runtime() {
     }
 }
 
+/// Whether `free_bytes` is short of [`POSIX_SHARED_MEMORY_FREE_BYTES_A_RUNTIME_WANTS`].
+const fn posix_shared_memory_is_short_for_a_runtime(free_bytes: u64) -> bool {
+    free_bytes < POSIX_SHARED_MEMORY_FREE_BYTES_A_RUNTIME_WANTS as u64
+}
+
 /// Raise the warning when `free_bytes` is short of what a runtime wants.
 #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
-fn emit_the_shared_memory_headroom_reading(mount_point: &Path, free_bytes: u64) -> bool {
-    if free_bytes >= POSIX_SHARED_MEMORY_FREE_BYTES_A_RUNTIME_WANTS as u64 {
+fn emit_the_shared_memory_headroom_reading(mount_point: &Path, free_bytes: u64) {
+    if !posix_shared_memory_is_short_for_a_runtime(free_bytes) {
         tracing::debug!(
             shared_memory = %mount_point.display(),
             free_bytes,
             "POSIX shared memory has the headroom a runtime wants"
         );
-        return false;
+        return;
     }
     tracing::warn!(
         shared_memory = %mount_point.display(),
         free_bytes,
         wanted_free_bytes = POSIX_SHARED_MEMORY_FREE_BYTES_A_RUNTIME_WANTS,
-        trusted_channel_ceiling_bytes = TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+        trusted_channel_ceiling_bytes = TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
         "POSIX shared memory is smaller than this runtime's channels may need; a producer \
          whose bags outgrow it dies of SIGBUS mid-write rather than being refused. Give the \
          container more (docker `--shm-size`, Kubernetes an `emptyDir` medium `Memory` volume) \
          or keep every bag well under the per-channel ceiling"
     );
-    true
 }
 
 /// Free bytes on the filesystem holding `path`, or `None` where it cannot be read.
@@ -114,46 +116,43 @@ fn free_bytes_on_the_filesystem_holding(path: &Path) -> Option<u64> {
 mod tests {
     use super::*;
 
-    /// Docker's default `/dev/shm` is 64 MB, which is under one trusted channel's
-    /// ceiling: the case HYG-1 measured a producer SIGBUS in. Raise the threshold
-    /// test to a number a default container passes and the warning stops firing
-    /// exactly where it is owed.
+    /// The shared memory a container gets with no `--shm-size` of its own.
+    const DOCKER_DEFAULT_SHARED_MEMORY_BYTES: u64 = 64 * 1000 * 1000;
+
+    /// Docker's default `/dev/shm` is under one trusted channel's ceiling: the
+    /// case HYG-1 measured a producer SIGBUS in. Raise the threshold past a
+    /// default container and the warning stops firing where it is owed.
     #[test]
     fn dockers_default_shared_memory_is_short_of_what_a_runtime_wants() {
-        const DOCKER_DEFAULT_SHARED_MEMORY_BYTES: u64 = 64 * 1000 * 1000;
         assert!(
-            DOCKER_DEFAULT_SHARED_MEMORY_BYTES
-                < POSIX_SHARED_MEMORY_FREE_BYTES_A_RUNTIME_WANTS as u64,
+            posix_shared_memory_is_short_for_a_runtime(DOCKER_DEFAULT_SHARED_MEMORY_BYTES),
             "a default container must trip the headroom warning"
         );
         assert!(
-            POSIX_SHARED_MEMORY_FREE_BYTES_A_RUNTIME_WANTS > TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+            POSIX_SHARED_MEMORY_FREE_BYTES_A_RUNTIME_WANTS > TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
             "the threshold must want more than one ceiling-sized chunk"
         );
     }
 
     /// The threshold itself, over a chosen free-space reading rather than over
     /// whatever this machine happens to have mounted.
-    #[cfg(target_os = "linux")]
     #[test]
-    fn the_warning_fires_below_the_headroom_a_runtime_wants_and_not_at_or_above_it() {
-        let mount_point = Path::new("/dev/shm");
+    fn the_reading_is_short_below_the_headroom_a_runtime_wants_and_not_at_or_above_it() {
         let wanted = POSIX_SHARED_MEMORY_FREE_BYTES_A_RUNTIME_WANTS as u64;
 
+        assert!(posix_shared_memory_is_short_for_a_runtime(
+            DOCKER_DEFAULT_SHARED_MEMORY_BYTES
+        ));
         assert!(
-            emit_the_shared_memory_headroom_reading(mount_point, 64 * 1000 * 1000),
-            "a default container's shared memory must be reported short"
-        );
-        assert!(
-            emit_the_shared_memory_headroom_reading(mount_point, wanted - 1),
+            posix_shared_memory_is_short_for_a_runtime(wanted - 1),
             "one byte under the threshold is still short"
         );
         assert!(
-            !emit_the_shared_memory_headroom_reading(mount_point, wanted),
+            !posix_shared_memory_is_short_for_a_runtime(wanted),
             "exactly the headroom a runtime wants is not short"
         );
         assert!(
-            !emit_the_shared_memory_headroom_reading(mount_point, u64::MAX),
+            !posix_shared_memory_is_short_for_a_runtime(u64::MAX),
             "a host with room to spare must not warn"
         );
     }
@@ -176,7 +175,8 @@ mod tests {
             "an unreadable mount point must not read as a full one"
         );
         assert!(
-            free_bytes_on_the_filesystem_holding(Path::new("/dev/shm")).is_some(),
+            free_bytes_on_the_filesystem_holding(Path::new(POSIX_SHARED_MEMORY_MOUNT_POINT))
+                .is_some(),
             "this machine's POSIX shared memory must read"
         );
     }

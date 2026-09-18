@@ -35,7 +35,7 @@ use crate::iceoryx2::{
     Iceoryx2NotifyService, Iceoryx2Service, InboundLinkName,
     RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL, WINDOWED_PORT_SUBSCRIBER_RING_DEPTH,
     audio_windowing_declared_by_input_port, delivery_profile_for_input_port,
-    effective_channel_ceiling_bytes, refuse_an_unsettled_match_device_sentinel,
+    effective_channel_chunk_ceiling_bytes, refuse_an_unsettled_match_device_sentinel,
 };
 use streamlib_ipc_types::{MAX_DESTINATIONS_PER_CHANNEL, MAX_INBOUND_LINKS_PER_DESTINATION};
 
@@ -154,7 +154,7 @@ pub fn open_iceoryx2_service(
     };
     // The tier default is the structural ceiling; an operator raises or lowers it
     // per deployment through the tier's node-level env override.
-    let channel_ceiling_bytes = effective_channel_ceiling_bytes(trust_tier);
+    let channel_ceiling_bytes = effective_channel_chunk_ceiling_bytes(trust_tier);
     let channel_sizing =
         resolve_channel_sizing(graph, iceoryx2_node, &source_proc_id, &source_port)?;
     let dest_input_port_delivery =
@@ -1653,7 +1653,7 @@ mod tests {
         let mut native_plain = NativeLinkWiredForLossCounting::wire(
             "metrics-keys-plain",
             DeliveryProfile::Ordered.resolve(),
-            crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+            crate::iceoryx2::TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
         );
         let dest_id = native_plain.dest_id.clone();
         let native_plain_keys = rendered_metrics_keys(
@@ -1975,7 +1975,7 @@ mod tests {
                 service_name: unique_service_name("mixed-endpoints"),
                 trust_tier: ChannelTrustTier::UntrustedSession,
                 expected_payload_bytes: 4096,
-                chunk_ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+                chunk_ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
             },
         )
         .expect("the engine-side source wires");
@@ -2324,7 +2324,7 @@ mod tests {
                 service_name: unique_service_name(tag),
                 trust_tier: ChannelTrustTier::Trusted,
                 expected_payload_bytes: 4096,
-                chunk_ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+                chunk_ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
             },
         )
         .expect("the source side wires");
@@ -2462,7 +2462,7 @@ mod tests {
                 drain_order: crate::iceoryx2::ReadMode::ReadNextInOrder,
                 depth: DESTINATION_MAILBOX_DEPTH,
             },
-            crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+            crate::iceoryx2::TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
         );
         let dest_id = link.dest_id.clone();
         let link_id = link.link_id.to_string();
@@ -2514,7 +2514,7 @@ mod tests {
         let mut link = NativeLinkWiredForLossCounting::wire(
             "ring-overrun/ordered",
             DeliveryProfile::Ordered.resolve(),
-            crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+            crate::iceoryx2::TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
         );
         let dest_id = link.dest_id.clone();
         let link_id = link.link_id.to_string();
@@ -2556,7 +2556,7 @@ mod tests {
         let mut link = NativeLinkWiredForLossCounting::wire(
             "ring-overrun/newest",
             DeliveryProfile::Newest.resolve(),
-            crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+            crate::iceoryx2::TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
         );
         let dest_id = link.dest_id.clone();
         let link_id = link.link_id.to_string();
