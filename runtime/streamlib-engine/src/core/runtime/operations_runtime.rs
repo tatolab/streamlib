@@ -413,10 +413,7 @@ fn apply_a_link_from_this_runtime(
 
             let link_id = graph
                 .traversal_mut()
-                .add_e(
-                    OutputLinkPortRef::new(from_processor.clone(), from_port.clone()),
-                    to,
-                )
+                .add_e(OutputLinkPortRef::new(from_processor, from_port), to)
                 .inspect(|link| tx.log(PendingOperation::AddLink(link.id.clone())))
                 .first()
                 .map(|link| link.id.clone())
@@ -449,9 +446,12 @@ fn apply_a_link_from_another_runtime(
     source: MeshPortAddress,
     to: InputLinkPortRef,
 ) -> Result<LinkUniqueId> {
+    // Deliberately says nothing about the runtime it names: whether that one is
+    // absent, silent or perfectly healthy is not known until the mesh has
+    // looked, and this end may be the one that is off the mesh. The first
+    // resolution pass overwrites it with what it actually found.
     let waiting_on = format!(
-        "the runtime {} is not on the {} mesh",
-        source.runtime_name,
+        "this link has just been applied and the {} mesh has not resolved it yet",
         runtime_mesh.mesh_name()
     );
     let (link_id, how_far_it_has_got) = compiler.scope(|graph, tx| -> Result<_> {
@@ -1170,12 +1170,16 @@ mod connect_wires_without_inspecting_a_port_tests {
         assert!(refusal.contains(&displayed), "{refusal}");
     }
 
-    /// A source on another runtime lands `awaiting_remote`, naming the runtime
-    /// it is waiting for, while its destination side is queued for the compiler
-    /// like any other link's — the channel it subscribes to is derived from the
-    /// address, and nothing about it needs that runtime to be here.
+    /// A source on another runtime lands `awaiting_remote` while its
+    /// destination side is queued for the compiler like any other link's — the
+    /// channel it subscribes to is derived from the address, and nothing about
+    /// it needs that runtime to be here.
+    ///
+    /// This runtime is off any mesh, so what it is waiting on is *itself*. A
+    /// reason naming the source runtime would report a peer that may be
+    /// perfectly healthy as the thing that is missing.
     #[test]
-    fn a_source_on_another_runtime_waits_naming_the_runtime_while_its_destination_wires() {
+    fn a_source_on_another_runtime_waits_on_this_runtimes_own_mesh_while_its_destination_wires() {
         register_producer_and_consumer_descriptors();
         let (compiler, _from, to) = compiler_holding_a_producer_and_consumer_node();
 
@@ -1205,7 +1209,14 @@ mod connect_wires_without_inspecting_a_port_tests {
         let waiting_on = rendered
             .awaiting_remote_reason
             .expect("a waiting link says what it is waiting on");
-        assert!(waiting_on.contains("bench-cam-a1b2"), "{waiting_on}");
+        assert!(
+            waiting_on.contains("this runtime is not on the"),
+            "a runtime off its own mesh says so rather than blaming the source: {waiting_on}"
+        );
+        assert!(
+            !waiting_on.contains("bench-cam-a1b2"),
+            "nothing has looked for that runtime yet, so nothing may be said about it:              {waiting_on}"
+        );
         assert_eq!(
             serde_json::to_value(&rendered.source).expect("the source renders"),
             serde_json::json!({

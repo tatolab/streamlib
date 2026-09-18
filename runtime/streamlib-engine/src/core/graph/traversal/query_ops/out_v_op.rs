@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::core::graph::{
-    LinkTraversal, LinkTraversalMut, ProcessorTraversal, ProcessorTraversalMut,
+    Link, LinkTraversal, LinkTraversalMut, ProcessorNode, ProcessorTraversal, ProcessorTraversalMut,
 };
-use petgraph::graph::NodeIndex;
+use petgraph::graph::{DiGraph, NodeIndex};
 
 use super::super::traversal_source::LinkLocation;
 
@@ -13,7 +13,7 @@ use super::super::traversal_source::LinkLocation;
 /// A link from another runtime carries from no node here, so it contributes
 /// none — which is the honest answer, not an omission.
 fn every_source_node_of(
-    graph: &petgraph::graph::DiGraph<crate::core::graph::ProcessorNode, crate::core::graph::Link>,
+    graph: &DiGraph<ProcessorNode, Link>,
     links: &[LinkLocation],
 ) -> Vec<NodeIndex> {
     links

@@ -260,14 +260,37 @@ impl RuntimeMeshMembership {
 
     /// Note a link `connect` has just applied against a port on another
     /// runtime, so the mesh resolves it.
+    ///
+    /// A runtime that never reached its mesh resolves nothing, so the link is
+    /// told that here and never asked about again — blaming the runtime it
+    /// names would report a healthy peer as absent when it is this end that
+    /// cannot see it.
     pub fn note_a_link_from_another_runtime(
         &self,
         address: crate::core::graph::MeshPortAddress,
         link_id: crate::core::graph::LinkUniqueId,
         how_far_it_has_got: Arc<Mutex<crate::core::graph::RemoteLinkResolution>>,
     ) {
-        if let Some(ingress_table) = self.carrying_links_from_other_runtimes.lock().as_ref() {
-            ingress_table.note_a_link_waiting_on(address, link_id, how_far_it_has_got);
+        let carrying = self.carrying_links_from_other_runtimes.lock().clone();
+        let Some(ingress_table) = carrying else {
+            *how_far_it_has_got.lock() = crate::core::graph::RemoteLinkResolution::AwaitingRemote {
+                reason: format!(
+                    "this runtime is not on the {} mesh, so it reads nothing from it: {}",
+                    self.mesh_name,
+                    self.why_it_is_not_on_its_mesh()
+                        .unwrap_or_else(|| "no reason was recorded".to_string()),
+                ),
+            };
+            return;
+        };
+        ingress_table.note_a_link_waiting_on(address, link_id, how_far_it_has_got);
+    }
+
+    /// Why this runtime is not on its mesh, or `None` while it is.
+    fn why_it_is_not_on_its_mesh(&self) -> Option<String> {
+        match &*self.session.lock() {
+            RuntimeMeshSessionState::Open(_) => None,
+            RuntimeMeshSessionState::NotOnTheMesh { reason } => Some(reason.clone()),
         }
     }
 
@@ -283,7 +306,8 @@ impl RuntimeMeshMembership {
         // because that teardown joins threads and talks to the network.
         let stopped_serving = self.serving_this_runtimes_output_ports.lock().take();
         drop(stopped_serving);
-        if let Some(carrying) = self.carrying_links_from_other_runtimes.lock().take() {
+        let stopped_carrying = self.carrying_links_from_other_runtimes.lock().take();
+        if let Some(carrying) = stopped_carrying {
             carrying.stop();
         }
 

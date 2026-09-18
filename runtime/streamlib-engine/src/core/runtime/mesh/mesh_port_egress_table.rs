@@ -21,6 +21,7 @@ use crossbeam_channel::{Receiver, Sender};
 use zenoh::Wait;
 use zenoh::sample::SampleKind;
 
+use crate::core::graph::MeshPortAddress;
 use crate::core::runtime::mesh::mesh_port_egress::{MeshPortEgress, WhatOneEgressSends};
 use crate::core::runtime::mesh::output_ports_offered_on_the_mesh::{
     OutputPortOfferedOnTheMesh, WhatThisRuntimeOffersOnTheMeshRegistry,
@@ -134,74 +135,112 @@ fn spawn_the_egress_thread(
             while let Ok(did) = what_the_egress_thread_reads.recv() {
                 match did {
                     WhatTheReadersDid::ARuntimeStartedReading(reader) => {
-                        let port = OutputPortOfferedOnTheMesh {
-                            processor_display_name: reader.processor_display_name.clone(),
-                            port_name: reader.port_name.clone(),
-                        };
-                        if !who_is_reading
-                            .entry(port.clone())
-                            .or_default()
-                            .insert(reader.reading_runtime_name.clone())
-                        {
-                            continue;
-                        }
-                        if sending.contains_key(&port) {
-                            continue;
-                        }
-                        // A port this runtime cannot send — one it does not
-                        // have, or one whose channel it cannot open. Said
-                        // rather than passed over: the reader wired against the
-                        // offered-ports answer and will wait on an egress token
-                        // that never comes, and this log is where the reason
-                        // is. Why it could not open is said by the opener.
-                        let Some(how_to_read_the_port) = offered
-                            .how_to_read_an_offered_output_port(
-                                &port.processor_display_name,
-                                &port.port_name,
-                            )
-                        else {
-                            tracing::warn!(
-                                "{} is reading {port} and this runtime cannot send it, so that \
-                                 link waits on an egress that never starts",
-                                reader.reading_runtime_name
-                            );
-                            continue;
-                        };
-                        match MeshPortEgress::start(WhatOneEgressSends {
-                            session: session.clone(),
-                            key_space: key_space.clone(),
-                            this_runtimes_name: this_runtimes_name.clone(),
-                            processor_display_name: port.processor_display_name.clone(),
-                            port_name: port.port_name.clone(),
-                            how_to_read_the_port,
-                            iceoryx2_node: iceoryx2_node.clone(),
-                        }) {
-                            Ok(egress) => {
-                                sending.insert(port, egress);
-                            }
-                            Err(cannot_spawn) => tracing::warn!(
-                                "the mesh could not start sending {port} for want of a thread: \
-                                 {cannot_spawn}"
-                            ),
-                        }
+                        a_runtime_started_reading(
+                            AnEgressTablesOwnState {
+                                session: &session,
+                                key_space: &key_space,
+                                this_runtimes_name: &this_runtimes_name,
+                                offered: &offered,
+                                iceoryx2_node: &iceoryx2_node,
+                            },
+                            &mut who_is_reading,
+                            &mut sending,
+                            &reader,
+                        );
                     }
                     WhatTheReadersDid::ARuntimeStoppedReading(reader) => {
-                        let port = OutputPortOfferedOnTheMesh {
-                            processor_display_name: reader.processor_display_name.clone(),
-                            port_name: reader.port_name.clone(),
-                        };
-                        let Some(readers) = who_is_reading.get_mut(&port) else {
-                            continue;
-                        };
-                        readers.remove(&reader.reading_runtime_name);
-                        if readers.is_empty() {
-                            who_is_reading.remove(&port);
-                            // Dropping the egress stops its thread, drops its
-                            // channel subscriber and undeclares its token.
-                            sending.remove(&port);
-                        }
+                        a_runtime_stopped_reading(&mut who_is_reading, &mut sending, &reader);
                     }
                 }
             }
         })
+}
+
+/// What starting one egress reads, gathered so the thread body stays flat.
+struct AnEgressTablesOwnState<'a> {
+    session: &'a zenoh::Session,
+    key_space: &'a RuntimeMeshKeySpace,
+    this_runtimes_name: &'a str,
+    offered: &'a Arc<WhatThisRuntimeOffersOnTheMeshRegistry>,
+    iceoryx2_node: &'a Iceoryx2Node,
+}
+
+/// Note one more reader of a port, and start sending it if it is the first.
+fn a_runtime_started_reading(
+    table: AnEgressTablesOwnState<'_>,
+    who_is_reading: &mut BTreeMap<OutputPortOfferedOnTheMesh, BTreeSet<String>>,
+    sending: &mut BTreeMap<OutputPortOfferedOnTheMesh, MeshPortEgress>,
+    reader: &ReaderOfAnOutputPort,
+) {
+    let port = OutputPortOfferedOnTheMesh::from(reader);
+    if !who_is_reading
+        .entry(port.clone())
+        .or_default()
+        .insert(reader.reading_runtime_name.clone())
+    {
+        return;
+    }
+    if sending.contains_key(&port) {
+        return;
+    }
+    // A port this runtime cannot send — one it does not have, or one whose
+    // channel it cannot open. Said rather than passed over: the reader wired
+    // against the offered-ports answer and will wait on an egress token that
+    // never comes, and this log is where the reason is. Why it could not open
+    // is said by the opener.
+    let Some(how_to_read_the_port) = table
+        .offered
+        .how_to_read_an_offered_output_port(&port.processor_display_name, &port.port_name)
+    else {
+        tracing::warn!(
+            "{} is reading {port} and this runtime cannot send it, so that link waits on an \
+             egress that never starts",
+            reader.reading_runtime_name
+        );
+        return;
+    };
+    let addressed = match MeshPortAddress::new(
+        table.this_runtimes_name,
+        &port.processor_display_name,
+        &port.port_name,
+    ) {
+        Ok(addressed) => addressed,
+        Err(not_an_address) => {
+            tracing::warn!("the mesh cannot send {port}: {not_an_address}");
+            return;
+        }
+    };
+    match MeshPortEgress::start(WhatOneEgressSends {
+        session: table.session.clone(),
+        key_space: table.key_space.clone(),
+        addressed,
+        how_to_read_the_port,
+        iceoryx2_node: table.iceoryx2_node.clone(),
+    }) {
+        Ok(egress) => {
+            sending.insert(port, egress);
+        }
+        Err(cannot_spawn) => tracing::warn!(
+            "the mesh could not start sending {port} for want of a thread: {cannot_spawn}"
+        ),
+    }
+}
+
+/// Note one fewer reader of a port, and stop sending it once the last leaves.
+fn a_runtime_stopped_reading(
+    who_is_reading: &mut BTreeMap<OutputPortOfferedOnTheMesh, BTreeSet<String>>,
+    sending: &mut BTreeMap<OutputPortOfferedOnTheMesh, MeshPortEgress>,
+    reader: &ReaderOfAnOutputPort,
+) {
+    let port = OutputPortOfferedOnTheMesh::from(reader);
+    let Some(readers) = who_is_reading.get_mut(&port) else {
+        return;
+    };
+    readers.remove(&reader.reading_runtime_name);
+    if readers.is_empty() {
+        who_is_reading.remove(&port);
+        // Dropping the egress stops its thread, drops its channel subscriber
+        // and undeclares its token.
+        sending.remove(&port);
+    }
 }

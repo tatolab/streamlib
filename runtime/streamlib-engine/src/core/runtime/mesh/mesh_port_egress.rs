@@ -24,6 +24,7 @@ use std::time::Instant;
 use zenoh::Wait;
 use zenoh::qos::{CongestionControl, Priority};
 
+use crate::core::graph::MeshPortAddress;
 use crate::core::runtime::mesh::a_bags_top_level_surface_id::a_bag_carries_a_top_level_surface_id;
 use crate::core::runtime::mesh::mesh_data_message_attachment::MeshDataMessageAttachment;
 use crate::core::runtime::mesh::output_ports_offered_on_the_mesh::HowToReadAnOfferedOutputPort;
@@ -36,8 +37,7 @@ use crate::iceoryx2::{ChannelIdlePollBackoff, FRAME_HEADER_SIZE, FrameHeader, Ic
 /// the egress token — which is what tells every reader the port stopped being
 /// sent.
 pub(super) struct MeshPortEgress {
-    processor_display_name: String,
-    port_name: String,
+    addressed: MeshPortAddress,
     stop: Arc<AtomicBool>,
     sending_thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -47,9 +47,10 @@ pub(super) struct MeshPortEgress {
 pub(super) struct WhatOneEgressSends {
     pub session: zenoh::Session,
     pub key_space: RuntimeMeshKeySpace,
-    pub this_runtimes_name: String,
-    pub processor_display_name: String,
-    pub port_name: String,
+    /// The port this egress sends, spelled the one way a port is addressed on
+    /// the mesh — so a log line here and the address a reader `connect`ed with
+    /// can never read differently.
+    pub addressed: MeshPortAddress,
     pub how_to_read_the_port: HowToReadAnOfferedOutputPort,
     pub iceoryx2_node: Iceoryx2Node,
 }
@@ -57,16 +58,14 @@ pub(super) struct WhatOneEgressSends {
 impl MeshPortEgress {
     /// Start sending one port, or say why it could not start.
     pub(super) fn start(sending: WhatOneEgressSends) -> std::io::Result<Self> {
-        let processor_display_name = sending.processor_display_name.clone();
-        let port_name = sending.port_name.clone();
+        let addressed = sending.addressed.clone();
         let stop = Arc::new(AtomicBool::new(false));
         let stop_for_the_thread = Arc::clone(&stop);
         let sending_thread = std::thread::Builder::new()
             .name("streamlib-mesh-egress".to_string())
             .spawn(move || send_one_port_to_the_mesh(sending, stop_for_the_thread))?;
         Ok(Self {
-            processor_display_name,
-            port_name,
+            addressed,
             stop,
             sending_thread: Some(sending_thread),
         })
@@ -78,11 +77,7 @@ impl Drop for MeshPortEgress {
         self.stop.store(true, Ordering::Release);
         if let Some(sending_thread) = self.sending_thread.take() {
             if sending_thread.join().is_err() {
-                tracing::warn!(
-                    "the mesh egress thread for {}/{} panicked",
-                    self.processor_display_name,
-                    self.port_name
-                );
+                tracing::warn!("the mesh egress thread for {} panicked", self.addressed);
             }
         }
     }
@@ -94,13 +89,15 @@ fn send_one_port_to_the_mesh(sending: WhatOneEgressSends, stop: Arc<AtomicBool>)
     let WhatOneEgressSends {
         session,
         key_space,
-        this_runtimes_name,
-        processor_display_name,
-        port_name,
+        addressed,
         how_to_read_the_port,
         iceoryx2_node,
     } = sending;
-    let addressed = format!("{this_runtimes_name}/{processor_display_name}/{port_name}");
+    let MeshPortAddress {
+        runtime_name: this_runtimes_name,
+        processor_display_name,
+        port_name,
+    } = &addressed;
 
     let service = match iceoryx2_node.open_or_create_service(
         &how_to_read_the_port.channel_service_name,

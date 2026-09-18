@@ -15,7 +15,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use zenoh::Wait;
 
-use crate::core::runtime::mesh::runtime_mesh_key::RuntimeMeshKeySpace;
+use crate::core::runtime::mesh::runtime_mesh_key::{ReaderOfAnOutputPort, RuntimeMeshKeySpace};
 
 /// How long a runtime has to say which ports it offers before the asking side
 /// gives up and asks again on its next pass. Engine-chosen; nothing authorable.
@@ -34,6 +34,15 @@ pub struct OutputPortOfferedOnTheMesh {
 impl std::fmt::Display for OutputPortOfferedOnTheMesh {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}/{}", self.processor_display_name, self.port_name)
+    }
+}
+
+impl From<&ReaderOfAnOutputPort> for OutputPortOfferedOnTheMesh {
+    fn from(reader: &ReaderOfAnOutputPort) -> Self {
+        Self {
+            processor_display_name: reader.processor_display_name.clone(),
+            port_name: reader.port_name.clone(),
+        }
     }
 }
 
@@ -138,12 +147,17 @@ impl WhatThisRuntimeOffersOnTheMeshRegistry {
 
     /// How to read one offered port's channel, or `None` while this runtime has
     /// no graph yet or no such port is wired.
+    ///
+    /// Cloned out from under the lock for the same reason
+    /// [`Self::output_ports_it_offers_right_now`] is, and more so: this one
+    /// opens a channel as well as reading the graph.
     pub fn how_to_read_an_offered_output_port(
         &self,
         processor_display_name: &str,
         port_name: &str,
     ) -> Option<HowToReadAnOfferedOutputPort> {
-        self.reader.lock().as_ref().and_then(|reader| {
+        let reader = self.reader.lock().clone();
+        reader.and_then(|reader| {
             reader.how_to_read_an_offered_output_port(processor_display_name, port_name)
         })
     }

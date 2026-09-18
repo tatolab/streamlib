@@ -3,7 +3,9 @@
 
 //! Query builder types for graph operations.
 
-use crate::core::graph::{Link, LinkUniqueId, LinksFromAnotherRuntime, ProcessorNode};
+use crate::core::graph::{
+    Link, LinkUniqueId, LinksFromAnotherRuntime, ProcessorNode, ProcessorUniqueId,
+};
 
 use petgraph::graph::{DiGraph, EdgeIndex, NodeIndex};
 
@@ -101,6 +103,26 @@ impl<'a> TraversalSourceMut<'a> {
             links_from_another_runtime,
         }
     }
+
+    /// A link traversal over nothing — what an op that could not add its link
+    /// hands back.
+    pub(in crate::core::graph::traversal) fn no_link(self) -> LinkTraversalMut<'a> {
+        LinkTraversalMut {
+            graph: self.graph,
+            links_from_another_runtime: self.links_from_another_runtime,
+            ids: vec![],
+        }
+    }
+}
+
+/// The node `processor_id` names, if the digraph holds one.
+pub(in crate::core::graph::traversal) fn node_index_of(
+    graph: &DiGraph<ProcessorNode, Link>,
+    processor_id: &ProcessorUniqueId,
+) -> Option<NodeIndex> {
+    graph
+        .node_indices()
+        .find(|&node_idx| &graph[node_idx].id == processor_id)
 }
 
 /// Mutable query over processor nodes.

@@ -33,6 +33,12 @@ use zenoh::Wait;
 /// runner.
 const HOW_LONG_AN_ARM_WAITS: Duration = Duration::from_secs(40);
 
+/// How long a peer asked to leave has to be gone. The ladder it walks — undeclare,
+/// stop each egress and ingress, join their threads, close the session — is
+/// bounded by design, so this is generous against a loaded machine rather than
+/// a guess at the budget.
+const HOW_LONG_A_PEER_HAS_TO_LEAVE: Duration = Duration::from_secs(30);
+
 /// The variable that pins multicast scouting, so a test never scouts on the
 /// machine's real network.
 const MESH_MULTICAST_INTERFACE_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_MESH_MULTICAST_INTERFACE";
@@ -225,12 +231,31 @@ impl CrossRuntimeLinkPeerProcess {
     }
 
     /// Ask the peer to leave cleanly, and wait for it to go.
+    ///
+    /// Bounded, and a timeout is a failure: a runtime that cannot finish
+    /// leaving — a teardown that waits on a lock or a thread that never
+    /// notices it was told to stop — is exactly what this arm is here to
+    /// catch, and an unbounded wait would hang the suite instead of failing
+    /// it.
     fn ask_it_to_leave(&mut self) {
         drop(self.child.stdin.take());
+        let gave_up_at = Instant::now() + HOW_LONG_A_PEER_HAS_TO_LEAVE;
+        while Instant::now() < gave_up_at {
+            match self.child.try_wait() {
+                Ok(Some(_)) => return,
+                Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+                Err(cannot_wait) => panic!("the peer could not be waited on: {cannot_wait}"),
+            }
+        }
+        let _ = self.child.kill();
         let _ = self.child.wait();
+        panic!(
+            "the peer did not finish leaving within {HOW_LONG_A_PEER_HAS_TO_LEAVE:?}; its              teardown is stuck"
+        );
     }
 
-    /// End the peer the way a crash does.
+    /// End the peer the way a crash does, which nothing in the runtime can
+    /// delay.
     fn kill_it(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();

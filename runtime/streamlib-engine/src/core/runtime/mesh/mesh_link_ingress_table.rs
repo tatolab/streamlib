@@ -10,7 +10,7 @@
 //! link's cell is the one `graph` reads, and it is written here — never under
 //! the graph lock, which a compile holds.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -20,9 +20,11 @@ use parking_lot::Mutex;
 use zenoh::Wait;
 
 use crate::core::graph::{LinkUniqueId, MeshPortAddress, RemoteLinkResolution};
+use crate::core::runtime::mesh::OutputPortsOfferedOnTheMesh;
 use crate::core::runtime::mesh::mesh_link_ingress::MeshLinkIngress;
 use crate::core::runtime::mesh::output_ports_offered_on_the_mesh::ask_a_runtime_what_output_ports_it_offers;
-use crate::core::runtime::mesh::runtime_mesh_key::RuntimeMeshKeySpace;
+use crate::core::runtime::mesh::runtime_mesh_description::RuntimeMeshDescription;
+use crate::core::runtime::mesh::runtime_mesh_key::{AnnouncedRuntimeIdentity, RuntimeMeshKeySpace};
 use crate::core::runtime::mesh::runtime_mesh_peer_table::RuntimeMeshPeerTable;
 use crate::iceoryx2::Iceoryx2Node;
 use streamlib_ipc_types::MAX_INBOUND_LINKS_PER_DESTINATION;
@@ -74,9 +76,9 @@ struct ResolvingEveryWaitingLink {
     /// Cleared to stop the thread. The wake-up channel cannot say so on its
     /// own: every ingress holds a sender, and an ingress outlives this.
     whether_to_keep_resolving: Arc<AtomicBool>,
-    wake_the_resolver: Option<Sender<()>>,
-    announcement_subscriber: Option<zenoh::pubsub::Subscriber<()>>,
-    resolving_thread: Option<std::thread::JoinHandle<()>>,
+    wake_the_resolver: Sender<()>,
+    announcement_subscriber: zenoh::pubsub::Subscriber<()>,
+    resolving_thread: std::thread::JoinHandle<()>,
 }
 
 impl MeshLinkIngressTable {
@@ -233,9 +235,9 @@ impl MeshLinkIngressTable {
             Ok(resolving_thread) => {
                 *self.resolving.lock() = Some(ResolvingEveryWaitingLink {
                     whether_to_keep_resolving,
-                    wake_the_resolver: Some(wake_the_resolver),
-                    announcement_subscriber: Some(announcement_subscriber),
-                    resolving_thread: Some(resolving_thread),
+                    wake_the_resolver,
+                    announcement_subscriber,
+                    resolving_thread,
                 });
             }
             Err(cannot_spawn) => tracing::warn!(
@@ -248,18 +250,18 @@ impl MeshLinkIngressTable {
     /// Stop resolving and stop carrying everything — a runtime leaving the
     /// mesh reads nothing from it.
     pub fn stop(&self) {
-        if let Some(mut resolving) = self.resolving.lock().take() {
-            drop(resolving.announcement_subscriber.take());
+        // Taken out of the lock before any of it is torn down: the join waits
+        // out whatever the pass is in the middle of, and the wiring op asks
+        // this same lock to wake the resolver while it holds the graph lock.
+        let resolving = self.resolving.lock().take();
+        if let Some(resolving) = resolving {
+            drop(resolving.announcement_subscriber);
             resolving
                 .whether_to_keep_resolving
                 .store(false, Ordering::Release);
-            if let Some(wake_the_resolver) = resolving.wake_the_resolver.take() {
-                let _ = wake_the_resolver.send(());
-            }
-            if let Some(resolving_thread) = resolving.resolving_thread.take() {
-                if resolving_thread.join().is_err() {
-                    tracing::warn!("the mesh ingress-resolving thread panicked");
-                }
+            let _ = resolving.wake_the_resolver.send(());
+            if resolving.resolving_thread.join().is_err() {
+                tracing::warn!("the mesh ingress-resolving thread panicked");
             }
         }
         let stopped_reading = {
@@ -277,9 +279,7 @@ impl MeshLinkIngressTable {
 
     fn ask_the_resolver_to_look_again(&self) {
         if let Some(resolving) = self.resolving.lock().as_ref() {
-            if let Some(wake_the_resolver) = resolving.wake_the_resolver.as_ref() {
-                let _ = wake_the_resolver.send(());
-            }
+            let _ = resolving.wake_the_resolver.send(());
         }
     }
 }
@@ -310,7 +310,7 @@ fn resolve_every_waiting_link_until_told_to_stop(
     whether_to_keep_resolving: &AtomicBool,
 ) {
     while whether_to_keep_resolving.load(Ordering::Acquire) {
-        run_one_resolution_pass(&resolving);
+        run_one_resolution_pass(&resolving, whether_to_keep_resolving);
         match when_to_look_again.recv_timeout(HOW_OFTEN_EVERY_WAITING_LINK_IS_LOOKED_AT_AGAIN) {
             Ok(()) => {
                 // Take every other wake-up queued behind this one: one pass
@@ -324,19 +324,29 @@ fn resolve_every_waiting_link_until_told_to_stop(
 }
 
 /// Look at every address this runtime links from and move each one on.
-fn run_one_resolution_pass(resolving: &ResolvingLinksNeeds) {
-    let every_address: std::collections::BTreeSet<MeshPortAddress> = {
+///
+/// The stop flag is read between addresses as well as between passes: one
+/// address whose runtime is present but not answering costs the whole
+/// offered-ports timeout, so a pass over several would eat a shutdown budget.
+fn run_one_resolution_pass(
+    resolving: &ResolvingLinksNeeds,
+    whether_to_keep_resolving: &AtomicBool,
+) {
+    // A set rather than a deduplicated list: the links are keyed by link id, so
+    // two reading one address are not adjacent, and each address is resolved
+    // once a pass however many links read it.
+    let every_address: BTreeSet<MeshPortAddress> = {
         let carried = resolving.carried.lock();
-        // A set rather than a deduplicated list: the links are keyed by link
-        // id, so two reading one address are not adjacent, and each address is
-        // resolved once a pass however many links read it.
         carried
             .links
             .values()
             .map(|link| link.address.clone())
-            .collect::<std::collections::BTreeSet<_>>()
+            .collect()
     };
     for address in every_address {
+        if !whether_to_keep_resolving.load(Ordering::Acquire) {
+            return;
+        }
         resolve_one_address(resolving, &address);
     }
 }
@@ -384,10 +394,7 @@ fn why_this_address_cannot_be_carried_yet(
 /// to carry from, one to carry from, or an ambiguity that refuses the link.
 fn what_the_runtimes_holding_the_name_say(
     address: &MeshPortAddress,
-    holders: &[(
-        crate::core::runtime::mesh::runtime_mesh_key::AnnouncedRuntimeIdentity,
-        Option<crate::core::runtime::mesh::runtime_mesh_description::RuntimeMeshDescription>,
-    )],
+    holders: &[(AnnouncedRuntimeIdentity, Option<RuntimeMeshDescription>)],
     this_engines_version: &str,
 ) -> std::result::Result<(), RemoteLinkResolution> {
     let [(_, described)] = holders else {
@@ -443,7 +450,7 @@ fn what_the_runtimes_holding_the_name_say(
 /// What a runtime's answer about its output ports means for this address.
 fn what_the_offered_ports_say(
     address: &MeshPortAddress,
-    offered: Option<&crate::core::runtime::mesh::OutputPortsOfferedOnTheMesh>,
+    offered: Option<&OutputPortsOfferedOnTheMesh>,
 ) -> std::result::Result<(), RemoteLinkResolution> {
     let Some(offered) = offered else {
         return Err(RemoteLinkResolution::AwaitingRemote {
@@ -542,6 +549,33 @@ fn keep_carrying_or_stop(resolving: &ResolvingLinksNeeds, address: &MeshPortAddr
     tell_the_ingress_about_every_link_from(&resolving.iceoryx2_node, &mut carried, address);
 }
 
+/// How far one link from `address` has got, once this runtime's ingress for it
+/// is open.
+///
+/// All three conditions, not two: the ingress being open is the caller's
+/// premise, and the other two are read here. A link that reported `wired` on
+/// the first two alone would say it was carrying over a port nothing was
+/// sending — and then fall back to `awaiting_remote` when an egress it never
+/// had went away.
+fn how_far_a_link_from_here_has_got(
+    address: &MeshPortAddress,
+    its_destination_is_open: bool,
+    the_source_is_sending: bool,
+) -> RemoteLinkResolution {
+    match (its_destination_is_open, the_source_is_sending) {
+        (false, _) => RemoteLinkResolution::AwaitingRemote {
+            reason: format!("{address} is being read and this link is not wired to it yet"),
+        },
+        (true, false) => RemoteLinkResolution::AwaitingRemote {
+            reason: format!(
+                "the runtime {} is on the mesh and offers {}/{}, and is not sending it",
+                address.runtime_name, address.processor_display_name, address.port_name
+            ),
+        },
+        (true, true) => RemoteLinkResolution::Wired,
+    }
+}
+
 /// Hand the ingress every destination of `address` it has not been told about,
 /// and say how far each link from it has got.
 ///
@@ -585,21 +619,11 @@ fn tell_the_ingress_about_every_link_from(
             link.the_ingress_knows_about_it = true;
         }
 
-        let how_far = if !link.its_destination_is_open {
-            RemoteLinkResolution::AwaitingRemote {
-                reason: format!("{address} is being read and this link is not wired to it yet"),
-            }
-        } else if the_source_is_sending {
-            RemoteLinkResolution::Wired
-        } else {
-            RemoteLinkResolution::AwaitingRemote {
-                reason: format!(
-                    "the runtime {} is on the mesh and offers {}/{}, and is not sending it",
-                    address.runtime_name, address.processor_display_name, address.port_name
-                ),
-            }
-        };
-        *link.how_far_it_has_got.lock() = how_far;
+        *link.how_far_it_has_got.lock() = how_far_a_link_from_here_has_got(
+            address,
+            link.its_destination_is_open,
+            the_source_is_sending,
+        );
     }
 }
 
@@ -625,8 +649,6 @@ fn say_how_far_every_link_from(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::runtime::mesh::runtime_mesh_description::RuntimeMeshDescription;
-    use crate::core::runtime::mesh::runtime_mesh_key::AnnouncedRuntimeIdentity;
     use crate::core::runtime::mesh::{HostIdentity, OutputPortOfferedOnTheMesh};
 
     fn an_address() -> MeshPortAddress {
@@ -795,5 +817,51 @@ mod tests {
     fn a_port_that_never_started_being_sent_is_not_one_that_stopped() {
         let sending = crate::core::runtime::mesh::mesh_link_ingress::SourceSendingState::default();
         assert!(!sending.it_was_sending_and_stopped());
+    }
+
+    /// The address every resolution test below reads.
+    fn the_address_being_read() -> MeshPortAddress {
+        MeshPortAddress::new("bench-cam-a1b2", "CameraSource", "video").expect("a legal address")
+    }
+
+    /// An ingress that is open over a port nobody is sending is not a link that
+    /// is carrying. Without this the link would claim `wired` while no bag
+    /// could cross, and then drop to `awaiting_remote` when an egress it never
+    /// had went away.
+    #[test]
+    fn a_link_whose_source_is_not_sending_the_port_is_not_wired() {
+        let how_far = how_far_a_link_from_here_has_got(&the_address_being_read(), true, false);
+        let RemoteLinkResolution::AwaitingRemote { reason } = how_far else {
+            panic!("a port nobody is sending is not wired; it read {how_far:?}");
+        };
+        assert!(reason.contains("bench-cam-a1b2"), "{reason}");
+        assert!(reason.contains("is not sending it"), "{reason}");
+    }
+
+    /// The source sending the port is what turns an open ingress and an open
+    /// destination into a link that is carrying.
+    #[test]
+    fn a_link_is_wired_once_its_destination_is_open_and_its_source_is_sending() {
+        assert_eq!(
+            how_far_a_link_from_here_has_got(&the_address_being_read(), true, true),
+            RemoteLinkResolution::Wired
+        );
+    }
+
+    /// A destination the wiring op has not opened yet keeps the link waiting
+    /// however hard the source is sending — the bags have nowhere to land.
+    #[test]
+    fn a_link_whose_destination_is_not_open_is_not_wired_however_hard_the_source_sends() {
+        for the_source_is_sending in [false, true] {
+            let how_far = how_far_a_link_from_here_has_got(
+                &the_address_being_read(),
+                false,
+                the_source_is_sending,
+            );
+            let RemoteLinkResolution::AwaitingRemote { reason } = how_far else {
+                panic!("a link with no open destination is not wired; it read {how_far:?}");
+            };
+            assert!(reason.contains("not wired to it yet"), "{reason}");
+        }
     }
 }

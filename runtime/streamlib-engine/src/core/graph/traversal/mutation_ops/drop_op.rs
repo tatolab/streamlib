@@ -20,7 +20,7 @@ impl<'a> ProcessorTraversalMut<'a> {
                 // another runtime carry no edge, so a removed destination's
                 // are forgotten here or they would outlive their processor.
                 if let Some(removed) = graph.node_weight(id) {
-                    links_from_another_runtime.forget_every_link_into(&removed.id.clone());
+                    links_from_another_runtime.forget_every_link_into(&removed.id);
                 }
                 graph.remove_node(id).is_none()
             })

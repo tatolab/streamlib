@@ -200,7 +200,7 @@ pub fn open_iceoryx2_service(
         );
     }
     if let Some(source_proc_id) = source_on_this_runtime.as_ref() {
-        let source_port = from_port.port_name().to_string();
+        let source_port = from_port.port_name();
         if let Some(source_link_wiring) = &source_link_wiring {
             wire_replies_awaited_from_its_out_of_process_ends.extend(wire_subprocess_source(
                 graph,
@@ -622,17 +622,23 @@ fn subscriber_ring_depth_of_input_port(
 /// publishing and needs nothing here. One with no local link never got that
 /// envelope entry and there is no channel to send: said by name rather than
 /// silently producing nothing.
+///
+/// A `source` naming a port on another runtime is refused: this opens a channel
+/// this runtime hosts, and a caller that got here with one has confused the two
+/// ends of the hop.
 pub(crate) fn open_the_channel_of_an_output_port_nothing_local_reads(
     graph: &mut Graph,
     iceoryx2_node: &Iceoryx2Node,
     source: &OutputLinkPortRef,
 ) -> Result<()> {
-    let Some(source_proc_id) = source.processor_id_on_this_runtime().cloned() else {
-        return Ok(());
+    let Some(source_proc_id) = source.processor_id_on_this_runtime() else {
+        return Err(Error::Configuration(format!(
+            "'{source}' names a port on another runtime, and this runtime cannot open a channel              for one it does not host"
+        )));
     };
-    let source_port = source.port_name().to_string();
+    let source_port = source.port_name();
     let channel_service_name = channel_service_name(source)?;
-    if out_of_process_link_wiring_of(graph, &source_proc_id).is_some() {
+    if out_of_process_link_wiring_of(graph, source_proc_id).is_some() {
         // A helper publishes from the wiring envelope a link gave it, so a
         // port something here already reads is live and needs nothing; one
         // nothing reads has no envelope entry, and this side cannot make one.
@@ -646,12 +652,12 @@ pub(crate) fn open_the_channel_of_an_output_port_nothing_local_reads(
         };
     }
 
-    let source_processor = get_single_processor(graph, &source_proc_id)?;
+    let source_processor = get_single_processor(graph, source_proc_id)?;
     let source_guard = source_processor.lock();
     let Some(output_inner) = source_guard.iceoryx2_output_writer_inner() else {
         return Ok(());
     };
-    if output_inner.has_channel_publisher(&source_port) {
+    if output_inner.has_channel_publisher(source_port) {
         return Ok(());
     }
 
@@ -670,7 +676,7 @@ pub(crate) fn open_the_channel_of_an_output_port_nothing_local_reads(
     // only reader is the engine's egress beside it.
     let trust_tier = ChannelTrustTier::Trusted;
     output_inner.set_channel_publisher(
-        &source_port,
+        source_port,
         publisher,
         ChannelEgressConfig {
             service_name: channel_service_name,
@@ -4693,6 +4699,96 @@ mod tests {
             )
             .expect("opening it again is a no-op");
             assert!(source_output.has_channel_publisher("out1"));
+        }
+
+        /// A channel opened for the mesh is deep enough that a windowed local
+        /// consumer connecting afterwards is not refused.
+        ///
+        /// What it catches: sizing this channel from the destinations present
+        /// — of which there are none — pins it at the ordered depth, and a
+        /// channel keeps its creation depth for as long as anything holds it
+        /// open. The next windowed `connect` out of that port would then be
+        /// refused for a depth nothing ever asked for.
+        #[test]
+        fn a_channel_opened_for_the_mesh_still_takes_a_windowed_consumer_afterwards() {
+            use crate::core::test_support::MockOutputOnlyProcessor;
+
+            let mut graph = Graph::new();
+            let source_id = add_mock_output_only(&mut graph);
+            attach_mock_instance::<MockOutputOnlyProcessor::Processor>(&mut graph, &source_id);
+            let source = OutputLinkPortRef::new(&source_id, "out1");
+            let iceoryx2_node = Iceoryx2Node::for_this_test_process();
+
+            open_the_channel_of_an_output_port_nothing_local_reads(
+                &mut graph,
+                &iceoryx2_node,
+                &source,
+            )
+            .expect("a port with no local link opens its channel for the mesh");
+
+            refuse_a_windowed_port_onto_a_channel_created_shallower_than_its_ring(
+                &graph,
+                &iceoryx2_node,
+                &source,
+                &ProcessorUniqueId::from("a-windowed-consumer"),
+                "audio_from_upstream",
+                &LinkUniqueId::from("L-windowed-after-the-mesh"),
+            )
+            .expect(
+                "a windowed consumer connecting after the mesh opened the channel must not be                  refused for its depth",
+            );
+        }
+
+        /// A source in a helper process that nothing here reads cannot be
+        /// opened from this side, and says so by name.
+        ///
+        /// What it catches: a silent `Ok(())`, which would leave the reader
+        /// waiting on an egress that never starts with nothing anywhere saying
+        /// why. A helper publishes only from the wiring envelope a link gave
+        /// it, and with no local link there is no envelope entry to make.
+        #[test]
+        fn a_helper_placed_source_nothing_local_reads_is_refused_by_name() {
+            let mut graph = Graph::new();
+            let source_id = add_mock_output_only(&mut graph);
+            attach_processor_instance(
+                &mut graph,
+                &source_id,
+                ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
+            );
+
+            let refusal = open_the_channel_of_an_output_port_nothing_local_reads(
+                &mut graph,
+                &Iceoryx2Node::for_this_test_process(),
+                &OutputLinkPortRef::new(&source_id, "out1"),
+            )
+            .expect_err("a helper-placed source with no local link cannot be opened from here")
+            .to_string();
+
+            assert!(refusal.contains(&source_id), "{refusal}");
+            assert!(refusal.contains("helper process"), "{refusal}");
+            assert!(
+                refusal.contains("Connect it to something here as well"),
+                "{refusal}"
+            );
+        }
+
+        /// A source naming a port on another runtime is refused rather than
+        /// quietly succeeding: this opens a channel *this* runtime hosts.
+        #[test]
+        fn a_source_on_another_runtime_is_not_a_channel_this_runtime_can_open() {
+            let mut graph = Graph::new();
+            let refusal = open_the_channel_of_an_output_port_nothing_local_reads(
+                &mut graph,
+                &Iceoryx2Node::for_this_test_process(),
+                &OutputLinkPortRef::on_another_runtime(an_address("elsewhere")),
+            )
+            .expect_err("this runtime cannot open a channel for a port it does not host")
+            .to_string();
+
+            assert!(
+                refusal.contains("names a port on another runtime"),
+                "{refusal}"
+            );
         }
 
         /// Disconnecting it takes it off the ingress table, which is what stops

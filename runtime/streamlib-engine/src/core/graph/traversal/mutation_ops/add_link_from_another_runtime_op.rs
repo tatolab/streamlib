@@ -5,7 +5,7 @@ use crate::core::graph::{
     InputLinkPortRef, Link, LinkTraversalMut, MeshPortAddress, TraversalSourceMut,
 };
 
-use super::super::traversal_source::LinkLocation;
+use super::super::traversal_source::{LinkLocation, node_index_of};
 
 impl<'a> TraversalSourceMut<'a> {
     /// Add a link carrying from a port on another runtime into a local input.
@@ -21,17 +21,10 @@ impl<'a> TraversalSourceMut<'a> {
         source: MeshPortAddress,
         destination: InputLinkPortRef,
     ) -> LinkTraversalMut<'a> {
-        let destination_exists = self
-            .graph
-            .node_indices()
-            .find(|&idx| self.graph[idx].id == destination.processor_id)
-            .is_some_and(|idx| self.graph[idx].has_input(&destination.port_name));
+        let destination_exists = node_index_of(self.graph, &destination.processor_id)
+            .is_some_and(|node_idx| self.graph[node_idx].has_input(&destination.port_name));
         if !destination_exists {
-            return LinkTraversalMut {
-                graph: self.graph,
-                links_from_another_runtime: self.links_from_another_runtime,
-                ids: vec![],
-            };
+            return self.no_link();
         }
 
         let link_id = self
