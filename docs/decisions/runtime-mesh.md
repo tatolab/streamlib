@@ -61,9 +61,17 @@ Recorded with the `runtime-mesh` proposal. It reads `zenoh` 1.10.1 and the rig p
   needs a provisioned key and certificate. Zenoh is elected under Apache-2.0.
 - **The duplicate check needs the mesh before the runtime exists.** The session therefore opens
   in `Runner::new()`, beside the runtime-id socket refusal, which needs no GPU.
-  - Cost: `Runtime()` takes Zenoh's 500 ms scouting delay while multicast discovery is on.
+  - Cost: `Runtime()` takes Zenoh's 500 ms scouting delay while multicast discovery is on. The
+    check itself adds nothing measurable — a liveliness `get` is answered out of the local
+    session's own view of its connected peers' declarations, so on the loopback a name somebody
+    holds comes back in about 140 µs and a name nobody holds finalises in under 100 µs. Its
+    two-second bound is a ceiling for a peer whose process has stopped answering, never a cost.
   - A same-host exception needs the pid in the key: a killed runtime's token is gone within
     milliseconds because the kernel closes TCP, but a restart can race that.
+  - The check sees only peers this runtime is already connected to when it opens: `open` waits
+    out the scouting delay for them, but a token declared onto a connection that already exists
+    takes about 100 ms to arrive. That is the residual the plan states — two runtimes that start
+    together both run, and each says so once.
 - **Tests run with discovery off.** Otherwise parallel test runtimes on one machine would find
   each other under one default name and refuse.
 

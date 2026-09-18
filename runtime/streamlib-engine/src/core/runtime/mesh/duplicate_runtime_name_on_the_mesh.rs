@@ -22,9 +22,7 @@ use zenoh::Wait;
 
 use crate::core::error::{Error, Result};
 use crate::core::runtime::mesh::HostIdentity;
-use crate::core::runtime::mesh::runtime_mesh_key::{
-    AnnouncedRuntimeIdentity, RuntimeMeshKeySpace,
-};
+use crate::core::runtime::mesh::runtime_mesh_key::{AnnouncedRuntimeIdentity, RuntimeMeshKeySpace};
 use crate::core::runtime::mesh::runtime_mesh_name::RuntimeMeshName;
 
 /// How long connected peers have to answer who holds this runtime's name.
@@ -209,11 +207,7 @@ mod tests {
             "a token this host left behind must free its name"
         );
         assert!(
-            !a_runtime_here_may_take_this_name_over(
-                &here,
-                &held_by(here.clone(), 4321),
-                |_| false
-            ),
+            !a_runtime_here_may_take_this_name_over(&here, &held_by(here.clone(), 4321), |_| false),
             "a live process on this host must keep its name"
         );
         assert!(
@@ -292,10 +286,7 @@ mod tests {
     fn a_holder_on_another_host_is_named_as_another_host() {
         let here = identified("this-boot", 4_026_531_836);
 
-        assert_eq!(
-            where_the_holder_is(&here, &here),
-            "a process on this host"
-        );
+        assert_eq!(where_the_holder_is(&here, &here), "a process on this host");
         assert_eq!(
             where_the_holder_is(&here, &identified("another-boot", 7)),
             "another host (kernel boot another-boot, pid namespace 7)"

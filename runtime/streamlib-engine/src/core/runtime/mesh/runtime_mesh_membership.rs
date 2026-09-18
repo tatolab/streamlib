@@ -118,7 +118,9 @@ impl RuntimeMeshMembership {
                 );
                 RuntimeMeshSessionState::Open(Box::new(announced))
             }
-            Err(WhyThisRuntimeIsNotAnnounced::ItsNameIsAlreadyLive(refusal)) => return Err(refusal),
+            Err(WhyThisRuntimeIsNotAnnounced::ItsNameIsAlreadyLive(refusal)) => {
+                return Err(refusal);
+            }
             Err(WhyThisRuntimeIsNotAnnounced::ItsMeshCouldNotBeReached(reason)) => {
                 tracing::warn!(
                     "Runtime {runtime_name} could not join the {} mesh and is running \
@@ -415,7 +417,7 @@ fn spawn_the_discovery_thread(
     std::thread::Builder::new()
         .name("streamlib-mesh-discovery".to_string())
         .spawn(move || {
-            let mut said_about = SamedNamedPeersAlreadySaidOnce::default();
+            let mut said_about = SameNamedPeersAlreadySaidOnce::default();
             loop {
                 // Ends when the subscriber is dropped, which drops the sender;
                 // a timeout is a round of asking every peer again.
@@ -471,7 +473,7 @@ fn spawn_the_discovery_thread(
 fn the_subscriber_feeding_this_thread_is_still_there(
     peers: &RuntimeMeshPeerTable,
     this_runtime: &AnnouncedRuntimeIdentity,
-    said_about: &mut SamedNamedPeersAlreadySaidOnce,
+    said_about: &mut SameNamedPeersAlreadySaidOnce,
     what_the_discovery_thread_reads: &Receiver<WhatTheMeshSaw>,
 ) -> bool {
     loop {
@@ -496,9 +498,9 @@ fn the_subscriber_feeding_this_thread_is_still_there(
 /// re-ask round, and the set is never pruned: a peer that leaves and returns is
 /// the same collision, not a new one.
 #[derive(Default)]
-struct SamedNamedPeersAlreadySaidOnce(BTreeSet<AnnouncedRuntimeIdentity>);
+struct SameNamedPeersAlreadySaidOnce(BTreeSet<AnnouncedRuntimeIdentity>);
 
-impl SamedNamedPeersAlreadySaidOnce {
+impl SameNamedPeersAlreadySaidOnce {
     /// Say that `announced` shares this runtime's name, the first time it does.
     fn say_it_once(
         &mut self,
@@ -517,8 +519,7 @@ impl SamedNamedPeersAlreadySaidOnce {
         this_runtime: &AnnouncedRuntimeIdentity,
         announced: &AnnouncedRuntimeIdentity,
     ) -> Option<String> {
-        if announced.runtime_name != this_runtime.runtime_name
-            || !self.0.insert(announced.clone())
+        if announced.runtime_name != this_runtime.runtime_name || !self.0.insert(announced.clone())
         {
             return None;
         }
@@ -531,76 +532,6 @@ impl SamedNamedPeersAlreadySaidOnce {
             announced.process_id,
             announced.runtime_name
         ))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::core::runtime::mesh::HostIdentity;
-
-    fn announced(runtime_name: &str, process_id: u32) -> AnnouncedRuntimeIdentity {
-        AnnouncedRuntimeIdentity {
-            runtime_name: runtime_name.to_string(),
-            host_identity: HostIdentity::ThisKernelBootAndPidNamespace {
-                kernel_boot_id: "2f1c8a30".to_string(),
-                pid_namespace_inode: 4_026_531_836,
-            },
-            process_id,
-        }
-    }
-
-    /// The residual is said once per peer and names the peer's host and pid, so
-    /// a reader can go and find the other runtime.
-    #[test]
-    fn a_peer_sharing_this_runtimes_name_is_said_once_and_names_where_it_is() {
-        let this_runtime = announced("rig-desk-a1b2", 100);
-        let namesake = announced("rig-desk-a1b2", 4321);
-        let mut said_about = SamedNamedPeersAlreadySaidOnce::default();
-
-        let collision = said_about
-            .what_to_say_about(&this_runtime, &namesake)
-            .expect("a peer sharing this runtime's name is worth saying");
-        assert!(collision.contains("rig-desk-a1b2"), "{collision}");
-        assert!(collision.contains("4321"), "{collision}");
-        assert!(
-            collision.contains(&namesake.host_identity.as_one_key_chunk()),
-            "{collision}"
-        );
-
-        assert_eq!(said_about.what_to_say_about(&this_runtime, &namesake), None);
-    }
-
-    /// A peer under another name is not a collision, and this runtime's own
-    /// pid is never one either.
-    #[test]
-    fn a_peer_under_another_name_is_never_said() {
-        let this_runtime = announced("rig-desk-a1b2", 100);
-        let mut said_about = SamedNamedPeersAlreadySaidOnce::default();
-
-        assert_eq!(
-            said_about.what_to_say_about(&this_runtime, &announced("rig-desk-c3d4", 4321)),
-            None
-        );
-    }
-
-    /// A second runtime under the same name is its own collision — a partition
-    /// healing onto two namesakes says both.
-    #[test]
-    fn a_second_namesake_is_said_as_well_as_the_first() {
-        let this_runtime = announced("rig-desk-a1b2", 100);
-        let mut said_about = SamedNamedPeersAlreadySaidOnce::default();
-
-        assert!(
-            said_about
-                .what_to_say_about(&this_runtime, &announced("rig-desk-a1b2", 4321))
-                .is_some()
-        );
-        assert!(
-            said_about
-                .what_to_say_about(&this_runtime, &announced("rig-desk-a1b2", 9999))
-                .is_some()
-        );
     }
 }
 
@@ -651,4 +582,74 @@ fn ask_a_peer_what_it_is(
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::runtime::mesh::HostIdentity;
+
+    fn announced(runtime_name: &str, process_id: u32) -> AnnouncedRuntimeIdentity {
+        AnnouncedRuntimeIdentity {
+            runtime_name: runtime_name.to_string(),
+            host_identity: HostIdentity::ThisKernelBootAndPidNamespace {
+                kernel_boot_id: "2f1c8a30".to_string(),
+                pid_namespace_inode: 4_026_531_836,
+            },
+            process_id,
+        }
+    }
+
+    /// The residual is said once per peer and names the peer's host and pid, so
+    /// a reader can go and find the other runtime.
+    #[test]
+    fn a_peer_sharing_this_runtimes_name_is_said_once_and_names_where_it_is() {
+        let this_runtime = announced("rig-desk-a1b2", 100);
+        let namesake = announced("rig-desk-a1b2", 4321);
+        let mut said_about = SameNamedPeersAlreadySaidOnce::default();
+
+        let collision = said_about
+            .what_to_say_about(&this_runtime, &namesake)
+            .expect("a peer sharing this runtime's name is worth saying");
+        assert!(collision.contains("rig-desk-a1b2"), "{collision}");
+        assert!(collision.contains("4321"), "{collision}");
+        assert!(
+            collision.contains(&namesake.host_identity.as_one_key_chunk()),
+            "{collision}"
+        );
+
+        assert_eq!(said_about.what_to_say_about(&this_runtime, &namesake), None);
+    }
+
+    /// A peer under another name is not a collision, and this runtime's own
+    /// pid is never one either.
+    #[test]
+    fn a_peer_under_another_name_is_never_said() {
+        let this_runtime = announced("rig-desk-a1b2", 100);
+        let mut said_about = SameNamedPeersAlreadySaidOnce::default();
+
+        assert_eq!(
+            said_about.what_to_say_about(&this_runtime, &announced("rig-desk-c3d4", 4321)),
+            None
+        );
+    }
+
+    /// A second runtime under the same name is its own collision — a partition
+    /// healing onto two namesakes says both.
+    #[test]
+    fn a_second_namesake_is_said_as_well_as_the_first() {
+        let this_runtime = announced("rig-desk-a1b2", 100);
+        let mut said_about = SameNamedPeersAlreadySaidOnce::default();
+
+        assert!(
+            said_about
+                .what_to_say_about(&this_runtime, &announced("rig-desk-a1b2", 4321))
+                .is_some()
+        );
+        assert!(
+            said_about
+                .what_to_say_about(&this_runtime, &announced("rig-desk-a1b2", 9999))
+                .is_some()
+        );
+    }
 }

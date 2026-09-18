@@ -624,10 +624,9 @@ impl ATokenHeldUnderAName {
         process_id: u32,
         listening: &str,
     ) -> Self {
-        let mesh_name = RuntimeMeshName::from_configuration_environment_or_default(Some(
-            mesh_name.to_string(),
-        ))
-        .expect("a legal mesh name");
+        let mesh_name =
+            RuntimeMeshName::from_configuration_environment_or_default(Some(mesh_name.to_string()))
+                .expect("a legal mesh name");
         let key_space = RuntimeMeshKeySpace::of(mesh_name.clone());
 
         // Every value stated, so nothing here is read out of the test process's
@@ -770,7 +769,11 @@ fn a_name_is_free_the_moment_the_runtime_holding_it_is_killed() {
 #[test]
 fn a_token_left_by_a_dead_process_on_this_host_is_taken_over_and_a_live_one_is_not() {
     for (what_holds_it, process_id, it_may_start) in [
-        ("a process that has exited", a_process_id_on_this_host_that_has_exited(), true),
+        (
+            "a process that has exited",
+            a_process_id_on_this_host_that_has_exited(),
+            true,
+        ),
         ("this very test process", std::process::id(), false),
     ] {
         let mesh_name = a_mesh_name_of_its_own("stale");
@@ -804,8 +807,7 @@ fn a_token_left_by_a_dead_process_on_this_host_is_taken_over_and_a_live_one_is_n
         } else {
             let refusal = taking_it_over.wait_until_it_refuses();
             assert!(
-                refusal.contains("left-behind")
-                    && refusal.contains(&format!("pid {process_id}")),
+                refusal.contains("left-behind") && refusal.contains(&format!("pid {process_id}")),
                 "a name held by {what_holds_it} must be refused naming it: {refusal}"
             );
             assert_eq!(taking_it_over.wait_for_its_exit_code(), Some(2));
@@ -855,5 +857,31 @@ fn two_runtimes_that_meet_after_both_started_both_keep_running_and_list_each_oth
             runtime.why_it_refused.lock().is_none(),
             "neither runtime is refused: they never saw each other in time"
         );
+    }
+}
+
+/// Isolated runtimes never refuse each other, however many share one name:
+/// with discovery off and no peers there is nobody to see, which is the
+/// isolation lever working rather than a hole in the check.
+#[test]
+fn isolated_runtimes_sharing_one_name_never_refuse_each_other() {
+    let mesh_name = a_mesh_name_of_its_own("isolated-namesakes");
+    let namesakes: Vec<RuntimeMeshPeerProcess> = (0..3)
+        .map(|_| {
+            RuntimeMeshPeerProcess::launch(HowToLaunchAPeer {
+                runtime_name: "one-name-many-isolated-runtimes".to_string(),
+                mesh_name: mesh_name.clone(),
+                ..Default::default()
+            })
+        })
+        .collect();
+
+    for runtime in &namesakes {
+        runtime.wait_until_it_is_on_the_mesh();
+        assert!(
+            runtime.why_it_refused.lock().is_none(),
+            "an isolated runtime has nobody to be refused by"
+        );
+        assert!(runtime.peer_names_it_sees().is_empty());
     }
 }

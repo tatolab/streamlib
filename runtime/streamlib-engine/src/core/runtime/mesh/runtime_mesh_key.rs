@@ -184,10 +184,13 @@ mod tests {
     #[test]
     fn the_key_for_one_name_reaches_every_holder_of_it_and_no_other_name() {
         let key_space = a_key_space("lab");
-        let under_one_name =
-            keyexpr::new(key_space.every_announcement_key_under("rig-desk-a1b2").as_str())
-                .expect("a key expression")
-                .to_owned();
+        let under_one_name = keyexpr::new(
+            key_space
+                .every_announcement_key_under("rig-desk-a1b2")
+                .as_str(),
+        )
+        .expect("a key expression")
+        .to_owned();
 
         for holder in [
             an_identity("rig-desk-a1b2", 4321),
