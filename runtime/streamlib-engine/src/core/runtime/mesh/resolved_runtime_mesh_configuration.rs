@@ -47,12 +47,18 @@ impl ResolvedRuntimeMeshConfiguration {
     /// Read the constructor's values, then the environment's, then the
     /// engine's own defaults.
     pub fn resolve(configuration: RuntimeMeshConfiguration) -> Result<Self> {
+        // A stated list replaces the default whether or not it names anything:
+        // `mesh_listen_endpoints=[]` asks for a runtime that dials peers and is
+        // dialled by none, which is a different request from asking for the
+        // default. Only an absent list takes the default — an absent
+        // environment variable included, since an empty one reads as unset.
+        let a_listener_list_was_stated = configuration.mesh_listen_endpoints.is_some();
         let listen_endpoints = resolve_mesh_endpoints(
             configuration.mesh_listen_endpoints,
             std::env::var_os(MESH_LISTEN_ENDPOINTS_ENVIRONMENT_VARIABLE),
             MESH_LISTEN_ENDPOINTS_ENVIRONMENT_VARIABLE,
         )?;
-        let listen_endpoints = if listen_endpoints.is_empty() {
+        let listen_endpoints = if listen_endpoints.is_empty() && !a_listener_list_was_stated {
             vec![read_one_mesh_endpoint(
                 DEFAULT_MESH_LISTEN_ENDPOINT,
                 "the engine's own default listener",
@@ -192,6 +198,28 @@ mod tests {
                 .map(RuntimeMeshEndpoint::as_str)
                 .collect::<Vec<_>>(),
             ["tcp/127.0.0.1:7447"]
+        );
+    }
+
+    /// A stated empty listener list is honoured rather than quietly replaced by
+    /// the default, which is what `resolve_mesh_endpoints` already promises for
+    /// every other stated list.
+    #[test]
+    fn a_stated_empty_listener_list_leaves_the_runtime_listening_on_nothing() {
+        let resolved = resolved(RuntimeMeshConfiguration {
+            mesh_listen_endpoints: Some(Vec::new()),
+            ..Default::default()
+        })
+        .expect("an empty listener list is legal");
+
+        assert!(resolved.listen_endpoints.is_empty());
+        assert_eq!(
+            resolved
+                .as_a_zenoh_configuration()
+                .expect("zenoh takes every value")
+                .get_json("listen/endpoints")
+                .expect("listen endpoints"),
+            "[]"
         );
     }
 
