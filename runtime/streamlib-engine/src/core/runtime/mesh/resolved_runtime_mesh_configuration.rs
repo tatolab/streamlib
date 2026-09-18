@@ -111,6 +111,23 @@ impl ResolvedRuntimeMeshConfiguration {
         }
         Ok(configuration)
     }
+
+    /// The same configuration for a session that asks one question and closes,
+    /// rather than one that lives as long as its runtime.
+    ///
+    /// A peer dials `connect/endpoints` on a background task and `open` returns
+    /// before any of them answers — right for a runtime that will still be
+    /// there in an hour, wrong for an observation whose question would go out
+    /// before the endpoint its caller named is reachable. A zero connect
+    /// timeout makes `open` await one attempt per endpoint instead
+    /// (`zenoh-1.10.1`, `net/runtime/orchestrator.rs:460-466`), and peer mode's
+    /// `exit_on_failure` stays false either way, so an endpoint nothing answers
+    /// on still costs nothing but the attempt.
+    pub fn as_a_zenoh_configuration_for_one_question(&self) -> zenoh::Result<zenoh::Config> {
+        let mut configuration = self.as_a_zenoh_configuration()?;
+        configuration.insert_json5("connect/timeout_ms", "0")?;
+        Ok(configuration)
+    }
 }
 
 /// Whether multicast discovery runs: what the constructor said, else what the

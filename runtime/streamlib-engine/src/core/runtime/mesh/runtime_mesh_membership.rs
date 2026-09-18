@@ -9,11 +9,10 @@
 //! runs on. It fails one for exactly one reason — a name another live runtime
 //! already holds, which is an address collision rather than a network failure.
 //!
-//! **No Zenoh call may run on a current-thread tokio runtime** — Zenoh resolves
-//! its builders by blocking on its own pool, which panics there. `Runner::new()`
-//! and `stop()` are called from whatever thread an app happens to own, so
-//! neither assumes: both hand their Zenoh work to a thread of this module's own
-//! through [`off_any_current_thread_tokio_runtime`]. Discovery already has one.
+//! Every blocking Zenoh call here goes through
+//! [`off_any_current_thread_tokio_runtime`], which is where the rule that none
+//! of them may run on a current-thread tokio runtime is written down. Discovery
+//! already has a thread of its own.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -30,13 +29,12 @@ use crate::core::runtime::RuntimeName;
 use crate::core::runtime::mesh::duplicate_runtime_name_on_the_mesh::refuse_this_runtime_if_its_name_is_already_live;
 use crate::core::runtime::mesh::hosted_control_plane_endpoint::HostedControlPlaneEndpointRegistry;
 use crate::core::runtime::mesh::resolved_runtime_mesh_configuration::ResolvedRuntimeMeshConfiguration;
-use crate::core::runtime::mesh::runtime_mesh_description::RuntimeMeshDescription;
+use crate::core::runtime::mesh::runtime_mesh_description::{
+    RuntimeMeshDescription, ask_a_peer_what_it_is,
+};
 use crate::core::runtime::mesh::runtime_mesh_key::{AnnouncedRuntimeIdentity, RuntimeMeshKeySpace};
 use crate::core::runtime::mesh::runtime_mesh_peer_table::RuntimeMeshPeerTable;
-
-/// How long a peer has to answer what it is before its description is left
-/// unread until the next round. Engine-chosen; nothing authorable.
-const HOW_LONG_A_PEER_HAS_TO_DESCRIBE_ITSELF: Duration = Duration::from_secs(2);
+use crate::core::runtime::mesh::zenoh_work_off_any_tokio_runtime::off_any_current_thread_tokio_runtime;
 
 /// How often every known peer is asked again what it is.
 ///
@@ -209,27 +207,6 @@ impl RuntimeMeshMembership {
             peers: self.peers.render_for_graph(),
         }
     }
-}
-
-/// Run `zenoh_work` on a thread that is nobody's tokio runtime.
-///
-/// A scoped thread rather than a detached one: the caller has to have the
-/// result before it goes on. A thread the OS will not give is reported, because
-/// the mesh never fails a runtime's start; a panic inside comes back out
-/// unchanged, because that is not the mesh's to swallow.
-fn off_any_current_thread_tokio_runtime<T: Send>(
-    mesh_step: &str,
-    zenoh_work: impl FnOnce() -> T + Send,
-) -> std::io::Result<T> {
-    std::thread::scope(|threads| {
-        let thread = std::thread::Builder::new()
-            .name(format!("streamlib-mesh-{mesh_step}"))
-            .spawn_scoped(threads, zenoh_work)?;
-        match thread.join() {
-            Ok(done) => Ok(done),
-            Err(panicked) => std::panic::resume_unwind(panicked),
-        }
-    })
 }
 
 /// Why this runtime is not announced on its mesh — which decides whether it
@@ -547,42 +524,6 @@ fn ask_a_peer_what_it_is_and_record_it(
     if let Some(described) = ask_a_peer_what_it_is(session, key_space, announced) {
         peers.record_what_a_peer_answered(announced, described);
     }
-}
-
-/// What a peer says it is, or `None` when it did not answer in time or
-/// answered something this engine cannot read.
-fn ask_a_peer_what_it_is(
-    session: &zenoh::Session,
-    key_space: &RuntimeMeshKeySpace,
-    announced: &AnnouncedRuntimeIdentity,
-) -> Option<RuntimeMeshDescription> {
-    let replies = session
-        .get(key_space.announcement_key_for(announced))
-        .timeout(HOW_LONG_A_PEER_HAS_TO_DESCRIBE_ITSELF)
-        .wait()
-        .inspect_err(|query_failure| {
-            tracing::debug!(
-                "could not ask the mesh peer {} what it is: {query_failure}",
-                announced.runtime_name
-            );
-        })
-        .ok()?;
-
-    for reply in replies {
-        let Ok(answered) = reply.result() else {
-            continue;
-        };
-        match RuntimeMeshDescription::decode(&answered.payload().to_bytes()) {
-            Ok(described) => return Some(described),
-            Err(unreadable) => {
-                tracing::debug!(
-                    "the mesh peer {} answered something this engine cannot read: {unreadable}",
-                    announced.runtime_name
-                );
-            }
-        }
-    }
-    None
 }
 
 #[cfg(test)]

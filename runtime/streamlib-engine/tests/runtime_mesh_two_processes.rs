@@ -9,18 +9,19 @@
 //! while the transport connects them, and multicast is pinned to `127.0.0.1`
 //! so a test never joins whatever network the machine is on.
 
+use std::collections::BTreeSet;
 use std::io::{BufRead, BufReader};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
-use streamlib_engine::core::runtime::RuntimeMeshConfiguration;
 use streamlib_engine::core::runtime::mesh::{
     AnnouncedRuntimeIdentity, HostIdentity, ResolvedRuntimeMeshConfiguration, RuntimeMeshKeySpace,
     RuntimeMeshName,
 };
+use streamlib_engine::core::runtime::{RuntimeMeshConfiguration, observe_a_runtime_mesh};
 use zenoh::Wait;
 
 /// How long an arm waits for two runtimes to see each other. Generous: a
@@ -83,6 +84,10 @@ fn a_free_loopback_port() -> u16 {
 struct RuntimeMeshPeerProcess {
     child: Child,
     what_it_last_saw: Arc<Mutex<Option<serde_json::Value>>>,
+    /// Every name this peer has reported at any point, which is how an arm
+    /// asks whether something it did was ever visible from the mesh — a report
+    /// is the latest view, so a token held briefly would be gone from it again.
+    every_name_it_has_ever_seen: Arc<Mutex<BTreeSet<String>>>,
     why_it_refused: Arc<Mutex<Option<String>>>,
     what_it_logged: Arc<Mutex<Vec<String>>>,
 }
@@ -136,10 +141,12 @@ impl RuntimeMeshPeerProcess {
             .expect("the mesh peer binary launches");
 
         let what_it_last_saw = Arc::new(Mutex::new(None));
+        let every_name_it_has_ever_seen = Arc::new(Mutex::new(BTreeSet::new()));
         let why_it_refused = Arc::new(Mutex::new(None));
         let what_it_logged = Arc::new(Mutex::new(Vec::new()));
         let reported = child.stdout.take().expect("the peer's stdout is piped");
         let saw = Arc::clone(&what_it_last_saw);
+        let ever_saw = Arc::clone(&every_name_it_has_ever_seen);
         let refused = Arc::clone(&why_it_refused);
         let logged = Arc::clone(&what_it_logged);
         std::thread::spawn(move || {
@@ -147,6 +154,7 @@ impl RuntimeMeshPeerProcess {
                 if let Some(refusal) = line.strip_prefix("REFUSED ") {
                     *refused.lock() = Some(refusal.to_string());
                 } else if let Ok(mesh) = serde_json::from_str::<serde_json::Value>(&line) {
+                    ever_saw.lock().extend(names_in(&mesh));
                     *saw.lock() = Some(mesh);
                 } else {
                     // Whatever is left is the engine's pretty log, which only
@@ -159,6 +167,7 @@ impl RuntimeMeshPeerProcess {
         Self {
             child,
             what_it_last_saw,
+            every_name_it_has_ever_seen,
             why_it_refused,
             what_it_logged,
         }
@@ -169,15 +178,12 @@ impl RuntimeMeshPeerProcess {
         let Some(mesh) = self.what_it_last_saw.lock().clone() else {
             return Vec::new();
         };
-        mesh["peers"]
-            .as_array()
-            .map(|peers| {
-                peers
-                    .iter()
-                    .filter_map(|peer| peer["runtime_name"].as_str().map(str::to_string))
-                    .collect()
-            })
-            .unwrap_or_default()
+        names_in(&mesh)
+    }
+
+    /// Every name this peer has reported since it started.
+    fn every_peer_name_it_has_ever_seen(&self) -> BTreeSet<String> {
+        self.every_name_it_has_ever_seen.lock().clone()
     }
 
     /// What this peer last reported about its own mesh.
@@ -254,6 +260,19 @@ impl Drop for RuntimeMeshPeerProcess {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+/// The runtime names one reported `mesh` object lists as peers.
+fn names_in(mesh: &serde_json::Value) -> Vec<String> {
+    mesh["peers"]
+        .as_array()
+        .map(|peers| {
+            peers
+                .iter()
+                .filter_map(|peer| peer["runtime_name"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Poll until `what_it_should_see` holds, or fail saying what was seen instead.
@@ -940,4 +959,99 @@ fn isolated_runtimes_sharing_one_name_never_refuse_each_other() {
         );
         assert!(runtime.peer_names_it_sees().is_empty());
     }
+}
+
+/// How long the observation arm keeps looking, so that a session holding
+/// anything on the mesh would overlap one of the peer's own reports. Twenty of
+/// the peer's hundred-millisecond report cycles.
+const HOW_LONG_THE_OBSERVATION_ARM_KEEPS_LOOKING: Duration = Duration::from_secs(2);
+
+/// What `streamlib nodes` reads, and what it costs the mesh: a runtime is
+/// listed whole, and never once sees the session that listed it.
+///
+/// The two halves are one arm on purpose. Proving the observation reads a peer
+/// proves nothing about the ban on announcing, and proving the ban with nothing
+/// to read would pass against a session that reads nothing either.
+#[test]
+fn an_observation_lists_a_runtime_whole_and_that_runtime_never_sees_the_observer() {
+    let mesh_name = a_mesh_name_of_its_own("observed");
+    let listening = format!("tcp/{LOOPBACK_INTERFACE}:{}", a_free_loopback_port());
+    let observed = RuntimeMeshPeerProcess::launch(HowToLaunchAPeer {
+        runtime_name: "observed-runtime".to_string(),
+        mesh_name: mesh_name.clone(),
+        listen_endpoints: vec![listening.clone()],
+        ..Default::default()
+    });
+    observed.wait_until_it_is_on_the_mesh();
+
+    let keep_looking = Arc::new(AtomicBool::new(true));
+    let what_every_look_saw = Arc::new(Mutex::new(Vec::new()));
+    let looking = std::thread::spawn({
+        let keep_looking = Arc::clone(&keep_looking);
+        let what_every_look_saw = Arc::clone(&what_every_look_saw);
+        let mesh_name = mesh_name.clone();
+        move || {
+            while keep_looking.load(Ordering::Relaxed) {
+                let looked = observe_a_runtime_mesh(RuntimeMeshConfiguration {
+                    mesh_name: Some(mesh_name.clone()),
+                    mesh_peer_endpoints: Some(vec![listening.clone()]),
+                    mesh_multicast_discovery: Some(false),
+                    ..Default::default()
+                })
+                .expect("the mesh is readable");
+                what_every_look_saw.lock().push(looked);
+            }
+        }
+    });
+
+    std::thread::sleep(HOW_LONG_THE_OBSERVATION_ARM_KEEPS_LOOKING);
+    keep_looking.store(false, Ordering::Relaxed);
+    looking.join().expect("the looking thread finishes");
+
+    let every_look = what_every_look_saw.lock().clone();
+    assert!(
+        !every_look.is_empty(),
+        "the arm must have looked at the mesh at least once"
+    );
+    for looked in &every_look {
+        assert_eq!(looked.mesh_name, mesh_name);
+        let listed: Vec<&str> = looked
+            .peers
+            .iter()
+            .map(|peer| peer.runtime_name.as_str())
+            .collect();
+        assert_eq!(listed, ["observed-runtime"], "one look saw {listed:?}");
+    }
+
+    // Whole, not merely named: the columns `streamlib nodes` prints come off
+    // the description, so a look that only read tokens would list a row of
+    // blanks.
+    let described = every_look
+        .iter()
+        .flat_map(|looked| looked.peers.iter())
+        .find(|peer| peer.runtime_id.is_some())
+        .expect("a look must have read the runtime's own description of itself");
+    assert!(
+        described
+            .host_name
+            .as_ref()
+            .is_some_and(|host| !host.is_empty()),
+        "the description names the host the runtime is on"
+    );
+    assert_eq!(
+        described.engine_version.as_deref(),
+        Some(env!("CARGO_PKG_VERSION"))
+    );
+    // The fixture hosts no control plane, so it is on the mesh and not drivable
+    // — the row `streamlib nodes` prints with no URL.
+    assert_eq!(
+        described.control_plane_urls.as_deref(),
+        Some(&[] as &[String])
+    );
+
+    assert!(
+        observed.every_peer_name_it_has_ever_seen().is_empty(),
+        "a runtime must never see the session that listed it, and this one saw {:?}",
+        observed.every_peer_name_it_has_ever_seen()
+    );
 }
