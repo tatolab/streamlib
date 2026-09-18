@@ -864,7 +864,8 @@ def build_argument_parser() -> argparse.ArgumentParser:
             metavar="NAME",
             help=(
                 "Name this runtime is addressed by on the runtime mesh. Omitted, the engine "
-                "reads STREAMLIB_RUNTIME_NAME, else names it after this host and app directory."
+                "reads STREAMLIB_RUNTIME_NAME, else names it after this host and app directory. "
+                "A name another live runtime on the mesh already holds is refused by name."
             ),
         )
         launch_command.add_argument(

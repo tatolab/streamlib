@@ -492,6 +492,16 @@ class Runtime:
         one machine differ and every run of one checkout matches. `streamlib
         run` and `dev` pass their `--runtime-name` through to here.
 
+        A name is unique within a mesh, and never auto-suffixed: it is the
+        address other runtimes wire against, so it may not depend on start
+        order. A name another live runtime already holds is refused here,
+        naming that runtime's host and pid and both ways out — stop it
+        (`streamlib nodes` lists it), or start this one under another name. The
+        one exception is a runtime on this very machine whose process is gone,
+        so restarting an app that was killed is never refused. Two runtimes
+        that start at the same instant, before either can see the other, both
+        run and each says so once: `graph` then lists both.
+
         `mesh_name` is one chunk of the channel-name grammar — non-empty,
         beginning with a lowercase letter and otherwise carrying only lowercase
         letters, digits, `-` and `_`. Left out, the engine reads
