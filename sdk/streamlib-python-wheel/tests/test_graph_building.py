@@ -122,6 +122,38 @@ def test_a_duplicate_requested_display_name_is_disambiguated_too():
         runtime.shutdown()
 
 
+def test_a_display_name_that_cannot_be_an_address_chunk_is_refused_naming_the_character():
+    """The display name is the processor's part of its mesh address.
+
+    So `add` refuses one that cannot be a single address chunk, naming the
+    character rather than quietly re-addressing the processor's ports.
+    """
+    runtime = streamlib.Runtime()
+    try:
+        for forbidden in ["/", "*", "$", "#", "?"]:
+            with pytest.raises(RuntimeError) as refusal:
+                runtime.add(GraphBuildingFilter, display_name=f"front{forbidden}left")
+            assert repr(forbidden) in str(refusal.value), (
+                f"the refusal must name {forbidden!r}: {refusal.value}"
+            )
+        with pytest.raises(RuntimeError) as refusal:
+            runtime.add(GraphBuildingFilter, display_name="@front")
+        assert "@" in str(refusal.value)
+    finally:
+        runtime.shutdown()
+
+
+def test_a_display_name_carrying_spaces_or_unicode_is_still_accepted():
+    runtime = streamlib.Runtime()
+    try:
+        assert runtime.add(GraphBuildingFilter, display_name="front left").display_name == (
+            "front left"
+        )
+        assert runtime.add(GraphBuildingFilter, display_name="カメラ").display_name == "カメラ"
+    finally:
+        runtime.shutdown()
+
+
 def test_connecting_a_port_that_does_not_exist_is_refused():
     runtime = streamlib.Runtime()
     try:

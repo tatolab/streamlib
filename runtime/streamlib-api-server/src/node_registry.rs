@@ -18,10 +18,11 @@
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use streamlib::sdk::runtime::RuntimeName;
 
 /// Schema version stamped into every [`NodeRegistryEntry`]. A reader skips an
 /// entry whose `schema_version` it does not recognize.
-pub const NODE_REGISTRY_SCHEMA_VERSION: u32 = 1;
+pub const NODE_REGISTRY_SCHEMA_VERSION: u32 = 2;
 
 /// One discovery entry: a running ApiServer-hosting runtime's control endpoint.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -30,6 +31,9 @@ pub struct NodeRegistryEntry {
     pub schema_version: u32,
     /// The runtime's `RuntimeUniqueId`, verbatim.
     pub runtime_id: String,
+    /// The name the runtime is addressed by on the runtime mesh — stable
+    /// across runs of one app, and what `--node` resolves.
+    pub runtime_name: String,
     /// The control plane's reachable base URL (`http://127.0.0.1:<bound_port>`).
     pub control_url: String,
     /// OS process id hosting the control plane.
@@ -39,12 +43,18 @@ pub struct NodeRegistryEntry {
 }
 
 impl NodeRegistryEntry {
-    /// Build an entry for `runtime_id` reachable at `control_url`, stamping the
-    /// current process id and a hint derived from this process's arg0 and cwd.
-    pub fn for_current_process(runtime_id: String, control_url: String) -> Self {
+    /// Build an entry for the runtime named `runtime_name` reachable at
+    /// `control_url`, stamping the current process id and a hint derived from
+    /// this process's arg0 and cwd.
+    pub fn for_current_process(
+        runtime_id: String,
+        runtime_name: &RuntimeName,
+        control_url: String,
+    ) -> Self {
         Self {
             schema_version: NODE_REGISTRY_SCHEMA_VERSION,
             runtime_id,
+            runtime_name: runtime_name.as_str().to_string(),
             control_url,
             pid: std::process::id(),
             hint: current_process_hint(),
@@ -290,6 +300,7 @@ mod tests {
         NodeRegistryEntry {
             schema_version: NODE_REGISTRY_SCHEMA_VERSION,
             runtime_id: runtime_id.to_string(),
+            runtime_name: format!("rig-example-{port}"),
             control_url: format!("http://127.0.0.1:{port}"),
             pid: 4242,
             hint: "streamlib (/tmp/example)".to_string(),
@@ -321,8 +332,13 @@ mod tests {
             json.contains("\"schema_version\""),
             "schema_version must be present in the wire form: {json}"
         );
+        assert!(
+            json.contains("\"runtime_name\""),
+            "the runtime's name is part of the entry's wire form: {json}"
+        );
         let decoded: NodeRegistryEntry = serde_json::from_str(&json).expect("decode");
         assert_eq!(decoded.schema_version, NODE_REGISTRY_SCHEMA_VERSION);
+        assert_eq!(decoded.runtime_name, entry.runtime_name);
         assert_eq!(decoded, entry);
     }
 

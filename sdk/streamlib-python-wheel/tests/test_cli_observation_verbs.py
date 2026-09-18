@@ -39,6 +39,7 @@ from streamlib._control_plane_client import (
     fetch_surface_image_png_bytes,
     resolve_control_url,
 )
+from streamlib import _node_registry
 from streamlib._node_registry import registry_directory, scan_check_and_prune
 from streamlib._runtime_log_reader import (
     LogRecordFilters,
@@ -214,15 +215,21 @@ def isolated_registry(tmp_path, monkeypatch):
 
 
 def write_registry_entry(
-    registry: Path, runtime_id: str, control_url: str, *, pid: "Optional[int]" = None
+    registry: Path,
+    runtime_id: str,
+    control_url: str,
+    *,
+    pid: "Optional[int]" = None,
+    runtime_name: "Optional[str]" = None,
 ) -> Path:
     registry.mkdir(parents=True, exist_ok=True)
     entry_path = registry / f"{runtime_id}.json"
     entry_path.write_text(
         json.dumps(
             {
-                "schema_version": 1,
+                "schema_version": _node_registry.NODE_REGISTRY_SCHEMA_VERSION,
                 "runtime_id": runtime_id,
+                "runtime_name": runtime_name or f"rig-app-{runtime_id}",
                 "control_url": control_url,
                 "pid": os.getpid() if pid is None else pid,
                 "hint": "python (/tmp/app)",
@@ -1127,6 +1134,40 @@ def test_a_record_caught_half_written_is_held_until_its_newline_lands(
     lines.close()
 
 
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        {"runtime_name": None},
+        {"runtime_name": ["desk", "rig"]},
+        {"runtime_id": {"nested": "object"}},
+        {"schema_version": 2.9},
+        {"pid": True},
+    ],
+    ids=["null-name", "array-name", "object-id", "fractional-version", "boolean-pid"],
+)
+def test_an_entry_whose_fields_are_the_wrong_shape_is_neither_listed_nor_deleted(
+    isolated_registry, malformed
+):
+    # Coercing would list a `null` name as the string "None" and let `--node
+    # None` resolve it; the reader skips what it cannot parse, which is also
+    # what keeps it out of the prune path.
+    isolated_registry.mkdir(parents=True, exist_ok=True)
+    entry_path = isolated_registry / "Rmalformed.json"
+    record = {
+        "schema_version": _node_registry.NODE_REGISTRY_SCHEMA_VERSION,
+        "runtime_id": "Rmalformed",
+        "runtime_name": "rig-app-a1b2",
+        "control_url": "http://127.0.0.1:1",
+        "pid": UNUSED_PID,
+        "hint": "hand-edited",
+    }
+    record.update(malformed)
+    entry_path.write_text(json.dumps(record), encoding="utf-8")
+
+    assert scan_check_and_prune() == []
+    assert entry_path.exists(), "a reader must not delete a record it cannot parse"
+
+
 def test_an_entry_whose_schema_version_is_unknown_is_neither_listed_nor_deleted(
     isolated_registry,
 ):
@@ -1137,8 +1178,9 @@ def test_an_entry_whose_schema_version_is_unknown_is_neither_listed_nor_deleted(
     entry_path.write_text(
         json.dumps(
             {
-                "schema_version": 2,
+                "schema_version": _node_registry.NODE_REGISTRY_SCHEMA_VERSION + 1,
                 "runtime_id": "Rfuture",
+                "runtime_name": "rig-app-future",
                 "control_url": "http://127.0.0.1:1",
                 "pid": UNUSED_PID,
                 "hint": "written by a newer engine",
@@ -1190,14 +1232,74 @@ def test_nodes_renders_a_live_node_as_a_table(
     isolated_registry, stub_control_plane, capsys
 ):
     server = stub_control_plane()
-    write_registry_entry(isolated_registry, "Rlisted", server.url)
+    write_registry_entry(
+        isolated_registry, "Rlisted", server.url, runtime_name="rig-desk-a1b2"
+    )
 
     assert cli.main(["nodes"]) == 0
 
     printed = capsys.readouterr().out
+    header = printed.splitlines()[0]
+    assert header.startswith("RUNTIME_NAME"), (
+        f"the runtime's name is the first column a reader sees: {header!r}"
+    )
     assert "RUNTIME_ID" in printed
+    assert "rig-desk-a1b2" in printed
     assert "Rlisted" in printed and server.url in printed
     assert "yes" in printed
+
+
+def test_a_verb_targets_a_node_by_its_runtime_name(
+    isolated_registry, stub_control_plane
+):
+    server = stub_control_plane()
+    write_registry_entry(
+        isolated_registry, "Rnamed", server.url, runtime_name="rig-desk-a1b2"
+    )
+    other = stub_control_plane()
+    write_registry_entry(
+        isolated_registry, "Rother", other.url, runtime_name="rig-lab-c3d4"
+    )
+
+    assert resolve_control_url(None, "rig-desk-a1b2") == server.url
+    assert resolve_control_url(None, "Rnamed") == server.url, (
+        "the runtime_id keeps resolving beside the name"
+    )
+
+
+def test_a_node_flag_naming_nothing_says_so_and_lists_what_is_live(
+    isolated_registry, stub_control_plane
+):
+    server = stub_control_plane()
+    write_registry_entry(
+        isolated_registry, "Rnamed", server.url, runtime_name="rig-desk-a1b2"
+    )
+
+    with pytest.raises(ControlPlaneError) as refusal:
+        resolve_control_url(None, "rig-nowhere-0000")
+
+    assert "rig-nowhere-0000" in str(refusal.value)
+    assert "rig-desk-a1b2" in str(refusal.value), (
+        "the refusal lists the names a caller could have meant"
+    )
+
+
+def test_two_nodes_answering_to_one_name_are_named_rather_than_picked_between(
+    isolated_registry, stub_control_plane
+):
+    first = stub_control_plane()
+    write_registry_entry(
+        isolated_registry, "Rfirst", first.url, runtime_name="rig-desk-a1b2"
+    )
+    second = stub_control_plane()
+    write_registry_entry(
+        isolated_registry, "Rsecond", second.url, runtime_name="rig-desk-a1b2"
+    )
+
+    with pytest.raises(ControlPlaneError) as refusal:
+        resolve_control_url(None, "rig-desk-a1b2")
+
+    assert "Rfirst" in str(refusal.value) and "Rsecond" in str(refusal.value)
 
 
 def test_graph_prints_the_tool_result(isolated_registry, stub_control_plane, capsys):

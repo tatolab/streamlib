@@ -23,7 +23,6 @@ pub(crate) fn host_control_plane_on_engine(
     engine: &Runner,
     bind_host: String,
     bind_port: u16,
-    node_name: Option<String>,
 ) -> PyResult<()> {
     python
         .detach(|| {
@@ -32,7 +31,6 @@ pub(crate) fn host_control_plane_on_engine(
                 ApiServerControlPlaneHostConfig {
                     bind_host,
                     bind_port,
-                    node_name,
                 },
             )
         })

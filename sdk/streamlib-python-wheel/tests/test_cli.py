@@ -686,13 +686,46 @@ def test_the_launcher_names_the_apps_directory_for_the_built_ins(tmp_path: Path,
         requested_entry_file=None,
         bind_host=cli.DEFAULT_CONTROL_PLANE_BIND_HOST,
         bind_port=cli.DEFAULT_CONTROL_PLANE_BIND_PORT,
-        node_name=None,
+        runtime_name=None,
     )
 
     assert exit_code == 1, "the entry file stopped the launch on purpose"
     assert recorded.read_text() == str(tmp_path), (
         "the app's anchor directory must reach the app's own code through the environment"
     )
+
+
+def test_a_runtime_name_the_engine_refuses_reads_as_a_launcher_error(tmp_path):
+    """A refused `--runtime-name` is a wiring mistake, not a launcher crash.
+
+    The engine owns the grammar, so the CLI cannot pre-check the name without
+    keeping a second copy of it — it reports what the engine said instead, the
+    way it reports a bad config or a missing camera.
+    """
+    write_app(tmp_path, "app.py")
+
+    with pytest.raises(cli.AppLaunchError, match="'/'") as refusal:
+        cli.launch_app_node(
+            "run",
+            requested_anchor_directory=tmp_path,
+            requested_entry_file=None,
+            bind_host=cli.DEFAULT_CONTROL_PLANE_BIND_HOST,
+            bind_port=cli.DEFAULT_CONTROL_PLANE_BIND_PORT,
+            runtime_name="a/b",
+        )
+
+    assert "a/b" in str(refusal.value), (
+        "the refusal must name the runtime name the caller asked for"
+    )
+
+
+def test_the_nodes_help_names_every_column_it_prints(capsys):
+    with pytest.raises(SystemExit):
+        cli.main(["nodes", "--help"])
+
+    printed = capsys.readouterr().out
+    for column in ("runtime_name", "runtime_id", "control_url", "pid", "alive?", "hint"):
+        assert column in printed, f"`nodes --help` must document {column}"
 
 
 def _v4l2loopback_is_loaded() -> bool:

@@ -54,7 +54,9 @@ use streamlib::sdk::error::Result;
 use streamlib::sdk::graph::{InputLinkPortRef, LinkUniqueId, OutputLinkPortRef, ProcessorUniqueId};
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::pubsub::{Event, EventListener, PUBSUB, topics};
-use streamlib::sdk::runtime::{ExchangedPublishedSurfaceFramePngImage, RuntimeOperations};
+use streamlib::sdk::runtime::{
+    ExchangedPublishedSurfaceFramePngImage, RuntimeOperations, what_one_mesh_address_chunk_may_be,
+};
 
 use crate::state::{AppState, RuntimeShutdownRequest};
 
@@ -331,7 +333,13 @@ fn tool_definitions() -> Vec<Value> {
                 "properties": {
                     "type": { "type": "string", "description": "The processor class import path, e.g. `processors.grayscale_effect:GrayscaleEffect`." },
                     "config": { "type": "object", "description": "The processor's configuration, as the keys its config schema declares. Omit for none." },
-                    "display_name": { "type": "string", "description": "Human-facing label; defaults to the class's short name, disambiguated within the graph." }
+                    "display_name": { "type": "string", "description": format!(
+                        "Human-facing label; defaults to the class's short name, disambiguated \
+                         within the graph. It is also the processor's part of its address on the \
+                         runtime mesh: {}. Spaces and unicode are fine, and a label that breaks \
+                         the rule is refused naming the character.",
+                        what_one_mesh_address_chunk_may_be()
+                    ) }
                 },
                 "required": ["type"],
                 "additionalProperties": false
@@ -871,6 +879,7 @@ mod tests {
         tap_plan: Option<StubTapPlan>,
         recorded_shutdown_reasons: Arc<Mutex<Vec<String>>>,
         recorded_graph_mutations: crate::control_plane_stub_support::RecordedGraphMutations,
+        armed_add_processor_refusal: crate::control_plane_stub_support::ArmedAddProcessorRefusal,
         exchange: StubSurfaceExchange,
     }
 
@@ -881,7 +890,17 @@ mod tests {
                 tap_plan: None,
                 recorded_shutdown_reasons: Arc::new(Mutex::new(Vec::new())),
                 recorded_graph_mutations: Arc::new(Mutex::new(Vec::new())),
+                armed_add_processor_refusal: Arc::new(Mutex::new(None)),
                 exchange: StubSurfaceExchange::default(),
+            }
+        }
+
+        /// A stub whose `add_processor` refuses with `refusal`, standing in for
+        /// an engine-side refusal the front end has to carry back.
+        fn refusing_every_add_processor(refusal: &str) -> Self {
+            Self {
+                armed_add_processor_refusal: Arc::new(Mutex::new(Some(refusal.to_string()))),
+                ..Self::new()
             }
         }
 
@@ -1101,6 +1120,44 @@ mod tests {
         );
         assert_eq!(spec.config["strength"], 0.5);
         assert_eq!(spec.display_name.as_deref(), Some("Gray"));
+    }
+
+    /// What this locks is the door, not the grammar: an engine that refuses an
+    /// add reaches the MCP caller as a tool error carrying its own words, the
+    /// offending character intact, rather than as a success or a swallowed
+    /// reason. The refusal itself lives at `add_processor_impl`, and is locked
+    /// by the engine's own tests and by `rt.add`.
+    #[tokio::test]
+    async fn tools_call_add_processor_carries_back_a_refused_display_name_naming_the_character() {
+        let runtime = Arc::new(
+            ControlPlaneMcpDispatchStubRuntime::refusing_every_add_processor(
+                "display name \"a/b\" cannot be one chunk of a processor's mesh address: it contains '/'",
+            ),
+        );
+
+        let (status, body) = mcp_call(
+            runtime,
+            json!({
+                "jsonrpc": "2.0", "id": 32, "method": "tools/call",
+                "params": { "name": "add_processor", "arguments": {
+                    "type": "processors.grayscale_effect:GrayscaleEffect",
+                    "display_name": "a/b"
+                } }
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["result"]["isError"], true, "body={body}");
+        let text = body["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(
+            text.contains("a/b"),
+            "the refusal must name the display name: {text}"
+        );
+        assert!(
+            text.contains("'/'"),
+            "the refusal must name the character: {text}"
+        );
     }
 
     #[tokio::test]

@@ -15,11 +15,13 @@ use std::time::Duration;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
+use streamlib::engine_internal::core::app_directory::record_the_app_entry_directory_the_language_host_captured;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::{
     ArmedEngineTeardownWatchdog, DescriptionOfTheAbandonedProcessorThreads,
-    ProcessorDisplayNameAndId, Runner, request_runtime_shutdown, take_runtime_shutdown_escalation,
+    ProcessorDisplayNameAndId, Runner, RuntimeMeshConfiguration, request_runtime_shutdown,
+    take_runtime_shutdown_escalation,
 };
 
 use crate::python_added_processor::{
@@ -297,15 +299,29 @@ fn install_unregistered_processor_type_resolver_once() {
 impl PythonRuntimeHandle {
     /// Boot the engine.
     #[new]
-    fn new(python: Python<'_>) -> PyResult<Self> {
+    #[pyo3(signature = (*, runtime_name = None))]
+    fn new(python: Python<'_>, runtime_name: Option<String>) -> PyResult<Self> {
         // Before the engine, so a processor added to its graph always has an
         // interpreter to be an exec of. This reads the app's own
         // `sys.executable`, which is the promise: one venv, and a processor's
         // child is the same Python the app is.
         crate::python_helper_process_spawn_host::capture_helper_process_launch_environment(python)?;
+        // Hand the engine the entry directory the capture above found, so an
+        // unnamed runtime run as `python app.py` is named after the app rather
+        // than after whatever shell it was launched from. Only the interpreter
+        // knows it; the engine cannot read `sys.path` for itself.
+        if let Some(entry_directory) =
+            crate::python_helper_process_spawn_host::captured_app_entry_directory()
+        {
+            record_the_app_entry_directory_the_language_host_captured(entry_directory);
+        }
         install_unregistered_processor_type_resolver_once();
         let engine = python
-            .detach(Runner::new)
+            .detach(|| {
+                Runner::new_with_runtime_mesh_configuration(RuntimeMeshConfiguration {
+                    runtime_name,
+                })
+            })
             .map_err(|engine_failure| PyRuntimeError::new_err(engine_failure.to_string()))?;
         Ok(Self {
             lifecycle: Mutex::new(PythonRuntimeLifecycleState::EngineConstructedNotYetRun(
@@ -393,17 +409,16 @@ impl PythonRuntimeHandle {
     /// Opt-in: a runtime that never calls this runs headless and publishes no
     /// node-registry entry. Called before `run()`, like every other
     /// graph-building call — the control plane is a processor in the graph.
-    #[pyo3(signature = (*, bind_host = "0.0.0.0".to_string(), bind_port = 9000, node_name = None))]
+    #[pyo3(signature = (*, bind_host = "0.0.0.0".to_string(), bind_port = 9000))]
     fn host_control_plane(
         &self,
         python: Python<'_>,
         bind_host: String,
         bind_port: u16,
-        node_name: Option<String>,
     ) -> PyResult<()> {
         let engine = self.engine_being_built("host the control plane")?;
         crate::python_control_plane_hosting::host_control_plane_on_engine(
-            python, &engine, bind_host, bind_port, node_name,
+            python, &engine, bind_host, bind_port,
         )
     }
 

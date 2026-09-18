@@ -5,6 +5,9 @@ use std::sync::Arc;
 
 use super::Runner;
 use super::RuntimeStatus;
+use super::mesh_address_chunk::{
+    first_reason_this_is_not_one_mesh_address_chunk, what_one_mesh_address_chunk_may_be,
+};
 use super::operations::{BoxFuture, RuntimeOperations};
 use super::runtime::TokioRuntimeVariant;
 use super::surface_image_exchange::exchange_published_surface_id_for_png_image_bytes;
@@ -67,6 +70,24 @@ async fn commit_live_graph_change(compiler: &Arc<Compiler>, live: LiveCommitCont
         })?
 }
 
+/// Refuse `requested_display_name` unless it is one legal mesh address chunk.
+///
+/// Beside the add path rather than in the grammar module: the grammar knows
+/// nothing about processors, and the remedy this names is the add's own.
+fn refuse_a_display_name_that_is_not_one_mesh_address_chunk(
+    requested_display_name: &str,
+) -> Result<()> {
+    match first_reason_this_is_not_one_mesh_address_chunk(requested_display_name) {
+        None => Ok(()),
+        Some(what_is_wrong) => Err(Error::Configuration(format!(
+            "display name {requested_display_name:?} cannot be one chunk of a processor's mesh \
+             address: {what_is_wrong}. {}. Rename the processor, or leave `display_name` out to \
+             take the class's own short name",
+            what_one_mesh_address_chunk_may_be()
+        ))),
+    }
+}
+
 /// Core implementation for add_processor - takes owned Arcs for 'static lifetime.
 ///
 /// Reports the display name the graph assigned alongside the id. Both come out
@@ -95,6 +116,14 @@ async fn add_processor_impl(
             }),
         );
     };
+
+    // Before anything else: the display name is the processor's part of its
+    // mesh address, so a name that cannot be one address chunk is a wiring
+    // error whatever door the add came through — `rt.add`, Rust, or the
+    // control plane's `add_processor`.
+    if let Some(requested_display_name) = spec.display_name.as_deref() {
+        refuse_a_display_name_that_is_not_one_mesh_address_chunk(requested_display_name)?;
+    }
 
     // A type nobody registered may still be resolvable by name — the wheel
     // resolves a Python class import path the way `rt.add` would. A resolver

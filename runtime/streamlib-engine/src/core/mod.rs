@@ -22,6 +22,7 @@ pub(crate) mod test_support;
 // Customer-facing modules. Module-path stays `pub` so consumers
 // can reach `streamlib::sdk::<name>` via the SDK's per-module
 // re-exports.
+pub mod app_directory;
 pub mod color;
 pub mod context;
 pub mod descriptors;
@@ -38,6 +39,7 @@ pub mod processors;
 pub mod pubsub;
 pub mod rhi;
 pub mod runtime;
+pub mod stable_short_id;
 pub mod texture;
 pub mod utils;
 // Linux-only: winit is a Linux-target engine dependency, and the window seam

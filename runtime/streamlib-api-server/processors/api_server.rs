@@ -25,92 +25,6 @@ struct StashedHandles {
     auth_token: Option<crate::auth::ApiServerBearerToken>,
 }
 
-/// Docker-style adjectives for runtime name generation.
-const ADJECTIVES: &[&str] = &[
-    "admiring",
-    "brave",
-    "clever",
-    "dazzling",
-    "eager",
-    "fancy",
-    "graceful",
-    "happy",
-    "inspiring",
-    "jolly",
-    "keen",
-    "lively",
-    "merry",
-    "noble",
-    "optimistic",
-    "peaceful",
-    "quirky",
-    "radiant",
-    "serene",
-    "trusting",
-    "upbeat",
-    "vibrant",
-    "witty",
-    "xenial",
-    "youthful",
-    "zealous",
-];
-
-/// Docker-style nouns for runtime name generation.
-const NOUNS: &[&str] = &[
-    "albatross",
-    "beaver",
-    "cheetah",
-    "dolphin",
-    "eagle",
-    "falcon",
-    "gazelle",
-    "hawk",
-    "ibis",
-    "jaguar",
-    "koala",
-    "leopard",
-    "meerkat",
-    "nightingale",
-    "otter",
-    "panther",
-    "quail",
-    "raven",
-    "sparrow",
-    "tiger",
-    "urchin",
-    "viper",
-    "walrus",
-    "xerus",
-    "yak",
-    "zebra",
-];
-
-/// Generate a Docker-style random name (adjective-noun).
-fn generate_runtime_name() -> String {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
-    // The OS CSPRNG this crate already links for bearer tokens.
-    let mut seed_bytes = [0u8; 8];
-    if let Err(csprng_unavailable) = getrandom::getrandom(&mut seed_bytes) {
-        // A display name is not worth failing a runtime over, and the pid still
-        // separates concurrent runtimes on one host.
-        tracing::warn!("OS CSPRNG unavailable for runtime naming: {csprng_unavailable}");
-        seed_bytes = (std::process::id() as u64).to_ne_bytes();
-    }
-
-    // The two indices read disjoint halves, so the seed has to be diffused
-    // across all 64 bits first: a pid is well under 2^32, which would otherwise
-    // leave the high half zero and pin every degraded runtime to one noun.
-    let mut hasher = DefaultHasher::new();
-    seed_bytes.hash(&mut hasher);
-    let hash = hasher.finish();
-
-    let adj = ADJECTIVES[(hash as usize) % ADJECTIVES.len()];
-    let noun = NOUNS[((hash >> 32) as usize) % NOUNS.len()];
-    format!("{}-{}", adj, noun)
-}
-
 #[streamlib::sdk::processor(
     description = "Runtime API server — HTTP + WebSocket control plane",
     execution = manual,
@@ -126,7 +40,6 @@ pub struct ApiServerProcessor {
     tokio_runtime: Option<tokio::runtime::Runtime>,
     shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
     runtime_id: Option<String>,
-    resolved_name: Option<String>,
     actual_port: Option<u16>,
 }
 
@@ -199,14 +112,6 @@ impl ManualProcessor for ApiServerProcessor::Processor {
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
         self.shutdown_tx = Some(shutdown_tx);
 
-        // Resolve runtime name (from config or auto-generate)
-        let runtime_name = self
-            .config
-            .name
-            .clone()
-            .unwrap_or_else(generate_runtime_name);
-        self.resolved_name = Some(runtime_name.clone());
-
         self.runtime_id = Some(handles.runtime_id.clone());
 
         let config = self.config.clone();
@@ -260,6 +165,7 @@ impl ManualProcessor for ApiServerProcessor::Processor {
         let control_url = format!("http://127.0.0.1:{}", actual_port);
         let entry = crate::node_registry::NodeRegistryEntry::for_current_process(
             handles.runtime_id.clone(),
+            ctx.runtime_name(),
             control_url,
         );
         match crate::node_registry::write_entry(

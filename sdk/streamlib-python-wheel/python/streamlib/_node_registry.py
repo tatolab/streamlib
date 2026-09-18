@@ -32,7 +32,7 @@ __all__ = [
     "live_nodes",
 ]
 
-NODE_REGISTRY_SCHEMA_VERSION = 1
+NODE_REGISTRY_SCHEMA_VERSION = 2
 
 
 class NodeRegistryEntry(NamedTuple):
@@ -40,6 +40,9 @@ class NodeRegistryEntry(NamedTuple):
 
     schema_version: int
     runtime_id: str
+    #: The name the runtime is addressed by on the runtime mesh — stable across
+    #: runs of one app, and what `--node` resolves alongside the id.
+    runtime_name: str
     control_url: str
     pid: int
     hint: str
@@ -123,20 +126,36 @@ def _read_entry_file(path: Path) -> "Optional[NodeRegistryEntry]":
     An entry whose `schema_version` this reader does not know is skipped for the
     same reason the field exists — and skipping it here is what keeps it OUT of
     the prune path, so a reader never deletes a record it cannot parse.
+
+    Every field is required to be the exact JSON type the writing runtime emits,
+    rather than coerced into one. Coercing is what made "skipped rather than
+    raised on" untrue: a `null` name became the string `"None"`, which `nodes`
+    then listed and `--node` then resolved.
     """
     try:
         record = json.loads(path.read_text(encoding="utf-8"))
-        if int(record["schema_version"]) != NODE_REGISTRY_SCHEMA_VERSION:
-            return None
-        return NodeRegistryEntry(
-            schema_version=int(record["schema_version"]),
-            runtime_id=str(record["runtime_id"]),
-            control_url=str(record["control_url"]),
-            pid=int(record["pid"]),
-            hint=str(record.get("hint", "")),
+        entry = NodeRegistryEntry(
+            schema_version=record["schema_version"],
+            runtime_id=record["runtime_id"],
+            runtime_name=record["runtime_name"],
+            control_url=record["control_url"],
+            pid=record["pid"],
+            hint=record.get("hint", ""),
         )
     except (OSError, ValueError, KeyError, TypeError):
         return None
+    # `type(...) is` rather than `isinstance`: JSON `true` is an `int` to
+    # `isinstance`, and a pid of `True` is not a pid.
+    if type(entry.schema_version) is not int or type(entry.pid) is not int:
+        return None
+    if entry.schema_version != NODE_REGISTRY_SCHEMA_VERSION:
+        return None
+    if any(
+        type(field) is not str
+        for field in (entry.runtime_id, entry.runtime_name, entry.control_url, entry.hint)
+    ):
+        return None
+    return entry
 
 
 def _process_exists(pid: int) -> bool:

@@ -12,6 +12,7 @@ every lifecycle hook.
 
 import atexit
 import weakref
+from typing import Optional
 
 from . import clock as clock
 from . import log as log
@@ -148,7 +149,12 @@ _live_runtimes: "weakref.WeakSet[Runtime]" = weakref.WeakSet()
 class Runtime(_NativeRuntime):
     """The engine, running in this process."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, runtime_name: Optional[str] = None) -> None:
+        # `runtime_name` is declared so this subclass accepts it and unused
+        # because the engine already has it: a `#[pyclass]`'s constructor is
+        # `__new__`, which `type.__call__` hands the arguments before it calls
+        # this.
+        del runtime_name
         super().__init__()
         # Registered before the hooks run, not after: a hook that raises leaves
         # a constructed engine behind whose threads still need joining, and the
