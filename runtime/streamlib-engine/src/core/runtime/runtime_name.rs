@@ -163,7 +163,7 @@ fn replace_every_character_that_would_stop_this_being_one_chunk(assembled: &str)
 }
 
 /// This machine's host name, or [`HOST_NAME_FOR_A_MACHINE_THAT_REPORTS_NONE`].
-fn this_hosts_name() -> String {
+pub(crate) fn this_hosts_name() -> String {
     let mut buffer = vec![0u8; HOST_NAME_BUFFER_BYTES];
     // SAFETY: the buffer is `HOST_NAME_BUFFER_BYTES` long and that is the length
     // passed; `gethostname` writes at most that many bytes.

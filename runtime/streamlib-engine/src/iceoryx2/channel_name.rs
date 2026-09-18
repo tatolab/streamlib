@@ -10,15 +10,16 @@
 //! subscribers regardless of how many destinations it feeds. A `connect()` link
 //! is the degenerate 1:1 case of that keying.
 //!
-//! The name is the same string in two roles: an iceoryx2 service name intra-node
-//! and (phase [L]) a Zenoh key-expression cross-node. It is `/`-separated into
-//! chunks; each chunk is `[a-z][a-z0-9_-]*`. The `/` is a chunk separator (a
-//! Zenoh keyexpr segment boundary), never a within-chunk character. Underscore
-//! and hyphen are transport-legal: iceoryx2 `ServiceName` imposes no charset
-//! restriction beyond non-empty / length / no `iox2://` prefix, and a Zenoh
-//! keyexpr segment forbids only `/ * $ ? #`. A leading `@` chunk is forbidden
-//! (Zenoh reserved for admin space) — the per-chunk `[a-z]`-leading rule already
-//! excludes it. This module is the single source of truth for that grammar.
+//! The name is an iceoryx2 service name, and never leaves this host: a port on
+//! the runtime mesh is addressed `<runtime name>/<display name>/<port>`, and a
+//! channel name — which carries a cuid2 processor id another runtime could not
+//! know — reaches no mesh key. It is `/`-separated into chunks; each chunk is
+//! `[a-z][a-z0-9_-]*`. The `/` is a chunk separator, never a within-chunk
+//! character. Underscore and hyphen are transport-legal: iceoryx2 `ServiceName`
+//! imposes no charset restriction beyond non-empty / length / no `iox2://`
+//! prefix. A leading `@` chunk is forbidden — the per-chunk `[a-z]`-leading
+//! rule already excludes it. This module is the single source of truth for that
+//! grammar, and the mesh name obeys it too.
 //!
 //! The `/` between the processor-id chunk and the port chunk makes the mapping
 //! injective: two distinct `(processor, port)` pairs can never collide onto one
@@ -93,6 +94,33 @@ impl fmt::Display for ChannelName {
 /// intact.
 fn is_channel_chunk_character(c: char) -> bool {
     matches!(c, 'a'..='z' | '0'..='9' | '-' | '_')
+}
+
+/// Why `candidate` is not one chunk of this grammar — `None` when it is one,
+/// and otherwise the reason, named for a refusal.
+///
+/// The mesh name obeys this grammar too, and reads its reason from here rather
+/// than from a second spelling of the same rule.
+pub fn first_reason_this_is_not_one_channel_name_chunk(candidate: &str) -> Option<String> {
+    match validate_channel_chunk_charset(candidate) {
+        Ok(()) => None,
+        Err(Error::EmptyChannelName) => Some("it is empty".to_string()),
+        Err(Error::ChannelNameMustStartWithLowercase(_)) => {
+            Some("it does not begin with a lowercase letter".to_string())
+        }
+        Err(Error::InvalidChannelNameCharacter { character, .. }) => {
+            Some(format!("it contains {character:?}"))
+        }
+        Err(other) => Some(other.to_string()),
+    }
+}
+
+/// The sentence a refusal of a single chunk ends with, so every caller states
+/// the same rule.
+pub fn describe_the_one_chunk_grammar() -> String {
+    "One chunk is non-empty, begins with a lowercase letter, and otherwise \
+     carries only lowercase letters, digits, '-' and '_'"
+        .to_string()
 }
 
 /// Validate one `/`-separated chunk's charset grammar (`[a-z][a-z0-9_-]*`)

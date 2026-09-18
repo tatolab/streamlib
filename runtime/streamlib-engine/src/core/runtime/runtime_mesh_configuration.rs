@@ -15,4 +15,19 @@ pub struct RuntimeMeshConfiguration {
     /// Unset, the engine reads `STREAMLIB_RUNTIME_NAME`, and failing that names
     /// the runtime after its host, its app directory and that directory's path.
     pub runtime_name: Option<String>,
+    /// The mesh everything this runtime announces lives under.
+    ///
+    /// Unset, the engine reads `STREAMLIB_MESH_NAME`, and failing that joins
+    /// the `default` mesh.
+    pub mesh_name: Option<String>,
+    /// Endpoints this runtime dials, for a network multicast discovery does
+    /// not cross. Unset, the engine reads `STREAMLIB_MESH_PEER_ENDPOINTS`.
+    pub mesh_peer_endpoints: Option<Vec<String>>,
+    /// Endpoints this runtime listens on, replacing the engine's own ephemeral
+    /// QUIC-over-UDP listener. Unset, the engine reads
+    /// `STREAMLIB_MESH_LISTEN_ENDPOINTS`.
+    pub mesh_listen_endpoints: Option<Vec<String>>,
+    /// Whether this runtime finds peers by multicast. Unset, the engine reads
+    /// `STREAMLIB_MESH_MULTICAST_DISCOVERY`, and failing that discovers.
+    pub mesh_multicast_discovery: Option<bool>,
 }

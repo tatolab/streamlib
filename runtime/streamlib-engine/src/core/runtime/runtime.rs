@@ -31,6 +31,9 @@ use crate::core::processors::ProcessorSpec;
 use crate::core::processors::ProcessorState;
 use crate::core::pubsub::{Event, EventListener, PUBSUB, ProcessorEvent, RuntimeEvent, topics};
 use crate::core::runtime::LoadedCapabilityExtensionRegistry;
+use crate::core::runtime::mesh::{
+    HostedControlPlaneEndpointRegistry, ResolvedRuntimeMeshConfiguration, RuntimeMeshMembership,
+};
 use crate::core::signals::ScopedShutdownSignalOwnership;
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 use crate::iceoryx2::Iceoryx2Node;
@@ -115,6 +118,9 @@ pub struct Runner {
     pub(crate) runtime_id: Arc<RuntimeUniqueId>,
     /// The name this runtime is addressed by on the runtime mesh.
     pub(crate) runtime_name: Arc<RuntimeName>,
+    /// This runtime's place on the runtime mesh. Joined in `new()`, left at the
+    /// end of `stop()`.
+    pub(crate) runtime_mesh: Arc<RuntimeMeshMembership>,
     /// Tokio runtime storage - either owned or external handle.
     pub(crate) tokio_runtime_variant: TokioRuntimeVariant,
     /// Compiles graph changes into running processors. Owns the graph and transaction.
@@ -176,7 +182,7 @@ impl Runner {
 
     /// Build a runtime told where it sits on the runtime mesh.
     pub fn new_with_runtime_mesh_configuration(
-        runtime_mesh_configuration: RuntimeMeshConfiguration,
+        mut runtime_mesh_configuration: RuntimeMeshConfiguration,
     ) -> Result<Arc<Self>> {
         // Cap per-thread timer slack at 1 ns on the calling thread before
         // spawning any worker. Linux defaults to 50 µs grouping for
@@ -219,11 +225,14 @@ impl Runner {
         let runtime_id = Arc::new(RuntimeUniqueId::from_env_or_generate()?);
 
         // Beside the id, and before the runtime writes anything: a name the
-        // caller cannot use as a mesh address is a wiring error, and refusing
-        // it here costs nothing that has to be undone.
+        // caller cannot use as a mesh address, or an endpoint this build cannot
+        // open, is a wiring error, and refusing it here costs nothing that has
+        // to be undone.
         let runtime_name = Arc::new(RuntimeName::from_configuration_environment_or_default(
-            runtime_mesh_configuration.runtime_name,
+            runtime_mesh_configuration.runtime_name.take(),
         )?);
+        let resolved_runtime_mesh_configuration =
+            ResolvedRuntimeMeshConfiguration::resolve(runtime_mesh_configuration)?;
 
         // Stand up the runtime's unified logging pathway: `tracing` →
         // bounded lossy channel → drain worker → line-buffered pretty
@@ -271,6 +280,18 @@ impl Runner {
         let (surface_service, surface_socket_path, surface_check_out_leases) =
             bring_up_surface_service(&runtime_directory, &runtime_id)?;
 
+        // After logging, so a local-only warning reaches the log, and before the
+        // iceoryx2 node, beside the runtime-id socket refusal — this is where a
+        // runtime's identity already comes up. `Runner::new()` needs no GPU, so
+        // everything here is provable without one.
+        let runtime_mesh = Arc::new(RuntimeMeshMembership::join(
+            &resolved_runtime_mesh_configuration,
+            &runtime_name,
+            runtime_id.as_str(),
+            &crate::core::runtime::runtime_name::this_hosts_name(),
+            Arc::new(HostedControlPlaneEndpointRegistry::default()),
+        ));
+
         crate::iceoryx2::warn_when_posix_shared_memory_is_short_for_a_runtime();
 
         tracing::info!("[new] Creating iceoryx2 Node...");
@@ -299,6 +320,7 @@ impl Runner {
         Ok(Arc::new(Self {
             runtime_id,
             runtime_name,
+            runtime_mesh,
             tokio_runtime_variant,
             compiler,
             runtime_context,
@@ -666,6 +688,12 @@ impl Runner {
                 );
             }
         }
+
+        // Last, so every processor is down before peers stop seeing this
+        // runtime: the token goes first and the session follows it.
+        crate::core::runtime::note_what_the_engine_teardown_is_waiting_on("the runtime mesh");
+        self.runtime_mesh
+            .leave("this runtime was stopped, which closed its mesh session");
 
         *self.status.lock() = RuntimeStatus::Stopped;
         PUBSUB.publish(
@@ -1147,8 +1175,9 @@ impl Runner {
             .into_iter()
             .map(LoadedCapabilityExtensionOutput::from)
             .collect();
+        let runtime_mesh = self.runtime_mesh.render_for_graph();
         self.compiler.scope(|graph, _tx| {
-            serde_json::to_value(graph.to_graph_response(extensions))
+            serde_json::to_value(graph.to_graph_response(extensions, runtime_mesh))
                 .map_err(|_| Error::GraphError("Unable to serialize graph".into()))
         })
     }

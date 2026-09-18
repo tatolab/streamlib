@@ -35,6 +35,58 @@ pub struct GraphResponse {
     /// The capabilities the extension wheels installed beside this engine
     /// registered at startup. Always present; empty when none loaded.
     pub extensions: Vec<LoadedCapabilityExtensionOutput>,
+    /// Where this runtime sits on the runtime mesh, and who else it sees
+    /// there. Always present: every runtime is on a mesh.
+    pub mesh: RuntimeMeshOutput,
+}
+
+/// This runtime's place on the runtime mesh.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+pub struct RuntimeMeshOutput {
+    /// The mesh everything this runtime announces lives under.
+    pub mesh_name: String,
+    /// The name this runtime is addressed by on that mesh.
+    pub runtime_name: String,
+    /// Whether this runtime's Zenoh session opened.
+    pub session: RuntimeMeshSessionOutput,
+    /// Why the session did not open. Present only when it did not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_only_reason: Option<String>,
+    /// The other runtimes this one currently sees, sorted by name. A session
+    /// that is `open` with no peers is isolated rather than local-only.
+    pub peers: Vec<RuntimeMeshPeerOutput>,
+}
+
+/// Whether a runtime reached its mesh at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeMeshSessionOutput {
+    /// The session opened. It may still reach nobody.
+    Open,
+    /// The session could not open, so this runtime reaches no other.
+    LocalOnly,
+}
+
+/// One other runtime on the mesh.
+///
+/// Only the name comes off the liveliness token; the rest is what the peer
+/// answered when asked, so each of the four is absent until it does.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+pub struct RuntimeMeshPeerOutput {
+    /// The name the peer is addressed by on the mesh.
+    pub runtime_name: String,
+    /// The peer's per-run id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_id: Option<String>,
+    /// What the peer's host calls itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_name: Option<String>,
+    /// The engine version the peer runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engine_version: Option<String>,
+    /// Where the peer's control plane can be reached, if it hosts one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control_plane_urls: Option<Vec<String>>,
 }
 
 /// A capability a loaded extension wheel registered.
@@ -910,22 +962,74 @@ mod port_rendering_tests {
 }
 
 #[cfg(test)]
-mod capability_extension_rendering_tests {
-    //! `extensions` is a third top-level key beside `nodes` and `links`, and a
-    //! reader that finds it absent cannot tell "nothing loaded" from "this
-    //! engine predates extensions" — so it is always present.
+mod capability_extension_and_mesh_rendering_tests {
+    //! `extensions` and `mesh` are top-level keys beside `nodes` and `links`,
+    //! and a reader that finds either absent cannot tell "nothing loaded" or
+    //! "no peers" from "this engine predates the key" — so both are always
+    //! present.
 
     use super::*;
     use crate::core::graph::Graph;
     use crate::core::runtime::{LoadedCapabilityExtension, LoadedCapabilityExtensionRegistry};
 
+    fn an_isolated_mesh() -> RuntimeMeshOutput {
+        RuntimeMeshOutput {
+            mesh_name: "default".to_string(),
+            runtime_name: "rig-desk-a1b2".to_string(),
+            session: RuntimeMeshSessionOutput::Open,
+            local_only_reason: None,
+            peers: Vec::new(),
+        }
+    }
+
     #[test]
     fn a_graph_with_no_extensions_still_carries_the_key_as_an_empty_list() {
-        let rendered = serde_json::to_value(Graph::new().to_graph_response(Vec::new())).unwrap();
+        let rendered =
+            serde_json::to_value(Graph::new().to_graph_response(Vec::new(), an_isolated_mesh()))
+                .unwrap();
 
         let keys: Vec<&String> = rendered.as_object().unwrap().keys().collect();
-        assert_eq!(keys, ["nodes", "links", "extensions"]);
+        assert_eq!(keys, ["nodes", "links", "extensions", "mesh"]);
         assert_eq!(rendered["extensions"], serde_json::json!([]));
+    }
+
+    /// An isolated runtime renders `open` with no peers, which is how a reader
+    /// tells it apart from one whose session never opened.
+    #[test]
+    fn an_isolated_runtime_renders_an_open_session_with_no_peers_and_no_reason() {
+        let rendered =
+            serde_json::to_value(Graph::new().to_graph_response(Vec::new(), an_isolated_mesh()))
+                .unwrap();
+
+        assert_eq!(
+            rendered["mesh"],
+            serde_json::json!({
+                "mesh_name": "default",
+                "runtime_name": "rig-desk-a1b2",
+                "session": "open",
+                "peers": [],
+            })
+        );
+    }
+
+    /// A runtime whose session never opened says so, and says why.
+    #[test]
+    fn a_local_only_runtime_renders_the_reason_its_session_did_not_open() {
+        let rendered = serde_json::to_value(Graph::new().to_graph_response(
+            Vec::new(),
+            RuntimeMeshOutput {
+                session: RuntimeMeshSessionOutput::LocalOnly,
+                local_only_reason: Some("the listen endpoint is already taken".to_string()),
+                ..an_isolated_mesh()
+            },
+        ))
+        .unwrap();
+
+        assert_eq!(rendered["mesh"]["session"], "local_only");
+        assert_eq!(
+            rendered["mesh"]["local_only_reason"],
+            "the listen endpoint is already taken"
+        );
     }
 
     #[test]
@@ -944,7 +1048,9 @@ mod capability_extension_rendering_tests {
             .map(LoadedCapabilityExtensionOutput::from)
             .collect();
 
-        let rendered = serde_json::to_value(Graph::new().to_graph_response(extensions)).unwrap();
+        let rendered =
+            serde_json::to_value(Graph::new().to_graph_response(extensions, an_isolated_mesh()))
+                .unwrap();
 
         assert_eq!(
             rendered["extensions"],

@@ -98,6 +98,20 @@ dirs = "6.0"   # Cross-platform home directory resolution
 libloading = "0.8"  # Dynamic library loading for Rust dylib plugins
 sha2.workspace = true  # SHA-256 hashing (escalate content hashing)
 dotenvy = "0.15"  # Load .env files for development environment
+# The runtime mesh's transport: one session per runtime, beside iceoryx2. The
+# only crate in the tree that names it.
+#
+# `default-features = false` because the defaults turn on TLS, WebSocket,
+# compression, multilink and both authentication schemes, none of which this
+# mesh uses — and `transport_multilink` in particular would let two peers keep
+# more than one link, which is the thing the QUIC-only listener exists to avoid.
+# TCP stays pinnable by endpoint for a network that blocks UDP; `?rel=1` QUIC
+# over UDP ships inside `transport_udp`. TLS `quic/` needs a provisioned key and
+# certificate, so it waits for the security milestone.
+zenoh = { version = "1.10.1", default-features = false, features = [
+    "transport_tcp",
+    "transport_udp",
+] }
 
 # Serialization
 serde.workspace = true
@@ -200,7 +214,9 @@ criterion = { version = "0.5", features = ["html_reports"] }  # Benches for logg
 trybuild = "1.0.121"
 # The real key-expression rules the mesh address grammar is checked against, so
 # the engine's own validator is graded by Zenoh rather than by a second reading
-# of the spec. Test-only, deliberately: nothing shipped links Zenoh yet.
+# of the spec. Named directly rather than reached through `zenoh` because the
+# grammar test wants `keyexpr`'s `internal` chunk inspection, which the facade
+# does not re-export.
 zenoh-keyexpr = { version = "1.10.1", features = ["internal"] }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
