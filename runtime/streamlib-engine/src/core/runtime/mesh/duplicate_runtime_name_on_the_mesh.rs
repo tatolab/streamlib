@@ -18,8 +18,6 @@
 
 use std::time::Duration;
 
-use zenoh::Wait;
-
 use crate::core::error::{Error, Result};
 use crate::core::runtime::mesh::HostIdentity;
 use crate::core::runtime::mesh::runtime_mesh_key::{AnnouncedRuntimeIdentity, RuntimeMeshKeySpace};
@@ -63,9 +61,6 @@ pub fn refuse_this_runtime_if_its_name_is_already_live(
 }
 
 /// Every runtime whose liveliness token is live under `runtime_name`.
-///
-/// A token this engine did not write is read past rather than guessed at, the
-/// way the discovery subscriber reads past one.
 fn every_live_holder_of(
     session: &zenoh::Session,
     key_space: &RuntimeMeshKeySpace,
@@ -74,27 +69,19 @@ fn every_live_holder_of(
     // A mesh that cannot be asked is not a mesh that said yes, but it is also
     // not grounds to fail a start the plan never lets the mesh fail. The
     // duplicate then shows up as the stated residual.
-    let Ok(replies) = session
-        .liveliness()
-        .get(key_space.every_announcement_key_under(runtime_name))
-        .timeout(HOW_LONG_PEERS_HAVE_TO_SAY_WHO_HOLDS_THIS_NAME)
-        .wait()
+    key_space
+        .every_runtime_announced_under_the_name(
+            session,
+            runtime_name,
+            HOW_LONG_PEERS_HAVE_TO_SAY_WHO_HOLDS_THIS_NAME,
+        )
         .inspect_err(|query_failure| {
             tracing::warn!(
                 "could not ask the mesh who holds the runtime name {runtime_name}, so a live \
                  duplicate would go unrefused: {query_failure}"
             );
         })
-    else {
-        return Vec::new();
-    };
-
-    replies
-        .into_iter()
-        .filter_map(|reply| {
-            key_space.read_an_announcement_key(reply.result().ok()?.key_expr().as_str())
-        })
-        .collect()
+        .unwrap_or_default()
 }
 
 /// The exception's decision, with the process probe named so the table is

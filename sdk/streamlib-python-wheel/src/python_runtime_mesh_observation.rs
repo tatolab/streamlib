@@ -13,8 +13,9 @@
 
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
+use streamlib::engine_internal::core::json_schema::RuntimeMeshPeerOutput;
 use streamlib::sdk::error::Error;
-use streamlib::sdk::runtime::{RuntimeMeshConfiguration, observe_a_runtime_mesh};
+use streamlib::sdk::runtime::{RuntimeMeshObservationRequest, observe_a_runtime_mesh};
 
 /// One runtime seen on a mesh.
 #[pyclass(name = "ObservedRuntimeMeshPeer", module = "streamlib", frozen)]
@@ -24,6 +25,18 @@ pub(crate) struct PythonObservedRuntimeMeshPeer {
     host_name: Option<String>,
     engine_version: Option<String>,
     control_plane_urls: Option<Vec<String>>,
+}
+
+impl From<RuntimeMeshPeerOutput> for PythonObservedRuntimeMeshPeer {
+    fn from(peer: RuntimeMeshPeerOutput) -> Self {
+        Self {
+            runtime_name: peer.runtime_name,
+            runtime_id: peer.runtime_id,
+            host_name: peer.host_name,
+            engine_version: peer.engine_version,
+            control_plane_urls: peer.control_plane_urls,
+        }
+    }
 }
 
 #[pymethods]
@@ -123,11 +136,10 @@ pub(crate) fn _observe_the_runtime_mesh(
 ) -> PyResult<PythonObservedRuntimeMesh> {
     let observed = python
         .detach(|| {
-            observe_a_runtime_mesh(RuntimeMeshConfiguration {
+            observe_a_runtime_mesh(RuntimeMeshObservationRequest {
                 mesh_name,
                 mesh_peer_endpoints,
                 mesh_multicast_discovery,
-                ..Default::default()
             })
         })
         .map_err(|mesh_failure| match mesh_failure {
@@ -144,18 +156,7 @@ pub(crate) fn _observe_the_runtime_mesh(
         peers: observed
             .peers
             .into_iter()
-            .map(|peer| {
-                Py::new(
-                    python,
-                    PythonObservedRuntimeMeshPeer {
-                        runtime_name: peer.runtime_name,
-                        runtime_id: peer.runtime_id,
-                        host_name: peer.host_name,
-                        engine_version: peer.engine_version,
-                        control_plane_urls: peer.control_plane_urls,
-                    },
-                )
-            })
+            .map(|peer| Py::new(python, PythonObservedRuntimeMeshPeer::from(peer)))
             .collect::<PyResult<Vec<_>>>()?,
     })
 }

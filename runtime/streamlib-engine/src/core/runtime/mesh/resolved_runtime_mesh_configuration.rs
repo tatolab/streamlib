@@ -262,6 +262,39 @@ mod tests {
         }
     }
 
+    /// A session that asks one question awaits its connect attempts rather
+    /// than dialling in the background, so the question cannot go out before
+    /// the endpoint its caller named is reachable. Pinned here because the key
+    /// is Zenoh's and a version bump could move it.
+    #[test]
+    fn a_configuration_for_one_question_awaits_its_connect_attempts() {
+        let resolved = resolved(RuntimeMeshConfiguration {
+            mesh_peer_endpoints: Some(vec!["tcp/127.0.0.1:7447".to_string()]),
+            ..Default::default()
+        })
+        .expect("a legal configuration resolves");
+
+        assert_eq!(
+            resolved
+                .as_a_zenoh_configuration_for_one_question()
+                .expect("zenoh takes every value")
+                .get_json("connect/timeout_ms")
+                .expect("a connect timeout"),
+            "0"
+        );
+        assert_ne!(
+            resolved
+                .as_a_zenoh_configuration()
+                .expect("zenoh takes every value")
+                .get_json("connect/timeout_ms")
+                .ok()
+                .as_deref(),
+            Some("0"),
+            "a runtime's own session keeps zenoh's background dialling; only the \
+             one-question session awaits its attempts"
+        );
+    }
+
     /// The engine's own test build never joins the machine's real mesh, so a
     /// test that constructs a runtime cannot reach the owner's desk.
     #[test]

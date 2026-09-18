@@ -1,12 +1,23 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Where a runtime's announcement sits in the mesh's key space.
+//! Where a runtime's announcement sits in the mesh's key space, and how to
+//! read who is announced there.
 //!
 //! A liveliness token carries no payload and a sample carries no zid, so the
 //! token key is the whole of what a runtime that has already died still says
 //! about itself: its name, its host and its pid. Everything else is answered
 //! by the description queryable beside it, which needs a living process.
+//!
+//! Reading the tokens lives here rather than beside either of its two callers
+//! — the duplicate-name check and the observation `streamlib nodes` makes —
+//! because knowing which keys are announcements and knowing how to turn one
+//! back into an identity is one piece of knowledge, and a second copy of it
+//! would be a second place to change when the key layout moves.
+
+use std::time::Duration;
+
+use zenoh::Wait;
 
 use crate::core::runtime::RuntimeName;
 use crate::core::runtime::mesh::HostIdentity;
@@ -87,6 +98,62 @@ impl RuntimeMeshKeySpace {
     /// otherwise, so it carries no wildcard of its own.
     pub fn every_announcement_key_under(&self, runtime_name: &str) -> String {
         format!("{}/{runtime_name}/**", self.runtime_announcement_root())
+    }
+
+    /// Every runtime whose liveliness token is live on this mesh.
+    pub(super) fn every_runtime_announced_on_this_mesh(
+        &self,
+        session: &zenoh::Session,
+        how_long_peers_have_to_answer: Duration,
+    ) -> zenoh::Result<Vec<AnnouncedRuntimeIdentity>> {
+        self.read_every_announcement_matching(
+            session,
+            self.every_announcement_key(),
+            how_long_peers_have_to_answer,
+        )
+    }
+
+    /// Every runtime whose liveliness token is live under `runtime_name` —
+    /// whatever host it is on and whatever its pid.
+    pub(super) fn every_runtime_announced_under_the_name(
+        &self,
+        session: &zenoh::Session,
+        runtime_name: &str,
+        how_long_peers_have_to_answer: Duration,
+    ) -> zenoh::Result<Vec<AnnouncedRuntimeIdentity>> {
+        self.read_every_announcement_matching(
+            session,
+            self.every_announcement_key_under(runtime_name),
+            how_long_peers_have_to_answer,
+        )
+    }
+
+    /// Ask the mesh who is announced under `announcement_key`.
+    ///
+    /// The bound is the caller's to state rather than Zenoh's to default: a
+    /// liveliness `get` whose peer never sends its final reply — a partition,
+    /// a process killed behind a half-open link — otherwise waits out
+    /// `queries_default_timeout`, ten seconds nobody here would have chosen.
+    ///
+    /// A token this engine did not write is read past rather than guessed at,
+    /// the way the discovery subscriber reads past one.
+    fn read_every_announcement_matching(
+        &self,
+        session: &zenoh::Session,
+        announcement_key: String,
+        how_long_peers_have_to_answer: Duration,
+    ) -> zenoh::Result<Vec<AnnouncedRuntimeIdentity>> {
+        let replies = session
+            .liveliness()
+            .get(announcement_key)
+            .timeout(how_long_peers_have_to_answer)
+            .wait()?;
+        Ok(replies
+            .into_iter()
+            .filter_map(|reply| {
+                self.read_an_announcement_key(reply.result().ok()?.key_expr().as_str())
+            })
+            .collect())
     }
 
     /// Who an announcement key names, or `None` when the key is not one this

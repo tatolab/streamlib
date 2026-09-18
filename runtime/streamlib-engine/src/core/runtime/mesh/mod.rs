@@ -42,4 +42,6 @@ pub use resolved_runtime_mesh_configuration::ResolvedRuntimeMeshConfiguration;
 pub use runtime_mesh_key::{AnnouncedRuntimeIdentity, RuntimeMeshKeySpace};
 pub use runtime_mesh_membership::RuntimeMeshMembership;
 pub use runtime_mesh_name::RuntimeMeshName;
-pub use runtime_mesh_observation::{RuntimeMeshObservation, observe_a_runtime_mesh};
+pub use runtime_mesh_observation::{
+    RuntimeMeshObservation, RuntimeMeshObservationRequest, observe_a_runtime_mesh,
+};

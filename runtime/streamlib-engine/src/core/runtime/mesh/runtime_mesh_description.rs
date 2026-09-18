@@ -80,7 +80,7 @@ pub(super) fn ask_a_peer_what_it_is(
     key_space: &RuntimeMeshKeySpace,
     announced: &AnnouncedRuntimeIdentity,
 ) -> Option<RuntimeMeshDescription> {
-    let answers = send_the_question_to(session, key_space, announced)?;
+    let answers = send_the_what_are_you_question_to(session, key_space, announced)?;
     wait_for_what_a_peer_answered(&announced.runtime_name, answers)
 }
 
@@ -96,29 +96,27 @@ pub(super) fn ask_every_peer_what_it_is(
     session: &zenoh::Session,
     key_space: &RuntimeMeshKeySpace,
     every_peer: impl IntoIterator<Item = AnnouncedRuntimeIdentity>,
-) -> Vec<(AnnouncedRuntimeIdentity, Option<RuntimeMeshDescription>)> {
+) -> impl Iterator<Item = (AnnouncedRuntimeIdentity, Option<RuntimeMeshDescription>)> {
+    // Collected rather than left lazy, and that is the whole mechanism: every
+    // question is on the wire before the first answer is waited on.
     let asked: Vec<_> = every_peer
         .into_iter()
         .map(|announced| {
-            let answers = send_the_question_to(session, key_space, &announced);
+            let answers = send_the_what_are_you_question_to(session, key_space, &announced);
             (announced, answers)
         })
         .collect();
 
-    asked
-        .into_iter()
-        .map(|(announced, answers)| {
-            let described = answers.and_then(|answers| {
-                wait_for_what_a_peer_answered(&announced.runtime_name, answers)
-            });
-            (announced, described)
-        })
-        .collect()
+    asked.into_iter().map(|(announced, answers)| {
+        let described = answers
+            .and_then(|answers| wait_for_what_a_peer_answered(&announced.runtime_name, answers));
+        (announced, described)
+    })
 }
 
 /// Send one "what are you" query, and hand back the channel it answers on
 /// without waiting — which is what lets a caller ask several at once.
-fn send_the_question_to(
+fn send_the_what_are_you_question_to(
     session: &zenoh::Session,
     key_space: &RuntimeMeshKeySpace,
     announced: &AnnouncedRuntimeIdentity,
@@ -161,7 +159,7 @@ fn wait_for_what_a_peer_answered(
 
 /// One peer as a reader renders it: its name off the token, and the four the
 /// peer itself answered — each absent until it does.
-pub(super) fn render_a_peer(
+pub(super) fn render_one_runtime_mesh_peer(
     runtime_name: &str,
     described: Option<&RuntimeMeshDescription>,
 ) -> RuntimeMeshPeerOutput {

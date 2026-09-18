@@ -21,7 +21,9 @@ use streamlib_engine::core::runtime::mesh::{
     AnnouncedRuntimeIdentity, HostIdentity, ResolvedRuntimeMeshConfiguration, RuntimeMeshKeySpace,
     RuntimeMeshName,
 };
-use streamlib_engine::core::runtime::{RuntimeMeshConfiguration, observe_a_runtime_mesh};
+use streamlib_engine::core::runtime::{
+    RuntimeMeshConfiguration, RuntimeMeshObservationRequest, observe_a_runtime_mesh,
+};
 use zenoh::Wait;
 
 /// How long an arm waits for two runtimes to see each other. Generous: a
@@ -992,11 +994,10 @@ fn an_observation_lists_a_runtime_whole_and_that_runtime_never_sees_the_observer
         let mesh_name = mesh_name.clone();
         move || {
             while keep_looking.load(Ordering::Relaxed) {
-                let looked = observe_a_runtime_mesh(RuntimeMeshConfiguration {
+                let looked = observe_a_runtime_mesh(RuntimeMeshObservationRequest {
                     mesh_name: Some(mesh_name.clone()),
                     mesh_peer_endpoints: Some(vec![listening.clone()]),
                     mesh_multicast_discovery: Some(false),
-                    ..Default::default()
                 })
                 .expect("the mesh is readable");
                 what_every_look_saw.lock().push(looked);

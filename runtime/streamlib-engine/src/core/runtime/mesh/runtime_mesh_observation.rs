@@ -9,18 +9,19 @@
 //! name on the mesh for as long as the listing took.
 //!
 //! So this opens a session that **declares nothing** — no liveliness token, no
-//! description queryable — asks the mesh who is on it, asks each of them what
-//! it is, and closes. Nothing it does is visible to a runtime as a peer, and
-//! the duplicate-name check has nothing new to trip over. It listens on nothing
-//! either: an observer is dialled by nobody, and taking the runtime's default
-//! listener would make `streamlib nodes` fight a runtime in the same shell for
-//! a `STREAMLIB_MESH_LISTEN_ENDPOINTS` port.
+//! description queryable — asks the mesh who is on it, asks all of them at once
+//! what they are, and closes. Nothing it does is visible to a runtime as a
+//! peer, and the duplicate-name check has nothing new to trip over. It listens
+//! on nothing either: an observer is dialled by nobody, and taking the
+//! runtime's default listener would make `streamlib nodes` fight a runtime in
+//! the same shell for a `STREAMLIB_MESH_LISTEN_ENDPOINTS` port.
 //!
 //! Everything else is the runtime's: the same configuration resolution, the
 //! same defaults, the same key space, the same description query. This is a
 //! second reader of the mesh, never a second mesh.
 
 use std::collections::BTreeSet;
+use std::time::Duration;
 
 use zenoh::Wait;
 
@@ -29,10 +30,35 @@ use crate::core::json_schema::RuntimeMeshPeerOutput;
 use crate::core::runtime::RuntimeMeshConfiguration;
 use crate::core::runtime::mesh::resolved_runtime_mesh_configuration::ResolvedRuntimeMeshConfiguration;
 use crate::core::runtime::mesh::runtime_mesh_description::{
-    ask_every_peer_what_it_is, render_a_peer,
+    ask_every_peer_what_it_is, render_one_runtime_mesh_peer,
 };
 use crate::core::runtime::mesh::runtime_mesh_key::{AnnouncedRuntimeIdentity, RuntimeMeshKeySpace};
 use crate::core::runtime::mesh::zenoh_work_off_any_tokio_runtime::off_any_current_thread_tokio_runtime;
+
+/// How long connected peers have to say who is on the mesh.
+///
+/// Stated rather than left to Zenoh's ten-second `queries_default_timeout`,
+/// because somebody is waiting on this one: `streamlib nodes` is a command a
+/// person runs. Engine-chosen; nothing authorable.
+const HOW_LONG_THE_MESH_HAS_TO_SAY_WHO_IS_ON_IT: Duration = Duration::from_secs(2);
+
+/// Which mesh to look at, and how to reach it.
+///
+/// Three values rather than the runtime's five: an observer is addressed by
+/// nobody, so it takes no runtime name and listens on nothing. Spelled as its
+/// own type so neither can be handed in and silently dropped.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RuntimeMeshObservationRequest {
+    /// The mesh to look at. Unset, the engine reads `STREAMLIB_MESH_NAME`, and
+    /// failing that looks at the `default` mesh.
+    pub mesh_name: Option<String>,
+    /// Endpoints to dial, for a network multicast does not cross. Unset, the
+    /// engine reads `STREAMLIB_MESH_PEER_ENDPOINTS`.
+    pub mesh_peer_endpoints: Option<Vec<String>>,
+    /// Whether to find runtimes by multicast. Unset, the engine reads
+    /// `STREAMLIB_MESH_MULTICAST_DISCOVERY`, and failing that discovers.
+    pub mesh_multicast_discovery: Option<bool>,
+}
 
 /// One look at one mesh, taken from outside it.
 #[derive(Debug, Clone)]
@@ -46,36 +72,37 @@ pub struct RuntimeMeshObservation {
     pub peers: Vec<RuntimeMeshPeerOutput>,
 }
 
-/// Look at the mesh `configuration` names without joining it.
+/// Look at the mesh `request` names without joining it.
 ///
-/// `runtime_name` and `mesh_listen_endpoints` are not read: an observer is
-/// addressed by nobody. The mesh name, the dialled peers and multicast
-/// discovery resolve exactly as a runtime's do, environment included.
-///
-/// Errs when the caller's configuration is refused, and when the session will
-/// not open at all — an observer that cannot look has nothing to report, where
-/// a runtime that cannot join still runs.
+/// Errs when the request is refused, and when the session will not open at all
+/// — an observer that cannot look has nothing to report, where a runtime that
+/// cannot join still runs.
 pub fn observe_a_runtime_mesh(
-    configuration: RuntimeMeshConfiguration,
+    request: RuntimeMeshObservationRequest,
 ) -> Result<RuntimeMeshObservation> {
     let resolved = ResolvedRuntimeMeshConfiguration::resolve(RuntimeMeshConfiguration {
+        mesh_name: request.mesh_name,
+        mesh_peer_endpoints: request.mesh_peer_endpoints,
+        mesh_multicast_discovery: request.mesh_multicast_discovery,
         runtime_name: None,
         mesh_listen_endpoints: Some(Vec::new()),
-        ..configuration
     })?;
     let key_space = RuntimeMeshKeySpace::of(resolved.mesh_name.clone());
     let mesh_name = resolved.mesh_name.to_string();
 
-    let peers = off_any_current_thread_tokio_runtime("observe", || {
+    let what_the_reading_thread_returned = off_any_current_thread_tokio_runtime("observe", || {
         read_every_runtime_announced_on(&resolved, &key_space)
     })
     .map_err(|cannot_spawn| {
         Error::Runtime(format!(
             "the {mesh_name} mesh could not be read for want of a thread: {cannot_spawn}"
         ))
-    })??;
+    })?;
 
-    Ok(RuntimeMeshObservation { mesh_name, peers })
+    Ok(RuntimeMeshObservation {
+        mesh_name,
+        peers: what_the_reading_thread_returned?,
+    })
 }
 
 /// Open, ask, close. Runs on a thread that is nobody's tokio runtime.
@@ -101,10 +128,11 @@ fn read_every_runtime_announced_on(
     let peers = ask_every_peer_what_it_is(
         &session,
         key_space,
-        every_runtime_announced_on(&session, key_space),
+        every_runtime_announced_on_this_mesh(&session, key_space, &resolved.mesh_name),
     )
-    .iter()
-    .map(|(announced, described)| render_a_peer(&announced.runtime_name, described.as_ref()))
+    .map(|(announced, described)| {
+        render_one_runtime_mesh_peer(&announced.runtime_name, described.as_ref())
+    })
     .collect();
 
     if let Err(close_failure) = session.close().wait() {
@@ -113,35 +141,25 @@ fn read_every_runtime_announced_on(
     Ok(peers)
 }
 
-/// Every runtime whose liveliness token is live on this mesh, in the order a
-/// peer table renders them.
+/// Every runtime announced on this mesh, in the order a peer table renders
+/// them.
 ///
 /// A set rather than a list: two runtimes may hold one name, so ordering by
-/// name alone would leave two rows whose order changed between runs. A token
-/// this engine did not write is read past rather than guessed at, the way the
-/// discovery subscriber reads past one.
-fn every_runtime_announced_on(
+/// name alone would leave two rows whose order changed between runs.
+fn every_runtime_announced_on_this_mesh(
     session: &zenoh::Session,
     key_space: &RuntimeMeshKeySpace,
+    mesh_name: &impl std::fmt::Display,
 ) -> BTreeSet<AnnouncedRuntimeIdentity> {
     // An unreadable mesh is an empty one here rather than an error: the caller
     // has a registry table to print either way, and a mesh with nobody on it
     // and a mesh that would not answer both read as no peers.
-    let Ok(replies) = session
-        .liveliness()
-        .get(key_space.every_announcement_key())
-        .wait()
+    key_space
+        .every_runtime_announced_on_this_mesh(session, HOW_LONG_THE_MESH_HAS_TO_SAY_WHO_IS_ON_IT)
         .inspect_err(|query_failure| {
-            tracing::warn!("could not ask the mesh who is on it: {query_failure}");
+            tracing::warn!("could not ask the {mesh_name} mesh who is on it: {query_failure}");
         })
-    else {
-        return BTreeSet::new();
-    };
-
-    replies
+        .unwrap_or_default()
         .into_iter()
-        .filter_map(|reply| {
-            key_space.read_an_announcement_key(reply.result().ok()?.key_expr().as_str())
-        })
         .collect()
 }

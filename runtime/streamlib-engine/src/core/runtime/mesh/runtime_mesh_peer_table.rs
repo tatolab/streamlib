@@ -12,7 +12,9 @@ use std::collections::BTreeMap;
 use parking_lot::RwLock;
 
 use crate::core::json_schema::RuntimeMeshPeerOutput;
-use crate::core::runtime::mesh::runtime_mesh_description::{RuntimeMeshDescription, render_a_peer};
+use crate::core::runtime::mesh::runtime_mesh_description::{
+    RuntimeMeshDescription, render_one_runtime_mesh_peer,
+};
 use crate::core::runtime::mesh::runtime_mesh_key::AnnouncedRuntimeIdentity;
 
 /// Every peer this runtime currently sees.
@@ -66,7 +68,7 @@ impl RuntimeMeshPeerTable {
             .read()
             .iter()
             .map(|(announced, described)| {
-                render_a_peer(&announced.runtime_name, described.as_ref())
+                render_one_runtime_mesh_peer(&announced.runtime_name, described.as_ref())
             })
             .collect()
     }
