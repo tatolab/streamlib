@@ -28,12 +28,26 @@ const PARTS_OF_A_MESH_PORT_ADDRESS: usize = 3;
 /// name to one of its own nodes at the moment it is asked.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct MeshPortAddress {
+    runtime_name: String,
+    processor_display_name: String,
+    port_name: String,
+}
+
+impl MeshPortAddress {
     /// The name the owning runtime is addressed by on the mesh.
-    pub runtime_name: String,
+    pub fn runtime_name(&self) -> &str {
+        &self.runtime_name
+    }
+
     /// The display name of the processor that owns the port, on that runtime.
-    pub processor_display_name: String,
+    pub fn processor_display_name(&self) -> &str {
+        &self.processor_display_name
+    }
+
     /// The port's own name on that processor.
-    pub port_name: String,
+    pub fn port_name(&self) -> &str {
+        &self.port_name
+    }
 }
 
 /// A mesh port address exactly as it rides the wire, before anything has
@@ -145,6 +159,25 @@ mod tests {
             .to_string();
         assert!(refusal.contains("runtime name"), "{refusal}");
         assert!(refusal.contains("la*b"), "{refusal}");
+    }
+
+    /// Every part an address hands back is one the key grammar carries, because
+    /// the fields are private and `new` and `parse` are the only ways in — a
+    /// struct literal cannot smuggle one past them, here or in a consumer.
+    #[test]
+    fn every_part_of_an_address_came_through_a_checked_constructor() {
+        let addressed = MeshPortAddress::parse("bench-cam-a1b2/Camera Source 2/video")
+            .expect("a legal address");
+        for part in [
+            addressed.runtime_name(),
+            addressed.processor_display_name(),
+            addressed.port_name(),
+        ] {
+            assert!(
+                first_reason_this_is_not_one_mesh_address_chunk(part).is_none(),
+                "{part:?} reached a built address without meeting the grammar"
+            );
+        }
     }
 
     /// A legal address still rides the wire unchanged, so the check costs the

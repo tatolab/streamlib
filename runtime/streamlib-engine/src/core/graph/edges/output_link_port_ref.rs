@@ -60,7 +60,7 @@ impl OutputLinkPortRef {
     pub fn port_name(&self) -> &str {
         match self {
             Self::OnThisRuntime { port_name, .. } => port_name,
-            Self::OnAnotherRuntime(address) => &address.port_name,
+            Self::OnAnotherRuntime(address) => &address.port_name(),
         }
     }
 

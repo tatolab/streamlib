@@ -339,12 +339,12 @@ fn resolve_a_source_addressing_this_runtimes_own_port(
     compiler.scope(|graph, _tx| {
         if let Some(named) = graph
             .traversal()
-            .v_with_display_name(&address.processor_display_name)
+            .v_with_display_name(&address.processor_display_name())
             .first()
         {
             return Ok(OutputLinkPortRef::new(
                 named.id.clone(),
-                address.port_name.clone(),
+                address.port_name().clone(),
             ));
         }
         let mut display_names: Vec<String> = graph
@@ -357,7 +357,7 @@ fn resolve_a_source_addressing_this_runtimes_own_port(
         Err(Error::ProcessorNotFound(format!(
             "no processor on this runtime is displayed as {:?}, which {address} names. This \
              runtime is displaying: {}",
-            address.processor_display_name,
+            address.processor_display_name(),
             if display_names.is_empty() {
                 "nothing".to_string()
             } else {

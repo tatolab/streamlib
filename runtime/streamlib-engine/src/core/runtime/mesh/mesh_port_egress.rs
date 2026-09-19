@@ -93,11 +93,9 @@ fn send_one_port_to_the_mesh(sending: WhatOneEgressSends, stop: Arc<AtomicBool>)
         how_to_read_the_port,
         iceoryx2_node,
     } = sending;
-    let MeshPortAddress {
-        runtime_name: this_runtimes_name,
-        processor_display_name,
-        port_name,
-    } = &addressed;
+    let this_runtimes_name = addressed.runtime_name();
+    let processor_display_name = addressed.processor_display_name();
+    let port_name = addressed.port_name();
 
     let service = match iceoryx2_node.open_or_create_service(
         &how_to_read_the_port.channel_service_name,

@@ -171,9 +171,9 @@ impl MeshLinkIngress {
         let reader_token = session
             .liveliness()
             .declare_token(key_space.reader_token_key(
-                &address.runtime_name,
-                &address.processor_display_name,
-                &address.port_name,
+                &address.runtime_name(),
+                &address.processor_display_name(),
+                &address.port_name(),
                 this_runtimes_name,
             ))
             .wait()
@@ -279,9 +279,9 @@ fn declare_the_data_subscriber(
     let addressed = address.to_string();
     session
         .declare_subscriber(key_space.data_key(
-            &address.runtime_name,
-            &address.processor_display_name,
-            &address.port_name,
+            &address.runtime_name(),
+            &address.processor_display_name(),
+            &address.port_name(),
         ))
         .callback(move |sample| {
             // A message this engine did not write, or one from a build whose
@@ -326,9 +326,9 @@ fn declare_the_egress_token_subscriber(
     session
         .liveliness()
         .declare_subscriber(key_space.egress_token_key(
-            &address.runtime_name,
-            &address.processor_display_name,
-            &address.port_name,
+            &address.runtime_name(),
+            &address.processor_display_name(),
+            &address.port_name(),
         ))
         .history(true)
         .callback(move |token| {

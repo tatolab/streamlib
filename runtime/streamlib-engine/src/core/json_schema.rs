@@ -586,9 +586,9 @@ impl From<&crate::core::graph::OutputLinkPortRef> for LinkPortRefOutput {
             },
             crate::core::graph::OutputLinkPortRef::OnAnotherRuntime(address) => {
                 Self::OnAnotherRuntime {
-                    runtime_name: address.runtime_name.clone(),
-                    processor_display_name: address.processor_display_name.clone(),
-                    port_name: address.port_name.clone(),
+                    runtime_name: address.runtime_name().to_string(),
+                    processor_display_name: address.processor_display_name().to_string(),
+                    port_name: address.port_name().to_string(),
                 }
             }
         }

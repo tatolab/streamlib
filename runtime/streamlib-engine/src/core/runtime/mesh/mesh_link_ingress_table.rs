@@ -388,7 +388,7 @@ fn why_this_address_cannot_be_carried_yet(
         address,
         &resolving
             .peers
-            .every_peer_holding_the_name(&address.runtime_name),
+            .every_peer_holding_the_name(&address.runtime_name()),
         env!("CARGO_PKG_VERSION"),
     ) {
         return Some(not_yet);
@@ -396,7 +396,7 @@ fn why_this_address_cannot_be_carried_yet(
     let offered = ask_a_runtime_what_output_ports_it_offers(
         &resolving.session,
         &resolving.key_space,
-        &address.runtime_name,
+        &address.runtime_name(),
     );
     what_the_offered_ports_say(address, offered.as_ref()).err()
 }
@@ -411,7 +411,7 @@ fn what_the_runtimes_holding_the_name_say(
     let [(_, described)] = holders else {
         if holders.is_empty() {
             return Err(RemoteLinkResolution::AwaitingRemote {
-                reason: format!("the runtime {} is not on the mesh", address.runtime_name),
+                reason: format!("the runtime {} is not on the mesh", address.runtime_name()),
             });
         }
         // Two live runtimes holding one name is an address collision: a link
@@ -432,7 +432,7 @@ fn what_the_runtimes_holding_the_name_say(
                 "{} live runtimes on this mesh are named {}, on {}. A link naming that runtime \
                  is ambiguous and carries from none of them until all but one leaves.",
                 holders.len(),
-                address.runtime_name,
+                address.runtime_name(),
                 where_they_are.join(" and ")
             ),
         });
@@ -441,7 +441,7 @@ fn what_the_runtimes_holding_the_name_say(
         return Err(RemoteLinkResolution::AwaitingRemote {
             reason: format!(
                 "the runtime {} is on the mesh and has not yet said what it is",
-                address.runtime_name
+                address.runtime_name()
             ),
         });
     };
@@ -451,7 +451,8 @@ fn what_the_runtimes_holding_the_name_say(
                 "the runtime {} runs engine {} and this one runs engine {this_engines_version}. \
                  Before 1.0 there is no wire between two engine versions, so nothing is carried \
                  across one.",
-                address.runtime_name, described.engine_version
+                address.runtime_name(),
+                described.engine_version
             ),
         });
     }
@@ -467,17 +468,17 @@ fn what_the_offered_ports_say(
         return Err(RemoteLinkResolution::AwaitingRemote {
             reason: format!(
                 "the runtime {} has not said which output ports it offers",
-                address.runtime_name
+                address.runtime_name()
             ),
         });
     };
-    if !offered.offers(&address.processor_display_name, &address.port_name) {
+    if !offered.offers(&address.processor_display_name(), &address.port_name()) {
         return Err(RemoteLinkResolution::Refused {
             reason: format!(
                 "the runtime {} offers no output port {}/{}. It offers: {}.",
-                address.runtime_name,
-                address.processor_display_name,
-                address.port_name,
+                address.runtime_name(),
+                address.processor_display_name(),
+                address.port_name(),
                 offered.listed_for_a_refusal()
             ),
         });
@@ -517,7 +518,7 @@ fn start_carrying(resolving: &ResolvingLinksNeeds, address: &MeshPortAddress) {
 fn keep_carrying_or_stop(resolving: &ResolvingLinksNeeds, address: &MeshPortAddress) {
     let the_runtime_left = resolving
         .peers
-        .every_peer_holding_the_name(&address.runtime_name)
+        .every_peer_holding_the_name(&address.runtime_name())
         .is_empty();
     let the_source_stopped_sending = resolving
         .carried
@@ -528,11 +529,11 @@ fn keep_carrying_or_stop(resolving: &ResolvingLinksNeeds, address: &MeshPortAddr
 
     if the_runtime_left || the_source_stopped_sending {
         let reason = if the_runtime_left {
-            format!("the runtime {} left the mesh", address.runtime_name)
+            format!("the runtime {} left the mesh", address.runtime_name())
         } else {
             format!(
                 "the runtime {} stopped sending {address}",
-                address.runtime_name
+                address.runtime_name()
             )
         };
         let stopped_reading = {
@@ -580,7 +581,9 @@ fn how_far_a_link_from_here_has_got(
         (true, false) => RemoteLinkResolution::AwaitingRemote {
             reason: format!(
                 "the runtime {} is on the mesh and offers {}/{}, and is not sending it",
-                address.runtime_name, address.processor_display_name, address.port_name
+                address.runtime_name(),
+                address.processor_display_name(),
+                address.port_name()
             ),
         },
         (true, true) => RemoteLinkResolution::Wired,
