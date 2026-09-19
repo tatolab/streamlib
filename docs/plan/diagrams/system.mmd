@@ -4,7 +4,7 @@ flowchart LR
     procs["User processor classes\n(importable modules — imported by the app,\nregistering their descriptor as the decorator runs, by helpers to run;\nnever hosted in the app;\nthe class's import path is its identity)"]
     pkgs["Extension wheels\n(ordinary PyPI packages — Rust inside for speed, a Python processor\nas the binding; depend on the streamlib wheel as a binary, never link the engine;\nnative internals expose handles, never streamlib internals;\ntwo mechanisms — a processor extension added by rt.add that calls its own\nRust directly, and a capability extension: support code declared by a pyproject\nentry point pip records, run once at startup like a driver, sandboxed, able to\nintroduce engine-grade capabilities the engine does not provide; first-party optional capabilities ship this way too,\nnetworking shipped first — streamlib-webrtc (WhipPublisher / WhepPlayer) and\nstreamlib-moq (MoqBroadcastPublisher / MoqBroadcastSubscriber), both on the encoded\nside of the codec blocks, touching no surface and no GPU;\nthe MoQ pair also carries data tracks under streamlib_bag — any bag as a track\nbeside video and audio, named by track_names, the producer's stamp intact,\na late media bag shed and its backlogged group abandoned on the vendored moq-transport;\ngraph carries what loaded as its extensions key;\nlive in packages/, local-linked in-repo,\npublished via the wheel's multi-project index)"]
     wheel["streamlib wheel\n(Python API + CLI + engine, PyO3 —\nrepo releases now, PyPI after rename;\nits bag codec is exported as the one encode/decode pair\nan extension carrying a bag over its own transport reaches)"]
-    helper["Helper processes — every Python processor\n(engine exec of sys.executable; own\ninterpreter, own GIL; imports the wheel;\nthe only placement)"]
+    helper["Helper processes — every Python processor\n(engine exec of sys.executable; own\ninterpreter, own GIL; imports the wheel —\nand refuses to start unless that wheel is the\nparent's own engine build, id checked before\nany channel or socket opens;\nthe only placement)"]
   end
 
   rustapp["Rust app\n(plain cargo project)"]
@@ -17,7 +17,7 @@ flowchart LR
   cli["CLI (in the wheel)\nnew / dev / run · nodes / graph / tap / logs / exchange · enable-virtual-camera"]
   wire["Wire\n(self-describing bags between nodes —\nthe only cross-language boundary)"]
 
-  registry["Node registry\n(per-user on-disk, one JSON per live node)"]
+  registry["Node registry\n(one JSON per live node, inside the one engine-resolved runtime\ndirectory — on Linux XDG_RUNTIME_DIR/streamlib where that is set and non-empty,\notherwise, and on macOS always, /tmp/streamlib-<uid>, owner-only and checked\nbefore the first write — which also holds the\nsurface socket and the engine-owned iceoryx2 domain)"]
   mesh["Runtime mesh (Zenoh)\n(engine transport, always on, beside iceoryx2 — one session per runtime\nin the app process, never in a helper; runtimes announce themselves and\ndiscover each other peer-to-peer, explicit peers or a router where multicast\ndoes not cross; everything under a mesh name, default `default`, no off switch;\nports addressed runtime name / display name / port, the runtime name unique\nin the mesh; any runtime may create a remote link — the input's runtime applies it\nwith connect's own refusals, a missing runtime waits, a missing port is refused;\nnothing is sent for a port no remote link reads; stamps cross unchanged tagged with\ntheir clock, never compared across clocks (a shared network clock is OPEN);\na send the network cannot take is dropped and counted per remote link;\nnotify, event bus, request-response and blackboard never cross;\ngraph lists mesh peers; a top-level surface_id crosses as pixels and lands as a fresh\nlocal surface id; no auth yet — the auth posture owns it)"]
 
   app -->|imports classes for rt.add| procs
@@ -49,7 +49,9 @@ a drop is counted at the port that lost it; a ring overwrite is counted by a seq
 number in an iceoryx2 user header, and a helper's counts reach graph through a
 per-spawn blackboard the parent reads (decided, not yet built);
 shutdown always ends — every helper stops at once on one ladder, interrupt after 1 s,
-teardown within 5 s, then its process group terminated and killed;
+teardown within 5 s, then its process group terminated and killed; an interrupted setup()
+still tears down, and a thread past its budget is abandoned and named rather than joined;
+a link onto a helper reads pending until the helper answers wired, or error with its reason;
 a read can name the inbound link a bag arrived on, and a port can list the links wired
 into it — which is how a many-track sink learns what it owes, counting unchanged;
 every stamp reads the one machine-monotonic clock"| helper
