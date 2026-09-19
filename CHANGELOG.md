@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.25.9](https://github.com/tatolab/streamlib/compare/v0.25.8...v0.25.9) (2026-09-19)
+
+
+### Bug Fixes
+
+* **engine:** a runtime offers on the mesh only the output ports it can send ([#2369](https://github.com/tatolab/streamlib/issues/2369)) ([d1b5260](https://github.com/tatolab/streamlib/commit/d1b52608aa8e8de889f2b43d7b73bbf1d6746c3f))
+
 ## [0.25.8](https://github.com/tatolab/streamlib/compare/v0.25.7...v0.25.8) (2026-09-19)
 
 
