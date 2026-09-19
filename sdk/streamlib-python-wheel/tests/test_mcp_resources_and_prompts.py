@@ -42,6 +42,10 @@ JSON_RPC_TIMEOUT_SECONDS = 30.0
 # helper answers between callbacks, so this is bounded by one frame of the
 # processor's own work, not by the wire.
 LINK_ANSWER_TIMEOUT_SECONDS = 15.0
+# How long a processor added to a running graph has to reach `Running`. Its
+# helper is spawned, imports the class and starts it, so this is bounded by an
+# interpreter launch rather than by the wire.
+ADDED_PROCESSOR_RUNNING_TIMEOUT_SECONDS = 15.0
 
 APP_WITH_A_SOURCE_LINKED_TO_A_SINK = '''\
 from streamlib import Runtime, TestPatternSource
@@ -126,6 +130,30 @@ def await_link_state(client: "ScriptedMcpClient", link_id: str, wanted: str) -> 
     return f"still {link['state'] if link else 'absent'} after {LINK_ANSWER_TIMEOUT_SECONDS}s"
 
 
+def await_added_processor_state(
+    client: "ScriptedMcpClient", processor_id: str, wanted: str
+) -> str:
+    """Poll `graph` until one processor reaches `wanted`, and report what it reached.
+
+    A processor added to a running graph is placed in a helper process that has
+    to be spawned before it can run, so `graph` reports it `Idle` for as long as
+    that takes — the same shape as the link that reads `pending` until its
+    helper opens its port.
+    """
+    deadline = time.monotonic() + ADDED_PROCESSOR_RUNNING_TIMEOUT_SECONDS
+    state = None
+    while time.monotonic() < deadline:
+        node = next(
+            (each for each in client.call_tool("graph", {})["nodes"] if each["id"] == processor_id),
+            None,
+        )
+        state = node["components"]["state"] if node is not None else None
+        if state == wanted:
+            return wanted
+        time.sleep(0.05)
+    return f"still {state or 'absent'} after {ADDED_PROCESSOR_RUNNING_TIMEOUT_SECONDS}s"
+
+
 class ScriptedMcpClient:
     """Plain JSON-RPC over `POST /mcp`, and nothing streamlib-specific."""
 
@@ -137,11 +165,6 @@ class ScriptedMcpClient:
         envelope = self.envelope(method, params)
         assert "error" not in envelope, f"{method} was refused: {envelope['error']}"
         return envelope["result"]
-
-    def refusal(self, method: str, params: "dict[str, Any]") -> "dict[str, Any]":
-        envelope = self.envelope(method, params)
-        assert "error" in envelope, f"{method} was expected to be refused: {envelope}"
-        return envelope["error"]
 
     def envelope(self, method: str, params: "dict[str, Any]") -> "dict[str, Any]":
         self.next_request_id += 1
@@ -172,14 +195,16 @@ def numbered_steps(prompt_text: str) -> "list[tuple[str, str]]":
     ]
 
 
+# The pairs earn their keep below the recipe, which reads the same for all
+# three: the sink is only the first consumer to open the source's channel —
+# which is created deep enough for a consumer of any profile — and the effect's
+# input then joins it live, in the last pair reading deeper than the opener.
 @pytest.mark.parametrize(
-    ("sink_input_delivery_profile", "inserted_input_delivery_profile", "expected_wiring_order"),
+    ("sink_input_delivery_profile", "inserted_input_delivery_profile"),
     [
-        ("newest", "newest", ["connect", "connect", "disconnect"]),
-        ("ordered", "newest", ["disconnect", "connect", "connect"]),
-        # A live channel keeps the buffer depth it was opened with, so the
-        # recipe refuses rather than hand the agent a `connect` that fails.
-        ("newest", "ordered", None),
+        ("newest", "newest"),
+        ("ordered", "newest"),
+        ("newest", "ordered"),
     ],
 )
 def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_link(
@@ -188,7 +213,6 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
     launch_node,
     sink_input_delivery_profile: str,
     inserted_input_delivery_profile: str,
-    expected_wiring_order: "list[str] | None",
 ):
     app_directory = tmp_path / "app"
     (app_directory / "processors").mkdir(parents=True)
@@ -241,26 +265,18 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
         "name": insert_prompt["name"],
         "arguments": {link_argument: replaced_link["id"], type_argument: inserted_type},
     }
-    if expected_wiring_order is None:
-        refusal = client.refusal("prompts/get", insert_request)
-        assert all(
-            profile in refusal["message"]
-            for profile in (sink_input_delivery_profile, inserted_input_delivery_profile)
-        ), refusal
-        assert [link["id"] for link in client.call_tool("graph", {})["links"]] == [
-            replaced_link["id"]
-        ], "a refused recipe must leave the running graph as it was"
-        node.interrupt()
-        assert node.await_exit(CLEAN_EXIT_TIMEOUT_SECONDS) == 0, node.recent_output()
-        return
     recipe = client.request("prompts/get", insert_request)
     recipe_text = recipe["messages"][0]["content"]["text"]
     steps = numbered_steps(recipe_text)
     assert steps, f"the recipe lists no steps:\n{recipe_text}"
     assert {tool_name for tool_name, _ in steps} <= served_tool_names, recipe_text
+    # The new links go up before the replaced one comes down, so nothing the
+    # sink was being fed stops. Only a target port that takes a single inbound
+    # link buys the disconnect-first order, and this sink declares no window
+    # contract under either profile.
     assert [
         tool_name for tool_name, _ in steps if tool_name in ("connect", "disconnect")
-    ] == expected_wiring_order, recipe_text
+    ] == ["connect", "connect", "disconnect"], recipe_text
 
     # Dispatch each step as written. An argument the text spells in backticks
     # is passed verbatim; the rest are what an earlier step answered.
@@ -315,8 +331,10 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
     assert upstream_link["target"]["processor_id"] == added_processor_id
     assert downstream_link["source"]["processor_id"] == added_processor_id
     assert downstream_link["target"] == replaced_link["target"]
-    added_node = next(n for n in graph_after["nodes"] if n["id"] == added_processor_id)
-    assert added_node["components"]["state"] == "Running"
+    assert await_added_processor_state(client, added_processor_id, "Running") == "Running", (
+        "the splice is only carrying bags once the inserted processor runs; a "
+        "processor stuck Idle is a helper that never started it"
+    )
 
     # The sink announces from its own helper only once a bag carrying the
     # inserted effect's mark reaches it: frames really pass through the splice.
