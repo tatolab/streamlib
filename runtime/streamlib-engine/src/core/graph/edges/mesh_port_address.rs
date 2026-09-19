@@ -192,8 +192,6 @@ mod tests {
         assert_eq!(back, addressed);
     }
 
-    use super::*;
-
     fn an_address() -> MeshPortAddress {
         MeshPortAddress::new("bench-cam-a1b2", "CameraSource", "video").expect("a legal address")
     }

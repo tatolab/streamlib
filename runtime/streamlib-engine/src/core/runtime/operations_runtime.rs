@@ -344,7 +344,7 @@ fn resolve_a_source_addressing_this_runtimes_own_port(
         {
             return Ok(OutputLinkPortRef::new(
                 named.id.clone(),
-                address.port_name().clone(),
+                address.port_name(),
             ));
         }
         let mut display_names: Vec<String> = graph

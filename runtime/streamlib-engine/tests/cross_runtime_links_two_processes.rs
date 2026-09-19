@@ -797,7 +797,7 @@ fn one_egress_serves_every_reader_and_outlives_all_but_the_last() {
     });
     source.wait_until_it_is_up();
 
-    let mut a_reader_of_the_port = |runtime_name: String, domain: &tempfile::TempDir| {
+    let a_reader_of_the_port = |runtime_name: String, domain: &tempfile::TempDir| {
         let reader = CrossRuntimeLinkPeerProcess::launch(HowToLaunchAPeer {
             reader: true,
             runtime_name,
