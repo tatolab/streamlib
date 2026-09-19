@@ -1919,6 +1919,7 @@ mod tests {
         println!("All dropped successfully");
     }
 
+    #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
         ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
@@ -2511,6 +2512,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
         ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"

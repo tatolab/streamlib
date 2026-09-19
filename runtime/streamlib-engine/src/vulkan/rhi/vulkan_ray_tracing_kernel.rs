@@ -2183,6 +2183,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     /// Build a 1-triangle BLAS, single-instance TLAS, and run trace-rays
     /// against a 64×64 storage image. Reads the result back and checks
     /// that the centre pixel is hit (barycentric color, mostly red) and

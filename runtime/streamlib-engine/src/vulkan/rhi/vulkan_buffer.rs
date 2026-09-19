@@ -1396,6 +1396,7 @@ mod tests {
         println!("Write/readback verified for {} bytes", size);
     }
 
+    #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
         ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
@@ -1842,6 +1843,7 @@ mod tests {
         println!("Buffer drop completed without panic");
     }
 
+    #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
         ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
@@ -1901,6 +1903,7 @@ mod tests {
         println!("DMA-BUF round-trip verified: {} bytes, fd={fd}", size);
     }
 
+    #[cfg(target_os = "linux")]
     /// Multi-plane `from_dma_buf_fds` round-trip: import two independently
     /// allocated + pattern-written DMA-BUFs as the two planes of a single
     /// `HostVulkanBuffer`, confirm `plane_count()` reports 2, and each
@@ -1989,6 +1992,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     /// Oversize vec rejection: we refuse to import a pixel buffer with
     /// more planes than the surface-share `MAX_DMA_BUF_PLANES` cap (4 today).
     /// Covers the Rust half of the consistency the wire helpers already

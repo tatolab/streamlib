@@ -76,9 +76,17 @@ fn the_one_spelling_of(chosen: PathBuf, working_directory: Option<&Path>) -> Pat
         return canonical;
     }
     // A directory that is not there to canonicalize is absolutized anyway, so a
-    // relative spelling never stands in for two different places.
+    // relative spelling never stands in for two different places. The join is
+    // canonicalized in turn: `chosen.canonicalize()` above resolves a relative
+    // path against the *process* working directory rather than the stated one,
+    // so it fails here and leaves the symlinks in the stated directory
+    // unresolved — which on macOS, where `/tmp` and `/var` are symlinks, is the
+    // difference between one spelling and two.
     match working_directory {
-        Some(working_directory) if chosen.is_relative() => working_directory.join(chosen),
+        Some(working_directory) if chosen.is_relative() => {
+            let absolutized = working_directory.join(chosen);
+            absolutized.canonicalize().unwrap_or(absolutized)
+        }
         _ => chosen,
     }
 }

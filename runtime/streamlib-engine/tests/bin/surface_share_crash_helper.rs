@@ -8,14 +8,22 @@
 //! Communicates with the parent via stdout because tracing would route through
 //! the host's logging pathway, which the test doesn't want to interleave.
 
-#![cfg(target_os = "linux")]
 #![allow(clippy::disallowed_macros)]
 
+#[cfg(target_os = "linux")]
 use std::io::Write;
+#[cfg(target_os = "linux")]
 use std::os::unix::io::RawFd;
 
+#[cfg(target_os = "linux")]
 use streamlib_surface_client::{connect_to_surface_share_socket, send_request_with_fds};
 
+/// The socket this fixture is killed on is Linux-only, so off Linux the
+/// binary exists to keep the target compiling and nothing drives it.
+#[cfg(not(target_os = "linux"))]
+fn main() {}
+
+#[cfg(target_os = "linux")]
 fn make_memfd_with(contents: &[u8]) -> RawFd {
     use std::io::{Seek, SeekFrom};
     use std::os::unix::io::{FromRawFd, IntoRawFd};
@@ -33,6 +41,7 @@ fn make_memfd_with(contents: &[u8]) -> RawFd {
     file.into_raw_fd()
 }
 
+#[cfg(target_os = "linux")]
 fn main() {
     let socket_path = std::env::var_os("STREAMLIB_SURFACE_SOCKET")
         .map(std::path::PathBuf::from)

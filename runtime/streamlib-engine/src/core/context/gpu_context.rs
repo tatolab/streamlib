@@ -5327,6 +5327,7 @@ mod tests {
         println!("escalate releases gate on panic via RAII Drop: OK");
     }
 
+    #[cfg(target_os = "linux")]
     /// Two processors driving one format pair from their own threads must
     /// not share a kernel's staged bindings: the cached handle is one
     /// object, an owned converter is the caller's alone.
@@ -5458,6 +5459,7 @@ mod tests {
         println!("Limited + Full interleave without deadlock: OK");
     }
 
+    #[cfg(target_os = "linux")]
     /// Kernel drop past `escalate_end` (#1006 scenario 6).
     ///
     /// A kernel constructed inside `escalate(|full| ...)` and returned

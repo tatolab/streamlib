@@ -89,6 +89,7 @@ mod vulkan_command_recorder;
 pub use vulkan_command_recorder::{ImageCopyRegion, RhiCommandRecorder};
 // `RhiCommandRecorderInner` is needed by `core::plugin::host_services`
 // for `Box::from_raw` in `drop_command_recorder`. Crate-scope export.
+#[cfg(target_os = "linux")]
 pub(crate) use vulkan_command_recorder::RhiCommandRecorderInner;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -109,9 +110,6 @@ pub use vulkan_present_compositor::{PresentScalingMode, VulkanPresentCompositor}
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod vulkan_swapchain_colorspace;
 
-mod vulkan_texture_cache;
-pub use vulkan_texture_cache::VulkanTextureCache;
-
 mod vulkan_pixel_buffer_pool;
 pub use vulkan_pixel_buffer_pool::VulkanPixelBufferPool;
 
@@ -123,10 +121,11 @@ pub use vulkan_graphics_kernel::{OffscreenColorTarget, OffscreenDraw, VulkanGrap
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod vulkan_acceleration_structure;
+#[cfg(target_os = "linux")]
+pub use vulkan_acceleration_structure::geometry_instance_flags_from_raw_bitmask;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use vulkan_acceleration_structure::{
     AccelerationStructureKind, IDENTITY_TRANSFORM, TlasInstanceDesc, VulkanAccelerationStructure,
-    geometry_instance_flags_from_raw_bitmask,
 };
 // `VulkanAccelerationStructureInner` is `pub(crate)`-shaped — only
 // the host's clone/drop callbacks in `core::plugin::host_services`

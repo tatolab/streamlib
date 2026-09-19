@@ -36,7 +36,7 @@ pub use color_converter::{
 };
 pub use command_buffer::CommandBuffer;
 pub use command_queue::RhiCommandQueue;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 pub(crate) use compute_kernel::reconcile_compute_binding_declarations;
 pub use compute_kernel::{
     ComputeBindingDeclaration, ComputeBindingKind, ComputeBindingSpec, ComputeKernelDescriptor,
@@ -48,7 +48,7 @@ pub use external_handle::{RhiExternalHandle, RhiPixelBufferExport, RhiPixelBuffe
 pub use glsl_shader_source_compiler::{
     DEFAULT_SHADER_ENTRY_POINT, GlslCompilationTargetStage, GlslShaderSourceToSpirvCompiler,
 };
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 pub(crate) use graphics_kernel::reconcile_graphics_binding_declarations;
 pub use graphics_kernel::{
     AttachmentFormats, BlendFactor, BlendOp, ColorBlendAttachment, ColorBlendState, ColorWriteMask,
@@ -64,9 +64,12 @@ pub use graphics_kernel::{
 pub use host_timeline_semaphore::HostTimelineSemaphore;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use index_buffer::IndexBuffer;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 pub(crate) use kernel_binding_names::{
     KernelShaderStageMask, quote_declared_shader_binding_names, quote_shader_stage_names,
+};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) use kernel_binding_names::{
     refuse_a_binding_the_shader_left_unnamed, refuse_a_descriptor_set_other_than_set_0,
     refuse_one_binding_name_that_identifies_two_slots,
     refuse_one_binding_slot_two_stages_spell_differently,
@@ -76,16 +79,16 @@ pub use pixel_buffer_pool::{
     PixelBufferDescriptor, PixelBufferPoolSlotId, PublishedPixelBufferFrameId,
     pool_slot_key_of_surface_id, split_pool_slot_and_frame_generation,
 };
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) use ray_tracing_kernel::ray_tracing_spirv_type_to_kind;
+#[cfg(target_os = "linux")]
+pub(crate) use ray_tracing_kernel::reconcile_ray_tracing_binding_declarations;
 pub use ray_tracing_kernel::{
     RayTracingBindingDeclaration, RayTracingBindingKind, RayTracingBindingSpec,
     RayTracingKernelDescriptor, RayTracingPushConstants, RayTracingShaderGroup,
     RayTracingShaderStage, RayTracingShaderStageFlags, RayTracingStage,
     derive_ray_tracing_bindings_from_spirv_multistage, ray_tracing_stages_covered_by,
     validate_shader_groups,
-};
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub(crate) use ray_tracing_kernel::{
-    ray_tracing_spirv_type_to_kind, reconcile_ray_tracing_binding_declarations,
 };
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use storage_buffer::StorageBuffer;

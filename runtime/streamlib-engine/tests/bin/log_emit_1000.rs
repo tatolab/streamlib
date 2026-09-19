@@ -31,7 +31,12 @@ fn raw_write_stdout(bytes: &[u8]) {
 }
 
 fn main() {
+    // `gettid` is the Linux thread id the parent's per-thread strace file is
+    // named after; the test that reads it runs nowhere else.
+    #[cfg(target_os = "linux")]
     let tid = unsafe { libc::syscall(libc::SYS_gettid) } as i64;
+    #[cfg(not(target_os = "linux"))]
+    let tid: i64 = -1;
     // Plain println! is fine here — this prefix is consumed by the
     // parent test reading the child's stdout, and the `write(1, ...)`
     // syscall it produces happens BEFORE the BURST_BEGIN sentinel so

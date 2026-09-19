@@ -183,6 +183,11 @@ pub(crate) mod tests {
         assert_eq!(domain.prefix(), format!("sl{uid}t{}_", std::process::id()));
     }
 
+    /// `/run/user/<uid>/streamlib` is the Linux arm of the runtime directory,
+    /// and 4 194 304 is the largest pid `pid_max` allows there. macOS resolves
+    /// the directory elsewhere and caps pids far lower, so it gets its own
+    /// bound below rather than a shared one that would hold on neither.
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_test_domain_at_the_longest_pid_fits_the_socket_path_budget_under_a_typical_xdg_runtime_dir()
      {
@@ -191,6 +196,29 @@ pub(crate) mod tests {
             Path::new("/run/user/100000/streamlib"),
             100_000,
             longest_linux_pid,
+        );
+
+        assert!(
+            domain.root().as_os_str().len() + domain.prefix().len()
+                <= ICEORYX2_DOMAIN_ROOT_AND_PREFIX_BUDGET_BYTES,
+            "{} + {}",
+            domain.root().display(),
+            domain.prefix()
+        );
+    }
+
+    /// The Apple bound, against the tighter `sun_path` macOS leaves and the
+    /// `/tmp/streamlib-<uid>/` the runtime directory always resolves to there.
+    /// `PID_MAX` is 99 999 on Darwin.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_test_domain_at_the_longest_pid_fits_the_socket_path_budget_under_the_apple_runtime_directory()
+     {
+        let longest_darwin_pid = 99_999;
+        let domain = test_domain_for_process(
+            Path::new("/tmp/streamlib-100000"),
+            100_000,
+            longest_darwin_pid,
         );
 
         assert!(

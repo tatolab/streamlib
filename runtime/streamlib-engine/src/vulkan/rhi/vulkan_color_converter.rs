@@ -830,6 +830,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     /// BT.709 limited-range NV12 with mismatched dest transfer
     /// (`Bt709` source → `Srgb` dest) → Rgba8Unorm must match the CPU
     /// reference within ±1 per channel.
@@ -872,7 +873,8 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+// The whole module drives the host-mapping import, which is Linux-bound.
+#[cfg(all(test, target_os = "linux"))]
 mod image_to_yuyv_buffer_tests {
     use super::*;
     use crate::core::color::{MatrixId, PrimariesId, RangeId, rgb_to_yuv_matrix};
@@ -918,6 +920,7 @@ mod image_to_yuyv_buffer_tests {
         out
     }
 
+    #[cfg(target_os = "linux")]
     /// Synthetic RGBA against the CPU conversion: every macropixel of the
     /// target range is written, to within one step of rounding, on
     /// whichever tier the driver takes — and the tier is reported.
