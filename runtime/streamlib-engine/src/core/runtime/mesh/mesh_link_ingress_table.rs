@@ -500,7 +500,7 @@ fn what_the_offered_ports_say(
     // source's own port sendable, so waiting would be waiting on a condition
     // that cannot change.
     if let Some(why_it_cannot_be_sent) =
-        offered.why_it_cannot_send(&address.processor_display_name(), &address.port_name())
+        offered.why_it_cannot_send(address.processor_display_name(), address.port_name())
     {
         return Err(RemoteLinkResolution::Refused {
             reason: format!(
