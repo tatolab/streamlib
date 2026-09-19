@@ -11,6 +11,10 @@
 # helper-placed Python processor, so the link's name has to survive the
 # parent's wiring envelope into a child interpreter to be read at all.
 #
+# Both ends run in helpers, and the source's port has no consumer on its own
+# runtime — the mesh is the only thing reading it, which is what a helper's
+# publisher used to need a local link for (#2344).
+#
 # What it reads:
 #   1. The reader's `graph` carries a link whose `source` is the three-part
 #      mesh address and whose `state` is `wired`.
