@@ -460,7 +460,9 @@ impl PythonRuntimeHandle {
                     .detach(|| engine.request_link_on_remote_input_runtime(from, address))
                     .map(|_link_request_id| ())
             }
-            _ => python.detach(|| engine.connect(from, to)).map(|_link_id| ()),
+            _ => python
+                .detach(|| engine.connect(from, to))
+                .map(|_link_id| ()),
         }
         .map_err(|connect_failure| PyRuntimeError::new_err(connect_failure.to_string()))
     }

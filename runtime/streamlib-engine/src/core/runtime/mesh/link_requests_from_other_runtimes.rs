@@ -177,13 +177,13 @@ impl Drop for LinkRequestsFromOtherRuntimesQueryable {
         // The queryable first: dropping it drops the callback that holds the
         // answering thread's sender, which is what ends that thread.
         drop(self.queryable.take());
-        if let Some(answering_thread) = self.answering_thread.take() {
-            if answering_thread.join().is_err() {
-                tracing::warn!(
-                    "the thread answering this runtime's link requests panicked; no other runtime \
-                     can wire a link into this one until it restarts"
-                );
-            }
+        if let Some(answering_thread) = self.answering_thread.take()
+            && answering_thread.join().is_err()
+        {
+            tracing::warn!(
+                "the thread answering this runtime's link requests panicked; no other runtime \
+                 can wire a link into this one until it restarts"
+            );
         }
     }
 }
@@ -303,7 +303,9 @@ pub(super) fn ask_a_runtime_to_apply_a_link_request(
         Ok(wire_bytes) => wire_bytes,
         Err(encode_failure) => {
             return HowARuntimeAnsweredALinkRequest::ItSaidNothing {
-                reason: format!("this runtime could not encode its own link request: {encode_failure}"),
+                reason: format!(
+                    "this runtime could not encode its own link request: {encode_failure}"
+                ),
             };
         }
     };

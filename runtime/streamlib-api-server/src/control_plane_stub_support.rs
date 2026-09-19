@@ -255,9 +255,9 @@ macro_rules! graph_mutation_ops_record_the_call {
             to: ::streamlib::sdk::graph::MeshPortAddress,
         ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::graph::LinkRequestUniqueId> {
             self.recorded_graph_mutations.lock().push(
-                $crate::control_plane_stub_support::RecordedGraphMutation::
-                    RequestLinkOnRemoteInputRuntime(from, to),
-            );
+                        $crate::control_plane_stub_support::RecordedGraphMutation::
+                            RequestLinkOnRemoteInputRuntime(from, to),
+                    );
             Ok(::streamlib::sdk::graph::LinkRequestUniqueId::from(
                 $crate::control_plane_stub_support::STUB_MADE_LINK_REQUEST_ID,
             ))
@@ -268,9 +268,9 @@ macro_rules! graph_mutation_ops_record_the_call {
             link_id: ::streamlib::sdk::graph::LinkUniqueId,
         ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::graph::LinkRequestUniqueId> {
             self.recorded_graph_mutations.lock().push(
-                $crate::control_plane_stub_support::RecordedGraphMutation::
-                    RequestDisconnectOnRemoteInputRuntime(input_runtime_name, link_id),
-            );
+                        $crate::control_plane_stub_support::RecordedGraphMutation::
+                            RequestDisconnectOnRemoteInputRuntime(input_runtime_name, link_id),
+                    );
             Ok(::streamlib::sdk::graph::LinkRequestUniqueId::from(
                 $crate::control_plane_stub_support::STUB_MADE_LINK_REQUEST_ID,
             ))

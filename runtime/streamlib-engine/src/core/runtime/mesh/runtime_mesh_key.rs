@@ -573,12 +573,20 @@ mod tests {
             key_space.link_requests_key_of("studio-display-9f3c"),
             "streamlib/lab/@runtime/studio-display-9f3c/@link-requests"
         );
-        keyexpr::new(key_space.link_requests_key_of("studio-display-9f3c").as_str())
-            .expect("the link-requests key is a key expression");
+        keyexpr::new(
+            key_space
+                .link_requests_key_of("studio-display-9f3c")
+                .as_str(),
+        )
+        .expect("the link-requests key is a key expression");
 
-        let ours = keyexpr::new(key_space.link_requests_key_of("studio-display-9f3c").as_str())
-            .expect("a key expression")
-            .to_owned();
+        let ours = keyexpr::new(
+            key_space
+                .link_requests_key_of("studio-display-9f3c")
+                .as_str(),
+        )
+        .expect("a key expression")
+        .to_owned();
         let anothers = key_space.link_requests_key_of("bench-cam-a1b2");
         assert!(
             !ours.includes(keyexpr::new(anothers.as_str()).expect("a key expression")),

@@ -153,14 +153,10 @@ fn how_this_runtime_reads_one_link(
     runtime
         .compiler
         .scope(|graph, _tx| {
-            graph
-                .traversal()
-                .e(link_id)
-                .first()
-                .map(|link| {
-                    LinkOutput::of_a_link_on_the_runtime_named(link, runtime.runtime_name.as_str())
-                        .state
-                })
+            graph.traversal().e(link_id).first().map(|link| {
+                LinkOutput::of_a_link_on_the_runtime_named(link, runtime.runtime_name.as_str())
+                    .state
+            })
         })
         .unwrap_or(crate::core::json_schema::LinkStateOutput::Disconnected)
 }
@@ -173,7 +169,7 @@ mod tests {
     };
     use crate::core::graph::{LinkRequestUniqueId, MeshPortAddress};
     use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
-    use crate::core::runtime::{RuntimeMeshConfiguration, RuntimeOperations};
+    use crate::core::runtime::RuntimeMeshConfiguration;
     use serial_test::serial;
 
     const THE_TEST_TYPE: &str = "link_requests_applied_tests:ADestination";
@@ -211,7 +207,9 @@ mod tests {
         .expect("a runtime is constructed");
         let mut spec = ProcessorSpec::new(import_path, serde_json::Value::Null);
         spec.display_name = Some(THE_DESTINATIONS_DISPLAY_NAME.to_string());
-        runtime.add_processor(spec).expect("the destination is added");
+        runtime
+            .add_processor(spec)
+            .expect("the destination is added");
         runtime
     }
 

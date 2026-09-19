@@ -1030,7 +1030,6 @@ mod connect_wires_without_inspecting_a_port_tests {
     use parking_lot::Mutex;
 
     use super::{RuntimeMeshMembership, connect_impl, disconnect_impl, remove_processor_impl};
-    use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent};
     use crate::core::compiler::{Compiler, PendingOperation};
     use crate::core::descriptors::ProcessorClassImportPath;
     use crate::core::descriptors::{PortDescriptor, ProcessorClassShortName, ProcessorDescriptor};
@@ -1039,6 +1038,7 @@ mod connect_wires_without_inspecting_a_port_tests {
         OutputLinkPortRef, PendingDeletionComponent, ProcessorUniqueId,
     };
     use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
+    use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent};
     use crate::core::test_support::CapturedTracingWarnings;
     use crate::core::{Error, Result};
 

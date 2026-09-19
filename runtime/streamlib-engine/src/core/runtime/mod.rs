@@ -6,12 +6,12 @@ mod end_the_process_at_once;
 mod engine_teardown_watchdog;
 mod graph_change_listener;
 mod helper_process_group_registry;
+mod link_requests_applied_into_this_runtimes_graph;
 mod local_processor_type_registration;
 pub mod mesh;
 pub(crate) mod mesh_address_chunk;
 mod operations;
 mod operations_runtime;
-mod link_requests_applied_into_this_runtimes_graph;
 mod output_ports_in_this_runtimes_graph;
 pub(crate) use operations_runtime::mark_this_thread_as_a_processor_execution_thread;
 #[allow(clippy::module_inception)]
@@ -40,13 +40,13 @@ pub(crate) use helper_process_group_registry::kill_every_registered_helper_proce
 pub use helper_process_group_registry::{
     deregister_a_helper_process_group, register_a_helper_process_group,
 };
+pub(crate) use link_requests_applied_into_this_runtimes_graph::LinkRequestsAppliedIntoThisRuntimesGraph;
 pub use mesh::{
     RuntimeMeshMembership, RuntimeMeshObservation, RuntimeMeshObservationRequest,
     observe_a_runtime_mesh,
 };
 pub use mesh_address_chunk::what_one_mesh_address_chunk_may_be;
 pub use operations::{BoxFuture, RuntimeOperations};
-pub(crate) use link_requests_applied_into_this_runtimes_graph::LinkRequestsAppliedIntoThisRuntimesGraph;
 pub(crate) use output_ports_in_this_runtimes_graph::OutputPortsInThisRuntimesGraph;
 pub use runtime::Runner;
 pub use runtime_mesh_configuration::RuntimeMeshConfiguration;

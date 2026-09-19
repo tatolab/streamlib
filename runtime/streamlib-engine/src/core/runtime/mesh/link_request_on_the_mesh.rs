@@ -134,9 +134,10 @@ impl ALinkRequestOnTheMesh {
         }
         match self.operation {
             WhichOperationALinkRequestNames::Connect => {
-                let (Some(source_address), Some(destination_address)) =
-                    (self.source_address.clone(), self.destination_address.clone())
-                else {
+                let (Some(source_address), Some(destination_address)) = (
+                    self.source_address.clone(),
+                    self.destination_address.clone(),
+                ) else {
                     return Err(format!(
                         "the link request {} asks for a link and names {}, where a link needs \
                          both a `source_address` and a `destination_address`",

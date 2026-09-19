@@ -805,7 +805,13 @@ mod link_rendering_tests {
             OutputLinkPortRef::new("Psrc", "out1"),
             InputLinkPortRef::new("Pdst", "in1"),
         );
-        let rendered = |link: &Link| serde_json::to_value(LinkOutput::of_a_link_on_the_runtime_named(link, A_RENDERING_RUNTIME)).unwrap();
+        let rendered = |link: &Link| {
+            serde_json::to_value(LinkOutput::of_a_link_on_the_runtime_named(
+                link,
+                A_RENDERING_RUNTIME,
+            ))
+            .unwrap()
+        };
         assert_eq!(rendered(&link)["state"], "pending");
 
         link.insert(LinkStateComponent(LinkState::Wired));
@@ -832,7 +838,13 @@ mod link_rendering_tests {
         link.insert_component_without_rendering_it(OutOfProcessLinkWireRepliesComponent(vec![
             std::sync::Arc::clone(&helpers_answer),
         ]));
-        let rendered = |link: &Link| serde_json::to_value(LinkOutput::of_a_link_on_the_runtime_named(link, A_RENDERING_RUNTIME)).unwrap();
+        let rendered = |link: &Link| {
+            serde_json::to_value(LinkOutput::of_a_link_on_the_runtime_named(
+                link,
+                A_RENDERING_RUNTIME,
+            ))
+            .unwrap()
+        };
 
         assert_eq!(rendered(&link)["state"], "pending");
         assert_eq!(rendered(&link)["components"]["state"], "Pending");
@@ -863,7 +875,11 @@ mod link_rendering_tests {
             helpers_answer,
         ]));
 
-        let rendered = serde_json::to_value(LinkOutput::of_a_link_on_the_runtime_named(&link, A_RENDERING_RUNTIME)).unwrap();
+        let rendered = serde_json::to_value(LinkOutput::of_a_link_on_the_runtime_named(
+            &link,
+            A_RENDERING_RUNTIME,
+        ))
+        .unwrap();
         assert_eq!(rendered["state"], "error");
         assert_eq!(rendered["components"]["state"], "Error");
         assert_eq!(
@@ -881,7 +897,11 @@ mod link_rendering_tests {
             InputLinkPortRef::new("Pdst", "in1"),
         );
         link.insert(LinkStateComponent(LinkState::Wired));
-        let rendered = serde_json::to_value(LinkOutput::of_a_link_on_the_runtime_named(&link, A_RENDERING_RUNTIME)).unwrap();
+        let rendered = serde_json::to_value(LinkOutput::of_a_link_on_the_runtime_named(
+            &link,
+            A_RENDERING_RUNTIME,
+        ))
+        .unwrap();
         assert!(
             rendered.get("error_reason").is_none(),
             "an ordinary link's shape is unchanged by this key: {rendered}"

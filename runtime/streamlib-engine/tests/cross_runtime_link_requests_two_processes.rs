@@ -203,7 +203,11 @@ impl LinkRequestPeerProcess {
 
     /// Send one command down the peer's stdin.
     fn ask_it_to(&mut self, command: serde_json::Value) {
-        let stdin = self.child.stdin.as_mut().expect("the peer's stdin is piped");
+        let stdin = self
+            .child
+            .stdin
+            .as_mut()
+            .expect("the peer's stdin is piped");
         writeln!(stdin, "{command}").expect("the command reaches the peer");
         stdin.flush().expect("the command is flushed");
     }
@@ -215,9 +219,9 @@ impl LinkRequestPeerProcess {
             "display_name": display_name,
         }));
         self.wait_until(&format!("the peer to add {display_name}"), || {
-            self.everything_it_has_reported()
-                .iter()
-                .any(|reported| reported.get("added").and_then(|it| it.as_str()) == Some(display_name))
+            self.everything_it_has_reported().iter().any(|reported| {
+                reported.get("added").and_then(|it| it.as_str()) == Some(display_name)
+            })
         });
     }
 
@@ -262,9 +266,10 @@ impl LinkRequestPeerProcess {
 
     /// The id of the one link this peer's graph holds.
     fn the_one_link_it_holds(&self) -> String {
-        let [link] = self.the_links_it_last_reported().try_into().unwrap_or_else(|links| {
-            panic!("expected exactly one link, got {links:?}")
-        });
+        let [link] = self
+            .the_links_it_last_reported()
+            .try_into()
+            .unwrap_or_else(|links| panic!("expected exactly one link, got {links:?}"));
         link["id"].as_str().expect("a link has an id").to_string()
     }
 
@@ -587,9 +592,10 @@ fn a_request_to_a_runtime_that_is_not_on_the_mesh_waits_and_lands_when_it_appear
     receiving.wait_until_it_is_up();
     receiving.add_a_processor_displayed_as(THE_DESTINATIONS_DISPLAY_NAME);
 
-    receiving.wait_until("the waiting request to land once its runtime appears", || {
-        !receiving.the_links_it_last_reported().is_empty()
-    });
+    receiving.wait_until(
+        "the waiting request to land once its runtime appears",
+        || !receiving.the_links_it_last_reported().is_empty(),
+    );
     assert_eq!(
         receiving.the_links_it_last_reported()[0]["created_by_runtime_name"],
         "xr-awaiting-sender"

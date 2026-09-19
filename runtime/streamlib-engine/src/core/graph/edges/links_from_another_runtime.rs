@@ -51,8 +51,9 @@ impl LinksFromAnotherRuntime {
         &mut self,
         destination_processor_id: &ProcessorUniqueId,
     ) {
-        self.0
-            .retain(|link| link.to_port().processor_id_on_this_runtime() != Some(destination_processor_id));
+        self.0.retain(|link| {
+            link.to_port().processor_id_on_this_runtime() != Some(destination_processor_id)
+        });
     }
 
     /// Every one of these links, in connect order.
@@ -65,10 +66,8 @@ impl LinksFromAnotherRuntime {
         &self,
         destination_processor_id: &ProcessorUniqueId,
     ) -> impl Iterator<Item = &Link> {
-        self.0
-            .iter()
-            .filter(move |link| {
-                link.to_port().processor_id_on_this_runtime() == Some(destination_processor_id)
-            })
+        self.0.iter().filter(move |link| {
+            link.to_port().processor_id_on_this_runtime() == Some(destination_processor_id)
+        })
     }
 }

@@ -715,7 +715,8 @@ async fn call_connect(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) ->
             processor_id,
             port_name,
         } => {
-            let to = InputLinkPortRef::new(ProcessorUniqueId::from(processor_id.as_str()), port_name);
+            let to =
+                InputLinkPortRef::new(ProcessorUniqueId::from(processor_id.as_str()), port_name);
             match runtime.connect_async(from_as_an_output, to).await {
                 Ok(link_id) => {
                     let how_the_graph_reads_it =
@@ -1804,9 +1805,9 @@ mod tests {
             call_the_disconnect_tool(runtime, json!({ "link_request_id": "LRabc123" })).await;
 
         let recorded = recorded_calls.lock();
-        let [crate::control_plane_stub_support::RecordedGraphMutation::CancelLinkRequest(
-            cancelled,
-        )] = recorded.as_slice()
+        let [
+            crate::control_plane_stub_support::RecordedGraphMutation::CancelLinkRequest(cancelled),
+        ] = recorded.as_slice()
         else {
             panic!("expected one cancel, recorded {recorded:?}");
         };

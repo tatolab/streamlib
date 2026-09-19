@@ -24,18 +24,18 @@ use zenoh::Wait;
 use zenoh::sample::SampleKind;
 
 use crate::core::error::{Error, Result};
+use crate::core::graph::LinkRequestUniqueId;
+use crate::core::json_schema::LinkRequestAwaitingARuntimeOutput;
 use crate::core::json_schema::{RuntimeMeshOutput, RuntimeMeshSessionOutput};
 use crate::core::runtime::RuntimeName;
 use crate::core::runtime::mesh::duplicate_runtime_name_on_the_mesh::refuse_this_runtime_if_its_name_is_already_live;
 use crate::core::runtime::mesh::hosted_control_plane_endpoint::HostedControlPlaneEndpointRegistry;
-use crate::core::graph::LinkRequestUniqueId;
-use crate::core::json_schema::LinkRequestAwaitingARuntimeOutput;
 use crate::core::runtime::mesh::link_request_on_the_mesh::ALinkRequestOnTheMesh;
-use crate::core::runtime::mesh::link_requests_this_runtime_has_sent::LinkRequestsThisRuntimeHasSent;
 use crate::core::runtime::mesh::link_requests_from_other_runtimes::{
     LinkRequestsFromOtherRuntimesQueryable, WhatThisRuntimeDoesWithALinkRequest,
     WhatThisRuntimeDoesWithALinkRequestRegistry,
 };
+use crate::core::runtime::mesh::link_requests_this_runtime_has_sent::LinkRequestsThisRuntimeHasSent;
 use crate::core::runtime::mesh::mesh_link_ingress_table::MeshLinkIngressTable;
 use crate::core::runtime::mesh::mesh_port_egress_table::MeshPortEgressTable;
 use crate::core::runtime::mesh::output_ports_offered_on_the_mesh::{
@@ -199,27 +199,26 @@ impl RuntimeMeshMembership {
         input_runtime_name: &str,
     ) {
         let link_request_id = request.link_request_id.clone();
-        self.link_requests_it_has_sent.note_a_request_waiting_to_be_sent(
-            request,
-            input_runtime_name,
-            &self.mesh_name,
-        );
+        self.link_requests_it_has_sent
+            .note_a_request_waiting_to_be_sent(request, input_runtime_name, &self.mesh_name);
         if let Some(why_not) = self.why_it_is_not_on_its_mesh() {
-            self.link_requests_it_has_sent.note_that_this_runtime_reaches_nobody(
-                &link_request_id,
-                format!(
-                    "this runtime is not on the {} mesh, so it asks nobody for anything: \
+            self.link_requests_it_has_sent
+                .note_that_this_runtime_reaches_nobody(
+                    &link_request_id,
+                    format!(
+                        "this runtime is not on the {} mesh, so it asks nobody for anything: \
                      {why_not}",
-                    self.mesh_name
-                ),
-            );
+                        self.mesh_name
+                    ),
+                );
         }
     }
 
     /// Cancel a request this runtime has not had applied, so it is never sent.
     /// Answers whether there was one.
     pub fn cancel_a_link_request(&self, link_request_id: &LinkRequestUniqueId) -> bool {
-        self.link_requests_it_has_sent.cancel_a_request(link_request_id)
+        self.link_requests_it_has_sent
+            .cancel_a_request(link_request_id)
     }
 
     /// Every request this runtime is still waiting on, as `graph` renders them.
@@ -345,9 +344,8 @@ impl RuntimeMeshMembership {
                 &this_runtimes_name,
                 &peers,
             );
-            link_requests_it_has_sent.start_sending_every_waiting_request(
-                &session, &key_space, &peers,
-            );
+            link_requests_it_has_sent
+                .start_sending_every_waiting_request(&session, &key_space, &peers);
         }) {
             tracing::warn!(
                 "this runtime cannot resolve its links from other runtimes for want of a thread: \

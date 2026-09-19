@@ -190,13 +190,13 @@ mod tests {
     #[test]
     fn both_ends_of_a_link_spell_a_remote_port_identically() {
         let address = a_mesh_address();
-        let as_an_input = rmp_serde::to_vec_named(&InputLinkPortRef::on_another_runtime(
-            address.clone(),
-        ))
-        .expect("encode");
-        let as_an_output =
-            rmp_serde::to_vec_named(&super::super::OutputLinkPortRef::on_another_runtime(address))
+        let as_an_input =
+            rmp_serde::to_vec_named(&InputLinkPortRef::on_another_runtime(address.clone()))
                 .expect("encode");
+        let as_an_output = rmp_serde::to_vec_named(
+            &super::super::OutputLinkPortRef::on_another_runtime(address),
+        )
+        .expect("encode");
         assert_eq!(as_an_input, as_an_output);
     }
 }

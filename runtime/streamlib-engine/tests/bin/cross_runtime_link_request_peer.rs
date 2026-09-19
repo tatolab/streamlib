@@ -98,9 +98,9 @@ fn register_the_one_processor_type_this_peer_adds() {
     descriptor
         .outputs
         .push(PortDescriptor::new(THE_OUTPUT_PORT, "output", true));
-    descriptor.inputs.push(
-        PortDescriptor::new(THE_INPUT_PORT, "input", true).with_delivery_profile("newest"),
-    );
+    descriptor
+        .inputs
+        .push(PortDescriptor::new(THE_INPUT_PORT, "input", true).with_delivery_profile("newest"));
     let _ = PROCESSOR_REGISTRY.register_descriptor_only(descriptor);
 }
 
@@ -181,16 +181,14 @@ fn answer_one_command(runtime: &Arc<Runner>, asked: WhatTheFixtureAsked) -> serd
         } => {
             let from = match from_runtime_name {
                 // A source on another runtime: this peer is wiring two others.
-                Some(runtime_name) => match MeshPortAddress::new(
-                    runtime_name,
-                    from_display_name,
-                    THE_OUTPUT_PORT,
-                ) {
-                    Ok(address) => OutputLinkPortRef::on_another_runtime(address),
-                    Err(not_an_address) => {
-                        return serde_json::json!({ "refused": not_an_address.to_string() });
+                Some(runtime_name) => {
+                    match MeshPortAddress::new(runtime_name, from_display_name, THE_OUTPUT_PORT) {
+                        Ok(address) => OutputLinkPortRef::on_another_runtime(address),
+                        Err(not_an_address) => {
+                            return serde_json::json!({ "refused": not_an_address.to_string() });
+                        }
                     }
-                },
+                }
                 // One of this runtime's own, named the way an author names it.
                 None => match the_processor_this_runtime_displays_as(runtime, &from_display_name) {
                     Some(processor_id) => OutputLinkPortRef::new(processor_id, THE_OUTPUT_PORT),

@@ -145,9 +145,8 @@ impl LinkRequestsThisRuntimeHasSent {
         mesh_name: &str,
     ) {
         let input_runtime_name = input_runtime_name.into();
-        let reason = format!(
-            "this request has just been made and the {mesh_name} mesh has not sent it yet"
-        );
+        let reason =
+            format!("this request has just been made and the {mesh_name} mesh has not sent it yet");
         self.waiting.lock().insert(
             request.link_request_id.clone(),
             ARequestThisRuntimeHasSent {
@@ -302,7 +301,9 @@ impl LinkRequestsThisRuntimeHasSent {
         let sending = self.sending.lock().take();
         if let Some(sending) = sending {
             drop(sending.announcement_subscriber);
-            sending.whether_to_keep_sending.store(false, Ordering::Release);
+            sending
+                .whether_to_keep_sending
+                .store(false, Ordering::Release);
             let _ = sending.wake_the_sender.send(());
             if sending.sending_thread.join().is_err() {
                 tracing::warn!("the mesh link-request sending thread panicked");
@@ -357,8 +358,7 @@ fn send_every_waiting_request_until_told_to_stop(
 /// request whose runtime is present but not answering costs the whole answer
 /// timeout, so a pass over several would eat a shutdown budget.
 fn run_one_sending_pass(sending: &SendingRequestsNeeds, whether_to_keep_sending: &AtomicBool) {
-    let every_request: Vec<LinkRequestUniqueId> =
-        sending.waiting.lock().keys().cloned().collect();
+    let every_request: Vec<LinkRequestUniqueId> = sending.waiting.lock().keys().cloned().collect();
     for link_request_id in every_request {
         if !whether_to_keep_sending.load(Ordering::Acquire) {
             return;
@@ -440,8 +440,8 @@ fn send_one_request(sending: &SendingRequestsNeeds, link_request_id: &LinkReques
         HowARuntimeAnsweredALinkRequest::ItSaidNothing { reason } => {
             sent.how_far_it_has_got = HowFarARequestHasGot::Unanswered { reason };
             sent.send_again_at = Instant::now() + sent.how_long_to_wait_next;
-            sent.how_long_to_wait_next = (sent.how_long_to_wait_next * 2)
-                .min(HOW_LONG_THE_WAIT_BETWEEN_SENDS_GROWS_TO);
+            sent.how_long_to_wait_next =
+                (sent.how_long_to_wait_next * 2).min(HOW_LONG_THE_WAIT_BETWEEN_SENDS_GROWS_TO);
         }
     }
 }

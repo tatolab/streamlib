@@ -30,8 +30,8 @@ use crate::core::json_schema::LoadedCapabilityExtensionOutput;
 use crate::core::processors::ProcessorSpec;
 use crate::core::processors::ProcessorState;
 use crate::core::pubsub::{Event, EventListener, PUBSUB, ProcessorEvent, RuntimeEvent, topics};
-use crate::core::runtime::LoadedCapabilityExtensionRegistry;
 use crate::core::runtime::LinkRequestsAppliedIntoThisRuntimesGraph;
+use crate::core::runtime::LoadedCapabilityExtensionRegistry;
 use crate::core::runtime::OutputPortsInThisRuntimesGraph;
 use crate::core::runtime::mesh::{
     HostedControlPlaneEndpointRegistry, MeshLinkIngressTable, ResolvedRuntimeMeshConfiguration,
