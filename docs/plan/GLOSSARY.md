@@ -48,6 +48,18 @@ name, carrying remote links as engine transport beside iceoryx2 — always on, n
 processor or an extension. _Avoid_: "fabric" (retired for this term), "gateway", "cluster",
 "federation".
 
+**Runtime name**: the name a runtime is addressed by on its mesh — its own, never its
+control plane's; one Zenoh key chunk, defaulting to `<hostname>-<app directory name>-<id>`
+with the id hashed from the directory's path, never auto-suffixed, and unique among live
+runtimes on one mesh. Set by constructor, environment or CLI only. _Avoid_: "node name"
+(retired), "runtime id" (that is the per-run id, never an address), "hostname".
+
+**Mesh name**: the name of one runtime mesh — one chunk of the channel-name grammar,
+`default` unless a runtime names another. Everything a runtime announces lives under it, and
+naming a different one is how groups sharing a network separate what they announce and read —
+never what dials whom. _Avoid_: "namespace" (Zenoh's own config key, which this is not),
+"cluster", "domain" (that is the iceoryx2 one).
+
 **Remote link**: a link whose output and input ports belong to different runtimes on the
 runtime mesh, addressed by runtime name, display name and port. _Avoid_: "network link",
 "bridge", "export".

@@ -439,7 +439,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   [consumer-tree-disposition — SHIPPED; a standing convention, and by the same decision
   the showcase carries no CI check to run]
 
-## Processor model & scheduling — IN-FLIGHT (→ runtime-mesh, cross-runtime-links)
+## Processor model & scheduling — IN-FLIGHT (→ cross-runtime-links)
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a bag
   (self-describing msgpack named map). The engine has no type layer: ports carry no
@@ -919,11 +919,18 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   readable off the returned handle, and the prefix on its log records; it defaults to
   the class's short name and the engine disambiguates duplicates within one graph. It is
   also the processor's part of its address on the runtime mesh (§Networking), so renaming a
-  processor re-addresses its ports. Identity is never derived from it — and neither is the default: a descriptor carries
+  processor re-addresses its ports. Being part of that address is what bounds it: `add`
+  refuses a requested display name that is empty, contains `/`, `*`, `$`, `#` or `?`, or
+  begins with `@`, naming the character and the fix, in Rust, in `rt.add` and in MCP
+  `add_processor` alike. Spaces and unicode stay legal, and a class's short name and the
+  engine's ` 2` suffix always pass, so no default display name is ever refused.
+  Identity is never derived from it — and neither is the default: a descriptor carries
   the class's short name as its own validated field rather than the engine splitting one
   out of the import path, because splitting re-invents the grammar this change deleted.
-  [processor-class-identity — SHIPPED #1838, #1841]
+  [processor-class-identity — SHIPPED #1838, #1841; the address-chunk refusal —
+  runtime-mesh, SHIPPED #2282]
   <!-- verify: cargo test -p streamlib-engine --test display_name_disambiguation_test -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh_address_chunk -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_graph_building.py::test_a_duplicate_requested_display_name_is_disambiguated_too -->
 - **OPEN** — Additional execution flavors to scale processor count (lightweight /
   green-thread style): intended, do not build until designed; hard constraint — no new
@@ -2234,7 +2241,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   machine-global scan paths; the lane costs nothing when unused (no `DT_NEEDED`
   entries, no import-time work). [audio-subsystem]
 
-## Networking — transport, runtime mesh, moq, webrtc — IN-FLIGHT (→ runtime-mesh, cross-runtime-links)
+## Networking — transport, runtime mesh, moq, webrtc — IN-FLIGHT (→ cross-runtime-links)
 
 - **DECIDED** — Cross-language interop happens on the wire between nodes, as
   self-describing bags — never in-graph. [importable-python-library — SHIPPED #1715]
@@ -2571,15 +2578,85 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   chosen by the engine from the link's ends, and no processor can tell which. A runtime
   that cannot open its session runs local-only and says so once; the mesh never fails a
   runtime's start. Easy, automatic data exchange between runtimes is runtime capability.
-  [runtime-mesh]
+  Five readings the build settled. **The session opens in `Runner::new()`**, after logging
+  and before the iceoryx2 node, beside the runtime-id socket refusal — so a refused runtime
+  builds no iceoryx2 node and no surface socket, and the duplicate refusal and discovery are
+  both provable with no GPU. It costs `Runtime()` about 500 ms more while multicast discovery
+  is on, which is Zenoh's own scouting delay: engine-chosen, not authorable, and paid again
+  by `dev`'s warm restart. **The session is built from defaults, never from a Zenoh config
+  file or a `ZENOH_*` variable** — peer mode, one listener on `udp/[::]:0?rel=1` (QUIC over
+  UDP, a stream per priority) unless the runtime names others, multicast scouting on its
+  default group, and no Zenoh `namespace` because the mesh name is a key prefix the engine
+  writes itself. That is the engine-owned-domain precedent applied to a second transport.
+  **Local-only means the open failed**, which in peer mode is a bind failure: the runtime
+  warns once naming the reason, runs on, and never retries for its life. A runtime with
+  discovery off and no peers is *isolated* rather than local-only, and `graph` says which one
+  it is. **The session closes at the end of `stop()`**, token undeclared first so peers see
+  the runtime leave at once; an engine the shutdown ladder leaks is closed by process exit,
+  whose kernel-closed TCP peers see within milliseconds, and no Zenoh call ever runs on one of
+  the engine's current-thread tokio runtimes. And **a helper opens no session**, because it
+  never constructs a `Runner` and Zenoh's thread pool starts on first use.
+  [runtime-mesh — SHIPPED #2283]
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::resolved_runtime_mesh_configuration::tests::the_zenoh_configuration_carries_peer_mode_and_exactly_these_endpoints -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::capability_extension_and_mesh_rendering_tests::a_local_only_runtime_renders_the_reason_its_session_did_not_open -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::capability_extension_and_mesh_rendering_tests::an_isolated_runtime_renders_an_open_session_with_no_peers_and_no_reason -->
+  <!-- verify: cargo test -p streamlib-engine --test runtime_mesh_two_processes -->
+- **DECIDED** — A runtime's name and mesh come from its constructor, its environment or the
+  CLI, and nowhere else. Five optional values configure it — the runtime name, the mesh name,
+  peer endpoints, listen endpoints and whether multicast discovery runs — reachable four ways:
+  keyword-only on `Runtime()` and stub-gated; `Runner::new_with_runtime_mesh_configuration`
+  in Rust, with `Runner::new()` taking the defaults; `STREAMLIB_RUNTIME_NAME`,
+  `STREAMLIB_MESH_NAME`, `STREAMLIB_MESH_PEER_ENDPOINTS`, `STREAMLIB_MESH_LISTEN_ENDPOINTS`
+  and `STREAMLIB_MESH_MULTICAST_DISCOVERY` for anything the constructor leaves unset, read in
+  the engine so a Rust app and a container get it too; and `streamlib run` / `dev`'s
+  `--runtime-name`, `--mesh-name`, `--mesh-peer`, `--mesh-listen` and
+  `--no-mesh-multicast-discovery`. An endpoint is a Zenoh locator and a router is named the
+  way a peer is; a malformed one — a transport this build lacks, or plain `udp/` — is refused
+  at construction by name, the caller's wiring error as a wrong `device_id` is, while an
+  endpoint that is merely unreachable never fails the runtime.
+  `streamlib run` constructs `Runtime()` before `setup(rt)`, so a CLI-launched app is named
+  on its command line or in its environment and never in `app.py` — and most apps need
+  neither, the default being stable. Rejected: `setup(rt)` naming the runtime, which makes
+  mesh configuration mutable state on a constructed runtime and moves both proofs behind the
+  GPU in `start()`; and a `[tool.streamlib]` table in `pyproject.toml`, the first
+  streamlib-specific file an app would author, which the zero-ceremony bar rules out. Owner,
+  2026-09-14. [runtime-mesh — SHIPPED #2282, #2283]
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::resolved_runtime_mesh_configuration -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::runtime_name -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_a_mesh_peer_this_build_cannot_dial_is_a_usage_error -->
 - **DECIDED** — A runtime announces itself on the mesh and discovers other runtimes
   automatically: peer-to-peer discovery is on by default, and explicit peers or a Zenoh
-  router serve networks that multicast discovery does not cross. [runtime-mesh]
+  router serve networks that multicast discovery does not cross. The announcement is a
+  liveliness token plus a description queryable, both under
+  `streamlib/<mesh name>/@runtime/<runtime name>`. A token carries no payload, so the token
+  *key* carries the only things a dead runtime must still answer for — its host identity and
+  its pid — while the queryable answers a msgpack document holding `runtime_id`, `host_name`,
+  `pid`, `engine_version` and `control_plane_urls`, read from the runtime's state at query
+  time so a control plane hosted after construction still shows up. `control_plane_urls` is
+  one `http://<address>:<port>` per non-loopback, non-link-local interface address the bind
+  covers, an IPv6 literal bracketed, and empty with no control plane. The `@runtime` chunk is
+  verbatim in Zenoh's grammar, so no `**` subscription over a mesh's port addresses ever
+  matches it, and since a display name may not begin with `@` no address can collide with it.
+  Discovery is a liveliness subscriber with history plus one description query per runtime
+  that appears, and a runtime that leaves is removed; `graph` reads the peer table lock-free
+  and never waits. Multicast discovery is proven in CI, not only on the rig: the two-process
+  fixture runs a multicast arm beside its explicit-peer arms, with scouting pinned to
+  loopback.
+  [runtime-mesh — SHIPPED #2283]
+  <!-- verify: cargo test -p streamlib-engine --test runtime_mesh_two_processes two_runtimes_discovering_by_multicast_each_list_the_other -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::capability_extension_and_mesh_rendering_tests::a_peer_that_has_not_answered_still_deserializes_beside_one_that_has -->
 - **DECIDED** — Everything a runtime puts on the mesh lives under a mesh name, `default`
   unless the runtime names another, so runtimes join everything reachable out of the box and
   groups sharing one network separate by naming different meshes. There is no switch that
   turns the mesh off; a runtime is isolated by a mesh name, explicit peers, or discovery
-  turned off. Stated as the posture for now, not a permanent default. [runtime-mesh]
+  turned off. Stated as the posture for now, not a permanent default. The mesh name is one
+  chunk of the channel-name grammar, `[a-z][a-z0-9_-]*`. What separation by mesh name does
+  and does not buy is worth stating exactly: runtimes in different meshes on one network may
+  still connect at the transport and exchange nothing, and unrelated Zenoh traffic — ROS 2's
+  `rmw_zenoh`, say — may connect the same way. Separation is of what is announced and read,
+  never of what dials whom. [runtime-mesh — SHIPPED #2283]
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::runtime_mesh_name -->
+  <!-- verify: cargo test -p streamlib-engine --test runtime_mesh_two_processes -->
 - **DECIDED** — A port on the mesh is addressed `<runtime name>/<display name>/<port>`. The
   runtime name belongs to the runtime rather than to its control plane; defaults to
   `<hostname>-<app directory name>-<id>`, the id hashed from the directory's full path so two
@@ -2587,7 +2664,35 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   runtime whose name is already live on the mesh refuses to start by name, except over one on
   the same host whose process is gone. The display name — already unique within a graph — is
   the processor's part of the address, so renaming re-addresses it; identity stays the class
-  import path. Processor ids and cuid2 channel names never appear on the mesh. [runtime-mesh]
+  import path. Processor ids and cuid2 channel names never appear on the mesh.
+  Three readings the build settled. **The grammar is one legal Zenoh key chunk** — non-empty,
+  no `/`, `*`, `$`, `#` or `?`, not beginning with `@` — and otherwise free text like a
+  display name, validated against the real key-expression rules; an explicit name that breaks
+  it is refused at construction naming the character. **The default is
+  `<hostname>-<app directory name>-<id>`** with every forbidden character replaced by `-`,
+  the id four base-36 characters of an FNV-1a hash over the app directory's full path — the
+  virtual camera's own recipe — resolved from `STREAMLIB_APP_DIRECTORY`, else the wheel's
+  captured entry directory for a hand-run `python app.py`, else the working directory, which
+  is what a Rust app gets. Where never-auto-suffixed bites is stated rather than discovered: a
+  second run from one directory is refused until given `--runtime-name`, and moving the
+  directory renames the runtime, as it relabels its unnamed virtual cameras. **The duplicate
+  check is a query before the token is declared** — discovery is on, so `open` has already
+  waited out the scouting delay, and the query then waits at most an engine-chosen bound for
+  connected peers to answer. Any token refuses `Runtime()`, naming the runtime name and the
+  holder's host and pid (both on the token key) and offering both fixes — stop it, or start
+  under another name — unless the holder's host identity is this host's and its pid is gone.
+  Host identity on Linux is the kernel boot id plus the pid-namespace inode, so a container on
+  the same kernel is never mistaken for its host; macOS has no host identity and therefore no
+  exception, so a duplicate there is refused until the old token leaves. `runtime_id` stays
+  per-run — logs, the registry file, iceoryx2 names, the description — and is never an
+  address.
+  Stated residual: two runtimes that start inside one discovery window, or that meet when a
+  partition heals, are not refused. Both keep running, each says so once naming the other's
+  host, and `graph` lists both; which one a remote link reaches is `cross-runtime-links`'s to
+  settle. [runtime-mesh — SHIPPED #2282, #2284]
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::runtime_name -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::duplicate_runtime_name_on_the_mesh -->
+  <!-- verify: cargo test -p streamlib-engine --test runtime_mesh_two_processes -->
 - **DECIDED** — A bag's top-level `surface_id` crosses the mesh transparently, for now: the
   sending runtime resolves it locally and sends the frame's pixels with what the receiver
   needs to rebuild them, and the receiving runtime writes the pixels into a freshly minted
@@ -2596,7 +2701,14 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   mechanism replaces in a later release. [runtime-mesh]
 - **DECIDED** — The mesh carries no authentication or access control in this work; security
   is its own later pass, and the auth posture OPEN under §Control plane & observability owns
-  it. [runtime-mesh]
+  it. What shipped holds the line: `zenoh` is built with `default-features = false` and
+  exactly `transport_tcp` and `transport_udp`, so the QUIC-over-UDP link runs unencrypted on
+  a self-signed key Zenoh makes itself — nothing to provision — and `transport_quic`, which
+  needs a provisioned key and certificate, waits for that security pass.
+  [runtime-mesh — SHIPPED #2283]
+  <!-- verify: grep -n "transport_udp" runtime/streamlib-engine/Cargo.toml -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_the_native_extension_links_nothing_the_host_may_not_supply -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_third_party_notices.py -->
 - **DECIDED** — Any runtime on the mesh may create a remote link: a receiver pulling another
   runtime's output into its own input, a sender pushing its output into another runtime's
   input, or a third runtime wiring two others. The runtime that owns the input end applies the
@@ -2621,7 +2733,28 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   [runtime-mesh]
 - **DECIDED** — `graph` carries the runtime's mesh peers, and `streamlib nodes` lists mesh
   peers beside the nodes in the local registry. A runtime that hosts no control plane still
-  joins the mesh and carries remote links; it is not drivable remotely. [runtime-mesh]
+  joins the mesh and carries remote links; it is not drivable remotely.
+  `graph` gains a fourth top-level key, `mesh`, always present, holding `mesh_name`,
+  `runtime_name`, `session` (`open` or `local_only`), `local_only_reason` only when the
+  session did not open, and `peers` sorted by name. A peer carries `runtime_name` always —
+  it is on the liveliness token — and `runtime_id`, `host_name`, `engine_version` and
+  `control_plane_urls` each only once the description answers, so every one of the four is
+  optional on the peer type and both shapes are covered by the key-list test, the strict
+  fixture and the schema. No peer carries a last-seen time: a wall-clock one would be a
+  fourth surface the clock entry bans, and a monotonic one means nothing to another machine.
+  `streamlib nodes` puts `RUNTIME_NAME` first and `--node` takes a runtime name or a runtime
+  id; below the registry table it prints a mesh-peers table of
+  `RUNTIME_NAME HOST CONTROL_PLANE_URLS ENGINE_VERSION`, whose rows come from a short-lived
+  observe-only session reached through a stub-gated `_engine` function and taking
+  `--mesh-name`, `--mesh-peer` and `--no-mesh-multicast-discovery`. A peer that is already a
+  registry row is not repeated, and the cost is about a second more per `nodes` call — the
+  scouting delay plus the query bound. `nodes` stays a registry surface rather than a tool,
+  so the CLI is still a pure JSON-RPC client for every tool there is.
+  [runtime-mesh — SHIPPED #2283, #2285]
+  <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::capability_extension_and_mesh_rendering_tests -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_a_runtime_on_the_mesh_is_listed_once_with_what_it_says_it_is -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_an_empty_mesh_says_so_and_names_the_mesh -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_a_verb_targets_a_node_by_its_runtime_name -->
 - **OPEN** — A common clock across machines: intended, do not build until designed. Direction:
   runtimes on a mesh negotiate a shared network time (PTP, NTP or similar) so stamps from
   different machines become comparable; until then the per-clock rule above stands.
@@ -2714,7 +2847,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_the_native_extension_links_nothing_the_host_may_not_supply -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_the_glsl_compiler_is_linked_statically -->
 
-## Control plane & observability — IN-FLIGHT (→ runtime-mesh, cross-runtime-links)
+## Control plane & observability — IN-FLIGHT (→ cross-runtime-links)
 
 - **DECIDED** — The control plane carries no optional capability's routes natively. A
   capability extension that needs an endpoint contributes it through the `host` door
@@ -2815,8 +2948,13 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   resolves identically. What a runtime *keeps* — logs, caches — stays under the project's
   `.streamlib/`. Node discovery is the per-user on-disk registry inside that directory: one
   JSON file per live node, written only by control-plane-hosting runtimes, pruned only when
-  both liveness signals (control round-trip, process check) fail. Owner, 2026-09-14.
-  [control-plane-one-surface; the directory — local-transport-hardening, SHIPPED #2261]
+  both liveness signals (control round-trip, process check) fail. The entry carries the
+  runtime's own `runtime_name` beside its `runtime_id`, taken from the runtime rather than
+  from the control plane it hosts, at a bumped schema version; the control plane no longer
+  carries a name of its own, and the adjective-noun generator that minted one nothing ever
+  read is gone. Owner, 2026-09-14.
+  [control-plane-one-surface; the directory — local-transport-hardening, SHIPPED #2261;
+  `runtime_name` on the entry — runtime-mesh, SHIPPED #2282]
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::streamlib_runtime_directory -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_runtime_directory.py -->
 - **DECIDED** — Observability: the JSONL log schema is a durable contract; tap forwards
