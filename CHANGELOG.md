@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.25.5](https://github.com/tatolab/streamlib/compare/v0.25.4...v0.25.5) (2026-09-19)
+
+
+### Features
+
+* **wheel:** wire a remote output from Python and MCP, into helper-placed processors too ([#2342](https://github.com/tatolab/streamlib/issues/2342)) ([a8cf4ad](https://github.com/tatolab/streamlib/commit/a8cf4adb6877f513bffaef2012774e03bc7e8e45))
+
 ## [0.25.4](https://github.com/tatolab/streamlib/compare/v0.25.3...v0.25.4) (2026-09-19)
 
 
