@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.25.7](https://github.com/tatolab/streamlib/compare/v0.25.6...v0.25.7) (2026-09-19)
+
+
+### Bug Fixes
+
+* **engine:** the mesh-address accessors left three warnings behind ([#2341](https://github.com/tatolab/streamlib/issues/2341)) ([5cb34ec](https://github.com/tatolab/streamlib/commit/5cb34ec29c29782375167ed1dd57a9d26366f33b))
+
 ## [0.25.6](https://github.com/tatolab/streamlib/compare/v0.25.5...v0.25.6) (2026-09-19)
 
 
