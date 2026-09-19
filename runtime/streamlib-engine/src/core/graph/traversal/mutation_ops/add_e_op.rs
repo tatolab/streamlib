@@ -20,14 +20,20 @@ impl<'a> TraversalSourceMut<'a> {
         let Some(from_idx) = node_index_of(self.graph, &source_on_this_runtime) else {
             return self.no_link();
         };
-        let Some(to_idx) = node_index_of(self.graph, &to.processor_id) else {
+        // A destination on another runtime has no node here either, and no
+        // door: the runtime that owns an input is the one that applies the
+        // link, so a remote destination is a link *request* and never an edge.
+        let Some(destination_on_this_runtime) = to.processor_id_on_this_runtime().cloned() else {
+            return self.no_link();
+        };
+        let Some(to_idx) = node_index_of(self.graph, &destination_on_this_runtime) else {
             return self.no_link();
         };
 
         if !self.graph[from_idx].has_output(from.port_name()) {
             return self.no_link();
         }
-        if !self.graph[to_idx].has_input(&to.port_name) {
+        if !self.graph[to_idx].has_input(to.port_name()) {
             return self.no_link();
         }
 

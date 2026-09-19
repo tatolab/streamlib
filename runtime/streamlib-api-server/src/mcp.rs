@@ -1356,8 +1356,11 @@ mod tests {
             Some("cam-1")
         );
         assert_eq!(from.port_name(), "video");
-        assert_eq!(to.processor_id.as_str(), "fx-1");
-        assert_eq!(to.port_name, "video_from_upstream");
+        assert_eq!(
+            to.processor_id_on_this_runtime().map(|id| id.as_str()),
+            Some("fx-1")
+        );
+        assert_eq!(to.port_name(), "video_from_upstream");
         assert_eq!(link_id.as_str(), "link-9");
     }
 
@@ -1409,7 +1412,10 @@ mod tests {
             from.mesh_port_address().map(|address| address.to_string()),
             Some("bench-cam-a1b2/CameraSource/video".to_string())
         );
-        assert_eq!(to.processor_id.as_str(), "fx-1");
+        assert_eq!(
+            to.processor_id_on_this_runtime().map(|id| id.as_str()),
+            Some("fx-1")
+        );
     }
 
     /// The result says which runtime applied the link and how that runtime's

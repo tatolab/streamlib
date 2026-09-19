@@ -145,7 +145,7 @@ mod tests {
             InputLinkPortRef::new("Pdst", "video.in"),
         );
         assert_eq!(link.from_port().port_name(), "video.raw");
-        assert_eq!(link.to_port().port_name, "video.in");
+        assert_eq!(link.to_port().port_name(), "video.in");
     }
 
     /// A source on another runtime reaches the link as its address, rather than

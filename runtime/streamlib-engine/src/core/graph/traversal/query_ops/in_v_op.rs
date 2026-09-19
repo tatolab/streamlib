@@ -31,7 +31,12 @@ fn every_destination_node_of(
                 let Some(link) = link_at(graph, links_from_another_runtime, at) else {
                     continue;
                 };
-                let destination_id = &link.to_port().processor_id;
+                // A link kept here always carries into this runtime; one that does not
+                    // names no local node to reach.
+                    let Some(destination_id) = link.to_port().processor_id_on_this_runtime()
+                    else {
+                        continue;
+                    };
                 if let Some(destination) = graph
                     .node_indices()
                     .find(|&idx| &graph[idx].id == destination_id)

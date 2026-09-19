@@ -492,15 +492,26 @@ fn refuse_a_destination_this_graph_cannot_take(
     graph: &crate::core::graph::Graph,
     to: &InputLinkPortRef,
 ) -> Result<()> {
+    // A destination naming this runtime's own name was resolved to a local
+    // reference before this, so anything still remote belongs to another
+    // runtime — and the runtime that owns an input is the one that applies the
+    // link. `connect` cannot apply this one anywhere.
+    let Some(destination_processor_id) = to.processor_id_on_this_runtime() else {
+        return Err(Error::InvalidLink(format!(
+            "the destination {to} is a port on another runtime, and only the runtime that owns an \
+             input applies a link into it. Ask that runtime for the link with \
+             `request_link_on_remote_input_runtime` instead of connecting it here"
+        )));
+    };
     let to_node = graph
         .traversal()
-        .v(&to.processor_id)
+        .v(destination_processor_id)
         .first()
-        .ok_or_else(|| Error::ProcessorNotFound(to.processor_id.to_string()))?;
-    if !to_node.has_input(&to.port_name) {
+        .ok_or_else(|| Error::ProcessorNotFound(destination_processor_id.to_string()))?;
+    if !to_node.has_input(to.port_name()) {
         return Err(Error::ProcessorPortNotFound {
-            processor_id: to.processor_id.to_string(),
-            port_name: to.port_name.clone(),
+            processor_id: destination_processor_id.to_string(),
+            port_name: to.port_name().to_string(),
             direction: PortDirection::Input,
         });
     }
@@ -521,10 +532,7 @@ async fn disconnect_impl(
             .map(|l| (l.from_port(), l.to_port()))
             .ok_or_else(|| Error::NotFound(format!("Link '{}' not found", link_id)))?;
 
-        let info = (
-            from_value.clone(),
-            InputLinkPortRef::new(to_value.processor_id.clone(), to_value.port_name.clone()),
-        );
+        let info = (from_value.clone(), to_value.clone());
 
         if let Some(link) = graph.traversal_mut().e(&link_id).first_mut() {
             link.insert(PendingDeletionComponent);
@@ -1014,7 +1022,10 @@ mod connect_wires_without_inspecting_a_port_tests {
     fn remove_processor_logs_every_incident_link_ahead_of_the_node() {
         register_producer_and_consumer_descriptors();
         let (compiler, from, to) = compiler_holding_a_producer_and_consumer_node();
-        let consumer_id = to.processor_id.clone();
+        let consumer_id = to
+            .processor_id_on_this_runtime()
+            .expect("a test consumer is on this runtime")
+            .clone();
         let runtime = tokio::runtime::Builder::new_current_thread()
             .build()
             .expect("current-thread runtime");
@@ -1256,7 +1267,12 @@ mod connect_wires_without_inspecting_a_port_tests {
             connect_on_this_thread(
                 &compiler,
                 source(),
-                InputLinkPortRef::new(to.processor_id.clone(), "no_such_port")
+                InputLinkPortRef::new(
+                    to.processor_id_on_this_runtime()
+                        .expect("a test consumer is on this runtime")
+                        .clone(),
+                    "no_such_port"
+                )
             ),
             Err(Error::ProcessorPortNotFound { .. })
         ));

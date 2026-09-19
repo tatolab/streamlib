@@ -613,9 +613,21 @@ impl From<&crate::core::graph::OutputLinkPortRef> for LinkPortRefOutput {
 
 impl From<&crate::core::graph::InputLinkPortRef> for LinkPortRefOutput {
     fn from(port_ref: &crate::core::graph::InputLinkPortRef) -> Self {
-        Self::OnThisRuntime {
-            processor_id: port_ref.processor_id.to_string(),
-            port_name: port_ref.port_name.clone(),
+        match port_ref {
+            crate::core::graph::InputLinkPortRef::OnThisRuntime {
+                processor_id,
+                port_name,
+            } => Self::OnThisRuntime {
+                processor_id: processor_id.to_string(),
+                port_name: port_name.clone(),
+            },
+            crate::core::graph::InputLinkPortRef::OnAnotherRuntime(address) => {
+                Self::OnAnotherRuntime {
+                    runtime_name: address.runtime_name().to_string(),
+                    processor_display_name: address.processor_display_name().to_string(),
+                    port_name: address.port_name().to_string(),
+                }
+            }
         }
     }
 }

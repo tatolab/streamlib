@@ -1392,17 +1392,25 @@ impl Runner {
                              snapshot alias map"
                         ))
                     })?;
+                let target_on_this_runtime =
+                    link.target.processor_id_on_this_runtime().ok_or_else(|| {
+                        Error::GraphError(format!(
+                            "link '{}' carries into {} on another runtime, which only that \
+                             runtime's own graph holds",
+                            link.id, link.target
+                        ))
+                    })?;
                 let to_alias = id_to_alias
-                    .get(link.target.processor_id.as_str())
+                    .get(target_on_this_runtime.as_str())
                     .ok_or_else(|| {
                         Error::GraphError(format!(
-                            "Link target processor '{}' missing from snapshot alias map",
-                            link.target.processor_id
+                            "Link target processor '{target_on_this_runtime}' missing from \
+                             snapshot alias map"
                         ))
                     })?;
                 connections.push(ConnectionDefinition {
                     from: format!("{}.{}", from_alias, link.source.port_name()),
-                    to: format!("{}.{}", to_alias, link.target.port_name),
+                    to: format!("{}.{}", to_alias, link.target.port_name()),
                 });
             }
 

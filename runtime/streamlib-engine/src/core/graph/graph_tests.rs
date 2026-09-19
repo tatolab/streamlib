@@ -409,8 +409,13 @@ mod edge_query_ops {
             Some(upstream_id.as_str())
         );
         assert_eq!(link.from_port().port_name(), "out1");
-        assert_eq!(link.to_port().processor_id.as_str(), downstream_id);
-        assert_eq!(link.to_port().port_name, "in1");
+        assert_eq!(
+            link.to_port()
+                .processor_id_on_this_runtime()
+                .map(|id| id.as_str()),
+            Some(downstream_id.as_str())
+        );
+        assert_eq!(link.to_port().port_name(), "in1");
     }
 }
 
@@ -511,7 +516,11 @@ mod filter_ops {
         let to_downstream1: Vec<_> = graph
             .traversal()
             .e(())
-            .filter(|link| link.to_port().processor_id.as_str() == downstream1_id)
+            .filter(|link| {
+                link.to_port()
+                    .processor_id_on_this_runtime()
+                    .is_some_and(|id| id.as_str() == downstream1_id)
+            })
             .ids();
 
         assert_eq!(to_downstream1.len(), 1);
@@ -1410,7 +1419,7 @@ mod links_from_another_runtime {
             found.from_port().mesh_port_address(),
             Some(&a_mesh_address())
         );
-        assert_eq!(found.to_port().port_name, "in1");
+        assert_eq!(found.to_port().port_name(), "in1");
     }
 
     /// It is one of the graph's links, so every walk over them reaches it.
