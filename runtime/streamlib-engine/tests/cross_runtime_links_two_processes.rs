@@ -1,14 +1,18 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! One link between two runtimes, in two OS processes — the proof a remote link
-//! carries anything at all, and that a runtime does no work for a port nobody
-//! reads.
+//! Links between runtimes in separate OS processes — the proof a remote link
+//! carries anything at all, that a runtime does no work for a port nobody
+//! reads, and that one egress serves every runtime reading a port.
+//!
+//! Most arms are one source and one reader; the last is one source and two
+//! readers, because "the source stops sending when the *last* reader leaves"
+//! says nothing that can be checked with one.
 //!
 //! Serial, and each arm takes its own mesh name, its own runtime names, its own
-//! loopback port and its own iceoryx2 domain. Four arms at once put eight
-//! runtimes with real network endpoints on one loopback interface, which tests
-//! the harness rather than the engine.
+//! loopback port and its own iceoryx2 domain. The arms at once would put a
+//! dozen runtimes with real network endpoints on one loopback interface, which
+//! tests the harness rather than the engine.
 //!
 //! GPU-free: neither peer builds a `Runner`, because `Runner::start()` needs a
 //! GPU and CI has none. Each stands up the mesh half a runtime stands up, over
@@ -51,7 +55,7 @@ const LOOPBACK_INTERFACE: &str = "127.0.0.1";
 /// a channel name, which is why the ingress channel is hashed from the address.
 const THE_DISPLAY_NAME: &str = "Camera Source 2";
 
-/// The runtime names one arm's two peers take.
+/// The runtime names one arm's source and reader take.
 ///
 /// Per arm rather than shared: an arm's peers leave at the end of it, but a
 /// session that has not finished tearing down is still on the transport when
@@ -552,4 +556,104 @@ fn a_killed_source_returns_the_link_to_waiting_and_a_restart_re_wires_it() {
     reader.wait_until("the link to carry again once its source returned", || {
         reader.every_bag_it_received().len() > bags_before_the_restart
     });
+}
+
+/// One source, two readers: the source holds exactly one egress however many
+/// runtimes read the port, and keeps it until the last of them leaves.
+///
+/// What it catches, and what no other arm can: the egress table counts its
+/// readers in a set, and every other arm drives that set with one reader — so
+/// "the last reader leaving takes the egress with it" is satisfied trivially by
+/// the only reader leaving. A second egress per reader, an egress torn down
+/// when the first of two readers leaves, or a reader whose token never joined
+/// the set all read identically with one reader and all break here.
+#[test]
+#[serial]
+fn one_egress_serves_every_reader_and_outlives_all_but_the_last() {
+    let mesh_name = a_mesh_name_of_its_own("two-readers");
+    let source_name = "x-source-two-readers".to_string();
+    let first_reader_name = "x-first-reader-two-readers".to_string();
+    let second_reader_name = "x-second-reader-two-readers".to_string();
+    let source_domain = a_domain_root_of_its_own("two-readers-source");
+    let first_reader_domain = a_domain_root_of_its_own("two-readers-first");
+    let second_reader_domain = a_domain_root_of_its_own("two-readers-second");
+    let source_listen = format!("udp/{LOOPBACK_INTERFACE}:{}?rel=1", a_free_loopback_port());
+    let every_egress_token = format!("streamlib/{mesh_name}/@runtime/{source_name}/@egress/**");
+    let every_reader_token = format!("streamlib/{mesh_name}/@runtime/{source_name}/@readers/**");
+
+    let source = CrossRuntimeLinkPeerProcess::launch(HowToLaunchAPeer {
+        runtime_name: source_name.clone(),
+        mesh_name: mesh_name.clone(),
+        listen_endpoints: vec![source_listen.clone()],
+        display_name: THE_DISPLAY_NAME.to_string(),
+        iceoryx2_domain_root: source_domain.path().to_path_buf(),
+        ..Default::default()
+    });
+    source.wait_until_it_is_up();
+
+    let mut a_reader_of_the_port = |runtime_name: String, domain: &tempfile::TempDir| {
+        let reader = CrossRuntimeLinkPeerProcess::launch(HowToLaunchAPeer {
+            reader: true,
+            runtime_name,
+            mesh_name: mesh_name.clone(),
+            peer_endpoints: vec![source_listen.clone()],
+            display_name: THE_DISPLAY_NAME.to_string(),
+            link_from: Some(source_name.clone()),
+            iceoryx2_domain_root: domain.path().to_path_buf(),
+            ..Default::default()
+        });
+        reader.wait_until_it_is_up();
+        reader
+    };
+
+    let mut first_reader = a_reader_of_the_port(first_reader_name, &first_reader_domain);
+    first_reader.wait_until("the first reader to receive a bag", || {
+        !first_reader.every_bag_it_received().is_empty()
+    });
+    let mut second_reader = a_reader_of_the_port(second_reader_name, &second_reader_domain);
+    second_reader.wait_until("the second reader to receive a bag", || {
+        !second_reader.every_bag_it_received().is_empty()
+    });
+
+    let looking = a_session_that_only_looks(&source_listen);
+    let while_both_read = every_token_under(&looking, &every_reader_token);
+    assert_eq!(
+        while_both_read.len(),
+        2,
+        "each runtime reading the port declares its own reader token; the source saw \
+         {while_both_read:?}"
+    );
+    let one_egress = every_token_under(&looking, &every_egress_token);
+    assert_eq!(
+        one_egress.len(),
+        1,
+        "a port is sent once however many runtimes read it; the source held {one_egress:?}"
+    );
+
+    // The first reader leaving is not the last: the egress stays, and the
+    // reader still here goes on receiving across it.
+    let bags_the_second_reader_had = second_reader.every_bag_it_received().len();
+    first_reader.ask_it_to_leave();
+    second_reader.wait_until(
+        "the remaining reader to receive a bag after the other left",
+        || second_reader.every_bag_it_received().len() > bags_the_second_reader_had,
+    );
+    let after_the_first_left = every_token_under(&looking, &every_egress_token);
+    assert_eq!(
+        after_the_first_left.len(),
+        1,
+        "a reader leaving while another still reads must not take the egress with it; the \
+         source held {after_the_first_left:?}"
+    );
+
+    // The second is the last, and takes it with it.
+    second_reader.ask_it_to_leave();
+    let gave_up_at = Instant::now() + HOW_LONG_AN_ARM_WAITS;
+    while Instant::now() < gave_up_at {
+        if every_token_under(&looking, &every_egress_token).is_empty() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    panic!("the last of two readers leaving must take the source's egress token with it");
 }
