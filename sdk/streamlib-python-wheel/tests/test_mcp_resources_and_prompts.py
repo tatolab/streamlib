@@ -149,7 +149,7 @@ def await_added_processor_state(
         )
         state = node["components"]["state"] if node is not None else None
         if state == wanted:
-            return state
+            return wanted
         time.sleep(0.05)
     return f"still {state or 'absent'} after {ADDED_PROCESSOR_RUNNING_TIMEOUT_SECONDS}s"
 
@@ -196,8 +196,9 @@ def numbered_steps(prompt_text: str) -> "list[tuple[str, str]]":
 
 
 # The pairs earn their keep below the recipe, which reads the same for all
-# three: the sink's profile is what opens the source's channel, and the
-# effect's input then joins that channel while it runs.
+# three: the sink is only the first consumer to open the source's channel —
+# which is created deep enough for a consumer of any profile — and the effect's
+# input then joins it live, in the last pair reading deeper than the opener.
 @pytest.mark.parametrize(
     ("sink_input_delivery_profile", "inserted_input_delivery_profile"),
     [
