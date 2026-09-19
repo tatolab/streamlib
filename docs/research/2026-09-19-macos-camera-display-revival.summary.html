@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>StreamLib on macOS — what it takes</title>
+<style>
+  :root {
+    --bg:#0f1115; --panel:#161a21; --panel2:#1c212a; --line:#262d38;
+    --ink:#e6e9ef; --dim:#9aa4b2; --faint:#6b7380;
+    --good:#4ade80; --warn:#fbbf24; --bad:#f87171; --accent:#7dd3fc;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg:#fbfbfc; --panel:#fff; --panel2:#f4f6f8; --line:#e2e6ec;
+      --ink:#14171c; --dim:#4e5663; --faint:#858d99;
+      --good:#15803d; --warn:#a16207; --bad:#b91c1c; --accent:#0369a1;
+    }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:16px/1.62 ui-sans-serif,-apple-system,"SF Pro Text",Inter,system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased}
+  .wrap{max-width:880px;margin:0 auto;padding:56px 28px 96px}
+  code,.mono{font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:.88em}
+
+  .eyebrow{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);margin-bottom:14px}
+  h1{font-size:34px;line-height:1.18;margin:0 0 18px;letter-spacing:-.02em;font-weight:640}
+  .lede{font-size:19px;line-height:1.55;color:var(--dim);margin:0 0 36px}
+  .lede strong{color:var(--ink);font-weight:600}
+
+  h2{font-size:13px;letter-spacing:.13em;text-transform:uppercase;color:var(--faint);
+     margin:52px 0 18px;padding-bottom:10px;border-bottom:1px solid var(--line);font-weight:600}
+  h3{font-size:16px;margin:28px 0 8px;font-weight:620}
+  p{margin:0 0 14px}
+
+  .verdict{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--good);
+    border-radius:10px;padding:20px 22px;margin:0 0 8px}
+  .verdict p:last-child{margin-bottom:0}
+
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  @media (max-width:680px){.grid{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px}
+  .card .k{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);margin-bottom:8px}
+  .card .v{font-size:15px;font-weight:600;margin-bottom:6px}
+  .card .d{font-size:13.5px;color:var(--dim);line-height:1.5}
+  .ok{color:var(--good)} .no{color:var(--bad)} .mid{color:var(--warn)}
+
+  pre{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:14px 16px;
+    overflow-x:auto;font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:12.5px;
+    line-height:1.6;color:var(--dim);margin:12px 0 0}
+  pre b{color:var(--good);font-weight:600}
+
+  table{width:100%;border-collapse:collapse;margin:6px 0 0;font-size:14.5px}
+  th{text-align:left;font-size:11.5px;letter-spacing:.09em;text-transform:uppercase;color:var(--faint);
+     font-weight:600;padding:0 10px 8px 0;border-bottom:1px solid var(--line)}
+  td{padding:11px 10px 11px 0;border-bottom:1px solid var(--line);vertical-align:top;color:var(--dim)}
+  td:first-child{color:var(--ink);font-weight:560}
+  td.num{font-variant-numeric:tabular-nums;color:var(--ink);font-weight:600;white-space:nowrap}
+
+  ol.steps{list-style:none;counter-reset:s;padding:0;margin:4px 0 0}
+  ol.steps li{counter-increment:s;position:relative;padding:0 0 0 46px;margin-bottom:20px}
+  ol.steps li::before{content:counter(s);position:absolute;left:0;top:1px;width:28px;height:28px;
+    border-radius:8px;background:var(--panel2);border:1px solid var(--line);display:grid;
+    place-items:center;font-size:13px;font-weight:650;color:var(--accent)}
+  ol.steps .t{font-weight:620;margin-bottom:3px}
+  ol.steps .m{font-size:13.5px;color:var(--dim);line-height:1.55}
+  ol.steps .dep{font-size:12px;color:var(--faint);margin-top:5px}
+
+  ul.plain{padding-left:20px;margin:4px 0 0}
+  ul.plain li{margin-bottom:9px;color:var(--dim)}
+  ul.plain li strong{color:var(--ink);font-weight:600}
+
+  .q{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:15px 18px;margin-bottom:10px}
+  .q.done{border-left:3px solid var(--good)}
+  .q .qq{font-weight:620;margin-bottom:4px}
+  .q .qa{font-size:13.5px;color:var(--dim)}
+
+  .flow{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin:14px 0 0}
+  .flow .row{display:flex;gap:12px;align-items:baseline;margin-bottom:10px;font-size:14px}
+  .flow .row:last-child{margin-bottom:0}
+  .flow .lbl{flex:0 0 132px;font-size:11.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--faint);font-weight:600}
+  .flow .val{color:var(--dim)}
+  .flow .val b{color:var(--ink);font-weight:600}
+
+  .foot{margin-top:56px;padding-top:18px;border-top:1px solid var(--line);font-size:13px;color:var(--faint)}
+  .foot code{color:var(--dim)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="eyebrow">Research memo · 19 Sep 2026 · Apple M1 Max, macOS 26.3 · all four passes complete</div>
+  <h1>Getting StreamLib working on macOS again</h1>
+  <p class="lede">
+    Target: <strong>camera live in a window</strong> on Apple Silicon, with the scaffolded app —
+    including its Python effect — working exactly as it does on Linux.
+  </p>
+
+  <div class="verdict">
+    <p><strong>Everything checks out. The design you want is the one the hardware supports.</strong>
+    Keeping Vulkan on macOS isn't a compromise — it's the cheap path. MoltenVK gives a Vulkan 1.3
+    device that accepts every feature the engine demands, presents through a <code>CAMetalLayer</code>,
+    and imports an <code>IOSurface</code> as a <code>VkImage</code> with no copy.</p>
+    <p><strong>Cross-process GPU frames work, the ordering contract survives intact, and the last open
+    question is now closed</strong> — the timeline crosses to a spawned child using only public API,
+    with no launchd service and no bundle. And there's a <strong>runnable sample app</strong>: a real
+    Python child editing a real 1080p GPU frame through numpy, verified pixel-exact over 300 frames,
+    at <strong>698 fps</strong>.</p>
+    <p>The engine doesn't compile for macOS today. But <strong>not one</strong> of its 65 errors is a
+    MoltenVK limitation — they're an unapplied Rust edition migration, a stale second GPU backend, and
+    <code>#[cfg(linux)]</code> on code with nothing Linux in it.</p>
+  </div>
+
+  <h2>What I ran on your machine</h2>
+
+  <div class="grid">
+    <div class="card">
+      <div class="k">GPU device</div>
+      <div class="v"><span class="ok">✓</span> MoltenVK clears the bar</div>
+      <div class="d"><b>Vulkan 1.3.323</b> on the M1 Max. Device creation with every feature the engine
+        hard-requires — timeline semaphores, sync2, dynamic rendering, YCbCr, format-less storage
+        images — succeeded.</div>
+    </div>
+    <div class="card">
+      <div class="k">Camera → GPU</div>
+      <div class="v"><span class="ok">✓</span> Zero-copy works</div>
+      <div class="d">An <code>IOSurface</code> — what AVFoundation hands you — imported straight into a
+        <code>VkImage</code>. Plain BGRA and biplanar <code>420v</code> per-plane. 15 formats round-tripped.</div>
+    </div>
+    <div class="card">
+      <div class="k">Window / present</div>
+      <div class="v"><span class="ok">✓</span> Swapchain works</div>
+      <div class="d"><code>CAMetalLayer</code> → <code>VkSurfaceKHR</code> → 3-image swapchain, FIFO
+        vsync, 60 formats including HDR10 and HLG. Your existing colorspace logic maps on unchanged.</div>
+    </div>
+    <div class="card">
+      <div class="k">Data plane</div>
+      <div class="v"><span class="ok">✓</span> iceoryx2 works</div>
+      <div class="d">Node, publisher and subscriber came up and moved samples on macOS with no changes
+        at all. The transport is already portable.</div>
+    </div>
+    <div class="card">
+      <div class="k">Cross-process frames</div>
+      <div class="v"><span class="ok">✓</span> Proven end-to-end</div>
+      <div class="d">Parent → spawned child → IOSurface over a Mach port → child imports into
+        <em>its own</em> <code>VkDevice</code>, GPU-reads and CPU-reads it back. Zero mismatches.
+        No launchd, no plist, no service.</div>
+    </div>
+    <div class="card">
+      <div class="k">Cross-process sync</div>
+      <div class="v"><span class="ok">✓</span> Timelines survive</div>
+      <div class="d">500-round <code>produce_done</code>/<code>consume_done</code> ping-pong,
+        <b>0 mismatched frames</b> in all five wait modes. Vulkan timeline values map 1:1 onto
+        <code>MTLSharedEvent</code>.</div>
+    </div>
+    <div class="card">
+      <div class="k">Runnable sample</div>
+      <div class="v"><span class="ok">✓</span> PASS, 698 fps</div>
+      <div class="d">A real spawned <b>Python 3.12</b> child editing a 1080p GPU frame through a numpy
+        view. 300 frames, every pixel verified, plus a negative control. Round trip
+        <b>0.216 ms</b>. <code>bash /tmp/slmac-sample/run.sh</code></div>
+    </div>
+    <div class="card">
+      <div class="k">Shared event transfer</div>
+      <div class="v"><span class="ok">✓</span> Public route found</div>
+      <div class="d">A public <code>NSXPCCoder</code> subclass extracts the handle's Mach send right —
+        no XPC service, no bundle. <b>500 device-side round trips at 120 µs.</b></div>
+    </div>
+    <div class="card">
+      <div class="k">Camera permission</div>
+      <div class="v"><span class="ok">✓</span> Nothing to ship</div>
+      <div class="d">The <em>terminal</em> is the permission subject, not you. Every mainstream
+        terminal already ships a camera usage string for its children.</div>
+    </div>
+    <div class="card">
+      <div class="k">Wheel / Gatekeeper</div>
+      <div class="v"><span class="ok">✓</span> No notarization</div>
+      <div class="d">pip-delivered files are never quarantined, and Gatekeeper is triggered by
+        quarantine. Ad-hoc signed dylibs load fine. No Developer ID, no CI secrets.</div>
+    </div>
+  </div>
+
+  <pre>=== cross-process timeline ping-pong, 500 rounds, separate VkDevices ===
+  both host-side waits       <b>0 mismatched frames</b>   824 us/round
+  both device-side waits     <b>0 mismatched frames</b>   561 us/round
+  server host / client dev   <b>0 mismatched frames</b>   696 us/round
+  server dev / client host   <b>0 mismatched frames</b>   853 us/round
+  server Vulkan / client Metal <b>0 mismatched frames</b> 497 us/round</pre>
+
+  <h2>The cross-process story — yes, you're good</h2>
+
+  <p>Your framing is right and it's also what the tree already does: <strong>the Mach channel only
+  exchanges handles. iceoryx2 stays the data plane.</strong> That split isn't new work — it's the
+  existing architecture.</p>
+
+  <div class="flow">
+    <div class="row"><div class="lbl">Per frame</div>
+      <div class="val">a bag carrying a <b>surface&nbsp;id string</b> over iceoryx2. No handle, no fd, no port.</div></div>
+    <div class="row"><div class="lbl">Per pool slot, once</div>
+      <div class="val">the producer registers the buffer, a consumer checks it out — <b>that</b> is where
+        the fd (Linux) or Mach port (macOS) crosses.</div></div>
+    <div class="row"><div class="lbl">Verified</div>
+      <div class="val"><code>register_buffer</code> is called from the pool's pre-allocation loop, once
+        per slot. Nothing per-frame touches it.</div></div>
+  </div>
+
+  <p style="margin-top:16px">So the Mach channel is a <strong>low-frequency control path</strong> —
+  touched a couple of dozen times at setup, then effectively never. Transport latency is irrelevant
+  (I measured ~4 µs anyway, on par with a Unix socket). The per-frame cost on macOS is iceoryx2, plus
+  an already-imported per-slot-cached <code>VkImage</code>, plus a timeline wait. The pre-iceoryx2
+  design pushed frame data through this channel; nothing does now.</p>
+
+  <h3>One correction: the mechanism is raw Mach, not XPC</h3>
+  <p style="color:var(--dim)">Your instinct about <em>no service install</em> is exactly right — that
+  outcome is fully achieved. But anonymous XPC can't reach a process that doesn't exist yet: an XPC
+  endpoint <strong>cannot be serialised to bytes</strong> (it throws <em>"may only be encoded by an
+  NSXPCCoder"</em>), so it can only travel over an XPC channel that already exists. Circular. The
+  service-less mechanism that actually works is raw Mach — which also hands you the public audit token
+  and dead-peer notifications that XPC makes harder to get.</p>
+
+  <h3><span class="ok">✓</span> The open question — resolved</h3>
+  <p style="color:var(--dim)">The last unknown was how the Metal shared event (the timeline) reaches a
+  child without a launchd-backed XPC service. <strong>It can, using only public API.</strong>
+  <code>NSXPCCoder</code> is a public Foundation class, and <code>MTLSharedEventHandle</code> checks
+  only that the coder <em>is one</em> — it never looks at the connection, which is nil in a subclass.
+  So a coder subclass extracts the handle's Mach send right, which crosses the channel the IOSurface
+  already uses. <strong>Proven: 500 device-side cross-process round trips at 120 µs each</strong>, with
+  the 1080p data path verified pixel-exact alongside it.</p>
+  <p style="color:var(--dim)">Public API, but used in a way Apple doesn't document —
+  <strong>rate it ~7/10 durable and keep the fallback wired behind the same interface</strong>. What's
+  load-bearing isn't the API, it's the encoded shape (one Mach send right plus a label). Failure is
+  safe — a bad port returns nil, not a crash — so the swap can be a runtime fallback. And the fallback
+  is cheap: host-side ordering costs <strong>+26–100 µs per frame, under 1% of a 16.7 ms budget</strong>.
+  Neither outcome threatens the milestone.</p>
+
+  <h3><span class="mid">⚠</span> One hard rule that came out of it</h3>
+  <p style="color:var(--dim)">A committed command buffer whose GPU wait isn't satisfied within
+  <strong>~5 seconds</strong> is killed by the OS, and MoltenVK marks the whole
+  <code>VkDevice</code> lost — unrecoverable. The spike hit this for real when its child blocked on a
+  full socket. <strong>A wedged Python helper must never be able to take the engine's device down.</strong>
+  So: never let the producer GPU-wait on a consumer that can stall; bound it host-side with a watchdog
+  well under 5 s. That's a design rule for the ticket, not implementer's discretion.</p>
+
+  <h3>The CPU path is <em>better</em> than Linux</h3>
+  <p style="color:var(--dim)">Linux reads write-combined memory at ~175 MB/s, which is why the
+  scaffolded effect does a bulk copy instead of editing in place. On Apple Silicon the default
+  IOSurface mapping is <strong>cached and reads at heap speed — ~50 GB/s</strong>. That performance
+  workaround is unnecessary here (and the comment explaining it will read as wrong on a Mac).</p>
+
+  <h2>Why it's broken right now</h2>
+
+  <p>Three months of Apple code, then seven months of nobody compiling it. All 12 CI jobs run on
+  Ubuntu; even the source-linting tools skip the Apple files on purpose. So it rotted silently.</p>
+
+  <table>
+    <thead><tr><th>Errors</th><th>What they are</th><th>How hard</th></tr></thead>
+    <tbody>
+      <tr><td class="num">21</td><td>Rust 2024 wants <code>unsafe extern</code> blocks — the migration was never run on Apple files</td><td><span class="ok">Mechanical</span> — one keyword each</td></tr>
+      <tr><td class="num">23</td><td>References to a second, half-finished <b>Metal</b> backend sitting beside Vulkan</td><td><span class="ok">Delete it</span> — 2.5k lines against 89k of Vulkan RHI</td></tr>
+      <tr><td class="num">18</td><td>Vulkan code hidden behind <code>#[cfg(linux)]</code> for no reason</td><td><span class="ok">Widen the gate</span></td></tr>
+      <tr><td class="num">3</td><td>Shaders only compiled on Linux by the build script</td><td><span class="ok">One line</span></td></tr>
+    </tbody>
+  </table>
+
+  <p style="margin-top:18px">Supporting evidence: I widened the gates on the consumer-side Vulkan RHI
+  in a throwaway worktree and it compiled on Apple Silicon with <strong>zero code changes</strong>.</p>
+
+  <h2>What's genuinely hard</h2>
+
+  <table>
+    <thead><tr><th>Linux today</th><th>macOS needs</th><th>Seam?</th></tr></thead>
+    <tbody>
+      <tr><td>V4L2 capture</td><td>AVFoundation</td><td><span class="no">No seam exists</span> — V4L2 is wired straight into the camera block. Building it is the bulk of the capture work.</td></tr>
+      <tr><td>fd-passing over sockets</td><td>Mach ports</td><td><span class="mid">Client exists, no server</span> — the existing XPC client was written against a shape that's ruled out; the IOSurface half survives, the transport gets re-pointed</td></tr>
+      <tr><td>DMA-BUF memory</td><td>IOSurface</td><td><span class="mid">Partly</span> — the plan already treats importability as a per-allocation "flavour" that can fall back</td></tr>
+      <tr><td>winit on any thread</td><td>Pump on the main thread</td><td><span class="ok">Yes</span> — the code comments already name this as the Apple seam</td></tr>
+    </tbody>
+  </table>
+
+  <h3 style="margin-top:30px">Where Apple's SDKs earn their place</h3>
+  <p style="color:var(--dim)">One RHI — Vulkan — everywhere. Apple frameworks at the edges only:</p>
+  <ul class="plain">
+    <li><strong>AVFoundation</strong> for capture → hands off an <code>IOSurface</code> to Vulkan</li>
+    <li><strong>AppKit / CAMetalLayer</strong> for the window → hands off a <code>VkSurfaceKHR</code></li>
+    <li><strong>IOSurface + Mach ports</strong> for cross-process frames; <strong>MTLSharedEvent</strong> for the ordering</li>
+    <li><strong>VideoToolbox</strong> for codecs later — MoltenVK has no Vulkan Video at all</li>
+    <li><strong>CoreAudio</strong> later, behind the audio backend trait that already exists</li>
+    <li><strong><code>mach_absolute_time</code></strong> for the clock — already shipped and correct</li>
+  </ul>
+
+  <h2>The milestone: camera → display on Apple Silicon</h2>
+  <p style="color:var(--dim)">Eight tracer bullets. Codecs, audio, ray tracing, virtual camera and the
+  adapters are deliberately out.</p>
+
+  <ol class="steps">
+    <li><div class="t">The engine compiles and links on macOS</div>
+      <div class="m">Edition migration, move the Vulkan stack off the Linux-only dependency list,
+        delete the Metal backend (after mining its AVFoundation notes), widen the shader build.
+        Ship a CI job that keeps it green.</div>
+      <div class="dep">Blocks everything</div></li>
+    <li><div class="t">A Vulkan device comes up on MoltenVK</div>
+      <div class="m">Fix a one-word bug in a block that has never been compiled, ask for the right
+        extensions, teach the loader to find MoltenVK.</div>
+      <div class="dep">Needs 1 · Proof: a compute kernel dispatches on this Mac</div></li>
+    <li><div class="t">A window presents</div>
+      <div class="m">Event pump moves to the main thread, <code>CAMetalLayer</code> becomes the Vulkan
+        surface, the display block is un-gated.</div>
+      <div class="dep">Needs 2</div></li>
+    <li><div class="t">A video device seam, with V4L2 moved behind it</div>
+      <div class="m">Copy the shape audio already uses. The camera block becomes platform-agnostic;
+        V4L2 becomes one implementation. Pure refactor — Linux CI stays green.</div>
+      <div class="dep">Needs 1 · Parallel with 2 and 3</div></li>
+    <li><div class="t">AVFoundation capture behind that seam</div>
+      <div class="m">Capture session → <code>IOSurface</code> → <code>VkImage</code>, colour and
+        timestamps mapped properly, and a real non-blocking permission request.</div>
+      <div class="dep">Needs 3 + 4 · Proof: frames from your camera reach a window</div></li>
+    <li><div class="t">A surface handle crosses to a helper process</div>
+      <div class="m">The Apple arm of surface-share: raw Mach instead of the Unix socket, Mach ports
+        instead of <code>SCM_RIGHTS</code>, an audit-token peer check, dead-peer notifications wired
+        to teardown.</div>
+      <div class="dep">Needs 2 · Parallel with 3–5 · Proof: two engine processes round-trip a surface</div></li>
+    <li><div class="t">A Python processor edits a frame on macOS</div>
+      <div class="m">Engine allocates the IOSurface; helper imports it into its own device, cached per
+        slot; <code>produce_done</code>/<code>consume_done</code> exported as Metal shared events; the
+        numpy view from the surface.</div>
+      <div class="dep">Needs 5 + 6 · Proof: the scaffolded effect inverts a real camera frame</div></li>
+    <li><div class="t">The wheel installs and runs</div>
+      <div class="m">macOS runner, arm64 wheel, bundled Vulkan loader + MoltenVK (~1.7 MB), stubs and
+        portability tests updated. The release index needs no change at all.</div>
+      <div class="dep">Needs 7 · Proof: clean machine → <code>pip install</code> → camera in a window</div></li>
+  </ol>
+
+  <h2>Decisions still yours</h2>
+
+  <div class="q done"><div class="qq"><span class="ok">✓ Decided</span> · Does the macOS MVP include a Python processor?</div>
+    <div class="qa">Yes — you ruled cross-process frames in. The narrow two-built-in MVP is struck.</div></div>
+  <div class="q done"><div class="qq"><span class="ok">✓ Decided</span> · Distribution shape</div>
+    <div class="qa">The wheel, identical to Linux. <strong>No .app bundle, no launchd, no installer</strong>
+    — under any justification. brew is build-time only. Security prompts are expected and fine; needing
+    a <em>bundle</em> to get them is not. This retires two fallbacks this research had left open — the
+    .app re-exec for the terminal-permission edge case, and the bundled XPC service for the shared-event
+    seam. Both off the table.</div></div>
+  <div class="q"><div class="qq">1 · Is macOS a supported floor, or a developer-machine floor?</div>
+    <div class="qa">"Contributors on Macs can run the engine" and "Mac users get the Linux install
+    experience" are different products with different CI and support costs.</div></div>
+  <div class="q"><div class="qq">2 · Vulkan everywhere, and delete <code>src/metal/</code>?</div>
+    <div class="qa">I recommend yes, with evidence. Reviving Metal means writing every kernel, buffer
+    and timeline twice, forever.</div></div>
+  <div class="q"><div class="qq">3 · The spawn fork — this one is new</div>
+    <div class="qa">The capability-secure rendezvous (nobody else can find it) only survives
+    <code>posix_spawn</code>, and our helper spawn is fork+exec because it registers
+    <code>pre_exec</code> closures. Either take the discoverable named path now plus a peer check, or
+    move the spawn to <code>posix_spawn</code> first — which is attractive anyway, because Apple's
+    <code>POSIX_SPAWN_CLOEXEC_DEFAULT</code> replaces the descriptor sweep with something stronger.</div></div>
+  <div class="q"><div class="qq">4 · Capture timestamp or publish timestamp?</div>
+    <div class="qa">The camera stamps publication today and never reads the driver's stamp — while audio
+    stamps capture. AVFoundation hands back a real capture time, so this becomes unavoidable, and
+    answering it changes behaviour on <em>both</em> platforms.</div></div>
+  <div class="q"><div class="qq">5 · Apple Silicon only, or Intel too?</div>
+    <div class="qa">Affects the CI matrix and the wheel count. I'd say arm64 only.</div></div>
+
+  <h2>Risks worth carrying</h2>
+  <ul class="plain">
+    <li><strong>~0.5 s Vulkan device bring-up per process.</strong> Measured. Every Python helper pays
+      it, and there's a test pinning the helper startup budget. Warm it before the real-time loop, and
+      expect to revisit that budget.</li>
+    <li><strong>A permission prompt that never returns.</strong> <code>requestAccess</code> blocks until
+      the user answers, so <code>streamlib dev</code> would look hung. Never await it on the critical
+      path, and name the <em>terminal</em> in the error — there's no "+" button on the Camera pane, so a
+      user who never got a prompt can't add themselves.</li>
+    <li><strong>One unexplained hang</strong> in Metal's shader cache between two processes of the same
+      executable (1 in ~15 runs; a 6×3 stress didn't reproduce). Matters because every helper shares one
+      <code>sys.executable</code>.</li>
+    <li><strong>A re-sign trap that only fails on users' machines.</strong> Any
+      <code>strip</code>/<code>lipo</code> step invalidates the signature. Must end in
+      <code>codesign -f -s -</code>. Worth a CI assertion — the portability test currently <em>skips</em>
+      silently on Mach-O rather than failing.</li>
+    <li><strong>Never daemonise the engine</strong>, or the permission chain breaks and camera access
+      silently dies.</li>
+    <li><strong>Linking and first run are still unmeasured.</strong> Every measurement here stops at
+      compile, or at a standalone probe.</li>
+  </ul>
+
+  <h3 style="margin-top:28px">One strategic note</h3>
+  <p style="color:var(--dim)"><strong>KosmicKrisp</strong> — LunarG's Vulkan-on-Metal driver in Mesa —
+  is MIT-licensed and <strong>fully Vulkan 1.3 CTS conformant</strong>, macOS 26+ on Apple Silicon, and
+  already ships in the LunarG SDK beside MoltenVK. MoltenVK's own README calls itself non-conformant.
+  That's the argument for bundling the Vulkan <em>loader</em> alongside MoltenVK rather than hard-wiring
+  MoltenVK: ~0.3 MB extra buys you that migration path, plus validation layers as an opt-in.</p>
+
+  <div class="foot">
+    Full memo — file:line evidence, every measurement, the draft change and the eight ticket bodies:
+    <code>docs/research/2026-09-19-macos-camera-display-revival.md</code>
+  </div>
+
+</div>
+</body>
+</html>
