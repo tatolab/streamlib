@@ -22,7 +22,7 @@
 //! channel's ring, the bags the egress never sent, Zenoh's silent drop, the
 //! network, and this ring.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -124,8 +124,12 @@ pub(super) struct MeshLinkIngress {
     /// its own destination processor's node, so `graph` reads it beside what
     /// that processor's ports lost. Shared with the writing thread, which is
     /// what records into them.
+    ///
+    /// Keyed by link id so a destination that goes takes its counter with it,
+    /// and so a link wired again over a surviving ingress replaces its counter
+    /// rather than gaining a second one to be charged twice.
     where_every_link_it_feeds_counts_hop_loss:
-        Arc<Mutex<Vec<RemoteInboundLinkMeshHopDroppedBagCounter>>>,
+        Arc<Mutex<BTreeMap<String, RemoteInboundLinkMeshHopDroppedBagCounter>>>,
     held_on_the_mesh: Option<HeldOnTheMeshByOneIngress>,
     writing_thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -245,7 +249,7 @@ impl MeshLinkIngress {
                 ))
             })?;
 
-        let where_every_link_it_feeds_counts_hop_loss = Arc::new(Mutex::new(Vec::new()));
+        let where_every_link_it_feeds_counts_hop_loss = Arc::new(Mutex::new(BTreeMap::new()));
         let writing_thread = spawn_the_writing_thread(
             address.clone(),
             Arc::clone(&arrived),
@@ -303,7 +307,21 @@ impl MeshLinkIngress {
         );
         self.where_every_link_it_feeds_counts_hop_loss
             .lock()
-            .push(where_its_hop_loss_is_counted);
+            .insert(link_id.to_string(), where_its_hop_loss_is_counted);
+    }
+
+    /// Forget one local destination this ingress feeds, when its link is gone
+    /// and other links keep the ingress alive.
+    ///
+    /// Everything [`Self::note_a_local_destination`] took, given back together:
+    /// a destination that left must stop being notified as much as it must
+    /// stop being charged for what the hop loses after it.
+    pub(super) fn forget_a_local_destination(&self, link_id: &str) {
+        self.writes_onto_the_local_channel
+            .remove_channel_link(THE_INGRESS_OUTPUT_PORT, link_id);
+        self.where_every_link_it_feeds_counts_hop_loss
+            .lock()
+            .remove(link_id);
     }
 }
 
@@ -437,7 +455,7 @@ fn spawn_the_writing_thread(
     arrived: Arc<(Mutex<WhatHasArrivedFromTheMesh>, Condvar)>,
     writes_onto_the_local_channel: Arc<OutputWriterInner>,
     where_every_link_it_feeds_counts_hop_loss: Arc<
-        Mutex<Vec<RemoteInboundLinkMeshHopDroppedBagCounter>>,
+        Mutex<BTreeMap<String, RemoteInboundLinkMeshHopDroppedBagCounter>>,
     >,
 ) -> std::io::Result<std::thread::JoinHandle<()>> {
     std::thread::Builder::new()
@@ -464,7 +482,7 @@ fn spawn_the_writing_thread(
                 // read here rather than as each bag arrived.
                 let lost_before_it = bags_the_hop_lost.how_many_the_hop_lost_before(&taken);
                 if lost_before_it > 0 {
-                    for counter in where_every_link_it_feeds_counts_hop_loss.lock().iter() {
+                    for counter in where_every_link_it_feeds_counts_hop_loss.lock().values() {
                         counter.record_dropped_bags(lost_before_it);
                     }
                 }

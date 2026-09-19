@@ -177,6 +177,15 @@ impl MeshLinkIngressTable {
                 .links
                 .values()
                 .any(|link| link.address == forgotten.address);
+            if still_read {
+                // The ingress outlives this link because other links read the
+                // same port, so it is told to give back what this one's wiring
+                // took: a destination that left must stop being notified and
+                // stop being charged for what the hop loses after it.
+                if let Some(ingress) = carried.carrying.get(&forgotten.address) {
+                    ingress.forget_a_local_destination(link_id.as_str());
+                }
+            }
             // Dropping the ingress undeclares this runtime's reader token,
             // which is what makes the source stop sending the port.
             (!still_read)
