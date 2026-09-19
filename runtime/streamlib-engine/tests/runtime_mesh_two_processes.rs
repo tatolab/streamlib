@@ -617,9 +617,22 @@ fn the_mesh_key_carries_exactly_what_the_plan_states() {
         .expect("the mesh is an object")
         .keys()
         .collect();
-    assert_eq!(keys, ["mesh_name", "runtime_name", "session", "peers"]);
+    assert_eq!(
+        keys,
+        [
+            "mesh_name",
+            "runtime_name",
+            "session",
+            "peers",
+            "egress_ports"
+        ]
+    );
     assert_eq!(mesh["mesh_name"], mesh_name);
     assert_eq!(mesh["runtime_name"], "shaped");
+    // A runtime alone on its mesh is sending nothing, and says so as an empty
+    // list rather than by leaving the key out — the way `peers` beside it
+    // already distinguishes "nobody" from "this engine predates the key".
+    assert_eq!(mesh["egress_ports"], serde_json::json!([]), "{mesh}");
 }
 
 /// A `quic/` endpoint names a transport this build does not carry, and a plain

@@ -22,6 +22,7 @@ mod mesh_link_ingress_table;
 mod mesh_port_egress;
 mod mesh_port_egress_table;
 mod output_ports_offered_on_the_mesh;
+mod output_ports_other_runtimes_are_reading;
 mod resolved_runtime_mesh_configuration;
 mod runtime_mesh_description;
 mod runtime_mesh_endpoint;

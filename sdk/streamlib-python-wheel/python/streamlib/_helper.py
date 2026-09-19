@@ -708,6 +708,10 @@ def wire_link_data_access(
         link_data_access.wire_input_link(
             input_link["name"],
             input_link["channel_service_name"],
+            # Not derived from the channel: a link carrying from another
+            # runtime rides a channel hashed from the source port's mesh
+            # address, and the address is what a read hands back.
+            input_link["inbound_link_name"],
             input_link["notify_service_name"],
             input_link["read_mode"],
             input_link["channel_service_creation_depth"],

@@ -161,6 +161,11 @@ def engine_shaped_link_wiring(direction: str, link_id: str) -> dict:
         "name": "frames_from_upstream",
         "link_id": link_id,
         "channel_service_name": channel_service_name,
+        # Equal to the channel for a link whose source is on this runtime,
+        # which is every link this suite wires; they differ only for one
+        # carrying from another runtime, whose channel is hashed from the
+        # source port's mesh address.
+        "inbound_link_name": channel_service_name,
         "notify_service_name": notify_service_name,
         "read_mode": "read_next_in_order",
         "channel_service_creation_depth": 16,
@@ -260,6 +265,10 @@ def test_a_helper_opens_the_channel_at_its_creation_depth_and_reads_at_its_own_p
     shallow_wiring["input_port_ring_depth"] = 4
     deep_wiring = engine_shaped_link_wiring("input", "L-deep-port")
     deep_wiring["channel_service_name"] = shallow_wiring["channel_service_name"]
+    # Both names move together: a link from this runtime is known by the
+    # channel it subscribed to, so leaving the name behind would send an
+    # envelope the engine never emits.
+    deep_wiring["inbound_link_name"] = shallow_wiring["channel_service_name"]
     deep_wiring["notify_service_name"] = f"{shallow_wiring['notify_service_name']}_deep"
     source_wiring = engine_shaped_link_wiring("output", "L-shallow-port")
     source_wiring["channel_service_name"] = shallow_wiring["channel_service_name"]

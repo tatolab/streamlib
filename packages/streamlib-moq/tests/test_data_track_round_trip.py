@@ -243,6 +243,7 @@ def _one_live_link(
     reading_end.wire_input_link(
         reading_port,
         channel_service_name,
+        channel_service_name,
         notify_service_name,
         "read_next_in_order",
         8,

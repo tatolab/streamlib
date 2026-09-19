@@ -1006,7 +1006,8 @@ def test_a_composing_type_read_over_a_link_arrives_built_from_the_bag():
     # `!Send`.
     destination = ProcessorLinkDataAccess()
     destination.wire_input_link(
-        INPUT_PORT, channel_service_name, notify_service_name,
+        INPUT_PORT, channel_service_name, channel_service_name,
+        notify_service_name,
         "read_next_in_order", 8, 8, 2, 1, link_id,
     )  # fmt: skip
     source = ProcessorLinkDataAccess()

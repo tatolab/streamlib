@@ -33,6 +33,7 @@ use crate::core::runtime::mesh::mesh_port_egress_table::MeshPortEgressTable;
 use crate::core::runtime::mesh::output_ports_offered_on_the_mesh::{
     OfferedOutputPortsQueryable, WhatThisRuntimeOffersOnTheMeshRegistry,
 };
+use crate::core::runtime::mesh::output_ports_other_runtimes_are_reading::OutputPortsOtherRuntimesAreReading;
 use crate::core::runtime::mesh::resolved_runtime_mesh_configuration::ResolvedRuntimeMeshConfiguration;
 use crate::core::runtime::mesh::runtime_mesh_description::{
     RuntimeMeshDescription, ask_a_peer_what_it_is,
@@ -63,6 +64,10 @@ pub struct RuntimeMeshMembership {
     /// way. Held rather than owned: the runtime hands the same table to every
     /// `RuntimeContext`, through which the wiring op reaches it.
     carrying_links_from_other_runtimes: Mutex<Option<Arc<MeshLinkIngressTable>>>,
+    /// Which of this runtime's output ports the mesh is currently sending.
+    /// Lives here rather than inside the egress table because `graph` reads it
+    /// whether or not this runtime ever started serving its ports.
+    being_read_by_other_runtimes: Arc<OutputPortsOtherRuntimesAreReading>,
 }
 
 /// What a runtime holds on the mesh to serve its own output ports: the
@@ -156,6 +161,7 @@ impl RuntimeMeshMembership {
             session: Mutex::new(session),
             serving_this_runtimes_output_ports: Mutex::new(None),
             carrying_links_from_other_runtimes: Mutex::new(None),
+            being_read_by_other_runtimes: Arc::default(),
         })
     }
 
@@ -189,6 +195,7 @@ impl RuntimeMeshMembership {
         };
         let key_space = self.key_space.clone();
         let this_runtimes_name = self.announced_identity.runtime_name.clone();
+        let being_read_by_other_runtimes = Arc::clone(&self.being_read_by_other_runtimes);
 
         let served = off_any_current_thread_tokio_runtime("serve", || {
             let offered_output_ports_queryable = OfferedOutputPortsQueryable::declare(
@@ -203,6 +210,7 @@ impl RuntimeMeshMembership {
                 &this_runtimes_name,
                 offered,
                 iceoryx2_node,
+                &being_read_by_other_runtimes,
             )?;
             Ok::<_, zenoh::Error>(ServingThisRuntimesOutputPorts {
                 _offered_output_ports_queryable: offered_output_ports_queryable,
@@ -388,6 +396,7 @@ impl RuntimeMeshMembership {
             }),
             serving_this_runtimes_output_ports: Mutex::new(None),
             carrying_links_from_other_runtimes: Mutex::new(None),
+            being_read_by_other_runtimes: Arc::default(),
         }
     }
 
@@ -415,6 +424,7 @@ impl RuntimeMeshMembership {
             session,
             local_only_reason,
             peers: self.peers.render_for_graph(),
+            egress_ports: self.being_read_by_other_runtimes.render_for_graph(),
         }
     }
 }

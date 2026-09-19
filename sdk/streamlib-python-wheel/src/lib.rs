@@ -59,6 +59,7 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<python_added_processor::PythonAddedProcessor>()?;
     module.add_class::<python_added_processor::PythonProcessorOutputPortReference>()?;
     module.add_class::<python_added_processor::PythonProcessorInputPortReference>()?;
+    module.add_class::<python_added_processor::PythonRemoteProcessorOutputPortReference>()?;
     module.add_class::<python_processor_link_data_access::PythonProcessorLinkDataAccess>()?;
     module.add_class::<python_processor_context::PythonRuntimeContextFullAccess>()?;
     module.add_class::<python_processor_context::PythonRuntimeContextLimitedAccess>()?;

@@ -179,7 +179,9 @@ impl PythonProcessorLinkDataAccess {
     /// `None` when the mailbox is empty.
     ///
     /// The read a destination taking many links on one port uses: each inbound
-    /// link is one producer, named by the source channel name it subscribed to.
+    /// link is one producer, named by the source channel name it subscribed to
+    /// — or, for a link carrying from another runtime, by that port's mesh
+    /// address, which is what the engine wired the link under.
     pub(crate) fn read_from_input_port_naming_its_inbound_link<'py>(
         &self,
         python: Python<'py>,
@@ -435,6 +437,13 @@ impl PythonProcessorLinkDataAccess {
     /// Open this processor's subscriber for a link into `port_name`, plus the
     /// one listener every input shares.
     ///
+    /// `channel_service_name` is what this end subscribes to and
+    /// `inbound_link_name` is what the link is known by in a read — two names
+    /// rather than one because a link carrying from another runtime rides a
+    /// channel hashed from the source port's mesh address, so deriving the
+    /// name from the channel would hand a many-track sink a hash instead of
+    /// the address. They are equal for a link from this runtime.
+    ///
     /// `notify_service_name` is always a real name here, unlike the output
     /// side's: a helper-hosted destination opens its listener whatever
     /// execution mode the class declares, and the engine withholds only its
@@ -446,6 +455,7 @@ impl PythonProcessorLinkDataAccess {
     #[pyo3(signature = (
         port_name,
         channel_service_name,
+        inbound_link_name,
         notify_service_name,
         read_mode,
         channel_service_creation_depth,
@@ -463,6 +473,7 @@ impl PythonProcessorLinkDataAccess {
         python: Python<'_>,
         port_name: &str,
         channel_service_name: &str,
+        inbound_link_name: &str,
         notify_service_name: &str,
         read_mode: &str,
         channel_service_creation_depth: usize,
@@ -522,7 +533,7 @@ impl PythonProcessorLinkDataAccess {
                 input_mailboxes.add_channel_subscriber(
                     port_name,
                     link_id,
-                    &InboundLinkName::from(channel_service_name),
+                    &InboundLinkName::from(inbound_link_name),
                     channel.create_subscriber(input_port_ring_depth)?,
                 );
                 if let Some((board_writer, (loss_count_slot, wiring_generation))) =
@@ -759,6 +770,7 @@ mod tests {
                     python,
                     "frames_from_upstream",
                     &channel,
+                    &channel,
                     &notify,
                     "read_next_in_order",
                     8,
@@ -887,6 +899,7 @@ mod tests {
                     python,
                     "frames_from_upstream",
                     &channel,
+                    &channel,
                     &notify,
                     "read_next_in_order",
                     8,
@@ -989,11 +1002,13 @@ mod tests {
                 Some((31, 1))
             );
 
+            let second_channel = format!("{channel}_second");
             let refusal = destination
                 .wire_input_link(
                     python,
                     "frames_from_upstream",
-                    &format!("{channel}_second"),
+                    &second_channel,
+                    &second_channel,
                     &notify,
                     "read_next_in_order",
                     8,
@@ -1068,6 +1083,7 @@ mod tests {
                 .wire_input_link(
                     python,
                     "audio_from_upstream",
+                    &channel,
                     &channel,
                     &notify,
                     "read_next_in_order",
@@ -1238,6 +1254,7 @@ mod tests {
                 .wire_input_link(
                     python,
                     "frames_from_upstream",
+                    &channel,
                     &channel,
                     &notify,
                     "whenever",

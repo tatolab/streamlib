@@ -248,8 +248,14 @@ pub fn mesh_ingress_channel_name(mesh_port_address: &str) -> ChannelName {
     name
 }
 
-/// The name a destination knows one of its inbound links by: the source channel
-/// name that link subscribed to, as [`source_channel_name`] derives it.
+/// The name a destination knows one of its inbound links by.
+///
+/// For a link whose source is on this runtime that is the source channel name
+/// it subscribed to, as [`source_channel_name`] derives it. For one carrying
+/// from another runtime it is the source port's mesh address — the channel
+/// there is hashed from that address ([`mesh_ingress_channel_name`]) and names
+/// nothing a reader could recognise, so the two are not the same string and
+/// the engine sends both.
 ///
 /// Cheap to clone because every queued frame carries one.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]

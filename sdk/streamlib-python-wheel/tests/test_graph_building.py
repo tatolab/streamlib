@@ -189,3 +189,91 @@ def test_the_graph_cannot_be_built_after_the_runtime_is_shut_down():
     runtime.shutdown()
     with pytest.raises(RuntimeError, match="has been shut down"):
         runtime.add(GraphBuildingFilter)
+
+
+def test_a_port_on_another_runtime_is_named_by_its_mesh_address():
+    """A remote reference carries the address and shows it — processor ids and
+    channel names never appear on the mesh, so the middle part is the display
+    name."""
+    runtime = streamlib.Runtime()
+    try:
+        source = runtime.remote_processor_output(
+            "bench-cam-a1b2", "CameraSource", "video"
+        )
+        assert isinstance(source, streamlib.RemoteProcessorOutputPortReference)
+        assert repr(source) == (
+            "RemoteProcessorOutputPortReference(bench-cam-a1b2/CameraSource/video)"
+        )
+    finally:
+        runtime.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("runtime_name", "display_name", "port_name", "offending_part"),
+    [
+        ("bench/cam", "CameraSource", "video", "runtime name"),
+        ("bench-cam", "Camera*Source", "video", "processor display name"),
+        ("bench-cam", "CameraSource", "@video", "port name"),
+        ("bench-cam", "", "video", "processor display name"),
+    ],
+)
+def test_an_address_the_mesh_cannot_carry_is_refused_where_it_was_written(
+    runtime_name: str, display_name: str, port_name: str, offending_part: str
+):
+    """Refused at the mint rather than at `connect`, so the traceback points at
+    the line the author wrote rather than at a wiring call several lines on."""
+    runtime = streamlib.Runtime()
+    try:
+        with pytest.raises(ValueError, match=offending_part):
+            runtime.remote_processor_output(runtime_name, display_name, port_name)
+    finally:
+        runtime.shutdown()
+
+
+def test_a_remote_source_wires_into_a_local_input_before_run():
+    """`connect` takes either end's reference. Nothing about the mesh is waited
+    on here — the link is applied now and resolves later, which is what lets a
+    graph naming an absent runtime finish building."""
+    runtime = streamlib.Runtime()
+    try:
+        destination = runtime.add(GraphBuildingFilter)
+        runtime.connect(
+            runtime.remote_processor_output("bench-cam-a1b2", "CameraSource", "video"),
+            destination.input("frames_from_upstream"),
+        )
+    finally:
+        runtime.shutdown()
+
+
+def test_a_remote_source_naming_a_processor_this_runtime_lacks_is_refused_by_name():
+    """An address naming this runtime's own name is a local reference, so it
+    meets the local refusal — which lists what this runtime does display."""
+    runtime = streamlib.Runtime(runtime_name="graph-building-under-test")
+    try:
+        destination = runtime.add(GraphBuildingFilter, display_name="Destination")
+        with pytest.raises(RuntimeError, match="NoSuchProcessor"):
+            runtime.connect(
+                runtime.remote_processor_output(
+                    "graph-building-under-test", "NoSuchProcessor", "video"
+                ),
+                destination.input("frames_from_upstream"),
+            )
+    finally:
+        runtime.shutdown()
+
+
+def test_a_source_that_is_neither_reference_names_both_spellings_that_would_work():
+    """The refusal is a Python author's to act on, so it names the two calls
+    that mint a source rather than the binding's own Rust types."""
+    runtime = streamlib.Runtime()
+    try:
+        destination = runtime.add(GraphBuildingFilter)
+        with pytest.raises(TypeError) as refused:
+            runtime.connect(
+                "camera.video",  # pyright: ignore[reportArgumentType]
+                destination.input("frames_from_upstream"),
+            )
+        assert "processor.output(port_name)" in str(refused.value)
+        assert "runtime.remote_processor_output(" in str(refused.value)
+    finally:
+        runtime.shutdown()

@@ -7,7 +7,9 @@
 //! (`camera.output("frames_to_downstream")`) so a link always reads as an
 //! endpoint of something, never as a bare string pair.
 
+use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
+use streamlib::sdk::graph::{MeshPortAddress, OutputLinkPortRef};
 
 /// A processor in the graph.
 #[pyclass(name = "AddedProcessor", module = "streamlib", frozen)]
@@ -95,4 +97,55 @@ impl PythonProcessorInputPortReference {
             self.processor_id, self.port_name
         )
     }
+}
+
+/// The producing end of a link, on another runtime.
+///
+/// Holds the address the mesh checked at the mint, so `connect` never has to
+/// re-check it and an illegal chunk is refused where the author typed it.
+#[pyclass(
+    name = "RemoteProcessorOutputPortReference",
+    module = "streamlib",
+    frozen
+)]
+pub(crate) struct PythonRemoteProcessorOutputPortReference {
+    pub(crate) address: MeshPortAddress,
+}
+
+#[pymethods]
+impl PythonRemoteProcessorOutputPortReference {
+    fn __repr__(&self) -> String {
+        format!("RemoteProcessorOutputPortReference({})", self.address)
+    }
+}
+
+/// The engine's own reference for whichever end `connect`'s source names: a
+/// port on this runtime, or one on another runtime over the mesh.
+///
+/// Reads straight into `OutputLinkPortRef`, which is already those two shapes,
+/// rather than through a Python-side enum that would shadow it. Hand-written
+/// rather than `#[derive(FromPyObject)]` for the refusal: the derive's names
+/// the Rust variants it tried, which a Python author has no way to act on,
+/// where this names the two spellings that would have worked.
+pub(crate) fn the_output_link_port_ref_this_source_names(
+    source: &Bound<'_, PyAny>,
+) -> PyResult<OutputLinkPortRef> {
+    if let Ok(on_this_runtime) = source.cast::<PythonProcessorOutputPortReference>() {
+        let on_this_runtime = on_this_runtime.borrow();
+        return Ok(OutputLinkPortRef::new(
+            on_this_runtime.processor_id.clone(),
+            on_this_runtime.port_name.clone(),
+        ));
+    }
+    if let Ok(on_another_runtime) = source.cast::<PythonRemoteProcessorOutputPortReference>() {
+        return Ok(OutputLinkPortRef::on_another_runtime(
+            on_another_runtime.borrow().address.clone(),
+        ));
+    }
+    Err(PyTypeError::new_err(format!(
+        "connect's source must name an output port: `processor.output(port_name)` for a \
+         port on this runtime, or `runtime.remote_processor_output(runtime_name, \
+         display_name, port_name)` for one on another runtime. Got {}.",
+        source.get_type()
+    )))
 }

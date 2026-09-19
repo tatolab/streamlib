@@ -46,6 +46,7 @@ __all__ = [
     "ProcessorOwnedWindowEvents",
     "ProcessorLinkDataAccess",
     "ProcessorOutputPortReference",
+    "RemoteProcessorOutputPortReference",
     "CameraSource",
     "CapabilityExtensionHost",
     "DisplayWindow",
@@ -551,10 +552,32 @@ class Runtime:
         are published as its config schema in the processor catalog.
         """
 
+    def remote_processor_output(
+        self, runtime_name: str, display_name: str, port_name: str
+    ) -> RemoteProcessorOutputPortReference:
+        """Name an output port on another runtime, to pull it over the mesh.
+
+        A port on the mesh is addressed `<runtime name>/<display name>/<port>`
+        — the processor's display name, never its id, so renaming a processor
+        re-addresses its ports. A part the mesh cannot carry raises
+        `ValueError` here rather than at `connect`.
+
+        A `runtime_name` equal to this runtime's own is a local reference,
+        resolved by display name when the link is applied.
+        """
+
     def connect(
-        self, source: ProcessorOutputPortReference, destination: ProcessorInputPortReference
+        self,
+        source: ProcessorOutputPortReference | RemoteProcessorOutputPortReference,
+        destination: ProcessorInputPortReference,
     ) -> None:
-        """Link one processor's output port to another's input port."""
+        """Link one processor's output port to another's input port.
+
+        The source may name a port on this runtime or one on another runtime;
+        the engine chooses the transport from the link's ends and no processor
+        can tell which. A link from another runtime reads `awaiting_remote` in
+        `graph` until that runtime is on the mesh and offers the port.
+        """
 
     # `bind_host` is `...` rather than its literal default because the binding
     # builds that string at call time, which is what the compiled signature
@@ -680,6 +703,16 @@ class ProcessorInputPortReference:
     def __repr__(self) -> str: ...
 
 @final
+class RemoteProcessorOutputPortReference:
+    """The producing end of a link, on another runtime.
+
+    Minted by `Runtime.remote_processor_output`, which is where its address is
+    checked; there is nothing to read off it that `repr` does not show.
+    """
+
+    def __repr__(self) -> str: ...
+
+@final
 class ProcessorLinkDataAccess:
     """One processor's links. The engine binds it; app code never builds one.
 
@@ -737,6 +770,7 @@ class ProcessorLinkDataAccess:
         self,
         port_name: str,
         channel_service_name: str,
+        inbound_link_name: str,
         notify_service_name: str,
         read_mode: str,
         channel_service_creation_depth: int,
@@ -749,6 +783,12 @@ class ProcessorLinkDataAccess:
         wiring_generation: int | None = None,
     ) -> None:
         """Open this processor's subscriber for one link into `port_name`.
+
+        `channel_service_name` is what this end subscribes to;
+        `inbound_link_name` is what a read hands back as the link's name. They
+        differ for a link carrying from another runtime, which rides a channel
+        hashed from the source port's mesh address, and are equal for a link
+        from this runtime.
 
         Once a loss-count board is open, `loss_count_slot` and
         `wiring_generation` name where the link's losses are mirrored, and

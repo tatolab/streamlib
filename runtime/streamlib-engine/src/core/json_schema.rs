@@ -55,6 +55,22 @@ pub struct RuntimeMeshOutput {
     /// The other runtimes this one currently sees, sorted by name. A session
     /// that is `open` with no peers is isolated rather than local-only.
     pub peers: Vec<RuntimeMeshPeerOutput>,
+    /// The output ports of this runtime that other runtimes are reading over
+    /// the mesh. Always present, and empty until one is — a sending runtime
+    /// does no network work for a port until a remote link reads it.
+    pub egress_ports: Vec<MeshEgressPortOutput>,
+}
+
+/// One output port of this runtime that the mesh is sending, and to whom.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+pub struct MeshEgressPortOutput {
+    /// The display name of the processor that owns the port — the middle chunk
+    /// of the port's mesh address.
+    pub processor_display_name: String,
+    /// The port's own name on that processor.
+    pub port_name: String,
+    /// Every runtime currently reading it, sorted by name.
+    pub reader_runtime_names: Vec<String>,
 }
 
 /// Whether a runtime reached its mesh at all.
@@ -1114,6 +1130,7 @@ mod capability_extension_and_mesh_rendering_tests {
             session: RuntimeMeshSessionOutput::Open,
             local_only_reason: None,
             peers: Vec::new(),
+            egress_ports: Vec::new(),
         }
     }
 
@@ -1143,8 +1160,44 @@ mod capability_extension_and_mesh_rendering_tests {
                 "runtime_name": "rig-desk-a1b2",
                 "session": "open",
                 "peers": [],
+                "egress_ports": [],
             })
         );
+    }
+
+    /// A port another runtime is reading renders under the display name the
+    /// mesh addresses it by, with every reader — so an agent on the sending
+    /// node can see who is pulling from it without asking the other end.
+    #[test]
+    fn a_port_another_runtime_reads_renders_with_the_runtimes_reading_it() {
+        let rendered = serde_json::to_value(Graph::new().to_graph_response(
+            Vec::new(),
+            RuntimeMeshOutput {
+                egress_ports: vec![MeshEgressPortOutput {
+                    processor_display_name: "CameraSource".to_string(),
+                    port_name: "video".to_string(),
+                    reader_runtime_names: vec![
+                        "bench-fx-c3d4".to_string(),
+                        "bench-rec-e5f6".to_string(),
+                    ],
+                }],
+                ..an_isolated_mesh()
+            },
+        ))
+        .unwrap();
+
+        assert_eq!(
+            rendered["mesh"]["egress_ports"],
+            serde_json::json!([{
+                "processor_display_name": "CameraSource",
+                "port_name": "video",
+                "reader_runtime_names": ["bench-fx-c3d4", "bench-rec-e5f6"],
+            }])
+        );
+
+        let read_back: GraphResponse =
+            serde_json::from_value(rendered).expect("an egress entry deserializes");
+        assert_eq!(read_back.mesh.egress_ports.len(), 1);
     }
 
     /// A peer that has not answered yet renders its name alone, and the whole
