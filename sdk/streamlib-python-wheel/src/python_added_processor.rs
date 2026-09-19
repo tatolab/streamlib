@@ -140,9 +140,7 @@ impl<'py> PythonLinkSourcePortReference<'py> {
         if let Ok(on_this_runtime) = source.cast::<PythonProcessorOutputPortReference>() {
             return Ok(Self::OnThisRuntime(on_this_runtime.borrow()));
         }
-        if let Ok(on_another_runtime) =
-            source.cast::<PythonRemoteProcessorOutputPortReference>()
-        {
+        if let Ok(on_another_runtime) = source.cast::<PythonRemoteProcessorOutputPortReference>() {
             return Ok(Self::OnAnotherRuntime(on_another_runtime.borrow()));
         }
         Err(PyTypeError::new_err(format!(

@@ -3715,6 +3715,9 @@ class FrameSomebodyElseWrote:
                 (
                     INPUT_PORT,
                     &channel_service_name,
+                    // The link's name is its channel here: this source is on
+                    // this runtime. The two differ only across the mesh.
+                    &channel_service_name,
                     &notify_service_name,
                     "read_next_in_order",
                     8,

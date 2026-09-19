@@ -4760,7 +4760,10 @@ mod tests {
                 &inbound_link_name_of(&source, "pcam/video"),
             );
 
-            assert_eq!(entry["channel_service_name"], serde_json::json!("pcam/video"));
+            assert_eq!(
+                entry["channel_service_name"],
+                serde_json::json!("pcam/video")
+            );
             assert_eq!(entry["inbound_link_name"], serde_json::json!("pcam/video"));
         }
 
