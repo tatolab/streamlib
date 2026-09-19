@@ -57,10 +57,21 @@ impl WhatThisRuntimeOffersOnTheMesh for OutputPortsInThisRuntimesGraph {
                 return None;
             }
             let source_processor_id = node.id.clone();
+            // Said rather than silently skipped: every graph output is offered,
+            // so one whose name the channel grammar cannot carry reaches here,
+            // and the egress table can only report that the link waits on an
+            // egress that never starts. This is the one place that knows why.
             let channel_service_name =
-                crate::iceoryx2::source_channel_name(source_processor_id.as_str(), port_name)
-                    .ok()?
-                    .into_string();
+                match crate::iceoryx2::source_channel_name(source_processor_id.as_str(), port_name)
+                {
+                    Ok(channel_service_name) => channel_service_name.into_string(),
+                    Err(cannot_be_named) => {
+                        tracing::warn!(
+                            "{processor_display_name}/{port_name} is offered on the mesh and                              cannot be sent: its channel cannot be named: {cannot_be_named}"
+                        );
+                        return None;
+                    }
+                };
             let source = OutputLinkPortRef::new(source_processor_id.clone(), port_name);
             // A port nothing here reads has no channel and no publisher — the
             // first `connect` out of it is what makes both, and across the mesh

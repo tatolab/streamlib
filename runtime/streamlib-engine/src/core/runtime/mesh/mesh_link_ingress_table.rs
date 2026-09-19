@@ -183,6 +183,12 @@ impl MeshLinkIngressTable {
         this_runtimes_name: &str,
         peers: &Arc<RuntimeMeshPeerTable>,
     ) {
+        // Any resolver already running goes first. Replacing the handle would
+        // only drop it: the thread holds a sender of its own, so the channel
+        // never disconnects, and its stop flag would stay set for as long as
+        // the process lived.
+        self.stop_resolving();
+
         let (wake_the_resolver, when_to_look_again) = crossbeam_channel::unbounded();
         let whether_to_keep_resolving = Arc::new(AtomicBool::new(true));
 
@@ -250,6 +256,22 @@ impl MeshLinkIngressTable {
     /// Stop resolving and stop carrying everything — a runtime leaving the
     /// mesh reads nothing from it.
     pub fn stop(&self) {
+        self.stop_resolving();
+        let stopped_reading = {
+            let mut carried = self.carried.lock();
+            for link in carried.links.values_mut() {
+                link.the_ingress_knows_about_it = false;
+                *link.how_far_it_has_got.lock() = RemoteLinkResolution::AwaitingRemote {
+                    reason: "this runtime has left the mesh".to_string(),
+                };
+            }
+            std::mem::take(&mut carried.carrying)
+        };
+        drop(stopped_reading);
+    }
+
+    /// End the resolving thread, if one is running. Idempotent.
+    fn stop_resolving(&self) {
         // Taken out of the lock before any of it is torn down: the join waits
         // out whatever the pass is in the middle of, and the wiring op asks
         // this same lock to wake the resolver while it holds the graph lock.
@@ -264,17 +286,6 @@ impl MeshLinkIngressTable {
                 tracing::warn!("the mesh ingress-resolving thread panicked");
             }
         }
-        let stopped_reading = {
-            let mut carried = self.carried.lock();
-            for link in carried.links.values_mut() {
-                link.the_ingress_knows_about_it = false;
-                *link.how_far_it_has_got.lock() = RemoteLinkResolution::AwaitingRemote {
-                    reason: "this runtime has left the mesh".to_string(),
-                };
-            }
-            std::mem::take(&mut carried.carrying)
-        };
-        drop(stopped_reading);
     }
 
     fn ask_the_resolver_to_look_again(&self) {

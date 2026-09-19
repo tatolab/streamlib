@@ -21,6 +21,12 @@ use crate::core::runtime::mesh::runtime_mesh_key::{ReaderOfAnOutputPort, Runtime
 /// gives up and asks again on its next pass. Engine-chosen; nothing authorable.
 const HOW_LONG_A_RUNTIME_HAS_TO_LIST_ITS_PORTS: Duration = Duration::from_secs(2);
 
+/// How many unanswered offered-ports queries this runtime holds before it drops
+/// one. Deep enough that every runtime on a mesh may ask at once while a compile
+/// holds the graph lock; shallow enough that a peer asking in a loop cannot
+/// grow this runtime's memory. Engine-chosen; nothing authorable.
+const HOW_MANY_UNANSWERED_QUERIES_ARE_HELD: usize = 64;
+
 /// One output port a runtime offers to the mesh.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct OutputPortOfferedOnTheMesh {
@@ -184,12 +190,22 @@ impl OfferedOutputPortsQueryable {
         offered: &std::sync::Arc<WhatThisRuntimeOffersOnTheMeshRegistry>,
     ) -> zenoh::Result<Self> {
         let answered_key = key_space.offered_output_ports_key_of(this_runtimes_name);
+        // Bounded, and a query that will not fit is dropped rather than queued:
+        // any peer that knows this runtime's name can ask, one thread answers
+        // them in turn, and that thread can be waiting on the lock a compile
+        // holds. An unbounded queue would grow as fast as a peer cared to ask.
+        // A dropped query is a query with no reply, which the asking side
+        // already reads as its own timeout and retries on its next pass.
         let (asked, what_the_answering_thread_reads) =
-            crossbeam_channel::unbounded::<zenoh::query::Query>();
+            crossbeam_channel::bounded::<zenoh::query::Query>(HOW_MANY_UNANSWERED_QUERIES_ARE_HELD);
         let queryable = session
             .declare_queryable(answered_key.clone())
             .callback(move |query| {
-                let _ = asked.send(query);
+                if asked.try_send(query).is_err() {
+                    tracing::warn!(
+                        "this runtime is being asked what it offers faster than it can answer;                          the asking runtime reads no reply as a timeout and asks again"
+                    );
+                }
             })
             .wait()?;
 

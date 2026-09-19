@@ -171,23 +171,6 @@ fn send_one_port_to_the_mesh(sending: WhatOneEgressSends, stop: Arc<AtomicBool>)
                 let bag_bytes = &framed[FRAME_HEADER_SIZE..];
                 let names_a_surface = a_bag_carries_a_top_level_surface_id(bag_bytes);
 
-                // One priority for the egress's life, decided by its first bag:
-                // two priorities are two QUIC streams, which would reorder one
-                // port's sequence and read downstream as gaps.
-                let publisher = match publisher.as_ref() {
-                    Some(publisher) => publisher,
-                    None => match declare_the_publisher(&session, &data_key, names_a_surface) {
-                        Ok(declared) => publisher.insert(declared),
-                        Err(declare_failure) => {
-                            tracing::warn!(
-                                "the mesh cannot send {addressed}: its publisher did not \
-                                     declare: {declare_failure}"
-                            );
-                            break;
-                        }
-                    },
-                };
-
                 if names_a_surface {
                     if !said_a_surface_will_not_cross {
                         said_a_surface_will_not_cross = true;
@@ -200,6 +183,29 @@ fn send_one_port_to_the_mesh(sending: WhatOneEgressSends, stop: Arc<AtomicBool>)
                     }
                     continue;
                 }
+
+                // One priority for the egress's life, decided by the first bag
+                // it actually sends: two priorities are two QUIC streams, which
+                // would reorder one port's sequence and read downstream as
+                // gaps. The rule is the change file's — `DataLow` for a bag
+                // naming a surface, `Data` otherwise — and until #2290 carries
+                // a frame's pixels no surface bag crosses, so the `DataLow` arm
+                // has no live input and this always declares `Data`. Declaring
+                // it above the skip instead would read the surface bag that is
+                // then thrown away, and put every ordinary bag behind it.
+                let publisher = match publisher.as_ref() {
+                    Some(publisher) => publisher,
+                    None => match declare_the_publisher(&session, &data_key, names_a_surface) {
+                        Ok(declared) => publisher.insert(declared),
+                        Err(declare_failure) => {
+                            tracing::warn!(
+                                "the mesh cannot send {addressed}: its publisher did not \
+                                 declare: {declare_failure}"
+                            );
+                            break;
+                        }
+                    },
+                };
 
                 let attached = MeshDataMessageAttachment {
                     timestamp_ns: stamp,

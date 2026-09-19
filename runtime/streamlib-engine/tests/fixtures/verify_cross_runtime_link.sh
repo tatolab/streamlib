@@ -37,8 +37,26 @@ mkdir -p "$OUTPUT_DIR"
 MESH_NAME="xrig-$$"
 SOURCE_RUNTIME_NAME="xrig-source-$$"
 READER_RUNTIME_NAME="xrig-reader-$$"
-SOURCE_CONTROL_PORT="${SOURCE_CONTROL_PORT:-9410}"
-READER_CONTROL_PORT="${READER_CONTROL_PORT:-9411}"
+# A free loopback port each, rather than two fixed ones: two runs of this at
+# once — or anything else already on 9410/9411 — would otherwise have the second
+# runtime fail to bind before it ever reached the link it is here to check.
+# Both in one go, holding both sockets until both ports are known: asked one at
+# a time, the first socket is closed before the second is bound and the kernel
+# hands the same ephemeral port straight back out.
+two_free_loopback_ports() {
+  "$PYTHON" -c '
+import socket
+held = [socket.socket() for _ in range(2)]
+for one in held:
+    one.bind(("127.0.0.1", 0))
+print(" ".join(str(one.getsockname()[1]) for one in held))
+for one in held:
+    one.close()
+'
+}
+read -r A_FREE_PORT ANOTHER_FREE_PORT <<<"$(two_free_loopback_ports)"
+SOURCE_CONTROL_PORT="${SOURCE_CONTROL_PORT:-$A_FREE_PORT}"
+READER_CONTROL_PORT="${READER_CONTROL_PORT:-$ANOTHER_FREE_PORT}"
 
 # The port's address on the mesh, spelled the way `connect` and `tap` take it.
 THE_ADDRESS="$SOURCE_RUNTIME_NAME/MicrophoneSource/audio"
@@ -50,12 +68,27 @@ HOW_LONG_THE_LINK_HAS_TO_WIRE=45
 
 say() { printf '%s\n' "$*" >&2; }
 
+# How long a runtime has to finish leaving before it is killed. A bounded wait
+# on purpose: `wait` with no deadline turns a runtime that never exits into a
+# fixture that hangs its caller rather than one that reports a failure.
+HOW_LONG_A_RUNTIME_HAS_TO_STOP=30
+
 stop_both_runtimes() {
   for pid in "${SOURCE_PID:-}" "${READER_PID:-}"; do
     [ -n "$pid" ] && kill -TERM "$pid" 2>/dev/null
   done
   for pid in "${SOURCE_PID:-}" "${READER_PID:-}"; do
-    [ -n "$pid" ] && wait "$pid" 2>/dev/null
+    [ -z "$pid" ] && continue
+    waited=0
+    while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt "$HOW_LONG_A_RUNTIME_HAS_TO_STOP" ]; do
+      sleep 1
+      waited=$((waited + 1))
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+      say "A runtime did not stop within ${HOW_LONG_A_RUNTIME_HAS_TO_STOP}s; killing it."
+      kill -KILL "$pid" 2>/dev/null
+    fi
+    wait "$pid" 2>/dev/null
   done
 }
 trap stop_both_runtimes EXIT

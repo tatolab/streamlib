@@ -191,14 +191,8 @@ pub fn open_iceoryx2_service(
     // Source side: install the single channel publisher (first link out of this
     // port) and append this link's destination notifier. A source on another
     // runtime has no side to wire here — its ingress is the channel's publisher
-    // and holds every destination's notifier, so it is told which service this
-    // destination waits on instead.
-    if source_on_this_runtime.is_none() {
-        mesh_link_ingress_table.note_how_a_links_destination_is_woken(
-            link_id,
-            notify_service_name_for_the_source.map(str::to_string),
-        );
-    }
+    // and holds every destination's notifier, and it is told which service this
+    // destination waits on once that destination is actually wired, below.
     if let Some(source_proc_id) = source_on_this_runtime.as_ref() {
         let source_port = from_port.port_name();
         if let Some(source_link_wiring) = &source_link_wiring {
@@ -267,6 +261,17 @@ pub fn open_iceoryx2_service(
             notify_service_for_the_destination.as_ref(),
             dest_audio_windowing,
         )?;
+    }
+
+    // Only now: this says the link's destination is open, and the mesh reads
+    // `wired` off it. Said before the wiring above, a destination whose wiring
+    // failed — the `?`s return before anything closes the service — would
+    // leave the ingress reporting a link that carries into nothing.
+    if source_on_this_runtime.is_none() {
+        mesh_link_ingress_table.note_how_a_links_destination_is_woken(
+            link_id,
+            notify_service_name_for_the_source.map(str::to_string),
+        );
     }
 
     let link = graph
@@ -633,7 +638,8 @@ pub(crate) fn open_the_channel_of_an_output_port_nothing_local_reads(
 ) -> Result<()> {
     let Some(source_proc_id) = source.processor_id_on_this_runtime() else {
         return Err(Error::Configuration(format!(
-            "'{source}' names a port on another runtime, and this runtime cannot open a channel              for one it does not host"
+            "'{source}' names a port on another runtime, and this runtime cannot open a \
+             channel for one it does not host"
         )));
     };
     let source_port = source.port_name();

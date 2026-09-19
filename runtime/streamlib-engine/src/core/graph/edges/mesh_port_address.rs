@@ -26,7 +26,7 @@ const PARTS_OF_A_MESH_PORT_ADDRESS: usize = 3;
 ///
 /// Carries no processor id: the runtime that owns the port resolves the display
 /// name to one of its own nodes at the moment it is asked.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 pub struct MeshPortAddress {
     /// The name the owning runtime is addressed by on the mesh.
     pub runtime_name: String,
@@ -34,6 +34,35 @@ pub struct MeshPortAddress {
     pub processor_display_name: String,
     /// The port's own name on that processor.
     pub port_name: String,
+}
+
+/// A mesh port address exactly as it rides the wire, before anything has
+/// checked it.
+///
+/// Its only purpose is to give [`MeshPortAddress`]'s `Deserialize` somewhere to
+/// land before [`MeshPortAddress::new`] runs: a derived `Deserialize` on the
+/// address itself would fill the fields straight from the wire, so a peer or a
+/// stored graph could put a chunk the key grammar cannot carry into this
+/// runtime's graph without ever meeting the refusal `new` exists to give.
+#[derive(Deserialize)]
+struct AMeshPortAddressAsItArrived {
+    runtime_name: String,
+    processor_display_name: String,
+    port_name: String,
+}
+
+impl<'de> Deserialize<'de> for MeshPortAddress {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        let arrived = AMeshPortAddressAsItArrived::deserialize(deserializer)?;
+        Self::new(
+            arrived.runtime_name,
+            arrived.processor_display_name,
+            arrived.port_name,
+        )
+        .map_err(serde::de::Error::custom)
+    }
 }
 
 impl MeshPortAddress {
@@ -98,6 +127,38 @@ impl fmt::Display for MeshPortAddress {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// An address that arrives over the wire meets the same refusal one built
+    /// here does. Without this the derived `Deserialize` would fill the fields
+    /// straight from the wire and a `*` would reach the graph, where it would
+    /// match keys the addressed runtime never offered.
+    #[test]
+    fn an_address_that_arrives_illegal_is_refused_rather_than_deserialized() {
+        let illegal = serde_json::json!({
+            "runtime_name": "la*b",
+            "processor_display_name": "Camera Source 2",
+            "port_name": "video",
+        });
+        let refusal = serde_json::from_value::<MeshPortAddress>(illegal)
+            .expect_err("a runtime name the key grammar cannot carry is refused on the wire")
+            .to_string();
+        assert!(refusal.contains("runtime name"), "{refusal}");
+        assert!(refusal.contains("la*b"), "{refusal}");
+    }
+
+    /// A legal address still rides the wire unchanged, so the check costs the
+    /// ordinary path nothing but the refusal.
+    #[test]
+    fn a_legal_address_round_trips_through_the_wire_unchanged() {
+        let addressed = MeshPortAddress::new("bench-cam-a1b2", "Camera Source 2", "video")
+            .expect("a legal address");
+        let back: MeshPortAddress =
+            rmp_serde::from_slice(&rmp_serde::to_vec_named(&addressed).expect("encode"))
+                .expect("decode");
+        assert_eq!(back, addressed);
+    }
+
     use super::*;
 
     fn an_address() -> MeshPortAddress {
