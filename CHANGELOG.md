@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.25.8](https://github.com/tatolab/streamlib/compare/v0.25.7...v0.25.8) (2026-09-19)
+
+
+### Bug Fixes
+
+* **engine:** a Python-authored source publishes for the mesh with no local link ([#2365](https://github.com/tatolab/streamlib/issues/2365)) ([8ced22f](https://github.com/tatolab/streamlib/commit/8ced22f17f0d8340ed296552097d4a4cf37bbfd2))
+
 ## [0.25.7](https://github.com/tatolab/streamlib/compare/v0.25.6...v0.25.7) (2026-09-19)
 
 
