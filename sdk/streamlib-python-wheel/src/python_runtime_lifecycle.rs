@@ -16,7 +16,7 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use streamlib::engine_internal::core::app_directory::record_the_app_entry_directory_the_language_host_captured;
-use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
+use streamlib::sdk::graph::{InputLinkPortRef, MeshPortAddress};
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::{
     ArmedEngineTeardownWatchdog, DescriptionOfTheAbandonedProcessorThreads,
@@ -25,7 +25,8 @@ use streamlib::sdk::runtime::{
 };
 
 use crate::python_added_processor::{
-    PythonAddedProcessor, PythonProcessorInputPortReference, PythonProcessorOutputPortReference,
+    PythonAddedProcessor, PythonLinkSourcePortReference, PythonProcessorInputPortReference,
+    PythonRemoteProcessorOutputPortReference,
 };
 use crate::python_bag_conversion::python_object_to_json_value;
 use crate::python_processor_registration::register_processor_class;
@@ -403,14 +404,33 @@ impl PythonRuntimeHandle {
         ))
     }
 
+    /// Name an output port on another runtime, to pull it over the mesh.
+    ///
+    /// The address is checked here rather than at `connect`, so a chunk the
+    /// mesh cannot carry is refused where the author wrote it.
+    fn remote_processor_output(
+        &self,
+        runtime_name: &str,
+        display_name: &str,
+        port_name: &str,
+    ) -> PyResult<PythonRemoteProcessorOutputPortReference> {
+        MeshPortAddress::new(runtime_name, display_name, port_name)
+            .map(|address| PythonRemoteProcessorOutputPortReference { address })
+            .map_err(|not_an_address| PyValueError::new_err(not_an_address.to_string()))
+    }
+
     /// Link one processor's output port to another's input port.
+    ///
+    /// The source may be a port on this runtime or one on another runtime; the
+    /// engine chooses the transport from the link's ends, and a source naming
+    /// this runtime's own name is the ordinary local link.
     fn connect(
         &self,
         python: Python<'_>,
-        source: &PythonProcessorOutputPortReference,
+        source: PythonLinkSourcePortReference<'_>,
         destination: &PythonProcessorInputPortReference,
     ) -> PyResult<()> {
-        let from = OutputLinkPortRef::new(source.processor_id.clone(), source.port_name.clone());
+        let from = source.as_an_output_link_port_ref();
         let to = InputLinkPortRef::new(
             destination.processor_id.clone(),
             destination.port_name.clone(),

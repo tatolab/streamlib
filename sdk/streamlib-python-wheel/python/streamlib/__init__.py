@@ -36,6 +36,9 @@ from ._engine import ProcessorLinkDataAccess as ProcessorLinkDataAccess
 from ._engine import ProcessorOutputPortReference as ProcessorOutputPortReference
 from ._engine import ProcessorOwnedWindow as ProcessorOwnedWindow
 from ._engine import ProcessorOwnedWindowEvents as ProcessorOwnedWindowEvents
+from ._engine import (
+    RemoteProcessorOutputPortReference as RemoteProcessorOutputPortReference,
+)
 from ._engine import CameraSource as CameraSource
 from ._engine import DisplayWindow as DisplayWindow
 from ._engine import H264Decoder as H264Decoder
@@ -120,6 +123,7 @@ __all__ = [
     "ProcessorOutputTextureRing",
     "ProcessorOwnedWindow",
     "ProcessorOwnedWindowEvents",
+    "RemoteProcessorOutputPortReference",
     "Runtime",
     "RuntimeContextFullAccess",
     "RuntimeContextLimitedAccess",

@@ -8,6 +8,7 @@
 //! endpoint of something, never as a bare string pair.
 
 use pyo3::prelude::*;
+use streamlib::sdk::graph::{MeshPortAddress, OutputLinkPortRef};
 
 /// A processor in the graph.
 #[pyclass(name = "AddedProcessor", module = "streamlib", frozen)]
@@ -94,5 +95,51 @@ impl PythonProcessorInputPortReference {
             "ProcessorInputPortReference({}.{})",
             self.processor_id, self.port_name
         )
+    }
+}
+
+/// The producing end of a link, on another runtime.
+///
+/// Holds the address the mesh checked at the mint, so `connect` never has to
+/// re-check it and an illegal chunk is refused where the author typed it.
+#[pyclass(
+    name = "RemoteProcessorOutputPortReference",
+    module = "streamlib",
+    frozen
+)]
+pub(crate) struct PythonRemoteProcessorOutputPortReference {
+    pub(crate) address: MeshPortAddress,
+}
+
+#[pymethods]
+impl PythonRemoteProcessorOutputPortReference {
+    fn __repr__(&self) -> String {
+        format!("RemoteProcessorOutputPortReference({})", self.address)
+    }
+}
+
+/// Either end a link may carry from: a port on this runtime, or one on
+/// another runtime over the mesh.
+///
+/// `connect` takes this rather than two overloads because the engine's own
+/// `OutputLinkPortRef` is the same two shapes — the Python surface mirrors the
+/// engine's type rather than inventing a parallel one.
+#[derive(FromPyObject)]
+pub(crate) enum PythonLinkSourcePortReference<'py> {
+    OnThisRuntime(PyRef<'py, PythonProcessorOutputPortReference>),
+    OnAnotherRuntime(PyRef<'py, PythonRemoteProcessorOutputPortReference>),
+}
+
+impl PythonLinkSourcePortReference<'_> {
+    /// The engine's own reference for whichever end this names.
+    pub(crate) fn as_an_output_link_port_ref(&self) -> OutputLinkPortRef {
+        match self {
+            Self::OnThisRuntime(local) => {
+                OutputLinkPortRef::new(local.processor_id.clone(), local.port_name.clone())
+            }
+            Self::OnAnotherRuntime(remote) => {
+                OutputLinkPortRef::on_another_runtime(remote.address.clone())
+            }
+        }
     }
 }
