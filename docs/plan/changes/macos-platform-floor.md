@@ -12,8 +12,9 @@ that says "measured" is from there.
 Vulkan backend), the cross-process transport (fd passing becomes Mach port passing), the processor
 model (the helper spawn mechanism), and the wheel's public install contract. A new
 `docs/decisions/macos-platform-floor.md` is owed rather than a section on an existing ADR — no
-current ADR is about a platform floor. **It is written at approval, not now: an ADR records the
-shape chosen over its alternatives, and the choices below are still `[NEEDS DECISION]`.**
+current ADR is about a platform floor. It was held back until the decisions below were settled — an
+ADR records the shape chosen over its alternatives — and now lands with this change, all five blocks
+resolved.
 
 **Precondition.** Every entry this delta touches is DECIDED: the MVP sentence
 (`ARCHITECTURE.md:14-21`), the capture-backend floor (`:1229-1231`), windowing and the one event

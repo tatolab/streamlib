@@ -347,18 +347,21 @@ built-ins, no Python processor in the graph, and therefore no cross-process pixe
 `CameraSource → InvertingEffect → DisplayWindow`, and `InvertingEffect` is a Python processor that
 reaches the frame through `resolve_surface` / `as_numpy` — i.e. it reads GPU memory belonging to
 another process. A macOS build where the *scaffolded default app* does not run is not "working
-again"; it is a demo. Cross-process frames over XPC + IOSurface are **in scope for this milestone**,
+again"; it is a demo. Cross-process frames over raw Mach + IOSurface are **in scope for this milestone**,
 not deferred. Owner's words: this is a must for the framework, and it should be cheaper now than in
 the pre-pivot framework, where the same capability needed a launchd-registered service — helper
 processes are first-class today and XPC can be established between a parent and a child it spawned
-without installing anything.
+without installing anything. *(The conclusion held and the mechanism did not: §10.1 found that XPC
+cannot in fact reach a spawned child service-lessly, and raw Mach is what delivers the
+no-installation outcome. The owner's framing is kept verbatim above because it is what set the
+scope.)*
 
 So the MVP line is the plan's own MVP sentence, unmodified, on Apple Silicon:
 
 - **In scope**: engine compiles and links on macOS; Vulkan-on-MoltenVK instance/device/loader;
   AVFoundation capture behind a new video device seam; IOSurface-backed ring allocation; winit pump on
   the main thread; `CAMetalLayer` present; camera permission handled honestly; **cross-process frames
-  to helper processes over XPC + IOSurface, including the CPU-mapped numpy view**; an
+  to helper processes over raw Mach + IOSurface, including the CPU-mapped numpy view**; an
   `aarch64-apple-darwin` wheel and CI lane.
 - **Deliberately out**: codecs (Vulkan Video does not exist on MoltenVK — VideoToolbox is a separate
   milestone); audio; ray tracing; the virtual camera; `MonotonicTimer` (so continuous-execution
@@ -392,7 +395,7 @@ this memo surfaces and does **not** take:
    owner's.
 3. **Delete `src/metal/`?** Follows from (2), but is its own `REMOVED:` bullet.
 4. ~~**Does the macOS MVP include a Python processor in the graph?**~~ — **Decided by the owner,
-   2026-09-19: yes.** Cross-process frames over XPC + IOSurface are a must for the framework and are
+   2026-09-19: yes.** Cross-process frames over raw Mach + IOSurface are a must for the framework and are
    in this milestone, not deferred. See §5.
 5. **Does the camera carry the device's capture timestamp or the publish timestamp?** The camera
    currently stamps publication with `MediaClock::now()` (`camera_source.rs:1152`) and never reads the
@@ -1039,8 +1042,10 @@ absolute path and the loader finds the ICD itself with no env vars set. Bundling
 ### What it does not prove
 
 It uses **host-side ordering** — the parent GPU-signals its own timeline and CPU-waits before the
-handoff — because §11.1's shared-event question is still open. The sync is isolated behind two
-functions, so device-side shared events drop in without touching anything else. The submit-plus-
+handoff — because it was built while §11.1's shared-event question was still open. **§11.1a has
+since resolved that question**, so what the spike exercises is the *fallback* path rather than the
+route the milestone will take. The sync is isolated behind two functions, so the device-side shared
+events drop in without touching anything else. The submit-plus-
 host-wait hops cost ~0.45–0.7 ms each; that is the CPU overhead device-side events would remove.
 It also does not touch AVFoundation, the window, or the wheel.
 

@@ -331,34 +331,46 @@
       <div class="dep">Needs 7 · Proof: clean machine → <code>pip install</code> → camera in a window</div></li>
   </ol>
 
-  <h2>Decisions still yours</h2>
+  <h2>Decisions — all resolved</h2>
+  <p style="color:var(--dim)">All five open questions were settled by the owner on 19 Sep 2026, plus
+  two recorded rather than asked. They are written into
+  <code>docs/plan/changes/macos-platform-floor.md</code> with their consequences.</p>
 
-  <div class="q done"><div class="qq"><span class="ok">✓ Decided</span> · Does the macOS MVP include a Python processor?</div>
-    <div class="qa">Yes — you ruled cross-process frames in. The narrow two-built-in MVP is struck.</div></div>
-  <div class="q done"><div class="qq"><span class="ok">✓ Decided</span> · Distribution shape</div>
-    <div class="qa">The wheel, identical to Linux. <strong>No .app bundle, no launchd, no installer</strong>
-    — under any justification. brew is build-time only. Security prompts are expected and fine; needing
-    a <em>bundle</em> to get them is not. This retires two fallbacks this research had left open — the
-    .app re-exec for the terminal-permission edge case, and the bundled XPC service for the shared-event
-    seam. Both off the table.</div></div>
-  <div class="q"><div class="qq">1 · Is macOS a supported floor, or a developer-machine floor?</div>
-    <div class="qa">"Contributors on Macs can run the engine" and "Mac users get the Linux install
-    experience" are different products with different CI and support costs.</div></div>
-  <div class="q"><div class="qq">2 · Vulkan everywhere, and delete <code>src/metal/</code>?</div>
-    <div class="qa">I recommend yes, with evidence. Reviving Metal means writing every kernel, buffer
-    and timeline twice, forever.</div></div>
-  <div class="q"><div class="qq">3 · The spawn fork — this one is new</div>
-    <div class="qa">The capability-secure rendezvous (nobody else can find it) only survives
-    <code>posix_spawn</code>, and our helper spawn is fork+exec because it registers
-    <code>pre_exec</code> closures. Either take the discoverable named path now plus a peer check, or
-    move the spawn to <code>posix_spawn</code> first — which is attractive anyway, because Apple's
-    <code>POSIX_SPAWN_CLOEXEC_DEFAULT</code> replaces the descriptor sweep with something stronger.</div></div>
-  <div class="q"><div class="qq">4 · Capture timestamp or publish timestamp?</div>
-    <div class="qa">The camera stamps publication today and never reads the driver's stamp — while audio
-    stamps capture. AVFoundation hands back a real capture time, so this becomes unavoidable, and
-    answering it changes behaviour on <em>both</em> platforms.</div></div>
-  <div class="q"><div class="qq">5 · Apple Silicon only, or Intel too?</div>
-    <div class="qa">Affects the CI matrix and the wheel count. I'd say arm64 only.</div></div>
+  <div class="q done"><div class="qq"><span class="ok">✓</span> Supported floor, not a developer machine</div>
+    <div class="qa">"I want people to be able to build and run it, not just develop on it." §Product names
+    Apple Silicon, CI gates macOS on every PR, the wheel is in the release closure, and a macOS-only
+    regression blocks a release. <strong>This is what makes capture, present, cross-process frames and
+    the wheel part of the milestone</strong> rather than optional.</div></div>
+
+  <div class="q done"><div class="qq"><span class="ok">✓</span> One Vulkan RHI; <code>src/metal/</code> deletes</div>
+    <div class="qa">MoltenVK is the macOS driver. No behavioural change on Linux —
+    <code>backend-metal</code> was never in <code>default</code> — but six shared
+    <code>core/rhi</code> files have their <code>cfg</code> expressions edited, so Linux CI green is a
+    proof obligation.</div></div>
+
+  <div class="q done"><div class="qq"><span class="ok">✓</span> Bootstrap-name rendezvous now; <code>posix_spawn</code> later</div>
+    <div class="qa">No Linux impact from the choice taken. The <code>posix_spawn</code> restructure
+    becomes <strong>its own change with its own Linux proof</strong>, because
+    <code>python_helper_process_spawn_host.rs</code> is one shared file — that change would alter the
+    spawn path on both platforms.</div></div>
+
+  <div class="q done"><div class="qq"><span class="mid">✓ conditional</span> · Camera carries the capture instant</div>
+    <div class="qa"><strong>The one entry that is not additive</strong> — it alters Linux behaviour.
+    Gated on a Linux regression check covering audio sync, encoder PTS, <code>Mp4Sink</code>, the mesh
+    and loss metrics. Tickets can be derived, but <strong>the timestamp work must not merge until that
+    check reports</strong>; if it finds a consumer this breaks, the decision reopens.</div></div>
+
+  <div class="q done"><div class="qq"><span class="ok">✓</span> arm64 only — no Intel, no Rosetta</div>
+    <div class="qa">One wheel, one CI lane. With a direction attached: optimise for modern Apple
+    Silicon and take the newest capability available rather than the most compatible. That bites the
+    deployment-target choice, and raises KosmicKrisp from curiosity to a real evaluation once a macOS
+    26 floor is acceptable.</div></div>
+
+  <div class="q done"><div class="qq"><span class="ok">✓</span> Recorded, not asked</div>
+    <div class="qa">Cross-process frames are in scope, not deferred. And the artifact is the wheel,
+    identical to Linux — <strong>no .app bundle, no launchd, no installer, under any
+    justification</strong>. That retired two fallbacks this research had left open: the .app re-exec
+    for the terminal-permission edge case, and a bundled XPC service for the shared-event seam.</div></div>
 
   <h2>Risks worth carrying</h2>
   <ul class="plain">
