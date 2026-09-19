@@ -227,6 +227,88 @@ mod tests {
         );
     }
 
+    /// A processor fed across the mesh renders what the hop lost per remote
+    /// link, beside what its own ports lost and never blended into it: the two
+    /// name different losses at different places, and `frames_dropped` counts
+    /// only bags that actually reached a port to be dropped at.
+    #[test]
+    fn a_processors_metrics_render_mesh_hop_loss_beside_its_ports_own_and_never_inside_it() {
+        let dropped = Arc::new(DroppedBagCountsByInboundLink::default());
+        dropped
+            .counter_for_inbound_link("L-remote")
+            .record_dropped_bags(2);
+        let hop_loss = Arc::new(MeshHopDroppedBagCountsByRemoteInboundLink::default());
+        hop_loss
+            .counter_for_inbound_link("L-remote")
+            .record_dropped_bags(9);
+
+        let rendered = ProcessorMetrics {
+            loss_counts: ProcessorLossCounts::CountedByPortsInThisProcess(
+                LossCountsOfPortsInThisProcess {
+                    dropped_bag_counts_by_inbound_link: dropped,
+                    ..Default::default()
+                },
+            ),
+            mesh_hop_dropped_bag_counts_by_remote_inbound_link: hop_loss,
+            ..Default::default()
+        }
+        .to_json();
+
+        assert_eq!(
+            rendered,
+            serde_json::json!({
+                "frames_dropped": 2,
+                "dropped_bags_by_link": { "L-remote": 2 },
+                "refused_bags_by_output_port": {},
+                "mesh_hop_dropped_bags_by_link": { "L-remote": 9 }
+            })
+        );
+    }
+
+    /// A wired remote link that has lost nothing on the hop says so, rather
+    /// than going missing — the rule every other per-link count already keeps.
+    #[test]
+    fn a_remote_link_that_has_lost_nothing_on_the_hop_renders_a_zero_rather_than_nothing() {
+        let hop_loss = Arc::new(MeshHopDroppedBagCountsByRemoteInboundLink::default());
+        let _ = hop_loss.counter_for_inbound_link("L-remote");
+
+        let rendered = ProcessorMetrics {
+            mesh_hop_dropped_bag_counts_by_remote_inbound_link: hop_loss,
+            ..Default::default()
+        }
+        .to_json();
+
+        assert_eq!(
+            rendered["mesh_hop_dropped_bags_by_link"],
+            serde_json::json!({ "L-remote": 0 })
+        );
+    }
+
+    /// A processor fed only from this runtime renders no hop-loss key at all.
+    /// A zero there would claim a hop it does not have, and a reader could not
+    /// tell it from a remote link that has lost nothing.
+    #[test]
+    fn a_processor_with_no_remote_link_renders_no_mesh_hop_key_rather_than_an_empty_one() {
+        let dropped = Arc::new(DroppedBagCountsByInboundLink::default());
+        let _ = dropped.counter_for_inbound_link("L-local");
+
+        let rendered = metrics_counted_here(LossCountsOfPortsInThisProcess {
+            dropped_bag_counts_by_inbound_link: dropped,
+            ..Default::default()
+        })
+        .to_json();
+
+        assert_eq!(
+            rendered,
+            serde_json::json!({
+                "frames_dropped": 0,
+                "dropped_bags_by_link": { "L-local": 0 },
+                "refused_bags_by_output_port": {}
+            }),
+            "the whole rendering, so no hop-loss key appears where there is no hop"
+        );
+    }
+
     /// Only a link into a windowed port carries a sample count, and a processor
     /// with no such link renders no key for one rather than an empty map.
     #[test]

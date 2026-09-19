@@ -437,7 +437,9 @@ mod tests {
     #[test]
     fn a_remote_links_hop_loss_is_counted_apart_and_a_re_wire_starts_it_from_zero() {
         let counts = MeshHopDroppedBagCountsByRemoteInboundLink::default();
-        counts.counter_for_inbound_link("L-remote").record_dropped_bags(7);
+        counts
+            .counter_for_inbound_link("L-remote")
+            .record_dropped_bags(7);
         assert_eq!(
             counts.mesh_hop_dropped_bag_count_snapshot_by_inbound_link(),
             BTreeMap::from([("L-remote".to_string(), 7)])
@@ -446,7 +448,11 @@ mod tests {
         let the_previous_wirings_counter = counts.counter_for_inbound_link("L-remote");
         let re_wired = counts.a_counter_for_a_fresh_wiring_of("L-remote");
 
-        assert_eq!(re_wired.dropped_bag_count(), 0, "a re-wire starts from zero");
+        assert_eq!(
+            re_wired.dropped_bag_count(),
+            0,
+            "a re-wire starts from zero"
+        );
         the_previous_wirings_counter.record_dropped_bags(3);
         assert_eq!(
             counts.mesh_hop_dropped_bag_count_snapshot_by_inbound_link(),
@@ -458,7 +464,9 @@ mod tests {
     #[test]
     fn a_disconnected_remote_links_hop_loss_leaves_with_it() {
         let counts = MeshHopDroppedBagCountsByRemoteInboundLink::default();
-        counts.counter_for_inbound_link("L-gone").record_dropped_bags(4);
+        counts
+            .counter_for_inbound_link("L-gone")
+            .record_dropped_bags(4);
 
         counts.forget_inbound_link("L-gone");
 

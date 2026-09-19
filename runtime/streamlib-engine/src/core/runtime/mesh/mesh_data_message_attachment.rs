@@ -57,8 +57,7 @@ impl MeshDataMessageAttachment {
             .copy_from_slice(&self.sequence_number.to_le_bytes());
         wire_bytes[PUBLISHER_GENERATION_OFFSET..CLOCK_IDENTITY_OFFSET]
             .copy_from_slice(&self.publisher_generation.to_le_bytes());
-        wire_bytes[CLOCK_IDENTITY_OFFSET..]
-            .copy_from_slice(&self.clock_identity.to_wire_bytes());
+        wire_bytes[CLOCK_IDENTITY_OFFSET..].copy_from_slice(&self.clock_identity.to_wire_bytes());
         wire_bytes
     }
 
@@ -123,8 +122,8 @@ mod tests {
                 // publisher_generation
                 0x28, 0x27, 0x26, 0x25, 0x24, 0x23, 0x22, 0x21, //
                 // clock_identity, verbatim rather than byte-swapped
-                0x2f, 0x1c, 0x8a, 0x30, 0x6b, 0x4e, 0x4d, 0x5a, 0x9a, 0x11, 0x2c, 0x7f, 0x0d,
-                0x5e, 0x8b, 0x93,
+                0x2f, 0x1c, 0x8a, 0x30, 0x6b, 0x4e, 0x4d, 0x5a, 0x9a, 0x11, 0x2c, 0x7f, 0x0d, 0x5e,
+                0x8b, 0x93,
             ]
         );
         assert_eq!(MESH_DATA_MESSAGE_ATTACHMENT_BYTES, 40);

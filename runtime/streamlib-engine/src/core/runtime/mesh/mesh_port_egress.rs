@@ -315,3 +315,71 @@ fn declare_the_publisher<'a>(
         .congestion_control(CongestionControl::Drop)
         .wait()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One port's publisher and its replacement, which is the only way to get
+    /// two `UniquePublisherId`s — iceoryx2 mints them and nothing else can.
+    ///
+    /// One after the other rather than both at once: a channel carries a
+    /// single publisher, which is exactly why a replacement's numbering
+    /// restarts and the generation has to say so.
+    fn a_ports_publisher_and_its_replacement(arm: &str) -> (UniquePublisherId, UniquePublisherId) {
+        let channel = Iceoryx2Node::for_this_test_process()
+            .open_or_create_service(
+                &format!("egress-generations-{arm}-{}", std::process::id()),
+                2,
+                4,
+            )
+            .expect("a test channel");
+        let first = channel.create_publisher(64).expect("a publisher");
+        let first_id = first.id();
+        drop(first);
+        let replacement = channel
+            .create_publisher(64)
+            .expect("a replacement publisher");
+        let replacement_id = replacement.id();
+        assert_ne!(
+            first_id, replacement_id,
+            "a replacement must be told apart from what it replaced, or the generation says \
+             nothing"
+        );
+        (first_id, replacement_id)
+    }
+
+    /// One publisher's whole run is one generation: bumping inside it would
+    /// make the reading runtime treat every bag as a baseline and count no
+    /// loss at all.
+    #[test]
+    fn one_publishers_run_is_one_generation_and_the_first_bag_is_generation_zero() {
+        let (numbering_publisher_id, _) = a_ports_publisher_and_its_replacement("one-run");
+        let mut generations = PublisherGenerationsOnePortHasHad::default();
+
+        let carried: Vec<u64> = (0..4)
+            .map(|_| generations.generation_of_a_sample_numbered_by(numbering_publisher_id))
+            .collect();
+
+        assert_eq!(carried, [0, 0, 0, 0]);
+    }
+
+    /// A replaced publisher is a new generation, which is what tells the
+    /// reading runtime that the numbering restarted rather than jumped.
+    #[test]
+    fn a_replaced_publisher_is_a_new_generation() {
+        let (first, second) = a_ports_publisher_and_its_replacement("replaced");
+        let mut generations = PublisherGenerationsOnePortHasHad::default();
+
+        assert_eq!(generations.generation_of_a_sample_numbered_by(first), 0);
+        assert_eq!(generations.generation_of_a_sample_numbered_by(first), 0);
+        assert_eq!(generations.generation_of_a_sample_numbered_by(second), 1);
+        assert_eq!(generations.generation_of_a_sample_numbered_by(second), 1);
+        assert_eq!(
+            generations.generation_of_a_sample_numbered_by(first),
+            2,
+            "a publisher coming back is a third generation, never the first again: its \
+             numbering restarted at zero the second time too"
+        );
+    }
+}

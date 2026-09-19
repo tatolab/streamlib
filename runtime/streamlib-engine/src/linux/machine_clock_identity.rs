@@ -19,9 +19,8 @@ pub fn read_this_machines_clock_identity() -> MachineClockIdentity {
         );
         return MachineClockIdentity::UNIDENTIFIED;
     };
-    let identity = MachineClockIdentity::of_the_machine_whose_boot_session_uuid_reads(
-        &kernel_boot_id,
-    );
+    let identity =
+        MachineClockIdentity::of_the_machine_whose_boot_session_uuid_reads(&kernel_boot_id);
     if identity.is_unidentified() {
         tracing::debug!(
             "this machine's boot id is not a UUID, so nothing it sends across the mesh can say \

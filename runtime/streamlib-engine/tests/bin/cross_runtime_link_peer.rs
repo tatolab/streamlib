@@ -68,7 +68,6 @@ const THE_CHANNELS_DEPTH: usize = 16;
 /// every channel's, so an egress joining later fits a slot that already exists.
 const THE_CHANNELS_SUBSCRIBER_SLOTS: usize = 8;
 
-
 fn main() {
     // No `Runner`, so no engine logging pathway: a peer says what it is doing
     // only when the test asks for it, and only to stderr, which the harness
@@ -153,7 +152,9 @@ fn run_as_the_source(
                 // generation beside the number the reader would read the
                 // change as loss.
                 drop(publisher);
-                publisher = service.create_publisher(1024).map_err(|why| why.to_string())?;
+                publisher = service
+                    .create_publisher(1024)
+                    .map_err(|why| why.to_string())?;
             }
             publish_one_bag(&publisher, published)?;
             published += 1;
@@ -438,8 +439,7 @@ impl HowToRunThisPeer {
                 "--link-from" => link_from = Some(value()),
                 "--iceoryx2-domain-root" => iceoryx2_domain_root = value().into(),
                 "--burst-once-a-reader-arrives" => {
-                    burst_once_a_reader_arrives =
-                        Some(value().parse().expect("a bag count"))
+                    burst_once_a_reader_arrives = Some(value().parse().expect("a bag count"))
                 }
                 "--recreate-the-publisher-after" => {
                     recreate_the_publisher_after = Some(value().parse().expect("a bag index"))
