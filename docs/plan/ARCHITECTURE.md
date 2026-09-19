@@ -439,7 +439,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   [consumer-tree-disposition — SHIPPED; a standing convention, and by the same decision
   the showcase carries no CI check to run]
 
-## Processor model & scheduling — IN-FLIGHT (→ loss-visibility, runtime-mesh, cross-runtime-links)
+## Processor model & scheduling — IN-FLIGHT (→ runtime-mesh, cross-runtime-links)
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a bag
   (self-describing msgpack named map). The engine has no type layer: ports carry no
@@ -522,13 +522,14 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   on a realtime link, never an error and never invisible — a run that lost most of its
   bags must not read as a healthy one. A `newest` port
   passing over bags to reach the most recent is the profile working, not loss at the
-  port, and is deliberately uncounted. **The clause states the intent, not yet the
-  tree**: what shipped counts the mailbox eviction at an app-process destination and
-  renders it under that node's `metrics` key. Two paths still lose a bag without
-  counting it anywhere a reader can reach; how both are counted is DECIDED directly below
-  and not yet built, and until it ships a `graph` that reports no drops is not yet proof that
-  none happened.
-  [delivery-profile-vocabulary — SHIPPED #2023 for the app-process half]
+  port, and is deliberately uncounted. The clause is now true of the tree as well as of the
+  intent: the mailbox eviction, the subscriber ring's overwrite, the two receive-seam
+  discards and a write refused at the channel ceiling are each counted where they happen and
+  rendered under `metrics`, for a helper-placed processor as for an app-process one. A
+  `graph` that reports no drops is proof that none happened, with the two residuals the
+  entries below state.
+  [delivery-profile-vocabulary — SHIPPED #2023 for the app-process half; made true of the
+  tree by loss-visibility — SHIPPED #2268, #2269, #2270]
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::mailbox::tests::an_eviction_is_counted_against_the_link_whose_bag_was_lost -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::input::tests::each_inbound_link_reports_its_own_losses_at_a_stalled_ordered_port -->
   <!-- verify: cargo test -p streamlib-engine --lib core::graph::components::processor_metrics::tests::a_processors_metrics_render_every_inbound_links_losses_by_name -->
@@ -543,17 +544,88 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   minus the last, minus one — are added to that inbound link's dropped-bag count, on
   `ordered` ports only, since a `newest` port passing over bags is the
   profile working. The number is engine-internal: no processor reads it and no bag carries
-  it. Stated residual: a bag lost after a link's last receive and before its disconnect is
-  not counted. [loss-visibility]
+  it. Six readings the build settled, none of them a mechanism the entry did not already
+  state. **Per-channel is per producing publisher**: each publisher numbers its own sends
+  from zero and each subscriber keeps its last number keyed by the publisher's id, so a
+  publisher recreated when a source port's last link goes starts a new baseline rather than
+  a gap. **"Fails before delivering to anyone" names exactly two send errors** — the two
+  that fail before any delivery consume no number; the other three consume one, because
+  iceoryx2 does not report a partial delivery, and a subscriber the failed send never
+  reached therefore reads a real loss. **The header is one engine type**,
+  `DataChannelBagSequenceNumberUserHeader`, with its iceoryx2 type name pinned so a move
+  never changes its identity, and a source-walking gate refuses a data `publish_subscribe`
+  builder outside the node wrapper so no site can open a service without it. **A gap and an
+  eviction never double-count**: a ring gap is a bag never received and an eviction is a bag
+  received and then displaced, and each lands once on the link's one counter. **A `newest`
+  port counts neither** — the eviction at a skip-to-latest mailbox is the profile working,
+  which is the tree catching up to the entry above rather than a new rule. And **a bag
+  dropped at the receive seam is counted on its link**: a frame too short for a header and a
+  frame bound to a port with no mailbox each consume a number and reach no reader, so no gap
+  could show them.
+  Two stated residuals: a bag lost after a link's last receive and before its disconnect is
+  not counted; and bags the ring overwrites before a link's first receive are not counted
+  either, because that first sample is the baseline the gap is measured from. Counts land on
+  the next receive for a native and a Python consumer alike — a consumer inside a long
+  `process()` receives nothing, so its overwrites reach `graph` when it next reads, and no
+  timer is added to shorten that.
+  [loss-visibility — SHIPPED #2268]
+  <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::an_ordered_consumer_that_stops_reading_renders_exactly_the_bags_its_ring_overwrote -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_newest_consumer_renders_no_loss_for_bags_passed_over_in_its_ring_or_its_mailbox -->
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::input::tests::a_replacement_publisher_on_a_live_subscriber_reads_as_a_new_baseline_not_a_gap -->
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::input::tests::a_frame_too_short_for_a_header_is_counted_on_the_link_it_arrived_on -->
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::input::tests::a_frame_bound_to_a_port_with_no_mailbox_is_counted_on_its_link -->
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::node::tests::a_channel_data_service_and_an_opener_disagreeing_on_the_user_header_are_refused_by_name -->
+  <!-- verify: cargo run -p xtask -- check-iceoryx2-construction -->
+- **DECIDED** — A write refused at the channel ceiling is counted on the producer, per
+  output port. The ceiling is per channel and the refusal happens before the bag reaches any
+  link, so it consumes no sequence number and no destination can ever see it; one counter at
+  the single send seam serves a native and a Python producer alike, so a Rust author's `Err`
+  is counted too, and `graph` renders `refused_bags_by_output_port: {port: n}` on the
+  producing node. The cost is stated rather than hidden: a reader looking only at a
+  destination's link does not see this loss. Rejected — adding the refusals into each
+  outbound link's `dropped_bags_by_link` at its destination, which would need per-link
+  baselines at the producer and a merge of two processes' counters at render. Owner,
+  2026-09-14. [loss-visibility — SHIPPED #2268]
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::output::tests::a_write_refused_at_the_ceiling_consumes_no_sequence_number -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::graph::components::processor_metrics -->
 - **DECIDED** — A helper-placed destination's per-link counts reach `graph`. The parent
   creates one blackboard per helper spawn; the helper is its only writer, one entry per
   inbound link holding that link's dropped-bag count, and the parent reads it whenever
   `graph` renders, without waiting on the child. The last counts a crashed helper wrote stay
   readable; a dead writer can no longer update its entries, so a respawned helper gets a
-  fresh board. A helper's write refused at the per-link ceiling is
+  fresh board. A helper's write refused at the ceiling is
   counted the same way. The node's `metrics` key then renders for a helper-placed processor
-  as it does for an app-process one. [loss-visibility]
+  as it does for an app-process one.
+  Five readings the build settled. **An entry is a slot carrying its wiring**: a
+  blackboard's keys are fixed at creation and links arrive live, so the board declares one
+  slot per inbound link the cap allows, and the parent assigns each link a slot and a wiring
+  generation carried in its setup envelope entry or its `wire_link`. Each value holds that
+  generation beside the link's dropped bags and discarded samples, and the parent renders a
+  slot only while its generation matches the link it assigned — so a late write for an
+  unwired link is ignored and a reused slot starts from zero, which is what makes a count
+  cumulative for the life of one wiring rather than of the slot. An output port's entry
+  carries a generation too, assigned per channel, so a reopened port never renders the total
+  of the channel before it, including while the helper has not yet answered. **The board is
+  named per spawn, never per processor**: the parent creates it before the child starts and
+  holds its creator and reader, dropping them at processor removal and never at helper
+  death, so a crashed helper's last counts render until the node goes. **The helper writes
+  at the seam that moves the count** — mirrored into its slot as the counter increments, on
+  the helper's own receive, with no loop flush and no timer. **The reader is wrapped for
+  `graph`** and read lock-free under the graph lock, so `graph` never waits on the child.
+  And **the flush count rides the same slot**, because a windowed port on a helper is where
+  both losses happen together.
+  The wheel's stub changed after all: `ProcessorLinkDataAccess` gained `open_loss_count_board`
+  and one optional keyword on each of its two link-opening methods, which the helper passes
+  and no processor author ever names. No authoring surface moved. The engine half of the
+  proof is CI-run; the end-to-end wheel arm — an overrun helper, a ceiling refusal and a
+  SIGKILL'd helper's last counts, all read off a running node's `graph` — is
+  `requires_gpu` and therefore rig-only.
+  [loss-visibility — SHIPPED #2270]
   <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_helper_placed_destinations_node_renders_the_counts_its_helper_wrote_on_its_slot -->
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::helper_process_loss_count_board::tests::the_parent_reads_each_entry_only_for_the_wiring_it_assigned -->
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::helper_process_loss_count_board::tests::a_write_from_a_wiring_the_slot_has_moved_past_lands_nothing -->
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::input::tests::every_loss_counted_on_a_mirrored_link_reaches_its_board_slot_as_it_is_counted -->
+  <!-- verify: pytest -m requires_gpu sdk/streamlib-python-wheel/tests/test_helper_loss_counts.py -->
 - **DECIDED** — No link ever blocks a producer. Producer-blocking is deleted, not merely
   unreachable: no profile resolves to it and the overflow policy it was the second half
   of goes with it. A processor publishing to a slow consumer loses bags at that
@@ -1055,7 +1127,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   unbuilt engine capabilities rather than Python-reach gaps; equalising the construction
   surface with no pass to render against would buy nothing.
 
-## Media I/O — camera, display, audio, codecs — IN-FLIGHT (→ loss-visibility, cross-runtime-links)
+## Media I/O — camera, display, audio, codecs — IN-FLIGHT (→ cross-runtime-links)
 
 - **DECIDED** — First-party camera, display, and audio are native built-in processors
   in the engine tree, statically linked into the wheel — pre-built named blocks
@@ -1573,17 +1645,45 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   the counted flush of the remainder behind it, and no part of the loss is silent. The
   iceoryx2 ring in front of a windowed port is engine-sized to a fixed cap well above a
   profile's depth, never to the contract's own depth, and a windowed port connected live onto
-  a channel created smaller than that cap is refused by name. [the flush count, the ring cap
-  and the live refusal — loss-visibility]
-  [audio-port-window-contract — SHIPPED #2033]
+  a channel created smaller than that cap is refused by name.
+  Three readings the build settled. **The cap is 64 bags**, returned by the one
+  creation-depth function whenever any destination of the channel being created is windowed
+  and 16 otherwise; the windowed port's subscriber ring is that 64, its mailbox depth stays
+  sized from its contract, and neither is fed to the other. **The live refusal reads the
+  held factory** — a windowed destination wired onto a channel whose creation depth is below
+  64 is refused at wire time naming the port, the link, both depths and the fix of
+  connecting the windowed consumer before the channel's other links, and it reads a channel
+  only a tap or a lagging helper still holds as readily as a busy one. **A flush counts the
+  samples no reader had received**, in per-channel samples at the port's declared rate: the
+  remainder past the last emitted window's already-delivered overlap, plus the staged source
+  frames scaled by the rate ratio and rounded down. Subtracting the overlap is what makes
+  the count mean what the entry says — under a rolling hop the front of the remainder is
+  samples the consumer already holds, and counting them would report loss for audio that was
+  delivered. `graph` renders `discarded_samples_by_link` beside `dropped_bags_by_link`, only
+  for links into windowed ports, and a link into an unwindowed port carries no sample count
+  rather than a zero, the way a port that declared nothing renders no `audio_window` key;
+  `frames_dropped` stays a bag total, and both flush callers — the format change and the
+  gap — count.
+  Three discards stay uncounted, each for a reason already in this section: resampler priming
+  output is filter delay rather than input; the remainder parked when a port's last link
+  disconnects is the designed stop above; and a bag `accept` refuses already fails the read
+  by name.
+  [audio-port-window-contract — SHIPPED #2033; the flush count, the ring cap and the live
+  refusal — loss-visibility, SHIPPED #2269]
+  <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_channel_created_for_a_windowed_destination_holds_the_windowed_ring_depth -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_windowed_consumer_connected_onto_a_running_shallower_channel_is_refused_naming_both_depths -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_gap_flush_at_a_windowed_destination_renders_its_discarded_samples_under_its_link -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_stalled_windowed_consumer_counts_what_its_sixty_four_bag_ring_overwrote -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::resolved_audio_window_contract::tests::the_profiles_depth_is_a_floor_no_contract_undercuts -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::resolved_audio_window_contract::tests::a_one_second_window_is_sized_past_the_profiles_depth_by_its_own_quanta -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::audio_window_stage_tests::a_single_evicted_block_displaces_the_stamps_enough_to_flush -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::audio_window_stage_tests::a_full_mailbox_that_still_cannot_make_a_window_says_so_once -->
 - **OPEN** — Whether a windowed port connected live onto a channel created smaller than the
-  windowed cap should instead wire at that channel's depth, with its ring overwrites counted,
-  once overwrite counting has shipped. Until then it is refused as the entry above states.
-  [loss-visibility]
+  windowed cap should instead wire at that channel's depth, with its ring overwrites counted.
+  Overwrite counting has now shipped (§Processor model), so the question is answerable where
+  it was not before; it is still undecided, and until it is decided the connect is refused as
+  the entry above states. [loss-visibility — the precondition met by #2268; the question
+  itself untouched]
 - **DECIDED** — The resampler is `rubato` — pure Rust, MIT, adding no `DT_NEEDED` entry —
   and the portability gate stays the pass/fail: the shipped `_engine.abi3.so` names the
   same five host libraries with the resampler in as without it. Its three adapter

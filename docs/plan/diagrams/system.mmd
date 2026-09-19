@@ -46,8 +46,10 @@ count, carried on every emitted window, and a declared count is what the stage c
 every input port declares one read policy — newest or ordered — and no other delivery setting:
 both drop under pressure, and no link ever blocks a producer;
 a drop is counted at the port that lost it; a ring overwrite is counted by a sequence
-number in an iceoryx2 user header, and a helper's counts reach graph through a
-per-spawn blackboard the parent reads (decided, not yet built);
+number in an iceoryx2 user header, a write refused at the channel ceiling is counted on the
+producer per output port, and a helper's counts reach graph through a per-spawn blackboard
+the parent reads on slots it assigned with a wiring generation;
+a windowed port's flush counts the samples no reader had received, behind a 64-bag ring;
 shutdown always ends — every helper stops at once on one ladder, interrupt after 1 s,
 teardown within 5 s, then its process group terminated and killed; an interrupted setup()
 still tears down, and a thread past its budget is abandoned and named rather than joined;
