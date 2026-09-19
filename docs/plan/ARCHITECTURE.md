@@ -43,7 +43,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   format; third-party Rust processors for Rust apps are ordinary cargo dependencies,
   source-compiled. [importable-python-library — SHIPPED #1715]
 
-## Packages & extension model — IN-FLIGHT (→ local-transport-hardening)
+## Packages & extension model — IN-FLIGHT
 
 - **DECIDED** — PyPI and cargo are the package systems. The custom module system is
   deleted in full: `streamlib_modules/`, the `.slpkg` format, `streamlib.lock`, the
@@ -58,11 +58,15 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   SHIPPED #1837, #1841, which deleted the crate whole]
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-10-importable-python-library-ripout.md -->
 - **DECIDED** — The plugin ABI is deleted: no dlopen'd processor cdylibs, no `repr(C)`
-  vtable surface, no load handshake, no build fingerprints. The extension paths are
+  vtable surface, and none of that ABI's load-time machinery — no dlopen load handshake, no
+  cdylib build fingerprints. The scope is the deleted ABI and nothing wider: a helper process
+  imports the one wheel and checks that the engine it imported is its parent's build, which
+  is the handshake §Processor model states, not an ABI surface returning. The extension paths are
   Python packages and Rust source crates only — and an extension wheel is a Python
   package: Rust inside, loaded across the CPython ABI, never dlopen'd by the engine
   (extension-model, 2026-09-04).
-  [importable-python-library; importable-python-library-ripout — SHIPPED #1715]
+  [importable-python-library; importable-python-library-ripout — SHIPPED #1715; the clause
+  scoped to the ABI by local-transport-hardening — SHIPPED #2262]
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-10-importable-python-library-ripout.md -->
 - **DECIDED** — Third-party native code (closed-source included) ships as an ordinary
   Python package whose native internals expose capabilities to Python as handles —
@@ -435,7 +439,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   [consumer-tree-disposition — SHIPPED; a standing convention, and by the same decision
   the showcase carries no CI check to run]
 
-## Processor model & scheduling — IN-FLIGHT (→ local-transport-hardening, loss-visibility, runtime-mesh, cross-runtime-links)
+## Processor model & scheduling — IN-FLIGHT (→ loss-visibility, runtime-mesh, cross-runtime-links)
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a bag
   (self-describing msgpack named map). The engine has no type layer: ports carry no
@@ -729,8 +733,63 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   waiting on those pipes, so nothing the helper started can hold the app's output open, delay
   the app's exit, or keep issuing the helper's privileged operations. A descendant that leaves
   the process group on purpose is the stated residual: it survives, holding none of the app's
-  descriptors and reaching no engine operation. [shutdown-ladder]
+  descriptors and reaching no engine operation.
+  Five readings the build settled, each binding where an implementer would otherwise choose
+  inline. **Any** Python callback interrupted at shutdown is followed by `teardown()`,
+  `setup()` included — a `setup()` that raises by itself keeps the no-teardown rule it
+  already had, and a `teardown()` touching state `setup()` never built raises and is logged
+  like any hook failure. The second interrupt gives a Python helper no `teardown()` at all:
+  it terminates the helper's process group, and a recording keeps what its closed fragments
+  hold, which is the case the fragmented layout was chosen for. A live `remove_processor`
+  whose native thread outlives its budget still removes the processor — the node and its
+  links go, the thread is abandoned, and the call fails naming it, so the caller learns the
+  change did not end cleanly. The engine's ends of a helper's stdout and stderr are detached
+  at its exit rather than closed, so a surviving `setsid` descendant's writes are still
+  logged rather than raising SIGPIPE, and each reader thread lives only while a survivor
+  holds its pipe. And the ladder is Linux-first: process groups, `waitid` and
+  CLOEXEC-at-source compile on both platforms, with macOS closing descriptors one at a time
+  where `close_range` is absent, while escalation and SIGHUP on macOS's
+  `ctrlc` / `NSApplication` path are not built.
+  [shutdown-ladder; local-transport-hardening — SHIPPED #2264, #2266]
   <!-- verify: sdk/streamlib-python-wheel/tests/test_helper_placement.py -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_helper_placement.py::test_a_processor_interrupted_while_still_setting_up_still_tears_down -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_helper_placement.py::test_a_worker_a_processor_forked_goes_down_with_the_apps_helper -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_three_helpers_slow_to_stop_cost_about_one_ladder -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_a_process_the_app_started_never_holds_the_apps_output_past_its_exit -->
+- **DECIDED** — A link onto a helper reads `wired` only once the helper says so. The helper
+  answers every `wire_link` it receives with a link-scoped `wired` or `wire_failed` reply,
+  `wire_failed` carrying the reason its open failed; the reply rides its own rpc tag, which
+  the bridge routes to that link's state and never to the lifecycle reply queue. A link
+  carried in the startup envelope needs no reply of its own — `ready` confirms it, and a
+  failure there still refuses the processor's start by name. `connect` does not wait for the
+  reply: it returns with the link `pending`, and the helper's answer flips it to `wired`, or
+  to `error` carrying the helper's own reason, which `graph` renders under `error_reason`
+  until the link is disconnected — the first use of `LinkState::Error`. The caller learns
+  whether its change took by reading `graph`, as the MCP instructions already tell it to,
+  and those instructions carry the `pending` and `error` cases. A bounded wait was rejected:
+  a helper reads commands only between callbacks, so waiting would put a control-plane call
+  behind user code, and the isolation axis settles it over the caller-learns-its-outcome
+  one. A helper that dies with a link unconfirmed takes the link down on the same death path
+  the ladder runs; the link never reads `wired`. A link an engine-to-helper wire has not yet
+  confirmed is never re-planned as unadded.
+  [local-transport-hardening — SHIPPED #2265]
+  <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_helper_that_cannot_open_its_port_leaves_the_link_in_error_with_its_reason -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_link_no_helper_has_to_answer_for_is_wired_as_soon_as_it_is_opened -->
+  <!-- verify: cargo test -p streamlib-api-server the_instructions_and_every_wiring_prompt_say_what_pending_and_error_mean -->
+- **DECIDED** — A helper refuses to start unless the engine it imported is its parent's
+  build. The build id is the crate version, the git sha — `unknown` where the build has no
+  `.git` — and a nonce minted per build by the engine's build script, compiled into
+  `_engine.abi3.so`. The parent passes its own in the helper's environment; the helper
+  compares before it opens any channel or socket, and on a mismatch writes a refusal naming
+  both ids to raw stderr and exits, so the parent reports that processor's start as refused
+  and names the helper's stderr. An absent id is a refusal too, never a silent pass. The
+  subprocess protocol version number, its minimum, its validator and its environment
+  variable retire with it: one check per invariant, and a hand-bumped integer never caught a
+  helper built against a different iceoryx2 patch or a stale wheel on the helper's
+  `sys.path`. [local-transport-hardening — SHIPPED #2262]
+  <!-- verify: cargo test -p streamlib-engine --lib core::engine_build_id_composition -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_helper_placement.py::test_a_helper_that_imported_another_engine_build_is_refused_naming_both_builds -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_helper_process.py::test_a_helper_handed_no_engine_build_id_refuses_rather_than_passing -->
 - **DECIDED** — The MVP edit loop is re-running `dev` (warm restart is sub-second by
   construction). Reload-on-save is a nicety, not MVP-gating, and when built it is
   processor-granular — stop the processor, respawn its helper (a fresh interpreter
@@ -2075,7 +2134,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   machine-global scan paths; the lane costs nothing when unused (no `DT_NEEDED`
   entries, no import-time work). [audio-subsystem]
 
-## Networking — transport, runtime mesh, moq, webrtc — IN-FLIGHT (→ local-transport-hardening, runtime-mesh, cross-runtime-links)
+## Networking — transport, runtime mesh, moq, webrtc — IN-FLIGHT (→ runtime-mesh, cross-runtime-links)
 
 - **DECIDED** — Cross-language interop happens on the wire between nodes, as
   self-describing bags — never in-graph. [importable-python-library — SHIPPED #1715]
@@ -2198,7 +2257,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   here: a helper stops on the shutdown ladder §Processor model states, whose `teardown()`
   budget is five seconds, so a WHIP `DELETE` or a QUIC close must fit inside it; and
   connecting inside `setup()` spends the sixty-second registration budget.
-  [extension-model; the ladder — shutdown-ladder]
+  [extension-model; the ladder — local-transport-hardening, SHIPPED #2264, #2266]
 - **DECIDED** — The proof bar is the codec blocks' two halves. CI-run, GPU-free and
   endpoint-free: RTP packetising and depacketising round trips, SDP construction and
   parsing, MoQ catalog and object bytes, and the bag literal a player writes checked
@@ -2468,7 +2527,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   different machines become comparable; until then the per-clock rule above stands.
   [runtime-mesh]
 
-## Language SDKs & parity — IN-FLIGHT (→ local-transport-hardening)
+## Language SDKs & parity — SHIPPED
 <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py -->
 
 - **DECIDED** — Python is the sole focus runtime: the importable PyO3 wheel is the
@@ -2507,9 +2566,27 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   stays alive beneath it, and `run()` raises naming the processor. An engine-chosen watchdog
   of about fifteen seconds ends a teardown hung anywhere else. The entry above's "all engine
   threads joined" therefore reads "joined, or abandoned and named". The `run()` docstring
-  states the same. [shutdown-ladder]
+  states the same.
+  Four readings the build settled. The watchdog arms when *any* engine teardown starts —
+  `run()`'s, `shutdown()`, context-manager exit, `atexit` — and on expiry logs what is still
+  running and ends the process with status 124, distinct from the third interrupt's 130; an
+  embedding host (Isaac Sim, a notebook) therefore loses its interpreter, accepted so that
+  nothing hangs the app. `run()` raises `RuntimeError` naming each abandoned processor by
+  display name and id — every other `run()` failure already raises that type, and the CLI
+  already reports it as a launch error — while a forced shutdown that abandoned nothing
+  returns normally. Abandoning is what keeps the engine alive: the thread holds the runner
+  and the engine is deliberately never dropped before process exit, so a thread that returns
+  late runs neither tokio shutdown, nor the fd restore, nor device wait-idle on its own
+  thread during interpreter finalization. And signal ownership stays scoped to `run()`:
+  a teardown outside it — `shutdown()` before a run, `Drop`, `atexit`, `__exit__` — owns no
+  signals, and the watchdog alone bounds it.
+  [shutdown-ladder; local-transport-hardening — SHIPPED #2266]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_ctrl_c_exits_cleanly -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_sigint_is_handed_back_to_cpython -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_a_second_ctrl_c_forces_the_shutdown_past_a_long_teardown -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_a_third_ctrl_c_kills_every_helper_process_group_and_exits_130 -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_sighup_tears_the_graph_down_gracefully -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_a_runtime_held_by_a_live_thread_is_torn_down_at_exit -->
 
 ## Distribution & versioning — SHIPPED
 <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py -->
@@ -2537,7 +2614,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_the_native_extension_links_nothing_the_host_may_not_supply -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_the_glsl_compiler_is_linked_statically -->
 
-## Control plane & observability — IN-FLIGHT (→ local-transport-hardening, runtime-mesh, cross-runtime-links)
+## Control plane & observability — IN-FLIGHT (→ runtime-mesh, cross-runtime-links)
 
 - **DECIDED** — The control plane carries no optional capability's routes natively. A
   capability extension that needs an endpoint contributes it through the `host` door
@@ -2588,12 +2665,15 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   [importable-python-library, mcp-served-with-the-node — SHIPPED #1712;
   control-plane-surface-pixel-exchange — SHIPPED #1972, #1974 for the vocabulary
   sentence; live graph mutation restored by owner ruling 2026-09-06; resources and
-  prompts — SHIPPED #2232, the catalog they serve from agent-readable-processor-catalog]
+  prompts — SHIPPED #2232, the catalog they serve from agent-readable-processor-catalog;
+  local-transport-hardening — SHIPPED #2263, #2265 made the late-joiner sizing clause true
+  in the tree and gave a helper's link the `pending` state the instructions now explain]
   <!-- verify: sdk/streamlib-python-wheel/tests/test_cli.py::test_the_wheel_serves_no_mcp_verb -->
   <!-- verify: cargo test -p streamlib-api-server tools_list_advertises_exactly_the_control_vocabulary -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_live_graph_mutation.py -->
   <!-- verify: cargo test -p streamlib-api-server resources_list_names_the_processor_catalog_and_the_live_graph -->
   <!-- verify: cargo test -p streamlib-api-server every_step_of_every_prompt_calls_a_tool_the_node_serves -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_newest_and_an_ordered_consumer_share_one_running_output_port_each_at_its_own_depth -->
 - **DECIDED** — `dev` and `run` bind the control plane identically: all interfaces
   (`0.0.0.0`) by default, narrowed per invocation by `--host`. There is no dev-only
   exposure posture — a node another host can reach is bound wide by definition, so
@@ -2622,10 +2702,23 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: sdk/streamlib-python-wheel/tests/test_cli.py::test_this_wheel_is_the_only_streamlib_cli -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_the_channel_form_taps_then_exchanges_each_sampled_id -->
-- **DECIDED** — Node discovery is a per-user on-disk registry — one JSON file per live
-  node in the OS's standard per-user runtime directory — written only by
-  control-plane-hosting runtimes, pruned only when both liveness signals (control
-  round-trip, process check) fail. [control-plane-one-surface]
+- **DECIDED** — One engine-resolved runtime directory holds everything a live runtime puts
+  on disk that means nothing once its processes are gone: the node registry, the
+  surface-sharing socket and the iceoryx2 domain. On Linux it is
+  `$XDG_RUNTIME_DIR/streamlib/` when that variable is set and non-empty, and otherwise —
+  empty or unset, and on macOS always — `/tmp/streamlib-<uid>/`, created owner-only and
+  checked as a real directory this uid owns with no group or other bits. The check runs once
+  as the runtime starts, before its first node, socket or registry write, and a failure
+  refuses the start by name; every user takes the resolved directory. No StreamLib variable
+  overrides it — a container or CI job sets `XDG_RUNTIME_DIR` — so a runtime starts anywhere
+  with nothing set and the old Linux refusal is gone, and the wheel's Python registry reader
+  resolves identically. What a runtime *keeps* — logs, caches — stays under the project's
+  `.streamlib/`. Node discovery is the per-user on-disk registry inside that directory: one
+  JSON file per live node, written only by control-plane-hosting runtimes, pruned only when
+  both liveness signals (control round-trip, process check) fail. Owner, 2026-09-14.
+  [control-plane-one-surface; the directory — local-transport-hardening, SHIPPED #2261]
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::streamlib_runtime_directory -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_runtime_directory.py -->
 - **DECIDED** — Observability: the JSONL log schema is a durable contract; tap forwards
   bags verbatim, trading completeness for guaranteed non-interference; graph and health
   inspection ride the same control plane. [control-plane-one-surface]
