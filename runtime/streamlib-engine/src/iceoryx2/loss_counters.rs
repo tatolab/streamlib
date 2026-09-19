@@ -276,6 +276,12 @@ impl MeshHopDroppedBagCountsByRemoteInboundLink {
         RemoteInboundLinkMeshHopDroppedBagCounter(self.per_inbound_link.count_for(inbound_link_id))
     }
 
+    /// Note a link as wired, so it reports zero rather than going missing until
+    /// its hop first loses something.
+    pub fn note_a_wired_link(&self, inbound_link_id: &str) {
+        let _ = self.counter_for_inbound_link(inbound_link_id);
+    }
+
     /// A zeroed counter for a link being wired again — the source runtime
     /// returning, its egress returning, or a disconnect and reconnect of the
     /// same id. The count a previous wiring reached is dropped rather than

@@ -360,6 +360,21 @@ impl OutputWriterInner {
         }
     }
 
+    /// Remove one link from `output_port` and keep the channel whether or not
+    /// it was the last.
+    ///
+    /// For a publisher whose life is not its links': a remote link's ingress
+    /// installs one publisher when it starts carrying a port and writes
+    /// through it for as long as it carries, so releasing the channel under
+    /// the last link that happens to be wired would leave the ingress writing
+    /// into nothing — and silently, because a link wired afterwards re-adds
+    /// onto a channel that is no longer there.
+    pub fn remove_channel_link_keeping_the_channel(&self, output_port: &str, link_id: &str) {
+        if let Some(egress) = self.channels.lock().get_mut(output_port) {
+            egress.links.retain(|link| link.link_id != link_id);
+        }
+    }
+
     /// Write raw bytes to the specified output port without serialization.
     ///
     /// The data is assumed to be pre-serialized (e.g., msgpack from a
@@ -1086,6 +1101,58 @@ mod tests {
     /// refusal this issue adds is gone. Remove the growth/PowerOfTwo path and the
     /// 100 KiB loan fails instead of delivering.
     #[test]
+    /// A publisher whose life is the ingress's, not its links': removing the
+    /// last link it happens to have must leave the channel open and writable,
+    /// because the ingress keeps writing and a link wired afterwards adds onto
+    /// that same channel.
+    ///
+    /// Fail-without-fix: point a remote link's ingress at `remove_channel_link`
+    /// instead and one link disconnecting releases the publisher under a live
+    /// ingress — after which `add_channel_link` is a silent no-op and every
+    /// later bag reaches nobody, while `graph` still reports the link wired.
+    #[test]
+    fn removing_the_last_link_can_keep_the_channel_so_a_later_one_still_lands() {
+        let pubsub = open_channel_data_service("kept-channel/pubsub", 2);
+        let publisher = pubsub.create_publisher(64).unwrap();
+        let subscriber = pubsub.create_subscriber(4).unwrap();
+        let inner = Arc::new(OutputWriterInner::new());
+        inner.set_channel_publisher(
+            "bags",
+            publisher,
+            ChannelEgressConfig {
+                service_name: "test/kept-channel/bags".to_string(),
+                trust_tier: ChannelTrustTier::Trusted,
+                expected_payload_bytes: 64,
+                chunk_ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
+            },
+        );
+        inner.add_channel_link("bags", "L-first", None);
+
+        inner.remove_channel_link_keeping_the_channel("bags", "L-first");
+
+        // The link is gone from the channel, and the channel is not.
+        assert_eq!(inner.channel_notifier_count("bags"), 0);
+        inner
+            .write_raw("bags", b"written with no link at all", 1)
+            .expect("the channel must still take a write once its last link has gone");
+        inner.add_channel_link("bags", "L-wired-afterwards", None);
+        inner
+            .write_raw("bags", b"written for a link wired afterwards", 2)
+            .expect("a link wired afterwards must land on the channel that was kept");
+
+        let mut delivered = Vec::new();
+        while let Ok(Some(sample)) = subscriber.receive() {
+            delivered.push(sample.payload()[FRAME_HEADER_SIZE..].to_vec());
+        }
+        assert_eq!(
+            delivered,
+            vec![
+                b"written with no link at all".to_vec(),
+                b"written for a link wired afterwards".to_vec(),
+            ]
+        );
+    }
+
     fn write_raw_refuses_over_ceiling_and_grows_within_it() {
         let pubsub = open_channel_data_service("ceiling/pubsub", 2);
         // Prime tiny (4 KiB) under PowerOfTwo so a 100 KiB write must grow.

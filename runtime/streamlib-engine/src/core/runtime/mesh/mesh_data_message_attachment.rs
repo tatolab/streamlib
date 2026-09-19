@@ -57,38 +57,46 @@ impl MeshDataMessageAttachment {
             .copy_from_slice(&self.sequence_number.to_le_bytes());
         wire_bytes[PUBLISHER_GENERATION_OFFSET..CLOCK_IDENTITY_OFFSET]
             .copy_from_slice(&self.publisher_generation.to_le_bytes());
-        wire_bytes[CLOCK_IDENTITY_OFFSET..].copy_from_slice(&self.clock_identity.to_wire_bytes());
+        wire_bytes[CLOCK_IDENTITY_OFFSET..CLOCK_IDENTITY_OFFSET + MACHINE_CLOCK_IDENTITY_BYTES]
+            .copy_from_slice(&self.clock_identity.to_wire_bytes());
         wire_bytes
     }
 
     /// Read a record off the wire, or `None` when the bytes are not one — a
     /// peer of another engine version, or a message this engine did not write.
     pub fn from_wire_bytes(wire_bytes: &[u8]) -> Option<Self> {
-        let record: &[u8; MESH_DATA_MESSAGE_ATTACHMENT_BYTES] = wire_bytes
+        let record: &OneRecordOnTheWire = wire_bytes
             .get(..MESH_DATA_MESSAGE_ATTACHMENT_BYTES)?
             .try_into()
             .ok()?;
         Some(Self {
-            timestamp_ns: i64::from_le_bytes(
-                record[TIMESTAMP_NS_OFFSET..SEQUENCE_NUMBER_OFFSET]
-                    .try_into()
-                    .ok()?,
-            ),
-            sequence_number: u64::from_le_bytes(
-                record[SEQUENCE_NUMBER_OFFSET..PUBLISHER_GENERATION_OFFSET]
-                    .try_into()
-                    .ok()?,
-            ),
-            publisher_generation: u64::from_le_bytes(
-                record[PUBLISHER_GENERATION_OFFSET..CLOCK_IDENTITY_OFFSET]
-                    .try_into()
-                    .ok()?,
-            ),
+            timestamp_ns: i64::from_le_bytes(eight_bytes_at(record, TIMESTAMP_NS_OFFSET)),
+            sequence_number: u64::from_le_bytes(eight_bytes_at(record, SEQUENCE_NUMBER_OFFSET)),
+            publisher_generation: u64::from_le_bytes(eight_bytes_at(
+                record,
+                PUBLISHER_GENERATION_OFFSET,
+            )),
             clock_identity: MachineClockIdentity::from_wire_bytes(
-                record[CLOCK_IDENTITY_OFFSET..].try_into().ok()?,
+                record[CLOCK_IDENTITY_OFFSET..CLOCK_IDENTITY_OFFSET + MACHINE_CLOCK_IDENTITY_BYTES]
+                    .try_into()
+                    .expect("the slice is the identity's own width"),
             ),
         })
     }
+}
+
+/// One whole record, as the decode borrows it.
+type OneRecordOnTheWire = [u8; MESH_DATA_MESSAGE_ATTACHMENT_BYTES];
+
+/// The eight bytes one numeric field occupies.
+///
+/// Infallible by construction — every offset names a fixed-width field inside a
+/// record of known length — which is why this does not hand back an error arm
+/// no caller could take.
+fn eight_bytes_at(record: &OneRecordOnTheWire, offset: usize) -> [u8; 8] {
+    record[offset..offset + 8]
+        .try_into()
+        .expect("every numeric field is eight bytes inside the record")
 }
 
 #[cfg(test)]

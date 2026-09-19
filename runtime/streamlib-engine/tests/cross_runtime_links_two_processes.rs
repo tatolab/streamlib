@@ -43,11 +43,6 @@ const HOW_LONG_AN_ARM_WAITS: Duration = Duration::from_secs(40);
 /// a guess at the budget.
 const HOW_LONG_A_PEER_HAS_TO_LEAVE: Duration = Duration::from_secs(30);
 
-/// How long a burst's last bags have to finish arriving before the reader's
-/// count is read as settled. The source publishes nothing after a burst, so
-/// this is drain time and not a rate — generous against a loaded machine.
-const HOW_LONG_A_BURST_HAS_TO_SETTLE: Duration = Duration::from_secs(2);
-
 /// The variable that pins multicast scouting, so a test never scouts on the
 /// machine's real network.
 const MESH_MULTICAST_INTERFACE_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_MESH_MULTICAST_INTERFACE";
@@ -132,7 +127,7 @@ struct HowToLaunchAPeer {
     link_from: Option<String>,
     iceoryx2_domain_root: std::path::PathBuf,
     burst_once_a_reader_arrives: Option<u64>,
-    recreate_the_publisher_after: Option<u64>,
+    recreate_the_publisher_just_before_the_burst: bool,
 }
 
 impl CrossRuntimeLinkPeerProcess {
@@ -171,10 +166,8 @@ impl CrossRuntimeLinkPeerProcess {
                 .arg("--burst-once-a-reader-arrives")
                 .arg(burst.to_string());
         }
-        if let Some(after) = how.recreate_the_publisher_after {
-            command
-                .arg("--recreate-the-publisher-after")
-                .arg(after.to_string());
+        if how.recreate_the_publisher_just_before_the_burst {
+            command.arg("--recreate-the-publisher-just-before-the-burst");
         }
 
         let mut child = command.spawn().expect("the peer binary launches");
@@ -287,12 +280,21 @@ impl CrossRuntimeLinkPeerProcess {
         });
     }
 
-    /// How many bags this peer last reported published.
-    fn how_many_it_has_published(&self) -> u64 {
+    /// The last bag index of this source's burst, once it has sent one.
+    fn the_index_its_burst_ended_at(&self) -> Option<u64> {
         self.everything_it_has_reported()
             .iter()
             .rev()
-            .find_map(|reported| reported.get("published_count")?.as_u64())
+            .find_map(|reported| reported.get("burst_ended_at_index")?.as_u64())
+    }
+
+    /// How many publishers this source's port has had — two once it has
+    /// replaced the one it started with.
+    fn how_many_publishers_its_port_has_had(&self) -> u64 {
+        self.everything_it_has_reported()
+            .iter()
+            .rev()
+            .find_map(|reported| reported.get("publishers_this_port_has_had")?.as_u64())
             .unwrap_or(0)
     }
 
@@ -917,8 +919,7 @@ fn every_bag_a_burst_lost_between_two_runtimes_is_counted_on_the_link() {
     });
     reader.wait_until_it_is_up();
 
-    let reached =
-        wait_until_the_burst_has_settled(&source, &reader, HOW_MANY_BAGS_THE_BURST_PUBLISHES);
+    let reached = wait_until_the_burst_is_behind_the_reader(&source, &reader);
 
     assert_eq!(
         reached.everything_accounted_for(),
@@ -935,17 +936,33 @@ fn every_bag_a_burst_lost_between_two_runtimes_is_counted_on_the_link() {
 
 /// The source replaces its port's publisher mid-stream and bursts afterwards.
 /// The replacement numbers its own sends from zero, and the reading runtime
-/// must read that as a new baseline rather than as loss.
+/// must not read that restart as loss.
 ///
-/// What it catches: dropping the generation from the attachment. The reader
-/// would then charge the hop for bags nobody ever sent, and the conservation
-/// identity would break in the direction of over-counting.
+/// **What this arm cannot do, stated so nobody reads more into it:** it cannot
+/// be made to fail by deleting `publisher_generation` from the attachment — I
+/// tried. A replacement publisher always restarts at zero
+/// (`iceoryx2/output.rs`, `next_sequence_number: 0`), so with the old run's
+/// last received number `s_a` and the new run's first received number `s_b`,
+/// the gap a generation-blind reader would compute is `s_b - s_a - 1`, while
+/// the bags really lost across the boundary are the old publisher's remaining
+/// sends plus `s_b` — larger by the old publisher's own total, always. Omitting
+/// the generation therefore under-states a boundary rather than inventing one,
+/// and no conservation bound can see it. What it produces is a number with no
+/// meaning, which is why the plan makes a new generation a baseline; that
+/// arithmetic is pinned where it can be made red, by
+/// `bags_a_gap_in_the_numbering_says_were_lost`'s
+/// `a_new_run_is_a_baseline_even_once_its_numbering_has_overtaken`.
+///
+/// What this arm does prove, against two real runtimes and a real publisher
+/// replacement: the grown attachment crosses the wire and is read at the far
+/// end, the link keeps carrying after its producer is replaced, the burst's
+/// loss is still counted under the new run, and the count never exceeds the
+/// stretch it covers. A bound rather than the other arm's equality, because a
+/// generation boundary's own loss is deliberately uncounted and so the count
+/// legitimately falls short of the span.
 #[test]
 #[serial]
 fn a_producer_recreated_mid_stream_is_a_baseline_and_not_a_gap() {
-    /// The replacement takes over after a handful of bags, so the run either
-    /// side of it is short enough to read and long enough to have a baseline.
-    const WHICH_BAG_THE_REPLACEMENT_TAKES_OVER_AT: u64 = 3;
     const HOW_MANY_BAGS_THE_BURST_PUBLISHES: u64 = 2_000;
 
     let mesh_name = a_mesh_name_of_its_own("recreated");
@@ -961,7 +978,7 @@ fn a_producer_recreated_mid_stream_is_a_baseline_and_not_a_gap() {
         display_name: THE_DISPLAY_NAME.to_string(),
         iceoryx2_domain_root: source_domain.path().to_path_buf(),
         burst_once_a_reader_arrives: Some(HOW_MANY_BAGS_THE_BURST_PUBLISHES),
-        recreate_the_publisher_after: Some(WHICH_BAG_THE_REPLACEMENT_TAKES_OVER_AT),
+        recreate_the_publisher_just_before_the_burst: true,
         ..Default::default()
     });
     source.wait_until_it_is_up();
@@ -978,51 +995,61 @@ fn a_producer_recreated_mid_stream_is_a_baseline_and_not_a_gap() {
     });
     reader.wait_until_it_is_up();
 
-    let reached =
-        wait_until_the_burst_has_settled(&source, &reader, HOW_MANY_BAGS_THE_BURST_PUBLISHES);
+    let reached = wait_until_the_burst_is_behind_the_reader(&source, &reader);
 
-    assert!(
-        reached.last_bag_index.unwrap_or(0) >= WHICH_BAG_THE_REPLACEMENT_TAKES_OVER_AT,
-        "the run must reach past the replacement, or the arm proves nothing: {reached:?}"
-    );
-    // The identity again, across a publisher change. Over-counting is what a
-    // missing generation causes, and this catches it in that direction as
-    // surely as it catches under-counting in the other.
     assert_eq!(
-        reached.everything_accounted_for(),
-        reached.the_span_its_ingress_covered(),
+        source.how_many_publishers_its_port_has_had(),
+        2,
+        "the port's publisher must actually have been replaced, or the arm proves nothing"
+    );
+    assert!(
+        reached.everything_accounted_for() <= reached.the_span_its_ingress_covered(),
         "a publisher replaced mid-stream must not make the hop count bags nobody sent: \
          {reached:?}"
     );
+    assert!(
+        reached.the_hop_lost > 0,
+        "the burst after the replacement must still have its loss counted, or the arm says \
+         nothing about a count that survives a new generation: {reached:?}"
+    );
 }
 
-/// Wait for the whole burst to be published and for the reader to stop seeing
-/// anything new, then hand back what reached the reader.
+/// Wait until the burst is behind the reader, then hand back what reached it.
 ///
-/// A bursting source publishes nothing afterwards, so the reader's count
-/// settling is the whole of the burst having arrived or been lost — a drain,
-/// never a rate.
-fn wait_until_the_burst_has_settled(
+/// The source publishes unhurried bags either side of its burst, so the arm
+/// waits for one of the trailing ones rather than for a quiet stretch: a
+/// stalled burst also looks quiet, and reading the counts during a stall is
+/// how this stopped being a proof the first time it was written. A trailing
+/// bag arriving says the whole burst is behind it, drained and counted.
+fn wait_until_the_burst_is_behind_the_reader(
     source: &CrossRuntimeLinkPeerProcess,
     reader: &CrossRuntimeLinkPeerProcess,
-    how_many_bags_the_burst_publishes: u64,
 ) -> WhatReachedTheReader {
-    source.wait_until("the whole burst to be published", || {
-        source.how_many_it_has_published() >= how_many_bags_the_burst_publishes
+    source.wait_until("the burst to be published", || {
+        source.the_index_its_burst_ended_at().is_some()
     });
-    reader.wait_until("the burst to stop arriving", || {
-        let so_far = reader.what_last_reached_it().received_count;
-        so_far > 0 && {
-            std::thread::sleep(HOW_LONG_A_BURST_HAS_TO_SETTLE);
-            reader.what_last_reached_it().received_count == so_far
-        }
+    let burst_ended_at = source
+        .the_index_its_burst_ended_at()
+        .expect("the source reported the index its burst ended at");
+
+    reader.wait_until("a bag published after the burst to arrive", || {
+        reader
+            .what_last_reached_it()
+            .last_bag_index
+            .is_some_and(|last| last > burst_ended_at + 1)
     });
 
     let reached = reader.what_last_reached_it();
     assert_eq!(
         reached.bags_lost_before_its_first_poll, 0,
-        "this peer must have been reading from its ingress's first bag, or the stretch the hop \
+        "the reader must have been reading from its ingress's first bag, or the stretch the hop \
          count covers is not knowable from here: {reached:?}"
+    );
+    assert!(
+        reached
+            .first_bag_index
+            .is_some_and(|first| first < burst_ended_at),
+        "the run must start before the burst ended, or the burst is not inside it: {reached:?}"
     );
     reached
 }

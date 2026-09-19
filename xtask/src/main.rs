@@ -404,6 +404,8 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::graph::components::processor_metrics::tests::a_processors_metrics_render_discarded_samples_only_for_links_into_windowed_ports",
                 "iceoryx2::loss_counters::tests::a_remote_links_hop_loss_is_counted_apart_and_a_re_wire_starts_it_from_zero",
                 "iceoryx2::loss_counters::tests::a_disconnected_remote_links_hop_loss_leaves_with_it",
+                "iceoryx2::bags_a_gap_in_the_numbering_says_were_lost",
+                "iceoryx2::output::tests::removing_the_last_link_can_keep_the_channel_so_a_later_one_still_lands",
                 "core::graph::components::processor_metrics::tests::a_processors_metrics_render_mesh_hop_loss_beside_its_ports_own_and_never_inside_it",
                 "core::graph::components::processor_metrics::tests::a_remote_link_that_has_lost_nothing_on_the_hop_renders_a_zero_rather_than_nothing",
                 "core::graph::components::processor_metrics::tests::a_processor_with_no_remote_link_renders_no_mesh_hop_key_rather_than_an_empty_one",

@@ -60,25 +60,9 @@ impl MachineClockIdentity {
     /// writes it lowercase, Apple uppercase — so the parse is the one place
     /// either answer is turned into bytes.
     pub fn of_the_machine_whose_boot_session_uuid_reads(boot_session_uuid: &str) -> Self {
-        let mut identity = [0u8; MACHINE_CLOCK_IDENTITY_BYTES];
-        let mut hex_digits = boot_session_uuid
-            .as_bytes()
-            .iter()
-            .copied()
-            .filter(|byte| *byte != b'-');
-        for byte in identity.iter_mut() {
-            let (Some(high), Some(low)) = (hex_digits.next(), hex_digits.next()) else {
-                return Self::UNIDENTIFIED;
-            };
-            let (Some(high), Some(low)) = (hex_digit_value(high), hex_digit_value(low)) else {
-                return Self::UNIDENTIFIED;
-            };
-            *byte = (high << 4) | low;
-        }
-        if hex_digits.next().is_some() {
-            return Self::UNIDENTIFIED;
-        }
-        Self(identity)
+        uuid::Uuid::parse_str(boot_session_uuid)
+            .map(|parsed| Self(*parsed.as_bytes()))
+            .unwrap_or(Self::UNIDENTIFIED)
     }
 
     /// Read an identity off the wire, where it is these sixteen bytes verbatim.
@@ -97,28 +81,12 @@ impl MachineClockIdentity {
     }
 }
 
-/// The value one hex digit carries, or `None` for a byte that is not one.
-fn hex_digit_value(digit: u8) -> Option<u8> {
-    match digit {
-        b'0'..=b'9' => Some(digit - b'0'),
-        b'a'..=b'f' => Some(digit - b'a' + 10),
-        b'A'..=b'F' => Some(digit - b'A' + 10),
-        _ => None,
-    }
-}
-
 impl std::fmt::Debug for MachineClockIdentity {
     /// The canonical lowercase UUID text, because the derived rendering of
     /// sixteen bytes is unreadable in the failure message of any test that
     /// compares two of these.
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for (position, byte) in self.0.iter().enumerate() {
-            if matches!(position, 4 | 6 | 8 | 10) {
-                write!(formatter, "-")?;
-            }
-            write!(formatter, "{byte:02x}")?;
-        }
-        Ok(())
+        write!(formatter, "{}", uuid::Uuid::from_bytes(self.0))
     }
 }
 

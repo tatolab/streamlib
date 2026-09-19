@@ -23,7 +23,9 @@ pub fn read_this_machines_clock_identity() -> MachineClockIdentity {
     let mut answer = [0u8; HOW_MANY_BYTES_A_BOOT_SESSION_UUID_ANSWER_TAKES];
     let mut answer_length = answer.len();
     // SAFETY: the name is a NUL-terminated C string, the buffer and the length
-    // cell are ours and live for the call, and no new value is set.
+    // cell are ours and live for the call, and no new value is set. The length
+    // cell is initialized to the buffer's own capacity, which is what bounds
+    // what the kernel may write into it.
     let answered = unsafe {
         libc::sysctlbyname(
             BOOT_SESSION_UUID_SYSCTL.as_ptr().cast(),

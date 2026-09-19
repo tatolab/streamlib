@@ -4,6 +4,7 @@
 //! iceoryx2-based IPC communication layer for cross-process processor communication.
 
 mod audio_window;
+mod bags_a_gap_in_the_numbering_says_were_lost;
 mod channel_ceiling;
 mod channel_idle_poll_backoff;
 mod channel_name;
@@ -32,6 +33,7 @@ pub(crate) use audio_window::{
     AudioWindowDeclarationOfAnInputPort, WINDOWED_PORT_SUBSCRIBER_RING_DEPTH,
     audio_windowing_declared_by_input_port, refuse_an_unsettled_match_device_sentinel,
 };
+pub use bags_a_gap_in_the_numbering_says_were_lost::BagsAGapInTheNumberingSaysWereLost;
 pub use channel_ceiling::{
     ENV_MAX_PAYLOAD_BYTES_PER_CHANNEL_TRUSTED, ENV_MAX_PAYLOAD_BYTES_PER_CHANNEL_UNTRUSTED_SESSION,
     effective_channel_chunk_ceiling_bytes,

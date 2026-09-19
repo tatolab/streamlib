@@ -58,11 +58,10 @@ impl PublisherGenerationsOnePortHasHad {
         &mut self,
         numbering_publisher_id: UniquePublisherId,
     ) -> u64 {
-        match self.numbering_publisher_id {
-            Some(last) if last != numbering_publisher_id => {
-                self.generation = self.generation.wrapping_add(1)
-            }
-            _ => {}
+        if let Some(last) = self.numbering_publisher_id
+            && last != numbering_publisher_id
+        {
+            self.generation = self.generation.wrapping_add(1);
         }
         self.numbering_publisher_id = Some(numbering_publisher_id);
         self.generation

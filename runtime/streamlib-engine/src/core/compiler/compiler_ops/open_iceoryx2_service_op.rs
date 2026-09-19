@@ -1154,8 +1154,9 @@ fn publish_loss_counts_on_processor_node(
 /// `link_id`, for the ingress to record into.
 ///
 /// Read off the node rather than minted here: the destination's own wiring has
-/// already inserted its metrics by this point, in either placement, and the
-/// hop counts ride that one component — which is what lets a helper-placed
+/// already inserted its metrics by this point, whether it runs in the app
+/// process or in its own helper process, and the hop counts ride that one
+/// component — which is what lets a helper-placed
 /// destination's hop count reach `graph` from the app process while its ports'
 /// own counts come off its helper's board. A node carrying no metrics is a
 /// destination whose wiring did not run, which cannot happen on this path, so
@@ -1178,7 +1179,7 @@ fn where_a_remote_links_hop_loss_is_counted(
         );
         return None;
     };
-    let _ = counts.counter_for_inbound_link(link_id.as_str());
+    counts.note_a_wired_link(link_id.as_str());
     Some(counts)
 }
 
@@ -4606,9 +4607,9 @@ mod tests {
             wire_one_into(arm, WhereTheDestinationRuns::InThisProcess)
         }
 
-        /// Which placement the destination of the wired link takes. Both wire
-        /// through the one op, which is the point: the hop count is the app
-        /// process's either way.
+        /// Where the destination of the wired link runs. Both wire through the
+        /// one op, which is the point: the hop count is the app process's
+        /// either way.
         enum WhereTheDestinationRuns {
             InThisProcess,
             InItsOwnHelperProcess,

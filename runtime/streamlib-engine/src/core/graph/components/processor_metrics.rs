@@ -136,29 +136,28 @@ impl JsonSerializableComponent for ProcessorMetrics {
             "dropped_bags_by_link": dropped_bags_by_inbound_link,
             "refused_bags_by_output_port": refused_bags_by_output_port,
         });
-        if !discarded_samples_by_inbound_link.is_empty()
-            && let Some(rendered_keys) = rendered.as_object_mut()
-        {
-            rendered_keys.insert(
-                "discarded_samples_by_link".to_string(),
-                serde_json::json!(discarded_samples_by_inbound_link),
-            );
-        }
-        // Only a link from another runtime can have hop loss, so a processor
-        // with none renders no key at all rather than a zero for a loss it
-        // cannot have — and `frames_dropped` stays exactly the sum of what this
-        // processor's own ports lost, since a bag the hop lost never reached
-        // one of them to be dropped at.
-        let mesh_hop_dropped_bags_by_inbound_link = self
-            .mesh_hop_dropped_bag_counts_by_remote_inbound_link
-            .mesh_hop_dropped_bag_count_snapshot_by_inbound_link();
-        if !mesh_hop_dropped_bags_by_inbound_link.is_empty()
-            && let Some(rendered_keys) = rendered.as_object_mut()
-        {
-            rendered_keys.insert(
-                "mesh_hop_dropped_bags_by_link".to_string(),
-                serde_json::json!(mesh_hop_dropped_bags_by_inbound_link),
-            );
+        // A per-link map with nothing in it renders no key at all rather than
+        // an empty object: a port that cannot discard samples and a link that
+        // cannot lose a hop are not the same as ones that have not yet. And
+        // `frames_dropped` stays exactly the sum of what this processor's own
+        // ports lost, since a bag the hop lost never reached one to be dropped
+        // at.
+        if let Some(rendered_keys) = rendered.as_object_mut() {
+            for (key, counts) in [
+                (
+                    "discarded_samples_by_link",
+                    discarded_samples_by_inbound_link,
+                ),
+                (
+                    "mesh_hop_dropped_bags_by_link",
+                    self.mesh_hop_dropped_bag_counts_by_remote_inbound_link
+                        .mesh_hop_dropped_bag_count_snapshot_by_inbound_link(),
+                ),
+            ] {
+                if !counts.is_empty() {
+                    rendered_keys.insert(key.to_string(), serde_json::json!(counts));
+                }
+            }
         }
         rendered
     }
