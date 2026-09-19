@@ -201,6 +201,42 @@ impl crate::core::ReactiveProcessor for MockDeviceMatchedAudioConsumerProcessor:
     }
 }
 
+/// Mock source whose one output port's name the channel-name grammar cannot
+/// carry — an uppercase letter inside the chunk.
+///
+/// Nothing between the declaration and the first `connect` validates a port name
+/// against that grammar, so this is what an author writing camelCase gets: a
+/// processor that adds, runs, and holds an output port whose channel can never
+/// be named.
+#[crate::processor(
+    execution = manual,
+    output("outOne"),
+)]
+pub(crate) struct MockProcessorWhoseOutputPortTheChannelGrammarCannotName;
+
+impl crate::core::ManualProcessor
+    for MockProcessorWhoseOutputPortTheChannelGrammarCannotName::Processor
+{
+    fn setup(
+        &mut self,
+        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
+    ) -> crate::core::error::Result<()> {
+        Ok(())
+    }
+    fn teardown(
+        &mut self,
+        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
+    ) -> crate::core::error::Result<()> {
+        Ok(())
+    }
+    fn start(
+        &mut self,
+        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
+    ) -> crate::core::error::Result<()> {
+        Ok(())
+    }
+}
+
 /// Register all engine-internal test mock processors with the global
 /// `PROCESSOR_REGISTRY`. Idempotent — safe to call from every test
 /// fixture that builds a graph against `lookup_registered_ident` or
@@ -215,6 +251,8 @@ pub(crate) fn ensure_test_mocks_registered() {
         PROCESSOR_REGISTRY.register::<MockInputOnlyProcessor::Processor>();
         PROCESSOR_REGISTRY.register::<MockOrderedInputOnlyProcessor::Processor>();
         PROCESSOR_REGISTRY.register::<MockReactiveInputOnlyProcessor::Processor>();
+        PROCESSOR_REGISTRY
+            .register::<MockProcessorWhoseOutputPortTheChannelGrammarCannotName::Processor>();
     });
 }
 
