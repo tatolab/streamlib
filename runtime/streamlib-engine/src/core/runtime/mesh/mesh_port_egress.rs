@@ -21,15 +21,53 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
+use iceoryx2::identifiers::UniquePublisherId;
 use zenoh::Wait;
 use zenoh::qos::{CongestionControl, Priority};
 
 use crate::core::graph::MeshPortAddress;
 use crate::core::runtime::mesh::a_bags_top_level_surface_id::a_bag_carries_a_top_level_surface_id;
+use crate::core::runtime::mesh::machine_clock_identity::MachineClockIdentity;
 use crate::core::runtime::mesh::mesh_data_message_attachment::MeshDataMessageAttachment;
 use crate::core::runtime::mesh::output_ports_offered_on_the_mesh::HowToReadAnOfferedOutputPort;
 use crate::core::runtime::mesh::runtime_mesh_key::RuntimeMeshKeySpace;
 use crate::iceoryx2::{ChannelIdlePollBackoff, FRAME_HEADER_SIZE, FrameHeader, Iceoryx2Node};
+
+/// How many times the port's publisher has been replaced under one egress.
+///
+/// A publisher numbers its own sends from zero, so a replaced one restarts the
+/// numbering and the next number the reading runtime sees is unrelated to the
+/// last. The generation is what tells the two apart there: a bag whose
+/// generation differs from the last one's is a baseline rather than a gap, so
+/// a producer recreated mid-stream is never read as loss.
+#[derive(Default)]
+struct PublisherGenerationsOnePortHasHad {
+    /// The publisher that numbered the last sample this egress sent; `None`
+    /// until the first.
+    numbering_publisher_id: Option<UniquePublisherId>,
+    generation: u64,
+}
+
+impl PublisherGenerationsOnePortHasHad {
+    /// The generation a sample numbered by `numbering_publisher_id` carries,
+    /// bumping when that publisher is not the one that numbered the last.
+    ///
+    /// The first sample of all takes generation zero rather than bumping onto
+    /// one: there is no earlier numbering for it to be told apart from.
+    fn generation_of_a_sample_numbered_by(
+        &mut self,
+        numbering_publisher_id: UniquePublisherId,
+    ) -> u64 {
+        match self.numbering_publisher_id {
+            Some(last) if last != numbering_publisher_id => {
+                self.generation = self.generation.wrapping_add(1)
+            }
+            _ => {}
+        }
+        self.numbering_publisher_id = Some(numbering_publisher_id);
+        self.generation
+    }
+}
 
 /// One of this runtime's output ports, being sent to the mesh.
 ///
@@ -156,6 +194,10 @@ fn send_one_port_to_the_mesh(sending: WhatOneEgressSends, stop: Arc<AtomicBool>)
     let mut publisher: Option<zenoh::pubsub::Publisher<'_>> = None;
     let mut said_a_surface_will_not_cross = false;
     let mut idle_poll_backoff = ChannelIdlePollBackoff::starting_at_the_shortest_sleep();
+    let mut publisher_generations = PublisherGenerationsOnePortHasHad::default();
+    // Read once: a boot id cannot change without a reboot, which ends this
+    // process, and this rides every bag.
+    let clock_identity = MachineClockIdentity::of_this_machine();
 
     while !stop.load(Ordering::Acquire) {
         match subscriber.receive() {
@@ -166,6 +208,13 @@ fn send_one_port_to_the_mesh(sending: WhatOneEgressSends, stop: Arc<AtomicBool>)
                     continue;
                 }
                 let stamp = FrameHeader::read_from_slice(&framed[..FRAME_HEADER_SIZE]).timestamp_ns;
+                // The engine's own number for this bag, carried end to end
+                // rather than re-minted here: a gap the reading runtime counts
+                // then covers this channel's ring and the bags this egress
+                // never sent, and not only what the network lost.
+                let sequence_number = sample.user_header().sequence_number;
+                let publisher_generation =
+                    publisher_generations.generation_of_a_sample_numbered_by(sample.origin());
                 let bag_bytes = &framed[FRAME_HEADER_SIZE..];
                 let names_a_surface = a_bag_carries_a_top_level_surface_id(bag_bytes);
 
@@ -207,6 +256,9 @@ fn send_one_port_to_the_mesh(sending: WhatOneEgressSends, stop: Arc<AtomicBool>)
 
                 let attached = MeshDataMessageAttachment {
                     timestamp_ns: stamp,
+                    sequence_number,
+                    publisher_generation,
+                    clock_identity,
                 }
                 .to_wire_bytes();
                 if let Err(put_failure) = publisher

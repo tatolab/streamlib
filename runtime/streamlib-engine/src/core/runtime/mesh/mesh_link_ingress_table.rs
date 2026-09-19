@@ -26,7 +26,7 @@ use crate::core::runtime::mesh::output_ports_offered_on_the_mesh::ask_a_runtime_
 use crate::core::runtime::mesh::runtime_mesh_description::RuntimeMeshDescription;
 use crate::core::runtime::mesh::runtime_mesh_key::{AnnouncedRuntimeIdentity, RuntimeMeshKeySpace};
 use crate::core::runtime::mesh::runtime_mesh_peer_table::RuntimeMeshPeerTable;
-use crate::iceoryx2::Iceoryx2Node;
+use crate::iceoryx2::{Iceoryx2Node, MeshHopDroppedBagCountsByRemoteInboundLink};
 use streamlib_ipc_types::MAX_INBOUND_LINKS_PER_DESTINATION;
 
 /// How often every waiting link is looked at again.
@@ -51,6 +51,11 @@ struct ALinkFromAnotherRuntime {
     /// a notifier: an iceoryx2 notifier is `!Send`, so it is minted on the
     /// thread that hands it to the ingress.
     notify_service_name: Option<String>,
+    /// Where this link's hop loss is counted — the counts on its destination
+    /// processor's node, which `graph` renders. `None` until the wiring op
+    /// reports the destination open, and for a fixture standing a link up with
+    /// no node to count on.
+    where_its_hop_loss_is_counted: Option<Arc<MeshHopDroppedBagCountsByRemoteInboundLink>>,
     /// Whether the ingress has already been told about this destination, so a
     /// re-pass never adds it twice.
     the_ingress_knows_about_it: bool,
@@ -107,17 +112,21 @@ impl MeshLinkIngressTable {
                 how_far_it_has_got,
                 its_destination_is_open: false,
                 notify_service_name: None,
+                where_its_hop_loss_is_counted: None,
                 the_ingress_knows_about_it: false,
             },
         );
         self.ask_the_resolver_to_look_again();
     }
 
-    /// Record the notify service one link's destination waits on, named by the
-    /// wiring op once the destination's side of the channel is open.
+    /// Record the notify service one link's destination waits on and where its
+    /// hop loss is counted, both named by the wiring op once the destination's
+    /// side of the channel is open.
     ///
-    /// `None` for a destination that drains no listener — a `manual` processor
-    /// polls its own ports and is woken by nobody.
+    /// A `None` notify service is a destination that drains no listener — a
+    /// `manual` processor polls its own ports and is woken by nobody. The
+    /// counts are the destination processor's own, which is what puts this
+    /// link's hop loss on that processor's node in `graph`.
     ///
     /// Reachable rather than supported: the cross-runtime-link fixture stands a
     /// runtime's mesh half up with no compiler, so it reports its own
@@ -127,6 +136,7 @@ impl MeshLinkIngressTable {
         &self,
         link_id: &LinkUniqueId,
         notify_service_name: Option<String>,
+        where_its_hop_loss_is_counted: Option<Arc<MeshHopDroppedBagCountsByRemoteInboundLink>>,
     ) {
         {
             let mut carried = self.carried.lock();
@@ -135,6 +145,7 @@ impl MeshLinkIngressTable {
             };
             link.its_destination_is_open = true;
             link.notify_service_name = notify_service_name;
+            link.where_its_hop_loss_is_counted = where_its_hop_loss_is_counted;
             link.the_ingress_knows_about_it = false;
         }
         self.ask_the_resolver_to_look_again();
@@ -629,7 +640,20 @@ fn tell_the_ingress_about_every_link_from(
                     })
                     .ok()
             });
-            ingress.note_a_local_destination(link_id.as_str(), notifier);
+            // Forgotten and minted again rather than continued: this is
+            // every way a link is wired afresh — the source runtime
+            // returning, its egress returning, or a reconnect of the same id
+            // — and the plan restarts a remote link's loss count at each.
+            let where_its_hop_loss_is_counted = link
+                .where_its_hop_loss_is_counted
+                .as_ref()
+                .map(|counts| counts.a_counter_for_a_fresh_wiring_of(link_id.as_str()))
+                .unwrap_or_default();
+            ingress.note_a_local_destination(
+                link_id.as_str(),
+                notifier,
+                where_its_hop_loss_is_counted,
+            );
             link.the_ingress_knows_about_it = true;
         }
 

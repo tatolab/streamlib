@@ -34,7 +34,8 @@ use crate::iceoryx2::{
     AudioWindowDeclarationOfAnInputPort, ChannelEgressConfig, ChannelSizing, ChannelTrustTier,
     DEFAULT_EXPECTED_PAYLOAD_BYTES, DeliveryProfile, DeliveryResolution, Iceoryx2Node,
     Iceoryx2NotifyService, Iceoryx2Service, InboundLinkName,
-    RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL, WINDOWED_PORT_SUBSCRIBER_RING_DEPTH,
+    MeshHopDroppedBagCountsByRemoteInboundLink, RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL,
+    WINDOWED_PORT_SUBSCRIBER_RING_DEPTH,
     audio_windowing_declared_by_input_port, delivery_profile_for_input_port,
     effective_channel_chunk_ceiling_bytes, refuse_an_unsettled_match_device_sentinel,
 };
@@ -272,6 +273,7 @@ pub fn open_iceoryx2_service(
         mesh_link_ingress_table.note_how_a_links_destination_is_woken(
             link_id,
             notify_service_name_for_the_source.map(str::to_string),
+            where_a_remote_links_hop_loss_is_counted(graph, &dest_proc_id),
         );
     }
 
@@ -383,6 +385,13 @@ pub fn close_iceoryx2_service(
                 );
             }
         }
+    }
+
+    // A link from another runtime counted what its hop lost on the
+    // destination's node, apart from what that destination's own ports lost.
+    // That count goes with the link, as every other per-link count does.
+    if source_on_this_runtime.is_none() {
+        forget_a_remote_links_hop_loss(graph, &dest_proc_id, link_id.as_str());
     }
 
     // Destination side: drop this link's channel subscriber (and the port
@@ -1139,6 +1148,42 @@ fn publish_loss_counts_on_processor_node(
                 .unwrap_or_default(),
         }),
     );
+}
+
+/// The hop-loss counts on a destination's node, which the ingress records into
+/// for a link whose source is on another runtime.
+///
+/// Read off the node rather than minted here: the destination's own wiring has
+/// already inserted its metrics by this point, in either placement, and the
+/// hop counts ride that one component. A node without them is a destination
+/// whose wiring did not run, which cannot happen on this path — so the ingress
+/// is handed nothing and counts into nothing rather than the op failing a link
+/// that otherwise carries.
+fn where_a_remote_links_hop_loss_is_counted(
+    graph: &Graph,
+    dest_proc_id: &ProcessorUniqueId,
+) -> Option<Arc<MeshHopDroppedBagCountsByRemoteInboundLink>> {
+    let counts = graph
+        .traversal()
+        .v(dest_proc_id)
+        .first()
+        .and_then(|node| node.get::<ProcessorMetrics>())
+        .map(|metrics| Arc::clone(&metrics.mesh_hop_dropped_bag_counts_by_remote_inbound_link));
+    if counts.is_none() {
+        tracing::warn!(
+            dest = %dest_proc_id,
+            "a link from another runtime reached a destination carrying no metrics, so what its              hop loses will not reach `graph`"
+        );
+    }
+    counts
+}
+
+/// Forget what a disconnected remote link's hop lost, so `graph` stops naming
+/// a link the destination no longer has.
+fn forget_a_remote_links_hop_loss(graph: &Graph, dest_proc_id: &ProcessorUniqueId, link_id: &str) {
+    if let Some(counts) = where_a_remote_links_hop_loss_is_counted(graph, dest_proc_id) {
+        counts.forget_inbound_link(link_id);
+    }
 }
 
 /// Insert `loss_counts` as `proc_id`'s node metrics, unless its first wired link

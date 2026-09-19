@@ -13,7 +13,14 @@
 //!
 //! `--source` publishes one port and offers it. `--reader` links from an
 //! address and reports every bag that lands on the local channel, as one JSON
-//! line each, beside the link's own state.
+//! line each, beside the link's own state and what its ingress says the hop
+//! lost.
+//!
+//! The reader also counts what *its own* local ring lost, off the same
+//! sequence numbers a real destination's subscriber reads, because it polls a
+//! subscriber directly instead of having a processor's counted mailbox. That
+//! is what lets an arm state the whole conservation identity rather than
+//! assume the last hop was lossless.
 //!
 //! Closing its stdin is how the test asks for a clean leave. A test that wants
 //! an abrupt one kills it instead, which is how "SIGKILL of the source returns
@@ -33,7 +40,8 @@ use streamlib_engine::core::runtime::mesh::{
 };
 use streamlib_engine::core::runtime::{RuntimeMeshConfiguration, RuntimeName};
 use streamlib_engine::iceoryx2::{
-    ChannelSizing, FRAME_HEADER_SIZE, FrameHeader, Iceoryx2Node, mesh_ingress_channel_name,
+    ChannelDataServicePublisher, ChannelSizing, FRAME_HEADER_SIZE, FrameHeader, Iceoryx2Node,
+    MeshHopDroppedBagCountsByRemoteInboundLink, mesh_ingress_channel_name,
 };
 
 /// What the peer writes once its mesh half is up.
@@ -59,6 +67,7 @@ const THE_CHANNELS_DEPTH: usize = 16;
 /// How many destination slots the source's channel is created with. Fixed like
 /// every channel's, so an egress joining later fits a slot that already exists.
 const THE_CHANNELS_SUBSCRIBER_SLOTS: usize = 8;
+
 
 fn main() {
     // No `Runner`, so no engine logging pathway: a peer says what it is doing
@@ -119,48 +128,86 @@ fn run_as_the_source(
     // One bag per report interval, each carrying its own index so the reader
     // can say which arrived, and stamped so the test can check the stamp
     // crossed unchanged.
+    let mut publisher = publisher;
     let mut published: u64 = 0;
+    let mut burst_still_owed = how.burst_once_a_reader_arrives;
     while !asked_to_leave.load(Ordering::Relaxed) {
-        let bag = a_bag_carrying(published);
-        let stamp = a_stamp_for(published);
-        let framed_len = FRAME_HEADER_SIZE + bag.len();
-        let mut framed = vec![0u8; framed_len];
-        FrameHeader::new(THE_PORT, stamp, bag.len() as u32)
-            .map_err(|why| why.to_string())?
-            .write_to_slice(&mut framed[..FRAME_HEADER_SIZE]);
-        framed[FRAME_HEADER_SIZE..].copy_from_slice(&bag);
+        // The burst waits for a reader, so every bag of it is one the link was
+        // already carrying — which is what makes the conservation the reader
+        // states an identity rather than a race against the wiring.
+        let bursting = burst_still_owed.is_some_and(|owed| owed > 0)
+            && !membership.render_for_graph().egress_ports.is_empty();
 
-        let mut sample = publisher
-            .loan_slice_uninit(framed_len)
-            .map_err(|why| format!("{why:?}"))?;
-        sample.payload_mut().copy_from_slice(unsafe {
-            // SAFETY: `MaybeUninit<u8>` has the same layout as `u8`, and every
-            // byte of `framed` is initialized.
-            std::slice::from_raw_parts(
-                framed.as_ptr() as *const std::mem::MaybeUninit<u8>,
-                framed.len(),
-            )
-        });
-        // SAFETY: the copy above initialized every byte the loan was taken for.
-        let sample = unsafe { sample.assume_init() };
-        sample.send().map_err(|why| format!("{why:?}"))?;
+        let how_many_to_publish_now = if bursting {
+            burst_still_owed.take().unwrap_or(0)
+        } else if burst_still_owed.is_some() {
+            0
+        } else {
+            1
+        };
+        for _ in 0..how_many_to_publish_now {
+            if how.recreate_the_publisher_after == Some(published) {
+                // The port's publisher replaced under a running egress, which
+                // is what a processor's last link going and coming back does.
+                // The new one numbers its own sends from zero, so without the
+                // generation beside the number the reader would read the
+                // change as loss.
+                drop(publisher);
+                publisher = service.create_publisher(1024).map_err(|why| why.to_string())?;
+            }
+            publish_one_bag(&publisher, published)?;
+            published += 1;
+        }
 
         // The mesh half of `graph` rides every report, so the test can watch
         // the source's own view of who is reading it change as readers come
         // and go — which is the only place that view exists without a `Runner`.
         report.write_line(
             &serde_json::json!({
-                "published": published,
-                "timestamp_ns": stamp,
+                "published": published.saturating_sub(1),
+                "published_count": published,
+                "timestamp_ns": a_stamp_for(published.saturating_sub(1)),
                 "egress_ports": membership.render_for_graph().egress_ports,
             })
             .to_string(),
         );
-        published += 1;
         std::thread::sleep(HOW_OFTEN_THE_PEER_REPORTS);
     }
 
     membership.leave("this peer was asked to leave");
+    Ok(())
+}
+
+/// Publish bag `published`, framed and stamped the way a real output port
+/// frames and stamps one.
+fn publish_one_bag(publisher: &ChannelDataServicePublisher, published: u64) -> Result<(), String> {
+    let bag = a_bag_carrying(published);
+    let stamp = a_stamp_for(published);
+    let framed_len = FRAME_HEADER_SIZE + bag.len();
+    let mut framed = vec![0u8; framed_len];
+    FrameHeader::new(THE_PORT, stamp, bag.len() as u32)
+        .map_err(|why| why.to_string())?
+        .write_to_slice(&mut framed[..FRAME_HEADER_SIZE]);
+    framed[FRAME_HEADER_SIZE..].copy_from_slice(&bag);
+
+    let mut sample = publisher
+        .loan_slice_uninit(framed_len)
+        .map_err(|why| format!("{why:?}"))?;
+    sample.payload_mut().copy_from_slice(unsafe {
+        // SAFETY: `MaybeUninit<u8>` has the same layout as `u8`, and every
+        // byte of `framed` is initialized.
+        std::slice::from_raw_parts(
+            framed.as_ptr() as *const std::mem::MaybeUninit<u8>,
+            framed.len(),
+        )
+    });
+    // SAFETY: the copy above initialized every byte the loan was taken for.
+    let mut sample = unsafe { sample.assume_init() };
+    // The engine's own numbering, which the egress copies into the
+    // attachment: this peer has no output writer to do it, so it numbers its
+    // own sends exactly as one does.
+    sample.user_header_mut().sequence_number = published;
+    sample.send().map_err(|why| format!("{why:?}"))?;
     Ok(())
 }
 
@@ -212,12 +259,34 @@ fn run_as_the_reader(
     // itself because it has no compiler: the destination's side of the local
     // channel is open, so the link is one the mesh may report as carrying. The
     // notify service is `None` because this peer polls its own subscriber
-    // rather than waiting on a listener.
-    ingress_table.note_how_a_links_destination_is_woken(&link_id, None);
+    // rather than waiting on a listener. The counts stand in for the ones a
+    // real destination's node carries, and are read back the same way `graph`
+    // reads those.
+    let where_the_hop_loss_is_counted =
+        Arc::new(MeshHopDroppedBagCountsByRemoteInboundLink::default());
+    ingress_table.note_how_a_links_destination_is_woken(
+        &link_id,
+        None,
+        Some(Arc::clone(&where_the_hop_loss_is_counted)),
+    );
     report.write_line(READY_LINE);
 
+    // This peer polls a subscriber where a real destination has a counted
+    // mailbox, so it counts its own ring's overwrites itself — against the
+    // ingress's numbering, which is a fresh one per wiring and unrelated to the
+    // sending runtime's.
+    let mut what_this_peers_own_ring_lost: u64 = 0;
+    let mut last_number_the_local_channel_carried: Option<u64> = None;
     while !asked_to_leave.load(Ordering::Relaxed) {
         while let Ok(Some(sample)) = subscriber.receive() {
+            let number_on_the_local_channel = sample.user_header().sequence_number;
+            if let Some(last) = last_number_the_local_channel_carried {
+                what_this_peers_own_ring_lost += number_on_the_local_channel
+                    .saturating_sub(last)
+                    .saturating_sub(1);
+            }
+            last_number_the_local_channel_carried = Some(number_on_the_local_channel);
+
             let framed = sample.payload();
             if framed.len() < FRAME_HEADER_SIZE {
                 continue;
@@ -231,7 +300,21 @@ fn run_as_the_reader(
                 .to_string(),
             );
         }
-        report.write_line(&how_far_it_has_got_as_json(&how_far_it_has_got).to_string());
+        let mut how_far = how_far_it_has_got_as_json(&how_far_it_has_got);
+        if let Some(reported) = how_far.as_object_mut() {
+            reported.insert(
+                "mesh_hop_dropped_bags_by_link".to_string(),
+                serde_json::json!(
+                    where_the_hop_loss_is_counted
+                        .mesh_hop_dropped_bag_count_snapshot_by_inbound_link()
+                ),
+            );
+            reported.insert(
+                "what_this_peers_own_ring_lost".to_string(),
+                serde_json::json!(what_this_peers_own_ring_lost),
+            );
+        }
+        report.write_line(&how_far.to_string());
         std::thread::sleep(HOW_OFTEN_THE_PEER_REPORTS);
     }
 
@@ -316,6 +399,13 @@ struct HowToRunThisPeer {
     display_name: String,
     link_from: Option<String>,
     iceoryx2_domain_root: std::path::PathBuf,
+    /// Publish this many bags back to back once a reader is there, instead of
+    /// one per report. Far more than the channel is deep, so the egress cannot
+    /// drain them all and the loss is the rings' rather than the network's.
+    burst_once_a_reader_arrives: Option<u64>,
+    /// Replace the channel publisher just before this bag, so the numbering
+    /// restarts under a running egress.
+    recreate_the_publisher_after: Option<u64>,
 }
 
 impl HowToRunThisPeer {
@@ -325,6 +415,8 @@ impl HowToRunThisPeer {
         let mut display_name = "CameraSource".to_string();
         let mut link_from = None;
         let mut iceoryx2_domain_root = std::path::PathBuf::from("/tmp");
+        let mut burst_once_a_reader_arrives = None;
+        let mut recreate_the_publisher_after = None;
         let mut arguments = std::env::args().skip(1);
         while let Some(flag) = arguments.next() {
             let mut value = || arguments.next().expect("every flag takes a value");
@@ -345,6 +437,13 @@ impl HowToRunThisPeer {
                 "--display-name" => display_name = value(),
                 "--link-from" => link_from = Some(value()),
                 "--iceoryx2-domain-root" => iceoryx2_domain_root = value().into(),
+                "--burst-once-a-reader-arrives" => {
+                    burst_once_a_reader_arrives =
+                        Some(value().parse().expect("a bag count"))
+                }
+                "--recreate-the-publisher-after" => {
+                    recreate_the_publisher_after = Some(value().parse().expect("a bag index"))
+                }
                 unknown => panic!("unknown flag {unknown:?}"),
             }
         }
@@ -354,6 +453,8 @@ impl HowToRunThisPeer {
             display_name,
             link_from,
             iceoryx2_domain_root,
+            burst_once_a_reader_arrives,
+            recreate_the_publisher_after,
         }
     }
 

@@ -14,6 +14,13 @@
 //! the lease, expires the link. The ring evicts its oldest bag when it is full,
 //! because no link ever blocks a producer — least of all one on another
 //! machine.
+//!
+//! What the hop lost is counted here and nowhere else, off a jump in the
+//! sequence number the sending runtime carried from the bag's own publisher.
+//! Counted on the writing thread rather than in the callback, so that this
+//! ring's own evictions are inside the jump: one gap then covers the sending
+//! channel's ring, the bags the egress never sent, Zenoh's silent drop, the
+//! network, and this ring.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -27,8 +34,8 @@ use crate::core::runtime::mesh::mesh_data_message_attachment::MeshDataMessageAtt
 use crate::core::runtime::mesh::runtime_mesh_key::RuntimeMeshKeySpace;
 use crate::iceoryx2::{
     ChannelEgressConfig, ChannelTrustTier, DEFAULT_EXPECTED_PAYLOAD_BYTES, DeliveryProfile,
-    Iceoryx2Node, OutputWriterInner, effective_channel_chunk_ceiling_bytes,
-    mesh_ingress_channel_name,
+    Iceoryx2Node, OutputWriterInner, RemoteInboundLinkMeshHopDroppedBagCounter,
+    effective_channel_chunk_ceiling_bytes, mesh_ingress_channel_name,
 };
 
 /// The one output port name the ingress publishes under on its local channel.
@@ -42,6 +49,54 @@ const THE_INGRESS_OUTPUT_PORT: &str = "bags";
 struct ABagOffTheMesh {
     bag_bytes: Vec<u8>,
     timestamp_ns: i64,
+    /// The number the producing publisher gave this bag on the sending
+    /// runtime, and which of that port's publishers gave it — carried this far
+    /// so the writing thread can see what the hop lost ahead of it.
+    sequence_number: u64,
+    publisher_generation: u64,
+}
+
+/// The last bag the writing thread took off the ring, as the sending runtime
+/// numbered it.
+#[derive(Clone, Copy)]
+struct LastBagTakenOffTheMesh {
+    publisher_generation: u64,
+    sequence_number: u64,
+}
+
+/// What the hop lost, read off jumps in the sending runtime's own numbering.
+///
+/// One slot rather than one per generation: an egress sends one port's samples
+/// in the order it received them, so a bag of any other generation is a new
+/// baseline either way. The same shape the local subscriber's ring-overwrite
+/// count already uses, for the same reason.
+#[derive(Default)]
+struct BagsTheHopLostBeforeEachArrival {
+    last: Option<LastBagTakenOffTheMesh>,
+}
+
+impl BagsTheHopLostBeforeEachArrival {
+    /// How many bags the hop lost before `arriving`, remembering it as the
+    /// last.
+    ///
+    /// The first bag of all, and the first of a generation this ingress has not
+    /// seen, is a baseline and never a gap: a publisher numbers its own sends
+    /// from zero, so a recreated producer's numbering says nothing about the
+    /// one before it.
+    fn how_many_the_hop_lost_before(&mut self, arriving: &ABagOffTheMesh) -> u64 {
+        let lost = match self.last {
+            Some(last) if last.publisher_generation == arriving.publisher_generation => arriving
+                .sequence_number
+                .saturating_sub(last.sequence_number)
+                .saturating_sub(1),
+            _ => 0,
+        };
+        self.last = Some(LastBagTakenOffTheMesh {
+            publisher_generation: arriving.publisher_generation,
+            sequence_number: arriving.sequence_number,
+        });
+        lost
+    }
 }
 
 /// The ring between the Zenoh callback and the writing thread.
@@ -65,6 +120,12 @@ pub(super) struct MeshLinkIngress {
     /// port that stops being sent is told apart from one that never started.
     the_source_is_sending: Arc<SourceSendingState>,
     arrived: Arc<(Mutex<WhatHasArrivedFromTheMesh>, Condvar)>,
+    /// Where each local link this ingress feeds has its hop loss counted — on
+    /// its own destination processor's node, so `graph` reads it beside what
+    /// that processor's ports lost. Shared with the writing thread, which is
+    /// what records into them.
+    where_every_link_it_feeds_counts_hop_loss:
+        Arc<Mutex<Vec<RemoteInboundLinkMeshHopDroppedBagCounter>>>,
     held_on_the_mesh: Option<HeldOnTheMeshByOneIngress>,
     writing_thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -184,10 +245,12 @@ impl MeshLinkIngress {
                 ))
             })?;
 
+        let where_every_link_it_feeds_counts_hop_loss = Arc::new(Mutex::new(Vec::new()));
         let writing_thread = spawn_the_writing_thread(
             address.clone(),
             Arc::clone(&arrived),
             Arc::clone(&writes_onto_the_local_channel),
+            Arc::clone(&where_every_link_it_feeds_counts_hop_loss),
         )?;
 
         tracing::info!("This runtime is reading {address} off the mesh into {local_channel}");
@@ -196,6 +259,7 @@ impl MeshLinkIngress {
             writes_onto_the_local_channel,
             the_source_is_sending,
             arrived,
+            where_every_link_it_feeds_counts_hop_loss,
             held_on_the_mesh: Some(HeldOnTheMeshByOneIngress {
                 _data_subscriber: data_subscriber,
                 _egress_token_subscriber: egress_token_subscriber,
@@ -217,21 +281,29 @@ impl MeshLinkIngress {
     }
 
     /// Record one local destination of this address, with the notifier that
-    /// wakes it.
+    /// wakes it and the counter its hop loss lands in.
     ///
     /// The ingress is the channel's publisher, so it is what holds every
     /// destination's notifier — the part a local source's output writer holds
     /// for a link between two processors here.
+    ///
+    /// The hop's loss is charged to every link this ingress feeds, and not
+    /// shared out between them: one gap is one stretch of this port that
+    /// reached none of them.
     pub(super) fn note_a_local_destination(
         &self,
         link_id: &str,
         notifier: Option<iceoryx2::port::notifier::Notifier<iceoryx2::service::ipc::Service>>,
+        where_its_hop_loss_is_counted: RemoteInboundLinkMeshHopDroppedBagCounter,
     ) {
         self.writes_onto_the_local_channel.add_channel_link(
             THE_INGRESS_OUTPUT_PORT,
             link_id,
             notifier,
         );
+        self.where_every_link_it_feeds_counts_hop_loss
+            .lock()
+            .push(where_its_hop_loss_is_counted);
     }
 }
 
@@ -303,6 +375,8 @@ fn declare_the_data_subscriber(
             arrived.ring.push_back(ABagOffTheMesh {
                 bag_bytes: sample.payload().to_bytes().into_owned(),
                 timestamp_ns: attached.timestamp_ns,
+                sequence_number: attached.sequence_number,
+                publisher_generation: attached.publisher_generation,
             });
             someone_is_waiting.notify_one();
         })
@@ -362,10 +436,14 @@ fn spawn_the_writing_thread(
     address: MeshPortAddress,
     arrived: Arc<(Mutex<WhatHasArrivedFromTheMesh>, Condvar)>,
     writes_onto_the_local_channel: Arc<OutputWriterInner>,
+    where_every_link_it_feeds_counts_hop_loss: Arc<
+        Mutex<Vec<RemoteInboundLinkMeshHopDroppedBagCounter>>,
+    >,
 ) -> std::io::Result<std::thread::JoinHandle<()>> {
     std::thread::Builder::new()
         .name("streamlib-mesh-ingress".to_string())
         .spawn(move || {
+            let mut bags_the_hop_lost = BagsTheHopLostBeforeEachArrival::default();
             loop {
                 let taken = {
                     let (arrived_ring, someone_is_waiting) = &*arrived;
@@ -380,6 +458,17 @@ fn spawn_the_writing_thread(
                         None => return,
                     }
                 };
+                // Before the write, and on this thread: the ring this bag
+                // came off evicts its oldest under pressure, and those
+                // evictions are inside the jump only because the numbers are
+                // read here rather than as each bag arrived.
+                let lost_before_it = bags_the_hop_lost.how_many_the_hop_lost_before(&taken);
+                if lost_before_it > 0 {
+                    for counter in where_every_link_it_feeds_counts_hop_loss.lock().iter() {
+                        counter.record_dropped_bags(lost_before_it);
+                    }
+                }
+
                 if let Err(write_failure) = writes_onto_the_local_channel.write_raw(
                     THE_INGRESS_OUTPUT_PORT,
                     &taken.bag_bytes,
@@ -391,4 +480,99 @@ fn spawn_the_writing_thread(
                 }
             }
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn a_bag_numbered(sequence_number: u64, publisher_generation: u64) -> ABagOffTheMesh {
+        ABagOffTheMesh {
+            bag_bytes: Vec::new(),
+            timestamp_ns: 0,
+            sequence_number,
+            publisher_generation,
+        }
+    }
+
+    /// What the sequence number a run of bags skipped says the hop lost.
+    fn what_the_hop_lost_carrying(numbered: &[(u64, u64)]) -> Vec<u64> {
+        let mut bags_the_hop_lost = BagsTheHopLostBeforeEachArrival::default();
+        numbered
+            .iter()
+            .map(|(sequence_number, publisher_generation)| {
+                bags_the_hop_lost.how_many_the_hop_lost_before(&a_bag_numbered(
+                    *sequence_number,
+                    *publisher_generation,
+                ))
+            })
+            .collect()
+    }
+
+    /// An unbroken run loses nothing, and the first bag of all is a baseline
+    /// rather than everything the producer sent before this link existed.
+    #[test]
+    fn an_unbroken_run_loses_nothing_and_its_first_bag_is_a_baseline() {
+        assert_eq!(
+            what_the_hop_lost_carrying(&[(500, 0), (501, 0), (502, 0)]),
+            [0, 0, 0]
+        );
+    }
+
+    /// A jump names exactly the bags between the two that arrived — the
+    /// arithmetic the whole count rests on.
+    #[test]
+    fn a_jump_counts_exactly_the_bags_between_the_two_that_arrived() {
+        assert_eq!(
+            what_the_hop_lost_carrying(&[(0, 0), (1, 0), (5, 0), (6, 0), (100, 0)]),
+            [0, 0, 3, 0, 93]
+        );
+    }
+
+    /// A recreated producer numbers from zero, and its first bag is a baseline
+    /// rather than a gap — even when its numbering has already overtaken the
+    /// one before it, which is the case the generation exists for. Without it
+    /// the jump from 4 to 7 would read as two lost bags that were never sent.
+    #[test]
+    fn a_recreated_producer_is_a_baseline_even_once_its_numbering_has_overtaken() {
+        assert_eq!(
+            what_the_hop_lost_carrying(&[(3, 0), (4, 0), (7, 1), (8, 1)]),
+            [0, 0, 0, 0]
+        );
+        assert_eq!(
+            what_the_hop_lost_carrying(&[(3, 0), (4, 0), (0, 1), (1, 1)]),
+            [0, 0, 0, 0]
+        );
+    }
+
+    /// A gap inside the replacement's own run still counts: a new generation
+    /// resets the baseline, it does not stop the counting.
+    #[test]
+    fn a_gap_after_a_recreated_producer_is_still_counted() {
+        assert_eq!(
+            what_the_hop_lost_carrying(&[(9, 0), (0, 1), (4, 1)]),
+            [0, 0, 3]
+        );
+    }
+
+    /// A number that does not advance — a duplicate, or one arriving behind
+    /// its successor — reads as no loss rather than as an enormous one out of
+    /// an unsigned subtraction that went below zero.
+    #[test]
+    fn a_number_that_does_not_advance_reads_as_no_loss() {
+        assert_eq!(
+            what_the_hop_lost_carrying(&[(7, 0), (7, 0), (3, 0), (4, 0)]),
+            [0, 0, 0, 0]
+        );
+    }
+
+    /// The counting survives the numbering wrapping: a publisher's number is a
+    /// `u64` that wraps, and the wrap must not read as the whole range lost.
+    #[test]
+    fn the_numbering_wrapping_is_not_read_as_the_whole_range_lost() {
+        assert_eq!(
+            what_the_hop_lost_carrying(&[(u64::MAX - 1, 0), (u64::MAX, 0), (0, 0), (1, 0)]),
+            [0, 0, 0, 0]
+        );
+    }
 }

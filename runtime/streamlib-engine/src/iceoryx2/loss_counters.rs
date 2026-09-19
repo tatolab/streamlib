@@ -4,7 +4,8 @@
 //! What a processor's ports lost, counted where `graph` reads them: bags per
 //! inbound link at a destination, samples a windowed port's flush discarded per
 //! inbound link, and bags per output port refused at a producer's channel
-//! ceiling.
+//! ceiling — beside which a destination fed across the runtime mesh counts
+//! what the hop from the other runtime lost before its ports saw anything.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -226,6 +227,81 @@ impl DiscardedSampleCountsByInboundLink {
     }
 }
 
+/// One remote inbound link's cumulative count of bags lost between two
+/// runtimes — at the sending channel's ring, at the bags the egress never
+/// sent, on the network, and in the ingress ring. Cloning shares the count.
+///
+/// Distinct from that link's dropped bags, which are what this runtime's own
+/// ports lost once the bags had arrived: these never reached a port at all.
+#[derive(Clone, Default)]
+pub struct RemoteInboundLinkMeshHopDroppedBagCounter(Arc<CumulativeCount>);
+
+impl RemoteInboundLinkMeshHopDroppedBagCounter {
+    /// Record `dropped_bag_count` of this link's bags, lost on the hop from the
+    /// runtime that produced them.
+    pub fn record_dropped_bags(&self, dropped_bag_count: u64) {
+        self.0.add(dropped_bag_count);
+    }
+
+    /// How many of this link's bags the hop has lost since it was wired.
+    pub fn dropped_bag_count(&self) -> u64 {
+        self.0.total()
+    }
+}
+
+/// Every remote inbound link's hop-loss counter for one destination processor.
+///
+/// Counted by the ingress, which runs in the app process wherever the
+/// destination runs — so a helper-placed destination's hop count reaches
+/// `graph` with no blackboard between them.
+///
+/// Only a link whose source is on another runtime is ever given a counter, so a
+/// processor fed only from this runtime carries no hop-loss entry at all rather
+/// than a zero for a loss it cannot have. A count lives for one wiring: a
+/// re-wire mints a fresh one, because the plan restarts a remote link's loss
+/// count when its runtime returns.
+#[derive(Default)]
+pub struct MeshHopDroppedBagCountsByRemoteInboundLink {
+    per_inbound_link: CumulativeCountsByName,
+}
+
+impl MeshHopDroppedBagCountsByRemoteInboundLink {
+    /// The counter for `inbound_link_id`, minting a zeroed one on first ask, so
+    /// a wired remote link that has lost nothing reports zero rather than going
+    /// missing.
+    pub fn counter_for_inbound_link(
+        &self,
+        inbound_link_id: &str,
+    ) -> RemoteInboundLinkMeshHopDroppedBagCounter {
+        RemoteInboundLinkMeshHopDroppedBagCounter(self.per_inbound_link.count_for(inbound_link_id))
+    }
+
+    /// A zeroed counter for a link being wired again — the source runtime
+    /// returning, its egress returning, or a disconnect and reconnect of the
+    /// same id. The count a previous wiring reached is dropped rather than
+    /// continued: a hop that is not the one that lost those bags must not
+    /// inherit them.
+    pub fn a_counter_for_a_fresh_wiring_of(
+        &self,
+        inbound_link_id: &str,
+    ) -> RemoteInboundLinkMeshHopDroppedBagCounter {
+        self.forget_inbound_link(inbound_link_id);
+        self.counter_for_inbound_link(inbound_link_id)
+    }
+
+    /// Forget a disconnected link's count, so `graph` stops naming a link it no
+    /// longer has.
+    pub fn forget_inbound_link(&self, inbound_link_id: &str) {
+        self.per_inbound_link.forget(inbound_link_id);
+    }
+
+    /// Every live remote inbound link's count as it stands right now, ordered by
+    /// link id.
+    pub fn mesh_hop_dropped_bag_count_snapshot_by_inbound_link(&self) -> BTreeMap<String, u64> {
+        self.per_inbound_link.snapshot_by_name()
+    }
+}
+
 /// One output port's cumulative count of bags refused at its channel's payload
 /// ceiling. Cloning shares the count.
 #[derive(Clone, Default)]
@@ -355,6 +431,42 @@ mod tests {
                 .dropped_bag_count_snapshot_by_inbound_link()
                 .is_empty(),
             "an entry still queued from a departed link must reach no reader"
+        );
+    }
+
+    #[test]
+    fn a_remote_links_hop_loss_is_counted_apart_and_a_re_wire_starts_it_from_zero() {
+        let counts = MeshHopDroppedBagCountsByRemoteInboundLink::default();
+        counts.counter_for_inbound_link("L-remote").record_dropped_bags(7);
+        assert_eq!(
+            counts.mesh_hop_dropped_bag_count_snapshot_by_inbound_link(),
+            BTreeMap::from([("L-remote".to_string(), 7)])
+        );
+
+        let the_previous_wirings_counter = counts.counter_for_inbound_link("L-remote");
+        let re_wired = counts.a_counter_for_a_fresh_wiring_of("L-remote");
+
+        assert_eq!(re_wired.dropped_bag_count(), 0, "a re-wire starts from zero");
+        the_previous_wirings_counter.record_dropped_bags(3);
+        assert_eq!(
+            counts.mesh_hop_dropped_bag_count_snapshot_by_inbound_link(),
+            BTreeMap::from([("L-remote".to_string(), 0)]),
+            "a bag the previous wiring's ingress was still counting must reach no reader"
+        );
+    }
+
+    #[test]
+    fn a_disconnected_remote_links_hop_loss_leaves_with_it() {
+        let counts = MeshHopDroppedBagCountsByRemoteInboundLink::default();
+        counts.counter_for_inbound_link("L-gone").record_dropped_bags(4);
+
+        counts.forget_inbound_link("L-gone");
+
+        assert!(
+            counts
+                .mesh_hop_dropped_bag_count_snapshot_by_inbound_link()
+                .is_empty(),
+            "`graph` must stop naming a link it no longer has"
         );
     }
 

@@ -8,7 +8,8 @@ use serde_json::Value as JsonValue;
 use super::JsonSerializableComponent;
 use crate::iceoryx2::{
     DiscardedSampleCountsByInboundLink, DroppedBagCountsByInboundLink,
-    HelperPlacedProcessorLossCounts, ProcessorLossCountSnapshot, RefusedBagCountsByOutputPort,
+    HelperPlacedProcessorLossCounts, MeshHopDroppedBagCountsByRemoteInboundLink,
+    ProcessorLossCountSnapshot, RefusedBagCountsByOutputPort,
 };
 
 /// Runtime metrics for a processor.
@@ -24,6 +25,16 @@ pub struct ProcessorMetrics {
     pub frames_processed: u64,
     /// What this processor's ports lost, read live from wherever they count it.
     pub loss_counts: ProcessorLossCounts,
+    /// What the hop from another runtime lost before this processor's ports saw
+    /// anything, counted per remote inbound link.
+    ///
+    /// Beside `loss_counts` rather than inside it, and not an arm of it: the
+    /// ingress that counts this runs in the app process wherever the
+    /// destination runs, so a helper-placed destination's hop count reaches
+    /// `graph` directly while its ports' own counts still come off its
+    /// helper's board.
+    pub mesh_hop_dropped_bag_counts_by_remote_inbound_link:
+        Arc<MeshHopDroppedBagCountsByRemoteInboundLink>,
 }
 
 /// Where a processor's loss counts are counted, and so where `graph` reads them.
@@ -131,6 +142,22 @@ impl JsonSerializableComponent for ProcessorMetrics {
             rendered_keys.insert(
                 "discarded_samples_by_link".to_string(),
                 serde_json::json!(discarded_samples_by_inbound_link),
+            );
+        }
+        // Only a link from another runtime can have hop loss, so a processor
+        // with none renders no key at all rather than a zero for a loss it
+        // cannot have — and `frames_dropped` stays exactly the sum of what this
+        // processor's own ports lost, since a bag the hop lost never reached
+        // one of them to be dropped at.
+        let mesh_hop_dropped_bags_by_inbound_link = self
+            .mesh_hop_dropped_bag_counts_by_remote_inbound_link
+            .mesh_hop_dropped_bag_count_snapshot_by_inbound_link();
+        if !mesh_hop_dropped_bags_by_inbound_link.is_empty()
+            && let Some(rendered_keys) = rendered.as_object_mut()
+        {
+            rendered_keys.insert(
+                "mesh_hop_dropped_bags_by_link".to_string(),
+                serde_json::json!(mesh_hop_dropped_bags_by_inbound_link),
             );
         }
         rendered

@@ -62,7 +62,9 @@ pub use iceoryx2_domain_for_this_test_process::{
 };
 pub use input::{BoundedReadOutcome, InputMailboxes, InputMailboxesInner};
 pub use loss_counters::{
-    DiscardedSampleCountsByInboundLink, DroppedBagCountsByInboundLink, RefusedBagCountsByOutputPort,
+    DiscardedSampleCountsByInboundLink, DroppedBagCountsByInboundLink,
+    MeshHopDroppedBagCountsByRemoteInboundLink, RefusedBagCountsByOutputPort,
+    RemoteInboundLinkMeshHopDroppedBagCounter,
 };
 pub use mailbox::{
     PortMailbox, PortMailboxDeliveredBag, PortMailboxEvictionNotice, PortMailboxQueuedFrameMeasure,
