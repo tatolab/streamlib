@@ -494,6 +494,8 @@ impl WhatThisRuntimeOffersOnTheMesh for TheOnePortThisPeerOffers {
                 processor_display_name: self.processor_display_name.clone(),
                 port_name: THE_PORT.to_string(),
             }],
+            // This peer's one port is nameable, so it holds none it cannot send.
+            ports_it_holds_and_cannot_send: vec![],
         }
     }
 

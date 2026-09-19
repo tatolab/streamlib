@@ -71,7 +71,8 @@ pub use output_ports_offered_on_the_mesh::{
     WhatThisRuntimeOffersOnTheMeshRegistry,
 };
 pub use output_ports_offered_on_the_mesh::{
-    OutputPortOfferedOnTheMesh, OutputPortsOfferedOnTheMesh,
+    OutputPortOfferedOnTheMesh, OutputPortThisRuntimeHoldsAndCannotSend,
+    OutputPortsOfferedOnTheMesh,
 };
 pub use resolved_runtime_mesh_configuration::ResolvedRuntimeMeshConfiguration;
 // Reachable rather than supported: `core::runtime` is a public module, and the

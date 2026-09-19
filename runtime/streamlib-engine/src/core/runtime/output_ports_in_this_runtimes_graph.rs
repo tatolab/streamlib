@@ -14,7 +14,8 @@ use std::sync::Arc;
 use crate::core::compiler::Compiler;
 use crate::core::graph::{Graph, OutputLinkPortRef};
 use crate::core::runtime::mesh::{
-    HowToReadAnOfferedOutputPort, OutputPortOfferedOnTheMesh, OutputPortsOfferedOnTheMesh,
+    HowToReadAnOfferedOutputPort, OutputPortOfferedOnTheMesh,
+    OutputPortThisRuntimeHoldsAndCannotSend, OutputPortsOfferedOnTheMesh,
     WhatThisRuntimeOffersOnTheMesh,
 };
 use crate::iceoryx2::Iceoryx2Node;
@@ -38,9 +39,7 @@ impl OutputPortsInThisRuntimesGraph {
 impl WhatThisRuntimeOffersOnTheMesh for OutputPortsInThisRuntimesGraph {
     fn output_ports_it_offers_right_now(&self) -> OutputPortsOfferedOnTheMesh {
         self.compiler
-            .scope(|graph, _tx| OutputPortsOfferedOnTheMesh {
-                ports: every_output_port_in(graph),
-            })
+            .scope(|graph, _tx| every_output_port_in(graph))
     }
 
     fn how_to_read_an_offered_output_port(
@@ -57,21 +56,23 @@ impl WhatThisRuntimeOffersOnTheMesh for OutputPortsInThisRuntimesGraph {
                 return None;
             }
             let source_processor_id = node.id.clone();
-            // Said rather than silently skipped: every graph output is offered,
-            // so one whose name the channel grammar cannot carry reaches here,
-            // and the egress table can only report that the link waits on an
-            // egress that never starts. This is the one place that knows why.
-            let channel_service_name =
-                match crate::iceoryx2::source_channel_name(source_processor_id.as_str(), port_name)
-                {
-                    Ok(channel_service_name) => channel_service_name.into_string(),
-                    Err(cannot_be_named) => {
-                        tracing::warn!(
-                            "{processor_display_name}/{port_name} is offered on the mesh and                              cannot be sent: its channel cannot be named: {cannot_be_named}"
-                        );
-                        return None;
-                    }
-                };
+            // The same check the offer answered with, so a port this runtime
+            // said it cannot send and one refused here can never disagree. A
+            // reader of this engine version is refused at the offer and never
+            // reaches here; one that raced a graph change does, and is told.
+            let channel_service_name = match the_channel_an_output_port_publishes_to(
+                source_processor_id.as_str(),
+                port_name,
+            ) {
+                Ok(channel_service_name) => channel_service_name.into_string(),
+                Err(why_it_cannot_be_sent) => {
+                    tracing::warn!(
+                        "{processor_display_name}/{port_name} is being read across the mesh and \
+                         cannot be sent: {why_it_cannot_be_sent}"
+                    );
+                    return None;
+                }
+            };
             let source = OutputLinkPortRef::new(source_processor_id.clone(), port_name);
             // A port nothing here reads has no channel and no publisher — the
             // first `connect` out of it is what makes both, and across the mesh
@@ -105,27 +106,58 @@ impl WhatThisRuntimeOffersOnTheMesh for OutputPortsInThisRuntimesGraph {
     }
 }
 
+/// The channel the output port `port_name` of the processor `source_processor_id`
+/// publishes to, or the reason the mesh cannot send that port.
+///
+/// The one check the offer and the egress both read, so a runtime can never
+/// answer that it offers a port it then declines to send.
+///
+/// Nameability alone: the offer is answered for every port in the graph on every
+/// query, and a sending runtime does no work for a port nobody reads, so this
+/// may touch nothing but the two names. Every other way a port turns out
+/// unsendable is found when its egress starts, by the egress.
+fn the_channel_an_output_port_publishes_to(
+    source_processor_id: &str,
+    port_name: &str,
+) -> std::result::Result<crate::iceoryx2::ChannelName, String> {
+    crate::iceoryx2::source_channel_name(source_processor_id, port_name)
+        .map_err(|cannot_be_named| format!("its channel cannot be named: {cannot_be_named}"))
+}
+
 /// Every output port of every processor in `graph`, addressed the way the mesh
-/// addresses one.
-fn every_output_port_in(graph: &Graph) -> Vec<OutputPortOfferedOnTheMesh> {
-    let mut offered: Vec<OutputPortOfferedOnTheMesh> = graph
-        .traversal()
-        .v(())
-        .iter()
-        .flat_map(|node| {
-            node.ports
-                .outputs
-                .iter()
-                .map(move |port| OutputPortOfferedOnTheMesh {
+/// addresses one, split into what this runtime can send and what it holds and
+/// cannot.
+fn every_output_port_in(graph: &Graph) -> OutputPortsOfferedOnTheMesh {
+    let mut ports = Vec::new();
+    let mut ports_it_holds_and_cannot_send = Vec::new();
+    for node in graph.traversal().v(()).iter() {
+        for port in &node.ports.outputs {
+            match the_channel_an_output_port_publishes_to(node.id.as_str(), &port.name) {
+                Ok(_) => ports.push(OutputPortOfferedOnTheMesh {
                     processor_display_name: node.display_name.clone(),
                     port_name: port.name.clone(),
-                })
-        })
-        .collect();
+                }),
+                Err(why_it_cannot_be_sent) => {
+                    ports_it_holds_and_cannot_send.push(OutputPortThisRuntimeHoldsAndCannotSend {
+                        processor_display_name: node.display_name.clone(),
+                        port_name: port.name.clone(),
+                        why_it_cannot_be_sent,
+                    })
+                }
+            }
+        }
+    }
     // Sorted so two runs of one graph answer the same, and so a refusal that
     // lists them reads the same on every machine.
-    offered.sort();
-    offered
+    ports.sort();
+    ports_it_holds_and_cannot_send.sort();
+    // Spelled out rather than built by mutating a default: this is the one place
+    // the document is produced, so a field added to it must fail here rather
+    // than reach every peer as whatever `Default` gives.
+    OutputPortsOfferedOnTheMesh {
+        ports,
+        ports_it_holds_and_cannot_send,
+    }
 }
 
 #[cfg(test)]
@@ -133,7 +165,10 @@ mod tests {
     use super::*;
     use crate::core::ProcessorInstanceWithItsOutOfProcessLinkWiring;
     use crate::core::processors::{ProcessorInstance, ProcessorSpec};
-    use crate::core::test_support::{MockOutputOnlyProcessor, ensure_test_mocks_registered};
+    use crate::core::test_support::{
+        MockOutputOnlyProcessor, MockProcessorWhoseOutputPortTheChannelGrammarCannotName,
+        ensure_test_mocks_registered,
+    };
 
     /// A compiler holding one app-process output-only mock, with its instance
     /// attached the way the compiler's spawn phase attaches one — and its
@@ -233,6 +268,45 @@ mod tests {
             "listing what is offered must open no channel: a sending runtime does no work for a \
              port nobody reads"
         );
+    }
+
+    /// A port whose channel the grammar cannot name is not offered — it is
+    /// answered as one this runtime holds and cannot send, with the reason, so
+    /// the reader refuses at once instead of waiting on an egress that can never
+    /// start.
+    ///
+    /// Mental-revert: put every graph output back into `ports` and this goes red
+    /// on both halves — and the reader's link goes back to `awaiting_remote` on
+    /// an egress that can never start, which is what reached the rig.
+    #[test]
+    fn a_port_whose_channel_cannot_be_named_is_held_and_unsendable_rather_than_offered() {
+        ensure_test_mocks_registered();
+        let compiler = Arc::new(Compiler::new());
+        let display_name = compiler.scope(|graph, _tx| {
+            graph
+                .traversal_mut()
+                .add_v(ProcessorSpec::new(
+                    MockProcessorWhoseOutputPortTheChannelGrammarCannotName::Processor::processor_class_import_path(),
+                    serde_json::Value::Null,
+                ))
+                .first()
+                .expect("the mock is in the registry")
+                .display_name
+                .clone()
+        });
+        let node = crate::iceoryx2::Iceoryx2Node::for_this_test_process();
+        let reads_the_graph = OutputPortsInThisRuntimesGraph::of(&compiler, &node);
+
+        let answered = reads_the_graph.output_ports_it_offers_right_now();
+        assert!(
+            !answered.offers(&display_name, "outOne"),
+            "a port the mesh cannot send is not on offer: {answered:?}"
+        );
+        let why = answered
+            .why_it_cannot_send(&display_name, "outOne")
+            .expect("the port it holds and cannot send is answered with its reason");
+        assert!(why.contains("channel cannot be named"), "{why}");
+        assert!(why.contains('O'), "the reason names the character: {why}");
     }
 
     /// A port no processor here has says so by answering nothing, which is what

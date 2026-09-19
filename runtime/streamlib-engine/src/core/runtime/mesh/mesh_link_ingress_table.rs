@@ -493,18 +493,56 @@ fn what_the_offered_ports_say(
             ),
         });
     };
-    if !offered.offers(&address.processor_display_name(), &address.port_name()) {
-        return Err(RemoteLinkResolution::Refused {
-            reason: format!(
-                "the runtime {} offers no output port {}/{}. It offers: {}.",
-                address.runtime_name(),
+    // Before the missing-port refusal, because the two read differently to the
+    // reader: a port that is not there is one to go and add, and a port that is
+    // there and unsendable is one to fix. Refused rather than waited on for the
+    // same reason a missing port is — nothing the reader can do makes the
+    // source's own port sendable, so waiting would be waiting on a condition
+    // that cannot change.
+    if let Some(why_it_cannot_be_sent) =
+        offered.why_it_cannot_send(address.processor_display_name(), address.port_name())
+    {
+        return Err(a_refusal_naming_the_trouble_and_what_is_offered(
+            address,
+            offered,
+            &format!(
+                "holds the output port {}/{} and cannot send it: {why_it_cannot_be_sent}",
                 address.processor_display_name(),
-                address.port_name(),
-                offered.listed_for_a_refusal()
+                address.port_name()
             ),
-        });
+        ));
+    }
+    if !offered.offers(address.processor_display_name(), address.port_name()) {
+        return Err(a_refusal_naming_the_trouble_and_what_is_offered(
+            address,
+            offered,
+            &format!(
+                "offers no output port {}/{}",
+                address.processor_display_name(),
+                address.port_name()
+            ),
+        ));
     }
     Ok(())
+}
+
+/// The sentence every offered-ports refusal ends with: what is wrong with the
+/// port this link names, then what the runtime does offer instead.
+///
+/// One frame for both refusals, so a reader comparing two of them never finds
+/// that one drifted.
+fn a_refusal_naming_the_trouble_and_what_is_offered(
+    address: &MeshPortAddress,
+    offered: &OutputPortsOfferedOnTheMesh,
+    the_trouble_with_the_port: &str,
+) -> RemoteLinkResolution {
+    RemoteLinkResolution::Refused {
+        reason: format!(
+            "the runtime {} {the_trouble_with_the_port}. It offers: {}.",
+            address.runtime_name(),
+            offered.listed_for_a_refusal()
+        ),
+    }
 }
 
 /// Start carrying `address`, and tell every link from it.
@@ -697,7 +735,9 @@ fn say_how_far_every_link_from(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::runtime::mesh::{HostIdentity, OutputPortOfferedOnTheMesh};
+    use crate::core::runtime::mesh::{
+        HostIdentity, OutputPortOfferedOnTheMesh, OutputPortThisRuntimeHoldsAndCannotSend,
+    };
 
     fn an_address() -> MeshPortAddress {
         MeshPortAddress::new("bench-cam-a1b2", "CameraSource", "video").expect("a legal address")
@@ -727,10 +767,8 @@ mod tests {
         )
     }
 
-    fn a_listing_offering(
-        ports: &[(&str, &str)],
-    ) -> crate::core::runtime::mesh::OutputPortsOfferedOnTheMesh {
-        crate::core::runtime::mesh::OutputPortsOfferedOnTheMesh {
+    fn a_listing_offering(ports: &[(&str, &str)]) -> OutputPortsOfferedOnTheMesh {
+        OutputPortsOfferedOnTheMesh {
             ports: ports
                 .iter()
                 .map(|(display, port)| OutputPortOfferedOnTheMesh {
@@ -738,7 +776,22 @@ mod tests {
                     port_name: port.to_string(),
                 })
                 .collect(),
+            ports_it_holds_and_cannot_send: vec![],
         }
+    }
+
+    fn the_held_and_unsendable_ports(
+        held: &[(&str, &str, &str)],
+    ) -> Vec<OutputPortThisRuntimeHoldsAndCannotSend> {
+        held.iter()
+            .map(
+                |(display, port, why)| OutputPortThisRuntimeHoldsAndCannotSend {
+                    processor_display_name: display.to_string(),
+                    port_name: port.to_string(),
+                    why_it_cannot_be_sent: why.to_string(),
+                },
+            )
+            .collect()
     }
 
     fn the_reason(outcome: std::result::Result<(), RemoteLinkResolution>) -> String {
@@ -845,6 +898,59 @@ mod tests {
         assert!(reason.contains("CameraSource/video"), "{reason}");
         assert!(reason.contains("MicrophoneSource/audio"), "{reason}");
         assert!(reason.contains("CameraSource/depth"), "{reason}");
+    }
+
+    /// A port the source holds and cannot send refuses the link with the
+    /// source's own reason — never the missing-port words for a port that is
+    /// plainly there.
+    ///
+    /// Mental-revert: drop the `why_it_cannot_send` arm from
+    /// `what_the_offered_ports_say` and this goes red on the reason, not on the
+    /// state — the missing-port refusal below catches the same address, and
+    /// tells the reader to go and add a port its graph already has. The state is
+    /// what the offer's own split fixes.
+    #[test]
+    fn a_port_the_source_holds_and_cannot_send_refuses_the_link_with_its_reason() {
+        let outcome = what_the_offered_ports_say(
+            &an_address(),
+            Some(&OutputPortsOfferedOnTheMesh {
+                ports: vec![],
+                ports_it_holds_and_cannot_send: the_held_and_unsendable_ports(&[(
+                    "CameraSource",
+                    "video",
+                    "its channel cannot be named: it contains 'V'",
+                )]),
+            }),
+        );
+        assert!(
+            matches!(outcome, Err(RemoteLinkResolution::Refused { .. })),
+            "a port that can never be sent is refused, not waited on; it read {outcome:?}"
+        );
+        let reason = the_reason(outcome);
+        assert!(reason.contains("CameraSource/video"), "{reason}");
+        assert!(reason.contains("cannot send it"), "{reason}");
+        assert!(reason.contains("it contains 'V'"), "{reason}");
+        assert!(
+            !reason.contains("offers no output port"),
+            "a port that is there is not reported as missing: {reason}"
+        );
+    }
+
+    /// The reason names what *is* on offer beside it, so a reader refused over
+    /// one port learns where to point its link without a second query.
+    #[test]
+    fn a_held_and_unsendable_port_is_refused_listing_what_the_runtime_does_offer() {
+        let listing = OutputPortsOfferedOnTheMesh {
+            ports: a_listing_offering(&[("MicrophoneSource", "audio")]).ports,
+            ports_it_holds_and_cannot_send: the_held_and_unsendable_ports(&[(
+                "CameraSource",
+                "video",
+                "no channel name",
+            )]),
+        };
+
+        let reason = the_reason(what_the_offered_ports_say(&an_address(), Some(&listing)));
+        assert!(reason.contains("MicrophoneSource/audio"), "{reason}");
     }
 
     /// A runtime offering the port is carried from.

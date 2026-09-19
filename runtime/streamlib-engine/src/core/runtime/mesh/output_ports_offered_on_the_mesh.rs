@@ -6,6 +6,12 @@
 //! Answered at query time and never announced: a graph changes while it runs,
 //! and a list put on the mesh once would be a list of what used to be there.
 //!
+//! A runtime offers only what it can send. A port it holds and cannot send is
+//! answered beside the offer with the reason, not left out silently: a reader
+//! refused as though the port did not exist would go looking for a port that is
+//! right there, and a reader told nothing at all would wait on an egress that
+//! can never start.
+//!
 //! The wire is msgpack, the same codec every bag rides, and the field names are
 //! the contract — a peer of another engine version reads this document.
 
@@ -52,11 +58,37 @@ impl From<&ReaderOfAnOutputPort> for OutputPortOfferedOnTheMesh {
     }
 }
 
+/// One output port a runtime holds and cannot send, and why.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct OutputPortThisRuntimeHoldsAndCannotSend {
+    /// The display name of the processor that owns the port.
+    pub processor_display_name: String,
+    /// The port's own name.
+    pub port_name: String,
+    /// Why the mesh cannot send it, in the holding runtime's own words — what a
+    /// reader's refusal quotes, so the reason never lives only in this
+    /// runtime's log.
+    pub why_it_cannot_be_sent: String,
+}
+
 /// The document a runtime answers with when a peer asks what it offers.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct OutputPortsOfferedOnTheMesh {
-    /// Every output port in the runtime's graph at the moment it was asked.
+    /// Every output port in the runtime's graph that it can send, at the moment
+    /// it was asked.
     pub ports: Vec<OutputPortOfferedOnTheMesh>,
+    /// Every output port in that graph it cannot send, each with the reason.
+    ///
+    /// Absent reads as empty, because that is what it means: a peer that names
+    /// no unsendable ports holds none this reader can be told about. It is what
+    /// a build predating this key answers, and the version gate does not
+    /// separate those — it compares crate versions, and a released wheel and a
+    /// local build of the same version both pass it. Without this the whole
+    /// document would fail to decode, and *every* link from that peer — the ones
+    /// it can serve included — would wait on a runtime that had in fact
+    /// answered.
+    #[serde(default)]
+    pub ports_it_holds_and_cannot_send: Vec<OutputPortThisRuntimeHoldsAndCannotSend>,
 }
 
 impl OutputPortsOfferedOnTheMesh {
@@ -78,8 +110,28 @@ impl OutputPortsOfferedOnTheMesh {
         })
     }
 
+    /// Why the runtime cannot send `port_name` on `processor_display_name`, for
+    /// a port it holds and said it cannot send — `None` for every other port,
+    /// offered or absent.
+    pub fn why_it_cannot_send(
+        &self,
+        processor_display_name: &str,
+        port_name: &str,
+    ) -> Option<&str> {
+        self.ports_it_holds_and_cannot_send
+            .iter()
+            .find(|held| {
+                held.processor_display_name == processor_display_name && held.port_name == port_name
+            })
+            .map(|held| held.why_it_cannot_be_sent.as_str())
+    }
+
     /// Every offered port, rendered for a refusal that has to say what *is*
     /// offered rather than only what is not.
+    ///
+    /// A port the runtime holds and cannot send is not one of them: naming it
+    /// here would answer a reader looking for somewhere to point its link with
+    /// a port that would refuse it the same way.
     pub fn listed_for_a_refusal(&self) -> String {
         if self.ports.is_empty() {
             return "nothing".to_string();
@@ -97,7 +149,8 @@ impl OutputPortsOfferedOnTheMesh {
 /// afterwards — the shape the hosted control plane's endpoint registry already
 /// uses for something the runtime learns after it is on the mesh.
 pub trait WhatThisRuntimeOffersOnTheMesh: Send + Sync {
-    /// Every output port in this runtime's graph right now.
+    /// Every output port in this runtime's graph right now, split into the ones
+    /// it can send and the ones it holds and cannot.
     fn output_ports_it_offers_right_now(&self) -> OutputPortsOfferedOnTheMesh;
 
     /// The channel the port at this address publishes to, and the sizing a
@@ -323,6 +376,11 @@ mod tests {
                     port_name: "audio".to_string(),
                 },
             ],
+            ports_it_holds_and_cannot_send: vec![OutputPortThisRuntimeHoldsAndCannotSend {
+                processor_display_name: "CameraSource".to_string(),
+                port_name: "depthOut".to_string(),
+                why_it_cannot_be_sent: "its channel cannot be named: it contains 'O'".to_string(),
+            }],
         }
     }
 
@@ -347,7 +405,14 @@ mod tests {
                 "ports": [
                     { "processor_display_name": "CameraSource", "port_name": "video" },
                     { "processor_display_name": "MicrophoneSource", "port_name": "audio" },
-                ]
+                ],
+                "ports_it_holds_and_cannot_send": [
+                    {
+                        "processor_display_name": "CameraSource",
+                        "port_name": "depthOut",
+                        "why_it_cannot_be_sent": "its channel cannot be named: it contains 'O'",
+                    },
+                ],
             })
         );
     }
@@ -363,8 +428,50 @@ mod tests {
         assert!(!listed.offers("NoSuchProcessor", "video"));
     }
 
+    /// A document from a peer that names no unsendable ports at all — the shape
+    /// a build predating that key answers — reads as one holding none, rather
+    /// than failing to decode and stranding every link from that peer.
+    #[test]
+    fn a_document_naming_no_unsendable_ports_reads_as_holding_none() {
+        let without_the_key = rmp_serde::to_vec_named(&serde_json::json!({
+            "ports": [{ "processor_display_name": "CameraSource", "port_name": "video" }],
+        }))
+        .expect("the older shape encodes");
+
+        let listed = OutputPortsOfferedOnTheMesh::decode(&without_the_key)
+            .expect("a document with no unsendable ports still decodes");
+        assert!(listed.offers("CameraSource", "video"));
+        assert!(listed.ports_it_holds_and_cannot_send.is_empty());
+    }
+
+    /// A port the runtime holds and cannot send is not offered, and answers the
+    /// reason under both of its own names — which is what a reader's refusal
+    /// quotes instead of saying the port does not exist.
+    #[test]
+    fn a_port_held_and_unsendable_is_not_offered_and_answers_why() {
+        let listed = a_listing();
+        assert!(
+            !listed.offers("CameraSource", "depthOut"),
+            "a port that cannot be sent is not on offer"
+        );
+        assert_eq!(
+            listed.why_it_cannot_send("CameraSource", "depthOut"),
+            Some("its channel cannot be named: it contains 'O'")
+        );
+        assert_eq!(listed.why_it_cannot_send("CameraSource", "video"), None);
+        assert_eq!(
+            listed.why_it_cannot_send("CameraSource", "no_such_port"),
+            None
+        );
+        assert_eq!(
+            listed.why_it_cannot_send("NoSuchProcessor", "depthOut"),
+            None
+        );
+    }
+
     /// A refusal lists what is offered, sorted, so two runs read the same — and
-    /// says so plainly when nothing is.
+    /// says so plainly when nothing is. A port held and unsendable is never one
+    /// of them: it would refuse the reader that followed it the same way.
     #[test]
     fn a_refusal_lists_what_is_offered_in_a_stable_order() {
         assert_eq!(
@@ -373,6 +480,14 @@ mod tests {
         );
         assert_eq!(
             OutputPortsOfferedOnTheMesh::default().listed_for_a_refusal(),
+            "nothing"
+        );
+        let holding_only_what_it_cannot_send = OutputPortsOfferedOnTheMesh {
+            ports: vec![],
+            ..a_listing()
+        };
+        assert_eq!(
+            holding_only_what_it_cannot_send.listed_for_a_refusal(),
             "nothing"
         );
     }
