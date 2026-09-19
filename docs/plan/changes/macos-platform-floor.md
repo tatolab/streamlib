@@ -246,7 +246,7 @@ its Unix socket and `SCM_RIGHTS` untouched, and no shared file changes behaviour
 B, when it is scheduled: **real, and this is a second reason it is deferred.**
 `python_helper_process_spawn_host.rs` is one shared file with per-platform arms, so replacing
 `Command` + `pre_exec` with a direct `posix_spawn` changes the spawn path on **both** platforms.
-B is therefore its own change with its own Linux proof, never a rider on this one.
+B is therefore its own change with its own Linux proof, never a rider on this one — filed as #2368.
 
 ## [NEEDS DECISION] 4 — Does a camera frame carry the capture instant or the publication instant?
 
