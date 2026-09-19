@@ -28,7 +28,9 @@ use zenoh::qos::{CongestionControl, Priority};
 use crate::core::graph::MeshPortAddress;
 use crate::core::runtime::mesh::a_bags_top_level_surface_id::a_bag_carries_a_top_level_surface_id;
 use crate::core::runtime::mesh::machine_clock_identity::MachineClockIdentity;
-use crate::core::runtime::mesh::mesh_data_message_attachment::MeshDataMessageAttachment;
+use crate::core::runtime::mesh::mesh_data_message_attachment::{
+    MeshDataMessageAttachment, PublisherGenerationOnTheMesh,
+};
 use crate::core::runtime::mesh::output_ports_offered_on_the_mesh::HowToReadAnOfferedOutputPort;
 use crate::core::runtime::mesh::runtime_mesh_key::RuntimeMeshKeySpace;
 use crate::iceoryx2::{ChannelIdlePollBackoff, FRAME_HEADER_SIZE, FrameHeader, Iceoryx2Node};
@@ -256,7 +258,7 @@ fn send_one_port_to_the_mesh(sending: WhatOneEgressSends, stop: Arc<AtomicBool>)
                 let attached = MeshDataMessageAttachment {
                     timestamp_ns: stamp,
                     sequence_number,
-                    publisher_generation,
+                    publisher_generation: PublisherGenerationOnTheMesh(publisher_generation),
                     clock_identity,
                 }
                 .to_wire_bytes();

@@ -27,6 +27,15 @@ const CLOCK_IDENTITY_OFFSET: usize = PUBLISHER_GENERATION_OFFSET + size_of::<u64
 pub const MESH_DATA_MESSAGE_ATTACHMENT_BYTES: usize =
     CLOCK_IDENTITY_OFFSET + MACHINE_CLOCK_IDENTITY_BYTES;
 
+/// Which run of one port's numbering a bag belongs to, as the sending runtime
+/// counted it.
+///
+/// A type of its own because the reading end takes it beside the sequence
+/// number and both are `u64`: swapped, every bag reads as a new run, every run
+/// as a baseline, and the loss count silently goes to zero.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PublisherGenerationOnTheMesh(pub u64);
+
 /// The fixed record beside every bag a remote link carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MeshDataMessageAttachment {
@@ -42,7 +51,7 @@ pub struct MeshDataMessageAttachment {
     /// egress. A bag whose generation differs from the last one's is a
     /// baseline and never a gap, so a recreated producer — whose numbering
     /// restarts — is not read as loss.
-    pub publisher_generation: u64,
+    pub publisher_generation: PublisherGenerationOnTheMesh,
     /// The machine whose monotonic clock produced `timestamp_ns`.
     pub clock_identity: MachineClockIdentity,
 }
@@ -56,7 +65,7 @@ impl MeshDataMessageAttachment {
         wire_bytes[SEQUENCE_NUMBER_OFFSET..PUBLISHER_GENERATION_OFFSET]
             .copy_from_slice(&self.sequence_number.to_le_bytes());
         wire_bytes[PUBLISHER_GENERATION_OFFSET..CLOCK_IDENTITY_OFFSET]
-            .copy_from_slice(&self.publisher_generation.to_le_bytes());
+            .copy_from_slice(&self.publisher_generation.0.to_le_bytes());
         wire_bytes[CLOCK_IDENTITY_OFFSET..CLOCK_IDENTITY_OFFSET + MACHINE_CLOCK_IDENTITY_BYTES]
             .copy_from_slice(&self.clock_identity.to_wire_bytes());
         wire_bytes
@@ -64,39 +73,25 @@ impl MeshDataMessageAttachment {
 
     /// Read a record off the wire, or `None` when the bytes are not one — a
     /// peer of another engine version, or a message this engine did not write.
+    ///
+    /// Every arm is `?` rather than an index that cannot fail: these are the
+    /// only peer-controlled bytes this engine decodes, and the decode runs on
+    /// the Zenoh subscriber's callback, where a panic stalls every key from
+    /// that peer until its lease runs out.
     pub fn from_wire_bytes(wire_bytes: &[u8]) -> Option<Self> {
-        let record: &OneRecordOnTheWire = wire_bytes
-            .get(..MESH_DATA_MESSAGE_ATTACHMENT_BYTES)?
-            .try_into()
-            .ok()?;
+        let (timestamp_ns, rest) = wire_bytes.split_first_chunk::<8>()?;
+        let (sequence_number, rest) = rest.split_first_chunk::<8>()?;
+        let (publisher_generation, rest) = rest.split_first_chunk::<8>()?;
+        let clock_identity = rest.first_chunk::<MACHINE_CLOCK_IDENTITY_BYTES>()?;
         Some(Self {
-            timestamp_ns: i64::from_le_bytes(eight_bytes_at(record, TIMESTAMP_NS_OFFSET)),
-            sequence_number: u64::from_le_bytes(eight_bytes_at(record, SEQUENCE_NUMBER_OFFSET)),
-            publisher_generation: u64::from_le_bytes(eight_bytes_at(
-                record,
-                PUBLISHER_GENERATION_OFFSET,
+            timestamp_ns: i64::from_le_bytes(*timestamp_ns),
+            sequence_number: u64::from_le_bytes(*sequence_number),
+            publisher_generation: PublisherGenerationOnTheMesh(u64::from_le_bytes(
+                *publisher_generation,
             )),
-            clock_identity: MachineClockIdentity::from_wire_bytes(
-                record[CLOCK_IDENTITY_OFFSET..CLOCK_IDENTITY_OFFSET + MACHINE_CLOCK_IDENTITY_BYTES]
-                    .try_into()
-                    .expect("the slice is the identity's own width"),
-            ),
+            clock_identity: MachineClockIdentity::from_wire_bytes(*clock_identity),
         })
     }
-}
-
-/// One whole record, as the decode borrows it.
-type OneRecordOnTheWire = [u8; MESH_DATA_MESSAGE_ATTACHMENT_BYTES];
-
-/// The eight bytes one numeric field occupies.
-///
-/// Infallible by construction — every offset names a fixed-width field inside a
-/// record of known length — which is why this does not hand back an error arm
-/// no caller could take.
-fn eight_bytes_at(record: &OneRecordOnTheWire, offset: usize) -> [u8; 8] {
-    record[offset..offset + 8]
-        .try_into()
-        .expect("every numeric field is eight bytes inside the record")
 }
 
 #[cfg(test)]
@@ -107,7 +102,7 @@ mod tests {
         MeshDataMessageAttachment {
             timestamp_ns: 0x0102_0304_0506_0708,
             sequence_number: 0x1112_1314_1516_1718,
-            publisher_generation: 0x2122_2324_2526_2728,
+            publisher_generation: PublisherGenerationOnTheMesh(0x2122_2324_2526_2728),
             clock_identity: MachineClockIdentity::of_the_machine_whose_boot_session_uuid_reads(
                 "2f1c8a30-6b4e-4d5a-9a11-2c7f0d5e8b93",
             ),
@@ -151,7 +146,7 @@ mod tests {
                 let record = MeshDataMessageAttachment {
                     timestamp_ns,
                     sequence_number: counter,
-                    publisher_generation: counter,
+                    publisher_generation: PublisherGenerationOnTheMesh(counter),
                     clock_identity: MachineClockIdentity::of_this_machine(),
                 };
                 assert_eq!(

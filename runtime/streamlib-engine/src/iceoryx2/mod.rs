@@ -33,7 +33,7 @@ pub(crate) use audio_window::{
     AudioWindowDeclarationOfAnInputPort, WINDOWED_PORT_SUBSCRIBER_RING_DEPTH,
     audio_windowing_declared_by_input_port, refuse_an_unsettled_match_device_sentinel,
 };
-pub use bags_a_gap_in_the_numbering_says_were_lost::BagsAGapInTheNumberingSaysWereLost;
+pub(crate) use bags_a_gap_in_the_numbering_says_were_lost::BagsAGapInTheNumberingSaysWereLost;
 pub use channel_ceiling::{
     ENV_MAX_PAYLOAD_BYTES_PER_CHANNEL_TRUSTED, ENV_MAX_PAYLOAD_BYTES_PER_CHANNEL_UNTRUSTED_SESSION,
     effective_channel_chunk_ceiling_bytes,

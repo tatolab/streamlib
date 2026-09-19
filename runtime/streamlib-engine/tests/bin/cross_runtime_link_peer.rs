@@ -121,7 +121,7 @@ fn run_as_the_source(
             THE_CHANNELS_DEPTH,
         )
         .map_err(|why| why.to_string())?;
-    let publisher = service
+    let mut publisher = service
         .create_publisher(1024)
         .map_err(|why| why.to_string())?;
 
@@ -138,7 +138,6 @@ fn run_as_the_source(
     // One bag per report interval, each carrying its own index so the reader
     // can say which arrived, and stamped so the test can check the stamp
     // crossed unchanged.
-    let mut publisher = publisher;
     let mut published: u64 = 0;
     let mut publishers_this_port_has_had: u64 = 1;
     let mut next_sequence_number: u64 = 0;
@@ -198,7 +197,6 @@ fn run_as_the_source(
         // and go — which is the only place that view exists without a `Runner`.
         report.write_line(
             &serde_json::json!({
-                "published": published.saturating_sub(1),
                 "published_count": published,
                 "burst_ended_at_index": burst_ended_at_index,
                 "publishers_this_port_has_had": publishers_this_port_has_had,

@@ -30,7 +30,9 @@ use parking_lot::{Condvar, Mutex};
 use zenoh::Wait;
 
 use crate::core::graph::MeshPortAddress;
-use crate::core::runtime::mesh::mesh_data_message_attachment::MeshDataMessageAttachment;
+use crate::core::runtime::mesh::mesh_data_message_attachment::{
+    MeshDataMessageAttachment, PublisherGenerationOnTheMesh,
+};
 use crate::core::runtime::mesh::runtime_mesh_key::RuntimeMeshKeySpace;
 use crate::iceoryx2::{
     BagsAGapInTheNumberingSaysWereLost, ChannelEgressConfig, ChannelTrustTier,
@@ -49,12 +51,10 @@ const THE_INGRESS_OUTPUT_PORT: &str = "bags";
 /// A bag as it arrives from the mesh, before the writing thread takes it.
 struct ABagOffTheMesh {
     bag_bytes: Vec<u8>,
-    timestamp_ns: i64,
-    /// The number the producing publisher gave this bag on the sending
-    /// runtime, and which of that port's publishers gave it — carried this far
-    /// so the writing thread can see what the hop lost ahead of it.
-    sequence_number: u64,
-    publisher_generation: u64,
+    /// The record that rode beside it, whole: the stamp to write it under, the
+    /// sending runtime's number for it and the run that number belongs to, and
+    /// the clock its stamp was taken on.
+    attached: MeshDataMessageAttachment,
 }
 
 /// The ring between the Zenoh callback and the writing thread.
@@ -75,7 +75,7 @@ struct OneLinkThisIngressFeeds {
     /// link wired onto an ingress that is already carrying must take its own
     /// first bag as its baseline, or its very first count would be a stretch
     /// of the port that went missing before the link existed.
-    bags_the_hop_lost: BagsAGapInTheNumberingSaysWereLost<u64>,
+    bags_the_hop_lost: BagsAGapInTheNumberingSaysWereLost<PublisherGenerationOnTheMesh>,
 }
 
 /// One port of another runtime, being carried into this one.
@@ -365,9 +365,7 @@ fn declare_the_data_subscriber(
             }
             arrived.ring.push_back(ABagOffTheMesh {
                 bag_bytes: sample.payload().to_bytes().into_owned(),
-                timestamp_ns: attached.timestamp_ns,
-                sequence_number: attached.sequence_number,
-                publisher_generation: attached.publisher_generation,
+                attached,
             });
             someone_is_waiting.notify_one();
         })
@@ -460,8 +458,8 @@ fn spawn_the_writing_thread(
                 // must not be charged for what it was never going to get.
                 for link in every_link_it_feeds.lock().values_mut() {
                     let lost_before_it = link.bags_the_hop_lost.how_many_were_lost_before(
-                        taken.publisher_generation,
-                        taken.sequence_number,
+                        taken.attached.publisher_generation,
+                        taken.attached.sequence_number,
                     );
                     if lost_before_it > 0 {
                         link.where_its_hop_loss_is_counted
@@ -472,7 +470,7 @@ fn spawn_the_writing_thread(
                 if let Err(write_failure) = writes_onto_the_local_channel.write_raw(
                     THE_INGRESS_OUTPUT_PORT,
                     &taken.bag_bytes,
-                    taken.timestamp_ns,
+                    taken.attached.timestamp_ns,
                 ) {
                     tracing::warn!(
                         "a bag from {address} did not reach its local channel: {write_failure}"

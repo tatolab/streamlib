@@ -79,6 +79,18 @@ impl CumulativeCountsByName {
         self.per_name.lock().remove(name);
     }
 
+    /// Replace `name`'s count with a zeroed one, under one lock.
+    ///
+    /// Forgetting and asking again would do the same in two, and a reader
+    /// snapshotting between them would see a name that is live go missing.
+    fn replace_count_for(&self, name: &str) -> Arc<CumulativeCount> {
+        let fresh = Arc::<CumulativeCount>::default();
+        self.per_name
+            .lock()
+            .insert(name.to_string(), Arc::clone(&fresh));
+        fresh
+    }
+
     fn snapshot_by_name(&self) -> BTreeMap<String, u64> {
         self.per_name
             .lock()
@@ -291,8 +303,9 @@ impl MeshHopDroppedBagCountsByRemoteInboundLink {
         &self,
         inbound_link_id: &str,
     ) -> RemoteInboundLinkMeshHopDroppedBagCounter {
-        self.forget_inbound_link(inbound_link_id);
-        self.counter_for_inbound_link(inbound_link_id)
+        RemoteInboundLinkMeshHopDroppedBagCounter(
+            self.per_inbound_link.replace_count_for(inbound_link_id),
+        )
     }
 
     /// Forget a disconnected link's count, so `graph` stops naming a link it no

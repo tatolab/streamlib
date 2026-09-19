@@ -36,15 +36,15 @@ mod zenoh_work_off_any_tokio_runtime;
 
 // Exported because something outside this module names it: the runtime and its
 // context hold the membership and the control-plane cell, `Runner::new()`
-// resolves the configuration, and the platform half of the host identity is in
-// `linux/`. The announced identity and the key space are exported for the
+// resolves the configuration, and the platform halves of the host identity and the
+// machine clock identity are in `linux/` and `apple/`. The announced identity and the key space are exported for the
 // mesh's own two-process fixture, which has to write the very key the
 // duplicate-name check reads rather than re-spell the grammar beside it.
 // The observation is exported because the wheel's `streamlib nodes` door
 // calls it. Everything else the mesh is built from stays inside it.
 pub use host_identity::HostIdentity;
 pub use hosted_control_plane_endpoint::HostedControlPlaneEndpointRegistry;
-pub use machine_clock_identity::{MACHINE_CLOCK_IDENTITY_BYTES, MachineClockIdentity};
+pub use machine_clock_identity::MachineClockIdentity;
 pub use mesh_data_message_attachment::{
     MESH_DATA_MESSAGE_ATTACHMENT_BYTES, MeshDataMessageAttachment,
 };

@@ -1053,3 +1053,92 @@ fn wait_until_the_burst_is_behind_the_reader(
     );
     reached
 }
+
+/// The source is killed after a burst its hop lost bags on, and comes back.
+/// The link re-wires, and its hop count starts again from zero.
+///
+/// The plan restarts a remote link's loss count when its runtime returns: a
+/// count carried across a re-wire would name bags a different hop lost, on a
+/// wiring `graph` no longer has.
+///
+/// What it catches: minting the returning link's counter with
+/// `counter_for_inbound_link` instead of `a_counter_for_a_fresh_wiring_of` —
+/// the whole of the restart, and the one call site that implements it. The
+/// returning source does not burst, so the zero this asserts is the count the
+/// re-wire minted and not a lull.
+#[test]
+#[serial]
+fn a_killed_sources_return_restarts_the_hop_count_from_zero() {
+    const HOW_MANY_BAGS_THE_BURST_PUBLISHES: u64 = 4_000;
+
+    let mesh_name = a_mesh_name_of_its_own("recount");
+    let (source_name, reader_name) = the_two_runtimes_of("recount");
+    let reader_domain = a_domain_root_of_its_own("recount-reader");
+    let reader_listen = format!("udp/{LOOPBACK_INTERFACE}:{}?rel=1", a_free_loopback_port());
+
+    let reader = CrossRuntimeLinkPeerProcess::launch(HowToLaunchAPeer {
+        reader: true,
+        runtime_name: reader_name,
+        mesh_name: mesh_name.clone(),
+        listen_endpoints: vec![reader_listen.clone()],
+        display_name: THE_DISPLAY_NAME.to_string(),
+        link_from: Some(source_name.clone()),
+        iceoryx2_domain_root: reader_domain.path().to_path_buf(),
+        ..Default::default()
+    });
+    reader.wait_until_it_is_up();
+
+    // A fresh domain each time, the restart arm's own reason: a killed process
+    // leaves its iceoryx2 node holding the channel's one publisher slot.
+    let launch_the_source = |domain: &tempfile::TempDir, burst: Option<u64>| {
+        CrossRuntimeLinkPeerProcess::launch(HowToLaunchAPeer {
+            runtime_name: source_name.clone(),
+            mesh_name: mesh_name.clone(),
+            peer_endpoints: vec![reader_listen.clone()],
+            display_name: THE_DISPLAY_NAME.to_string(),
+            iceoryx2_domain_root: domain.path().to_path_buf(),
+            burst_once_a_reader_arrives: burst,
+            ..Default::default()
+        })
+    };
+
+    let bursting_domain = a_domain_root_of_its_own("recount-source");
+    let mut source = launch_the_source(&bursting_domain, Some(HOW_MANY_BAGS_THE_BURST_PUBLISHES));
+    source.wait_until_it_is_up();
+    let lost_before_the_kill = wait_until_the_burst_is_behind_the_reader(&source, &reader);
+    assert!(
+        lost_before_the_kill.the_hop_lost > 0,
+        "the first wiring must have lost something, or a zero afterwards says nothing: \
+         {lost_before_the_kill:?}"
+    );
+
+    source.kill_it();
+    let states_before_the_kill = reader.every_state_it_has_reported().len();
+    reader.wait_until(
+        "the link to return to waiting once its source is gone",
+        || {
+            reader
+                .every_state_it_has_reported()
+                .iter()
+                .skip(states_before_the_kill)
+                .any(|state| state == "awaiting_remote")
+        },
+    );
+
+    // Steady this time, so what the count reads after the re-wire is the
+    // restart and not a stretch where nothing happened to be lost yet.
+    let returned_domain = a_domain_root_of_its_own("recount-source-again");
+    let bags_before_the_restart = reader.every_bag_it_received().len();
+    let source = launch_the_source(&returned_domain, None);
+    source.wait_until_it_is_up();
+    reader.wait_until("the link to carry again once its source returned", || {
+        reader.every_bag_it_received().len() > bags_before_the_restart + 2
+    });
+
+    assert_eq!(
+        reader.what_last_reached_it().the_hop_lost,
+        0,
+        "the returning link's count must start again from zero rather than carrying what a \
+         previous wiring's hop lost"
+    );
+}
