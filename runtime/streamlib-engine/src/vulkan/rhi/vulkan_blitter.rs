@@ -164,18 +164,6 @@ impl RhiBlitter for VulkanBlitter {
         Ok(())
     }
 
-    unsafe fn blit_copy_iosurface_raw(
-        &self,
-        _src: *const std::ffi::c_void,
-        _dest: &PixelBuffer,
-        _width: u32,
-        _height: u32,
-    ) -> Result<()> {
-        Err(Error::NotSupported(
-            "IOSurface not available on Linux".into(),
-        ))
-    }
-
     fn clear_cache(&self) {}
 }
 

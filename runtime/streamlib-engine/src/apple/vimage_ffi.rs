@@ -255,11 +255,15 @@ impl vImage_Buffer {
         width: usize,
         height: usize,
     ) -> Self {
-        Self {
-            data: CVPixelBufferGetBaseAddress(pixel_buffer),
-            height,
-            width,
-            rowBytes: CVPixelBufferGetBytesPerRow(pixel_buffer),
+        // SAFETY: the caller's contract above — a locked `CVPixelBuffer`,
+        // still locked for this buffer's whole life.
+        unsafe {
+            Self {
+                data: CVPixelBufferGetBaseAddress(pixel_buffer),
+                height,
+                width,
+                rowBytes: CVPixelBufferGetBytesPerRow(pixel_buffer),
+            }
         }
     }
 }

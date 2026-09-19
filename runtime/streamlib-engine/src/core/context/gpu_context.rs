@@ -38,18 +38,6 @@ impl RhiBlitter for NoOpBlitter {
         ))
     }
 
-    unsafe fn blit_copy_iosurface_raw(
-        &self,
-        _src: *const std::ffi::c_void,
-        _dest: &PixelBuffer,
-        _width: u32,
-        _height: u32,
-    ) -> Result<()> {
-        Err(Error::NotSupported(
-            "Blitter not supported on this platform".into(),
-        ))
-    }
-
     fn clear_cache(&self) {}
 }
 
@@ -393,11 +381,7 @@ impl PixelBufferPoolManager {
             let desc = PixelBufferDescriptor::new(width, height, format);
             let _ = desc;
             let underlying_pool = RhiPixelBufferPool {
-                #[cfg(target_os = "macos")]
-                inner: return Err(crate::core::Error::Configuration(
-                    "PixelBufferPool creation via descriptor not yet implemented".into(),
-                )),
-                #[cfg(target_os = "linux")]
+                #[cfg(any(target_os = "linux", target_os = "macos"))]
                 inner: {
                     let vulkan_device = std::sync::Arc::clone(&self.device.inner);
                     let bytes_per_pixel = format.bits_per_pixel() / 8;
@@ -416,7 +400,7 @@ impl PixelBufferPoolManager {
                         POOL_PRE_ALLOCATE_COUNT,
                     )?
                 },
-                #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+                #[cfg(not(any(target_os = "linux", target_os = "macos")))]
                 _marker: std::marker::PhantomData,
             };
 
@@ -2712,23 +2696,6 @@ impl GpuContext {
         self.blitter.blit_copy(src, dest)
     }
 
-    /// Copy from raw IOSurface to a pixel buffer.
-    ///
-    /// # Safety
-    /// - `src` must be a valid IOSurfaceRef pointer
-    /// - The IOSurface must remain valid for the duration of the blit
-    #[cfg(target_os = "macos")]
-    pub unsafe fn blit_copy_iosurface(
-        &self,
-        src: crate::apple::corevideo_ffi::IOSurfaceRef,
-        dest: &PixelBuffer,
-        width: u32,
-        height: u32,
-    ) -> Result<()> {
-        self.blitter
-            .blit_copy_iosurface_raw(src, dest, width, height)
-    }
-
     /// Clear the blitter's texture cache to free GPU memory.
     pub fn clear_blitter_cache(&self) {
         self.blitter.clear_cache();
@@ -3918,27 +3885,6 @@ impl GpuContextLimitedAccess {
         self.host_inner().blit_copy(src, dest)
     }
 
-    /// Copy from raw IOSurface to a pixel buffer (Split: cache hit).
-    ///
-    /// # Safety
-    /// - `src` must be a valid IOSurfaceRef pointer
-    /// - The IOSurface must remain valid for the duration of the blit
-    ///
-    /// macOS-only; non-macOS hosts return an error.
-    #[cfg(target_os = "macos")]
-    pub unsafe fn blit_copy_iosurface(
-        &self,
-        src: crate::apple::corevideo_ffi::IOSurfaceRef,
-        dest: &PixelBuffer,
-        width: u32,
-        height: u32,
-    ) -> Result<()> {
-        unsafe {
-            self.host_inner()
-                .blit_copy_iosurface(src, dest, width, height)
-        }
-    }
-
     /// Get the surface store, if initialized.
     ///
     /// Returns `Some(SurfaceStore)` (refcount bumped) when the host has
@@ -4644,25 +4590,6 @@ impl GpuContextFullAccess {
     /// Copy pixels between same-format, same-size buffers.
     pub fn blit_copy(&self, src: &PixelBuffer, dest: &PixelBuffer) -> Result<()> {
         self.host_inner().blit_copy(src, dest)
-    }
-
-    /// Copy from raw IOSurface to a pixel buffer.
-    ///
-    /// # Safety
-    /// - `src` must be a valid IOSurfaceRef pointer
-    /// - The IOSurface must remain valid for the duration of the blit
-    #[cfg(target_os = "macos")]
-    pub unsafe fn blit_copy_iosurface(
-        &self,
-        src: crate::apple::corevideo_ffi::IOSurfaceRef,
-        dest: &PixelBuffer,
-        width: u32,
-        height: u32,
-    ) -> Result<()> {
-        unsafe {
-            self.host_inner()
-                .blit_copy_iosurface(src, dest, width, height)
-        }
     }
 
     /// Clear the blitter's texture cache to free GPU memory.

@@ -16,10 +16,11 @@
 //! events. The raw-window-handle seam between the window and the present
 //! target is untouched; the pump never mints a surface and never draws.
 //!
-//! Linux-gated but in `core/` rather than `linux/`: this is the seam an Apple
-//! main-thread implementation fills, and Apple's rule — the loop must live on
-//! the process's first thread — changes where the loop is driven, not what a
-//! window owner asks for or what it is handed back.
+//! In `core/` rather than `linux/` because it is one seam with a per-platform
+//! loop under it. Apple's rule — the loop must live on the process's first
+//! thread — changes where the loop is driven, not what a window owner asks for
+//! or what it is handed back, and moving the Apple pump onto that thread is
+//! still outstanding.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
