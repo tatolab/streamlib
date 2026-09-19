@@ -196,7 +196,8 @@ class _PublisherUnderTest:
         link_data_access = ProcessorLinkDataAccess()
         for index in range(inbound_links):
             link_data_access.wire_input_link(
-                "tracks", f"{unique}/encoder{index}", f"{unique}_dest/notify",
+                "tracks", f"{unique}/encoder{index}", f"{unique}/encoder{index}",
+                f"{unique}_dest/notify",
                 "read_next_in_order", 8, 8, 2, 4, f"L-{unique}-{index}",
             )  # fmt: skip
         context = RuntimeContextFullAccess.open_for_helper_process(
@@ -298,7 +299,8 @@ def test_a_multichannel_bag_is_refused_before_any_session_is_opened(request):
 
     destination = ProcessorLinkDataAccess()
     destination.wire_input_link(
-        "tracks", channel, notify, "read_next_in_order", 8, 8, 2, 1, f"L-{unique}",
+        "tracks", channel, channel, notify,
+        "read_next_in_order", 8, 8, 2, 1, f"L-{unique}",
     )  # fmt: skip
     source = ProcessorLinkDataAccess()
     source.wire_output_link(

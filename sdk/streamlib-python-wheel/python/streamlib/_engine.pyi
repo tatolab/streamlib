@@ -737,6 +737,7 @@ class ProcessorLinkDataAccess:
         self,
         port_name: str,
         channel_service_name: str,
+        inbound_link_name: str,
         notify_service_name: str,
         read_mode: str,
         channel_service_creation_depth: int,
@@ -749,6 +750,12 @@ class ProcessorLinkDataAccess:
         wiring_generation: int | None = None,
     ) -> None:
         """Open this processor's subscriber for one link into `port_name`.
+
+        `channel_service_name` is what this end subscribes to;
+        `inbound_link_name` is what a read hands back as the link's name. They
+        differ for a link carrying from another runtime, which rides a channel
+        hashed from the source port's mesh address, and are equal for a link
+        from this runtime.
 
         Once a loss-count board is open, `loss_count_slot` and
         `wiring_generation` name where the link's losses are mirrored, and

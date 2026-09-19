@@ -238,6 +238,7 @@ pub fn open_iceoryx2_service(
             &dest_proc_id,
             &dest_port,
             &channel_service_name,
+            &inbound_link_name_of(&from_port, &channel_service_name),
             notify_service_name_for_the_destination
                 .as_deref()
                 .unwrap_or(""),
@@ -1242,6 +1243,12 @@ fn wire_subprocess_source(
 /// of process, so it opens its own channel subscriber (bound to its local input
 /// port) from the envelope.
 ///
+/// `channel_service_name` and `inbound_link_name` ride the envelope as two
+/// separate keys because they are two different names for a link from another
+/// runtime: the channel is hashed from the port's mesh address and names
+/// nothing a reader could recognise, while the link name *is* that address.
+/// They are equal for a link whose source is on this runtime.
+///
 /// Hands back the cell this end's answer will land in, on the same terms as
 /// [`wire_subprocess_source`].
 #[allow(clippy::too_many_arguments)]
@@ -1251,6 +1258,7 @@ fn wire_subprocess_dest(
     dest_proc_id: &ProcessorUniqueId,
     dest_port: &str,
     channel_service_name: &str,
+    inbound_link_name: &InboundLinkName,
     notify_service_name: &str,
     dest_input_port_delivery: DeliveryResolution,
     channel_sizing: ChannelSizing,
@@ -1270,6 +1278,7 @@ fn wire_subprocess_dest(
         "name": dest_port,
         "link_id": link_id.to_string(),
         "channel_service_name": channel_service_name,
+        "inbound_link_name": inbound_link_name.as_str(),
         "notify_service_name": notify_service_name,
         "read_mode": dest_input_port_delivery.drain_order.as_manifest_str(),
         "channel_service_creation_depth": channel_sizing.channel_service_creation_depth,
@@ -1504,6 +1513,7 @@ mod tests {
             &dest_id.into(),
             "in1",
             "pabc/out1",
+            &InboundLinkName::from("pabc/out1"),
             "pdef/notify",
             DeliveryProfile::Newest.resolve(),
             sizing_of_a_two_subscriber_test_channel(),
@@ -1866,6 +1876,7 @@ mod tests {
             &helper_windowed_id.as_str().into(),
             "audio",
             "pabc/out1",
+            &InboundLinkName::from("pabc/out1"),
             "pdef/notify",
             DeliveryProfile::Ordered.resolve(),
             ChannelSizing {
@@ -2157,6 +2168,7 @@ mod tests {
             &dest_id.as_str().into(),
             "in1",
             "pabc/out1",
+            &InboundLinkName::from("pabc/out1"),
             "pdef/notify",
             DeliveryProfile::Newest.resolve(),
             sizing_of_a_two_subscriber_test_channel(),
@@ -3733,6 +3745,7 @@ mod tests {
             &dest_id.as_str().into(),
             "audio",
             "pabc/out1",
+            &InboundLinkName::from("pabc/out1"),
             "pdef/notify",
             DeliveryProfile::Ordered.resolve(),
             sizing_of_a_two_subscriber_test_channel(),
@@ -3784,6 +3797,7 @@ mod tests {
             &dest_id.as_str().into(),
             "audio",
             "pabc/out1",
+            &InboundLinkName::from("pabc/out1"),
             "pdef/notify",
             DeliveryProfile::Ordered.resolve(),
             sizing_of_a_two_subscriber_test_channel(),
@@ -4290,6 +4304,7 @@ mod tests {
             &dest_id.as_str().into(),
             "audio",
             "pabc/out1",
+            &InboundLinkName::from("pabc/out1"),
             "pdef/notify",
             DeliveryProfile::Ordered.resolve(),
             ChannelSizing {
@@ -4658,6 +4673,95 @@ mod tests {
                 .as_str(),
                 "bench-cam-naming/Camera Source 2/video"
             );
+        }
+
+        /// One helper-placed destination's recorded input entry, wired through
+        /// the op's own subprocess branch.
+        fn one_helper_destinations_recorded_input_entry(
+            channel_service_name: &str,
+            inbound_link_name: &InboundLinkName,
+        ) -> serde_json::Value {
+            let mut graph = Graph::new();
+            let dest_id = add_mock_input_only(&mut graph);
+            let dest_instance = attach_processor_instance(
+                &mut graph,
+                &dest_id,
+                ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
+            );
+            let link_wiring = out_of_process_link_wiring_of(&graph, &dest_id.as_str().into())
+                .expect("a helper stub's node carries its link wiring");
+            wire_subprocess_dest(
+                &mut graph,
+                &link_wiring,
+                &dest_id.as_str().into(),
+                "in1",
+                channel_service_name,
+                inbound_link_name,
+                "pdef/notify",
+                DeliveryProfile::Newest.resolve(),
+                sizing_of_a_two_subscriber_test_channel(),
+                1,
+                &LinkUniqueId::from("L-envelope"),
+                None,
+            )
+            .expect("recording dest wiring must succeed");
+
+            dest_instance
+                .lock()
+                .out_of_process_link_wiring()
+                .expect("the stub records its own wiring")
+                .as_setup_command_ports()["inputs"][0]
+                .clone()
+        }
+
+        /// The envelope hands a helper both names, and for a link from another
+        /// runtime they differ: the channel is the hash its ingress writes onto
+        /// and the link name is the port's mesh address.
+        ///
+        /// Mental-revert: drop `inbound_link_name` from the entry and a
+        /// helper-placed many-track sink fed across the mesh names its tracks
+        /// by a hash nobody can recognise.
+        #[test]
+        fn the_envelope_hands_a_helper_the_address_beside_the_channel_it_subscribes_to() {
+            let address = an_address("envelope");
+            let channel =
+                crate::iceoryx2::mesh_ingress_channel_name(&address.to_string()).into_string();
+            let source = OutputLinkPortRef::on_another_runtime(address.clone());
+
+            let entry = one_helper_destinations_recorded_input_entry(
+                &channel,
+                &inbound_link_name_of(&source, &channel),
+            );
+
+            assert_eq!(
+                entry["channel_service_name"],
+                serde_json::json!(channel),
+                "the helper subscribes to the channel the ingress publishes onto"
+            );
+            assert_eq!(
+                entry["inbound_link_name"],
+                serde_json::json!(address.to_string()),
+                "and knows the link by the port's mesh address"
+            );
+            assert_ne!(
+                entry["channel_service_name"], entry["inbound_link_name"],
+                "the two names are exactly what this key exists to keep apart"
+            );
+        }
+
+        /// A link whose source is on this runtime carries one name twice, which
+        /// is what makes the key safe to send for every link rather than only
+        /// for remote ones.
+        #[test]
+        fn the_envelope_hands_a_helper_one_name_twice_for_a_link_from_this_runtime() {
+            let source = OutputLinkPortRef::new("Pcam", "video");
+            let entry = one_helper_destinations_recorded_input_entry(
+                "pcam/video",
+                &inbound_link_name_of(&source, "pcam/video"),
+            );
+
+            assert_eq!(entry["channel_service_name"], serde_json::json!("pcam/video"));
+            assert_eq!(entry["inbound_link_name"], serde_json::json!("pcam/video"));
         }
 
         /// A source port nothing on this runtime reads still gets its channel

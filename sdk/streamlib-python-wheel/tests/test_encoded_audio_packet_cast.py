@@ -99,6 +99,7 @@ def wired_link(request: pytest.FixtureRequest) -> Iterator[WiredLinkUnderTest]:
     destination.wire_input_link(
         INPUT_PORT,
         channel_service_name,
+        channel_service_name,
         notify_service_name,
         "read_next_in_order",
         8,
