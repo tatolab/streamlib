@@ -2381,6 +2381,7 @@ mod tests {
                 "source": { "processor_id": "PatternSourceId", "port_name": "video" },
                 "target": { "processor_id": "WindowSinkId", "port_name": "video" },
                 "state": "wired",
+                "created_by_runtime_name": "rig-desk-a1b2",
                 "components": {}
             }],
             "extensions": [],

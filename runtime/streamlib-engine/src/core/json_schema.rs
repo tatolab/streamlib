@@ -205,6 +205,13 @@ pub struct LinkOutput {
     /// Current state of the link.
     #[serde(default)]
     pub state: LinkStateOutput,
+    /// The runtime that asked for this link — this node's own name for a link
+    /// its own app or control plane wired, and the asking runtime's name for
+    /// one another runtime pushed here or wired on its behalf.
+    ///
+    /// Always present, so a reader never has to tell "nobody asked" from "this
+    /// engine predates the key".
+    pub created_by_runtime_name: String,
     /// Why the link is in the `error` state, in the words of whoever refused
     /// it — today always the helper process that could not open its port.
     ///
@@ -476,8 +483,16 @@ impl From<crate::core::graph::PortKind> for PortKindOutput {
     }
 }
 
-impl From<&crate::core::graph::Link> for LinkOutput {
-    fn from(link: &crate::core::graph::Link) -> Self {
+impl LinkOutput {
+    /// Render `link` as the runtime named `this_runtimes_name` sees it.
+    ///
+    /// The name is the renderer's rather than the link's because a link nobody
+    /// asked for across the mesh was asked for here, and a `Link` has no field
+    /// to say so.
+    pub fn of_a_link_on_the_runtime_named(
+        link: &crate::core::graph::Link,
+        this_runtimes_name: &str,
+    ) -> Self {
         let rendered = RenderedLinkState::of(link);
         let mut components = link.serialize_components();
         // `LinkStateComponent` renders under `components.state` too, and for a
@@ -496,6 +511,7 @@ impl From<&crate::core::graph::Link> for LinkOutput {
             state: rendered.state,
             error_reason: rendered.error_reason,
             awaiting_remote_reason: rendered.awaiting_remote_reason,
+            created_by_runtime_name: this_runtimes_name.to_string(),
             components,
         }
     }
@@ -704,6 +720,26 @@ mod link_rendering_tests {
         OutputLinkPortRef,
     };
 
+    /// The name of the runtime these tests render against.
+    const A_RENDERING_RUNTIME: &str = "rig-desk-a1b2";
+
+    /// Every link says who asked for it, and a link this runtime wired says
+    /// this runtime — which is what makes the key readable without a reader
+    /// having to know whether the mesh was involved.
+    #[test]
+    fn a_link_this_runtime_wired_is_created_by_this_runtime() {
+        let link = Link::between(
+            OutputLinkPortRef::new("Psrc", "out1"),
+            InputLinkPortRef::new("Pdst", "in1"),
+        );
+        let rendered = serde_json::to_value(LinkOutput::of_a_link_on_the_runtime_named(
+            &link,
+            A_RENDERING_RUNTIME,
+        ))
+        .unwrap();
+        assert_eq!(rendered["created_by_runtime_name"], A_RENDERING_RUNTIME);
+    }
+
     /// The field is the state a link was created in; wiring records its
     /// outcome on a component. Rendering reads the component first, so a
     /// `graph` read after a connect says `wired` at the top level rather than
@@ -714,7 +750,7 @@ mod link_rendering_tests {
             OutputLinkPortRef::new("Psrc", "out1"),
             InputLinkPortRef::new("Pdst", "in1"),
         );
-        let rendered = |link: &Link| serde_json::to_value(LinkOutput::from(link)).unwrap();
+        let rendered = |link: &Link| serde_json::to_value(LinkOutput::of_a_link_on_the_runtime_named(link, A_RENDERING_RUNTIME)).unwrap();
         assert_eq!(rendered(&link)["state"], "pending");
 
         link.insert(LinkStateComponent(LinkState::Wired));
@@ -741,7 +777,7 @@ mod link_rendering_tests {
         link.insert_component_without_rendering_it(OutOfProcessLinkWireRepliesComponent(vec![
             std::sync::Arc::clone(&helpers_answer),
         ]));
-        let rendered = |link: &Link| serde_json::to_value(LinkOutput::from(link)).unwrap();
+        let rendered = |link: &Link| serde_json::to_value(LinkOutput::of_a_link_on_the_runtime_named(link, A_RENDERING_RUNTIME)).unwrap();
 
         assert_eq!(rendered(&link)["state"], "pending");
         assert_eq!(rendered(&link)["components"]["state"], "Pending");
@@ -772,7 +808,7 @@ mod link_rendering_tests {
             helpers_answer,
         ]));
 
-        let rendered = serde_json::to_value(LinkOutput::from(&link)).unwrap();
+        let rendered = serde_json::to_value(LinkOutput::of_a_link_on_the_runtime_named(&link, A_RENDERING_RUNTIME)).unwrap();
         assert_eq!(rendered["state"], "error");
         assert_eq!(rendered["components"]["state"], "Error");
         assert_eq!(
@@ -790,7 +826,7 @@ mod link_rendering_tests {
             InputLinkPortRef::new("Pdst", "in1"),
         );
         link.insert(LinkStateComponent(LinkState::Wired));
-        let rendered = serde_json::to_value(LinkOutput::from(&link)).unwrap();
+        let rendered = serde_json::to_value(LinkOutput::of_a_link_on_the_runtime_named(&link, A_RENDERING_RUNTIME)).unwrap();
         assert!(
             rendered.get("error_reason").is_none(),
             "an ordinary link's shape is unchanged by this key: {rendered}"

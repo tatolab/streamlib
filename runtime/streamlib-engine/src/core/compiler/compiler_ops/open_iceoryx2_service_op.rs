@@ -3236,7 +3236,10 @@ mod tests {
             .e(link_id)
             .first()
             .expect("the link must be in the graph");
-        let rendered = crate::core::json_schema::LinkOutput::from(link);
+        let rendered = crate::core::json_schema::LinkOutput::of_a_link_on_the_runtime_named(
+            link,
+            "a-test-runtime",
+        );
         (rendered.state, rendered.error_reason)
     }
 

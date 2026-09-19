@@ -1409,12 +1409,13 @@ mod connect_wires_without_inspecting_a_port_tests {
         .expect("connect never waits on the mesh");
 
         let rendered = compiler.scope(|graph, _tx| {
-            crate::core::json_schema::LinkOutput::from(
+            crate::core::json_schema::LinkOutput::of_a_link_on_the_runtime_named(
                 graph
                     .traversal()
                     .e(&link_id)
                     .first()
                     .expect("the link is in the graph"),
+                THIS_RUNTIMES_NAME,
             )
         });
         assert_eq!(
