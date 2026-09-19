@@ -11,7 +11,8 @@ is a Python processor, the reader spells the remote port with
 Python processor — so the link's name has to survive the parent's wiring
 envelope into a child interpreter to be read at all.
 
-`--source` publishes the known signal. `--reader <source runtime name>` pulls
+`--source` publishes the known signal, with nothing on its own runtime reading
+it. `--reader <source runtime name>` pulls
 `<that name>/KnownAudioSignalSource/audio` into the probe.
 
 Audio rather than video for the Rust rig's reason: a video bag names a surface,
@@ -56,19 +57,10 @@ def main() -> None:
     runtime = streamlib.Runtime()
     if arguments.source:
         from known_audio_signal_source import KnownAudioSignalSource
-        from mesh_linked_audio_probe import MeshLinkedAudioProbe
 
-        signal = runtime.add(
-            KnownAudioSignalSource, display_name=THE_SOURCES_DISPLAY_NAME
-        )
-        # The source is a Python processor, so it runs in a helper process, and
-        # a helper opens its publisher only for a link its own runtime made —
-        # the engine says exactly this, and says to connect the port locally as
-        # well. Without a local consumer the port is offered on the mesh and
-        # cannot be sent, and a reader's link waits forever on an egress that
-        # never starts. Wired here rather than worked around silently.
-        local_consumer = runtime.add(MeshLinkedAudioProbe, display_name="local_consumer")
-        runtime.connect(signal.output(THE_PORT), local_consumer.input(THE_PORT))
+        # Nothing here reads the port: the reader across the mesh is its only
+        # consumer, which is the whole of what this end proves (#2344).
+        runtime.add(KnownAudioSignalSource, display_name=THE_SOURCES_DISPLAY_NAME)
     else:
         from mesh_linked_audio_probe import MeshLinkedAudioProbe
 
