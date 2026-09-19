@@ -427,10 +427,10 @@ impl PythonRuntimeHandle {
     fn connect(
         &self,
         python: Python<'_>,
-        source: PythonLinkSourcePortReference<'_>,
+        source: &Bound<'_, PyAny>,
         destination: &PythonProcessorInputPortReference,
     ) -> PyResult<()> {
-        let from = source.as_an_output_link_port_ref();
+        let from = PythonLinkSourcePortReference::read_from(source)?.as_an_output_link_port_ref();
         let to = InputLinkPortRef::new(
             destination.processor_id.clone(),
             destination.port_name.clone(),

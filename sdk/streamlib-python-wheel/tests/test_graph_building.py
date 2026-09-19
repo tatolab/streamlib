@@ -260,3 +260,20 @@ def test_a_remote_source_naming_a_processor_this_runtime_lacks_is_refused_by_nam
             )
     finally:
         runtime.shutdown()
+
+
+def test_a_source_that_is_neither_reference_names_both_spellings_that_would_work():
+    """The refusal is a Python author's to act on, so it names the two calls
+    that mint a source rather than the binding's own Rust types."""
+    runtime = streamlib.Runtime()
+    try:
+        destination = runtime.add(GraphBuildingFilter)
+        with pytest.raises(TypeError) as refused:
+            runtime.connect(
+                "camera.video",  # pyright: ignore[reportArgumentType]
+                destination.input("frames_from_upstream"),
+            )
+        assert "processor.output(port_name)" in str(refused.value)
+        assert "runtime.remote_processor_output(" in str(refused.value)
+    finally:
+        runtime.shutdown()

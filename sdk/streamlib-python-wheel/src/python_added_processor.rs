@@ -7,6 +7,7 @@
 //! (`camera.output("frames_to_downstream")`) so a link always reads as an
 //! endpoint of something, never as a bare string pair.
 
+use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
 use streamlib::sdk::graph::{MeshPortAddress, OutputLinkPortRef};
 
@@ -124,13 +125,34 @@ impl PythonRemoteProcessorOutputPortReference {
 /// `connect` takes this rather than two overloads because the engine's own
 /// `OutputLinkPortRef` is the same two shapes — the Python surface mirrors the
 /// engine's type rather than inventing a parallel one.
-#[derive(FromPyObject)]
 pub(crate) enum PythonLinkSourcePortReference<'py> {
     OnThisRuntime(PyRef<'py, PythonProcessorOutputPortReference>),
     OnAnotherRuntime(PyRef<'py, PythonRemoteProcessorOutputPortReference>),
 }
 
-impl PythonLinkSourcePortReference<'_> {
+impl<'py> PythonLinkSourcePortReference<'py> {
+    /// Read whichever of the two references `source` is.
+    ///
+    /// Hand-written rather than `#[derive(FromPyObject)]`, whose refusal names
+    /// this enum and its variants — Rust types a Python author has no way to
+    /// act on. This one names the two spellings that would work.
+    pub(crate) fn read_from(source: &Bound<'py, PyAny>) -> PyResult<Self> {
+        if let Ok(on_this_runtime) = source.cast::<PythonProcessorOutputPortReference>() {
+            return Ok(Self::OnThisRuntime(on_this_runtime.borrow()));
+        }
+        if let Ok(on_another_runtime) =
+            source.cast::<PythonRemoteProcessorOutputPortReference>()
+        {
+            return Ok(Self::OnAnotherRuntime(on_another_runtime.borrow()));
+        }
+        Err(PyTypeError::new_err(format!(
+            "connect's source must name an output port: `processor.output(port_name)` for a \
+             port on this runtime, or `runtime.remote_processor_output(runtime_name, \
+             display_name, port_name)` for one on another runtime. Got {}.",
+            source.get_type()
+        )))
+    }
+
     /// The engine's own reference for whichever end this names.
     pub(crate) fn as_an_output_link_port_ref(&self) -> OutputLinkPortRef {
         match self {
