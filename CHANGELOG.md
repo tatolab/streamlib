@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.25.4](https://github.com/tatolab/streamlib/compare/v0.25.3...v0.25.4) (2026-09-19)
+
+
+### Features
+
+* **engine:** pull an output port on another runtime into a local input over the mesh ([#2338](https://github.com/tatolab/streamlib/issues/2338)) ([43e11c2](https://github.com/tatolab/streamlib/commit/43e11c224ed3b1fcc425e02f58c4a931accf9aed))
+
 ## [0.25.3](https://github.com/tatolab/streamlib/compare/v0.25.2...v0.25.3) (2026-09-18)
 
 
