@@ -34,6 +34,7 @@ use super::audio_window::{
     DeviceMatchedAudioWindowContractsByInputPort, LatestQueuedSourceAudioFormat,
     ResolvedAudioWindowContract, queued_audio_window_frame_measure,
 };
+use super::bags_a_gap_in_the_numbering_says_were_lost::BagsAGapInTheNumberingSaysWereLost;
 use super::channel_name::InboundLinkName;
 use super::helper_process_loss_count_board::InboundLinkLossCountBoardSlotMirror;
 use super::loss_counters::{
@@ -126,49 +127,10 @@ struct PortBoundSubscriber {
     /// This link's share of the destination's discarded-sample counts, held only
     /// by a link into a windowed port.
     discarded_sample_counter: Option<InboundLinkDiscardedSampleCounter>,
-    /// The sequence number of the last sample this subscriber received, and the
-    /// id of the publisher that numbered it; `None` until the first sample after
-    /// wiring.
-    last_received_sequence_number: Option<LastReceivedSequenceNumber>,
-}
-
-/// The last sequence number a subscriber received, and the id of the publisher
-/// that numbered it.
-///
-/// One slot rather than one per publisher: a channel carries one publisher at
-/// a time and its ring delivers in send order, so a sample from any other
-/// publisher is a new baseline either way.
-#[derive(Clone, Copy)]
-struct LastReceivedSequenceNumber {
-    numbering_publisher_id: UniquePublisherId,
-    sequence_number: u64,
-}
-
-impl PortBoundSubscriber {
-    /// Remember a sample numbered `sequence_number` by `numbering_publisher_id`
-    /// as the last received, and return how many bags the subscriber ring
-    /// overwrote ahead of it.
-    ///
-    /// The first sample after wiring, and the first from a publisher this
-    /// subscriber has not heard from, is a baseline and never a gap, so a
-    /// replaced producer is not read as a loss.
-    fn record_received_sequence_number_and_count_bags_the_ring_overwrote(
-        &mut self,
-        numbering_publisher_id: UniquePublisherId,
-        sequence_number: u64,
-    ) -> u64 {
-        let overwritten = match self.last_received_sequence_number {
-            Some(last) if last.numbering_publisher_id == numbering_publisher_id => sequence_number
-                .saturating_sub(last.sequence_number)
-                .saturating_sub(1),
-            _ => 0,
-        };
-        self.last_received_sequence_number = Some(LastReceivedSequenceNumber {
-            numbering_publisher_id,
-            sequence_number,
-        });
-        overwritten
-    }
+    /// What this subscriber's ring has overwritten, read off jumps in the
+    /// numbering of the publisher that is sending it — one unbroken run per
+    /// publisher, so a replaced producer is a baseline rather than a gap.
+    bags_the_ring_overwrote: BagsAGapInTheNumberingSaysWereLost<UniquePublisherId>,
 }
 
 /// A destination's channel subscribers and its notify-service [`Listener`],
@@ -754,7 +716,7 @@ impl InputMailboxesInner {
                 subscriber,
                 dropped_bag_counter,
                 discarded_sample_counter,
-                last_received_sequence_number: None,
+                bags_the_ring_overwrote: Default::default(),
             });
     }
 
@@ -1003,8 +965,8 @@ impl InputMailboxesInner {
                         break;
                     }
                 };
-                let bags_the_ring_overwrote = bound
-                    .record_received_sequence_number_and_count_bags_the_ring_overwrote(
+                let bags_the_ring_overwrote =
+                    bound.bags_the_ring_overwrote.how_many_were_lost_before(
                         sample.origin(),
                         sample.user_header().sequence_number,
                     );

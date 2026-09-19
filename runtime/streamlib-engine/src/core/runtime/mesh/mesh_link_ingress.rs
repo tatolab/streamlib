@@ -14,8 +14,15 @@
 //! the lease, expires the link. The ring evicts its oldest bag when it is full,
 //! because no link ever blocks a producer — least of all one on another
 //! machine.
+//!
+//! What the hop lost is counted here and nowhere else, off a jump in the
+//! sequence number the sending runtime carried from the bag's own publisher.
+//! Counted on the writing thread rather than in the callback, so that this
+//! ring's own evictions are inside the jump: one gap then covers the sending
+//! channel's ring, the bags the egress never sent, Zenoh's silent drop, the
+//! network, and this ring.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -23,11 +30,14 @@ use parking_lot::{Condvar, Mutex};
 use zenoh::Wait;
 
 use crate::core::graph::MeshPortAddress;
-use crate::core::runtime::mesh::mesh_data_message_attachment::MeshDataMessageAttachment;
+use crate::core::runtime::mesh::mesh_data_message_attachment::{
+    MeshDataMessageAttachment, PublisherGenerationOnTheMesh,
+};
 use crate::core::runtime::mesh::runtime_mesh_key::RuntimeMeshKeySpace;
 use crate::iceoryx2::{
-    ChannelEgressConfig, ChannelTrustTier, DEFAULT_EXPECTED_PAYLOAD_BYTES, DeliveryProfile,
-    Iceoryx2Node, OutputWriterInner, effective_channel_chunk_ceiling_bytes,
+    BagsAGapInTheNumberingSaysWereLost, ChannelEgressConfig, ChannelTrustTier,
+    DEFAULT_EXPECTED_PAYLOAD_BYTES, DeliveryProfile, Iceoryx2Node, OutputWriterInner,
+    RemoteInboundLinkMeshHopDroppedBagCounter, effective_channel_chunk_ceiling_bytes,
     mesh_ingress_channel_name,
 };
 
@@ -41,7 +51,10 @@ const THE_INGRESS_OUTPUT_PORT: &str = "bags";
 /// A bag as it arrives from the mesh, before the writing thread takes it.
 struct ABagOffTheMesh {
     bag_bytes: Vec<u8>,
-    timestamp_ns: i64,
+    /// The record that rode beside it, whole: the stamp to write it under, the
+    /// sending runtime's number for it and the run that number belongs to, and
+    /// the clock its stamp was taken on.
+    attached: MeshDataMessageAttachment,
 }
 
 /// The ring between the Zenoh callback and the writing thread.
@@ -55,6 +68,16 @@ struct WhatHasArrivedFromTheMesh {
     the_ingress_is_stopping: bool,
 }
 
+/// One local link an ingress feeds, and what it takes to count its hop loss.
+struct OneLinkThisIngressFeeds {
+    where_its_hop_loss_is_counted: RemoteInboundLinkMeshHopDroppedBagCounter,
+    /// Its own view of the sending runtime's numbering, not the ingress's: a
+    /// link wired onto an ingress that is already carrying must take its own
+    /// first bag as its baseline, or its very first count would be a stretch
+    /// of the port that went missing before the link existed.
+    bags_the_hop_lost: BagsAGapInTheNumberingSaysWereLost<PublisherGenerationOnTheMesh>,
+}
+
 /// One port of another runtime, being carried into this one.
 pub(super) struct MeshLinkIngress {
     address: MeshPortAddress,
@@ -65,6 +88,15 @@ pub(super) struct MeshLinkIngress {
     /// port that stops being sent is told apart from one that never started.
     the_source_is_sending: Arc<SourceSendingState>,
     arrived: Arc<(Mutex<WhatHasArrivedFromTheMesh>, Condvar)>,
+    /// Where each local link this ingress feeds has its hop loss counted — on
+    /// its own destination processor's node, so `graph` reads it beside what
+    /// that processor's ports lost. Shared with the writing thread, which is
+    /// what records into them.
+    ///
+    /// Keyed by link id so a destination that goes takes its counter with it,
+    /// and so a link wired again over a surviving ingress replaces its counter
+    /// rather than gaining a second one to be charged twice.
+    every_link_it_feeds: Arc<Mutex<BTreeMap<String, OneLinkThisIngressFeeds>>>,
     held_on_the_mesh: Option<HeldOnTheMeshByOneIngress>,
     writing_thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -184,10 +216,12 @@ impl MeshLinkIngress {
                 ))
             })?;
 
+        let every_link_it_feeds = Arc::new(Mutex::new(BTreeMap::new()));
         let writing_thread = spawn_the_writing_thread(
             address.clone(),
             Arc::clone(&arrived),
             Arc::clone(&writes_onto_the_local_channel),
+            Arc::clone(&every_link_it_feeds),
         )?;
 
         tracing::info!("This runtime is reading {address} off the mesh into {local_channel}");
@@ -196,6 +230,7 @@ impl MeshLinkIngress {
             writes_onto_the_local_channel,
             the_source_is_sending,
             arrived,
+            every_link_it_feeds,
             held_on_the_mesh: Some(HeldOnTheMeshByOneIngress {
                 _data_subscriber: data_subscriber,
                 _egress_token_subscriber: egress_token_subscriber,
@@ -217,21 +252,49 @@ impl MeshLinkIngress {
     }
 
     /// Record one local destination of this address, with the notifier that
-    /// wakes it.
+    /// wakes it and the counter its hop loss lands in.
     ///
     /// The ingress is the channel's publisher, so it is what holds every
     /// destination's notifier — the part a local source's output writer holds
     /// for a link between two processors here.
+    ///
+    /// The hop's loss is charged to every link this ingress feeds, and not
+    /// shared out between them: one gap is one stretch of this port that
+    /// reached none of them.
     pub(super) fn note_a_local_destination(
         &self,
         link_id: &str,
         notifier: Option<iceoryx2::port::notifier::Notifier<iceoryx2::service::ipc::Service>>,
+        where_its_hop_loss_is_counted: RemoteInboundLinkMeshHopDroppedBagCounter,
     ) {
         self.writes_onto_the_local_channel.add_channel_link(
             THE_INGRESS_OUTPUT_PORT,
             link_id,
             notifier,
         );
+        self.every_link_it_feeds.lock().insert(
+            link_id.to_string(),
+            OneLinkThisIngressFeeds {
+                where_its_hop_loss_is_counted,
+                bags_the_hop_lost: Default::default(),
+            },
+        );
+    }
+
+    /// Forget one local destination this ingress feeds, when its link is gone
+    /// and other links keep the ingress alive.
+    ///
+    /// Everything [`Self::note_a_local_destination`] took, given back together:
+    /// a destination that left must stop being notified as much as it must
+    /// stop being charged for what the hop loses after it.
+    pub(super) fn forget_a_local_destination(&self, link_id: &str) {
+        // Keeping the channel: this ingress's publisher lives as long as the
+        // ingress does, not as long as whichever links happen to be wired, and
+        // releasing it here would leave the ingress writing into nothing while
+        // still reporting itself as carrying the port.
+        self.writes_onto_the_local_channel
+            .remove_channel_link_keeping_the_channel(THE_INGRESS_OUTPUT_PORT, link_id);
+        self.every_link_it_feeds.lock().remove(link_id);
     }
 }
 
@@ -302,7 +365,7 @@ fn declare_the_data_subscriber(
             }
             arrived.ring.push_back(ABagOffTheMesh {
                 bag_bytes: sample.payload().to_bytes().into_owned(),
-                timestamp_ns: attached.timestamp_ns,
+                attached,
             });
             someone_is_waiting.notify_one();
         })
@@ -362,6 +425,7 @@ fn spawn_the_writing_thread(
     address: MeshPortAddress,
     arrived: Arc<(Mutex<WhatHasArrivedFromTheMesh>, Condvar)>,
     writes_onto_the_local_channel: Arc<OutputWriterInner>,
+    every_link_it_feeds: Arc<Mutex<BTreeMap<String, OneLinkThisIngressFeeds>>>,
 ) -> std::io::Result<std::thread::JoinHandle<()>> {
     std::thread::Builder::new()
         .name("streamlib-mesh-ingress".to_string())
@@ -380,10 +444,33 @@ fn spawn_the_writing_thread(
                         None => return,
                     }
                 };
+                // Before the write, and on this thread: the ring this bag came
+                // off evicts its oldest under pressure, and those evictions are
+                // inside the jump only because the numbers are read here rather
+                // than as each bag arrived. One unbroken run per publisher
+                // generation the sending runtime carried, so a replaced
+                // producer's restart is a baseline rather than the gap it looks
+                // like.
+                //
+                // Per link rather than once for the ingress: what a gap costs is
+                // the same for every link past its own baseline, but a link
+                // wired onto an ingress already carrying has no baseline yet and
+                // must not be charged for what it was never going to get.
+                for link in every_link_it_feeds.lock().values_mut() {
+                    let lost_before_it = link.bags_the_hop_lost.how_many_were_lost_before(
+                        taken.attached.publisher_generation,
+                        taken.attached.sequence_number,
+                    );
+                    if lost_before_it > 0 {
+                        link.where_its_hop_loss_is_counted
+                            .record_dropped_bags(lost_before_it);
+                    }
+                }
+
                 if let Err(write_failure) = writes_onto_the_local_channel.write_raw(
                     THE_INGRESS_OUTPUT_PORT,
                     &taken.bag_bytes,
-                    taken.timestamp_ns,
+                    taken.attached.timestamp_ns,
                 ) {
                     tracing::warn!(
                         "a bag from {address} did not reach its local channel: {write_failure}"

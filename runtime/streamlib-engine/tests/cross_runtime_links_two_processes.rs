@@ -126,6 +126,8 @@ struct HowToLaunchAPeer {
     display_name: String,
     link_from: Option<String>,
     iceoryx2_domain_root: std::path::PathBuf,
+    burst_once_a_reader_arrives: Option<u64>,
+    recreate_the_publisher_just_before_the_burst: bool,
 }
 
 impl CrossRuntimeLinkPeerProcess {
@@ -158,6 +160,14 @@ impl CrossRuntimeLinkPeerProcess {
         }
         if let Some(link_from) = &how.link_from {
             command.arg("--link-from").arg(link_from);
+        }
+        if let Some(burst) = how.burst_once_a_reader_arrives {
+            command
+                .arg("--burst-once-a-reader-arrives")
+                .arg(burst.to_string());
+        }
+        if how.recreate_the_publisher_just_before_the_burst {
+            command.arg("--recreate-the-publisher-just-before-the-burst");
         }
 
         let mut child = command.spawn().expect("the peer binary launches");
@@ -270,6 +280,51 @@ impl CrossRuntimeLinkPeerProcess {
         });
     }
 
+    /// The last bag index of this source's burst, once it has sent one.
+    fn the_index_its_burst_ended_at(&self) -> Option<u64> {
+        self.everything_it_has_reported()
+            .iter()
+            .rev()
+            .find_map(|reported| reported.get("burst_ended_at_index")?.as_u64())
+    }
+
+    /// How many publishers this source's port has had — two once it has
+    /// replaced the one it started with.
+    fn how_many_publishers_its_port_has_had(&self) -> u64 {
+        self.everything_it_has_reported()
+            .iter()
+            .rev()
+            .find_map(|reported| reported.get("publishers_this_port_has_had")?.as_u64())
+            .unwrap_or(0)
+    }
+
+    /// Everything this reader last reported about what reached it: how many
+    /// bags, which indices they spanned, what the hop lost, and what its own
+    /// local ring lost either side of its first poll.
+    fn what_last_reached_it(&self) -> WhatReachedTheReader {
+        let reported = self.everything_it_has_reported();
+        let last_with_totals = reported
+            .iter()
+            .rev()
+            .find(|reported| reported.get("received_count").is_some())
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        let number = |key: &str| last_with_totals.get(key).and_then(|it| it.as_u64());
+        WhatReachedTheReader {
+            received_count: number("received_count").unwrap_or(0),
+            first_bag_index: number("first_bag_index"),
+            last_bag_index: number("last_bag_index"),
+            bags_lost_before_its_first_poll: number("bags_lost_before_this_peers_first_poll")
+                .unwrap_or(0),
+            its_own_ring_lost: number("what_this_peers_own_ring_lost").unwrap_or(0),
+            the_hop_lost: last_with_totals
+                .get("mesh_hop_dropped_bags_by_link")
+                .and_then(|by_link| by_link.as_object())
+                .map(|by_link| by_link.values().filter_map(|lost| lost.as_u64()).sum())
+                .unwrap_or(0),
+        }
+    }
+
     /// Every state this peer has reported its link in, in order.
     fn every_state_it_has_reported(&self) -> Vec<String> {
         self.everything_it_has_reported()
@@ -350,6 +405,43 @@ fn every_token_under(session: &zenoh::Session, key: &str) -> BTreeSet<String> {
         .into_iter()
         .filter_map(|reply| Some(reply.result().ok()?.key_expr().as_str().to_string()))
         .collect()
+}
+
+/// What one reader last reported about what reached it.
+///
+/// `graph`'s own `metrics.mesh_hop_dropped_bags_by_link` for the hop, and this
+/// peer's own accounting for the shallow local channel it polls where a real
+/// destination has a counted mailbox.
+#[derive(Debug)]
+struct WhatReachedTheReader {
+    received_count: u64,
+    first_bag_index: Option<u64>,
+    last_bag_index: Option<u64>,
+    /// How many bags the ingress wrote before this peer's first poll of the
+    /// wiring. Non-zero means the peer was not there from the ingress's first
+    /// bag, so no arm can say which span the hop count covers.
+    bags_lost_before_its_first_poll: u64,
+    its_own_ring_lost: u64,
+    the_hop_lost: u64,
+}
+
+impl WhatReachedTheReader {
+    /// The stretch of published bags this reader's ingress saw, from the first
+    /// bag it delivered to the last.
+    ///
+    /// Every bag in it either arrived, was lost on the hop, or was lost after
+    /// it in this peer's own ring — which is the conservation an arm states.
+    fn the_span_its_ingress_covered(&self) -> u64 {
+        let (Some(first), Some(last)) = (self.first_bag_index, self.last_bag_index) else {
+            return 0;
+        };
+        last - first + 1
+    }
+
+    /// Everything that stretch accounts for.
+    fn everything_accounted_for(&self) -> u64 {
+        self.received_count + self.the_hop_lost + self.its_own_ring_lost
+    }
 }
 
 /// Two runtimes, one link: every bag the source published lands on the reader's
@@ -770,4 +862,283 @@ fn one_egress_serves_every_reader_and_outlives_all_but_the_last() {
         std::thread::sleep(Duration::from_millis(100));
     }
     panic!("the last of two readers leaving must take the source's egress token with it");
+}
+
+/// One source and one reader, with a burst far larger than either ring, and
+/// the identity the count exists to make true: over the stretch of bags the
+/// reader's ingress delivered, every one that did not arrive is counted.
+///
+/// A conservation identity rather than a number: what the rings lose under a
+/// burst is not reproducible, and an arm asserting a rate would be asserting
+/// this machine's scheduling.
+///
+/// The reader polls a subscriber where a real destination has a counted
+/// mailbox, so it accounts for that shallow local channel itself. The arm
+/// requires it to have been there from its ingress's first bag, and says so by
+/// name if it was not — without that, no span the hop count covers is knowable
+/// from here.
+///
+/// What it catches: a count that misses the sending runtime's own ring, which
+/// is what a second numbering minted at the egress would do; a count that
+/// double-charges, which is what counting in the Zenoh callback as well as on
+/// the writing thread would do; and a count that charges the hop for bags lost
+/// after it.
+#[test]
+#[serial]
+fn every_bag_a_burst_lost_between_two_runtimes_is_counted_on_the_link() {
+    /// Far past the 16-bag channel depth and the ingress ring, published with
+    /// no pause, so the egress cannot keep up and the loss is the rings'.
+    const HOW_MANY_BAGS_THE_BURST_PUBLISHES: u64 = 4_000;
+
+    let mesh_name = a_mesh_name_of_its_own("hop-loss");
+    let (source_name, reader_name) = the_two_runtimes_of("hop-loss");
+    let source_domain = a_domain_root_of_its_own("hop-loss-source");
+    let reader_domain = a_domain_root_of_its_own("hop-loss-reader");
+    let source_listen = format!("udp/{LOOPBACK_INTERFACE}:{}?rel=1", a_free_loopback_port());
+
+    let source = CrossRuntimeLinkPeerProcess::launch(HowToLaunchAPeer {
+        runtime_name: source_name.clone(),
+        mesh_name: mesh_name.clone(),
+        listen_endpoints: vec![source_listen.clone()],
+        display_name: THE_DISPLAY_NAME.to_string(),
+        iceoryx2_domain_root: source_domain.path().to_path_buf(),
+        burst_once_a_reader_arrives: Some(HOW_MANY_BAGS_THE_BURST_PUBLISHES),
+        ..Default::default()
+    });
+    source.wait_until_it_is_up();
+
+    let reader = CrossRuntimeLinkPeerProcess::launch(HowToLaunchAPeer {
+        reader: true,
+        runtime_name: reader_name,
+        mesh_name,
+        peer_endpoints: vec![source_listen],
+        display_name: THE_DISPLAY_NAME.to_string(),
+        link_from: Some(source_name),
+        iceoryx2_domain_root: reader_domain.path().to_path_buf(),
+        ..Default::default()
+    });
+    reader.wait_until_it_is_up();
+
+    let reached = wait_until_the_burst_is_behind_the_reader(&source, &reader);
+
+    assert_eq!(
+        reached.everything_accounted_for(),
+        reached.the_span_its_ingress_covered(),
+        "every bag between the first and the last the ingress delivered must have arrived or \
+         been counted: {reached:?}"
+    );
+    assert!(
+        reached.the_hop_lost > 0,
+        "a {HOW_MANY_BAGS_THE_BURST_PUBLISHES}-bag burst through a 16-bag channel must lose \
+         something between the runtimes, or this arm proves nothing: {reached:?}"
+    );
+}
+
+/// The source replaces its port's publisher mid-stream and bursts afterwards.
+/// The replacement numbers its own sends from zero, and the reading runtime
+/// must not read that restart as loss.
+///
+/// **What this arm cannot do, stated so nobody reads more into it:** it cannot
+/// be made to fail by deleting `publisher_generation` from the attachment — I
+/// tried. A replacement publisher always restarts at zero
+/// (`iceoryx2/output.rs`, `next_sequence_number: 0`), so with the old run's
+/// last received number `s_a` and the new run's first received number `s_b`,
+/// the gap a generation-blind reader would compute is `s_b - s_a - 1`, while
+/// the bags really lost across the boundary are the old publisher's remaining
+/// sends plus `s_b` — larger by the old publisher's own total, always. Omitting
+/// the generation therefore under-states a boundary rather than inventing one,
+/// and no conservation bound can see it. What it produces is a number with no
+/// meaning, which is why the plan makes a new generation a baseline; that
+/// arithmetic is pinned where it can be made red, by
+/// `bags_a_gap_in_the_numbering_says_were_lost`'s
+/// `a_new_run_is_a_baseline_even_once_its_numbering_has_overtaken`.
+///
+/// What this arm does prove, against two real runtimes and a real publisher
+/// replacement: the grown attachment crosses the wire and is read at the far
+/// end, the link keeps carrying after its producer is replaced, the burst's
+/// loss is still counted under the new run, and the count never exceeds the
+/// stretch it covers. A bound rather than the other arm's equality, because a
+/// generation boundary's own loss is deliberately uncounted and so the count
+/// legitimately falls short of the span.
+#[test]
+#[serial]
+fn a_producer_recreated_mid_stream_is_a_baseline_and_not_a_gap() {
+    const HOW_MANY_BAGS_THE_BURST_PUBLISHES: u64 = 2_000;
+
+    let mesh_name = a_mesh_name_of_its_own("recreated");
+    let (source_name, reader_name) = the_two_runtimes_of("recreated");
+    let source_domain = a_domain_root_of_its_own("recreated-source");
+    let reader_domain = a_domain_root_of_its_own("recreated-reader");
+    let source_listen = format!("udp/{LOOPBACK_INTERFACE}:{}?rel=1", a_free_loopback_port());
+
+    let source = CrossRuntimeLinkPeerProcess::launch(HowToLaunchAPeer {
+        runtime_name: source_name.clone(),
+        mesh_name: mesh_name.clone(),
+        listen_endpoints: vec![source_listen.clone()],
+        display_name: THE_DISPLAY_NAME.to_string(),
+        iceoryx2_domain_root: source_domain.path().to_path_buf(),
+        burst_once_a_reader_arrives: Some(HOW_MANY_BAGS_THE_BURST_PUBLISHES),
+        recreate_the_publisher_just_before_the_burst: true,
+        ..Default::default()
+    });
+    source.wait_until_it_is_up();
+
+    let reader = CrossRuntimeLinkPeerProcess::launch(HowToLaunchAPeer {
+        reader: true,
+        runtime_name: reader_name,
+        mesh_name,
+        peer_endpoints: vec![source_listen],
+        display_name: THE_DISPLAY_NAME.to_string(),
+        link_from: Some(source_name),
+        iceoryx2_domain_root: reader_domain.path().to_path_buf(),
+        ..Default::default()
+    });
+    reader.wait_until_it_is_up();
+
+    let reached = wait_until_the_burst_is_behind_the_reader(&source, &reader);
+
+    assert_eq!(
+        source.how_many_publishers_its_port_has_had(),
+        2,
+        "the port's publisher must actually have been replaced, or the arm proves nothing"
+    );
+    assert!(
+        reached.everything_accounted_for() <= reached.the_span_its_ingress_covered(),
+        "a publisher replaced mid-stream must not make the hop count bags nobody sent: \
+         {reached:?}"
+    );
+    assert!(
+        reached.the_hop_lost > 0,
+        "the burst after the replacement must still have its loss counted, or the arm says \
+         nothing about a count that survives a new generation: {reached:?}"
+    );
+}
+
+/// Wait until the burst is behind the reader, then hand back what reached it.
+///
+/// The source publishes unhurried bags either side of its burst, so the arm
+/// waits for one of the trailing ones rather than for a quiet stretch: a
+/// stalled burst also looks quiet, and reading the counts during a stall is
+/// how this stopped being a proof the first time it was written. A trailing
+/// bag arriving says the whole burst is behind it, drained and counted.
+fn wait_until_the_burst_is_behind_the_reader(
+    source: &CrossRuntimeLinkPeerProcess,
+    reader: &CrossRuntimeLinkPeerProcess,
+) -> WhatReachedTheReader {
+    source.wait_until("the burst to be published", || {
+        source.the_index_its_burst_ended_at().is_some()
+    });
+    let burst_ended_at = source
+        .the_index_its_burst_ended_at()
+        .expect("the source reported the index its burst ended at");
+
+    reader.wait_until("a bag published after the burst to arrive", || {
+        reader
+            .what_last_reached_it()
+            .last_bag_index
+            .is_some_and(|last| last > burst_ended_at + 1)
+    });
+
+    let reached = reader.what_last_reached_it();
+    assert_eq!(
+        reached.bags_lost_before_its_first_poll, 0,
+        "the reader must have been reading from its ingress's first bag, or the stretch the hop \
+         count covers is not knowable from here: {reached:?}"
+    );
+    assert!(
+        reached
+            .first_bag_index
+            .is_some_and(|first| first < burst_ended_at),
+        "the run must start before the burst ended, or the burst is not inside it: {reached:?}"
+    );
+    reached
+}
+
+/// The source is killed after a burst its hop lost bags on, and comes back.
+/// The link re-wires, and its hop count starts again from zero.
+///
+/// The plan restarts a remote link's loss count when its runtime returns: a
+/// count carried across a re-wire would name bags a different hop lost, on a
+/// wiring `graph` no longer has.
+///
+/// What it catches: minting the returning link's counter with
+/// `counter_for_inbound_link` instead of `a_counter_for_a_fresh_wiring_of` —
+/// the whole of the restart, and the one call site that implements it. The
+/// returning source does not burst, so the zero this asserts is the count the
+/// re-wire minted and not a lull.
+#[test]
+#[serial]
+fn a_killed_sources_return_restarts_the_hop_count_from_zero() {
+    const HOW_MANY_BAGS_THE_BURST_PUBLISHES: u64 = 4_000;
+
+    let mesh_name = a_mesh_name_of_its_own("recount");
+    let (source_name, reader_name) = the_two_runtimes_of("recount");
+    let reader_domain = a_domain_root_of_its_own("recount-reader");
+    let reader_listen = format!("udp/{LOOPBACK_INTERFACE}:{}?rel=1", a_free_loopback_port());
+
+    let reader = CrossRuntimeLinkPeerProcess::launch(HowToLaunchAPeer {
+        reader: true,
+        runtime_name: reader_name,
+        mesh_name: mesh_name.clone(),
+        listen_endpoints: vec![reader_listen.clone()],
+        display_name: THE_DISPLAY_NAME.to_string(),
+        link_from: Some(source_name.clone()),
+        iceoryx2_domain_root: reader_domain.path().to_path_buf(),
+        ..Default::default()
+    });
+    reader.wait_until_it_is_up();
+
+    // A fresh domain each time, the restart arm's own reason: a killed process
+    // leaves its iceoryx2 node holding the channel's one publisher slot.
+    let launch_the_source = |domain: &tempfile::TempDir, burst: Option<u64>| {
+        CrossRuntimeLinkPeerProcess::launch(HowToLaunchAPeer {
+            runtime_name: source_name.clone(),
+            mesh_name: mesh_name.clone(),
+            peer_endpoints: vec![reader_listen.clone()],
+            display_name: THE_DISPLAY_NAME.to_string(),
+            iceoryx2_domain_root: domain.path().to_path_buf(),
+            burst_once_a_reader_arrives: burst,
+            ..Default::default()
+        })
+    };
+
+    let bursting_domain = a_domain_root_of_its_own("recount-source");
+    let mut source = launch_the_source(&bursting_domain, Some(HOW_MANY_BAGS_THE_BURST_PUBLISHES));
+    source.wait_until_it_is_up();
+    let lost_before_the_kill = wait_until_the_burst_is_behind_the_reader(&source, &reader);
+    assert!(
+        lost_before_the_kill.the_hop_lost > 0,
+        "the first wiring must have lost something, or a zero afterwards says nothing: \
+         {lost_before_the_kill:?}"
+    );
+
+    source.kill_it();
+    let states_before_the_kill = reader.every_state_it_has_reported().len();
+    reader.wait_until(
+        "the link to return to waiting once its source is gone",
+        || {
+            reader
+                .every_state_it_has_reported()
+                .iter()
+                .skip(states_before_the_kill)
+                .any(|state| state == "awaiting_remote")
+        },
+    );
+
+    // Steady this time, so what the count reads after the re-wire is the
+    // restart and not a stretch where nothing happened to be lost yet.
+    let returned_domain = a_domain_root_of_its_own("recount-source-again");
+    let bags_before_the_restart = reader.every_bag_it_received().len();
+    let source = launch_the_source(&returned_domain, None);
+    source.wait_until_it_is_up();
+    reader.wait_until("the link to carry again once its source returned", || {
+        reader.every_bag_it_received().len() > bags_before_the_restart + 2
+    });
+
+    assert_eq!(
+        reader.what_last_reached_it().the_hop_lost,
+        0,
+        "the returning link's count must start again from zero rather than carrying what a \
+         previous wiring's hop lost"
+    );
 }

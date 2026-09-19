@@ -21,15 +21,54 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
+use iceoryx2::identifiers::UniquePublisherId;
 use zenoh::Wait;
 use zenoh::qos::{CongestionControl, Priority};
 
 use crate::core::graph::MeshPortAddress;
 use crate::core::runtime::mesh::a_bags_top_level_surface_id::a_bag_carries_a_top_level_surface_id;
-use crate::core::runtime::mesh::mesh_data_message_attachment::MeshDataMessageAttachment;
+use crate::core::runtime::mesh::machine_clock_identity::MachineClockIdentity;
+use crate::core::runtime::mesh::mesh_data_message_attachment::{
+    MeshDataMessageAttachment, PublisherGenerationOnTheMesh,
+};
 use crate::core::runtime::mesh::output_ports_offered_on_the_mesh::HowToReadAnOfferedOutputPort;
 use crate::core::runtime::mesh::runtime_mesh_key::RuntimeMeshKeySpace;
 use crate::iceoryx2::{ChannelIdlePollBackoff, FRAME_HEADER_SIZE, FrameHeader, Iceoryx2Node};
+
+/// How many times the port's publisher has been replaced under one egress.
+///
+/// A publisher numbers its own sends from zero, so a replaced one restarts the
+/// numbering and the next number the reading runtime sees is unrelated to the
+/// last. The generation is what tells the two apart there: a bag whose
+/// generation differs from the last one's is a baseline rather than a gap, so
+/// a producer recreated mid-stream is never read as loss.
+#[derive(Default)]
+struct PublisherGenerationsOnePortHasHad {
+    /// The publisher that numbered the last sample this egress sent; `None`
+    /// until the first.
+    numbering_publisher_id: Option<UniquePublisherId>,
+    generation: u64,
+}
+
+impl PublisherGenerationsOnePortHasHad {
+    /// The generation a sample numbered by `numbering_publisher_id` carries,
+    /// bumping when that publisher is not the one that numbered the last.
+    ///
+    /// The first sample of all takes generation zero rather than bumping onto
+    /// one: there is no earlier numbering for it to be told apart from.
+    fn generation_of_a_sample_numbered_by(
+        &mut self,
+        numbering_publisher_id: UniquePublisherId,
+    ) -> u64 {
+        if let Some(last) = self.numbering_publisher_id
+            && last != numbering_publisher_id
+        {
+            self.generation = self.generation.wrapping_add(1);
+        }
+        self.numbering_publisher_id = Some(numbering_publisher_id);
+        self.generation
+    }
+}
 
 /// One of this runtime's output ports, being sent to the mesh.
 ///
@@ -156,6 +195,10 @@ fn send_one_port_to_the_mesh(sending: WhatOneEgressSends, stop: Arc<AtomicBool>)
     let mut publisher: Option<zenoh::pubsub::Publisher<'_>> = None;
     let mut said_a_surface_will_not_cross = false;
     let mut idle_poll_backoff = ChannelIdlePollBackoff::starting_at_the_shortest_sleep();
+    let mut publisher_generations = PublisherGenerationsOnePortHasHad::default();
+    // Read once: a boot id cannot change without a reboot, which ends this
+    // process, and this rides every bag.
+    let clock_identity = MachineClockIdentity::of_this_machine();
 
     while !stop.load(Ordering::Acquire) {
         match subscriber.receive() {
@@ -166,6 +209,13 @@ fn send_one_port_to_the_mesh(sending: WhatOneEgressSends, stop: Arc<AtomicBool>)
                     continue;
                 }
                 let stamp = FrameHeader::read_from_slice(&framed[..FRAME_HEADER_SIZE]).timestamp_ns;
+                // The engine's own number for this bag, carried end to end
+                // rather than re-minted here: a gap the reading runtime counts
+                // then covers this channel's ring and the bags this egress
+                // never sent, and not only what the network lost.
+                let sequence_number = sample.user_header().sequence_number;
+                let publisher_generation =
+                    publisher_generations.generation_of_a_sample_numbered_by(sample.origin());
                 let bag_bytes = &framed[FRAME_HEADER_SIZE..];
                 let names_a_surface = a_bag_carries_a_top_level_surface_id(bag_bytes);
 
@@ -175,8 +225,9 @@ fn send_one_port_to_the_mesh(sending: WhatOneEgressSends, stop: Arc<AtomicBool>)
                         tracing::warn!(
                             "{addressed} publishes bags naming a surface, and a surface id names \
                              a frame in this machine's own pools — nothing another runtime can \
-                             resolve. Those bags are not sent, and are counted nowhere until the \
-                             mesh carries the pixels themselves."
+                             resolve. Those bags are not sent, and each one reads on the reading \
+                             runtime as a bag this hop lost, which from that side is what it is. \
+                             The mesh carrying the pixels themselves is what ends both."
                         );
                     }
                     continue;
@@ -207,6 +258,9 @@ fn send_one_port_to_the_mesh(sending: WhatOneEgressSends, stop: Arc<AtomicBool>)
 
                 let attached = MeshDataMessageAttachment {
                     timestamp_ns: stamp,
+                    sequence_number,
+                    publisher_generation: PublisherGenerationOnTheMesh(publisher_generation),
+                    clock_identity,
                 }
                 .to_wire_bytes();
                 if let Err(put_failure) = publisher
@@ -262,4 +316,72 @@ fn declare_the_publisher<'a>(
         .priority(priority)
         .congestion_control(CongestionControl::Drop)
         .wait()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One port's publisher and its replacement, which is the only way to get
+    /// two `UniquePublisherId`s — iceoryx2 mints them and nothing else can.
+    ///
+    /// One after the other rather than both at once: a channel carries a
+    /// single publisher, which is exactly why a replacement's numbering
+    /// restarts and the generation has to say so.
+    fn a_ports_publisher_and_its_replacement(arm: &str) -> (UniquePublisherId, UniquePublisherId) {
+        let channel = Iceoryx2Node::for_this_test_process()
+            .open_or_create_service(
+                &format!("egress-generations-{arm}-{}", std::process::id()),
+                2,
+                4,
+            )
+            .expect("a test channel");
+        let first = channel.create_publisher(64).expect("a publisher");
+        let first_id = first.id();
+        drop(first);
+        let replacement = channel
+            .create_publisher(64)
+            .expect("a replacement publisher");
+        let replacement_id = replacement.id();
+        assert_ne!(
+            first_id, replacement_id,
+            "a replacement must be told apart from what it replaced, or the generation says \
+             nothing"
+        );
+        (first_id, replacement_id)
+    }
+
+    /// One publisher's whole run is one generation: bumping inside it would
+    /// make the reading runtime treat every bag as a baseline and count no
+    /// loss at all.
+    #[test]
+    fn one_publishers_run_is_one_generation_and_the_first_bag_is_generation_zero() {
+        let (numbering_publisher_id, _) = a_ports_publisher_and_its_replacement("one-run");
+        let mut generations = PublisherGenerationsOnePortHasHad::default();
+
+        let carried: Vec<u64> = (0..4)
+            .map(|_| generations.generation_of_a_sample_numbered_by(numbering_publisher_id))
+            .collect();
+
+        assert_eq!(carried, [0, 0, 0, 0]);
+    }
+
+    /// A replaced publisher is a new generation, which is what tells the
+    /// reading runtime that the numbering restarted rather than jumped.
+    #[test]
+    fn a_replaced_publisher_is_a_new_generation() {
+        let (first, second) = a_ports_publisher_and_its_replacement("replaced");
+        let mut generations = PublisherGenerationsOnePortHasHad::default();
+
+        assert_eq!(generations.generation_of_a_sample_numbered_by(first), 0);
+        assert_eq!(generations.generation_of_a_sample_numbered_by(first), 0);
+        assert_eq!(generations.generation_of_a_sample_numbered_by(second), 1);
+        assert_eq!(generations.generation_of_a_sample_numbered_by(second), 1);
+        assert_eq!(
+            generations.generation_of_a_sample_numbered_by(first),
+            2,
+            "a publisher coming back is a third generation, never the first again: its \
+             numbering restarted at zero the second time too"
+        );
+    }
 }

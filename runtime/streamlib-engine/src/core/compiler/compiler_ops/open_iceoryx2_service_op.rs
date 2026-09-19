@@ -34,9 +34,10 @@ use crate::iceoryx2::{
     AudioWindowDeclarationOfAnInputPort, ChannelEgressConfig, ChannelSizing, ChannelTrustTier,
     DEFAULT_EXPECTED_PAYLOAD_BYTES, DeliveryProfile, DeliveryResolution, Iceoryx2Node,
     Iceoryx2NotifyService, Iceoryx2Service, InboundLinkName,
-    RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL, WINDOWED_PORT_SUBSCRIBER_RING_DEPTH,
-    audio_windowing_declared_by_input_port, delivery_profile_for_input_port,
-    effective_channel_chunk_ceiling_bytes, refuse_an_unsettled_match_device_sentinel,
+    MeshHopDroppedBagCountsByRemoteInboundLink, RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL,
+    WINDOWED_PORT_SUBSCRIBER_RING_DEPTH, audio_windowing_declared_by_input_port,
+    delivery_profile_for_input_port, effective_channel_chunk_ceiling_bytes,
+    refuse_an_unsettled_match_device_sentinel,
 };
 use streamlib_ipc_types::{
     MAX_DESTINATIONS_PER_CHANNEL, MAX_INBOUND_LINKS_PER_DESTINATION,
@@ -272,6 +273,7 @@ pub fn open_iceoryx2_service(
         mesh_link_ingress_table.note_how_a_links_destination_is_woken(
             link_id,
             notify_service_name_for_the_source.map(str::to_string),
+            where_a_remote_links_hop_loss_is_counted(graph, &dest_proc_id, link_id),
         );
     }
 
@@ -383,6 +385,13 @@ pub fn close_iceoryx2_service(
                 );
             }
         }
+    }
+
+    // A link from another runtime counted what its hop lost on the
+    // destination's node, apart from what that destination's own ports lost.
+    // That count goes with the link, as every other per-link count does.
+    if source_on_this_runtime.is_none() {
+        forget_a_remote_links_hop_loss(graph, &dest_proc_id, link_id.as_str());
     }
 
     // Destination side: drop this link's channel subscriber (and the port
@@ -1139,6 +1148,61 @@ fn publish_loss_counts_on_processor_node(
                 .unwrap_or_default(),
         }),
     );
+}
+
+/// The hop-loss counts on a destination's node, with a zeroed entry minted for
+/// `link_id`, for the ingress to record into.
+///
+/// Read off the node rather than minted here: the destination's own wiring has
+/// already inserted its metrics by this point, whether it runs in the app
+/// process or in its own helper process, and the hop counts ride that one
+/// component — which is what lets a helper-placed
+/// destination's hop count reach `graph` from the app process while its ports'
+/// own counts come off its helper's board. A node carrying no metrics is a
+/// destination whose wiring did not run, which cannot happen on this path, so
+/// the ingress is handed nothing rather than the op failing a link that
+/// otherwise carries.
+///
+/// The entry is minted now rather than when the ingress first carries
+/// something, so a wired remote link that has lost nothing reads as zero
+/// instead of going missing — the rule every other per-link count keeps.
+fn where_a_remote_links_hop_loss_is_counted(
+    graph: &Graph,
+    dest_proc_id: &ProcessorUniqueId,
+    link_id: &LinkUniqueId,
+) -> Option<Arc<MeshHopDroppedBagCountsByRemoteInboundLink>> {
+    let Some(counts) = hop_loss_counts_on_the_node_of(graph, dest_proc_id) else {
+        tracing::warn!(
+            dest = %dest_proc_id,
+            "a link from another runtime reached a destination carrying no metrics, so what \
+             its hop loses will not reach `graph`"
+        );
+        return None;
+    };
+    counts.note_a_wired_link(link_id.as_str());
+    Some(counts)
+}
+
+/// Forget what a disconnected remote link's hop lost, so `graph` stops naming
+/// a link the destination no longer has.
+fn forget_a_remote_links_hop_loss(graph: &Graph, dest_proc_id: &ProcessorUniqueId, link_id: &str) {
+    if let Some(counts) = hop_loss_counts_on_the_node_of(graph, dest_proc_id) {
+        counts.forget_inbound_link(link_id);
+    }
+}
+
+/// The hop-loss counts a destination's node carries, or `None` for a node with
+/// no metrics on it yet.
+fn hop_loss_counts_on_the_node_of(
+    graph: &Graph,
+    dest_proc_id: &ProcessorUniqueId,
+) -> Option<Arc<MeshHopDroppedBagCountsByRemoteInboundLink>> {
+    graph
+        .traversal()
+        .v(dest_proc_id)
+        .first()
+        .and_then(|node| node.get::<ProcessorMetrics>())
+        .map(|metrics| Arc::clone(&metrics.mesh_hop_dropped_bag_counts_by_remote_inbound_link))
 }
 
 /// Insert `loss_counts` as `proc_id`'s node metrics, unless its first wired link
@@ -4529,24 +4593,53 @@ mod tests {
                 .expect("a legal address")
         }
 
-        /// A graph holding one app-process destination and one link into it from
+        /// A graph holding one destination and one link into it from
         /// `an_address()`, wired through the op.
         struct ALinkWiredFromAnotherRuntime {
-            _graph: Graph,
-            dest_input: Arc<crate::iceoryx2::InputMailboxesInner>,
+            graph: Graph,
+            dest_id: String,
+            dest_input: Option<Arc<crate::iceoryx2::InputMailboxesInner>>,
             ingress_table: Arc<MeshLinkIngressTable>,
             link_id: LinkUniqueId,
         }
 
         fn wire_one(arm: &str) -> ALinkWiredFromAnotherRuntime {
+            wire_one_into(arm, WhereTheDestinationRuns::InThisProcess)
+        }
+
+        /// Where the destination of the wired link runs. Both wire through the
+        /// one op, which is the point: the hop count is the app process's
+        /// either way.
+        enum WhereTheDestinationRuns {
+            InThisProcess,
+            InItsOwnHelperProcess,
+        }
+
+        fn wire_one_into(
+            arm: &str,
+            where_the_destination_runs: WhereTheDestinationRuns,
+        ) -> ALinkWiredFromAnotherRuntime {
             use crate::core::test_support::MockInputOnlyProcessor;
 
             let address = an_address(arm);
             let mut graph = Graph::new();
             let dest_id = add_mock_input_only(&mut graph);
-            let (_, _, dest_input) =
-                attach_mock_instance::<MockInputOnlyProcessor::Processor>(&mut graph, &dest_id);
-            let dest_input = dest_input.expect("the mock destination has input mailboxes");
+            let dest_input = match where_the_destination_runs {
+                WhereTheDestinationRuns::InThisProcess => {
+                    let (_, _, dest_input) = attach_mock_instance::<
+                        MockInputOnlyProcessor::Processor,
+                    >(&mut graph, &dest_id);
+                    Some(dest_input.expect("the mock destination has input mailboxes"))
+                }
+                WhereTheDestinationRuns::InItsOwnHelperProcess => {
+                    attach_processor_instance(
+                        &mut graph,
+                        &dest_id,
+                        ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
+                    );
+                    None
+                }
+            };
             let link_id = graph
                 .traversal_mut()
                 .add_link_from_another_runtime(
@@ -4580,11 +4673,146 @@ mod tests {
             .expect("a link with no local source node still wires its destination");
 
             ALinkWiredFromAnotherRuntime {
-                _graph: graph,
+                graph,
+                dest_id,
                 dest_input,
                 ingress_table,
                 link_id,
             }
+        }
+
+        /// What one wired link's destination node renders for the hop.
+        fn hop_loss_rendered_by(wired: &mut ALinkWiredFromAnotherRuntime) -> serde_json::Value {
+            rendered_metrics_in(&mut wired.graph, &wired.dest_id)
+                .expect("a wired destination renders metrics")["mesh_hop_dropped_bags_by_link"]
+                .clone()
+        }
+
+        /// A destination fed from another runtime renders what that hop lost,
+        /// under this link's id and beside what its own ports lost — zero
+        /// before anything is lost, never an absent key, so a `graph` showing
+        /// no hop loss is evidence rather than silence.
+        ///
+        /// Fail-without-fix: stop minting the entry at wiring time and a
+        /// perfectly healthy remote link renders no hop key at all, which
+        /// reads exactly like a link that cannot lose anything.
+        #[test]
+        fn a_destination_fed_from_another_runtime_renders_what_the_hop_lost_under_this_links_id() {
+            let mut wired = wire_one("hop-loss");
+
+            assert_eq!(
+                hop_loss_rendered_by(&mut wired),
+                serde_json::json!({ wired.link_id.to_string(): 0 })
+            );
+
+            // What the ingress's writing thread does when it reads a jump.
+            hop_loss_counts_on_the_node_of(&wired.graph, &wired.dest_id.as_str().into())
+                .expect("the destination's node carries hop-loss counts")
+                .counter_for_inbound_link(wired.link_id.as_str())
+                .record_dropped_bags(11);
+
+            assert_eq!(
+                hop_loss_rendered_by(&mut wired),
+                serde_json::json!({ wired.link_id.to_string(): 11 }),
+                "`graph` must read the count live off the object the ingress records into"
+            );
+        }
+
+        /// The same, into a destination running in its own helper process. The
+        /// ingress is in the app process wherever the destination runs, so the
+        /// hop count reaches `graph` with no blackboard between them — while
+        /// that destination's own dropped bags still come off its helper's.
+        ///
+        /// Fail-without-fix: hang the hop count off `ProcessorLossCounts`
+        /// instead and a helper-placed destination's hop loss would have to
+        /// cross a board its helper never writes, so it would always read zero.
+        #[test]
+        fn a_helper_placed_destination_renders_the_hop_count_the_app_process_kept_for_it() {
+            let mut wired = wire_one_into(
+                "hop-loss-helper",
+                WhereTheDestinationRuns::InItsOwnHelperProcess,
+            );
+
+            hop_loss_counts_on_the_node_of(&wired.graph, &wired.dest_id.as_str().into())
+                .expect("a helper-placed destination's node carries hop-loss counts")
+                .counter_for_inbound_link(wired.link_id.as_str())
+                .record_dropped_bags(4);
+
+            let rendered = rendered_metrics_in(&mut wired.graph, &wired.dest_id)
+                .expect("a wired destination renders metrics");
+            assert_eq!(
+                rendered["mesh_hop_dropped_bags_by_link"],
+                serde_json::json!({ wired.link_id.to_string(): 4 })
+            );
+            assert_eq!(
+                rendered["dropped_bags_by_link"],
+                serde_json::json!({ wired.link_id.to_string(): 0 }),
+                "the ports' own counts still come off the helper's board, untouched"
+            );
+        }
+
+        /// A disconnected remote link takes its hop count with it, so `graph`
+        /// stops naming a link the destination no longer has — the life every
+        /// other per-link count already has.
+        #[test]
+        fn a_disconnected_remote_link_takes_its_hop_count_with_it() {
+            let mut wired = wire_one("hop-loss-disconnect");
+            hop_loss_counts_on_the_node_of(&wired.graph, &wired.dest_id.as_str().into())
+                .expect("the destination's node carries hop-loss counts")
+                .counter_for_inbound_link(wired.link_id.as_str())
+                .record_dropped_bags(5);
+
+            close_iceoryx2_service(&mut wired.graph, &wired.link_id, &wired.ingress_table)
+                .expect("the link disconnects");
+
+            let rendered = rendered_metrics_in(&mut wired.graph, &wired.dest_id)
+                .expect("the destination still renders metrics");
+            assert_eq!(
+                rendered.get("mesh_hop_dropped_bags_by_link"),
+                None,
+                "a destination with no remote link left renders no hop key at all"
+            );
+        }
+
+        /// A link whose source is on this runtime renders no hop key: there is
+        /// no hop to lose anything on, and a zero there could not be told from
+        /// a remote link that has lost nothing.
+        #[test]
+        fn a_link_whose_source_is_on_this_runtime_renders_no_hop_key() {
+            let mut graph = Graph::new();
+            let source_id = add_mock_output_only(&mut graph);
+            let dest_id = add_mock_input_only(&mut graph);
+            attach_mock_instance::<crate::core::test_support::MockOutputOnlyProcessor::Processor>(
+                &mut graph, &source_id,
+            );
+            attach_mock_instance::<crate::core::test_support::MockInputOnlyProcessor::Processor>(
+                &mut graph, &dest_id,
+            );
+            let link_id = graph
+                .traversal_mut()
+                .add_e(
+                    OutputLinkPortRef::new(&source_id, "out1"),
+                    InputLinkPortRef::new(&dest_id, "in1"),
+                )
+                .first()
+                .expect("the link is kept")
+                .id
+                .clone();
+
+            open_iceoryx2_service(
+                &mut graph,
+                &link_id,
+                &Iceoryx2Node::for_this_test_process(),
+                &a_mesh_link_ingress_table(),
+            )
+            .expect("a link wholly on this runtime wires");
+
+            assert_eq!(
+                rendered_metrics_in(&mut graph, &dest_id)
+                    .expect("a wired destination renders metrics")
+                    .get("mesh_hop_dropped_bags_by_link"),
+                None
+            );
         }
 
         /// The destination subscribes to the channel the address derives — the
@@ -4598,6 +4826,7 @@ mod tests {
             let wired = wire_one("subscribes");
             let subscribed: Vec<String> = wired
                 .dest_input
+                .expect("an app-process destination has input mailboxes")
                 .inbound_link_names("in1")
                 .iter()
                 .map(|name| name.to_string())
@@ -4625,7 +4854,10 @@ mod tests {
         #[test]
         fn the_destination_knows_the_link_by_the_address_and_not_by_the_channel() {
             let wired = wire_one("named");
-            let known_as = wired.dest_input.inbound_link_names("in1");
+            let known_as = wired
+                .dest_input
+                .expect("an app-process destination has input mailboxes")
+                .inbound_link_names("in1");
             assert_eq!(
                 known_as.first().map(|name| name.as_str()),
                 Some(an_address("named").to_string().as_str())
@@ -4909,7 +5141,7 @@ mod tests {
         #[test]
         fn disconnecting_it_takes_it_off_the_ingress_table() {
             let mut wired = wire_one("forgets");
-            close_iceoryx2_service(&mut wired._graph, &wired.link_id, &wired.ingress_table)
+            close_iceoryx2_service(&mut wired.graph, &wired.link_id, &wired.ingress_table)
                 .expect("the disconnect succeeds");
             assert!(
                 !wired

@@ -8,7 +8,8 @@ use serde_json::Value as JsonValue;
 use super::JsonSerializableComponent;
 use crate::iceoryx2::{
     DiscardedSampleCountsByInboundLink, DroppedBagCountsByInboundLink,
-    HelperPlacedProcessorLossCounts, ProcessorLossCountSnapshot, RefusedBagCountsByOutputPort,
+    HelperPlacedProcessorLossCounts, MeshHopDroppedBagCountsByRemoteInboundLink,
+    ProcessorLossCountSnapshot, RefusedBagCountsByOutputPort,
 };
 
 /// Runtime metrics for a processor.
@@ -24,6 +25,16 @@ pub struct ProcessorMetrics {
     pub frames_processed: u64,
     /// What this processor's ports lost, read live from wherever they count it.
     pub loss_counts: ProcessorLossCounts,
+    /// What the hop from another runtime lost before this processor's ports saw
+    /// anything, counted per remote inbound link.
+    ///
+    /// Beside `loss_counts` rather than inside it, and not an arm of it: the
+    /// ingress that counts this runs in the app process wherever the
+    /// destination runs, so a helper-placed destination's hop count reaches
+    /// `graph` directly while its ports' own counts still come off its
+    /// helper's board.
+    pub mesh_hop_dropped_bag_counts_by_remote_inbound_link:
+        Arc<MeshHopDroppedBagCountsByRemoteInboundLink>,
 }
 
 /// Where a processor's loss counts are counted, and so where `graph` reads them.
@@ -125,13 +136,28 @@ impl JsonSerializableComponent for ProcessorMetrics {
             "dropped_bags_by_link": dropped_bags_by_inbound_link,
             "refused_bags_by_output_port": refused_bags_by_output_port,
         });
-        if !discarded_samples_by_inbound_link.is_empty()
-            && let Some(rendered_keys) = rendered.as_object_mut()
-        {
-            rendered_keys.insert(
-                "discarded_samples_by_link".to_string(),
-                serde_json::json!(discarded_samples_by_inbound_link),
-            );
+        // A per-link map with nothing in it renders no key at all rather than
+        // an empty object: a port that cannot discard samples and a link that
+        // cannot lose a hop are not the same as ones that have not yet. And
+        // `frames_dropped` stays exactly the sum of what this processor's own
+        // ports lost, since a bag the hop lost never reached one to be dropped
+        // at.
+        if let Some(rendered_keys) = rendered.as_object_mut() {
+            for (key, counts) in [
+                (
+                    "discarded_samples_by_link",
+                    discarded_samples_by_inbound_link,
+                ),
+                (
+                    "mesh_hop_dropped_bags_by_link",
+                    self.mesh_hop_dropped_bag_counts_by_remote_inbound_link
+                        .mesh_hop_dropped_bag_count_snapshot_by_inbound_link(),
+                ),
+            ] {
+                if !counts.is_empty() {
+                    rendered_keys.insert(key.to_string(), serde_json::json!(counts));
+                }
+            }
         }
         rendered
     }
@@ -197,6 +223,88 @@ mod tests {
                 "refused_bags_by_output_port": { "audio": 0, "video": 2 }
             }),
             "refusals stay per output port and never enter the inbound bag total"
+        );
+    }
+
+    /// A processor fed across the mesh renders what the hop lost per remote
+    /// link, beside what its own ports lost and never blended into it: the two
+    /// name different losses at different places, and `frames_dropped` counts
+    /// only bags that actually reached a port to be dropped at.
+    #[test]
+    fn a_processors_metrics_render_mesh_hop_loss_beside_its_ports_own_and_never_inside_it() {
+        let dropped = Arc::new(DroppedBagCountsByInboundLink::default());
+        dropped
+            .counter_for_inbound_link("L-remote")
+            .record_dropped_bags(2);
+        let hop_loss = Arc::new(MeshHopDroppedBagCountsByRemoteInboundLink::default());
+        hop_loss
+            .counter_for_inbound_link("L-remote")
+            .record_dropped_bags(9);
+
+        let rendered = ProcessorMetrics {
+            loss_counts: ProcessorLossCounts::CountedByPortsInThisProcess(
+                LossCountsOfPortsInThisProcess {
+                    dropped_bag_counts_by_inbound_link: dropped,
+                    ..Default::default()
+                },
+            ),
+            mesh_hop_dropped_bag_counts_by_remote_inbound_link: hop_loss,
+            ..Default::default()
+        }
+        .to_json();
+
+        assert_eq!(
+            rendered,
+            serde_json::json!({
+                "frames_dropped": 2,
+                "dropped_bags_by_link": { "L-remote": 2 },
+                "refused_bags_by_output_port": {},
+                "mesh_hop_dropped_bags_by_link": { "L-remote": 9 }
+            })
+        );
+    }
+
+    /// A wired remote link that has lost nothing on the hop says so, rather
+    /// than going missing — the rule every other per-link count already keeps.
+    #[test]
+    fn a_remote_link_that_has_lost_nothing_on_the_hop_renders_a_zero_rather_than_nothing() {
+        let hop_loss = Arc::new(MeshHopDroppedBagCountsByRemoteInboundLink::default());
+        let _ = hop_loss.counter_for_inbound_link("L-remote");
+
+        let rendered = ProcessorMetrics {
+            mesh_hop_dropped_bag_counts_by_remote_inbound_link: hop_loss,
+            ..Default::default()
+        }
+        .to_json();
+
+        assert_eq!(
+            rendered["mesh_hop_dropped_bags_by_link"],
+            serde_json::json!({ "L-remote": 0 })
+        );
+    }
+
+    /// A processor fed only from this runtime renders no hop-loss key at all.
+    /// A zero there would claim a hop it does not have, and a reader could not
+    /// tell it from a remote link that has lost nothing.
+    #[test]
+    fn a_processor_with_no_remote_link_renders_no_mesh_hop_key_rather_than_an_empty_one() {
+        let dropped = Arc::new(DroppedBagCountsByInboundLink::default());
+        let _ = dropped.counter_for_inbound_link("L-local");
+
+        let rendered = metrics_counted_here(LossCountsOfPortsInThisProcess {
+            dropped_bag_counts_by_inbound_link: dropped,
+            ..Default::default()
+        })
+        .to_json();
+
+        assert_eq!(
+            rendered,
+            serde_json::json!({
+                "frames_dropped": 0,
+                "dropped_bags_by_link": { "L-local": 0 },
+                "refused_bags_by_output_port": {}
+            }),
+            "the whole rendering, so no hop-loss key appears where there is no hop"
         );
     }
 
