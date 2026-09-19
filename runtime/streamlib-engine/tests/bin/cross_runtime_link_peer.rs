@@ -1,0 +1,416 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+//! One end of a cross-runtime link, in its own OS process, for
+//! `cross_runtime_links_two_processes`.
+//!
+//! A link between runtimes is between processes by construction, so its proof
+//! needs a second one. CI has no GPU, and `Runner::start()` needs one — so this
+//! stands up a runtime's mesh half without a `Runner`: the same
+//! `RuntimeMeshMembership` a runtime joins with, told to serve its output ports
+//! or to carry a link from another runtime, over a real iceoryx2 channel and a
+//! real Zenoh session.
+//!
+//! `--source` publishes one port and offers it. `--reader` links from an
+//! address and reports every bag that lands on the local channel, as one JSON
+//! line each, beside the link's own state.
+//!
+//! Closing its stdin is how the test asks for a clean leave. A test that wants
+//! an abrupt one kills it instead, which is how "SIGKILL of the source returns
+//! the link to waiting" is proven.
+
+use std::io::BufRead;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+
+use parking_lot::Mutex;
+use streamlib_engine::core::graph::{MeshPortAddress, RemoteLinkResolution};
+use streamlib_engine::core::runtime::mesh::{
+    HowToReadAnOfferedOutputPort, MeshLinkIngressTable, OutputPortOfferedOnTheMesh,
+    OutputPortsOfferedOnTheMesh, ResolvedRuntimeMeshConfiguration, RuntimeMeshMembership,
+    WhatThisRuntimeOffersOnTheMesh, WhatThisRuntimeOffersOnTheMeshRegistry,
+};
+use streamlib_engine::core::runtime::{RuntimeMeshConfiguration, RuntimeName};
+use streamlib_engine::iceoryx2::{
+    ChannelSizing, FRAME_HEADER_SIZE, FrameHeader, Iceoryx2Node, mesh_ingress_channel_name,
+};
+
+/// What the peer writes once its mesh half is up.
+const READY_LINE: &str = "READY";
+
+/// What the peer writes instead when it could not come up at all.
+const REFUSED_LINE_PREFIX: &str = "REFUSED ";
+
+/// The processor id the source's channel is keyed on. Not a mesh name: the
+/// mesh addresses the port by its *display* name, and this is the local side
+/// the display name resolves to.
+const THE_SOURCES_PROCESSOR_ID: &str = "psource";
+
+/// The port the source publishes and the reader links from.
+const THE_PORT: &str = "video";
+
+/// How often either peer reports.
+const HOW_OFTEN_THE_PEER_REPORTS: Duration = Duration::from_millis(100);
+
+/// How deep the source's channel is, and the ring every reader of it takes.
+const THE_CHANNELS_DEPTH: usize = 16;
+
+/// How many destination slots the source's channel is created with. Fixed like
+/// every channel's, so an egress joining later fits a slot that already exists.
+const THE_CHANNELS_SUBSCRIBER_SLOTS: usize = 8;
+
+fn main() {
+    // No `Runner`, so no engine logging pathway: a peer says what it is doing
+    // only when the test asks for it, and only to stderr, which the harness
+    // keeps out of its report channel.
+    let _ = tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .try_init();
+
+    let report = ReportChannelTakenBeforeAnythingReplacesStdout::take();
+    let how = HowToRunThisPeer::read_from_the_command_line();
+    let asked_to_leave = Arc::new(AtomicBool::new(false));
+    read_stdin_until_it_closes(Arc::clone(&asked_to_leave));
+
+    let outcome = match how.role {
+        WhatThisPeerIs::TheSourceOfTheLink => run_as_the_source(&report, &how, &asked_to_leave),
+        WhatThisPeerIs::TheReaderOfTheLink => run_as_the_reader(&report, &how, &asked_to_leave),
+    };
+    if let Err(why) = outcome {
+        report.write_line(&format!("{REFUSED_LINE_PREFIX}{why}"));
+        std::process::exit(2);
+    }
+}
+
+/// Publish one port, offer it on the mesh, and let the egress do the rest.
+fn run_as_the_source(
+    report: &ReportChannelTakenBeforeAnythingReplacesStdout,
+    how: &HowToRunThisPeer,
+    asked_to_leave: &AtomicBool,
+) -> Result<(), String> {
+    let iceoryx2_node = how.open_an_iceoryx2_node()?;
+    let channel_service_name =
+        streamlib_engine::iceoryx2::source_channel_name(THE_SOURCES_PROCESSOR_ID, THE_PORT)
+            .map_err(|why| why.to_string())?
+            .into_string();
+    let service = iceoryx2_node
+        .open_or_create_service(
+            &channel_service_name,
+            THE_CHANNELS_SUBSCRIBER_SLOTS,
+            THE_CHANNELS_DEPTH,
+        )
+        .map_err(|why| why.to_string())?;
+    let publisher = service
+        .create_publisher(1024)
+        .map_err(|why| why.to_string())?;
+
+    let offered = Arc::new(WhatThisRuntimeOffersOnTheMeshRegistry::default());
+    offered.record_how_to_read_this_runtimes_graph(Arc::new(TheOnePortThisPeerOffers {
+        processor_display_name: how.display_name.clone(),
+        channel_service_name,
+    }));
+
+    let membership = how.join_the_mesh()?;
+    membership.start_serving_this_runtimes_output_ports(&offered, &iceoryx2_node);
+    report.write_line(READY_LINE);
+
+    // One bag per report interval, each carrying its own index so the reader
+    // can say which arrived, and stamped so the test can check the stamp
+    // crossed unchanged.
+    let mut published: u64 = 0;
+    while !asked_to_leave.load(Ordering::Relaxed) {
+        let bag = a_bag_carrying(published);
+        let stamp = a_stamp_for(published);
+        let framed_len = FRAME_HEADER_SIZE + bag.len();
+        let mut framed = vec![0u8; framed_len];
+        FrameHeader::new(THE_PORT, stamp, bag.len() as u32)
+            .map_err(|why| why.to_string())?
+            .write_to_slice(&mut framed[..FRAME_HEADER_SIZE]);
+        framed[FRAME_HEADER_SIZE..].copy_from_slice(&bag);
+
+        let mut sample = publisher
+            .loan_slice_uninit(framed_len)
+            .map_err(|why| format!("{why:?}"))?;
+        sample.payload_mut().copy_from_slice(unsafe {
+            // SAFETY: `MaybeUninit<u8>` has the same layout as `u8`, and every
+            // byte of `framed` is initialized.
+            std::slice::from_raw_parts(
+                framed.as_ptr() as *const std::mem::MaybeUninit<u8>,
+                framed.len(),
+            )
+        });
+        // SAFETY: the copy above initialized every byte the loan was taken for.
+        let sample = unsafe { sample.assume_init() };
+        sample.send().map_err(|why| format!("{why:?}"))?;
+
+        report.write_line(
+            &serde_json::json!({ "published": published, "timestamp_ns": stamp }).to_string(),
+        );
+        published += 1;
+        std::thread::sleep(HOW_OFTEN_THE_PEER_REPORTS);
+    }
+
+    membership.leave("this peer was asked to leave");
+    Ok(())
+}
+
+/// Link from one address and report what lands on the local channel.
+fn run_as_the_reader(
+    report: &ReportChannelTakenBeforeAnythingReplacesStdout,
+    how: &HowToRunThisPeer,
+    asked_to_leave: &AtomicBool,
+) -> Result<(), String> {
+    let address = MeshPortAddress::new(
+        how.link_from.clone().ok_or("--link-from is required")?,
+        how.display_name.clone(),
+        THE_PORT,
+    )
+    .map_err(|why| why.to_string())?;
+
+    let iceoryx2_node = how.open_an_iceoryx2_node()?;
+    // The channel the ingress writes, derived from the address exactly as the
+    // wiring op derives it — which is the whole point of the derivation being
+    // a pure function of the address.
+    let local_channel = mesh_ingress_channel_name(&address.to_string()).into_string();
+    let local_service = iceoryx2_node
+        .open_or_create_service(
+            &local_channel,
+            streamlib_ipc_types::MAX_DESTINATIONS_PER_CHANNEL
+                + streamlib_engine::iceoryx2::RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL
+                + streamlib_engine::iceoryx2::RESERVED_MESH_EGRESS_SUBSCRIBER_SLOTS_PER_CHANNEL,
+            streamlib_engine::iceoryx2::DeliveryProfile::ORDERED_DEPTH,
+        )
+        .map_err(|why| why.to_string())?;
+    let subscriber = local_service
+        .create_subscriber(streamlib_engine::iceoryx2::DeliveryProfile::ORDERED_DEPTH)
+        .map_err(|why| why.to_string())?;
+
+    let ingress_table = MeshLinkIngressTable::of_this_runtime(&iceoryx2_node);
+    let membership = how.join_the_mesh()?;
+    membership.start_carrying_links_from_other_runtimes(&ingress_table);
+
+    let how_far_it_has_got = Arc::new(Mutex::new(RemoteLinkResolution::AwaitingRemote {
+        reason: "this peer has only just asked for the link".to_string(),
+    }));
+    let link_id = streamlib_engine::core::graph::LinkUniqueId::new();
+    membership.note_a_link_from_another_runtime(
+        address,
+        link_id.clone(),
+        Arc::clone(&how_far_it_has_got),
+    );
+    // What the wiring op does in a real runtime, and what this peer does for
+    // itself because it has no compiler: the destination's side of the local
+    // channel is open, so the link is one the mesh may report as carrying. The
+    // notify service is `None` because this peer polls its own subscriber
+    // rather than waiting on a listener.
+    ingress_table.note_how_a_links_destination_is_woken(&link_id, None);
+    report.write_line(READY_LINE);
+
+    while !asked_to_leave.load(Ordering::Relaxed) {
+        while let Ok(Some(sample)) = subscriber.receive() {
+            let framed = sample.payload();
+            if framed.len() < FRAME_HEADER_SIZE {
+                continue;
+            }
+            let header = FrameHeader::read_from_slice(&framed[..FRAME_HEADER_SIZE]);
+            report.write_line(
+                &serde_json::json!({
+                    "received": String::from_utf8_lossy(&framed[FRAME_HEADER_SIZE..]),
+                    "timestamp_ns": header.timestamp_ns,
+                })
+                .to_string(),
+            );
+        }
+        report.write_line(&how_far_it_has_got_as_json(&how_far_it_has_got).to_string());
+        std::thread::sleep(HOW_OFTEN_THE_PEER_REPORTS);
+    }
+
+    ingress_table.stop();
+    membership.leave("this peer was asked to leave");
+    Ok(())
+}
+
+/// How far the link has got, in the shape the test reads.
+fn how_far_it_has_got_as_json(
+    how_far_it_has_got: &Mutex<RemoteLinkResolution>,
+) -> serde_json::Value {
+    match &*how_far_it_has_got.lock() {
+        RemoteLinkResolution::AwaitingRemote { reason } => {
+            serde_json::json!({ "state": "awaiting_remote", "reason": reason })
+        }
+        RemoteLinkResolution::Wired => serde_json::json!({ "state": "wired" }),
+        RemoteLinkResolution::Refused { reason } => {
+            serde_json::json!({ "state": "error", "reason": reason })
+        }
+    }
+}
+
+/// The bag the source publishes for index `published`.
+///
+/// Plain bytes rather than msgpack: what crosses must be byte-equal, and a
+/// payload the engine cannot read is exactly as good a proof of that as one it
+/// can — better, since it also shows the mesh inspects nothing but the one key.
+pub fn a_bag_carrying(published: u64) -> Vec<u8> {
+    format!("bag-{published}").into_bytes()
+}
+
+/// The stamp the source puts on bag `published`, far enough from zero that a
+/// stamp invented on the way across could not pass for it.
+pub fn a_stamp_for(published: u64) -> i64 {
+    1_726_000_000_000_000_000 + published as i64
+}
+
+/// The one port this peer offers, and the channel it publishes to.
+struct TheOnePortThisPeerOffers {
+    processor_display_name: String,
+    channel_service_name: String,
+}
+
+impl WhatThisRuntimeOffersOnTheMesh for TheOnePortThisPeerOffers {
+    fn output_ports_it_offers_right_now(&self) -> OutputPortsOfferedOnTheMesh {
+        OutputPortsOfferedOnTheMesh {
+            ports: vec![OutputPortOfferedOnTheMesh {
+                processor_display_name: self.processor_display_name.clone(),
+                port_name: THE_PORT.to_string(),
+            }],
+        }
+    }
+
+    fn how_to_read_an_offered_output_port(
+        &self,
+        processor_display_name: &str,
+        port_name: &str,
+    ) -> Option<HowToReadAnOfferedOutputPort> {
+        (processor_display_name == self.processor_display_name && port_name == THE_PORT).then(
+            || HowToReadAnOfferedOutputPort {
+                channel_service_name: self.channel_service_name.clone(),
+                channel_sizing: ChannelSizing {
+                    max_subscribers: THE_CHANNELS_SUBSCRIBER_SLOTS,
+                    channel_service_creation_depth: THE_CHANNELS_DEPTH,
+                },
+            },
+        )
+    }
+}
+
+/// Which end of the link this process is.
+enum WhatThisPeerIs {
+    TheSourceOfTheLink,
+    TheReaderOfTheLink,
+}
+
+/// Every flag the fixture drives.
+struct HowToRunThisPeer {
+    role: WhatThisPeerIs,
+    mesh: RuntimeMeshConfiguration,
+    display_name: String,
+    link_from: Option<String>,
+    iceoryx2_domain_root: std::path::PathBuf,
+}
+
+impl HowToRunThisPeer {
+    fn read_from_the_command_line() -> Self {
+        let mut role = WhatThisPeerIs::TheSourceOfTheLink;
+        let mut mesh = RuntimeMeshConfiguration::default();
+        let mut display_name = "CameraSource".to_string();
+        let mut link_from = None;
+        let mut iceoryx2_domain_root = std::path::PathBuf::from("/tmp");
+        let mut arguments = std::env::args().skip(1);
+        while let Some(flag) = arguments.next() {
+            let mut value = || arguments.next().expect("every flag takes a value");
+            match flag.as_str() {
+                "--source" => role = WhatThisPeerIs::TheSourceOfTheLink,
+                "--reader" => role = WhatThisPeerIs::TheReaderOfTheLink,
+                "--runtime-name" => mesh.runtime_name = Some(value()),
+                "--mesh-name" => mesh.mesh_name = Some(value()),
+                "--mesh-peer" => mesh
+                    .mesh_peer_endpoints
+                    .get_or_insert_with(Vec::new)
+                    .push(value()),
+                "--mesh-listen" => mesh
+                    .mesh_listen_endpoints
+                    .get_or_insert_with(Vec::new)
+                    .push(value()),
+                "--multicast-discovery" => mesh.mesh_multicast_discovery = Some(value() == "on"),
+                "--display-name" => display_name = value(),
+                "--link-from" => link_from = Some(value()),
+                "--iceoryx2-domain-root" => iceoryx2_domain_root = value().into(),
+                unknown => panic!("unknown flag {unknown:?}"),
+            }
+        }
+        Self {
+            role,
+            mesh,
+            display_name,
+            link_from,
+            iceoryx2_domain_root,
+        }
+    }
+
+    fn join_the_mesh(&self) -> Result<RuntimeMeshMembership, String> {
+        let mut mesh = RuntimeMeshConfiguration {
+            runtime_name: self.mesh.runtime_name.clone(),
+            mesh_name: self.mesh.mesh_name.clone(),
+            mesh_peer_endpoints: self.mesh.mesh_peer_endpoints.clone(),
+            mesh_listen_endpoints: self.mesh.mesh_listen_endpoints.clone(),
+            mesh_multicast_discovery: self.mesh.mesh_multicast_discovery,
+        };
+        let runtime_name = Arc::new(
+            RuntimeName::from_configuration_environment_or_default(mesh.runtime_name.take())
+                .map_err(|why| why.to_string())?,
+        );
+        let resolved =
+            ResolvedRuntimeMeshConfiguration::resolve(mesh).map_err(|why| why.to_string())?;
+        RuntimeMeshMembership::join(
+            &resolved,
+            &runtime_name,
+            "R0000000000",
+            "a-test-host",
+            &Arc::new(Default::default()),
+        )
+        .map_err(|why| why.to_string())
+    }
+
+    fn open_an_iceoryx2_node(&self) -> Result<Iceoryx2Node, String> {
+        std::fs::create_dir_all(&self.iceoryx2_domain_root).map_err(|why| why.to_string())?;
+        Iceoryx2Node::new(
+            &self.iceoryx2_domain_root,
+            &format!("cross-runtime-link-peer/{}", std::process::id()),
+        )
+        .map_err(|why| why.to_string())
+    }
+}
+
+/// A duplicate of fd 1, taken before anything replaces fd 1 itself.
+struct ReportChannelTakenBeforeAnythingReplacesStdout(std::fs::File);
+
+impl ReportChannelTakenBeforeAnythingReplacesStdout {
+    fn take() -> Self {
+        // SAFETY: fd 1 is open at process start, and the duplicate is checked
+        // before anything adopts it.
+        let duplicated = unsafe { libc::fcntl(libc::STDOUT_FILENO, libc::F_DUPFD_CLOEXEC, 0) };
+        assert!(duplicated >= 0, "this process has no stdout to report on");
+        // SAFETY: `duplicated` is a fresh descriptor nothing else owns.
+        Self(unsafe { std::os::fd::FromRawFd::from_raw_fd(duplicated) })
+    }
+
+    fn write_line(&self, line: &str) {
+        use std::io::Write as _;
+        let mut channel = &self.0;
+        let _ = writeln!(channel, "{line}");
+        let _ = channel.flush();
+    }
+}
+
+/// Watch stdin on its own thread: the parent closing it is the ask to leave.
+fn read_stdin_until_it_closes(asked_to_leave: Arc<AtomicBool>) {
+    std::thread::spawn(move || {
+        let mut line = String::new();
+        while std::io::stdin().lock().read_line(&mut line).unwrap_or(0) > 0 {
+            line.clear();
+        }
+        asked_to_leave.store(true, Ordering::Relaxed);
+    });
+}

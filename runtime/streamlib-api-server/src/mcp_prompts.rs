@@ -405,10 +405,29 @@ fn insert_processor_between_linked_processors_recipe(
                 "no link with id `{link_id}` is in the graph; `graph` lists the links"
             ))
         })?;
-    let source = node_with_id(graph, &link.source.processor_id)?;
-    let target = node_with_id(graph, &link.target.processor_id)?;
-    let source_port = link.source.port_name.as_str();
-    let target_port = link.target.port_name.as_str();
+    // The recipe re-wires the link's source into the inserted processor, which
+    // needs a source this node can name in `connect`. A link carrying from
+    // another runtime has none, so it is refused rather than rendered against
+    // whichever local processor happens to sit nearby.
+    let source_processor_id = link.source.processor_id_on_this_runtime().ok_or_else(|| {
+        RpcError::invalid_params(format!(
+            "link `{link_id}` carries from a port on another runtime, and a processor cannot be \
+             inserted into one from here"
+        ))
+    })?;
+    let source = node_with_id(graph, source_processor_id)?;
+    // The engine only ever renders a target on this node, so this is defence
+    // against a graph document that came from somewhere else rather than a
+    // shape this runtime produces.
+    let target_processor_id = link.target.processor_id_on_this_runtime().ok_or_else(|| {
+        RpcError::invalid_params(format!(
+            "link `{link_id}` carries into a port on another runtime, and a processor cannot be \
+             inserted into one from here"
+        ))
+    })?;
+    let target = node_with_id(graph, target_processor_id)?;
+    let source_port = link.source.port_name();
+    let target_port = link.target.port_name();
     let source_label = processor_node_display_name_and_id_label(source);
     let target_label = processor_node_display_name_and_id_label(target);
 

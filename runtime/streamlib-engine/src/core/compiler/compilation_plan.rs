@@ -78,7 +78,10 @@ impl CompilationPlan {
                 tracing::debug!("[commit] link-add {link_id} skipped — link absent from graph");
                 return false;
             };
-            let source_removed = processors_to_remove.contains(&link.from_port().processor_id);
+            let source_removed = link
+                .from_port()
+                .processor_id_on_this_runtime()
+                .is_some_and(|source| processors_to_remove.contains(source));
             let target_removed = processors_to_remove.contains(&link.to_port().processor_id);
             if source_removed || target_removed {
                 tracing::debug!(

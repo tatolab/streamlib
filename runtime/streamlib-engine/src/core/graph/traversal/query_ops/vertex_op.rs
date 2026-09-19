@@ -47,32 +47,42 @@ impl<'a> TraversalSource<'a> {
     /// - `&str` - vertex by ID string
     /// - `ProcessorUniqueId` - vertex by ID
     pub fn v(self, filter: impl private::IntoVertexFilter) -> ProcessorTraversal<'a> {
-        match filter.into_filter() {
-            Some(id) => {
-                // code for some
-                self.graph
-                    .node_references()
-                    .find(|(_, processor_node)| processor_node.id == id)
-                    .map(|(idx, _)| ProcessorTraversal {
-                        graph: self.graph,
-                        ids: vec![idx],
-                    })
-                    .unwrap_or_else(|| ProcessorTraversal {
-                        graph: self.graph,
-                        ids: vec![],
-                    })
-            }
-            None => {
-                let ids = self
-                    .graph
-                    .node_references()
-                    .map(|(idx, _)| idx)
-                    .collect::<Vec<_>>();
-                ProcessorTraversal {
-                    graph: self.graph,
-                    ids,
-                }
-            }
+        let ids = match filter.into_filter() {
+            Some(id) => self
+                .graph
+                .node_references()
+                .find(|(_, processor_node)| processor_node.id == id)
+                .map(|(idx, _)| vec![idx])
+                .unwrap_or_default(),
+            None => self
+                .graph
+                .node_references()
+                .map(|(idx, _)| idx)
+                .collect::<Vec<_>>(),
+        };
+        ProcessorTraversal {
+            graph: self.graph,
+            links_from_another_runtime: self.links_from_another_runtime,
+            ids,
+        }
+    }
+
+    /// Start traversal from the processor a display name labels.
+    ///
+    /// A display name is unique within a graph and is the processor's part of
+    /// its mesh address, which is what a peer names a port by — so this is how
+    /// an address is turned back into one of this runtime's own nodes.
+    pub fn v_with_display_name(self, display_name: &str) -> ProcessorTraversal<'a> {
+        let ids = self
+            .graph
+            .node_references()
+            .find(|(_, processor_node)| processor_node.display_name == display_name)
+            .map(|(idx, _)| vec![idx])
+            .unwrap_or_default();
+        ProcessorTraversal {
+            graph: self.graph,
+            links_from_another_runtime: self.links_from_another_runtime,
+            ids,
         }
     }
 }
@@ -85,29 +95,23 @@ impl<'a> TraversalSourceMut<'a> {
     /// - `&str` - vertex by ID string
     /// - `ProcessorUniqueId` - vertex by ID
     pub fn v(self, filter: impl private::IntoVertexFilter) -> ProcessorTraversalMut<'a> {
-        match filter.into_filter() {
-            Some(id) => {
-                let found = self
-                    .graph
-                    .node_references()
-                    .find(|(_, processor_node)| processor_node.id == id)
-                    .map(|(idx, _)| idx);
-                ProcessorTraversalMut {
-                    graph: self.graph,
-                    ids: found.map(|idx| vec![idx]).unwrap_or_default(),
-                }
-            }
-            None => {
-                let ids = self
-                    .graph
-                    .node_references()
-                    .map(|(idx, _)| idx)
-                    .collect::<Vec<_>>();
-                ProcessorTraversalMut {
-                    graph: self.graph,
-                    ids,
-                }
-            }
+        let ids = match filter.into_filter() {
+            Some(id) => self
+                .graph
+                .node_references()
+                .find(|(_, processor_node)| processor_node.id == id)
+                .map(|(idx, _)| vec![idx])
+                .unwrap_or_default(),
+            None => self
+                .graph
+                .node_references()
+                .map(|(idx, _)| idx)
+                .collect::<Vec<_>>(),
+        };
+        ProcessorTraversalMut {
+            graph: self.graph,
+            links_from_another_runtime: self.links_from_another_runtime,
+            ids,
         }
     }
 }

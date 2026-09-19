@@ -68,8 +68,7 @@ impl GraphInspector {
 
         Some(LinkSnapshot {
             id: id.clone(),
-            source_processor: link.source.processor_id.clone(),
-            source_port: link.source.port_name.clone(),
+            source: link.source.clone(),
             target_processor: link.target.processor_id.clone(),
             target_port: link.target.port_name.clone(),
             capacity: link.capacity.into(),

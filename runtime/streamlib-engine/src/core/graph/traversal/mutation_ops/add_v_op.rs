@@ -66,6 +66,7 @@ impl<'a> TraversalSourceMut<'a> {
 
         ProcessorTraversalMut {
             graph: self.graph,
+            links_from_another_runtime: self.links_from_another_runtime,
             ids: vec![node_idx],
         }
     }

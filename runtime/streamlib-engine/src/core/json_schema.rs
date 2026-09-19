@@ -197,28 +197,79 @@ pub struct LinkOutput {
     /// `state` stays a plain string so a check against `"wired"` is unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_reason: Option<String>,
+    /// What a link in the `awaiting_remote` state is waiting on — the source
+    /// runtime, which is not on the mesh, or the port, which the runtime that
+    /// is here does not offer.
+    ///
+    /// Absent in every other state. Unlike `error_reason` this is not final:
+    /// the link wires itself the moment what it names turns up.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub awaiting_remote_reason: Option<String>,
     /// Runtime components (dynamic, varies based on link state).
     pub components: serde_json::Map<String, serde_json::Value>,
 }
 
-/// Reference to a port on a processor.
+/// Reference to a port on a processor — on this node, or on another runtime
+/// over the mesh.
+///
+/// One of two shapes, told apart by their keys and not by a tag: a port on this
+/// node carries `processor_id`, and a port on another runtime carries the three
+/// parts of its mesh address. A reader checking `processor_id` therefore finds
+/// nothing on a remote end rather than a processor id this node does not have.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
-pub struct LinkPortRefOutput {
-    /// Processor instance ID.
-    pub processor_id: String,
-    /// Port name on that processor.
-    pub port_name: String,
+#[serde(untagged)]
+pub enum LinkPortRefOutput {
+    /// A port on a processor this node holds.
+    OnThisRuntime {
+        /// Processor instance ID.
+        processor_id: String,
+        /// Port name on that processor.
+        port_name: String,
+    },
+    /// A port on a processor another runtime holds, addressed
+    /// `<runtime name>/<display name>/<port>`.
+    OnAnotherRuntime {
+        /// The name the owning runtime is addressed by on the mesh.
+        runtime_name: String,
+        /// The display name of the processor that owns the port, there.
+        processor_display_name: String,
+        /// The port's own name on that processor.
+        port_name: String,
+    },
+}
+
+impl LinkPortRefOutput {
+    /// The processor this port belongs to when this node holds it, and `None`
+    /// for a port on another runtime.
+    pub fn processor_id_on_this_runtime(&self) -> Option<&str> {
+        match self {
+            Self::OnThisRuntime { processor_id, .. } => Some(processor_id),
+            Self::OnAnotherRuntime { .. } => None,
+        }
+    }
+
+    /// The port's own name, wherever the port lives.
+    pub fn port_name(&self) -> &str {
+        match self {
+            Self::OnThisRuntime { port_name, .. } | Self::OnAnotherRuntime { port_name, .. } => {
+                port_name
+            }
+        }
+    }
 }
 
 /// State of a link in the graph.
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema,
 )]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum LinkStateOutput {
     /// Link exists in graph but not yet wired.
     #[default]
     Pending,
+    /// The link's source is a port on another runtime and nothing carries yet.
+    /// `awaiting_remote_reason` says what is missing.
+    AwaitingRemote,
     /// Link is actively wired with a ring buffer channel.
     Wired,
     /// Link is being disconnected.
@@ -411,7 +462,7 @@ impl From<crate::core::graph::PortKind> for PortKindOutput {
 
 impl From<&crate::core::graph::Link> for LinkOutput {
     fn from(link: &crate::core::graph::Link) -> Self {
-        let (state, error_reason) = rendered_link_state_and_the_reason_for_an_error(link);
+        let rendered = RenderedLinkState::of(link);
         let mut components = link.serialize_components();
         // `LinkStateComponent` renders under `components.state` too, and for a
         // link waiting on a helper it holds the `Pending` the op stamped. Left
@@ -419,68 +470,134 @@ impl From<&crate::core::graph::Link> for LinkOutput {
         // check — the same disagreement the top-level state reads the component
         // to avoid, in the other direction.
         if let Some(rendered_state) = components.get_mut("state") {
-            *rendered_state = serde_json::json!(format!("{state:?}"));
+            *rendered_state = serde_json::json!(format!("{:?}", rendered.state));
         }
         Self {
             id: link.id.to_string(),
             source: LinkPortRefOutput::from(&link.source),
             target: LinkPortRefOutput::from(&link.target),
             capacity: link.capacity.get(),
-            state,
-            error_reason,
+            state: rendered.state,
+            error_reason: rendered.error_reason,
+            awaiting_remote_reason: rendered.awaiting_remote_reason,
             components,
         }
     }
 }
 
-/// What a link reports as its state, and why where that is `error`.
-///
-/// Wiring records its outcome on the component; the field is the state the link
-/// was created in. A link handed to an out-of-process end sits at `Pending`
-/// there until that end answers — the answer lands on a cell its bridge's
-/// reader thread fills, which holds no graph lock — so a link still carrying
-/// those cells reads its state off them instead. Once the disconnect path has
-/// moved the component past `Pending`, that stamp is the answer: a link on its
-/// way out is not `wired` because a helper once said so.
-fn rendered_link_state_and_the_reason_for_an_error(
-    link: &crate::core::graph::Link,
-) -> (LinkStateOutput, Option<String>) {
-    let stamped = link
-        .get::<crate::core::graph::LinkStateComponent>()
-        .map(|state| state.0)
-        .unwrap_or(link.state);
-    if stamped != crate::core::graph::LinkState::Pending {
-        return (LinkStateOutput::from(stamped), None);
+/// What a link reports as its state, and why where that is `error` or
+/// `awaiting_remote`.
+struct RenderedLinkState {
+    state: LinkStateOutput,
+    error_reason: Option<String>,
+    awaiting_remote_reason: Option<String>,
+}
+
+impl RenderedLinkState {
+    /// Read one link's state off whichever cell holds the live answer.
+    ///
+    /// Wiring records its outcome on the component; the field is the state the
+    /// link was created in. A link handed to an out-of-process end sits at
+    /// `Pending` there until that end answers — the answer lands on a cell its
+    /// bridge's reader thread fills, which holds no graph lock — so a link still
+    /// carrying those cells reads its state off them instead. A link whose
+    /// source is on another runtime reads its own cell the same way, which the
+    /// mesh writes as the source runtime appears, offers the port, and leaves.
+    /// Once the disconnect path has moved the component past `Pending`, that
+    /// stamp is the answer: a link on its way out is not `wired` because a
+    /// helper once said so.
+    fn of(link: &crate::core::graph::Link) -> Self {
+        let stamped = link
+            .get::<crate::core::graph::LinkStateComponent>()
+            .map(|state| state.0)
+            .unwrap_or(link.state);
+        if let Some(resolution) = link.get::<crate::core::graph::RemoteLinkResolutionComponent>() {
+            return Self::of_a_link_from_another_runtime(stamped, resolution);
+        }
+        if stamped != crate::core::graph::LinkState::Pending {
+            return Self::plain(LinkStateOutput::from(stamped));
+        }
+        let Some(replies) = link.get::<crate::core::graph::OutOfProcessLinkWireRepliesComponent>()
+        else {
+            return Self::plain(LinkStateOutput::from(stamped));
+        };
+        match replies.what_its_out_of_process_ends_have_answered() {
+            crate::core::graph::OutOfProcessLinkWireProgress::AnEndHasNotAnsweredYet => {
+                Self::plain(LinkStateOutput::Pending)
+            }
+            crate::core::graph::OutOfProcessLinkWireProgress::EveryEndOpenedItsPort => {
+                Self::plain(LinkStateOutput::Wired)
+            }
+            crate::core::graph::OutOfProcessLinkWireProgress::AnEndRefused { reason } => Self {
+                state: LinkStateOutput::Error,
+                error_reason: Some(reason),
+                awaiting_remote_reason: None,
+            },
+        }
     }
-    let Some(replies) = link.get::<crate::core::graph::OutOfProcessLinkWireRepliesComponent>()
-    else {
-        return (LinkStateOutput::from(stamped), None);
-    };
-    match replies.what_its_out_of_process_ends_have_answered() {
-        crate::core::graph::OutOfProcessLinkWireProgress::AnEndHasNotAnsweredYet => {
-            (LinkStateOutput::Pending, None)
+
+    /// A link whose source is on another runtime, read off the cell the mesh
+    /// writes — except once the disconnect path has stamped it, which outranks
+    /// a mesh answer the same way it outranks a helper's.
+    fn of_a_link_from_another_runtime(
+        stamped: crate::core::graph::LinkState,
+        resolution: &crate::core::graph::RemoteLinkResolutionComponent,
+    ) -> Self {
+        if matches!(
+            stamped,
+            crate::core::graph::LinkState::Disconnecting
+                | crate::core::graph::LinkState::Disconnected
+        ) {
+            return Self::plain(LinkStateOutput::from(stamped));
         }
-        crate::core::graph::OutOfProcessLinkWireProgress::EveryEndOpenedItsPort => {
-            (LinkStateOutput::Wired, None)
+        match resolution.how_far_it_has_got() {
+            crate::core::graph::RemoteLinkResolution::AwaitingRemote { reason } => Self {
+                state: LinkStateOutput::AwaitingRemote,
+                error_reason: None,
+                awaiting_remote_reason: Some(reason),
+            },
+            crate::core::graph::RemoteLinkResolution::Wired => Self::plain(LinkStateOutput::Wired),
+            crate::core::graph::RemoteLinkResolution::Refused { reason } => Self {
+                state: LinkStateOutput::Error,
+                error_reason: Some(reason),
+                awaiting_remote_reason: None,
+            },
         }
-        crate::core::graph::OutOfProcessLinkWireProgress::AnEndRefused { reason } => {
-            (LinkStateOutput::Error, Some(reason))
+    }
+
+    fn plain(state: LinkStateOutput) -> Self {
+        Self {
+            state,
+            error_reason: None,
+            awaiting_remote_reason: None,
         }
     }
 }
 
 impl From<&crate::core::graph::OutputLinkPortRef> for LinkPortRefOutput {
     fn from(port_ref: &crate::core::graph::OutputLinkPortRef) -> Self {
-        Self {
-            processor_id: port_ref.processor_id.to_string(),
-            port_name: port_ref.port_name.clone(),
+        match port_ref {
+            crate::core::graph::OutputLinkPortRef::OnThisRuntime {
+                processor_id,
+                port_name,
+            } => Self::OnThisRuntime {
+                processor_id: processor_id.to_string(),
+                port_name: port_name.clone(),
+            },
+            crate::core::graph::OutputLinkPortRef::OnAnotherRuntime(address) => {
+                Self::OnAnotherRuntime {
+                    runtime_name: address.runtime_name().to_string(),
+                    processor_display_name: address.processor_display_name().to_string(),
+                    port_name: address.port_name().to_string(),
+                }
+            }
         }
     }
 }
 
 impl From<&crate::core::graph::InputLinkPortRef> for LinkPortRefOutput {
     fn from(port_ref: &crate::core::graph::InputLinkPortRef) -> Self {
-        Self {
+        Self::OnThisRuntime {
             processor_id: port_ref.processor_id.to_string(),
             port_name: port_ref.port_name.clone(),
         }
@@ -491,6 +608,7 @@ impl From<crate::core::graph::LinkState> for LinkStateOutput {
     fn from(state: crate::core::graph::LinkState) -> Self {
         match state {
             crate::core::graph::LinkState::Pending => LinkStateOutput::Pending,
+            crate::core::graph::LinkState::AwaitingRemote => LinkStateOutput::AwaitingRemote,
             crate::core::graph::LinkState::Wired => LinkStateOutput::Wired,
             crate::core::graph::LinkState::Disconnecting => LinkStateOutput::Disconnecting,
             crate::core::graph::LinkState::Disconnected => LinkStateOutput::Disconnected,
@@ -553,7 +671,10 @@ impl From<&crate::core::CodeExamples> for CodeExamplesOutput {
 #[cfg(test)]
 mod link_rendering_tests {
     use super::*;
-    use crate::core::graph::{GraphEdgeWithComponents, Link, LinkState, LinkStateComponent};
+    use crate::core::graph::{
+        GraphEdgeWithComponents, InputLinkPortRef, Link, LinkState, LinkStateComponent,
+        OutputLinkPortRef,
+    };
 
     /// The field is the state a link was created in; wiring records its
     /// outcome on a component. Rendering reads the component first, so a
@@ -561,7 +682,10 @@ mod link_rendering_tests {
     /// a permanent `pending` beside a `components.state` that disagrees.
     #[test]
     fn a_wired_links_top_level_state_comes_from_its_wiring_component() {
-        let mut link = Link::new("Psrc.out1", "Pdst.in1");
+        let mut link = Link::between(
+            OutputLinkPortRef::new("Psrc", "out1"),
+            InputLinkPortRef::new("Pdst", "in1"),
+        );
         let rendered = |link: &Link| serde_json::to_value(LinkOutput::from(link)).unwrap();
         assert_eq!(rendered(&link)["state"], "pending");
 
@@ -580,7 +704,10 @@ mod link_rendering_tests {
         use crate::core::graph::OutOfProcessLinkWireRepliesComponent;
         use crate::core::processors::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
 
-        let mut link = Link::new("Psrc.out1", "Pdst.in1");
+        let mut link = Link::between(
+            OutputLinkPortRef::new("Psrc", "out1"),
+            InputLinkPortRef::new("Pdst", "in1"),
+        );
         link.insert(LinkStateComponent(LinkState::Pending));
         let helpers_answer = OutOfProcessLinkWireReply::awaiting_the_far_sides_answer();
         link.insert_component_without_rendering_it(OutOfProcessLinkWireRepliesComponent(vec![
@@ -602,7 +729,10 @@ mod link_rendering_tests {
         use crate::core::graph::OutOfProcessLinkWireRepliesComponent;
         use crate::core::processors::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
 
-        let mut link = Link::new("Psrc.out1", "Pdst.in1");
+        let mut link = Link::between(
+            OutputLinkPortRef::new("Psrc", "out1"),
+            InputLinkPortRef::new("Pdst", "in1"),
+        );
         link.insert(LinkStateComponent(LinkState::Pending));
         let helpers_answer = OutOfProcessLinkWireReply::awaiting_the_far_sides_answer();
         helpers_answer.note_the_far_sides_answer(
@@ -627,7 +757,10 @@ mod link_rendering_tests {
     /// all, so a reader that finds one knows the link is refused.
     #[test]
     fn a_link_that_was_never_refused_renders_no_reason_key() {
-        let mut link = Link::new("Psrc.out1", "Pdst.in1");
+        let mut link = Link::between(
+            OutputLinkPortRef::new("Psrc", "out1"),
+            InputLinkPortRef::new("Pdst", "in1"),
+        );
         link.insert(LinkStateComponent(LinkState::Wired));
         let rendered = serde_json::to_value(LinkOutput::from(&link)).unwrap();
         assert!(

@@ -8,7 +8,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::core::descriptors::ProcessorClassImportPath;
-use crate::core::graph::{LinkUniqueId, ProcessorUniqueId};
+use crate::core::graph::{LinkUniqueId, OutputLinkPortRef, ProcessorUniqueId};
 
 use crate::core::processors::ProcessorState;
 
@@ -34,10 +34,9 @@ pub struct ProcessorSnapshot {
 pub struct LinkSnapshot {
     /// Link identifier.
     pub id: LinkUniqueId,
-    /// Source processor.
-    pub source_processor: ProcessorUniqueId,
-    /// Source port name.
-    pub source_port: String,
+    /// Source port, as the link names it — a port on this runtime, or one on
+    /// another runtime by its mesh address.
+    pub source: OutputLinkPortRef,
     /// Target processor.
     pub target_processor: ProcessorUniqueId,
     /// Target port name.

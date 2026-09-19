@@ -310,13 +310,26 @@ pub const MAX_PUBLISHERS_PER_CHANNEL: usize = 1;
 /// destination slots.
 ///
 /// A channel's data service is created with `max_subscribers =
-/// MAX_DESTINATIONS_PER_CHANNEL + this`. The reserved slot lets the phase-3.5
+/// MAX_DESTINATIONS_PER_CHANNEL + this +
+/// [`RESERVED_MESH_EGRESS_SUBSCRIBER_SLOTS_PER_CHANNEL`]. The reserved slot lets
+/// the phase-3.5
 /// `tap` op attach a broadcast consumer as a pure subscriber-add with no service
 /// re-open — iceoryx2 fixes `max_subscribers` at create time, so the headroom
 /// must exist up front. iceoryx2 sizes each publisher's shared-memory data
 /// segment as `max_subscribers × (subscriber_max_buffer_size + borrowed) + …`,
 /// so this is deliberately 1 (not the iceoryx2 default of 8).
 pub const RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL: usize = 1;
+
+/// Subscriber slots a channel's data service reserves for the runtime mesh's
+/// egress, beyond its destination cap and the tap's slot.
+///
+/// A port read from another runtime is drained by one egress, which takes an
+/// ordinary subscriber slot the way a destination does. Counting it against
+/// [`MAX_DESTINATIONS_PER_CHANNEL`] would make a port at its fan-out cap fail
+/// to send across the mesh — and fail on the *sending* machine, where the
+/// runtime that asked for the link cannot see it. One, because a port has at
+/// most one egress however many runtimes read it.
+pub const RESERVED_MESH_EGRESS_SUBSCRIBER_SLOTS_PER_CHANNEL: usize = 1;
 
 /// Destinations one channel — one source output port — may feed at once.
 ///

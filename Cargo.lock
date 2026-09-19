@@ -5640,6 +5640,7 @@ dependencies = [
  "pollster",
  "prost-build",
  "raw-window-handle",
+ "rmp",
  "rmp-serde",
  "rspirv-reflect",
  "rubato",

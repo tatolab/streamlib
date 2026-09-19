@@ -31,8 +31,10 @@ use crate::core::processors::ProcessorSpec;
 use crate::core::processors::ProcessorState;
 use crate::core::pubsub::{Event, EventListener, PUBSUB, ProcessorEvent, RuntimeEvent, topics};
 use crate::core::runtime::LoadedCapabilityExtensionRegistry;
+use crate::core::runtime::OutputPortsInThisRuntimesGraph;
 use crate::core::runtime::mesh::{
-    HostedControlPlaneEndpointRegistry, ResolvedRuntimeMeshConfiguration, RuntimeMeshMembership,
+    HostedControlPlaneEndpointRegistry, MeshLinkIngressTable, ResolvedRuntimeMeshConfiguration,
+    RuntimeMeshMembership, WhatThisRuntimeOffersOnTheMeshRegistry,
 };
 use crate::core::signals::ScopedShutdownSignalOwnership;
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
@@ -137,6 +139,13 @@ pub struct Runner {
     /// Listener for graph changes that triggers compilation.
     /// Stored to keep subscription alive for runtime lifetime.
     _graph_change_listener: Arc<Mutex<dyn EventListener>>,
+    /// How the mesh reads this runtime's graph, held so it outlives the
+    /// queryable and the egresses that read it.
+    _offered_on_the_mesh: Arc<WhatThisRuntimeOffersOnTheMeshRegistry>,
+    /// Every port on another runtime this runtime links from. Handed to the
+    /// mesh, which resolves each and opens its ingress, and to every
+    /// `RuntimeContext`, through which the wiring op reaches it.
+    pub(crate) mesh_link_ingress_table: Arc<MeshLinkIngressTable>,
     /// iceoryx2 Node for creating Services, Publishers, and Subscribers.
     /// Created in new(); cloned into the RuntimeContext during start().
     pub(crate) iceoryx2_node: Iceoryx2Node,
@@ -325,6 +334,22 @@ impl Runner {
         // Subscribe to graph changes
         PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener))?;
 
+        // The mesh joined before the graph and the iceoryx2 node existed, so
+        // this is where it learns to read them: what this runtime offers a peer
+        // that asks, and how to reach one of those ports' channels when another
+        // runtime starts reading it.
+        let offered_on_the_mesh = Arc::new(WhatThisRuntimeOffersOnTheMeshRegistry::default());
+        offered_on_the_mesh.record_how_to_read_this_runtimes_graph(
+            OutputPortsInThisRuntimesGraph::of(&compiler, &iceoryx2_node),
+        );
+        runtime_mesh.start_serving_this_runtimes_output_ports(&offered_on_the_mesh, &iceoryx2_node);
+
+        // The other half: every port on another runtime this one links from.
+        // `connect` notes a link here and the mesh resolves it afterwards, so
+        // nothing about a remote link waits on a network call.
+        let mesh_link_ingress_table = MeshLinkIngressTable::of_this_runtime(&iceoryx2_node);
+        runtime_mesh.start_carrying_links_from_other_runtimes(&mesh_link_ingress_table);
+
         Ok(Arc::new(Self {
             runtime_id,
             runtime_name,
@@ -335,6 +360,8 @@ impl Runner {
             runtime_context,
             status,
             _graph_change_listener: listener,
+            _offered_on_the_mesh: offered_on_the_mesh,
+            mesh_link_ingress_table,
             iceoryx2_node,
             #[cfg(target_os = "linux")]
             surface_service,
@@ -576,6 +603,7 @@ impl Runner {
             runtime_ops,
             self.tokio_runtime_variant.handle(),
             iceoryx2_node,
+            Arc::clone(&self.mesh_link_ingress_table),
             Arc::clone(&audio_clock),
             self.runtime_directory.clone(),
             Arc::clone(&self.hosted_control_plane),
@@ -1341,12 +1369,27 @@ impl Runner {
 
             let mut connections: Vec<ConnectionDefinition> = Vec::new();
             for link in graph.traversal().e(()).iter() {
+                // A snapshot names every endpoint by an alias of a processor it
+                // also carries, so it has no way to spell a port on another
+                // runtime. Refused by name rather than written out a link
+                // short: a snapshot missing a link reads as a graph that never
+                // had one.
+                let source_on_this_runtime =
+                    link.source.processor_id_on_this_runtime().ok_or_else(|| {
+                        Error::GraphError(format!(
+                            "link '{}' carries from {} on another runtime, and a graph snapshot \
+                             names every port by the alias of a processor it also carries, so it \
+                             cannot spell one. Save a snapshot of a graph with no remote link, or \
+                             wire the remote link again after loading one.",
+                            link.id, link.source
+                        ))
+                    })?;
                 let from_alias = id_to_alias
-                    .get(link.source.processor_id.as_str())
+                    .get(source_on_this_runtime.as_str())
                     .ok_or_else(|| {
                         Error::GraphError(format!(
-                            "Link source processor '{}' missing from snapshot alias map",
-                            link.source.processor_id
+                            "Link source processor '{source_on_this_runtime}' missing from \
+                             snapshot alias map"
                         ))
                     })?;
                 let to_alias = id_to_alias
@@ -1358,7 +1401,7 @@ impl Runner {
                         ))
                     })?;
                 connections.push(ConnectionDefinition {
-                    from: format!("{}.{}", from_alias, link.source.port_name),
+                    from: format!("{}.{}", from_alias, link.source.port_name()),
                     to: format!("{}.{}", to_alias, link.target.port_name),
                 });
             }

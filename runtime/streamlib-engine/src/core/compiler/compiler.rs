@@ -271,9 +271,11 @@ impl Compiler {
                         );
 
                         tracing::info!("[CLOSE SERVICE] {}", link_id);
-                        if let Err(e) =
-                            super::compiler_ops::close_iceoryx2_service(&mut graph, link_id)
-                        {
+                        if let Err(e) = super::compiler_ops::close_iceoryx2_service(
+                            &mut graph,
+                            link_id,
+                            runtime_ctx.mesh_link_ingress_table(),
+                        ) {
                             tracing::warn!("Failed to close service {}: {}", link_id, e);
                         }
 
@@ -408,6 +410,7 @@ impl Compiler {
                     &mut graph,
                     link_id,
                     runtime_ctx.iceoryx2_node(),
+                    runtime_ctx.mesh_link_ingress_table(),
                 )?;
 
                 PUBSUB.publish(
@@ -493,11 +496,15 @@ fn this_link_is_already_wired_or_awaiting_its_helpers_answer(link: &Link) -> boo
 #[cfg(test)]
 mod already_wired_tests {
     use super::*;
+    use crate::core::graph::{InputLinkPortRef, OutputLinkPortRef};
     use crate::core::processors::OutOfProcessLinkWireReply;
 
     #[test]
     fn a_link_nothing_has_wired_yet_is_planned() {
-        let link = Link::new("Psrc.out1", "Pdst.in1");
+        let link = Link::between(
+            OutputLinkPortRef::new("Psrc", "out1"),
+            InputLinkPortRef::new("Pdst", "in1"),
+        );
         assert!(!this_link_is_already_wired_or_awaiting_its_helpers_answer(
             &link
         ));
@@ -505,7 +512,10 @@ mod already_wired_tests {
 
     #[test]
     fn a_wired_link_is_not_planned_again() {
-        let mut link = Link::new("Psrc.out1", "Pdst.in1");
+        let mut link = Link::between(
+            OutputLinkPortRef::new("Psrc", "out1"),
+            InputLinkPortRef::new("Pdst", "in1"),
+        );
         link.insert(LinkStateComponent(LinkState::Wired));
         assert!(this_link_is_already_wired_or_awaiting_its_helpers_answer(
             &link
@@ -517,7 +527,10 @@ mod already_wired_tests {
     /// again on the next compile, wiring one link twice.
     #[test]
     fn a_link_a_helper_has_not_answered_for_is_not_planned_again() {
-        let mut link = Link::new("Psrc.out1", "Pdst.in1");
+        let mut link = Link::between(
+            OutputLinkPortRef::new("Psrc", "out1"),
+            InputLinkPortRef::new("Pdst", "in1"),
+        );
         link.insert(LinkStateComponent(LinkState::Pending));
         link.insert_component_without_rendering_it(OutOfProcessLinkWireRepliesComponent(vec![
             OutOfProcessLinkWireReply::awaiting_the_far_sides_answer(),

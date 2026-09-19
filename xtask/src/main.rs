@@ -444,7 +444,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "iceoryx2::node::tests::the_sweep_reads_the_engine_owned_domain_and_never_the_ambient_one",
                 "iceoryx2::output::tests::write_raw_refuses_over_ceiling_and_grows_within_it",
                 "iceoryx2::posix_shared_memory_headroom",
-                "core::runtime::tap::tests::the_idle_backoff_holds_the_floor_through_an_ordinary_gap_and_climbs_only_once_quiet",
+                "iceoryx2::channel_idle_poll_backoff",
                 "core::runtime::tap::tests::a_bag_published_after_a_quiet_stretch_still_reaches_a_tap",
                 "iceoryx2::node::tests::a_deeper_open_survives_a_shallow_service_a_dead_holder_left_behind",
                 "iceoryx2::node::tests::channel_service_reopen_larger_fails_smaller_succeeds",
@@ -460,7 +460,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_channel_first_wired_to_a_newest_consumer_is_created_deep_enough_for_any_consumer",
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_helper_opening_first_joins_the_channel_the_engine_created_between_two_helpers",
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_disconnected_link_releases_the_services_it_held",
-                "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::channel_max_subscribers_is_the_fixed_cap_plus_tap_and_refuses_past_it",
+                "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::channel_max_subscribers_is_the_fixed_cap_plus_its_two_reservations_and_refuses_past_it",
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::destination_max_notifiers_is_the_fixed_cap_and_refuses_past_it",
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::only_a_reactive_destination_consumes_notifications_in_or_out_of_process",
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_helper_destination_that_never_drains_is_notified_by_no_source_and_still_opens_its_listener",
@@ -687,6 +687,14 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::json_schema::capability_extension_and_mesh_rendering_tests::a_local_only_runtime_renders_the_reason_its_session_did_not_open",
                 "core::json_schema::capability_extension_and_mesh_rendering_tests::a_peer_that_has_not_answered_still_deserializes_beside_one_that_has",
                 "core::runtime::mesh",
+                "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_link_whose_source_is_on_another_runtime",
+                "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_port_on_another_runtime_is_named_by_its_address_and_not_by_its_channel",
+                "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::the_source_a_caller_named_round_trips_and_misses",
+                "core::graph::edges",
+                "core::graph::graph_tests::links_from_another_runtime",
+                "core::runtime::operations_runtime::connect_wires_without_inspecting_a_port_tests",
+                "core::runtime::output_ports_in_this_runtimes_graph",
+                "iceoryx2::channel_name",
                 "core::runtime::stated_configuration_value",
                 "linux::host_identity",
             ],
@@ -774,6 +782,20 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "codec_roundtrip_rig",
             ],
         ),
+        // The engine-owned cross-runtime-link rig, for the same reason: running
+        // it needs a GPU and two whole runtimes, so nothing but this builds it.
+        (
+            "the cross-runtime-link rig example compiles",
+            "cargo",
+            &[
+                "build",
+                "--locked",
+                "-p",
+                "streamlib-engine",
+                "--example",
+                "cross_runtime_link_rig",
+            ],
+        ),
         // The deviceless arm's integration binaries, which the workflow runs
         // beside the slice. `attribute_macro_test` aside, these are the only
         // engine integration tests CI runs at all.
@@ -792,7 +814,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
             ],
         ),
         (
-            "the mesh's two-process proof (the only CI test that runs two runtimes)",
+            "the mesh's two-process proof (one of the two CI tests that run two runtimes)",
             "cargo",
             &[
                 "test",
@@ -801,6 +823,18 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "streamlib-engine",
                 "--test",
                 "runtime_mesh_two_processes",
+            ],
+        ),
+        (
+            "the cross-runtime-link two-process proof (the other one)",
+            "cargo",
+            &[
+                "test",
+                "--locked",
+                "-p",
+                "streamlib-engine",
+                "--test",
+                "cross_runtime_links_two_processes",
             ],
         ),
         // The dependency closure's licences, against `deny.toml`'s allowlist.

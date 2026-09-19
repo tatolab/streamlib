@@ -28,6 +28,11 @@ use crate::core::json_schema::{RuntimeMeshOutput, RuntimeMeshSessionOutput};
 use crate::core::runtime::RuntimeName;
 use crate::core::runtime::mesh::duplicate_runtime_name_on_the_mesh::refuse_this_runtime_if_its_name_is_already_live;
 use crate::core::runtime::mesh::hosted_control_plane_endpoint::HostedControlPlaneEndpointRegistry;
+use crate::core::runtime::mesh::mesh_link_ingress_table::MeshLinkIngressTable;
+use crate::core::runtime::mesh::mesh_port_egress_table::MeshPortEgressTable;
+use crate::core::runtime::mesh::output_ports_offered_on_the_mesh::{
+    OfferedOutputPortsQueryable, WhatThisRuntimeOffersOnTheMeshRegistry,
+};
 use crate::core::runtime::mesh::resolved_runtime_mesh_configuration::ResolvedRuntimeMeshConfiguration;
 use crate::core::runtime::mesh::runtime_mesh_description::{
     RuntimeMeshDescription, ask_a_peer_what_it_is,
@@ -35,6 +40,7 @@ use crate::core::runtime::mesh::runtime_mesh_description::{
 use crate::core::runtime::mesh::runtime_mesh_key::{AnnouncedRuntimeIdentity, RuntimeMeshKeySpace};
 use crate::core::runtime::mesh::runtime_mesh_peer_table::RuntimeMeshPeerTable;
 use crate::core::runtime::mesh::zenoh_work_off_any_tokio_runtime::off_any_current_thread_tokio_runtime;
+use crate::iceoryx2::Iceoryx2Node;
 
 /// How often every known peer is asked again what it is.
 ///
@@ -46,9 +52,25 @@ const HOW_OFTEN_EVERY_PEER_IS_ASKED_AGAIN: Duration = Duration::from_secs(5);
 /// This runtime's place on its mesh.
 pub struct RuntimeMeshMembership {
     mesh_name: String,
+    key_space: RuntimeMeshKeySpace,
     announced_identity: AnnouncedRuntimeIdentity,
     peers: Arc<RuntimeMeshPeerTable>,
     session: Mutex<RuntimeMeshSessionState>,
+    /// What this runtime serves to the mesh, brought up once it has a graph and
+    /// an iceoryx2 node — neither of which exists when the session opens.
+    serving_this_runtimes_output_ports: Mutex<Option<ServingThisRuntimesOutputPorts>>,
+    /// Every port on another runtime this one links from, brought up the same
+    /// way. Held rather than owned: the runtime hands the same table to every
+    /// `RuntimeContext`, through which the wiring op reaches it.
+    carrying_links_from_other_runtimes: Mutex<Option<Arc<MeshLinkIngressTable>>>,
+}
+
+/// What a runtime holds on the mesh to serve its own output ports: the
+/// queryable that answers which it offers, and the egresses the readers of
+/// those ports create.
+struct ServingThisRuntimesOutputPorts {
+    _offered_output_ports_queryable: OfferedOutputPortsQueryable,
+    _egress_table: MeshPortEgressTable,
 }
 
 /// Whether this runtime reached its mesh, and what it holds there if it did.
@@ -128,10 +150,148 @@ impl RuntimeMeshMembership {
 
         Ok(Self {
             mesh_name: resolved.mesh_name.to_string(),
+            key_space,
             announced_identity,
             peers,
             session: Mutex::new(session),
+            serving_this_runtimes_output_ports: Mutex::new(None),
+            carrying_links_from_other_runtimes: Mutex::new(None),
         })
+    }
+
+    /// The session this runtime is announced on, or `None` while it is not on
+    /// its mesh.
+    ///
+    /// Cloned out from under the lock rather than borrowed: every caller goes
+    /// on to declare something, which talks to the network, and `leave` wants
+    /// this lock.
+    fn the_session_it_is_announced_on(&self) -> Option<zenoh::Session> {
+        match &*self.session.lock() {
+            RuntimeMeshSessionState::Open(announced) => Some(announced.session.clone()),
+            RuntimeMeshSessionState::NotOnTheMesh { .. } => None,
+        }
+    }
+
+    /// Start serving this runtime's own output ports: answer a peer asking
+    /// which it offers, and send one the moment another runtime reads it.
+    ///
+    /// Called once the runtime has a graph and an iceoryx2 node, which
+    /// `Runner::new()` builds after the session is open. A runtime that never
+    /// reached its mesh serves nothing and says nothing about it: it has no
+    /// session to declare on, and `graph` already renders it local-only.
+    pub fn start_serving_this_runtimes_output_ports(
+        &self,
+        offered: &Arc<WhatThisRuntimeOffersOnTheMeshRegistry>,
+        iceoryx2_node: &Iceoryx2Node,
+    ) {
+        let Some(session) = self.the_session_it_is_announced_on() else {
+            return;
+        };
+        let key_space = self.key_space.clone();
+        let this_runtimes_name = self.announced_identity.runtime_name.clone();
+
+        let served = off_any_current_thread_tokio_runtime("serve", || {
+            let offered_output_ports_queryable = OfferedOutputPortsQueryable::declare(
+                &session,
+                &key_space,
+                &this_runtimes_name,
+                offered,
+            )?;
+            let egress_table = MeshPortEgressTable::watching_the_readers_of_this_runtimes_ports(
+                &session,
+                &key_space,
+                &this_runtimes_name,
+                offered,
+                iceoryx2_node,
+            )?;
+            Ok::<_, zenoh::Error>(ServingThisRuntimesOutputPorts {
+                _offered_output_ports_queryable: offered_output_ports_queryable,
+                _egress_table: egress_table,
+            })
+        });
+
+        match served {
+            Ok(Ok(serving)) => {
+                *self.serving_this_runtimes_output_ports.lock() = Some(serving);
+            }
+            Ok(Err(declare_failure)) => tracing::warn!(
+                "this runtime is on the mesh but cannot serve its own output ports, so no other \
+                 runtime can pull one: {declare_failure}"
+            ),
+            Err(cannot_spawn) => tracing::warn!(
+                "this runtime cannot serve its own output ports for want of a thread: \
+                 {cannot_spawn}"
+            ),
+        }
+    }
+
+    /// Start resolving this runtime's links from other runtimes, now that it
+    /// has an iceoryx2 node to carry them onto.
+    ///
+    /// A runtime that never reached its mesh resolves nothing: every link from
+    /// another runtime stays waiting, saying so, which is what `graph` already
+    /// renders beside a local-only session.
+    pub fn start_carrying_links_from_other_runtimes(
+        &self,
+        ingress_table: &Arc<MeshLinkIngressTable>,
+    ) {
+        let Some(session) = self.the_session_it_is_announced_on() else {
+            return;
+        };
+        *self.carrying_links_from_other_runtimes.lock() = Some(Arc::clone(ingress_table));
+        let key_space = self.key_space.clone();
+        let this_runtimes_name = self.announced_identity.runtime_name.clone();
+        let peers = Arc::clone(&self.peers);
+        let ingress_table = Arc::clone(ingress_table);
+        if let Err(cannot_spawn) = off_any_current_thread_tokio_runtime("carry", move || {
+            ingress_table.start_resolving_every_waiting_link(
+                &session,
+                &key_space,
+                &this_runtimes_name,
+                &peers,
+            );
+        }) {
+            tracing::warn!(
+                "this runtime cannot resolve its links from other runtimes for want of a thread: \
+                 {cannot_spawn}"
+            );
+        }
+    }
+
+    /// Note a link `connect` has just applied against a port on another
+    /// runtime, so the mesh resolves it.
+    ///
+    /// A runtime that never reached its mesh resolves nothing, so the link is
+    /// told that here and never asked about again — blaming the runtime it
+    /// names would report a healthy peer as absent when it is this end that
+    /// cannot see it.
+    pub fn note_a_link_from_another_runtime(
+        &self,
+        address: crate::core::graph::MeshPortAddress,
+        link_id: crate::core::graph::LinkUniqueId,
+        how_far_it_has_got: Arc<Mutex<crate::core::graph::RemoteLinkResolution>>,
+    ) {
+        let carrying = self.carrying_links_from_other_runtimes.lock().clone();
+        let Some(ingress_table) = carrying else {
+            *how_far_it_has_got.lock() = crate::core::graph::RemoteLinkResolution::AwaitingRemote {
+                reason: format!(
+                    "this runtime is not on the {} mesh, so it reads nothing from it: {}",
+                    self.mesh_name,
+                    self.why_it_is_not_on_its_mesh()
+                        .unwrap_or_else(|| "no reason was recorded".to_string()),
+                ),
+            };
+            return;
+        };
+        ingress_table.note_a_link_waiting_on(address, link_id, how_far_it_has_got);
+    }
+
+    /// Why this runtime is not on its mesh, or `None` while it is.
+    fn why_it_is_not_on_its_mesh(&self) -> Option<String> {
+        match &*self.session.lock() {
+            RuntimeMeshSessionState::Open(_) => None,
+            RuntimeMeshSessionState::NotOnTheMesh { reason } => Some(reason.clone()),
+        }
     }
 
     /// Leave the mesh: undeclare the token first, so peers see this runtime go
@@ -139,6 +299,18 @@ impl RuntimeMeshMembership {
     ///
     /// Idempotent, because `stop()` is.
     pub fn leave(&self, why: &str) {
+        // Before the session: dropping the egresses undeclares their tokens and
+        // releases their channel slots while there is still a session to say so
+        // on, so a reader sees every port stop rather than inferring it from a
+        // lease running out. Taken out under the lock and dropped outside it,
+        // because that teardown joins threads and talks to the network.
+        let stopped_serving = self.serving_this_runtimes_output_ports.lock().take();
+        drop(stopped_serving);
+        let stopped_carrying = self.carrying_links_from_other_runtimes.lock().take();
+        if let Some(carrying) = stopped_carrying {
+            carrying.stop();
+        }
+
         let previous = std::mem::replace(
             &mut *self.session.lock(),
             RuntimeMeshSessionState::NotOnTheMesh {
@@ -189,6 +361,44 @@ impl RuntimeMeshMembership {
                  kernel closes it at process exit instead: {cannot_spawn}"
             );
         }
+    }
+
+    /// A membership that never reached a mesh, for a test that needs a
+    /// runtime's name and mesh name and no network.
+    ///
+    /// The same state `join` lands in when a session cannot open, reached
+    /// without opening one.
+    #[cfg(test)]
+    pub(crate) fn that_never_reached_its_mesh(runtime_name: &str, mesh_name: &str) -> Self {
+        Self {
+            mesh_name: mesh_name.to_string(),
+            key_space: RuntimeMeshKeySpace::of(
+                crate::core::runtime::mesh::runtime_mesh_name::RuntimeMeshName::
+                    from_configuration_environment_or_default(Some(mesh_name.to_string()))
+                    .expect("a test names a legal mesh"),
+            ),
+            announced_identity: AnnouncedRuntimeIdentity {
+                runtime_name: runtime_name.to_string(),
+                host_identity: crate::core::runtime::mesh::HostIdentity::of_this_host(),
+                process_id: std::process::id(),
+            },
+            peers: Arc::new(RuntimeMeshPeerTable::default()),
+            session: Mutex::new(RuntimeMeshSessionState::NotOnTheMesh {
+                reason: "this membership was built for a test and opened no session".to_string(),
+            }),
+            serving_this_runtimes_output_ports: Mutex::new(None),
+            carrying_links_from_other_runtimes: Mutex::new(None),
+        }
+    }
+
+    /// The name this runtime is addressed by on its mesh.
+    pub fn runtime_name(&self) -> &str {
+        &self.announced_identity.runtime_name
+    }
+
+    /// The mesh this runtime is on.
+    pub fn mesh_name(&self) -> &str {
+        &self.mesh_name
     }
 
     /// This runtime's place on the mesh, as `graph` renders it.

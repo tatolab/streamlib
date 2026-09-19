@@ -5,6 +5,8 @@ use crate::core::graph::{
     Link, LinkTraversal, LinkTraversalMut, ProcessorNode, ProcessorTraversal, ProcessorTraversalMut,
 };
 
+use super::super::traversal_source::link_at;
+
 impl<'a> ProcessorTraversal<'a> {
     /// Calls the provided closure for each processor node in the traversal.
     ///
@@ -41,8 +43,8 @@ impl<'a> LinkTraversal<'a> {
     /// This is useful for side effects (logging, events, etc.) while continuing
     /// the traversal chain. Similar to [`Iterator::inspect`].
     pub fn inspect<F: FnMut(&Link)>(self, mut f: F) -> Self {
-        for &idx in &self.ids {
-            if let Some(link) = self.graph.edge_weight(idx) {
+        for at in &self.ids {
+            if let Some(link) = link_at(self.graph, self.links_from_another_runtime, at) {
                 f(link);
             }
         }
@@ -56,8 +58,8 @@ impl<'a> LinkTraversalMut<'a> {
     /// This is useful for side effects (logging, events, etc.) while continuing
     /// the traversal chain. Similar to [`Iterator::inspect`].
     pub fn inspect<F: FnMut(&Link)>(self, mut f: F) -> Self {
-        for &idx in &self.ids {
-            if let Some(link) = self.graph.edge_weight(idx) {
+        for at in &self.ids {
+            if let Some(link) = link_at(self.graph, self.links_from_another_runtime, at) {
                 f(link);
             }
         }

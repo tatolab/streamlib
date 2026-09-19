@@ -32,6 +32,19 @@ const MESH_KEY_ROOT_CHUNK: &str = "streamlib";
 /// it, and a display name may not begin with `@`, so no address collides.
 const RUNTIME_ANNOUNCEMENT_CHUNK: &str = "@runtime";
 
+/// The chunk under a runtime's own name where it answers which output ports it
+/// offers. Verbatim like every `@` chunk, so `@runtime/**` — the announcement
+/// subscription — never reaches it.
+const OFFERED_OUTPUT_PORTS_CHUNK: &str = "@offered-ports";
+
+/// The chunk under a runtime's own name where the runtimes reading its ports
+/// hold their tokens: `@readers/<display name>/<port>/<reader's runtime name>`.
+const READERS_CHUNK: &str = "@readers";
+
+/// The chunk under a runtime's own name where it holds one token per port it is
+/// currently sending: `@egress/<display name>/<port>`.
+const EGRESS_CHUNK: &str = "@egress";
+
 /// What a runtime's own announcement is named by. Every field is on the token
 /// key, so a peer reads all three off a token whose runtime is already gone.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -53,6 +66,19 @@ impl AnnouncedRuntimeIdentity {
             process_id: std::process::id(),
         }
     }
+}
+
+/// One runtime reading one output port of another, as its token names it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ReaderOfAnOutputPort {
+    /// The runtime that owns the port being read.
+    pub source_runtime_name: String,
+    /// The display name of the processor that owns it.
+    pub processor_display_name: String,
+    /// The port's own name.
+    pub port_name: String,
+    /// The runtime doing the reading.
+    pub reading_runtime_name: String,
 }
 
 /// One mesh's key space.
@@ -81,6 +107,105 @@ impl RuntimeMeshKeySpace {
             announced.runtime_name,
             announced.host_identity.as_one_key_chunk(),
             announced.process_id
+        )
+    }
+
+    /// The key a runtime answers on when a peer asks which output ports it
+    /// offers.
+    ///
+    /// Under the runtime's name rather than its whole announced identity: a
+    /// peer knows the name it is pulling from and nothing else about the
+    /// process behind it. Two live runtimes holding one name is refused as an
+    /// address collision before a link is ever carried from either.
+    pub fn offered_output_ports_key_of(&self, runtime_name: &str) -> String {
+        format!(
+            "{}/{runtime_name}/{OFFERED_OUTPUT_PORTS_CHUNK}",
+            self.runtime_announcement_root()
+        )
+    }
+
+    /// The token a runtime declares to say it is reading one port of
+    /// `source_runtime_name`.
+    ///
+    /// The source runtime watches these: the first reader of a port creates its
+    /// egress, and the last reader leaving removes it, so a runtime does no
+    /// network work for a port nobody pulls.
+    pub fn reader_token_key(
+        &self,
+        source_runtime_name: &str,
+        processor_display_name: &str,
+        port_name: &str,
+        reading_runtime_name: &str,
+    ) -> String {
+        format!(
+            "{}/{source_runtime_name}/{READERS_CHUNK}/{processor_display_name}/{port_name}/\
+             {reading_runtime_name}",
+            self.runtime_announcement_root()
+        )
+    }
+
+    /// The key a source runtime subscribes to in order to see every reader of
+    /// every one of its ports.
+    pub fn every_reader_token_of(&self, source_runtime_name: &str) -> String {
+        format!(
+            "{}/{source_runtime_name}/{READERS_CHUNK}/**",
+            self.runtime_announcement_root()
+        )
+    }
+
+    /// Which port a reader token names, or `None` when the key is not one this
+    /// engine wrote.
+    pub fn read_a_reader_token_key(&self, key: &str) -> Option<ReaderOfAnOutputPort> {
+        let readers_root = format!("{}/", self.runtime_announcement_root());
+        let rest = key.strip_prefix(&readers_root)?;
+        let mut chunks = rest.split('/');
+        let source_runtime_name = chunks.next()?.to_string();
+        if chunks.next()? != READERS_CHUNK {
+            return None;
+        }
+        let processor_display_name = chunks.next()?.to_string();
+        let port_name = chunks.next()?.to_string();
+        let reading_runtime_name = chunks.next()?.to_string();
+        if chunks.next().is_some() {
+            return None;
+        }
+        Some(ReaderOfAnOutputPort {
+            source_runtime_name,
+            processor_display_name,
+            port_name,
+            reading_runtime_name,
+        })
+    }
+
+    /// The token a source runtime declares while it is sending one port.
+    ///
+    /// A reader watches this: the token going while the runtime stays says the
+    /// port stopped being sent, which returns the link to waiting.
+    pub fn egress_token_key(
+        &self,
+        source_runtime_name: &str,
+        processor_display_name: &str,
+        port_name: &str,
+    ) -> String {
+        format!(
+            "{}/{source_runtime_name}/{EGRESS_CHUNK}/{processor_display_name}/{port_name}",
+            self.runtime_announcement_root()
+        )
+    }
+
+    /// The key one port's bags ride on.
+    ///
+    /// Outside the `@runtime` subtree, because this is the port's own address:
+    /// `streamlib/<mesh name>/<runtime name>/<display name>/<port>`.
+    pub fn data_key(
+        &self,
+        source_runtime_name: &str,
+        processor_display_name: &str,
+        port_name: &str,
+    ) -> String {
+        format!(
+            "{MESH_KEY_ROOT_CHUNK}/{}/{source_runtime_name}/{processor_display_name}/{port_name}",
+            self.mesh_name
         )
     }
 
@@ -329,6 +454,132 @@ mod tests {
                 key_space.read_an_announcement_key(foreign),
                 None,
                 "{foreign:?} must read as no identity"
+            );
+        }
+    }
+
+    /// A reader token carries the whole of what the source runtime needs to
+    /// decide which port to send and to whom.
+    #[test]
+    fn a_reader_token_key_reads_back_as_the_port_and_the_reader() {
+        let key_space = a_key_space("lab");
+        let key = key_space.reader_token_key(
+            "bench-cam-a1b2",
+            "Camera Source 2",
+            "video",
+            "desk-viewer-c3d4",
+        );
+        assert_eq!(
+            key_space.read_a_reader_token_key(&key),
+            Some(ReaderOfAnOutputPort {
+                source_runtime_name: "bench-cam-a1b2".to_string(),
+                processor_display_name: "Camera Source 2".to_string(),
+                port_name: "video".to_string(),
+                reading_runtime_name: "desk-viewer-c3d4".to_string(),
+            })
+        );
+    }
+
+    /// A source runtime's reader subscription reaches every reader of every one
+    /// of its ports, and nobody else's.
+    #[test]
+    fn the_reader_subscription_reaches_every_reader_of_this_runtimes_ports_only() {
+        let key_space = a_key_space("lab");
+        let ours = keyexpr::new(key_space.every_reader_token_of("bench-cam-a1b2").as_str())
+            .expect("a key expression")
+            .to_owned();
+
+        for (display, port, reader) in [
+            ("CameraSource", "video", "desk-one"),
+            ("CameraSource", "video", "desk-two"),
+            ("MicrophoneSource", "audio", "desk-one"),
+        ] {
+            let held = key_space.reader_token_key("bench-cam-a1b2", display, port, reader);
+            assert!(
+                ours.includes(keyexpr::new(held.as_str()).expect("a key expression")),
+                "{ours} must reach {held}"
+            );
+        }
+
+        let anothers =
+            key_space.reader_token_key("bench-cam-c3d4", "CameraSource", "video", "desk-one");
+        assert!(
+            !ours.includes(keyexpr::new(anothers.as_str()).expect("a key expression")),
+            "{ours} must not reach {anothers}"
+        );
+    }
+
+    /// The announcement subscription never reaches the reader, egress or
+    /// offered-port keys, and the reader reader never reaches an announcement:
+    /// each hangs under a chunk beginning `@`, which no wildcard matches.
+    #[test]
+    fn the_at_chunks_keep_every_subtree_out_of_every_others_subscription() {
+        let key_space = a_key_space("lab");
+        let announcements = keyexpr::new(key_space.every_announcement_key().as_str())
+            .expect("a key expression")
+            .to_owned();
+
+        for out_of_reach in [
+            key_space.reader_token_key("bench", "CameraSource", "video", "desk"),
+            key_space.egress_token_key("bench", "CameraSource", "video"),
+            key_space.offered_output_ports_key_of("bench"),
+        ] {
+            assert!(
+                !announcements
+                    .includes(keyexpr::new(out_of_reach.as_str()).expect("a key expression")),
+                "{announcements} must not reach {out_of_reach}"
+            );
+            assert_eq!(
+                key_space.read_an_announcement_key(&out_of_reach),
+                None,
+                "{out_of_reach} must not read as an announcement"
+            );
+        }
+
+        assert_eq!(
+            key_space
+                .read_a_reader_token_key(&key_space.announcement_key_for(&an_identity("bench", 7))),
+            None,
+            "an announcement must not read as a reader token"
+        );
+    }
+
+    /// A port's own bags ride outside the `@runtime` subtree, at the address
+    /// the port is named by — so the data key is the address and nothing else.
+    #[test]
+    fn a_ports_bags_ride_at_the_address_the_port_is_named_by() {
+        let key_space = a_key_space("lab");
+        let data_key = key_space.data_key("bench-cam-a1b2", "Camera Source 2", "video");
+        assert_eq!(
+            data_key,
+            "streamlib/lab/bench-cam-a1b2/Camera Source 2/video"
+        );
+        keyexpr::new(data_key.as_str()).expect("the data key is a key expression");
+
+        assert_eq!(
+            a_key_space("other").data_key("bench-cam-a1b2", "Camera Source 2", "video"),
+            "streamlib/other/bench-cam-a1b2/Camera Source 2/video",
+            "two meshes never share a port's data key"
+        );
+    }
+
+    /// A key this engine did not write reads as no reader rather than as one
+    /// with half its parts invented.
+    #[test]
+    fn a_key_this_engine_did_not_write_reads_as_no_reader() {
+        let key_space = a_key_space("lab");
+        for foreign in [
+            "streamlib/lab/@runtime/bench/@readers",
+            "streamlib/lab/@runtime/bench/@readers/CameraSource",
+            "streamlib/lab/@runtime/bench/@readers/CameraSource/video",
+            "streamlib/lab/@runtime/bench/@readers/CameraSource/video/desk/extra",
+            "streamlib/lab/@runtime/bench/@egress/CameraSource/video",
+            "ros2/lab/@runtime/bench/@readers/CameraSource/video/desk",
+        ] {
+            assert_eq!(
+                key_space.read_a_reader_token_key(foreign),
+                None,
+                "{foreign:?} must read as no reader"
             );
         }
     }

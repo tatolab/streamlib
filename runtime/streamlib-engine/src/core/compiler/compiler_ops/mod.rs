@@ -13,6 +13,9 @@ pub(crate) use apply_processor_config_update_op::{
     ProcessorConfigUpdateOutcome, apply_processor_config_update,
 };
 pub use open_iceoryx2_service_op::{close_iceoryx2_service, open_iceoryx2_service};
-pub(crate) use open_iceoryx2_service_op::{find_channel_source_port, resolve_channel_sizing};
+pub(crate) use open_iceoryx2_service_op::{
+    find_the_source_a_caller_named, open_the_channel_of_an_output_port_nothing_local_reads,
+    resolve_channel_sizing,
+};
 pub(crate) use prepare_processor_op::prepare_processor;
 pub(crate) use spawn_processor_op::spawn_processor;

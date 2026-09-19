@@ -258,7 +258,7 @@ fn initialize_result() -> Value {
             "prompts": { "listChanged": false },
         },
         "serverInfo": { "name": MCP_SERVER_NAME, "version": MCP_SERVER_VERSION },
-        "instructions": "StreamLib runtime control plane for one running node. Observe it with `graph` (processors, their ids, port names and links), `tap` (raw bags on a channel spelled `<processor id, lowercased>/<output port>`), `logs` and `exchange` (a published frame's pixels). Change its live graph with `add_processor`, `connect`, `disconnect` and `remove_processor`: a Python processor class written to a module the app can import — a file beside `app.py`, or a pip-installed package — is added by its `module:ClassName` path and runs in its own helper process; a link is spliced in by connecting the new processor on both sides, then disconnecting the link it replaces. Read `graph` first for ids and port names, and again afterwards to confirm a link's state is `wired` and the processor is `Running`. A `connect` onto a processor in a helper process returns before that helper has opened its port, so its link reads `pending` until the helper answers and then `wired`; a link that reads `error` carries the helper's own reason in `error_reason` and will never carry a bag — read the reason, `disconnect` it, and fix what it names. The resource `streamlib://processor-catalog` lists every type `add_processor` can take with its config schema and ports, and `streamlib://graph` is the live graph. The prompts are step-by-step recipes over these tools: inserting a processor into a link, fanning an output to another consumer, showing a channel on a virtual camera, and looking at what a channel carries.",
+        "instructions": "StreamLib runtime control plane for one running node. Observe it with `graph` (processors, their ids, port names and links), `tap` (raw bags on a channel spelled `<processor id, lowercased>/<output port>`), `logs` and `exchange` (a published frame's pixels). Change its live graph with `add_processor`, `connect`, `disconnect` and `remove_processor`: a Python processor class written to a module the app can import — a file beside `app.py`, or a pip-installed package — is added by its `module:ClassName` path and runs in its own helper process; a link is spliced in by connecting the new processor on both sides, then disconnecting the link it replaces. Read `graph` first for ids and port names, and again afterwards to confirm a link's state is `wired` and the processor is `Running`. A `connect` onto a processor in a helper process returns before that helper has opened its port, so its link reads `pending` until the helper answers and then `wired`; a link that reads `error` carries the refusing end's own reason in `error_reason` and will never carry a bag — read the reason, `disconnect` it, and fix what it names. A link whose source is a port on another runtime reads `awaiting_remote` until that runtime is on the mesh and offers the port, with `awaiting_remote_reason` saying what it is still waiting on; unlike `error` it is not final, and the link wires itself the moment what it names turns up. The resource `streamlib://processor-catalog` lists every type `add_processor` can take with its config schema and ports, and `streamlib://graph` is the live graph. The prompts are step-by-step recipes over these tools: inserting a processor into a link, fanning an output to another consumer, showing a channel on a virtual camera, and looking at what a channel carries.",
     })
 }
 
@@ -282,7 +282,7 @@ fn tool_definitions() -> Vec<Value> {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "channel": { "type": "string", "description": "Channel data-service name, e.g. {source_processor}/{source_output_port}." },
+                    "channel": { "type": "string", "description": "What the port is named by: a channel data-service name for a port on this node, e.g. {source_processor}/{source_output_port}, or a port on another runtime by its mesh address {runtime_name}/{processor_display_name}/{port} — the channel a remote link lands on is hashed from that address and is nothing to spell." },
                     "count": { "type": "integer", "minimum": 1, "description": "Number of bags to collect before returning. Defaults to a small sample." },
                     "max_bag_bytes": { "type": "integer", "minimum": 1, "maximum": MAX_TAP_RESPONSE_BAG_BYTES, "description": "Per-bag ceiling on the bytes hex-encoded into the result. A bag over the cap comes back flagged `hex_truncated` and cannot be decoded, so raise this rather than accept one. Defaults high enough to carry any audio block whole." }
                 },
@@ -1237,8 +1237,11 @@ mod tests {
         else {
             panic!("expected a connect then a disconnect, recorded {recorded:?}");
         };
-        assert_eq!(from.processor_id.as_str(), "cam-1");
-        assert_eq!(from.port_name, "video");
+        assert_eq!(
+            from.processor_id_on_this_runtime().map(|id| id.as_str()),
+            Some("cam-1")
+        );
+        assert_eq!(from.port_name(), "video");
         assert_eq!(to.processor_id.as_str(), "fx-1");
         assert_eq!(to.port_name, "video_from_upstream");
         assert_eq!(link_id.as_str(), "link-9");

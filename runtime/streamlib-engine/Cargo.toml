@@ -85,6 +85,7 @@ crossbeam-queue = "0.3"  # Lock-free MPMC queue for thread-safe mailboxes
 iceoryx2 = "0.9.3"  # Zero-copy IPC pub/sub for cross-process communication
 iceoryx2-log = "0.9.3"  # Bridge iceoryx2's internal log records into streamlib tracing
 rmp-serde = "1.3"  # MessagePack serialization for frame payloads
+rmp.workspace = true  # Raw msgpack markers: the egress walk over a bag's top-level keys
 serde_bytes.workspace = true  # `samples` rides the wire as msgpack `bin`, not an array
 rubato.workspace = true  # Resampler behind the audio window contract's read-side stage
 signal-hook = "0.3"  # Native signal handling (SIGTERM, SIGINT) for event bus
@@ -258,6 +259,20 @@ path = "tests/bin/runtime_mesh_peer.rs"
 [[test]]
 name = "runtime_mesh_two_processes"
 path = "tests/runtime_mesh_two_processes.rs"
+
+# One end of a cross-runtime link in its own process, driven by the
+# `cross_runtime_links_two_processes` integration test. CI has no GPU, so it
+# stands a runtime's mesh half up without a `Runner`.
+[[bin]]
+name = "cross_runtime_link_peer"
+path = "tests/bin/cross_runtime_link_peer.rs"
+
+# The two-process cross-runtime-link proof. Named in
+# `.github/workflows/test.yml`'s engine slice and the `run_local_ci_gates`
+# mirror, or it runs nowhere.
+[[test]]
+name = "cross_runtime_links_two_processes"
+path = "tests/cross_runtime_links_two_processes.rs"
 # Strace-backed no-syscalls test child. Built under `cargo test` via
 # the path dep; not needed for normal builds.
 

@@ -228,6 +228,26 @@ pub fn source_channel_name(source_processor: &str, source_output: &str) -> Resul
     Ok(name)
 }
 
+/// The channel a remote link's bags land on, derived from the port's mesh
+/// address.
+///
+/// One channel per source address, shared by every local link from it: the
+/// ingress is that channel's single publisher and each destination subscribes
+/// like any other. The name is engine-derived and opaque on purpose — an
+/// address carries a display name a user chose, which is legal on the mesh and
+/// not in this grammar, so it is hashed whole rather than transliterated into
+/// something that could collide with another address or with a processor id.
+///
+/// `mesh_port_address` is the rendered `<runtime name>/<display name>/<port>`.
+pub fn mesh_ingress_channel_name(mesh_port_address: &str) -> ChannelName {
+    let name = ChannelName(format!(
+        "meshlink-{:016x}{CHANNEL_CHUNK_SEPARATOR}bags",
+        fnv1a_64(mesh_port_address.as_bytes())
+    ));
+    debug_assert!(validate_channel_name(name.as_str()).is_ok());
+    name
+}
+
 /// The name a destination knows one of its inbound links by: the source channel
 /// name that link subscribed to, as [`source_channel_name`] derives it.
 ///
@@ -553,5 +573,58 @@ mod tests {
             .expect("a grammar-legal source output port must produce a channel name");
         PortKey::new(channel.as_str())
             .expect("a grammar-legal channel name must always fit the PortKey wire");
+    }
+}
+
+#[cfg(test)]
+mod mesh_ingress_channel_name_tests {
+    use super::*;
+
+    /// One address always derives the same channel, so the compiler wiring a
+    /// destination and the ingress opening the publisher meet on one name.
+    #[test]
+    fn one_address_always_derives_the_same_channel() {
+        let derived = mesh_ingress_channel_name("bench-cam-a1b2/CameraSource/video");
+        assert_eq!(
+            derived,
+            mesh_ingress_channel_name("bench-cam-a1b2/CameraSource/video")
+        );
+        assert_eq!(derived.as_str(), "meshlink-c030e16452e1f7cb/bags");
+    }
+
+    /// Two addresses never land on one channel, whatever a user called their
+    /// processors.
+    #[test]
+    fn two_addresses_never_land_on_one_channel() {
+        let addresses = [
+            "bench-cam-a1b2/CameraSource/video",
+            "bench-cam-a1b2/CameraSource/audio",
+            "bench-cam-a1b2/CameraSource 2/video",
+            "bench-cam-c3d4/CameraSource/video",
+        ];
+        let mut derived: Vec<String> = addresses
+            .iter()
+            .map(|address| mesh_ingress_channel_name(address).into_string())
+            .collect();
+        derived.sort();
+        derived.dedup();
+        assert_eq!(derived.len(), addresses.len());
+    }
+
+    /// An address the channel grammar could never carry — a display name with
+    /// spaces, punctuation or unicode, all legal on the mesh — still derives a
+    /// legal channel name, because the address is hashed rather than spelled.
+    #[test]
+    fn an_address_the_channel_grammar_could_not_carry_still_derives_a_legal_name() {
+        for address in [
+            "lab-two/Camera Source 2/video",
+            "lab-two/カメラ/video",
+            "lab-two/Depth.Estimator/DEPTH",
+            &format!("lab-two/{}/video", "x".repeat(4_096)),
+        ] {
+            let derived = mesh_ingress_channel_name(address);
+            validate_channel_name(derived.as_str())
+                .unwrap_or_else(|why| panic!("{address}: {why}"));
+        }
     }
 }

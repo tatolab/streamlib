@@ -209,12 +209,18 @@ pub(crate) fn create_iceoryx2_node_in_domain(
 
 /// The sizing a channel data service is created with, and that every opener
 /// reopens it at — the parameters iceoryx2 verifies on each open.
+///
+/// Reachable rather than supported: the cross-runtime-link fixture stands a
+/// runtime's mesh half up without a `Runner`, and an egress asks for exactly
+/// the sizing the compiler created the channel with.
+#[doc(hidden)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ChannelSizing {
-    /// The fixed destination slot count plus the reserved tap slot.
-    pub(crate) max_subscribers: usize,
+pub struct ChannelSizing {
+    /// The fixed destination slot count plus the two reserved slots — one for
+    /// a tap, one for the mesh's egress.
+    pub max_subscribers: usize,
     /// The deepest ring any subscriber on the channel may take.
-    pub(crate) channel_service_creation_depth: usize,
+    pub channel_service_creation_depth: usize,
 }
 
 /// The publisher of a channel data service: `[u8]` frames under the
@@ -296,7 +302,9 @@ impl Iceoryx2Node {
     /// (`{source_processor}/{source_output_port}`). The service carries exactly
     /// [`MAX_PUBLISHERS_PER_CHANNEL`] (1) publisher — the source — and
     /// `max_subscribers` slots: the fixed destination cap plus the reserved tap
-    /// slot ([`crate::iceoryx2::RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL`]).
+    /// slot ([`crate::iceoryx2::RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL`]) and
+    /// the mesh egress's
+    /// ([`crate::iceoryx2::RESERVED_MESH_EGRESS_SUBSCRIBER_SLOTS_PER_CHANNEL`]).
     /// Every opener (the engine and every helper) must request the SAME
     /// `max_subscribers` — iceoryx2 verifies it on `open`.
     ///
@@ -640,9 +648,11 @@ impl Iceoryx2Service {
     /// Create the channel's reserved-slot tap subscriber, discriminating the
     /// slot-exhaustion case from every other transport failure.
     ///
-    /// A channel data service is opened with
-    /// `max_subscribers = MAX_DESTINATIONS_PER_CHANNEL + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL`.
-    /// Destination subscribers take their slots as links are wired; the reserved
+    /// A channel data service is opened with `max_subscribers =
+    /// MAX_DESTINATIONS_PER_CHANNEL + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL
+    /// + RESERVED_MESH_EGRESS_SUBSCRIBER_SLOTS_PER_CHANNEL`. Destination
+    /// subscribers take their slots as links are wired, the mesh's egress takes
+    /// its own when another runtime reads the port, and the remaining reserved
     /// slot is what a tap consumes here, with a ring `tap_ring_depth` deep.
     /// iceoryx2 fixes `max_subscribers` at create time, so a tap arriving when
     /// every slot is taken trips

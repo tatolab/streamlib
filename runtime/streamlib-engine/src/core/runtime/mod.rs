@@ -11,6 +11,7 @@ pub mod mesh;
 pub(crate) mod mesh_address_chunk;
 mod operations;
 mod operations_runtime;
+mod output_ports_in_this_runtimes_graph;
 pub(crate) use operations_runtime::mark_this_thread_as_a_processor_execution_thread;
 #[allow(clippy::module_inception)]
 mod runtime;
@@ -44,6 +45,7 @@ pub use mesh::{
 };
 pub use mesh_address_chunk::what_one_mesh_address_chunk_may_be;
 pub use operations::{BoxFuture, RuntimeOperations};
+pub(crate) use output_ports_in_this_runtimes_graph::OutputPortsInThisRuntimesGraph;
 pub use runtime::Runner;
 pub use runtime_mesh_configuration::RuntimeMeshConfiguration;
 pub use runtime_name::RuntimeName;

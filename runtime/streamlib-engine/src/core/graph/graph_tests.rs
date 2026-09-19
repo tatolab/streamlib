@@ -402,8 +402,13 @@ mod edge_query_ops {
 
         let link = graph.traversal().e(link_id.as_str()).first().unwrap();
 
-        assert_eq!(link.from_port().processor_id.as_str(), upstream_id);
-        assert_eq!(link.from_port().port_name, "out1");
+        assert_eq!(
+            link.from_port()
+                .processor_id_on_this_runtime()
+                .map(|id| id.as_str()),
+            Some(upstream_id.as_str())
+        );
+        assert_eq!(link.from_port().port_name(), "out1");
         assert_eq!(link.to_port().processor_id.as_str(), downstream_id);
         assert_eq!(link.to_port().port_name, "in1");
     }
@@ -1351,5 +1356,224 @@ mod display_name_disambiguation {
                 node.id
             );
         }
+    }
+}
+
+// =============================================================================
+// Links whose source is a port on another runtime
+// =============================================================================
+
+mod links_from_another_runtime {
+    use super::*;
+    use crate::core::graph::{InputLinkPortRef, MeshPortAddress};
+
+    fn a_mesh_address() -> MeshPortAddress {
+        MeshPortAddress::new("bench-cam-a1b2", "CameraSource", "video").expect("a legal address")
+    }
+
+    /// A graph with one input-only processor and one link into it from another
+    /// runtime, with the link's id and the destination's id.
+    fn a_graph_carrying_one_link_from_another_runtime() -> (Graph, String, String) {
+        let mut graph = test_graph();
+        let destination = graph
+            .traversal_mut()
+            .add_v(MockInputOnlyProcessor::Processor::node(Default::default()))
+            .first()
+            .expect("the destination is added")
+            .id
+            .clone();
+        let link_id = graph
+            .traversal_mut()
+            .add_link_from_another_runtime(
+                a_mesh_address(),
+                InputLinkPortRef::new(destination.clone(), "in1"),
+            )
+            .first()
+            .expect("the link is kept")
+            .id
+            .to_string();
+        (graph, link_id, destination.to_string())
+    }
+
+    /// The link is reachable by its own id, and carries the address it was
+    /// named by rather than a local reference.
+    #[test]
+    fn a_link_from_another_runtime_is_found_by_its_id() {
+        let (graph, link_id, _) = a_graph_carrying_one_link_from_another_runtime();
+
+        let found = graph
+            .traversal()
+            .e(link_id.as_str())
+            .first()
+            .expect("the link is in the graph");
+        assert_eq!(
+            found.from_port().mesh_port_address(),
+            Some(&a_mesh_address())
+        );
+        assert_eq!(found.to_port().port_name, "in1");
+    }
+
+    /// It is one of the graph's links, so every walk over them reaches it.
+    #[test]
+    fn a_link_from_another_runtime_is_one_of_the_graphs_links() {
+        let (graph, link_id, _) = a_graph_carrying_one_link_from_another_runtime();
+
+        assert_eq!(graph.traversal().e(()).ids().len(), 1);
+        assert_eq!(
+            graph
+                .traversal()
+                .e(())
+                .first()
+                .map(|link| link.id.to_string()),
+            Some(link_id)
+        );
+    }
+
+    /// Its destination's inbound links include it — which is what keeps the
+    /// fan-in cap, the windowed-port refusal and the notify sizing counting it.
+    #[test]
+    fn its_destinations_inbound_links_include_it() {
+        let (graph, link_id, destination) = a_graph_carrying_one_link_from_another_runtime();
+
+        let inbound = graph.traversal().v(destination.as_str()).in_e().ids();
+        assert_eq!(
+            inbound.iter().map(|id| id.to_string()).collect::<Vec<_>>(),
+            vec![link_id]
+        );
+    }
+
+    /// No node's outbound links include it: nothing here produces it.
+    #[test]
+    fn no_nodes_outbound_links_include_it() {
+        let (graph, _, destination) = a_graph_carrying_one_link_from_another_runtime();
+
+        assert!(
+            graph
+                .traversal()
+                .v(destination.as_str())
+                .out_e()
+                .ids()
+                .is_empty()
+        );
+        assert!(graph.traversal().v(()).out_e().ids().is_empty());
+    }
+
+    /// Its destination is the node it carries into, and it carries from no node
+    /// here — the honest answer for a source on another machine.
+    #[test]
+    fn it_carries_into_its_destination_and_out_of_no_node_here() {
+        let (graph, link_id, destination) = a_graph_carrying_one_link_from_another_runtime();
+
+        assert_eq!(
+            graph
+                .traversal()
+                .e(link_id.as_str())
+                .in_v()
+                .ids()
+                .iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>(),
+            vec![destination]
+        );
+        assert!(
+            graph
+                .traversal()
+                .e(link_id.as_str())
+                .out_v()
+                .ids()
+                .is_empty()
+        );
+    }
+
+    /// Disconnecting it takes it out of the graph.
+    #[test]
+    fn dropping_it_takes_it_out_of_the_graph() {
+        let (mut graph, link_id, _) = a_graph_carrying_one_link_from_another_runtime();
+
+        graph.traversal_mut().e(link_id.as_str()).drop();
+
+        assert!(graph.traversal().e(link_id.as_str()).first().is_none());
+        assert!(graph.traversal().e(()).ids().is_empty());
+    }
+
+    /// Removing its destination takes it with it, the way petgraph cascades a
+    /// node's incident edges — otherwise the link would outlive its processor.
+    #[test]
+    fn removing_its_destination_takes_it_too() {
+        let (mut graph, link_id, destination) = a_graph_carrying_one_link_from_another_runtime();
+
+        graph.traversal_mut().v(destination.as_str()).drop();
+
+        assert!(graph.traversal().e(link_id.as_str()).first().is_none());
+        assert!(graph.traversal().e(()).ids().is_empty());
+    }
+
+    /// A component set on it is read back off it, so the wiring state and the
+    /// services a link holds work exactly as they do on an edge.
+    #[test]
+    fn a_component_set_on_it_is_read_back_off_it() {
+        let (mut graph, link_id, _) = a_graph_carrying_one_link_from_another_runtime();
+
+        graph
+            .traversal_mut()
+            .e(link_id.as_str())
+            .first_mut()
+            .expect("the link is in the graph")
+            .insert(CounterComponent(7));
+
+        assert_eq!(
+            graph
+                .traversal()
+                .e(link_id.as_str())
+                .first()
+                .and_then(|link| link.get::<CounterComponent>())
+                .map(|counter| counter.0),
+            Some(7)
+        );
+        assert_eq!(
+            graph
+                .traversal()
+                .e(())
+                .has_component::<CounterComponent>()
+                .ids()
+                .len(),
+            1
+        );
+    }
+
+    /// A destination the graph does not hold, or a port it does not declare,
+    /// keeps no link — the same answer `add_e` gives.
+    #[test]
+    fn a_destination_the_graph_does_not_hold_keeps_no_link() {
+        let mut graph = test_graph();
+        let destination = graph
+            .traversal_mut()
+            .add_v(MockInputOnlyProcessor::Processor::node(Default::default()))
+            .first()
+            .expect("the destination is added")
+            .id
+            .clone();
+
+        assert!(
+            graph
+                .traversal_mut()
+                .add_link_from_another_runtime(
+                    a_mesh_address(),
+                    InputLinkPortRef::new("Pnobody", "in1"),
+                )
+                .first()
+                .is_none()
+        );
+        assert!(
+            graph
+                .traversal_mut()
+                .add_link_from_another_runtime(
+                    a_mesh_address(),
+                    InputLinkPortRef::new(destination, "no_such_port"),
+                )
+                .first()
+                .is_none()
+        );
+        assert!(graph.traversal().e(()).ids().is_empty());
     }
 }

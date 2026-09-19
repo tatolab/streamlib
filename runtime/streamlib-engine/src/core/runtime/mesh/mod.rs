@@ -12,9 +12,16 @@
 //! nodes` reads it through [`observe_a_runtime_mesh`], on a session that
 //! announces nothing.
 
+mod a_bags_top_level_surface_id;
 mod duplicate_runtime_name_on_the_mesh;
 mod host_identity;
 mod hosted_control_plane_endpoint;
+mod mesh_data_message_attachment;
+mod mesh_link_ingress;
+mod mesh_link_ingress_table;
+mod mesh_port_egress;
+mod mesh_port_egress_table;
+mod output_ports_offered_on_the_mesh;
 mod resolved_runtime_mesh_configuration;
 mod runtime_mesh_description;
 mod runtime_mesh_endpoint;
@@ -35,6 +42,22 @@ mod zenoh_work_off_any_tokio_runtime;
 // calls it. Everything else the mesh is built from stays inside it.
 pub use host_identity::HostIdentity;
 pub use hosted_control_plane_endpoint::HostedControlPlaneEndpointRegistry;
+pub use mesh_data_message_attachment::{
+    MESH_DATA_MESSAGE_ATTACHMENT_BYTES, MeshDataMessageAttachment,
+};
+#[doc(hidden)]
+pub use mesh_link_ingress_table::MeshLinkIngressTable;
+// Reachable rather than supported, like the key grammar above: the
+// cross-runtime-link fixture stands two runtimes' mesh halves up without a
+// `Runner`, because CI has no GPU to start one with.
+#[doc(hidden)]
+pub use output_ports_offered_on_the_mesh::{
+    HowToReadAnOfferedOutputPort, WhatThisRuntimeOffersOnTheMesh,
+    WhatThisRuntimeOffersOnTheMeshRegistry,
+};
+pub use output_ports_offered_on_the_mesh::{
+    OutputPortOfferedOnTheMesh, OutputPortsOfferedOnTheMesh,
+};
 pub use resolved_runtime_mesh_configuration::ResolvedRuntimeMeshConfiguration;
 // Reachable rather than supported: `core::runtime` is a public module, and the
 // key grammar is the mesh's own business.

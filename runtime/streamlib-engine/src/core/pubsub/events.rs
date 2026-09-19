@@ -3,7 +3,7 @@
 
 use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::error::Result;
-use crate::core::graph::ProcessorUniqueId;
+use crate::core::graph::{InputLinkPortRef, OutputLinkPortRef, ProcessorUniqueId};
 use serde::{Deserialize, Serialize};
 
 /// Common topic constants for system events
@@ -216,18 +216,20 @@ pub enum RuntimeEvent {
 
     // ===== Runtime Link Events =====
     // Emitted by Runtime when user connects/disconnects ports
-    /// Emitted when runtime will connect two ports
+    /// Emitted when runtime will connect two ports.
+    ///
+    /// The source rides as the reference it was named by rather than as a
+    /// processor id and a port name, because a link's source may be a port on
+    /// another runtime, which has no processor id here.
     RuntimeWillConnect {
-        from_processor: ProcessorUniqueId,
-        from_port: String,
-        to_processor: ProcessorUniqueId,
-        to_port: String,
+        from: OutputLinkPortRef,
+        to: InputLinkPortRef,
     },
     /// Emitted when runtime did connect two ports
     RuntimeDidConnect {
         link_id: String,
-        from_port: String,
-        to_port: String,
+        from: OutputLinkPortRef,
+        to: InputLinkPortRef,
     },
     /// Emitted when runtime will disconnect a link
     RuntimeWillDisconnect {
@@ -675,10 +677,15 @@ mod tests {
                 height: 1080,
             }),
             Event::RuntimeGlobal(RuntimeEvent::RuntimeWillConnect {
-                from_processor: ProcessorUniqueId::from("Pcam"),
-                from_port: "video_out".into(),
-                to_processor: ProcessorUniqueId::from("Pdisplay"),
-                to_port: "video_in".into(),
+                from: OutputLinkPortRef::new("Pcam", "video_out"),
+                to: InputLinkPortRef::new("Pdisplay", "video_in"),
+            }),
+            Event::RuntimeGlobal(RuntimeEvent::RuntimeWillConnect {
+                from: OutputLinkPortRef::on_another_runtime(
+                    crate::core::graph::MeshPortAddress::new("lab-two", "CameraSource", "video")
+                        .expect("a legal address"),
+                ),
+                to: InputLinkPortRef::new("Pdisplay", "video_in"),
             }),
         ];
 
