@@ -27,6 +27,8 @@ published against elapsed monotonic time, so it never reads a wall clock and
 never sleeps.
 """
 
+import os
+
 import numpy
 
 import known_audio_signal
@@ -53,6 +55,13 @@ PUBLISHING_LEAD_NS = 100_000_000
 # rather than the loop's next lead-in.
 TRAILING_SILENCE_SECONDS = 1.0
 
+# Whether the signal plays once or over and over. Off by default, because every
+# analysis arm scores one pass of a finite waveform and a second pass would run
+# past the window it records. On for an arm that has to still be publishing
+# when something downstream gets round to looking — a `tap`, whose window opens
+# whenever its caller asks rather than when the signal starts.
+REPEATS = os.environ.get("STREAMLIB_KNOWN_SIGNAL_REPEATS") == "1"
+
 
 def _interleaved_stereo_f32_bytes(mono_samples):
     """The same mono signal in both channels, interleaved little-endian."""
@@ -62,7 +71,7 @@ def _interleaved_stereo_f32_bytes(mono_samples):
 
 @processor(execution="continuous", interval_ms=1)
 class KnownAudioSignalSource:
-    """Plays the known signal once, then silence."""
+    """Plays the known signal once, then silence — or over and over."""
 
     @output()
     def audio(self) -> None: ...
@@ -73,6 +82,7 @@ class KnownAudioSignalSource:
             int(TRAILING_SILENCE_SECONDS * SAMPLE_RATE), dtype="<f8"
         )
         self._signal = numpy.concatenate([signal, trailing_silence])
+        self._repeats = REPEATS
         self._samples_published = 0
         self._first_sample_timestamp_ns = None
 
@@ -82,14 +92,20 @@ class KnownAudioSignalSource:
         return published_ns - elapsed_ns > PUBLISHING_LEAD_NS
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        if self._samples_published >= len(self._signal):
+        if not self._repeats and self._samples_published >= len(self._signal):
             return
         if self._first_sample_timestamp_ns is None:
             self._first_sample_timestamp_ns = monotonic_now_ns()
         elif self._is_far_enough_ahead():
             return
 
-        at = self._samples_published
+        # The stamp counts every sample ever published and the waveform wraps
+        # under it, so a repeat is one continuous stream rather than a new one
+        # starting late: re-anchoring each pass on `now` would write the
+        # publishing lead into the stamps as a gap. The signal's length is a
+        # whole number of blocks, so a pass ends exactly on a block boundary
+        # and no block spans the wrap.
+        at = self._samples_published % len(self._signal)
         block = self._signal[at : at + SAMPLES_PER_BLOCK]
         # Derived from the samples before it rather than read fresh, so the
         # stamps describe one gapless stream even though the publishing runs
@@ -104,7 +120,7 @@ class KnownAudioSignalSource:
                 "dtype": DTYPE,
                 "first_sample_timestamp_ns": (
                     self._first_sample_timestamp_ns
-                    + at * 1_000_000_000 // SAMPLE_RATE
+                    + self._samples_published * 1_000_000_000 // SAMPLE_RATE
                 ),
             },
         )
