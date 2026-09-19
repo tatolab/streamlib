@@ -722,7 +722,7 @@ async fn call_connect(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) ->
                         how_the_graph_reads_one_link(runtime, &link_id).await;
                     tool_ok(json!({
                         "link_id": link_id.as_str(),
-                        "input_runtime_name": runtime.runtime_name(),
+                        "input_runtime_name": runtime.this_runtimes_name_on_the_mesh(),
                         "state": how_the_graph_reads_it.state,
                     }))
                 }
@@ -907,7 +907,7 @@ async fn call_disconnect(runtime: &Arc<dyn RuntimeOperations>, arguments: Value)
             // would be a runtime asking itself.
             let on_another_runtime = arguments
                 .input_runtime_name
-                .filter(|named| named != &runtime.runtime_name());
+                .filter(|named| named != &runtime.this_runtimes_name_on_the_mesh());
             match on_another_runtime {
                 None => match runtime
                     .disconnect_async(LinkUniqueId::from(link_id.as_str()))

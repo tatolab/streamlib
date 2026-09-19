@@ -277,3 +277,118 @@ def test_a_source_that_is_neither_reference_names_both_spellings_that_would_work
         assert "runtime.remote_processor_output(" in str(refused.value)
     finally:
         runtime.shutdown()
+
+
+def test_an_input_port_on_another_runtime_is_named_by_its_mesh_address():
+    """The destination mirror of the source reference: one address grammar
+    serves both ends, so a push is spelled the way a pull is."""
+    runtime = streamlib.Runtime()
+    try:
+        destination = runtime.remote_processor_input(
+            "studio-display-9f3c", "DisplayWindow", "video"
+        )
+        assert isinstance(destination, streamlib.RemoteProcessorInputPortReference)
+        assert repr(destination) == (
+            "RemoteProcessorInputPortReference(studio-display-9f3c/DisplayWindow/video)"
+        )
+    finally:
+        runtime.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("runtime_name", "display_name", "port_name", "offending_part"),
+    [
+        ("studio/display", "DisplayWindow", "video", "runtime name"),
+        ("studio-display", "Display*Window", "video", "processor display name"),
+        ("studio-display", "DisplayWindow", "@video", "port name"),
+        ("studio-display", "", "video", "processor display name"),
+    ],
+)
+def test_a_destination_address_the_mesh_cannot_carry_is_refused_where_it_was_written(
+    runtime_name: str, display_name: str, port_name: str, offending_part: str
+):
+    """Refused at the mint, like the source mirror, so the traceback points at
+    the line the author wrote."""
+    runtime = streamlib.Runtime()
+    try:
+        with pytest.raises(ValueError, match=offending_part):
+            runtime.remote_processor_input(runtime_name, display_name, port_name)
+    finally:
+        runtime.shutdown()
+
+
+def test_a_push_into_another_runtime_is_asked_for_and_never_waited_on():
+    """The runtime that owns an input applies every link into it, so this only
+    asks. Nothing here waits on the mesh — the runtime named is not on one, and
+    building the graph still finishes."""
+    runtime = streamlib.Runtime(runtime_name="graph-building-pushing")
+    try:
+        source = runtime.add(GraphBuildingFilter)
+        runtime.connect(
+            source.output("frames_to_downstream"),
+            runtime.remote_processor_input(
+                "studio-display-9f3c", "DisplayWindow", "video"
+            ),
+        )
+    finally:
+        runtime.shutdown()
+
+
+def test_a_third_party_wiring_names_neither_end_on_this_runtime():
+    """An agent runtime wires two others, and neither end has to be here —
+    this runtime adds no processor at all and the call still returns."""
+    runtime = streamlib.Runtime(runtime_name="graph-building-agent")
+    try:
+        runtime.connect(
+            runtime.remote_processor_output("bench-cam-a1b2", "CameraSource", "video"),
+            runtime.remote_processor_input(
+                "studio-display-9f3c", "DisplayWindow", "video"
+            ),
+        )
+    finally:
+        runtime.shutdown()
+
+
+def test_a_destination_naming_this_runtime_takes_the_local_path_and_its_refusals():
+    """An address naming this runtime's own name is a local reference, so it
+    meets the local refusal — which is also the proof it took that path: a
+    destination on another runtime is only asked for, and asking never
+    refuses on a display name this runtime cannot see.
+    """
+    runtime = streamlib.Runtime(runtime_name="graph-building-destination")
+    try:
+        source = runtime.add(GraphBuildingFilter, display_name="Source")
+        with pytest.raises(RuntimeError, match="NoSuchProcessor"):
+            runtime.connect(
+                source.output("frames_to_downstream"),
+                runtime.remote_processor_input(
+                    "graph-building-destination", "NoSuchProcessor", "video"
+                ),
+            )
+        # And the same address naming a processor it does hold wires.
+        runtime.add(GraphBuildingFilter, display_name="Destination")
+        runtime.connect(
+            source.output("frames_to_downstream"),
+            runtime.remote_processor_input(
+                "graph-building-destination", "Destination", "frames_from_upstream"
+            ),
+        )
+    finally:
+        runtime.shutdown()
+
+
+def test_a_destination_that_is_neither_reference_names_both_spellings_that_would_work():
+    """The destination mirror of the source refusal: it names the two calls
+    that mint one rather than the binding's own Rust types."""
+    runtime = streamlib.Runtime()
+    try:
+        source = runtime.add(GraphBuildingFilter)
+        with pytest.raises(TypeError) as refused:
+            runtime.connect(
+                source.output("frames_to_downstream"),
+                "display.video",  # pyright: ignore[reportArgumentType]
+            )
+        assert "processor.input(port_name)" in str(refused.value)
+        assert "runtime.remote_processor_input(" in str(refused.value)
+    finally:
+        runtime.shutdown()

@@ -168,7 +168,11 @@ pub trait RuntimeOperations: Send + Sync {
     // outcome from the link on the runtime that applied it.
 
     /// The name this runtime is addressed by on the runtime mesh.
-    fn runtime_name(&self) -> String;
+    ///
+    /// Spelled at length because `Runner` has an inherent `runtime_name()` of
+    /// its own returning a different type, and a caller holding a `Runner`
+    /// rather than a `dyn RuntimeOperations` would silently get that one.
+    fn this_runtimes_name_on_the_mesh(&self) -> String;
 
     /// Ask the runtime that owns `to` to carry `from` into it.
     ///

@@ -84,7 +84,7 @@ macro_rules! graph_mutation_ops_are_unreachable {
         ) -> ::streamlib::sdk::error::Result<()> {
             unreachable!(concat!("the control plane serves no disconnect ", $surface))
         }
-        fn runtime_name(&self) -> String {
+        fn this_runtimes_name_on_the_mesh(&self) -> String {
             $crate::control_plane_stub_support::STUB_RUNTIME_NAME.to_string()
         }
         fn request_link_on_remote_input_runtime(
@@ -246,7 +246,7 @@ macro_rules! graph_mutation_ops_record_the_call {
         ) -> ::streamlib::sdk::error::Result<()> {
             unreachable!("the MCP front end awaits the async op, never the blocking wrapper")
         }
-        fn runtime_name(&self) -> String {
+        fn this_runtimes_name_on_the_mesh(&self) -> String {
             $crate::control_plane_stub_support::STUB_RUNTIME_NAME.to_string()
         }
         fn request_link_on_remote_input_runtime(
