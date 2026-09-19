@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.25.6](https://github.com/tatolab/streamlib/compare/v0.25.5...v0.25.6) (2026-09-19)
+
+
+### Features
+
+* **engine:** count every bag lost between two runtimes on its remote link ([#2347](https://github.com/tatolab/streamlib/issues/2347)) ([7296a3f](https://github.com/tatolab/streamlib/commit/7296a3f5b3934ebd0a8e534a0c3b17b1941b7a83))
+
 ## [0.25.5](https://github.com/tatolab/streamlib/compare/v0.25.4...v0.25.5) (2026-09-19)
 
 
