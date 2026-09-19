@@ -679,3 +679,97 @@ jobs:
           # MCP tool dispatch — the surface an agent and every programmatic
           # client drive the runtime through.
           cargo test --locked -p streamlib-api-server --lib
+
+  # The lane whose absence is why the Apple tree rotted: every one of the other
+  # jobs in this repo is `ubuntu-latest`, so `aarch64-apple-darwin` went roughly
+  # seven months without being compiled at all and accumulated 44 errors nobody
+  # saw. macOS is a supported platform floor, so a macOS-only regression blocks
+  # a release exactly as a Linux one does — which only means anything if
+  # something compiles it on every PR.
+  #
+  # `macos-15` pinned rather than `macos-latest`: that label now means macOS 26,
+  # and the runner image is what decides the SDK the Apple frameworks are linked
+  # against. arm64, and free for public repositories.
+  #
+  # No GPU work runs here. A Vulkan device on MoltenVK is #2356 and a window is
+  # #2357; this job's whole claim is that the tree compiles and that the tests
+  # needing no device pass.
+  rust-build-macos:
+    name: Rust Build (macOS)
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Compiles and runs PR-authored code; a persisted checkout token would
+          # be readable by it. No workspace member has a git dependency.
+          persist-credentials: false
+
+      # `glslc` stages the engine's SPIR-V for `include_bytes!`, so it is a
+      # build dependency wherever the Vulkan RHI compiles — which, since the
+      # Metal tree went, is here too. Homebrew's `shaderc` formula is what
+      # carries the binary. `cmake` and `ninja` build the `shaderc` *crate*
+      # (glslang + SPIRV-Tools from source); ninja is what makes that a minute
+      # rather than several, so it is installed explicitly rather than assumed.
+      - name: Install glslc and the shaderc crate's build tools
+        run: brew install shaderc cmake ninja
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-macos
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      # The four exclusions, each for a reason that is not "macOS is broken":
+      # `streamlib-adapter-skia` is excluded on Linux too (skia-bindings 404s on
+      # its prebuilt download); `-opengl` and `-vulkan` carry `tests/bin`
+      # fixtures gated `#![cfg(target_os = "linux")]` whole, which leaves a bin
+      # target with no `main` off Linux, and the adapters themselves are out of
+      # the macOS milestone; `streamlib-python-wheel` still spawns its helper
+      # with `libc::pipe2`, which Darwin does not have — that is #2362's, and
+      # it needs the portable-CLOEXEC allowance `check-no-inheritable-descriptor`
+      # does not yet make.
+      - name: cargo clippy (workspace, default targets)
+        run: |
+          cargo clippy --locked --workspace --no-deps \
+            --exclude streamlib-adapter-skia \
+            --exclude streamlib-adapter-opengl \
+            --exclude streamlib-adapter-vulkan \
+            --exclude streamlib-python-wheel
+
+      # `--all-targets` where the Linux job's clippy takes default targets: the
+      # tests, benches and example targets are exactly where a macOS-only
+      # compile break would otherwise hide, and none of them is expensive here.
+      - name: cargo check (workspace, all targets)
+        run: |
+          cargo check --locked --workspace --all-targets \
+            --exclude streamlib-adapter-skia \
+            --exclude streamlib-adapter-opengl \
+            --exclude streamlib-adapter-vulkan \
+            --exclude streamlib-python-wheel
+
+      - name: Run unit tests
+        run: |
+          cargo test --locked -p streamlib -p streamlib-macros \
+            -p streamlib-processor-schema -p streamlib-ipc-types --lib
+          cargo test --locked -p streamlib-engine --test attribute_macro_test
+          cargo test --locked -p streamlib-media-builtins --lib
+          cargo test --locked -p streamlib-consumer-rhi --lib
+          cargo test --locked -p streamlib-api-server --lib
+          # `--test-threads=1` because two of these open iceoryx2 nodes in child
+          # processes of this same binary and race each other when run in
+          # parallel; serialised they pass, and the whole suite is about ninety
+          # seconds. The Linux job names a slice of this suite instead, so this
+          # is the broader of the two runs rather than a mirror of it.
+          cargo test --locked -p streamlib-engine --lib -- --test-threads=1
+
+      # The whole reason this job exists in the milestone's first ticket: the
+      # source-walking gates now evaluate `cfg` for macOS as well as Linux, so
+      # `apple/` is linted at all. Cheap, and it fails here rather than leaving
+      # the Apple tree unlinted the way it was.
+      - name: cargo xtask lint-logging
+        run: cargo run --locked -q -p xtask -- lint-logging

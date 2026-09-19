@@ -450,7 +450,9 @@ impl VulkanRhiBuffer for ConsumerVulkanBuffer {
     }
 }
 
-#[cfg(test)]
+// The check it locks guards an OPAQUE_FD bind, which is Linux-only along with
+// every other descriptor import on this type.
+#[cfg(all(test, target_os = "linux"))]
 mod stated_memory_type_index_tests {
     use super::*;
 

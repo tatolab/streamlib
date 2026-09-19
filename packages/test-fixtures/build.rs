@@ -4,8 +4,12 @@
 #![allow(clippy::disallowed_macros)] // build.rs uses println! for `cargo:` directives
 
 fn main() {
-    #[cfg(target_os = "linux")]
-    {
+    // `CARGO_CFG_TARGET_OS` rather than `#[cfg(target_os = ...)]`, which in a
+    // build script names the host compiling it rather than the target these
+    // blobs are staged for — the same distinction the engine's own build
+    // script draws.
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    if target_os == "linux" || target_os == "macos" {
         compile_cpu_ref_doubler();
         compile_graphics_kernel_smoke();
         compile_ray_tracing_kernel_smoke();
@@ -16,10 +20,8 @@ fn main() {
 /// cannot be dispatched against by name. The engine's own `build.rs` applies
 /// this uniformly for that reason; a fixture compiled without it would be the
 /// one blob in the tree whose bindings cannot be bound.
-#[cfg(target_os = "linux")]
 const KEEP_BINDING_NAMES: &str = "-g";
 
-#[cfg(target_os = "linux")]
 fn compile_cpu_ref_doubler() {
     use std::path::{Path, PathBuf};
     use std::process::Command;
@@ -43,7 +45,6 @@ fn compile_cpu_ref_doubler() {
     );
 }
 
-#[cfg(target_os = "linux")]
 fn compile_graphics_kernel_smoke() {
     use std::path::{Path, PathBuf};
     use std::process::Command;
@@ -80,7 +81,6 @@ fn compile_graphics_kernel_smoke() {
     }
 }
 
-#[cfg(target_os = "linux")]
 fn compile_ray_tracing_kernel_smoke() {
     use std::path::{Path, PathBuf};
     use std::process::Command;
