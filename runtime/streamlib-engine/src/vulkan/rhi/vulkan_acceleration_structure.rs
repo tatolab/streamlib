@@ -10,7 +10,7 @@
 //! `examples/raytracing-showcase` example, and grows into the richer
 //! lifecycle when a consumer needs it.
 
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 use std::ffi::c_void;
 use std::mem;

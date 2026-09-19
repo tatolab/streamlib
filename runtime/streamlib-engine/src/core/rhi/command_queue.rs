@@ -8,8 +8,7 @@
 //! `clone_rhi_command_queue` / `drop_rhi_command_queue` callbacks
 //! manage the Arc refcount in host-compiled code.
 //!
-//! Platform-specific Arcs (`VulkanCommandQueue` on Linux,
-//! `MetalCommandQueue` on macOS) live on the private
+//! The platform-specific Arc lives on the private
 //! [`RhiCommandQueueInner`] type behind the opaque handle.
 
 use std::ffi::c_void;
@@ -22,27 +21,11 @@ use super::CommandBuffer;
 /// Rich data backing a [`RhiCommandQueue`], reached through the
 /// queue's opaque handle.
 pub(crate) struct RhiCommandQueueInner {
-    // Metal backend: explicit feature OR macOS/iOS default (when vulkan not requested)
-    #[cfg(all(
-        not(feature = "backend-vulkan"),
-        any(feature = "backend-metal", any(target_os = "macos", target_os = "ios"))
-    ))]
-    pub(crate) inner: std::sync::Arc<crate::metal::rhi::MetalCommandQueue>,
-
-    // Vulkan backend: explicit feature OR Linux default
-    #[cfg(any(
-        feature = "backend-vulkan",
-        all(target_os = "linux", not(feature = "backend-metal"))
-    ))]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) inner: std::sync::Arc<crate::vulkan::rhi::VulkanCommandQueue>,
 
     #[cfg(target_os = "windows")]
     pub(crate) inner: std::sync::Arc<crate::windows::rhi::DX12CommandQueue>,
-
-    /// Metal command queue for Apple platform services.
-    /// Always present on macOS/iOS regardless of GPU backend selection.
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
-    pub(crate) metal_queue: std::sync::Arc<crate::metal::rhi::MetalCommandQueue>,
 }
 
 /// Platform-agnostic command queue wrapper.
@@ -52,12 +35,8 @@ pub(crate) struct RhiCommandQueueInner {
 /// [`create_command_buffer`](RhiCommandQueue::create_command_buffer)
 /// to create single-use command buffers for GPU operations.
 ///
-/// On Metal, this wraps MTLCommandQueue.
 /// On Vulkan, this wraps VkQueue.
 /// On DX12, this wraps ID3D12CommandQueue.
-///
-/// On macOS/iOS, Metal queue is always available for Apple platform services
-/// regardless of which GPU backend is selected for rendering.
 #[repr(C)]
 pub struct RhiCommandQueue {
     /// Opaque handle to the host's `Arc<RhiCommandQueueInner>`.
@@ -103,20 +82,6 @@ impl RhiCommandQueue {
                 inner: platform_command_buffer,
             },
         ))
-    }
-
-    /// Get the underlying Metal command queue for Apple platform services.
-    ///
-    /// Available on macOS/iOS regardless of which GPU backend is selected.
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
-    pub fn as_metal_command_queue(&self) -> &crate::metal::rhi::MetalCommandQueue {
-        &self.host_inner().metal_queue
-    }
-
-    /// Get the raw Metal command queue reference for Apple platform services.
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
-    pub fn metal_queue_ref(&self) -> &metal::CommandQueueRef {
-        self.host_inner().metal_queue.queue_ref()
     }
 }
 

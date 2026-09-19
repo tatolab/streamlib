@@ -16,7 +16,7 @@
 //! texture (with a default linear-clamp sampler), storage image, top-level
 //! acceleration structure. All bindings live on descriptor set 0.
 
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -975,7 +975,7 @@ impl VulkanRayTracingKernel {
 
     /// Bind a raw-bytes [`crate::core::rhi::StorageBuffer`] at
     /// `binding`.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn set_storage_buffer_storage(
         &self,
         binding: u32,
@@ -986,7 +986,7 @@ impl VulkanRayTracingKernel {
 
     /// Bind a [`crate::core::rhi::UniformBuffer`] (UBO) at
     /// `binding`.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn set_uniform_buffer(
         &self,
         binding: u32,

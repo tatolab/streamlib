@@ -15,9 +15,9 @@
 //! (SurfaceStore-style), so the envelope needs only one vtable pointer,
 //! not a parent-vtable-plus-methods-vtable pair.
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::ffi::c_void;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::sync::Arc;
 
 /// Host-side wire envelope for an OPAQUE_FD-exportable timeline
@@ -33,7 +33,7 @@ use std::sync::Arc;
 /// Layout-stable: `handle` is `Arc::into_raw(Arc<HostVulkanTimelineSemaphore>)`
 /// (the same inner pointer the SurfaceStore `register_texture` path
 /// derefs for its `produce_done` / `consume_done` sidecars).
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[repr(C)]
 pub struct HostTimelineSemaphore {
     /// Opaque handle to the host's `Arc<HostVulkanTimelineSemaphore>`
@@ -45,12 +45,12 @@ pub struct HostTimelineSemaphore {
 // interior (a `vulkanalia::Device` clone + `vk::Semaphore`) is Send+Sync.
 // Refcount bookkeeping crosses the cdylib boundary through the methods
 // vtable but always runs in host-compiled code.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 unsafe impl Send for HostTimelineSemaphore {}
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 unsafe impl Sync for HostTimelineSemaphore {}
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl HostTimelineSemaphore {
     /// Mint the wire envelope from an owned
     /// `Arc<HostVulkanTimelineSemaphore>`. Leaks one strong count via
@@ -61,7 +61,7 @@ impl HostTimelineSemaphore {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl Clone for HostTimelineSemaphore {
     fn clone(&self) -> Self {
         if !self.handle.is_null() {
@@ -79,7 +79,7 @@ impl Clone for HostTimelineSemaphore {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl Drop for HostTimelineSemaphore {
     fn drop(&mut self) {
         if !self.handle.is_null() {
@@ -94,7 +94,7 @@ impl Drop for HostTimelineSemaphore {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl std::fmt::Debug for HostTimelineSemaphore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HostTimelineSemaphore").finish()

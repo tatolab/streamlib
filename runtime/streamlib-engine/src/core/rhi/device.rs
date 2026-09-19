@@ -4,10 +4,7 @@
 //! RHI device abstraction.
 
 use crate::core::Result;
-#[cfg(any(
-    feature = "backend-vulkan",
-    all(target_os = "linux", not(feature = "backend-metal"))
-))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::host_rhi::HostTextureExt;
 
 use super::command_queue::RhiCommandQueue;
@@ -16,39 +13,18 @@ use super::texture::{Texture, TextureDescriptor};
 /// Platform-agnostic GPU device wrapper.
 ///
 /// This type wraps the platform-specific device implementation and provides
-/// a unified interface for GPU operations. Use the `as_*` methods to "dip down"
-/// to the native device when needed for platform-specific operations.
+/// a unified interface for GPU operations. Engine code reaches the native
+/// device through the [`crate::host_rhi::HostGpuDeviceExt`] extension trait.
 ///
 /// Includes a shared command queue created at device initialization.
 /// All processors should use this shared queue via [`command_queue`](GpuDevice::command_queue).
-///
-/// On macOS/iOS, Metal is always available for Apple platform services (IOSurface,
-/// CVPixelBuffer, etc.) regardless of which GPU backend is selected for rendering.
 #[derive(Clone)]
 pub struct GpuDevice {
-    // Metal backend: when vulkan NOT requested AND (explicit metal feature OR macOS/iOS)
-    // Vulkan takes precedence if explicitly requested
-    #[cfg(all(
-        not(feature = "backend-vulkan"),
-        any(feature = "backend-metal", any(target_os = "macos", target_os = "ios"))
-    ))]
-    pub(crate) inner: std::sync::Arc<crate::metal::rhi::MetalDevice>,
-
-    // Vulkan backend: explicit feature OR Linux default (when metal not requested)
-    #[cfg(any(
-        feature = "backend-vulkan",
-        all(target_os = "linux", not(feature = "backend-metal"))
-    ))]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) inner: std::sync::Arc<crate::vulkan::rhi::HostVulkanDevice>,
 
     #[cfg(target_os = "windows")]
     pub(crate) inner: std::sync::Arc<crate::windows::rhi::DX12Device>,
-
-    /// Metal device for Apple platform services.
-    /// Always present on macOS/iOS regardless of GPU backend selection.
-    /// Used for IOSurface, CVPixelBuffer, and other Apple-specific operations.
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
-    pub(crate) metal_device: std::sync::Arc<crate::metal::rhi::MetalDevice>,
 
     /// Shared command queue for all GPU operations.
     command_queue: RhiCommandQueue,
@@ -63,52 +39,14 @@ impl GpuDevice {
 
     /// Create a new GPU device using the system default.
     pub fn new() -> Result<Self> {
-        // Metal backend (default on macOS/iOS when Vulkan not requested)
-        #[cfg(all(
-            not(feature = "backend-vulkan"),
-            any(feature = "backend-metal", any(target_os = "macos", target_os = "ios"))
-        ))]
-        {
-            let metal_device = crate::metal::rhi::MetalDevice::new()?;
-            let metal_queue_wrapper = metal_device.create_command_queue_wrapper();
-            let metal_queue_arc = std::sync::Arc::new(metal_queue_wrapper);
-            let command_queue = {
-                let inner = crate::core::rhi::command_queue::RhiCommandQueueInner {
-                    inner: metal_queue_arc.clone(),
-                    metal_queue: metal_queue_arc,
-                };
-                RhiCommandQueue::from_arc_into_raw(std::sync::Arc::new(inner))
-            };
-            let metal_device_arc = std::sync::Arc::new(metal_device);
-            Ok(Self {
-                inner: metal_device_arc.clone(),
-                metal_device: metal_device_arc,
-                command_queue,
-            })
-        }
-
-        // Vulkan backend (explicit feature OR Linux default)
-        #[cfg(any(
-            feature = "backend-vulkan",
-            all(target_os = "linux", not(feature = "backend-metal"))
-        ))]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             let device_arc = crate::vulkan::rhi::HostVulkanDevice::new()?;
             let vulkan_queue = device_arc.create_command_queue_wrapper();
 
-            // On macOS/iOS with Vulkan backend, also create Metal device/queue for Apple services
-            #[cfg(any(target_os = "macos", target_os = "ios"))]
-            let (metal_device, metal_queue) = {
-                let md = crate::metal::rhi::MetalDevice::new()?;
-                let mq = md.create_command_queue_wrapper();
-                (std::sync::Arc::new(md), std::sync::Arc::new(mq))
-            };
-
             let command_queue = {
                 let inner = crate::core::rhi::command_queue::RhiCommandQueueInner {
                     inner: std::sync::Arc::new(vulkan_queue),
-                    #[cfg(any(target_os = "macos", target_os = "ios"))]
-                    metal_queue,
                 };
                 RhiCommandQueue::from_arc_into_raw(std::sync::Arc::new(inner))
             };
@@ -130,8 +68,6 @@ impl GpuDevice {
 
             Ok(Self {
                 inner: device_arc,
-                #[cfg(any(target_os = "macos", target_os = "ios"))]
-                metal_device,
                 command_queue,
             })
         }
@@ -155,21 +91,7 @@ impl GpuDevice {
 
     /// Create a texture on this device.
     pub fn create_texture(&self, desc: &TextureDescriptor) -> Result<Texture> {
-        // Metal backend
-        #[cfg(all(
-            not(feature = "backend-vulkan"),
-            any(feature = "backend-metal", any(target_os = "macos", target_os = "ios"))
-        ))]
-        {
-            let metal_texture = self.inner.create_texture(desc)?;
-            Ok(Texture::from_metal(metal_texture))
-        }
-
-        // Vulkan backend
-        #[cfg(any(
-            feature = "backend-vulkan",
-            all(target_os = "linux", not(feature = "backend-metal"))
-        ))]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             let vulkan_texture = self.inner.create_texture(desc)?;
             Ok(Texture::from_vulkan(vulkan_texture))
@@ -220,23 +142,6 @@ impl GpuDevice {
     /// The queue is created once at device initialization and reused.
     pub fn command_queue(&self) -> &RhiCommandQueue {
         &self.command_queue
-    }
-
-    /// Get the underlying Metal device for Apple platform services.
-    ///
-    /// Available on macOS/iOS regardless of which GPU backend is selected.
-    /// Apple services (IOSurface, CVPixelBuffer, VideoToolbox) require Metal.
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
-    pub fn as_metal_device(&self) -> &crate::metal::rhi::MetalDevice {
-        &self.metal_device
-    }
-
-    /// Get the raw Metal device handle for Apple platform services.
-    ///
-    /// Available on macOS/iOS regardless of which GPU backend is selected.
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
-    pub fn metal_device_ref(&self) -> &metal::DeviceRef {
-        self.metal_device.device_ref()
     }
 }
 

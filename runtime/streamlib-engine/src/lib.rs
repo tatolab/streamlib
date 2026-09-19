@@ -103,8 +103,6 @@ pub use core::{
     // Processor traits (mode-specific)
     ContinuousProcessor,
     Error,
-    GlContext,
-    GlTextureBinding,
     GpuContext,
     GraphSnapshot,
     InputPortMarker,
@@ -127,23 +125,15 @@ pub use core::{
     TexturePoolDescriptor,
     TextureUsages,
     TimeContext,
-    gl_constants,
     // Port marker traits and helpers for compile-time safe connections
     input,
     media_clock::MediaClock,
     output,
 };
 
-// GPU Backends - Metal and Vulkan
-// Metal module is always available on macOS/iOS since Apple platform services need Metal types
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-pub(crate) mod metal;
-
-// Vulkan module: explicit feature OR Linux default
-#[cfg(any(
-    feature = "backend-vulkan",
-    all(target_os = "linux", not(feature = "backend-metal"))
-))]
+// The one RHI, on every supported platform. MoltenVK is the macOS driver;
+// there is no second backend and no per-platform RHI.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) mod vulkan;
 
 // Linux platform services
@@ -177,16 +167,10 @@ pub mod linux_alsa_audio_device_backend {
     pub use crate::linux::alsa_audio_device_backend::AlsaAudioDeviceBackend;
 }
 
-#[cfg(any(
-    feature = "backend-vulkan",
-    all(target_os = "linux", not(feature = "backend-metal"))
-))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod host_rhi;
 
-#[cfg(any(
-    feature = "backend-vulkan",
-    all(target_os = "linux", not(feature = "backend-metal"))
-))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use host_rhi::{HostGpuDeviceExt, HostPixelBufferRefExt, HostTextureExt};
 
 #[cfg(target_os = "linux")]
@@ -317,10 +301,7 @@ pub mod sdk {
 
     /// Engine-bridge surface mirror — same shape the SDK exposes via
     /// [`streamlib::sdk::engine`](../../streamlib-sdk/src/lib.rs).
-    #[cfg(any(
-        feature = "backend-vulkan",
-        all(target_os = "linux", not(feature = "backend-metal"))
-    ))]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub mod engine {
         #[cfg(target_os = "linux")]
         pub use crate::HostSurfaceStoreExt;

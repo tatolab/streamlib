@@ -6,9 +6,9 @@
 //! `(handle, cached POD)` shape; see
 //! [`StorageBuffer`](super::StorageBuffer) for the shared rationale.
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::ffi::c_void;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::sync::Arc;
 
 /// Uniform buffer for per-draw / per-dispatch shader parameters.
@@ -16,7 +16,7 @@ use std::sync::Arc;
 /// Linux-only — UBO allocation rides the Vulkan RHI path. Kernels
 /// bind it via the kernel's `set_uniform_buffer` method, which
 /// accepts `&impl VulkanUniformBindable`.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[repr(C)]
 pub struct UniformBuffer {
     /// Opaque handle to the host's `Arc<HostVulkanBuffer>`.
@@ -27,12 +27,12 @@ pub struct UniformBuffer {
     pub(crate) mapped_ptr_cached: *mut u8,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 unsafe impl Send for UniformBuffer {}
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 unsafe impl Sync for UniformBuffer {}
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl UniformBuffer {
     /// Allocate a HOST_VISIBLE uniform buffer of the given byte size.
     /// Underlying `VkBuffer` carries `UNIFORM_BUFFER | TRANSFER_SRC |
@@ -82,7 +82,7 @@ impl UniformBuffer {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl Clone for UniformBuffer {
     fn clone(&self) -> Self {
         if !self.handle.is_null() {
@@ -102,7 +102,7 @@ impl Clone for UniformBuffer {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl Drop for UniformBuffer {
     fn drop(&mut self) {
         if !self.handle.is_null() {
@@ -117,7 +117,7 @@ impl Drop for UniformBuffer {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl std::fmt::Debug for UniformBuffer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("UniformBuffer")

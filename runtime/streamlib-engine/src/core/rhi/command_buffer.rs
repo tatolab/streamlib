@@ -20,18 +20,7 @@ use super::texture::Texture;
 /// Holds the platform-specific command buffer by value (no Arc —
 /// command buffers are single-use, not shared).
 pub(crate) struct CommandBufferInner {
-    // Metal backend: explicit feature OR macOS/iOS default (when vulkan not requested)
-    #[cfg(all(
-        not(feature = "backend-vulkan"),
-        any(feature = "backend-metal", any(target_os = "macos", target_os = "ios"))
-    ))]
-    pub(crate) inner: crate::metal::rhi::MetalCommandBuffer,
-
-    // Vulkan backend: explicit feature OR Linux default
-    #[cfg(any(
-        feature = "backend-vulkan",
-        all(target_os = "linux", not(feature = "backend-metal"))
-    ))]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) inner: crate::vulkan::rhi::VulkanCommandBuffer,
 
     #[cfg(target_os = "windows")]
@@ -42,7 +31,6 @@ pub(crate) struct CommandBufferInner {
 ///
 /// Command buffers batch GPU operations for submission.
 ///
-/// On Metal, this wraps MTLCommandBuffer.
 /// On Vulkan, this wraps VkCommandBuffer.
 /// On DX12, this wraps ID3D12CommandList.
 ///
@@ -88,19 +76,7 @@ impl CommandBuffer {
             return;
         }
         let inner = self.host_inner_mut();
-        #[cfg(all(
-            not(feature = "backend-vulkan"),
-            any(feature = "backend-metal", any(target_os = "macos", target_os = "ios"))
-        ))]
-        {
-            inner
-                .inner
-                .copy_texture(&src.host_inner().inner, &dst.host_inner().inner);
-        }
-        #[cfg(any(
-            feature = "backend-vulkan",
-            all(target_os = "linux", not(feature = "backend-metal"))
-        ))]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             use crate::host_rhi::HostTextureExt;
             inner
@@ -139,17 +115,6 @@ impl CommandBuffer {
             self.handle = std::ptr::null();
             inner.inner.commit_and_wait();
         }
-    }
-
-    /// Get the underlying Metal command buffer (Metal backend only).
-    ///
-    #[cfg(all(
-        not(feature = "backend-vulkan"),
-        any(feature = "backend-metal", any(target_os = "macos", target_os = "ios"))
-    ))]
-    pub fn as_metal_command_buffer(&self) -> &crate::metal::rhi::MetalCommandBuffer {
-        // SAFETY: see `host_inner_mut` — same shape, immutable borrow.
-        unsafe { &(*(self.handle as *const CommandBufferInner)).inner }
     }
 }
 

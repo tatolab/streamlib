@@ -14,7 +14,7 @@
 //! [`crate::vulkan::rhi::ConsumerMarker`] (the consumer flavor) is
 //! re-exported from `streamlib_consumer_rhi`.
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use streamlib_consumer_rhi::{DevicePrivilege, private as consumer_rhi_private};
 
 /// Privilege marker for host-side Vulkan resources — full RHI access
@@ -26,10 +26,10 @@ pub struct HostMarker;
 // supertrait `Sealed` lives in `streamlib-consumer-rhi::private` and
 // is implemented here for the streamlib-side marker so external
 // crates cannot invent their own privilege flavors.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl consumer_rhi_private::Sealed for HostMarker {}
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl DevicePrivilege for HostMarker {
     type TimelineSemaphore = super::HostVulkanTimelineSemaphore;
     type Texture = super::HostVulkanTexture;
@@ -39,7 +39,7 @@ impl DevicePrivilege for HostMarker {
 // Non-Linux: HostMarker still resolves but to phantom unit types for
 // platforms where the DMA-BUF / OPAQUE_FD machinery isn't built.
 // `ConsumerMarker` only exists on Linux today.
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 mod placeholder {
     use streamlib_consumer_rhi::{
         DevicePrivilege, TextureFormat, VulkanRhiBuffer, VulkanTextureLike,

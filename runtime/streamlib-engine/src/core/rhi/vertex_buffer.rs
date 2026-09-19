@@ -6,16 +6,16 @@
 //! `(handle, cached POD)` shape; see
 //! [`StorageBuffer`](super::StorageBuffer) for the shared rationale.
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::ffi::c_void;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::sync::Arc;
 
 /// Vertex buffer for graphics pipeline vertex input.
 ///
 /// Linux-only. Graphics kernels bind it via `set_vertex_buffer`,
 /// which accepts `&impl VulkanVertexBindable`.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[repr(C)]
 pub struct VertexBuffer {
     /// Opaque handle to the host's `Arc<HostVulkanBuffer>`.
@@ -26,12 +26,12 @@ pub struct VertexBuffer {
     pub(crate) mapped_ptr_cached: *mut u8,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 unsafe impl Send for VertexBuffer {}
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 unsafe impl Sync for VertexBuffer {}
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl VertexBuffer {
     /// Allocate a HOST_VISIBLE vertex buffer of the given byte size.
     /// Underlying `VkBuffer` carries `VERTEX_BUFFER | TRANSFER_SRC |
@@ -81,7 +81,7 @@ impl VertexBuffer {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl Clone for VertexBuffer {
     fn clone(&self) -> Self {
         if !self.handle.is_null() {
@@ -101,7 +101,7 @@ impl Clone for VertexBuffer {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl Drop for VertexBuffer {
     fn drop(&mut self) {
         if !self.handle.is_null() {
@@ -116,7 +116,7 @@ impl Drop for VertexBuffer {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl std::fmt::Debug for VertexBuffer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("VertexBuffer")

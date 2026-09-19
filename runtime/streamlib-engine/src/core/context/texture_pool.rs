@@ -314,15 +314,10 @@ unsafe impl Send for PooledTextureHandle {}
 unsafe impl Sync for PooledTextureHandle {}
 
 impl PooledTextureHandle {
-    /// Constructor for non-macOS platforms (Linux/Windows). The
-    /// host's pool allocator builds a `PooledTextureHandleInner`,
+    /// The host's pool allocator builds a `PooledTextureHandleInner`,
     /// leaks it via `Box::into_raw`, resolves the host-mode vtable,
     /// and assembles the plugin ABI shape.
-    ///
-    /// On macOS, handles are created via
-    /// `texture_pool_macos::allocate_iosurface_slot`.
     #[allow(dead_code)]
-    #[cfg(not(target_os = "macos"))]
     pub(crate) fn new(
         texture: Texture,
         pool_inner: Arc<TexturePoolInner>,
@@ -407,22 +402,11 @@ impl PooledTextureHandle {
         unsafe { (*(self.handle as *const PooledTextureHandleInner)).slot_id }
     }
 
-    /// Get the IOSurface ID for cross-framework sharing.
-    pub fn iosurface_id(&self) -> Option<u32> {
-        self.texture.iosurface_id()
-    }
-
     /// Get the platform-native sharing handle for this texture — on Linux
     /// the fd's ownership transfers to the caller, per
     /// [`Texture::native_handle`].
     pub fn native_handle(&self) -> Option<NativeTextureHandle> {
         self.texture.native_handle()
-    }
-
-    /// Get the underlying Metal texture (macOS only).
-    #[cfg(target_os = "macos")]
-    pub fn metal_texture(&self) -> &metal::TextureRef {
-        self.texture.as_metal_texture()
     }
 }
 
@@ -569,7 +553,6 @@ impl TexturePool {
     }
 
     /// Allocate a new texture slot.
-    #[cfg(not(target_os = "macos"))]
     fn allocate_slot(&self, desc: &TexturePoolDescriptor) -> Result<Arc<PoolSlot>> {
         let texture_desc =
             TextureDescriptor::new(desc.width, desc.height, desc.format).with_usage(desc.usage);
@@ -603,13 +586,6 @@ impl TexturePool {
             key: TexturePoolKey::from_descriptor(desc),
             in_use: AtomicBool::new(false),
         }))
-    }
-
-    /// Allocate a new IOSurface-backed texture slot (macOS).
-    #[cfg(target_os = "macos")]
-    fn allocate_slot(&self, desc: &TexturePoolDescriptor) -> Result<Arc<PoolSlot>> {
-        // Delegate to macOS-specific implementation
-        crate::apple::texture_pool_macos::allocate_iosurface_slot(&self.inner, desc)
     }
 
     /// Pre-warm the pool with textures of specific dimensions.

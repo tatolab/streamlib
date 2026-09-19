@@ -65,13 +65,22 @@ pub use crate::vulkan::rhi::{
     TlasInstanceDesc, VulkanAccelerationStructure, VulkanAccess, VulkanBufferLike,
     VulkanComputeKernel, VulkanGraphicsKernel, VulkanIndexBindable, VulkanRayTracingKernel,
     VulkanStage, VulkanStorageBindable, VulkanTextureReadback, VulkanUniformBindable,
-    VulkanVertexBindable, drm_modifier_probe,
+    VulkanVertexBindable,
 };
+
+/// The EGL/DRM modifier probe. Linux-bound by its mechanism, not by its
+/// caller: Apple has no DRM format modifiers to enumerate.
+#[cfg(target_os = "linux")]
+pub use crate::vulkan::rhi::drm_modifier_probe;
 
 #[cfg(target_os = "linux")]
 pub use crate::vulkan::rhi::{
-    HostMappingTier, HostMappingWrittenByGpu, MAX_FRAMES_IN_FLIGHT,
-    PixelBufferUploadFinalTextureLayout, PresentFrame, PresentScalingMode, VulkanPresentCompositor,
+    HostMappingTier, HostMappingWrittenByGpu, PixelBufferUploadFinalTextureLayout,
+};
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub use crate::vulkan::rhi::{
+    MAX_FRAMES_IN_FLIGHT, PresentFrame, PresentScalingMode, VulkanPresentCompositor,
     VulkanPresentTarget,
 };
 
@@ -114,8 +123,6 @@ impl HostTextureExt for Texture {
     fn from_vulkan(texture: HostVulkanTexture) -> Self {
         let inner = TextureInner {
             inner: Arc::new(texture),
-            #[cfg(any(target_os = "macos", target_os = "ios"))]
-            metal_texture: None,
         };
         Texture::from_inner(inner)
     }

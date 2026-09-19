@@ -274,15 +274,21 @@ fn start_window_event_pump_thread() -> std::result::Result<ProcessWideWindowEven
 
 fn build_the_processes_one_event_loop()
 -> std::result::Result<EventLoop<WindowEventPumpControlMessage>, String> {
+    let mut builder = EventLoop::<WindowEventPumpControlMessage>::with_user_event();
     // The pump runs on its own thread, not the process main thread; both Linux
     // backends need their own any-thread opt-in (each trait method flags only
     // its own backend).
-    use winit::platform::wayland::EventLoopBuilderExtWayland;
-    use winit::platform::x11::EventLoopBuilderExtX11;
+    #[cfg(target_os = "linux")]
+    {
+        use winit::platform::wayland::EventLoopBuilderExtWayland;
+        use winit::platform::x11::EventLoopBuilderExtX11;
 
-    let mut builder = EventLoop::<WindowEventPumpControlMessage>::with_user_event();
-    EventLoopBuilderExtX11::with_any_thread(&mut builder, true);
-    EventLoopBuilderExtWayland::with_any_thread(&mut builder, true);
+        EventLoopBuilderExtX11::with_any_thread(&mut builder, true);
+        EventLoopBuilderExtWayland::with_any_thread(&mut builder, true);
+    }
+    // AppKit has no any-thread opt-in to give: the loop must be on the
+    // process's first thread, so this refuses off it until the Apple pump
+    // moves there.
     builder
         .build()
         .map_err(|e| format!("failed to build the window event loop: {e}"))

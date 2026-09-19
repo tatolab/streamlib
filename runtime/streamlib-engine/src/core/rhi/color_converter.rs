@@ -16,9 +16,9 @@ use crate::core::color::{
 };
 use crate::core::rhi::PixelFormat;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::core::Result;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::core::rhi::Texture;
 
 /// Push-constants struct matching the converter shader's
@@ -236,13 +236,8 @@ pub fn pixel_format_color_kind(format: PixelFormat) -> ColorSpaceKind {
 /// Rich data backing a [`RhiColorConverter`], reached through the
 /// converter's opaque handle.
 pub struct RhiColorConverterInner {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) inner: crate::vulkan::rhi::VulkanColorConverter,
-
-    #[cfg(target_os = "macos")]
-    pub(crate) src_format: PixelFormat,
-    #[cfg(target_os = "macos")]
-    pub(crate) dst_format: PixelFormat,
 
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     _marker: std::marker::PhantomData<()>,
@@ -251,7 +246,7 @@ pub struct RhiColorConverterInner {
 impl RhiColorConverterInner {
     /// Convert a [`crate::core::rhi::StorageBuffer`]-shape source into
     /// an RGBA storage image.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn convert_buffer_to_image_storage(
         &self,
         src: &crate::core::rhi::StorageBuffer,
@@ -264,7 +259,7 @@ impl RhiColorConverterInner {
     }
 
     /// [`crate::core::rhi::PixelBuffer`]-shape source variant.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn convert_buffer_to_image_pixel(
         &self,
         src: &crate::core::rhi::PixelBuffer,
@@ -278,7 +273,7 @@ impl RhiColorConverterInner {
 
     /// Bind source / destination / push-constants on the buffer→image
     /// kernel and return it for recorder-driven dispatch.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn prepare_buffer_to_image_storage(
         &self,
         src: &crate::core::rhi::StorageBuffer,
@@ -293,7 +288,7 @@ impl RhiColorConverterInner {
 
     /// [`crate::core::rhi::PixelBuffer`]-shape source variant of
     /// [`Self::prepare_buffer_to_image_storage`].
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn prepare_buffer_to_image_pixel(
         &self,
         src: &crate::core::rhi::PixelBuffer,
@@ -309,7 +304,7 @@ impl RhiColorConverterInner {
     /// Bind an RGBA texture source, a YUYV storage-buffer destination and
     /// the encoding push-constants on the image→buffer kernel, and return
     /// it for recorder-driven dispatch.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn prepare_image_to_yuyv_buffer(
         &self,
         src: &Texture,
@@ -321,30 +316,11 @@ impl RhiColorConverterInner {
             .prepare_image_to_yuyv_buffer(src, dst, dst_stride_bytes, info)
     }
 
-    /// macOS stub — Apple-platform color conversion lives in the
-    /// follow-on Apple activation work; until then converter
-    /// construction returns `NotSupported`, so this is unreachable.
-    #[cfg(target_os = "macos")]
-    pub fn convert_buffer_to_image<S, D>(
-        &self,
-        _src: &S,
-        _dst: &D,
-        _info: &ResolvedColorInfo,
-    ) -> crate::core::Result<()> {
-        Err(crate::core::Error::NotSupported(
-            "color conversion not implemented on macOS".into(),
-        ))
-    }
-
     /// Source pixel format this converter accepts.
     pub fn src_format(&self) -> PixelFormat {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             self.inner.src_format()
-        }
-        #[cfg(target_os = "macos")]
-        {
-            self.src_format
         }
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
@@ -354,13 +330,9 @@ impl RhiColorConverterInner {
 
     /// Destination pixel format this converter produces.
     pub fn dst_format(&self) -> PixelFormat {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             self.inner.dst_format()
-        }
-        #[cfg(target_os = "macos")]
-        {
-            self.dst_format
         }
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
@@ -439,7 +411,7 @@ impl RhiColorConverter {
     /// an RGBA storage image. Mode-routed: host-mode dispatches through
     /// `host_inner`; cdylib-mode dispatches through the per-type methods
     /// vtable (Phase E sub-lift v2).
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn convert_buffer_to_image_storage(
         &self,
         src: &crate::core::rhi::StorageBuffer,
@@ -454,7 +426,7 @@ impl RhiColorConverter {
     /// [`crate::core::rhi::PixelBuffer`]-shape source variant of
     /// [`Self::convert_buffer_to_image_storage`]. Same mode-routed
     /// dispatch (Phase E sub-lift v2).
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn convert_buffer_to_image_pixel(
         &self,
         src: &crate::core::rhi::PixelBuffer,
@@ -468,7 +440,7 @@ impl RhiColorConverter {
 
     /// Bind source / destination / push-constants on the buffer→image
     /// kernel and return it for recorder-driven dispatch.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn prepare_buffer_to_image_storage(
         &self,
         src: &crate::core::rhi::StorageBuffer,
@@ -484,7 +456,7 @@ impl RhiColorConverter {
     /// [`crate::core::rhi::PixelBuffer`]-shape source variant of
     /// [`Self::prepare_buffer_to_image_storage`]. Same mode-routed
     /// dispatch (Phase E sub-lift v2).
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn prepare_buffer_to_image_pixel(
         &self,
         src: &crate::core::rhi::PixelBuffer,
@@ -504,7 +476,7 @@ impl RhiColorConverter {
     /// and return the kernel for recorder-driven dispatch. Dispatch it
     /// over `⌈width/2 / 16⌉ × ⌈height / 16⌉` groups — one thread per
     /// macropixel.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn prepare_image_to_yuyv_buffer(
         &self,
         src: &Texture,
@@ -514,19 +486,6 @@ impl RhiColorConverter {
     ) -> Result<std::sync::Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
         self.host_inner()
             .prepare_image_to_yuyv_buffer(src, dst, dst_stride_bytes, info)
-    }
-
-    /// macOS stub.
-    #[cfg(target_os = "macos")]
-    pub fn convert_buffer_to_image<S, D>(
-        &self,
-        _src: &S,
-        _dst: &D,
-        _info: &ResolvedColorInfo,
-    ) -> crate::core::Result<()> {
-        Err(crate::core::Error::NotSupported(
-            "color conversion not implemented on macOS".into(),
-        ))
     }
 
     /// Source pixel format this converter accepts. Cached POD —
@@ -600,22 +559,6 @@ impl Drop for RhiColorConverter {
 impl std::fmt::Debug for RhiColorConverter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("RhiColorConverter").finish()
-    }
-}
-
-/// Unused on macOS today; kept here so the symbol stays referenced
-/// when the cdylib builds against `target_os = "macos"`.
-#[cfg(target_os = "macos")]
-impl RhiColorConverterInner {
-    #[allow(dead_code)]
-    pub(crate) fn new_macos_stub(
-        src: PixelFormat,
-        dst: PixelFormat,
-    ) -> Result<Self, crate::core::Error> {
-        let _ = (src, dst);
-        Err(crate::core::Error::NotSupported(
-            "RhiColorConverter not yet implemented on macOS".into(),
-        ))
     }
 }
 

@@ -269,7 +269,7 @@ impl TextureReadback {
     }
 
     /// Engine-internal borrow of the owned `VulkanTextureReadback`.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn host_inner(&self) -> &crate::vulkan::rhi::VulkanTextureReadback {
         // SAFETY: `handle` is `Box::into_raw(Box<Arc<VulkanTextureReadback>>)`.
         unsafe {

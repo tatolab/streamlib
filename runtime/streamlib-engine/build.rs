@@ -3,13 +3,13 @@
 
 #![allow(clippy::disallowed_macros)] // build.rs uses println!/eprintln! for `cargo:` directives
 
-//! Build script: links Metal on Apple platforms; on Linux compiles the
-//! Vulkan compute, vertex, fragment, and ray-tracing shaders this crate
-//! ships (`vulkan/rhi/shaders/*.{comp,vert,frag,rgen,rmiss,rchit}`) to
-//! SPIR-V via `glslc` and stages the artifacts in `OUT_DIR` for
-//! `include_bytes!` to consume at compile time, and compiles the PipeWire
-//! shims against the vendored PipeWire/SPA headers; and stamps the engine's
-//! build id, which a helper process checks against its parent's.
+//! Build script: wherever the Vulkan RHI is compiled, compiles the Vulkan
+//! compute, vertex, fragment, and ray-tracing shaders this crate ships
+//! (`vulkan/rhi/shaders/*.{comp,vert,frag,rgen,rmiss,rchit}`) to SPIR-V via
+//! `glslc` and stages the artifacts in `OUT_DIR` for `include_bytes!` to
+//! consume at compile time; on Linux compiles the PipeWire shims against the
+//! vendored PipeWire/SPA headers; and stamps the engine's build id, which a
+//! helper process checks against its parent's.
 
 #[path = "src/core/engine_build_id_composition.rs"]
 mod engine_build_id_composition;
@@ -17,20 +17,19 @@ mod engine_build_id_composition;
 fn main() {
     stamp_the_engine_build_id();
 
-    // Link Metal framework on macOS for MP4 writer
-    #[cfg(target_os = "macos")]
-    {
-        println!("cargo:rustc-link-lib=framework=Metal");
+    // `CARGO_CFG_TARGET_OS` rather than `#[cfg(target_os = ...)]`, which in a
+    // build script names the host that is compiling it — so a `cfg` gate here
+    // built the shaders when cross-compiling to macOS from Linux and not when
+    // building natively on a Mac, which is the opposite of what either needs.
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+
+    // Every target the Vulkan RHI compiles for needs its SPIR-V staged, or
+    // the `include_bytes!` sites fail to read them.
+    if target_os == "linux" || target_os == "macos" {
+        compile_shaders();
     }
 
-    #[cfg(target_os = "linux")]
-    compile_shaders();
-
-    // `CARGO_CFG_TARGET_OS` rather than `#[cfg(target_os = ...)]`, which in a
-    // build script names the host that is compiling it. Cross-checking the
-    // Apple path from Linux (`cargo check --target aarch64-apple-darwin`) would
-    // otherwise hand this file's sources to a cross toolchain that is not there.
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
+    if target_os == "linux" {
         compile_pipewire_shims();
     }
 }
@@ -137,10 +136,8 @@ fn compile_pipewire_shims() {
 /// blob (it embeds the GLSL source, not just names), and changing the bytes
 /// changes each driver pipeline-cache filename once, so the first run after
 /// an upgrade recompiles pipelines cold.
-#[cfg(target_os = "linux")]
 const KEEP_BINDING_NAMES: &str = "-g";
 
-#[cfg(target_os = "linux")]
 fn compile_shaders() {
     use std::path::{Path, PathBuf};
     use std::process::Command;

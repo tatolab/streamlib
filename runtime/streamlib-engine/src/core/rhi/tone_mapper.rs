@@ -15,9 +15,9 @@
 
 use crate::core::color::TransferId;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::core::Result;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::core::rhi::Texture;
 
 /// Tone-curve selector for [`ToneMapperPushConstants::tonemap_curve`].
@@ -116,7 +116,7 @@ pub const TONE_MAPPER_PUSH_CONSTANT_SIZE: u32 =
 /// `GENERAL` otherwise. Callers holding a
 /// [`crate::core::context::TextureRegistration`] write these back via
 /// `update_layout`.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[must_use = "the terminal layouts must reach the textures' registrations — discarding them leaves a registration claiming a stale layout"]
 pub struct ToneMapperFinalTextureLayouts {
@@ -143,26 +143,25 @@ pub struct ToneMapperFinalTextureLayouts {
 /// Thread-safe — internal compute-kernel submissions serialize through
 /// the host queue mutex.
 pub struct RhiToneMapper {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) inner: crate::vulkan::rhi::VulkanToneMapper,
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     _marker: std::marker::PhantomData<()>,
 }
 
 impl RhiToneMapper {
     /// Build a tone-mapper bound to `device`. The internal compute
     /// kernel is allocated lazily on first dispatch.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn new(device: &std::sync::Arc<crate::vulkan::rhi::HostVulkanDevice>) -> Self {
         Self {
             inner: crate::vulkan::rhi::VulkanToneMapper::new(device),
         }
     }
 
-    /// macOS stub — Apple-platform tone mapping lives in the
-    /// follow-on Apple activation work.
-    #[cfg(not(target_os = "linux"))]
+    /// Stub for a platform with no Vulkan RHI.
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     pub fn new() -> Self {
         Self {
             _marker: std::marker::PhantomData,
@@ -174,7 +173,7 @@ impl RhiToneMapper {
     /// [`crate::vulkan::rhi::RhiCommandRecorder`] and wants the tone
     /// curve to nest inside its own barriers rather than spawning a
     /// separate queue submit.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn prepare(
         &self,
         src: &Texture,
@@ -191,7 +190,7 @@ impl RhiToneMapper {
     /// [`crate::core::rhi::VulkanLayout::GENERAL`] (the storage-image
     /// binding requirement). For consumers that need layout transitions
     /// handled, prefer [`Self::apply_with_layouts`].
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn apply(
         &self,
         src: &Texture,
@@ -226,7 +225,7 @@ impl RhiToneMapper {
     ///   [`crate::core::context::TextureRegistration`]. The caller is
     ///   responsible for `update_layout`ing any associated registration
     ///   with the returned terminal layouts after the call.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn apply_with_layouts(
         &self,
         src: &Texture,

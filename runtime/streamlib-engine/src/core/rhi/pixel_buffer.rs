@@ -89,7 +89,7 @@ impl PixelBuffer {
     /// `HostVulkanBuffer` is the generic Vulkan buffer allocation
     /// primitive and carries no pixel semantics; pixel `width` /
     /// `height` / `bytes_per_pixel` / `format` live on this wrapper.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn from_host_vulkan_buffer(
         buffer: Arc<crate::vulkan::rhi::HostVulkanBuffer>,
         width: u32,
@@ -201,12 +201,6 @@ impl PixelBuffer {
             return 0;
         }
         self.buffer_ref().plane_size(plane_index)
-    }
-
-    /// Get the raw platform pointer (CVPixelBufferRef on macOS).
-    #[cfg(target_os = "macos")]
-    pub fn as_ptr(&self) -> *mut std::ffi::c_void {
-        self.buffer_ref().as_ptr()
     }
 
     /// Number of `PixelBuffer` references to the same underlying

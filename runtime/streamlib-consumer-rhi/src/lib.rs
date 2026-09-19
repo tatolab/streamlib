@@ -48,19 +48,19 @@ mod error;
 mod formats;
 mod pixel_format;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod consumer_vulkan_buffer;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod consumer_vulkan_device;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod consumer_vulkan_sync;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod consumer_vulkan_texture;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod device_capability;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod vulkan_extension_names;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod vulkan_layout;
 
 pub use error::{ConsumerRhiError, Result};
@@ -74,28 +74,28 @@ pub use pixel_format::PixelFormat;
 /// through) are refused at load rather than skewing silently.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use consumer_vulkan_buffer::ConsumerVulkanBuffer;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use consumer_vulkan_device::ConsumerVulkanDevice;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use consumer_vulkan_sync::ConsumerVulkanTimelineSemaphore;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use consumer_vulkan_texture::ConsumerVulkanTexture;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use device_capability::{
     ConsumerMarker, DevicePrivilege, VulkanRhiBuffer, VulkanRhiDevice, VulkanTextureLike,
     VulkanTimelineSemaphoreLike, terminal_layout_for_shader_read_access_of_image_usage,
 };
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use vulkan_extension_names::vulkan_extension_names_borrowed_from_properties;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use vulkan_layout::VulkanLayout;
 
 /// Sealing supertrait module for [`DevicePrivilege`]. Re-exported so
 /// `streamlib::vulkan::rhi::HostMarker` can `impl Sealed for HostMarker`
 /// from the streamlib crate. See [`device_capability::private`].
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[doc(hidden)]
 pub use device_capability::private;
 

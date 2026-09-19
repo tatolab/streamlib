@@ -54,7 +54,7 @@ pub enum SurfaceBoundKernelBindingKind {
     SampledTexture,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl SurfaceBoundKernelBindingKind {
     /// The image layout this kind's descriptor requires when the pipeline runs.
     pub fn required_image_layout(self) -> streamlib_consumer_rhi::VulkanLayout {
