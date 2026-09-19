@@ -111,9 +111,12 @@ struct PortBoundSubscriber {
     /// one must go.
     link_id: String,
     local_port: String,
-    /// The source channel name this subscriber subscribed to — the name a read
-    /// hands back for every frame it delivers, and the name `graph` and `tap`
-    /// show for the same link.
+    /// The name a read hands back for every frame this subscriber delivers.
+    ///
+    /// The channel it subscribed to for a link from this runtime, which is
+    /// what `graph` and `tap` show for the same link; the source port's mesh
+    /// address for one carrying from another runtime, whose channel is hashed
+    /// from that address.
     inbound_link_name: InboundLinkName,
     subscriber: ChannelDataServiceSubscriber,
     /// This link's share of the destination's dropped-bag counts. Every frame
@@ -1513,8 +1516,9 @@ impl InputMailboxes {
     ///
     /// What a destination taking many links on one port reads with: each
     /// inbound link is one producer, named by the source channel name it
-    /// subscribed to, so a sink can tell N streams apart without the producers
-    /// having to identify themselves in their bags.
+    /// subscribed to — or, for a link carrying from another runtime, by that
+    /// port's mesh address — so a sink can tell N streams apart without the
+    /// producers having to identify themselves in their bags.
     ///
     /// Bags from one link keep that link's order; no interleaving is promised
     /// between two links. A bag no link delivered is refused by name, and the

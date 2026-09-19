@@ -2097,8 +2097,9 @@ impl PythonLinkInputDataReader {
     ///
     /// Any number of links may enter one input port, and each is one producer.
     /// This is how a many-input processor tells them apart: the name is the
-    /// source channel the link subscribed to, which the engine knows and a
-    /// producer cannot misstate.
+    /// source channel the link subscribed to — or, for a link carrying from
+    /// another runtime, that port's mesh address — which the engine knows and
+    /// a producer cannot misstate.
     #[pyo3(signature = (port_name, *, into = None))]
     fn read_from_inbound_link<'py>(
         &self,

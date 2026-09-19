@@ -179,7 +179,9 @@ impl PythonProcessorLinkDataAccess {
     /// `None` when the mailbox is empty.
     ///
     /// The read a destination taking many links on one port uses: each inbound
-    /// link is one producer, named by the source channel name it subscribed to.
+    /// link is one producer, named by the source channel name it subscribed to
+    /// — or, for a link carrying from another runtime, by that port's mesh
+    /// address, which is what the engine wired the link under.
     pub(crate) fn read_from_input_port_naming_its_inbound_link<'py>(
         &self,
         python: Python<'py>,
