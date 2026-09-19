@@ -486,9 +486,9 @@ impl From<crate::core::graph::PortKind> for PortKindOutput {
 impl LinkOutput {
     /// Render `link` as the runtime named `this_runtimes_name` sees it.
     ///
-    /// The name is the renderer's rather than the link's because a link nobody
-    /// asked for across the mesh was asked for here, and a `Link` has no field
-    /// to say so.
+    /// The renderer's own name is what a link carries no room for: a link this
+    /// runtime wired was asked for here, and only a link another runtime
+    /// requested carries a name of its own to render instead.
     pub fn of_a_link_on_the_runtime_named(
         link: &crate::core::graph::Link,
         this_runtimes_name: &str,
@@ -511,7 +511,10 @@ impl LinkOutput {
             state: rendered.state,
             error_reason: rendered.error_reason,
             awaiting_remote_reason: rendered.awaiting_remote_reason,
-            created_by_runtime_name: this_runtimes_name.to_string(),
+            created_by_runtime_name: link
+                .get::<crate::core::graph::TheRequestThatAppliedThisLinkComponent>()
+                .map(|applied| applied.requester_runtime_name.clone())
+                .unwrap_or_else(|| this_runtimes_name.to_string()),
             components,
         }
     }

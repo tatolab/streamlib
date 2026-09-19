@@ -28,6 +28,10 @@ use crate::core::json_schema::{RuntimeMeshOutput, RuntimeMeshSessionOutput};
 use crate::core::runtime::RuntimeName;
 use crate::core::runtime::mesh::duplicate_runtime_name_on_the_mesh::refuse_this_runtime_if_its_name_is_already_live;
 use crate::core::runtime::mesh::hosted_control_plane_endpoint::HostedControlPlaneEndpointRegistry;
+use crate::core::runtime::mesh::link_requests_from_other_runtimes::{
+    LinkRequestsFromOtherRuntimesQueryable, WhatThisRuntimeDoesWithALinkRequest,
+    WhatThisRuntimeDoesWithALinkRequestRegistry,
+};
 use crate::core::runtime::mesh::mesh_link_ingress_table::MeshLinkIngressTable;
 use crate::core::runtime::mesh::mesh_port_egress_table::MeshPortEgressTable;
 use crate::core::runtime::mesh::output_ports_offered_on_the_mesh::{
@@ -68,6 +72,9 @@ pub struct RuntimeMeshMembership {
     /// Lives here rather than inside the egress table because `graph` reads it
     /// whether or not this runtime ever started serving its ports.
     being_read_by_other_runtimes: Arc<OutputPortsOtherRuntimesAreReading>,
+    /// How this runtime applies a link another runtime asks it for. Empty until
+    /// the runtime exists to apply one, which is after the session opens.
+    applies_link_requests: Arc<WhatThisRuntimeDoesWithALinkRequestRegistry>,
 }
 
 /// What a runtime holds on the mesh to serve its own output ports: the
@@ -76,6 +83,10 @@ pub struct RuntimeMeshMembership {
 struct ServingThisRuntimesOutputPorts {
     _offered_output_ports_queryable: OfferedOutputPortsQueryable,
     _egress_table: MeshPortEgressTable,
+    /// Answering a peer that asks this runtime to apply a link into one of its
+    /// own inputs. Held beside the other two because all three stop together:
+    /// a runtime that has left the mesh serves nothing and answers nothing.
+    _link_requests_queryable: LinkRequestsFromOtherRuntimesQueryable,
 }
 
 /// Whether this runtime reached its mesh, and what it holds there if it did.
@@ -162,7 +173,22 @@ impl RuntimeMeshMembership {
             serving_this_runtimes_output_ports: Mutex::new(None),
             carrying_links_from_other_runtimes: Mutex::new(None),
             being_read_by_other_runtimes: Arc::default(),
+            applies_link_requests: Arc::default(),
         })
+    }
+
+    /// Record how this runtime applies a link request another runtime sends it.
+    ///
+    /// Called once the runtime exists, which is after the session is open and
+    /// after the queryable below is declared: a request that arrives in between
+    /// is refused saying the runtime is still starting, and the runtime that
+    /// asked resends.
+    pub fn record_how_this_runtime_applies_link_requests(
+        &self,
+        applies_them: Arc<dyn WhatThisRuntimeDoesWithALinkRequest>,
+    ) {
+        self.applies_link_requests
+            .record_how_this_runtime_applies_them(applies_them);
     }
 
     /// The session this runtime is announced on, or `None` while it is not on
@@ -197,12 +223,19 @@ impl RuntimeMeshMembership {
         let this_runtimes_name = self.announced_identity.runtime_name.clone();
         let being_read_by_other_runtimes = Arc::clone(&self.being_read_by_other_runtimes);
 
+        let applies_link_requests = Arc::clone(&self.applies_link_requests);
         let served = off_any_current_thread_tokio_runtime("serve", || {
             let offered_output_ports_queryable = OfferedOutputPortsQueryable::declare(
                 &session,
                 &key_space,
                 &this_runtimes_name,
                 offered,
+            )?;
+            let link_requests_queryable = LinkRequestsFromOtherRuntimesQueryable::declare(
+                &session,
+                &key_space,
+                &this_runtimes_name,
+                &applies_link_requests,
             )?;
             let egress_table = MeshPortEgressTable::watching_the_readers_of_this_runtimes_ports(
                 &session,
@@ -215,6 +248,7 @@ impl RuntimeMeshMembership {
             Ok::<_, zenoh::Error>(ServingThisRuntimesOutputPorts {
                 _offered_output_ports_queryable: offered_output_ports_queryable,
                 _egress_table: egress_table,
+                _link_requests_queryable: link_requests_queryable,
             })
         });
 
@@ -397,6 +431,7 @@ impl RuntimeMeshMembership {
             serving_this_runtimes_output_ports: Mutex::new(None),
             carrying_links_from_other_runtimes: Mutex::new(None),
             being_read_by_other_runtimes: Arc::default(),
+            applies_link_requests: Arc::default(),
         }
     }
 

@@ -19,9 +19,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::core::graph::{LinkUniqueId, MeshPortAddress};
+use crate::core::graph::{LinkRequestUniqueId, LinkUniqueId, MeshPortAddress};
 use crate::core::json_schema::LinkStateOutput;
-use crate::core::runtime::mesh::link_request_unique_id::LinkRequestUniqueId;
 
 /// Which of the two things a link request asks for, as it rides the wire.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

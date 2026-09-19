@@ -31,6 +31,7 @@ use crate::core::processors::ProcessorSpec;
 use crate::core::processors::ProcessorState;
 use crate::core::pubsub::{Event, EventListener, PUBSUB, ProcessorEvent, RuntimeEvent, topics};
 use crate::core::runtime::LoadedCapabilityExtensionRegistry;
+use crate::core::runtime::LinkRequestsAppliedIntoThisRuntimesGraph;
 use crate::core::runtime::OutputPortsInThisRuntimesGraph;
 use crate::core::runtime::mesh::{
     HostedControlPlaneEndpointRegistry, MeshLinkIngressTable, ResolvedRuntimeMeshConfiguration,
@@ -350,7 +351,7 @@ impl Runner {
         let mesh_link_ingress_table = MeshLinkIngressTable::of_this_runtime(&iceoryx2_node);
         runtime_mesh.start_carrying_links_from_other_runtimes(&mesh_link_ingress_table);
 
-        Ok(Arc::new(Self {
+        let runtime = Arc::new(Self {
             runtime_id,
             runtime_name,
             runtime_mesh,
@@ -374,7 +375,19 @@ impl Runner {
             _logging_guard,
             setup_hooks: Arc::new(Mutex::new(Vec::new())),
             pipeline_name: Arc::new(Mutex::new(None)),
-        }))
+        });
+
+        // Last, because it is the one thing that needs the runtime itself: a
+        // peer's link request is applied through this runtime's own `connect`.
+        // The queryable that answers those is already declared and refuses
+        // anything arriving before now by saying the runtime is still starting.
+        runtime
+            .runtime_mesh
+            .record_how_this_runtime_applies_link_requests(
+                LinkRequestsAppliedIntoThisRuntimesGraph::of(&runtime),
+            );
+
+        Ok(runtime)
     }
 
     /// Register a one-shot hook to run during [`Self::start`], after the
