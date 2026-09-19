@@ -100,7 +100,7 @@ pub const kCVPixelBufferLock_ReadOnly: CVPixelBufferLockFlags = 0x00000001;
 // ==========================================================================
 
 #[link(name = "Accelerate", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     // ========================================================================
     // CV Image Format
     // ========================================================================
@@ -206,7 +206,7 @@ extern "C" {
 // ==========================================================================
 
 #[link(name = "CoreVideo", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     /// Lock the base address of a CVPixelBuffer for CPU access.
     ///
     /// Parameters:

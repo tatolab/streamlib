@@ -34,7 +34,7 @@ pub const kCVReturnSuccess: i32 = 0;
 pub const K_CFNUMBER_SINT32_TYPE: i32 = 3;
 
 #[link(name = "CoreVideo", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     // ========================================================================
     // CVMetalTextureCache
     // ========================================================================
@@ -196,7 +196,7 @@ extern "C" {
 pub type CFBooleanRef = *const c_void;
 
 #[link(name = "CoreFoundation", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     pub fn CFRelease(cf: *const c_void);
 
     pub fn CFNumberCreate(
@@ -220,7 +220,7 @@ extern "C" {
 }
 
 #[link(name = "CoreVideo", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     // ========================================================================
     // CVPixelBuffer Dictionary Keys
     // ========================================================================
@@ -271,12 +271,12 @@ pub type mach_port_t = u32;
 // When set to true, the IOSurface can be looked up by ID from any process.
 // Note: Deprecated in macOS 10.11, but may still work for cross-process sharing.
 #[link(name = "IOSurface", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     pub static kIOSurfaceIsGlobal: CFStringRef;
 }
 
 #[link(name = "IOSurface", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     /// Get the unique ID of an IOSurface.
     /// This ID can be used to look up the surface in another process.
     pub fn IOSurfaceGetID(buffer: *const c_void) -> IOSurfaceID;
@@ -304,7 +304,7 @@ extern "C" {
 
 // Mach port deallocation
 #[link(name = "System")]
-extern "C" {
+unsafe extern "C" {
     /// Deallocate a mach port right.
     pub fn mach_port_deallocate(task: mach_port_t, name: mach_port_t) -> i32;
 

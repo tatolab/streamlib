@@ -25,7 +25,7 @@ fn set_realtime_priority() -> Result<()> {
         THREAD_TIME_CONSTRAINT_POLICY, thread_time_constraint_policy_data_t,
     };
 
-    extern "C" {
+    unsafe extern "C" {
         fn mach_thread_self() -> u32;
         fn thread_policy_set(
             thread: u32,
@@ -89,7 +89,7 @@ fn set_realtime_priority() -> Result<()> {
         THREAD_TIME_CONSTRAINT_POLICY, thread_time_constraint_policy_data_t,
     };
 
-    extern "C" {
+    unsafe extern "C" {
         fn mach_thread_self() -> u32;
         fn thread_policy_set(
             thread: u32,

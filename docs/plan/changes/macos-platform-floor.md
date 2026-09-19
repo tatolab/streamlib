@@ -199,6 +199,17 @@ which this delta does not touch.
   ignored. `apple/media_clock.rs` is the live one.
 - REMOVED: runtime/streamlib-engine/src/apple/arkit.rs
   Two empty modules and an empty test. Zero references in the tree.
+- REMOVED: runtime/streamlib-engine/src/apple/pixel_transfer.rs
+  A `VTPixelTransferSession` wrapper with zero callers that reaches the Metal tree through
+  `as_metal_device()`, `as_metal_texture()` and `metal_queue_ref()` — it cannot outlive the
+  backend those facade arms belong to. Recorded while shipping #2355.
+- REMOVED: runtime/streamlib-engine/src/apple/texture_pool_macos.rs
+  The IOSurface-backed pool arm, built on `MetalTexture` and reached only from the macOS
+  `allocate_slot` arm of `core/context/texture_pool.rs`, itself a Metal facade arm. The IOSurface
+  allocation flavour returns through the Vulkan RHI under §Media I/O. Recorded while shipping #2355.
+- REMOVED: backend-vulkan
+  The other half of the backend selector. With one RHI it selects nothing; every site reading it is
+  a backend-selection `cfg` this change simplifies. Owner, 2026-09-19. Recorded while shipping #2355.
 - REMOVED: tonic-build
   A macOS-only build dependency for a surface-share gRPC service that does not exist;
   `build.rs` names neither it nor protobuf.

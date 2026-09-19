@@ -56,7 +56,7 @@ pub const XPC_TYPE_INT64: *const c_void = unsafe { &_xpc_type_int64 as *const _ 
 pub const XPC_TYPE_ERROR: *const c_void = unsafe { &_xpc_type_error as *const _ };
 
 // External type symbols (opaque, just for pointer identity)
-extern "C" {
+unsafe extern "C" {
     static _xpc_type_dictionary: c_void;
     static _xpc_type_string: c_void;
     static _xpc_type_int64: c_void;
@@ -67,7 +67,7 @@ extern "C" {
 // XPC Error Constants
 // =============================================================================
 
-extern "C" {
+unsafe extern "C" {
     /// Error returned when the connection is interrupted.
     pub static _xpc_error_connection_interrupted: c_void;
 
@@ -93,7 +93,7 @@ pub fn xpc_error_connection_invalid() -> xpc_object_t {
 // =============================================================================
 
 #[link(name = "System", kind = "dylib")]
-extern "C" {
+unsafe extern "C" {
     // =========================================================================
     // Connection Management
     // =========================================================================
@@ -297,7 +297,7 @@ pub struct BlockDescriptor {
 }
 
 // Block class symbols
-extern "C" {
+unsafe extern "C" {
     /// Global block class (for blocks with no captures).
     pub static _NSConcreteGlobalBlock: c_void;
     /// Stack block class (for blocks allocated on stack).
