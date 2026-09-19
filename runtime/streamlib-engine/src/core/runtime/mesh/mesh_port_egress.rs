@@ -225,8 +225,9 @@ fn send_one_port_to_the_mesh(sending: WhatOneEgressSends, stop: Arc<AtomicBool>)
                         tracing::warn!(
                             "{addressed} publishes bags naming a surface, and a surface id names \
                              a frame in this machine's own pools — nothing another runtime can \
-                             resolve. Those bags are not sent, and are counted nowhere until the \
-                             mesh carries the pixels themselves."
+                             resolve. Those bags are not sent, and each one reads on the reading \
+                             runtime as a bag this hop lost, which from that side is what it is. \
+                             The mesh carrying the pixels themselves is what ends both."
                         );
                     }
                     continue;
