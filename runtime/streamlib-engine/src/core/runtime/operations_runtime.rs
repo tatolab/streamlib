@@ -15,8 +15,8 @@ use super::surface_image_exchange::exchange_published_surface_id_for_png_image_b
 use crate::core::RuntimeContext;
 use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::graph::{
-    GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId, MeshPortAddress,
-    PendingDeletionComponent, ProcessorUniqueId, StateComponent,
+    GraphEdgeWithComponents, GraphNodeWithComponents, LinkRequestUniqueId, LinkUniqueId,
+    MeshPortAddress, PendingDeletionComponent, ProcessorUniqueId, StateComponent,
 };
 use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec, ProcessorState};
 use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent, topics};
@@ -517,6 +517,35 @@ fn apply_a_link_from_another_runtime(
     Ok(link_id)
 }
 
+/// The address a peer reads one of this runtime's own output ports at.
+///
+/// Refused by name when the port is not there, because a request naming a port
+/// this runtime does not publish would wait on an egress that never starts and
+/// say nothing about why.
+fn this_runtimes_address_for_one_of_its_own_output_ports(
+    compiler: &Arc<Compiler>,
+    this_runtimes_name: &str,
+    processor_id: &ProcessorUniqueId,
+    port_name: &str,
+) -> Result<MeshPortAddress> {
+    let display_name = compiler.scope(|graph, _tx| {
+        let node = graph
+            .traversal()
+            .v(processor_id)
+            .first()
+            .ok_or_else(|| Error::ProcessorNotFound(processor_id.to_string()))?;
+        if !node.has_output(port_name) {
+            return Err(Error::ProcessorPortNotFound {
+                processor_id: processor_id.to_string(),
+                port_name: port_name.to_string(),
+                direction: PortDirection::Output,
+            });
+        }
+        Ok(node.display_name.clone())
+    })?;
+    MeshPortAddress::new(this_runtimes_name, display_name, port_name)
+}
+
 /// Refuse a destination this graph has no processor or no such input port for,
 /// with the typed error a caller can act on.
 fn refuse_a_destination_this_graph_cannot_take(
@@ -844,6 +873,84 @@ impl RuntimeOperations for Runner {
                     .map_err(|_| Error::Runtime("Task channel closed".into()))?
             }
         }
+    }
+
+    fn runtime_name(&self) -> String {
+        self.runtime_mesh.runtime_name().to_string()
+    }
+
+    fn request_link_on_remote_input_runtime(
+        &self,
+        from: OutputLinkPortRef,
+        to: MeshPortAddress,
+    ) -> Result<LinkRequestUniqueId> {
+        if to.names_the_runtime(self.runtime_mesh.runtime_name()) {
+            return Err(Error::InvalidLink(format!(
+                "the destination {to} is a port on this runtime, which applies its own links. \
+                 Use `connect` instead of asking across the mesh for one"
+            )));
+        }
+        // A processor id never appears on the mesh, so a source on this runtime
+        // becomes the address a peer can read it at: this runtime's name, the
+        // processor's display name, and the port.
+        let source_address = match from {
+            OutputLinkPortRef::OnAnotherRuntime(address) => address,
+            OutputLinkPortRef::OnThisRuntime {
+                processor_id,
+                port_name,
+            } => this_runtimes_address_for_one_of_its_own_output_ports(
+                &self.compiler,
+                self.runtime_mesh.runtime_name(),
+                &processor_id,
+                &port_name,
+            )?,
+        };
+        let link_request_id = LinkRequestUniqueId::new();
+        let input_runtime_name = to.runtime_name().to_string();
+        self.runtime_mesh.ask_another_runtime_for_a_link(
+            crate::core::runtime::mesh::ALinkRequestOnTheMesh::asking_for_a_link(
+                link_request_id.clone(),
+                source_address,
+                to,
+                self.runtime_mesh.runtime_name(),
+            ),
+            &input_runtime_name,
+        );
+        Ok(link_request_id)
+    }
+
+    fn request_disconnect_on_remote_input_runtime(
+        &self,
+        input_runtime_name: String,
+        link_id: LinkUniqueId,
+    ) -> Result<LinkRequestUniqueId> {
+        if input_runtime_name == self.runtime_mesh.runtime_name() {
+            return Err(Error::InvalidLink(format!(
+                "the link {link_id} is on this runtime, which removes its own links. Use \
+                 `disconnect` instead of asking across the mesh for one"
+            )));
+        }
+        let link_request_id = LinkRequestUniqueId::new();
+        self.runtime_mesh.ask_another_runtime_for_a_link(
+            crate::core::runtime::mesh::ALinkRequestOnTheMesh::asking_for_a_link_to_go(
+                link_request_id.clone(),
+                link_id,
+                self.runtime_mesh.runtime_name(),
+            ),
+            &input_runtime_name,
+        );
+        Ok(link_request_id)
+    }
+
+    fn cancel_link_request(&self, link_request_id: &LinkRequestUniqueId) -> Result<()> {
+        if self.runtime_mesh.cancel_a_link_request(link_request_id) {
+            return Ok(());
+        }
+        Err(Error::NotFound(format!(
+            "this runtime is holding no link request {link_request_id}. It was applied, it was \
+             cancelled already, or it was never made here — `graph` lists the ones it holds \
+             under `mesh.link_requests_awaiting_runtime`."
+        )))
     }
 
     fn disconnect(&self, link_id: &LinkUniqueId) -> Result<()> {

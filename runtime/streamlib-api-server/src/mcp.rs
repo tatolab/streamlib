@@ -2392,7 +2392,8 @@ mod tests {
                 "runtime_name": "rig-desk-a1b2",
                 "session": "open",
                 "peers": [],
-                "egress_ports": []
+                "egress_ports": [],
+                "link_requests_awaiting_runtime": []
             }
         })
     }

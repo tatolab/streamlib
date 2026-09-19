@@ -31,7 +31,6 @@ use crate::core::runtime::mesh::{
     ALinkRequestOnTheMesh, WhatALinkRequestAsksFor, WhatALinkRequestWasAnswered,
     WhatThisRuntimeDoesWithALinkRequest,
 };
-use crate::core::runtime::operations::RuntimeOperations;
 
 /// This runtime's graph, as a link request reaches it.
 pub(crate) struct LinkRequestsAppliedIntoThisRuntimesGraph {

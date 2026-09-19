@@ -59,6 +59,58 @@ pub struct RuntimeMeshOutput {
     /// the mesh. Always present, and empty until one is — a sending runtime
     /// does no network work for a port until a remote link reads it.
     pub egress_ports: Vec<MeshEgressPortOutput>,
+    /// Every link this runtime has asked another runtime to apply, and that
+    /// runtime has not. Always present, and empty when there are none.
+    ///
+    /// A request leaves this list when the runtime that owns the input applies
+    /// it — the link is then that runtime's to render. One it refused stays,
+    /// because asking never waits and a refusal has nowhere else to land.
+    pub link_requests_awaiting_runtime: Vec<LinkRequestAwaitingARuntimeOutput>,
+}
+
+/// One link this runtime has asked another runtime for, still unapplied.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+pub struct LinkRequestAwaitingARuntimeOutput {
+    /// The id this runtime minted for the request. `disconnect` takes it to
+    /// cancel the request.
+    pub link_request_id: String,
+    /// What the request asks for: `connect` or `disconnect`.
+    pub operation: String,
+    /// The runtime being asked — the one that owns the input.
+    pub input_runtime_name: String,
+    /// The port the link would carry from, as `<runtime>/<display name>/<port>`.
+    /// Absent on a request asking for a link to go.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// The port the link would carry into, spelled the same way. Absent on a
+    /// request asking for a link to go.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination: Option<String>,
+    /// The link a request asking for one to go names. Absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_id: Option<String>,
+    /// How far the request has got.
+    pub state: LinkRequestStateOutput,
+    /// What that state is about, in terms the author who asked can act on.
+    pub reason: String,
+}
+
+/// How far a link request this runtime made has got.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum LinkRequestStateOutput {
+    /// The runtime it names is not on the mesh, so it has not been sent. Not
+    /// final: it is sent the moment that runtime appears.
+    AwaitingRuntime,
+    /// It was sent and nothing came back. Not final either — a request sent at
+    /// `Drop`, or its reply, can go missing with nothing said — so it is sent
+    /// again on a backoff.
+    Unanswered,
+    /// The runtime it names refused it. Final: a resend would be refused in
+    /// the same words. `reason` is that runtime's own.
+    Refused,
 }
 
 /// One output port of this runtime that the mesh is sending, and to whom.
@@ -1182,6 +1234,7 @@ mod capability_extension_and_mesh_rendering_tests {
             local_only_reason: None,
             peers: Vec::new(),
             egress_ports: Vec::new(),
+            link_requests_awaiting_runtime: Vec::new(),
         }
     }
 
@@ -1212,6 +1265,7 @@ mod capability_extension_and_mesh_rendering_tests {
                 "session": "open",
                 "peers": [],
                 "egress_ports": [],
+                "link_requests_awaiting_runtime": [],
             })
         );
     }
