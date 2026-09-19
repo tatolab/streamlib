@@ -60,7 +60,7 @@ TRAILING_SILENCE_SECONDS = 1.0
 # past the window it records. On for an arm that has to still be publishing
 # when something downstream gets round to looking — a `tap`, whose window opens
 # whenever its caller asks rather than when the signal starts.
-REPEATS = os.environ.get("STREAMLIB_KNOWN_SIGNAL_REPEATS") == "1"
+THE_SIGNAL_PLAYS_OVER_AND_OVER = os.environ.get("STREAMLIB_KNOWN_SIGNAL_REPEATS") == "1"
 
 
 def _interleaved_stereo_f32_bytes(mono_samples):
@@ -82,7 +82,7 @@ class KnownAudioSignalSource:
             int(TRAILING_SILENCE_SECONDS * SAMPLE_RATE), dtype="<f8"
         )
         self._signal = numpy.concatenate([signal, trailing_silence])
-        self._repeats = REPEATS
+        self._plays_over_and_over = THE_SIGNAL_PLAYS_OVER_AND_OVER
         self._samples_published = 0
         self._first_sample_timestamp_ns = None
 
@@ -92,7 +92,9 @@ class KnownAudioSignalSource:
         return published_ns - elapsed_ns > PUBLISHING_LEAD_NS
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        if not self._repeats and self._samples_published >= len(self._signal):
+        if not self._plays_over_and_over and self._samples_published >= len(
+            self._signal
+        ):
             return
         if self._first_sample_timestamp_ns is None:
             self._first_sample_timestamp_ns = monotonic_now_ns()

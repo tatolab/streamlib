@@ -487,9 +487,15 @@ fn a_source_holds_no_egress_until_somebody_reads_its_port() {
 ///
 /// What it catches: an agent driving the sending node cannot otherwise tell
 /// that anybody is pulling from it — every other sign of a remote link lives on
-/// the runtime that owns the input. Mental-revert: render the readers rather
-/// than the live egresses, and a port this runtime cannot send reads as one it
-/// is sending.
+/// the runtime that owns the input. Mental-revert: never write the table from
+/// the egress thread and the source renders an empty list while a reader is
+/// plainly taking its bags.
+///
+/// What it does *not* catch is that the table is derived from the live
+/// egresses rather than from the readers — both spellings agree here, because
+/// this source offers the port it is asked for. The divergence is locked in
+/// `mesh_port_egress_table`'s own tests, where a port with readers and no
+/// egress can be built without standing up a second runtime.
 #[test]
 #[serial]
 fn a_sources_graph_names_the_port_the_mesh_reads_and_who_reads_it() {

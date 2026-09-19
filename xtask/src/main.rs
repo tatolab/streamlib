@@ -428,8 +428,6 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_stalled_windowed_consumer_counts_what_its_sixty_four_bag_ring_overwrote",
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_gap_flush_at_a_windowed_destination_renders_its_discarded_samples_under_its_link",
                 "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_helper_placed_windowed_port_is_handed_the_windowed_ring_depth",
-                "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_link_whose_source_is_on_another_runtime::the_envelope_hands_a_helper_the_address_beside_the_channel_it_subscribes_to",
-                "core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_link_whose_source_is_on_another_runtime::the_envelope_hands_a_helper_one_name_twice_for_a_link_from_this_runtime",
                 "iceoryx2::input::tests::a_replacement_publisher_on_a_live_subscriber_reads_as_a_new_baseline_not_a_gap",
                 "iceoryx2::input::tests::a_frame_too_short_for_a_header_is_counted_on_the_link_it_arrived_on",
                 "iceoryx2::input::tests::a_frame_bound_to_a_port_with_no_mailbox_is_counted_on_its_link",

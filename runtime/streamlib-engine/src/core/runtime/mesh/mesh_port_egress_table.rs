@@ -54,7 +54,7 @@ impl MeshPortEgressTable {
         this_runtimes_name: &str,
         offered: &Arc<WhatThisRuntimeOffersOnTheMeshRegistry>,
         iceoryx2_node: &Iceoryx2Node,
-        being_read: &Arc<OutputPortsOtherRuntimesAreReading>,
+        being_read_by_other_runtimes: &Arc<OutputPortsOtherRuntimesAreReading>,
     ) -> zenoh::Result<Self> {
         let (what_the_readers_did, what_the_egress_thread_reads) = crossbeam_channel::unbounded();
         let reader_token_subscriber = declare_the_reader_token_subscriber(
@@ -69,7 +69,7 @@ impl MeshPortEgressTable {
             this_runtimes_name.to_string(),
             Arc::clone(offered),
             iceoryx2_node.clone(),
-            Arc::clone(being_read),
+            Arc::clone(being_read_by_other_runtimes),
             what_the_egress_thread_reads,
         )?;
         Ok(Self {
@@ -125,7 +125,7 @@ fn spawn_the_egress_thread(
     this_runtimes_name: String,
     offered: Arc<WhatThisRuntimeOffersOnTheMeshRegistry>,
     iceoryx2_node: Iceoryx2Node,
-    being_read: Arc<OutputPortsOtherRuntimesAreReading>,
+    being_read_by_other_runtimes: Arc<OutputPortsOtherRuntimesAreReading>,
     what_the_egress_thread_reads: Receiver<WhatTheReadersDid>,
 ) -> std::io::Result<std::thread::JoinHandle<()>> {
     std::thread::Builder::new()
@@ -156,15 +156,14 @@ fn spawn_the_egress_thread(
                         a_runtime_stopped_reading(&mut who_is_reading, &mut sending, &reader);
                     }
                 }
-                being_read.record_what_is_being_sent(what_this_runtime_is_sending(
-                    &who_is_reading,
-                    &sending,
-                ));
+                being_read_by_other_runtimes.record_what_is_being_sent(
+                    what_this_runtime_is_sending(&who_is_reading, &sending),
+                );
             }
             // The thread ends with the session, so nothing is being sent any
             // more; leaving the last state behind would have `graph` report
             // egresses whose thread is gone.
-            being_read.record_what_is_being_sent(BTreeMap::new());
+            being_read_by_other_runtimes.record_what_is_being_sent(BTreeMap::new());
         })
 }
 
@@ -262,9 +261,13 @@ fn a_runtime_stopped_reading(
 /// Derived from both halves rather than kept as a third map: a port somebody
 /// reads and this runtime cannot send has readers and no egress, and `graph`
 /// must say this runtime sends nothing for it.
-fn what_this_runtime_is_sending(
+///
+/// Generic over what an egress *is* because this reads only which ports have
+/// one — which is also what lets the divergence be tested without standing up
+/// a Zenoh session and an iceoryx2 subscriber to own.
+fn what_this_runtime_is_sending<AnEgress>(
     who_is_reading: &BTreeMap<OutputPortOfferedOnTheMesh, BTreeSet<String>>,
-    sending: &BTreeMap<OutputPortOfferedOnTheMesh, MeshPortEgress>,
+    sending: &BTreeMap<OutputPortOfferedOnTheMesh, AnEgress>,
 ) -> BTreeMap<OutputPortOfferedOnTheMesh, BTreeSet<String>> {
     sending
         .keys()
@@ -275,4 +278,71 @@ fn what_this_runtime_is_sending(
             )
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn a_port(processor_display_name: &str, port_name: &str) -> OutputPortOfferedOnTheMesh {
+        OutputPortOfferedOnTheMesh {
+            processor_display_name: processor_display_name.to_string(),
+            port_name: port_name.to_string(),
+        }
+    }
+
+    fn reading(runtime_names: &[&str]) -> BTreeSet<String> {
+        runtime_names.iter().map(|it| it.to_string()).collect()
+    }
+
+    /// A port somebody reads and this runtime cannot send renders nothing.
+    ///
+    /// The two maps really do diverge: `a_runtime_started_reading` notes the
+    /// reader before it discovers the port is not one this runtime offers, and
+    /// then starts no egress. `graph` must not read that as a send.
+    ///
+    /// Mental-revert: derive from `who_is_reading` instead and this runtime
+    /// claims to be sending a port it has no publisher for.
+    #[test]
+    fn a_port_with_readers_and_no_egress_is_not_being_sent() {
+        let who_is_reading = BTreeMap::from([
+            (a_port("CameraSource", "video"), reading(&["bench-fx-c3d4"])),
+            (
+                a_port("NoSuchProcessor", "video"),
+                reading(&["bench-rec-e5f6"]),
+            ),
+        ]);
+        let sending = BTreeMap::from([(a_port("CameraSource", "video"), ())]);
+
+        assert_eq!(
+            what_this_runtime_is_sending(&who_is_reading, &sending),
+            BTreeMap::from([(a_port("CameraSource", "video"), reading(&["bench-fx-c3d4"]))]),
+        );
+    }
+
+    /// An egress whose readers have all gone still renders, with none — the
+    /// window between the last reader leaving and the egress being dropped.
+    #[test]
+    fn an_egress_whose_readers_have_gone_renders_with_no_readers() {
+        let sending = BTreeMap::from([(a_port("CameraSource", "video"), ())]);
+
+        assert_eq!(
+            what_this_runtime_is_sending(&BTreeMap::new(), &sending),
+            BTreeMap::from([(a_port("CameraSource", "video"), BTreeSet::new())]),
+        );
+    }
+
+    /// Every reader of one port arrives together, so `graph` names all of them.
+    #[test]
+    fn a_port_two_runtimes_read_names_both() {
+        let port = a_port("CameraSource", "video");
+        let who_is_reading =
+            BTreeMap::from([(port.clone(), reading(&["bench-fx-c3d4", "bench-rec-e5f6"]))]);
+        let sending = BTreeMap::from([(port.clone(), ())]);
+
+        assert_eq!(
+            what_this_runtime_is_sending(&who_is_reading, &sending)[&port],
+            reading(&["bench-fx-c3d4", "bench-rec-e5f6"]),
+        );
+    }
 }

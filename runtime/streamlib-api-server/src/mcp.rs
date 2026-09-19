@@ -764,8 +764,17 @@ async fn how_the_graph_reads_one_link(
     runtime: &Arc<dyn RuntimeOperations>,
     link_id: &LinkUniqueId,
 ) -> HowTheGraphReadsOneLink {
-    let Ok(graph) = runtime.to_json_async().await else {
-        return HowTheGraphReadsOneLink::default();
+    let graph = match runtime.to_json_async().await {
+        Ok(graph) => graph,
+        Err(unreadable) => {
+            // Swallowing this would leave the caller a null state with nothing
+            // to act on, and the operator nothing to re-derive it from.
+            tracing::warn!(
+                "a link was connected and this node's own graph could not be read to say what \
+                 state it is in: {unreadable}"
+            );
+            return HowTheGraphReadsOneLink::default();
+        }
     };
     let input_runtime_name = graph["mesh"]["runtime_name"].as_str().map(str::to_string);
     let state = graph["links"]
