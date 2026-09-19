@@ -164,3 +164,162 @@ fn how_this_runtime_reads_one_link(
         })
         .unwrap_or(crate::core::json_schema::LinkStateOutput::Disconnected)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::descriptors::{
+        PortDescriptor, ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor,
+    };
+    use crate::core::graph::{LinkRequestUniqueId, MeshPortAddress};
+    use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
+    use crate::core::runtime::{RuntimeMeshConfiguration, RuntimeOperations};
+    use serial_test::serial;
+
+    const THE_TEST_TYPE: &str = "link_requests_applied_tests:ADestination";
+    const THE_DESTINATIONS_DISPLAY_NAME: &str = "DisplayWindow";
+    const THE_INPUT_PORT: &str = "frames_from_upstream";
+
+    fn register_the_destination_type() -> ProcessorClassImportPath {
+        static REGISTERED_ONCE_PER_PROCESS: std::sync::Once = std::sync::Once::new();
+        let import_path = ProcessorClassImportPath::new(THE_TEST_TYPE).expect("a legal path");
+        REGISTERED_ONCE_PER_PROCESS.call_once(|| {
+            let mut descriptor = ProcessorDescriptor::new(
+                ProcessorClassShortName::new("ADestination").expect("a legal short name"),
+                import_path.clone(),
+                "a destination for a link request to land on",
+            );
+            descriptor.inputs.push(
+                PortDescriptor::new(THE_INPUT_PORT, "input", true).with_delivery_profile("newest"),
+            );
+            let _ = PROCESSOR_REGISTRY.register_descriptor_only(descriptor);
+        });
+        import_path
+    }
+
+    /// A runtime off any mesh, holding one processor to push into.
+    ///
+    /// Off the network on purpose: applying a request needs a graph and this
+    /// runtime's own `connect`, neither of which the mesh is involved in.
+    fn a_runtime_holding_a_destination() -> Arc<Runner> {
+        let import_path = register_the_destination_type();
+        let runtime = Runner::new_with_runtime_mesh_configuration(RuntimeMeshConfiguration {
+            runtime_name: Some("link-request-apply-under-test".to_string()),
+            mesh_multicast_discovery: Some(false),
+            ..Default::default()
+        })
+        .expect("a runtime is constructed");
+        let mut spec = ProcessorSpec::new(import_path, serde_json::Value::Null);
+        spec.display_name = Some(THE_DESTINATIONS_DISPLAY_NAME.to_string());
+        runtime.add_processor(spec).expect("the destination is added");
+        runtime
+    }
+
+    fn a_request_from(link_request_id: &str) -> ALinkRequestOnTheMesh {
+        ALinkRequestOnTheMesh::asking_for_a_link(
+            LinkRequestUniqueId::from(link_request_id),
+            MeshPortAddress::new("bench-cam-a1b2", "CameraSource", "video")
+                .expect("a legal address"),
+            MeshPortAddress::new(
+                "link-request-apply-under-test",
+                THE_DESTINATIONS_DISPLAY_NAME,
+                THE_INPUT_PORT,
+            )
+            .expect("a legal address"),
+            "bench-cam-a1b2",
+        )
+    }
+
+    fn how_many_links(runtime: &Runner) -> usize {
+        runtime
+            .compiler
+            .scope(|graph, _tx| graph.traversal().e(()).iter().count())
+    }
+
+    /// A request sent twice makes one link, and the second send is answered
+    /// with the one the first made.
+    ///
+    /// This is what makes a resend safe, and a resend is not optional: a
+    /// request rides at `Drop` and so does its reply, so either can go missing
+    /// with nothing said and the requester has no way to tell that from a
+    /// runtime that never got it.
+    ///
+    /// Driven by calling the seam twice rather than by losing a real reply:
+    /// Zenoh offers no way to drop one, and what has to hold is that the
+    /// *second arrival* of one id makes no second link.
+    #[test]
+    #[serial]
+    fn a_request_that_arrives_twice_makes_one_link_and_answers_with_it_both_times() {
+        let runtime = a_runtime_holding_a_destination();
+        let applies_them = LinkRequestsAppliedIntoThisRuntimesGraph::of(&runtime);
+        let request = a_request_from("LRarrives-twice");
+
+        let first = applies_them
+            .answer_one_link_request(&request)
+            .expect("the first arrival applies the link");
+        assert_eq!(how_many_links(&runtime), 1);
+
+        let second = applies_them
+            .answer_one_link_request(&request)
+            .expect("the second arrival is answered rather than refused");
+        assert_eq!(
+            how_many_links(&runtime),
+            1,
+            "a resend must not make a second link"
+        );
+        assert_eq!(
+            first.link_id, second.link_id,
+            "a resend is answered with the link the first send made"
+        );
+
+        runtime.stop().expect("the runtime stops");
+    }
+
+    /// Two different requests for the same pair of ports are two links: the id
+    /// is what makes a resend idempotent, not the ports it names.
+    ///
+    /// Mental-revert: key the idempotence on the addresses and a runtime that
+    /// genuinely wants a second link from one port to another cannot have one.
+    #[test]
+    #[serial]
+    fn two_requests_naming_the_same_ports_are_two_links() {
+        let runtime = a_runtime_holding_a_destination();
+        let applies_them = LinkRequestsAppliedIntoThisRuntimesGraph::of(&runtime);
+
+        applies_them
+            .answer_one_link_request(&a_request_from("LRone"))
+            .expect("the first request applies");
+        applies_them
+            .answer_one_link_request(&a_request_from("LRanother"))
+            .expect("the second request applies");
+
+        assert_eq!(how_many_links(&runtime), 2);
+        runtime.stop().expect("the runtime stops");
+    }
+
+    /// The applied link names the runtime that asked, not the one that applied
+    /// it — which is what `graph` renders as `created_by_runtime_name`.
+    #[test]
+    #[serial]
+    fn an_applied_link_names_the_runtime_that_asked_for_it() {
+        let runtime = a_runtime_holding_a_destination();
+        let applies_them = LinkRequestsAppliedIntoThisRuntimesGraph::of(&runtime);
+        let applied = applies_them
+            .answer_one_link_request(&a_request_from("LRnames-its-asker"))
+            .expect("the request applies");
+
+        let rendered = runtime.compiler.scope(|graph, _tx| {
+            LinkOutput::of_a_link_on_the_runtime_named(
+                graph
+                    .traversal()
+                    .e(&applied.link_id)
+                    .first()
+                    .expect("the link is in the graph"),
+                runtime.runtime_name.as_str(),
+            )
+        });
+        assert_eq!(rendered.created_by_runtime_name, "bench-cam-a1b2");
+
+        runtime.stop().expect("the runtime stops");
+    }
+}

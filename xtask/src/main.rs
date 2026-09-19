@@ -846,6 +846,18 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "cross_runtime_links_two_processes",
             ],
         ),
+        (
+            "the link-request proof (the only one that runs three runtimes)",
+            "cargo",
+            &[
+                "test",
+                "--locked",
+                "-p",
+                "streamlib-engine",
+                "--test",
+                "cross_runtime_link_requests_two_processes",
+            ],
+        ),
         // The dependency closure's licences, against `deny.toml`'s allowlist.
         // Not a source-walking gate: those are in-process tree walkers by
         // contract, and this shells out to a binary that is not part of the
