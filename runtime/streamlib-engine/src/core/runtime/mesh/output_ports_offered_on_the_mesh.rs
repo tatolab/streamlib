@@ -110,14 +110,21 @@ pub trait WhatThisRuntimeOffersOnTheMesh: Send + Sync {
 }
 
 /// What an egress needs to take a destination slot on an offered port's
-/// channel: the iceoryx2 service name and the sizing the compiler opened it
-/// with.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// channel: the iceoryx2 service name, the sizing the compiler opened it with,
+/// and — for a port whose processor runs in a helper — that helper's answer
+/// that it opened the publisher this channel carries from.
+#[derive(Debug, Clone)]
 pub struct HowToReadAnOfferedOutputPort {
     /// The channel data-service name the port publishes to.
     pub channel_service_name: String,
     /// The sizing every opener of that service must ask for.
     pub channel_sizing: crate::iceoryx2::ChannelSizing,
+    /// The helper's answer that it opened its publisher, `None` for a port
+    /// whose processor runs in this process and for one already publishing.
+    /// An egress waits on it before saying the port is being sent, so a reader
+    /// never reads `wired` over a helper that refused.
+    pub the_helpers_answer_that_it_opened_its_publisher:
+        Option<std::sync::Arc<crate::core::processors::OutOfProcessLinkWireReply>>,
 }
 
 /// The seam through which the mesh reads this runtime's own graph, filled in
@@ -379,9 +386,7 @@ mod tests {
             registry.output_ports_it_offers_right_now(),
             OutputPortsOfferedOnTheMesh::default()
         );
-        assert_eq!(
-            registry.how_to_read_an_offered_output_port("CameraSource", "video"),
-            None
-        );
+        let how_to_read = registry.how_to_read_an_offered_output_port("CameraSource", "video");
+        assert!(how_to_read.is_none(), "{how_to_read:?}");
     }
 }

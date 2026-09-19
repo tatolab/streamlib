@@ -634,6 +634,36 @@ fn subscriber_ring_depth_of_input_port(
     }
 }
 
+/// The channel of an output port only the mesh reads, as its egress needs it.
+#[derive(Debug)]
+pub(crate) struct TheChannelOfAnOutputPortOnlyTheMeshReads {
+    /// The sizing the channel exists at — the only sizing a later opener of its
+    /// service may ask for, and what the egress takes its own slot with.
+    pub(crate) channel_sizing: ChannelSizing,
+    /// A helper-placed source's answer that it opened its publisher, which the
+    /// egress waits on before it says the port is being sent. `None` for a
+    /// source in this process, whose publisher is installed here and now.
+    pub(crate) the_helpers_answer_that_it_opened_its_publisher:
+        Option<Arc<OutOfProcessLinkWireReply>>,
+}
+
+impl TheChannelOfAnOutputPortOnlyTheMeshReads {
+    /// A port that is already publishing, because something local reads it too
+    /// or because the processor holds no iceoryx2 output resources to install
+    /// one into: its sizing is whatever its live channel was created at, and
+    /// nothing was asked of anyone, so there is no answer to wait for.
+    fn of_a_port_that_is_already_publishing(
+        graph: &Graph,
+        iceoryx2_node: &Iceoryx2Node,
+        source: &OutputLinkPortRef,
+    ) -> Result<Self> {
+        Ok(Self {
+            channel_sizing: resolve_channel_sizing(graph, iceoryx2_node, source)?,
+            the_helpers_answer_that_it_opened_its_publisher: None,
+        })
+    }
+}
+
 /// Open the channel of an output port nothing on this runtime reads, and
 /// install its publisher, so a port read only across the mesh publishes at all.
 ///
@@ -641,17 +671,14 @@ fn subscriber_ring_depth_of_input_port(
 /// `connect` out of it: with no local link there is no channel, so the producer
 /// drops every bag as a declared port with nowhere to go. The mesh's egress is
 /// that port's first consumer, and this is the wiring it needs — the source
-/// half of [`wire_rust_source`], without the notifier or the link bookkeeping,
-/// because there is no link.
+/// half of [`wire_rust_source`] with no notifier, because there is no
+/// destination to wake.
 ///
 /// Idempotent: a port that already has a publisher — because something local
 /// reads it too — is left exactly as it is.
 ///
-/// A source whose ports live in a helper opens its own publisher from the
-/// wiring envelope a link gave it, so one with a local link is already
-/// publishing and needs nothing here. One with no local link never got that
-/// envelope entry and there is no channel to send: said by name rather than
-/// silently producing nothing.
+/// A source whose ports live in a helper opens its own publisher, so it is
+/// asked for one instead and answers on its own time.
 ///
 /// A `source` naming a port on another runtime is refused: this opens a channel
 /// this runtime hosts, and a caller that got here with one has confused the two
@@ -660,7 +687,7 @@ pub(crate) fn open_the_channel_of_an_output_port_nothing_local_reads(
     graph: &mut Graph,
     iceoryx2_node: &Iceoryx2Node,
     source: &OutputLinkPortRef,
-) -> Result<()> {
+) -> Result<TheChannelOfAnOutputPortOnlyTheMeshReads> {
     let Some(source_proc_id) = source.processor_id_on_this_runtime() else {
         return Err(Error::Configuration(format!(
             "'{source}' names a port on another runtime, and this runtime cannot open a \
@@ -669,38 +696,34 @@ pub(crate) fn open_the_channel_of_an_output_port_nothing_local_reads(
     };
     let source_port = source.port_name();
     let channel_service_name = channel_service_name(source)?;
-    if out_of_process_link_wiring_of(graph, source_proc_id).is_some() {
-        // A helper publishes from the wiring envelope a link gave it, so a
-        // port something here already reads is live and needs nothing; one
-        // nothing reads has no envelope entry, and this side cannot make one.
-        return match iceoryx2_node.open_existing_channel_service(&channel_service_name)? {
-            Some(_) => Ok(()),
-            None => Err(Error::Configuration(format!(
-                "'{source_proc_id}:{source_port}' is read across the mesh and its processor runs \
-                 in a helper process, which publishes only for a link this runtime made. Connect \
-                 it to something here as well, and the mesh reads the same channel."
-            ))),
-        };
+    if let Some(source_link_wiring) = out_of_process_link_wiring_of(graph, source_proc_id) {
+        return ask_a_helper_to_open_the_publisher_of_an_output_port_only_the_mesh_reads(
+            graph,
+            iceoryx2_node,
+            source,
+            source_proc_id,
+            &source_link_wiring,
+            &channel_service_name,
+        );
     }
 
     let source_processor = get_single_processor(graph, source_proc_id)?;
-    let source_guard = source_processor.lock();
-    let Some(output_inner) = source_guard.iceoryx2_output_writer_inner() else {
-        return Ok(());
+    let output_writer_inner = source_processor.lock().iceoryx2_output_writer_inner();
+    let Some(output_inner) =
+        output_writer_inner.filter(|output_inner| !output_inner.has_channel_publisher(source_port))
+    else {
+        return TheChannelOfAnOutputPortOnlyTheMeshReads::of_a_port_that_is_already_publishing(
+            graph,
+            iceoryx2_node,
+            source,
+        );
     };
-    if output_inner.has_channel_publisher(source_port) {
-        return Ok(());
-    }
 
-    // Deep enough for any consumer that connects later, windowed included: a
-    // channel keeps the depth it was created at, and this is the only place one
-    // is created with no destination to size it from, so sizing it from the
-    // destinations present — none — would refuse the first windowed local
-    // `connect` that ever followed.
+    let channel_sizing = the_sizing_a_channel_the_mesh_opens_first_is_created_at(graph, source)?;
     let service = iceoryx2_node.open_or_create_service(
         &channel_service_name,
-        channel_max_subscribers(graph, source)?,
-        WINDOWED_PORT_SUBSCRIBER_RING_DEPTH,
+        channel_sizing.max_subscribers,
+        channel_sizing.channel_service_creation_depth,
     )?;
     let publisher = service.create_publisher(DEFAULT_EXPECTED_PAYLOAD_BYTES)?;
     // Trusted: the writer is this runtime's own app-process processor, and the
@@ -721,7 +744,107 @@ pub(crate) fn open_the_channel_of_an_output_port_nothing_local_reads(
         port = %source_port,
         "Opened the channel of an output port only the mesh reads"
     );
-    Ok(())
+    Ok(TheChannelOfAnOutputPortOnlyTheMeshReads {
+        channel_sizing,
+        the_helpers_answer_that_it_opened_its_publisher: None,
+    })
+}
+
+/// Ask a helper to open the publisher of one of its output ports that only the
+/// mesh reads, and say how that port's channel is sized.
+///
+/// A helper opens a publisher from an entry in the wiring envelope its parent
+/// sends and from nothing else, so this hands it the entry a `connect` would:
+/// with no notify service, because no destination waits on a listener, and
+/// under a hold id of the port's own, because there is no link. Its bookkeeping
+/// keys on that id alone, so the hold sits in it exactly as a link does and the
+/// port keeps its publisher while either holds it.
+///
+/// The answer is a round trip through the child, and the caller runs under the
+/// graph lock, so the cell it lands in is handed back rather than waited on.
+fn ask_a_helper_to_open_the_publisher_of_an_output_port_only_the_mesh_reads(
+    graph: &mut Graph,
+    iceoryx2_node: &Iceoryx2Node,
+    source: &OutputLinkPortRef,
+    source_proc_id: &ProcessorUniqueId,
+    source_link_wiring: &OutOfProcessLinkWiringEnvelope,
+    channel_service_name: &str,
+) -> Result<TheChannelOfAnOutputPortOnlyTheMeshReads> {
+    let source_port = source.port_name();
+    // A live channel is a helper that already publishes to it, because a
+    // helper's publisher is the only thing that ever creates this one.
+    if iceoryx2_node
+        .open_existing_channel_service(channel_service_name)?
+        .is_some()
+    {
+        return TheChannelOfAnOutputPortOnlyTheMeshReads::of_a_port_that_is_already_publishing(
+            graph,
+            iceoryx2_node,
+            source,
+        );
+    }
+
+    // Derived rather than read off the live channel: the helper creates the
+    // service from the entry below and has not answered yet, so there is
+    // nothing live to read.
+    let channel_sizing = the_sizing_a_channel_the_mesh_opens_first_is_created_at(graph, source)?;
+    let the_helpers_answer_that_it_opened_its_publisher = wire_subprocess_source(
+        graph,
+        source_link_wiring,
+        source_proc_id,
+        source_port,
+        channel_service_name,
+        // The only reader is the mesh's egress, which polls its subscriber, so
+        // there is no listener to wake and the notifier cap goes unread.
+        "",
+        DEFAULT_EXPECTED_PAYLOAD_BYTES,
+        effective_channel_chunk_ceiling_bytes(ChannelTrustTier::UntrustedSession),
+        channel_sizing,
+        MAX_INBOUND_LINKS_PER_DESTINATION,
+        &the_id_a_mesh_egress_holds_a_helper_placed_output_port_open_under(
+            source_proc_id,
+            source_port,
+        ),
+    )?;
+    tracing::info!(
+        source = %source_proc_id,
+        port = %source_port,
+        "Asked a helper to open the publisher of an output port only the mesh reads"
+    );
+    Ok(TheChannelOfAnOutputPortOnlyTheMeshReads {
+        channel_sizing,
+        the_helpers_answer_that_it_opened_its_publisher,
+    })
+}
+
+/// The sizing a port's channel is created at when the mesh's egress is its
+/// first consumer: the fixed subscriber cap, and a ring deep enough for any
+/// consumer that connects later, windowed included.
+///
+/// Deep rather than sized from the destinations present — of which there are
+/// none — because a channel keeps the depth it was created at, so the shallow
+/// ring would refuse the first windowed local `connect` that ever followed.
+fn the_sizing_a_channel_the_mesh_opens_first_is_created_at(
+    graph: &Graph,
+    source: &OutputLinkPortRef,
+) -> Result<ChannelSizing> {
+    Ok(ChannelSizing {
+        max_subscribers: channel_max_subscribers(graph, source)?,
+        channel_service_creation_depth: WINDOWED_PORT_SUBSCRIBER_RING_DEPTH,
+    })
+}
+
+/// The id a mesh egress holds a helper-placed output port's publisher open
+/// under.
+///
+/// Derived from the port rather than minted, so the same port asked for twice
+/// is one hold; prefixed so it can never read as the cuid2 a graph link's id
+/// is.
+fn the_id_a_mesh_egress_holds_a_helper_placed_output_port_open_under(
+    source_proc_id: &ProcessorUniqueId,
+    source_port: &str,
+) -> LinkUniqueId {
+    LinkUniqueId::from(format!("mesh-egress/{source_proc_id}/{source_port}"))
 }
 
 /// Reverse-resolve what a caller named a channel by to the source that
@@ -5102,36 +5225,154 @@ mod tests {
             );
         }
 
-        /// A source in a helper process that nothing here reads cannot be
-        /// opened from this side, and says so by name.
-        ///
-        /// What it catches: a silent `Ok(())`, which would leave the reader
-        /// waiting on an egress that never starts with nothing anywhere saying
-        /// why. A helper publishes only from the wiring envelope a link gave
-        /// it, and with no local link there is no envelope entry to make.
-        #[test]
-        fn a_helper_placed_source_nothing_local_reads_is_refused_by_name() {
-            let mut graph = Graph::new();
-            let source_id = add_mock_output_only(&mut graph);
+        /// A graph holding one output-only mock whose ports live in a helper,
+        /// with the far side that records what the parent asks of it.
+        fn a_helper_placed_output_only_source(
+            graph: &mut Graph,
+        ) -> (String, RecordingOutOfProcessFarSideLinkDelivery) {
+            let source_id = add_mock_output_only(graph);
+            let far_side = RecordingOutOfProcessFarSideLinkDelivery::default();
             attach_processor_instance(
-                &mut graph,
+                graph,
                 &source_id,
-                ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
+                ProcessorInstance::new(Box::new(
+                    OutOfCrateHelperSpawnHostStub::with_a_far_side_past_its_setup_command(
+                        far_side.clone(),
+                        ProcessExecution::Reactive,
+                    ),
+                )),
             );
+            (source_id, far_side)
+        }
 
-            let refusal = open_the_channel_of_an_output_port_nothing_local_reads(
+        /// A source in a helper process that nothing here reads is asked for
+        /// its publisher, over the wiring envelope a link would have used.
+        ///
+        /// What it catches (#2344): a helper opens a publisher from an envelope
+        /// entry and from nothing else, and across the mesh there is no
+        /// `connect` to make one — so the port is offered, cannot be sent, and
+        /// the reader's link waits on an egress that never starts. Every
+        /// Python-authored source is in a helper, so that was all of them.
+        #[test]
+        fn a_helper_placed_source_nothing_local_reads_is_asked_for_its_publisher() {
+            let mut graph = Graph::new();
+            let (source_id, far_side) = a_helper_placed_output_only_source(&mut graph);
+
+            let opened = open_the_channel_of_an_output_port_nothing_local_reads(
                 &mut graph,
                 &Iceoryx2Node::for_this_test_process(),
                 &OutputLinkPortRef::new(&source_id, "out1"),
             )
-            .expect_err("a helper-placed source with no local link cannot be opened from here")
-            .to_string();
+            .expect("a helper-placed source with no local link is asked for its publisher");
 
-            assert!(refusal.contains(&source_id), "{refusal}");
-            assert!(refusal.contains("helper process"), "{refusal}");
+            let handed_over = far_side.late_wired_links.lock();
+            let [(direction, entry)] = handed_over.as_slice() else {
+                panic!("exactly one entry reaches the helper; got {handed_over:?}");
+            };
+            assert_eq!(*direction, crate::core::PortDirection::Output);
+            assert_eq!(entry["name"], serde_json::json!("out1"));
+            assert_eq!(
+                entry["dest_notify_service_name"],
+                serde_json::json!(""),
+                "the mesh's egress polls its subscriber, so there is no listener to wake"
+            );
+            assert_eq!(
+                entry["link_id"],
+                serde_json::json!(format!("mesh-egress/{source_id}/out1")),
+                "the hold is the port's own, since a port read only across the mesh has no link"
+            );
             assert!(
-                refusal.contains("Connect it to something here as well"),
-                "{refusal}"
+                opened
+                    .the_helpers_answer_that_it_opened_its_publisher
+                    .is_some(),
+                "the answer the egress waits on is handed back, or nothing downstream can wait \
+                 for it. That it is waited on is `mesh_port_egress`'s to lock."
+            );
+        }
+
+        /// The helper is told to create the channel at exactly the sizing the
+        /// egress is then told to open it with.
+        ///
+        /// What it catches: deriving the egress's sizing from the live channel,
+        /// as the app-process path can. A helper answers on its own time, so at
+        /// this moment there is no live channel to read — the depth would fall
+        /// back to the ordered one while the helper created a windowed one, and
+        /// the egress would be refused by iceoryx2 for a depth nothing asked
+        /// for.
+        #[test]
+        fn a_helper_is_told_to_create_the_channel_at_the_sizing_the_egress_is_given() {
+            let mut graph = Graph::new();
+            let (source_id, far_side) = a_helper_placed_output_only_source(&mut graph);
+
+            let opened = open_the_channel_of_an_output_port_nothing_local_reads(
+                &mut graph,
+                &Iceoryx2Node::for_this_test_process(),
+                &OutputLinkPortRef::new(&source_id, "out1"),
+            )
+            .expect("a helper-placed source with no local link is asked for its publisher");
+
+            let handed_over = far_side.late_wired_links.lock();
+            let [(_, entry)] = handed_over.as_slice() else {
+                panic!("exactly one entry reaches the helper; got {handed_over:?}");
+            };
+            assert_eq!(
+                entry["channel_service_creation_depth"],
+                serde_json::json!(opened.channel_sizing.channel_service_creation_depth)
+            );
+            assert_eq!(
+                entry["max_subscribers"],
+                serde_json::json!(opened.channel_sizing.max_subscribers)
+            );
+            assert_eq!(
+                opened.channel_sizing.channel_service_creation_depth,
+                WINDOWED_PORT_SUBSCRIBER_RING_DEPTH,
+                "deep enough for the first windowed local `connect` that ever follows, as the \
+                 app-process path opens one"
+            );
+        }
+
+        /// A helper-placed port something local already reads is asked for
+        /// nothing: it is publishing, and the mesh takes a slot on the channel
+        /// that is already there, at the sizing that channel already has.
+        #[test]
+        fn a_helper_placed_source_something_local_reads_is_asked_for_nothing() {
+            let mut graph = Graph::new();
+            let (source_id, far_side) = a_helper_placed_output_only_source(&mut graph);
+            let iceoryx2_node = Iceoryx2Node::for_this_test_process();
+            // The helper's own publisher would have created this, from the
+            // envelope entry the local `connect` gave it.
+            let already_publishing = iceoryx2_node
+                .open_or_create_service(
+                    &crate::iceoryx2::source_channel_name(&source_id, "out1")
+                        .expect("the mock's port names a legal channel")
+                        .into_string(),
+                    4,
+                    DeliveryProfile::ORDERED_DEPTH,
+                )
+                .expect("the channel opens");
+
+            let opened = open_the_channel_of_an_output_port_nothing_local_reads(
+                &mut graph,
+                &iceoryx2_node,
+                &OutputLinkPortRef::new(&source_id, "out1"),
+            )
+            .expect("a port whose helper already publishes needs nothing asked of it");
+
+            assert!(
+                far_side.late_wired_links.lock().is_empty(),
+                "a second entry would be a second hold on a publisher that is already open"
+            );
+            assert!(
+                opened
+                    .the_helpers_answer_that_it_opened_its_publisher
+                    .is_none(),
+                "there is no answer to wait for when nothing was asked"
+            );
+            assert_eq!(
+                opened.channel_sizing.channel_service_creation_depth,
+                already_publishing.channel_service_creation_depth(),
+                "a live channel keeps the depth it was created at, and that is the only depth \
+                 the egress may open it with"
             );
         }
 

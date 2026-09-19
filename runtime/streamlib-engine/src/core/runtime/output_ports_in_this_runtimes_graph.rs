@@ -77,31 +77,29 @@ impl WhatThisRuntimeOffersOnTheMesh for OutputPortsInThisRuntimesGraph {
             // first `connect` out of it is what makes both, and across the mesh
             // there is no `connect`. The egress is that port's first consumer,
             // so this is where its channel comes from.
-            if let Err(cannot_open) =
-                crate::core::compiler::compiler_ops::open_the_channel_of_an_output_port_nothing_local_reads(
-                    graph,
-                    &self.iceoryx2_node,
-                    &source,
-                )
-            {
-                tracing::warn!(
-                    "{processor_display_name}/{port_name} is offered on the mesh and cannot be \
-                     sent: {cannot_open}"
-                );
-                return None;
-            }
-            // The sizing the compiler opened the channel with: an egress
-            // reopens that service and takes a destination slot on it, so it
-            // asks for exactly what is already there.
-            let channel_sizing = crate::core::compiler::compiler_ops::resolve_channel_sizing(
+            let channel = match crate::core::compiler::compiler_ops::open_the_channel_of_an_output_port_nothing_local_reads(
                 graph,
                 &self.iceoryx2_node,
                 &source,
-            )
-            .ok()?;
+            ) {
+                Ok(channel) => channel,
+                Err(cannot_open) => {
+                    tracing::warn!(
+                        "{processor_display_name}/{port_name} is offered on the mesh and cannot \
+                         be sent: {cannot_open}"
+                    );
+                    return None;
+                }
+            };
             Some(HowToReadAnOfferedOutputPort {
                 channel_service_name,
-                channel_sizing,
+                // The sizing the channel was opened with: the egress reopens
+                // that service and takes a destination slot on it, so it asks
+                // for exactly what is there — or, for a helper's port, for
+                // exactly what the helper was told to create it with.
+                channel_sizing: channel.channel_sizing,
+                the_helpers_answer_that_it_opened_its_publisher: channel
+                    .the_helpers_answer_that_it_opened_its_publisher,
             })
         })
     }

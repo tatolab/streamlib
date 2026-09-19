@@ -509,6 +509,9 @@ impl WhatThisRuntimeOffersOnTheMesh for TheOnePortThisPeerOffers {
                     max_subscribers: THE_CHANNELS_SUBSCRIBER_SLOTS,
                     channel_service_creation_depth: THE_CHANNELS_DEPTH,
                 },
+                // This peer publishes from its own process, so there is no
+                // helper for the egress to wait on.
+                the_helpers_answer_that_it_opened_its_publisher: None,
             },
         )
     }
