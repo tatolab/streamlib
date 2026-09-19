@@ -108,8 +108,11 @@ which this delta does not touch.
   `MediaClock::now()` before delegating to `write_with_timestamp`. Today the camera writes plainly,
   so both are publication time and agree by accident, while different consumers read different
   doors — the encoder reads the payload, `Mp4Sink` and the mesh read the envelope. The camera
-  therefore stamps both with the device's instant through `write_with_timestamp`, the shape
-  `MicrophoneSource` already uses, and never through the implicit write.
+  therefore resolves the device's instant once and writes it to both: assigned to the frame's own
+  `timestamp_ns` field **and** passed as the same value to `write_with_timestamp`, never through the
+  implicit write. Swapping the call alone does not do it — `write_with_timestamp` serialises the
+  payload as given and sets only the envelope, so a call-site-only change leaves the two disagreeing
+  in the other direction.
 - ADDED: a device stamp is trusted only when it is usable, and the platform flag alone does not
   establish that. The stamp is taken when the device reports it on the machine's monotonic clock and
   it is non-zero; otherwise the engine falls back to its own clock at dequeue and says so once per
