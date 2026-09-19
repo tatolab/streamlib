@@ -42,6 +42,10 @@ JSON_RPC_TIMEOUT_SECONDS = 30.0
 # helper answers between callbacks, so this is bounded by one frame of the
 # processor's own work, not by the wire.
 LINK_ANSWER_TIMEOUT_SECONDS = 15.0
+# How long a processor added to a running graph has to reach `Running`. Its
+# helper is spawned, imports the class and starts it, so this is bounded by an
+# interpreter launch rather than by the wire.
+ADDED_PROCESSOR_RUNNING_TIMEOUT_SECONDS = 15.0
 
 APP_WITH_A_SOURCE_LINKED_TO_A_SINK = '''\
 from streamlib import Runtime, TestPatternSource
@@ -124,6 +128,30 @@ def await_link_state(client: "ScriptedMcpClient", link_id: str, wanted: str) -> 
             )
         time.sleep(0.05)
     return f"still {link['state'] if link else 'absent'} after {LINK_ANSWER_TIMEOUT_SECONDS}s"
+
+
+def await_added_processor_state(
+    client: "ScriptedMcpClient", processor_id: str, wanted: str
+) -> str:
+    """Poll `graph` until one processor reaches `wanted`, and report what it reached.
+
+    A processor added to a running graph is placed in a helper process that has
+    to be spawned before it can run, so `graph` reports it `Idle` for as long as
+    that takes — the same shape as the link that reads `pending` until its
+    helper opens its port.
+    """
+    deadline = time.monotonic() + ADDED_PROCESSOR_RUNNING_TIMEOUT_SECONDS
+    state = None
+    while time.monotonic() < deadline:
+        node = next(
+            (each for each in client.call_tool("graph", {})["nodes"] if each["id"] == processor_id),
+            None,
+        )
+        state = node["components"]["state"] if node is not None else None
+        if state == wanted:
+            return state
+        time.sleep(0.05)
+    return f"still {state or 'absent'} after {ADDED_PROCESSOR_RUNNING_TIMEOUT_SECONDS}s"
 
 
 class ScriptedMcpClient:
@@ -302,8 +330,10 @@ def test_a_client_following_the_insert_prompt_splices_a_processor_into_a_live_li
     assert upstream_link["target"]["processor_id"] == added_processor_id
     assert downstream_link["source"]["processor_id"] == added_processor_id
     assert downstream_link["target"] == replaced_link["target"]
-    added_node = next(n for n in graph_after["nodes"] if n["id"] == added_processor_id)
-    assert added_node["components"]["state"] == "Running"
+    assert await_added_processor_state(client, added_processor_id, "Running") == "Running", (
+        "the splice is only carrying bags once the inserted processor runs; a "
+        "processor stuck Idle is a helper that never started it"
+    )
 
     # The sink announces from its own helper only once a bag carrying the
     # inserted effect's mark reaches it: frames really pass through the splice.
