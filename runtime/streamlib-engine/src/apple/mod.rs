@@ -5,6 +5,7 @@ pub mod arkit;
 pub mod audio_clock;
 pub mod corevideo_ffi;
 pub mod iosurface;
+pub mod machine_clock_identity;
 pub mod media_clock;
 pub mod pixel_transfer;
 pub mod texture;
