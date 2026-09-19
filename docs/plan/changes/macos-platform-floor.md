@@ -103,6 +103,21 @@ which this delta does not touch.
   through `VK_EXT_metal_objects`. Camera→GPU transport keeps its no-dial rule: importability is an
   allocation flavour the engine derives per acquisition, and IOSurface joins DMA-BUF and OPAQUE_FD
   as one of them.
+- ADDED: **a camera frame carries one capture instant on both of its stamps.** A bag has two: the
+  payload's own `timestamp_ns` and the envelope's, which `OutputWriter::write` sets from its own
+  `MediaClock::now()` before delegating to `write_with_timestamp`. Today the camera writes plainly,
+  so both are publication time and agree by accident, while different consumers read different
+  doors — the encoder reads the payload, `Mp4Sink` and the mesh read the envelope. The camera
+  therefore stamps both with the device's instant through `write_with_timestamp`, the shape
+  `MicrophoneSource` already uses, and never through the implicit write.
+- ADDED: a device stamp is trusted only when it is usable, and the platform flag alone does not
+  establish that. The stamp is taken when the device reports it on the machine's monotonic clock and
+  it is non-zero; otherwise the engine falls back to its own clock at dequeue and says so once per
+  device, naming it. **A stamp ahead of the engine's own clock at dequeue is clamped to that instant
+  and counted**, because no real capture happens in the future and trusting one silently is how a
+  frame-period of audio-video skew ships. Owner, 2026-09-19, on evidence that the `vivid` driver
+  sets the monotonic flag honestly and still reports every stamp roughly nine tenths of a frame
+  period ahead.
 - MODIFIED: windowing states where the loop lives. The engine still owns the process's one event
   pump; on Apple that pump runs on the process's first thread, which is the thread `rt.run()`
   blocks. Window policy, the raw-window-handle seam and the per-processor render thread are
@@ -240,13 +255,18 @@ B is therefore its own change with its own Linux proof, never a rider on this on
 - **B. Publication instant.** Keep today's behaviour: `camera_source.rs:1152` stamps
   `MediaClock::now()` at publish and never reads the V4L2 buffer stamp.
 
-**RESOLVED — A, owner, 2026-09-19, conditional on a Linux regression check.** The camera carries
-the device's capture instant. **This is the one decision in this delta that is not additive**:
-every other entry is macOS-only, this one changes Linux behaviour. The owner has commissioned a
-baseline characterisation on the Linux rig before the ticket lands — the blast radius across audio
-sync, encoder PTS derivation, `Mp4Sink` muxing, the mesh and the loss metrics, plus the measured
-gap between the V4L2 buffer stamp and today's publish stamp. **If that check finds a consumer this
-breaks, this block reopens.**
+**RESOLVED — A, owner, 2026-09-19. The Linux check has reported and the decision stands.** The
+camera carries the device's capture instant. **This is the one decision in this delta that is not
+additive**: every other entry is macOS-only, this one changes Linux behaviour.
+
+No consumer breaks outright, and no test asserts on a camera timestamp today — timestamp assertions
+exist only on audio, and the loss metrics are sequence-based and immune. Two findings amended the
+§Media I/O entries above rather than reopening this block: a bag carries **two** stamps and the
+consumers split across them, so the change must move both; and `vivid` sets the monotonic flag
+honestly while reporting every stamp roughly nine tenths of a frame period in the future, which is
+why the trust rule needs the clamp and not the flag alone. Residual, carried rather than closed: the
+Linux box has no real camera — all four nodes are `vivid` — so what a UVC device reports is still
+unmeasured, and the clamp is what makes that gap safe to carry.
 
 ## [NEEDS DECISION] 5 — Apple Silicon only, or Intel Macs too?
 
@@ -278,14 +298,11 @@ settled here because neither is this delta's to settle:
   any justification. `brew` is a build-time dependency only. Embedding StreamLib in another
   application, and a future iOS library, are out of scope — owner, 2026-09-19.
 
-## One condition still outstanding
+## The condition that was outstanding, now discharged
 
-Block 4's resolution is conditional on a Linux regression check, commissioned 2026-09-19 and sent to
-a Linux session: the blast radius across audio sync, encoder PTS derivation, `Mp4Sink`, the mesh and
-the loss metrics, the measured gap between the V4L2 buffer stamp and today's publish stamp, and
-whether every device sets `V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC`. **Tickets may be derived now; the
-timestamp work must not merge until that check reports.** If it finds a consumer the switch breaks,
-block 4 reopens and this change comes back.
+Block 4's resolution was conditional on a Linux regression check. It reported 2026-09-19: no
+consumer breaks, no test at risk, and two findings folded into §Media I/O above — the two-stamp
+split, and the clamp the monotonic flag cannot give. **The gate on the timestamp work is lifted.**
 
 ## Not in scope
 
