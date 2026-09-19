@@ -71,12 +71,6 @@ pub struct OutputPortThisRuntimeHoldsAndCannotSend {
     pub why_it_cannot_be_sent: String,
 }
 
-impl std::fmt::Display for OutputPortThisRuntimeHoldsAndCannotSend {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/{}", self.processor_display_name, self.port_name)
-    }
-}
-
 /// The document a runtime answers with when a peer asks what it offers.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct OutputPortsOfferedOnTheMesh {
@@ -84,6 +78,16 @@ pub struct OutputPortsOfferedOnTheMesh {
     /// it was asked.
     pub ports: Vec<OutputPortOfferedOnTheMesh>,
     /// Every output port in that graph it cannot send, each with the reason.
+    ///
+    /// Absent reads as empty, because that is what it means: a peer that names
+    /// no unsendable ports holds none this reader can be told about. It is what
+    /// a build predating this key answers, and the version gate does not
+    /// separate those — it compares crate versions, and a released wheel and a
+    /// local build of the same version both pass it. Without this the whole
+    /// document would fail to decode, and *every* link from that peer — the ones
+    /// it can serve included — would wait on a runtime that had in fact
+    /// answered.
+    #[serde(default)]
     pub ports_it_holds_and_cannot_send: Vec<OutputPortThisRuntimeHoldsAndCannotSend>,
 }
 
@@ -424,6 +428,22 @@ mod tests {
         assert!(!listed.offers("NoSuchProcessor", "video"));
     }
 
+    /// A document from a peer that names no unsendable ports at all — the shape
+    /// a build predating that key answers — reads as one holding none, rather
+    /// than failing to decode and stranding every link from that peer.
+    #[test]
+    fn a_document_naming_no_unsendable_ports_reads_as_holding_none() {
+        let without_the_key = rmp_serde::to_vec_named(&serde_json::json!({
+            "ports": [{ "processor_display_name": "CameraSource", "port_name": "video" }],
+        }))
+        .expect("the older shape encodes");
+
+        let listed = OutputPortsOfferedOnTheMesh::decode(&without_the_key)
+            .expect("a document with no unsendable ports still decodes");
+        assert!(listed.offers("CameraSource", "video"));
+        assert!(listed.ports_it_holds_and_cannot_send.is_empty());
+    }
+
     /// A port the runtime holds and cannot send is not offered, and answers the
     /// reason under both of its own names — which is what a reader's refusal
     /// quotes instead of saying the port does not exist.
@@ -462,12 +482,12 @@ mod tests {
             OutputPortsOfferedOnTheMesh::default().listed_for_a_refusal(),
             "nothing"
         );
+        let holding_only_what_it_cannot_send = OutputPortsOfferedOnTheMesh {
+            ports: vec![],
+            ..a_listing()
+        };
         assert_eq!(
-            OutputPortsOfferedOnTheMesh {
-                ports: vec![],
-                ports_it_holds_and_cannot_send: a_listing().ports_it_holds_and_cannot_send,
-            }
-            .listed_for_a_refusal(),
+            holding_only_what_it_cannot_send.listed_for_a_refusal(),
             "nothing"
         );
     }

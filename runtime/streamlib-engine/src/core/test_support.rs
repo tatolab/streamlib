@@ -217,18 +217,6 @@ pub(crate) struct MockProcessorWhoseOutputPortTheChannelGrammarCannotName;
 impl crate::core::ManualProcessor
     for MockProcessorWhoseOutputPortTheChannelGrammarCannotName::Processor
 {
-    fn setup(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        Ok(())
-    }
-    fn teardown(
-        &mut self,
-        _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,
-    ) -> crate::core::error::Result<()> {
-        Ok(())
-    }
     fn start(
         &mut self,
         _ctx: &crate::core::context::RuntimeContextFullAccess<'_>,

@@ -64,7 +64,7 @@ impl WhatThisRuntimeOffersOnTheMesh for OutputPortsInThisRuntimesGraph {
                 source_processor_id.as_str(),
                 port_name,
             ) {
-                Ok(channel_service_name) => channel_service_name,
+                Ok(channel_service_name) => channel_service_name.into_string(),
                 Err(why_it_cannot_be_sent) => {
                     tracing::warn!(
                         "{processor_display_name}/{port_name} is being read across the mesh and \
@@ -112,18 +112,15 @@ impl WhatThisRuntimeOffersOnTheMesh for OutputPortsInThisRuntimesGraph {
 /// The one check the offer and the egress both read, so a runtime can never
 /// answer that it offers a port it then declines to send.
 ///
-/// Nameability alone, which is pure string work over the two names. The offer is
-/// answered for every port in the graph on every query, and a sending runtime
-/// does no work for a port nobody reads, so a check that opened a channel would
-/// be exactly the work that rule forbids. Every other way a port turns out
-/// unsendable — a channel that will not open, a helper that refuses its
-/// publisher — is found when its egress starts, by the egress.
+/// Nameability alone: the offer is answered for every port in the graph on every
+/// query, and a sending runtime does no work for a port nobody reads, so this
+/// may touch nothing but the two names. Every other way a port turns out
+/// unsendable is found when its egress starts, by the egress.
 fn the_channel_an_output_port_publishes_to(
     source_processor_id: &str,
     port_name: &str,
-) -> std::result::Result<String, String> {
+) -> std::result::Result<crate::iceoryx2::ChannelName, String> {
     crate::iceoryx2::source_channel_name(source_processor_id, port_name)
-        .map(crate::iceoryx2::ChannelName::into_string)
         .map_err(|cannot_be_named| format!("its channel cannot be named: {cannot_be_named}"))
 }
 
@@ -131,29 +128,36 @@ fn the_channel_an_output_port_publishes_to(
 /// addresses one, split into what this runtime can send and what it holds and
 /// cannot.
 fn every_output_port_in(graph: &Graph) -> OutputPortsOfferedOnTheMesh {
-    let mut answer = OutputPortsOfferedOnTheMesh::default();
+    let mut ports = Vec::new();
+    let mut ports_it_holds_and_cannot_send = Vec::new();
     for node in graph.traversal().v(()).iter() {
         for port in &node.ports.outputs {
             match the_channel_an_output_port_publishes_to(node.id.as_str(), &port.name) {
-                Ok(_) => answer.ports.push(OutputPortOfferedOnTheMesh {
+                Ok(_) => ports.push(OutputPortOfferedOnTheMesh {
                     processor_display_name: node.display_name.clone(),
                     port_name: port.name.clone(),
                 }),
-                Err(why_it_cannot_be_sent) => answer.ports_it_holds_and_cannot_send.push(
-                    OutputPortThisRuntimeHoldsAndCannotSend {
+                Err(why_it_cannot_be_sent) => {
+                    ports_it_holds_and_cannot_send.push(OutputPortThisRuntimeHoldsAndCannotSend {
                         processor_display_name: node.display_name.clone(),
                         port_name: port.name.clone(),
                         why_it_cannot_be_sent,
-                    },
-                ),
+                    })
+                }
             }
         }
     }
     // Sorted so two runs of one graph answer the same, and so a refusal that
     // lists them reads the same on every machine.
-    answer.ports.sort();
-    answer.ports_it_holds_and_cannot_send.sort();
-    answer
+    ports.sort();
+    ports_it_holds_and_cannot_send.sort();
+    // Spelled out rather than built by mutating a default: this is the one place
+    // the document is produced, so a field added to it must fail here rather
+    // than reach every peer as whatever `Default` gives.
+    OutputPortsOfferedOnTheMesh {
+        ports,
+        ports_it_holds_and_cannot_send,
+    }
 }
 
 #[cfg(test)]

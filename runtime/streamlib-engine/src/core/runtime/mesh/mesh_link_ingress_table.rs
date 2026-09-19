@@ -502,29 +502,47 @@ fn what_the_offered_ports_say(
     if let Some(why_it_cannot_be_sent) =
         offered.why_it_cannot_send(address.processor_display_name(), address.port_name())
     {
-        return Err(RemoteLinkResolution::Refused {
-            reason: format!(
-                "the runtime {} holds the output port {}/{} and cannot send it: \
-                 {why_it_cannot_be_sent}. It offers: {}.",
-                address.runtime_name(),
+        return Err(a_refusal_naming_the_trouble_and_what_is_offered(
+            address,
+            offered,
+            &format!(
+                "holds the output port {}/{} and cannot send it: {why_it_cannot_be_sent}",
                 address.processor_display_name(),
-                address.port_name(),
-                offered.listed_for_a_refusal()
+                address.port_name()
             ),
-        });
+        ));
     }
-    if !offered.offers(&address.processor_display_name(), &address.port_name()) {
-        return Err(RemoteLinkResolution::Refused {
-            reason: format!(
-                "the runtime {} offers no output port {}/{}. It offers: {}.",
-                address.runtime_name(),
+    if !offered.offers(address.processor_display_name(), address.port_name()) {
+        return Err(a_refusal_naming_the_trouble_and_what_is_offered(
+            address,
+            offered,
+            &format!(
+                "offers no output port {}/{}",
                 address.processor_display_name(),
-                address.port_name(),
-                offered.listed_for_a_refusal()
+                address.port_name()
             ),
-        });
+        ));
     }
     Ok(())
+}
+
+/// The sentence every offered-ports refusal ends with: what is wrong with the
+/// port this link names, then what the runtime does offer instead.
+///
+/// One frame for both refusals, so a reader comparing two of them never finds
+/// that one drifted.
+fn a_refusal_naming_the_trouble_and_what_is_offered(
+    address: &MeshPortAddress,
+    offered: &OutputPortsOfferedOnTheMesh,
+    the_trouble_with_the_port: &str,
+) -> RemoteLinkResolution {
+    RemoteLinkResolution::Refused {
+        reason: format!(
+            "the runtime {} {the_trouble_with_the_port}. It offers: {}.",
+            address.runtime_name(),
+            offered.listed_for_a_refusal()
+        ),
+    }
 }
 
 /// Start carrying `address`, and tell every link from it.
@@ -717,7 +735,9 @@ fn say_how_far_every_link_from(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::runtime::mesh::{HostIdentity, OutputPortOfferedOnTheMesh};
+    use crate::core::runtime::mesh::{
+        HostIdentity, OutputPortOfferedOnTheMesh, OutputPortThisRuntimeHoldsAndCannotSend,
+    };
 
     fn an_address() -> MeshPortAddress {
         MeshPortAddress::new("bench-cam-a1b2", "CameraSource", "video").expect("a legal address")
@@ -747,10 +767,8 @@ mod tests {
         )
     }
 
-    fn a_listing_offering(
-        ports: &[(&str, &str)],
-    ) -> crate::core::runtime::mesh::OutputPortsOfferedOnTheMesh {
-        crate::core::runtime::mesh::OutputPortsOfferedOnTheMesh {
+    fn a_listing_offering(ports: &[(&str, &str)]) -> OutputPortsOfferedOnTheMesh {
+        OutputPortsOfferedOnTheMesh {
             ports: ports
                 .iter()
                 .map(|(display, port)| OutputPortOfferedOnTheMesh {
@@ -762,22 +780,18 @@ mod tests {
         }
     }
 
-    fn a_listing_holding_and_unable_to_send(
+    fn the_held_and_unsendable_ports(
         held: &[(&str, &str, &str)],
-    ) -> crate::core::runtime::mesh::OutputPortsOfferedOnTheMesh {
-        crate::core::runtime::mesh::OutputPortsOfferedOnTheMesh {
-            ports: vec![],
-            ports_it_holds_and_cannot_send: held
-                .iter()
-                .map(|(display, port, why)| {
-                    crate::core::runtime::mesh::OutputPortThisRuntimeHoldsAndCannotSend {
-                        processor_display_name: display.to_string(),
-                        port_name: port.to_string(),
-                        why_it_cannot_be_sent: why.to_string(),
-                    }
-                })
-                .collect(),
-        }
+    ) -> Vec<OutputPortThisRuntimeHoldsAndCannotSend> {
+        held.iter()
+            .map(
+                |(display, port, why)| OutputPortThisRuntimeHoldsAndCannotSend {
+                    processor_display_name: display.to_string(),
+                    port_name: port.to_string(),
+                    why_it_cannot_be_sent: why.to_string(),
+                },
+            )
+            .collect()
     }
 
     fn the_reason(outcome: std::result::Result<(), RemoteLinkResolution>) -> String {
@@ -899,11 +913,14 @@ mod tests {
     fn a_port_the_source_holds_and_cannot_send_refuses_the_link_with_its_reason() {
         let outcome = what_the_offered_ports_say(
             &an_address(),
-            Some(&a_listing_holding_and_unable_to_send(&[(
-                "CameraSource",
-                "video",
-                "its channel cannot be named: it contains 'V'",
-            )])),
+            Some(&OutputPortsOfferedOnTheMesh {
+                ports: vec![],
+                ports_it_holds_and_cannot_send: the_held_and_unsendable_ports(&[(
+                    "CameraSource",
+                    "video",
+                    "its channel cannot be named: it contains 'V'",
+                )]),
+            }),
         );
         assert!(
             matches!(outcome, Err(RemoteLinkResolution::Refused { .. })),
@@ -923,10 +940,14 @@ mod tests {
     /// one port learns where to point its link without a second query.
     #[test]
     fn a_held_and_unsendable_port_is_refused_listing_what_the_runtime_does_offer() {
-        let mut listing = a_listing_offering(&[("MicrophoneSource", "audio")]);
-        listing.ports_it_holds_and_cannot_send =
-            a_listing_holding_and_unable_to_send(&[("CameraSource", "video", "no channel name")])
-                .ports_it_holds_and_cannot_send;
+        let listing = OutputPortsOfferedOnTheMesh {
+            ports: a_listing_offering(&[("MicrophoneSource", "audio")]).ports,
+            ports_it_holds_and_cannot_send: the_held_and_unsendable_ports(&[(
+                "CameraSource",
+                "video",
+                "no channel name",
+            )]),
+        };
 
         let reason = the_reason(what_the_offered_ports_say(&an_address(), Some(&listing)));
         assert!(reason.contains("MicrophoneSource/audio"), "{reason}");
