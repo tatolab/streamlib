@@ -56,9 +56,11 @@ impl WhatThisRuntimeDoesWithALinkRequest for LinkRequestsAppliedIntoThisRuntimes
         };
         let asked_for = request.what_it_asks_for(env!("CARGO_PKG_VERSION"))?;
 
-        // A resend is answered with the link the first send made. Kept on the
-        // link rather than in a registry beside the graph, so a link that goes
-        // takes its request id with it and there is nothing to forget.
+        // A resend of a `connect` is answered with the link the first send
+        // made. Kept on the link rather than in a registry beside the graph, so
+        // a link that goes takes its request id with it and there is nothing to
+        // forget. A `disconnect` needs no such record — it is idempotent by what
+        // it asks for, which the arm below relies on.
         if let Some(already_applied) =
             the_link_a_request_already_applied(&runtime, &request.link_request_id)
         {
@@ -87,6 +89,17 @@ impl WhatThisRuntimeDoesWithALinkRequest for LinkRequestsAppliedIntoThisRuntimes
                 })
             }
             WhatALinkRequestAsksFor::RemovingALink { link_id } => {
+                // A link this runtime does not hold is the answer, not a
+                // refusal: what was asked for is already true. That is what
+                // makes a resend safe here — the reply to the first send can go
+                // missing exactly as a `connect`'s can, and refusing the second
+                // would latch `refused` forever on a disconnect that worked.
+                if !this_runtime_holds_the_link(&runtime, &link_id) {
+                    return Ok(WhatALinkRequestWasAnswered {
+                        link_id,
+                        state: crate::core::json_schema::LinkStateOutput::Disconnected,
+                    });
+                }
                 runtime
                     .disconnect(&link_id)
                     .map_err(|refusal| refusal.to_string())?;
@@ -120,6 +133,13 @@ fn the_link_a_request_already_applied(
         state: how_this_runtime_reads_one_link(runtime, &link_id),
         link_id,
     })
+}
+
+/// Whether this runtime's graph still holds the link `link_id` names.
+fn this_runtime_holds_the_link(runtime: &Runner, link_id: &LinkUniqueId) -> bool {
+    runtime
+        .compiler
+        .scope(|graph, _tx| graph.traversal().e(link_id).first().is_some())
 }
 
 /// Write onto the link which request applied it and which runtime asked, so a
@@ -193,14 +213,19 @@ mod tests {
         import_path
     }
 
-    /// A runtime off any mesh, holding one processor to push into.
+    /// A runtime isolated on a mesh of its own, holding one processor to push
+    /// into.
     ///
-    /// Off the network on purpose: applying a request needs a graph and this
-    /// runtime's own `connect`, neither of which the mesh is involved in.
+    /// Isolated rather than off the network — every runtime is on a mesh — and
+    /// on its own one with discovery off, so it reaches no peer and no peer
+    /// reaches it. That matters because applying a request needs a graph and
+    /// this runtime's own `connect`, and nothing here should depend on what
+    /// else happens to be running on the machine.
     fn a_runtime_holding_a_destination() -> Arc<Runner> {
         let import_path = register_the_destination_type();
         let runtime = Runner::new_with_runtime_mesh_configuration(RuntimeMeshConfiguration {
             runtime_name: Some("link-request-apply-under-test".to_string()),
+            mesh_name: Some(format!("lr-apply-{}", std::process::id())),
             mesh_multicast_discovery: Some(false),
             ..Default::default()
         })
@@ -268,6 +293,66 @@ mod tests {
         assert_eq!(
             first.link_id, second.link_id,
             "a resend is answered with the link the first send made"
+        );
+
+        runtime.stop().expect("the runtime stops");
+    }
+
+    /// A `disconnect` that arrives twice is answered both times, because what
+    /// it asks for is already true the second time.
+    ///
+    /// Mental-revert: let the second arrival fall through to `disconnect`, which
+    /// answers `Link 'X' not found`. That is a decodable refusal, so the
+    /// requester latches `refused` forever — on a disconnect that worked. A
+    /// lost reply is the design's own premise, so this is reachable rather than
+    /// theoretical.
+    #[test]
+    #[serial]
+    fn a_disconnect_that_arrives_twice_is_answered_both_times() {
+        let runtime = a_runtime_holding_a_destination();
+        let applies_them = LinkRequestsAppliedIntoThisRuntimesGraph::of(&runtime);
+        let applied = applies_them
+            .answer_one_link_request(&a_request_from("LRto-be-removed"))
+            .expect("the link is applied");
+
+        let removing = ALinkRequestOnTheMesh::asking_for_a_link_to_go(
+            LinkRequestUniqueId::from("LRremoving"),
+            applied.link_id.clone(),
+            "bench-cam-a1b2",
+        );
+        applies_them
+            .answer_one_link_request(&removing)
+            .expect("the first arrival removes the link");
+
+        // The link is marked for deletion rather than gone — this runtime was
+        // never started, so no compile has run — which is exactly the state a
+        // resend must still be answered in.
+        let second = applies_them
+            .answer_one_link_request(&removing)
+            .expect("a resend of a disconnect is answered, never refused");
+        assert_eq!(second.link_id, applied.link_id);
+
+        runtime.stop().expect("the runtime stops");
+    }
+
+    /// A `disconnect` naming a link this runtime never held is answered too:
+    /// the asked-for state is reached, whoever reached it.
+    #[test]
+    #[serial]
+    fn a_disconnect_naming_a_link_this_runtime_does_not_hold_is_answered() {
+        let runtime = a_runtime_holding_a_destination();
+        let applies_them = LinkRequestsAppliedIntoThisRuntimesGraph::of(&runtime);
+
+        let answered = applies_them
+            .answer_one_link_request(&ALinkRequestOnTheMesh::asking_for_a_link_to_go(
+                LinkRequestUniqueId::from("LRnever-here"),
+                LinkUniqueId::from("Lnot-a-link-here".to_string()),
+                "bench-cam-a1b2",
+            ))
+            .expect("a link that is not here is the answer, not a refusal");
+        assert_eq!(
+            answered.state,
+            crate::core::json_schema::LinkStateOutput::Disconnected
         );
 
         runtime.stop().expect("the runtime stops");

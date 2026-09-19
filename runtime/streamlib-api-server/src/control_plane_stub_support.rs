@@ -84,8 +84,8 @@ macro_rules! graph_mutation_ops_are_unreachable {
         ) -> ::streamlib::sdk::error::Result<()> {
             unreachable!(concat!("the control plane serves no disconnect ", $surface))
         }
-        fn this_runtimes_name_on_the_mesh(&self) -> String {
-            $crate::control_plane_stub_support::STUB_RUNTIME_NAME.to_string()
+        fn this_runtimes_name_on_the_mesh(&self) -> &str {
+            $crate::control_plane_stub_support::STUB_RUNTIME_NAME
         }
         fn request_link_on_remote_input_runtime(
             &self,
@@ -96,7 +96,7 @@ macro_rules! graph_mutation_ops_are_unreachable {
         }
         fn request_disconnect_on_remote_input_runtime(
             &self,
-            _input_runtime_name: String,
+            _input_runtime_name: &str,
             _link_id: ::streamlib::sdk::graph::LinkUniqueId,
         ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::graph::LinkRequestUniqueId> {
             unreachable!(concat!("the control plane serves no disconnect ", $surface))
@@ -246,8 +246,8 @@ macro_rules! graph_mutation_ops_record_the_call {
         ) -> ::streamlib::sdk::error::Result<()> {
             unreachable!("the MCP front end awaits the async op, never the blocking wrapper")
         }
-        fn this_runtimes_name_on_the_mesh(&self) -> String {
-            $crate::control_plane_stub_support::STUB_RUNTIME_NAME.to_string()
+        fn this_runtimes_name_on_the_mesh(&self) -> &str {
+            $crate::control_plane_stub_support::STUB_RUNTIME_NAME
         }
         fn request_link_on_remote_input_runtime(
             &self,
@@ -264,12 +264,12 @@ macro_rules! graph_mutation_ops_record_the_call {
         }
         fn request_disconnect_on_remote_input_runtime(
             &self,
-            input_runtime_name: String,
+            input_runtime_name: &str,
             link_id: ::streamlib::sdk::graph::LinkUniqueId,
         ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::graph::LinkRequestUniqueId> {
             self.recorded_graph_mutations.lock().push(
                         $crate::control_plane_stub_support::RecordedGraphMutation::
-                            RequestDisconnectOnRemoteInputRuntime(input_runtime_name, link_id),
+                            RequestDisconnectOnRemoteInputRuntime(input_runtime_name.to_string(), link_id),
                     );
             Ok(::streamlib::sdk::graph::LinkRequestUniqueId::from(
                 $crate::control_plane_stub_support::STUB_MADE_LINK_REQUEST_ID,

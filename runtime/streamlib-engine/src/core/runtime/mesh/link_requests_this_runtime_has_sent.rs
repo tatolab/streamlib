@@ -28,11 +28,12 @@ use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 use parking_lot::Mutex;
 use zenoh::Wait;
 
+use crate::core::error::{Error, Result};
 use crate::core::graph::LinkRequestUniqueId;
-use crate::core::json_schema::{LinkRequestAwaitingARuntimeOutput, LinkRequestStateOutput};
-use crate::core::runtime::mesh::link_request_on_the_mesh::{
-    ALinkRequestOnTheMesh, WhichOperationALinkRequestNames,
+use crate::core::json_schema::{
+    LinkRequestAwaitingARuntimeOutput, LinkRequestOperationOutput, LinkRequestStateOutput,
 };
+use crate::core::runtime::mesh::link_request_on_the_mesh::ALinkRequestOnTheMesh;
 use crate::core::runtime::mesh::link_requests_from_other_runtimes::{
     HowARuntimeAnsweredALinkRequest, ask_a_runtime_to_apply_a_link_request,
 };
@@ -57,9 +58,23 @@ const HOW_SOON_AN_UNANSWERED_REQUEST_IS_SENT_AGAIN: Duration = Duration::from_se
 /// The longest this runtime waits between two sends of one request.
 const HOW_LONG_THE_WAIT_BETWEEN_SENDS_GROWS_TO: Duration = Duration::from_secs(30);
 
+/// How many unapplied requests this runtime holds before it drops one.
+///
+/// The answering side caps itself for the same reason and in the same words: a
+/// peer asking in a loop must not grow this runtime's memory, and until the
+/// security pass any runtime may ask. The exposure here is an agent driving MCP
+/// `connect` at a display name that does not exist, whose refusals are final
+/// and would otherwise pile up in `graph` for the life of the runtime.
+/// Engine-chosen; nothing authorable.
+const HOW_MANY_UNAPPLIED_REQUESTS_THIS_RUNTIME_HOLDS: usize = 256;
+
 /// One request this runtime has made and no runtime has applied.
 struct ARequestThisRuntimeHasSent {
     request: ALinkRequestOnTheMesh,
+    /// Which request this was, counting from the runtime's first. The map is
+    /// keyed by a cuid2, which says nothing about order, and the cap below
+    /// drops the *oldest* dead record rather than an arbitrary one.
+    noted: u64,
     /// The runtime being asked — the one that owns the input.
     input_runtime_name: String,
     how_far_it_has_got: HowFarARequestHasGot,
@@ -67,9 +82,15 @@ struct ARequestThisRuntimeHasSent {
     send_again_at: Instant,
     /// How long the next unanswered send waits before the one after it.
     how_long_to_wait_next: Duration,
-    /// Set by a cancel. Checked immediately before a send, so a cancel that
-    /// arrives while the table is idle is always honoured.
-    cancelled: bool,
+}
+
+impl ARequestThisRuntimeHasSent {
+    /// Put the next send further out, up to the ceiling.
+    fn wait_longer_before_the_next_send(&mut self) {
+        self.send_again_at = Instant::now() + self.how_long_to_wait_next;
+        self.how_long_to_wait_next =
+            (self.how_long_to_wait_next * 2).min(HOW_LONG_THE_WAIT_BETWEEN_SENDS_GROWS_TO);
+    }
 }
 
 /// How far one request has got.
@@ -108,8 +129,11 @@ impl HowFarARequestHasGot {
 }
 
 /// Every request this runtime has made and no runtime has applied.
+#[derive(Default)]
 pub struct LinkRequestsThisRuntimeHasSent {
     waiting: Arc<Mutex<BTreeMap<LinkRequestUniqueId, ARequestThisRuntimeHasSent>>>,
+    /// How many requests this runtime has ever noted, which is what orders them.
+    noted_so_far: Mutex<u64>,
     /// Set once this runtime is on a mesh and the sending thread is up.
     sending: Mutex<Option<SendingEveryWaitingRequest>>,
 }
@@ -120,15 +144,6 @@ struct SendingEveryWaitingRequest {
     wake_the_sender: Sender<()>,
     announcement_subscriber: zenoh::pubsub::Subscriber<()>,
     sending_thread: std::thread::JoinHandle<()>,
-}
-
-impl Default for LinkRequestsThisRuntimeHasSent {
-    fn default() -> Self {
-        Self {
-            waiting: Arc::new(Mutex::new(BTreeMap::new())),
-            sending: Mutex::new(None),
-        }
-    }
 }
 
 impl LinkRequestsThisRuntimeHasSent {
@@ -143,22 +158,31 @@ impl LinkRequestsThisRuntimeHasSent {
         request: ALinkRequestOnTheMesh,
         input_runtime_name: impl Into<String>,
         mesh_name: &str,
-    ) {
+    ) -> Result<()> {
         let input_runtime_name = input_runtime_name.into();
         let reason =
             format!("this request has just been made and the {mesh_name} mesh has not sent it yet");
-        self.waiting.lock().insert(
-            request.link_request_id.clone(),
-            ARequestThisRuntimeHasSent {
-                request,
-                input_runtime_name,
-                how_far_it_has_got: HowFarARequestHasGot::AwaitingTheRuntime { reason },
-                send_again_at: Instant::now(),
-                how_long_to_wait_next: HOW_SOON_AN_UNANSWERED_REQUEST_IS_SENT_AGAIN,
-                cancelled: false,
-            },
-        );
+        {
+            let mut waiting = self.waiting.lock();
+            if waiting.len() >= HOW_MANY_UNAPPLIED_REQUESTS_THIS_RUNTIME_HOLDS {
+                forget_the_oldest_refused_request(&mut waiting)?;
+            }
+            let mut noted_so_far = self.noted_so_far.lock();
+            *noted_so_far += 1;
+            waiting.insert(
+                request.link_request_id.clone(),
+                ARequestThisRuntimeHasSent {
+                    request,
+                    noted: *noted_so_far,
+                    input_runtime_name,
+                    how_far_it_has_got: HowFarARequestHasGot::AwaitingTheRuntime { reason },
+                    send_again_at: Instant::now(),
+                    how_long_to_wait_next: HOW_SOON_AN_UNANSWERED_REQUEST_IS_SENT_AGAIN,
+                },
+            );
+        }
         self.ask_the_sender_to_look_again();
+        Ok(())
     }
 
     /// Say why a request will never be sent, for a runtime that is not on its
@@ -174,16 +198,30 @@ impl LinkRequestsThisRuntimeHasSent {
     }
 
     /// Cancel a request, so it is never sent. Answers whether there was one.
+    ///
+    /// Taking it out of the table is the whole of the cancel: a send already in
+    /// flight re-looks-up its own entry before writing anything down, finds it
+    /// gone, and discards whatever came back.
+    ///
+    /// Stated residual: that send may already have reached the runtime that
+    /// owns the input, which will have applied the link. A cancel stops this
+    /// runtime asking again; it cannot unmake a link another runtime has
+    /// already made. `disconnect` naming that link is how it goes.
     pub fn cancel_a_request(&self, link_request_id: &LinkRequestUniqueId) -> bool {
-        let mut waiting = self.waiting.lock();
-        let Some(cancelled) = waiting.get_mut(link_request_id) else {
-            return false;
-        };
-        // Marked as well as removed: a send already in flight reads the mark
-        // before it applies whatever came back.
-        cancelled.cancelled = true;
-        waiting.remove(link_request_id);
-        true
+        self.waiting.lock().remove(link_request_id).is_some()
+    }
+
+    /// Put one request into `how_far_it_has_got`, so a test can drive a state
+    /// the network would otherwise have to produce.
+    #[cfg(test)]
+    fn note_how_far_a_request_got_for_a_test(
+        &self,
+        link_request_id: &LinkRequestUniqueId,
+        how_far_it_has_got: HowFarARequestHasGot,
+    ) {
+        if let Some(held) = self.waiting.lock().get_mut(link_request_id) {
+            held.how_far_it_has_got = how_far_it_has_got;
+        }
     }
 
     /// Every request still waiting, as `graph` renders them.
@@ -193,10 +231,7 @@ impl LinkRequestsThisRuntimeHasSent {
             .values()
             .map(|waiting| LinkRequestAwaitingARuntimeOutput {
                 link_request_id: waiting.request.link_request_id.to_string(),
-                operation: match waiting.request.operation {
-                    WhichOperationALinkRequestNames::Connect => "connect".to_string(),
-                    WhichOperationALinkRequestNames::Disconnect => "disconnect".to_string(),
-                },
+                operation: LinkRequestOperationOutput::from(waiting.request.operation),
                 input_runtime_name: waiting.input_runtime_name.clone(),
                 source: waiting
                     .request
@@ -324,6 +359,38 @@ impl Drop for LinkRequestsThisRuntimeHasSent {
     }
 }
 
+/// Make room for one more request by forgetting the oldest one that will never
+/// be sent again, or refuse by name when every one this runtime holds is live.
+///
+/// A refused request is a record kept for reading, and the oldest is the one
+/// its author is least likely to still be looking at. A request still awaiting
+/// its runtime, or still unanswered, is live work and is never dropped for a
+/// newer one — so a runtime that fills up on live requests refuses the next,
+/// which is the caller's to see rather than the log's.
+fn forget_the_oldest_refused_request(
+    waiting: &mut BTreeMap<LinkRequestUniqueId, ARequestThisRuntimeHasSent>,
+) -> Result<()> {
+    let oldest_refused = waiting
+        .values()
+        .filter(|held| !held.how_far_it_has_got.it_is_worth_sending_again())
+        .min_by_key(|held| held.noted)
+        .map(|held| held.request.link_request_id.clone());
+    let Some(oldest_refused) = oldest_refused else {
+        return Err(Error::Runtime(format!(
+            "this runtime is already holding {HOW_MANY_UNAPPLIED_REQUESTS_THIS_RUNTIME_HOLDS} \
+             link requests no runtime has applied, and every one of them is still waiting or \
+             still being sent. Read `graph`'s `mesh.link_requests_awaiting_runtime` and cancel \
+             the ones that are no longer wanted."
+        )));
+    };
+    tracing::warn!(
+        "this runtime is holding {HOW_MANY_UNAPPLIED_REQUESTS_THIS_RUNTIME_HOLDS} unapplied link \
+         requests, so the oldest refused one ({oldest_refused}) is forgotten to make room"
+    );
+    waiting.remove(&oldest_refused);
+    Ok(())
+}
+
 /// Everything one sending pass reads.
 struct SendingRequestsNeeds {
     session: zenoh::Session,
@@ -363,13 +430,17 @@ fn run_one_sending_pass(sending: &SendingRequestsNeeds, whether_to_keep_sending:
         if !whether_to_keep_sending.load(Ordering::Acquire) {
             return;
         }
-        send_one_request(sending, &link_request_id);
+        send_one_request(sending, &link_request_id, whether_to_keep_sending);
     }
 }
 
 /// Send one request if it is due and its runtime is here, and write down what
 /// came back.
-fn send_one_request(sending: &SendingRequestsNeeds, link_request_id: &LinkRequestUniqueId) {
+fn send_one_request(
+    sending: &SendingRequestsNeeds,
+    link_request_id: &LinkRequestUniqueId,
+    whether_to_keep_sending: &AtomicBool,
+) {
     // Nothing here is held while the mesh is asked: the ask waits out a
     // timeout, and holding the table across it would block every `connect`.
     let (request, input_runtime_name) = {
@@ -377,7 +448,7 @@ fn send_one_request(sending: &SendingRequestsNeeds, link_request_id: &LinkReques
         let Some(due) = waiting.get_mut(link_request_id) else {
             return;
         };
-        if due.cancelled || !due.how_far_it_has_got.it_is_worth_sending_again() {
+        if !due.how_far_it_has_got.it_is_worth_sending_again() {
             return;
         }
         if Instant::now() < due.send_again_at {
@@ -404,15 +475,16 @@ fn send_one_request(sending: &SendingRequestsNeeds, link_request_id: &LinkReques
         &sending.key_space,
         &input_runtime_name,
         &request,
+        whether_to_keep_sending,
     );
 
+    // Looked up again rather than held across the ask: a cancel that landed
+    // while this was in flight took the entry with it, and finding it gone is
+    // how this send learns to write nothing down.
     let mut waiting = sending.waiting.lock();
     let Some(sent) = waiting.get_mut(link_request_id) else {
         return;
     };
-    if sent.cancelled {
-        return;
-    }
     match answered {
         HowARuntimeAnsweredALinkRequest::ItAppliedTheRequest(applied) => {
             tracing::info!(
@@ -437,11 +509,21 @@ fn send_one_request(sending: &SendingRequestsNeeds, link_request_id: &LinkReques
                 ),
             };
         }
+        // Said in its own words, and not final: it will be able to apply this
+        // once it has finished starting, so the request keeps its backoff slot
+        // exactly as silence does.
+        HowARuntimeAnsweredALinkRequest::ItIsNotReadyYet(not_yet) => {
+            sent.how_far_it_has_got = HowFarARequestHasGot::Unanswered {
+                reason: format!(
+                    "the runtime {} cannot apply it yet: {}",
+                    not_yet.refused_by_runtime_name, not_yet.reason
+                ),
+            };
+            sent.wait_longer_before_the_next_send();
+        }
         HowARuntimeAnsweredALinkRequest::ItSaidNothing { reason } => {
             sent.how_far_it_has_got = HowFarARequestHasGot::Unanswered { reason };
-            sent.send_again_at = Instant::now() + sent.how_long_to_wait_next;
-            sent.how_long_to_wait_next =
-                (sent.how_long_to_wait_next * 2).min(HOW_LONG_THE_WAIT_BETWEEN_SENDS_GROWS_TO);
+            sent.wait_longer_before_the_next_send();
         }
     }
 }
@@ -468,15 +550,17 @@ mod tests {
     #[test]
     fn a_waiting_request_renders_its_id_its_runtime_and_both_ends() {
         let table = LinkRequestsThisRuntimeHasSent::default();
-        table.note_a_request_waiting_to_be_sent(
-            a_connect_request("LRabc123"),
-            "studio-display-9f3c",
-            "default",
-        );
+        table
+            .note_a_request_waiting_to_be_sent(
+                a_connect_request("LRabc123"),
+                "studio-display-9f3c",
+                "default",
+            )
+            .expect("an empty table takes a request");
 
         let [rendered] = table.render_for_graph().try_into().expect("exactly one");
         assert_eq!(rendered.link_request_id, "LRabc123");
-        assert_eq!(rendered.operation, "connect");
+        assert_eq!(rendered.operation, LinkRequestOperationOutput::Connect);
         assert_eq!(rendered.input_runtime_name, "studio-display-9f3c");
         assert_eq!(
             rendered.source.as_deref(),
@@ -494,11 +578,13 @@ mod tests {
     #[test]
     fn a_cancelled_request_leaves_the_table() {
         let table = LinkRequestsThisRuntimeHasSent::default();
-        table.note_a_request_waiting_to_be_sent(
-            a_connect_request("LRabc123"),
-            "studio-display-9f3c",
-            "default",
-        );
+        table
+            .note_a_request_waiting_to_be_sent(
+                a_connect_request("LRabc123"),
+                "studio-display-9f3c",
+                "default",
+            )
+            .expect("an empty table takes a request");
 
         assert!(table.cancel_a_request(&LinkRequestUniqueId::from("LRabc123")));
         assert!(table.render_for_graph().is_empty());
@@ -513,18 +599,20 @@ mod tests {
     #[test]
     fn a_request_asking_for_a_link_to_go_renders_the_link_it_names() {
         let table = LinkRequestsThisRuntimeHasSent::default();
-        table.note_a_request_waiting_to_be_sent(
-            ALinkRequestOnTheMesh::asking_for_a_link_to_go(
-                LinkRequestUniqueId::from("LRxyz789"),
-                LinkUniqueId::from("Labc".to_string()),
-                "agent-wiring-e5f6",
-            ),
-            "studio-display-9f3c",
-            "default",
-        );
+        table
+            .note_a_request_waiting_to_be_sent(
+                ALinkRequestOnTheMesh::asking_for_a_link_to_go(
+                    LinkRequestUniqueId::from("LRxyz789"),
+                    LinkUniqueId::from("Labc".to_string()),
+                    "agent-wiring-e5f6",
+                ),
+                "studio-display-9f3c",
+                "default",
+            )
+            .expect("an empty table takes a request");
 
         let [rendered] = table.render_for_graph().try_into().expect("exactly one");
-        assert_eq!(rendered.operation, "disconnect");
+        assert_eq!(rendered.operation, LinkRequestOperationOutput::Disconnect);
         assert_eq!(rendered.link_id.as_deref(), Some("Labc"));
         assert_eq!(rendered.source, None);
         assert_eq!(rendered.destination, None);
@@ -535,11 +623,13 @@ mod tests {
     #[test]
     fn a_runtime_off_its_mesh_says_so_rather_than_blaming_the_runtime_it_names() {
         let table = LinkRequestsThisRuntimeHasSent::default();
-        table.note_a_request_waiting_to_be_sent(
-            a_connect_request("LRabc123"),
-            "studio-display-9f3c",
-            "default",
-        );
+        table
+            .note_a_request_waiting_to_be_sent(
+                a_connect_request("LRabc123"),
+                "studio-display-9f3c",
+                "default",
+            )
+            .expect("an empty table takes a request");
         table.note_that_this_runtime_reaches_nobody(
             &LinkRequestUniqueId::from("LRabc123"),
             "this runtime is not on the default mesh".to_string(),
@@ -552,6 +642,86 @@ mod tests {
             "{}",
             rendered.reason
         );
+    }
+
+    /// A runtime asked for more requests than it holds forgets its oldest
+    /// refused one rather than growing without bound.
+    ///
+    /// The exposure is real rather than theoretical: until the security pass
+    /// any runtime may ask, and an agent driving MCP `connect` at a display
+    /// name that does not exist makes a refusal — which is final — every time.
+    #[test]
+    fn a_runtime_asked_for_more_than_it_holds_forgets_its_oldest_refused_request() {
+        let table = LinkRequestsThisRuntimeHasSent::default();
+        for which in 0..HOW_MANY_UNAPPLIED_REQUESTS_THIS_RUNTIME_HOLDS {
+            table
+                .note_a_request_waiting_to_be_sent(
+                    a_connect_request(&format!("LR{which}")),
+                    "studio-display-9f3c",
+                    "default",
+                )
+                .expect("a table under its cap takes a request");
+        }
+        // The first two were refused; everything after is still live.
+        for refused in ["LR0", "LR1"] {
+            table.note_how_far_a_request_got_for_a_test(
+                &LinkRequestUniqueId::from(refused),
+                HowFarARequestHasGot::Refused {
+                    reason: "no such processor".to_string(),
+                },
+            );
+        }
+
+        table
+            .note_a_request_waiting_to_be_sent(
+                a_connect_request("LRone-too-many"),
+                "studio-display-9f3c",
+                "default",
+            )
+            .expect("a full table forgets a refused request to make room");
+
+        let held: Vec<String> = table
+            .render_for_graph()
+            .into_iter()
+            .map(|request| request.link_request_id)
+            .collect();
+        assert_eq!(held.len(), HOW_MANY_UNAPPLIED_REQUESTS_THIS_RUNTIME_HOLDS);
+        assert!(
+            !held.contains(&"LR0".to_string()),
+            "the oldest refused went"
+        );
+        assert!(held.contains(&"LR1".to_string()), "the next refused stayed");
+        assert!(held.contains(&"LRone-too-many".to_string()));
+    }
+
+    /// A runtime whose every held request is still live refuses the next by
+    /// name rather than dropping live work for it.
+    #[test]
+    fn a_runtime_holding_only_live_requests_refuses_the_next_by_name() {
+        let table = LinkRequestsThisRuntimeHasSent::default();
+        for which in 0..HOW_MANY_UNAPPLIED_REQUESTS_THIS_RUNTIME_HOLDS {
+            table
+                .note_a_request_waiting_to_be_sent(
+                    a_connect_request(&format!("LR{which}")),
+                    "studio-display-9f3c",
+                    "default",
+                )
+                .expect("a table under its cap takes a request");
+        }
+
+        let refusal = table
+            .note_a_request_waiting_to_be_sent(
+                a_connect_request("LRone-too-many"),
+                "studio-display-9f3c",
+                "default",
+            )
+            .expect_err("every held request is live, so none can be forgotten")
+            .to_string();
+        assert!(
+            refusal.contains("link_requests_awaiting_runtime"),
+            "{refusal}"
+        );
+        assert!(refusal.contains("cancel"), "{refusal}");
     }
 
     /// A refusal is final and an unanswered send is not — which is what makes

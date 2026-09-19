@@ -74,8 +74,8 @@ pub struct LinkRequestAwaitingARuntimeOutput {
     /// The id this runtime minted for the request. `disconnect` takes it to
     /// cancel the request.
     pub link_request_id: String,
-    /// What the request asks for: `connect` or `disconnect`.
-    pub operation: String,
+    /// What the request asks for.
+    pub operation: LinkRequestOperationOutput,
     /// The runtime being asked — the one that owns the input.
     pub input_runtime_name: String,
     /// The port the link would carry from, as `<runtime>/<display name>/<port>`.
@@ -93,6 +93,31 @@ pub struct LinkRequestAwaitingARuntimeOutput {
     pub state: LinkRequestStateOutput,
     /// What that state is about, in terms the author who asked can act on.
     pub reason: String,
+}
+
+/// What a link request asks the runtime that owns the input to do.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum LinkRequestOperationOutput {
+    /// Apply a link into one of that runtime's inputs.
+    Connect,
+    /// Remove a link that runtime holds.
+    Disconnect,
+}
+
+impl From<crate::core::runtime::mesh::WhichOperationALinkRequestNames>
+    for LinkRequestOperationOutput
+{
+    fn from(operation: crate::core::runtime::mesh::WhichOperationALinkRequestNames) -> Self {
+        match operation {
+            crate::core::runtime::mesh::WhichOperationALinkRequestNames::Connect => Self::Connect,
+            crate::core::runtime::mesh::WhichOperationALinkRequestNames::Disconnect => {
+                Self::Disconnect
+            }
+        }
+    }
 }
 
 /// How far a link request this runtime made has got.

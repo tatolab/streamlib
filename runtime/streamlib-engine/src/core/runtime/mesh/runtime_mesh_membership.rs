@@ -193,14 +193,17 @@ impl RuntimeMeshMembership {
     /// is there, and `graph` renders how far it has got until then. A runtime
     /// that never reached its mesh says so on the request rather than blaming
     /// the runtime it names, which may be perfectly healthy.
+    ///
+    /// Refused only when this runtime is already holding its fill of requests
+    /// no runtime has applied and none of them can be forgotten.
     pub fn ask_another_runtime_for_a_link(
         &self,
         request: ALinkRequestOnTheMesh,
         input_runtime_name: &str,
-    ) {
+    ) -> Result<()> {
         let link_request_id = request.link_request_id.clone();
         self.link_requests_it_has_sent
-            .note_a_request_waiting_to_be_sent(request, input_runtime_name, &self.mesh_name);
+            .note_a_request_waiting_to_be_sent(request, input_runtime_name, &self.mesh_name)?;
         if let Some(why_not) = self.why_it_is_not_on_its_mesh() {
             self.link_requests_it_has_sent
                 .note_that_this_runtime_reaches_nobody(
@@ -212,6 +215,7 @@ impl RuntimeMeshMembership {
                     ),
                 );
         }
+        Ok(())
     }
 
     /// Cancel a request this runtime has not had applied, so it is never sent.

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use super::Runner;
 use super::RuntimeStatus;
-use super::mesh::RuntimeMeshMembership;
+use super::mesh::{ALinkRequestOnTheMesh, RuntimeMeshMembership};
 use super::mesh_address_chunk::{
     first_reason_this_is_not_one_mesh_address_chunk, what_one_mesh_address_chunk_may_be,
 };
@@ -875,8 +875,8 @@ impl RuntimeOperations for Runner {
         }
     }
 
-    fn this_runtimes_name_on_the_mesh(&self) -> String {
-        self.runtime_mesh.runtime_name().to_string()
+    fn this_runtimes_name_on_the_mesh(&self) -> &str {
+        self.runtime_mesh.runtime_name()
     }
 
     fn request_link_on_remote_input_runtime(
@@ -908,20 +908,20 @@ impl RuntimeOperations for Runner {
         let link_request_id = LinkRequestUniqueId::new();
         let input_runtime_name = to.runtime_name().to_string();
         self.runtime_mesh.ask_another_runtime_for_a_link(
-            crate::core::runtime::mesh::ALinkRequestOnTheMesh::asking_for_a_link(
+            ALinkRequestOnTheMesh::asking_for_a_link(
                 link_request_id.clone(),
                 source_address,
                 to,
                 self.runtime_mesh.runtime_name(),
             ),
             &input_runtime_name,
-        );
+        )?;
         Ok(link_request_id)
     }
 
     fn request_disconnect_on_remote_input_runtime(
         &self,
-        input_runtime_name: String,
+        input_runtime_name: &str,
         link_id: LinkUniqueId,
     ) -> Result<LinkRequestUniqueId> {
         if input_runtime_name == self.runtime_mesh.runtime_name() {
@@ -932,13 +932,13 @@ impl RuntimeOperations for Runner {
         }
         let link_request_id = LinkRequestUniqueId::new();
         self.runtime_mesh.ask_another_runtime_for_a_link(
-            crate::core::runtime::mesh::ALinkRequestOnTheMesh::asking_for_a_link_to_go(
+            ALinkRequestOnTheMesh::asking_for_a_link_to_go(
                 link_request_id.clone(),
                 link_id,
                 self.runtime_mesh.runtime_name(),
             ),
-            &input_runtime_name,
-        );
+            input_runtime_name,
+        )?;
         Ok(link_request_id)
     }
 

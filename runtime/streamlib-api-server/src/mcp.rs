@@ -386,7 +386,7 @@ fn tool_definitions() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "link_id": { "type": "string", "description": "A link id `graph` or `connect` reported." },
-                    "input_runtime_name": { "type": "string", "description": "The runtime holding that link, when it is not this one. `graph` reports it on every link as `created_by_runtime_name` is reported, and `mesh.peers` lists the runtimes this node can see." },
+                    "input_runtime_name": { "type": "string", "description": "The runtime holding that link, when it is not this one — the `input_runtime_name` that `connect` answered with, or the one on its entry under `mesh.link_requests_awaiting_runtime`. Not `created_by_runtime_name`, which names the runtime that *asked* for the link. A link another runtime holds appears in that runtime's `graph`, never this node's." },
                     "link_request_id": { "type": "string", "description": "A link request to cancel, as `connect` returned it and `graph` lists it. Give this instead of `link_id`." }
                 },
                 "additionalProperties": false
@@ -715,9 +715,34 @@ async fn call_connect(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) ->
             processor_id,
             port_name,
         } => {
-            let to =
-                InputLinkPortRef::new(ProcessorUniqueId::from(processor_id.as_str()), port_name);
+            let to = InputLinkPortRef::new(processor_id, port_name);
             match runtime.connect_async(from_as_an_output, to).await {
+                Ok(link_id) => {
+                    let how_the_graph_reads_it =
+                        how_the_graph_reads_one_link(runtime, &link_id).await;
+                    tool_ok(json!({
+                        "link_id": link_id.as_str(),
+                        "input_runtime_name": runtime.this_runtimes_name_on_the_mesh(),
+                        "state": how_the_graph_reads_it.state,
+                    }))
+                }
+                Err(e) => tool_error(format!("connect failed: {e}")),
+            }
+        }
+        // A destination naming this node is a local reference, resolved by
+        // display name — the same rule the engine, Python and `disconnect`
+        // already apply, so an agent that wires uniformly by runtime name gets
+        // a link rather than a refusal telling it to use the tool it just used.
+        NamedEndOfALink::OnAnotherRuntime(address)
+            if address.names_the_runtime(runtime.this_runtimes_name_on_the_mesh()) =>
+        {
+            match runtime
+                .connect_async(
+                    from_as_an_output,
+                    InputLinkPortRef::on_another_runtime(address),
+                )
+                .await
+            {
                 Ok(link_id) => {
                     let how_the_graph_reads_it =
                         how_the_graph_reads_one_link(runtime, &link_id).await;
@@ -908,7 +933,7 @@ async fn call_disconnect(runtime: &Arc<dyn RuntimeOperations>, arguments: Value)
             // would be a runtime asking itself.
             let on_another_runtime = arguments
                 .input_runtime_name
-                .filter(|named| named != &runtime.this_runtimes_name_on_the_mesh());
+                .filter(|named| named != runtime.this_runtimes_name_on_the_mesh());
             match on_another_runtime {
                 None => match runtime
                     .disconnect_async(LinkUniqueId::from(link_id.as_str()))
@@ -919,7 +944,7 @@ async fn call_disconnect(runtime: &Arc<dyn RuntimeOperations>, arguments: Value)
                 },
                 Some(input_runtime_name) => {
                     match runtime.request_disconnect_on_remote_input_runtime(
-                        input_runtime_name.clone(),
+                        &input_runtime_name,
                         LinkUniqueId::from(link_id.as_str()),
                     ) {
                         Ok(link_request_id) => tool_ok(json!({
@@ -933,6 +958,19 @@ async fn call_disconnect(runtime: &Arc<dyn RuntimeOperations>, arguments: Value)
             }
         }
         (None, Some(link_request_id)) => {
+            // A request is this node's own to cancel, so naming a runtime
+            // beside it asks for something this tool does not do. Refused
+            // rather than read past, for the reason `deny_unknown_fields` is on
+            // the arguments above: a caller who spelled it meant it.
+            if arguments.input_runtime_name.is_some() {
+                return tool_error(
+                    "disconnect arguments: `link_request_id` cancels a request this node is \
+                     holding, which is always this node's own, so `input_runtime_name` names \
+                     nothing it could act on. Drop it, or give `link_id` with it to remove a \
+                     link another runtime holds."
+                        .to_string(),
+                );
+            }
             match runtime.cancel_link_request(&LinkRequestUniqueId::from(link_request_id.as_str()))
             {
                 Ok(()) => tool_ok(json!({ "cancelled_link_request_id": link_request_id })),
@@ -1628,6 +1666,56 @@ mod tests {
         assert_eq!(stated["input_runtime_name"], "studio-display-9f3c");
     }
 
+    /// A destination naming this node's own runtime is an ordinary local link,
+    /// not a request this node sends to itself.
+    ///
+    /// Mental-revert: route on argument shape alone and an agent that wires
+    /// uniformly by runtime name — the names `graph` hands it — is refused
+    /// with "use `connect` instead", by `connect`.
+    #[tokio::test]
+    async fn tools_call_connect_naming_this_node_as_the_destination_wires_it_here() {
+        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
+        let recorded_calls = Arc::clone(&runtime.recorded_graph_mutations);
+
+        let body = call_the_connect_tool(
+            Arc::clone(&runtime),
+            json!({
+                "from_processor_id": "cam-1",
+                "from_port": "video",
+                "to_runtime_name": crate::control_plane_stub_support::STUB_RUNTIME_NAME,
+                "to_processor_display_name": "DisplayWindow",
+                "to_port": "video",
+            }),
+        )
+        .await;
+
+        let recorded = recorded_calls.lock();
+        let [crate::control_plane_stub_support::RecordedGraphMutation::Connect(_, to)] =
+            recorded.as_slice()
+        else {
+            panic!("expected one local connect, recorded {recorded:?}");
+        };
+        assert_eq!(
+            to.mesh_port_address().map(|address| address.to_string()),
+            Some(format!(
+                "{}/DisplayWindow/video",
+                crate::control_plane_stub_support::STUB_RUNTIME_NAME
+            )),
+            "the address is handed to `connect`, which resolves it by display name"
+        );
+
+        let stated: Value =
+            serde_json::from_str(body["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            stated["link_id"],
+            crate::control_plane_stub_support::STUB_CREATED_LINK_ID
+        );
+        assert!(
+            stated.get("link_request_id").is_none(),
+            "a link applied here is a link, not a request: {stated}"
+        );
+    }
+
     /// Naming both ends remotely is a third-party wiring, and neither end
     /// touches this node's own graph.
     #[tokio::test]
@@ -1816,6 +1904,30 @@ mod tests {
         let stated: Value =
             serde_json::from_str(body["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
         assert_eq!(stated["cancelled_link_request_id"], "LRabc123");
+    }
+
+    /// A request is this node's own to cancel, so naming a runtime beside it
+    /// is refused rather than read past.
+    ///
+    /// Mental-revert: ignore the field and
+    /// `{"link_request_id": "LR…", "input_runtime_name": "other-node"}` succeeds
+    /// while doing something other than what the caller spelled — the same
+    /// hazard `deny_unknown_fields` closes, reached through a legal field.
+    #[tokio::test]
+    async fn tools_call_disconnect_refuses_a_runtime_named_beside_a_request_to_cancel() {
+        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
+        let recorded_calls = Arc::clone(&runtime.recorded_graph_mutations);
+
+        let body = call_the_disconnect_tool(
+            runtime,
+            json!({ "link_request_id": "LRabc123", "input_runtime_name": "other-node" }),
+        )
+        .await;
+
+        let text = body["result"]["content"][0]["text"].as_str().unwrap();
+        assert_eq!(body["result"]["isError"], true, "{text}");
+        assert!(text.contains("input_runtime_name"), "{text}");
+        assert!(recorded_calls.lock().is_empty(), "nothing was cancelled");
     }
 
     /// Naming both a link and a request, or neither, is refused by name — the

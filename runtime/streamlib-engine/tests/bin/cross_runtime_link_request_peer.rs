@@ -50,6 +50,9 @@ const THE_OUTPUT_PORT: &str = "video";
 /// The one input port every processor this peer adds consumes.
 const THE_INPUT_PORT: &str = "frames_from_upstream";
 
+/// The class every node this peer adds is an instance of.
+const THE_CLASS_PATH: &str = "cross_runtime_link_request_peer:LinkRequestPeerProcessor";
+
 fn main() {
     let report = ReportChannelTakenBeforeTheRuntimeExists::take();
     let how = HowToRunThisPeer::read_from_the_command_line();
@@ -89,7 +92,7 @@ fn main() {
 /// Descriptor-only because `connect` checks a port exists and nothing more:
 /// no instance is ever constructed, which is what keeps this GPU-free.
 fn register_the_one_processor_type_this_peer_adds() {
-    let import_path = ProcessorClassImportPath::new(the_class_path()).expect("a legal class path");
+    let import_path = ProcessorClassImportPath::new(THE_CLASS_PATH).expect("a legal class path");
     let mut descriptor = ProcessorDescriptor::new(
         ProcessorClassShortName::new("LinkRequestPeerProcessor").expect("a legal short name"),
         import_path,
@@ -102,10 +105,6 @@ fn register_the_one_processor_type_this_peer_adds() {
         .inputs
         .push(PortDescriptor::new(THE_INPUT_PORT, "input", true).with_delivery_profile("newest"));
     let _ = PROCESSOR_REGISTRY.register_descriptor_only(descriptor);
-}
-
-fn the_class_path() -> String {
-    "cross_runtime_link_request_peer:LinkRequestPeerProcessor".to_string()
 }
 
 /// One command the fixture sends, as it rides stdin.
@@ -161,7 +160,7 @@ fn answer_one_command(runtime: &Arc<Runner>, asked: WhatTheFixtureAsked) -> serd
     match asked {
         WhatTheFixtureAsked::Add { display_name } => {
             let mut spec = ProcessorSpec::new(
-                ProcessorClassImportPath::new(the_class_path()).expect("a legal class path"),
+                ProcessorClassImportPath::new(THE_CLASS_PATH).expect("a legal class path"),
                 serde_json::Value::Null,
             );
             spec.display_name = Some(display_name.clone());
@@ -216,7 +215,7 @@ fn answer_one_command(runtime: &Arc<Runner>, asked: WhatTheFixtureAsked) -> serd
             input_runtime_name,
             link_id,
         } => match runtime.request_disconnect_on_remote_input_runtime(
-            input_runtime_name,
+            &input_runtime_name,
             LinkUniqueId::from(link_id),
         ) {
             Ok(link_request_id) => {

@@ -172,7 +172,7 @@ pub trait RuntimeOperations: Send + Sync {
     /// Spelled at length because `Runner` has an inherent `runtime_name()` of
     /// its own returning a different type, and a caller holding a `Runner`
     /// rather than a `dyn RuntimeOperations` would silently get that one.
-    fn this_runtimes_name_on_the_mesh(&self) -> String;
+    fn this_runtimes_name_on_the_mesh(&self) -> &str;
 
     /// Ask the runtime that owns `to` to carry `from` into it.
     ///
@@ -188,7 +188,7 @@ pub trait RuntimeOperations: Send + Sync {
     /// Ask the runtime named `input_runtime_name` to remove `link_id`.
     fn request_disconnect_on_remote_input_runtime(
         &self,
-        input_runtime_name: String,
+        input_runtime_name: &str,
         link_id: LinkUniqueId,
     ) -> Result<LinkRequestUniqueId>;
 

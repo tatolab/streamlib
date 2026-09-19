@@ -209,10 +209,24 @@ pub struct WhyALinkRequestWasRefused {
     pub refused_by_runtime_name: String,
     /// Why, in terms the requester can act on.
     pub reason: String,
+    /// Whether asking again later might work.
+    ///
+    /// Most refusals are about the request — a processor that is not there, a
+    /// port that is not offered — and asking again gets the same answer. A few
+    /// are about the *moment*: a runtime that has declared this queryable and
+    /// has not yet finished starting genuinely cannot apply a link yet, and
+    /// will be able to in milliseconds. Without this the requester reads both
+    /// as final and a link nobody asked twice for is never made.
+    ///
+    /// Defaults to final, so a refusal from an engine that does not send it
+    /// keeps the meaning every refusal used to have.
+    #[serde(default)]
+    pub a_resend_may_still_work: bool,
 }
 
 impl WhyALinkRequestWasRefused {
-    /// A refusal from `refused_by_runtime_name`.
+    /// A refusal from `refused_by_runtime_name` that asking again will meet
+    /// again.
     pub fn from_the_runtime_named(
         refused_by_runtime_name: impl Into<String>,
         reason: impl Into<String>,
@@ -220,6 +234,19 @@ impl WhyALinkRequestWasRefused {
         Self {
             refused_by_runtime_name: refused_by_runtime_name.into(),
             reason: reason.into(),
+            a_resend_may_still_work: false,
+        }
+    }
+
+    /// A refusal about the moment rather than the request: this runtime cannot
+    /// apply a link *yet*, and the one that asked should ask again.
+    pub fn because_that_runtime_is_not_ready_yet(
+        refused_by_runtime_name: impl Into<String>,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self {
+            a_resend_may_still_work: true,
+            ..Self::from_the_runtime_named(refused_by_runtime_name, reason)
         }
     }
 
