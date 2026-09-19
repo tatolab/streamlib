@@ -16,17 +16,18 @@ use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use streamlib::engine_internal::core::app_directory::record_the_app_entry_directory_the_language_host_captured;
-use streamlib::sdk::graph::{InputLinkPortRef, MeshPortAddress};
+use streamlib::sdk::graph::MeshPortAddress;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::{
     ArmedEngineTeardownWatchdog, DescriptionOfTheAbandonedProcessorThreads,
-    ProcessorDisplayNameAndId, Runner, RuntimeMeshConfiguration, request_runtime_shutdown,
-    take_runtime_shutdown_escalation,
+    ProcessorDisplayNameAndId, Runner, RuntimeMeshConfiguration, RuntimeOperations,
+    request_runtime_shutdown, take_runtime_shutdown_escalation,
 };
 
 use crate::python_added_processor::{
-    PythonAddedProcessor, PythonProcessorInputPortReference,
-    PythonRemoteProcessorOutputPortReference, the_output_link_port_ref_this_source_names,
+    PythonAddedProcessor, PythonRemoteProcessorInputPortReference,
+    PythonRemoteProcessorOutputPortReference, the_input_link_port_ref_this_destination_names,
+    the_output_link_port_ref_this_source_names,
 };
 use crate::python_bag_conversion::python_object_to_json_value;
 use crate::python_processor_registration::register_processor_class;
@@ -419,6 +420,21 @@ impl PythonRuntimeHandle {
             .map_err(|not_an_address| PyValueError::new_err(not_an_address.to_string()))
     }
 
+    /// Name an input port on another runtime, to push into it over the mesh.
+    ///
+    /// The address is checked here rather than at `connect`, so a chunk the
+    /// mesh cannot carry is refused where the author wrote it.
+    fn remote_processor_input(
+        &self,
+        runtime_name: &str,
+        display_name: &str,
+        port_name: &str,
+    ) -> PyResult<PythonRemoteProcessorInputPortReference> {
+        MeshPortAddress::new(runtime_name, display_name, port_name)
+            .map(|address| PythonRemoteProcessorInputPortReference { address })
+            .map_err(|not_an_address| PyValueError::new_err(not_an_address.to_string()))
+    }
+
     /// Link one processor's output port to another's input port.
     ///
     /// The source may be a port on this runtime or one on another runtime; the
@@ -428,18 +444,27 @@ impl PythonRuntimeHandle {
         &self,
         python: Python<'_>,
         source: &Bound<'_, PyAny>,
-        destination: &PythonProcessorInputPortReference,
+        destination: &Bound<'_, PyAny>,
     ) -> PyResult<()> {
         let from = the_output_link_port_ref_this_source_names(source)?;
-        let to = InputLinkPortRef::new(
-            destination.processor_id.clone(),
-            destination.port_name.clone(),
-        );
+        let to = the_input_link_port_ref_this_destination_names(destination)?;
         let engine = self.engine_being_built("connect two processors")?;
-        python
-            .detach(|| engine.connect(from, to))
-            .map(|_link_id| ())
-            .map_err(|connect_failure| PyRuntimeError::new_err(connect_failure.to_string()))
+        // The runtime that owns an input applies every link into it, so a
+        // destination on another runtime is asked for rather than applied here.
+        // Neither door waits on the mesh; both return as soon as the link or
+        // the request is noted.
+        match to.mesh_port_address() {
+            Some(address) if !address.names_the_runtime(engine.runtime_name().as_str()) => {
+                let address = address.clone();
+                python
+                    .detach(|| engine.request_link_on_remote_input_runtime(from, address))
+                    .map(|_link_request_id| ())
+            }
+            _ => python
+                .detach(|| engine.connect(from, to))
+                .map(|_link_id| ()),
+        }
+        .map_err(|connect_failure| PyRuntimeError::new_err(connect_failure.to_string()))
     }
 
     /// Host the control plane in this process, so the node is discoverable.

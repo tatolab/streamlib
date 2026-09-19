@@ -82,7 +82,10 @@ impl CompilationPlan {
                 .from_port()
                 .processor_id_on_this_runtime()
                 .is_some_and(|source| processors_to_remove.contains(source));
-            let target_removed = processors_to_remove.contains(&link.to_port().processor_id);
+            let target_removed = link
+                .to_port()
+                .processor_id_on_this_runtime()
+                .is_some_and(|target| processors_to_remove.contains(target));
             if source_removed || target_removed {
                 tracing::debug!(
                     "[commit] link-add {link_id} skipped — endpoint processor removed in same batch"

@@ -617,6 +617,7 @@ jobs:
             core::graph::graph_tests::links_from_another_runtime \
             core::runtime::operations_runtime::connect_wires_without_inspecting_a_port_tests \
             core::runtime::output_ports_in_this_runtimes_graph \
+            core::runtime::link_requests_applied_into_this_runtimes_graph \
             iceoryx2::channel_name \
             core::runtime::stated_configuration_value \
             linux::host_identity \
@@ -652,6 +653,17 @@ jobs:
           # `Runner`, because `start()` needs a GPU.
           cargo test --locked -p streamlib-engine \
             --test cross_runtime_links_two_processes
+          # The link-request proof, and the only thing in CI that runs *three*
+          # runtimes at once: one runtime pushes its own output into another's
+          # input, a third wires two it is not part of, a request naming a
+          # processor the answering runtime lacks comes back refused by name, a
+          # runtime that is present and silent leaves the request unanswered
+          # rather than refused, an absent one's request is sent when it
+          # appears, a cancelled one never is, and a third runtime's disconnect
+          # reaches the link. GPU-free — every peer builds a `Runner` and never
+          # starts it, because a request is applied against a graph.
+          cargo test --locked -p streamlib-engine \
+            --test cross_runtime_link_requests_two_processes
           # streamlib-consumer-rhi was reached by no cargo invocation here for
           # the same reason the built-ins were: the clippy step builds default
           # targets and never its test target. Its unit tests are the no-GPU

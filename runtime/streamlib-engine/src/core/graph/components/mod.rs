@@ -20,6 +20,7 @@ mod processor_ready_barrier_component;
 mod remote_link_resolution_component;
 mod shutdown_channel_component;
 mod state_component;
+mod the_request_that_applied_this_link_component;
 mod thread_handle_component;
 
 pub use component_map::*;
@@ -41,4 +42,5 @@ pub use processor_ready_barrier_component::*;
 pub use remote_link_resolution_component::*;
 pub use shutdown_channel_component::*;
 pub use state_component::*;
+pub use the_request_that_applied_this_link_component::*;
 pub use thread_handle_component::*;

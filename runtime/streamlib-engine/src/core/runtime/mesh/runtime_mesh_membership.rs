@@ -24,10 +24,18 @@ use zenoh::Wait;
 use zenoh::sample::SampleKind;
 
 use crate::core::error::{Error, Result};
+use crate::core::graph::LinkRequestUniqueId;
+use crate::core::json_schema::LinkRequestAwaitingARuntimeOutput;
 use crate::core::json_schema::{RuntimeMeshOutput, RuntimeMeshSessionOutput};
 use crate::core::runtime::RuntimeName;
 use crate::core::runtime::mesh::duplicate_runtime_name_on_the_mesh::refuse_this_runtime_if_its_name_is_already_live;
 use crate::core::runtime::mesh::hosted_control_plane_endpoint::HostedControlPlaneEndpointRegistry;
+use crate::core::runtime::mesh::link_request_on_the_mesh::ALinkRequestOnTheMesh;
+use crate::core::runtime::mesh::link_requests_from_other_runtimes::{
+    LinkRequestsFromOtherRuntimesQueryable, WhatThisRuntimeDoesWithALinkRequest,
+    WhatThisRuntimeDoesWithALinkRequestRegistry,
+};
+use crate::core::runtime::mesh::link_requests_this_runtime_has_sent::LinkRequestsThisRuntimeHasSent;
 use crate::core::runtime::mesh::mesh_link_ingress_table::MeshLinkIngressTable;
 use crate::core::runtime::mesh::mesh_port_egress_table::MeshPortEgressTable;
 use crate::core::runtime::mesh::output_ports_offered_on_the_mesh::{
@@ -68,6 +76,14 @@ pub struct RuntimeMeshMembership {
     /// Lives here rather than inside the egress table because `graph` reads it
     /// whether or not this runtime ever started serving its ports.
     being_read_by_other_runtimes: Arc<OutputPortsOtherRuntimesAreReading>,
+    /// How this runtime applies a link another runtime asks it for. Empty until
+    /// the runtime exists to apply one, which is after the session opens.
+    applies_link_requests: Arc<WhatThisRuntimeDoesWithALinkRequestRegistry>,
+    /// Every link this runtime has asked another runtime to apply. Lives here
+    /// rather than inside the session state because `graph` reads it whether
+    /// or not this runtime ever reached a mesh — a request made off one is
+    /// still a request the author asked for.
+    link_requests_it_has_sent: Arc<LinkRequestsThisRuntimeHasSent>,
 }
 
 /// What a runtime holds on the mesh to serve its own output ports: the
@@ -76,6 +92,10 @@ pub struct RuntimeMeshMembership {
 struct ServingThisRuntimesOutputPorts {
     _offered_output_ports_queryable: OfferedOutputPortsQueryable,
     _egress_table: MeshPortEgressTable,
+    /// Answering a peer that asks this runtime to apply a link into one of its
+    /// own inputs. Held beside the other two because all three stop together:
+    /// a runtime that has left the mesh serves nothing and answers nothing.
+    _link_requests_queryable: LinkRequestsFromOtherRuntimesQueryable,
 }
 
 /// Whether this runtime reached its mesh, and what it holds there if it did.
@@ -162,7 +182,66 @@ impl RuntimeMeshMembership {
             serving_this_runtimes_output_ports: Mutex::new(None),
             carrying_links_from_other_runtimes: Mutex::new(None),
             being_read_by_other_runtimes: Arc::default(),
+            applies_link_requests: Arc::default(),
+            link_requests_it_has_sent: Arc::default(),
         })
+    }
+
+    /// Ask the runtime that owns `request`'s input to apply it.
+    ///
+    /// Never waits on the mesh: the request is kept and sent when that runtime
+    /// is there, and `graph` renders how far it has got until then. A runtime
+    /// that never reached its mesh says so on the request rather than blaming
+    /// the runtime it names, which may be perfectly healthy.
+    ///
+    /// Refused only when this runtime is already holding its fill of requests
+    /// no runtime has applied and none of them can be forgotten.
+    pub fn ask_another_runtime_for_a_link(
+        &self,
+        request: ALinkRequestOnTheMesh,
+        input_runtime_name: &str,
+    ) -> Result<()> {
+        let link_request_id = request.link_request_id.clone();
+        self.link_requests_it_has_sent
+            .note_a_request_waiting_to_be_sent(request, input_runtime_name, &self.mesh_name)?;
+        if let Some(why_not) = self.why_it_is_not_on_its_mesh() {
+            self.link_requests_it_has_sent
+                .note_that_this_runtime_reaches_nobody(
+                    &link_request_id,
+                    format!(
+                        "this runtime is not on the {} mesh, so it asks nobody for anything: \
+                     {why_not}",
+                        self.mesh_name
+                    ),
+                );
+        }
+        Ok(())
+    }
+
+    /// Cancel a request this runtime has not had applied, so it is never sent.
+    /// Answers whether there was one.
+    pub fn cancel_a_link_request(&self, link_request_id: &LinkRequestUniqueId) -> bool {
+        self.link_requests_it_has_sent
+            .cancel_a_request(link_request_id)
+    }
+
+    /// Every request this runtime is still waiting on, as `graph` renders them.
+    pub fn link_requests_awaiting_a_runtime(&self) -> Vec<LinkRequestAwaitingARuntimeOutput> {
+        self.link_requests_it_has_sent.render_for_graph()
+    }
+
+    /// Record how this runtime applies a link request another runtime sends it.
+    ///
+    /// Called once the runtime exists, which is after the session is open and
+    /// after the queryable below is declared: a request that arrives in between
+    /// is refused saying the runtime is still starting, and the runtime that
+    /// asked resends.
+    pub fn record_how_this_runtime_applies_link_requests(
+        &self,
+        applies_them: Arc<dyn WhatThisRuntimeDoesWithALinkRequest>,
+    ) {
+        self.applies_link_requests
+            .record_how_this_runtime_applies_them(applies_them);
     }
 
     /// The session this runtime is announced on, or `None` while it is not on
@@ -197,12 +276,19 @@ impl RuntimeMeshMembership {
         let this_runtimes_name = self.announced_identity.runtime_name.clone();
         let being_read_by_other_runtimes = Arc::clone(&self.being_read_by_other_runtimes);
 
+        let applies_link_requests = Arc::clone(&self.applies_link_requests);
         let served = off_any_current_thread_tokio_runtime("serve", || {
             let offered_output_ports_queryable = OfferedOutputPortsQueryable::declare(
                 &session,
                 &key_space,
                 &this_runtimes_name,
                 offered,
+            )?;
+            let link_requests_queryable = LinkRequestsFromOtherRuntimesQueryable::declare(
+                &session,
+                &key_space,
+                &this_runtimes_name,
+                &applies_link_requests,
             )?;
             let egress_table = MeshPortEgressTable::watching_the_readers_of_this_runtimes_ports(
                 &session,
@@ -215,6 +301,7 @@ impl RuntimeMeshMembership {
             Ok::<_, zenoh::Error>(ServingThisRuntimesOutputPorts {
                 _offered_output_ports_queryable: offered_output_ports_queryable,
                 _egress_table: egress_table,
+                _link_requests_queryable: link_requests_queryable,
             })
         });
 
@@ -251,6 +338,9 @@ impl RuntimeMeshMembership {
         let this_runtimes_name = self.announced_identity.runtime_name.clone();
         let peers = Arc::clone(&self.peers);
         let ingress_table = Arc::clone(ingress_table);
+        // The requests this runtime sends wait on the same event the links it
+        // pulls do — a runtime appearing — so both start together.
+        let link_requests_it_has_sent = Arc::clone(&self.link_requests_it_has_sent);
         if let Err(cannot_spawn) = off_any_current_thread_tokio_runtime("carry", move || {
             ingress_table.start_resolving_every_waiting_link(
                 &session,
@@ -258,6 +348,8 @@ impl RuntimeMeshMembership {
                 &this_runtimes_name,
                 &peers,
             );
+            link_requests_it_has_sent
+                .start_sending_every_waiting_request(&session, &key_space, &peers);
         }) {
             tracing::warn!(
                 "this runtime cannot resolve its links from other runtimes for want of a thread: \
@@ -318,6 +410,7 @@ impl RuntimeMeshMembership {
         if let Some(carrying) = stopped_carrying {
             carrying.stop();
         }
+        self.link_requests_it_has_sent.stop();
 
         let previous = std::mem::replace(
             &mut *self.session.lock(),
@@ -397,6 +490,8 @@ impl RuntimeMeshMembership {
             serving_this_runtimes_output_ports: Mutex::new(None),
             carrying_links_from_other_runtimes: Mutex::new(None),
             being_read_by_other_runtimes: Arc::default(),
+            applies_link_requests: Arc::default(),
+            link_requests_it_has_sent: Arc::default(),
         }
     }
 
@@ -425,6 +520,7 @@ impl RuntimeMeshMembership {
             local_only_reason,
             peers: self.peers.render_for_graph(),
             egress_ports: self.being_read_by_other_runtimes.render_for_graph(),
+            link_requests_awaiting_runtime: self.link_requests_it_has_sent.render_for_graph(),
         }
     }
 }

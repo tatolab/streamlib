@@ -251,8 +251,12 @@ and cannot map a remote monotonic stamp onto ours; the OPEN's PTP/NTP direction 
 - **Consumer backlog, filed when X1 merges:** `packages/streamlib-moq`'s deadline measures a remote stamp
   against local now (`delivery_deadline.rs:127`, `:156`).
 - **Found, not fixed here:** a duplicate local link is never refused (a resent mesh request is covered by its
-  id); NV12 pool slots are undersized (`gpu_context.rs:405`). They go in the PR body. `disconnect_impl`
-  naming the target's port as the source port (`operations_runtime.rs:358`) is fixed in X2, which builds on it.
+  id); NV12 pool slots are undersized (`gpu_context.rs:405`). They go in the PR body.
+  ~~`disconnect_impl` naming the target's port as the source port (`operations_runtime.rs:358`) is fixed in
+  X2, which builds on it.~~ — Superseded 2026-09-19 by the tree: X1's #2292 (PR #2338) replaced that
+  construction with a clone of the link's own `from_port()`, so the source half was already right when X2
+  began. X2 collapsed the remaining hand-rebuilt *destination* on the same line and added the
+  asymmetric-port test against today's behaviour.
 
 ## Expected slices
 
@@ -262,7 +266,7 @@ MCP, helper destinations) and #2288 (hop loss); X2 is #2289, X3 #2290, X4 #2291.
 | # | Slice | Blocked by | Proof |
 |---|---|---|---|
 | X1 | Pull: `MeshPortAddress`, Python and MCP remote source, offered-port query, reader and egress tokens, ingress, egress without surfaces, states and reasons, version and duplicate-name errors, attachment, hop count, inbound link name incl. helper envelope, `graph` link shape, tap by address | #2283, #2263, #2265, #2268, #2272, #2273 | CI two-process components over loopback: bags byte-equal and stamps equal; dropping every k-th put counts exactly k's; SIGKILL of the source returns `awaiting_remote` and a restart re-wires from zero; no key without a reader; attachment golden bytes. Rig: two `streamlib run` apps, the known audio signal across, `tap_audio_channel.py --expect-frame-not-restamped` |
-| X2 | Requests: push and third party, `link_request_id`, resend and idempotent apply, cancel, `link_requests_awaiting_runtime`, disconnect over the mesh and `disconnect_impl`'s source port, `created_by_runtime_name`, MCP `to_*` | X1 | CI: a request's reply and refusal by name; a dropped reply resent returns the one link; a silent input runtime stays waiting; an absent one's request sends on appearance and a cancelled one never does; the disconnect events name both ports on an asymmetric link. Rig: a third app wires the other two over MCP |
+| X2 | Requests: push and third party, `link_request_id`, resend and idempotent apply, cancel, `link_requests_awaiting_runtime`, disconnect over the mesh ~~and `disconnect_impl`'s source port~~ (already right — see the note above), `created_by_runtime_name`, MCP `to_*` | X1 | CI: a request's reply and refusal by name; a dropped reply resent returns the one link; a silent input runtime stays waiting; an absent one's request sends on appearance and a cancelled one never does; the disconnect events name both ports on an asymmetric link. Rig: a third app wires the other two over MCP |
 | X3 | Surfaces: staging's pooled source, egress copy, ingress mint, refusals counted | X1 | Rig: an RGBA source across, both ends exchanged, byte-exact, the ids differing; an NV12 and a retired id counted |
 | X4 | Clock identity on the link, its read and `graph` rendering, `Mp4Sink`'s refusal | X1 | CI: boot id read on both platforms, cross-compiled; a track from another clock stops by name while the rest record |
 

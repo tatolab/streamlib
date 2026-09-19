@@ -6,6 +6,7 @@ mod end_the_process_at_once;
 mod engine_teardown_watchdog;
 mod graph_change_listener;
 mod helper_process_group_registry;
+mod link_requests_applied_into_this_runtimes_graph;
 mod local_processor_type_registration;
 pub mod mesh;
 pub(crate) mod mesh_address_chunk;
@@ -39,6 +40,7 @@ pub(crate) use helper_process_group_registry::kill_every_registered_helper_proce
 pub use helper_process_group_registry::{
     deregister_a_helper_process_group, register_a_helper_process_group,
 };
+pub(crate) use link_requests_applied_into_this_runtimes_graph::LinkRequestsAppliedIntoThisRuntimesGraph;
 pub use mesh::{
     RuntimeMeshMembership, RuntimeMeshObservation, RuntimeMeshObservationRequest,
     observe_a_runtime_mesh,

@@ -16,6 +16,9 @@ mod a_bags_top_level_surface_id;
 mod duplicate_runtime_name_on_the_mesh;
 mod host_identity;
 mod hosted_control_plane_endpoint;
+mod link_request_on_the_mesh;
+mod link_requests_from_other_runtimes;
+mod link_requests_this_runtime_has_sent;
 mod machine_clock_identity;
 mod mesh_data_message_attachment;
 mod mesh_link_ingress;
@@ -44,6 +47,15 @@ mod zenoh_work_off_any_tokio_runtime;
 // calls it. Everything else the mesh is built from stays inside it.
 pub use host_identity::HostIdentity;
 pub use hosted_control_plane_endpoint::HostedControlPlaneEndpointRegistry;
+pub use link_request_on_the_mesh::{
+    ALinkRequestOnTheMesh, WhatALinkRequestAsksFor, WhatALinkRequestWasAnswered,
+    WhichOperationALinkRequestNames, WhyALinkRequestWasRefused,
+};
+pub use link_requests_from_other_runtimes::{
+    HowARuntimeAnsweredALinkRequest, WhatThisRuntimeDoesWithALinkRequest,
+    WhatThisRuntimeDoesWithALinkRequestRegistry,
+};
+pub use link_requests_this_runtime_has_sent::LinkRequestsThisRuntimeHasSent;
 pub use machine_clock_identity::MachineClockIdentity;
 pub use mesh_data_message_attachment::{
     MESH_DATA_MESSAGE_ATTACHMENT_BYTES, MeshDataMessageAttachment,

@@ -30,6 +30,7 @@ use crate::core::json_schema::LoadedCapabilityExtensionOutput;
 use crate::core::processors::ProcessorSpec;
 use crate::core::processors::ProcessorState;
 use crate::core::pubsub::{Event, EventListener, PUBSUB, ProcessorEvent, RuntimeEvent, topics};
+use crate::core::runtime::LinkRequestsAppliedIntoThisRuntimesGraph;
 use crate::core::runtime::LoadedCapabilityExtensionRegistry;
 use crate::core::runtime::OutputPortsInThisRuntimesGraph;
 use crate::core::runtime::mesh::{
@@ -350,7 +351,7 @@ impl Runner {
         let mesh_link_ingress_table = MeshLinkIngressTable::of_this_runtime(&iceoryx2_node);
         runtime_mesh.start_carrying_links_from_other_runtimes(&mesh_link_ingress_table);
 
-        Ok(Arc::new(Self {
+        let runtime = Arc::new(Self {
             runtime_id,
             runtime_name,
             runtime_mesh,
@@ -374,7 +375,19 @@ impl Runner {
             _logging_guard,
             setup_hooks: Arc::new(Mutex::new(Vec::new())),
             pipeline_name: Arc::new(Mutex::new(None)),
-        }))
+        });
+
+        // Last, because it is the one thing that needs the runtime itself: a
+        // peer's link request is applied through this runtime's own `connect`.
+        // The queryable that answers those is already declared and refuses
+        // anything arriving before now by saying the runtime is still starting.
+        runtime
+            .runtime_mesh
+            .record_how_this_runtime_applies_link_requests(
+                LinkRequestsAppliedIntoThisRuntimesGraph::of(&runtime),
+            );
+
+        Ok(runtime)
     }
 
     /// Register a one-shot hook to run during [`Self::start`], after the
@@ -1392,17 +1405,25 @@ impl Runner {
                              snapshot alias map"
                         ))
                     })?;
+                let target_on_this_runtime =
+                    link.target.processor_id_on_this_runtime().ok_or_else(|| {
+                        Error::GraphError(format!(
+                            "link '{}' carries into {} on another runtime, which only that \
+                             runtime's own graph holds",
+                            link.id, link.target
+                        ))
+                    })?;
                 let to_alias = id_to_alias
-                    .get(link.target.processor_id.as_str())
+                    .get(target_on_this_runtime.as_str())
                     .ok_or_else(|| {
                         Error::GraphError(format!(
-                            "Link target processor '{}' missing from snapshot alias map",
-                            link.target.processor_id
+                            "Link target processor '{target_on_this_runtime}' missing from \
+                             snapshot alias map"
                         ))
                     })?;
                 connections.push(ConnectionDefinition {
                     from: format!("{}.{}", from_alias, link.source.port_name()),
-                    to: format!("{}.{}", to_alias, link.target.port_name),
+                    to: format!("{}.{}", to_alias, link.target.port_name()),
                 });
             }
 

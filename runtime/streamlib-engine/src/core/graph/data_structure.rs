@@ -153,12 +153,11 @@ impl Graph {
             links: self
                 .digraph
                 .edge_indices()
-                .map(|idx| LinkOutput::from(&self.digraph[idx]))
-                .chain(
-                    self.links_from_another_runtime
-                        .every_link()
-                        .map(LinkOutput::from),
-                )
+                .map(|idx| &self.digraph[idx])
+                .chain(self.links_from_another_runtime.every_link())
+                .map(|link| {
+                    LinkOutput::of_a_link_on_the_runtime_named(link, &runtime_mesh.runtime_name)
+                })
                 .collect(),
             extensions: loaded_capability_extensions,
             mesh: runtime_mesh,

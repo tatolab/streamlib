@@ -37,6 +37,9 @@ from ._engine import ProcessorOutputPortReference as ProcessorOutputPortReferenc
 from ._engine import ProcessorOwnedWindow as ProcessorOwnedWindow
 from ._engine import ProcessorOwnedWindowEvents as ProcessorOwnedWindowEvents
 from ._engine import (
+    RemoteProcessorInputPortReference as RemoteProcessorInputPortReference,
+)
+from ._engine import (
     RemoteProcessorOutputPortReference as RemoteProcessorOutputPortReference,
 )
 from ._engine import CameraSource as CameraSource
@@ -123,6 +126,7 @@ __all__ = [
     "ProcessorOutputTextureRing",
     "ProcessorOwnedWindow",
     "ProcessorOwnedWindowEvents",
+    "RemoteProcessorInputPortReference",
     "RemoteProcessorOutputPortReference",
     "Runtime",
     "RuntimeContextFullAccess",

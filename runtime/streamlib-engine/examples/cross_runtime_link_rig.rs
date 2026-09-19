@@ -13,6 +13,11 @@
 //! input declares a window contract — so the arm also covers the case where the
 //! destination's own contract sizes the channel the ingress must publish onto.
 //!
+//! `--destination` is that same `OpusEncoder` left unwired, and `--wiring-agent`
+//! is a runtime holding no processor at all. Together they are the other half
+//! of the bar: a link neither of them asked for, wired by a third runtime over
+//! MCP, which is the only way a third-party wiring is made.
+//!
 //! Audio rather than video on purpose: a video bag names a surface, and a
 //! surface id means nothing on another machine, so the mesh does not carry one
 //! until the frame's pixels do (#2290). An `AudioBlock`'s samples ride inline.
@@ -60,6 +65,17 @@ mod rig {
             /// The runtime name the source is addressed by.
             source_runtime_name: String,
         },
+        /// Hold an input for another runtime to push into, and wire nothing.
+        ///
+        /// The same encoder `--reader` wires for itself, left unwired: whoever
+        /// asks for the link is the point of the arm this end serves.
+        TheDestination,
+        /// Wire two other runtimes together, being neither end of the link.
+        ///
+        /// Adds no processor at all — it drives its own control plane's MCP
+        /// `connect` with both ends named on the mesh, which is the only way a
+        /// third-party wiring is asked for.
+        TheWiringAgent,
     }
 
     pub fn run() -> Result<()> {
@@ -109,6 +125,24 @@ mod rig {
                 )?;
                 tracing::info!("cross_runtime_link_rig: reading {source} into OpusEncoder");
             }
+            WhichEndOfTheLink::TheDestination => {
+                app.add(
+                    OpusEncoder::Processor::processor_class_import_path(),
+                    serde_json::json!({}),
+                    Some("OpusEncoder"),
+                )?;
+                tracing::info!(
+                    "cross_runtime_link_rig: holding OpusEncoder/{THE_PORT} for another runtime \
+                     to push into, as {}",
+                    app.runner().runtime_name()
+                );
+            }
+            WhichEndOfTheLink::TheWiringAgent => {
+                tracing::info!(
+                    "cross_runtime_link_rig: wiring two other runtimes, as {}",
+                    app.runner().runtime_name()
+                );
+            }
         }
 
         app.run()
@@ -122,6 +156,8 @@ mod rig {
         while let Some(flag) = arguments.next() {
             match flag.as_str() {
                 "--source" => which_end = Some(WhichEndOfTheLink::TheSource),
+                "--destination" => which_end = Some(WhichEndOfTheLink::TheDestination),
+                "--wiring-agent" => which_end = Some(WhichEndOfTheLink::TheWiringAgent),
                 "--reader" => {
                     which_end = Some(WhichEndOfTheLink::TheReader {
                         source_runtime_name: arguments.next().ok_or_else(|| {
@@ -137,14 +173,19 @@ mod rig {
                 }
                 unknown => {
                     return Err(Error::Runtime(format!(
-                        "unknown flag {unknown:?}; this rig takes --source or --reader \
-                         <source runtime name>, and --control-plane-port"
+                        "unknown flag {unknown:?}; this rig takes --source, --reader <source \
+                         runtime name>, --destination or --wiring-agent, and \
+                         --control-plane-port"
                     )));
                 }
             }
         }
         let which_end = which_end.ok_or_else(|| {
-            Error::Runtime("name an end: --source, or --reader <source runtime name>".into())
+            Error::Runtime(
+                "name an end: --source, --reader <source runtime name>, --destination, or \
+                 --wiring-agent"
+                    .into(),
+            )
         })?;
         Ok((which_end, control_plane_port))
     }

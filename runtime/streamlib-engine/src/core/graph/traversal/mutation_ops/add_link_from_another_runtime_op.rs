@@ -21,8 +21,13 @@ impl<'a> TraversalSourceMut<'a> {
         source: MeshPortAddress,
         destination: InputLinkPortRef,
     ) -> LinkTraversalMut<'a> {
-        let destination_exists = node_index_of(self.graph, &destination.processor_id)
-            .is_some_and(|node_idx| self.graph[node_idx].has_input(&destination.port_name));
+        // Both ends on other runtimes is no link of this runtime's: it is a
+        // third-party wiring, which reaches the runtime owning the input as a
+        // request and becomes an ordinary link from another runtime there.
+        let destination_exists = destination
+            .processor_id_on_this_runtime()
+            .and_then(|processor_id| node_index_of(self.graph, processor_id))
+            .is_some_and(|node_idx| self.graph[node_idx].has_input(destination.port_name()));
         if !destination_exists {
             return self.no_link();
         }

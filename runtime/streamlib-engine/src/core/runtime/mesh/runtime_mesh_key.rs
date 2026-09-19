@@ -45,6 +45,12 @@ const READERS_CHUNK: &str = "@readers";
 /// currently sending: `@egress/<display name>/<port>`.
 const EGRESS_CHUNK: &str = "@egress";
 
+/// The chunk under a runtime's own name where it answers link requests — one
+/// runtime asking it to apply or remove a link into one of its own inputs.
+/// Verbatim like every `@` chunk, so no subscription over a mesh's port
+/// addresses reaches it.
+const LINK_REQUESTS_CHUNK: &str = "@link-requests";
+
 /// What a runtime's own announcement is named by. Every field is on the token
 /// key, so a peer reads all three off a token whose runtime is already gone.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -175,6 +181,18 @@ impl RuntimeMeshKeySpace {
             port_name,
             reading_runtime_name,
         })
+    }
+
+    /// The key a runtime answers link requests on.
+    ///
+    /// Under the runtime's name for the same reason the offered-ports key is:
+    /// a requester knows the name of the runtime whose input it is naming, and
+    /// nothing else about the process behind it.
+    pub fn link_requests_key_of(&self, runtime_name: &str) -> String {
+        format!(
+            "{}/{runtime_name}/{LINK_REQUESTS_CHUNK}",
+            self.runtime_announcement_root()
+        )
     }
 
     /// The token a source runtime declares while it is sending one port.
@@ -523,6 +541,7 @@ mod tests {
             key_space.reader_token_key("bench", "CameraSource", "video", "desk"),
             key_space.egress_token_key("bench", "CameraSource", "video"),
             key_space.offered_output_ports_key_of("bench"),
+            key_space.link_requests_key_of("bench"),
         ] {
             assert!(
                 !announcements
@@ -541,6 +560,42 @@ mod tests {
                 .read_a_reader_token_key(&key_space.announcement_key_for(&an_identity("bench", 7))),
             None,
             "an announcement must not read as a reader token"
+        );
+    }
+
+    /// A runtime answers link requests under its own name, and one runtime's
+    /// key never reaches another's — so a request always lands on exactly the
+    /// runtime whose input it names.
+    #[test]
+    fn a_runtime_answers_link_requests_only_under_its_own_name() {
+        let key_space = a_key_space("lab");
+        assert_eq!(
+            key_space.link_requests_key_of("studio-display-9f3c"),
+            "streamlib/lab/@runtime/studio-display-9f3c/@link-requests"
+        );
+        keyexpr::new(
+            key_space
+                .link_requests_key_of("studio-display-9f3c")
+                .as_str(),
+        )
+        .expect("the link-requests key is a key expression");
+
+        let ours = keyexpr::new(
+            key_space
+                .link_requests_key_of("studio-display-9f3c")
+                .as_str(),
+        )
+        .expect("a key expression")
+        .to_owned();
+        let anothers = key_space.link_requests_key_of("bench-cam-a1b2");
+        assert!(
+            !ours.includes(keyexpr::new(anothers.as_str()).expect("a key expression")),
+            "{ours} must not reach {anothers}"
+        );
+        assert_eq!(
+            a_key_space("other").link_requests_key_of("studio-display-9f3c"),
+            "streamlib/other/@runtime/studio-display-9f3c/@link-requests",
+            "two meshes never share a runtime's link-request key"
         );
     }
 
