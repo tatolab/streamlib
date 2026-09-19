@@ -61,6 +61,10 @@ const THE_PORT: &str = "video";
 /// How often either peer reports.
 const HOW_OFTEN_THE_PEER_REPORTS: Duration = Duration::from_millis(100);
 
+/// How long the reader waits after finding its local channel empty. Short
+/// enough that it is back before a 16-deep ring can fill.
+const HOW_LONG_AN_EMPTY_POLL_WAITS: Duration = Duration::from_micros(200);
+
 /// How deep the source's channel is, and the ring every reader of it takes.
 const THE_CHANNELS_DEPTH: usize = 16;
 
@@ -131,18 +135,22 @@ fn run_as_the_source(
     let mut published: u64 = 0;
     let mut burst_still_owed = how.burst_once_a_reader_arrives;
     while !asked_to_leave.load(Ordering::Relaxed) {
-        // The burst waits for a reader, so every bag of it is one the link was
-        // already carrying — which is what makes the conservation the reader
-        // states an identity rather than a race against the wiring.
-        let bursting = burst_still_owed.is_some_and(|owed| owed > 0)
-            && !membership.render_for_graph().egress_ports.is_empty();
-
-        let how_many_to_publish_now = if bursting {
-            burst_still_owed.take().unwrap_or(0)
-        } else if burst_still_owed.is_some() {
-            0
-        } else {
-            1
+        let how_many_to_publish_now = match burst_still_owed {
+            // No burst asked for: one bag per report, which is what every
+            // other arm reads.
+            None => 1,
+            // A burst asked for and not yet sent. It waits for a reader, so
+            // every bag of it is one the link was already carrying — which is
+            // what makes the conservation the reader states an identity rather
+            // than a race against the wiring.
+            Some(owed) if owed > 0 && !membership.render_for_graph().egress_ports.is_empty() => {
+                burst_still_owed = Some(0);
+                owed
+            }
+            // Waiting for a reader, or the burst is spent. A bursting source
+            // publishes nothing else ever, so the reader's count settling is
+            // the whole of the burst having arrived or been lost.
+            Some(_) => 0,
         };
         for _ in 0..how_many_to_publish_now {
             if how.recreate_the_publisher_after == Some(published) {
@@ -276,52 +284,133 @@ fn run_as_the_reader(
     // mailbox, so it counts its own ring's overwrites itself — against the
     // ingress's numbering, which is a fresh one per wiring and unrelated to the
     // sending runtime's.
-    let mut what_this_peers_own_ring_lost: u64 = 0;
-    let mut last_number_the_local_channel_carried: Option<u64> = None;
+    //
+    // Drained continuously rather than once per report: the local channel is
+    // as shallow as any `ordered` port, and a poll cadence would make this
+    // peer lose almost everything a burst sent — loss after the hop, which is
+    // not what a hop-loss arm is measuring.
+    let mut counted = WhatThisPeerHasSeenOnItsLocalChannel::default();
+    let mut report_next_at = std::time::Instant::now();
     while !asked_to_leave.load(Ordering::Relaxed) {
+        let mut drained_something = false;
         while let Ok(Some(sample)) = subscriber.receive() {
-            let number_on_the_local_channel = sample.user_header().sequence_number;
-            if let Some(last) = last_number_the_local_channel_carried {
-                what_this_peers_own_ring_lost += number_on_the_local_channel
-                    .saturating_sub(last)
-                    .saturating_sub(1);
-            }
-            last_number_the_local_channel_carried = Some(number_on_the_local_channel);
+            drained_something = true;
+            counted.note_one_sample_off_the_local_channel(sample.user_header().sequence_number);
 
             let framed = sample.payload();
             if framed.len() < FRAME_HEADER_SIZE {
                 continue;
             }
             let header = FrameHeader::read_from_slice(&framed[..FRAME_HEADER_SIZE]);
+            let bag = String::from_utf8_lossy(&framed[FRAME_HEADER_SIZE..]).into_owned();
+            counted.note_the_bag_it_carried(&bag);
             report.write_line(
-                &serde_json::json!({
-                    "received": String::from_utf8_lossy(&framed[FRAME_HEADER_SIZE..]),
-                    "timestamp_ns": header.timestamp_ns,
-                })
-                .to_string(),
+                &serde_json::json!({ "received": bag, "timestamp_ns": header.timestamp_ns })
+                    .to_string(),
             );
         }
-        let mut how_far = how_far_it_has_got_as_json(&how_far_it_has_got);
-        if let Some(reported) = how_far.as_object_mut() {
-            reported.insert(
-                "mesh_hop_dropped_bags_by_link".to_string(),
-                serde_json::json!(
-                    where_the_hop_loss_is_counted
-                        .mesh_hop_dropped_bag_count_snapshot_by_inbound_link()
-                ),
-            );
-            reported.insert(
-                "what_this_peers_own_ring_lost".to_string(),
-                serde_json::json!(what_this_peers_own_ring_lost),
-            );
+
+        let now = std::time::Instant::now();
+        if now >= report_next_at {
+            report_next_at = now + HOW_OFTEN_THE_PEER_REPORTS;
+            let mut how_far = how_far_it_has_got_as_json(&how_far_it_has_got);
+            if let Some(reported) = how_far.as_object_mut() {
+                reported.insert(
+                    "mesh_hop_dropped_bags_by_link".to_string(),
+                    serde_json::json!(
+                        where_the_hop_loss_is_counted
+                            .mesh_hop_dropped_bag_count_snapshot_by_inbound_link()
+                    ),
+                );
+                counted.write_what_it_has_seen_into(reported);
+            }
+            report.write_line(&how_far.to_string());
         }
-        report.write_line(&how_far.to_string());
-        std::thread::sleep(HOW_OFTEN_THE_PEER_REPORTS);
+        if !drained_something {
+            std::thread::sleep(HOW_LONG_AN_EMPTY_POLL_WAITS);
+        }
     }
 
     ingress_table.stop();
     membership.leave("this peer was asked to leave");
     Ok(())
+}
+
+/// What this peer has taken off its local channel, in the terms an arm states
+/// conservation in.
+///
+/// Its own ring's losses are counted here because this peer polls a subscriber
+/// where a real destination has a counted mailbox. They are split in two: what
+/// went missing *before* its first poll of a wiring, and what went missing
+/// between two samples it saw. The first is what says whether this peer was
+/// there from the ingress's first bag — without which no arm can state the
+/// span the hop count covers.
+#[derive(Default)]
+struct WhatThisPeerHasSeenOnItsLocalChannel {
+    received_count: u64,
+    first_bag_index: Option<u64>,
+    last_bag_index: Option<u64>,
+    bags_lost_before_this_peers_first_poll: u64,
+    what_this_peers_own_ring_lost: u64,
+    last_number_the_local_channel_carried: Option<u64>,
+}
+
+impl WhatThisPeerHasSeenOnItsLocalChannel {
+    /// Note one sample by the number the ingress gave it on the local channel.
+    ///
+    /// The ingress numbers a wiring's sends from zero, so the number on the
+    /// first sample of all is exactly how many it wrote that this peer never
+    /// saw.
+    fn note_one_sample_off_the_local_channel(&mut self, number_on_the_local_channel: u64) {
+        match self.last_number_the_local_channel_carried {
+            Some(last) => {
+                self.what_this_peers_own_ring_lost += number_on_the_local_channel
+                    .saturating_sub(last)
+                    .saturating_sub(1)
+            }
+            None => self.bags_lost_before_this_peers_first_poll = number_on_the_local_channel,
+        }
+        self.last_number_the_local_channel_carried = Some(number_on_the_local_channel);
+    }
+
+    /// Note the bag one sample carried, by the index its producer wrote into it.
+    fn note_the_bag_it_carried(&mut self, bag: &str) {
+        self.received_count += 1;
+        let Some(index) = bag
+            .strip_prefix("bag-")
+            .and_then(|index| index.parse::<u64>().ok())
+        else {
+            return;
+        };
+        self.first_bag_index.get_or_insert(index);
+        self.last_bag_index = Some(index);
+    }
+
+    fn write_what_it_has_seen_into(
+        &self,
+        reported: &mut serde_json::Map<String, serde_json::Value>,
+    ) {
+        reported.insert(
+            "received_count".to_string(),
+            serde_json::json!(self.received_count),
+        );
+        reported.insert(
+            "first_bag_index".to_string(),
+            serde_json::json!(self.first_bag_index),
+        );
+        reported.insert(
+            "last_bag_index".to_string(),
+            serde_json::json!(self.last_bag_index),
+        );
+        reported.insert(
+            "bags_lost_before_this_peers_first_poll".to_string(),
+            serde_json::json!(self.bags_lost_before_this_peers_first_poll),
+        );
+        reported.insert(
+            "what_this_peers_own_ring_lost".to_string(),
+            serde_json::json!(self.what_this_peers_own_ring_lost),
+        );
+    }
 }
 
 /// How far the link has got, in the shape the test reads.
