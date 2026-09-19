@@ -26,6 +26,7 @@ use crate::core::runtime::mesh::mesh_port_egress::{MeshPortEgress, WhatOneEgress
 use crate::core::runtime::mesh::output_ports_offered_on_the_mesh::{
     OutputPortOfferedOnTheMesh, WhatThisRuntimeOffersOnTheMeshRegistry,
 };
+use crate::core::runtime::mesh::output_ports_other_runtimes_are_reading::OutputPortsOtherRuntimesAreReading;
 use crate::core::runtime::mesh::runtime_mesh_key::{ReaderOfAnOutputPort, RuntimeMeshKeySpace};
 use crate::iceoryx2::Iceoryx2Node;
 
@@ -53,6 +54,7 @@ impl MeshPortEgressTable {
         this_runtimes_name: &str,
         offered: &Arc<WhatThisRuntimeOffersOnTheMeshRegistry>,
         iceoryx2_node: &Iceoryx2Node,
+        being_read: &Arc<OutputPortsOtherRuntimesAreReading>,
     ) -> zenoh::Result<Self> {
         let (what_the_readers_did, what_the_egress_thread_reads) = crossbeam_channel::unbounded();
         let reader_token_subscriber = declare_the_reader_token_subscriber(
@@ -67,6 +69,7 @@ impl MeshPortEgressTable {
             this_runtimes_name.to_string(),
             Arc::clone(offered),
             iceoryx2_node.clone(),
+            Arc::clone(being_read),
             what_the_egress_thread_reads,
         )?;
         Ok(Self {
@@ -122,6 +125,7 @@ fn spawn_the_egress_thread(
     this_runtimes_name: String,
     offered: Arc<WhatThisRuntimeOffersOnTheMeshRegistry>,
     iceoryx2_node: Iceoryx2Node,
+    being_read: Arc<OutputPortsOtherRuntimesAreReading>,
     what_the_egress_thread_reads: Receiver<WhatTheReadersDid>,
 ) -> std::io::Result<std::thread::JoinHandle<()>> {
     std::thread::Builder::new()
@@ -152,7 +156,15 @@ fn spawn_the_egress_thread(
                         a_runtime_stopped_reading(&mut who_is_reading, &mut sending, &reader);
                     }
                 }
+                being_read.record_what_is_being_sent(what_this_runtime_is_sending(
+                    &who_is_reading,
+                    &sending,
+                ));
             }
+            // The thread ends with the session, so nothing is being sent any
+            // more; leaving the last state behind would have `graph` report
+            // egresses whose thread is gone.
+            being_read.record_what_is_being_sent(BTreeMap::new());
         })
 }
 
@@ -243,4 +255,24 @@ fn a_runtime_stopped_reading(
         // and undeclares its token.
         sending.remove(&port);
     }
+}
+
+/// The readers of every port that actually has an egress.
+///
+/// Derived from both halves rather than kept as a third map: a port somebody
+/// reads and this runtime cannot send has readers and no egress, and `graph`
+/// must say this runtime sends nothing for it.
+fn what_this_runtime_is_sending(
+    who_is_reading: &BTreeMap<OutputPortOfferedOnTheMesh, BTreeSet<String>>,
+    sending: &BTreeMap<OutputPortOfferedOnTheMesh, MeshPortEgress>,
+) -> BTreeMap<OutputPortOfferedOnTheMesh, BTreeSet<String>> {
+    sending
+        .keys()
+        .map(|port| {
+            (
+                port.clone(),
+                who_is_reading.get(port).cloned().unwrap_or_default(),
+            )
+        })
+        .collect()
 }

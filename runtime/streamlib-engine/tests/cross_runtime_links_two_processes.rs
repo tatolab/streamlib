@@ -55,6 +55,11 @@ const LOOPBACK_INTERFACE: &str = "127.0.0.1";
 /// a channel name, which is why the ingress channel is hashed from the address.
 const THE_DISPLAY_NAME: &str = "Camera Source 2";
 
+/// The output port the source peer publishes, spelled here too because the
+/// peer binary is a separate crate and this is what the source's own `graph`
+/// has to name.
+const THE_PORT: &str = "video";
+
 /// The runtime names one arm's source and reader take.
 ///
 /// Per arm rather than shared: an arm's peers leave at the end of it, but a
@@ -224,6 +229,45 @@ impl CrossRuntimeLinkPeerProcess {
                 ))
             })
             .collect()
+    }
+
+    /// The ports this peer last reported the mesh reading from it, each with
+    /// its readers — `graph.mesh.egress_ports` on the source's own runtime.
+    ///
+    /// The last report rather than all of them: an egress comes and goes, so
+    /// what the source is sending *now* is the only reading worth asserting.
+    fn the_egress_ports_it_last_reported(&self) -> Vec<(String, String, Vec<String>)> {
+        self.everything_it_has_reported()
+            .iter()
+            .rev()
+            .find_map(|reported| reported.get("egress_ports").cloned())
+            .into_iter()
+            .flat_map(|ports| ports.as_array().cloned().unwrap_or_default())
+            .map(|port| {
+                (
+                    port["processor_display_name"].as_str().unwrap().to_string(),
+                    port["port_name"].as_str().unwrap().to_string(),
+                    port["reader_runtime_names"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|name| name.as_str().unwrap().to_string())
+                        .collect(),
+                )
+            })
+            .collect()
+    }
+
+    /// Wait until this peer reports the egress ports `expected`, or fail
+    /// naming what it reported last.
+    fn wait_until_it_reports_egress_ports(
+        &self,
+        described: &str,
+        expected: &[(String, String, Vec<String>)],
+    ) {
+        self.wait_until(described, || {
+            self.the_egress_ports_it_last_reported() == expected
+        });
     }
 
     /// Every state this peer has reported its link in, in order.
@@ -436,6 +480,70 @@ fn a_source_holds_no_egress_until_somebody_reads_its_port() {
         std::thread::sleep(Duration::from_millis(100));
     }
     panic!("the last reader leaving must take the source's egress token with it");
+}
+
+/// The source's own `graph` names the port the mesh is reading from it and the
+/// runtime reading it, and empties when that reader goes.
+///
+/// What it catches: an agent driving the sending node cannot otherwise tell
+/// that anybody is pulling from it — every other sign of a remote link lives on
+/// the runtime that owns the input. Mental-revert: render the readers rather
+/// than the live egresses, and a port this runtime cannot send reads as one it
+/// is sending.
+#[test]
+#[serial]
+fn a_sources_graph_names_the_port_the_mesh_reads_and_who_reads_it() {
+    let mesh_name = a_mesh_name_of_its_own("egressports");
+    let (source_name, reader_name) = the_two_runtimes_of("egressports");
+    let source_domain = a_domain_root_of_its_own("egressports-source");
+    let reader_domain = a_domain_root_of_its_own("egressports-reader");
+    let source_listen = format!("udp/{LOOPBACK_INTERFACE}:{}?rel=1", a_free_loopback_port());
+
+    let source = CrossRuntimeLinkPeerProcess::launch(HowToLaunchAPeer {
+        runtime_name: source_name.clone(),
+        mesh_name: mesh_name.clone(),
+        listen_endpoints: vec![source_listen.clone()],
+        display_name: THE_DISPLAY_NAME.to_string(),
+        iceoryx2_domain_root: source_domain.path().to_path_buf(),
+        ..Default::default()
+    });
+    source.wait_until_it_is_up();
+    source.wait_until("the source to publish a few bags nobody reads", || {
+        source.everything_it_has_reported().len() >= 3
+    });
+    assert_eq!(
+        source.the_egress_ports_it_last_reported(),
+        Vec::new(),
+        "a source nobody reads must render no egress port"
+    );
+
+    let mut reader = CrossRuntimeLinkPeerProcess::launch(HowToLaunchAPeer {
+        reader: true,
+        runtime_name: reader_name.clone(),
+        mesh_name,
+        peer_endpoints: vec![source_listen],
+        display_name: THE_DISPLAY_NAME.to_string(),
+        link_from: Some(source_name),
+        iceoryx2_domain_root: reader_domain.path().to_path_buf(),
+        ..Default::default()
+    });
+    reader.wait_until_it_is_up();
+
+    source.wait_until_it_reports_egress_ports(
+        "the source to render the port its reader is pulling",
+        &[(
+            THE_DISPLAY_NAME.to_string(),
+            THE_PORT.to_string(),
+            vec![reader_name],
+        )],
+    );
+
+    reader.ask_it_to_leave();
+
+    source.wait_until_it_reports_egress_ports(
+        "the source to render no egress port once its reader has gone",
+        &[],
+    );
 }
 
 /// A link naming a runtime that is not on the mesh waits, saying so, and wires

@@ -145,8 +145,16 @@ fn run_as_the_source(
         let sample = unsafe { sample.assume_init() };
         sample.send().map_err(|why| format!("{why:?}"))?;
 
+        // The mesh half of `graph` rides every report, so the test can watch
+        // the source's own view of who is reading it change as readers come
+        // and go — which is the only place that view exists without a `Runner`.
         report.write_line(
-            &serde_json::json!({ "published": published, "timestamp_ns": stamp }).to_string(),
+            &serde_json::json!({
+                "published": published,
+                "timestamp_ns": stamp,
+                "egress_ports": membership.render_for_graph().egress_ports,
+            })
+            .to_string(),
         );
         published += 1;
         std::thread::sleep(HOW_OFTEN_THE_PEER_REPORTS);
