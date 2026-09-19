@@ -25,8 +25,8 @@ use streamlib::sdk::runtime::{
 };
 
 use crate::python_added_processor::{
-    PythonAddedProcessor, PythonLinkSourcePortReference, PythonProcessorInputPortReference,
-    PythonRemoteProcessorOutputPortReference,
+    PythonAddedProcessor, PythonProcessorInputPortReference,
+    PythonRemoteProcessorOutputPortReference, the_output_link_port_ref_this_source_names,
 };
 use crate::python_bag_conversion::python_object_to_json_value;
 use crate::python_processor_registration::register_processor_class;
@@ -430,7 +430,7 @@ impl PythonRuntimeHandle {
         source: &Bound<'_, PyAny>,
         destination: &PythonProcessorInputPortReference,
     ) -> PyResult<()> {
-        let from = PythonLinkSourcePortReference::read_from(source)?.as_an_output_link_port_ref();
+        let from = the_output_link_port_ref_this_source_names(source)?;
         let to = InputLinkPortRef::new(
             destination.processor_id.clone(),
             destination.port_name.clone(),

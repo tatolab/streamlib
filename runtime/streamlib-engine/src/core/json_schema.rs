@@ -58,7 +58,6 @@ pub struct RuntimeMeshOutput {
     /// The output ports of this runtime that other runtimes are reading over
     /// the mesh. Always present, and empty until one is — a sending runtime
     /// does no network work for a port until a remote link reads it.
-    #[serde(default)]
     pub egress_ports: Vec<MeshEgressPortOutput>,
 }
 

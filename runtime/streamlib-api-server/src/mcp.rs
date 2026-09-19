@@ -678,7 +678,7 @@ async fn call_connect(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) ->
         arguments.from_port,
     ) {
         Ok(from) => from,
-        Err(refusal) => return tool_error(refusal),
+        Err(refusal) => return tool_error(format!("connect arguments: {refusal}")),
     };
     let to = InputLinkPortRef::new(
         ProcessorUniqueId::from(arguments.to_processor_id.as_str()),
@@ -686,11 +686,11 @@ async fn call_connect(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) ->
     );
     match runtime.connect_async(from, to).await {
         Ok(link_id) => {
-            let (input_runtime_name, state) = how_the_graph_reads_one_link(runtime, &link_id).await;
+            let how_the_graph_reads_it = how_the_graph_reads_one_link(runtime, &link_id).await;
             tool_ok(json!({
                 "link_id": link_id.as_str(),
-                "input_runtime_name": input_runtime_name,
-                "state": state,
+                "input_runtime_name": how_the_graph_reads_it.input_runtime_name,
+                "state": how_the_graph_reads_it.state,
             }))
         }
         Err(e) => tool_error(format!("connect failed: {e}")),
@@ -710,40 +710,47 @@ fn the_source_end_these_arguments_name(
     port_name: String,
 ) -> std::result::Result<OutputLinkPortRef, String> {
     match (processor_id, runtime_name, processor_display_name) {
-        (Some(processor_id), None, None) => Ok(OutputLinkPortRef::new(
-            ProcessorUniqueId::from(processor_id.as_str()),
-            port_name,
-        )),
+        (Some(processor_id), None, None) => Ok(OutputLinkPortRef::new(processor_id, port_name)),
         (None, Some(runtime_name), Some(processor_display_name)) => {
             MeshPortAddress::new(runtime_name, processor_display_name, port_name)
                 .map(OutputLinkPortRef::on_another_runtime)
-                .map_err(|not_an_address| format!("connect arguments: {not_an_address}"))
+                .map_err(|not_an_address| not_an_address.to_string())
         }
         (None, None, None) => Err(
-            "connect arguments: the source end was not named. Give `from_processor_id` for a \
+            "the source end was not named. Give `from_processor_id` for a \
              port on this node, or `from_runtime_name` with `from_processor_display_name` for a \
              port on another runtime."
                 .to_string(),
         ),
         (None, Some(_), None) => Err(
-            "connect arguments: `from_runtime_name` names a runtime but not a processor on it. \
+            "`from_runtime_name` names a runtime but not a processor on it. \
              Give `from_processor_display_name` beside it — `graph` on that runtime lists the \
              display names."
                 .to_string(),
         ),
         (None, None, Some(_)) => Err(
-            "connect arguments: `from_processor_display_name` names a processor but not the \
+            "`from_processor_display_name` names a processor but not the \
              runtime holding it. Give `from_runtime_name` beside it, or `from_processor_id` for \
              a port on this node."
                 .to_string(),
         ),
         (Some(_), _, _) => Err(
-            "connect arguments: the source end was named twice. `from_processor_id` names a \
+            "the source end was named twice. `from_processor_id` names a \
              port on this node and `from_runtime_name` with `from_processor_display_name` names \
              one on another runtime — give one form or the other, never both."
                 .to_string(),
         ),
     }
+}
+
+/// What `graph` says about a link just connected, beside its id.
+///
+/// A struct rather than a pair of `Option<String>`s: the two are the same type
+/// and would be swappable at the call site with nothing to catch it.
+#[derive(Default)]
+struct HowTheGraphReadsOneLink {
+    input_runtime_name: Option<String>,
+    state: Option<String>,
 }
 
 /// The runtime the input end is on and the state the new link reads, taken
@@ -756,9 +763,9 @@ fn the_source_end_these_arguments_name(
 async fn how_the_graph_reads_one_link(
     runtime: &Arc<dyn RuntimeOperations>,
     link_id: &LinkUniqueId,
-) -> (Option<String>, Option<String>) {
+) -> HowTheGraphReadsOneLink {
     let Ok(graph) = runtime.to_json_async().await else {
-        return (None, None);
+        return HowTheGraphReadsOneLink::default();
     };
     let input_runtime_name = graph["mesh"]["runtime_name"].as_str().map(str::to_string);
     let state = graph["links"]
@@ -768,7 +775,10 @@ async fn how_the_graph_reads_one_link(
         .find(|link| link["id"].as_str() == Some(link_id.as_str()))
         .and_then(|link| link["state"].as_str())
         .map(str::to_string);
-    (input_runtime_name, state)
+    HowTheGraphReadsOneLink {
+        input_runtime_name,
+        state,
+    }
 }
 
 async fn call_disconnect(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Value {
@@ -2365,7 +2375,8 @@ mod tests {
                 "mesh_name": "default",
                 "runtime_name": "rig-desk-a1b2",
                 "session": "open",
-                "peers": []
+                "peers": [],
+                "egress_ports": []
             }
         })
     }

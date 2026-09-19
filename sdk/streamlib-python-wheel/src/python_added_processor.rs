@@ -119,47 +119,33 @@ impl PythonRemoteProcessorOutputPortReference {
     }
 }
 
-/// Either end a link may carry from: a port on this runtime, or one on
-/// another runtime over the mesh.
+/// The engine's own reference for whichever end `connect`'s source names: a
+/// port on this runtime, or one on another runtime over the mesh.
 ///
-/// `connect` takes this rather than two overloads because the engine's own
-/// `OutputLinkPortRef` is the same two shapes — the Python surface mirrors the
-/// engine's type rather than inventing a parallel one.
-pub(crate) enum PythonLinkSourcePortReference<'py> {
-    OnThisRuntime(PyRef<'py, PythonProcessorOutputPortReference>),
-    OnAnotherRuntime(PyRef<'py, PythonRemoteProcessorOutputPortReference>),
-}
-
-impl<'py> PythonLinkSourcePortReference<'py> {
-    /// Read whichever of the two references `source` is.
-    ///
-    /// Hand-written rather than `#[derive(FromPyObject)]`, whose refusal names
-    /// this enum and its variants — Rust types a Python author has no way to
-    /// act on. This one names the two spellings that would work.
-    pub(crate) fn read_from(source: &Bound<'py, PyAny>) -> PyResult<Self> {
-        if let Ok(on_this_runtime) = source.cast::<PythonProcessorOutputPortReference>() {
-            return Ok(Self::OnThisRuntime(on_this_runtime.borrow()));
-        }
-        if let Ok(on_another_runtime) = source.cast::<PythonRemoteProcessorOutputPortReference>() {
-            return Ok(Self::OnAnotherRuntime(on_another_runtime.borrow()));
-        }
-        Err(PyTypeError::new_err(format!(
-            "connect's source must name an output port: `processor.output(port_name)` for a \
-             port on this runtime, or `runtime.remote_processor_output(runtime_name, \
-             display_name, port_name)` for one on another runtime. Got {}.",
-            source.get_type()
-        )))
+/// Reads straight into `OutputLinkPortRef`, which is already those two shapes,
+/// rather than through a Python-side enum that would shadow it. Hand-written
+/// rather than `#[derive(FromPyObject)]` for the refusal: the derive's names
+/// the Rust variants it tried, which a Python author has no way to act on,
+/// where this names the two spellings that would have worked.
+pub(crate) fn the_output_link_port_ref_this_source_names(
+    source: &Bound<'_, PyAny>,
+) -> PyResult<OutputLinkPortRef> {
+    if let Ok(on_this_runtime) = source.cast::<PythonProcessorOutputPortReference>() {
+        let on_this_runtime = on_this_runtime.borrow();
+        return Ok(OutputLinkPortRef::new(
+            on_this_runtime.processor_id.clone(),
+            on_this_runtime.port_name.clone(),
+        ));
     }
-
-    /// The engine's own reference for whichever end this names.
-    pub(crate) fn as_an_output_link_port_ref(&self) -> OutputLinkPortRef {
-        match self {
-            Self::OnThisRuntime(local) => {
-                OutputLinkPortRef::new(local.processor_id.clone(), local.port_name.clone())
-            }
-            Self::OnAnotherRuntime(remote) => {
-                OutputLinkPortRef::on_another_runtime(remote.address.clone())
-            }
-        }
+    if let Ok(on_another_runtime) = source.cast::<PythonRemoteProcessorOutputPortReference>() {
+        return Ok(OutputLinkPortRef::on_another_runtime(
+            on_another_runtime.borrow().address.clone(),
+        ));
     }
+    Err(PyTypeError::new_err(format!(
+        "connect's source must name an output port: `processor.output(port_name)` for a \
+         port on this runtime, or `runtime.remote_processor_output(runtime_name, \
+         display_name, port_name)` for one on another runtime. Got {}.",
+        source.get_type()
+    )))
 }
