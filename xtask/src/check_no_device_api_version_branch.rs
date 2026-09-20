@@ -22,11 +22,15 @@
 //! `streamlib:allow-device-api-version-read` pragma is the escape hatch for a
 //! read that only reports.
 //!
-//! The floor it accepts, stated so nobody mistakes it for a parser: only a read
-//! spelled with a leading dot is seen, so a destructuring binding
-//! (`let vk::PhysicalDeviceProperties { api_version, .. } = props`) slips past;
-//! and only whole-line comments are skipped, so `.api_version` in a trailing
-//! comment, a `/* */` span or a string literal is flagged and takes the pragma.
+//! Two passes: dotted reads (`props.api_version`) per line, and `api_version`
+//! bound out of a `PhysicalDeviceProperties { … }` destructuring pattern, which
+//! carries no dot at all.
+//!
+//! The floor it accepts, stated so nobody mistakes it for a parser: only
+//! whole-line comments are skipped, so `.api_version` in a trailing comment, a
+//! `/* */` span or a string literal is flagged and takes the pragma; and a
+//! pattern destructured through a type alias rather than the
+//! `PhysicalDeviceProperties` name is not seen.
 
 use anyhow::{Context, Result};
 use std::fs;
@@ -39,6 +43,9 @@ const SCAN_ROOTS: &[&str] = &["runtime", "adapters", "sdk", "xtask"];
 /// The field read this gate bans. A following `(` makes it the
 /// `VkApplicationInfo` builder setter instead, which is the request, not a probe.
 const BANNED_DEVICE_API_VERSION_FIELD_READ: &str = ".api_version";
+
+/// The field name a destructuring pattern binds, with no dot to find it by.
+const BOUND_DEVICE_API_VERSION_FIELD: &str = "api_version";
 
 /// Per-line escape hatch for a read that only reports the value.
 const ALLOW_LINE_PRAGMA: &str = "streamlib:allow-device-api-version-read";
@@ -173,9 +180,94 @@ pub fn scan_files(
                 line_text: line_text.to_string(),
             });
         }
+
+        for line in lines_binding_api_version_in_a_device_properties_pattern(&body) {
+            let line_text = body.lines().nth(line - 1).unwrap_or_default();
+            if line_text.contains(ALLOW_LINE_PRAGMA) {
+                continue;
+            }
+            report.violations.push(DeviceApiVersionReadViolation {
+                path: relative_path.clone(),
+                line,
+                line_text: line_text.to_string(),
+            });
+        }
     }
 
     Ok(report)
+}
+
+/// Lines binding `api_version` out of a `VkPhysicalDeviceProperties`
+/// destructuring pattern.
+///
+/// `let vk::PhysicalDeviceProperties { api_version, .. } = properties;` reads the
+/// device's report with no dot anywhere, so the dotted scan above cannot see it
+/// and the binding is free to decide an entry point on the next line. Walks the
+/// braces of each `PhysicalDeviceProperties { … }` so a pattern split across
+/// lines is caught too. A field *initialiser* — `api_version:` — builds a
+/// properties value rather than reading one, and is left alone.
+fn lines_binding_api_version_in_a_device_properties_pattern(body: &str) -> Vec<usize> {
+    const DEVICE_PROPERTIES_TYPE: &str = "PhysicalDeviceProperties";
+    let mut lines = Vec::new();
+
+    for (type_start, matched) in body.match_indices(DEVICE_PROPERTIES_TYPE) {
+        let after_type = type_start + matched.len();
+        // Only a brace the type name itself opens is a pattern or a literal.
+        // `fn probe(properties: vk::PhysicalDeviceProperties) -> bool {` also has
+        // a `{` after the name — the function body — and taking that one would
+        // make every bare `api_version` in the body a violation.
+        let Some(brace_offset) =
+            body[after_type..].find(|character: char| !character.is_whitespace())
+        else {
+            continue;
+        };
+        if body[after_type..].as_bytes()[brace_offset] != b'{' {
+            continue;
+        }
+        let pattern_start = after_type + brace_offset;
+        let Some(pattern_end) = matching_close_brace(body, pattern_start) else {
+            continue;
+        };
+
+        let pattern = &body[pattern_start..pattern_end];
+        for (field_start, field) in pattern.match_indices(BOUND_DEVICE_API_VERSION_FIELD) {
+            let character_before = pattern[..field_start].chars().next_back();
+            let is_a_dotted_read_or_longer_identifier = character_before.is_some_and(|character| {
+                character == '.' || character.is_alphanumeric() || character == '_'
+            });
+            let character_after = pattern[field_start + field.len()..]
+                .chars()
+                .find(|character| !character.is_whitespace());
+            // `api_version:` initialises a field; `api_version,` / `api_version }`
+            // binds one.
+            let is_a_field_initialiser = character_after == Some(':');
+            if is_a_dotted_read_or_longer_identifier || is_a_field_initialiser {
+                continue;
+            }
+            let absolute = pattern_start + field_start;
+            lines.push(body[..absolute].matches('\n').count() + 1);
+        }
+    }
+
+    lines
+}
+
+/// The offset of the `}` closing the `{` at `open_brace`.
+fn matching_close_brace(body: &str, open_brace: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (offset, character) in body[open_brace..].char_indices() {
+        match character {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(open_brace + offset);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Whether `line` reads an `api_version` field rather than calling the builder
@@ -232,6 +324,96 @@ mod tests {
             1,
             "branching entry-point selection on the reported version must be flagged: \
              {violations:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_api_version_bound_out_of_a_device_properties_pattern() {
+        let violations = scan_one(
+            "runtime/streamlib-engine/src/vulkan/rhi/vulkan_device.rs",
+            "let vk::PhysicalDeviceProperties { api_version, .. } = properties;\n",
+        );
+        assert_eq!(
+            violations.len(),
+            1,
+            "a destructuring binding reads the report with no dot to find it by: {violations:?}"
+        );
+    }
+
+    /// rustfmt splits a wide pattern across lines; the binding is the same read.
+    #[test]
+    fn rejects_a_device_properties_pattern_split_across_lines() {
+        let violations = scan_one(
+            "runtime/streamlib-engine/src/vulkan/rhi/vulkan_device.rs",
+            "let vk::PhysicalDeviceProperties {\n    device_name,\n    api_version,\n    ..\n\
+             } = properties;\n",
+        );
+        assert_eq!(
+            violations.len(),
+            1,
+            "a multi-line pattern binds just the same: {violations:?}"
+        );
+        assert_eq!(
+            violations[0].line, 3,
+            "the report must point at the binding, not the pattern's first line"
+        );
+    }
+
+    /// Building a properties value is not reading a device's report.
+    #[test]
+    fn accepts_a_device_properties_struct_literal_initialising_the_field() {
+        let violations = scan_one(
+            "runtime/streamlib-engine/src/vulkan/rhi/vulkan_device.rs",
+            "let properties = vk::PhysicalDeviceProperties {\n    \
+             api_version: REQUESTED_VULKAN_INSTANCE_API_VERSION,\n    ..Default::default()\n};\n",
+        );
+        assert!(
+            violations.is_empty(),
+            "a field initialiser constructs, it does not probe: {violations:?}"
+        );
+    }
+
+    /// The pattern pass must not fire on every `api_version` in the file — only
+    /// on one inside a `PhysicalDeviceProperties { … }` span.
+    #[test]
+    fn accepts_an_unrelated_binding_of_the_same_name_outside_a_properties_pattern() {
+        let violations = scan_one(
+            "runtime/streamlib-engine/src/vulkan/rhi/vulkan_device.rs",
+            "let SomeOtherThing { api_version, .. } = thing;\n\
+             struct Request { api_version: u32 }\n",
+        );
+        assert!(
+            violations.is_empty(),
+            "only a device-properties pattern is a device read: {violations:?}"
+        );
+    }
+
+    /// A signature naming the type also has a `{` after it — the function body.
+    /// Taking that brace would make every bare `api_version` in the body a
+    /// violation, including an unrelated local.
+    #[test]
+    fn accepts_a_local_named_the_same_inside_a_function_typed_by_device_properties() {
+        let violations = scan_one(
+            "runtime/streamlib-engine/src/vulkan/rhi/vulkan_device.rs",
+            "fn describe(properties: vk::PhysicalDeviceProperties) -> u32 {\n    \
+             let api_version = REQUESTED_VULKAN_INSTANCE_API_VERSION;\n    api_version\n}\n",
+        );
+        assert!(
+            violations.is_empty(),
+            "only a brace the type name itself opens is a pattern: {violations:?}"
+        );
+    }
+
+    #[test]
+    fn accepts_a_bound_field_carrying_the_pragma() {
+        let violations = scan_one(
+            "runtime/streamlib-engine/src/vulkan/rhi/vulkan_device.rs",
+            "let vk::PhysicalDeviceProperties { api_version, .. } = properties; \
+             // streamlib:allow-device-api-version-read\n",
+        );
+        assert!(
+            violations.is_empty(),
+            "the pragma exempts a reporting binding too: {violations:?}"
         );
     }
 
