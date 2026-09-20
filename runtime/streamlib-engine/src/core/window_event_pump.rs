@@ -281,10 +281,11 @@ fn build_the_processes_one_event_loop()
     // until the Apple pump is driven on the process's first thread (#2357).
     #[cfg(target_os = "macos")]
     {
-        Err(
-            "the window event pump builds its event loop on its own thread, and macOS              requires the process's first thread; the Apple pump is not wired yet"
-                .to_string(),
+        Err(concat!(
+            "the window event pump builds its event loop on its own thread, and macOS ",
+            "requires the process's first thread; the Apple pump is not wired yet",
         )
+        .to_string())
     }
     #[cfg(not(target_os = "macos"))]
     {

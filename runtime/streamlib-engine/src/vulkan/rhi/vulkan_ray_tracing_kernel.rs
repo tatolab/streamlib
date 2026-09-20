@@ -2183,11 +2183,11 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "linux")]
     /// Build a 1-triangle BLAS, single-instance TLAS, and run trace-rays
     /// against a 64×64 storage image. Reads the result back and checks
     /// that the centre pixel is hit (barycentric color, mostly red) and
     /// the corner pixels are miss (dark blue from rmiss).
+    #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
         ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"

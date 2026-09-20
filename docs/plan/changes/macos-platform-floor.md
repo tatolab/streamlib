@@ -230,11 +230,24 @@ which this delta does not touch.
   The Metal blitter was its only implementation; what remained refused by name, making the three
   facade layers a no-op chain with no callers. An IOSurface reaches the RHI as a `VkImage` through
   `VK_EXT_metal_objects`, not a raw blit. Recorded while shipping #2355.
-- REMOVED: Texture::iosurface_id / PooledTextureHandle::iosurface_id
-  Ungated `pub fn`s that existed on Linux and answered `None` there; their only producer was the
-  Metal texture. `NativeTextureHandle::IOSurface` goes with them, along with
-  `HostVulkanTexture::placeholder` and the `imported_from_iosurface` / `imported_from_metal` flags,
-  each of which lost its last writer. Recorded while shipping #2355.
+- REMOVED: Texture::iosurface_id
+  An ungated `pub fn` that existed on Linux and answered `None` there; its only producer was the
+  Metal texture. Recorded while shipping #2355.
+- REMOVED: PooledTextureHandle::iosurface_id
+  The pooled-handle forwarder onto it, ungated and equally producerless. Recorded while shipping
+  #2355.
+- REMOVED: NativeTextureHandle::IOSurface
+  The variant those two answered with, left without a constructor or a match arm anywhere in the
+  tree. Recorded while shipping #2355.
+- REMOVED: HostVulkanTexture::placeholder
+  Its only production caller was `Texture::from_metal`; what remained was a test exercising nothing
+  else. Recorded while shipping #2355.
+- REMOVED: imported_from_iosurface
+  A `HostVulkanTexture` flag whose last `true` writer went with the Metal import sketch, leaving the
+  branch it guarded inside `Drop` unreachable. Recorded while shipping #2355.
+- REMOVED: imported_from_metal
+  A `VulkanSemaphore` flag in the same position, written `false` once and read nowhere. Recorded
+  while shipping #2355.
 - REMOVED: the macOS XPC arm of core/context/surface_store.rs
   An XPC client with no server behind it, reaching the deleted Metal tree for its mach ports. Its
   `CheckedInSurfaces` map went with it — the map had no writer left, which made

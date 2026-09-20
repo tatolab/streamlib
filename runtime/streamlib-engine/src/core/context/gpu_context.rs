@@ -2036,7 +2036,7 @@ impl GpuContext {
     /// `COLOR_ATTACHMENT_OPTIMAL` and `source` in `SHADER_READ_ONLY_OPTIMAL`.
     /// Concurrent callers serialize on the cached compositor's lock, which is
     /// also what makes one descriptor-ring slot enough.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn compose_texture_onto_offscreen_texture(
         &self,
         destination: &Texture,
@@ -5254,10 +5254,10 @@ mod tests {
         println!("escalate releases gate on panic via RAII Drop: OK");
     }
 
-    #[cfg(target_os = "linux")]
     /// Two processors driving one format pair from their own threads must
     /// not share a kernel's staged bindings: the cached handle is one
     /// object, an owned converter is the caller's alone.
+    #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
         ignore = "hardware integration — needs a GPU device; see docs/testing-hardware.md"
@@ -5386,7 +5386,6 @@ mod tests {
         println!("Limited + Full interleave without deadlock: OK");
     }
 
-    #[cfg(target_os = "linux")]
     /// Kernel drop past `escalate_end` (#1006 scenario 6).
     ///
     /// A kernel constructed inside `escalate(|full| ...)` and returned
@@ -5398,6 +5397,7 @@ mod tests {
     /// Mental revert: wiring the drop to require a live escalate
     /// scope would crash here because the scope is closed before the
     /// drop runs.
+    #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
         ignore = "hardware integration — kernel construction needs GPU"

@@ -345,8 +345,6 @@ pub(crate) struct SurfaceStoreInner {
     /// Local cache of checked-out surfaces (surface_id -> pixel_buffer).
     cache: Mutex<SurfaceCache>,
 
-    /// Reverse lookup for checked-in surfaces (iosurface_id -> surface_id).
-
     /// The Unix socket path to connect to.
     service_name: String,
 

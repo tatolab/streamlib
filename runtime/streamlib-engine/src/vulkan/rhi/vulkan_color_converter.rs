@@ -830,7 +830,6 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "linux")]
     /// BT.709 limited-range NV12 with mismatched dest transfer
     /// (`Bt709` source → `Srgb` dest) → Rgba8Unorm must match the CPU
     /// reference within ±1 per channel.
@@ -847,6 +846,7 @@ mod tests {
     /// - Mid-stream transfer change costs only push constants — no
     ///   pipeline rebuild — which the test verifies by reusing the
     ///   same `(src, dst)` PixelFormat pair as the prior test.
+    #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
         ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
@@ -920,10 +920,10 @@ mod image_to_yuyv_buffer_tests {
         out
     }
 
-    #[cfg(target_os = "linux")]
     /// Synthetic RGBA against the CPU conversion: every macropixel of the
     /// target range is written, to within one step of rounding, on
     /// whichever tier the driver takes — and the tier is reported.
+    #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
         ignore = "hardware integration — needs a Vulkan device; see docs/testing-hardware.md"

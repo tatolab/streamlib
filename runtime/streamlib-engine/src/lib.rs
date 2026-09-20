@@ -229,15 +229,6 @@ pub mod platform {
         #[cfg(target_os = "windows")]
         return "Windows";
     }
-
-    pub fn gpu_backend() -> &'static str {
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
-        return "Metal";
-        #[cfg(target_os = "linux")]
-        return "Vulkan";
-        #[cfg(target_os = "windows")]
-        return "Direct3D 12";
-    }
 }
 
 // =============================================================================
