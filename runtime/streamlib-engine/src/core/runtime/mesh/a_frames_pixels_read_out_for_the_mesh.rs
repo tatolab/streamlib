@@ -339,3 +339,216 @@ fn a_read_refusal(refusal: crate::core::Error) -> WhyAFramesPixelsCannotCrossThe
         other => WhyAFramesPixelsCannotCrossTheMesh::ItsPixelsCannotBeReadOut(other),
     }
 }
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    use serde_json::json;
+    use streamlib_consumer_rhi::PixelFormat;
+
+    use crate::core::context::GpuContext;
+    use crate::core::runtime::mesh::a_bags_top_level_surface_id::the_top_level_surface_id_of_a_bag;
+    use crate::core::runtime::mesh::a_frames_pixels_on_the_mesh::a_frames_pixels_off_the_mesh;
+    use crate::core::runtime::mesh::a_frames_pixels_written_into_a_local_surface::WritesAFramesPixelsIntoALocalSurface;
+
+    /// The device, or nothing — CI has no GPU, and these arms run on the rig.
+    fn gpu_or_skip(test_name: &str) -> Option<GpuContext> {
+        match GpuContext::init_for_platform_sync() {
+            Ok(gpu_context) => Some(gpu_context),
+            Err(_) => {
+                println!("{test_name}: no GPU device — skipping");
+                None
+            }
+        }
+    }
+
+    /// The one cell both halves read, already holding `gpu_context`.
+    fn the_mesh_copying_frames_with(
+        gpu_context: &GpuContext,
+    ) -> Arc<GpuContextTheMeshCopiesFramesWith> {
+        let cell = Arc::new(GpuContextTheMeshCopiesFramesWith::default());
+        cell.record_the_runtimes_gpu_context(gpu_context);
+        cell
+    }
+
+    /// A picture no wrong copy passes for: every byte differs from its
+    /// neighbours, so a copy off by one pixel, one row or one plane fails.
+    fn a_picture_of(byte_count: usize) -> Vec<u8> {
+        (0..byte_count).map(|at| (at % 251) as u8).collect()
+    }
+
+    /// The bag a video producer writes around a surface id.
+    fn a_video_bag_naming(surface_id: &str, width: u32, height: u32) -> Vec<u8> {
+        rmp_serde::to_vec_named(&json!({
+            "surface_id": surface_id,
+            "width": width,
+            "height": height,
+            "timestamp_ns": 1_726_000_000_000_000_000i64,
+        }))
+        .expect("a bag encodes")
+    }
+
+    /// What one pooled surface currently holds.
+    fn the_pixels_in(buffer: &crate::core::rhi::PixelBuffer) -> Vec<u8> {
+        let plane = buffer.plane_base_address(0);
+        assert!(!plane.is_null(), "a pooled surface is host-mapped");
+        // SAFETY: the plane's mapping is `plane_size(0)` bytes long and lives
+        // as long as the buffer this borrows from.
+        unsafe { std::slice::from_raw_parts(plane, buffer.plane_size(0) as usize) }.to_vec()
+    }
+
+    /// The whole crossing in one process: a frame read out of one pooled
+    /// surface arrives byte for byte in another, under an id of the
+    /// receiving runtime's own, with the rest of the producer's bag
+    /// untouched.
+    ///
+    /// The two ends are one runtime here because CI has no second machine;
+    /// what this pins is the pair of copies and the rewrite, which is what a
+    /// second machine would exercise too. GPU-gated: skips with no device.
+    #[test]
+    fn a_frame_crosses_byte_for_byte_into_a_surface_of_this_runtimes_own() {
+        const WIDTH: u32 = 64;
+        const HEIGHT: u32 = 48;
+        let Some(gpu_context) =
+            gpu_or_skip("a_frame_crosses_byte_for_byte_into_a_surface_of_this_runtimes_own")
+        else {
+            return;
+        };
+        let cell = the_mesh_copying_frames_with(&gpu_context);
+
+        let (produced_id, produced) = gpu_context
+            .acquire_pixel_buffer(WIDTH, HEIGHT, PixelFormat::Rgba32)
+            .expect("a frame to send");
+        let picture = a_picture_of(produced.plane_size(0) as usize);
+        // SAFETY: the picture is exactly `plane_size(0)` bytes, and the plane
+        // is this buffer's own host mapping.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                picture.as_ptr(),
+                produced.plane_base_address(0),
+                picture.len(),
+            )
+        };
+        let produced_id = produced_id.to_string();
+        let bag = a_video_bag_naming(&produced_id, WIDTH, HEIGHT);
+
+        let message = ReadsAFramesPixelsOutForTheMesh::reading_through(&cell)
+            .a_mesh_message_carrying_the_frame_this_bag_names(&produced_id, &bag)
+            .unwrap_or_else(|why| panic!("the frame must be readable out: {why}"));
+        let arrived =
+            a_frames_pixels_off_the_mesh(&message.message_bytes, message.description_bytes)
+                .expect("the message this egress built reads back");
+        assert_eq!(arrived.description.pixel_format, PixelFormat::Rgba32);
+        assert_eq!(arrived.description.width, WIDTH);
+        assert_eq!(arrived.description.height, HEIGHT);
+        assert_eq!(arrived.bag_bytes, bag);
+        assert_eq!(arrived.pixel_bytes, picture);
+
+        let landed_bag = WritesAFramesPixelsIntoALocalSurface::minting_through(&cell)
+            .a_bag_naming_the_local_surface_this_frame_landed_in(&arrived)
+            .unwrap_or_else(|why| panic!("the frame must land: {why}"));
+
+        let landed_id = the_top_level_surface_id_of_a_bag(&landed_bag)
+            .expect("the bag handed downstream names a surface")
+            .surface_id()
+            .to_string();
+        assert_ne!(
+            landed_id, produced_id,
+            "the frame must land in a surface of the receiving runtime's own, never under the \
+             sender's id"
+        );
+        let read_back: serde_json::Value =
+            rmp_serde::from_slice(&landed_bag).expect("the bag handed downstream is still one");
+        assert_eq!(read_back["width"], json!(WIDTH));
+        assert_eq!(read_back["height"], json!(HEIGHT));
+        assert_eq!(
+            read_back["timestamp_ns"],
+            json!(1_726_000_000_000_000_000i64),
+            "a stamp inside the bag crosses unchanged"
+        );
+
+        let landed = gpu_context
+            .get_pixel_buffer(&landed_id)
+            .expect("the id handed downstream resolves on this runtime");
+        assert_eq!(
+            the_pixels_in(&landed),
+            picture,
+            "the frame must arrive byte for byte"
+        );
+    }
+
+    /// A multi-plane frame is refused by that name rather than crossing with
+    /// its chroma dropped — a one-buffer export carries the first plane only.
+    /// GPU-gated: skips with no device.
+    #[test]
+    fn a_multi_plane_frame_is_refused_by_name_rather_than_crossing_without_its_chroma() {
+        let Some(gpu_context) = gpu_or_skip(
+            "a_multi_plane_frame_is_refused_by_name_rather_than_crossing_without_its_chroma",
+        ) else {
+            return;
+        };
+        let cell = the_mesh_copying_frames_with(&gpu_context);
+        let (nv12_id, _held) = gpu_context
+            .acquire_pixel_buffer(64, 48, PixelFormat::Nv12VideoRange)
+            .expect("an NV12 frame");
+        let nv12_id = nv12_id.to_string();
+
+        let refused = ReadsAFramesPixelsOutForTheMesh::reading_through(&cell)
+            .a_mesh_message_carrying_the_frame_this_bag_names(
+                &nv12_id,
+                &a_video_bag_naming(&nv12_id, 64, 48),
+            )
+            .err()
+            .expect("NV12 must be refused");
+
+        assert_eq!(refused.which_refusal_this_is(), "more-than-one-plane");
+        assert!(
+            refused.to_string().contains("nv12"),
+            "the refusal must name the format it refused: {refused}"
+        );
+    }
+
+    /// An id whose slot the producer has recycled is refused by its own name,
+    /// so a port that met it and then met something else says both.
+    /// GPU-gated: skips with no device.
+    #[test]
+    fn a_recycled_frame_is_refused_by_its_own_name() {
+        let Some(gpu_context) = gpu_or_skip("a_recycled_frame_is_refused_by_its_own_name") else {
+            return;
+        };
+        let cell = the_mesh_copying_frames_with(&gpu_context);
+        let (minted, _held) = gpu_context
+            .acquire_pixel_buffer(32, 32, PixelFormat::Rgba32)
+            .expect("a frame");
+        let a_generation_the_slot_never_published = format!(
+            "{}#{}",
+            minted.pool_slot_id(),
+            minted.frame_generation() + 7
+        );
+
+        let refused = ReadsAFramesPixelsOutForTheMesh::reading_through(&cell)
+            .a_mesh_message_carrying_the_frame_this_bag_names(
+                &a_generation_the_slot_never_published,
+                &a_video_bag_naming(&a_generation_the_slot_never_published, 32, 32),
+            )
+            .err()
+            .expect("a recycled frame must be refused");
+
+        assert_eq!(refused.which_refusal_this_is(), "the-frame-was-recycled");
+    }
+
+    /// A runtime that has not started carries no frame, and says so as its
+    /// own reason rather than as a read that failed.
+    #[test]
+    fn a_runtime_with_no_gpu_context_carries_no_frame_and_says_so_by_name() {
+        let refused = ReadsAFramesPixelsOutForTheMesh::reading_through(&Arc::new(
+            GpuContextTheMeshCopiesFramesWith::default(),
+        ))
+        .a_mesh_message_carrying_the_frame_this_bag_names("7#3", b"\x81\xaasurface_id\xa33#1")
+        .err()
+        .expect("a runtime with no context resolves nothing");
+
+        assert_eq!(refused.which_refusal_this_is(), "no-gpu-context");
+    }
+}

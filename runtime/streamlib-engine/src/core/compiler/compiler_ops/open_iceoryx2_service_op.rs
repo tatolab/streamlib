@@ -1545,9 +1545,7 @@ mod tests {
     fn a_mesh_link_ingress_table() -> Arc<MeshLinkIngressTable> {
         MeshLinkIngressTable::of_this_runtime(
             &Iceoryx2Node::for_this_test_process(),
-            &Arc::new(
-                crate::core::runtime::mesh::GpuContextTheMeshCopiesFramesWith::default(),
-            ),
+            &Arc::new(crate::core::runtime::mesh::GpuContextTheMeshCopiesFramesWith::default()),
         )
     }
     use crate::core::execution::{ExecutionConfig, ProcessExecution};

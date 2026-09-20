@@ -328,6 +328,62 @@ mod tests {
         );
     }
 
+    /// A pool with every buffer still being read refuses the frame by that
+    /// name, so the ingress counts it rather than matching on prose — the
+    /// one thing the named error variant exists for.
+    ///
+    /// GPU-gated: skips with no device. Rig-only, like every arm that needs
+    /// a real pool.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_pool_with_every_buffer_in_use_refuses_the_frame_by_that_name() {
+        use crate::core::context::GpuContext;
+        use crate::core::runtime::mesh::a_frames_pixels_on_the_mesh::AFramesPixelDescriptionOnTheMesh;
+
+        // Tiny, because the point is the cap and not the bytes: filling a
+        // 64-slot pool of these costs a few dozen kilobytes.
+        const EDGE: u32 = 16;
+        let Ok(gpu_context) = GpuContext::init_for_platform_sync() else {
+            println!(
+                "a_pool_with_every_buffer_in_use_refuses_the_frame_by_that_name: no GPU device — skipping"
+            );
+            return;
+        };
+        let cell = Arc::new(GpuContextTheMeshCopiesFramesWith::default());
+        cell.record_the_runtimes_gpu_context(&gpu_context);
+        let mut writer = WritesAFramesPixelsIntoALocalSurface::minting_through(&cell);
+
+        // Held, every one: a pool hands a slot back the moment nothing in
+        // this process holds it, so a frame that was minted and dropped
+        // fills nothing.
+        let mut every_buffer_still_being_read = Vec::new();
+        while let Ok(held) = gpu_context.acquire_pixel_buffer(EDGE, EDGE, PixelFormat::Rgba32) {
+            every_buffer_still_being_read.push(held);
+            if every_buffer_still_being_read.len() > 128 {
+                panic!("the pool must have a cap, or nothing here is being tested");
+            }
+        }
+
+        let refused = writer
+            .a_bag_naming_the_local_surface_this_frame_landed_in(&AFramesPixelsOffTheMesh {
+                description: AFramesPixelDescriptionOnTheMesh {
+                    pixel_format: PixelFormat::Rgba32,
+                    width: EDGE,
+                    height: EDGE,
+                    pixel_byte_length: u64::from(EDGE) * u64::from(EDGE) * 4,
+                },
+                bag_bytes: b"\x81\xaasurface_id\xa33#1",
+                pixel_bytes: &vec![0u8; (EDGE * EDGE * 4) as usize],
+            })
+            .expect_err("a pool with nothing free mints nothing");
+
+        assert_eq!(refused.which_refusal_this_is(), "the-pool-is-at-its-cap");
+        assert!(
+            refused.to_string().contains("16x16 rgba32"),
+            "the refusal must name the pool it could not mint from: {refused}"
+        );
+    }
+
     /// A runtime with no GPU context refuses rather than reaching for a pool
     /// that is not there — the state every ingress is in before `start()`.
     #[test]

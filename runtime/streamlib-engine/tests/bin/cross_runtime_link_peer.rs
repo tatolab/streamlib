@@ -36,8 +36,7 @@ use streamlib_engine::core::graph::{MeshPortAddress, RemoteLinkResolution};
 use streamlib_engine::core::runtime::mesh::{
     GpuContextTheMeshCopiesFramesWith, HowToReadAnOfferedOutputPort, MeshLinkIngressTable,
     OutputPortOfferedOnTheMesh, OutputPortsOfferedOnTheMesh, ResolvedRuntimeMeshConfiguration,
-    RuntimeMeshMembership, WhatThisRuntimeOffersOnTheMesh,
-    WhatThisRuntimeOffersOnTheMeshRegistry,
+    RuntimeMeshMembership, WhatThisRuntimeOffersOnTheMesh, WhatThisRuntimeOffersOnTheMeshRegistry,
 };
 use streamlib_engine::core::runtime::{RuntimeMeshConfiguration, RuntimeName};
 use streamlib_engine::iceoryx2::{
