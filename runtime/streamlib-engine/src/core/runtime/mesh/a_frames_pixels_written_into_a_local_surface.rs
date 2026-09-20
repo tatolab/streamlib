@@ -73,6 +73,9 @@ pub(super) enum WhyAFramesPixelsCannotLandHere {
         pixels_that_arrived: u64,
         the_surface_holds: u64,
     },
+    /// The three parts of the message do not fit the bytes that arrived, so
+    /// there is no frame in it to land.
+    ItsMessageCouldNotBeRead { payload_bytes: usize },
     /// The bag names no surface this engine can read, so there is nothing to
     /// hand the local id to. A sending runtime only ever builds this message
     /// for a bag that named one.
@@ -91,6 +94,7 @@ impl WhyAFramesPixelsCannotLandHere {
             Self::EveryBufferInItsPoolIsInUse(_) => "the-pool-is-at-its-cap",
             Self::NoLocalSurfaceCouldBeMinted(_) => "no-local-surface-could-be-minted",
             Self::ItsPixelsAreNotTheSizeOfTheSurfaceMinted { .. } => "the-wrong-number-of-pixels",
+            Self::ItsMessageCouldNotBeRead { .. } => "the-message-could-not-be-read",
             Self::ItsBagNamesNoSurfaceToReplace => "its-bag-names-no-surface",
             Self::ItsBagCouldNotBeRewritten(_) => "its-bag-could-not-be-rewritten",
         }
@@ -124,6 +128,11 @@ impl std::fmt::Display for WhyAFramesPixelsCannotLandHere {
                 formatter,
                 "{pixels_that_arrived} bytes of pixels arrived for a surface that holds \
                  {the_surface_holds}, so the frame would land part-written"
+            ),
+            Self::ItsMessageCouldNotBeRead { payload_bytes } => write!(
+                formatter,
+                "it says it carries a frame and its three parts do not fit the {payload_bytes} \
+                 bytes that arrived"
             ),
             Self::ItsBagNamesNoSurfaceToReplace => formatter.write_str(
                 "its bag names no surface this engine can read, so the local one has nowhere \
@@ -188,6 +197,10 @@ impl WritesAFramesPixelsIntoALocalSurface {
                 other => WhyAFramesPixelsCannotLandHere::NoLocalSurfaceCouldBeMinted(other),
             })?;
 
+        // Said by this side rather than left to the write below, because an
+        // arriving frame of the wrong size is the sending runtime disagreeing
+        // with this one about the shape — its own refusal, counted and named
+        // apart from a surface that would not mint.
         let the_surface_holds = local_surface.plane_size(0);
         if arrived.pixel_bytes.len() as u64 != the_surface_holds {
             return Err(
@@ -197,25 +210,9 @@ impl WritesAFramesPixelsIntoALocalSurface {
                 },
             );
         }
-        let plane = local_surface.plane_base_address(0);
-        if plane.is_null() {
-            return Err(WhyAFramesPixelsCannotLandHere::NoLocalSurfaceCouldBeMinted(
-                crate::core::Error::GpuError(format!(
-                    "the surface {local_surface_id} this runtime minted for an arriving frame is \
-                     not mapped, so its pixels cannot be written into it"
-                )),
-            ));
-        }
-        // SAFETY: the plane's mapping is `plane_size(0)` bytes long, which the
-        // check above proved is exactly what arrived, and the arriving bytes
-        // are a separate allocation the mesh owns.
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                arrived.pixel_bytes.as_ptr(),
-                plane,
-                the_surface_holds as usize,
-            )
-        };
+        local_surface
+            .write_this_plane_from(0, arrived.pixel_bytes)
+            .map_err(WhyAFramesPixelsCannotLandHere::NoLocalSurfaceCouldBeMinted)?;
 
         the_top_level_surface_id_of_a_bag(arrived.bag_bytes)
             .ok_or(WhyAFramesPixelsCannotLandHere::ItsBagNamesNoSurfaceToReplace)?

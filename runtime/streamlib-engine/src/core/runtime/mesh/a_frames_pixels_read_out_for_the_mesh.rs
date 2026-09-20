@@ -30,12 +30,14 @@ use crate::core::runtime::mesh::gpu_context_the_mesh_copies_frames_with::GpuCont
 
 /// Why one frame's pixels are not crossing, in the terms the port's log line
 /// and its once-per-reason bookkeeping both use.
+#[derive(Debug)]
 pub(super) enum WhyAFramesPixelsCannotCrossTheMesh {
     /// The runtime has no GPU context — it has not started, or it has
     /// stopped. Nothing is resolvable either way.
     ThisRuntimeHasNoGpuContextYet,
     /// The platform carries no export staging, so there is no door to copy a
     /// frame out through.
+    #[cfg(not(target_os = "linux"))]
     ThisPlatformCannotReadAFrameOut,
     /// The producer has recycled the slot this id named, so its bytes are
     /// somebody else's picture now.
@@ -53,6 +55,7 @@ impl WhyAFramesPixelsCannotCrossTheMesh {
     pub(super) fn which_refusal_this_is(&self) -> &'static str {
         match self {
             Self::ThisRuntimeHasNoGpuContextYet => "no-gpu-context",
+            #[cfg(not(target_os = "linux"))]
             Self::ThisPlatformCannotReadAFrameOut => "no-export-staging-on-this-platform",
             Self::TheProducerHasRecycledTheFrame(_) => "the-frame-was-recycled",
             Self::ItsFormatHasMoreThanOnePlane(_) => "more-than-one-plane",
@@ -67,6 +70,7 @@ impl std::fmt::Display for WhyAFramesPixelsCannotCrossTheMesh {
             Self::ThisRuntimeHasNoGpuContextYet => formatter.write_str(
                 "this runtime has no GPU context, so it can resolve no surface of its own",
             ),
+            #[cfg(not(target_os = "linux"))]
             Self::ThisPlatformCannotReadAFrameOut => formatter.write_str(
                 "this platform carries no surface export staging, so there is no door to copy a \
                  frame out through",
@@ -88,6 +92,9 @@ impl std::fmt::Display for WhyAFramesPixelsCannotCrossTheMesh {
 
 /// Reads one port's frames out for the mesh, on the egress's own thread.
 pub(super) struct ReadsAFramesPixelsOutForTheMesh {
+    /// Read on every frame where there is a door to copy one out through, and
+    /// on no platform where there is not.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     gpu_context_the_mesh_copies_frames_with: Arc<GpuContextTheMeshCopiesFramesWith>,
     /// The identity every claim this reader takes is charged to, minted on
     /// the first frame it reads. One per reader rather than one per frame, so
@@ -171,23 +178,10 @@ impl ReadsAFramesPixelsOutForTheMesh {
             height: staging.surface_height(),
             pixel_byte_length: staging.staging_byte_size(),
         };
-        if staged_pixels.len() as u64 != description.pixel_byte_length {
-            return Err(
-                WhyAFramesPixelsCannotCrossTheMesh::ItsPixelsCannotBeReadOut(
-                    crate::core::Error::GpuError(format!(
-                        "surface {surface_id}'s export staging mapped {} bytes where it is sized for \
-                     {}, so the frame would cross part-written",
-                        staged_pixels.len(),
-                        description.pixel_byte_length
-                    )),
-                ),
-            );
-        }
-
         Ok(a_mesh_message_carrying_a_frames_pixels(
             description,
             bag_bytes,
-            |the_messages_pixel_tail| the_messages_pixel_tail.copy_from_slice(staged_pixels),
+            staged_pixels,
         ))
     }
 
@@ -199,7 +193,6 @@ impl ReadsAFramesPixelsOutForTheMesh {
         _bag_bytes: &[u8],
     ) -> std::result::Result<AMeshMessageCarryingAFramesPixels, WhyAFramesPixelsCannotCrossTheMesh>
     {
-        let _ = &self.gpu_context_the_mesh_copies_frames_with;
         Err(WhyAFramesPixelsCannotCrossTheMesh::ThisPlatformCannotReadAFrameOut)
     }
 
@@ -216,27 +209,12 @@ impl ReadsAFramesPixelsOutForTheMesh {
         gpu_context: &crate::core::context::GpuContext,
         surface_id: &str,
     ) -> std::result::Result<
-        Option<AFrameClaimedWhileItsPixelsAreRead<'_>>,
+        Option<AFrameClaimedWhileItsPixelsAreRead>,
         WhyAFramesPixelsCannotCrossTheMesh,
     > {
-        use crate::core::context::SurfaceStore;
-
-        if self.claims_are_charged_to.is_none() {
-            let Some(leases) = gpu_context
-                .surface_store()
-                .as_ref()
-                .and_then(SurfaceStore::check_out_leases)
-                .cloned()
-            else {
-                return Ok(None);
-            };
-            let holder = leases.mint_holder_id();
-            self.claims_are_charged_to = Some(AFrameClaimHolderOnThisRuntime { leases, holder });
-        }
-        let charged_to = self
-            .claims_are_charged_to
-            .as_ref()
-            .expect("the branch above records one or returns");
+        let Some(charged_to) = self.the_holder_every_claim_is_charged_to(gpu_context) else {
+            return Ok(None);
+        };
         charged_to
             .leases
             .record_check_out_lease(surface_id, charged_to.holder)
@@ -247,9 +225,31 @@ impl ReadsAFramesPixelsOutForTheMesh {
                 other => WhyAFramesPixelsCannotCrossTheMesh::ItsPixelsCannotBeReadOut(other),
             })?;
         Ok(Some(AFrameClaimedWhileItsPixelsAreRead {
-            charged_to,
+            leases: Arc::clone(&charged_to.leases),
+            holder: charged_to.holder,
             surface_id: surface_id.to_string(),
         }))
+    }
+
+    /// The identity this reader charges every claim to, minted on first ask —
+    /// or `None` where this runtime keeps no lease table at all.
+    #[cfg(target_os = "linux")]
+    fn the_holder_every_claim_is_charged_to(
+        &mut self,
+        gpu_context: &crate::core::context::GpuContext,
+    ) -> Option<&AFrameClaimHolderOnThisRuntime> {
+        use crate::core::context::SurfaceStore;
+
+        if self.claims_are_charged_to.is_none() {
+            let leases = gpu_context
+                .surface_store()
+                .as_ref()
+                .and_then(SurfaceStore::check_out_leases)
+                .cloned()?;
+            let holder = leases.mint_holder_id();
+            self.claims_are_charged_to = Some(AFrameClaimHolderOnThisRuntime { leases, holder });
+        }
+        self.claims_are_charged_to.as_ref()
     }
 }
 
@@ -280,19 +280,24 @@ impl Drop for AFrameClaimHolderOnThisRuntime {
 }
 
 /// One frame claimed for exactly as long as its pixels are being read.
+///
+/// Owns what it gives back rather than borrowing the reader that minted the
+/// holder: a guard borrowing `&mut self` would hold the reader exclusively
+/// through the staging, the refill and the copy, and the next line to read a
+/// field of it would fail to compile for a reason that looks unrelated.
 #[cfg(target_os = "linux")]
-struct AFrameClaimedWhileItsPixelsAreRead<'a> {
-    charged_to: &'a AFrameClaimHolderOnThisRuntime,
+struct AFrameClaimedWhileItsPixelsAreRead {
+    leases: Arc<crate::core::context::SurfaceCheckOutLeaseRegistry>,
+    holder: crate::core::context::SurfaceCheckOutLeaseHolderId,
     surface_id: String,
 }
 
 #[cfg(target_os = "linux")]
-impl Drop for AFrameClaimedWhileItsPixelsAreRead<'_> {
+impl Drop for AFrameClaimedWhileItsPixelsAreRead {
     fn drop(&mut self) {
         if let Err(cannot_release) = self
-            .charged_to
             .leases
-            .release_one_check_out_lease(&self.surface_id, self.charged_to.holder)
+            .release_one_check_out_lease(&self.surface_id, self.holder)
         {
             tracing::warn!(
                 "the mesh could not give the frame {} back to its pool, so the producer will \
@@ -321,14 +326,13 @@ fn a_backing_of_more_than_one_plane(
     gpu_context: &crate::core::context::GpuContext,
     surface_id: &str,
 ) -> Option<String> {
-    use streamlib_consumer_rhi::TextureFormat;
-
     if let Some(pixel_buffer) = gpu_context.pooled_backing_held_in_this_process(surface_id) {
         let pixel_format = pixel_buffer.format();
         return (pixel_format.plane_count() > 1).then(|| pixel_format.wire_name().to_string());
     }
     let registration = gpu_context.producer_registered_texture_for_surface_id(surface_id)?;
-    (registration.texture().format() == TextureFormat::Nv12).then(|| "nv12".to_string())
+    let texture_format = registration.texture().format();
+    (texture_format.plane_count() > 1).then(|| texture_format.wire_name().to_string())
 }
 
 /// The refusal every read failure that is not one of the named ones takes.
@@ -410,6 +414,15 @@ mod tests {
     /// second machine would exercise too. GPU-gated: skips with no device.
     #[test]
     fn a_frame_crosses_byte_for_byte_into_a_surface_of_this_runtimes_own() {
+        // Both single-plane byte orders, because the whole reason the format
+        // rides the wire is that BGRA must not arrive labelled RGBA — and
+        // nothing downstream of a relabelled frame could tell.
+        for pixel_format in [PixelFormat::Rgba32, PixelFormat::Bgra32] {
+            a_frame_of_this_format_crosses_byte_for_byte(pixel_format);
+        }
+    }
+
+    fn a_frame_of_this_format_crosses_byte_for_byte(pixel_format: PixelFormat) {
         const WIDTH: u32 = 64;
         const HEIGHT: u32 = 48;
         let Some(gpu_context) =
@@ -420,7 +433,7 @@ mod tests {
         let cell = the_mesh_copying_frames_with(&gpu_context);
 
         let (produced_id, produced) = gpu_context
-            .acquire_pixel_buffer(WIDTH, HEIGHT, PixelFormat::Rgba32)
+            .acquire_pixel_buffer(WIDTH, HEIGHT, pixel_format)
             .expect("a frame to send");
         let picture = a_picture_of(produced.plane_size(0) as usize);
         // SAFETY: the picture is exactly `plane_size(0)` bytes, and the plane
@@ -441,7 +454,10 @@ mod tests {
         let arrived =
             a_frames_pixels_off_the_mesh(&message.message_bytes, message.description_bytes)
                 .expect("the message this egress built reads back");
-        assert_eq!(arrived.description.pixel_format, PixelFormat::Rgba32);
+        assert_eq!(
+            arrived.description.pixel_format, pixel_format,
+            "the backing's own byte order must cross, never a relabelling of it"
+        );
         assert_eq!(arrived.description.width, WIDTH);
         assert_eq!(arrived.description.height, HEIGHT);
         assert_eq!(arrived.bag_bytes, bag);
@@ -501,8 +517,7 @@ mod tests {
                 &nv12_id,
                 &a_video_bag_naming(&nv12_id, 64, 48),
             )
-            .err()
-            .expect("NV12 must be refused");
+            .expect_err("NV12 must be refused");
 
         assert_eq!(refused.which_refusal_this_is(), "more-than-one-plane");
         assert!(
@@ -534,10 +549,157 @@ mod tests {
                 &a_generation_the_slot_never_published,
                 &a_video_bag_naming(&a_generation_the_slot_never_published, 32, 32),
             )
-            .err()
-            .expect("a recycled frame must be refused");
+            .expect_err("a recycled frame must be refused");
 
         assert_eq!(refused.which_refusal_this_is(), "the-frame-was-recycled");
+    }
+
+    /// A context whose pool reads a real lease table, and the table — the
+    /// arrangement `Runner::start()` makes, which `init_for_platform_sync()`
+    /// alone does not: with no store the claim path is skipped entirely, so
+    /// every arm below would pass against a reader that claims nothing.
+    fn a_gpu_context_reading_check_out_leases_or_skip(
+        test_name: &str,
+    ) -> Option<(
+        GpuContext,
+        Arc<crate::core::context::SurfaceCheckOutLeaseRegistry>,
+    )> {
+        let gpu_context = gpu_or_skip(test_name)?;
+        let check_out_leases = Arc::new(crate::core::context::SurfaceCheckOutLeaseRegistry::new());
+        gpu_context.set_surface_store(
+            crate::core::context::SurfaceStore::new_reading_check_out_leases(
+                "the-pool-reads-this-lease-table-in-process".to_string(),
+                "mesh-frame-claim-test-runtime".to_string(),
+                Arc::clone(&check_out_leases),
+            ),
+        );
+        Some((gpu_context, check_out_leases))
+    }
+
+    /// The claim is really taken, and really given back.
+    ///
+    /// This is what "a slow network never pins the producer's pool slot"
+    /// rests on: while the guard lives the pool may not rehand the slot, and
+    /// the moment it drops the pool may. Delete the claim and this fails.
+    /// GPU-gated: skips with no device.
+    #[test]
+    fn a_frame_being_read_is_claimed_against_its_pool_and_given_back_when_the_read_ends() {
+        let Some((gpu_context, check_out_leases)) = a_gpu_context_reading_check_out_leases_or_skip(
+            "a_frame_being_read_is_claimed_against_its_pool_and_given_back_when_the_read_ends",
+        ) else {
+            return;
+        };
+        let cell = the_mesh_copying_frames_with(&gpu_context);
+        let (produced_id, _held) = gpu_context
+            .acquire_pixel_buffer(64, 48, PixelFormat::Rgba32)
+            .expect("a frame to send");
+        let produced_id = produced_id.to_string();
+        let mut reader = ReadsAFramesPixelsOutForTheMesh::reading_through(&cell);
+
+        assert_eq!(
+            check_out_leases
+                .outstanding_check_out_count(&produced_id)
+                .expect("a readable lease table"),
+            0,
+            "nothing holds the frame before the read"
+        );
+        let claimed = reader
+            .claim_the_frame(&gpu_context, &produced_id)
+            .expect("the frame is claimable");
+        assert!(
+            claimed.is_some(),
+            "a runtime whose pool reads a lease table must take a claim, or the pool can rehand              the slot out from under the copy"
+        );
+        assert_eq!(
+            check_out_leases
+                .outstanding_check_out_count(&produced_id)
+                .expect("a readable lease table"),
+            1,
+            "the frame must be held for as long as its pixels are being read"
+        );
+
+        drop(claimed);
+
+        assert_eq!(
+            check_out_leases
+                .outstanding_check_out_count(&produced_id)
+                .expect("a readable lease table"),
+            0,
+            "a claim the read is done with must go back, or the producer never gets that slot              again"
+        );
+    }
+
+    /// A whole read-out leaves nothing held — the claim spans the copy and
+    /// not the put, so a slow network cannot pin the producer's slot.
+    /// GPU-gated: skips with no device.
+    #[test]
+    fn a_read_out_that_finished_holds_none_of_the_producers_frames() {
+        let Some((gpu_context, check_out_leases)) = a_gpu_context_reading_check_out_leases_or_skip(
+            "a_read_out_that_finished_holds_none_of_the_producers_frames",
+        ) else {
+            return;
+        };
+        let cell = the_mesh_copying_frames_with(&gpu_context);
+        let (produced_id, _held) = gpu_context
+            .acquire_pixel_buffer(64, 48, PixelFormat::Rgba32)
+            .expect("a frame to send");
+        let produced_id = produced_id.to_string();
+
+        // Kept alive across the assertion: a reader dropped here would give
+        // every claim back through its own backstop, and this arm would then
+        // pass against a read that never released one.
+        let mut reads_frames_out = ReadsAFramesPixelsOutForTheMesh::reading_through(&cell);
+        reads_frames_out
+            .a_mesh_message_carrying_the_frame_this_bag_names(
+                &produced_id,
+                &a_video_bag_naming(&produced_id, 64, 48),
+            )
+            .unwrap_or_else(|why| panic!("the frame must be readable out: {why}"));
+
+        assert_eq!(
+            check_out_leases
+                .outstanding_check_out_count(&produced_id)
+                .expect("a readable lease table"),
+            0,
+            "the message is built and the claim is done; holding it across the put is what \
+             would pin the slot for as long as the network takes"
+        );
+        drop(reads_frames_out);
+    }
+
+    /// A reader that goes while still holding claims gives every one back —
+    /// the backstop for a read that never reached its own guard.
+    /// GPU-gated: skips with no device.
+    #[test]
+    fn a_reader_that_goes_gives_back_every_claim_it_still_held() {
+        let Some((gpu_context, check_out_leases)) = a_gpu_context_reading_check_out_leases_or_skip(
+            "a_reader_that_goes_gives_back_every_claim_it_still_held",
+        ) else {
+            return;
+        };
+        let cell = the_mesh_copying_frames_with(&gpu_context);
+        let (produced_id, _held) = gpu_context
+            .acquire_pixel_buffer(64, 48, PixelFormat::Rgba32)
+            .expect("a frame to send");
+        let produced_id = produced_id.to_string();
+
+        let mut reader = ReadsAFramesPixelsOutForTheMesh::reading_through(&cell);
+        let claimed = reader
+            .claim_the_frame(&gpu_context, &produced_id)
+            .expect("the frame is claimable");
+        // The claim outlives the reader here on purpose: a panic mid-copy is
+        // exactly this shape, and a claim nobody gives back pins its slot for
+        // the rest of the run.
+        std::mem::forget(claimed);
+        drop(reader);
+
+        assert_eq!(
+            check_out_leases
+                .outstanding_check_out_count(&produced_id)
+                .expect("a readable lease table"),
+            0,
+            "a reader's own drop must give back what its guards did not"
+        );
     }
 
     /// A runtime that has not started carries no frame, and says so as its
@@ -548,8 +710,7 @@ mod tests {
             GpuContextTheMeshCopiesFramesWith::default(),
         ))
         .a_mesh_message_carrying_the_frame_this_bag_names("7#3", b"\x81\xaasurface_id\xa33#1")
-        .err()
-        .expect("a runtime with no context resolves nothing");
+        .expect_err("a runtime with no context resolves nothing");
 
         assert_eq!(refused.which_refusal_this_is(), "no-gpu-context");
     }

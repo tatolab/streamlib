@@ -48,6 +48,21 @@ pub struct AMeshMessageCarryingAFramesPixels {
     pub description_bytes: u32,
 }
 
+/// Its length rather than its bytes: a 1080p frame is 8.3 MB, and a panic or
+/// a log line that printed them would bury whatever it was reporting.
+impl std::fmt::Debug for AMeshMessageCarryingAFramesPixels {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AMeshMessageCarryingAFramesPixels")
+            .field(
+                "message_bytes",
+                &format_args!("<{} bytes>", self.message_bytes.len()),
+            )
+            .field("description_bytes", &self.description_bytes)
+            .finish()
+    }
+}
+
 /// One mesh message carrying a frame, as the reading runtime takes it apart.
 pub struct AFramesPixelsOffTheMesh<'a> {
     pub description: AFramesPixelDescriptionOnTheMesh,
@@ -94,30 +109,25 @@ impl AFramesPixelDescriptionOnTheMesh {
     }
 }
 
-/// Build the message one frame crosses as, filling its pixel tail through
-/// `read_the_frames_pixels_into`.
+/// Build the message one frame crosses as.
 ///
-/// The tail is handed to the caller rather than taken from it, so a frame's
-/// pixels are copied once — straight out of the sender's staging into the
-/// bytes that go on the wire — rather than into an intermediate the message
-/// then copies again. At 1080p RGBA that second copy would be 8.3 MB per
-/// frame. The tail is zeroed before it is handed over, which is a pass over
-/// those bytes but not a copy of them; taking it uninitialised would need
-/// `unsafe` here for a memset the allocator largely absorbs.
+/// `pixel_bytes` is read once, straight into the bytes that go on the wire:
+/// the sender's staging hands out a contiguous borrow, and at 1080p RGBA any
+/// second pass over it — an intermediate buffer, or zeroing a tail before
+/// overwriting it — would be another 8.3 MB per frame per reading runtime.
+/// The one allocation is sized for all three parts up front for the same
+/// reason.
 pub fn a_mesh_message_carrying_a_frames_pixels(
     description: AFramesPixelDescriptionOnTheMesh,
     bag_bytes: &[u8],
-    read_the_frames_pixels_into: impl FnOnce(&mut [u8]),
+    pixel_bytes: &[u8],
 ) -> AMeshMessageCarryingAFramesPixels {
     let described = description.to_wire_bytes();
-    let pixel_byte_length = description.pixel_byte_length as usize;
     let mut message_bytes =
-        Vec::with_capacity(described.len() + bag_bytes.len() + pixel_byte_length);
+        Vec::with_capacity(described.len() + bag_bytes.len() + pixel_bytes.len());
     message_bytes.extend_from_slice(&described);
     message_bytes.extend_from_slice(bag_bytes);
-    let where_the_pixels_go = message_bytes.len()..message_bytes.len() + pixel_byte_length;
-    message_bytes.resize(where_the_pixels_go.end, 0);
-    read_the_frames_pixels_into(&mut message_bytes[where_the_pixels_go]);
+    message_bytes.extend_from_slice(pixel_bytes);
     AMeshMessageCarryingAFramesPixels {
         message_bytes,
         // Bounded by the format vocabulary above, not by anything a peer sends.
@@ -247,9 +257,7 @@ mod tests {
         let bag_bytes = b"\x82\xaasurface_id\xa33#1\xa5width\x04".as_slice();
         let pixels: Vec<u8> = (0..32u8).collect();
 
-        let message = a_mesh_message_carrying_a_frames_pixels(description, bag_bytes, |tail| {
-            tail.copy_from_slice(&pixels)
-        });
+        let message = a_mesh_message_carrying_a_frames_pixels(description, bag_bytes, &pixels);
         assert_eq!(
             message.message_bytes.len(),
             message.description_bytes as usize + bag_bytes.len() + pixels.len()
@@ -272,9 +280,7 @@ mod tests {
             height: 0,
             pixel_byte_length: 0,
         };
-        let message = a_mesh_message_carrying_a_frames_pixels(description, b"\x80", |tail| {
-            assert!(tail.is_empty())
-        });
+        let message = a_mesh_message_carrying_a_frames_pixels(description, b"\x80", &[]);
         let read = a_frames_pixels_off_the_mesh(&message.message_bytes, message.description_bytes)
             .expect("a frame with no pixels still reads");
         assert_eq!(read.bag_bytes, b"\x80");
@@ -286,7 +292,7 @@ mod tests {
                 ..description
             },
             b"",
-            |tail| tail.copy_from_slice(&[9, 9, 9, 9]),
+            &[9, 9, 9, 9],
         );
         let read =
             a_frames_pixels_off_the_mesh(&empty_bag.message_bytes, empty_bag.description_bytes)
@@ -306,8 +312,7 @@ mod tests {
             height: 2,
             pixel_byte_length: 32,
         };
-        let message =
-            a_mesh_message_carrying_a_frames_pixels(description, b"\x80", |tail| tail.fill(7));
+        let message = a_mesh_message_carrying_a_frames_pixels(description, b"\x80", &[7u8; 32]);
 
         let mut truncated = message.message_bytes.clone();
         truncated.truncate(truncated.len() - 8);

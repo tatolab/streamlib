@@ -24,6 +24,7 @@ use std::time::{Duration, Instant};
 
 use iceoryx2::identifiers::UniquePublisherId;
 use zenoh::Wait;
+use zenoh::bytes::ZBytes;
 use zenoh::qos::{CongestionControl, Priority};
 
 use crate::core::graph::MeshPortAddress;
@@ -448,12 +449,19 @@ fn send_one_port_to_the_mesh(sending: WhatOneEgressSends, stop: Arc<AtomicBool>)
                     },
                 };
 
-                let (payload, frame_pixel_description_bytes) = match &carrying_a_frame {
+                // Both arms hand `put` something it takes by move. Zenoh's
+                // `From<&[u8]> for ZBytes` is a `to_vec`, so passing a slice
+                // would copy the whole message a second time inside the put —
+                // another 8.3 MB per 1080p frame, per reading runtime, on
+                // this thread. `From<Vec<u8>>` moves. The ordinary-bag arm
+                // copies either way: that bag is the channel's sample and
+                // this thread does not own it.
+                let (payload, frame_pixel_description_bytes) = match carrying_a_frame {
                     Some(carrying) => (
-                        carrying.message_bytes.as_slice(),
+                        ZBytes::from(carrying.message_bytes),
                         carrying.description_bytes,
                     ),
-                    None => (bag_bytes, 0),
+                    None => (ZBytes::from(bag_bytes.to_vec()), 0),
                 };
                 let attached = MeshDataMessageAttachment {
                     timestamp_ns: stamp,
@@ -463,9 +471,7 @@ fn send_one_port_to_the_mesh(sending: WhatOneEgressSends, stop: Arc<AtomicBool>)
                     frame_pixel_description_bytes,
                 }
                 .to_wire_bytes();
-                if let Err(put_failure) =
-                    publisher.put(payload).attachment(attached.to_vec()).wait()
-                {
+                if let Err(put_failure) = publisher.put(payload).attachment(attached).wait() {
                     tracing::warn!("a bag on {addressed} did not reach the mesh: {put_failure}");
                 }
             }

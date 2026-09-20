@@ -10,6 +10,7 @@ use std::ffi::c_void;
 use std::sync::Arc;
 
 use super::{PixelBufferRef, PixelFormat};
+use crate::core::error::{Error, Result};
 
 /// Pixel buffer with cached dimensions.
 ///
@@ -193,6 +194,37 @@ impl PixelBuffer {
             return core::ptr::null_mut();
         }
         self.buffer_ref().plane_base_address(plane_index)
+    }
+
+    /// Fill one plane of this buffer with `pixel_bytes`, or say why it
+    /// could not be.
+    ///
+    /// The one safe door onto a plane's mapping, so the null check, the
+    /// length check and the safety argument live on the type that owns that
+    /// mapping rather than in each caller. Refuses rather than truncating: a
+    /// part-written plane is a frame with somebody else's bytes in the rest
+    /// of it, and nothing downstream could tell.
+    pub fn write_this_plane_from(&self, plane_index: u32, pixel_bytes: &[u8]) -> Result<()> {
+        let plane_size = self.plane_size(plane_index);
+        if pixel_bytes.len() as u64 != plane_size {
+            return Err(Error::GpuError(format!(
+                "plane {plane_index} of this surface holds {plane_size} bytes and {} were \
+                 offered, so writing them would leave the frame part-written",
+                pixel_bytes.len()
+            )));
+        }
+        let plane = self.plane_base_address(plane_index);
+        if plane.is_null() {
+            return Err(Error::GpuError(format!(
+                "plane {plane_index} of this surface is not host-mapped, so nothing can be \
+                 written into it"
+            )));
+        }
+        // SAFETY: the plane's mapping is `plane_size` bytes long, which the
+        // check above proved is exactly what was offered, and `pixel_bytes`
+        // is a separate allocation the caller owns.
+        unsafe { std::ptr::copy_nonoverlapping(pixel_bytes.as_ptr(), plane, plane_size as usize) };
+        Ok(())
     }
 
     /// Byte size of the given plane, or `0` if out of range.

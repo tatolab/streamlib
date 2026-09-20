@@ -31,7 +31,9 @@ use zenoh::Wait;
 
 use crate::core::graph::MeshPortAddress;
 use crate::core::runtime::mesh::a_frames_pixels_on_the_mesh::a_frames_pixels_off_the_mesh;
-use crate::core::runtime::mesh::a_frames_pixels_written_into_a_local_surface::WritesAFramesPixelsIntoALocalSurface;
+use crate::core::runtime::mesh::a_frames_pixels_written_into_a_local_surface::{
+    WhyAFramesPixelsCannotLandHere, WritesAFramesPixelsIntoALocalSurface,
+};
 use crate::core::runtime::mesh::gpu_context_the_mesh_copies_frames_with::GpuContextTheMeshCopiesFramesWith;
 use crate::core::runtime::mesh::mesh_data_message_attachment::{
     MeshDataMessageAttachment, PublisherGenerationOnTheMesh,
@@ -73,6 +75,12 @@ const THE_INGRESS_OUTPUT_PORT: &str = "bags";
 /// on the link's receive loop and only hands off, and the split is free once
 /// the bytes are owned either way.
 struct ABagOffTheMesh {
+    /// Owned rather than Zenoh's own buffer, which is what costs the one
+    /// copy this hop makes. A received `ZSlice` points into the link's
+    /// `RecyclingObjectPool` of MTU-sized buffers, so a ring holding sixteen
+    /// of them — across every ingress — keeps that many out of circulation
+    /// and can stall the very receive loop the callback must never block.
+    /// Copying hands the pool its buffer straight back.
     payload_bytes: Vec<u8>,
     /// The record that rode beside it, whole: the stamp to write it under, the
     /// sending runtime's number for it and the run that number belongs to, and
@@ -569,25 +577,21 @@ fn the_bag_to_hand_downstream<'a>(
     writes_a_frames_pixels_into_a_local_surface: &mut WritesAFramesPixelsIntoALocalSurface,
     said_why_a_frame_did_not_land: &mut BTreeSet<&'static str>,
 ) -> Option<std::borrow::Cow<'a, [u8]>> {
+    let payload_bytes = &taken.payload_bytes;
     if taken.attached.frame_pixel_description_bytes == 0 {
-        return Some(std::borrow::Cow::Borrowed(&taken.payload_bytes));
+        return Some(std::borrow::Cow::Borrowed(payload_bytes));
     }
-    let Some(arrived) = a_frames_pixels_off_the_mesh(
-        &taken.payload_bytes,
+    let landed = match a_frames_pixels_off_the_mesh(
+        payload_bytes,
         taken.attached.frame_pixel_description_bytes,
-    ) else {
-        if said_why_a_frame_did_not_land.insert("the-message-could-not-be-read") {
-            tracing::warn!(
-                "a message on {address} says it carries a frame and its three parts do not fit \
-                 the {} bytes that arrived, so it is read past",
-                taken.payload_bytes.len()
-            );
-        }
-        return None;
+    ) {
+        Some(arrived) => writes_a_frames_pixels_into_a_local_surface
+            .a_bag_naming_the_local_surface_this_frame_landed_in(&arrived),
+        None => Err(WhyAFramesPixelsCannotLandHere::ItsMessageCouldNotBeRead {
+            payload_bytes: payload_bytes.len(),
+        }),
     };
-    match writes_a_frames_pixels_into_a_local_surface
-        .a_bag_naming_the_local_surface_this_frame_landed_in(&arrived)
-    {
+    match landed {
         Ok(bag_bytes) => Some(std::borrow::Cow::Owned(bag_bytes)),
         Err(why_it_cannot_land) => {
             if said_why_a_frame_did_not_land.insert(why_it_cannot_land.which_refusal_this_is()) {

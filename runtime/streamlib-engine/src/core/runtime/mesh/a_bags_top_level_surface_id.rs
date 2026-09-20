@@ -27,6 +27,11 @@ use crate::core::error::{Error, Result};
 /// The one bag key the engine reads.
 const SURFACE_ID_KEY: &str = "surface_id";
 
+/// The longest header msgpack puts in front of a string: the `str32` marker
+/// plus its four length bytes. What a rewrite's allocation allows for, since
+/// the id going in may take a wider header than the one coming out.
+const LONGEST_MSGPACK_STRING_HEADER_BYTES: usize = 5;
+
 /// A bag's top-level `surface_id`, and where its value sits in the bag's bytes.
 pub struct ATopLevelSurfaceIdInABag<'a> {
     bag_bytes: &'a [u8],
@@ -47,7 +52,8 @@ impl<'a> ATopLevelSurfaceIdInABag<'a> {
     /// the alternative is an `unwrap` on a path a peer's bytes reach.
     pub fn a_bag_naming_this_surface_instead(&self, local_surface_id: &str) -> Result<Vec<u8>> {
         let mut rewritten = Vec::with_capacity(
-            self.bag_bytes.len() + local_surface_id.len() - self.value_span.len() + 5,
+            self.bag_bytes.len() + local_surface_id.len() - self.value_span.len()
+                + LONGEST_MSGPACK_STRING_HEADER_BYTES,
         );
         rewritten.extend_from_slice(&self.bag_bytes[..self.value_span.start]);
         rmp::encode::write_str(&mut rewritten, local_surface_id).map_err(|cannot_spell_it| {
