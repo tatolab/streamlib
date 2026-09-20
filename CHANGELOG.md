@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.1](https://github.com/tatolab/streamlib/compare/v0.26.0...v0.26.1) (2026-09-20)
+
+
+### Features
+
+* **engine:** a Vulkan device comes up on MoltenVK ([#2375](https://github.com/tatolab/streamlib/issues/2375)) ([7948a35](https://github.com/tatolab/streamlib/commit/7948a355552853f5230849fb5a7deaf9f698eae0))
+
 ## [0.26.0](https://github.com/tatolab/streamlib/compare/v0.25.9...v0.26.0) (2026-09-20)
 
 
