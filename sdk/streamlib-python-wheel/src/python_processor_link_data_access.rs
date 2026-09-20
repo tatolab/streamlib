@@ -26,7 +26,7 @@ use streamlib::sdk::iceoryx2::{
     ChannelEgressConfig, ChannelTrustTier, HelperProcessLossCountBoardWriter,
     ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, Iceoryx2Node,
     InboundLinkLossCountBoardSlotAndWiringGeneration, InboundLinkName, InputMailboxesInner,
-    OutputWriterInner, ReadMode, ResolvedAudioWindowContract,
+    OutputWriterInner, ReadMode, ResolvedAudioWindowContract, TheClockAnInboundLinksStampsAreTakenOn,
 };
 
 use crate::python_bag_conversion::{
@@ -534,6 +534,17 @@ impl PythonProcessorLinkDataAccess {
                     port_name,
                     link_id,
                     &InboundLinkName::from(inbound_link_name),
+                    // The two names differ for a link carrying from another
+                    // runtime — it rides a channel hashed from the source
+                    // port's mesh address — and that is the whole of what this
+                    // process can tell about the clock: a helper opens no mesh
+                    // session, so the machine behind such a link is the app
+                    // process's to name.
+                    if inbound_link_name == channel_service_name {
+                        TheClockAnInboundLinksStampsAreTakenOn::ThisMachine
+                    } else {
+                        TheClockAnInboundLinksStampsAreTakenOn::AMachineOnlyTheAppProcessCanName
+                    },
                     channel.create_subscriber(input_port_ring_depth)?,
                 );
                 if let Some((board_writer, (loss_count_slot, wiring_generation))) =

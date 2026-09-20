@@ -1493,6 +1493,7 @@ mod tests {
                 "in",
                 link_id,
                 &InboundLinkName::from("psource/out"),
+                crate::iceoryx2::TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
                 data.create_subscriber(depth).expect("dest subscriber"),
             );
             if !in_inner.has_listener() {

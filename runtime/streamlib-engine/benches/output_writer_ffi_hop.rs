@@ -56,6 +56,7 @@ use streamlib_engine::iceoryx2::{
     ChannelDataServicePublisher, ChannelDataServiceSubscriber, ChannelEgressConfig,
     ChannelTrustTier, Iceoryx2Node, InboundLinkName, InputMailboxesInner, OutputWriter,
     OutputWriterInner, ReadMode, TRUSTED_CHANNEL_CHUNK_CEILING_BYTES,
+    TheClockAnInboundLinksStampsAreTakenOn,
 };
 
 /// Per-bench-run unique service-name suffix so parallel benches
@@ -344,6 +345,7 @@ fn build_round_trip(tag: &str) -> RoundTripFixture {
         "in",
         "L-bench-round-trip",
         &InboundLinkName::from("pbench/out"),
+        TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
         subscriber,
     );
 

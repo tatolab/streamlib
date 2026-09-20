@@ -22,6 +22,7 @@ mod output;
 mod payload;
 mod posix_shared_memory_headroom;
 mod read_mode;
+mod the_clock_an_inbound_links_stamps_are_taken_on;
 
 #[cfg(test)]
 pub(crate) use audio_window::{AudioBlockSampleDtype, encode_an_audio_block_onto_the_wire};
@@ -89,3 +90,6 @@ pub use payload::{
 };
 pub use posix_shared_memory_headroom::warn_when_posix_shared_memory_is_short_for_a_runtime;
 pub use read_mode::ReadMode;
+pub use the_clock_an_inbound_links_stamps_are_taken_on::{
+    TheClockAnInboundLinksStampsAreTakenOn, WhatIsKnownOfAnInboundLinksStampClock,
+};

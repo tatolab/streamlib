@@ -35,9 +35,9 @@ use crate::iceoryx2::{
     DEFAULT_EXPECTED_PAYLOAD_BYTES, DeliveryProfile, DeliveryResolution, Iceoryx2Node,
     Iceoryx2NotifyService, Iceoryx2Service, InboundLinkName,
     MeshHopDroppedBagCountsByRemoteInboundLink, RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL,
-    WINDOWED_PORT_SUBSCRIBER_RING_DEPTH, audio_windowing_declared_by_input_port,
-    delivery_profile_for_input_port, effective_channel_chunk_ceiling_bytes,
-    refuse_an_unsettled_match_device_sentinel,
+    TheClockAnInboundLinksStampsAreTakenOn, WINDOWED_PORT_SUBSCRIBER_RING_DEPTH,
+    audio_windowing_declared_by_input_port, delivery_profile_for_input_port,
+    effective_channel_chunk_ceiling_bytes, refuse_an_unsettled_match_device_sentinel,
 };
 use streamlib_ipc_types::{
     MAX_DESTINATIONS_PER_CHANNEL, MAX_INBOUND_LINKS_PER_DESTINATION,
@@ -269,6 +269,7 @@ pub fn open_iceoryx2_service(
             &dest_port,
             link_id,
             &inbound_link_name_of(&from_port, &channel_service_name),
+            the_clock_this_links_stamps_are_taken_on(&from_port, mesh_link_ingress_table),
             dest_input_port_delivery,
             &service,
             notify_service_for_the_destination.as_ref(),
@@ -480,6 +481,28 @@ fn inbound_link_name_of(source: &OutputLinkPortRef, channel_service_name: &str) 
     match source.mesh_port_address() {
         Some(address) => InboundLinkName::from(address.to_string().as_str()),
         None => InboundLinkName::from(channel_service_name),
+    }
+}
+
+/// Which machine's monotonic clock a destination reads this link's stamps as
+/// being taken on.
+///
+/// A link from a port on this runtime was stamped here. One from another
+/// runtime was stamped on whatever machine the mesh is carrying it from, which
+/// no bag has said yet: the destination is wired long before the source runtime
+/// is known, so it takes the ingress table's cell for the address and reads the
+/// answer out of it afterwards, as bags arrive and as the source comes and goes.
+fn the_clock_this_links_stamps_are_taken_on(
+    source: &OutputLinkPortRef,
+    mesh_link_ingress_table: &MeshLinkIngressTable,
+) -> TheClockAnInboundLinksStampsAreTakenOn {
+    match source.mesh_port_address() {
+        Some(address) => {
+            TheClockAnInboundLinksStampsAreTakenOn::WhicheverMachineTheMeshIsCarryingFrom(
+                mesh_link_ingress_table.machine_clock_carried_from(address),
+            )
+        }
+        None => TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
     }
 }
 
@@ -1189,6 +1212,7 @@ fn wire_rust_dest(
     dest_port: &str,
     link_id: &LinkUniqueId,
     inbound_link_name: &InboundLinkName,
+    stamp_clock: TheClockAnInboundLinksStampsAreTakenOn,
     dest_input_port_delivery: DeliveryResolution,
     service: &Iceoryx2Service,
     notify_service: Option<&Iceoryx2NotifyService>,
@@ -1233,7 +1257,13 @@ fn wire_rust_dest(
     }
 
     let subscriber = service.create_subscriber(subscriber_ring_depth)?;
-    input_inner.add_channel_subscriber(dest_port, link_id.as_str(), inbound_link_name, subscriber);
+    input_inner.add_channel_subscriber(
+        dest_port,
+        link_id.as_str(),
+        inbound_link_name,
+        stamp_clock,
+        subscriber,
+    );
     tracing::debug!(
         "Bound channel subscriber to destination input port '{}'",
         dest_port
@@ -2733,6 +2763,7 @@ mod tests {
             "in1",
             &link_id,
             &InboundLinkName::from("psource/out1"),
+            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             DeliveryProfile::Newest.resolve(),
             &channel,
             notify_service.as_ref(),
@@ -2796,6 +2827,7 @@ mod tests {
                 "in1",
                 &link_id,
                 &InboundLinkName::from("psource/out1"),
+                TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
                 dest_delivery,
                 &channel,
                 None,
@@ -3865,6 +3897,7 @@ mod tests {
             "audio",
             &"L-match-device".into(),
             &InboundLinkName::from("psource/audio_out"),
+            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             DeliveryProfile::Ordered.resolve(),
             &channel,
             None,
