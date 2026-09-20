@@ -18,11 +18,18 @@
 //! of the bar: a link neither of them asked for, wired by a third runtime over
 //! MCP, which is the only way a third-party wiring is made.
 //!
-//! Audio rather than video on purpose: a video bag names a surface, and a
-//! surface id means nothing on another machine, so the mesh does not carry one
-//! until the frame's pixels do (#2290). An `AudioBlock`'s samples ride inline.
-//! No audio hardware is needed either — under the null backend a microphone
-//! publishes silent blocks and the graph runs unchanged.
+//! `--video-source` runs a `TestPatternSource` and offers it; `--video-reader`
+//! links from `<source runtime name>/TestPatternSource/video` into an
+//! `H264Encoder`. That arm is the frame-carrying one: a video bag names a
+//! surface, and a surface id means nothing on another machine, so the sending
+//! runtime copies the frame's pixels out and the reading one mints a local
+//! surface for them. `tests/fixtures/verify_cross_runtime_frame.sh` reads the
+//! two ids and exchanges each on its own node.
+//!
+//! The audio arms need no hardware — under the null backend a microphone
+//! publishes silent blocks and the graph runs unchanged. The video arms need
+//! a GPU on both ends, which is why they are rig-only like everything else
+//! here.
 //!
 //! Both runtimes host a control plane, because an unobservable rig can only be
 //! watched: `tests/fixtures/verify_cross_runtime_link.sh` reads `graph` on the
@@ -41,7 +48,8 @@ mod rig {
     use streamlib::sdk::error::{Error, Result};
     use streamlib::sdk::graph::{InputLinkPortRef, MeshPortAddress, OutputLinkPortRef};
     use streamlib_media_builtins::{
-        MicrophoneSource, OpusEncoder, register_media_builtin_processor_types,
+        H264Encoder, MicrophoneSource, OpusEncoder, TestPatternSource,
+        register_media_builtin_processor_types,
     };
 
     /// The display name the source gives its microphone, and the reader
@@ -51,6 +59,20 @@ mod rig {
 
     /// The port the source publishes and the reader links from.
     const THE_PORT: &str = "audio";
+
+    /// The display name the video source gives its pattern, and the video
+    /// reader addresses it by.
+    const THE_VIDEO_SOURCES_DISPLAY_NAME: &str = "TestPatternSource";
+
+    /// The port the video source publishes and the video reader links from.
+    const THE_VIDEO_PORT: &str = "video";
+
+    /// The pattern's extent. Small on purpose: a 1080p RGBA frame is 8.3 MB,
+    /// which has to queue inside Zenoh's fragment deadline, and what this arm
+    /// is here to prove is that the pixels arrive rather than how many fit
+    /// down a wire.
+    const THE_PATTERNS_WIDTH: u32 = 320;
+    const THE_PATTERNS_HEIGHT: u32 = 240;
 
     /// The port the hosted control plane binds. The wheel's own default; the
     /// api-server increments on collision, so the fixture names one per end.
@@ -70,6 +92,16 @@ mod rig {
         /// The same encoder `--reader` wires for itself, left unwired: whoever
         /// asks for the link is the point of the arm this end serves.
         TheDestination,
+        /// Publish one video port and offer it on the mesh.
+        ///
+        /// The frame-carrying arm: every bag this publishes names a surface,
+        /// which is the one key the engine reads on the way across.
+        TheVideoSource,
+        /// Link from the video source's port and encode what arrives.
+        TheVideoReader {
+            /// The runtime name the video source is addressed by.
+            source_runtime_name: String,
+        },
         /// Wire two other runtimes together, being neither end of the link.
         ///
         /// Adds no processor at all — it drives its own control plane's MCP
@@ -137,6 +169,40 @@ mod rig {
                     app.runner().runtime_name()
                 );
             }
+            WhichEndOfTheLink::TheVideoSource => {
+                app.add(
+                    TestPatternSource::Processor::processor_class_import_path(),
+                    serde_json::json!({
+                        "width": THE_PATTERNS_WIDTH,
+                        "height": THE_PATTERNS_HEIGHT,
+                    }),
+                    Some(THE_VIDEO_SOURCES_DISPLAY_NAME),
+                )?;
+                tracing::info!(
+                    "cross_runtime_link_rig: offering {}/{THE_VIDEO_PORT} as {}",
+                    THE_VIDEO_SOURCES_DISPLAY_NAME,
+                    app.runner().runtime_name()
+                );
+            }
+            WhichEndOfTheLink::TheVideoReader {
+                source_runtime_name,
+            } => {
+                let encoder = app.add(
+                    H264Encoder::Processor::processor_class_import_path(),
+                    serde_json::json!({}),
+                    Some("H264Encoder"),
+                )?;
+                let source = MeshPortAddress::new(
+                    source_runtime_name,
+                    THE_VIDEO_SOURCES_DISPLAY_NAME,
+                    THE_VIDEO_PORT,
+                )?;
+                app.runner().connect(
+                    OutputLinkPortRef::on_another_runtime(source.clone()),
+                    InputLinkPortRef::new(encoder.processor_id(), THE_VIDEO_PORT),
+                )?;
+                tracing::info!("cross_runtime_link_rig: reading {source} into H264Encoder");
+            }
             WhichEndOfTheLink::TheWiringAgent => {
                 tracing::info!(
                     "cross_runtime_link_rig: wiring two other runtimes, as {}",
@@ -156,6 +222,16 @@ mod rig {
         while let Some(flag) = arguments.next() {
             match flag.as_str() {
                 "--source" => which_end = Some(WhichEndOfTheLink::TheSource),
+                "--video-source" => which_end = Some(WhichEndOfTheLink::TheVideoSource),
+                "--video-reader" => {
+                    which_end = Some(WhichEndOfTheLink::TheVideoReader {
+                        source_runtime_name: arguments.next().ok_or_else(|| {
+                            Error::Runtime(
+                                "--video-reader takes the runtime name it links from".into(),
+                            )
+                        })?,
+                    })
+                }
                 "--destination" => which_end = Some(WhichEndOfTheLink::TheDestination),
                 "--wiring-agent" => which_end = Some(WhichEndOfTheLink::TheWiringAgent),
                 "--reader" => {
@@ -174,16 +250,16 @@ mod rig {
                 unknown => {
                     return Err(Error::Runtime(format!(
                         "unknown flag {unknown:?}; this rig takes --source, --reader <source \
-                         runtime name>, --destination or --wiring-agent, and \
-                         --control-plane-port"
+                         runtime name>, --video-source, --video-reader <source runtime name>, \
+                         --destination or --wiring-agent, and --control-plane-port"
                     )));
                 }
             }
         }
         let which_end = which_end.ok_or_else(|| {
             Error::Runtime(
-                "name an end: --source, --reader <source runtime name>, --destination, or \
-                 --wiring-agent"
+                "name an end: --source, --reader <source runtime name>, --video-source, \
+                 --video-reader <source runtime name>, --destination, or --wiring-agent"
                     .into(),
             )
         })?;
