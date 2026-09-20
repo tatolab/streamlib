@@ -124,6 +124,20 @@ fn run_as_the_source(
     let mut publisher = service
         .create_publisher(1024)
         .map_err(|why| why.to_string())?;
+    // A channel's destination slots are fixed when it is created, so holding
+    // every one of them leaves none for an egress — which is how an arm makes
+    // one fail on its own thread, after it has already been started.
+    let _every_destination_slot: Vec<_> = if how.take_every_destination_slot {
+        (0..THE_CHANNELS_SUBSCRIBER_SLOTS)
+            .map(|_| {
+                service
+                    .create_subscriber(THE_CHANNELS_DEPTH)
+                    .map_err(|why| why.to_string())
+            })
+            .collect::<Result<_, String>>()?
+    } else {
+        Vec::new()
+    };
 
     let offered = Arc::new(WhatThisRuntimeOffersOnTheMeshRegistry::default());
     offered.record_how_to_read_this_runtimes_graph(Arc::new(TheOnePortThisPeerOffers {
@@ -539,6 +553,9 @@ struct HowToRunThisPeer {
     /// Replace the channel publisher immediately before the burst, so the
     /// numbering restarts under a running egress and then floods.
     recreate_the_publisher_just_before_the_burst: bool,
+    /// Hold every destination slot on this source's own channel, so the egress
+    /// a reader asks for is refused one and its thread ends.
+    take_every_destination_slot: bool,
 }
 
 impl HowToRunThisPeer {
@@ -550,6 +567,7 @@ impl HowToRunThisPeer {
         let mut iceoryx2_domain_root = std::path::PathBuf::from("/tmp");
         let mut burst_once_a_reader_arrives = None;
         let mut recreate_the_publisher_just_before_the_burst = false;
+        let mut take_every_destination_slot = false;
         let mut arguments = std::env::args().skip(1);
         while let Some(flag) = arguments.next() {
             let mut value = || arguments.next().expect("every flag takes a value");
@@ -576,6 +594,7 @@ impl HowToRunThisPeer {
                 "--recreate-the-publisher-just-before-the-burst" => {
                     recreate_the_publisher_just_before_the_burst = true
                 }
+                "--take-every-destination-slot" => take_every_destination_slot = true,
                 unknown => panic!("unknown flag {unknown:?}"),
             }
         }
@@ -587,6 +606,7 @@ impl HowToRunThisPeer {
             iceoryx2_domain_root,
             burst_once_a_reader_arrives,
             recreate_the_publisher_just_before_the_burst,
+            take_every_destination_slot,
         }
     }
 

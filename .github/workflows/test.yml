@@ -647,10 +647,12 @@ jobs:
           # runtimes at once: one runtime pulls a port of another over the
           # mesh, bags cross byte-equal under the stamp their producer wrote, a
           # source holds no egress until somebody reads its port and loses it
-          # when the last reader leaves, a link named before its runtime exists
-          # waits and then wires, and a killed source returns the link to
-          # waiting until it comes back. GPU-free — neither peer builds a
-          # `Runner`, because `start()` needs a GPU.
+          # when the last reader leaves, a source whose egress cannot take a
+          # destination slot settles to rendering none rather than to one it is
+          # not sending, a link named before its runtime exists waits and then
+          # wires, and a killed source returns the link to waiting until it
+          # comes back. GPU-free — neither peer builds a `Runner`, because
+          # `start()` needs a GPU.
           cargo test --locked -p streamlib-engine \
             --test cross_runtime_links_two_processes
           # The link-request proof, and the only thing in CI that runs *three*
