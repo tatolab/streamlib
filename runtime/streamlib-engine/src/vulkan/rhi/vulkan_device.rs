@@ -428,9 +428,8 @@ impl Drop for ExportPoolSentinel {
 /// What to install when the loader opened but no ICD behind it is usable.
 const NO_USABLE_VULKAN_DRIVER_GUIDANCE: &str = if cfg!(any(target_os = "macos", target_os = "ios"))
 {
-    "No usable Vulkan driver (ICD) was found. MoltenVK is the driver on Apple \
-     hardware — install it (`brew install molten-vk`, or the LunarG SDK) and check \
-     that its ICD manifest is on the loader's search path."
+    "No usable Vulkan driver (ICD) was found. MoltenVK is the Vulkan driver on Apple \
+     hardware; check that its ICD manifest is on the loader's search path."
 } else {
     "No usable Vulkan driver (ICD) was found. Install your GPU vendor's Vulkan \
      driver — the proprietary NVIDIA driver, or `mesa-vulkan-drivers` for \
@@ -440,9 +439,8 @@ const NO_USABLE_VULKAN_DRIVER_GUIDANCE: &str = if cfg!(any(target_os = "macos", 
 /// What to install when no loader library opened at all.
 const NO_VULKAN_LOADER_LIBRARY_GUIDANCE: &str = if cfg!(any(target_os = "macos", target_os = "ios"))
 {
-    "No Vulkan loader library could be opened. Install the loader and MoltenVK \
-     (`brew install vulkan-loader molten-vk`, or the LunarG SDK), then check that \
-     `libvulkan.dylib` resolves. Tried:"
+    "No Vulkan loader library could be opened. Apple hardware reaches the GPU through \
+     the Vulkan loader and MoltenVK, and neither was found at any of these paths:"
 } else {
     "No Vulkan loader library could be opened. Install your GPU vendor's Vulkan \
      driver and the loader (`libvulkan1` / `vulkan-loader`), then check `vulkaninfo` \
@@ -458,8 +456,13 @@ const NO_VULKAN_LOADER_LIBRARY_GUIDANCE: &str = if cfg!(any(target_os = "macos",
 /// with the loader installed. `VULKAN_SDK` is the LunarG SDK's own variable,
 /// read here to honour that convention rather than as a StreamLib dial — there
 /// is no engine setting for which loader to use, and the order is fixed.
-/// Shipping the loader inside the wheel is a separate concern (#2362); these
-/// cover a Homebrew or LunarG install.
+///
+/// **These are developer-machine fallbacks, never the install experience.** The
+/// user story is `pip install streamlib` and nothing else: the wheel carries the
+/// loader and MoltenVK and points the loader at them (#2362). A package manager
+/// is a way a contributor may already have the driver, and must never appear in
+/// anything a user reads — see
+/// [`the_guidance_a_user_reads_never_names_a_third_party_package_manager`].
 fn vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString> {
     let mut candidate_paths: Vec<std::ffi::OsString> = vec![LIBRARY.into()];
     candidate_paths.extend(apple_vulkan_loader_library_candidate_paths());
@@ -4782,6 +4785,30 @@ mod tests {
             Some(std::ffi::OsStr::new(LIBRARY)),
             "the platform default must stay first so an already-resolving host is unchanged"
         );
+    }
+
+    /// The install story is `pip install streamlib` and nothing else, so nothing a
+    /// user can read may send them to a third-party package manager. The wheel
+    /// carries the loader and MoltenVK (#2362); a contributor who happens to have
+    /// them from Homebrew or the LunarG SDK is served by the search list, which is
+    /// not text anybody reads. Owner, 2026-09-20.
+    #[test]
+    fn the_guidance_a_user_reads_never_names_a_third_party_package_manager() {
+        const THIRD_PARTY_PACKAGE_MANAGERS: &[&str] = &["brew", "homebrew", "port ", "macports"];
+
+        for (label, guidance) in [
+            ("no-loader", NO_VULKAN_LOADER_LIBRARY_GUIDANCE),
+            ("no-driver", NO_USABLE_VULKAN_DRIVER_GUIDANCE),
+        ] {
+            let lowercased = guidance.to_lowercase();
+            for package_manager in THIRD_PARTY_PACKAGE_MANAGERS {
+                assert!(
+                    !lowercased.contains(package_manager),
+                    "the {label} guidance sends a user to `{package_manager}`; the install is \
+                     `pip install streamlib` and the wheel carries the driver: {guidance}"
+                );
+            }
+        }
     }
 
     /// Apple needs more than the bare name: dyld's default search path excludes
