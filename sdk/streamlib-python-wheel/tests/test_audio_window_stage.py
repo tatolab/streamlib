@@ -350,6 +350,7 @@ def wire_with_window(data_plane: ProcessorLinkDataAccess, audio_window) -> None:
         "audio",
         "streamlib/tests/audio-window/never-opened",
         "streamlib/tests/audio-window/never-opened",
+        "this_machine",
         "streamlib/tests/audio-window/never-notified",
         "read_next_in_order",
         16,

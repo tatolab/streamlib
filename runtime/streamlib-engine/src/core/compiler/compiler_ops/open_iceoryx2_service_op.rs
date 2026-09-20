@@ -254,6 +254,7 @@ pub fn open_iceoryx2_service(
             &dest_port,
             &channel_service_name,
             &inbound_link_name_of(&from_port, &channel_service_name),
+            &the_clock_this_links_stamps_are_taken_on,
             notify_service_name_for_the_destination
                 .as_deref()
                 .unwrap_or(""),
@@ -1498,6 +1499,13 @@ fn wire_subprocess_source(
 /// nothing a reader could recognise, while the link name *is* that address.
 /// They are equal for a link whose source is on this runtime.
 ///
+/// `stamp_clock` rides it as a third, rather than being left for the far side
+/// to infer from those two being equal: which machine's clock a link's stamps
+/// are taken on is decided here, from the link's source, and a far side that
+/// guessed it from a naming coincidence would guess wrong — silently, and in
+/// the direction that lets two clocks be compared — the moment either name
+/// changed.
+///
 /// Hands back the cell this end's answer will land in, on the same terms as
 /// [`wire_subprocess_source`].
 #[allow(clippy::too_many_arguments)]
@@ -1508,6 +1516,7 @@ fn wire_subprocess_dest(
     dest_port: &str,
     channel_service_name: &str,
     inbound_link_name: &InboundLinkName,
+    stamp_clock: &TheClockAnInboundLinksStampsAreTakenOn,
     notify_service_name: &str,
     dest_input_port_delivery: DeliveryResolution,
     channel_sizing: ChannelSizing,
@@ -1528,6 +1537,7 @@ fn wire_subprocess_dest(
         "link_id": link_id.to_string(),
         "channel_service_name": channel_service_name,
         "inbound_link_name": inbound_link_name.as_str(),
+        "stamp_clock": stamp_clock.as_the_token_a_far_side_is_wired_with(),
         "notify_service_name": notify_service_name,
         "read_mode": dest_input_port_delivery.drain_order.as_manifest_str(),
         "channel_service_creation_depth": channel_sizing.channel_service_creation_depth,
@@ -1766,6 +1776,7 @@ mod tests {
             "in1",
             "pabc/out1",
             &InboundLinkName::from("pabc/out1"),
+            &TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             "pdef/notify",
             DeliveryProfile::Newest.resolve(),
             sizing_of_a_two_subscriber_test_channel(),
@@ -2129,6 +2140,7 @@ mod tests {
             "audio",
             "pabc/out1",
             &InboundLinkName::from("pabc/out1"),
+            &TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             "pdef/notify",
             DeliveryProfile::Ordered.resolve(),
             ChannelSizing {
@@ -2421,6 +2433,7 @@ mod tests {
             "in1",
             "pabc/out1",
             &InboundLinkName::from("pabc/out1"),
+            &TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             "pdef/notify",
             DeliveryProfile::Newest.resolve(),
             sizing_of_a_two_subscriber_test_channel(),
@@ -4004,6 +4017,7 @@ mod tests {
             "audio",
             "pabc/out1",
             &InboundLinkName::from("pabc/out1"),
+            &TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             "pdef/notify",
             DeliveryProfile::Ordered.resolve(),
             sizing_of_a_two_subscriber_test_channel(),
@@ -4056,6 +4070,7 @@ mod tests {
             "audio",
             "pabc/out1",
             &InboundLinkName::from("pabc/out1"),
+            &TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             "pdef/notify",
             DeliveryProfile::Ordered.resolve(),
             sizing_of_a_two_subscriber_test_channel(),
@@ -4563,6 +4578,7 @@ mod tests {
             "audio",
             "pabc/out1",
             &InboundLinkName::from("pabc/out1"),
+            &TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             "pdef/notify",
             DeliveryProfile::Ordered.resolve(),
             ChannelSizing {
@@ -5123,6 +5139,7 @@ mod tests {
                 "in1",
                 channel_service_name,
                 inbound_link_name,
+                &TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
                 "pdef/notify",
                 DeliveryProfile::Newest.resolve(),
                 sizing_of_a_two_subscriber_test_channel(),

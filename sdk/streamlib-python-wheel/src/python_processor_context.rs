@@ -2228,16 +2228,29 @@ impl PythonLinkInputDataReader {
             Ok(answer) => answer,
             Err(the_parent_did_not_answer) => {
                 tracing::warn!(
-                    "the runtime did not say which machine stamps the bags on                      `{inbound_link_name}`, so nothing here may be compared against them:                      {the_parent_did_not_answer}"
+                    "the runtime did not say which machine stamps the bags on \
+                     `{inbound_link_name}`, so nothing here may be compared against them: \
+                     {the_parent_did_not_answer}"
                 );
                 return Ok(None);
             }
         };
+        // Absent is what the runtime answers for a link nothing has crossed
+        // yet and for an address it carries nothing from; an answer that is not
+        // a mapping at all lands here too, and must not read as the same thing
+        // silently.
         match answer.get_item("stamp_clock_identity") {
             Ok(machine) => machine.extract::<Option<String>>(),
-            // Absent, which is what the runtime answers for a link nothing has
-            // crossed yet and for an address it carries nothing from.
-            Err(_) => Ok(None),
+            Err(not_a_mapping) => {
+                if !answer.is_instance_of::<pyo3::types::PyDict>() {
+                    tracing::warn!(
+                        "the runtime's answer about `{inbound_link_name}` was not a mapping this \
+                         build can read, so nothing here may be compared against its stamps: \
+                         {not_a_mapping}"
+                    );
+                }
+                Ok(None)
+            }
         }
     }
 }

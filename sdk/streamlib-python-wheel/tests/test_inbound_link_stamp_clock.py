@@ -18,6 +18,8 @@ not know rather than answer with this machine.
 
 import os
 import re
+from collections.abc import Callable
+from typing import Any
 
 import pytest
 
@@ -37,16 +39,24 @@ def _a_context_reading_one_link(
     request: pytest.FixtureRequest,
     channel_service_name: str,
     inbound_link_name: str,
+    stamp_clock: str = "this_machine",
+    escalate_request_to_parent: "Callable[..., Any] | None" = None,
 ) -> RuntimeContextFullAccess:
-    """One input port wired with the two names the engine sends for a link."""
+    """One input port wired the way the engine wires one: two names for the
+    link, and the token saying which machine its stamps are taken on."""
     unique = f"stampclock{os.getpid()}_{request.node.name}"
     destination = ProcessorLinkDataAccess()
     destination.wire_input_link(
-        INPUT_PORT, channel_service_name, inbound_link_name,
+        INPUT_PORT, channel_service_name, inbound_link_name, stamp_clock,
         f"{unique}_dest/notify", "read_next_in_order", 8, 8, 2, 1, f"L-{unique}",
     )  # fmt: skip
     return RuntimeContextFullAccess.open_for_helper_process(
-        {}, destination, "runtime-under-test", "processor-under-test"
+        {},
+        destination,
+        "runtime-under-test",
+        "processor-under-test",
+        escalate_request_to_parent,
+        None,
     )
 
 
@@ -78,9 +88,8 @@ def test_a_link_from_this_runtime_names_this_machine(
 def test_a_link_from_another_runtime_names_nothing_with_no_runtime_to_ask(
     request: pytest.FixtureRequest,
 ):
-    """The two names differ for a link carrying from another runtime — it rides
-    a channel hashed from the source port's mesh address — and a helper holds
-    no mesh session to say which machine is behind it.
+    """The engine wires a link carrying from another runtime with the token
+    saying so, and a helper holds no mesh session to name the machine behind it.
 
     With no parent to ask, the answer is `None`. Fail-without-fix: answer this
     machine for every link, and a processor comparing a local track's stamps
@@ -91,6 +100,7 @@ def test_a_link_from_another_runtime_names_nothing_with_no_runtime_to_ask(
         request,
         f"{unique}/meshlink-deadbeefdeadbeef",
         "bench-cam-a1b2/CameraSource/video",
+        stamp_clock="a_machine_only_the_app_process_can_name",
     )
 
     assert (
@@ -116,6 +126,156 @@ def test_a_link_name_the_port_does_not_carry_names_nothing(
     assert (
         context.inputs.inbound_link_stamp_clock_identity(
             INPUT_PORT, "pnothing/video_out"
+        )
+        is None
+    )
+
+
+def test_a_stamp_clock_token_this_build_does_not_know_is_refused_by_name(
+    request: pytest.FixtureRequest,
+):
+    """A wiring this build cannot read must refuse rather than fall back.
+
+    Falling back would have to pick one of the two answers, and picking
+    `this_machine` is the one that lets two clocks be compared — so the link
+    never opens instead.
+    """
+    unique = f"stampclockbadtoken{os.getpid()}"
+    with pytest.raises(ValueError, match="stamp clock"):
+        _a_context_reading_one_link(
+            request,
+            f"{unique}/video_out",
+            f"{unique}/video_out",
+            stamp_clock="whatever_machine",
+        )
+
+
+# =============================================================================
+# The half a helper cannot answer for itself
+# =============================================================================
+
+A_REMOTE_LINKS_NAME = "bench-cam-a1b2/Camera Source/video"
+ANOTHER_MACHINE = "8b93a1c2-0000-4d5a-9a11-2c7f0d5e2f1c"
+
+
+class _AParentThatAnswers:
+    """Stands in for the bridge's `request_from_parent`, recording what it was
+    asked so the question itself can be checked, not only the answer."""
+
+    def __init__(self, answer: "dict[str, Any] | Exception") -> None:
+        self.answer = answer
+        self.asked: "list[dict[str, Any]]" = []
+
+    def __call__(self, op: "dict[str, Any]") -> "dict[str, Any]":
+        self.asked.append(dict(op))
+        if isinstance(self.answer, Exception):
+            raise self.answer
+        return self.answer
+
+
+def test_a_remote_links_machine_is_asked_of_the_runtime_and_handed_back(
+    request: pytest.FixtureRequest,
+):
+    """The whole of the corrected Design §2: a helper holds no mesh session, so
+    it asks the runtime by the link's name — which for a remote link is the
+    source port's mesh address — and hands back what the runtime answered.
+
+    Fail-without-fix: return `None` without asking, or answer this machine, and
+    a Python sink is told a remote track shares a clock with a local one.
+    """
+    unique = f"stampclockasks{os.getpid()}"
+    the_parent = _AParentThatAnswers(
+        {"result": "ok", "stamp_clock_identity": ANOTHER_MACHINE}
+    )
+    context = _a_context_reading_one_link(
+        request,
+        f"{unique}/meshlink-deadbeefdeadbeef",
+        A_REMOTE_LINKS_NAME,
+        stamp_clock="a_machine_only_the_app_process_can_name",
+        escalate_request_to_parent=the_parent,
+    )
+
+    named = context.inputs.inbound_link_stamp_clock_identity(
+        INPUT_PORT, A_REMOTE_LINKS_NAME
+    )
+
+    assert named == ANOTHER_MACHINE
+    assert the_parent.asked == [
+        {
+            "op": "inbound_link_stamp_clock_identity",
+            "inbound_link_name": A_REMOTE_LINKS_NAME,
+        }
+    ], "the runtime is asked by the link's name, and asked once"
+
+
+def test_a_link_from_this_runtime_never_asks_the_runtime(
+    request: pytest.FixtureRequest,
+):
+    """A local link is answered in process. Asking would put a bridge round
+    trip behind every one of them.
+    """
+    unique = f"stampclocknoask{os.getpid()}"
+    channel_service_name = f"{unique}/video_out"
+    the_parent = _AParentThatAnswers({"result": "ok", "stamp_clock_identity": ANOTHER_MACHINE})
+    context = _a_context_reading_one_link(
+        request,
+        channel_service_name,
+        channel_service_name,
+        escalate_request_to_parent=the_parent,
+    )
+
+    named = context.inputs.inbound_link_stamp_clock_identity(
+        INPUT_PORT, channel_service_name
+    )
+
+    assert the_parent.asked == [], "a local link is not the runtime's to answer"
+    assert named is not None and named != ANOTHER_MACHINE
+
+
+def test_a_runtime_that_cannot_answer_names_no_machine_rather_than_raising(
+    request: pytest.FixtureRequest,
+):
+    """The caller asked which clock a link is on; "the runtime could not say"
+    is an answer to that, and it is the answer that stops a stamp being
+    compared. Raising would take down a processor that was being careful.
+    """
+    unique = f"stampclockrefused{os.getpid()}"
+    context = _a_context_reading_one_link(
+        request,
+        f"{unique}/meshlink-deadbeefdeadbeef",
+        A_REMOTE_LINKS_NAME,
+        stamp_clock="a_machine_only_the_app_process_can_name",
+        escalate_request_to_parent=_AParentThatAnswers(
+            RuntimeError("the parent refused")
+        ),
+    )
+
+    assert (
+        context.inputs.inbound_link_stamp_clock_identity(
+            INPUT_PORT, A_REMOTE_LINKS_NAME
+        )
+        is None
+    )
+
+
+def test_a_runtime_that_names_no_machine_yet_hands_back_nothing(
+    request: pytest.FixtureRequest,
+):
+    """The runtime answers with the key absent while nothing has crossed the
+    link, which must read as `None` rather than as a protocol break.
+    """
+    unique = f"stampclocknotyet{os.getpid()}"
+    context = _a_context_reading_one_link(
+        request,
+        f"{unique}/meshlink-deadbeefdeadbeef",
+        A_REMOTE_LINKS_NAME,
+        stamp_clock="a_machine_only_the_app_process_can_name",
+        escalate_request_to_parent=_AParentThatAnswers({"result": "ok"}),
+    )
+
+    assert (
+        context.inputs.inbound_link_stamp_clock_identity(
+            INPUT_PORT, A_REMOTE_LINKS_NAME
         )
         is None
     )

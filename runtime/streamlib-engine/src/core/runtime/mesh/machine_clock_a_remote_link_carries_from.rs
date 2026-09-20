@@ -5,10 +5,10 @@
 //! stamped on, as the mesh currently knows it.
 //!
 //! A stamp crosses the mesh unchanged and is never compared against a stamp
-//! from another clock, so a destination reading two links has to be able to ask
-//! which clock each one is on. The answer is a property of the link rather than
-//! of each bag (owner, 2026-09-14): one cell per source address, written by the
-//! ingress carrying it and read by `graph` and by every destination of it.
+//! from another clock ([`MachineClockIdentity`]). The answer is a property of
+//! the link rather than of each bag (owner, 2026-09-14): one cell per source
+//! address, written by the ingress carrying it and read by `graph` and by every
+//! destination of it.
 //!
 //! Nothing is known until the first bag lands. The address's runtime being on
 //! the mesh says nothing about the clock — a runtime announces its host, which

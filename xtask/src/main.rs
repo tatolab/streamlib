@@ -491,6 +491,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "iceoryx2::node::tests::the_sweep_reads_the_engine_owned_domain_and_never_the_ambient_one",
                 "iceoryx2::output::tests::write_raw_refuses_over_ceiling_and_grows_within_it",
                 "iceoryx2::posix_shared_memory_headroom",
+                "iceoryx2::the_clock_an_inbound_links_stamps_are_taken_on",
                 "iceoryx2::channel_idle_poll_backoff",
                 "core::runtime::tap::tests::a_bag_published_after_a_quiet_stretch_still_reaches_a_tap",
                 "iceoryx2::node::tests::a_deeper_open_survives_a_shallow_service_a_dead_holder_left_behind",

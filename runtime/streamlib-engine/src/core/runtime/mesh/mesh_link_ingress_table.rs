@@ -181,17 +181,12 @@ impl MeshLinkIngressTable {
         &self,
         address: &MeshPortAddress,
     ) -> WhatIsKnownOfAnInboundLinksStampClock {
-        match self
-            .carried
+        self.carried
             .lock()
             .machine_clocks_by_address
             .get(address)
-            .map(|machine_clock| machine_clock.what_it_is_now())
-        {
-            Some(Some(machine)) => WhatIsKnownOfAnInboundLinksStampClock::TheMachine(machine),
-            Some(None) => WhatIsKnownOfAnInboundLinksStampClock::NothingHasCrossedItYet,
-            None => WhatIsKnownOfAnInboundLinksStampClock::NoSuchLinkFeedsThatPort,
-        }
+            .map(|machine_clock| machine_clock.what_it_is_now().into())
+            .unwrap_or(WhatIsKnownOfAnInboundLinksStampClock::NoSuchLinkFeedsThatPort)
     }
 
     /// Record the notify service one link's destination waits on and where its
@@ -808,6 +803,7 @@ fn tell_the_ingress_about_every_link_from(
                 link_id.as_str(),
                 notifier,
                 where_its_hop_loss_is_counted,
+                link.where_its_hop_loss_is_counted.clone(),
             );
             link.the_ingress_knows_about_it = true;
         }
@@ -909,8 +905,6 @@ mod tests {
         }
     }
 
-    /// A runtime nobody has announced leaves the link waiting, naming the
-    /// runtime — which is what a reader has to go and start.
     /// The one question a helper cannot answer for itself, answered here.
     /// An address this runtime carries nothing from says so rather than
     /// naming a machine, and minting a cell for it would leave an entry
@@ -959,6 +953,8 @@ mod tests {
         );
     }
 
+    /// A runtime nobody has announced leaves the link waiting, naming the
+    /// runtime — which is what a reader has to go and start.
     #[test]
     fn a_runtime_that_is_not_on_the_mesh_leaves_the_link_waiting_naming_it() {
         let outcome =

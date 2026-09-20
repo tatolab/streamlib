@@ -4,12 +4,10 @@
 //! Which machine's monotonic clock the bags arriving on one inbound link were
 //! stamped on.
 //!
-//! Every stamp on the data plane is a machine's monotonic clock, whose epoch is
-//! that machine's own boot, so two stamps from two machines are readings of two
-//! unrelated clocks and subtracting them means nothing. A destination fanning
-//! several links in therefore has to be able to ask, link by link, which clock
-//! it is reading — and the answer belongs to the link rather than to each bag
-//! (owner, 2026-09-14).
+//! One clock per machine ([`MachineClockIdentity`]), so a destination fanning
+//! several links in has to be able to ask, link by link, which one it is
+//! reading before it compares two stamps. The answer belongs to the link rather
+//! than to each bag (owner, 2026-09-14).
 //!
 //! What a process can answer depends on where it is. The app process holds the
 //! mesh, so it reads the ingress's own cell; a helper process holds none, and
@@ -38,7 +36,47 @@ pub enum TheClockAnInboundLinksStampsAreTakenOn {
     AMachineOnlyTheAppProcessCanName,
 }
 
+/// The token a far side is wired with for a link whose bags were stamped on
+/// this machine.
+pub const THIS_MACHINE_STAMP_CLOCK_TOKEN: &str = "this_machine";
+
+/// The token a far side is wired with for a link only the app process can name
+/// the machine of.
+pub const ONLY_THE_APP_PROCESS_CAN_NAME_STAMP_CLOCK_TOKEN: &str =
+    "a_machine_only_the_app_process_can_name";
+
 impl TheClockAnInboundLinksStampsAreTakenOn {
+    /// Which of the two answers a far side is wired with, as the envelope
+    /// spells it.
+    ///
+    /// The cell cannot cross a process boundary, so what a helper is told is
+    /// the *kind* of answer rather than the answer: this machine, or a machine
+    /// only the app process holds a mesh session to name. Sent rather than
+    /// re-derived on the far side, because this side already knows it from the
+    /// link's source and a far side guessing from the shape of two names would
+    /// guess wrong the moment either name changed.
+    pub fn as_the_token_a_far_side_is_wired_with(&self) -> &'static str {
+        match self {
+            Self::ThisMachine => THIS_MACHINE_STAMP_CLOCK_TOKEN,
+            Self::WhicheverMachineTheMeshIsCarryingFrom(_)
+            | Self::AMachineOnlyTheAppProcessCanName => {
+                ONLY_THE_APP_PROCESS_CAN_NAME_STAMP_CLOCK_TOKEN
+            }
+        }
+    }
+
+    /// The answer a far side reads off the token it was wired with, or `None`
+    /// for a token this build does not know.
+    pub fn of_the_token_a_far_side_was_wired_with(token: &str) -> Option<Self> {
+        match token {
+            THIS_MACHINE_STAMP_CLOCK_TOKEN => Some(Self::ThisMachine),
+            ONLY_THE_APP_PROCESS_CAN_NAME_STAMP_CLOCK_TOKEN => {
+                Some(Self::AMachineOnlyTheAppProcessCanName)
+            }
+            _ => None,
+        }
+    }
+
     /// What this process can say about the clock right now.
     pub fn what_is_known_of_it(&self) -> WhatIsKnownOfAnInboundLinksStampClock {
         match self {
@@ -46,10 +84,7 @@ impl TheClockAnInboundLinksStampsAreTakenOn {
                 MachineClockIdentity::of_this_machine(),
             ),
             Self::WhicheverMachineTheMeshIsCarryingFrom(carries_from) => {
-                match carries_from.what_it_is_now() {
-                    Some(machine) => WhatIsKnownOfAnInboundLinksStampClock::TheMachine(machine),
-                    None => WhatIsKnownOfAnInboundLinksStampClock::NothingHasCrossedItYet,
-                }
+                carries_from.what_it_is_now().into()
             }
             Self::AMachineOnlyTheAppProcessCanName => {
                 WhatIsKnownOfAnInboundLinksStampClock::OnlyTheAppProcessCanSay
@@ -59,11 +94,6 @@ impl TheClockAnInboundLinksStampsAreTakenOn {
 }
 
 /// The answer to "which machine's clock are this link's stamps taken on".
-///
-/// Four answers rather than an identity or nothing, because "not yet", "not
-/// here" and "no such link" are three different things and a reader that
-/// treats them alike either compares stamps it must not or refuses to compare
-/// stamps it may.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WhatIsKnownOfAnInboundLinksStampClock {
     /// The machine whose monotonic clock stamped the bags arriving on it.
@@ -74,8 +104,21 @@ pub enum WhatIsKnownOfAnInboundLinksStampClock {
     /// It carries from another runtime and is being read in a helper process,
     /// which holds no mesh session. The app process can answer.
     OnlyTheAppProcessCanSay,
-    /// No link of that name feeds that port.
+    /// Nothing of that name is bound on that port here — no such link, or a
+    /// process that holds no binding for it at all.
     NoSuchLinkFeedsThatPort,
+}
+
+impl From<Option<MachineClockIdentity>> for WhatIsKnownOfAnInboundLinksStampClock {
+    /// What a cell's current reading means, in one place: both the binding and
+    /// the ingress table answer off one of these, and the two must agree on
+    /// what an empty cell says.
+    fn from(what_a_cell_reads: Option<MachineClockIdentity>) -> Self {
+        match what_a_cell_reads {
+            Some(machine) => Self::TheMachine(machine),
+            None => Self::NothingHasCrossedItYet,
+        }
+    }
 }
 
 impl WhatIsKnownOfAnInboundLinksStampClock {
@@ -133,6 +176,56 @@ mod tests {
             WhatIsKnownOfAnInboundLinksStampClock::TheMachine(another_machine),
             "the binding reads the ingress's cell, so it follows what arrives"
         );
+    }
+
+    /// A link's kind survives the envelope, and a remote one lands on the far
+    /// side as the answer only the app process can give — never as this
+    /// machine, which is the answer that would let two clocks be compared.
+    #[test]
+    fn every_clocks_token_reads_back_as_the_answer_a_far_side_owes() {
+        let carries_from = Arc::new(MachineClockARemoteLinkCarriesFrom::default());
+
+        for (wired_with, what_the_far_side_reads) in [
+            (
+                TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
+                WhatIsKnownOfAnInboundLinksStampClock::TheMachine(
+                    MachineClockIdentity::of_this_machine(),
+                ),
+            ),
+            (
+                TheClockAnInboundLinksStampsAreTakenOn::WhicheverMachineTheMeshIsCarryingFrom(
+                    Arc::clone(&carries_from),
+                ),
+                WhatIsKnownOfAnInboundLinksStampClock::OnlyTheAppProcessCanSay,
+            ),
+        ] {
+            let token = wired_with.as_the_token_a_far_side_is_wired_with();
+            let on_the_far_side =
+                TheClockAnInboundLinksStampsAreTakenOn::of_the_token_a_far_side_was_wired_with(
+                    token,
+                )
+                .unwrap_or_else(|| panic!("{token} must read back as an answer"));
+
+            assert_eq!(
+                on_the_far_side.what_is_known_of_it(),
+                what_the_far_side_reads
+            );
+        }
+    }
+
+    /// A token this build does not know is read as nothing, so a far side
+    /// refuses the wiring by name rather than falling back to this machine.
+    #[test]
+    fn a_token_this_build_does_not_know_reads_as_no_answer() {
+        for not_one in ["", "this machine", "THIS_MACHINE", "another_machine"] {
+            assert!(
+                TheClockAnInboundLinksStampsAreTakenOn::of_the_token_a_far_side_was_wired_with(
+                    not_one
+                )
+                .is_none(),
+                "{not_one:?} must read as no answer"
+            );
+        }
     }
 
     /// A helper holds no mesh, so it sends the reader to the app process

@@ -256,21 +256,11 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
     /// Take the machine this track's bags are stamped on, or latch the track
     /// by name when it is not the machine the recording is on.
     ///
-    /// Whether the track may go on recording, the shape
-    /// [`Self::commit_or_latch_media`] uses for the same question about a
-    /// track's codec.
-    ///
-    /// Every stamp is a machine's monotonic clock, whose epoch is that
-    /// machine's own boot, and the file's epoch is the earliest first stamp
-    /// across every track. A track from another machine joining that would be
-    /// placed against an epoch its stamps have nothing to do with — two boots
-    /// can be days apart — so it stops by name and every other track keeps
-    /// recording. Its own file, written by its own sink, is the way to record
-    /// two machines at once.
-    ///
-    /// A track whose clock changes mid-recording stops for the same reason:
-    /// its peer came back on a fresh boot, and its stamps restart somewhere
-    /// unrelated to where they left off.
+    /// The file's epoch is the earliest first stamp across every track, so a
+    /// track on another machine's clock would be placed against an epoch its
+    /// stamps have nothing to do with — two boots can be days apart. Its own
+    /// file, written by its own sink, is how two machines are recorded at
+    /// once.
     fn commit_or_latch_the_tracks_stamp_clock(
         &mut self,
         track_index: usize,
@@ -282,7 +272,10 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
         if let Some(the_tracks_machine) = self.tracks[track_index].stamp_clock_identity {
             if the_tracks_machine != stamped_on {
                 let refusal = format!(
-                    "the bags on `{}` were stamped on machine {the_tracks_machine} and are now                      stamped on machine {stamped_on} — the link's peer came back on a fresh boot,                      and a monotonic stamp from one boot says nothing about where the last one                      left off",
+                    "the bags on `{}` were stamped on machine {the_tracks_machine} and are now \
+                     stamped on machine {stamped_on} — the link's peer came back on a fresh \
+                     boot, and a monotonic stamp from one boot says nothing about where the last \
+                     one left off",
                     self.tracks[track_index].inbound_link_name
                 );
                 self.latch_track(track_index, refusal);
@@ -292,22 +285,23 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
         }
 
         match self.the_machine_this_recording_is_on {
-            None => {
-                self.the_machine_this_recording_is_on = Some(stamped_on);
-                self.tracks[track_index].stamp_clock_identity = Some(stamped_on);
-                true
-            }
-            Some(the_recordings_machine) if the_recordings_machine == stamped_on => {
-                self.tracks[track_index].stamp_clock_identity = Some(stamped_on);
-                true
-            }
-            Some(the_recordings_machine) => {
+            Some(the_recordings_machine) if the_recordings_machine != stamped_on => {
                 let refusal = format!(
-                    "the bags on `{}` were stamped on machine {stamped_on}, and this recording is                      on machine {the_recordings_machine} — two machines' monotonic clocks have                      unrelated epochs, so there is no one timeline to place both tracks on",
+                    "the bags on `{}` were stamped on machine {stamped_on}, and this recording \
+                     is on machine {the_recordings_machine} — two machines' monotonic clocks \
+                     have unrelated epochs, so there is no one timeline to place both tracks on",
                     self.tracks[track_index].inbound_link_name
                 );
                 self.latch_track(track_index, refusal);
                 false
+            }
+            // The recording's own machine, whether this track is the one that
+            // settled it or a later one agreeing with it.
+            _ => {
+                self.the_machine_this_recording_is_on
+                    .get_or_insert(stamped_on);
+                self.tracks[track_index].stamp_clock_identity = Some(stamped_on);
+                true
             }
         }
     }
@@ -321,6 +315,18 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
 
     pub fn tally(&self) -> &Mp4SinkRunTally {
         &self.tally
+    }
+
+    /// Why the track on `inbound_link_name` stopped, or `None` while it is
+    /// still recording.
+    ///
+    /// The refusal is what a person reads when their recording quietly loses a
+    /// track, so it is worth asserting on rather than only counting.
+    pub fn why_a_track_stopped(&self, inbound_link_name: &str) -> Option<&str> {
+        self.tracks
+            .iter()
+            .find(|track| track.inbound_link_name == inbound_link_name)
+            .and_then(|track| track.latched_refusal.as_deref())
     }
 
     /// Whether `moov` has landed — false while any track is still silent.
@@ -1406,12 +1412,32 @@ mod tests {
                 )
                 .expect("accepted");
         }
+        const LINK: &str = "bench-cam-a1b2/Camera Source/video";
+        let why_it_stopped = writer
+            .why_a_track_stopped(LINK)
+            .expect("the odd machine's track stopped")
+            .to_string();
         let tally = writer.finish().expect("the file closes");
 
         assert_eq!(
             tally.tracks_latched, 1,
             "only the odd machine's track stops"
         );
+        // By name, and naming both machines: this is the line a person reads
+        // when a track quietly leaves their recording, and it has to say which
+        // track and which two clocks without them going to look anything up.
+        for named in [LINK, ONE_MACHINE, ANOTHER_MACHINE] {
+            assert!(
+                why_it_stopped.contains(named),
+                "the refusal must name {named}, and reads {why_it_stopped:?}"
+            );
+        }
+        assert!(
+            !why_it_stopped.contains("  "),
+            "the refusal reads as one sentence, and a run of spaces is a lost line \
+             continuation: {why_it_stopped:?}"
+        );
+
         assert_eq!(
             tally.bags_discarded_after_latch, 8,
             "every bag of the stopped track is read and discarded rather than left to back up"
@@ -1517,6 +1543,26 @@ mod tests {
                 a_machine(ANOTHER_MACHINE),
             )
             .expect("accepted");
+
+        const LINK: &str = "bench-cam-a1b2/Microphone/audio";
+        let why_it_stopped = writer
+            .why_a_track_stopped(LINK)
+            .expect("the track whose clock changed stopped")
+            .to_string();
+        // By name, and naming both machines: this is the line a person reads
+        // when a track quietly leaves their recording, and it has to say which
+        // track and which two clocks without them going to look anything up.
+        for named in [LINK, ONE_MACHINE, ANOTHER_MACHINE] {
+            assert!(
+                why_it_stopped.contains(named),
+                "the refusal must name {named}, and reads {why_it_stopped:?}"
+            );
+        }
+        assert!(
+            !why_it_stopped.contains("  "),
+            "the refusal reads as one sentence, and a run of spaces is a lost line \
+             continuation: {why_it_stopped:?}"
+        );
 
         let tally = writer.finish().expect("the file closes");
         assert_eq!(tally.tracks_latched, 1);

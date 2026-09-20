@@ -205,7 +205,7 @@ impl RuntimeContext {
     }
 
     /// Every port on another runtime this runtime links from.
-    pub fn mesh_link_ingress_table(&self) -> &Arc<MeshLinkIngressTable> {
+    pub(crate) fn mesh_link_ingress_table(&self) -> &Arc<MeshLinkIngressTable> {
         &self.mesh_link_ingress_table
     }
 

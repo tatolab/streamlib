@@ -26,7 +26,8 @@ use streamlib::sdk::iceoryx2::{
     ChannelEgressConfig, ChannelTrustTier, HelperProcessLossCountBoardWriter,
     ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, Iceoryx2Node,
     InboundLinkLossCountBoardSlotAndWiringGeneration, InboundLinkName, InputMailboxesInner,
-    OutputWriterInner, ReadMode, ResolvedAudioWindowContract,
+    ONLY_THE_APP_PROCESS_CAN_NAME_STAMP_CLOCK_TOKEN, OutputWriterInner, ReadMode,
+    ResolvedAudioWindowContract, THIS_MACHINE_STAMP_CLOCK_TOKEN,
     TheClockAnInboundLinksStampsAreTakenOn, WhatIsKnownOfAnInboundLinksStampClock,
 };
 
@@ -478,6 +479,7 @@ impl PythonProcessorLinkDataAccess {
         port_name,
         channel_service_name,
         inbound_link_name,
+        stamp_clock,
         notify_service_name,
         read_mode,
         channel_service_creation_depth,
@@ -496,6 +498,7 @@ impl PythonProcessorLinkDataAccess {
         port_name: &str,
         channel_service_name: &str,
         inbound_link_name: &str,
+        stamp_clock: &str,
         notify_service_name: &str,
         read_mode: &str,
         channel_service_creation_depth: usize,
@@ -508,6 +511,21 @@ impl PythonProcessorLinkDataAccess {
         wiring_generation: Option<u64>,
     ) -> PyResult<()> {
         let (node, input_mailboxes) = self.helper_process_input_plane()?;
+        // Read rather than guessed from the two names differing: which
+        // machine's clock this link's stamps are taken on is the parent's to
+        // decide, and a wrong answer here is invisible — it reads as this
+        // machine, and lets a processor compare two clocks.
+        let Some(stamp_clock) =
+            TheClockAnInboundLinksStampsAreTakenOn::of_the_token_a_far_side_was_wired_with(
+                stamp_clock,
+            )
+        else {
+            return Err(PyValueError::new_err(format!(
+                "input port {port_name:?} was wired with stamp clock {stamp_clock:?}; the engine \
+                 sends only {THIS_MACHINE_STAMP_CLOCK_TOKEN:?} or \
+                 {ONLY_THE_APP_PROCESS_CAN_NAME_STAMP_CLOCK_TOKEN:?}"
+            )));
+        };
         let read_mode = match read_mode {
             "skip_to_latest" => ReadMode::SkipToLatest,
             "read_next_in_order" => ReadMode::ReadNextInOrder,
@@ -556,17 +574,7 @@ impl PythonProcessorLinkDataAccess {
                     port_name,
                     link_id,
                     &InboundLinkName::from(inbound_link_name),
-                    // The two names differ for a link carrying from another
-                    // runtime — it rides a channel hashed from the source
-                    // port's mesh address — and that is the whole of what this
-                    // process can tell about the clock: a helper opens no mesh
-                    // session, so the machine behind such a link is the app
-                    // process's to name.
-                    if inbound_link_name == channel_service_name {
-                        TheClockAnInboundLinksStampsAreTakenOn::ThisMachine
-                    } else {
-                        TheClockAnInboundLinksStampsAreTakenOn::AMachineOnlyTheAppProcessCanName
-                    },
+                    stamp_clock.clone(),
                     channel.create_subscriber(input_port_ring_depth)?,
                 );
                 if let Some((board_writer, (loss_count_slot, wiring_generation))) =
@@ -803,6 +811,7 @@ mod tests {
                     python,
                     "frames_from_upstream",
                     &channel,
+                    THIS_MACHINE_STAMP_CLOCK_TOKEN,
                     &channel,
                     &notify,
                     "read_next_in_order",
@@ -932,6 +941,7 @@ mod tests {
                     python,
                     "frames_from_upstream",
                     &channel,
+                    THIS_MACHINE_STAMP_CLOCK_TOKEN,
                     &channel,
                     &notify,
                     "read_next_in_order",
@@ -1041,6 +1051,7 @@ mod tests {
                     python,
                     "frames_from_upstream",
                     &second_channel,
+                    THIS_MACHINE_STAMP_CLOCK_TOKEN,
                     &second_channel,
                     &notify,
                     "read_next_in_order",
@@ -1117,6 +1128,7 @@ mod tests {
                     python,
                     "audio_from_upstream",
                     &channel,
+                    THIS_MACHINE_STAMP_CLOCK_TOKEN,
                     &channel,
                     &notify,
                     "read_next_in_order",
@@ -1288,6 +1300,7 @@ mod tests {
                     python,
                     "frames_from_upstream",
                     &channel,
+                    THIS_MACHINE_STAMP_CLOCK_TOKEN,
                     &channel,
                     &notify,
                     "whenever",

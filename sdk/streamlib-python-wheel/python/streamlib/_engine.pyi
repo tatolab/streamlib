@@ -799,6 +799,7 @@ class ProcessorLinkDataAccess:
         port_name: str,
         channel_service_name: str,
         inbound_link_name: str,
+        stamp_clock: str,
         notify_service_name: str,
         read_mode: str,
         channel_service_creation_depth: int,
@@ -817,6 +818,11 @@ class ProcessorLinkDataAccess:
         differ for a link carrying from another runtime, which rides a channel
         hashed from the source port's mesh address, and are equal for a link
         from this runtime.
+
+        `stamp_clock` says which machine's clock this link's stamps are taken
+        on — `"this_machine"`, or `"a_machine_only_the_app_process_can_name"`
+        for a link carrying from another runtime, whose machine this process
+        holds no mesh session to name. Any other value raises `ValueError`.
 
         Once a loss-count board is open, `loss_count_slot` and
         `wiring_generation` name where the link's losses are mirrored, and

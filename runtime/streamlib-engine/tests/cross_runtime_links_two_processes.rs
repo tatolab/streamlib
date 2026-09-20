@@ -563,14 +563,16 @@ fn a_bag_crosses_the_mesh_byte_equal_under_the_stamp_its_producer_wrote() {
 /// A link names no machine until a bag has crossed it, and names the machine
 /// that stamped that bag afterwards.
 ///
-/// The two peers are two processes on one machine, so the machine a bag names
-/// is this one — which is the point: the identity rides every message's
-/// attachment and is read back off the wire, rather than being assumed from
-/// the link's shape.
+/// What it catches: an identity that never reaches the ingress's cell over a
+/// real Zenoh hop, and one written there before anything crossed — a link that
+/// named a machine while carrying nothing would let a sink compare stamps it
+/// never received.
 ///
-/// What it catches: an identity that never reaches the ingress's cell, and one
-/// written there before anything crossed — a link that named a machine while
-/// carrying nothing would let a sink compare stamps it never received.
+/// What it cannot catch: that the identity is the *sender's* rather than this
+/// machine's. Both peers run on one machine, so the two are equal here, and
+/// forcing a second boot id would need a back door in library code. That half
+/// is locked by `mesh_link_ingress::tests::
+/// the_machine_a_message_names_is_the_senders_and_never_this_one`.
 #[test]
 #[serial]
 fn a_link_names_no_machine_until_a_bag_has_crossed_it_and_that_bags_machine_after() {
