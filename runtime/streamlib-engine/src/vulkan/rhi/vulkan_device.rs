@@ -57,7 +57,7 @@ pub(crate) const CROSS_PROCESS_EXPORT_BY_FILE_DESCRIPTOR_EXISTS_ON_THIS_PLATFORM
 /// for, so it answers 1.0.x to an instance that asked for 1.0 and 1.4.x to one
 /// that asked for 1.4, on the same hardware. `cargo xtask
 /// check-no-device-api-version-branch` keeps the tree off that probe.
-pub const REQUESTED_VULKAN_INSTANCE_API_VERSION: u32 = vk::make_version(1, 4, 0);
+pub(crate) const REQUESTED_VULKAN_INSTANCE_API_VERSION: u32 = vk::make_version(1, 4, 0);
 
 /// Best-effort hint about which third-party GPU compute libraries are
 /// **available to integrate against this device**. Probed once at
@@ -455,6 +455,22 @@ fn no_usable_vulkan_driver_guidance() -> &'static str {
     }
 }
 
+/// What to install when no loader library opened, per platform.
+fn no_vulkan_loader_library_guidance() -> &'static str {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    {
+        "No Vulkan loader library could be opened. Install the loader and MoltenVK \
+         (`brew install vulkan-loader molten-vk`, or the LunarG SDK), then check that \
+         `libvulkan.dylib` resolves. Tried:"
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    {
+        "No Vulkan loader library could be opened. Install your GPU vendor's Vulkan \
+         driver and the loader (`libvulkan1` / `vulkan-loader`), then check `vulkaninfo` \
+         runs. Tried:"
+    }
+}
+
 /// Dynamic libraries the Vulkan loader may live in, in the order they are tried.
 ///
 /// vulkanalia's own [`LIBRARY`] name is first on every platform, so a host that
@@ -512,22 +528,6 @@ fn load_the_first_vulkan_loader_library_that_opens() -> Result<LibloadingLoader>
         no_vulkan_loader_library_guidance(),
         refusal_per_candidate.join("\n  "),
     )))
-}
-
-/// What to install when no loader library opened, per platform.
-fn no_vulkan_loader_library_guidance() -> &'static str {
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
-    {
-        "No Vulkan loader library could be opened. Install the loader and MoltenVK \
-         (`brew install vulkan-loader molten-vk`, or the LunarG SDK), then check that \
-         `libvulkan.dylib` resolves. Tried:"
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-    {
-        "No Vulkan loader library could be opened. Install your GPU vendor's Vulkan \
-         driver and the loader (`libvulkan1` / `vulkan-loader`), then check `vulkaninfo` \
-         runs. Tried:"
-    }
 }
 
 impl HostVulkanDevice {
@@ -627,7 +627,6 @@ impl HostVulkanDevice {
                 instance_extensions.push(headless_ext.as_ptr());
                 tracing::info!("VK_EXT_headless_surface available");
             }
-
         }
 
         // VK_EXT_swapchain_colorspace — exposes the wide-gamut + HDR
@@ -949,7 +948,9 @@ impl HostVulkanDevice {
                 device_extensions.push(metal_objects_ext.as_ptr());
                 tracing::info!("VK_EXT_metal_objects enabled - Metal interop available");
             } else {
-                tracing::warn!("VK_EXT_metal_objects not available - Metal interop will be limited");
+                tracing::warn!(
+                    "VK_EXT_metal_objects not available - Metal interop will be limited"
+                );
             }
         }
 

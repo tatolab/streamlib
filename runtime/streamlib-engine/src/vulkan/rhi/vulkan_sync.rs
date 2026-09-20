@@ -183,7 +183,9 @@ impl HostVulkanTimelineSemaphore {
             .handle_types(vk::ExternalSemaphoreHandleTypeFlags::OPAQUE_FD)
             .build();
 
-        let info = if exportable && super::CROSS_PROCESS_EXPORT_BY_FILE_DESCRIPTOR_EXISTS_ON_THIS_PLATFORM {
+        let info = if exportable
+            && super::CROSS_PROCESS_EXPORT_BY_FILE_DESCRIPTOR_EXISTS_ON_THIS_PLATFORM
+        {
             // Chain order: SemaphoreCreateInfo -> ExportSemaphoreCreateInfo -> SemaphoreTypeCreateInfo.
             // p_next is set manually to avoid moving the local `type_info`
             // into the builder's pNext (vulkanalia's builder takes &mut and
@@ -273,10 +275,6 @@ impl HostVulkanTimelineSemaphore {
                 "HostVulkanTimelineSemaphore::export_opaque_fd: semaphore was not created with `new_exportable`".into(),
             ));
         }
-        let info = vk::SemaphoreGetFdInfoKHR::builder()
-            .semaphore(self.semaphore)
-            .handle_type(vk::ExternalSemaphoreHandleTypeFlags::OPAQUE_FD)
-            .build();
         if !super::CROSS_PROCESS_EXPORT_BY_FILE_DESCRIPTOR_EXISTS_ON_THIS_PLATFORM {
             return Err(Error::GpuError(
                 "HostVulkanTimelineSemaphore::export_opaque_fd: OPAQUE_FD semaphore export is \
@@ -285,6 +283,10 @@ impl HostVulkanTimelineSemaphore {
                     .into(),
             ));
         }
+        let info = vk::SemaphoreGetFdInfoKHR::builder()
+            .semaphore(self.semaphore)
+            .handle_type(vk::ExternalSemaphoreHandleTypeFlags::OPAQUE_FD)
+            .build();
         let fd = unsafe { self.device.get_semaphore_fd_khr(&info) }
             .map_err(|e| Error::GpuError(format!("vkGetSemaphoreFdKHR failed: {e}")))?;
         Ok(fd)

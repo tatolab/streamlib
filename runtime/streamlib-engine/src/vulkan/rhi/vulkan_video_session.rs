@@ -1080,7 +1080,10 @@ mod tests {
             refuse_a_video_session_this_device_cannot_serve(
                 false,
                 true,
-                &descriptor_for("decode-only/encode", vk::VideoCodecOperationFlagsKHR::ENCODE_H264),
+                &descriptor_for(
+                    "decode-only/encode",
+                    vk::VideoCodecOperationFlagsKHR::ENCODE_H264
+                ),
             )
             .is_err(),
             "a decode-capable device must still refuse an encode session"
@@ -1089,7 +1092,10 @@ mod tests {
             refuse_a_video_session_this_device_cannot_serve(
                 true,
                 false,
-                &descriptor_for("encode-only/decode", vk::VideoCodecOperationFlagsKHR::DECODE_H264),
+                &descriptor_for(
+                    "encode-only/decode",
+                    vk::VideoCodecOperationFlagsKHR::DECODE_H264
+                ),
             )
             .is_err(),
             "an encode-capable device must still refuse a decode session"
@@ -1101,7 +1107,10 @@ mod tests {
         refuse_a_video_session_this_device_cannot_serve(
             true,
             true,
-            &descriptor_for("served/decode", vk::VideoCodecOperationFlagsKHR::DECODE_H264),
+            &descriptor_for(
+                "served/decode",
+                vk::VideoCodecOperationFlagsKHR::DECODE_H264,
+            ),
         )
         .expect("a device serving decode must pass the guard");
     }

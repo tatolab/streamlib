@@ -181,8 +181,8 @@ fn line_reads_a_device_api_version_field(line: &str) -> bool {
         // `.api_version_foo` is a different identifier, not this field.
         let next_character = line[match_end..].chars().next();
         let is_the_builder_setter = next_character == Some('(');
-        let is_a_longer_identifier = next_character
-            .is_some_and(|character| character.is_alphanumeric() || character == '_');
+        let is_a_longer_identifier =
+            next_character.is_some_and(|character| character.is_alphanumeric() || character == '_');
         if !is_the_builder_setter && !is_a_longer_identifier {
             return true;
         }
@@ -320,7 +320,10 @@ mod tests {
             "runtime/streamlib-engine/src/vulkan/rhi/notes.md",
             "props.api_version is clamped by MoltenVK\n",
         );
-        assert!(violations.is_empty(), "only Rust is scanned: {violations:?}");
+        assert!(
+            violations.is_empty(),
+            "only Rust is scanned: {violations:?}"
+        );
     }
 
     #[test]

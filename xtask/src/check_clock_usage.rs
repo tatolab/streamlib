@@ -755,9 +755,12 @@ mod tests {
 
     #[test]
     fn discovery_skips_virtualenv_and_build_trees() {
-        let tracked =
-            crate::tracked_files_under_scan_roots(&workspace_root(), SCAN_ROOTS, "check-clock-usage")
-                .unwrap();
+        let tracked = crate::tracked_files_under_scan_roots(
+            &workspace_root(),
+            SCAN_ROOTS,
+            "check-clock-usage",
+        )
+        .unwrap();
 
         assert!(
             tracked
