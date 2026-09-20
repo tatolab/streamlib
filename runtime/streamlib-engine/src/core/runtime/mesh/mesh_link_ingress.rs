@@ -152,6 +152,33 @@ struct OneLinkThisIngressFeeds {
     bags_the_hop_lost: BagsAGapInTheNumberingSaysWereLost<PublisherGenerationOnTheMesh>,
 }
 
+impl OneLinkThisIngressFeeds {
+    /// This link as a wiring that has counted nothing yet.
+    ///
+    /// The one place a fresh wiring's counter is minted, so the rule that its
+    /// count starts at zero is written once — whether the wiring is the link's
+    /// first or the one a clock change begins.
+    fn wired_afresh(
+        link_id: &str,
+        counts_of_the_destination_it_feeds: Option<Arc<MeshHopDroppedBagCountsByRemoteInboundLink>>,
+    ) -> Self {
+        Self {
+            where_its_hop_loss_is_counted: counts_of_the_destination_it_feeds
+                .as_ref()
+                .map(|counts| counts.a_counter_for_a_fresh_wiring_of(link_id))
+                .unwrap_or_default(),
+            counts_of_the_destination_it_feeds,
+            bags_the_hop_lost: Default::default(),
+        }
+    }
+
+    /// Begin this link's wiring again, because it is carrying from another
+    /// machine than it was.
+    fn wire_it_afresh(&mut self, link_id: &str) {
+        *self = Self::wired_afresh(link_id, self.counts_of_the_destination_it_feeds.take());
+    }
+}
+
 /// One port of another runtime, being carried into this one.
 pub(super) struct MeshLinkIngress {
     address: MeshPortAddress,
@@ -350,7 +377,6 @@ impl MeshLinkIngress {
         &self,
         link_id: &str,
         notifier: Option<iceoryx2::port::notifier::Notifier<iceoryx2::service::ipc::Service>>,
-        where_its_hop_loss_is_counted: RemoteInboundLinkMeshHopDroppedBagCounter,
         counts_of_the_destination_it_feeds: Option<Arc<MeshHopDroppedBagCountsByRemoteInboundLink>>,
     ) {
         self.writes_onto_the_local_channel.add_channel_link(
@@ -360,11 +386,7 @@ impl MeshLinkIngress {
         );
         self.every_link_it_feeds.lock().insert(
             link_id.to_string(),
-            OneLinkThisIngressFeeds {
-                where_its_hop_loss_is_counted,
-                counts_of_the_destination_it_feeds,
-                bags_the_hop_lost: Default::default(),
-            },
+            OneLinkThisIngressFeeds::wired_afresh(link_id, counts_of_the_destination_it_feeds),
         );
     }
 
@@ -627,15 +649,11 @@ fn charge_every_link_for_what_the_hop_lost_before(
     );
     for (link_id, link) in every_link_it_feeds.iter_mut() {
         if wired_afresh {
-            link.bags_the_hop_lost = Default::default();
-            // The rendered total too, not only the baseline: what it reached
-            // under the machine that has gone describes a hop that no longer
-            // exists, and `graph` would go on showing those losses against a
-            // link now carrying from somewhere else.
-            if let Some(counts) = link.counts_of_the_destination_it_feeds.as_ref() {
-                link.where_its_hop_loss_is_counted =
-                    counts.a_counter_for_a_fresh_wiring_of(link_id);
-            }
+            // The rendered total as well as the baseline: what it reached under
+            // the machine that has gone describes a hop that no longer exists,
+            // and `graph` would go on showing those losses against a link now
+            // carrying from somewhere else.
+            link.wire_it_afresh(link_id);
         }
         let lost_before_it = link
             .bags_the_hop_lost

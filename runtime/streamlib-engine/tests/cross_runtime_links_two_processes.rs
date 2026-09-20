@@ -623,7 +623,8 @@ fn a_link_names_no_machine_until_a_bag_has_crossed_it_and_that_bags_machine_afte
         },
     );
 
-    let this_machine = streamlib_engine::iceoryx2::MachineClockIdentity::of_this_machine();
+    let this_machine =
+        streamlib_engine::core::runtime::mesh::MachineClockIdentity::of_this_machine();
     assert!(
         !this_machine.is_unidentified(),
         "this platform names no clock at all, so the arm proves nothing"

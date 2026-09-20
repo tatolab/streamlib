@@ -73,7 +73,6 @@ pub use mailbox::{
     PortMailbox, PortMailboxDeliveredBag, PortMailboxEvictionNotice, PortMailboxQueuedFrameMeasure,
 };
 
-pub use crate::core::runtime::mesh::MachineClockIdentity;
 pub use node::{
     ChannelDataServicePublisher, ChannelDataServiceSubscriber, ChannelSizing,
     ChannelTapSubscribeError, ICEORYX2_DOMAIN_ROOT_AND_PREFIX_BUDGET_BYTES,

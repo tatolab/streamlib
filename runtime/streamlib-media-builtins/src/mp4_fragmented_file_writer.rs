@@ -22,7 +22,7 @@ use mp4_atom::{
 };
 use serde::Deserialize;
 use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::iceoryx2::MachineClockIdentity;
+use streamlib::sdk::runtime::mesh::MachineClockIdentity;
 
 use crate::encoded_audio_packet::{EncodedAudioCodec, read_encoded_audio_packet_bag};
 use crate::encoded_video_frame::{EncodedVideoCodec, read_encoded_video_frame_bag};
@@ -367,12 +367,11 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
                  inbound links this sink enumerated at setup"
             )));
         };
-        if self.tracks[track_index].is_latched() {
-            self.tracks[track_index].bags_discarded_after_latch += 1;
-            self.tally.bags_discarded_after_latch += 1;
-            return Ok(());
-        }
-        if !self.commit_or_latch_the_tracks_stamp_clock(track_index, stamped_on) {
+        // Short-circuiting, so an already-latched track never reaches the clock
+        // check: a stopped track has no machine of its own left to disagree.
+        if self.tracks[track_index].is_latched()
+            || !self.commit_or_latch_the_tracks_stamp_clock(track_index, stamped_on)
+        {
             self.tracks[track_index].bags_discarded_after_latch += 1;
             self.tally.bags_discarded_after_latch += 1;
             return Ok(());

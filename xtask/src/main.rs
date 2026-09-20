@@ -374,6 +374,14 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "--lib",
             ],
         ),
+        // The wheel's own Rust tests. CI runs these in `python-wheel.yml`
+        // rather than `test.yml`, so this mirror had no entry for them and a
+        // break in the helper's data plane reached a PR green locally.
+        (
+            "python wheel unit tests",
+            "cargo",
+            &["test", "--locked", "-p", "streamlib-python-wheel", "--lib"],
+        ),
         (
             "control-plane unit tests (REST routes + MCP tool dispatch)",
             "cargo",
@@ -706,6 +714,9 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::compiler::compiler_ops::subprocess_bridge::tests::reader_and_escalate_worker",
                 "core::compiler::compiler_ops::subprocess_bridge::tests::link_delivery_to_a_subprocess_past_its_setup_command",
                 "core::compiler::compiler_ops::subprocess_escalate::tests::log_frame_parses_as_escalate_request_log_variant",
+                "core::compiler::compiler_ops::subprocess_escalate::tests::a_helpers_question_is_answered_with_the_machine_the_mesh_is_carrying_from",
+                "core::compiler::compiler_ops::subprocess_escalate::tests::an_address_this_runtime_carries_nothing_from_names_no_machine",
+                "core::compiler::compiler_ops::subprocess_escalate::tests::a_link_name_that_is_not_a_mesh_address_is_refused_naming_it",
                 "core::compiler::compiler_ops::subprocess_escalate::tests::log_op::a_captured_engine_record_lands_as_rust_with_its_own_target",
                 "core::compiler::compiler_ops::subprocess_escalate::tests::log_op::a_record_naming_no_target_takes_its_sources_own",
                 "core::processors::__generated_private::generated_processor_impl::tests",

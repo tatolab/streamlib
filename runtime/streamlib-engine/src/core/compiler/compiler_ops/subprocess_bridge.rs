@@ -986,16 +986,9 @@ fn read_frame<R: Read>(reader: &mut R) -> Result<serde_json::Value> {
 
 #[cfg(test)]
 mod tests {
-    /// A table for a test whose helper never asks about a remote link: it
-    /// carries nothing, because no link was ever noted on it.
-    fn a_mesh_link_ingress_table_carrying_nothing() -> Arc<MeshLinkIngressTable> {
-        MeshLinkIngressTable::of_this_runtime(
-            &crate::iceoryx2::Iceoryx2Node::for_this_test_process(),
-            &Arc::new(crate::core::runtime::mesh::GpuContextTheMeshCopiesFramesWith::default()),
-        )
-    }
-
     use super::*;
+
+    use crate::core::runtime::mesh::a_mesh_link_ingress_table_carrying_nothing;
 
     use crate::core::context::{GpuContext, GpuContextLimitedAccess};
     use std::sync::mpsc::RecvTimeoutError;

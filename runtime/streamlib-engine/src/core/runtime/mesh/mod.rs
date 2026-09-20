@@ -71,6 +71,8 @@ pub use mesh_data_message_attachment::{
 };
 #[doc(hidden)]
 pub use mesh_link_ingress_table::MeshLinkIngressTable;
+#[cfg(test)]
+pub(crate) use mesh_link_ingress_table::a_mesh_link_ingress_table_carrying_nothing;
 // Reachable rather than supported, like the key grammar above: the
 // cross-runtime-link fixture stands two runtimes' mesh halves up without a
 // `Runner`, because CI has no GPU to start one with.

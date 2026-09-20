@@ -94,6 +94,8 @@ use crate::core::processor_owned_window::{
 };
 use crate::core::rhi::{PixelBuffer, PixelFormat, TextureFormat, TextureUsages};
 use crate::core::runtime::mesh::MeshLinkIngressTable;
+#[cfg(test)]
+use crate::core::runtime::mesh::a_mesh_link_ingress_table_carrying_nothing;
 use crate::core::window_event_pump::WindowRegistrationRequestFromOwningProcessor;
 use crate::host_rhi::PresentScalingMode;
 
@@ -4621,18 +4623,6 @@ fn handle_inbound_link_stamp_clock_identity(
             .map(|machine| machine.to_string()),
         ..Default::default()
     })
-}
-
-/// A table for a test that asks no mesh question: it carries nothing, because
-/// no link was ever noted on it.
-#[cfg(test)]
-fn a_mesh_link_ingress_table_carrying_nothing() -> std::sync::Arc<MeshLinkIngressTable> {
-    MeshLinkIngressTable::of_this_runtime(
-        &crate::iceoryx2::Iceoryx2Node::for_this_test_process(),
-        &std::sync::Arc::new(
-            crate::core::runtime::mesh::GpuContextTheMeshCopiesFramesWith::default(),
-        ),
-    )
 }
 
 /// Convenience wrapper used by host processors: parse, dispatch, envelope.

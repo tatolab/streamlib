@@ -511,10 +511,6 @@ impl PythonProcessorLinkDataAccess {
         wiring_generation: Option<u64>,
     ) -> PyResult<()> {
         let (node, input_mailboxes) = self.helper_process_input_plane()?;
-        // Read rather than guessed from the two names differing: which
-        // machine's clock this link's stamps are taken on is the parent's to
-        // decide, and a wrong answer here is invisible — it reads as this
-        // machine, and lets a processor compare two clocks.
         let Some(stamp_clock) =
             TheClockAnInboundLinksStampsAreTakenOn::of_the_token_a_far_side_was_wired_with(
                 stamp_clock,
@@ -811,8 +807,8 @@ mod tests {
                     python,
                     "frames_from_upstream",
                     &channel,
-                    THIS_MACHINE_STAMP_CLOCK_TOKEN,
                     &channel,
+                    THIS_MACHINE_STAMP_CLOCK_TOKEN,
                     &notify,
                     "read_next_in_order",
                     8,
@@ -941,8 +937,8 @@ mod tests {
                     python,
                     "frames_from_upstream",
                     &channel,
-                    THIS_MACHINE_STAMP_CLOCK_TOKEN,
                     &channel,
+                    THIS_MACHINE_STAMP_CLOCK_TOKEN,
                     &notify,
                     "read_next_in_order",
                     8,
@@ -1051,8 +1047,8 @@ mod tests {
                     python,
                     "frames_from_upstream",
                     &second_channel,
-                    THIS_MACHINE_STAMP_CLOCK_TOKEN,
                     &second_channel,
+                    THIS_MACHINE_STAMP_CLOCK_TOKEN,
                     &notify,
                     "read_next_in_order",
                     8,
@@ -1128,8 +1124,8 @@ mod tests {
                     python,
                     "audio_from_upstream",
                     &channel,
-                    THIS_MACHINE_STAMP_CLOCK_TOKEN,
                     &channel,
+                    THIS_MACHINE_STAMP_CLOCK_TOKEN,
                     &notify,
                     "read_next_in_order",
                     8,
@@ -1300,8 +1296,8 @@ mod tests {
                     python,
                     "frames_from_upstream",
                     &channel,
-                    THIS_MACHINE_STAMP_CLOCK_TOKEN,
                     &channel,
+                    THIS_MACHINE_STAMP_CLOCK_TOKEN,
                     &notify,
                     "whenever",
                     8,

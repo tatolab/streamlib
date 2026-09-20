@@ -604,22 +604,28 @@ impl LinkOutput {
                 .get::<crate::core::graph::TheRequestThatAppliedThisLinkComponent>()
                 .map(|applied| applied.requester_runtime_name.clone())
                 .unwrap_or_else(|| this_runtimes_name.to_string()),
-            // A link carrying the cell is one from another runtime, and the
-            // cell is empty until a bag has crossed it. One carrying none was
-            // stamped here, on the one clock this node reads its own time from.
-            stamp_clock_identity:
-                match link
-                    .get::<crate::core::graph::TheMachineClockALinksStampsAreTakenOnComponent>()
-                {
-                    Some(machine_clock) => machine_clock.as_uuid_text(),
-                    None => Some(
-                        crate::core::runtime::mesh::MachineClockIdentity::of_this_machine()
-                            .to_string(),
-                    ),
-                },
+            stamp_clock_identity: the_machine_a_links_stamps_are_taken_on(link),
             components,
         }
     }
+}
+
+/// Which machine's clock a link's stamps are taken on, as `graph` renders it.
+///
+/// Keyed on the link's source rather than on whether it carries the mesh's
+/// cell: the cell is attached when the link is wired, and a link whose source
+/// is on another runtime is in the graph — and rendered — from the moment
+/// `connect` applies it, which is before that. Read the other way round, such a
+/// link would claim this machine's clock for its whole `awaiting_remote` life,
+/// which is the one answer that lets a reader compare it against a local stamp.
+fn the_machine_a_links_stamps_are_taken_on(link: &crate::core::graph::Link) -> Option<String> {
+    if link.source.mesh_port_address().is_none() {
+        return Some(
+            crate::core::runtime::mesh::MachineClockIdentity::of_this_machine().to_string(),
+        );
+    }
+    link.get::<crate::core::graph::TheMachineClockALinksStampsAreTakenOnComponent>()
+        .and_then(|machine_clock| machine_clock.as_uuid_text())
 }
 
 /// What a link reports as its state, and why where that is `error` or
@@ -863,6 +869,41 @@ mod link_rendering_tests {
         assert_eq!(
             rendered["stamp_clock_identity"],
             crate::core::runtime::mesh::MachineClockIdentity::of_this_machine().to_string()
+        );
+    }
+
+    /// A link whose source is on another runtime names no machine before it is
+    /// wired — which is its whole `awaiting_remote` life, because `connect`
+    /// puts it in the graph and the wiring op attaches the mesh's cell only
+    /// afterwards.
+    ///
+    /// Fail-without-fix: read the absence of the cell as "stamped here" and
+    /// every remote link claims this machine's clock from the moment it is
+    /// connected until the moment it wires — the one answer that lets a reader
+    /// compare it against a local stamp.
+    #[test]
+    fn a_link_from_another_runtime_names_no_machine_before_it_is_wired() {
+        let link = Link::between(
+            OutputLinkPortRef::on_another_runtime(
+                crate::core::graph::MeshPortAddress::new(
+                    "bench-cam-a1b2",
+                    "Camera Source",
+                    "video",
+                )
+                .expect("a legal address"),
+            ),
+            InputLinkPortRef::new("Pdst", "in1"),
+        );
+        let rendered = serde_json::to_value(LinkOutput::of_a_link_on_the_runtime_named(
+            &link,
+            A_RENDERING_RUNTIME,
+        ))
+        .unwrap();
+
+        assert_eq!(
+            rendered.get("stamp_clock_identity"),
+            None,
+            "nothing has said which machine stamps this link's bags, and this node is not it"
         );
     }
 

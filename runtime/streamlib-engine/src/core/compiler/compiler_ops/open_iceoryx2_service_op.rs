@@ -1499,12 +1499,8 @@ fn wire_subprocess_source(
 /// nothing a reader could recognise, while the link name *is* that address.
 /// They are equal for a link whose source is on this runtime.
 ///
-/// `stamp_clock` rides it as a third, rather than being left for the far side
-/// to infer from those two being equal: which machine's clock a link's stamps
-/// are taken on is decided here, from the link's source, and a far side that
-/// guessed it from a naming coincidence would guess wrong — silently, and in
-/// the direction that lets two clocks be compared — the moment either name
-/// changed.
+/// `stamp_clock` rides it as a third, spelled by
+/// [`TheClockAnInboundLinksStampsAreTakenOn::as_the_token_a_far_side_is_wired_with`].
 ///
 /// Hands back the cell this end's answer will land in, on the same terms as
 /// [`wire_subprocess_source`].
@@ -4794,6 +4790,9 @@ mod tests {
     mod a_link_whose_source_is_on_another_runtime {
         use super::*;
         use crate::core::graph::MeshPortAddress;
+        use crate::iceoryx2::{
+            ONLY_THE_APP_PROCESS_CAN_NAME_STAMP_CLOCK_TOKEN, THIS_MACHINE_STAMP_CLOCK_TOKEN,
+        };
 
         /// An address of this test's own: two tests sharing one would derive
         /// one ingress channel and meet each other's service in this process's
@@ -5122,6 +5121,7 @@ mod tests {
         fn one_helper_destinations_recorded_input_entry(
             channel_service_name: &str,
             inbound_link_name: &InboundLinkName,
+            stamp_clock: &TheClockAnInboundLinksStampsAreTakenOn,
         ) -> serde_json::Value {
             let mut graph = Graph::new();
             let dest_id = add_mock_input_only(&mut graph);
@@ -5139,7 +5139,7 @@ mod tests {
                 "in1",
                 channel_service_name,
                 inbound_link_name,
-                &TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
+                stamp_clock,
                 "pdef/notify",
                 DeliveryProfile::Newest.resolve(),
                 sizing_of_a_two_subscriber_test_channel(),
@@ -5174,6 +5174,7 @@ mod tests {
             let entry = one_helper_destinations_recorded_input_entry(
                 &channel,
                 &inbound_link_name_of(&source, &channel),
+                &the_clock_this_links_stamps_are_taken_on(&source, &a_mesh_link_ingress_table()),
             );
 
             assert_eq!(
@@ -5190,6 +5191,15 @@ mod tests {
                 entry["channel_service_name"], entry["inbound_link_name"],
                 "the two names are exactly what this key exists to keep apart"
             );
+            // Sent rather than left for the helper to infer from those two
+            // names differing. Fail-without-fix: send the local token here and
+            // a helper answers "this machine" for a link carrying from another
+            // one, which is what lets two clocks be compared.
+            assert_eq!(
+                entry["stamp_clock"],
+                serde_json::json!(ONLY_THE_APP_PROCESS_CAN_NAME_STAMP_CLOCK_TOKEN),
+                "only the app process holds a mesh session to name this link's machine"
+            );
         }
 
         /// A link whose source is on this runtime carries one name twice, which
@@ -5201,6 +5211,7 @@ mod tests {
             let entry = one_helper_destinations_recorded_input_entry(
                 "pcam/video",
                 &inbound_link_name_of(&source, "pcam/video"),
+                &the_clock_this_links_stamps_are_taken_on(&source, &a_mesh_link_ingress_table()),
             );
 
             assert_eq!(
@@ -5208,6 +5219,11 @@ mod tests {
                 serde_json::json!("pcam/video")
             );
             assert_eq!(entry["inbound_link_name"], serde_json::json!("pcam/video"));
+            assert_eq!(
+                entry["stamp_clock"],
+                serde_json::json!(THIS_MACHINE_STAMP_CLOCK_TOKEN),
+                "its bags were stamped here, and the helper is told so rather than inferring it"
+            );
         }
 
         /// A source port nothing on this runtime reads still gets its channel

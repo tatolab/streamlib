@@ -115,6 +115,19 @@ struct ResolvingEveryWaitingLink {
     resolving_thread: std::thread::JoinHandle<()>,
 }
 
+/// A table for a test that asks it no mesh question: it carries nothing,
+/// because no link was ever noted on it.
+///
+/// One per call rather than one shared: an arm that mints a cell for an address
+/// would otherwise be visible to the arm that asserts there is none.
+#[cfg(test)]
+pub(crate) fn a_mesh_link_ingress_table_carrying_nothing() -> Arc<MeshLinkIngressTable> {
+    MeshLinkIngressTable::of_this_runtime(
+        &Iceoryx2Node::for_this_test_process(),
+        &Arc::new(crate::core::runtime::mesh::GpuContextTheMeshCopiesFramesWith::default()),
+    )
+}
+
 impl MeshLinkIngressTable {
     /// A table for a runtime whose iceoryx2 node is `iceoryx2_node`.
     pub fn of_this_runtime(
@@ -790,19 +803,9 @@ fn tell_the_ingress_about_every_link_from(
                     })
                     .ok()
             });
-            // Forgotten and minted again rather than continued: this is
-            // every way a link is wired afresh — the source runtime
-            // returning, its egress returning, or a reconnect of the same id
-            // — and the plan restarts a remote link's loss count at each.
-            let where_its_hop_loss_is_counted = link
-                .where_its_hop_loss_is_counted
-                .as_ref()
-                .map(|counts| counts.a_counter_for_a_fresh_wiring_of(link_id.as_str()))
-                .unwrap_or_default();
             ingress.note_a_local_destination(
                 link_id.as_str(),
                 notifier,
-                where_its_hop_loss_is_counted,
                 link.where_its_hop_loss_is_counted.clone(),
             );
             link.the_ingress_knows_about_it = true;

@@ -157,10 +157,12 @@ fn a_helper_process_mints_names_polls_and_closes_a_window_entirely_over_the_wire
 
     let (parent_end, helper_end) =
         UnixStream::pair().expect("a socketpair stands in for the spawned helper's");
+    let (_mesh_domain_root, mesh_link_ingress_table) =
+        helper_process_escalate_socket::a_mesh_link_ingress_table_carrying_nothing();
     let bridge = SubprocessBridge::new(
         parent_end,
         gpu_context_limited_access.clone(),
-        a_mesh_link_ingress_table_carrying_nothing(),
+        mesh_link_ingress_table,
         "processor-owned-window-over-the-wire".to_string(),
     )
     .expect("the bridge wraps the parent end");
@@ -343,18 +345,4 @@ fn a_helper_process_mints_names_polls_and_closes_a_window_entirely_over_the_wire
     // with the processor, present thread joined and registration dropped.
     drop(bridge);
     wait_until_the_pump_routes_to_exactly(0);
-}
-
-/// A table for a test whose helper never asks about a remote link: it carries
-/// nothing, because no link was ever noted on it.
-fn a_mesh_link_ingress_table_carrying_nothing()
--> std::sync::Arc<streamlib_engine::core::runtime::mesh::MeshLinkIngressTable> {
-    let domain_root = tempfile::tempdir().expect("a domain root of its own");
-    streamlib_engine::core::runtime::mesh::MeshLinkIngressTable::of_this_runtime(
-        &streamlib_engine::iceoryx2::Iceoryx2Node::new(domain_root.path(), "streamlib-test")
-            .expect("an iceoryx2 node"),
-        &std::sync::Arc::new(
-            streamlib_engine::core::runtime::mesh::GpuContextTheMeshCopiesFramesWith::default(),
-        ),
-    )
 }
