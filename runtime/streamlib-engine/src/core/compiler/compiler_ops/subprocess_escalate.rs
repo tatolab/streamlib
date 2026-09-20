@@ -4741,7 +4741,14 @@ mod tests {
     /// as "not yet".
     #[test]
     fn a_link_name_that_is_not_a_mesh_address_is_refused_naming_it() {
-        for not_an_address in ["", "pcamera/video_out", "one/two/three/four"] {
+        // The empty name is asserted on separately: `contains("")` is always
+        // true, so it would pass this loop's message check without saying
+        // anything.
+        for not_an_address in [
+            "pcamera/video_out",
+            "one/two/three/four",
+            "no-slashes-at-all",
+        ] {
             let response = handle_inbound_link_stamp_clock_identity(
                 &a_mesh_link_ingress_table_carrying_nothing(),
                 "req-4".to_string(),
@@ -4751,13 +4758,25 @@ mod tests {
                 panic!("{not_an_address:?} must be refused rather than answered");
             };
             assert!(
-                refused.message.contains(not_an_address)
-                    || not_an_address.is_empty() && refused.message.contains("mesh address"),
+                refused.message.contains(not_an_address),
                 "the refusal must name what was asked about, and reads {:?}",
                 refused.message
             );
             assert_eq!(refused.request_id, "req-4", "the refusal correlates");
         }
+
+        let EscalateResponse::Err(refused) = handle_inbound_link_stamp_clock_identity(
+            &a_mesh_link_ingress_table_carrying_nothing(),
+            "req-5".to_string(),
+            "",
+        ) else {
+            panic!("an empty link name must be refused rather than answered");
+        };
+        assert!(
+            refused.message.contains("mesh address"),
+            "the refusal must say what it wanted, and reads {:?}",
+            refused.message
+        );
     }
 
     #[test]
