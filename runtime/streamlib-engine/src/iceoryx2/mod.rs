@@ -90,6 +90,9 @@ pub use payload::{
 };
 pub use posix_shared_memory_headroom::warn_when_posix_shared_memory_is_short_for_a_runtime;
 pub use read_mode::ReadMode;
+// Re-exported beside the two types that carry it, so a caller of the
+// link-naming read finds the answer and what the answer names in one place.
+pub use crate::core::runtime::mesh::MachineClockIdentity;
 pub use the_clock_an_inbound_links_stamps_are_taken_on::{
     TheClockAnInboundLinksStampsAreTakenOn, WhatIsKnownOfAnInboundLinksStampClock,
 };
