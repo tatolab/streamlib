@@ -17,8 +17,8 @@
 //! while a fragmented message queues. No producer ever waits on the network:
 //! the put runs here, never on the thread that wrote the bag.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 use iceoryx2::identifiers::UniquePublisherId;
@@ -33,7 +33,8 @@ use crate::core::runtime::mesh::mesh_data_message_attachment::{
     MeshDataMessageAttachment, PublisherGenerationOnTheMesh,
 };
 use crate::core::runtime::mesh::mesh_port_egress_table::{
-    SaysWhichEgressOfItsPortItIs, WhatTheEgressTableIsTold, WhichEgressOfAPortThisIs,
+    SaysWhichEgressOfItsPortItIs, WhatTheEgressTableIsTold, WhereAnEgressSaysItStoppedToItsTable,
+    WhichEgressOfAPortThisIs,
 };
 use crate::core::runtime::mesh::output_ports_offered_on_the_mesh::{
     HowToReadAnOfferedOutputPort, OutputPortOfferedOnTheMesh,
@@ -119,11 +120,7 @@ impl SaysWhichEgressOfItsPortItIs for MeshPortEgress {
 pub(super) struct WhatOneEgressSends {
     /// Where this egress says its thread ended, so its table stops claiming the
     /// port is being sent.
-    ///
-    /// Weak because the table's own sender is what decides its thread's life,
-    /// and this end is owned by that same thread through its map of egresses.
-    pub where_this_egress_says_it_stopped:
-        Weak<crossbeam_channel::Sender<WhatTheEgressTableIsTold>>,
+    pub where_this_egress_says_it_stopped: WhereAnEgressSaysItStoppedToItsTable,
     /// Which egress of this port this one is, so what it says about itself
     /// never reaches the egress that replaced it.
     pub which_egress_of_this_port_this_is: WhichEgressOfAPortThisIs,
@@ -271,7 +268,7 @@ fn take_a_destination_slot_once_the_port_publishes(
 /// Naming which egress of the port this is, because a cancelled one says this
 /// too and by then the port may hold the egress that replaced it.
 struct SaysThisEgressStoppedWhenItsThreadEnds {
-    where_this_egress_says_it_stopped: Weak<crossbeam_channel::Sender<WhatTheEgressTableIsTold>>,
+    where_this_egress_says_it_stopped: WhereAnEgressSaysItStoppedToItsTable,
     port: OutputPortOfferedOnTheMesh,
     which_egress_of_its_port_it_is: WhichEgressOfAPortThisIs,
 }
@@ -690,16 +687,25 @@ mod tests {
         }
     }
 
-    /// One egress's report to `its_table`, as its thread holds it.
+    /// One egress's report to `its_table` as its thread holds it, beside the
+    /// identity that table minted for it — which is what its message has to
+    /// carry back.
     fn an_egress_reporting_to(
         its_table: &Arc<crossbeam_channel::Sender<WhatTheEgressTableIsTold>>,
-        which_egress_of_its_port_it_is: WhichEgressOfAPortThisIs,
-    ) -> SaysThisEgressStoppedWhenItsThreadEnds {
-        SaysThisEgressStoppedWhenItsThreadEnds {
-            where_this_egress_says_it_stopped: Arc::downgrade(its_table),
-            port: the_port_one_egress_sends(),
+    ) -> (
+        SaysThisEgressStoppedWhenItsThreadEnds,
+        WhichEgressOfAPortThisIs,
+    ) {
+        let which_egress_of_its_port_it_is =
+            HowManyEgressesThisTableHasStarted::default().the_next_egress();
+        (
+            SaysThisEgressStoppedWhenItsThreadEnds {
+                where_this_egress_says_it_stopped: Arc::downgrade(its_table),
+                port: the_port_one_egress_sends(),
+                which_egress_of_its_port_it_is,
+            },
             which_egress_of_its_port_it_is,
-        }
+        )
     }
 
     /// What one egress told its table, or `None` when it said nothing.
@@ -731,10 +737,10 @@ mod tests {
     #[test]
     fn an_egress_whose_thread_ends_tells_its_table_which_egress_stopped() {
         let (its_table, what_the_table_reads) = a_table_listening_to_its_egresses();
-        let mut how_many_this_table_has_started = HowManyEgressesThisTableHasStarted::default();
-        let which_one_it_is = how_many_this_table_has_started.the_next_egress();
+        let (the_egress_reporting_to_its_table, which_one_it_is) =
+            an_egress_reporting_to(&its_table);
 
-        drop(an_egress_reporting_to(&its_table, which_one_it_is));
+        drop(the_egress_reporting_to_its_table);
 
         assert_eq!(
             what_one_egress_told_its_table(&what_the_table_reads),
@@ -747,14 +753,13 @@ mod tests {
     #[test]
     fn an_egress_whose_thread_panics_still_tells_its_table_it_stopped() {
         let (its_table, what_the_table_reads) = a_table_listening_to_its_egresses();
-        let mut how_many_this_table_has_started = HowManyEgressesThisTableHasStarted::default();
-        let which_one_it_is = how_many_this_table_has_started.the_next_egress();
-        let reporting = an_egress_reporting_to(&its_table, which_one_it_is);
+        let (the_egress_reporting_to_its_table, which_one_it_is) =
+            an_egress_reporting_to(&its_table);
 
         // On its own thread, so the unwind is contained the way one egress's is.
         // The panic in this test's output is this test's own.
         let how_the_thread_ended = std::thread::spawn(move || {
-            let _says_it_stopped = reporting;
+            let _says_it_stopped = the_egress_reporting_to_its_table;
             panic!("an egress's receive loop panicked");
         })
         .join();
@@ -772,14 +777,10 @@ mod tests {
     #[test]
     fn an_egress_outliving_its_table_says_nothing() {
         let (its_table, what_the_table_reads) = a_table_listening_to_its_egresses();
-        let mut how_many_this_table_has_started = HowManyEgressesThisTableHasStarted::default();
-        let reporting = an_egress_reporting_to(
-            &its_table,
-            how_many_this_table_has_started.the_next_egress(),
-        );
+        let (the_egress_reporting_to_its_table, _) = an_egress_reporting_to(&its_table);
 
         drop(its_table);
-        drop(reporting);
+        drop(the_egress_reporting_to_its_table);
 
         assert!(what_the_table_reads.try_recv().is_err());
     }

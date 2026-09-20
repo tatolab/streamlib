@@ -46,6 +46,12 @@ pub(super) enum WhatTheEgressTableIsTold {
     },
 }
 
+/// Where an egress says its thread ended, as the egress itself holds it.
+///
+/// Weak because the table's own sender is what decides its thread's life, and
+/// every egress is owned by that same thread through its map of them.
+pub(super) type WhereAnEgressSaysItStoppedToItsTable = Weak<Sender<WhatTheEgressTableIsTold>>;
+
 /// Which egress of one port an egress is — the table's own count, minted when
 /// it starts it.
 ///
@@ -68,6 +74,10 @@ pub(super) trait SaysWhichEgressOfItsPortItIs {
 
 /// The table's running count of the egresses it has started, which is where
 /// every [`WhichEgressOfAPortThisIs`] comes from.
+///
+/// One per egress table and never a second: two counters mint the same
+/// identities, and an egress that shares one with another silently takes that
+/// one's place out of the table when it stops.
 #[derive(Default)]
 pub(super) struct HowManyEgressesThisTableHasStarted(u64);
 
@@ -176,7 +186,7 @@ fn spawn_the_egress_thread(
     iceoryx2_node: Iceoryx2Node,
     being_read_by_other_runtimes: Arc<OutputPortsOtherRuntimesAreReading>,
     what_the_egress_thread_reads: Receiver<WhatTheEgressTableIsTold>,
-    how_an_egress_reports_stopping: Weak<Sender<WhatTheEgressTableIsTold>>,
+    how_an_egress_reports_stopping: WhereAnEgressSaysItStoppedToItsTable,
 ) -> std::io::Result<std::thread::JoinHandle<()>> {
     std::thread::Builder::new()
         .name("streamlib-mesh-egress-table".to_string())
@@ -238,7 +248,7 @@ struct AnEgressTablesOwnState<'a> {
     this_runtimes_name: &'a str,
     offered: &'a Arc<WhatThisRuntimeOffersOnTheMeshRegistry>,
     iceoryx2_node: &'a Iceoryx2Node,
-    how_an_egress_reports_stopping: &'a Weak<Sender<WhatTheEgressTableIsTold>>,
+    how_an_egress_reports_stopping: &'a WhereAnEgressSaysItStoppedToItsTable,
 }
 
 /// Note one more reader of a port, and start sending it if it is the first.

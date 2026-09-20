@@ -260,13 +260,23 @@ impl CrossRuntimeLinkPeerProcess {
             .unwrap_or_default()
     }
 
-    /// Every egress port this peer has named in any report, in report order.
+    /// Every egress port this peer named in its last `how_many_reports`
+    /// reports.
     ///
-    /// The last report alone cannot say whether one was ever rendered: a source
-    /// that must render none at all is only proven by every report it made.
-    fn every_egress_port_it_has_ever_reported(&self) -> Vec<(String, String, Vec<String>)> {
-        self.everything_it_has_reported()
+    /// A window rather than the last report alone, and never every report it
+    /// ever made: the table renders an egress from the moment its thread is
+    /// spawned and withdraws it when that thread says it ended, so a source
+    /// whose egress fails renders the port until its table hears. What that
+    /// settles to is the claim; that it was never rendered at all is not one the
+    /// table makes.
+    fn every_egress_port_in_its_last_reports(
+        &self,
+        how_many_reports: usize,
+    ) -> Vec<(String, String, Vec<String>)> {
+        let reported = self.everything_it_has_reported();
+        reported
             .iter()
+            .skip(reported.len().saturating_sub(how_many_reports))
             .flat_map(the_egress_ports_one_report_names)
             .collect()
     }
@@ -674,16 +684,17 @@ fn a_sources_graph_names_the_port_the_mesh_reads_and_who_reads_it() {
     );
 }
 
-/// How many reports a source makes after its reader has reached it before the
-/// arm below reads what it rendered.
+/// How many of a source's own reports the arm below reads as its settled
+/// render, and how many it waits out first.
 ///
-/// Against the bug it catches, the entry appears on the first table update after
-/// the reader's token arrives and never leaves, so any window at all decides it;
-/// this one is a second of them against a loaded runner.
-const HOW_MANY_REPORTS_A_SOURCE_MAKES_BEFORE_ITS_RENDER_IS_READ: usize = 10;
+/// A second of them either side, at the peer's report cadence. Against the bug
+/// it catches the entry never leaves, so every report in the window names the
+/// port however wide the window is; the width is against a loaded runner
+/// settling slowly, never against the assertion being thin.
+const HOW_MANY_REPORTS_A_SOURCES_RENDER_IS_READ_OVER: usize = 10;
 
 /// A source whose egress cannot take a destination slot on its own channel
-/// renders no egress port, rather than one it is not sending.
+/// settles to rendering no egress port, rather than one it is not sending.
 ///
 /// What it catches: `MeshPortEgress::start` succeeds the moment its thread
 /// spawns, and everything that can refuse an egress happens inside that thread
@@ -703,7 +714,7 @@ const HOW_MANY_REPORTS_A_SOURCE_MAKES_BEFORE_ITS_RENDER_IS_READ: usize = 10;
 /// the port under its reader's name for the rest of the run.
 #[test]
 #[serial]
-fn a_source_whose_egress_cannot_take_a_slot_renders_no_egress_port() {
+fn a_source_whose_egress_cannot_take_a_slot_settles_to_no_egress_port() {
     let mesh_name = a_mesh_name_of_its_own("noslot");
     let (source_name, reader_name) = the_two_runtimes_of("noslot");
     let source_domain = a_domain_root_of_its_own("noslot-source");
@@ -747,17 +758,21 @@ fn a_source_whose_egress_cannot_take_a_slot_renders_no_egress_port() {
             })
         },
     );
+    // Long enough for the table to have heard that the egress ended and to have
+    // reported what it renders from then on, twice over: the first window is the
+    // settling, the second is what the assertion reads.
     let reported_by_then = source.everything_it_has_reported().len();
     source.wait_until("the source to report again with its reader waiting", || {
         source.everything_it_has_reported().len()
-            >= reported_by_then + HOW_MANY_REPORTS_A_SOURCE_MAKES_BEFORE_ITS_RENDER_IS_READ
+            >= reported_by_then + HOW_MANY_REPORTS_A_SOURCES_RENDER_IS_READ_OVER * 2
     });
 
     assert_eq!(
-        source.every_egress_port_it_has_ever_reported(),
+        source
+            .every_egress_port_in_its_last_reports(HOW_MANY_REPORTS_A_SOURCES_RENDER_IS_READ_OVER),
         Vec::new(),
-        "a source that could not take a slot for its egress sends nothing, and must never have \
-         rendered a port as being sent"
+        "a source that could not take a slot for its egress sends nothing, and must have settled \
+         to rendering no port as being sent"
     );
     assert!(
         !reader
