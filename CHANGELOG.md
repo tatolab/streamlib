@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.4](https://github.com/tatolab/streamlib/compare/v0.26.3...v0.26.4) (2026-09-20)
+
+
+### Features
+
+* **engine:** show each remote link's stamp clock, and stop an Mp4Sink track from another clock ([#2382](https://github.com/tatolab/streamlib/issues/2382)) ([872d8e4](https://github.com/tatolab/streamlib/commit/872d8e49f8996fc8af21f7450cad88630b48fea2))
+
 ## [0.26.3](https://github.com/tatolab/streamlib/compare/v0.26.2...v0.26.3) (2026-09-20)
 
 
