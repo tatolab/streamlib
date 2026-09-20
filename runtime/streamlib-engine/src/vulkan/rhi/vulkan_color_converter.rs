@@ -846,6 +846,7 @@ mod tests {
     /// - Mid-stream transfer change costs only push constants — no
     ///   pipeline rebuild — which the test verifies by reusing the
     ///   same `(src, dst)` PixelFormat pair as the prior test.
+    #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
         ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
@@ -872,7 +873,8 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+// The whole module drives the host-mapping import, which is Linux-bound.
+#[cfg(all(test, target_os = "linux"))]
 mod image_to_yuyv_buffer_tests {
     use super::*;
     use crate::core::color::{MatrixId, PrimariesId, RangeId, rgb_to_yuv_matrix};
@@ -921,6 +923,7 @@ mod image_to_yuyv_buffer_tests {
     /// Synthetic RGBA against the CPU conversion: every macropixel of the
     /// target range is written, to within one step of rounding, on
     /// whichever tier the driver takes — and the tier is reported.
+    #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
         ignore = "hardware integration — needs a Vulkan device; see docs/testing-hardware.md"

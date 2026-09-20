@@ -1578,6 +1578,22 @@ mod tests {
         );
     }
 
+    /// A temporary directory short enough that a domain root under it still
+    /// fits the socket-path budget.
+    ///
+    /// macOS resolves `TMPDIR` to a per-session `/var/folders/…` path of
+    /// roughly fifty bytes, which spends the whole budget before a domain name
+    /// is appended. `/tmp` is where the runtime directory resolves there
+    /// anyway, so a test domain built under it matches what a real run gets.
+    fn domain_root_parent_within_the_socket_path_budget() -> tempfile::TempDir {
+        #[cfg(target_os = "macos")]
+        return tempfile::Builder::new()
+            .tempdir_in("/tmp")
+            .expect("a temp directory under /tmp");
+        #[cfg(not(target_os = "macos"))]
+        return tempfile::tempdir().expect("a temp directory");
+    }
+
     /// Set only in the child process the dead-node test re-runs itself in.
     const DEAD_NODE_CHILD_DOMAIN_ROOT_ENVIRONMENT_VARIABLE: &str =
         "STREAMLIB_TEST_DEAD_NODE_CHILD_ICEORYX2_DOMAIN_ROOT";
@@ -1601,7 +1617,7 @@ mod tests {
             unreachable!("SIGKILL to self does not return");
         }
 
-        let domain = tempfile::tempdir().unwrap();
+        let domain = domain_root_parent_within_the_socket_path_budget();
         let domain_root = domain.path().join("iox2");
 
         let child = std::process::Command::new(std::env::current_exe().unwrap())
@@ -1687,7 +1703,7 @@ mod tests {
             unreachable!("SIGKILL to self does not return");
         }
 
-        let domain = tempfile::tempdir().unwrap();
+        let domain = domain_root_parent_within_the_socket_path_budget();
         let domain_root = domain.path().join("iox2");
 
         // This node is created BEFORE the holder dies and is never replaced, so
@@ -1811,7 +1827,7 @@ mod tests {
             ),
         )
         .unwrap();
-        let domain = tempfile::tempdir().unwrap();
+        let domain = domain_root_parent_within_the_socket_path_budget();
         let domain_root = domain.path().join("iox2");
 
         let child = std::process::Command::new(std::env::current_exe().unwrap())
@@ -1882,8 +1898,8 @@ mod tests {
         // `OnceLock`, so forcing it here means it cannot fire again.
         let _ = crate::iceoryx2::iceoryx2_domain_for_this_test_process();
 
-        let first_process = tempfile::tempdir().unwrap();
-        let second_process = tempfile::tempdir().unwrap();
+        let first_process = domain_root_parent_within_the_socket_path_budget();
+        let second_process = domain_root_parent_within_the_socket_path_budget();
         let first_root = first_process.path().join("iox2");
         let second_root = second_process.path().join("iox2");
         // Prefixes of exited pids, so the next test process's sweep reclaims the

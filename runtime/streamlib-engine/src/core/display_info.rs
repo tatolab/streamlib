@@ -37,7 +37,7 @@ mod apple_link {
     use std::ffi::c_void;
 
     #[link(name = "CoreGraphics", kind = "framework")]
-    extern "C" {
+    unsafe extern "C" {
         pub fn CGMainDisplayID() -> u32;
         pub fn CGDisplayCopyDisplayMode(display: u32) -> *const c_void;
         pub fn CGDisplayModeGetRefreshRate(mode: *const c_void) -> f64;

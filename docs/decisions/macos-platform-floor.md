@@ -84,12 +84,19 @@ not just develop on it"* — is what the nine tickets trace to.
 
 ## Consequences
 
-- The Metal tree, the `backend-metal` feature and two dead Apple files are deleted; six shared
-  `core/rhi` files have their `cfg` expressions simplified, which is a no-op on Linux because
-  `backend-metal` was never in `default`.
+- The Metal tree, the `backend-metal` feature and four dead Apple files are deleted; eight shared
+  files have their `cfg` expressions simplified, which is a no-op on Linux because `backend-metal`
+  was never in `default`. Two of the eight are the SDK's (`streamlib-sdk`'s manifest forwards the
+  feature and its `sdk::engine` module reads it); two of the four Apple files are Metal-RHI call
+  sites that cannot outlive the tree.
 - Capture stops being V4L2-only. A video device backend seam is created — modelled on
   `AudioDeviceBackend` and extending it rather than paralleling it — and the V4L2 implementation
   moves behind it unchanged. This is the largest single piece of engine work in the milestone.
+- **CoreVideo's `_pixelFormatDictionaryInit` is not thread-safe**, so `CVMetalTextureCacheCreate`
+  and `CVPixelBufferPoolCreate` crash when either races `AVCaptureDeviceInput` initialisation. The
+  deleted Metal tree serialised both by dispatching them to the main thread. Whatever the Apple
+  capture arm allocates through CoreVideo inherits that constraint; recorded here because the tree
+  that recorded it is gone and no capture code exists yet to carry it.
 - The engine's one event pump gains an Apple arm that runs on the process's first thread, which is
   the thread `rt.run()` blocks.
 - A cross-process GPU wait is never unbounded: an unsatisfied wait past roughly five seconds loses

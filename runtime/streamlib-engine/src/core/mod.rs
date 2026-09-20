@@ -42,11 +42,12 @@ pub mod runtime;
 pub mod stable_short_id;
 pub mod texture;
 pub mod utils;
-// Linux-only: winit is a Linux-target engine dependency, and the window seam
-// the pump serves has no Apple implementation yet.
-#[cfg(target_os = "linux")]
+// Wherever winit and the Vulkan present target compile. The Apple event loop
+// is not yet driven on the thread AppKit requires, so a window opens on Linux
+// only — see `window_event_pump`.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod processor_owned_window;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod window_event_pump;
 
 // Customer-facing modules (wildcard re-exports stay).
@@ -57,7 +58,7 @@ pub use execution::*;
 pub use graph::*;
 pub use graph_snapshot::*;
 pub use processors::*;
-pub use rhi::{GlContext, GlTextureBinding, NativeTextureHandle, RhiBackend, gl_constants};
+pub use rhi::NativeTextureHandle;
 pub use runtime::*;
 pub use texture::*;
 pub use utils::*;

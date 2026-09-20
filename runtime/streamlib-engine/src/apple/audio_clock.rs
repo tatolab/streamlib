@@ -34,7 +34,7 @@ const DISPATCH_TIME_NOW: dispatch_time_t = 0;
 const QOS_CLASS_USER_INTERACTIVE: u32 = 0x21;
 
 #[link(name = "System", kind = "dylib")]
-extern "C" {
+unsafe extern "C" {
     // Dispatch queue creation
     fn dispatch_queue_create_with_target(
         label: *const i8,

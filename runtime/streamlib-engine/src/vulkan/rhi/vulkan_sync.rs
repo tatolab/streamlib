@@ -1,26 +1,20 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Vulkan synchronization primitives and Metal interop.
+//! Vulkan synchronization primitives.
 
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use vulkanalia::vk::KhrExternalSemaphoreFdExtensionDeviceCommands;
 
 use crate::core::{Error, Result};
 
 /// Vulkan semaphore wrapper for synchronization.
-///
-/// Can be created standalone or imported from a Metal shared event
-/// for cross-API synchronization.
 #[allow(dead_code)]
 pub struct VulkanSemaphore {
     device: vulkanalia::Device,
     semaphore: vk::Semaphore,
-    /// Whether this was imported from Metal (affects cleanup)
-    #[allow(dead_code)]
-    imported_from_metal: bool,
 }
 
 #[allow(dead_code)]
@@ -35,51 +29,6 @@ impl VulkanSemaphore {
         Ok(Self {
             device: device.clone(),
             semaphore,
-            imported_from_metal: false,
-        })
-    }
-
-    /// Import a Vulkan semaphore from a Metal shared event.
-    ///
-    /// This enables cross-API synchronization: Metal can signal the event,
-    /// and Vulkan can wait on the semaphore (or vice versa).
-    ///
-    /// # Arguments
-    /// * `device` - The Vulkan device
-    /// * `mtl_shared_event` - Raw pointer to MTLSharedEvent (id<MTLSharedEvent>)
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
-    pub fn from_metal_shared_event(
-        device: &vulkanalia::Device,
-        mtl_shared_event: *const std::ffi::c_void,
-    ) -> Result<Self> {
-        if mtl_shared_event.is_null() {
-            return Err(Error::GpuError("Cannot import null MTLSharedEvent".into()));
-        }
-
-        // Create import info for Metal shared event
-        let import_info = vk::ImportMetalSharedEventInfoEXT {
-            mtl_shared_event: mtl_shared_event as vk::MTLSharedEvent_id,
-            ..Default::default()
-        };
-
-        // Create semaphore with import info in pNext chain
-        let semaphore_info = vk::SemaphoreCreateInfo {
-            p_next: &import_info as *const _ as *const _,
-            ..Default::default()
-        };
-
-        let semaphore = unsafe { device.create_semaphore(&semaphore_info, None) }.map_err(|e| {
-            Error::GpuError(format!(
-                "Failed to create semaphore from MTLSharedEvent: {e}"
-            ))
-        })?;
-
-        tracing::debug!("Imported MTLSharedEvent as Vulkan semaphore");
-
-        Ok(Self {
-            device: device.clone(),
-            semaphore,
-            imported_from_metal: true,
         })
     }
 
@@ -199,7 +148,7 @@ pub struct HostVulkanTimelineSemaphore {
     exportable: bool,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl HostVulkanTimelineSemaphore {
     /// Create an in-process timeline semaphore (no export).
     ///
@@ -398,19 +347,19 @@ impl HostVulkanTimelineSemaphore {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl Drop for HostVulkanTimelineSemaphore {
     fn drop(&mut self) {
         unsafe { self.device.destroy_semaphore(self.semaphore, None) };
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 unsafe impl Send for HostVulkanTimelineSemaphore {}
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 unsafe impl Sync for HostVulkanTimelineSemaphore {}
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl super::VulkanTimelineSemaphoreLike for HostVulkanTimelineSemaphore {
     fn wait(&self, value: u64, timeout_ns: u64) -> streamlib_consumer_rhi::Result<()> {
         HostVulkanTimelineSemaphore::wait(self, value, timeout_ns)
@@ -458,7 +407,7 @@ mod tests {
     /// a timed-out wait into `Ok`. Mental-revert: with the `SuccessCode::
     /// TIMEOUT` mapping removed from [`HostVulkanTimelineSemaphore::wait`],
     /// this test fails at the `expect_err`.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[cfg_attr(
         not(feature = "hardware-tests"),
         ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
@@ -483,7 +432,7 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[cfg_attr(
         not(feature = "hardware-tests"),
         ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
@@ -510,7 +459,7 @@ mod tests {
     /// fd. Sufficient to confirm `VK_KHR_external_semaphore_fd` is wired.
     /// Cross-process import is exercised by the surface-adapter
     /// integration tests in `streamlib-adapter-vulkan`.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[cfg_attr(
         not(feature = "hardware-tests"),
         ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"

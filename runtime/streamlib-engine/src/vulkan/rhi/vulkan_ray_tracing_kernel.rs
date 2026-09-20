@@ -16,7 +16,7 @@
 //! texture (with a default linear-clamp sampler), storage image, top-level
 //! acceleration structure. All bindings live on descriptor set 0.
 
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -975,7 +975,7 @@ impl VulkanRayTracingKernel {
 
     /// Bind a raw-bytes [`crate::core::rhi::StorageBuffer`] at
     /// `binding`.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn set_storage_buffer_storage(
         &self,
         binding: u32,
@@ -986,7 +986,7 @@ impl VulkanRayTracingKernel {
 
     /// Bind a [`crate::core::rhi::UniformBuffer`] (UBO) at
     /// `binding`.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn set_uniform_buffer(
         &self,
         binding: u32,
@@ -2187,6 +2187,7 @@ mod tests {
     /// against a 64×64 storage image. Reads the result back and checks
     /// that the centre pixel is hit (barycentric color, mostly red) and
     /// the corner pixels are miss (dark blue from rmiss).
+    #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
         ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"

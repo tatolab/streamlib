@@ -3,16 +3,12 @@
 
 //! Surface Store for cross-process GPU surface sharing.
 //!
-//! Provides check-in/check-out semantics for IOSurfaces via the macOS XPC surface-share service.
-//! Surfaces are cached locally after first checkout to minimize XPC overhead.
+//! Provides check-in/check-out semantics against the per-runtime surface-share
+//! service. Surfaces are cached locally after first checkout to minimize
+//! round-trips.
 
 use std::collections::HashMap;
-#[cfg(target_os = "macos")]
-use std::ffi::CString;
 use std::sync::Arc;
-
-#[cfg(target_os = "macos")]
-use std::ffi::c_void;
 
 use parking_lot::Mutex;
 
@@ -273,17 +269,6 @@ fn leave_plane_fds_to_the_import(plane_fds: Vec<OwnedFd>) {
     }
 }
 
-#[cfg(target_os = "macos")]
-use crate::apple::xpc_ffi::{
-    _NSConcreteMallocBlock, BLOCK_FLAGS_NEEDS_FREE, Block, BlockDescriptor, xpc_connection_cancel,
-    xpc_connection_create_mach_service, xpc_connection_resume, xpc_connection_send_message,
-    xpc_connection_send_message_with_reply_sync, xpc_connection_set_event_handler,
-    xpc_connection_t, xpc_dictionary_copy_mach_send, xpc_dictionary_create,
-    xpc_dictionary_get_string, xpc_dictionary_set_mach_send, xpc_dictionary_set_string,
-    xpc_error_connection_interrupted, xpc_error_connection_invalid, xpc_is_error, xpc_object_t,
-    xpc_release,
-};
-
 /// Surface metadata stored alongside the cached pixel buffer.
 #[derive(Debug, Clone)]
 pub struct CachedSurface {
@@ -345,52 +330,14 @@ impl SurfaceCache {
     }
 }
 
-/// Reverse lookup from pixel buffer identity to surface ID.
-struct CheckedInSurfaces {
-    /// Map from IOSurface ID (from IOSurfaceGetID) to surface store ID.
-    iosurface_id_to_surface_id: HashMap<u32, String>,
-}
-
-impl CheckedInSurfaces {
-    fn new() -> Self {
-        Self {
-            iosurface_id_to_surface_id: HashMap::new(),
-        }
-    }
-
-    fn get_surface_id(&self, iosurface_id: u32) -> Option<&String> {
-        self.iosurface_id_to_surface_id.get(&iosurface_id)
-    }
-
-    fn insert(&mut self, iosurface_id: u32, surface_id: String) {
-        self.iosurface_id_to_surface_id
-            .insert(iosurface_id, surface_id);
-    }
-
-    fn clear(&mut self) {
-        self.iosurface_id_to_surface_id.clear();
-    }
-
-    fn surface_ids(&self) -> Vec<String> {
-        self.iosurface_id_to_surface_id.values().cloned().collect()
-    }
-}
-
-/// Surface store client for cross-process GPU surface sharing.
+/// Rich data backing a [`SurfaceStore`], reached through the store's opaque
+/// handle.
 ///
-/// Connects to the macOS XPC surface-share service to exchange mach ports for surface IDs.
-/// Caches resolved surfaces locally to minimize XPC round-trips.
-/// Rich data backing a [`SurfaceStore`], reached through the store's
-/// opaque handle.
-///
-/// All cross-platform and Linux-specific surface-share IPC methods
-/// (`connect`, `check_in`, `check_out`, `register_texture`, etc.)
-/// live on this type; the `SurfaceStore` handle forwards each to it.
+/// Connects to the surface-share service to exchange handles for surface ids
+/// and caches what it resolves. Every surface-share IPC method (`connect`,
+/// `check_in`, `check_out`, `register_texture`, …) lives here; the
+/// `SurfaceStore` handle forwards each to it.
 pub(crate) struct SurfaceStoreInner {
-    /// XPC connection to the surface-share service (macOS only).
-    #[cfg(target_os = "macos")]
-    connection: Mutex<Option<xpc_connection_t>>,
-
     /// Unix socket connection to the surface-share service (Linux only).
     #[cfg(target_os = "linux")]
     connection: Mutex<Option<std::os::unix::net::UnixStream>>,
@@ -398,10 +345,7 @@ pub(crate) struct SurfaceStoreInner {
     /// Local cache of checked-out surfaces (surface_id -> pixel_buffer).
     cache: Mutex<SurfaceCache>,
 
-    /// Reverse lookup for checked-in surfaces (iosurface_id -> surface_id).
-    checked_in: Mutex<CheckedInSurfaces>,
-
-    /// The XPC service name (macOS) or Unix socket path (Linux) to connect to.
+    /// The Unix socket path to connect to.
     service_name: String,
 
     /// Runtime ID for tracking which surfaces belong to this runtime.
@@ -434,10 +378,9 @@ impl SurfaceStoreInner {
         check_out_leases: Option<Arc<SurfaceCheckOutLeaseRegistry>>,
     ) -> Arc<Self> {
         Arc::new(SurfaceStoreInner {
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            #[cfg(target_os = "linux")]
             connection: Mutex::new(None),
             cache: Mutex::new(SurfaceCache::new()),
-            checked_in: Mutex::new(CheckedInSurfaces::new()),
             service_name,
             runtime_id,
             check_out_leases,
@@ -449,577 +392,10 @@ impl SurfaceStoreInner {
         self.check_out_leases.as_ref()
     }
 
-    /// Connect to the macOS XPC surface-share service.
+    /// Release a single surface from the surface-share service.
     ///
-    /// This should be called during runtime.start().
-    #[cfg(target_os = "macos")]
-    pub fn connect(&self) -> Result<()> {
-        let service_name = CString::new(self.service_name.as_str())
-            .map_err(|e| Error::Configuration(format!("Invalid XPC service name: {}", e)))?;
-
-        let connection = unsafe {
-            xpc_connection_create_mach_service(
-                service_name.as_ptr(),
-                std::ptr::null_mut(), // default queue
-                0,                    // no special flags
-            )
-        };
-
-        if connection.is_null() {
-            return Err(Error::Configuration(format!(
-                "Failed to create XPC connection to '{}'",
-                self.service_name
-            )));
-        }
-
-        // Set up a minimal event handler (required before resume)
-        // We use synchronous send/reply, so the handler just logs connection errors
-        unsafe {
-            let handler = create_xpc_event_handler();
-            xpc_connection_set_event_handler(connection, handler);
-            xpc_connection_resume(connection);
-        }
-
-        *self.connection.lock() = Some(connection);
-
-        tracing::info!(
-            "SurfaceStore: Connected to XPC service '{}'",
-            self.service_name
-        );
-
-        Ok(())
-    }
-
-    /// Disconnect from the surface-share service and release all surfaces.
-    ///
-    /// This should be called during runtime.stop().
-    #[cfg(target_os = "macos")]
-    pub fn disconnect(&self) -> Result<()> {
-        // Release all checked-in surfaces from the surface-share service
-        let surface_ids = self.checked_in.lock().surface_ids();
-        for surface_id in surface_ids {
-            if let Err(e) = self.release_from_surface_share(&surface_id) {
-                tracing::warn!(
-                    "SurfaceStore: Failed to release surface '{}': {}",
-                    surface_id,
-                    e
-                );
-            }
-        }
-
-        // Clear local state
-        self.cache.lock().clear();
-        self.checked_in.lock().clear();
-
-        // Cancel the XPC connection
-        if let Some(connection) = self.connection.lock().take() {
-            unsafe {
-                xpc_connection_cancel(connection);
-            }
-        }
-
-        tracing::info!("SurfaceStore: Disconnected from XPC service");
-        Ok(())
-    }
-
-    /// Check in a pixel buffer, returning a surface ID.
-    ///
-    /// If this pixel buffer was already checked in, returns the existing ID.
-    /// Otherwise, sends the mach port to the surface-share service and receives a new ID.
-    #[cfg(target_os = "macos")]
-    pub fn check_in(&self, pixel_buffer: &PixelBuffer) -> Result<String> {
-        use crate::apple::corevideo_ffi::{IOSurfaceGetID, mach_port_deallocate, mach_task_self};
-
-        // Get the IOSurface ID for deduplication
-        let pixel_buffer_ref = pixel_buffer.buffer_ref();
-        let iosurface = pixel_buffer_ref.iosurface_ref().ok_or_else(|| {
-            Error::Configuration("Pixel buffer is not backed by an IOSurface".into())
-        })?;
-        let iosurface_id = unsafe { IOSurfaceGetID(iosurface) };
-
-        // Check if already checked in
-        {
-            let checked_in = self.checked_in.lock();
-            if let Some(existing_id) = checked_in.get_surface_id(iosurface_id) {
-                tracing::trace!(
-                    "SurfaceStore: Reusing existing surface ID '{}' for IOSurface {}",
-                    existing_id,
-                    iosurface_id
-                );
-                return Ok(existing_id.clone());
-            }
-        }
-
-        // Export mach port from the pixel buffer
-        let (_, mach_port) = pixel_buffer_ref.export_handle_as_mach_port()?;
-
-        // Send to surface-share service via XPC
-        let surface_id = self.check_in_to_surface_share(mach_port);
-
-        // Deallocate our copy of the mach port - XPC copied the send right to its dictionary,
-        // so we must release ours to avoid leaking ports
-        let task = unsafe { mach_task_self() };
-        let dealloc_result = unsafe { mach_port_deallocate(task, mach_port) };
-        if dealloc_result != 0 {
-            tracing::warn!(
-                "SurfaceStore: Failed to deallocate mach_port={}: error {}",
-                mach_port,
-                dealloc_result
-            );
-        }
-
-        // Now propagate any error from the surface-share service call
-        let surface_id = surface_id?;
-
-        // Store reverse mapping
-        self.inner
-            .checked_in
-            .lock()
-            .insert(iosurface_id, surface_id.clone());
-
-        // Also cache locally for fast checkout
-        self.cache
-            .lock()
-            .insert(surface_id.clone(), pixel_buffer.clone());
-
-        tracing::debug!(
-            "SurfaceStore: Checked in IOSurface {} as '{}'",
-            iosurface_id,
-            surface_id
-        );
-
-        Ok(surface_id)
-    }
-
-    /// Check out a surface by ID, returning the pixel buffer.
-    ///
-    /// Returns from cache if available, otherwise fetches from the surface-share service.
-    #[cfg(target_os = "macos")]
-    pub fn check_out(&self, surface_id: &str) -> Result<PixelBuffer> {
-        // Check cache first
-        {
-            let mut cache = self.cache.lock();
-            if let Some(cached) = cache.surfaces.get_mut(surface_id) {
-                cached.checkout_count += 1;
-                tracing::trace!(
-                    "SurfaceStore: Cache hit for '{}' (checkout #{})",
-                    surface_id,
-                    cached.checkout_count
-                );
-                return Ok(cached.pixel_buffer.clone());
-            }
-        }
-
-        // Cache miss - fetch from the surface-share service
-        tracing::debug!(
-            "SurfaceStore: Cache miss for '{}', fetching from the surface-share service",
-            surface_id
-        );
-        let mach_port = self.check_out_from_surface_share(surface_id)?;
-
-        // Import the pixel buffer from mach port
-        use crate::core::rhi::{
-            PixelBufferRef, PixelFormat, RhiExternalHandle, RhiPixelBufferImport,
-        };
-
-        let handle = RhiExternalHandle::IOSurfaceMachPort { port: mach_port };
-        // Width/height/format are extracted from the IOSurface itself after import
-        // We pass dummy values as the import will query the actual values from the IOSurface
-        let pixel_buffer_ref =
-            PixelBufferRef::from_external_handle(handle, 0, 0, PixelFormat::default())?;
-        let pixel_buffer = PixelBuffer::new(pixel_buffer_ref);
-
-        // Cache for future use
-        self.cache
-            .lock()
-            .insert(surface_id.to_string(), pixel_buffer.clone());
-
-        Ok(pixel_buffer)
-    }
-
-    /// Send check-in request to surface-share service via XPC.
-    #[cfg(target_os = "macos")]
-    fn check_in_to_surface_share(&self, mach_port: u32) -> Result<String> {
-        let connection = self.connection.lock();
-        let connection = connection.as_ref().ok_or_else(|| {
-            Error::Configuration("SurfaceStore not connected to surface-share service".into())
-        })?;
-
-        // Create request dictionary
-        let request = unsafe { xpc_dictionary_create(std::ptr::null(), std::ptr::null(), 0) };
-        if request.is_null() {
-            return Err(Error::Configuration(
-                "Failed to create XPC request dictionary".into(),
-            ));
-        }
-
-        // Set operation type
-        let op_key = CString::new("op").unwrap();
-        let op_value = CString::new("check_in").unwrap();
-        unsafe {
-            xpc_dictionary_set_string(request, op_key.as_ptr(), op_value.as_ptr());
-        }
-
-        // Set runtime ID
-        let runtime_id_key = CString::new("runtime_id").unwrap();
-        let runtime_id_value = CString::new(self.runtime_id.as_str()).unwrap();
-        unsafe {
-            xpc_dictionary_set_string(request, runtime_id_key.as_ptr(), runtime_id_value.as_ptr());
-        }
-
-        // Set mach port
-        let port_key = CString::new("mach_port").unwrap();
-        unsafe {
-            xpc_dictionary_set_mach_send(request, port_key.as_ptr(), mach_port);
-        }
-
-        // Send and wait for reply
-        let reply = unsafe { xpc_connection_send_message_with_reply_sync(*connection, request) };
-
-        // Release request
-        unsafe {
-            xpc_release(request);
-        }
-
-        if reply.is_null() {
-            return Err(Error::Configuration(
-                "XPC check_in: null reply from the surface-share service".into(),
-            ));
-        }
-
-        // Check for error
-        if xpc_is_error(reply) {
-            unsafe {
-                xpc_release(reply);
-            }
-            return Err(Error::Configuration(
-                "XPC check_in: surface-share service returned error".into(),
-            ));
-        }
-
-        // Extract surface_id from reply
-        let surface_id_key = CString::new("surface_id").unwrap();
-        let surface_id_ptr = unsafe { xpc_dictionary_get_string(reply, surface_id_key.as_ptr()) };
-
-        if surface_id_ptr.is_null() {
-            unsafe {
-                xpc_release(reply);
-            }
-            return Err(Error::Configuration(
-                "XPC check_in: missing surface_id in reply".into(),
-            ));
-        }
-
-        let surface_id = unsafe { std::ffi::CStr::from_ptr(surface_id_ptr) }
-            .to_string_lossy()
-            .into_owned();
-
-        unsafe {
-            xpc_release(reply);
-        }
-
-        Ok(surface_id)
-    }
-
-    /// Send check-out request to surface-share service via XPC.
-    #[cfg(target_os = "macos")]
-    fn check_out_from_surface_share(&self, surface_id: &str) -> Result<u32> {
-        let connection = self.connection.lock();
-        let connection = connection.as_ref().ok_or_else(|| {
-            Error::Configuration("SurfaceStore not connected to surface-share service".into())
-        })?;
-
-        // Create request dictionary
-        let request = unsafe { xpc_dictionary_create(std::ptr::null(), std::ptr::null(), 0) };
-        if request.is_null() {
-            return Err(Error::Configuration(
-                "Failed to create XPC request dictionary".into(),
-            ));
-        }
-
-        // Set operation type
-        let op_key = CString::new("op").unwrap();
-        let op_value = CString::new("check_out").unwrap();
-        unsafe {
-            xpc_dictionary_set_string(request, op_key.as_ptr(), op_value.as_ptr());
-        }
-
-        // Set surface ID
-        let surface_id_key = CString::new("surface_id").unwrap();
-        let surface_id_value = CString::new(surface_id).unwrap();
-        unsafe {
-            xpc_dictionary_set_string(request, surface_id_key.as_ptr(), surface_id_value.as_ptr());
-        }
-
-        // Send and wait for reply
-        let reply = unsafe { xpc_connection_send_message_with_reply_sync(*connection, request) };
-
-        // Release request
-        unsafe {
-            xpc_release(request);
-        }
-
-        if reply.is_null() {
-            return Err(Error::Configuration(
-                "XPC check_out: null reply from the surface-share service".into(),
-            ));
-        }
-
-        // Check for error
-        if xpc_is_error(reply) {
-            unsafe {
-                xpc_release(reply);
-            }
-            return Err(Error::Configuration(format!(
-                "XPC check_out: surface-share service returned error for surface '{}'",
-                surface_id
-            )));
-        }
-
-        // Extract mach_port from reply
-        let port_key = CString::new("mach_port").unwrap();
-        let mach_port = unsafe { xpc_dictionary_copy_mach_send(reply, port_key.as_ptr()) };
-
-        unsafe {
-            xpc_release(reply);
-        }
-
-        if mach_port == 0 {
-            return Err(Error::Configuration(format!(
-                "XPC check_out: invalid mach port for surface '{}'",
-                surface_id
-            )));
-        }
-
-        Ok(mach_port)
-    }
-
-    /// Register a buffer with the surface-share service using the new protocol.
-    ///
-    /// The client provides the UUID (PixelBufferPoolSlotId) and the buffer.
-    /// This is used for pre-registering pooled buffers.
-    #[cfg(target_os = "macos")]
-    pub fn register_buffer(&self, pool_id: &str, pixel_buffer: &PixelBuffer) -> Result<()> {
-        use crate::apple::corevideo_ffi::{mach_port_deallocate, mach_task_self};
-
-        // Export mach port from the pixel buffer
-        let pixel_buffer_ref = pixel_buffer.buffer_ref();
-        let (_, mach_port) = pixel_buffer_ref.export_handle_as_mach_port()?;
-
-        // Register with the surface-share service
-        let result = self.register_with_surface_share(pool_id, mach_port);
-
-        // Deallocate our copy of the mach port
-        let task = unsafe { mach_task_self() };
-        let dealloc_result = unsafe { mach_port_deallocate(task, mach_port) };
-        if dealloc_result != 0 {
-            tracing::warn!(
-                "SurfaceStore: Failed to deallocate mach_port={}: error {}",
-                mach_port,
-                dealloc_result
-            );
-        }
-
-        result
-    }
-
-    /// Send register request to surface-share service via XPC (new protocol).
-    #[cfg(target_os = "macos")]
-    fn register_with_surface_share(&self, pool_id: &str, mach_port: u32) -> Result<()> {
-        let connection = self.connection.lock();
-        let connection = connection.as_ref().ok_or_else(|| {
-            Error::Configuration("SurfaceStore not connected to surface-share service".into())
-        })?;
-
-        // Create request dictionary
-        let request = unsafe { xpc_dictionary_create(std::ptr::null(), std::ptr::null(), 0) };
-        if request.is_null() {
-            return Err(Error::Configuration(
-                "Failed to create XPC request dictionary".into(),
-            ));
-        }
-
-        // Set operation type
-        let op_key = CString::new("op").unwrap();
-        let op_value = CString::new("register").unwrap();
-        unsafe {
-            xpc_dictionary_set_string(request, op_key.as_ptr(), op_value.as_ptr());
-        }
-
-        // Set surface_id (the UUID we're providing)
-        let surface_id_key = CString::new("surface_id").unwrap();
-        let surface_id_value = CString::new(pool_id).unwrap();
-        unsafe {
-            xpc_dictionary_set_string(request, surface_id_key.as_ptr(), surface_id_value.as_ptr());
-        }
-
-        // Set runtime ID
-        let runtime_id_key = CString::new("runtime_id").unwrap();
-        let runtime_id_value = CString::new(self.runtime_id.as_str()).unwrap();
-        unsafe {
-            xpc_dictionary_set_string(request, runtime_id_key.as_ptr(), runtime_id_value.as_ptr());
-        }
-
-        // Set mach port
-        let port_key = CString::new("mach_port").unwrap();
-        unsafe {
-            xpc_dictionary_set_mach_send(request, port_key.as_ptr(), mach_port);
-        }
-
-        // Send and wait for reply
-        let reply = unsafe { xpc_connection_send_message_with_reply_sync(*connection, request) };
-
-        // Release request
-        unsafe {
-            xpc_release(request);
-        }
-
-        if reply.is_null() {
-            return Err(Error::Configuration(
-                "XPC register: null reply from the surface-share service".into(),
-            ));
-        }
-
-        // Check for error
-        if xpc_is_error(reply) {
-            unsafe {
-                xpc_release(reply);
-            }
-            return Err(Error::Configuration(
-                "XPC register: surface-share service returned error".into(),
-            ));
-        }
-
-        // Check for error message in reply
-        let error_key = CString::new("error").unwrap();
-        let error_ptr = unsafe { xpc_dictionary_get_string(reply, error_key.as_ptr()) };
-        if !error_ptr.is_null() {
-            let error_msg = unsafe { std::ffi::CStr::from_ptr(error_ptr) }
-                .to_string_lossy()
-                .into_owned();
-            unsafe {
-                xpc_release(reply);
-            }
-            return Err(Error::Configuration(format!("XPC register: {}", error_msg)));
-        }
-
-        unsafe {
-            xpc_release(reply);
-        }
-
-        tracing::debug!("SurfaceStore: Registered buffer '{}'", pool_id);
-        Ok(())
-    }
-
-    /// Lookup a buffer from the surface-share service using the new protocol.
-    ///
-    /// Returns the mach port for the given UUID.
-    #[cfg(target_os = "macos")]
-    pub fn lookup_buffer(&self, pool_id: &str) -> Result<PixelBuffer> {
-        let mach_port = self.lookup_from_surface_share(pool_id)?;
-
-        // Import the pixel buffer from mach port
-        use crate::core::rhi::{
-            PixelBufferRef, PixelFormat, RhiExternalHandle, RhiPixelBufferImport,
-        };
-
-        let handle = RhiExternalHandle::IOSurfaceMachPort { port: mach_port };
-        let pixel_buffer_ref =
-            PixelBufferRef::from_external_handle(handle, 0, 0, PixelFormat::default())?;
-        Ok(PixelBuffer::new(pixel_buffer_ref))
-    }
-
-    /// Send lookup request to surface-share service via XPC (new protocol).
-    #[cfg(target_os = "macos")]
-    fn lookup_from_surface_share(&self, pool_id: &str) -> Result<u32> {
-        let connection = self.connection.lock();
-        let connection = connection.as_ref().ok_or_else(|| {
-            Error::Configuration("SurfaceStore not connected to surface-share service".into())
-        })?;
-
-        // Create request dictionary
-        let request = unsafe { xpc_dictionary_create(std::ptr::null(), std::ptr::null(), 0) };
-        if request.is_null() {
-            return Err(Error::Configuration(
-                "Failed to create XPC request dictionary".into(),
-            ));
-        }
-
-        // Set operation type
-        let op_key = CString::new("op").unwrap();
-        let op_value = CString::new("lookup").unwrap();
-        unsafe {
-            xpc_dictionary_set_string(request, op_key.as_ptr(), op_value.as_ptr());
-        }
-
-        // Set surface_id (the UUID we're looking up)
-        let surface_id_key = CString::new("surface_id").unwrap();
-        let surface_id_value = CString::new(pool_id).unwrap();
-        unsafe {
-            xpc_dictionary_set_string(request, surface_id_key.as_ptr(), surface_id_value.as_ptr());
-        }
-
-        // Send and wait for reply
-        let reply = unsafe { xpc_connection_send_message_with_reply_sync(*connection, request) };
-
-        // Release request
-        unsafe {
-            xpc_release(request);
-        }
-
-        if reply.is_null() {
-            return Err(Error::Configuration(
-                "XPC lookup: null reply from the surface-share service".into(),
-            ));
-        }
-
-        // Check for error
-        if xpc_is_error(reply) {
-            unsafe {
-                xpc_release(reply);
-            }
-            return Err(Error::Configuration(format!(
-                "XPC lookup: surface-share service returned error for '{}'",
-                pool_id
-            )));
-        }
-
-        // Check for error message in reply
-        let error_key = CString::new("error").unwrap();
-        let error_ptr = unsafe { xpc_dictionary_get_string(reply, error_key.as_ptr()) };
-        if !error_ptr.is_null() {
-            let error_msg = unsafe { std::ffi::CStr::from_ptr(error_ptr) }
-                .to_string_lossy()
-                .into_owned();
-            unsafe {
-                xpc_release(reply);
-            }
-            return Err(Error::Configuration(format!("XPC lookup: {}", error_msg)));
-        }
-
-        // Extract mach_port from reply
-        let port_key = CString::new("mach_port").unwrap();
-        let mach_port = unsafe { xpc_dictionary_copy_mach_send(reply, port_key.as_ptr()) };
-
-        unsafe {
-            xpc_release(reply);
-        }
-
-        if mach_port == 0 {
-            return Err(Error::Configuration(format!(
-                "XPC lookup: invalid mach port for '{}'",
-                pool_id
-            )));
-        }
-
-        Ok(mach_port)
-    }
-
-    /// Release a single surface from the surface-share service. Platform-dispatched.
-    ///
-    /// Fire-and-forget on macOS (mirrors `release_from_surface_share`). On Linux the
-    /// surface-share service's `release` op is best-effort; a missing connection returns Ok
-    /// since the surface-share service already treats the client's socket-close as a full
+    /// The `release` op is best-effort; a missing connection returns Ok since the
+    /// surface-share service already treats the client's socket-close as a full
     /// release.
     pub fn release(&self, surface_id: &str) -> Result<()> {
         // Evict the local cache's strong reference first: `check_in` parks a
@@ -1027,67 +403,17 @@ impl SurfaceStoreInner {
         // buffer's strong count returns to 1 — without this eviction a
         // released surface pins its pool slot for the store's lifetime.
         self.cache.lock().remove(surface_id);
-        #[cfg(target_os = "macos")]
-        {
-            self.release_from_surface_share(surface_id)
-        }
         #[cfg(target_os = "linux")]
         {
             self.release_from_surface_share_unix(surface_id)
         }
-        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+        #[cfg(not(target_os = "linux"))]
         {
             let _ = surface_id;
             Err(Error::NotSupported(
-                "SurfaceStore::release is only supported on macOS and Linux".into(),
+                "SurfaceStore::release is only supported on Linux".into(),
             ))
         }
-    }
-
-    /// Send release request to surface-share service via XPC.
-    #[cfg(target_os = "macos")]
-    fn release_from_surface_share(&self, surface_id: &str) -> Result<()> {
-        let connection = self.connection.lock();
-        let connection = connection.as_ref().ok_or_else(|| {
-            Error::Configuration("SurfaceStore not connected to surface-share service".into())
-        })?;
-
-        // Create request dictionary
-        let request = unsafe { xpc_dictionary_create(std::ptr::null(), std::ptr::null(), 0) };
-        if request.is_null() {
-            return Err(Error::Configuration(
-                "Failed to create XPC request dictionary".into(),
-            ));
-        }
-
-        // Set operation type
-        let op_key = CString::new("op").unwrap();
-        let op_value = CString::new("release").unwrap();
-        unsafe {
-            xpc_dictionary_set_string(request, op_key.as_ptr(), op_value.as_ptr());
-        }
-
-        // Set surface ID
-        let surface_id_key = CString::new("surface_id").unwrap();
-        let surface_id_value = CString::new(surface_id).unwrap();
-        unsafe {
-            xpc_dictionary_set_string(request, surface_id_key.as_ptr(), surface_id_value.as_ptr());
-        }
-
-        // Set runtime ID
-        let runtime_id_key = CString::new("runtime_id").unwrap();
-        let runtime_id_value = CString::new(self.runtime_id.as_str()).unwrap();
-        unsafe {
-            xpc_dictionary_set_string(request, runtime_id_key.as_ptr(), runtime_id_value.as_ptr());
-        }
-
-        // Send without waiting for reply (fire and forget for cleanup)
-        unsafe {
-            xpc_connection_send_message(*connection, request);
-            xpc_release(request);
-        }
-
-        Ok(())
     }
 
     // =========================================================================
@@ -1114,24 +440,15 @@ impl SurfaceStoreInner {
         Ok(())
     }
 
-    /// Disconnect from the surface-share service and release all surfaces.
+    /// Disconnect from the surface-share service, dropping every surface this
+    /// store resolved.
+    ///
+    /// Closing the socket is the release: the service treats a client's
+    /// socket-close as a full release of everything that client checked in,
+    /// which is why nothing is released one id at a time here.
     #[cfg(target_os = "linux")]
     pub fn disconnect(&self) -> Result<()> {
-        // Release all checked-in surfaces
-        let surface_ids = self.checked_in.lock().surface_ids();
-        for surface_id in surface_ids {
-            if let Err(e) = self.release_from_surface_share_unix(&surface_id) {
-                tracing::warn!(
-                    "SurfaceStore: Failed to release surface '{}': {}",
-                    surface_id,
-                    e
-                );
-            }
-        }
-
-        // Clear local state
         self.cache.lock().clear();
-        self.checked_in.lock().clear();
 
         // Drop the connection
         self.connection.lock().take();
@@ -1942,43 +1259,45 @@ impl SurfaceStoreInner {
     // Unsupported platform stubs
     // =========================================================================
 
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(not(target_os = "linux"))]
     pub fn connect(&self) -> Result<()> {
         Err(Error::NotSupported(
-            "SurfaceStore is only supported on macOS and Linux".into(),
+            "SurfaceStore is only supported on Linux".into(),
         ))
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    /// `Ok` rather than the refusal its siblings return: nothing was ever
+    /// connected, and a shutdown path must not fail for having nothing to do.
+    #[cfg(not(target_os = "linux"))]
     pub fn disconnect(&self) -> Result<()> {
         Ok(())
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(not(target_os = "linux"))]
     pub fn check_in(&self, _pixel_buffer: &PixelBuffer) -> Result<String> {
         Err(Error::NotSupported(
-            "SurfaceStore is only supported on macOS and Linux".into(),
+            "SurfaceStore is only supported on Linux".into(),
         ))
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(not(target_os = "linux"))]
     pub fn check_out(&self, _surface_id: &str) -> Result<PixelBuffer> {
         Err(Error::NotSupported(
-            "SurfaceStore is only supported on macOS and Linux".into(),
+            "SurfaceStore is only supported on Linux".into(),
         ))
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(not(target_os = "linux"))]
     pub fn register_buffer(&self, _pool_id: &str, _pixel_buffer: &PixelBuffer) -> Result<()> {
         Err(Error::NotSupported(
-            "SurfaceStore is only supported on macOS and Linux".into(),
+            "SurfaceStore is only supported on Linux".into(),
         ))
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(not(target_os = "linux"))]
     pub fn lookup_buffer(&self, _pool_id: &str) -> Result<PixelBuffer> {
         Err(Error::NotSupported(
-            "SurfaceStore is only supported on macOS and Linux".into(),
+            "SurfaceStore is only supported on Linux".into(),
         ))
     }
 
@@ -2016,49 +1335,8 @@ impl SurfaceStoreInner {
     }
 }
 
-// Safety: XPC connections are thread-safe
 unsafe impl Send for SurfaceStoreInner {}
 unsafe impl Sync for SurfaceStoreInner {}
-
-// =============================================================================
-// XPC Block Helper (macOS only)
-// =============================================================================
-
-/// Create a minimal XPC event handler block for client connections.
-///
-/// This handler logs connection errors but otherwise does nothing, since we use
-/// synchronous send/reply calls.
-#[cfg(target_os = "macos")]
-unsafe fn create_xpc_event_handler() -> *mut c_void {
-    // Trampoline function that handles XPC events
-    extern "C" fn event_handler_trampoline(_block: *mut Block<()>, event: xpc_object_t) {
-        if xpc_is_error(event) {
-            if event == xpc_error_connection_invalid() {
-                tracing::debug!("SurfaceStore: XPC connection invalid");
-            } else if event == xpc_error_connection_interrupted() {
-                tracing::debug!("SurfaceStore: XPC connection interrupted");
-            }
-        }
-    }
-
-    // Block descriptor (static, no copy/dispose needed for this simple case)
-    static DESCRIPTOR: BlockDescriptor = BlockDescriptor {
-        reserved: 0,
-        size: std::mem::size_of::<Block<()>>() as u64,
-    };
-
-    // Create heap-allocated block with proper ABI
-    let block = Box::new(Block {
-        isa: &_NSConcreteMallocBlock as *const _,
-        flags: BLOCK_FLAGS_NEEDS_FREE,
-        reserved: 0,
-        invoke: event_handler_trampoline as *const c_void,
-        descriptor: &DESCRIPTOR,
-        context: (),
-    });
-
-    Box::into_raw(block) as *mut c_void
-}
 
 impl std::fmt::Debug for SurfaceStoreInner {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -2081,8 +1359,7 @@ use std::ffi::c_void as ss_c_void;
 /// Cross-process surface sharing handle.
 ///
 /// Cheap to clone — increments the strong count on the host's
-/// `Arc<SurfaceStoreInner>`. Both XPC (macOS) and Unix socket (Linux)
-/// variants are exposed through the same method surface.
+/// `Arc<SurfaceStoreInner>`.
 pub struct SurfaceStore {
     /// Opaque handle to the host's `Arc<SurfaceStoreInner>`.
     pub(crate) handle: *const ss_c_void,
@@ -2259,7 +1536,7 @@ impl SurfaceStore {
         unsafe { &*(self.handle as *const SurfaceStoreInner) }
     }
 
-    /// Connect to the surface-share service (XPC on macOS, Unix
+    /// Connect to the surface-share service (Unix
     /// socket on Linux).
     pub fn connect(&self) -> Result<()> {
         if self.is_none() {

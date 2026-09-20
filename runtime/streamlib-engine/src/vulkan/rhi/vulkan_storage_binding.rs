@@ -22,7 +22,7 @@
 use vulkanalia::vk;
 
 use crate::core::rhi::PixelBuffer;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::core::rhi::{IndexBuffer, StorageBuffer, UniformBuffer, VertexBuffer};
 
 /// Common shape returned by every binding trait — the kernel-internal
@@ -31,12 +31,12 @@ use crate::core::rhi::{IndexBuffer, StorageBuffer, UniformBuffer, VertexBuffer};
 pub(super) fn vk_buffer_handle_for_pixel_buffer(
     buffer: &PixelBuffer,
 ) -> (vk::Buffer, vk::DeviceSize) {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     {
         let inner = &buffer.buffer_ref().inner;
         (inner.buffer(), inner.size())
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = buffer;
         (vk::Buffer::null(), 0)
@@ -122,7 +122,7 @@ impl VulkanStorageBindable for PixelBuffer {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl VulkanStorageBindable for StorageBuffer {
     fn vk_buffer(&self) -> vk::Buffer {
         self.host_inner().buffer()
@@ -134,7 +134,7 @@ impl VulkanStorageBindable for StorageBuffer {
 
 // --- Uniform bindings ---
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl VulkanUniformBindable for UniformBuffer {
     fn vk_buffer(&self) -> vk::Buffer {
         self.host_inner().buffer()
@@ -146,7 +146,7 @@ impl VulkanUniformBindable for UniformBuffer {
 
 // --- Vertex bindings ---
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl VulkanVertexBindable for VertexBuffer {
     fn vk_buffer(&self) -> vk::Buffer {
         self.host_inner().buffer()
@@ -158,7 +158,7 @@ impl VulkanVertexBindable for VertexBuffer {
 
 // --- Index bindings ---
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl VulkanIndexBindable for IndexBuffer {
     fn vk_buffer(&self) -> vk::Buffer {
         self.host_inner().buffer()

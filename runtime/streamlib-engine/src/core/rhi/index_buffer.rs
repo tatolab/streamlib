@@ -6,9 +6,9 @@
 //! `(handle, cached POD)` shape; see
 //! [`StorageBuffer`](super::StorageBuffer) for the shared rationale.
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::ffi::c_void;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::sync::Arc;
 
 /// Index buffer for graphics pipeline indexed draws.
@@ -17,7 +17,7 @@ use std::sync::Arc;
 /// which accepts `&impl VulkanIndexBindable`. The caller separately
 /// specifies the index element type (u16 / u32) at the binding
 /// callsite via `IndexType`.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub struct IndexBuffer {
     /// Opaque handle to the host's `Arc<HostVulkanBuffer>`.
     pub(crate) handle: *const c_void,
@@ -27,12 +27,12 @@ pub struct IndexBuffer {
     pub(crate) mapped_ptr_cached: *mut u8,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 unsafe impl Send for IndexBuffer {}
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 unsafe impl Sync for IndexBuffer {}
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl IndexBuffer {
     /// Allocate a HOST_VISIBLE index buffer of the given byte size.
     /// Underlying `VkBuffer` carries `INDEX_BUFFER | TRANSFER_SRC |
@@ -79,7 +79,7 @@ impl IndexBuffer {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl Clone for IndexBuffer {
     fn clone(&self) -> Self {
         if !self.handle.is_null() {
@@ -99,7 +99,7 @@ impl Clone for IndexBuffer {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl Drop for IndexBuffer {
     fn drop(&mut self) {
         if !self.handle.is_null() {
@@ -114,7 +114,7 @@ impl Drop for IndexBuffer {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl std::fmt::Debug for IndexBuffer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("IndexBuffer")

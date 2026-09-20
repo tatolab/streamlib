@@ -3,7 +3,6 @@
 
 //! Render Hardware Interface (RHI) - Platform-agnostic GPU abstraction.
 
-mod backend;
 pub mod blitter;
 mod color_converter;
 pub(crate) mod command_buffer;
@@ -11,8 +10,7 @@ pub(crate) mod command_queue;
 mod compute_kernel;
 mod device;
 mod external_handle;
-mod gl_interop;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod glsl_shader_source_compiler;
 mod graphics_kernel;
 mod host_timeline_semaphore;
@@ -26,13 +24,11 @@ mod ray_tracing_kernel;
 pub(crate) mod spirv_module_rewriting_for_tests;
 mod storage_buffer;
 pub(crate) mod texture;
-mod texture_cache;
 mod texture_readback;
 mod tone_mapper;
 mod uniform_buffer;
 mod vertex_buffer;
 
-pub use backend::RhiBackend;
 pub use blitter::RhiBlitter;
 pub use color_converter::{
     COLOR_CONVERTER_PUSH_CONSTANT_SIZE, ColorConverterPushConstants, RhiColorConverter,
@@ -48,8 +44,7 @@ pub use compute_kernel::{
 };
 pub use device::GpuDevice;
 pub use external_handle::{RhiExternalHandle, RhiPixelBufferExport, RhiPixelBufferImport};
-pub use gl_interop::{GlContext, GlTextureBinding, gl_constants};
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use glsl_shader_source_compiler::{
     DEFAULT_SHADER_ENTRY_POINT, GlslCompilationTargetStage, GlslShaderSourceToSpirvCompiler,
 };
@@ -65,13 +60,16 @@ pub use graphics_kernel::{
     VertexInputAttribute, VertexInputBinding, VertexInputRate, VertexInputState, Viewport,
     derive_bindings_from_spirv_multistage,
 };
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use host_timeline_semaphore::HostTimelineSemaphore;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use index_buffer::IndexBuffer;
 #[cfg(target_os = "linux")]
 pub(crate) use kernel_binding_names::{
     KernelShaderStageMask, quote_declared_shader_binding_names, quote_shader_stage_names,
+};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) use kernel_binding_names::{
     refuse_a_binding_the_shader_left_unnamed, refuse_a_descriptor_set_other_than_set_0,
     refuse_one_binding_name_that_identifies_two_slots,
     refuse_one_binding_slot_two_stages_spell_differently,
@@ -81,6 +79,10 @@ pub use pixel_buffer_pool::{
     PixelBufferDescriptor, PixelBufferPoolSlotId, PublishedPixelBufferFrameId,
     pool_slot_key_of_surface_id, split_pool_slot_and_frame_generation,
 };
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) use ray_tracing_kernel::ray_tracing_spirv_type_to_kind;
+#[cfg(target_os = "linux")]
+pub(crate) use ray_tracing_kernel::reconcile_ray_tracing_binding_declarations;
 pub use ray_tracing_kernel::{
     RayTracingBindingDeclaration, RayTracingBindingKind, RayTracingBindingSpec,
     RayTracingKernelDescriptor, RayTracingPushConstants, RayTracingShaderGroup,
@@ -88,20 +90,16 @@ pub use ray_tracing_kernel::{
     derive_ray_tracing_bindings_from_spirv_multistage, ray_tracing_stages_covered_by,
     validate_shader_groups,
 };
-#[cfg(target_os = "linux")]
-pub(crate) use ray_tracing_kernel::{
-    ray_tracing_spirv_type_to_kind, reconcile_ray_tracing_binding_declarations,
-};
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use storage_buffer::StorageBuffer;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use tone_mapper::ToneMapperFinalTextureLayouts;
 pub use tone_mapper::{
     RhiToneMapper, TONE_MAPPER_PUSH_CONSTANT_SIZE, ToneCurveId, ToneMapperPushConstants,
 };
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use uniform_buffer::UniformBuffer;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use vertex_buffer::VertexBuffer;
 // Note: RhiPixelBufferPool is intentionally not exported - use GpuContext::acquire_pixel_buffer()
 pub(crate) use pixel_buffer_pool::RhiPixelBufferPool;
@@ -117,7 +115,6 @@ pub use pixel_buffer_ref::PixelBufferRef;
 // rather than depending on `streamlib-consumer-rhi` directly.
 pub use streamlib_consumer_rhi::{PixelFormat, TextureFormat, TextureUsages, VulkanLayout};
 pub use texture::{NativeTextureHandle, Texture, TextureDescriptor};
-pub use texture_cache::{RhiTextureCache, RhiTextureView};
 pub use texture_readback::{
     ReadbackTicket, TextureReadback, TextureReadbackDescriptor, TextureReadbackError,
     TextureSourceLayout,

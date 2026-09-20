@@ -12,9 +12,9 @@
 //! Exposes byte size and a mapped pointer only; no pixel-shaped
 //! getters that would be meaningless on an SSBO.
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::ffi::c_void;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::sync::Arc;
 
 /// Raw byte-shaped GPU storage buffer (SSBO).
@@ -27,7 +27,7 @@ use std::sync::Arc;
 /// pointer. Engine-internal callers reach the underlying
 /// `Arc<HostVulkanBuffer>` via [`Self::host_inner`]; cdylib callers
 /// route Clone/Drop through the vtable.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[repr(C)]
 pub struct StorageBuffer {
     /// Opaque handle to the host's `Arc<HostVulkanBuffer>` (produced
@@ -47,12 +47,12 @@ pub struct StorageBuffer {
 // runs in host-compiled code regardless. `mapped_ptr_cached` is either
 // null or a persistently-mapped pointer the host's VMA allocator
 // guarantees stable for the buffer's lifetime.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 unsafe impl Send for StorageBuffer {}
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 unsafe impl Sync for StorageBuffer {}
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl StorageBuffer {
     /// Wrap an externally-allocated `Arc<HostVulkanBuffer>` as a
     /// `StorageBuffer`. The inner buffer must have been allocated via
@@ -125,7 +125,7 @@ impl StorageBuffer {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl Clone for StorageBuffer {
     fn clone(&self) -> Self {
         if !self.handle.is_null() {
@@ -145,7 +145,7 @@ impl Clone for StorageBuffer {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl Drop for StorageBuffer {
     fn drop(&mut self) {
         if !self.handle.is_null() {
@@ -160,7 +160,7 @@ impl Drop for StorageBuffer {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl std::fmt::Debug for StorageBuffer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("StorageBuffer")

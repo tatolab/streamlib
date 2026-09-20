@@ -17,20 +17,19 @@
 //! `resolve_texture_registration_by_surface_id` get the same lifecycle
 //! metadata adapter consumers do.
 //!
-//! On Linux the registration carries the texture's last-known
-//! `VkImageLayout` so consumers can issue a correct
-//! `vkCmdPipelineBarrier2` source layout. On other platforms only the
-//! texture is held — Metal manages texture state automatically and
-//! Vulkan layouts don't apply.
+//! Wherever the Vulkan RHI compiles, the registration carries the texture's
+//! last-known `VkImageLayout` so consumers can issue a correct
+//! `vkCmdPipelineBarrier2` source layout. On a platform with no Vulkan RHI
+//! only the texture is held.
 
 use std::ffi::c_void;
 use std::sync::Arc;
 
 use crate::core::rhi::Texture;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::sync::atomic::{AtomicI32, Ordering};
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use streamlib_consumer_rhi::VulkanLayout;
 
 /// Rich data backing a [`TextureRegistration`], reached through the
@@ -46,7 +45,7 @@ pub(crate) struct TextureRegistrationInner {
     /// submits is correct regardless of which one wins the atomic
     /// update; the field tracks "best-known stable layout for the
     /// next reader."
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) current_layout: AtomicI32,
 }
 
@@ -68,7 +67,7 @@ unsafe impl Sync for TextureRegistration {}
 
 impl TextureRegistration {
     /// Construct a registration with an initial layout.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn new(texture: Texture, initial_layout: VulkanLayout) -> Self {
         let inner = TextureRegistrationInner {
             texture,
@@ -78,7 +77,7 @@ impl TextureRegistration {
     }
 
     /// Construct a registration on platforms without Vulkan layout tracking.
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     pub fn new(texture: Texture) -> Self {
         let inner = TextureRegistrationInner { texture };
         Self::from_arc_into_raw(Arc::new(inner))
@@ -108,7 +107,7 @@ impl TextureRegistration {
     }
 
     /// Last-known `VkImageLayout` the texture is in.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn current_layout(&self) -> VulkanLayout {
         if self.handle.is_null() {
             return VulkanLayout::UNDEFINED;
@@ -117,7 +116,7 @@ impl TextureRegistration {
     }
 
     /// Record a new last-known layout.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn update_layout(&self, new_layout: VulkanLayout) {
         if self.handle.is_null() {
             return;
@@ -167,7 +166,7 @@ mod layout_tests {
 }
 
 #[cfg(test)]
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod tests {
     use super::*;
     use crate::core::context::GpuContext;

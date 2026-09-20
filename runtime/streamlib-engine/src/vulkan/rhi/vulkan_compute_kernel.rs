@@ -1009,7 +1009,7 @@ impl VulkanComputeKernel {
     /// Bind a raw-bytes [`crate::core::rhi::StorageBuffer`] at
     /// `binding` — the canonical shape from
     /// [`crate::core::context::GpuContext::acquire_storage_buffer`].
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn set_storage_buffer_storage(
         &self,
         binding: u32,
@@ -1019,7 +1019,7 @@ impl VulkanComputeKernel {
     }
 
     /// Bind a [`crate::core::rhi::UniformBuffer`] (UBO) at `binding`.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn set_uniform_buffer(
         &self,
         binding: u32,

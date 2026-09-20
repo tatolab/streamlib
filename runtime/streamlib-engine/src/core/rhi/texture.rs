@@ -6,9 +6,9 @@
 //! `(handle, cached POD)` shape: the handle is
 //! `Arc::into_raw(Arc<TextureInner>)`; Clone/Drop refcount it directly.
 //!
-//! Platform-specific Arcs (`HostVulkanTexture` on Linux,
-//! `MetalTexture` on macOS, `DX12Texture` on Windows) live on the
-//! private [`TextureInner`] type behind the opaque handle. Engine code
+//! The platform-specific Arc — `HostVulkanTexture` wherever the Vulkan RHI
+//! compiles — lives on the private [`TextureInner`] type behind the opaque
+//! handle. Engine code
 //! reaches them via the [`crate::host_rhi::HostTextureExt`] extension
 //! trait.
 //!
@@ -29,10 +29,6 @@ use streamlib_consumer_rhi::{TextureFormat, TextureUsages};
 /// handle multiple platform sharing mechanisms (e.g., pygfx, wgpu-py).
 #[derive(Debug, Clone)]
 pub enum NativeTextureHandle {
-    /// macOS/iOS: IOSurface ID for cross-process GPU memory sharing.
-    /// Use `IOSurfaceLookup(id)` to get the IOSurface handle.
-    IOSurface { id: u32 },
-
     /// Linux: DMA-BUF file descriptor for GPU memory sharing.
     /// Import via `EGL_EXT_image_dma_buf_import` or Vulkan external memory.
     ///
@@ -86,101 +82,49 @@ impl<'a> TextureDescriptor<'a> {
 
 /// Rich data backing a [`Texture`], held behind the opaque handle.
 ///
-/// Holds the platform-specific Arc(s) the engine RHI and surface
-/// adapters need (raw `VkImage`, `MTLTexture`, IOSurface, etc.).
+/// Holds the platform-specific Arc the engine RHI and surface adapters
+/// need (the raw `VkImage` and its allocation).
 pub(crate) struct TextureInner {
-    // Metal backend: when vulkan NOT requested AND (explicit metal feature OR macOS/iOS)
-    #[cfg(all(
-        not(feature = "backend-vulkan"),
-        any(feature = "backend-metal", any(target_os = "macos", target_os = "ios"))
-    ))]
-    pub(crate) inner: Arc<crate::metal::rhi::MetalTexture>,
-
-    // Vulkan backend: explicit feature OR Linux default (when metal not requested)
-    #[cfg(any(
-        feature = "backend-vulkan",
-        all(target_os = "linux", not(feature = "backend-metal"))
-    ))]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) inner: Arc<crate::vulkan::rhi::HostVulkanTexture>,
 
     #[cfg(target_os = "windows")]
     pub(crate) inner: Arc<crate::windows::rhi::DX12Texture>,
-
-    /// Metal texture for Apple platform services (IOSurface, CVPixelBuffer).
-    /// On macOS/iOS with Vulkan backend, textures created from IOSurface are
-    /// stored here. When Metal is the backend, this duplicates `inner`.
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
-    pub(crate) metal_texture: Option<Arc<crate::metal::rhi::MetalTexture>>,
 }
 
 impl TextureInner {
     /// Texture width in pixels.
     pub(crate) fn width(&self) -> u32 {
-        // On macOS, prefer metal_texture if available (for IOSurface-backed textures)
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
-        if let Some(ref mt) = self.metal_texture {
-            return mt.width();
-        }
         self.inner.width()
     }
 
     /// Texture height in pixels.
     pub(crate) fn height(&self) -> u32 {
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
-        if let Some(ref mt) = self.metal_texture {
-            return mt.height();
-        }
         self.inner.height()
     }
 
     /// Texture format.
     pub(crate) fn format(&self) -> TextureFormat {
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
-        if let Some(ref mt) = self.metal_texture {
-            return mt.format();
-        }
         self.inner.format()
     }
 
     /// Whether a recorded copy may read this texture (Vulkan:
     /// TRANSFER_SRC usage; the non-Vulkan backends do not usage-gate
-    /// copies). An IOSurface-backed texture answers from its Metal
-    /// side, like every accessor above.
+    /// copies).
     pub(crate) fn supports_transfer_read(&self) -> bool {
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
-        if self.metal_texture.is_some() {
-            return true;
-        }
-        #[cfg(any(
-            feature = "backend-vulkan",
-            all(target_os = "linux", not(feature = "backend-metal"))
-        ))]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         return self.inner.supports_transfer_read();
-        #[cfg(not(any(
-            feature = "backend-vulkan",
-            all(target_os = "linux", not(feature = "backend-metal"))
-        )))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         true
     }
 
     /// Whether a recorded copy may write this texture (Vulkan:
     /// TRANSFER_DST usage; the non-Vulkan backends do not usage-gate
-    /// copies). An IOSurface-backed texture answers from its Metal
-    /// side, like every accessor above.
+    /// copies).
     pub(crate) fn supports_transfer_write(&self) -> bool {
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
-        if self.metal_texture.is_some() {
-            return true;
-        }
-        #[cfg(any(
-            feature = "backend-vulkan",
-            all(target_os = "linux", not(feature = "backend-metal"))
-        ))]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         return self.inner.supports_transfer_write();
-        #[cfg(not(any(
-            feature = "backend-vulkan",
-            all(target_os = "linux", not(feature = "backend-metal"))
-        )))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         true
     }
 }
@@ -210,15 +154,14 @@ pub struct Texture {
 
 // SAFETY: `handle` points at an `Arc<TextureInner>` whose interior is
 // Send+Sync (platform-specific texture types — `HostVulkanTexture`,
-// `MetalTexture`, `DX12Texture` — are themselves Send+Sync).
+// `DX12Texture` — are themselves Send+Sync).
 unsafe impl Send for Texture {}
 unsafe impl Sync for Texture {}
 
 impl Texture {
     /// Construct from a fully-populated [`TextureInner`]. Engine-only;
     /// surface adapters and RHI helpers reach this through
-    /// [`crate::host_rhi::HostTextureExt::from_vulkan`] or the
-    /// equivalent Metal / DX12 entry points.
+    /// [`crate::host_rhi::HostTextureExt::from_vulkan`].
     pub(crate) fn from_inner(inner: TextureInner) -> Self {
         let width = inner.width();
         let height = inner.height();
@@ -301,33 +244,9 @@ impl Texture {
         self.host_inner().supports_transfer_write()
     }
 
-    /// Get the IOSurface ID for cross-framework sharing.
-    ///
-    /// Returns `Some(id)` on macOS/iOS if the texture is backed by an IOSurface.
-    /// Returns `None` on other platforms or if no IOSurface is available.
-    ///
-    /// Engine-internal: reads the host's `TextureInner` directly; cdylib
-    /// callers reach this through future per-method vtable callbacks
-    /// (not wired today — `host_inner()` panics with `catch_unwind` at
-    /// the plugin ABI).
-    pub fn iosurface_id(&self) -> Option<u32> {
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
-        {
-            self.host_inner()
-                .metal_texture
-                .as_ref()
-                .and_then(|mt| mt.iosurface_id())
-        }
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-        {
-            None
-        }
-    }
-
     /// Get the platform-native sharing handle for this texture.
     ///
     /// Returns the appropriate handle type for the current platform:
-    /// - macOS/iOS: `IOSurface { id }`
     /// - Linux: `DmaBuf { fd }` — adapters export DMA-BUF FDs to a
     ///   different GPU API (CUDA, OpenGL, downstream IPC) without
     ///   touching host-internal `TextureInner` layout. The fd is freshly
@@ -339,22 +258,6 @@ impl Texture {
     /// Returns `None` if no sharing handle is available (no Vulkan
     /// backing, export failed, or the platform doesn't expose one).
     pub fn native_handle(&self) -> Option<NativeTextureHandle> {
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
-        {
-            // macOS / iOS native-handle path stays host-only until
-            // macOS cdylib adapter work resumes (#908 deferred list).
-            // `host_inner()` panics in cdylib mode; the panic
-            // propagates through the cdylib's Rust stack until it
-            // crosses the next plugin ABI (the plugin entry point
-            // or any host vtable callback the cdylib calls), where
-            // `catch_unwind` converts it to a "callback panicked"
-            // log entry instead of UB.
-            self.host_inner()
-                .metal_texture
-                .as_ref()
-                .and_then(|mt| mt.iosurface_id())
-                .map(|id| NativeTextureHandle::IOSurface { id })
-        }
         #[cfg(target_os = "linux")]
         {
             if self.handle.is_null() {
@@ -372,57 +275,10 @@ impl Texture {
             // cdylib adapter work begins.
             None
         }
-        #[cfg(not(any(
-            target_os = "macos",
-            target_os = "ios",
-            target_os = "linux",
-            target_os = "windows"
-        )))]
+        #[cfg(not(any(target_os = "linux", target_os = "windows")))]
         {
             None
         }
-    }
-
-    /// Get the underlying Metal texture (macOS/iOS only).
-    ///
-    /// Panics if no Metal texture is available.
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
-    pub fn as_metal_texture(&self) -> &metal::TextureRef {
-        self.host_inner()
-            .metal_texture
-            .as_ref()
-            .expect("No Metal texture available")
-            .as_metal_texture()
-    }
-
-    /// Get the underlying IOSurface if this texture is IOSurface-backed (macOS/iOS only).
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
-    pub fn as_iosurface(&self) -> Option<&objc2_io_surface::IOSurface> {
-        self.host_inner()
-            .metal_texture
-            .as_ref()
-            .and_then(|mt| mt.iosurface())
-    }
-
-    /// Create from a Metal texture.
-    ///
-    /// When Metal is the GPU backend, this sets both `inner` and `metal_texture`.
-    /// When Vulkan is the GPU backend on macOS, this only sets `metal_texture`
-    /// (used for Apple platform interop like IOSurface).
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
-    pub fn from_metal(texture: crate::metal::rhi::MetalTexture) -> Self {
-        let arc_texture = Arc::new(texture);
-
-        let inner = TextureInner {
-            // When Metal is backend, inner is the MetalTexture
-            #[cfg(not(feature = "backend-vulkan"))]
-            inner: arc_texture.clone(),
-            // When Vulkan is backend on macOS, inner would be HostVulkanTexture (not set here)
-            #[cfg(feature = "backend-vulkan")]
-            inner: Arc::new(crate::vulkan::rhi::HostVulkanTexture::placeholder()),
-            metal_texture: Some(arc_texture),
-        };
-        Self::from_inner(inner)
     }
 }
 

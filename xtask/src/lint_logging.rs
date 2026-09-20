@@ -262,6 +262,59 @@ const RUST_BANNED_MACROS: &[(&str, &str)] = &[
     ("dbg", "dbg!"),
 ];
 
+/// One of the platforms the workspace compiles for, as the `cfg` evaluator
+/// below reads a gate against.
+///
+/// The scan runs once per platform because a single pass sees only one arm of
+/// every `#[cfg(target_os = …)]` in the tree.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PlatformTheCfgGatesAreEvaluatedFor {
+    Linux,
+    MacOs,
+}
+
+impl PlatformTheCfgGatesAreEvaluatedFor {
+    /// Every platform a pass runs for, in scan order.
+    pub const EVERY_PLATFORM_SCANNED: [Self; 2] = [Self::Linux, Self::MacOs];
+
+    /// The `target_os` value a gate has to name to be included in this pass.
+    fn target_os_value(self) -> &'static str {
+        match self {
+            Self::Linux => "linux",
+            Self::MacOs => "macos",
+        }
+    }
+
+    /// The `target_vendor` value, which Apple sets and Linux leaves as
+    /// `unknown`.
+    fn target_vendor_value(self) -> &'static str {
+        match self {
+            Self::Linux => "unknown",
+            Self::MacOs => "apple",
+        }
+    }
+
+    /// The `target_env` value. Darwin leaves it empty, so no `target_env = …`
+    /// gate is ever true there.
+    fn target_env_value(self) -> &'static str {
+        match self {
+            Self::Linux => "gnu",
+            Self::MacOs => "",
+        }
+    }
+}
+
+/// What makes two findings the same finding across platform passes: one line
+/// of one file breaking one rule. The target is not part of it because this
+/// key orders and collapses Rust findings only.
+fn one_violation_per_line_key(violation: &Violation) -> (&Path, usize, &'static str) {
+    (
+        violation.path.as_path(),
+        violation.line_no,
+        violation.matched_pattern,
+    )
+}
+
 /// Walks every crate that opts into workspace lints
 /// (`[lints] workspace = true` in its Cargo.toml) and checks each `.rs` file
 /// under its source roots for banned macro invocations. Crates that don't opt
@@ -270,53 +323,77 @@ const RUST_BANNED_MACROS: &[(&str, &str)] = &[
 /// Returns one file count per source root name rather than a single total, so
 /// [`run`] can refuse a run in which one root read nothing.
 ///
-/// Respects `#[cfg(...)]` on out-of-line mod declarations in the crate root
-/// (e.g. `#[cfg(target_os = "macos")] mod apple;`) so that files the Linux
-/// runner's clippy would never parse are also skipped here.
+/// Respects `#[cfg(...)]` on out-of-line mod declarations in the crate root,
+/// evaluated once per [`PlatformTheCfgGatesAreEvaluatedFor`], so that a
+/// subtree one platform excludes is still read by the platform that compiles
+/// it.
 pub fn scan_rust(
     project_root: &Path,
     violations: &mut Vec<Violation>,
 ) -> Result<Vec<LintLoggingScanRootFileCount>> {
     let mut files_scanned_per_source_root =
         vec![0usize; crate::RUST_CRATE_SOURCE_ROOT_DIR_NAMES.len()];
-    for crate_root in discover_lint_opted_in_crates(project_root)? {
-        let excluded = collect_cfg_excluded_mod_paths(&crate_root);
-        for (root_index, root_name) in crate::RUST_CRATE_SOURCE_ROOT_DIR_NAMES.iter().enumerate() {
-            let files_scanned = &mut files_scanned_per_source_root[root_index];
-            let source_root = crate_root.join(root_name);
-            if !source_root.exists() {
-                continue;
-            }
-            for entry in WalkDir::new(&source_root)
-                .into_iter()
-                .filter_map(|e| e.ok())
+    // A file counted once however many passes read it: the passes differ in
+    // which cfg-gated subtrees they enter, not in the tree they walk.
+    let mut paths_already_counted: std::collections::HashSet<PathBuf> =
+        std::collections::HashSet::new();
+    // The opt-in set is read from the manifests and cannot vary by platform.
+    let lint_opted_in_crate_roots = discover_lint_opted_in_crates(project_root)?;
+    // Only this function's own findings are deduped, so a caller's entries are
+    // neither reordered nor collapsed against ours.
+    let mut rust_violations = Vec::new();
+    for platform in PlatformTheCfgGatesAreEvaluatedFor::EVERY_PLATFORM_SCANNED {
+        for crate_root in &lint_opted_in_crate_roots {
+            let excluded = collect_cfg_excluded_mod_paths(crate_root, platform);
+            for (root_index, root_name) in
+                crate::RUST_CRATE_SOURCE_ROOT_DIR_NAMES.iter().enumerate()
             {
-                let path = entry.path();
-                if !entry.file_type().is_file() {
+                let files_scanned = &mut files_scanned_per_source_root[root_index];
+                let source_root = crate_root.join(root_name);
+                if !source_root.exists() {
                     continue;
                 }
-                if path.extension().and_then(|e| e.to_str()) != Some("rs") {
-                    continue;
+                for entry in WalkDir::new(&source_root)
+                    .into_iter()
+                    .filter_map(|e| e.ok())
+                {
+                    let path = entry.path();
+                    if !entry.file_type().is_file() {
+                        continue;
+                    }
+                    if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                        continue;
+                    }
+                    if excluded.iter().any(|p| path.starts_with(p)) {
+                        continue;
+                    }
+                    if path.components().any(|c| {
+                        c.as_os_str()
+                            .to_str()
+                            .is_some_and(is_parked_pending_segment)
+                    }) {
+                        // Parked implementation dirs (`_apple_impl_pending_`,
+                        // `_nvjpeg_impl_pending_`, ...) hold code that is NOT
+                        // declared in any mod graph and never compiles — lint it
+                        // when it is activated, not while parked.
+                        continue;
+                    }
+                    if paths_already_counted.insert(path.to_path_buf()) {
+                        *files_scanned += 1;
+                    }
+                    scan_rust_file(path, &mut rust_violations, platform)?;
                 }
-                if excluded.iter().any(|p| path.starts_with(p)) {
-                    continue;
-                }
-                if path.components().any(|c| {
-                    c.as_os_str()
-                        .to_str()
-                        .is_some_and(is_parked_pending_segment)
-                }) {
-                    // Parked implementation dirs (`_apple_impl_pending_`,
-                    // `_nvjpeg_impl_pending_`, ...) hold code that is NOT
-                    // declared in any mod graph and never compiles — lint it
-                    // when it is activated, not while parked.
-                    continue;
-                }
-                *files_scanned += 1;
-                scan_rust_file(path, violations)?;
             }
         }
     }
+    // A violation on a line both passes reach is one violation.
+    rust_violations.sort_by(|left, right| {
+        one_violation_per_line_key(left).cmp(&one_violation_per_line_key(right))
+    });
+    rust_violations.dedup_by(|left, right| {
+        one_violation_per_line_key(left) == one_violation_per_line_key(right)
+    });
+    violations.append(&mut rust_violations);
     Ok(crate::RUST_CRATE_SOURCE_ROOT_DIR_NAMES
         .iter()
         .zip(files_scanned_per_source_root)
@@ -346,16 +423,23 @@ fn is_parked_pending_segment(segment: &str) -> bool {
 /// A folder-backed crate reaches its `processors/` files through `#[path]`
 /// arms in its committed `src/lib.rs`, which [`resolve_mod_candidates`]
 /// honours, so one walk from the crate root covers both shapes.
-fn collect_cfg_excluded_mod_paths(crate_root: &Path) -> Vec<PathBuf> {
+fn collect_cfg_excluded_mod_paths(
+    crate_root: &Path,
+    platform: PlatformTheCfgGatesAreEvaluatedFor,
+) -> Vec<PathBuf> {
     let mut excluded = Vec::new();
     let lib_rs = crate_root.join("src/lib.rs");
     if lib_rs.exists() {
-        walk_mods_for_exclusions(&lib_rs, &mut excluded);
+        walk_mods_for_exclusions(&lib_rs, &mut excluded, platform);
     }
     excluded
 }
 
-fn walk_mods_for_exclusions(file_path: &Path, excluded: &mut Vec<PathBuf>) {
+fn walk_mods_for_exclusions(
+    file_path: &Path,
+    excluded: &mut Vec<PathBuf>,
+    platform: PlatformTheCfgGatesAreEvaluatedFor,
+) {
     let Ok(content) = fs::read_to_string(file_path) else {
         return;
     };
@@ -364,7 +448,11 @@ fn walk_mods_for_exclusions(file_path: &Path, excluded: &mut Vec<PathBuf>) {
     };
     // A file-level `#![cfg(...)]` gates the module the file IS, so a predicate
     // false on the runner strips the file and everything it declares.
-    if file.attrs.iter().any(is_cfg_excluded_on_linux) {
+    if file
+        .attrs
+        .iter()
+        .any(|attr| is_cfg_excluded_on(attr, platform))
+    {
         let stem = file_path
             .file_stem()
             .and_then(|n| n.to_str())
@@ -386,11 +474,14 @@ fn walk_mods_for_exclusions(file_path: &Path, excluded: &mut Vec<PathBuf>) {
             let Some(found) = candidates.into_iter().find(|p| p.exists()) else {
                 continue;
             };
-            let gated_out = m.attrs.iter().any(is_cfg_excluded_on_linux);
+            let gated_out = m
+                .attrs
+                .iter()
+                .any(|attr| is_cfg_excluded_on(attr, platform));
             if gated_out {
                 push_mod_exclusion(&found, &mod_name, excluded);
             } else {
-                walk_mods_for_exclusions(&found, excluded);
+                walk_mods_for_exclusions(&found, excluded, platform);
             }
         }
     }
@@ -482,7 +573,11 @@ fn discover_lint_opted_in_crates(project_root: &Path) -> Result<Vec<PathBuf>> {
     Ok(result)
 }
 
-fn scan_rust_file(path: &Path, violations: &mut Vec<Violation>) -> Result<()> {
+fn scan_rust_file(
+    path: &Path,
+    violations: &mut Vec<Violation>,
+    platform: PlatformTheCfgGatesAreEvaluatedFor,
+) -> Result<()> {
     let content =
         fs::read_to_string(path).with_context(|| format!("failed to read {}", path.display()))?;
     if content.contains(ALLOW_FILE_PRAGMA) {
@@ -494,7 +589,7 @@ fn scan_rust_file(path: &Path, violations: &mut Vec<Violation>) -> Result<()> {
     };
     // File-level #![allow(clippy::disallowed_macros)] or any inner #![cfg(test)]
     // guard (including `cfg(all(test, ...))`) skips the whole file.
-    if file.attrs.iter().any(is_skip_attr) {
+    if file.attrs.iter().any(|attr| is_skip_attr(attr, platform)) {
         return Ok(());
     }
     let source_lines: Vec<&str> = content.lines().collect();
@@ -502,6 +597,7 @@ fn scan_rust_file(path: &Path, violations: &mut Vec<Violation>) -> Result<()> {
         path,
         source_lines: &source_lines,
         violations,
+        platform,
     };
     visitor.visit_file(&file);
     Ok(())
@@ -511,12 +607,13 @@ struct RustVisitor<'a> {
     path: &'a Path,
     source_lines: &'a [&'a str],
     violations: &'a mut Vec<Violation>,
+    platform: PlatformTheCfgGatesAreEvaluatedFor,
 }
 
 impl<'ast, 'a> Visit<'ast> for RustVisitor<'a> {
     fn visit_item(&mut self, item: &'ast syn::Item) {
         if let Some(attrs) = item_attrs(item) {
-            if attrs.iter().any(is_skip_attr) {
+            if attrs.iter().any(|attr| is_skip_attr(attr, self.platform)) {
                 return;
             }
         }
@@ -525,7 +622,7 @@ impl<'ast, 'a> Visit<'ast> for RustVisitor<'a> {
 
     fn visit_expr(&mut self, expr: &'ast syn::Expr) {
         if let Some(attrs) = expr_attrs(expr) {
-            if attrs.iter().any(is_skip_attr) {
+            if attrs.iter().any(|attr| is_skip_attr(attr, self.platform)) {
                 return;
             }
         }
@@ -537,7 +634,7 @@ impl<'ast, 'a> Visit<'ast> for RustVisitor<'a> {
 
     fn visit_stmt(&mut self, stmt: &'ast syn::Stmt) {
         if let syn::Stmt::Macro(m) = stmt {
-            if !m.attrs.iter().any(is_skip_attr) {
+            if !m.attrs.iter().any(|attr| is_skip_attr(attr, self.platform)) {
                 self.check_macro(&m.mac);
             }
             // don't descend — no inner exprs to visit in a stmt-macro
@@ -547,7 +644,11 @@ impl<'ast, 'a> Visit<'ast> for RustVisitor<'a> {
     }
 
     fn visit_item_macro(&mut self, item: &'ast syn::ItemMacro) {
-        if !item.attrs.iter().any(is_skip_attr) {
+        if !item
+            .attrs
+            .iter()
+            .any(|attr| is_skip_attr(attr, self.platform))
+        {
             self.check_macro(&item.mac);
         }
     }
@@ -560,7 +661,7 @@ impl<'ast, 'a> Visit<'ast> for RustVisitor<'a> {
             syn::ImplItem::Macro(x) => &x.attrs,
             _ => &[],
         };
-        if attrs.iter().any(is_skip_attr) {
+        if attrs.iter().any(|attr| is_skip_attr(attr, self.platform)) {
             return;
         }
         syn::visit::visit_impl_item(self, item);
@@ -574,7 +675,7 @@ impl<'ast, 'a> Visit<'ast> for RustVisitor<'a> {
             syn::TraitItem::Macro(x) => &x.attrs,
             _ => &[],
         };
-        if attrs.iter().any(is_skip_attr) {
+        if attrs.iter().any(|attr| is_skip_attr(attr, self.platform)) {
             return;
         }
         syn::visit::visit_trait_item(self, item);
@@ -588,7 +689,7 @@ impl<'ast, 'a> Visit<'ast> for RustVisitor<'a> {
             syn::ForeignItem::Macro(x) => &x.attrs,
             _ => &[],
         };
-        if attrs.iter().any(is_skip_attr) {
+        if attrs.iter().any(|attr| is_skip_attr(attr, self.platform)) {
             return;
         }
         syn::visit::visit_foreign_item(self, item);
@@ -639,22 +740,22 @@ impl<'a> RustVisitor<'a> {
     }
 }
 
-fn is_skip_attr(attr: &syn::Attribute) -> bool {
-    is_cfg_excluded_on_linux(attr) || is_allow_disallowed_macros(attr)
+fn is_skip_attr(attr: &syn::Attribute, platform: PlatformTheCfgGatesAreEvaluatedFor) -> bool {
+    is_cfg_excluded_on(attr, platform) || is_allow_disallowed_macros(attr)
 }
 
-/// True if this `#[cfg(...)]` attribute guards an item that clippy running on
-/// `cargo clippy --workspace --no-deps` on `ubuntu-latest` would NOT see.
-/// Mirrors the runner's cfg state: linux / unix, no `test`, no `debug_assertions`
-/// treated as set (conservative "unknown → included").
-fn is_cfg_excluded_on_linux(attr: &syn::Attribute) -> bool {
+/// True if this `#[cfg(...)]` attribute guards an item clippy would NOT see on
+/// `platform`. Mirrors a runner's cfg state: the platform's own `target_os` /
+/// vendor / env, unix, no `test`, `debug_assertions` treated as set
+/// (conservative "unknown → included").
+fn is_cfg_excluded_on(attr: &syn::Attribute, platform: PlatformTheCfgGatesAreEvaluatedFor) -> bool {
     if !attr.path().is_ident("cfg") {
         return false;
     }
     let Ok(tokens) = attr.meta.require_list().map(|l| l.tokens.clone()) else {
         return false;
     };
-    eval_cfg(tokens) == CfgEval::False
+    eval_cfg(tokens, platform) == CfgEval::False
 }
 
 #[derive(PartialEq, Eq, Clone, Copy)]
@@ -666,12 +767,18 @@ enum CfgEval {
     Unknown,
 }
 
-fn eval_cfg(tokens: proc_macro2::TokenStream) -> CfgEval {
+fn eval_cfg(
+    tokens: proc_macro2::TokenStream,
+    platform: PlatformTheCfgGatesAreEvaluatedFor,
+) -> CfgEval {
     let mut iter = tokens.into_iter().peekable();
-    eval_predicate(&mut iter)
+    eval_predicate(&mut iter, platform)
 }
 
-fn eval_predicate(iter: &mut std::iter::Peekable<proc_macro2::token_stream::IntoIter>) -> CfgEval {
+fn eval_predicate(
+    iter: &mut std::iter::Peekable<proc_macro2::token_stream::IntoIter>,
+    platform: PlatformTheCfgGatesAreEvaluatedFor,
+) -> CfgEval {
     let Some(tt) = iter.next() else {
         return CfgEval::Unknown;
     };
@@ -684,20 +791,20 @@ fn eval_predicate(iter: &mut std::iter::Peekable<proc_macro2::token_stream::Into
                     let Some(proc_macro2::TokenTree::Group(g)) = iter.next() else {
                         unreachable!()
                     };
-                    eval_all(g.stream())
+                    eval_all(g.stream(), platform)
                 }
                 ("any", Some(proc_macro2::TokenTree::Group(_))) => {
                     let Some(proc_macro2::TokenTree::Group(g)) = iter.next() else {
                         unreachable!()
                     };
-                    eval_any(g.stream())
+                    eval_any(g.stream(), platform)
                 }
                 ("not", Some(proc_macro2::TokenTree::Group(_))) => {
                     let Some(proc_macro2::TokenTree::Group(g)) = iter.next() else {
                         unreachable!()
                     };
                     let mut inner = g.stream().into_iter().peekable();
-                    match eval_predicate(&mut inner) {
+                    match eval_predicate(&mut inner, platform) {
                         CfgEval::True => CfgEval::False,
                         CfgEval::False => CfgEval::True,
                         CfgEval::Unknown => CfgEval::Unknown,
@@ -705,13 +812,13 @@ fn eval_predicate(iter: &mut std::iter::Peekable<proc_macro2::token_stream::Into
                 }
                 // Bare `cfg(test)` — single identifier, no group follows, or
                 // the next tokens are not a group (e.g., comma).
-                _ => eval_bare(&name, iter),
+                _ => eval_bare(&name, iter, platform),
             }
         }
         proc_macro2::TokenTree::Group(g) => {
             // Parenthesized predicate: eval its stream.
             let mut inner = g.stream().into_iter().peekable();
-            eval_predicate(&mut inner)
+            eval_predicate(&mut inner, platform)
         }
         _ => CfgEval::Unknown,
     }
@@ -722,6 +829,7 @@ fn eval_predicate(iter: &mut std::iter::Peekable<proc_macro2::token_stream::Into
 fn eval_bare(
     name: &str,
     iter: &mut std::iter::Peekable<proc_macro2::token_stream::IntoIter>,
+    platform: PlatformTheCfgGatesAreEvaluatedFor,
 ) -> CfgEval {
     // Look ahead for `= "value"` — a Punct('=') then a Literal.
     if let Some(proc_macro2::TokenTree::Punct(p)) = iter.peek() {
@@ -730,7 +838,7 @@ fn eval_bare(
             if let Some(proc_macro2::TokenTree::Literal(lit)) = iter.next() {
                 let value_raw = lit.to_string();
                 let value = value_raw.trim_matches('"');
-                return eval_name_value(name, value);
+                return eval_name_value(name, value, platform);
             }
             return CfgEval::Unknown;
         }
@@ -746,28 +854,24 @@ fn eval_bare(
     }
 }
 
-fn eval_name_value(name: &str, value: &str) -> CfgEval {
+fn eval_name_value(
+    name: &str,
+    value: &str,
+    platform: PlatformTheCfgGatesAreEvaluatedFor,
+) -> CfgEval {
     match name {
-        "target_os" => {
-            if value == "linux" {
-                CfgEval::True
-            } else {
-                CfgEval::False
-            }
-        }
+        "target_os" => CfgEval::from(value == platform.target_os_value()),
         "target_family" => match value {
             "unix" => CfgEval::True,
             "windows" | "wasm" => CfgEval::False,
             _ => CfgEval::Unknown,
         },
         "target_env" => match value {
-            "gnu" => CfgEval::True,
-            "msvc" | "musl" => CfgEval::False,
+            "gnu" | "msvc" | "musl" => CfgEval::from(value == platform.target_env_value()),
             _ => CfgEval::Unknown,
         },
         "target_vendor" => match value {
-            "unknown" => CfgEval::True,
-            "apple" | "pc" => CfgEval::False,
+            "unknown" | "apple" | "pc" => CfgEval::from(value == platform.target_vendor_value()),
             _ => CfgEval::Unknown,
         },
         // target_arch, feature flags, rustc flags we don't track — conservative.
@@ -775,12 +879,21 @@ fn eval_name_value(name: &str, value: &str) -> CfgEval {
     }
 }
 
-fn eval_all(stream: proc_macro2::TokenStream) -> CfgEval {
+impl From<bool> for CfgEval {
+    fn from(value: bool) -> Self {
+        if value { Self::True } else { Self::False }
+    }
+}
+
+fn eval_all(
+    stream: proc_macro2::TokenStream,
+    platform: PlatformTheCfgGatesAreEvaluatedFor,
+) -> CfgEval {
     let predicates = split_on_commas(stream);
     let mut any_unknown = false;
     for p in predicates {
         let mut iter = p.into_iter().peekable();
-        match eval_predicate(&mut iter) {
+        match eval_predicate(&mut iter, platform) {
             CfgEval::False => return CfgEval::False,
             CfgEval::Unknown => any_unknown = true,
             CfgEval::True => {}
@@ -793,12 +906,15 @@ fn eval_all(stream: proc_macro2::TokenStream) -> CfgEval {
     }
 }
 
-fn eval_any(stream: proc_macro2::TokenStream) -> CfgEval {
+fn eval_any(
+    stream: proc_macro2::TokenStream,
+    platform: PlatformTheCfgGatesAreEvaluatedFor,
+) -> CfgEval {
     let predicates = split_on_commas(stream);
     let mut any_unknown = false;
     for p in predicates {
         let mut iter = p.into_iter().peekable();
-        match eval_predicate(&mut iter) {
+        match eval_predicate(&mut iter, platform) {
             CfgEval::True => return CfgEval::True,
             CfgEval::Unknown => any_unknown = true,
             CfgEval::False => {}
@@ -1058,11 +1174,18 @@ mod tests {
     // ----- Rust target -------------------------------------------------------
 
     fn scan_rust_source(content: &str) -> Vec<Violation> {
+        scan_rust_source_for(content, PlatformTheCfgGatesAreEvaluatedFor::Linux)
+    }
+
+    fn scan_rust_source_for(
+        content: &str,
+        platform: PlatformTheCfgGatesAreEvaluatedFor,
+    ) -> Vec<Violation> {
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("probe.rs");
         fs::write(&path, content).unwrap();
         let mut violations = Vec::new();
-        scan_rust_file(&path, &mut violations).unwrap();
+        scan_rust_file(&path, &mut violations, platform).unwrap();
         violations
     }
 
@@ -1153,13 +1276,70 @@ mod tests {
     }
 
     #[test]
-    fn rust_cfg_macos_skips_item() {
+    fn rust_cfg_macos_skips_item_on_the_linux_pass() {
         let v =
             scan_rust_source("#[cfg(target_os = \"macos\")]\npub fn mac() { println!(\"x\"); }\n");
         assert!(
             v.is_empty(),
             "target_os=macos should be skipped on linux: {:?}",
             v
+        );
+    }
+
+    #[test]
+    fn rust_cfg_macos_lints_item_on_the_macos_pass() {
+        let v = scan_rust_source_for(
+            "#[cfg(target_os = \"macos\")]\npub fn mac() { println!(\"x\"); }\n",
+            PlatformTheCfgGatesAreEvaluatedFor::MacOs,
+        );
+        assert_eq!(v.len(), 1, "the Apple arm is linted by its own pass: {v:?}");
+    }
+
+    #[test]
+    fn rust_cfg_linux_skips_item_on_the_macos_pass() {
+        let v = scan_rust_source_for(
+            "#[cfg(target_os = \"linux\")]\npub fn lin() { println!(\"x\"); }\n",
+            PlatformTheCfgGatesAreEvaluatedFor::MacOs,
+        );
+        assert!(v.is_empty(), "the Linux arm is not the Apple pass's: {v:?}");
+    }
+
+    #[test]
+    fn rust_cfg_windows_is_skipped_by_every_pass() {
+        for platform in PlatformTheCfgGatesAreEvaluatedFor::EVERY_PLATFORM_SCANNED {
+            let v = scan_rust_source_for(
+                "#[cfg(target_os = \"windows\")]\npub fn win() { println!(\"x\"); }\n",
+                platform,
+            );
+            assert!(v.is_empty(), "no pass compiles Windows: {v:?}");
+        }
+    }
+
+    #[test]
+    fn rust_cfg_apple_vendor_lints_only_on_the_macos_pass() {
+        let on_apple = scan_rust_source_for(
+            "#[cfg(target_vendor = \"apple\")]\npub fn v() { println!(\"x\"); }\n",
+            PlatformTheCfgGatesAreEvaluatedFor::MacOs,
+        );
+        assert_eq!(on_apple.len(), 1, "{on_apple:?}");
+        let on_linux = scan_rust_source(
+            "#[cfg(target_vendor = \"apple\")]\npub fn v() { println!(\"x\"); }\n",
+        );
+        assert!(on_linux.is_empty(), "{on_linux:?}");
+    }
+
+    #[test]
+    fn rust_cfg_gnu_env_is_the_linux_pass_only() {
+        let on_linux =
+            scan_rust_source("#[cfg(target_env = \"gnu\")]\npub fn e() { println!(\"x\"); }\n");
+        assert_eq!(on_linux.len(), 1, "{on_linux:?}");
+        let on_apple = scan_rust_source_for(
+            "#[cfg(target_env = \"gnu\")]\npub fn e() { println!(\"x\"); }\n",
+            PlatformTheCfgGatesAreEvaluatedFor::MacOs,
+        );
+        assert!(
+            on_apple.is_empty(),
+            "Darwin leaves target_env empty: {on_apple:?}"
         );
     }
 
@@ -1229,9 +1409,10 @@ mod tests {
         assert!(v[0].line_text.contains("bad"));
     }
 
+    /// The Apple subtree is reached by the macOS pass and by nothing else.
     #[test]
-    fn rust_out_of_line_mod_cfg_excludes_subtree() {
-        // Emulates libs/streamlib/src/lib.rs: `#[cfg(target_os = "macos")] pub mod apple;`
+    fn rust_out_of_line_macos_mod_subtree_is_linted_by_the_macos_pass() {
+        // Emulates the engine's lib.rs: `#[cfg(target_os = "macos")] pub mod apple;`
         // pointing at `apple/mod.rs` which contains a banned macro.
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
@@ -1255,11 +1436,89 @@ mod tests {
 
         let mut violations = Vec::new();
         scan_rust(root, &mut violations).unwrap();
-        assert!(
-            violations.is_empty(),
-            "cfg(target_os=macos) mod subtree should be excluded on linux: {:?}",
-            violations
+        assert_eq!(
+            violations.len(),
+            1,
+            "the Apple subtree is linted exactly once: {violations:?}"
         );
+        assert!(violations[0].path.ends_with("src/apple/mod.rs"));
+    }
+
+    /// A Windows subtree is excluded by every pass, so it stays unlinted.
+    #[test]
+    fn rust_out_of_line_windows_mod_subtree_is_excluded_by_every_pass() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let crate_root = root.join("sdk/streamlib-macros");
+        fs::create_dir_all(crate_root.join("src/windows")).unwrap();
+        fs::write(
+            crate_root.join("Cargo.toml"),
+            "[package]\nname=\"probe\"\nversion=\"0.1.0\"\n[lints]\nworkspace = true\n",
+        )
+        .unwrap();
+        fs::write(
+            crate_root.join("src/lib.rs"),
+            "#[cfg(target_os = \"windows\")]\npub mod windows;\n",
+        )
+        .unwrap();
+        fs::write(
+            crate_root.join("src/windows/mod.rs"),
+            "pub fn f() { println!(\"x\"); }\n",
+        )
+        .unwrap();
+
+        let mut violations = Vec::new();
+        scan_rust(root, &mut violations).unwrap();
+        assert!(violations.is_empty(), "{violations:?}");
+    }
+
+    /// A line both passes reach is reported once, not once per pass.
+    #[test]
+    fn rust_a_violation_both_passes_reach_is_reported_once() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let crate_root = root.join("sdk/streamlib-macros");
+        fs::create_dir_all(crate_root.join("src")).unwrap();
+        fs::write(
+            crate_root.join("Cargo.toml"),
+            "[package]\nname=\"probe\"\nversion=\"0.1.0\"\n[lints]\nworkspace = true\n",
+        )
+        .unwrap();
+        fs::write(
+            crate_root.join("src/lib.rs"),
+            "pub fn f() { println!(\"x\"); }\n",
+        )
+        .unwrap();
+
+        let mut violations = Vec::new();
+        let counts = scan_rust(root, &mut violations).unwrap();
+        assert_eq!(violations.len(), 1, "{violations:?}");
+        let src_root_files_scanned = counts
+            .iter()
+            .find(|count| count.scan_root_description.contains("`src/`"))
+            .map(|count| count.files_scanned);
+        assert_eq!(
+            src_root_files_scanned,
+            Some(1),
+            "two passes read the one file; it is counted once: {counts:?}"
+        );
+    }
+
+    /// A caller's own findings survive the Rust scan's dedup untouched.
+    #[test]
+    fn rust_scan_leaves_a_callers_violations_alone() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let mut violations = vec![Violation {
+            path: root.join("somewhere.py"),
+            line_no: 1,
+            line_text: "print('x')".to_string(),
+            matched_pattern: "print(",
+            target: "python",
+        }];
+        scan_rust(root, &mut violations).unwrap();
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].target, "python");
     }
 
     #[test]

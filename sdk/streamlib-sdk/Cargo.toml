@@ -20,8 +20,6 @@ crate-type = ["rlib"]
 # Forwarded engine features. Customer apps that need a non-default engine
 # configuration enable the matching SDK feature; the SDK forwards it to
 # the engine dep.
-backend-metal = ["streamlib-engine/backend-metal"]
-backend-vulkan = ["streamlib-engine/backend-vulkan"]
 strip_debug_logging = ["streamlib-engine/strip_debug_logging"]
 hardware-tests = ["streamlib-engine/hardware-tests"]
 test-support = ["streamlib-engine/test-support"]

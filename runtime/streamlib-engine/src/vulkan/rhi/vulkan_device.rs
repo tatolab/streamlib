@@ -7,6 +7,7 @@ use std::ffi::{CStr, c_char};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+#[cfg(target_os = "linux")]
 use vma::Alloc as _;
 use vulkanalia::loader::{LIBRARY, LibloadingLoader};
 use vulkanalia::prelude::v1_4::*;
@@ -528,7 +529,8 @@ impl HostVulkanDevice {
             .api_version(vk::make_version(1, 4, 0))
             .build();
 
-        let instance_create_flags = vk::InstanceCreateFlags::empty();
+        #[allow(unused_mut)]
+        let mut instance_create_flags = vk::InstanceCreateFlags::empty();
 
         // On macOS/iOS, enable portability enumeration flag
         #[cfg(any(target_os = "macos", target_os = "ios"))]

@@ -16,7 +16,9 @@ use std::sync::Arc;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
-use crate::{ConsumerRhiError, ConsumerVulkanDevice, Result, VulkanRhiBuffer};
+#[cfg(target_os = "linux")]
+use crate::{ConsumerRhiError, Result};
+use crate::{ConsumerVulkanDevice, VulkanRhiBuffer};
 
 /// One imported plane: buffer + memory + mapped pointer + size.
 struct ConsumerImportedPlane {
@@ -40,6 +42,13 @@ pub struct ConsumerVulkanBuffer {
     size: vk::DeviceSize,
 }
 
+/// Every import below takes a file descriptor, so the whole block is
+/// Linux-only: MoltenVK advertises neither `VK_KHR_external_memory_fd` nor
+/// `VK_EXT_external_memory_dma_buf`, and the Apple arm imports an IOSurface
+/// rather than a descriptor. The type itself still compiles there — it is
+/// `ConsumerMarker::Buffer`, so the privilege ladder needs it — and simply has
+/// nothing that mints one until that arm exists.
+#[cfg(target_os = "linux")]
 impl ConsumerVulkanBuffer {
     /// Import a single-plane DMA-BUF as a HOST_VISIBLE `VkBuffer`.
     #[tracing::instrument(level = "trace", skip(vulkan_device), fields(fd, allocation_size))]
@@ -204,7 +213,9 @@ impl ConsumerVulkanBuffer {
             size: plane0.size,
         })
     }
+}
 
+impl ConsumerVulkanBuffer {
     /// Persistently mapped CPU pointer for plane 0. Use
     /// [`Self::plane_mapped_ptr`] for any plane.
     pub fn mapped_ptr(&self) -> *mut u8 {
@@ -253,6 +264,7 @@ impl ConsumerVulkanBuffer {
 
 /// Which `vkImportMemoryFdInfoKHR.handleType` to chain through when
 /// importing a plane, and how the memory type index is arrived at.
+#[cfg(target_os = "linux")]
 #[derive(Copy, Clone, Debug)]
 enum ImportHandleType {
     DmaBuf,
@@ -265,6 +277,7 @@ enum ImportHandleType {
     OpaqueFdAtStatedMemoryTypeIndex(u32),
 }
 
+#[cfg(target_os = "linux")]
 fn import_single_plane(
     vulkan_device: &Arc<ConsumerVulkanDevice>,
     fd: std::os::unix::io::RawFd,
@@ -278,6 +291,7 @@ fn import_single_plane(
     )
 }
 
+#[cfg(target_os = "linux")]
 fn import_single_plane_with_handle_type(
     vulkan_device: &Arc<ConsumerVulkanDevice>,
     fd: std::os::unix::io::RawFd,
@@ -383,6 +397,7 @@ fn import_single_plane_with_handle_type(
 /// `checked_shl` rather than a bare shift: an index at or past
 /// VK_MAX_MEMORY_TYPES names no memory type on any device, and must be
 /// refused rather than overflow the bit test.
+#[cfg(target_os = "linux")]
 fn refuse_unless_the_buffer_can_bind_the_stated_memory_type_index(
     memory_type_bits: u32,
     stated_memory_type_index: u32,
@@ -437,7 +452,9 @@ impl VulkanRhiBuffer for ConsumerVulkanBuffer {
     }
 }
 
-#[cfg(test)]
+// The check it locks guards an OPAQUE_FD bind, which is Linux-only along with
+// every other descriptor import on this type.
+#[cfg(all(test, target_os = "linux"))]
 mod stated_memory_type_index_tests {
     use super::*;
 

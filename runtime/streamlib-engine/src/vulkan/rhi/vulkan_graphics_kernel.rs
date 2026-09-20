@@ -1310,7 +1310,7 @@ impl VulkanGraphicsKernel {
 
     /// Bind a raw-bytes [`crate::core::rhi::StorageBuffer`] at
     /// `(frame_index, binding)`.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn set_storage_buffer_storage(
         &self,
         frame_index: u32,
@@ -1323,7 +1323,7 @@ impl VulkanGraphicsKernel {
 
     /// Bind a [`crate::core::rhi::UniformBuffer`] (UBO) at
     /// `(frame_index, binding)`.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn set_uniform_buffer(
         &self,
         frame_index: u32,
@@ -1357,7 +1357,7 @@ impl VulkanGraphicsKernel {
     /// `(frame_index, binding)`. `binding` must match a
     /// `VertexInputBinding` declared in the pipeline's vertex input
     /// state.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn set_vertex_buffer(
         &self,
         frame_index: u32,
@@ -1370,7 +1370,7 @@ impl VulkanGraphicsKernel {
     }
 
     /// Bind a [`crate::core::rhi::IndexBuffer`] at `frame_index`.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn set_index_buffer(
         &self,
         frame_index: u32,

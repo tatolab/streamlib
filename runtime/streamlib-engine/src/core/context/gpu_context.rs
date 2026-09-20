@@ -16,7 +16,7 @@ use crate::core::{Error, Result};
 use crate::host_rhi::HostTextureExt;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use streamlib_consumer_rhi::VulkanLayout;
 
 /// Number of buffers to pre-allocate per pool.
@@ -29,24 +29,10 @@ const POOL_MAX_BUFFER_COUNT: usize = 64;
 const MAX_BUFFER_CACHE_SIZE: usize = 512;
 
 /// No-op blitter for platforms without a native blitter.
-#[cfg(not(target_os = "macos"))]
 struct NoOpBlitter;
 
-#[cfg(not(target_os = "macos"))]
 impl RhiBlitter for NoOpBlitter {
     fn blit_copy(&self, _src: &PixelBuffer, _dest: &PixelBuffer) -> Result<()> {
-        Err(Error::NotSupported(
-            "Blitter not supported on this platform".into(),
-        ))
-    }
-
-    unsafe fn blit_copy_iosurface_raw(
-        &self,
-        _src: *const std::ffi::c_void,
-        _dest: &PixelBuffer,
-        _width: u32,
-        _height: u32,
-    ) -> Result<()> {
         Err(Error::NotSupported(
             "Blitter not supported on this platform".into(),
         ))
@@ -395,11 +381,7 @@ impl PixelBufferPoolManager {
             let desc = PixelBufferDescriptor::new(width, height, format);
             let _ = desc;
             let underlying_pool = RhiPixelBufferPool {
-                #[cfg(target_os = "macos")]
-                inner: return Err(crate::core::Error::Configuration(
-                    "PixelBufferPool creation via descriptor not yet implemented".into(),
-                )),
-                #[cfg(target_os = "linux")]
+                #[cfg(any(target_os = "linux", target_os = "macos"))]
                 inner: {
                     let vulkan_device = std::sync::Arc::clone(&self.device.inner);
                     let bytes_per_pixel = format.bits_per_pixel() / 8;
@@ -418,7 +400,7 @@ impl PixelBufferPoolManager {
                         POOL_PRE_ALLOCATE_COUNT,
                     )?
                 },
-                #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+                #[cfg(not(any(target_os = "linux", target_os = "macos")))]
                 _marker: std::marker::PhantomData,
             };
 
@@ -853,7 +835,7 @@ pub struct GpuContext {
     /// build, is the shared resource: `compose_to_offscreen_texture` stages
     /// one descriptor-ring slot and then submits, so two concurrent draws
     /// through one compositor would overwrite each other's bindings.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     present_compositor_cache: Arc<
         parking_lot::Mutex<
             HashMap<
@@ -941,7 +923,7 @@ impl GpuContext {
             buffer_texture_cache: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(target_os = "linux")]
             color_converter_cache: Arc::new(RwLock::new(HashMap::new())),
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             present_compositor_cache: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             escalate_gate: Arc::new(super::escalate_gate::EscalateGate::new()),
             #[cfg(target_os = "linux")]
@@ -978,7 +960,7 @@ impl GpuContext {
             buffer_texture_cache: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(target_os = "linux")]
             color_converter_cache: Arc::new(RwLock::new(HashMap::new())),
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             present_compositor_cache: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             escalate_gate: Arc::new(super::escalate_gate::EscalateGate::new()),
             #[cfg(target_os = "linux")]
@@ -1029,10 +1011,7 @@ impl GpuContext {
     /// Wait for the GPU device to become idle. On Vulkan backends this calls
     /// `vkDeviceWaitIdle`; on other backends this is a no-op.
     pub fn wait_device_idle(&self) -> Result<()> {
-        #[cfg(any(
-            feature = "backend-vulkan",
-            all(target_os = "linux", not(feature = "backend-metal"))
-        ))]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             // `vkDeviceWaitIdle` is externally synchronized over every
             // `VkQueue` the device has — go through
@@ -1045,13 +1024,7 @@ impl GpuContext {
     }
 
     /// Create platform-specific blitter.
-    #[cfg(target_os = "macos")]
-    fn create_blitter(device: &Arc<GpuDevice>) -> Arc<dyn RhiBlitter> {
-        let command_queue = device.command_queue().clone();
-        Arc::new(crate::metal::rhi::MetalBlitter::new(command_queue))
-    }
-
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn create_blitter(device: &Arc<GpuDevice>) -> Arc<dyn RhiBlitter> {
         let vulkan_device = &device.inner;
         match crate::vulkan::rhi::VulkanBlitter::new(
@@ -1070,7 +1043,7 @@ impl GpuContext {
         }
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     fn create_blitter(_device: &Arc<GpuDevice>) -> Arc<dyn RhiBlitter> {
         Arc::new(NoOpBlitter)
     }
@@ -1192,9 +1165,9 @@ impl GpuContext {
     /// reaching the texture via [`Self::resolve_texture_registration_by_surface_id`]
     /// can issue correct layout transitions.
     pub fn register_texture(&self, id: &str, texture: Texture) {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         let registration = TextureRegistration::new(texture, VulkanLayout::UNDEFINED);
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         let registration = TextureRegistration::new(texture);
         let mut cache = self.texture_cache.lock().unwrap();
         cache.insert(pool_slot_key_of_surface_id(id).to_string(), registration);
@@ -1991,7 +1964,7 @@ impl GpuContext {
     /// from creation, never the window). Display processors reach this
     /// through the SDK `create_present_target` wrapper, never
     /// `VulkanPresentTarget::new` on a raw device.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn create_present_target(
         &self,
         window: &(impl raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle),
@@ -2009,7 +1982,7 @@ impl GpuContext {
     /// raw [`crate::vulkan::rhi::VulkanPresentTarget`] without the ABI-safe
     /// wrapper. In-process consumers (via
     /// [`GpuContextFullAccess::create_present_target`]) drive it directly.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn create_vulkan_present_target(
         &self,
         window: &(impl raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle),
@@ -2043,7 +2016,7 @@ impl GpuContext {
     /// A caller that just wants one draw uses
     /// [`Self::compose_texture_onto_offscreen_texture`] instead, which shares
     /// a cached compositor rather than compiling a pipeline per call.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn create_present_compositor(
         &self,
         attachment_format: crate::core::rhi::TextureFormat,
@@ -2063,7 +2036,7 @@ impl GpuContext {
     /// `COLOR_ATTACHMENT_OPTIMAL` and `source` in `SHADER_READ_ONLY_OPTIMAL`.
     /// Concurrent callers serialize on the cached compositor's lock, which is
     /// also what makes one descriptor-ring slot enough.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn compose_texture_onto_offscreen_texture(
         &self,
         destination: &Texture,
@@ -2685,14 +2658,7 @@ impl GpuContext {
 
     /// Initialize GPU context for the current platform.
     pub fn init_for_platform() -> Result<Self> {
-        #[cfg(target_os = "macos")]
-        {
-            let device = GpuDevice::new()?;
-            tracing::info!("GPU: Using Metal device");
-            Ok(Self::new(device))
-        }
-
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             let device = GpuDevice::new()?;
             tracing::info!("GPU: Using Vulkan device");
@@ -2719,21 +2685,6 @@ impl GpuContext {
         Self::init_for_platform()
     }
 
-    /// Get the underlying Metal device (macOS only).
-    #[cfg(target_os = "macos")]
-    pub fn metal_device(&self) -> &crate::metal::rhi::MetalDevice {
-        self.device.as_metal_device()
-    }
-
-    /// Create a texture cache for converting pixel buffers to texture views.
-    #[cfg(target_os = "macos")]
-    pub fn create_texture_cache(&self) -> Result<crate::core::rhi::RhiTextureCache> {
-        use metal::foreign_types::ForeignTypeRef;
-        let device_ptr = self.metal_device().device() as *const _ as *mut std::ffi::c_void;
-        let metal_device_ref = unsafe { metal::DeviceRef::from_ptr(device_ptr as *mut _) };
-        crate::core::rhi::RhiTextureCache::new_metal(metal_device_ref)
-    }
-
     // =========================================================================
     // GPU Blit Operations
     // =========================================================================
@@ -2743,23 +2694,6 @@ impl GpuContext {
     /// Uses GPU blit with texture caching for efficient repeated copies.
     pub fn blit_copy(&self, src: &PixelBuffer, dest: &PixelBuffer) -> Result<()> {
         self.blitter.blit_copy(src, dest)
-    }
-
-    /// Copy from raw IOSurface to a pixel buffer.
-    ///
-    /// # Safety
-    /// - `src` must be a valid IOSurfaceRef pointer
-    /// - The IOSurface must remain valid for the duration of the blit
-    #[cfg(target_os = "macos")]
-    pub unsafe fn blit_copy_iosurface(
-        &self,
-        src: crate::apple::corevideo_ffi::IOSurfaceRef,
-        dest: &PixelBuffer,
-        width: u32,
-        height: u32,
-    ) -> Result<()> {
-        self.blitter
-            .blit_copy_iosurface_raw(src, dest, width, height)
     }
 
     /// Clear the blitter's texture cache to free GPU memory.
@@ -3951,27 +3885,6 @@ impl GpuContextLimitedAccess {
         self.host_inner().blit_copy(src, dest)
     }
 
-    /// Copy from raw IOSurface to a pixel buffer (Split: cache hit).
-    ///
-    /// # Safety
-    /// - `src` must be a valid IOSurfaceRef pointer
-    /// - The IOSurface must remain valid for the duration of the blit
-    ///
-    /// macOS-only; non-macOS hosts return an error.
-    #[cfg(target_os = "macos")]
-    pub unsafe fn blit_copy_iosurface(
-        &self,
-        src: crate::apple::corevideo_ffi::IOSurfaceRef,
-        dest: &PixelBuffer,
-        width: u32,
-        height: u32,
-    ) -> Result<()> {
-        unsafe {
-            self.host_inner()
-                .blit_copy_iosurface(src, dest, width, height)
-        }
-    }
-
     /// Get the surface store, if initialized.
     ///
     /// Returns `Some(SurfaceStore)` (refcount bumped) when the host has
@@ -4002,7 +3915,7 @@ impl GpuContextFullAccess {
 
     /// Build a swapchain-backed [`crate::vulkan::rhi::VulkanPresentTarget`]
     /// from a native window handle.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn create_present_target(
         &self,
         window: &(impl raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle),
@@ -4019,7 +3932,7 @@ impl GpuContextFullAccess {
     /// `attachment_format` (typically the present target's
     /// [`color_format`](crate::vulkan::rhi::VulkanPresentTarget::color_format)).
     /// In-process (Boxed) only.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn create_present_compositor(
         &self,
         attachment_format: crate::core::rhi::TextureFormat,
@@ -4674,40 +4587,9 @@ impl GpuContextFullAccess {
         Ok(self.host_inner().gpu_capabilities())
     }
 
-    /// Get the underlying Metal device (macOS only).
-    #[cfg(target_os = "macos")]
-    pub fn metal_device(&self) -> &crate::metal::rhi::MetalDevice {
-        self.host_inner().metal_device()
-    }
-
-    /// Create a texture cache for converting pixel buffers to texture views.
-    #[cfg(target_os = "macos")]
-    pub fn create_texture_cache(&self) -> Result<crate::core::rhi::RhiTextureCache> {
-        self.host_inner().create_texture_cache()
-    }
-
     /// Copy pixels between same-format, same-size buffers.
     pub fn blit_copy(&self, src: &PixelBuffer, dest: &PixelBuffer) -> Result<()> {
         self.host_inner().blit_copy(src, dest)
-    }
-
-    /// Copy from raw IOSurface to a pixel buffer.
-    ///
-    /// # Safety
-    /// - `src` must be a valid IOSurfaceRef pointer
-    /// - The IOSurface must remain valid for the duration of the blit
-    #[cfg(target_os = "macos")]
-    pub unsafe fn blit_copy_iosurface(
-        &self,
-        src: crate::apple::corevideo_ffi::IOSurfaceRef,
-        dest: &PixelBuffer,
-        width: u32,
-        height: u32,
-    ) -> Result<()> {
-        unsafe {
-            self.host_inner()
-                .blit_copy_iosurface(src, dest, width, height)
-        }
     }
 
     /// Clear the blitter's texture cache to free GPU memory.
@@ -5375,6 +5257,7 @@ mod tests {
     /// Two processors driving one format pair from their own threads must
     /// not share a kernel's staged bindings: the cached handle is one
     /// object, an owned converter is the caller's alone.
+    #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
         ignore = "hardware integration — needs a GPU device; see docs/testing-hardware.md"
@@ -5514,6 +5397,7 @@ mod tests {
     /// Mental revert: wiring the drop to require a live escalate
     /// scope would crash here because the scope is closed before the
     /// drop runs.
+    #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
         ignore = "hardware integration — kernel construction needs GPU"

@@ -27,7 +27,7 @@
 use vulkanalia::vk;
 
 use crate::core::rhi::PixelBuffer;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::core::rhi::{IndexBuffer, StorageBuffer, UniformBuffer, VertexBuffer};
 
 /// Any of streamlib's typed buffer wrappers, projected onto the raw
@@ -39,29 +39,29 @@ pub trait VulkanBufferLike {
 
 impl VulkanBufferLike for PixelBuffer {
     fn vk_buffer(&self) -> vk::Buffer {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             self.buffer_ref().inner.buffer()
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
             vk::Buffer::null()
         }
     }
 
     fn vk_buffer_size(&self) -> vk::DeviceSize {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             self.buffer_ref().inner.size()
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
             0
         }
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl VulkanBufferLike for StorageBuffer {
     fn vk_buffer(&self) -> vk::Buffer {
         self.host_inner().buffer()
@@ -71,7 +71,7 @@ impl VulkanBufferLike for StorageBuffer {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl VulkanBufferLike for UniformBuffer {
     fn vk_buffer(&self) -> vk::Buffer {
         self.host_inner().buffer()
@@ -81,7 +81,7 @@ impl VulkanBufferLike for UniformBuffer {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl VulkanBufferLike for VertexBuffer {
     fn vk_buffer(&self) -> vk::Buffer {
         self.host_inner().buffer()
@@ -91,7 +91,7 @@ impl VulkanBufferLike for VertexBuffer {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl VulkanBufferLike for IndexBuffer {
     fn vk_buffer(&self) -> vk::Buffer {
         self.host_inner().buffer()
@@ -101,7 +101,7 @@ impl VulkanBufferLike for IndexBuffer {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl VulkanBufferLike for crate::vulkan::rhi::HostVulkanBuffer {
     fn vk_buffer(&self) -> vk::Buffer {
         self.buffer()

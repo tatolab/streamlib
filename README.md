@@ -349,10 +349,12 @@ These do not exist yet:
 | **GPU kernels from Python** | Compute, graphics, ray tracing, and acceleration structures exist Rust-side. The Python kernel API is in flight, not shipped. |
 | **DMA-BUF import** | Export from Python works; importing a foreign fd into a graph does not yet. |
 
-**Platform floor.** Linux + NVIDIA, which is what CI tests: abi3 wheel, CPython 3.10+, GIL-enabled
-builds, manylinux_2_28, x86_64, V4L2 the only capture backend. The wheel carries its own GLSL
-compiler, so there is no system toolchain to install. macOS engine paths cross-compile but Apple
-capture is undesigned; Windows is unbuilt.
+**Platform floor.** Linux + NVIDIA, which is what the wheel ships for: abi3 wheel, CPython 3.10+,
+GIL-enabled builds, manylinux_2_28, x86_64, V4L2 the only capture backend. The wheel carries its
+own GLSL compiler, so there is no system toolchain to install. Apple Silicon is becoming a second
+floor: the engine builds natively on `aarch64-apple-darwin` and CI compiles it on every PR, on the
+one Vulkan RHI through MoltenVK — but no Vulkan device comes up yet, no window presents, capture
+is unbuilt and no macOS wheel is published. Windows is unbuilt.
 
 ## License
 

@@ -31,7 +31,7 @@ pub use vulkan_device::{
     HostVulkanDevice, RayTracingPipelineProperties, ThirdPartyGpuCapabilities,
 };
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[allow(unused_imports)]
 pub use vulkan_sync::HostVulkanTimelineSemaphore;
 #[allow(unused_imports)]
@@ -48,7 +48,7 @@ pub use vulkan_upload_resources::HostVulkanUploadResources;
 // re-export); the `#[allow(unused_imports)]` keeps the surface
 // available for downstream crates that still pull these names through
 // `streamlib::vulkan::rhi`.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[allow(unused_imports)]
 pub use streamlib_consumer_rhi::{
     ConsumerMarker, ConsumerVulkanBuffer, ConsumerVulkanDevice, ConsumerVulkanTexture,
@@ -59,9 +59,9 @@ pub use streamlib_consumer_rhi::{
 mod vulkan_blitter;
 pub use vulkan_blitter::VulkanBlitter;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod vulkan_tone_mapper;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use vulkan_tone_mapper::VulkanToneMapper;
 
 pub(crate) mod vulkan_buffer;
@@ -83,17 +83,18 @@ pub use vulkan_pipeline_flags::{VulkanAccess, VulkanStage};
 mod vulkan_validation_messenger;
 pub use vulkan_validation_messenger::VulkanValidationMessageCounts;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod vulkan_command_recorder;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use vulkan_command_recorder::{ImageCopyRegion, RhiCommandRecorder};
 // `RhiCommandRecorderInner` is needed by `core::plugin::host_services`
 // for `Box::from_raw` in `drop_command_recorder`. Crate-scope export.
+#[cfg(target_os = "linux")]
 pub(crate) use vulkan_command_recorder::RhiCommandRecorderInner;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod vulkan_present_target;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use vulkan_present_target::{
     MAX_FRAMES_IN_FLIGHT, PresentFrame, PresentTarget, VulkanPresentTarget,
 };
@@ -101,16 +102,13 @@ pub use vulkan_present_target::{
 // reclaim the `Box<Mutex<VulkanPresentTarget>>` in the `drop_present_target`
 // slot body + lock it in the method slot bodies.
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod vulkan_present_compositor;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use vulkan_present_compositor::{PresentScalingMode, VulkanPresentCompositor};
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod vulkan_swapchain_colorspace;
-
-mod vulkan_texture_cache;
-pub use vulkan_texture_cache::VulkanTextureCache;
 
 mod vulkan_pixel_buffer_pool;
 pub use vulkan_pixel_buffer_pool::VulkanPixelBufferPool;
@@ -121,21 +119,22 @@ pub use vulkan_compute_kernel::VulkanComputeKernel;
 mod vulkan_graphics_kernel;
 pub use vulkan_graphics_kernel::{OffscreenColorTarget, OffscreenDraw, VulkanGraphicsKernel};
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod vulkan_acceleration_structure;
 #[cfg(target_os = "linux")]
+pub use vulkan_acceleration_structure::geometry_instance_flags_from_raw_bitmask;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use vulkan_acceleration_structure::{
     AccelerationStructureKind, IDENTITY_TRANSFORM, TlasInstanceDesc, VulkanAccelerationStructure,
-    geometry_instance_flags_from_raw_bitmask,
 };
 // `VulkanAccelerationStructureInner` is `pub(crate)`-shaped — only
 // the host's clone/drop callbacks in `core::plugin::host_services`
 // need to reference it for `Arc::increment_strong_count` /
 // `Arc::decrement_strong_count`. Re-export at crate scope.
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod vulkan_ray_tracing_kernel;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use vulkan_ray_tracing_kernel::VulkanRayTracingKernel;
 
 mod vulkan_texture_readback;

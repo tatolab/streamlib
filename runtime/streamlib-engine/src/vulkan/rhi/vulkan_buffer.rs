@@ -1396,6 +1396,7 @@ mod tests {
         println!("Write/readback verified for {} bytes", size);
     }
 
+    #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
         ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
@@ -1842,6 +1843,7 @@ mod tests {
         println!("Buffer drop completed without panic");
     }
 
+    #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
         ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
@@ -1906,6 +1908,7 @@ mod tests {
     /// `HostVulkanBuffer`, confirm `plane_count()` reports 2, and each
     /// plane's bytes survive intact. Mirrors the symmetry the polyglot
     /// Python and Deno shims provide via `*_gpu_surface_plane_{count,size,mmap,base_address}`.
+    #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
         ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
@@ -1993,6 +1996,7 @@ mod tests {
     /// more planes than the surface-share `MAX_DMA_BUF_PLANES` cap (4 today).
     /// Covers the Rust half of the consistency the wire helpers already
     /// enforce on sends/receives.
+    #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
         ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"

@@ -87,8 +87,8 @@ fn texture_usages_to_vk(usage: TextureUsages) -> vk::ImageUsageFlags {
 ///
 /// Memory binding (`vk_memory`, `vk_memory_offset`, `vk_memory_size`)
 /// is populated lazily from VMA's `get_allocation_info` for the VMA
-/// path or directly from the import call for the DMA-BUF / IOSurface
-/// path — see [`HostVulkanTexture::vk_memory_binding`].
+/// path or directly from the import call for the DMA-BUF path — see
+/// [`HostVulkanTexture::vk_memory_binding`].
 #[derive(Clone, Copy)]
 struct HostVkImageMeta {
     vk_image_tiling: vk::ImageTiling,
@@ -152,7 +152,6 @@ impl Default for HostVkImageMeta {
 /// Vulkan texture wrapper.
 ///
 /// Wraps a VkImage with associated memory and metadata.
-/// Can be created from scratch or imported from an IOSurface via VK_EXT_metal_objects.
 ///
 /// # Cdylib reachability
 ///
@@ -213,8 +212,6 @@ pub struct HostVulkanTexture {
     imported_memory_size: vk::DeviceSize,
     /// Lazy-cached image view for this texture.
     cached_image_view: OnceLock<vk::ImageView>,
-    /// Whether this texture was imported from IOSurface (no memory to free).
-    imported_from_iosurface: bool,
     /// Whether this texture was imported from a DMA-BUF fd (uses imported_memory path).
     #[cfg(target_os = "linux")]
     imported_from_dma_buf: bool,
@@ -316,7 +313,6 @@ impl HostVulkanTexture {
             #[cfg(target_os = "linux")]
             imported_memory_size: 0,
             cached_image_view: OnceLock::new(),
-            imported_from_iosurface: false,
             #[cfg(target_os = "linux")]
             imported_from_dma_buf: false,
             #[cfg(target_os = "linux")]
@@ -379,7 +375,6 @@ impl HostVulkanTexture {
             #[cfg(target_os = "linux")]
             imported_memory_size: 0,
             cached_image_view: OnceLock::new(),
-            imported_from_iosurface: false,
             #[cfg(target_os = "linux")]
             imported_from_dma_buf: false,
             #[cfg(target_os = "linux")]
@@ -521,7 +516,6 @@ impl HostVulkanTexture {
             imported_memory: None,
             imported_memory_size: 0,
             cached_image_view: OnceLock::new(),
-            imported_from_iosurface: false,
             imported_from_dma_buf: false,
             is_opaque_fd_export: false,
             chosen_drm_format_modifier: chosen,
@@ -671,7 +665,6 @@ impl HostVulkanTexture {
             imported_memory: None,
             imported_memory_size: 0,
             cached_image_view: OnceLock::new(),
-            imported_from_iosurface: false,
             imported_from_dma_buf: false,
             is_opaque_fd_export: true,
             chosen_drm_format_modifier: 0,
@@ -779,7 +772,6 @@ impl HostVulkanTexture {
             imported_memory: None,
             imported_memory_size: 0,
             cached_image_view: OnceLock::new(),
-            imported_from_iosurface: false,
             imported_from_dma_buf: false,
             is_opaque_fd_export: false,
             chosen_drm_format_modifier: 0,
@@ -791,113 +783,6 @@ impl HostVulkanTexture {
                 vk_image_usage_flags: usage_flags,
             },
         })
-    }
-
-    /// Import a texture from an IOSurface via VK_EXT_metal_objects.
-    ///
-    /// This creates a Vulkan image backed by the same GPU memory as the IOSurface,
-    /// enabling zero-copy interop between Metal and Vulkan.
-    ///
-    /// # Arguments
-    /// * `device` - The Vulkan device
-    /// * `iosurface_ref` - Raw pointer to the IOSurfaceRef
-    /// * `width` - Texture width in pixels
-    /// * `height` - Texture height in pixels
-    /// * `format` - Texture format
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
-    pub fn from_iosurface(
-        device: &vulkanalia::Device,
-        iosurface_ref: *const std::ffi::c_void,
-        width: u32,
-        height: u32,
-        format: TextureFormat,
-    ) -> Result<Self> {
-        if iosurface_ref.is_null() {
-            return Err(Error::TextureError("Cannot import null IOSurface".into()));
-        }
-
-        let vk_format = texture_format_to_vk(format);
-
-        // Create import info for IOSurface
-        let import_info = vk::ImportMetalIOSurfaceInfoEXT {
-            io_surface: iosurface_ref as *mut _,
-            ..Default::default()
-        };
-
-        // Create image with import info in pNext chain
-        let image_info = vk::ImageCreateInfo {
-            image_type: vk::ImageType::_2D,
-            format: vk_format,
-            extent: vk::Extent3D {
-                width,
-                height,
-                depth: 1,
-            },
-            mip_levels: 1,
-            array_layers: 1,
-            samples: vk::SampleCountFlags::_1,
-            tiling: vk::ImageTiling::OPTIMAL,
-            usage: vk::ImageUsageFlags::SAMPLED
-                | vk::ImageUsageFlags::TRANSFER_SRC
-                | vk::ImageUsageFlags::TRANSFER_DST,
-            sharing_mode: vk::SharingMode::EXCLUSIVE,
-            initial_layout: vk::ImageLayout::UNDEFINED,
-            p_next: &import_info as *const _ as *const _,
-            ..Default::default()
-        };
-
-        let image = unsafe { device.create_image(&image_info, None) }
-            .map(|r| r)
-            .map_err(|e| Error::GpuError(format!("Failed to create image from IOSurface: {e}")))?;
-
-        tracing::debug!(
-            "Imported IOSurface as Vulkan image: {}x{} {:?}",
-            width,
-            height,
-            format
-        );
-
-        Ok(Self {
-            vulkan_device: None,
-            image: Some(image),
-            allocation: None,
-            imported_from_iosurface: true,
-            width,
-            height,
-            format,
-            vk_image_meta: HostVkImageMeta {
-                vk_image_tiling: vk::ImageTiling::OPTIMAL,
-                vk_image_usage_flags: vk::ImageUsageFlags::SAMPLED
-                    | vk::ImageUsageFlags::TRANSFER_SRC
-                    | vk::ImageUsageFlags::TRANSFER_DST,
-            },
-        })
-    }
-
-    /// Create a placeholder texture for cases where a HostVulkanTexture is needed
-    /// but the actual texture is stored elsewhere (e.g., Metal texture on macOS).
-    pub fn placeholder() -> Self {
-        Self {
-            vulkan_device: None,
-            image: None,
-            allocation: None,
-            #[cfg(target_os = "linux")]
-            imported_memory: None,
-            #[cfg(target_os = "linux")]
-            imported_memory_size: 0,
-            cached_image_view: OnceLock::new(),
-            imported_from_iosurface: false,
-            #[cfg(target_os = "linux")]
-            imported_from_dma_buf: false,
-            #[cfg(target_os = "linux")]
-            is_opaque_fd_export: false,
-            #[cfg(target_os = "linux")]
-            chosen_drm_format_modifier: 0,
-            width: 0,
-            height: 0,
-            format: TextureFormat::Rgba8Unorm,
-            vk_image_meta: HostVkImageMeta::default(),
-        }
     }
 
     /// Get the underlying Vulkan image handle.
@@ -1494,7 +1379,6 @@ impl HostVulkanTexture {
             imported_memory: Some(memory),
             imported_memory_size: alloc_size,
             cached_image_view: OnceLock::new(),
-            imported_from_iosurface: false,
             imported_from_dma_buf: true,
             is_opaque_fd_export: false,
             chosen_drm_format_modifier: drm_format_modifier,
@@ -1583,7 +1467,6 @@ impl HostVulkanTexture {
             imported_memory: Some(memory),
             imported_memory_size: alloc_size,
             cached_image_view: OnceLock::new(),
-            imported_from_iosurface: false,
             imported_from_dma_buf: true,
             is_opaque_fd_export: false,
             chosen_drm_format_modifier: 0,
@@ -1609,7 +1492,6 @@ impl Clone for HostVulkanTexture {
             #[cfg(target_os = "linux")]
             imported_memory_size: 0,
             cached_image_view: OnceLock::new(),
-            imported_from_iosurface: false,
             #[cfg(target_os = "linux")]
             imported_from_dma_buf: false,
             #[cfg(target_os = "linux")]
@@ -1631,14 +1513,6 @@ impl Drop for HostVulkanTexture {
             if let Some(vk_dev) = &self.vulkan_device {
                 unsafe { vk_dev.device().destroy_image_view(view, None) };
             }
-        }
-
-        if self.imported_from_iosurface {
-            // IOSurface manages the memory — only destroy the image handle
-            if let (Some(vk_dev), Some(image)) = (&self.vulkan_device, self.image) {
-                unsafe { vk_dev.device().destroy_image(image, None) };
-            }
-            return;
         }
 
         #[cfg(target_os = "linux")]
@@ -1671,10 +1545,8 @@ unsafe impl Sync for HostVulkanTexture {}
 impl HostVulkanTexture {
     /// Memory binding tuple `(memory, offset, size)` resolved against
     /// whichever path created the image — VMA for the standard
-    /// allocators, the imported `VkDeviceMemory` for the DMA-BUF
-    /// import paths, or `(null, 0, 0)` for placeholder / IOSurface-
-    /// import textures (Skia consumers must check before relying on
-    /// `vk_memory()`).
+    /// allocators, or the imported `VkDeviceMemory` for the DMA-BUF
+    /// import paths.
     fn vk_memory_binding(&self) -> (vk::DeviceMemory, vk::DeviceSize, vk::DeviceSize) {
         // VMA path: query allocation_info on demand. The lookup is a
         // simple struct read from VMA's internal allocation handle.
@@ -2000,6 +1872,7 @@ mod tests {
         println!("All dropped successfully");
     }
 
+    #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
         ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
@@ -2135,18 +2008,6 @@ mod tests {
              an unrelated owner — the double-close that corrupts bystander \
              subsystems at teardown"
         );
-    }
-
-    #[test]
-    fn test_placeholder_has_no_resources() {
-        let tex = HostVulkanTexture::placeholder();
-        assert!(tex.image().is_none());
-        assert_eq!(tex.width(), 0);
-        assert_eq!(tex.height(), 0);
-        assert!(tex.allocation.is_none());
-        assert!(tex.vulkan_device.is_none());
-
-        println!("Placeholder verified: no image, no memory, no device");
     }
 
     /// Validates the camera-display allocation pattern after the fix:
@@ -2592,6 +2453,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
         ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"

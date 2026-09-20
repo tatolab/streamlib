@@ -12,15 +12,25 @@
 //! - `crash-mid-write` — import + bind FBO + draw + `abort()` before
 //!   the parent sees a response.
 
-#![cfg(target_os = "linux")]
+// The adapter this fixture drives imports a DMA-BUF, so it exists on Linux
+// alone. Off it the binary is an empty `main` so the target still compiles —
+// a bin whose every item is gated out has none, and the crate stops building.
+#[cfg(not(target_os = "linux"))]
+fn main() {}
 
+#[cfg(target_os = "linux")]
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+#[cfg(target_os = "linux")]
 use std::os::unix::net::UnixStream;
+#[cfg(target_os = "linux")]
 use std::process::ExitCode;
+#[cfg(target_os = "linux")]
 use std::sync::Arc;
 
+#[cfg(target_os = "linux")]
 use streamlib_adapter_opengl::{EglRuntime, HostSurfaceRegistration, OpenGlSurfaceAdapter};
 
+#[cfg(target_os = "linux")]
 #[derive(Debug, serde::Deserialize)]
 struct HelperRequest {
     width: u32,
@@ -31,6 +41,7 @@ struct HelperRequest {
     plane_stride: u64,
 }
 
+#[cfg(target_os = "linux")]
 #[derive(Debug, serde::Serialize)]
 struct HelperResponse {
     ok: bool,
@@ -46,6 +57,7 @@ struct HelperResponse {
     clippy::disallowed_macros,
     reason = "no subscriber exists in a spawned test helper; stderr is what the harness reads"
 )]
+#[cfg(target_os = "linux")]
 fn die(socket: Option<&UnixStream>, msg: String) -> ExitCode {
     eprintln!("[opengl-helper] FATAL: {msg}");
     if let Some(s) = socket {
@@ -59,6 +71,7 @@ fn die(socket: Option<&UnixStream>, msg: String) -> ExitCode {
     ExitCode::from(1)
 }
 
+#[cfg(target_os = "linux")]
 fn run() -> ExitCode {
     let role = std::env::args()
         .nth(1)
@@ -144,6 +157,7 @@ fn run() -> ExitCode {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn main() -> ExitCode {
     run()
 }

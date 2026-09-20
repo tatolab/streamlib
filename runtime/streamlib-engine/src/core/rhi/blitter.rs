@@ -11,19 +11,6 @@ pub trait RhiBlitter: Send + Sync {
     /// Copy pixels between same-format, same-size buffers.
     fn blit_copy(&self, src: &PixelBuffer, dest: &PixelBuffer) -> Result<()>;
 
-    /// Copy from raw IOSurface (platform-specific, unsafe).
-    ///
-    /// # Safety
-    /// - `src` must be a valid IOSurfaceRef pointer
-    /// - The IOSurface must remain valid for the duration of the blit
-    unsafe fn blit_copy_iosurface_raw(
-        &self,
-        src: *const std::ffi::c_void,
-        dest: &PixelBuffer,
-        width: u32,
-        height: u32,
-    ) -> Result<()>;
-
     /// Clear texture cache to free GPU memory.
     fn clear_cache(&self);
 }

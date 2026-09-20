@@ -100,7 +100,7 @@ pub const kCVPixelBufferLock_ReadOnly: CVPixelBufferLockFlags = 0x00000001;
 // ==========================================================================
 
 #[link(name = "Accelerate", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     // ========================================================================
     // CV Image Format
     // ========================================================================
@@ -206,7 +206,7 @@ extern "C" {
 // ==========================================================================
 
 #[link(name = "CoreVideo", kind = "framework")]
-extern "C" {
+unsafe extern "C" {
     /// Lock the base address of a CVPixelBuffer for CPU access.
     ///
     /// Parameters:
@@ -255,11 +255,15 @@ impl vImage_Buffer {
         width: usize,
         height: usize,
     ) -> Self {
-        Self {
-            data: CVPixelBufferGetBaseAddress(pixel_buffer),
-            height,
-            width,
-            rowBytes: CVPixelBufferGetBytesPerRow(pixel_buffer),
+        // SAFETY: the caller's contract above — a locked `CVPixelBuffer`,
+        // still locked for this buffer's whole life.
+        unsafe {
+            Self {
+                data: CVPixelBufferGetBaseAddress(pixel_buffer),
+                height,
+                width,
+                rowBytes: CVPixelBufferGetBytesPerRow(pixel_buffer),
+            }
         }
     }
 }

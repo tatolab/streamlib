@@ -188,10 +188,7 @@ pub mod sdk {
     /// primitives via the SDK's official extension surface" — distinct
     /// from `sdk::*` (regular SDK API) and `streamlib::engine_internal::*`
     /// (direct passthrough).
-    #[cfg(any(
-        feature = "backend-vulkan",
-        all(target_os = "linux", not(feature = "backend-metal"))
-    ))]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub mod engine {
         /// Host-side Vulkan RHI types (HostVulkanDevice,
         /// HostVulkanTexture, HostVulkanBuffer,
