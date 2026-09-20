@@ -25,7 +25,7 @@ libc.workspace = true
 # The DMA-BUF plane cap the fd-import path is checked against. Linux-only
 # because fd import is: the Apple arm imports an IOSurface, not a descriptor.
 [target.'cfg(target_os = "linux")'.dependencies]
-streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.25.9" }
+streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.26.0" }
 
 [lints]
 workspace = true

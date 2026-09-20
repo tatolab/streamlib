@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.26.0](https://github.com/tatolab/streamlib/compare/v0.25.9...v0.26.0) (2026-09-20)
+
+
+### ⚠ BREAKING CHANGES
+
+* **engine:** the engine compiles and links for aarch64-apple-darwin, and CI keeps it that way ([#2371](https://github.com/tatolab/streamlib/issues/2371))
+
+### Features
+
+* **engine:** the engine compiles and links for aarch64-apple-darwin, and CI keeps it that way ([#2371](https://github.com/tatolab/streamlib/issues/2371)) ([d9fe6e1](https://github.com/tatolab/streamlib/commit/d9fe6e1f6ff2f836c09f6624df6e3bf7b7c676b5))
+
 ## [0.25.9](https://github.com/tatolab/streamlib/compare/v0.25.8...v0.25.9) (2026-09-19)
 
 
