@@ -3,7 +3,8 @@
 
 //! Links between runtimes in separate OS processes — the proof a remote link
 //! carries anything at all, that a runtime does no work for a port nobody
-//! reads, and that one egress serves every runtime reading a port.
+//! reads, that one egress serves every runtime reading a port, and that a
+//! source renders only the ports it is really sending.
 //!
 //! Most arms are one source and one reader; the last is one source and two
 //! readers, because "the source stops sending when the *last* reader leaves"
@@ -128,6 +129,7 @@ struct HowToLaunchAPeer {
     iceoryx2_domain_root: std::path::PathBuf,
     burst_once_a_reader_arrives: Option<u64>,
     recreate_the_publisher_just_before_the_burst: bool,
+    take_every_destination_slot: bool,
 }
 
 impl CrossRuntimeLinkPeerProcess {
@@ -168,6 +170,9 @@ impl CrossRuntimeLinkPeerProcess {
         }
         if how.recreate_the_publisher_just_before_the_burst {
             command.arg("--recreate-the-publisher-just-before-the-burst");
+        }
+        if how.take_every_destination_slot {
+            command.arg("--take-every-destination-slot");
         }
 
         let mut child = command.spawn().expect("the peer binary launches");
@@ -250,21 +255,19 @@ impl CrossRuntimeLinkPeerProcess {
         self.everything_it_has_reported()
             .iter()
             .rev()
-            .find_map(|reported| reported.get("egress_ports").cloned())
-            .into_iter()
-            .flat_map(|ports| ports.as_array().cloned().unwrap_or_default())
-            .map(|port| {
-                (
-                    port["processor_display_name"].as_str().unwrap().to_string(),
-                    port["port_name"].as_str().unwrap().to_string(),
-                    port["reader_runtime_names"]
-                        .as_array()
-                        .unwrap()
-                        .iter()
-                        .map(|name| name.as_str().unwrap().to_string())
-                        .collect(),
-                )
-            })
+            .find(|reported| reported.get("egress_ports").is_some())
+            .map(the_egress_ports_one_report_names)
+            .unwrap_or_default()
+    }
+
+    /// Every egress port this peer has named in any report, in report order.
+    ///
+    /// The last report alone cannot say whether one was ever rendered: a source
+    /// that must render none at all is only proven by every report it made.
+    fn every_egress_port_it_has_ever_reported(&self) -> Vec<(String, String, Vec<String>)> {
+        self.everything_it_has_reported()
+            .iter()
+            .flat_map(the_egress_ports_one_report_names)
             .collect()
     }
 
@@ -370,6 +373,33 @@ impl Drop for CrossRuntimeLinkPeerProcess {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+/// The egress ports one report names, each with the runtimes reading it.
+fn the_egress_ports_one_report_names(
+    reported: &serde_json::Value,
+) -> Vec<(String, String, Vec<String>)> {
+    reported
+        .get("egress_ports")
+        .and_then(|ports| ports.as_array())
+        .map(|ports| {
+            ports
+                .iter()
+                .map(|port| {
+                    (
+                        port["processor_display_name"].as_str().unwrap().to_string(),
+                        port["port_name"].as_str().unwrap().to_string(),
+                        port["reader_runtime_names"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .map(|name| name.as_str().unwrap().to_string())
+                            .collect(),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// A session that only looks at the mesh — it announces nothing, so what it
@@ -641,6 +671,100 @@ fn a_sources_graph_names_the_port_the_mesh_reads_and_who_reads_it() {
     source.wait_until_it_reports_egress_ports(
         "the source to render no egress port once its reader has gone",
         &[],
+    );
+}
+
+/// How many reports a source makes after its reader has reached it before the
+/// arm below reads what it rendered.
+///
+/// Against the bug it catches, the entry appears on the first table update after
+/// the reader's token arrives and never leaves, so any window at all decides it;
+/// this one is a second of them against a loaded runner.
+const HOW_MANY_REPORTS_A_SOURCE_MAKES_BEFORE_ITS_RENDER_IS_READ: usize = 10;
+
+/// A source whose egress cannot take a destination slot on its own channel
+/// renders no egress port, rather than one it is not sending.
+///
+/// What it catches: `MeshPortEgress::start` succeeds the moment its thread
+/// spawns, and everything that can refuse an egress happens inside that thread
+/// afterwards. A table that keeps the entry has the source's own `graph` claim a
+/// send while the reader's link reads `awaiting_remote` — two runtimes saying
+/// opposite things about one link, with the source the one that is wrong — and
+/// no later reader can replace the entry, so the port stays unsendable for the
+/// run (#2346).
+///
+/// The refusal is the ticket's own repro and the readiest one to stage: a
+/// channel's destination slots are fixed when it is created, so a source holding
+/// every one of them leaves none for the egress. Nothing else in CI drives an
+/// egress that fails at all — the unit tests feed the table's two maps directly,
+/// which is what let this survive the surface it shipped on.
+///
+/// Mental-revert: stop the egress thread saying it ended, and the source renders
+/// the port under its reader's name for the rest of the run.
+#[test]
+#[serial]
+fn a_source_whose_egress_cannot_take_a_slot_renders_no_egress_port() {
+    let mesh_name = a_mesh_name_of_its_own("noslot");
+    let (source_name, reader_name) = the_two_runtimes_of("noslot");
+    let source_domain = a_domain_root_of_its_own("noslot-source");
+    let reader_domain = a_domain_root_of_its_own("noslot-reader");
+    let source_listen = format!("udp/{LOOPBACK_INTERFACE}:{}?rel=1", a_free_loopback_port());
+
+    let source = CrossRuntimeLinkPeerProcess::launch(HowToLaunchAPeer {
+        runtime_name: source_name.clone(),
+        mesh_name: mesh_name.clone(),
+        listen_endpoints: vec![source_listen.clone()],
+        display_name: THE_DISPLAY_NAME.to_string(),
+        iceoryx2_domain_root: source_domain.path().to_path_buf(),
+        take_every_destination_slot: true,
+        ..Default::default()
+    });
+    source.wait_until_it_is_up();
+
+    let reader = CrossRuntimeLinkPeerProcess::launch(HowToLaunchAPeer {
+        reader: true,
+        runtime_name: reader_name.clone(),
+        mesh_name,
+        peer_endpoints: vec![source_listen],
+        display_name: THE_DISPLAY_NAME.to_string(),
+        link_from: Some(source_name.clone()),
+        iceoryx2_domain_root: reader_domain.path().to_path_buf(),
+        ..Default::default()
+    });
+    reader.wait_until_it_is_up();
+
+    // The source answering what it offers is what says the two are talking, so
+    // the reader's token has reached it and its egress has been asked for.
+    reader.wait_until(
+        "the reader to say its source offers the port and is not sending it",
+        || {
+            reader.everything_it_has_reported().iter().any(|reported| {
+                reported.get("state").and_then(|state| state.as_str()) == Some("awaiting_remote")
+                    && reported
+                        .get("reason")
+                        .and_then(|reason| reason.as_str())
+                        .is_some_and(|reason| reason.contains("is not sending it"))
+            })
+        },
+    );
+    let reported_by_then = source.everything_it_has_reported().len();
+    source.wait_until("the source to report again with its reader waiting", || {
+        source.everything_it_has_reported().len()
+            >= reported_by_then + HOW_MANY_REPORTS_A_SOURCE_MAKES_BEFORE_ITS_RENDER_IS_READ
+    });
+
+    assert_eq!(
+        source.every_egress_port_it_has_ever_reported(),
+        Vec::new(),
+        "a source that could not take a slot for its egress sends nothing, and must never have \
+         rendered a port as being sent"
+    );
+    assert!(
+        !reader
+            .every_state_it_has_reported()
+            .contains(&"wired".to_string()),
+        "nothing was sent, so the reader's link must never have read wired: {:?}",
+        reader.every_state_it_has_reported()
     );
 }
 
