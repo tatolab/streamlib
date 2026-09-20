@@ -42,6 +42,26 @@ use crate::core::signals::ScopedShutdownSignalOwnership;
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 use crate::iceoryx2::Iceoryx2Node;
 
+/// Gives the mesh's GPU context back when `start()` leaves early.
+///
+/// The mesh reads that context on its own threads, so a `start()` that
+/// recorded one and then failed would leave the mesh holding a device
+/// belonging to a runtime that never ran — and a host that gives up on a
+/// failed `start()` never calls the `stop()` that would clear it.
+struct ForgetsTheMeshsGpuContextUnlessStartFinishes<'a> {
+    gpu_context_the_mesh_copies_frames_with: &'a GpuContextTheMeshCopiesFramesWith,
+    start_finished: bool,
+}
+
+impl Drop for ForgetsTheMeshsGpuContextUnlessStartFinishes<'_> {
+    fn drop(&mut self) {
+        if !self.start_finished {
+            self.gpu_context_the_mesh_copies_frames_with
+                .forget_the_runtimes_gpu_context();
+        }
+    }
+}
+
 /// Storage variant for tokio runtime in Runner.
 ///
 /// Enables Runner to work both standalone (owning its runtime) and
@@ -571,6 +591,16 @@ impl Runner {
         // copying is recorded in that store's lease table.
         self.gpu_context_the_mesh_copies_frames_with
             .record_the_runtimes_gpu_context(&gpu);
+        // Everything below here can leave early, and a host is under no
+        // obligation to call `stop()` after a `start()` that failed. Without
+        // this, the mesh would hold the last clone of a device belonging to a
+        // runtime that never ran.
+        let mut the_mesh_keeps_this_context_only_if_start_finishes =
+            ForgetsTheMeshsGpuContextUnlessStartFinishes {
+                gpu_context_the_mesh_copies_frames_with: &self
+                    .gpu_context_the_mesh_copies_frames_with,
+                start_finished: false,
+            };
 
         // Drain pre-start hooks now — after the GpuContext is FULLY live
         // (device + SurfaceStore) but before any processor setup runs.
@@ -675,6 +705,7 @@ impl Runner {
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeStarted),
         );
 
+        the_mesh_keeps_this_context_only_if_start_finishes.start_finished = true;
         Ok(())
     }
 

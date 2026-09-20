@@ -176,9 +176,10 @@ impl WritesAFramesPixelsIntoALocalSurface {
             .the_gpu_context_or_none()
             .ok_or(WhyAFramesPixelsCannotLandHere::ThisRuntimeHasNoGpuContextYet)?;
 
-        // Before the mint, because the mint is what creates the pool this
-        // bounds: refusing after one would have already grown the runtime.
-        self.refuse_a_shape_too_many(
+        // Asked before the mint, because the mint is what creates the pool
+        // this bounds: refusing after one would have already grown the
+        // runtime.
+        let this_shape = self.refuse_a_shape_too_many(
             arrived.description.width,
             arrived.description.height,
             arrived.description.pixel_format,
@@ -196,6 +197,12 @@ impl WritesAFramesPixelsIntoALocalSurface {
                 }
                 other => WhyAFramesPixelsCannotLandHere::NoLocalSurfaceCouldBeMinted(other),
             })?;
+        // Counted only now, and before every later refusal: a shape whose
+        // pool this runtime could not create — an extent no device would
+        // allocate — cost it nothing, so charging the source for it would let
+        // a peer sending four impossible shapes lock out a real one. A shape
+        // whose pool *does* exist is charged whatever happens to the frame.
+        self.pools_minted_for_this_source.insert(this_shape);
 
         // Said by this side rather than left to the write below, because an
         // arriving frame of the wrong size is the sending runtime disagreeing
@@ -221,44 +228,60 @@ impl WritesAFramesPixelsIntoALocalSurface {
     }
 
     /// Refuse a shape beyond the handful one source may mint pools of, and
-    /// record every shape that is allowed through.
+    /// hand back the shape so the caller can charge it once its pool exists.
+    ///
+    /// Asking and charging are separate on purpose: the ask has to happen
+    /// before the mint, because the mint is what grows the runtime, and the
+    /// charge has to happen after it, because a mint that failed grew
+    /// nothing.
     fn refuse_a_shape_too_many(
         &mut self,
         width: u32,
         height: u32,
         pixel_format: PixelFormat,
-    ) -> std::result::Result<(), WhyAFramesPixelsCannotLandHere> {
+    ) -> std::result::Result<AFormatAndExtentAPoolWasMintedFor, WhyAFramesPixelsCannotLandHere>
+    {
         let this_shape = AFormatAndExtentAPoolWasMintedFor {
             width,
             height,
             pixel_format_wire_name: pixel_format.wire_name(),
         };
-        if self.pools_minted_for_this_source.contains(&this_shape) {
-            return Ok(());
-        }
-        if self.pools_minted_for_this_source.len()
-            >= HOW_MANY_FORMAT_AND_EXTENT_PAIRS_ONE_SOURCE_MAY_MINT
+        if self.pools_minted_for_this_source.contains(&this_shape)
+            || self.pools_minted_for_this_source.len()
+                < HOW_MANY_FORMAT_AND_EXTENT_PAIRS_ONE_SOURCE_MAY_MINT
         {
-            return Err(
-                WhyAFramesPixelsCannotLandHere::ItIsOneShapeTooManyFromThisSource {
-                    this_shape: this_shape.to_string(),
-                    already_minted: self
-                        .pools_minted_for_this_source
-                        .iter()
-                        .map(AFormatAndExtentAPoolWasMintedFor::to_string)
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                },
-            );
+            return Ok(this_shape);
         }
-        self.pools_minted_for_this_source.insert(this_shape);
-        Ok(())
+        Err(
+            WhyAFramesPixelsCannotLandHere::ItIsOneShapeTooManyFromThisSource {
+                this_shape: this_shape.to_string(),
+                already_minted: self
+                    .pools_minted_for_this_source
+                    .iter()
+                    .map(AFormatAndExtentAPoolWasMintedFor::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            },
+        )
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Ask, then charge — what the caller does when `acquire_pixel_buffer`
+    /// answers with a surface.
+    fn a_shape_whose_pool_was_minted(
+        writer: &mut WritesAFramesPixelsIntoALocalSurface,
+        width: u32,
+        height: u32,
+        pixel_format: PixelFormat,
+    ) -> std::result::Result<(), WhyAFramesPixelsCannotLandHere> {
+        let this_shape = writer.refuse_a_shape_too_many(width, height, pixel_format)?;
+        writer.pools_minted_for_this_source.insert(this_shape);
+        Ok(())
+    }
 
     fn a_writer() -> WritesAFramesPixelsIntoALocalSurface {
         WritesAFramesPixelsIntoALocalSurface::minting_through(&Arc::new(
@@ -279,9 +302,7 @@ mod tests {
                 (64, 64, PixelFormat::Gray8),
             ] {
                 assert!(
-                    writer
-                        .refuse_a_shape_too_many(width, height, pixel_format)
-                        .is_ok(),
+                    a_shape_whose_pool_was_minted(&mut writer, width, height, pixel_format).is_ok(),
                     "{width}x{height} {pixel_format:?} is one of the four this source may have"
                 );
             }
@@ -295,14 +316,14 @@ mod tests {
     fn a_shape_beyond_the_handful_is_refused_by_name_listing_the_ones_already_minted() {
         let mut writer = a_writer();
         for extent in 1..=HOW_MANY_FORMAT_AND_EXTENT_PAIRS_ONE_SOURCE_MAY_MINT as u32 {
-            writer
-                .refuse_a_shape_too_many(extent * 16, 64, PixelFormat::Rgba32)
+            a_shape_whose_pool_was_minted(&mut writer, extent * 16, 64, PixelFormat::Rgba32)
                 .expect("the shapes up to the bound are admitted");
         }
 
         let refused = writer
             .refuse_a_shape_too_many(9999, 64, PixelFormat::Bgra32)
-            .expect_err("the shape past the bound is refused");
+            .err()
+            .expect("the shape past the bound is refused");
 
         assert_eq!(
             refused.which_refusal_this_is(),
@@ -323,6 +344,28 @@ mod tests {
                 .is_ok(),
             "a shape already minted for must keep crossing after another was refused"
         );
+    }
+
+    /// A shape whose pool this runtime could not create costs the source
+    /// nothing. Charging for it would let a peer sending four impossible
+    /// extents lock out every real one for the rest of the run.
+    #[test]
+    fn a_shape_whose_pool_was_never_minted_does_not_spend_the_sources_budget() {
+        let mut writer = a_writer();
+
+        for extent in 1..=HOW_MANY_FORMAT_AND_EXTENT_PAIRS_ONE_SOURCE_MAY_MINT as u32 * 3 {
+            // Asked and not charged — the mint failed, so no pool exists.
+            writer
+                .refuse_a_shape_too_many(extent, 1, PixelFormat::Rgba32)
+                .expect("a shape nothing was minted for spends nothing");
+        }
+
+        for extent in 1..=HOW_MANY_FORMAT_AND_EXTENT_PAIRS_ONE_SOURCE_MAY_MINT as u32 {
+            a_shape_whose_pool_was_minted(&mut writer, extent * 16, 64, PixelFormat::Rgba32)
+                .unwrap_or_else(|why| {
+                    panic!("a real shape must still be admitted after failed mints: {why}")
+                });
+        }
     }
 
     /// A pool with every buffer still being read refuses the frame by that
