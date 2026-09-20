@@ -270,16 +270,26 @@ impl MeshLinkIngressTable {
                     ingress.forget_a_local_destination(link_id.as_str());
                 }
             }
-            if !still_read {
-                carried.machine_clocks_by_address.remove(&forgotten.address);
-            }
+            let machine_clock = (!still_read)
+                .then(|| carried.machine_clocks_by_address.remove(&forgotten.address))
+                .flatten();
             // Dropping the ingress undeclares this runtime's reader token,
             // which is what makes the source stop sending the port.
-            (!still_read)
+            let stopped_reading = (!still_read)
                 .then(|| carried.carrying.remove(&forgotten.address))
-                .flatten()
+                .flatten();
+            (stopped_reading, machine_clock)
         };
+        let (stopped_reading, machine_clock) = stopped_reading;
         drop(stopped_reading);
+        // Emptied, not merely dropped from the table: the link that has gone
+        // and its destination still hold clones, and the ingress's writing
+        // thread could name a machine until the drop above joined it. A cell
+        // nobody empties would leave a torn-down link naming the machine it
+        // used to carry from.
+        if let Some(machine_clock) = machine_clock {
+            machine_clock.forget_the_machine_because_nothing_is_arriving();
+        }
     }
 
     /// Start resolving waiting links, now that this runtime is on a mesh.
@@ -906,6 +916,39 @@ mod tests {
             | RemoteLinkResolution::Refused { reason } => reason,
             RemoteLinkResolution::Wired => panic!("a wired link has no reason"),
         }
+    }
+
+    /// The last link on an address going empties the cell, rather than only
+    /// dropping it from the table.
+    ///
+    /// The link that has gone and its destination still hold clones of it, so a
+    /// cell nobody empties leaves a torn-down link naming the machine it used
+    /// to carry from — on `graph`, beside a state that says it is disconnected.
+    #[test]
+    fn the_last_link_on_an_address_going_empties_the_cell_the_link_still_holds() {
+        let table = a_mesh_link_ingress_table_carrying_nothing();
+        let link_id = LinkUniqueId::new();
+        let machine_clock = table.machine_clock_carried_from(&an_address());
+        table.note_a_link_waiting_on(
+            an_address(),
+            link_id.clone(),
+            Arc::new(Mutex::new(RemoteLinkResolution::AwaitingRemote {
+                reason: "a link this test stood up".to_string(),
+            })),
+        );
+        machine_clock.note_the_machine_a_bag_was_stamped_on(
+            crate::core::runtime::mesh::MachineClockIdentity::of_the_machine_whose_boot_session_uuid_reads(
+                "8b93a1c2-0000-4d5a-9a11-2c7f0d5e2f1c",
+            ),
+        );
+
+        table.forget_a_link(&link_id);
+
+        assert_eq!(
+            machine_clock.what_it_is_now(),
+            None,
+            "the clone the link still holds must stop naming a machine nothing is carrying from"
+        );
     }
 
     /// The one question a helper cannot answer for itself, answered here.
