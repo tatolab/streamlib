@@ -979,6 +979,26 @@ class LinkInputDataReader:
         arrives. A port nothing is connected to lists none.
         """
 
+    def inbound_link_stamp_clock_identity(
+        self, port_name: str, inbound_link_name: str
+    ) -> str | None:
+        """Which machine's monotonic clock one link's stamps are taken on.
+
+        The machine's boot-session UUID text, or `None` when no machine is
+        named yet. Every stamp is a machine's monotonic clock, whose epoch is
+        that machine's own boot, so two stamps taken on two machines are
+        readings of two unrelated clocks: compare one link's stamps against
+        another's only where both answer the same string, and never where
+        either answers `None`.
+
+        A link from this runtime always names this machine. A link carrying
+        from another runtime names nothing until its first bag lands, and names
+        a different machine once its peer comes back on a fresh boot. Answering
+        for one costs a round trip to the runtime, which this process holds no
+        mesh session to answer for itself — read it when a link wires or a
+        track opens, not once per bag.
+        """
+
     def has_data(self, port_name: str) -> bool: ...
 
 @final

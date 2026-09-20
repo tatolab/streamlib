@@ -27,7 +27,7 @@ use streamlib::sdk::iceoryx2::{
     ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, Iceoryx2Node,
     InboundLinkLossCountBoardSlotAndWiringGeneration, InboundLinkName, InputMailboxesInner,
     OutputWriterInner, ReadMode, ResolvedAudioWindowContract,
-    TheClockAnInboundLinksStampsAreTakenOn,
+    TheClockAnInboundLinksStampsAreTakenOn, WhatIsKnownOfAnInboundLinksStampClock,
 };
 
 use crate::python_bag_conversion::{
@@ -245,6 +245,27 @@ impl PythonProcessorLinkDataAccess {
             .iter()
             .map(|inbound_link_name| inbound_link_name.as_str().to_string())
             .collect())
+    }
+
+    /// What this process can say about the clock one inbound link of
+    /// `port_name` takes its stamps on.
+    ///
+    /// A link from this runtime answers this machine. A link carrying from
+    /// another runtime answers that only the app process can say: this process
+    /// opens no mesh session, so it knows the link's name and nothing about
+    /// the machine behind it.
+    pub(crate) fn inbound_link_stamp_clock_of_input_port(
+        &self,
+        port_name: &str,
+        inbound_link_name: &str,
+    ) -> PyResult<WhatIsKnownOfAnInboundLinksStampClock> {
+        let Some(input_mailboxes) = self.input_mailboxes.get() else {
+            return Err(unwired_port_error("input", port_name));
+        };
+        Ok(input_mailboxes.inbound_link_stamp_clock_identity(
+            port_name,
+            &InboundLinkName::from(inbound_link_name),
+        ))
     }
 }
 
