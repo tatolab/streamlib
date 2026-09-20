@@ -143,9 +143,13 @@ unsafe impl Sync for VulkanFence {}
 pub struct HostVulkanTimelineSemaphore {
     device: vulkanalia::Device,
     semaphore: vk::Semaphore,
-    /// Whether the semaphore was created with VK_KHR_external_semaphore_fd
-    /// export support — i.e. [`Self::export_opaque_fd`] is callable.
-    exportable: bool,
+    /// Whether the caller asked for fd export via [`Self::new_exportable`].
+    ///
+    /// What was asked for, not what the object can do: where the platform has
+    /// no fd handle type the request is honoured without chaining
+    /// `VkExportSemaphoreCreateInfo`, and [`Self::export_opaque_fd`] refuses on
+    /// the platform rather than on this flag.
+    export_by_file_descriptor_was_requested: bool,
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -173,7 +177,11 @@ impl HostVulkanTimelineSemaphore {
         Self::create(device, initial_value, true)
     }
 
-    fn create(device: &vulkanalia::Device, initial_value: u64, exportable: bool) -> Result<Self> {
+    fn create(
+        device: &vulkanalia::Device,
+        initial_value: u64,
+        export_by_file_descriptor_was_requested: bool,
+    ) -> Result<Self> {
         let mut type_info = vk::SemaphoreTypeCreateInfo::builder()
             .semaphore_type(vk::SemaphoreType::TIMELINE)
             .initial_value(initial_value)
@@ -183,7 +191,7 @@ impl HostVulkanTimelineSemaphore {
             .handle_types(vk::ExternalSemaphoreHandleTypeFlags::OPAQUE_FD)
             .build();
 
-        let info = if exportable
+        let info = if export_by_file_descriptor_was_requested
             && super::CROSS_PROCESS_EXPORT_BY_FILE_DESCRIPTOR_EXISTS_ON_THIS_PLATFORM
         {
             // Chain order: SemaphoreCreateInfo -> ExportSemaphoreCreateInfo -> SemaphoreTypeCreateInfo.
@@ -202,14 +210,15 @@ impl HostVulkanTimelineSemaphore {
 
         let semaphore = unsafe { device.create_semaphore(&info, None) }.map_err(|e| {
             Error::GpuError(format!(
-                "Failed to create timeline semaphore (exportable={exportable}): {e}"
+                "Failed to create timeline semaphore \
+                 (exportable={export_by_file_descriptor_was_requested}): {e}"
             ))
         })?;
 
         Ok(Self {
             device: device.clone(),
             semaphore,
-            exportable,
+            export_by_file_descriptor_was_requested,
         })
     }
 
@@ -261,7 +270,7 @@ impl HostVulkanTimelineSemaphore {
         Ok(Self {
             device: device.clone(),
             semaphore,
-            exportable: false,
+            export_by_file_descriptor_was_requested: false,
         })
     }
 
@@ -270,7 +279,7 @@ impl HostVulkanTimelineSemaphore {
     /// the returned fd and must close it after use (or after the
     /// subprocess has imported its own copy).
     pub fn export_opaque_fd(&self) -> Result<std::os::unix::io::RawFd> {
-        if !self.exportable {
+        if !self.export_by_file_descriptor_was_requested {
             return Err(Error::GpuError(
                 "HostVulkanTimelineSemaphore::export_opaque_fd: semaphore was not created with `new_exportable`".into(),
             ));
@@ -353,7 +362,7 @@ impl HostVulkanTimelineSemaphore {
 
     /// Whether [`Self::export_opaque_fd`] can be called.
     pub fn is_exportable(&self) -> bool {
-        self.exportable
+        self.export_by_file_descriptor_was_requested
     }
 }
 

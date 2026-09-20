@@ -21,13 +21,20 @@
 //! `.api_version(...)` sets the request and is always allowed; a per-line
 //! `streamlib:allow-device-api-version-read` pragma is the escape hatch for a
 //! read that only reports.
+//!
+//! The floor it accepts, stated so nobody mistakes it for a parser: only a read
+//! spelled with a leading dot is seen, so a destructuring binding
+//! (`let vk::PhysicalDeviceProperties { api_version, .. } = props`) slips past;
+//! and only whole-line comments are skipped, so `.api_version` in a trailing
+//! comment, a `/* */` span or a string literal is flagged and takes the pragma.
 
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// Workspace trees that hold Vulkan code this gate owns.
-const SCAN_ROOTS: &[&str] = &["runtime", "adapters", "sdk"];
+/// Workspace trees this gate owns. `xtask` is in so this gate's own
+/// [`SCAN_EXEMPT_FILES`] entry is reachable rather than dead.
+const SCAN_ROOTS: &[&str] = &["runtime", "adapters", "sdk", "xtask"];
 
 /// The field read this gate bans. A following `(` makes it the
 /// `VkApplicationInfo` builder setter instead, which is the request, not a probe.
@@ -174,21 +181,15 @@ pub fn scan_files(
 /// Whether `line` reads an `api_version` field rather than calling the builder
 /// setter of the same name.
 fn line_reads_a_device_api_version_field(line: &str) -> bool {
-    let mut search_from = 0usize;
-    while let Some(offset) = line[search_from..].find(BANNED_DEVICE_API_VERSION_FIELD_READ) {
-        let match_start = search_from + offset;
-        let match_end = match_start + BANNED_DEVICE_API_VERSION_FIELD_READ.len();
-        // `.api_version_foo` is a different identifier, not this field.
-        let next_character = line[match_end..].chars().next();
-        let is_the_builder_setter = next_character == Some('(');
-        let is_a_longer_identifier =
-            next_character.is_some_and(|character| character.is_alphanumeric() || character == '_');
-        if !is_the_builder_setter && !is_a_longer_identifier {
-            return true;
-        }
-        search_from = match_end;
-    }
-    false
+    line.match_indices(BANNED_DEVICE_API_VERSION_FIELD_READ)
+        .any(|(match_start, matched)| {
+            // `(` makes it the builder setter; an identifier character makes it
+            // `.api_version_something`, a different field.
+            let character_after = line[match_start + matched.len()..].chars().next();
+            !character_after.is_some_and(|character| {
+                character == '(' || character.is_alphanumeric() || character == '_'
+            })
+        })
 }
 
 #[cfg(test)]

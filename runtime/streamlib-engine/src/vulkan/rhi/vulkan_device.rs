@@ -17,7 +17,9 @@ use vulkanalia_vma as vma;
 use crate::core::rhi::TextureDescriptor;
 use crate::core::{Error, Result};
 
-use streamlib_consumer_rhi::vulkan_extension_names_borrowed_from_properties;
+use streamlib_consumer_rhi::{
+    REQUESTED_VULKAN_INSTANCE_API_VERSION, vulkan_extension_names_borrowed_from_properties,
+};
 
 #[cfg(target_os = "linux")]
 use super::VulkanTextureLike;
@@ -40,24 +42,8 @@ use super::{
 /// `vkGetSemaphoreFdKHR` takes vulkanalia's panicking stub for a command the
 /// loader never resolved. Where the mechanism does not exist the export
 /// declaration is omitted and the allocation is local.
-///
-/// The Apple flavours — an IOSurface for memory, a Metal shared event for a
-/// timeline — arrive with the interop seam (#2360), which is where the three
-/// sites reading this become one allocation-flavour decision rather than a
-/// platform predicate.
 pub(crate) const CROSS_PROCESS_EXPORT_BY_FILE_DESCRIPTOR_EXISTS_ON_THIS_PLATFORM: bool =
     cfg!(target_os = "linux");
-
-/// The Vulkan API version the engine requests at instance creation.
-///
-/// This request — not any device query — is what makes the entry points promoted
-/// into core 1.3 (`cmd_pipeline_barrier2`, `cmd_begin_rendering`, `queue_submit2`,
-/// `wait_semaphores`) resolve at load time. A device's reported `apiVersion` is
-/// not a capability report: MoltenVK clamps it to whatever the instance asked
-/// for, so it answers 1.0.x to an instance that asked for 1.0 and 1.4.x to one
-/// that asked for 1.4, on the same hardware. `cargo xtask
-/// check-no-device-api-version-branch` keeps the tree off that probe.
-pub(crate) const REQUESTED_VULKAN_INSTANCE_API_VERSION: u32 = vk::make_version(1, 4, 0);
 
 /// Best-effort hint about which third-party GPU compute libraries are
 /// **available to integrate against this device**. Probed once at
@@ -440,36 +426,28 @@ impl Drop for ExportPoolSentinel {
 }
 
 /// What to install when the loader opened but no ICD behind it is usable.
-fn no_usable_vulkan_driver_guidance() -> &'static str {
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
-    {
-        "No usable Vulkan driver (ICD) was found. MoltenVK is the driver on Apple \
-         hardware — install it (`brew install molten-vk`, or the LunarG SDK) and check \
-         that its ICD manifest is on the loader's search path."
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-    {
-        "No usable Vulkan driver (ICD) was found. Install your GPU vendor's Vulkan \
-         driver — the proprietary NVIDIA driver, or `mesa-vulkan-drivers` for \
-         AMD/Intel — then check `vulkaninfo` runs."
-    }
-}
+const NO_USABLE_VULKAN_DRIVER_GUIDANCE: &str = if cfg!(any(target_os = "macos", target_os = "ios"))
+{
+    "No usable Vulkan driver (ICD) was found. MoltenVK is the driver on Apple \
+     hardware — install it (`brew install molten-vk`, or the LunarG SDK) and check \
+     that its ICD manifest is on the loader's search path."
+} else {
+    "No usable Vulkan driver (ICD) was found. Install your GPU vendor's Vulkan \
+     driver — the proprietary NVIDIA driver, or `mesa-vulkan-drivers` for \
+     AMD/Intel — then check `vulkaninfo` runs."
+};
 
-/// What to install when no loader library opened, per platform.
-fn no_vulkan_loader_library_guidance() -> &'static str {
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
-    {
-        "No Vulkan loader library could be opened. Install the loader and MoltenVK \
-         (`brew install vulkan-loader molten-vk`, or the LunarG SDK), then check that \
-         `libvulkan.dylib` resolves. Tried:"
-    }
-    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-    {
-        "No Vulkan loader library could be opened. Install your GPU vendor's Vulkan \
-         driver and the loader (`libvulkan1` / `vulkan-loader`), then check `vulkaninfo` \
-         runs. Tried:"
-    }
-}
+/// What to install when no loader library opened at all.
+const NO_VULKAN_LOADER_LIBRARY_GUIDANCE: &str = if cfg!(any(target_os = "macos", target_os = "ios"))
+{
+    "No Vulkan loader library could be opened. Install the loader and MoltenVK \
+     (`brew install vulkan-loader molten-vk`, or the LunarG SDK), then check that \
+     `libvulkan.dylib` resolves. Tried:"
+} else {
+    "No Vulkan loader library could be opened. Install your GPU vendor's Vulkan \
+     driver and the loader (`libvulkan1` / `vulkan-loader`), then check `vulkaninfo` \
+     runs. Tried:"
+};
 
 /// Dynamic libraries the Vulkan loader may live in, in the order they are tried.
 ///
@@ -484,21 +462,29 @@ fn no_vulkan_loader_library_guidance() -> &'static str {
 /// cover a Homebrew or LunarG install.
 fn vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString> {
     let mut candidate_paths: Vec<std::ffi::OsString> = vec![LIBRARY.into()];
-
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
-    {
-        candidate_paths.push("libvulkan.1.dylib".into());
-        if let Some(sdk_root) = std::env::var_os("VULKAN_SDK") {
-            let mut sdk_library_path = std::path::PathBuf::from(sdk_root);
-            sdk_library_path.push("lib");
-            sdk_library_path.push(LIBRARY);
-            candidate_paths.push(sdk_library_path.into_os_string());
-        }
-        candidate_paths.push("/opt/homebrew/lib/libvulkan.dylib".into());
-        candidate_paths.push("/usr/local/lib/libvulkan.dylib".into());
-    }
-
+    candidate_paths.extend(apple_vulkan_loader_library_candidate_paths());
     candidate_paths
+}
+
+/// The Apple-only tail of the search list: the versioned soname, a LunarG SDK
+/// root if one is exported, and the two prefixes dyld does not search itself.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+fn apple_vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString> {
+    let mut candidate_paths: Vec<std::ffi::OsString> = vec!["libvulkan.1.dylib".into()];
+    if let Some(sdk_root) = std::env::var_os("VULKAN_SDK") {
+        let mut sdk_library_path = std::path::PathBuf::from(sdk_root);
+        sdk_library_path.push("lib");
+        sdk_library_path.push(LIBRARY);
+        candidate_paths.push(sdk_library_path.into_os_string());
+    }
+    candidate_paths.push("/opt/homebrew/lib/libvulkan.dylib".into());
+    candidate_paths.push("/usr/local/lib/libvulkan.dylib".into());
+    candidate_paths
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+fn apple_vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString> {
+    Vec::new()
 }
 
 /// Open the first Vulkan loader library that dlopens, or refuse naming every
@@ -525,7 +511,7 @@ fn load_the_first_vulkan_loader_library_that_opens() -> Result<LibloadingLoader>
 
     Err(Error::GpuError(format!(
         "{}\n  {}",
-        no_vulkan_loader_library_guidance(),
+        NO_VULKAN_LOADER_LIBRARY_GUIDANCE,
         refusal_per_candidate.join("\n  "),
     )))
 }
@@ -693,7 +679,7 @@ impl HostVulkanDevice {
 
         let instance = unsafe { entry.create_instance(&instance_info, None) }.map_err(|e| {
             Error::GpuError(if e == vk::ErrorCode::INCOMPATIBLE_DRIVER {
-                no_usable_vulkan_driver_guidance().to_string()
+                NO_USABLE_VULKAN_DRIVER_GUIDANCE.to_string()
             } else {
                 format!("Failed to create Vulkan instance: {e}")
             })
@@ -912,7 +898,6 @@ impl HostVulkanDevice {
         // Device extensions
         let mut device_extensions: Vec<*const c_char> = Vec::new();
 
-        // Enumerate device extensions once and enable what's available
         let available_device_extension_properties =
             unsafe { instance.enumerate_device_extension_properties(physical_device, None) }
                 .inspect_err(|e| {
@@ -1267,10 +1252,9 @@ impl HostVulkanDevice {
         // Dynamic rendering, timeline semaphores and synchronization2 are the
         // promoted-1.3 core the engine is written against; requesting them is
         // not optional on any platform. Synchronization2 is also a mandatory
-        // dependency of VK_KHR_video_encode_queue. Measured on an M1 Max:
-        // MoltenVK accepts all three, so a device that refuses one fails
-        // creation with FEATURE_NOT_PRESENT rather than being quietly served a
-        // device the engine's call sites cannot use.
+        // dependency of VK_KHR_video_encode_queue. A device that refuses one
+        // fails creation with FEATURE_NOT_PRESENT rather than being quietly
+        // served a device the engine's call sites cannot use.
         let mut dynamic_rendering_features = vk::PhysicalDeviceDynamicRenderingFeatures::builder()
             .dynamic_rendering(true)
             .build();
@@ -1340,6 +1324,7 @@ impl HostVulkanDevice {
             .build();
 
         let device_create_info = {
+            #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
             let mut builder = vk::DeviceCreateInfo::builder()
                 .queue_create_infos(&queue_create_infos)
                 .enabled_extension_names(&device_extensions)
@@ -4853,6 +4838,7 @@ mod tests {
 
     /// Ray tracing is an absent tier on MoltenVK, not a failure: construction
     /// refuses by name rather than reaching an entry point that never loaded.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[cfg_attr(
         not(feature = "hardware-tests"),
         ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
