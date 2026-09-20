@@ -338,6 +338,21 @@ impl CrossRuntimeLinkPeerProcess {
         }
     }
 
+    /// Every machine this peer has reported its link's stamps as being taken
+    /// on, in order — `None` for a report that named none.
+    fn every_stamp_clock_it_has_reported(&self) -> Vec<Option<String>> {
+        self.everything_it_has_reported()
+            .iter()
+            .filter(|reported| reported.get("state").is_some())
+            .map(|reported| {
+                reported
+                    .get("stamp_clock_identity")
+                    .and_then(|machine| machine.as_str())
+                    .map(str::to_string)
+            })
+            .collect()
+    }
+
     /// Every state this peer has reported its link in, in order.
     fn every_state_it_has_reported(&self) -> Vec<String> {
         self.everything_it_has_reported()
@@ -543,6 +558,88 @@ fn a_bag_crosses_the_mesh_byte_equal_under_the_stamp_its_producer_wrote() {
             .every_state_it_has_reported()
             .contains(&"wired".to_string())
     });
+}
+
+/// A link names no machine until a bag has crossed it, and names the machine
+/// that stamped that bag afterwards.
+///
+/// What it catches: an identity that never reaches the ingress's cell over a
+/// real Zenoh hop, and one written there before anything crossed — a link that
+/// named a machine while carrying nothing would let a sink compare stamps it
+/// never received.
+///
+/// What it cannot catch: that the identity is the *sender's* rather than this
+/// machine's. Both peers run on one machine, so the two are equal here, and
+/// forcing a second boot id would need a back door in library code. That half
+/// is locked by `mesh_link_ingress::tests::
+/// the_machine_a_message_names_is_the_senders_and_never_this_one`.
+#[test]
+#[serial]
+fn a_link_names_no_machine_until_a_bag_has_crossed_it_and_that_bags_machine_after() {
+    let mesh_name = a_mesh_name_of_its_own("clock");
+    let (source_name, reader_name) = the_two_runtimes_of("clock");
+    let source_domain = a_domain_root_of_its_own("clock-source");
+    let reader_domain = a_domain_root_of_its_own("clock-reader");
+    let source_listen = format!("udp/{LOOPBACK_INTERFACE}:{}?rel=1", a_free_loopback_port());
+
+    let source = CrossRuntimeLinkPeerProcess::launch(HowToLaunchAPeer {
+        runtime_name: source_name.clone(),
+        mesh_name: mesh_name.clone(),
+        listen_endpoints: vec![source_listen.clone()],
+        display_name: THE_DISPLAY_NAME.to_string(),
+        iceoryx2_domain_root: source_domain.path().to_path_buf(),
+        ..Default::default()
+    });
+    source.wait_until_it_is_up();
+
+    let reader = CrossRuntimeLinkPeerProcess::launch(HowToLaunchAPeer {
+        reader: true,
+        runtime_name: reader_name,
+        mesh_name,
+        peer_endpoints: vec![source_listen],
+        display_name: THE_DISPLAY_NAME.to_string(),
+        link_from: Some(source_name),
+        iceoryx2_domain_root: reader_domain.path().to_path_buf(),
+        ..Default::default()
+    });
+    reader.wait_until_it_is_up();
+
+    assert_eq!(
+        reader.every_stamp_clock_it_has_reported().first(),
+        Some(&None),
+        "the first report is made before any bag has crossed, so it must name no machine"
+    );
+
+    reader.wait_until("a bag to cross the mesh", || {
+        !reader.every_bag_it_received().is_empty()
+    });
+    reader.wait_until(
+        "the link to name the machine that bag was stamped on",
+        || {
+            reader
+                .every_stamp_clock_it_has_reported()
+                .iter()
+                .any(Option::is_some)
+        },
+    );
+
+    let this_machine =
+        streamlib_engine::core::runtime::mesh::MachineClockIdentity::of_this_machine();
+    assert!(
+        !this_machine.is_unidentified(),
+        "this platform names no clock at all, so the arm proves nothing"
+    );
+    for named in reader
+        .every_stamp_clock_it_has_reported()
+        .into_iter()
+        .flatten()
+    {
+        assert_eq!(
+            named,
+            this_machine.to_string(),
+            "both peers run on this machine, so the identity off the wire is this machine's"
+        );
+    }
 }
 
 /// A source runtime holds no egress token while nobody is reading its port, and

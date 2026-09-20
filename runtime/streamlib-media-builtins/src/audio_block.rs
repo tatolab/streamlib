@@ -47,8 +47,8 @@ pub struct AudioBlock {
     #[serde(default)]
     pub dtype: AudioSampleDtype,
     /// Monotonic timestamp in nanoseconds of the block's first sample,
-    /// stamped by the capturing device — the machine's monotonic epoch, the
-    /// one a `VideoFrame.timestamp_ns` is stamped in.
+    /// stamped by the capturing device — this machine's monotonic epoch, the
+    /// one a `VideoFrame.timestamp_ns` on the same machine is stamped in.
     pub first_sample_timestamp_ns: i64,
 }
 

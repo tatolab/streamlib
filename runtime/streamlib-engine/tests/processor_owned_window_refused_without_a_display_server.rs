@@ -56,9 +56,12 @@ fn a_process_with_no_display_server_answers_the_create_op_with_the_pumps_own_err
 
     let (parent_end, helper_end) =
         UnixStream::pair().expect("a socketpair stands in for the spawned helper's");
+    let (_mesh_domain_root, mesh_link_ingress_table) =
+        helper_process_escalate_socket::a_mesh_link_ingress_table_carrying_nothing();
     let bridge = SubprocessBridge::new(
         parent_end,
         gpu_context_limited_access,
+        mesh_link_ingress_table,
         "processor-owned-window-headless".to_string(),
     )
     .expect("the bridge wraps the parent end");

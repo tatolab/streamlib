@@ -4,11 +4,17 @@
 """Canonical monotonic-clock timestamp source and drift-free periodic timer.
 
 Use [`monotonic_now_ns`] for any timestamp that needs to be compared across
-processes — frame stamps, log correlation tokens, anything that crosses a
-process boundary. It reads `clock_gettime(CLOCK_MONOTONIC)`, the same kernel
-syscall Rust's `Instant::now()` and Python's
-`time.clock_gettime_ns(time.CLOCK_MONOTONIC)` make, so values from all of them
-share the kernel's monotonic epoch and are directly comparable.
+processes on one machine — frame stamps, log correlation tokens, anything that
+crosses a process boundary. It reads `clock_gettime(CLOCK_MONOTONIC)`, the same
+kernel syscall Rust's `Instant::now()` and Python's
+`time.clock_gettime_ns(time.CLOCK_MONOTONIC)` make, so every process on one
+machine reads the one clock that machine's boot started.
+
+That epoch is the machine's own boot, so a reading from another machine is a
+reading of an unrelated clock and subtracting the two means nothing. A bag
+that crossed the runtime mesh carries its producer's stamp unchanged; ask
+`ctx.inputs.inbound_link_stamp_clock_identity(port, link)` which machine a
+link's stamps were taken on before comparing them with another link's.
 
 Wall-clock APIs (`time.time`, `datetime.now`, `time.time_ns`) are NOT
 comparable across processes — they drift under NTP and reflect different

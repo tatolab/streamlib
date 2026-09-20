@@ -23,6 +23,7 @@ mod hosted_control_plane_endpoint;
 mod link_request_on_the_mesh;
 mod link_requests_from_other_runtimes;
 mod link_requests_this_runtime_has_sent;
+mod machine_clock_a_remote_link_carries_from;
 mod machine_clock_identity;
 mod mesh_data_message_attachment;
 mod mesh_link_ingress;
@@ -61,12 +62,17 @@ pub use link_requests_from_other_runtimes::{
     WhatThisRuntimeDoesWithALinkRequestRegistry,
 };
 pub use link_requests_this_runtime_has_sent::LinkRequestsThisRuntimeHasSent;
+pub use machine_clock_a_remote_link_carries_from::{
+    MachineClockARemoteLinkCarriesFrom, WhatNotingABagsClockDid,
+};
 pub use machine_clock_identity::MachineClockIdentity;
 pub use mesh_data_message_attachment::{
     MESH_DATA_MESSAGE_ATTACHMENT_BYTES, MeshDataMessageAttachment,
 };
 #[doc(hidden)]
 pub use mesh_link_ingress_table::MeshLinkIngressTable;
+#[cfg(test)]
+pub(crate) use mesh_link_ingress_table::a_mesh_link_ingress_table_carrying_nothing;
 // Reachable rather than supported, like the key grammar above: the
 // cross-runtime-link fixture stands two runtimes' mesh halves up without a
 // `Runner`, because CI has no GPU to start one with.

@@ -21,6 +21,7 @@ use pyo3::exceptions::{
 };
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList};
+use streamlib::sdk::iceoryx2::WhatIsKnownOfAnInboundLinksStampClock;
 use streamlib::sdk::rhi::PixelFormat;
 use streamlib_adapter_cuda::dlpack::DeviceType;
 
@@ -1864,6 +1865,8 @@ impl PythonRuntimeContextFullAccess {
                 PythonLinkInputDataReader {
                     link_data_access: link_data_access.clone_ref(python),
                     gpu_limited_access_context: gpu_limited_access_context.clone_ref(python),
+                    ask_the_parent: escalate_request_to_parent
+                        .map(|requester| requester.clone().unbind()),
                 },
             )?,
             link_output_data_writer: Py::new(
@@ -2053,6 +2056,15 @@ fn configuration_as_python_dict<'py>(
 pub(crate) struct PythonLinkInputDataReader {
     link_data_access: Py<PythonProcessorLinkDataAccess>,
     gpu_limited_access_context: Py<PythonGpuContextLimitedAccess>,
+    /// The bridge's blocking round trip to the parent, for the one question
+    /// this process cannot answer for itself: which machine's clock a link
+    /// carrying from another runtime takes its stamps on. `None` in a process
+    /// with no parent to ask, where no such link can exist either.
+    ///
+    /// Held here rather than reached through the GPU exchange client: that one
+    /// is built only where the surface socket is too, and this question has
+    /// nothing to do with surfaces.
+    ask_the_parent: Option<Py<PyAny>>,
 }
 
 #[pymethods]
@@ -2150,11 +2162,97 @@ impl PythonLinkInputDataReader {
             .inbound_links_of_input_port(port_name)
     }
 
+    /// Which machine's monotonic clock the bags arriving on one link of
+    /// `port_name` were stamped on, as that machine's boot-session UUID text.
+    ///
+    /// Two stamps taken on two machines are readings of two unrelated clocks,
+    /// so a processor fanning several links in asks this before it compares one
+    /// link's stamps against another's. A link from this runtime always answers
+    /// this machine; one carrying from another runtime answers `None` until its
+    /// first bag lands, and answers a different machine after its peer comes
+    /// back on a fresh boot.
+    ///
+    /// Costs a round trip to the runtime for a link carrying from another
+    /// runtime, which this process holds no mesh session to answer for itself.
+    /// Read it when a link wires or a track opens, not once per bag.
+    fn inbound_link_stamp_clock_identity(
+        &self,
+        python: Python<'_>,
+        port_name: &str,
+        inbound_link_name: &str,
+    ) -> PyResult<Option<String>> {
+        match self
+            .link_data_access
+            .get()
+            .inbound_link_stamp_clock_of_input_port(port_name, inbound_link_name)?
+        {
+            WhatIsKnownOfAnInboundLinksStampClock::TheMachine(machine) => {
+                Ok(Some(machine.to_string()))
+            }
+            WhatIsKnownOfAnInboundLinksStampClock::NothingHasCrossedItYet
+            | WhatIsKnownOfAnInboundLinksStampClock::ItsMachineNamesNoClockOfItsOwn
+            | WhatIsKnownOfAnInboundLinksStampClock::NoSuchLinkFeedsThatPort => Ok(None),
+            WhatIsKnownOfAnInboundLinksStampClock::OnlyTheAppProcessCanSay => {
+                self.ask_the_parent_which_machine_stamped(python, inbound_link_name)
+            }
+        }
+    }
+
     /// Whether a bag is waiting on `port_name`, without consuming it.
     fn has_data(&self, python: Python<'_>, port_name: &str) -> PyResult<bool> {
         self.link_data_access
             .get()
             .input_port_has_data(python, port_name)
+    }
+}
+
+impl PythonLinkInputDataReader {
+    /// Ask the runtime which machine stamped the bags arriving on a link this
+    /// process holds no mesh session to answer for.
+    ///
+    /// A refusal is `None` rather than a raise: the caller asked which clock a
+    /// link is on, and "the runtime could not say" is an answer to that — one
+    /// that stops a stamp being compared, which is the safe direction. The
+    /// reason is logged rather than swallowed.
+    fn ask_the_parent_which_machine_stamped(
+        &self,
+        python: Python<'_>,
+        inbound_link_name: &str,
+    ) -> PyResult<Option<String>> {
+        let Some(ask_the_parent) = self.ask_the_parent.as_ref() else {
+            return Ok(None);
+        };
+        let request = pyo3::types::PyDict::new(python);
+        request.set_item("op", "inbound_link_stamp_clock_identity")?;
+        request.set_item("inbound_link_name", inbound_link_name)?;
+        let answer = match ask_the_parent.bind(python).call1((request,)) {
+            Ok(answer) => answer,
+            Err(the_parent_did_not_answer) => {
+                tracing::warn!(
+                    "the runtime did not say which machine stamps the bags on \
+                     `{inbound_link_name}`, so nothing here may be compared against them: \
+                     {the_parent_did_not_answer}"
+                );
+                return Ok(None);
+            }
+        };
+        // Absent is what the runtime answers for a link nothing has crossed
+        // yet and for an address it carries nothing from; an answer that is not
+        // a mapping at all lands here too, and must not read as the same thing
+        // silently.
+        match answer.get_item("stamp_clock_identity") {
+            Ok(machine) => machine.extract::<Option<String>>(),
+            Err(not_a_mapping) => {
+                if !answer.is_instance_of::<pyo3::types::PyDict>() {
+                    tracing::warn!(
+                        "the runtime's answer about `{inbound_link_name}` was not a mapping this \
+                         build can read, so nothing here may be compared against its stamps: \
+                         {not_a_mapping}"
+                    );
+                }
+                Ok(None)
+            }
+        }
     }
 }
 
@@ -3719,6 +3817,7 @@ class FrameSomebodyElseWrote:
                     // The link's name is its channel here: this source is on
                     // this runtime. The two differ only across the mesh.
                     &channel_service_name,
+                    streamlib::sdk::iceoryx2::THIS_MACHINE_STAMP_CLOCK_TOKEN,
                     &notify_service_name,
                     "read_next_in_order",
                     8,
@@ -3765,6 +3864,7 @@ class FrameSomebodyElseWrote:
                     PythonGpuContextLimitedAccess::new_for_helper_process(Some(exchange_client)),
                 )
                 .unwrap(),
+                ask_the_parent: None,
             },
         }
     }

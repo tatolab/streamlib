@@ -115,6 +115,7 @@ fn escalate_request_vectors_round_trip() {
         CopyDeviceExportStagingBackToSurface => r#"{"op":"copy_device_export_staging_back_to_surface","request_id":"copy_device_export_staging_back_to_surface.request_id-15","surface_id":"copy_device_export_staging_back_to_surface.surface_id-16"}"#,
         CreateProcessorOwnedWindow => r#"{"op":"create_processor_owned_window","initial_height_in_physical_pixels":238,"initial_width_in_physical_pixels":239,"request_id":"create_processor_owned_window.request_id-240","window_title":"create_processor_owned_window.window_title-241"}"#,
         DrainProcessorOwnedWindowEvents => r#"{"op":"drain_processor_owned_window_events","request_id":"drain_processor_owned_window_events.request_id-242","window_id":"drain_processor_owned_window_events.window_id-243"}"#,
+        InboundLinkStampClockIdentity => r#"{"op":"inbound_link_stamp_clock_identity","request_id":"inbound_link_stamp_clock_identity.request_id-246","inbound_link_name":"inbound_link_stamp_clock_identity.inbound_link_name-247"}"#,
         Log => r#"{"op":"log","attrs":{"attr":"log.attrs.attr-17"},"channel":"log.channel-18","intercepted":false,"level":"debug","message":"log.message-21","pipeline_id":"log.pipeline_id-22","processor_id":"log.processor_id-23","rhi_op":"log.rhi_op-244","source":"python","source_seq":"log.source_seq-25","source_ts":"log.source_ts-26","target":"log.target-245"}"#,
         OpenCpuReadbackStaging => r#"{"op":"open_cpu_readback_staging","request_id":"open_cpu_readback_staging.request_id-201","surface_id":"open_cpu_readback_staging.surface_id-202"}"#,
         OpenDeviceExportStaging => r#"{"op":"open_device_export_staging","request_id":"open_device_export_staging.request_id-27","surface_id":"open_device_export_staging.surface_id-28"}"#,
@@ -140,7 +141,7 @@ fn escalate_request_vectors_round_trip() {
 fn escalate_response_vectors_round_trip() {
     assert_golden_vectors_round_trip!(EscalateResponse:
         Err => r#"{"result":"err","message":"err.message-2","request_id":"err.request_id-3"}"#,
-        Ok => r#"{"result":"ok","handle_id":"ok.handle_id-4","request_id":"ok.request_id-5","bindings":[{"kind":"sampled_texture","name":"ok.bindings[0].name-6"},{"kind":"storage_image","name":"ok.bindings[1].name-7"}],"bytes_per_row":"ok.bytes_per_row-8","close_requested_by_user":true,"exporting_device_uuid":"ok.exporting_device_uuid-9","format":"ok.format-10","height":11,"processor_owned_window_is_closed":true,"staging_byte_size":"ok.staging_byte_size-12","timeline_value":"ok.timeline_value-13","usage":["ok.usage[0]-14","ok.usage[1]-15"],"width":16,"writable":false}"#,
+        Ok => r#"{"result":"ok","handle_id":"ok.handle_id-4","request_id":"ok.request_id-5","bindings":[{"kind":"sampled_texture","name":"ok.bindings[0].name-6"},{"kind":"storage_image","name":"ok.bindings[1].name-7"}],"bytes_per_row":"ok.bytes_per_row-8","close_requested_by_user":true,"stamp_clock_identity":"ok.stamp_clock_identity-17","exporting_device_uuid":"ok.exporting_device_uuid-9","format":"ok.format-10","height":11,"processor_owned_window_is_closed":true,"staging_byte_size":"ok.staging_byte_size-12","timeline_value":"ok.timeline_value-13","usage":["ok.usage[0]-14","ok.usage[1]-15"],"width":16,"writable":false}"#,
     );
 }
 

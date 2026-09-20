@@ -81,12 +81,20 @@ impl MachineClockIdentity {
     }
 }
 
-impl std::fmt::Debug for MachineClockIdentity {
-    /// The canonical lowercase UUID text, because the derived rendering of
-    /// sixteen bytes is unreadable in the failure message of any test that
-    /// compares two of these.
+impl std::fmt::Display for MachineClockIdentity {
+    /// The canonical lowercase UUID text — what `graph` renders on a link and
+    /// what the Python read surface hands back.
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(formatter, "{}", uuid::Uuid::from_bytes(self.0))
+    }
+}
+
+impl std::fmt::Debug for MachineClockIdentity {
+    /// The same text, because the derived rendering of sixteen bytes is
+    /// unreadable in the failure message of any test that compares two of
+    /// these.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, formatter)
     }
 }
 
@@ -190,17 +198,28 @@ mod tests {
     }
 
     /// The readable rendering is the canonical UUID text, which is what a
-    /// failing comparison has to show.
+    /// failing comparison has to show and what `graph` and the Python read
+    /// surface hand a reader — one spelling through either formatter, so a
+    /// rendered identity always reads back as the one that wrote it.
     #[test]
     fn the_rendering_is_the_canonical_uuid_text() {
+        let identity = MachineClockIdentity::of_the_machine_whose_boot_session_uuid_reads(
+            "2F1C8A30-6B4E-4D5A-9A11-2C7F0D5E8B93",
+        );
+
         assert_eq!(
-            format!(
-                "{:?}",
-                MachineClockIdentity::of_the_machine_whose_boot_session_uuid_reads(
-                    "2F1C8A30-6B4E-4D5A-9A11-2C7F0D5E8B93"
-                )
-            ),
+            format!("{identity:?}"),
             "2f1c8a30-6b4e-4d5a-9a11-2c7f0d5e8b93"
+        );
+        assert_eq!(
+            format!("{identity}"),
+            "2f1c8a30-6b4e-4d5a-9a11-2c7f0d5e8b93"
+        );
+        assert_eq!(
+            MachineClockIdentity::of_the_machine_whose_boot_session_uuid_reads(
+                &identity.to_string()
+            ),
+            identity
         );
     }
 }

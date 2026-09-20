@@ -799,6 +799,7 @@ class ProcessorLinkDataAccess:
         port_name: str,
         channel_service_name: str,
         inbound_link_name: str,
+        stamp_clock: str,
         notify_service_name: str,
         read_mode: str,
         channel_service_creation_depth: int,
@@ -817,6 +818,11 @@ class ProcessorLinkDataAccess:
         differ for a link carrying from another runtime, which rides a channel
         hashed from the source port's mesh address, and are equal for a link
         from this runtime.
+
+        `stamp_clock` says which machine's clock this link's stamps are taken
+        on — `"this_machine"`, or `"a_machine_only_the_app_process_can_name"`
+        for a link carrying from another runtime, whose machine this process
+        holds no mesh session to name. Any other value raises `ValueError`.
 
         Once a loss-count board is open, `loss_count_slot` and
         `wiring_generation` name where the link's losses are mirrored, and
@@ -977,6 +983,28 @@ class LinkInputDataReader:
         Readable in `setup()` — links are wired before it runs — which is how
         a sink learns how many producers it owes before the first bag
         arrives. A port nothing is connected to lists none.
+        """
+
+    def inbound_link_stamp_clock_identity(
+        self, port_name: str, inbound_link_name: str
+    ) -> str | None:
+        """Which machine's monotonic clock one link's stamps are taken on.
+
+        The machine's boot-session UUID text, or `None` — which covers a link
+        nothing has crossed yet, one whose machine names no clock of its own,
+        and a name no link on that port carries. Every stamp is a machine's
+        monotonic clock, whose epoch is
+        that machine's own boot, so two stamps taken on two machines are
+        readings of two unrelated clocks: compare one link's stamps against
+        another's only where both answer the same string, and never where
+        either answers `None`.
+
+        A link from this runtime always names this machine. A link carrying
+        from another runtime names nothing until its first bag lands, and names
+        a different machine once its peer comes back on a fresh boot. Answering
+        for one costs a round trip to the runtime, which this process holds no
+        mesh session to answer for itself — read it when a link wires or a
+        track opens, not once per bag.
         """
 
     def has_data(self, port_name: str) -> bool: ...

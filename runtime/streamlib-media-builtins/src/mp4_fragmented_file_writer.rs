@@ -22,6 +22,7 @@ use mp4_atom::{
 };
 use serde::Deserialize;
 use streamlib::sdk::error::{Error, Result};
+use streamlib::sdk::runtime::mesh::MachineClockIdentity;
 
 use crate::encoded_audio_packet::{EncodedAudioCodec, read_encoded_audio_packet_bag};
 use crate::encoded_video_frame::{EncodedVideoCodec, read_encoded_video_frame_bag};
@@ -134,6 +135,10 @@ struct Mp4TrackFromInboundLink {
     committed_channel_count: Option<u32>,
     /// The coded extent `tkhd` states as the track's presentation size.
     coded_extent: Option<(u32, u32)>,
+    /// The machine whose monotonic clock stamped this track's bags, taken at
+    /// its first one. `None` for a track whose link named no machine, which is
+    /// a track this sink has nothing to check and lets through.
+    stamp_clock_identity: Option<MachineClockIdentity>,
     first_timestamp_ns: Option<i64>,
     last_accepted_timestamp_ns: Option<i64>,
     /// Where the next Opus packet lands if no capture gap intervened: the sum
@@ -162,6 +167,7 @@ impl Mp4TrackFromInboundLink {
             committed_parameter_sets: None,
             committed_channel_count: None,
             coded_extent: None,
+            stamp_clock_identity: None,
             first_timestamp_ns: None,
             last_accepted_timestamp_ns: None,
             opus_ticks_accounted_since_the_tracks_first_stamp: 0,
@@ -217,6 +223,11 @@ pub struct Mp4SinkRunTally {
 pub struct Mp4FragmentedFileWriter<W: Write> {
     sink: W,
     tracks: Vec<Mp4TrackFromInboundLink>,
+    /// The machine whose clock this whole recording is on, taken from the
+    /// first track to deliver a bag. Every later track's stamps are measured
+    /// against the same epoch — the file's is the earliest first stamp across
+    /// all of them — so a track on another machine's clock cannot join it.
+    the_machine_this_recording_is_on: Option<MachineClockIdentity>,
     header_already_written: bool,
     next_fragment_sequence_number: u32,
     open_fragment_started_at_ns: Option<i64>,
@@ -234,10 +245,64 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
         Self {
             sink,
             tracks,
+            the_machine_this_recording_is_on: None,
             header_already_written: false,
             next_fragment_sequence_number: 1,
             open_fragment_started_at_ns: None,
             tally: Mp4SinkRunTally::default(),
+        }
+    }
+
+    /// Take the machine this track's bags are stamped on, or latch the track
+    /// by name when it is not the machine the recording is on.
+    ///
+    /// The file's epoch is the earliest first stamp across every track, so a
+    /// track on another machine's clock would be placed against an epoch its
+    /// stamps have nothing to do with — two boots can be days apart. Its own
+    /// file, written by its own sink, is how two machines are recorded at
+    /// once.
+    fn commit_or_latch_the_tracks_stamp_clock(
+        &mut self,
+        track_index: usize,
+        stamped_on: Option<MachineClockIdentity>,
+    ) -> bool {
+        let Some(stamped_on) = stamped_on else {
+            return true;
+        };
+        if let Some(the_tracks_machine) = self.tracks[track_index].stamp_clock_identity {
+            if the_tracks_machine != stamped_on {
+                let refusal = format!(
+                    "the bags on `{}` were stamped on machine {the_tracks_machine} and are now \
+                     stamped on machine {stamped_on} — the link's peer came back on a fresh \
+                     boot, and a monotonic stamp from one boot says nothing about where the last \
+                     one left off",
+                    self.tracks[track_index].inbound_link_name
+                );
+                self.latch_track(track_index, refusal);
+                return false;
+            }
+            return true;
+        }
+
+        match self.the_machine_this_recording_is_on {
+            Some(the_recordings_machine) if the_recordings_machine != stamped_on => {
+                let refusal = format!(
+                    "the bags on `{}` were stamped on machine {stamped_on}, and this recording \
+                     is on machine {the_recordings_machine} — two machines' monotonic clocks \
+                     have unrelated epochs, so there is no one timeline to place both tracks on",
+                    self.tracks[track_index].inbound_link_name
+                );
+                self.latch_track(track_index, refusal);
+                false
+            }
+            // The recording's own machine, whether this track is the one that
+            // settled it or a later one agreeing with it.
+            _ => {
+                self.the_machine_this_recording_is_on
+                    .get_or_insert(stamped_on);
+                self.tracks[track_index].stamp_clock_identity = Some(stamped_on);
+                true
+            }
         }
     }
 
@@ -250,6 +315,18 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
 
     pub fn tally(&self) -> &Mp4SinkRunTally {
         &self.tally
+    }
+
+    /// Why the track on `inbound_link_name` stopped, or `None` while it is
+    /// still recording.
+    ///
+    /// The refusal is what a person reads when their recording quietly loses a
+    /// track, so it is worth asserting on rather than only counting.
+    pub fn why_a_track_stopped(&self, inbound_link_name: &str) -> Option<&str> {
+        self.tracks
+            .iter()
+            .find(|track| track.inbound_link_name == inbound_link_name)
+            .and_then(|track| track.latched_refusal.as_deref())
     }
 
     /// Whether `moov` has landed — false while any track is still silent.
@@ -266,12 +343,19 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
             .collect()
     }
 
-    /// Take one bag on one inbound link.
+    /// Take one bag on one inbound link, stamped on `stamped_on`'s monotonic
+    /// clock.
+    ///
+    /// `stamped_on` is `None` for a link that names no machine — nothing to
+    /// check, so the bag is taken. Two machines that each name no clock are
+    /// never read as sharing one, so "unknown" can never be what lets two
+    /// epochs into one file.
     pub fn accept_bag(
         &mut self,
         inbound_link_name: &str,
         bag_bytes: &[u8],
         timestamp_ns: i64,
+        stamped_on: Option<MachineClockIdentity>,
     ) -> Result<()> {
         let Some(track_index) = self
             .tracks
@@ -283,7 +367,11 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
                  inbound links this sink enumerated at setup"
             )));
         };
-        if self.tracks[track_index].is_latched() {
+        // Short-circuiting, so an already-latched track never reaches the clock
+        // check: a stopped track has no machine of its own left to disagree.
+        if self.tracks[track_index].is_latched()
+            || !self.commit_or_latch_the_tracks_stamp_clock(track_index, stamped_on)
+        {
             self.tracks[track_index].bags_discarded_after_latch += 1;
             self.tally.bags_discarded_after_latch += 1;
             return Ok(());
@@ -1211,6 +1299,7 @@ mod tests {
                     "camera/video",
                     &h264_bag(index as u64, index % 4 == 0, H264_SEQUENCE_PARAMETER_SET),
                     index as i64 * ONE_VIDEO_FRAME_NS,
+                    None,
                 )
                 .expect("accepted");
             writer
@@ -1218,6 +1307,7 @@ mod tests {
                     "microphone/audio",
                     &opus_bag(index as u64, 2),
                     index as i64 * ONE_OPUS_PACKET_NS,
+                    None,
                 )
                 .expect("accepted");
         }
@@ -1234,6 +1324,7 @@ mod tests {
                     "camera/video",
                     &h264_bag(index as u64, index == 0, H264_SEQUENCE_PARAMETER_SET),
                     index as i64 * ONE_VIDEO_FRAME_NS,
+                    None,
                 )
                 .expect("the bag is accepted");
         }
@@ -1261,6 +1352,329 @@ mod tests {
             .collect()
     }
 
+    // ------------------------------------------------------------------------
+    // Which machine's clock a track's stamps are taken on
+    // ------------------------------------------------------------------------
+
+    const ONE_MACHINE: &str = "2f1c8a30-6b4e-4d5a-9a11-2c7f0d5e8b93";
+    const ANOTHER_MACHINE: &str = "8b93a1c2-0000-4d5a-9a11-2c7f0d5e2f1c";
+
+    use streamlib::sdk::iceoryx2::WhatIsKnownOfAnInboundLinksStampClock;
+
+    fn a_machine(boot_session_uuid: &str) -> Option<MachineClockIdentity> {
+        Some(MachineClockIdentity::of_the_machine_whose_boot_session_uuid_reads(boot_session_uuid))
+    }
+
+    /// The sink's whole reason to check a clock: two tracks from one machine
+    /// and one from another. The odd one stops by name, the other two record,
+    /// and the file re-parses with their two traks in it.
+    ///
+    /// Fail-without-fix: take every bag whatever machine stamped it, and the
+    /// file's epoch — the earliest first stamp across every track — is taken
+    /// from a boot the other two know nothing about, placing their samples
+    /// however far apart the two machines last rebooted.
+    #[test]
+    fn a_track_from_another_machine_stops_by_name_while_the_rest_keep_recording() {
+        let mut file = Vec::new();
+        let mut writer = Mp4FragmentedFileWriter::new(
+            &mut file,
+            &[
+                "camera/video".to_string(),
+                "microphone/audio".to_string(),
+                "bench-cam-a1b2/Camera Source/video".to_string(),
+            ],
+        );
+
+        for index in 0..8u64 {
+            writer
+                .accept_bag(
+                    "camera/video",
+                    &h264_bag(index, index == 0, H264_SEQUENCE_PARAMETER_SET),
+                    index as i64 * ONE_VIDEO_FRAME_NS,
+                    a_machine(ONE_MACHINE),
+                )
+                .expect("accepted");
+            writer
+                .accept_bag(
+                    "microphone/audio",
+                    &opus_bag(index, 2),
+                    index as i64 * ONE_OPUS_PACKET_NS,
+                    a_machine(ONE_MACHINE),
+                )
+                .expect("accepted");
+            writer
+                .accept_bag(
+                    "bench-cam-a1b2/Camera Source/video",
+                    &h264_bag(index, index == 0, H264_SEQUENCE_PARAMETER_SET),
+                    // A plausible stamp on another machine's clock: days of
+                    // uptime, which is what makes the file's epoch nonsense.
+                    86_400_000_000_000 + index as i64 * ONE_VIDEO_FRAME_NS,
+                    a_machine(ANOTHER_MACHINE),
+                )
+                .expect("accepted");
+        }
+        const LINK: &str = "bench-cam-a1b2/Camera Source/video";
+        let why_it_stopped = writer
+            .why_a_track_stopped(LINK)
+            .expect("the odd machine's track stopped")
+            .to_string();
+        let tally = writer.finish().expect("the file closes");
+
+        assert_eq!(
+            tally.tracks_latched, 1,
+            "only the odd machine's track stops"
+        );
+        // By name, and naming both machines: this is the line a person reads
+        // when a track quietly leaves their recording, and it has to say which
+        // track and which two clocks without them going to look anything up.
+        for named in [LINK, ONE_MACHINE, ANOTHER_MACHINE] {
+            assert!(
+                why_it_stopped.contains(named),
+                "the refusal must name {named}, and reads {why_it_stopped:?}"
+            );
+        }
+        assert!(
+            !why_it_stopped.contains("  "),
+            "the refusal reads as one sentence, and a run of spaces is a lost line \
+             continuation: {why_it_stopped:?}"
+        );
+
+        assert_eq!(
+            tally.bags_discarded_after_latch, 8,
+            "every bag of the stopped track is read and discarded rather than left to back up"
+        );
+
+        let atoms = parse_written_atoms(&file).expect("the file re-parses");
+        let moov = only_moov(&atoms);
+        let track_names: Vec<&str> = moov
+            .trak
+            .iter()
+            .map(|trak| trak.mdia.hdlr.name.as_str())
+            .collect();
+        assert_eq!(
+            track_names,
+            vec!["camera/video", "microphone/audio"],
+            "a track that never wrote a sample entry gets no trak, so the odd machine's is absent"
+        );
+        assert!(
+            !every_moof(&atoms).is_empty(),
+            "the two tracks on one machine's clock went on recording"
+        );
+    }
+
+    /// The first track to deliver is what the recording's clock is taken from,
+    /// whichever machine that is — a file of remote tracks alone is a file
+    /// like any other.
+    #[test]
+    fn a_recording_of_one_remote_machines_tracks_is_never_refused() {
+        let mut file = Vec::new();
+        let mut writer = Mp4FragmentedFileWriter::new(
+            &mut file,
+            &[
+                "bench-cam-a1b2/Camera Source/video".to_string(),
+                "bench-cam-a1b2/Microphone/audio".to_string(),
+            ],
+        );
+
+        for index in 0..4u64 {
+            writer
+                .accept_bag(
+                    "bench-cam-a1b2/Camera Source/video",
+                    &h264_bag(index, index == 0, H264_SEQUENCE_PARAMETER_SET),
+                    index as i64 * ONE_VIDEO_FRAME_NS,
+                    a_machine(ANOTHER_MACHINE),
+                )
+                .expect("accepted");
+            writer
+                .accept_bag(
+                    "bench-cam-a1b2/Microphone/audio",
+                    &opus_bag(index, 2),
+                    index as i64 * ONE_OPUS_PACKET_NS,
+                    a_machine(ANOTHER_MACHINE),
+                )
+                .expect("accepted");
+        }
+        let tally = writer.finish().expect("the file closes");
+
+        assert_eq!(tally.tracks_latched, 0);
+        assert_eq!(
+            only_moov(&parse_written_atoms(&file).unwrap()).trak.len(),
+            2
+        );
+    }
+
+    /// A link whose peer comes back on a fresh boot is a new clock under a
+    /// track that is already recording: its stamps restart somewhere unrelated
+    /// to where they left off, so the track stops rather than writing them.
+    #[test]
+    fn a_tracks_clock_changing_mid_recording_stops_that_track_by_name() {
+        let mut file = Vec::new();
+        let mut writer = Mp4FragmentedFileWriter::new(
+            &mut file,
+            &[
+                "camera/video".to_string(),
+                "bench-cam-a1b2/Microphone/audio".to_string(),
+            ],
+        );
+        for index in 0..4u64 {
+            writer
+                .accept_bag(
+                    "camera/video",
+                    &h264_bag(index, index == 0, H264_SEQUENCE_PARAMETER_SET),
+                    index as i64 * ONE_VIDEO_FRAME_NS,
+                    a_machine(ONE_MACHINE),
+                )
+                .expect("accepted");
+            writer
+                .accept_bag(
+                    "bench-cam-a1b2/Microphone/audio",
+                    &opus_bag(index, 2),
+                    index as i64 * ONE_OPUS_PACKET_NS,
+                    a_machine(ONE_MACHINE),
+                )
+                .expect("accepted");
+        }
+        assert_eq!(writer.tally().tracks_latched, 0);
+
+        writer
+            .accept_bag(
+                "bench-cam-a1b2/Microphone/audio",
+                &opus_bag(4, 2),
+                4 * ONE_OPUS_PACKET_NS,
+                a_machine(ANOTHER_MACHINE),
+            )
+            .expect("accepted");
+
+        const LINK: &str = "bench-cam-a1b2/Microphone/audio";
+        let why_it_stopped = writer
+            .why_a_track_stopped(LINK)
+            .expect("the track whose clock changed stopped")
+            .to_string();
+        // By name, and naming both machines: this is the line a person reads
+        // when a track quietly leaves their recording, and it has to say which
+        // track and which two clocks without them going to look anything up.
+        for named in [LINK, ONE_MACHINE, ANOTHER_MACHINE] {
+            assert!(
+                why_it_stopped.contains(named),
+                "the refusal must name {named}, and reads {why_it_stopped:?}"
+            );
+        }
+        assert!(
+            !why_it_stopped.contains("  "),
+            "the refusal reads as one sentence, and a run of spaces is a lost line \
+             continuation: {why_it_stopped:?}"
+        );
+
+        let tally = writer.finish().expect("the file closes");
+        assert_eq!(tally.tracks_latched, 1);
+        assert_eq!(
+            only_moov(&parse_written_atoms(&file).unwrap()).trak.len(),
+            2,
+            "the track had already written its sample entry, so it keeps its trak and just stops"
+        );
+    }
+
+    /// A machine that names no clock of its own is never one two tracks share.
+    ///
+    /// The sink is handed `None` for such a link, not the nil id — the read
+    /// surface downgrades it — so two tracks from two such machines settle no
+    /// clock between them and neither is latched against the other's epoch.
+    ///
+    /// Fail-without-fix: hand the nil id through as an identity and these two
+    /// compare equal, which is the epoch-mixing this check exists to stop.
+    #[test]
+    fn two_machines_that_each_name_no_clock_are_not_read_as_one() {
+        let mut file = Vec::new();
+        let mut writer = Mp4FragmentedFileWriter::new(
+            &mut file,
+            &["camera/video".to_string(), "microphone/audio".to_string()],
+        );
+
+        // What the read surface hands a sink for a machine naming no clock.
+        let names_no_clock =
+            WhatIsKnownOfAnInboundLinksStampClock::from(Some(MachineClockIdentity::UNIDENTIFIED))
+                .the_machine_if_it_is_known();
+        assert_eq!(
+            names_no_clock, None,
+            "the nil id never reaches a sink as a machine"
+        );
+
+        for index in 0..4u64 {
+            writer
+                .accept_bag(
+                    "camera/video",
+                    &h264_bag(index, index == 0, H264_SEQUENCE_PARAMETER_SET),
+                    index as i64 * ONE_VIDEO_FRAME_NS,
+                    names_no_clock,
+                )
+                .expect("accepted");
+            writer
+                .accept_bag(
+                    "microphone/audio",
+                    &opus_bag(index, 2),
+                    index as i64 * ONE_OPUS_PACKET_NS,
+                    names_no_clock,
+                )
+                .expect("accepted");
+        }
+
+        assert_eq!(
+            writer.the_machine_this_recording_is_on, None,
+            "neither track settled a clock, so neither is measured against the other's"
+        );
+        assert_eq!(writer.finish().expect("the file closes").tracks_latched, 0);
+    }
+
+    /// A link that names no machine is nothing to check: its bags are taken,
+    /// and it settles no clock on the recording — so "unknown" can never be
+    /// what lets two epochs into one file. The moment it does name one it is
+    /// checked like any other track.
+    #[test]
+    fn a_link_naming_no_machine_is_taken_and_settles_no_clock() {
+        let mut file = Vec::new();
+        let mut writer = Mp4FragmentedFileWriter::new(
+            &mut file,
+            &["camera/video".to_string(), "microphone/audio".to_string()],
+        );
+
+        writer
+            .accept_bag(
+                "camera/video",
+                &h264_bag(0, true, H264_SEQUENCE_PARAMETER_SET),
+                0,
+                None,
+            )
+            .expect("accepted");
+        assert_eq!(
+            writer.the_machine_this_recording_is_on, None,
+            "a bag naming no machine must not settle the clock every later track is measured \
+             against"
+        );
+
+        writer
+            .accept_bag(
+                "microphone/audio",
+                &opus_bag(0, 2),
+                0,
+                a_machine(ONE_MACHINE),
+            )
+            .expect("accepted");
+        writer
+            .accept_bag(
+                "camera/video",
+                &h264_bag(1, false, H264_SEQUENCE_PARAMETER_SET),
+                ONE_VIDEO_FRAME_NS,
+                a_machine(ONE_MACHINE),
+            )
+            .expect("accepted");
+
+        let tally = writer.finish().expect("the file closes");
+        assert_eq!(
+            tally.tracks_latched, 0,
+            "the track named the machine the recording is on, so it goes on recording"
+        );
+    }
+
     #[test]
     fn the_file_opens_with_the_brands_and_one_trak_per_link_named_after_its_producer() {
         let mut file = Vec::new();
@@ -1273,16 +1687,18 @@ mod tests {
                 "camera/video",
                 &h264_bag(0, true, H264_SEQUENCE_PARAMETER_SET),
                 0,
+                None,
             )
             .expect("accepted");
         writer
-            .accept_bag("microphone/audio", &opus_bag(0, 2), 0)
+            .accept_bag("microphone/audio", &opus_bag(0, 2), 0, None)
             .expect("accepted");
         writer
             .accept_bag(
                 "camera/video",
                 &h264_bag(1, false, H264_SEQUENCE_PARAMETER_SET),
                 ONE_VIDEO_FRAME_NS,
+                None,
             )
             .expect("accepted");
         writer.finish().expect("the file closes");
@@ -1350,6 +1766,7 @@ mod tests {
                     "microphone/audio",
                     &opus_bag(index, 2),
                     index as i64 * ONE_OPUS_PACKET_NS,
+                    None,
                 )
                 .expect("accepted");
         }
@@ -1439,16 +1856,23 @@ mod tests {
                 "camera/video",
                 &h264_bag(0, true, H264_SEQUENCE_PARAMETER_SET),
                 0,
+                None,
             )
             .expect("accepted");
         writer
-            .accept_bag("microphone/audio", &opus_bag(0, 2), microphone_offset_ns)
+            .accept_bag(
+                "microphone/audio",
+                &opus_bag(0, 2),
+                microphone_offset_ns,
+                None,
+            )
             .expect("accepted");
         writer
             .accept_bag(
                 "camera/video",
                 &h264_bag(1, false, H264_SEQUENCE_PARAMETER_SET),
                 ONE_VIDEO_FRAME_NS,
+                None,
             )
             .expect("accepted");
         writer.finish().expect("closes");
@@ -1595,6 +2019,7 @@ mod tests {
                     "microphone/audio",
                     &opus_bag(index, 1),
                     index as i64 * ONE_OPUS_PACKET_NS,
+                    None,
                 )
                 .expect("accepted");
         }
@@ -1626,6 +2051,7 @@ mod tests {
                     "camera/video",
                     &h264_bag(index as u64, index % 3 == 0, H264_SEQUENCE_PARAMETER_SET),
                     index as i64 * ONE_VIDEO_FRAME_NS,
+                    None,
                 )
                 .expect("accepted");
         }
@@ -1667,16 +2093,18 @@ mod tests {
                 "camera/video",
                 &h264_bag(0, true, H264_SEQUENCE_PARAMETER_SET),
                 0,
+                None,
             )
             .expect("accepted");
         writer
-            .accept_bag("microphone/audio", &opus_bag(0, 2), 0)
+            .accept_bag("microphone/audio", &opus_bag(0, 2), 0, None)
             .expect("accepted");
         writer
             .accept_bag(
                 "camera/video",
                 &h264_bag(1, false, H264_SEQUENCE_PARAMETER_SET),
                 ONE_VIDEO_FRAME_NS,
+                None,
             )
             .expect("accepted");
         // A second sync point carrying a different SPS: there is no second
@@ -1686,6 +2114,7 @@ mod tests {
                 "camera/video",
                 &h264_bag(2, true, H264_SEQUENCE_PARAMETER_SET_AT_ANOTHER_LEVEL),
                 2 * ONE_VIDEO_FRAME_NS,
+                None,
             )
             .expect("the refusal is a latch, not an error");
         for index in 1..6u64 {
@@ -1694,6 +2123,7 @@ mod tests {
                     "microphone/audio",
                     &opus_bag(index, 2),
                     index as i64 * ONE_OPUS_PACKET_NS,
+                    None,
                 )
                 .expect("the healthy track keeps recording");
         }
@@ -1727,10 +2157,15 @@ mod tests {
         let mut file = Vec::new();
         let mut writer = Mp4FragmentedFileWriter::new(&mut file, &["microphone/audio".to_string()]);
         writer
-            .accept_bag("microphone/audio", &opus_bag(0, 2), 0)
+            .accept_bag("microphone/audio", &opus_bag(0, 2), 0, None)
             .expect("accepted");
         writer
-            .accept_bag("microphone/audio", &opus_bag(1, 1), ONE_OPUS_PACKET_NS)
+            .accept_bag(
+                "microphone/audio",
+                &opus_bag(1, 1),
+                ONE_OPUS_PACKET_NS,
+                None,
+            )
             .expect("the refusal is a latch");
         let tally = writer.finish().expect("closes");
 
@@ -1746,13 +2181,13 @@ mod tests {
         let mut file = Vec::new();
         let mut writer = Mp4FragmentedFileWriter::new(&mut file, &["microphone/audio".to_string()]);
         writer
-            .accept_bag("microphone/audio", &opus_bag(0, 1), 5_000)
+            .accept_bag("microphone/audio", &opus_bag(0, 1), 5_000, None)
             .expect("accepted");
         writer
-            .accept_bag("microphone/audio", &opus_bag(1, 1), 5_000)
+            .accept_bag("microphone/audio", &opus_bag(1, 1), 5_000, None)
             .expect("accepted but dropped");
         writer
-            .accept_bag("microphone/audio", &opus_bag(2, 1), 4_000)
+            .accept_bag("microphone/audio", &opus_bag(2, 1), 4_000, None)
             .expect("accepted but dropped");
         let tally = writer.finish().expect("closes");
 
@@ -1774,7 +2209,7 @@ mod tests {
         .expect("msgpack serialize");
 
         writer
-            .accept_bag("captions/text", &caption_shaped_bag, 0)
+            .accept_bag("captions/text", &caption_shaped_bag, 0, None)
             .expect("the refusal is a latch, not an error");
         let tally = writer.finish().expect("closes");
         assert_eq!(tally.tracks_latched, 1);
@@ -1789,6 +2224,7 @@ mod tests {
                 "ghost/video",
                 &h264_bag(0, true, H264_SEQUENCE_PARAMETER_SET),
                 0,
+                None,
             )
             .expect_err("a link that was never wired cannot have a track");
         assert!(failure.to_string().contains("ghost/video"));
@@ -1806,6 +2242,7 @@ mod tests {
                 "camera/video",
                 &h264_bag(0, true, H264_SEQUENCE_PARAMETER_SET),
                 0,
+                None,
             )
             .expect("accepted");
         assert!(
@@ -1818,7 +2255,7 @@ mod tests {
         );
 
         writer
-            .accept_bag("microphone/audio", &opus_bag(0, 2), 0)
+            .accept_bag("microphone/audio", &opus_bag(0, 2), 0, None)
             .expect("accepted");
         assert!(
             writer.header_already_written(),
@@ -1842,6 +2279,7 @@ mod tests {
                     "camera/video",
                     &h264_bag(index as u64, index % 6 == 0, H264_SEQUENCE_PARAMETER_SET),
                     index as i64 * ONE_VIDEO_FRAME_NS,
+                    None,
                 )
                 .expect("accepted");
             writer
@@ -1849,6 +2287,7 @@ mod tests {
                     "microphone/audio",
                     &opus_bag(index as u64, 2),
                     index as i64 * ONE_OPUS_PACKET_NS,
+                    None,
                 )
                 .expect("accepted");
         }
@@ -1905,13 +2344,14 @@ mod tests {
         }))
         .expect("msgpack serialize");
         writer
-            .accept_bag("captions/text", &caption_shaped_bag, 0)
+            .accept_bag("captions/text", &caption_shaped_bag, 0, None)
             .expect("the refusal is a latch");
         writer
             .accept_bag(
                 "camera/video",
                 &h264_bag(0, true, H264_SEQUENCE_PARAMETER_SET),
                 0,
+                None,
             )
             .expect("accepted");
         writer
@@ -1919,6 +2359,7 @@ mod tests {
                 "camera/video",
                 &h264_bag(1, false, H264_SEQUENCE_PARAMETER_SET),
                 ONE_VIDEO_FRAME_NS,
+                None,
             )
             .expect("accepted");
         let tally = writer
@@ -1950,7 +2391,12 @@ mod tests {
         let mut writer = Mp4FragmentedFileWriter::new(&mut file, &["microphone/audio".to_string()]);
         for (index, &timestamp_ns) in stamps_ns.iter().enumerate() {
             writer
-                .accept_bag("microphone/audio", &opus_bag(index as u64, 2), timestamp_ns)
+                .accept_bag(
+                    "microphone/audio",
+                    &opus_bag(index as u64, 2),
+                    timestamp_ns,
+                    None,
+                )
                 .expect("the bag is accepted");
         }
         writer.finish().expect("the file closes");
@@ -2103,6 +2549,7 @@ mod tests {
                     "camera/video",
                     &h264_bag(index as u64, index % 4 == 0, H264_SEQUENCE_PARAMETER_SET),
                     index as i64 * ONE_VIDEO_FRAME_NS,
+                    None,
                 )
                 .expect("accepted");
             writer
@@ -2110,6 +2557,7 @@ mod tests {
                     "microphone/audio",
                     &opus_bag(index as u64, 2),
                     index as i64 * ONE_OPUS_PACKET_NS,
+                    None,
                 )
                 .expect("accepted");
         }
@@ -2176,6 +2624,7 @@ mod tests {
                     "camera/video",
                     &h264_bag(index as u64, index % 6 == 0, H264_SEQUENCE_PARAMETER_SET),
                     index as i64 * ONE_VIDEO_FRAME_NS,
+                    None,
                 )
                 .expect("accepted");
         }
@@ -2207,16 +2656,18 @@ mod tests {
                 "camera/video",
                 &h264_bag(0, true, H264_SEQUENCE_PARAMETER_SET),
                 0,
+                None,
             )
             .expect("accepted");
         writer
-            .accept_bag("microphone/audio", &opus_bag(0, 2), 0)
+            .accept_bag("microphone/audio", &opus_bag(0, 2), 0, None)
             .expect("accepted");
         writer
             .accept_bag(
                 "camera/video",
                 &h264_bag(1, true, H264_SEQUENCE_PARAMETER_SET_AT_ANOTHER_LEVEL),
                 ONE_VIDEO_FRAME_NS,
+                None,
             )
             .expect("the camera latches");
 
@@ -2229,6 +2680,7 @@ mod tests {
                     "microphone/audio",
                     &opus_bag(index, 2),
                     index as i64 * ONE_OPUS_PACKET_NS,
+                    None,
                 )
                 .expect("accepted");
         }
@@ -2255,16 +2707,18 @@ mod tests {
                 "camera/video",
                 &h264_bag(0, true, H264_SEQUENCE_PARAMETER_SET),
                 0,
+                None,
             )
             .expect("accepted");
         writer
-            .accept_bag("microphone/audio", &opus_bag(0, 2), 0)
+            .accept_bag("microphone/audio", &opus_bag(0, 2), 0, None)
             .expect("accepted");
         writer
             .accept_bag(
                 "camera/video",
                 &h264_bag(1, false, H264_SEQUENCE_PARAMETER_SET),
                 ONE_VIDEO_FRAME_NS,
+                None,
             )
             .expect("accepted");
         writer.finish().expect("closes");
@@ -2331,6 +2785,7 @@ mod tests {
                     "camera/video",
                     &h264_bag(index as u64, index % 3 == 0, H264_SEQUENCE_PARAMETER_SET),
                     index as i64 * ONE_VIDEO_FRAME_NS,
+                    None,
                 )
                 .expect("accepted");
         }
@@ -2371,6 +2826,7 @@ mod tests {
                     "microphone/audio",
                     &opus_bag_of_size(sequence_index, 2, 64 * 1024),
                     sequence_index as i64 * ONE_OPUS_PACKET_NS,
+                    None,
                 )
                 .expect("accepted");
             sequence_index += 1;

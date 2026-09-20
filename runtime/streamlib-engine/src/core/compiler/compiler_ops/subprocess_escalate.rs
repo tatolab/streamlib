@@ -32,9 +32,10 @@ use super::subprocess_escalate_wire_types::escalate_request::{
     EscalateRequestAcquireImage, EscalateRequestAcquirePixelBuffer, EscalateRequestAcquireTexture,
     EscalateRequestCloseProcessorOwnedWindow, EscalateRequestCopyDeviceExportStagingBackToSurface,
     EscalateRequestCreateProcessorOwnedWindow, EscalateRequestDrainProcessorOwnedWindowEvents,
-    EscalateRequestLog, EscalateRequestLogLevel, EscalateRequestLogSource,
-    EscalateRequestOpenCpuReadbackStaging, EscalateRequestOpenDeviceExportStaging,
-    EscalateRequestRefillDeviceExportStaging, EscalateRequestRegisterAccelerationStructureBlas,
+    EscalateRequestInboundLinkStampClockIdentity, EscalateRequestLog, EscalateRequestLogLevel,
+    EscalateRequestLogSource, EscalateRequestOpenCpuReadbackStaging,
+    EscalateRequestOpenDeviceExportStaging, EscalateRequestRefillDeviceExportStaging,
+    EscalateRequestRegisterAccelerationStructureBlas,
     EscalateRequestRegisterAccelerationStructureTlas, EscalateRequestRegisterComputeKernel,
     EscalateRequestRegisterGraphicsKernel, EscalateRequestRegisterGraphicsKernelPipelineState,
     EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp,
@@ -92,6 +93,9 @@ use crate::core::processor_owned_window::{
     WindowPresentLoopForOwningProcessor,
 };
 use crate::core::rhi::{PixelBuffer, PixelFormat, TextureFormat, TextureUsages};
+use crate::core::runtime::mesh::MeshLinkIngressTable;
+#[cfg(test)]
+use crate::core::runtime::mesh::a_mesh_link_ingress_table_carrying_nothing;
 use crate::core::window_event_pump::WindowRegistrationRequestFromOwningProcessor;
 use crate::host_rhi::PresentScalingMode;
 
@@ -121,6 +125,7 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
         EscalateRequest::AcquireImage(p) => Some(&p.request_id),
         EscalateRequest::RunCpuReadbackCopy(p) => Some(&p.request_id),
         EscalateRequest::WaitDeviceIdle(p) => Some(&p.request_id),
+        EscalateRequest::InboundLinkStampClockIdentity(p) => Some(&p.request_id),
         EscalateRequest::OpenCpuReadbackStaging(p) => Some(&p.request_id),
         EscalateRequest::OpenDeviceExportStaging(p) => Some(&p.request_id),
         EscalateRequest::RefillDeviceExportStaging(p) => Some(&p.request_id),
@@ -392,6 +397,7 @@ impl EscalateHandleRegistry {
 pub(crate) fn handle_escalate_op(
     sandbox: &GpuContextLimitedAccess,
     registry: &EscalateHandleRegistry,
+    mesh_link_ingress_table: &MeshLinkIngressTable,
     op: EscalateRequest,
 ) -> Option<EscalateResponse> {
     let rid = request_id(&op).map(str::to_string).unwrap_or_default();
@@ -628,6 +634,16 @@ pub(crate) fn handle_escalate_op(
                 }))
             }
         }
+        EscalateRequest::InboundLinkStampClockIdentity(
+            EscalateRequestInboundLinkStampClockIdentity {
+                request_id: _,
+                inbound_link_name,
+            },
+        ) => Some(handle_inbound_link_stamp_clock_identity(
+            mesh_link_ingress_table,
+            rid,
+            &inbound_link_name,
+        )),
         EscalateRequest::WaitDeviceIdle(EscalateRequestWaitDeviceIdle { request_id: _ }) => {
             Some(match sandbox.escalate(|full| full.wait_device_idle()) {
                 Ok(()) => EscalateResponse::Ok(EscalateResponseOk {
@@ -4575,19 +4591,54 @@ impl EscalateParseError {
     }
 }
 
+/// Answer which machine's clock one inbound link's stamps are taken on, for a
+/// helper that holds no mesh session of its own.
+///
+/// The link's name is the source port's mesh address, so a name that is not one
+/// is a caller asking about a link from this runtime — which the helper can
+/// already answer for itself, and asking here means its two names went astray.
+fn handle_inbound_link_stamp_clock_identity(
+    mesh_link_ingress_table: &MeshLinkIngressTable,
+    rid: String,
+    inbound_link_name: &str,
+) -> EscalateResponse {
+    let address = match crate::core::graph::MeshPortAddress::parse(inbound_link_name) {
+        Ok(address) => address,
+        Err(not_an_address) => {
+            return EscalateResponse::Err(EscalateResponseErr {
+                request_id: rid,
+                message: format!(
+                    "`{inbound_link_name}` is not a mesh address, so no other runtime's clock \
+                     answers for it: {not_an_address}"
+                ),
+            });
+        }
+    };
+    EscalateResponse::Ok(EscalateResponseOk {
+        request_id: rid,
+        handle_id: String::new(),
+        stamp_clock_identity: mesh_link_ingress_table
+            .what_machine_an_address_is_carrying_from(&address)
+            .the_machine_if_it_is_known()
+            .map(|machine| machine.to_string()),
+        ..Default::default()
+    })
+}
+
 /// Convenience wrapper used by host processors: parse, dispatch, envelope.
 /// Anything the subprocess sends that carries `rpc: escalate_request` flows
 /// through this single function; lifecycle traffic is handled by the caller.
 pub(crate) fn process_bridge_message(
     sandbox: &GpuContextLimitedAccess,
     registry: &EscalateHandleRegistry,
+    mesh_link_ingress_table: &MeshLinkIngressTable,
     value: &serde_json::Value,
 ) -> Option<serde_json::Value> {
     let parsed = try_parse_escalate_request(value)?;
     let response = match parsed {
         // Fire-and-forget ops (log) return `None` from the handler — no
         // reply is written back to the subprocess.
-        Ok(op) => handle_escalate_op(sandbox, registry, op)?,
+        Ok(op) => handle_escalate_op(sandbox, registry, mesh_link_ingress_table, op)?,
         Err(err) => err.into_response(),
     };
     Some(envelope_response(response))
@@ -4611,6 +4662,122 @@ const SPIRV_MAGIC_LE: [u8; 4] = 0x0723_0203u32.to_le_bytes();
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ------------------------------------------------------------------------
+    // Which machine a remote link's stamps are taken on, answered for a helper
+    // ------------------------------------------------------------------------
+
+    /// The address the arms below ask about, in the spelling a helper knows a
+    /// remote link by — a display name with a space in it, which is legal on
+    /// the mesh and is why the channel it rides is hashed instead.
+    const A_REMOTE_LINKS_NAME: &str = "bench-cam-a1b2/Camera Source/video";
+
+    /// The answer's machine, or `None` for one that named none.
+    fn the_machine_answered(response: &EscalateResponse) -> Option<String> {
+        match response {
+            EscalateResponse::Ok(answered) => answered.stamp_clock_identity.clone(),
+            EscalateResponse::Err(refused) => {
+                panic!("expected an answer, got a refusal: {}", refused.message)
+            }
+        }
+    }
+
+    /// The whole of what a helper cannot work out for itself: it hands over the
+    /// link's name and the app process reads the machine off the ingress cell
+    /// that name addresses.
+    #[test]
+    fn a_helpers_question_is_answered_with_the_machine_the_mesh_is_carrying_from() {
+        let table = a_mesh_link_ingress_table_carrying_nothing();
+        let address = crate::core::graph::MeshPortAddress::parse(A_REMOTE_LINKS_NAME)
+            .expect("a legal address");
+        let machine_clock = table.machine_clock_carried_from(&address);
+
+        assert_eq!(
+            the_machine_answered(&handle_inbound_link_stamp_clock_identity(
+                &table,
+                "req-1".to_string(),
+                A_REMOTE_LINKS_NAME,
+            )),
+            None,
+            "nothing has crossed the link, so no machine has been named"
+        );
+
+        let another_machine =
+            crate::core::runtime::mesh::MachineClockIdentity::of_the_machine_whose_boot_session_uuid_reads(
+                "8b93a1c2-0000-4d5a-9a11-2c7f0d5e2f1c",
+            );
+        machine_clock.note_the_machine_a_bag_was_stamped_on(another_machine);
+
+        assert_eq!(
+            the_machine_answered(&handle_inbound_link_stamp_clock_identity(
+                &table,
+                "req-2".to_string(),
+                A_REMOTE_LINKS_NAME,
+            )),
+            Some("8b93a1c2-0000-4d5a-9a11-2c7f0d5e2f1c".to_string()),
+            "the answer is the machine the ingress learnt off the wire"
+        );
+    }
+
+    /// An address this runtime carries nothing from names no machine, rather
+    /// than borrowing this one — the answer that would let two clocks be
+    /// compared.
+    #[test]
+    fn an_address_this_runtime_carries_nothing_from_names_no_machine() {
+        assert_eq!(
+            the_machine_answered(&handle_inbound_link_stamp_clock_identity(
+                &a_mesh_link_ingress_table_carrying_nothing(),
+                "req-3".to_string(),
+                A_REMOTE_LINKS_NAME,
+            )),
+            None
+        );
+    }
+
+    /// Only a link carrying from another runtime ever asks, and such a link is
+    /// named by its source port's mesh address. A name that is not one is a
+    /// helper asking about a link it could have answered itself, so it is
+    /// refused by name rather than answered with silence a caller would read
+    /// as "not yet".
+    #[test]
+    fn a_link_name_that_is_not_a_mesh_address_is_refused_naming_it() {
+        // The empty name is asserted on separately: `contains("")` is always
+        // true, so it would pass this loop's message check without saying
+        // anything.
+        for not_an_address in [
+            "pcamera/video_out",
+            "one/two/three/four",
+            "no-slashes-at-all",
+        ] {
+            let response = handle_inbound_link_stamp_clock_identity(
+                &a_mesh_link_ingress_table_carrying_nothing(),
+                "req-4".to_string(),
+                not_an_address,
+            );
+            let EscalateResponse::Err(refused) = response else {
+                panic!("{not_an_address:?} must be refused rather than answered");
+            };
+            assert!(
+                refused.message.contains(not_an_address),
+                "the refusal must name what was asked about, and reads {:?}",
+                refused.message
+            );
+            assert_eq!(refused.request_id, "req-4", "the refusal correlates");
+        }
+
+        let EscalateResponse::Err(refused) = handle_inbound_link_stamp_clock_identity(
+            &a_mesh_link_ingress_table_carrying_nothing(),
+            "req-5".to_string(),
+            "",
+        ) else {
+            panic!("an empty link name must be refused rather than answered");
+        };
+        assert!(
+            refused.message.contains("mesh address"),
+            "the refusal must say what it wanted, and reads {:?}",
+            refused.message
+        );
+    }
 
     #[test]
     fn parse_pixel_format_accepts_common_aliases() {
@@ -5202,8 +5369,13 @@ mod tests {
                 let expected_request_id = request_id(&request)
                     .expect("every present-class op carries a correlation token")
                     .to_string();
-                let response = handle_escalate_op(&sandbox, &registry, request)
-                    .expect("every present-class op produces a response");
+                let response = handle_escalate_op(
+                    &sandbox,
+                    &registry,
+                    &a_mesh_link_ingress_table_carrying_nothing(),
+                    request,
+                )
+                .expect("every present-class op produces a response");
                 let message = refusal_message_of(response, &expected_request_id);
                 assert!(
                     message.contains(A_WINDOW_ID_NOBODY_OWNS),
@@ -5354,6 +5526,7 @@ mod tests {
             let response = handle_escalate_op(
                 &sandbox,
                 &registry,
+                &a_mesh_link_ingress_table_carrying_nothing(),
                 EscalateRequest::CreateProcessorOwnedWindow(
                     EscalateRequestCreateProcessorOwnedWindow {
                         request_id: "req-create".into(),
@@ -5433,8 +5606,13 @@ mod tests {
                 let expected_request_id = request_id(&request)
                     .expect("every readback op carries a correlation token")
                     .to_string();
-                let response = handle_escalate_op(&sandbox, &registry, request)
-                    .expect("every readback op produces a response");
+                let response = handle_escalate_op(
+                    &sandbox,
+                    &registry,
+                    &a_mesh_link_ingress_table_carrying_nothing(),
+                    request,
+                )
+                .expect("every readback op produces a response");
                 match response {
                     EscalateResponse::Err(err) => {
                         assert_eq!(err.request_id, expected_request_id);
@@ -5484,6 +5662,7 @@ mod tests {
             let response = handle_escalate_op(
                 &sandbox,
                 &registry,
+                &a_mesh_link_ingress_table_carrying_nothing(),
                 EscalateRequest::RunCpuReadbackCopy(EscalateRequestRunCpuReadbackCopy {
                     request_id: "req-seam-read".into(),
                     surface_id: surface_id.clone(),
@@ -5540,6 +5719,7 @@ mod tests {
             let response = handle_escalate_op(
                 &sandbox,
                 &registry,
+                &a_mesh_link_ingress_table_carrying_nothing(),
                 EscalateRequest::RunCpuReadbackCopy(EscalateRequestRunCpuReadbackCopy {
                     request_id: "req-seam-write".into(),
                     surface_id: pool_id.to_string(),
@@ -5584,6 +5764,7 @@ mod tests {
             let read = handle_escalate_op(
                 &sandbox,
                 &registry,
+                &a_mesh_link_ingress_table_carrying_nothing(),
                 EscalateRequest::RunCpuReadbackCopy(EscalateRequestRunCpuReadbackCopy {
                     request_id: "req-read".into(),
                     surface_id: surface_id.clone(),
@@ -5609,6 +5790,7 @@ mod tests {
             let published = handle_escalate_op(
                 &sandbox,
                 &registry,
+                &a_mesh_link_ingress_table_carrying_nothing(),
                 EscalateRequest::RunCpuReadbackCopy(EscalateRequestRunCpuReadbackCopy {
                     request_id: "req-publish".into(),
                     surface_id: surface_id.clone(),
@@ -5655,6 +5837,7 @@ mod tests {
             let response = handle_escalate_op(
                 &sandbox,
                 &registry,
+                &a_mesh_link_ingress_table_carrying_nothing(),
                 EscalateRequest::OpenCpuReadbackStaging(EscalateRequestOpenCpuReadbackStaging {
                     request_id: "req-seam-open".into(),
                     surface_id: pool_id.to_string(),
@@ -5690,6 +5873,7 @@ mod tests {
             let response = handle_escalate_op(
                 &sandbox,
                 &registry,
+                &a_mesh_link_ingress_table_carrying_nothing(),
                 EscalateRequest::RunCpuReadbackCopy(EscalateRequestRunCpuReadbackCopy {
                     request_id: "req-frame-id".into(),
                     surface_id: "pool-slot-7#3".into(),
@@ -7722,6 +7906,7 @@ void main() {
             let response = handle_escalate_op(
                 sandbox,
                 registry,
+                &a_mesh_link_ingress_table_carrying_nothing(),
                 EscalateRequest::RegisterGraphicsKernel(req),
             )
             .expect("must produce a response");
@@ -8338,6 +8523,7 @@ void main() {
             let response = handle_escalate_op(
                 &sandbox,
                 &registry,
+                &a_mesh_link_ingress_table_carrying_nothing(),
                 EscalateRequest::RegisterGraphicsKernel(make_register_req(
                     "req-bad-v",
                     "xyz123",
@@ -8368,6 +8554,7 @@ void main() {
             let response = handle_escalate_op(
                 &sandbox,
                 &registry,
+                &a_mesh_link_ingress_table_carrying_nothing(),
                 EscalateRequest::RegisterGraphicsKernel(make_register_req(
                     "req-bad-f",
                     "deadbeef",
@@ -8397,9 +8584,13 @@ void main() {
             let registry = EscalateHandleRegistry::new();
             let mut req = make_run_req("req-bad-push", "kernel-x", "surface-y");
             req.push_constants_hex = "xyz".to_string();
-            let response =
-                handle_escalate_op(&sandbox, &registry, EscalateRequest::RunGraphicsDraw(req))
-                    .expect("must produce a response");
+            let response = handle_escalate_op(
+                &sandbox,
+                &registry,
+                &a_mesh_link_ingress_table_carrying_nothing(),
+                EscalateRequest::RunGraphicsDraw(req),
+            )
+            .expect("must produce a response");
             match response {
                 EscalateResponse::Err(err) => {
                     assert_eq!(err.request_id, "req-bad-push");
@@ -8434,6 +8625,7 @@ void main() {
                 handle_escalate_op(
                     &sandbox,
                     &registry,
+                    &a_mesh_link_ingress_table_carrying_nothing(),
                     EscalateRequest::RunGraphicsDraw(with_vertex_buffer),
                 )
                 .expect("must produce a response"),
@@ -8453,6 +8645,7 @@ void main() {
                 handle_escalate_op(
                     &sandbox,
                     &registry,
+                    &a_mesh_link_ingress_table_carrying_nothing(),
                     EscalateRequest::RunGraphicsDraw(indexed),
                 )
                 .expect("must produce a response"),
@@ -8471,6 +8664,7 @@ void main() {
                 handle_escalate_op(
                     &sandbox,
                     &registry,
+                    &a_mesh_link_ingress_table_carrying_nothing(),
                     EscalateRequest::RunGraphicsDraw(indexed_without_a_buffer),
                 )
                 .expect("must produce a response"),
@@ -8494,8 +8688,13 @@ void main() {
             let mut req = make_run_req("req-depth", "kernel-x", "surface-y");
             req.depth_target_uuid = Some("depth-uuid".to_string());
             let message = refusal_message(
-                handle_escalate_op(&sandbox, &registry, EscalateRequest::RunGraphicsDraw(req))
-                    .expect("must produce a response"),
+                handle_escalate_op(
+                    &sandbox,
+                    &registry,
+                    &a_mesh_link_ingress_table_carrying_nothing(),
+                    EscalateRequest::RunGraphicsDraw(req),
+                )
+                .expect("must produce a response"),
             );
             assert!(
                 message.contains("depth_target_uuid is set"),
@@ -8517,8 +8716,13 @@ void main() {
             let mut req = make_run_req("req-targets", "kernel-x", "surface-y");
             req.color_target_uuids = vec!["a".to_string(), "b".to_string()];
             let message = refusal_message(
-                handle_escalate_op(&sandbox, &registry, EscalateRequest::RunGraphicsDraw(req))
-                    .expect("must produce a response"),
+                handle_escalate_op(
+                    &sandbox,
+                    &registry,
+                    &a_mesh_link_ingress_table_carrying_nothing(),
+                    EscalateRequest::RunGraphicsDraw(req),
+                )
+                .expect("must produce a response"),
             );
             assert!(
                 message.contains("exactly one colour attachment"),
@@ -8537,6 +8741,7 @@ void main() {
                 handle_escalate_op(
                     &sandbox,
                     &registry,
+                    &a_mesh_link_ingress_table_carrying_nothing(),
                     EscalateRequest::RunGraphicsDraw(make_run_req(
                         "req-bad-id",
                         "never-registered",
@@ -8572,6 +8777,7 @@ void main() {
                 handle_escalate_op(
                     &sandbox,
                     &registry,
+                    &a_mesh_link_ingress_table_carrying_nothing(),
                     EscalateRequest::RegisterGraphicsKernel(req),
                 )
                 .expect("must produce a response"),
@@ -8718,6 +8924,7 @@ void main() {
                 handle_escalate_op(
                     &sandbox,
                     &registry,
+                    &a_mesh_link_ingress_table_carrying_nothing(),
                     EscalateRequest::RegisterGraphicsKernel(req),
                 )
                 .expect("must produce a response"),
@@ -8822,9 +9029,13 @@ void main() {
             }];
             run.extent_width = 64;
             run.extent_height = 64;
-            let response =
-                handle_escalate_op(&sandbox, &registry, EscalateRequest::RunGraphicsDraw(run))
-                    .expect("must produce a response");
+            let response = handle_escalate_op(
+                &sandbox,
+                &registry,
+                &a_mesh_link_ingress_table_carrying_nothing(),
+                EscalateRequest::RunGraphicsDraw(run),
+            )
+            .expect("must produce a response");
             match response {
                 EscalateResponse::Ok(ok) => {
                     assert_eq!(ok.request_id, "run-draw");
@@ -8985,8 +9196,13 @@ void main() {
                 width: 32,
                 height: 64,
             });
-            match handle_escalate_op(&sandbox, &registry, EscalateRequest::RunGraphicsDraw(run))
-                .expect("must produce a response")
+            match handle_escalate_op(
+                &sandbox,
+                &registry,
+                &a_mesh_link_ingress_table_carrying_nothing(),
+                EscalateRequest::RunGraphicsDraw(run),
+            )
+            .expect("must produce a response")
             {
                 EscalateResponse::Ok(_) => {}
                 other => panic!("the scissored draw failed: {other:?}"),
@@ -9062,8 +9278,13 @@ void main() {
             run.extent_width = 64;
             run.extent_height = 64;
             let message = refusal_message(
-                handle_escalate_op(&sandbox, &registry, EscalateRequest::RunGraphicsDraw(run))
-                    .expect("must produce a response"),
+                handle_escalate_op(
+                    &sandbox,
+                    &registry,
+                    &a_mesh_link_ingress_table_carrying_nothing(),
+                    EscalateRequest::RunGraphicsDraw(run),
+                )
+                .expect("must produce a response"),
             );
             assert!(
                 message.contains("already thrown away"),
@@ -9395,6 +9616,7 @@ void main() {
             let response = handle_escalate_op(
                 sandbox,
                 registry,
+                &a_mesh_link_ingress_table_carrying_nothing(),
                 EscalateRequest::RegisterRayTracingKernel(req),
             )
             .expect("must produce a response");
@@ -9409,8 +9631,13 @@ void main() {
             registry: &EscalateHandleRegistry,
             req: EscalateRequest,
         ) -> String {
-            let response =
-                handle_escalate_op(sandbox, registry, req).expect("must produce a response");
+            let response = handle_escalate_op(
+                sandbox,
+                registry,
+                &a_mesh_link_ingress_table_carrying_nothing(),
+                req,
+            )
+            .expect("must produce a response");
             match response {
                 EscalateResponse::Ok(ok) => ok.handle_id,
                 other => panic!("registering the acceleration structure failed: {other:?}"),
@@ -9530,6 +9757,7 @@ void main() {
                 handle_escalate_op(
                     &self.sandbox,
                     &self.registry,
+                    &a_mesh_link_ingress_table_carrying_nothing(),
                     EscalateRequest::RunRayTracingKernel(req),
                 )
                 .expect("must produce a response")
@@ -9551,6 +9779,7 @@ void main() {
                 handle_escalate_op(
                     &sandbox,
                     &registry,
+                    &a_mesh_link_ingress_table_carrying_nothing(),
                     EscalateRequest::RegisterAccelerationStructureBlas(make_blas_req(
                         "blas-bad-vertices",
                         "xyz123",
@@ -9573,6 +9802,7 @@ void main() {
                 handle_escalate_op(
                     &sandbox,
                     &registry,
+                    &a_mesh_link_ingress_table_carrying_nothing(),
                     EscalateRequest::RegisterAccelerationStructureBlas(make_blas_req(
                         "blas-bad-indices",
                         &vertex_hex(A_SCENES_TRIANGLE_VERTICES),
@@ -9609,6 +9839,7 @@ void main() {
                     handle_escalate_op(
                         &sandbox,
                         &registry,
+                        &a_mesh_link_ingress_table_carrying_nothing(),
                         EscalateRequest::RegisterAccelerationStructureBlas(make_blas_req(
                             request_id,
                             &vertices_hex,
@@ -9637,6 +9868,7 @@ void main() {
                 handle_escalate_op(
                     &sandbox,
                     &registry,
+                    &a_mesh_link_ingress_table_carrying_nothing(),
                     EscalateRequest::RegisterAccelerationStructureTlas(req),
                 )
                 .expect("must produce a response"),
@@ -9657,6 +9889,7 @@ void main() {
                 handle_escalate_op(
                     &sandbox,
                     &registry,
+                    &a_mesh_link_ingress_table_carrying_nothing(),
                     EscalateRequest::RegisterAccelerationStructureTlas(req),
                 )
                 .expect("must produce a response"),
@@ -9677,6 +9910,7 @@ void main() {
                 handle_escalate_op(
                     &sandbox,
                     &registry,
+                    &a_mesh_link_ingress_table_carrying_nothing(),
                     EscalateRequest::RegisterAccelerationStructureTlas(req),
                 )
                 .expect("must produce a response"),
@@ -9697,6 +9931,7 @@ void main() {
                 handle_escalate_op(
                     &sandbox,
                     &registry,
+                    &a_mesh_link_ingress_table_carrying_nothing(),
                     EscalateRequest::RunRayTracingKernel(req),
                 )
                 .expect("must produce a response"),
@@ -9775,6 +10010,7 @@ void main() {
                 handle_escalate_op(
                     &sandbox,
                     &registry,
+                    &a_mesh_link_ingress_table_carrying_nothing(),
                     EscalateRequest::RegisterRayTracingKernel(req),
                 )
                 .expect("must produce a response"),
@@ -9966,6 +10202,7 @@ void main() {
                 handle_escalate_op(
                     &sandbox,
                     &registry,
+                    &a_mesh_link_ingress_table_carrying_nothing(),
                     EscalateRequest::RegisterRayTracingKernel(req),
                 )
                 .expect("must produce a response"),
@@ -10049,6 +10286,7 @@ void main() {
             let released = handle_escalate_op(
                 &sandbox,
                 &registry,
+                &a_mesh_link_ingress_table_carrying_nothing(),
                 EscalateRequest::ReleaseHandle(EscalateRequestReleaseHandle {
                     request_id: "release-blas".to_string(),
                     handle_id: blas.clone(),
@@ -10065,6 +10303,7 @@ void main() {
             let released_twice = handle_escalate_op(
                 &sandbox,
                 &registry,
+                &a_mesh_link_ingress_table_carrying_nothing(),
                 EscalateRequest::ReleaseHandle(EscalateRequestReleaseHandle {
                     request_id: "release-blas-again".to_string(),
                     handle_id: blas,
@@ -10088,6 +10327,7 @@ void main() {
                 handle_escalate_op(
                     &sandbox,
                     &registry,
+                    &a_mesh_link_ingress_table_carrying_nothing(),
                     EscalateRequest::RegisterAccelerationStructureTlas(make_tlas_req(
                         "tlas-unknown",
                         "definitely-not-a-registered-structure",
@@ -10114,6 +10354,7 @@ void main() {
                 handle_escalate_op(
                     &scene.sandbox,
                     &scene.registry,
+                    &a_mesh_link_ingress_table_carrying_nothing(),
                     EscalateRequest::RegisterAccelerationStructureTlas(make_tlas_req(
                         "tlas-over-tlas",
                         &scene.tlas_id,
@@ -10376,8 +10617,13 @@ void main() {
             height: 240,
             format: "bgra".to_string(),
         });
-        let response = handle_escalate_op(&sandbox, &registry, acquire)
-            .expect("acquire_pixel_buffer must produce a response");
+        let response = handle_escalate_op(
+            &sandbox,
+            &registry,
+            &a_mesh_link_ingress_table_carrying_nothing(),
+            acquire,
+        )
+        .expect("acquire_pixel_buffer must produce a response");
         let buffer_handle_id = match response {
             EscalateResponse::Ok(ref ok) => {
                 assert_eq!(ok.request_id, "req-1");
@@ -10401,8 +10647,13 @@ void main() {
             format: "rgba8_unorm".to_string(),
             usage: vec!["texture_binding".to_string(), "copy_src".to_string()],
         });
-        let response = handle_escalate_op(&sandbox, &registry, acquire_tex)
-            .expect("acquire_texture must produce a response");
+        let response = handle_escalate_op(
+            &sandbox,
+            &registry,
+            &a_mesh_link_ingress_table_carrying_nothing(),
+            acquire_tex,
+        )
+        .expect("acquire_texture must produce a response");
         let texture_handle_id = match response {
             EscalateResponse::Ok(ref ok) => {
                 assert_eq!(ok.request_id, "req-tex");
@@ -10432,8 +10683,13 @@ void main() {
             request_id: "req-tex-rel".to_string(),
             handle_id: texture_handle_id.clone(),
         });
-        match handle_escalate_op(&sandbox, &registry, release_tex)
-            .expect("release_handle must produce a response")
+        match handle_escalate_op(
+            &sandbox,
+            &registry,
+            &a_mesh_link_ingress_table_carrying_nothing(),
+            release_tex,
+        )
+        .expect("release_handle must produce a response")
         {
             EscalateResponse::Ok(ok) => {
                 assert_eq!(ok.request_id, "req-tex-rel");
@@ -10449,8 +10705,13 @@ void main() {
             request_id: "req-2".to_string(),
             handle_id: buffer_handle_id.clone(),
         });
-        let response = handle_escalate_op(&sandbox, &registry, release)
-            .expect("release_handle must produce a response");
+        let response = handle_escalate_op(
+            &sandbox,
+            &registry,
+            &a_mesh_link_ingress_table_carrying_nothing(),
+            release,
+        )
+        .expect("release_handle must produce a response");
         match response {
             EscalateResponse::Ok(ok) => {
                 assert_eq!(ok.request_id, "req-2");
@@ -10464,8 +10725,13 @@ void main() {
             request_id: "req-3".to_string(),
             handle_id: "never-existed".to_string(),
         });
-        match handle_escalate_op(&sandbox, &registry, release_unknown)
-            .expect("release_handle must produce a response")
+        match handle_escalate_op(
+            &sandbox,
+            &registry,
+            &a_mesh_link_ingress_table_carrying_nothing(),
+            release_unknown,
+        )
+        .expect("release_handle must produce a response")
         {
             EscalateResponse::Err(err) => {
                 assert_eq!(err.request_id, "req-3");

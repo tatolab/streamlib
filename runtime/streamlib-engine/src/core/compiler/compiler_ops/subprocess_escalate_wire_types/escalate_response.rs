@@ -90,6 +90,14 @@ pub(crate) struct EscalateResponseOk {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) close_requested_by_user: Option<bool>,
 
+    /// The machine whose monotonic clock stamped the bags arriving on the
+    /// named inbound link, as the canonical lowercase UUID text of its
+    /// boot-session id. Set on `inbound_link_stamp_clock_identity` responses,
+    /// and absent there when no bag has crossed the link yet or this runtime
+    /// carries nothing from that address.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) stamp_clock_identity: Option<String>,
+
     /// Lowercase hex of the exporting Vulkan device's
     /// `VkPhysicalDeviceIDProperties::deviceUUID` (32 characters, no
     /// separators). Set on `open_device_export_staging` responses. The external

@@ -53,6 +53,7 @@ use crate::core::processors::{
     LinksAwaitingTheirOutOfProcessWireReply, OutOfProcessFarSideLinkDelivery,
     OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply,
 };
+use crate::core::runtime::mesh::MeshLinkIngressTable;
 
 use super::subprocess_escalate::{
     ESCALATE_OP_ANSWERED_BY_NOTHING, EscalateHandleRegistry, process_bridge_message,
@@ -363,10 +364,12 @@ pub struct SubprocessBridge {
 
 impl SubprocessBridge {
     /// Wrap a socketpair parent end and spawn the reader thread and the
-    /// escalate worker, which dispatches against `sandbox`.
+    /// escalate worker, which dispatches against `sandbox` and, for the one
+    /// question a helper cannot answer for itself, against this runtime's mesh.
     pub fn new(
         stream: UnixStream,
         sandbox: GpuContextLimitedAccess,
+        mesh_link_ingress_table: Arc<MeshLinkIngressTable>,
         processor_id: String,
     ) -> Result<Self> {
         let read_half = stream.try_clone().map_err(|e| {
@@ -384,7 +387,12 @@ impl SubprocessBridge {
         let dispatch_registry = Arc::clone(&registry);
         let dispatch_sandbox = sandbox.clone();
         let escalate_request_dispatch: EscalateRequestDispatch = Arc::new(move |frame| {
-            process_bridge_message(&dispatch_sandbox, &dispatch_registry, frame)
+            process_bridge_message(
+                &dispatch_sandbox,
+                &dispatch_registry,
+                &mesh_link_ingress_table,
+                frame,
+            )
         });
         let SubprocessBridgeThreads {
             frame_demultiplexing_reader_thread,
@@ -979,6 +987,8 @@ fn read_frame<R: Read>(reader: &mut R) -> Result<serde_json::Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::core::runtime::mesh::a_mesh_link_ingress_table_carrying_nothing;
 
     use crate::core::context::{GpuContext, GpuContextLimitedAccess};
     use std::sync::mpsc::RecvTimeoutError;
@@ -1615,8 +1625,13 @@ mod tests {
             return;
         };
         let (parent_end, subprocess_end) = UnixStream::pair().expect("socketpair");
-        let bridge = SubprocessBridge::new(parent_end, sandbox, "p-setup-phase-test".into())
-            .expect("bridge construction");
+        let bridge = SubprocessBridge::new(
+            parent_end,
+            sandbox,
+            a_mesh_link_ingress_table_carrying_nothing(),
+            "p-setup-phase-test".into(),
+        )
+        .expect("bridge construction");
 
         bridge
             .send(&serde_json::json!({"cmd": SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS}))
@@ -1699,8 +1714,13 @@ mod tests {
         };
 
         let (parent_end, child_end) = UnixStream::pair().expect("socketpair");
-        let bridge = SubprocessBridge::new(parent_end, sandbox, "p-bridge-test".into())
-            .expect("bridge construction");
+        let bridge = SubprocessBridge::new(
+            parent_end,
+            sandbox,
+            a_mesh_link_ingress_table_carrying_nothing(),
+            "p-bridge-test".into(),
+        )
+        .expect("bridge construction");
 
         // Keep the child stream alive across the entire test so the reader
         // loop stays in its read → classify → continue cycle instead of
@@ -1741,8 +1761,13 @@ mod tests {
         };
 
         let (parent_end, child_end) = UnixStream::pair().expect("socketpair");
-        let bridge = SubprocessBridge::new(parent_end, sandbox, "p-bridge-test".into())
-            .expect("bridge construction");
+        let bridge = SubprocessBridge::new(
+            parent_end,
+            sandbox,
+            a_mesh_link_ingress_table_carrying_nothing(),
+            "p-bridge-test".into(),
+        )
+        .expect("bridge construction");
 
         let ready = serde_json::json!({"rpc": "ready"});
         let mut child_writer = BufWriter::new(child_end);
@@ -1818,9 +1843,13 @@ mod tests {
 
         for cycle in 0..2 {
             let (parent_end, child_end) = UnixStream::pair().expect("socketpair");
-            let bridge =
-                SubprocessBridge::new(parent_end, sandbox.clone(), format!("p-crash-{cycle}"))
-                    .expect("bridge construction");
+            let bridge = SubprocessBridge::new(
+                parent_end,
+                sandbox.clone(),
+                a_mesh_link_ingress_table_carrying_nothing(),
+                format!("p-crash-{cycle}"),
+            )
+            .expect("bridge construction");
 
             let mut child_writer = BufWriter::new(child_end.try_clone().expect("clone child end"));
             let mut child_reader = BufReader::new(child_end);

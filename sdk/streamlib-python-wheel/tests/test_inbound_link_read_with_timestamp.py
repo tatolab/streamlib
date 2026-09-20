@@ -71,7 +71,8 @@ def two_links_into_one_port(
     for kind in ("video", "audio"):
         channel_service_name = f"{unique}/{kind}"
         destination.wire_input_link(
-            INPUT_PORT, channel_service_name, channel_service_name, notify_service_name,
+            INPUT_PORT, channel_service_name, channel_service_name, "this_machine",
+            notify_service_name,
             "read_next_in_order", 8, 8, 2, 2, f"L-{unique}-{kind}",
         )  # fmt: skip
         source = ProcessorLinkDataAccess()
@@ -179,7 +180,9 @@ def test_a_link_is_named_by_what_the_engine_wired_it_under_not_by_its_channel(
 
     destination = ProcessorLinkDataAccess()
     destination.wire_input_link(
-        INPUT_PORT, channel_service_name, inbound_link_name, notify_service_name,
+        INPUT_PORT, channel_service_name, inbound_link_name,
+        "a_machine_only_the_app_process_can_name",
+        notify_service_name,
         "read_next_in_order", 8, 8, 2, 1, f"L-{unique}",
     )  # fmt: skip
     source = ProcessorLinkDataAccess()

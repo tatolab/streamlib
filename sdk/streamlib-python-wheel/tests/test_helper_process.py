@@ -166,6 +166,9 @@ def engine_shaped_link_wiring(direction: str, link_id: str) -> dict:
         # carrying from another runtime, whose channel is hashed from the
         # source port's mesh address.
         "inbound_link_name": channel_service_name,
+        # Every link this suite wires has its source on this runtime, so every
+        # bag it carries was stamped here.
+        "stamp_clock": "this_machine",
         "notify_service_name": notify_service_name,
         "read_mode": "read_next_in_order",
         "channel_service_creation_depth": 16,

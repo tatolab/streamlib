@@ -22,12 +22,15 @@ use zenoh::Wait;
 use crate::core::graph::{LinkUniqueId, MeshPortAddress, RemoteLinkResolution};
 use crate::core::runtime::mesh::OutputPortsOfferedOnTheMesh;
 use crate::core::runtime::mesh::gpu_context_the_mesh_copies_frames_with::GpuContextTheMeshCopiesFramesWith;
+use crate::core::runtime::mesh::machine_clock_a_remote_link_carries_from::MachineClockARemoteLinkCarriesFrom;
 use crate::core::runtime::mesh::mesh_link_ingress::MeshLinkIngress;
 use crate::core::runtime::mesh::output_ports_offered_on_the_mesh::ask_a_runtime_what_output_ports_it_offers;
 use crate::core::runtime::mesh::runtime_mesh_description::RuntimeMeshDescription;
 use crate::core::runtime::mesh::runtime_mesh_key::{AnnouncedRuntimeIdentity, RuntimeMeshKeySpace};
 use crate::core::runtime::mesh::runtime_mesh_peer_table::RuntimeMeshPeerTable;
-use crate::iceoryx2::{Iceoryx2Node, MeshHopDroppedBagCountsByRemoteInboundLink};
+use crate::iceoryx2::{
+    Iceoryx2Node, MeshHopDroppedBagCountsByRemoteInboundLink, WhatIsKnownOfAnInboundLinksStampClock,
+};
 use streamlib_ipc_types::MAX_INBOUND_LINKS_PER_DESTINATION;
 
 /// How often every waiting link is looked at again.
@@ -67,6 +70,27 @@ struct ALinkFromAnotherRuntime {
 struct WhatThisRuntimeIsCarryingFromOtherRuntimes {
     links: BTreeMap<LinkUniqueId, ALinkFromAnotherRuntime>,
     carrying: BTreeMap<MeshPortAddress, MeshLinkIngress>,
+    /// The machine each address's stamps are taken on, one cell per address
+    /// and shared by every link and every destination reading it.
+    ///
+    /// Kept here rather than on an ingress because it outlives one: the source
+    /// runtime leaving tears the ingress down and the links from it stay,
+    /// still holding the cell they were wired with.
+    machine_clocks_by_address: BTreeMap<MeshPortAddress, Arc<MachineClockARemoteLinkCarriesFrom>>,
+}
+
+impl WhatThisRuntimeIsCarryingFromOtherRuntimes {
+    /// The cell for `address`, minted on first use.
+    fn machine_clock_carried_from(
+        &mut self,
+        address: &MeshPortAddress,
+    ) -> Arc<MachineClockARemoteLinkCarriesFrom> {
+        Arc::clone(
+            self.machine_clocks_by_address
+                .entry(address.clone())
+                .or_default(),
+        )
+    }
 }
 
 /// Every port on another runtime this runtime links from.
@@ -89,6 +113,19 @@ struct ResolvingEveryWaitingLink {
     wake_the_resolver: Sender<()>,
     announcement_subscriber: zenoh::pubsub::Subscriber<()>,
     resolving_thread: std::thread::JoinHandle<()>,
+}
+
+/// A table for a test that asks it no mesh question: it carries nothing,
+/// because no link was ever noted on it.
+///
+/// One per call rather than one shared: an arm that mints a cell for an address
+/// would otherwise be visible to the arm that asserts there is none.
+#[cfg(test)]
+pub(crate) fn a_mesh_link_ingress_table_carrying_nothing() -> Arc<MeshLinkIngressTable> {
+    MeshLinkIngressTable::of_this_runtime(
+        &Iceoryx2Node::for_this_test_process(),
+        &Arc::new(crate::core::runtime::mesh::GpuContextTheMeshCopiesFramesWith::default()),
+    )
 }
 
 impl MeshLinkIngressTable {
@@ -128,6 +165,41 @@ impl MeshLinkIngressTable {
             },
         );
         self.ask_the_resolver_to_look_again();
+    }
+
+    /// The cell naming the machine whose monotonic clock stamped the bags
+    /// arriving from `address`.
+    ///
+    /// Taken by the wiring op, which hands it to the link it renders and to the
+    /// destination that reads it — so both keep reading the same cell across
+    /// the source runtime leaving and coming back. Minted here on first use:
+    /// a link is wired long before its source runtime is known, so there is no
+    /// ingress yet to take it from.
+    pub fn machine_clock_carried_from(
+        &self,
+        address: &MeshPortAddress,
+    ) -> Arc<MachineClockARemoteLinkCarriesFrom> {
+        self.carried.lock().machine_clock_carried_from(address)
+    }
+
+    /// Which machine's monotonic clock the bags arriving from `address` were
+    /// stamped on, for a reader that holds no cell of its own.
+    ///
+    /// How a helper-placed destination's question is answered: a helper opens
+    /// no mesh session, so it asks the app process over the escalate bridge and
+    /// the app process reads it here. Mints nothing — an address this runtime
+    /// links from no port of has no cell, and asking about one must not make
+    /// one.
+    pub fn what_machine_an_address_is_carrying_from(
+        &self,
+        address: &MeshPortAddress,
+    ) -> WhatIsKnownOfAnInboundLinksStampClock {
+        self.carried
+            .lock()
+            .machine_clocks_by_address
+            .get(address)
+            .map(|machine_clock| machine_clock.what_it_is_now().into())
+            .unwrap_or(WhatIsKnownOfAnInboundLinksStampClock::NoSuchLinkFeedsThatPort)
     }
 
     /// Record the notify service one link's destination waits on and where its
@@ -198,13 +270,26 @@ impl MeshLinkIngressTable {
                     ingress.forget_a_local_destination(link_id.as_str());
                 }
             }
+            let machine_clock = (!still_read)
+                .then(|| carried.machine_clocks_by_address.remove(&forgotten.address))
+                .flatten();
             // Dropping the ingress undeclares this runtime's reader token,
             // which is what makes the source stop sending the port.
-            (!still_read)
+            let stopped_reading = (!still_read)
                 .then(|| carried.carrying.remove(&forgotten.address))
-                .flatten()
+                .flatten();
+            (stopped_reading, machine_clock)
         };
+        let (stopped_reading, machine_clock) = stopped_reading;
         drop(stopped_reading);
+        // Emptied, not merely dropped from the table: the link that has gone
+        // and its destination still hold clones, and the ingress's writing
+        // thread could name a machine until the drop above joined it. A cell
+        // nobody empties would leave a torn-down link naming the machine it
+        // used to carry from.
+        if let Some(machine_clock) = machine_clock {
+            machine_clock.forget_the_machine_because_nothing_is_arriving();
+        }
     }
 
     /// Start resolving waiting links, now that this runtime is on a mesh.
@@ -303,6 +388,12 @@ impl MeshLinkIngressTable {
             std::mem::take(&mut carried.carrying)
         };
         drop(stopped_reading);
+        // After the ingresses are gone, for the reason `keep_carrying_or_stop`
+        // gives: their writing threads are joined by that drop, and until they
+        // are they can still name a machine.
+        for machine_clock in self.carried.lock().machine_clocks_by_address.values() {
+            machine_clock.forget_the_machine_because_nothing_is_arriving();
+        }
     }
 
     /// End the resolving thread, if one is running. Idempotent.
@@ -562,6 +653,11 @@ fn a_refusal_naming_the_trouble_and_what_is_offered(
 
 /// Start carrying `address`, and tell every link from it.
 fn start_carrying(resolving: &ResolvingLinksNeeds, address: &MeshPortAddress) {
+    // Taken before the ingress starts and under its own short hold of the
+    // lock: starting one talks to the network, and the lock is what every
+    // `connect` and `disconnect` waits on.
+    let machine_clock_it_carries_from =
+        resolving.carried.lock().machine_clock_carried_from(address);
     let ingress = match MeshLinkIngress::start(
         &resolving.session,
         &resolving.key_space,
@@ -570,6 +666,7 @@ fn start_carrying(resolving: &ResolvingLinksNeeds, address: &MeshPortAddress) {
         &resolving.iceoryx2_node,
         resolving.wake_the_resolver.clone(),
         &resolving.gpu_context_the_mesh_copies_frames_with,
+        &machine_clock_it_carries_from,
     ) {
         Ok(ingress) => ingress,
         Err(cannot_start) => {
@@ -623,6 +720,18 @@ fn keep_carrying_or_stop(resolving: &ResolvingLinksNeeds, address: &MeshPortAddr
             carried.carrying.remove(address)
         };
         drop(stopped_reading);
+        // After the ingress is gone, not before: dropping it joins its writing
+        // thread, and that thread is still draining what arrived before the
+        // teardown. Emptied ahead of the join, the last bag out would fill the
+        // cell again and leave a link naming a machine while carrying nothing.
+        if let Some(machine_clock) = resolving
+            .carried
+            .lock()
+            .machine_clocks_by_address
+            .get(address)
+        {
+            machine_clock.forget_the_machine_because_nothing_is_arriving();
+        }
         say_how_far_every_link_from(
             resolving,
             address,
@@ -704,19 +813,10 @@ fn tell_the_ingress_about_every_link_from(
                     })
                     .ok()
             });
-            // Forgotten and minted again rather than continued: this is
-            // every way a link is wired afresh — the source runtime
-            // returning, its egress returning, or a reconnect of the same id
-            // — and the plan restarts a remote link's loss count at each.
-            let where_its_hop_loss_is_counted = link
-                .where_its_hop_loss_is_counted
-                .as_ref()
-                .map(|counts| counts.a_counter_for_a_fresh_wiring_of(link_id.as_str()))
-                .unwrap_or_default();
             ingress.note_a_local_destination(
                 link_id.as_str(),
                 notifier,
-                where_its_hop_loss_is_counted,
+                link.where_its_hop_loss_is_counted.clone(),
             );
             link.the_ingress_knows_about_it = true;
         }
@@ -816,6 +916,87 @@ mod tests {
             | RemoteLinkResolution::Refused { reason } => reason,
             RemoteLinkResolution::Wired => panic!("a wired link has no reason"),
         }
+    }
+
+    /// The last link on an address going empties the cell, rather than only
+    /// dropping it from the table.
+    ///
+    /// The link that has gone and its destination still hold clones of it, so a
+    /// cell nobody empties leaves a torn-down link naming the machine it used
+    /// to carry from — on `graph`, beside a state that says it is disconnected.
+    #[test]
+    fn the_last_link_on_an_address_going_empties_the_cell_the_link_still_holds() {
+        let table = a_mesh_link_ingress_table_carrying_nothing();
+        let link_id = LinkUniqueId::new();
+        let machine_clock = table.machine_clock_carried_from(&an_address());
+        table.note_a_link_waiting_on(
+            an_address(),
+            link_id.clone(),
+            Arc::new(Mutex::new(RemoteLinkResolution::AwaitingRemote {
+                reason: "a link this test stood up".to_string(),
+            })),
+        );
+        machine_clock.note_the_machine_a_bag_was_stamped_on(
+            crate::core::runtime::mesh::MachineClockIdentity::of_the_machine_whose_boot_session_uuid_reads(
+                "8b93a1c2-0000-4d5a-9a11-2c7f0d5e2f1c",
+            ),
+        );
+
+        table.forget_a_link(&link_id);
+
+        assert_eq!(
+            machine_clock.what_it_is_now(),
+            None,
+            "the clone the link still holds must stop naming a machine nothing is carrying from"
+        );
+    }
+
+    /// The one question a helper cannot answer for itself, answered here.
+    /// An address this runtime carries nothing from says so rather than
+    /// naming a machine, and minting a cell for it would leave an entry
+    /// behind for every address anybody ever asked about.
+    #[test]
+    fn an_address_this_runtime_carries_nothing_from_names_no_machine_and_mints_no_cell() {
+        let table = MeshLinkIngressTable::of_this_runtime(
+            &Iceoryx2Node::for_this_test_process(),
+            &Arc::new(crate::core::runtime::mesh::GpuContextTheMeshCopiesFramesWith::default()),
+        );
+
+        assert_eq!(
+            table.what_machine_an_address_is_carrying_from(&an_address()),
+            WhatIsKnownOfAnInboundLinksStampClock::NoSuchLinkFeedsThatPort
+        );
+        assert!(
+            table.carried.lock().machine_clocks_by_address.is_empty(),
+            "asking about an address must not mint a cell for it"
+        );
+    }
+
+    /// A link waiting on an address has a cell from the moment the wiring op
+    /// takes it, and the answer follows what the ingress writes into it.
+    #[test]
+    fn an_address_being_carried_names_whatever_machine_its_bags_were_stamped_on() {
+        let table = MeshLinkIngressTable::of_this_runtime(
+            &Iceoryx2Node::for_this_test_process(),
+            &Arc::new(crate::core::runtime::mesh::GpuContextTheMeshCopiesFramesWith::default()),
+        );
+        let machine_clock = table.machine_clock_carried_from(&an_address());
+
+        assert_eq!(
+            table.what_machine_an_address_is_carrying_from(&an_address()),
+            WhatIsKnownOfAnInboundLinksStampClock::NothingHasCrossedItYet
+        );
+
+        let another_machine =
+            crate::core::runtime::mesh::MachineClockIdentity::of_the_machine_whose_boot_session_uuid_reads(
+                "8b93a1c2-0000-4d5a-9a11-2c7f0d5e2f1c",
+            );
+        machine_clock.note_the_machine_a_bag_was_stamped_on(another_machine);
+
+        assert_eq!(
+            table.what_machine_an_address_is_carrying_from(&an_address()),
+            WhatIsKnownOfAnInboundLinksStampClock::TheMachine(another_machine)
+        );
     }
 
     /// A runtime nobody has announced leaves the link waiting, naming the

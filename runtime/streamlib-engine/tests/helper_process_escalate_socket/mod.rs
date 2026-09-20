@@ -10,7 +10,12 @@
 
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
+
 use std::time::Duration;
+use streamlib_engine::core::runtime::mesh::{
+    GpuContextTheMeshCopiesFramesWith, MeshLinkIngressTable,
+};
+use streamlib_engine::iceoryx2::Iceoryx2Node;
 
 use serde_json::{Value, json};
 
@@ -122,4 +127,20 @@ pub fn send_lifecycle_command_and_let_the_helper_read_it(
         json!(lifecycle_command),
         "the helper must see the lifecycle command the parent sent, got {received}"
     );
+}
+
+/// A mesh ingress table for a test whose helper never asks about a remote
+/// link: it carries nothing, because no link was ever noted on it.
+///
+/// The domain root comes back with it. Dropped on its own, it would
+/// `remove_dir_all` the directory the returned table's iceoryx2 node still
+/// keeps its files under, and the node would then clean up against nothing.
+pub fn a_mesh_link_ingress_table_carrying_nothing()
+-> (tempfile::TempDir, std::sync::Arc<MeshLinkIngressTable>) {
+    let domain_root = tempfile::tempdir().expect("a domain root of its own");
+    let table = MeshLinkIngressTable::of_this_runtime(
+        &Iceoryx2Node::new(domain_root.path(), "streamlib-test").expect("an iceoryx2 node"),
+        &std::sync::Arc::new(GpuContextTheMeshCopiesFramesWith::default()),
+    );
+    (domain_root, table)
 }

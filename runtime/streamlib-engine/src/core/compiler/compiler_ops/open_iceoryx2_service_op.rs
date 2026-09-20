@@ -35,9 +35,9 @@ use crate::iceoryx2::{
     DEFAULT_EXPECTED_PAYLOAD_BYTES, DeliveryProfile, DeliveryResolution, Iceoryx2Node,
     Iceoryx2NotifyService, Iceoryx2Service, InboundLinkName,
     MeshHopDroppedBagCountsByRemoteInboundLink, RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL,
-    WINDOWED_PORT_SUBSCRIBER_RING_DEPTH, audio_windowing_declared_by_input_port,
-    delivery_profile_for_input_port, effective_channel_chunk_ceiling_bytes,
-    refuse_an_unsettled_match_device_sentinel,
+    TheClockAnInboundLinksStampsAreTakenOn, WINDOWED_PORT_SUBSCRIBER_RING_DEPTH,
+    audio_windowing_declared_by_input_port, delivery_profile_for_input_port,
+    effective_channel_chunk_ceiling_bytes, refuse_an_unsettled_match_device_sentinel,
 };
 use streamlib_ipc_types::{
     MAX_DESTINATIONS_PER_CHANNEL, MAX_INBOUND_LINKS_PER_DESTINATION,
@@ -200,6 +200,9 @@ pub fn open_iceoryx2_service(
     // side's startup envelope — either way wired the moment this op returns.
     let mut wire_replies_awaited_from_its_out_of_process_ends = Vec::new();
 
+    let the_clock_this_links_stamps_are_taken_on =
+        the_clock_this_links_stamps_are_taken_on(&from_port, mesh_link_ingress_table);
+
     // Source side: install the single channel publisher (first link out of this
     // port) and append this link's destination notifier. A source on another
     // runtime has no side to wire here — its ingress is the channel's publisher
@@ -251,6 +254,7 @@ pub fn open_iceoryx2_service(
             &dest_port,
             &channel_service_name,
             &inbound_link_name_of(&from_port, &channel_service_name),
+            &the_clock_this_links_stamps_are_taken_on,
             notify_service_name_for_the_destination
                 .as_deref()
                 .unwrap_or(""),
@@ -269,6 +273,7 @@ pub fn open_iceoryx2_service(
             &dest_port,
             link_id,
             &inbound_link_name_of(&from_port, &channel_service_name),
+            the_clock_this_links_stamps_are_taken_on.clone(),
             dest_input_port_delivery,
             &service,
             notify_service_for_the_destination.as_ref(),
@@ -286,6 +291,20 @@ pub fn open_iceoryx2_service(
             notify_service_name_for_the_source.map(str::to_string),
             where_a_remote_links_hop_loss_is_counted(graph, &dest_proc_id, link_id),
         );
+    }
+    // Rendered off the ingress table's own cell, so `graph` says which machine
+    // the link is carrying from now rather than which one it was carrying from
+    // when it was wired. A link from this runtime carries none: it was stamped
+    // on this machine, which the renderer answers without being told.
+    if let TheClockAnInboundLinksStampsAreTakenOn::WhicheverMachineTheMeshIsCarryingFrom(
+        machine_clock,
+    ) = the_clock_this_links_stamps_are_taken_on
+    {
+        if let Some(link) = graph.traversal_mut().e(link_id).first_mut() {
+            link.insert_component_without_rendering_it(
+                crate::core::graph::TheMachineClockALinksStampsAreTakenOnComponent(machine_clock),
+            );
+        }
     }
 
     let link = graph
@@ -480,6 +499,28 @@ fn inbound_link_name_of(source: &OutputLinkPortRef, channel_service_name: &str) 
     match source.mesh_port_address() {
         Some(address) => InboundLinkName::from(address.to_string().as_str()),
         None => InboundLinkName::from(channel_service_name),
+    }
+}
+
+/// Which machine's monotonic clock a destination reads this link's stamps as
+/// being taken on.
+///
+/// A link from a port on this runtime was stamped here. One from another
+/// runtime was stamped on whatever machine the mesh is carrying it from, which
+/// no bag has said yet: the destination is wired long before the source runtime
+/// is known, so it takes the ingress table's cell for the address and reads the
+/// answer out of it afterwards, as bags arrive and as the source comes and goes.
+fn the_clock_this_links_stamps_are_taken_on(
+    source: &OutputLinkPortRef,
+    mesh_link_ingress_table: &MeshLinkIngressTable,
+) -> TheClockAnInboundLinksStampsAreTakenOn {
+    match source.mesh_port_address() {
+        Some(address) => {
+            TheClockAnInboundLinksStampsAreTakenOn::WhicheverMachineTheMeshIsCarryingFrom(
+                mesh_link_ingress_table.machine_clock_carried_from(address),
+            )
+        }
+        None => TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
     }
 }
 
@@ -1189,6 +1230,7 @@ fn wire_rust_dest(
     dest_port: &str,
     link_id: &LinkUniqueId,
     inbound_link_name: &InboundLinkName,
+    stamp_clock: TheClockAnInboundLinksStampsAreTakenOn,
     dest_input_port_delivery: DeliveryResolution,
     service: &Iceoryx2Service,
     notify_service: Option<&Iceoryx2NotifyService>,
@@ -1233,7 +1275,13 @@ fn wire_rust_dest(
     }
 
     let subscriber = service.create_subscriber(subscriber_ring_depth)?;
-    input_inner.add_channel_subscriber(dest_port, link_id.as_str(), inbound_link_name, subscriber);
+    input_inner.add_channel_subscriber(
+        dest_port,
+        link_id.as_str(),
+        inbound_link_name,
+        stamp_clock,
+        subscriber,
+    );
     tracing::debug!(
         "Bound channel subscriber to destination input port '{}'",
         dest_port
@@ -1451,6 +1499,9 @@ fn wire_subprocess_source(
 /// nothing a reader could recognise, while the link name *is* that address.
 /// They are equal for a link whose source is on this runtime.
 ///
+/// `stamp_clock` rides it as a third, spelled by
+/// [`TheClockAnInboundLinksStampsAreTakenOn::as_the_token_a_far_side_is_wired_with`].
+///
 /// Hands back the cell this end's answer will land in, on the same terms as
 /// [`wire_subprocess_source`].
 #[allow(clippy::too_many_arguments)]
@@ -1461,6 +1512,7 @@ fn wire_subprocess_dest(
     dest_port: &str,
     channel_service_name: &str,
     inbound_link_name: &InboundLinkName,
+    stamp_clock: &TheClockAnInboundLinksStampsAreTakenOn,
     notify_service_name: &str,
     dest_input_port_delivery: DeliveryResolution,
     channel_sizing: ChannelSizing,
@@ -1481,6 +1533,7 @@ fn wire_subprocess_dest(
         "link_id": link_id.to_string(),
         "channel_service_name": channel_service_name,
         "inbound_link_name": inbound_link_name.as_str(),
+        "stamp_clock": stamp_clock.as_the_token_a_far_side_is_wired_with(),
         "notify_service_name": notify_service_name,
         "read_mode": dest_input_port_delivery.drain_order.as_manifest_str(),
         "channel_service_creation_depth": channel_sizing.channel_service_creation_depth,
@@ -1719,6 +1772,7 @@ mod tests {
             "in1",
             "pabc/out1",
             &InboundLinkName::from("pabc/out1"),
+            &TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             "pdef/notify",
             DeliveryProfile::Newest.resolve(),
             sizing_of_a_two_subscriber_test_channel(),
@@ -2082,6 +2136,7 @@ mod tests {
             "audio",
             "pabc/out1",
             &InboundLinkName::from("pabc/out1"),
+            &TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             "pdef/notify",
             DeliveryProfile::Ordered.resolve(),
             ChannelSizing {
@@ -2374,6 +2429,7 @@ mod tests {
             "in1",
             "pabc/out1",
             &InboundLinkName::from("pabc/out1"),
+            &TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             "pdef/notify",
             DeliveryProfile::Newest.resolve(),
             sizing_of_a_two_subscriber_test_channel(),
@@ -2733,6 +2789,7 @@ mod tests {
             "in1",
             &link_id,
             &InboundLinkName::from("psource/out1"),
+            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             DeliveryProfile::Newest.resolve(),
             &channel,
             notify_service.as_ref(),
@@ -2796,6 +2853,7 @@ mod tests {
                 "in1",
                 &link_id,
                 &InboundLinkName::from("psource/out1"),
+                TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
                 dest_delivery,
                 &channel,
                 None,
@@ -3865,6 +3923,7 @@ mod tests {
             "audio",
             &"L-match-device".into(),
             &InboundLinkName::from("psource/audio_out"),
+            TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             DeliveryProfile::Ordered.resolve(),
             &channel,
             None,
@@ -3954,6 +4013,7 @@ mod tests {
             "audio",
             "pabc/out1",
             &InboundLinkName::from("pabc/out1"),
+            &TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             "pdef/notify",
             DeliveryProfile::Ordered.resolve(),
             sizing_of_a_two_subscriber_test_channel(),
@@ -4006,6 +4066,7 @@ mod tests {
             "audio",
             "pabc/out1",
             &InboundLinkName::from("pabc/out1"),
+            &TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             "pdef/notify",
             DeliveryProfile::Ordered.resolve(),
             sizing_of_a_two_subscriber_test_channel(),
@@ -4513,6 +4574,7 @@ mod tests {
             "audio",
             "pabc/out1",
             &InboundLinkName::from("pabc/out1"),
+            &TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             "pdef/notify",
             DeliveryProfile::Ordered.resolve(),
             ChannelSizing {
@@ -4728,6 +4790,9 @@ mod tests {
     mod a_link_whose_source_is_on_another_runtime {
         use super::*;
         use crate::core::graph::MeshPortAddress;
+        use crate::iceoryx2::{
+            ONLY_THE_APP_PROCESS_CAN_NAME_STAMP_CLOCK_TOKEN, THIS_MACHINE_STAMP_CLOCK_TOKEN,
+        };
 
         /// An address of this test's own: two tests sharing one would derive
         /// one ingress channel and meet each other's service in this process's
@@ -5056,6 +5121,7 @@ mod tests {
         fn one_helper_destinations_recorded_input_entry(
             channel_service_name: &str,
             inbound_link_name: &InboundLinkName,
+            stamp_clock: &TheClockAnInboundLinksStampsAreTakenOn,
         ) -> serde_json::Value {
             let mut graph = Graph::new();
             let dest_id = add_mock_input_only(&mut graph);
@@ -5073,6 +5139,7 @@ mod tests {
                 "in1",
                 channel_service_name,
                 inbound_link_name,
+                stamp_clock,
                 "pdef/notify",
                 DeliveryProfile::Newest.resolve(),
                 sizing_of_a_two_subscriber_test_channel(),
@@ -5107,6 +5174,7 @@ mod tests {
             let entry = one_helper_destinations_recorded_input_entry(
                 &channel,
                 &inbound_link_name_of(&source, &channel),
+                &the_clock_this_links_stamps_are_taken_on(&source, &a_mesh_link_ingress_table()),
             );
 
             assert_eq!(
@@ -5123,6 +5191,15 @@ mod tests {
                 entry["channel_service_name"], entry["inbound_link_name"],
                 "the two names are exactly what this key exists to keep apart"
             );
+            // Sent rather than left for the helper to infer from those two
+            // names differing. Fail-without-fix: send the local token here and
+            // a helper answers "this machine" for a link carrying from another
+            // one, which is what lets two clocks be compared.
+            assert_eq!(
+                entry["stamp_clock"],
+                serde_json::json!(ONLY_THE_APP_PROCESS_CAN_NAME_STAMP_CLOCK_TOKEN),
+                "only the app process holds a mesh session to name this link's machine"
+            );
         }
 
         /// A link whose source is on this runtime carries one name twice, which
@@ -5134,6 +5211,7 @@ mod tests {
             let entry = one_helper_destinations_recorded_input_entry(
                 "pcam/video",
                 &inbound_link_name_of(&source, "pcam/video"),
+                &the_clock_this_links_stamps_are_taken_on(&source, &a_mesh_link_ingress_table()),
             );
 
             assert_eq!(
@@ -5141,6 +5219,11 @@ mod tests {
                 serde_json::json!("pcam/video")
             );
             assert_eq!(entry["inbound_link_name"], serde_json::json!("pcam/video"));
+            assert_eq!(
+                entry["stamp_clock"],
+                serde_json::json!(THIS_MACHINE_STAMP_CLOCK_TOKEN),
+                "its bags were stamped here, and the helper is told so rather than inferring it"
+            );
         }
 
         /// A source port nothing on this runtime reads still gets its channel

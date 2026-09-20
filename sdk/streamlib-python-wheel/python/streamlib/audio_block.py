@@ -63,10 +63,10 @@ class AudioBlock:
     """An audio-block bag, cast: interleaved CPU samples plus how to read them.
 
     ``first_sample_timestamp_ns`` (the machine's monotonic clock in
-    nanoseconds, comparable across every process on the host) is the ordering
-    primitive and the whole of A/V sync: any sample's instant derives from it,
-    ``sample_count`` and ``sample_rate``, so joining a block to a camera frame
-    is subtracting two timestamps.
+    nanoseconds, comparable with any stamp taken on the same machine) is the
+    ordering primitive and the whole of A/V sync: any sample's instant derives
+    from it, ``sample_count`` and ``sample_rate``, so joining a block to a
+    camera frame is subtracting two timestamps.
 
     Read through ``ctx.inputs.read(port, into=AudioBlock)``, whose bag keys
     this validates on construction; ``samples`` is then the numpy view of the

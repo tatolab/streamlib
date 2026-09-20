@@ -105,10 +105,19 @@ impl ReactiveProcessor for Mp4Sink::Processor {
         while let Some((bag_bytes, frame_header_timestamp_ns, inbound_link_name)) =
             self.inputs.read_raw_from_inbound_link("tracks")?
         {
+            // Read per bag rather than once per track: a link's peer coming
+            // back on a fresh boot is a new clock mid-recording, and a track
+            // that went on writing against the epoch of the boot before it
+            // would place its samples days out.
+            let stamped_on = self
+                .inputs
+                .inbound_link_stamp_clock_identity("tracks", &inbound_link_name)
+                .the_machine_if_it_is_known();
             file_writer.accept_bag(
                 inbound_link_name.as_str(),
                 &bag_bytes,
                 frame_header_timestamp_ns,
+                stamped_on,
             )?;
         }
 

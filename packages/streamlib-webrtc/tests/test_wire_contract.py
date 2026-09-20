@@ -89,6 +89,7 @@ def wired_link(request: pytest.FixtureRequest) -> Iterator[WiredLinkUnderTest]:
     destination = ProcessorLinkDataAccess()
     destination.wire_input_link(
         INPUT_PORT, channel_service_name, channel_service_name,
+        "this_machine",
         notify_service_name,
         "read_next_in_order", 8, 8, 2, 1, link_id,
     )  # fmt: skip

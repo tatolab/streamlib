@@ -209,8 +209,8 @@ class VideoFrame(ClaimedSurfacePixelAccess):
     """A video-frame bag, cast: GPU surface reference plus per-frame metadata.
 
     ``surface_id`` is the handoff contract; ``timestamp_ns`` (the machine's
-    monotonic clock in nanoseconds, comparable across every process on the
-    host) is the ordering primitive.
+    monotonic clock in nanoseconds, comparable with any stamp taken on the same
+    machine) is the ordering primitive.
 
     Read through ``ctx.inputs.read(port, into=VideoFrame)``, the frame also
     holds its surface still: the producer cannot recycle those pixels while
