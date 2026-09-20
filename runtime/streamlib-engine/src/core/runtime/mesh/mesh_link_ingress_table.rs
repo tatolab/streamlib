@@ -367,12 +367,15 @@ impl MeshLinkIngressTable {
                     reason: "this runtime has left the mesh".to_string(),
                 };
             }
-            for machine_clock in carried.machine_clocks_by_address.values() {
-                machine_clock.forget_the_machine_because_nothing_is_arriving();
-            }
             std::mem::take(&mut carried.carrying)
         };
         drop(stopped_reading);
+        // After the ingresses are gone, for the reason `keep_carrying_or_stop`
+        // gives: their writing threads are joined by that drop, and until they
+        // are they can still name a machine.
+        for machine_clock in self.carried.lock().machine_clocks_by_address.values() {
+            machine_clock.forget_the_machine_because_nothing_is_arriving();
+        }
     }
 
     /// End the resolving thread, if one is running. Idempotent.
@@ -696,16 +699,21 @@ fn keep_carrying_or_stop(resolving: &ResolvingLinksNeeds, address: &MeshPortAddr
             {
                 link.the_ingress_knows_about_it = false;
             }
-            // Nothing is arriving from the address any more, so no clock is
-            // being carried from it. A source that comes back may come back on
-            // another machine, and a link that went on naming the old one
-            // while carrying nothing would say what no bag supports.
-            if let Some(machine_clock) = carried.machine_clocks_by_address.get(address) {
-                machine_clock.forget_the_machine_because_nothing_is_arriving();
-            }
             carried.carrying.remove(address)
         };
         drop(stopped_reading);
+        // After the ingress is gone, not before: dropping it joins its writing
+        // thread, and that thread is still draining what arrived before the
+        // teardown. Emptied ahead of the join, the last bag out would fill the
+        // cell again and leave a link naming a machine while carrying nothing.
+        if let Some(machine_clock) = resolving
+            .carried
+            .lock()
+            .machine_clocks_by_address
+            .get(address)
+        {
+            machine_clock.forget_the_machine_because_nothing_is_arriving();
+        }
         say_how_far_every_link_from(
             resolving,
             address,
