@@ -19,6 +19,13 @@
 //! every other surface in the engine speaks, and a private numbering here
 //! would be a second one to keep in step.
 
+// The writing half — the offsets, `to_wire_bytes` and the builder — belongs
+// to a sending runtime, and the door a frame's pixels are copied out through
+// is Linux-only. A build for another platform reads these messages and never
+// writes one, so on that platform the whole half is unreachable by design
+// rather than by oversight.
+#![cfg_attr(not(target_os = "linux"), allow(dead_code))]
+
 use streamlib_consumer_rhi::PixelFormat;
 
 /// Where each fixed field begins, and how long the fixed part of a description

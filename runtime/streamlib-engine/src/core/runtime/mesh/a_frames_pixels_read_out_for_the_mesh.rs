@@ -30,7 +30,11 @@ use crate::core::runtime::mesh::gpu_context_the_mesh_copies_frames_with::GpuCont
 
 /// Why one frame's pixels are not crossing, in the terms the port's log line
 /// and its once-per-reason bookkeeping both use.
+///
+/// On a platform with no copy-out door every reason but the platform's own is
+/// unreachable, which is the point of that arm rather than a gap in it.
 #[derive(Debug)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub(super) enum WhyAFramesPixelsCannotCrossTheMesh {
     /// The runtime has no GPU context — it has not started, or it has
     /// stopped. Nothing is resolvable either way.

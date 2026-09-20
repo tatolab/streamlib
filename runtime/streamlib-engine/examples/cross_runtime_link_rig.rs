@@ -44,12 +44,11 @@ fn main() -> streamlib::sdk::error::Result<()> {
 }
 
 mod rig {
-    use streamlib::sdk::app::App;
+    use streamlib::sdk::app::{AddedProcessor, App};
     use streamlib::sdk::error::{Error, Result};
     use streamlib::sdk::graph::{InputLinkPortRef, MeshPortAddress, OutputLinkPortRef};
     use streamlib_media_builtins::{
-        H264Encoder, MicrophoneSource, OpusEncoder, TestPatternSource,
-        register_media_builtin_processor_types,
+        MicrophoneSource, OpusEncoder, TestPatternSource, register_media_builtin_processor_types,
     };
 
     /// The display name the source gives its microphone, and the reader
@@ -187,11 +186,7 @@ mod rig {
             WhichEndOfTheLink::TheVideoReader {
                 source_runtime_name,
             } => {
-                let encoder = app.add(
-                    H264Encoder::Processor::processor_class_import_path(),
-                    serde_json::json!({}),
-                    Some("H264Encoder"),
-                )?;
+                let encoder = the_video_readers_consumer(&app)?;
                 let source = MeshPortAddress::new(
                     source_runtime_name,
                     THE_VIDEO_SOURCES_DISPLAY_NAME,
@@ -201,7 +196,7 @@ mod rig {
                     OutputLinkPortRef::on_another_runtime(source.clone()),
                     InputLinkPortRef::new(encoder.processor_id(), THE_VIDEO_PORT),
                 )?;
-                tracing::info!("cross_runtime_link_rig: reading {source} into H264Encoder");
+                tracing::info!("cross_runtime_link_rig: reading {source} into the encoder");
             }
             WhichEndOfTheLink::TheWiringAgent => {
                 tracing::info!(
@@ -212,6 +207,33 @@ mod rig {
         }
 
         app.run()
+    }
+
+    /// What the video reader links the crossed frames into.
+    ///
+    /// An `H264Encoder`, because a consumer that merely receives the bag
+    /// would not prove the surface it names is usable — the encoder resolves
+    /// it and encodes it, which is the whole claim.
+    #[cfg(target_os = "linux")]
+    fn the_video_readers_consumer(app: &App) -> Result<AddedProcessor> {
+        app.add(
+            streamlib_media_builtins::H264Encoder::Processor::processor_class_import_path(),
+            serde_json::json!({}),
+            Some("H264Encoder"),
+        )
+    }
+
+    /// See the Linux arm: the hardware encoders are Linux-only, and so is the
+    /// door a frame's pixels are copied out through, so no frame reaches this
+    /// platform to be read anyway. Refused by name rather than left to fail
+    /// as a missing processor class at `add`.
+    #[cfg(not(target_os = "linux"))]
+    fn the_video_readers_consumer(_app: &App) -> Result<AddedProcessor> {
+        Err(Error::Runtime(
+            "--video-reader needs a hardware video encoder, which this platform does not build; \
+             the mesh does not carry a frame's pixels off Linux either"
+                .into(),
+        ))
     }
 
     /// The two flags the fixture drives.
