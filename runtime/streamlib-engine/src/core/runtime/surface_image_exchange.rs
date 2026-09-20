@@ -246,7 +246,14 @@ mod tests {
     // Same reason as the skip in `core::context::surface_pixel_exchange`: a
     // gated test that finds no device passes trivially, and stdout is the
     // only channel a test harness surfaces.
+    // Linux-gated because the verb is: the non-Linux arm of
+    // `exchange_published_surface_id_for_png_image_bytes` refuses by name, and
+    // `core::context::surface_pixel_exchange` — which owns the copy it calls —
+    // is itself Linux-only. The Vulkan primitives underneath (blitter, readback,
+    // colour converter) do compile on macOS; whether they work under MoltenVK is
+    // unproven, and porting the verb is display-path work, not this ticket's.
     #[allow(clippy::disallowed_macros)]
+    #[cfg(target_os = "linux")]
     #[test]
     #[serial_test::serial]
     fn a_published_pool_frame_exchanges_through_the_runtime_operation_for_its_own_pixels() {

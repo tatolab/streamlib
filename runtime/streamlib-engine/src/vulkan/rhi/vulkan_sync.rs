@@ -143,9 +143,13 @@ unsafe impl Sync for VulkanFence {}
 pub struct HostVulkanTimelineSemaphore {
     device: vulkanalia::Device,
     semaphore: vk::Semaphore,
-    /// Whether the semaphore was created with VK_KHR_external_semaphore_fd
-    /// export support — i.e. [`Self::export_opaque_fd`] is callable.
-    exportable: bool,
+    /// Whether the caller asked for fd export via [`Self::new_exportable`].
+    ///
+    /// What was asked for, not what the object can do: where the platform has
+    /// no fd handle type the request is honoured without chaining
+    /// `VkExportSemaphoreCreateInfo`, and [`Self::export_opaque_fd`] refuses on
+    /// the platform rather than on this flag.
+    export_by_file_descriptor_was_requested: bool,
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -173,7 +177,11 @@ impl HostVulkanTimelineSemaphore {
         Self::create(device, initial_value, true)
     }
 
-    fn create(device: &vulkanalia::Device, initial_value: u64, exportable: bool) -> Result<Self> {
+    fn create(
+        device: &vulkanalia::Device,
+        initial_value: u64,
+        export_by_file_descriptor_was_requested: bool,
+    ) -> Result<Self> {
         let mut type_info = vk::SemaphoreTypeCreateInfo::builder()
             .semaphore_type(vk::SemaphoreType::TIMELINE)
             .initial_value(initial_value)
@@ -183,7 +191,9 @@ impl HostVulkanTimelineSemaphore {
             .handle_types(vk::ExternalSemaphoreHandleTypeFlags::OPAQUE_FD)
             .build();
 
-        let info = if exportable {
+        let info = if export_by_file_descriptor_was_requested
+            && super::CROSS_PROCESS_EXPORT_BY_FILE_DESCRIPTOR_EXISTS_ON_THIS_PLATFORM
+        {
             // Chain order: SemaphoreCreateInfo -> ExportSemaphoreCreateInfo -> SemaphoreTypeCreateInfo.
             // p_next is set manually to avoid moving the local `type_info`
             // into the builder's pNext (vulkanalia's builder takes &mut and
@@ -200,14 +210,15 @@ impl HostVulkanTimelineSemaphore {
 
         let semaphore = unsafe { device.create_semaphore(&info, None) }.map_err(|e| {
             Error::GpuError(format!(
-                "Failed to create timeline semaphore (exportable={exportable}): {e}"
+                "Failed to create timeline semaphore \
+                 (exportable={export_by_file_descriptor_was_requested}): {e}"
             ))
         })?;
 
         Ok(Self {
             device: device.clone(),
             semaphore,
-            exportable,
+            export_by_file_descriptor_was_requested,
         })
     }
 
@@ -259,7 +270,7 @@ impl HostVulkanTimelineSemaphore {
         Ok(Self {
             device: device.clone(),
             semaphore,
-            exportable: false,
+            export_by_file_descriptor_was_requested: false,
         })
     }
 
@@ -268,9 +279,17 @@ impl HostVulkanTimelineSemaphore {
     /// the returned fd and must close it after use (or after the
     /// subprocess has imported its own copy).
     pub fn export_opaque_fd(&self) -> Result<std::os::unix::io::RawFd> {
-        if !self.exportable {
+        if !self.export_by_file_descriptor_was_requested {
             return Err(Error::GpuError(
                 "HostVulkanTimelineSemaphore::export_opaque_fd: semaphore was not created with `new_exportable`".into(),
+            ));
+        }
+        if !super::CROSS_PROCESS_EXPORT_BY_FILE_DESCRIPTOR_EXISTS_ON_THIS_PLATFORM {
+            return Err(Error::GpuError(
+                "HostVulkanTimelineSemaphore::export_opaque_fd: OPAQUE_FD semaphore export is \
+                 a Linux mechanism and this platform has no vkGetSemaphoreFdKHR — the Apple \
+                 cross-process timeline is a Metal shared event (#2360)"
+                    .into(),
             ));
         }
         let info = vk::SemaphoreGetFdInfoKHR::builder()
@@ -343,7 +362,7 @@ impl HostVulkanTimelineSemaphore {
 
     /// Whether [`Self::export_opaque_fd`] can be called.
     pub fn is_exportable(&self) -> bool {
-        self.exportable
+        self.export_by_file_descriptor_was_requested
     }
 }
 
@@ -459,7 +478,7 @@ mod tests {
     /// fd. Sufficient to confirm `VK_KHR_external_semaphore_fd` is wired.
     /// Cross-process import is exercised by the surface-adapter
     /// integration tests in `streamlib-adapter-vulkan`.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
         ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
@@ -483,6 +502,30 @@ mod tests {
         let fd = sem.export_opaque_fd().expect("export_opaque_fd");
         assert!(fd >= 0, "exported sync fd should be a valid kernel fd");
         unsafe { libc::close(fd) };
+    }
+
+    /// Where the fd handle type does not exist, export refuses by name. Without
+    /// the guard this reaches `vkGetSemaphoreFdKHR`, which the loader never
+    /// resolved — vulkanalia's unloaded-command stub panics, and a panic in this
+    /// position aborts the whole test binary rather than failing one case.
+    #[cfg(not(target_os = "linux"))]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn timeline_semaphore_export_refuses_where_there_is_no_fd_handle_type() {
+        let device = HostVulkanDevice::new().expect("the rig must produce a Vulkan device");
+        let semaphore = HostVulkanTimelineSemaphore::new_exportable(device.device(), 0)
+            .expect("a timeline semaphore must still be creatable without fd export");
+
+        let refusal = semaphore
+            .export_opaque_fd()
+            .expect_err("a platform without vkGetSemaphoreFdKHR must refuse the export");
+        assert!(
+            refusal.to_string().contains("Linux mechanism"),
+            "the refusal must say why rather than blaming the caller: {refusal}"
+        );
     }
 
     #[cfg_attr(

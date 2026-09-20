@@ -64,6 +64,8 @@ mod device_capability;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod vulkan_extension_names;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+mod vulkan_instance_api_version;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod vulkan_layout;
 
 pub use error::{ConsumerRhiError, Result};
@@ -92,6 +94,8 @@ pub use device_capability::{
 };
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use vulkan_extension_names::vulkan_extension_names_borrowed_from_properties;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub use vulkan_instance_api_version::REQUESTED_VULKAN_INSTANCE_API_VERSION;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use vulkan_layout::VulkanLayout;
 

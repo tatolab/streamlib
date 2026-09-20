@@ -156,8 +156,14 @@ enum HostVisibleAllocationIntent {
 }
 
 impl HostVisibleAllocationIntent {
-    fn is_exportable(self) -> bool {
-        matches!(self, Self::SequentialWriteExportable)
+    /// Whether the allocation declares a DMA-BUF export handle type.
+    ///
+    /// An exportable intent on a platform without the handle type degrades to a
+    /// local allocation rather than failing — see
+    /// [`CROSS_PROCESS_EXPORT_BY_FILE_DESCRIPTOR_EXISTS_ON_THIS_PLATFORM`].
+    fn declares_dma_buf_export(self) -> bool {
+        super::CROSS_PROCESS_EXPORT_BY_FILE_DESCRIPTOR_EXISTS_ON_THIS_PLATFORM
+            && matches!(self, Self::SequentialWriteExportable)
     }
 
     fn vma_allocation_create_flags(self) -> vma::AllocationCreateFlags {
@@ -240,7 +246,7 @@ impl HostVulkanBuffer {
             .size(size)
             .usage(usage)
             .sharing_mode(vk::SharingMode::EXCLUSIVE);
-        if intent.is_exportable() {
+        if intent.declares_dma_buf_export() {
             buffer_info = buffer_info.push_next(&mut external_buffer_info);
         }
 
@@ -256,7 +262,7 @@ impl HostVulkanBuffer {
         let (buffer, allocation) = {
             #[cfg(target_os = "linux")]
             let result = match vulkan_device.dma_buf_buffer_pool() {
-                Some(pool) if intent.is_exportable() => unsafe {
+                Some(pool) if intent.declares_dma_buf_export() => unsafe {
                     pool.create_buffer(buffer_info, &alloc_opts)
                 },
                 _ => unsafe { allocator.create_buffer(buffer_info, &alloc_opts) },

@@ -124,7 +124,7 @@ impl ConsumerVulkanDevice {
             .application_version(vk::make_version(0, 1, 0))
             .engine_name(b"StreamLib\0")
             .engine_version(vk::make_version(0, 1, 0))
-            .api_version(vk::make_version(1, 4, 0))
+            .api_version(crate::REQUESTED_VULKAN_INSTANCE_API_VERSION)
             .build();
 
         let instance_info = vk::InstanceCreateInfo::builder()

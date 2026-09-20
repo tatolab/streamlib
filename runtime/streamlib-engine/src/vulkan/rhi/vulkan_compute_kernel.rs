@@ -1634,14 +1634,15 @@ mod tests {
     use crate::core::rhi::spirv_module_rewriting_for_tests::move_binding_to_another_descriptor_set_in_spirv_module;
     use crate::vulkan::rhi::HostVulkanBuffer;
 
-    fn try_vulkan_device() -> Option<Arc<HostVulkanDevice>> {
-        match HostVulkanDevice::new() {
-            Ok(d) => Some(d),
-            Err(_) => {
-                println!("Skipping - no Vulkan device available");
-                None
-            }
-        }
+    /// The device every dispatch test below runs on.
+    ///
+    /// Under `hardware-tests` the rig is asserted to exist, so a device that
+    /// cannot be created is the failure — not a reason to pass. Skipping here is
+    /// what would let a driver producing no usable device still report a green
+    /// dispatch suite, which is exactly what the MoltenVK bring-up needed to see.
+    fn vulkan_device_for_dispatch_tests() -> Arc<HostVulkanDevice> {
+        HostVulkanDevice::new()
+            .expect("the rig must produce a Vulkan device for the dispatch tests")
     }
 
     /// Allocate a HOST_VISIBLE storage buffer of `element_count * 4` bytes
@@ -1776,10 +1777,7 @@ mod tests {
     }
 
     fn assert_blend_for(input_count: u32) {
-        let device = match try_vulkan_device() {
-            Some(d) => d,
-            None => return,
-        };
+        let device = vulkan_device_for_dispatch_tests();
         let elem_count = 256u32;
         let (inputs, output) = run_blend_kernel_for(&device, input_count, elem_count);
         let actual = read_buffer_u32(&output, elem_count as usize);
@@ -1832,10 +1830,7 @@ mod tests {
     )]
     #[test]
     fn kernel_bindings_reflect_descriptor() {
-        let device = match try_vulkan_device() {
-            Some(d) => d,
-            None => return,
-        };
+        let device = vulkan_device_for_dispatch_tests();
         for &input_count in &[1u32, 2, 4, 8] {
             let bindings = blend_descriptor(input_count);
             let kernel = VulkanComputeKernel::new(
@@ -1867,10 +1862,7 @@ mod tests {
     )]
     #[test]
     fn rejects_descriptor_with_mismatched_binding_kind() {
-        let device = match try_vulkan_device() {
-            Some(d) => d,
-            None => return,
-        };
+        let device = vulkan_device_for_dispatch_tests();
         // SPIR-V binding 0 is StorageBuffer — declaring it as UniformBuffer must fail.
         let bindings = vec![
             ComputeBindingSpec::uniform_buffer(0),
@@ -1900,10 +1892,7 @@ mod tests {
     )]
     #[test]
     fn rejects_descriptor_missing_a_binding_the_shader_declares() {
-        let device = match try_vulkan_device() {
-            Some(d) => d,
-            None => return,
-        };
+        let device = vulkan_device_for_dispatch_tests();
         // 4-input shader declares bindings 0..3 + 8; omit binding 2.
         let bindings = vec![
             ComputeBindingSpec::storage_buffer(0),
@@ -1935,10 +1924,7 @@ mod tests {
     )]
     #[test]
     fn rejects_descriptor_with_extra_binding_not_in_shader() {
-        let device = match try_vulkan_device() {
-            Some(d) => d,
-            None => return,
-        };
+        let device = vulkan_device_for_dispatch_tests();
         // 1-input shader declares only bindings 0 and 8 — extra binding 1 is invalid.
         let bindings = vec![
             ComputeBindingSpec::storage_buffer(0),
@@ -1969,10 +1955,7 @@ mod tests {
     )]
     #[test]
     fn rejects_push_constant_size_mismatch() {
-        let device = match try_vulkan_device() {
-            Some(d) => d,
-            None => return,
-        };
+        let device = vulkan_device_for_dispatch_tests();
         let bindings = blend_descriptor(1);
         let result = VulkanComputeKernel::new(
             &device,
@@ -1998,10 +1981,7 @@ mod tests {
     )]
     #[test]
     fn dispatch_without_setting_bindings_fails_loud() {
-        let device = match try_vulkan_device() {
-            Some(d) => d,
-            None => return,
-        };
+        let device = vulkan_device_for_dispatch_tests();
         let bindings = blend_descriptor(2);
         let kernel = VulkanComputeKernel::new(
             &device,
@@ -2034,10 +2014,7 @@ mod tests {
     )]
     #[test]
     fn dispatch_completes_within_reasonable_budget() {
-        let device = match try_vulkan_device() {
-            Some(d) => d,
-            None => return,
-        };
+        let device = vulkan_device_for_dispatch_tests();
         // Performance smoke: a small kernel build + first dispatch should
         // round-trip in well under a couple seconds on any reasonable GPU.
         // Catches catastrophic regressions like accidentally recreating
@@ -2171,10 +2148,7 @@ mod tests {
     #[test]
     #[serial(streamlib_pipeline_cache_env)]
     fn cache_miss_writes_cache_file_after_kernel_construction() {
-        let device = match try_vulkan_device() {
-            Some(d) => d,
-            None => return,
-        };
+        let device = vulkan_device_for_dispatch_tests();
         let dir = unique_cache_dir("miss-writes");
         with_pipeline_cache_dir(&dir, || {
             assert!(
@@ -2219,10 +2193,7 @@ mod tests {
     #[test]
     #[serial(streamlib_pipeline_cache_env)]
     fn cache_hit_does_not_panic_or_break_kernel_construction() {
-        let device = match try_vulkan_device() {
-            Some(d) => d,
-            None => return,
-        };
+        let device = vulkan_device_for_dispatch_tests();
         let dir = unique_cache_dir("hit-reuses");
         with_pipeline_cache_dir(&dir, || {
             let bindings = blend_descriptor(1);
@@ -2276,10 +2247,7 @@ mod tests {
     #[test]
     #[serial(streamlib_pipeline_cache_env)]
     fn corrupt_cache_blob_falls_back_to_recompile_and_overwrites() {
-        let device = match try_vulkan_device() {
-            Some(d) => d,
-            None => return,
-        };
+        let device = vulkan_device_for_dispatch_tests();
         let dir = unique_cache_dir("corrupt-blob");
         with_pipeline_cache_dir(&dir, || {
             std::fs::create_dir_all(&dir).expect("mkdir");
@@ -2320,10 +2288,7 @@ mod tests {
     #[test]
     #[serial(streamlib_pipeline_cache_env)]
     fn read_only_cache_dir_does_not_break_kernel_construction() {
-        let device = match try_vulkan_device() {
-            Some(d) => d,
-            None => return,
-        };
+        let device = vulkan_device_for_dispatch_tests();
         let dir = unique_cache_dir("readonly-dir");
         with_pipeline_cache_dir(&dir, || {
             std::fs::create_dir_all(&dir).expect("mkdir");
@@ -2375,10 +2340,7 @@ mod tests {
     )]
     #[test]
     fn sampled_image_binding_dispatches_with_raw_view() {
-        let device = match try_vulkan_device() {
-            Some(d) => d,
-            None => return,
-        };
+        let device = vulkan_device_for_dispatch_tests();
 
         let bindings = [
             ComputeBindingSpec::sampled_image(0),
