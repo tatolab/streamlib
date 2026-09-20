@@ -210,6 +210,45 @@ which this delta does not touch.
 - REMOVED: backend-vulkan
   The other half of the backend selector. With one RHI it selects nothing; every site reading it is
   a backend-selection `cfg` this change simplifies. Owner, 2026-09-19. Recorded while shipping #2355.
+- REMOVED: runtime/streamlib-engine/src/core/rhi/backend.rs
+  `RhiBackend` and its `STREAMLIB_RHI_BACKEND` environment variable — a *runtime* backend selector,
+  public at `core::RhiBackend`, with zero consumers. One RHI selects nothing and takes no dial.
+  Recorded while shipping #2355.
+- REMOVED: runtime/streamlib-engine/src/core/rhi/texture_cache.rs
+  `RhiTextureCache` and `RhiTextureView`, whose only constructor (`new_metal`) lived in the Metal
+  tree, together with `GpuContext::create_texture_cache` and `GpuContext::metal_device`. Zero
+  consumers. Recorded while shipping #2355.
+- REMOVED: runtime/streamlib-engine/src/vulkan/rhi/vulkan_texture_cache.rs
+  `VulkanTextureCache`, reachable only through the facade above. Recorded while shipping #2355.
+- REMOVED: runtime/streamlib-engine/src/core/rhi/gl_interop.rs
+  `GlContext`, `GlTextureBinding` and `gl_constants` — crate-root re-exports whose only
+  implementation was Metal's CGL/IOSurface path, with zero consumers. The GL surface adapter
+  (`streamlib-adapter-opengl`'s `OpenGlContext`) is the live one and is untouched. Recorded while
+  shipping #2355.
+- REMOVED: RhiBlitter::blit_copy_iosurface_raw
+  And `blit_copy_iosurface` on `GpuContext`, `GpuContextFullAccess` and `GpuContextLimitedAccess`.
+  The Metal blitter was its only implementation; what remained refused by name, making the three
+  facade layers a no-op chain with no callers. An IOSurface reaches the RHI as a `VkImage` through
+  `VK_EXT_metal_objects`, not a raw blit. Recorded while shipping #2355.
+- REMOVED: Texture::iosurface_id / PooledTextureHandle::iosurface_id
+  Ungated `pub fn`s that existed on Linux and answered `None` there; their only producer was the
+  Metal texture. `NativeTextureHandle::IOSurface` goes with them, along with
+  `HostVulkanTexture::placeholder` and the `imported_from_iosurface` / `imported_from_metal` flags,
+  each of which lost its last writer. Recorded while shipping #2355.
+- REMOVED: the macOS XPC arm of core/context/surface_store.rs
+  An XPC client with no server behind it, reaching the deleted Metal tree for its mach ports. Its
+  `CheckedInSurfaces` map went with it — the map had no writer left, which made
+  `disconnect`'s per-surface release loop provably empty on Linux too; the socket-close the service
+  already treats as a full release is what actually released them. The Apple transport returns as
+  raw Mach in #2360. Recorded while shipping #2355.
+- REMOVED: Mp4Sink on macOS
+  Not deleted — gated to Linux, with `mp4_annex_b_access_unit`, `mp4_fragmented_file_writer` and
+  `mp4_track_sample_entry`. They read parameter sets through the engine's Vulkan Video NAL parser
+  (`nv_video_parser`), which MoltenVK cannot serve and which stays Linux-only, so a macOS runtime
+  registers no `Mp4Sink` and records no MP4. The parser's Annex-B helpers are pure byte walking and
+  nothing about them is Linux-bound; lifting them out from under the Vulkan Video tree would make
+  the sink cross-platform again, and is backlog rather than milestone work. Recorded while
+  shipping #2355.
 - REMOVED: tonic-build
   A macOS-only build dependency for a surface-share gRPC service that does not exist;
   `build.rs` names neither it nor protobuf.

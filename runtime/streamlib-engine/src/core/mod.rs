@@ -42,8 +42,9 @@ pub mod runtime;
 pub mod stable_short_id;
 pub mod texture;
 pub mod utils;
-// Linux-only: winit is a Linux-target engine dependency, and the window seam
-// the pump serves has no Apple implementation yet.
+// Wherever winit and the Vulkan present target compile. The Apple event loop
+// is not yet driven on the thread AppKit requires, so a window opens on Linux
+// only — see `window_event_pump`.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod processor_owned_window;
 #[cfg(any(target_os = "linux", target_os = "macos"))]

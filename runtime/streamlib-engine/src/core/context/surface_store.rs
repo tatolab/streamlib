@@ -330,47 +330,13 @@ impl SurfaceCache {
     }
 }
 
-/// Reverse lookup from pixel buffer identity to surface ID.
-struct CheckedInSurfaces {
-    /// Map from IOSurface ID (from IOSurfaceGetID) to surface store ID.
-    iosurface_id_to_surface_id: HashMap<u32, String>,
-}
-
-impl CheckedInSurfaces {
-    fn new() -> Self {
-        Self {
-            iosurface_id_to_surface_id: HashMap::new(),
-        }
-    }
-
-    fn get_surface_id(&self, iosurface_id: u32) -> Option<&String> {
-        self.iosurface_id_to_surface_id.get(&iosurface_id)
-    }
-
-    fn insert(&mut self, iosurface_id: u32, surface_id: String) {
-        self.iosurface_id_to_surface_id
-            .insert(iosurface_id, surface_id);
-    }
-
-    fn clear(&mut self) {
-        self.iosurface_id_to_surface_id.clear();
-    }
-
-    fn surface_ids(&self) -> Vec<String> {
-        self.iosurface_id_to_surface_id.values().cloned().collect()
-    }
-}
-
-/// Surface store client for cross-process GPU surface sharing.
+/// Rich data backing a [`SurfaceStore`], reached through the store's opaque
+/// handle.
 ///
-/// Connects to the surface-share service to exchange handles for surface IDs.
-/// Caches resolved surfaces locally to minimize round-trips.
-/// Rich data backing a [`SurfaceStore`], reached through the store's
-/// opaque handle.
-///
-/// All cross-platform and Linux-specific surface-share IPC methods
-/// (`connect`, `check_in`, `check_out`, `register_texture`, etc.)
-/// live on this type; the `SurfaceStore` handle forwards each to it.
+/// Connects to the surface-share service to exchange handles for surface ids
+/// and caches what it resolves. Every surface-share IPC method (`connect`,
+/// `check_in`, `check_out`, `register_texture`, …) lives here; the
+/// `SurfaceStore` handle forwards each to it.
 pub(crate) struct SurfaceStoreInner {
     /// Unix socket connection to the surface-share service (Linux only).
     #[cfg(target_os = "linux")]
@@ -380,7 +346,6 @@ pub(crate) struct SurfaceStoreInner {
     cache: Mutex<SurfaceCache>,
 
     /// Reverse lookup for checked-in surfaces (iosurface_id -> surface_id).
-    checked_in: Mutex<CheckedInSurfaces>,
 
     /// The Unix socket path to connect to.
     service_name: String,
@@ -418,7 +383,6 @@ impl SurfaceStoreInner {
             #[cfg(target_os = "linux")]
             connection: Mutex::new(None),
             cache: Mutex::new(SurfaceCache::new()),
-            checked_in: Mutex::new(CheckedInSurfaces::new()),
             service_name,
             runtime_id,
             check_out_leases,
@@ -478,24 +442,15 @@ impl SurfaceStoreInner {
         Ok(())
     }
 
-    /// Disconnect from the surface-share service and release all surfaces.
+    /// Disconnect from the surface-share service, dropping every surface this
+    /// store resolved.
+    ///
+    /// Closing the socket is the release: the service treats a client's
+    /// socket-close as a full release of everything that client checked in,
+    /// which is why nothing is released one id at a time here.
     #[cfg(target_os = "linux")]
     pub fn disconnect(&self) -> Result<()> {
-        // Release all checked-in surfaces
-        let surface_ids = self.checked_in.lock().surface_ids();
-        for surface_id in surface_ids {
-            if let Err(e) = self.release_from_surface_share_unix(&surface_id) {
-                tracing::warn!(
-                    "SurfaceStore: Failed to release surface '{}': {}",
-                    surface_id,
-                    e
-                );
-            }
-        }
-
-        // Clear local state
         self.cache.lock().clear();
-        self.checked_in.lock().clear();
 
         // Drop the connection
         self.connection.lock().take();
@@ -1313,6 +1268,8 @@ impl SurfaceStoreInner {
         ))
     }
 
+    /// `Ok` rather than the refusal its siblings return: nothing was ever
+    /// connected, and a shutdown path must not fail for having nothing to do.
     #[cfg(not(target_os = "linux"))]
     pub fn disconnect(&self) -> Result<()> {
         Ok(())

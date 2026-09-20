@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Vulkan synchronization primitives and Metal interop.
+//! Vulkan synchronization primitives.
 
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
@@ -11,16 +11,10 @@ use vulkanalia::vk::KhrExternalSemaphoreFdExtensionDeviceCommands;
 use crate::core::{Error, Result};
 
 /// Vulkan semaphore wrapper for synchronization.
-///
-/// Can be created standalone or imported from a Metal shared event
-/// for cross-API synchronization.
 #[allow(dead_code)]
 pub struct VulkanSemaphore {
     device: vulkanalia::Device,
     semaphore: vk::Semaphore,
-    /// Whether this was imported from Metal (affects cleanup)
-    #[allow(dead_code)]
-    imported_from_metal: bool,
 }
 
 #[allow(dead_code)]
@@ -35,7 +29,6 @@ impl VulkanSemaphore {
         Ok(Self {
             device: device.clone(),
             semaphore,
-            imported_from_metal: false,
         })
     }
 

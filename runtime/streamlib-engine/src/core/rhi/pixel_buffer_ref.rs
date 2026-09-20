@@ -7,15 +7,12 @@ use super::PixelFormat;
 
 /// Platform pixel buffer reference.
 ///
-/// Wraps the platform's native pixel buffer type plus its pixel-shaped
-/// metadata (width, height, format, bytes-per-pixel):
-/// - Linux / macOS: `Arc<HostVulkanBuffer>` (shared generic-buffer primitive)
-///   plus pixel metadata stored on this reference (the bottom-layer
-///   `HostVulkanBuffer` is role-agnostic and does not carry pixel shape).
-/// - Windows: `ID3D11Texture2D*` (future)
+/// Holds an `Arc<HostVulkanBuffer>` — the role-agnostic bottom-layer
+/// primitive, which carries no pixel shape — plus the pixel-shaped metadata
+/// this reference adds: width, height, format, bytes-per-pixel.
 ///
-/// Clone increments the appropriate refcount, Drop decrements it.
-/// No image data is ever copied.
+/// Clone bumps the Arc's refcount; no image data is ever copied.
+#[derive(Clone)]
 pub struct PixelBufferRef {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) inner: std::sync::Arc<crate::vulkan::rhi::HostVulkanBuffer>,
@@ -121,31 +118,6 @@ impl PixelBufferRef {
         }
     }
 }
-
-impl Clone for PixelBufferRef {
-    fn clone(&self) -> Self {
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
-        {
-            Self {
-                inner: std::sync::Arc::clone(&self.inner),
-                width: self.width,
-                height: self.height,
-                bytes_per_pixel: self.bytes_per_pixel,
-                format: self.format,
-            }
-        }
-        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-        {
-            Self {
-                _marker: std::marker::PhantomData,
-            }
-        }
-    }
-}
-
-// Safety: the backing `HostVulkanBuffer` is itself Send+Sync.
-unsafe impl Send for PixelBufferRef {}
-unsafe impl Sync for PixelBufferRef {}
 
 impl std::fmt::Debug for PixelBufferRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

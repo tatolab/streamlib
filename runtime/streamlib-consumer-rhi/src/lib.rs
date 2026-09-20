@@ -48,6 +48,9 @@ mod error;
 mod formats;
 mod pixel_format;
 
+// Compiled wherever `ConsumerVulkanDevice` is, because it is
+// `ConsumerMarker::Buffer` and the privilege ladder does not resolve without
+// it. Only its imports are Linux — see the constructors.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod consumer_vulkan_buffer;
 #[cfg(any(target_os = "linux", target_os = "macos"))]

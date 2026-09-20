@@ -262,24 +262,11 @@ const RUST_BANNED_MACROS: &[(&str, &str)] = &[
     ("dbg", "dbg!"),
 ];
 
-/// Walks every crate that opts into workspace lints
-/// (`[lints] workspace = true` in its Cargo.toml) and checks each `.rs` file
-/// under its source roots for banned macro invocations. Crates that don't opt
-/// in (CLI binaries, runtime binaries) are out of the lockout by design.
-///
-/// Returns one file count per source root name rather than a single total, so
-/// [`run`] can refuse a run in which one root read nothing.
-///
-/// Respects `#[cfg(...)]` on out-of-line mod declarations in the crate root
-/// (e.g. `#[cfg(target_os = "macos")] mod apple;`) so that files the Linux
-/// runner's clippy would never parse are also skipped here.
 /// One of the platforms the workspace compiles for, as the `cfg` evaluator
 /// below reads a gate against.
 ///
 /// The scan runs once per platform because a single pass sees only one arm of
-/// every `#[cfg(target_os = …)]` in the tree: a Linux-only pass never parses
-/// `apple/`, which is how a `println!` there survived seven months of green
-/// gates.
+/// every `#[cfg(target_os = …)]` in the tree.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PlatformTheCfgGatesAreEvaluatedFor {
     Linux,
@@ -317,20 +304,47 @@ impl PlatformTheCfgGatesAreEvaluatedFor {
     }
 }
 
+/// What makes two findings the same finding across platform passes: one line
+/// of one file breaking one rule. The target is not part of it because this
+/// key orders and collapses Rust findings only.
+fn one_violation_per_line_key(violation: &Violation) -> (&Path, usize, &'static str) {
+    (
+        violation.path.as_path(),
+        violation.line_no,
+        violation.matched_pattern,
+    )
+}
+
+/// Walks every crate that opts into workspace lints
+/// (`[lints] workspace = true` in its Cargo.toml) and checks each `.rs` file
+/// under its source roots for banned macro invocations. Crates that don't opt
+/// in (CLI binaries, runtime binaries) are out of the lockout by design.
+///
+/// Returns one file count per source root name rather than a single total, so
+/// [`run`] can refuse a run in which one root read nothing.
+///
+/// Respects `#[cfg(...)]` on out-of-line mod declarations in the crate root,
+/// evaluated once per [`PlatformTheCfgGatesAreEvaluatedFor`], so that a
+/// subtree one platform excludes is still read by the platform that compiles
+/// it.
 pub fn scan_rust(
     project_root: &Path,
     violations: &mut Vec<Violation>,
 ) -> Result<Vec<LintLoggingScanRootFileCount>> {
     let mut files_scanned_per_source_root =
         vec![0usize; crate::RUST_CRATE_SOURCE_ROOT_DIR_NAMES.len()];
-    // One pass per platform, and a file counted once however many passes read
-    // it: the passes differ in which cfg-gated subtrees they enter, not in the
-    // tree they walk.
+    // A file counted once however many passes read it: the passes differ in
+    // which cfg-gated subtrees they enter, not in the tree they walk.
     let mut paths_already_counted: std::collections::HashSet<PathBuf> =
         std::collections::HashSet::new();
+    // The opt-in set is read from the manifests and cannot vary by platform.
+    let lint_opted_in_crate_roots = discover_lint_opted_in_crates(project_root)?;
+    // Only this function's own findings are deduped, so a caller's entries are
+    // neither reordered nor collapsed against ours.
+    let mut rust_violations = Vec::new();
     for platform in PlatformTheCfgGatesAreEvaluatedFor::EVERY_PLATFORM_SCANNED {
-        for crate_root in discover_lint_opted_in_crates(project_root)? {
-            let excluded = collect_cfg_excluded_mod_paths(&crate_root, platform);
+        for crate_root in &lint_opted_in_crate_roots {
+            let excluded = collect_cfg_excluded_mod_paths(crate_root, platform);
             for (root_index, root_name) in
                 crate::RUST_CRATE_SOURCE_ROOT_DIR_NAMES.iter().enumerate()
             {
@@ -367,23 +381,19 @@ pub fn scan_rust(
                     if paths_already_counted.insert(path.to_path_buf()) {
                         *files_scanned += 1;
                     }
-                    scan_rust_file(path, violations, platform)?;
+                    scan_rust_file(path, &mut rust_violations, platform)?;
                 }
             }
         }
     }
     // A violation on a line both passes reach is one violation.
-    violations.sort_by(|left, right| {
-        (left.path.as_path(), left.line_no, left.matched_pattern).cmp(&(
-            right.path.as_path(),
-            right.line_no,
-            right.matched_pattern,
-        ))
+    rust_violations.sort_by(|left, right| {
+        one_violation_per_line_key(left).cmp(&one_violation_per_line_key(right))
     });
-    violations.dedup_by(|left, right| {
-        (left.path.as_path(), left.line_no, left.matched_pattern)
-            == (right.path.as_path(), right.line_no, right.matched_pattern)
+    rust_violations.dedup_by(|left, right| {
+        one_violation_per_line_key(left) == one_violation_per_line_key(right)
     });
+    violations.append(&mut rust_violations);
     Ok(crate::RUST_CRATE_SOURCE_ROOT_DIR_NAMES
         .iter()
         .zip(files_scanned_per_source_root)
@@ -1400,10 +1410,6 @@ mod tests {
     }
 
     /// The Apple subtree is reached by the macOS pass and by nothing else.
-    ///
-    /// This is the gap the Apple tree rotted in: with a Linux-only pass the
-    /// `mod apple;` gate excluded the whole subtree, so a banned macro under it
-    /// was invisible to every green gate the repo had.
     #[test]
     fn rust_out_of_line_macos_mod_subtree_is_linted_by_the_macos_pass() {
         // Emulates the engine's lib.rs: `#[cfg(target_os = "macos")] pub mod apple;`
@@ -1485,8 +1491,34 @@ mod tests {
         .unwrap();
 
         let mut violations = Vec::new();
-        scan_rust(root, &mut violations).unwrap();
+        let counts = scan_rust(root, &mut violations).unwrap();
         assert_eq!(violations.len(), 1, "{violations:?}");
+        let src_root_files_scanned = counts
+            .iter()
+            .find(|count| count.scan_root_description.contains("`src/`"))
+            .map(|count| count.files_scanned);
+        assert_eq!(
+            src_root_files_scanned,
+            Some(1),
+            "two passes read the one file; it is counted once: {counts:?}"
+        );
+    }
+
+    /// A caller's own findings survive the Rust scan's dedup untouched.
+    #[test]
+    fn rust_scan_leaves_a_callers_violations_alone() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        let mut violations = vec![Violation {
+            path: root.join("somewhere.py"),
+            line_no: 1,
+            line_text: "print('x')".to_string(),
+            matched_pattern: "print(",
+            target: "python",
+        }];
+        scan_rust(root, &mut violations).unwrap();
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].target, "python");
     }
 
     #[test]

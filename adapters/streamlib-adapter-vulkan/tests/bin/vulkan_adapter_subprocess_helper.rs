@@ -38,19 +38,31 @@
 //!                   via the EPOLLHUP watchdog or
 //!                   `SubprocessCrashHarness`.
 
-#![cfg(target_os = "linux")]
+// The adapter this fixture drives imports a DMA-BUF, so it exists on Linux
+// alone. Off it the binary is an empty `main` so the target still compiles —
+// a bin whose every item is gated out has none, and the crate stops building.
+#[cfg(not(target_os = "linux"))]
+fn main() {}
 
+#[cfg(target_os = "linux")]
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+#[cfg(target_os = "linux")]
 use std::os::unix::net::UnixStream;
+#[cfg(target_os = "linux")]
 use std::process::ExitCode;
+#[cfg(target_os = "linux")]
 use std::sync::Arc;
 
+#[cfg(target_os = "linux")]
 use streamlib_consumer_rhi::{
     ConsumerVulkanDevice, ConsumerVulkanTexture, ConsumerVulkanTimelineSemaphore, TextureFormat,
 };
+#[cfg(target_os = "linux")]
 use vulkanalia::prelude::v1_4::*;
+#[cfg(target_os = "linux")]
 use vulkanalia::vk;
 
+#[cfg(target_os = "linux")]
 #[derive(Debug, serde::Deserialize)]
 struct HelperRequest {
     #[allow(dead_code)] // role is dispatched on argv[1]; this echoes it for debug
@@ -74,6 +86,7 @@ struct HelperRequest {
     clear_color: Option<[f32; 4]>,
 }
 
+#[cfg(target_os = "linux")]
 #[derive(Debug, serde::Serialize)]
 struct HelperResponse {
     ok: bool,
@@ -81,6 +94,7 @@ struct HelperResponse {
     bytes_read: Option<Vec<u8>>,
 }
 
+#[cfg(target_os = "linux")]
 fn die(socket: Option<&UnixStream>, msg: String) -> ExitCode {
     tracing::error!(error = %msg, "[helper] FATAL");
     if let Some(s) = socket {
@@ -95,6 +109,7 @@ fn die(socket: Option<&UnixStream>, msg: String) -> ExitCode {
     ExitCode::from(1)
 }
 
+#[cfg(target_os = "linux")]
 fn run() -> ExitCode {
     let role = std::env::args()
         .nth(1)
@@ -322,6 +337,7 @@ fn run() -> ExitCode {
 }
 
 /// Subprocess `vkCmdClearColorImage` — equivalent to a plain GPU write.
+#[cfg(target_os = "linux")]
 fn subprocess_clear_image(
     device: &Arc<ConsumerVulkanDevice>,
     image: vk::Image,
@@ -425,6 +441,7 @@ fn subprocess_clear_image(
 
 /// Subprocess readback — `vkCmdCopyImageToBuffer` into a staging buffer,
 /// then map and read.
+#[cfg(target_os = "linux")]
 fn subprocess_readback_image(
     device: &Arc<ConsumerVulkanDevice>,
     image: vk::Image,
@@ -588,6 +605,7 @@ fn subprocess_readback_image(
     Ok(out)
 }
 
+#[cfg(target_os = "linux")]
 fn main() -> ExitCode {
     run()
 }

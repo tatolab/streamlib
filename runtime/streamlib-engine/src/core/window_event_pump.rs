@@ -19,8 +19,7 @@
 //! In `core/` rather than `linux/` because it is one seam with a per-platform
 //! loop under it. Apple's rule — the loop must live on the process's first
 //! thread — changes where the loop is driven, not what a window owner asks for
-//! or what it is handed back, and moving the Apple pump onto that thread is
-//! still outstanding.
+//! or what it is handed back.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -275,24 +274,35 @@ fn start_window_event_pump_thread() -> std::result::Result<ProcessWideWindowEven
 
 fn build_the_processes_one_event_loop()
 -> std::result::Result<EventLoop<WindowEventPumpControlMessage>, String> {
-    let mut builder = EventLoop::<WindowEventPumpControlMessage>::with_user_event();
-    // The pump runs on its own thread, not the process main thread; both Linux
-    // backends need their own any-thread opt-in (each trait method flags only
-    // its own backend).
-    #[cfg(target_os = "linux")]
+    // AppKit has no any-thread opt-in to give, and winit does not report the
+    // violation — it panics inside `EventLoop::build`. The pump owns its own
+    // thread, so on Apple that panic would unwind a spawned thread and reach
+    // the caller as a startup timeout naming nothing. Refuse here instead,
+    // until the Apple pump is driven on the process's first thread (#2357).
+    #[cfg(target_os = "macos")]
     {
-        use winit::platform::wayland::EventLoopBuilderExtWayland;
-        use winit::platform::x11::EventLoopBuilderExtX11;
-
-        EventLoopBuilderExtX11::with_any_thread(&mut builder, true);
-        EventLoopBuilderExtWayland::with_any_thread(&mut builder, true);
+        Err(
+            "the window event pump builds its event loop on its own thread, and macOS              requires the process's first thread; the Apple pump is not wired yet"
+                .to_string(),
+        )
     }
-    // AppKit has no any-thread opt-in to give: the loop must be on the
-    // process's first thread, so this refuses off it until the Apple pump
-    // moves there.
-    builder
-        .build()
-        .map_err(|e| format!("failed to build the window event loop: {e}"))
+    #[cfg(not(target_os = "macos"))]
+    {
+        let mut builder = EventLoop::<WindowEventPumpControlMessage>::with_user_event();
+        // Both Linux backends need their own any-thread opt-in (each trait
+        // method flags only its own backend).
+        #[cfg(target_os = "linux")]
+        {
+            use winit::platform::wayland::EventLoopBuilderExtWayland;
+            use winit::platform::x11::EventLoopBuilderExtX11;
+
+            EventLoopBuilderExtX11::with_any_thread(&mut builder, true);
+            EventLoopBuilderExtWayland::with_any_thread(&mut builder, true);
+        }
+        builder
+            .build()
+            .map_err(|e| format!("failed to build the window event loop: {e}"))
+    }
 }
 
 /// The pump thread's book of live windows. Holds the delivery end only — the

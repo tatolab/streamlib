@@ -17,11 +17,10 @@
 //! `resolve_texture_registration_by_surface_id` get the same lifecycle
 //! metadata adapter consumers do.
 //!
-//! On Linux the registration carries the texture's last-known
-//! `VkImageLayout` so consumers can issue a correct
-//! `vkCmdPipelineBarrier2` source layout. On other platforms only the
-//! texture is held — Metal manages texture state automatically and
-//! Vulkan layouts don't apply.
+//! Wherever the Vulkan RHI compiles, the registration carries the texture's
+//! last-known `VkImageLayout` so consumers can issue a correct
+//! `vkCmdPipelineBarrier2` source layout. On a platform with no Vulkan RHI
+//! only the texture is held.
 
 use std::ffi::c_void;
 use std::sync::Arc;

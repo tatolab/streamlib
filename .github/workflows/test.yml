@@ -724,21 +724,19 @@ jobs:
           shared-key: rust-macos
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      # The four exclusions, each for a reason that is not "macOS is broken":
-      # `streamlib-adapter-skia` is excluded on Linux too (skia-bindings 404s on
-      # its prebuilt download); `-opengl` and `-vulkan` carry `tests/bin`
-      # fixtures gated `#![cfg(target_os = "linux")]` whole, which leaves a bin
-      # target with no `main` off Linux, and the adapters themselves are out of
-      # the macOS milestone; `streamlib-python-wheel` still spawns its helper
-      # with `libc::pipe2`, which Darwin does not have — that is #2362's, and
-      # it needs the portable-CLOEXEC allowance `check-no-inheritable-descriptor`
-      # does not yet make.
+      # Two exclusions, the same count Linux carries, and neither of them is
+      # "macOS is broken": `streamlib-adapter-skia` is excluded on Linux too
+      # (skia-bindings 404s on its prebuilt download), and
+      # `streamlib-python-wheel` spawns its helper with `libc::pipe2`, which
+      # Darwin has no equivalent of — that is #2362's, and it needs the
+      # portable-CLOEXEC allowance `check-no-inheritable-descriptor` does not
+      # yet make. Every other workspace member compiles here, including the
+      # Linux-only adapters, whose `tests/bin` fixtures carry an empty `main`
+      # off Linux so the crate keeps building and cannot rot unseen.
       - name: cargo clippy (workspace, default targets)
         run: |
           cargo clippy --locked --workspace --no-deps \
             --exclude streamlib-adapter-skia \
-            --exclude streamlib-adapter-opengl \
-            --exclude streamlib-adapter-vulkan \
             --exclude streamlib-python-wheel
 
       # `--all-targets` where the Linux job's clippy takes default targets: the
@@ -748,8 +746,6 @@ jobs:
         run: |
           cargo check --locked --workspace --all-targets \
             --exclude streamlib-adapter-skia \
-            --exclude streamlib-adapter-opengl \
-            --exclude streamlib-adapter-vulkan \
             --exclude streamlib-python-wheel
 
       - name: Run unit tests

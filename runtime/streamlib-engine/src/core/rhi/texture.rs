@@ -6,9 +6,9 @@
 //! `(handle, cached POD)` shape: the handle is
 //! `Arc::into_raw(Arc<TextureInner>)`; Clone/Drop refcount it directly.
 //!
-//! The platform-specific Arc (`HostVulkanTexture` on Linux and macOS,
-//! `DX12Texture` on Windows) lives on the
-//! private [`TextureInner`] type behind the opaque handle. Engine code
+//! The platform-specific Arc — `HostVulkanTexture` wherever the Vulkan RHI
+//! compiles — lives on the private [`TextureInner`] type behind the opaque
+//! handle. Engine code
 //! reaches them via the [`crate::host_rhi::HostTextureExt`] extension
 //! trait.
 //!
@@ -29,10 +29,6 @@ use streamlib_consumer_rhi::{TextureFormat, TextureUsages};
 /// handle multiple platform sharing mechanisms (e.g., pygfx, wgpu-py).
 #[derive(Debug, Clone)]
 pub enum NativeTextureHandle {
-    /// macOS/iOS: IOSurface ID for cross-process GPU memory sharing.
-    /// Use `IOSurfaceLookup(id)` to get the IOSurface handle.
-    IOSurface { id: u32 },
-
     /// Linux: DMA-BUF file descriptor for GPU memory sharing.
     /// Import via `EGL_EXT_image_dma_buf_import` or Vulkan external memory.
     ///
@@ -165,8 +161,7 @@ unsafe impl Sync for Texture {}
 impl Texture {
     /// Construct from a fully-populated [`TextureInner`]. Engine-only;
     /// surface adapters and RHI helpers reach this through
-    /// [`crate::host_rhi::HostTextureExt::from_vulkan`] or the
-    /// equivalent DX12 entry point.
+    /// [`crate::host_rhi::HostTextureExt::from_vulkan`].
     pub(crate) fn from_inner(inner: TextureInner) -> Self {
         let width = inner.width();
         let height = inner.height();

@@ -45,7 +45,9 @@ pub struct ConsumerVulkanBuffer {
 /// Every import below takes a file descriptor, so the whole block is
 /// Linux-only: MoltenVK advertises neither `VK_KHR_external_memory_fd` nor
 /// `VK_EXT_external_memory_dma_buf`, and the Apple arm imports an IOSurface
-/// rather than a descriptor.
+/// rather than a descriptor. The type itself still compiles there — it is
+/// `ConsumerMarker::Buffer`, so the privilege ladder needs it — and simply has
+/// nothing that mints one until that arm exists.
 #[cfg(target_os = "linux")]
 impl ConsumerVulkanBuffer {
     /// Import a single-plane DMA-BUF as a HOST_VISIBLE `VkBuffer`.
@@ -262,8 +264,8 @@ impl ConsumerVulkanBuffer {
 
 /// Which `vkImportMemoryFdInfoKHR.handleType` to chain through when
 /// importing a plane, and how the memory type index is arrived at.
-#[derive(Copy, Clone, Debug)]
 #[cfg(target_os = "linux")]
+#[derive(Copy, Clone, Debug)]
 enum ImportHandleType {
     DmaBuf,
     /// The importer searches for a memory type itself. Correct for

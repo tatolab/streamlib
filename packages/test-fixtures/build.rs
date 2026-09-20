@@ -8,7 +8,7 @@ fn main() {
     // build script names the host compiling it rather than the target these
     // blobs are staged for — the same distinction the engine's own build
     // script draws.
-    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").expect("cargo sets CARGO_CFG_TARGET_OS");
     if target_os == "linux" || target_os == "macos" {
         compile_cpu_ref_doubler();
         compile_graphics_kernel_smoke();

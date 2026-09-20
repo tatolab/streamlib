@@ -21,7 +21,7 @@ fn main() {
     // build script names the host that is compiling it — so a `cfg` gate here
     // built the shaders when cross-compiling to macOS from Linux and not when
     // building natively on a Mac, which is the opposite of what either needs.
-    let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let target_os = std::env::var("CARGO_CFG_TARGET_OS").expect("cargo sets CARGO_CFG_TARGET_OS");
 
     // Every target the Vulkan RHI compiles for needs its SPIR-V staged, or
     // the `include_bytes!` sites fail to read them.
