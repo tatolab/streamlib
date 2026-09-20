@@ -231,36 +231,9 @@ pub fn run(workspace_root: &Path) -> Result<()> {
 }
 
 pub fn scan(workspace_root: &Path) -> Result<ClockUsageScanReport> {
-    let tracked = tracked_files_under_scan_roots(workspace_root)?;
+    let tracked =
+        crate::tracked_files_under_scan_roots(workspace_root, SCAN_ROOTS, "check-clock-usage")?;
     scan_files(workspace_root, &tracked)
-}
-
-/// Workspace-relative paths git tracks under the scan roots.
-///
-/// A filesystem walk would descend `sdk/streamlib-python-wheel/.venv-pyright`
-/// and every other build tree, gating third-party sources the project does not
-/// own. `git ls-files` sees exactly what CI checks out.
-fn tracked_files_under_scan_roots(workspace_root: &Path) -> Result<Vec<PathBuf>> {
-    let output = std::process::Command::new("git")
-        .args(["ls-files", "-z", "--"])
-        .args(SCAN_ROOTS)
-        .current_dir(workspace_root)
-        .output()
-        .context("failed to run `git ls-files` for check-clock-usage")?;
-
-    anyhow::ensure!(
-        output.status.success(),
-        "`git ls-files` failed ({}) — check-clock-usage cannot enumerate its scan roots",
-        output.status
-    );
-
-    let listing =
-        String::from_utf8(output.stdout).context("`git ls-files` emitted a non-UTF-8 path")?;
-    Ok(listing
-        .split('\0')
-        .filter(|path| !path.is_empty())
-        .map(PathBuf::from)
-        .collect())
 }
 
 pub fn scan_files(
@@ -782,7 +755,9 @@ mod tests {
 
     #[test]
     fn discovery_skips_virtualenv_and_build_trees() {
-        let tracked = tracked_files_under_scan_roots(&workspace_root()).unwrap();
+        let tracked =
+            crate::tracked_files_under_scan_roots(&workspace_root(), SCAN_ROOTS, "check-clock-usage")
+                .unwrap();
 
         assert!(
             tracked

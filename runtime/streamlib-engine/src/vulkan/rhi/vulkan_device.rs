@@ -32,6 +32,17 @@ use super::{
     VulkanValidationMessageCounts,
 };
 
+/// The Vulkan API version the engine requests at instance creation.
+///
+/// This request — not any device query — is what makes the entry points promoted
+/// into core 1.3 (`cmd_pipeline_barrier2`, `cmd_begin_rendering`, `queue_submit2`,
+/// `wait_semaphores`) resolve at load time. A device's reported `apiVersion` is
+/// not a capability report: MoltenVK clamps it to whatever the instance asked
+/// for, so it answers 1.0.x to an instance that asked for 1.0 and 1.4.x to one
+/// that asked for 1.4, on the same hardware. `cargo xtask
+/// check-no-device-api-version-branch` keeps the tree off that probe.
+pub const REQUESTED_VULKAN_INSTANCE_API_VERSION: u32 = vk::make_version(1, 4, 0);
+
 /// Best-effort hint about which third-party GPU compute libraries are
 /// **available to integrate against this device**. Probed once at
 /// device construction; each field is `true` when the matching vendor
@@ -526,7 +537,7 @@ impl HostVulkanDevice {
             .application_version(vk::make_version(0, 1, 0))
             .engine_name(b"StreamLib\0")
             .engine_version(vk::make_version(0, 1, 0))
-            .api_version(vk::make_version(1, 4, 0))
+            .api_version(REQUESTED_VULKAN_INSTANCE_API_VERSION)
             .build();
 
         #[allow(unused_mut)]
@@ -4638,37 +4649,21 @@ mod tests {
         unsafe { device.allocator().destroy_buffer(buffer, allocation) };
     }
 
-    #[cfg_attr(
-        not(feature = "hardware-tests"),
-        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
-    )]
+    /// The floor that makes the promoted 1.3 entry points resolve. Asserted on
+    /// the request the engine makes, never on what a device reports back: the
+    /// reported value is clamped to the request under MoltenVK, so a device
+    /// probe would pass for the wrong reason on every driver.
     #[test]
-    fn test_physical_device_supports_vulkan_1_4() {
-        let device = match try_create_device() {
-            Some(d) => d,
-            None => return,
-        };
-
-        let props = unsafe {
-            device
-                .instance()
-                .get_physical_device_properties(device.physical_device())
-        };
-
-        // Vulkan version is packed: (variant<<29) | (major<<22) | (minor<<12) | patch
-        let major = props.api_version >> 22;
-        let minor = (props.api_version >> 12) & 0x3ff;
+    fn the_requested_instance_api_version_clears_the_promoted_entry_point_floor() {
+        let requested = REQUESTED_VULKAN_INSTANCE_API_VERSION;
+        let major = vk::version_major(requested);
+        let minor = vk::version_minor(requested);
 
         assert!(
-            major > 1 || (major == 1 && minor >= 4),
-            "Physical device must support Vulkan 1.4 for this codebase, got {major}.{minor}"
-        );
-
-        println!(
-            "Physical device Vulkan version: {}.{}.{}",
-            major,
-            minor,
-            props.api_version & 0xfff
+            major > 1 || (major == 1 && minor >= 3),
+            "cmd_pipeline_barrier2, cmd_begin_rendering, queue_submit2 and wait_semaphores are \
+             promoted into core 1.3 and resolve only because the instance asks for at least \
+             that; the request is {major}.{minor}"
         );
     }
 }

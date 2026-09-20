@@ -12,6 +12,7 @@ pub mod check_bounded_apt_install;
 pub mod check_clock_usage;
 pub mod check_device_wait_idle;
 pub mod check_iceoryx2_construction;
+pub mod check_no_device_api_version_branch;
 pub mod check_no_escalate_in_lifecycle;
 pub mod check_no_in_process_placement;
 pub mod check_no_inheritable_descriptor;
@@ -136,6 +137,38 @@ pub fn ensure_every_source_walking_gate_scan_root_contributed(
     Ok(())
 }
 
+/// Workspace-relative paths git tracks under `scan_roots`.
+///
+/// A filesystem walk would descend `sdk/streamlib-python-wheel/.venv-pyright`
+/// and every other build tree, gating third-party sources the project does not
+/// own. `git ls-files` sees exactly what CI checks out.
+pub fn tracked_files_under_scan_roots(
+    workspace_root: &Path,
+    scan_roots: &[&str],
+    gate_name: &str,
+) -> Result<Vec<PathBuf>> {
+    let output = std::process::Command::new("git")
+        .args(["ls-files", "-z", "--"])
+        .args(scan_roots)
+        .current_dir(workspace_root)
+        .output()
+        .with_context(|| format!("failed to run `git ls-files` for {gate_name}"))?;
+
+    anyhow::ensure!(
+        output.status.success(),
+        "`git ls-files` failed ({}) — {gate_name} cannot enumerate its scan roots",
+        output.status
+    );
+
+    let listing =
+        String::from_utf8(output.stdout).context("`git ls-files` emitted a non-UTF-8 path")?;
+    Ok(listing
+        .split('\0')
+        .filter(|path| !path.is_empty())
+        .map(PathBuf::from)
+        .collect())
+}
+
 /// Every source-walking gate, paired with the subcommand name that runs it alone.
 ///
 /// Each gate reads the tree and reports; none builds the workspace. That is what
@@ -155,6 +188,10 @@ const ALL_SOURCE_WALKING_GATES: &[(&str, fn(&Path) -> Result<()>)] = &[
         check_no_escalate_in_lifecycle::run,
     ),
     ("check-device-wait-idle", check_device_wait_idle::run),
+    (
+        "check-no-device-api-version-branch",
+        check_no_device_api_version_branch::run,
+    ),
     (
         "check-iceoryx2-construction",
         check_iceoryx2_construction::run,
@@ -965,6 +1002,14 @@ enum Commands {
     /// reports `UNASSIGNED-Threading-Info`).
     CheckDeviceWaitIdle,
 
+    /// CI gate for the Vulkan API-version contract. Fails on any read of a
+    /// physical device's reported `apiVersion`. That value is not a capability
+    /// report — MoltenVK clamps it to whatever the instance requested, so a
+    /// probe reads the engine's own `vk::make_version(1, 4, 0)` back. The
+    /// requested instance version is the floor that makes the promoted 1.3
+    /// entry points resolve.
+    CheckNoDeviceApiVersionBranch,
+
     /// CI gate for the engine-owned iceoryx2 domain. Fails on any
     /// `NodeBuilder::new()` or `publish_subscribe::<` under `runtime/`, `sdk/` or
     /// `adapters/` outside `iceoryx2/node.rs`, and on any `Config::global_config()`
@@ -1107,6 +1152,9 @@ fn main() -> Result<()> {
             check_no_escalate_in_lifecycle::run(&workspace_root()?)?
         }
         Commands::CheckDeviceWaitIdle => check_device_wait_idle::run(&workspace_root()?)?,
+        Commands::CheckNoDeviceApiVersionBranch => {
+            check_no_device_api_version_branch::run(&workspace_root()?)?
+        }
         Commands::CheckIceoryx2Construction => {
             check_iceoryx2_construction::run(&workspace_root()?)?
         }
