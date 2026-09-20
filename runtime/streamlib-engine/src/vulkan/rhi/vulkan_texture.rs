@@ -257,7 +257,9 @@ impl HostVulkanTexture {
 
         // Declare DMA-BUF handle type at image creation — required by Vulkan spec
         // (VUID-vkBindImageMemory-memory-02728) when memory will be allocated with
-        // VkExportMemoryAllocateInfo.
+        // VkExportMemoryAllocateInfo. Omitted where the handle type does not
+        // exist, or vkCreateImage refuses every allocation; see
+        // `CROSS_PROCESS_EXPORT_BY_FILE_DESCRIPTOR_EXISTS_ON_THIS_PLATFORM`.
         let mut external_image_info = vk::ExternalMemoryImageCreateInfo::builder()
             .handle_types(vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT)
             .build();
@@ -276,8 +278,12 @@ impl HostVulkanTexture {
             .tiling(vk::ImageTiling::OPTIMAL)
             .usage(usage_flags)
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
-            .initial_layout(vk::ImageLayout::UNDEFINED)
-            .push_next(&mut external_image_info);
+            .initial_layout(vk::ImageLayout::UNDEFINED);
+        let image_info = if super::CROSS_PROCESS_EXPORT_BY_FILE_DESCRIPTOR_EXISTS_ON_THIS_PLATFORM {
+            image_info.push_next(&mut external_image_info)
+        } else {
+            image_info
+        };
 
         let alloc_opts = vma::AllocationOptions {
             flags: vma::AllocationCreateFlags::DEDICATED_MEMORY,

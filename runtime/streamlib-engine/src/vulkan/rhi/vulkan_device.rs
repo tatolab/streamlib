@@ -31,6 +31,23 @@ use super::{
     VulkanValidationMessageCounts,
 };
 
+/// Whether cross-process export through a file descriptor exists on this
+/// platform.
+///
+/// DMA-BUF and OPAQUE_FD are Linux mechanisms. Declaring either handle type on a
+/// driver that has neither makes `vkCreateBuffer` / `vkCreateImage` refuse the
+/// allocation outright with `FEATURE_NOT_PRESENT`, and reaching
+/// `vkGetSemaphoreFdKHR` takes vulkanalia's panicking stub for a command the
+/// loader never resolved. Where the mechanism does not exist the export
+/// declaration is omitted and the allocation is local.
+///
+/// The Apple flavours — an IOSurface for memory, a Metal shared event for a
+/// timeline — arrive with the interop seam (#2360), which is where the three
+/// sites reading this become one allocation-flavour decision rather than a
+/// platform predicate.
+pub(crate) const CROSS_PROCESS_EXPORT_BY_FILE_DESCRIPTOR_EXISTS_ON_THIS_PLATFORM: bool =
+    cfg!(target_os = "linux");
+
 /// The Vulkan API version the engine requests at instance creation.
 ///
 /// This request — not any device query — is what makes the entry points promoted

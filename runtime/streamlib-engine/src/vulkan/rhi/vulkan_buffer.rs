@@ -158,15 +158,12 @@ enum HostVisibleAllocationIntent {
 impl HostVisibleAllocationIntent {
     /// Whether the allocation declares a DMA-BUF export handle type.
     ///
-    /// DMA-BUF is a Linux mechanism. Chaining `VkExternalMemoryBufferCreateInfo`
-    /// with `DMA_BUF_EXT` on a driver that has none — MoltenVK — makes
-    /// `vkCreateBuffer` refuse with `FEATURE_NOT_PRESENT`, so no host-visible
-    /// buffer allocates at all. Where the handle type does not exist the
-    /// declaration is omitted and the allocation is local; the Apple export
-    /// flavour is an IOSurface and arrives with the Apple interop seam (#2360),
-    /// not through this handle type.
+    /// An exportable intent on a platform without the handle type degrades to a
+    /// local allocation rather than failing — see
+    /// [`CROSS_PROCESS_EXPORT_BY_FILE_DESCRIPTOR_EXISTS_ON_THIS_PLATFORM`].
     fn declares_dma_buf_export(self) -> bool {
-        cfg!(target_os = "linux") && matches!(self, Self::SequentialWriteExportable)
+        super::CROSS_PROCESS_EXPORT_BY_FILE_DESCRIPTOR_EXISTS_ON_THIS_PLATFORM
+            && matches!(self, Self::SequentialWriteExportable)
     }
 
     fn vma_allocation_create_flags(self) -> vma::AllocationCreateFlags {

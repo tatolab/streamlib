@@ -183,7 +183,7 @@ impl HostVulkanTimelineSemaphore {
             .handle_types(vk::ExternalSemaphoreHandleTypeFlags::OPAQUE_FD)
             .build();
 
-        let info = if exportable {
+        let info = if exportable && super::CROSS_PROCESS_EXPORT_BY_FILE_DESCRIPTOR_EXISTS_ON_THIS_PLATFORM {
             // Chain order: SemaphoreCreateInfo -> ExportSemaphoreCreateInfo -> SemaphoreTypeCreateInfo.
             // p_next is set manually to avoid moving the local `type_info`
             // into the builder's pNext (vulkanalia's builder takes &mut and
@@ -277,6 +277,14 @@ impl HostVulkanTimelineSemaphore {
             .semaphore(self.semaphore)
             .handle_type(vk::ExternalSemaphoreHandleTypeFlags::OPAQUE_FD)
             .build();
+        if !super::CROSS_PROCESS_EXPORT_BY_FILE_DESCRIPTOR_EXISTS_ON_THIS_PLATFORM {
+            return Err(Error::GpuError(
+                "HostVulkanTimelineSemaphore::export_opaque_fd: OPAQUE_FD semaphore export is \
+                 a Linux mechanism and this platform has no vkGetSemaphoreFdKHR — the Apple \
+                 cross-process timeline is a Metal shared event (#2360)"
+                    .into(),
+            ));
+        }
         let fd = unsafe { self.device.get_semaphore_fd_khr(&info) }
             .map_err(|e| Error::GpuError(format!("vkGetSemaphoreFdKHR failed: {e}")))?;
         Ok(fd)
@@ -459,7 +467,7 @@ mod tests {
     /// fd. Sufficient to confirm `VK_KHR_external_semaphore_fd` is wired.
     /// Cross-process import is exercised by the surface-adapter
     /// integration tests in `streamlib-adapter-vulkan`.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(target_os = "linux")]
     #[cfg_attr(
         not(feature = "hardware-tests"),
         ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
@@ -483,6 +491,30 @@ mod tests {
         let fd = sem.export_opaque_fd().expect("export_opaque_fd");
         assert!(fd >= 0, "exported sync fd should be a valid kernel fd");
         unsafe { libc::close(fd) };
+    }
+
+    /// Where the fd handle type does not exist, export refuses by name. Without
+    /// the guard this reaches `vkGetSemaphoreFdKHR`, which the loader never
+    /// resolved — vulkanalia's unloaded-command stub panics, and a panic in this
+    /// position aborts the whole test binary rather than failing one case.
+    #[cfg(not(target_os = "linux"))]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn timeline_semaphore_export_refuses_where_there_is_no_fd_handle_type() {
+        let device = HostVulkanDevice::new().expect("the rig must produce a Vulkan device");
+        let semaphore = HostVulkanTimelineSemaphore::new_exportable(device.device(), 0)
+            .expect("a timeline semaphore must still be creatable without fd export");
+
+        let refusal = semaphore
+            .export_opaque_fd()
+            .expect_err("a platform without vkGetSemaphoreFdKHR must refuse the export");
+        assert!(
+            refusal.to_string().contains("Linux mechanism"),
+            "the refusal must say why rather than blaming the caller: {refusal}"
+        );
     }
 
     #[cfg_attr(

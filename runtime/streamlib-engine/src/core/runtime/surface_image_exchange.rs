@@ -246,7 +246,12 @@ mod tests {
     // Same reason as the skip in `core::context::surface_pixel_exchange`: a
     // gated test that finds no device passes trivially, and stdout is the
     // only channel a test harness surfaces.
+    ///
+    /// Linux-gated because the capability is: the non-Linux arm of
+    /// `exchange_published_surface_id_for_png_image_bytes` refuses by name —
+    /// the colour converter, blit and readback it needs are not carried there.
     #[allow(clippy::disallowed_macros)]
+    #[cfg(target_os = "linux")]
     #[test]
     #[serial_test::serial]
     fn a_published_pool_frame_exchanges_through_the_runtime_operation_for_its_own_pixels() {
