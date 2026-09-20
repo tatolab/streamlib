@@ -187,6 +187,15 @@ plant docs/learnings/slpkg-raw-device-rhi-construction.md "A separately-built .f
 run_gate
 expect_pass "a learning that records driver behaviour is not residue"
 
+# A research memo describes the tree it measured, which for a memo that informed a
+# change is the tree before it.
+new_repo <<'EOF'
+- REMOVED: .fkpkg
+EOF
+plant docs/research/2026-01-01-packaging-survey.md "The \`.fkpkg\` format ships 3 files and is read by nothing else."
+run_gate
+expect_pass "a research memo describing the pre-change tree is not residue"
+
 # Consumers lag by design (CLAUDE.md).
 new_repo <<'EOF'
 - REMOVED: fictional_modules
