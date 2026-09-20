@@ -36,6 +36,9 @@ trap 'rm -f "$hits"' EXIT
 #                     superseded ADR keeps naming what it retired.
 #   docs/learnings/** empirical-only (same rule): a learning records driver or library
 #                     behaviour that stays true after the thing that surfaced it is gone.
+#   docs/research/**  dated evidence (same rule): a memo answers its question as of the day
+#                     it was taken and describes the tree it measured — which, for a memo
+#                     that informed a change, is the tree before that change.
 #   docs/plan/**      the plan states what we agreed, not what the tree holds. It also
 #                     breaks a deadlock: /ship-change gates at step 1 but folds
 #                     ARCHITECTURE.md at step 3, so a change whose own plan text names
@@ -51,6 +54,7 @@ content_excludes=(
   ':!docs/plan/**'
   ':!docs/decisions/**'
   ':!docs/learnings/**'
+  ':!docs/research/**'
   ':!examples/**'
   ':!CHANGELOG.md'
 )

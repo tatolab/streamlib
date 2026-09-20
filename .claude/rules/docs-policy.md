@@ -14,6 +14,10 @@ paths:
   symptom → root cause → fix shape. Tie the lesson to the constraint, not a line number. A new
   learning ships with its index line in `docs/learnings/README.md` in the same PR.
 - **`docs/decisions/` holds chosen-shape rationale** — why this design over the alternatives.
+- **`docs/research/` is dated evidence** — a memo answers one question from primary sources as of
+  the day it was taken, and describes the tree it measured. It is never rewritten to match a tree
+  that has since changed: a memo naming something a later change deleted is the record working, not
+  residue.
 - **Supersession is annotated, not overwritten:**
 
   ```markdown
