@@ -35,6 +35,9 @@ use crate::core::runtime::mesh::a_frames_pixels_written_into_a_local_surface::{
     WhyAFramesPixelsCannotLandHere, WritesAFramesPixelsIntoALocalSurface,
 };
 use crate::core::runtime::mesh::gpu_context_the_mesh_copies_frames_with::GpuContextTheMeshCopiesFramesWith;
+use crate::core::runtime::mesh::machine_clock_a_remote_link_carries_from::{
+    MachineClockARemoteLinkCarriesFrom, WhatNotingABagsClockDid,
+};
 use crate::core::runtime::mesh::mesh_data_message_attachment::{
     MeshDataMessageAttachment, PublisherGenerationOnTheMesh,
 };
@@ -205,6 +208,11 @@ impl MeshLinkIngress {
     /// The reader token is declared last of the three: it is what makes the
     /// source create its egress, and a bag arriving before this side is
     /// subscribed would be lost for no reason.
+    ///
+    /// `machine_clock_it_carries_from` is the table's cell for this address,
+    /// which the writing thread fills off each arriving bag. The table keeps
+    /// it rather than this ingress, because the links wired with it outlive
+    /// the source runtime leaving and this ingress with it.
     pub(super) fn start(
         session: &zenoh::Session,
         key_space: &RuntimeMeshKeySpace,
@@ -213,6 +221,7 @@ impl MeshLinkIngress {
         iceoryx2_node: &Iceoryx2Node,
         wake_the_resolver: crossbeam_channel::Sender<()>,
         gpu_context_the_mesh_copies_frames_with: &Arc<GpuContextTheMeshCopiesFramesWith>,
+        machine_clock_it_carries_from: &Arc<MachineClockARemoteLinkCarriesFrom>,
     ) -> crate::core::Result<Self> {
         let local_channel = mesh_ingress_channel_name(&address.to_string()).into_string();
         let writes_onto_the_local_channel = Arc::new(OutputWriterInner::new());
@@ -284,6 +293,7 @@ impl MeshLinkIngress {
             Arc::clone(&arrived),
             Arc::clone(&writes_onto_the_local_channel),
             Arc::clone(&every_link_it_feeds),
+            Arc::clone(machine_clock_it_carries_from),
             WritesAFramesPixelsIntoALocalSurface::minting_through(
                 gpu_context_the_mesh_copies_frames_with,
             ),
@@ -488,6 +498,7 @@ fn spawn_the_writing_thread(
     arrived: Arc<(Mutex<WhatHasArrivedFromTheMesh>, Condvar)>,
     writes_onto_the_local_channel: Arc<OutputWriterInner>,
     every_link_it_feeds: Arc<Mutex<BTreeMap<String, OneLinkThisIngressFeeds>>>,
+    machine_clock_it_carries_from: Arc<MachineClockARemoteLinkCarriesFrom>,
     mut writes_a_frames_pixels_into_a_local_surface: WritesAFramesPixelsIntoALocalSurface,
 ) -> std::io::Result<std::thread::JoinHandle<()>> {
     std::thread::Builder::new()
@@ -512,28 +523,23 @@ fn spawn_the_writing_thread(
                         None => return,
                     }
                 };
-                // Before the write, and on this thread: the ring this bag came
-                // off evicts its oldest under pressure, and those evictions are
-                // inside the jump only because the numbers are read here rather
-                // than as each bag arrived. One unbroken run per publisher
-                // generation the sending runtime carried, so a replaced
-                // producer's restart is a baseline rather than the gap it looks
-                // like.
-                //
-                // Per link rather than once for the ingress: what a gap costs is
-                // the same for every link past its own baseline, but a link
-                // wired onto an ingress already carrying has no baseline yet and
-                // must not be charged for what it was never going to get.
-                for link in every_link_it_feeds.lock().values_mut() {
-                    let lost_before_it = link.bags_the_hop_lost.how_many_were_lost_before(
-                        taken.attached.publisher_generation,
-                        taken.attached.sequence_number,
+                let the_machine_it_was_stamped_on = machine_clock_it_carries_from
+                    .note_the_machine_a_bag_was_stamped_on(taken.attached.clock_identity);
+                if let WhatNotingABagsClockDid::ItNamedAnotherMachineThanBefore { until_this_bag } =
+                    the_machine_it_was_stamped_on
+                {
+                    tracing::info!(
+                        "{address} is carrying from another machine than it was — its stamps were \
+                         taken on {until_this_bag} and are now taken on {}. Every link from it is \
+                         wired afresh and counts from zero.",
+                        taken.attached.clock_identity
                     );
-                    if lost_before_it > 0 {
-                        link.where_its_hop_loss_is_counted
-                            .record_dropped_bags(lost_before_it);
-                    }
                 }
+                charge_every_link_for_what_the_hop_lost_before(
+                    &mut every_link_it_feeds.lock(),
+                    &taken.attached,
+                    the_machine_it_was_stamped_on,
+                );
 
                 let Some(bag_bytes) = the_bag_to_hand_downstream(
                     &address,
@@ -561,6 +567,48 @@ fn spawn_the_writing_thread(
                 }
             }
         })
+}
+
+/// Charge every link this ingress feeds for the bags the hop lost before this
+/// one.
+///
+/// Run before the write and on the writing thread: the ring this bag came off
+/// evicts its oldest under pressure, and those evictions are inside the jump
+/// only because the numbers are read here rather than as each bag arrived. One
+/// unbroken run per publisher generation the sending runtime carried, so a
+/// replaced producer's restart is a baseline rather than the gap it looks like.
+///
+/// Per link rather than once for the ingress: what a gap costs is the same for
+/// every link past its own baseline, but a link wired onto an ingress already
+/// carrying has no baseline yet and must not be charged for what it was never
+/// going to get.
+///
+/// A bag stamped on another machine than the one before it is a peer that came
+/// back on a fresh boot, or another machine that took the name. Its stamps are
+/// a new clock, so every link is wired afresh here: what each had counted
+/// described a run of the port that has ended, and carrying the numbering over
+/// would charge this bag for every bag of that run it never had.
+fn charge_every_link_for_what_the_hop_lost_before(
+    every_link_it_feeds: &mut BTreeMap<String, OneLinkThisIngressFeeds>,
+    attached: &MeshDataMessageAttachment,
+    the_machine_it_was_stamped_on: WhatNotingABagsClockDid,
+) {
+    let wired_afresh = matches!(
+        the_machine_it_was_stamped_on,
+        WhatNotingABagsClockDid::ItNamedAnotherMachineThanBefore { .. }
+    );
+    for link in every_link_it_feeds.values_mut() {
+        if wired_afresh {
+            link.bags_the_hop_lost = Default::default();
+        }
+        let lost_before_it = link
+            .bags_the_hop_lost
+            .how_many_were_lost_before(attached.publisher_generation, attached.sequence_number);
+        if lost_before_it > 0 {
+            link.where_its_hop_loss_is_counted
+                .record_dropped_bags(lost_before_it);
+        }
+    }
 }
 
 /// The bag one arriving message is handed downstream as, or `None` when its
@@ -655,6 +703,126 @@ mod tests {
              ceiling",
             arrived.bytes_in_the_ring
         );
+    }
+
+    // ------------------------------------------------------------------------
+    // What one arriving bag costs the links this ingress feeds
+    // ------------------------------------------------------------------------
+
+    const ONE_MACHINE: &str = "2f1c8a30-6b4e-4d5a-9a11-2c7f0d5e8b93";
+    const ANOTHER_MACHINE: &str = "8b93a1c2-0000-4d5a-9a11-2c7f0d5e2f1c";
+
+    fn a_machine(boot_session_uuid: &str) -> crate::core::runtime::mesh::MachineClockIdentity {
+        crate::core::runtime::mesh::MachineClockIdentity::of_the_machine_whose_boot_session_uuid_reads(
+            boot_session_uuid,
+        )
+    }
+
+    fn a_bag_numbered(
+        sequence_number: u64,
+        stamped_on: crate::core::runtime::mesh::MachineClockIdentity,
+    ) -> MeshDataMessageAttachment {
+        MeshDataMessageAttachment {
+            timestamp_ns: 0,
+            sequence_number,
+            publisher_generation: PublisherGenerationOnTheMesh(0),
+            clock_identity: stamped_on,
+            frame_pixel_description_bytes: 0,
+        }
+    }
+
+    /// One link an ingress feeds, and the counter its hop loss lands in.
+    fn one_link_it_feeds() -> (
+        BTreeMap<String, OneLinkThisIngressFeeds>,
+        RemoteInboundLinkMeshHopDroppedBagCounter,
+    ) {
+        let where_its_hop_loss_is_counted = RemoteInboundLinkMeshHopDroppedBagCounter::default();
+        let every_link_it_feeds = BTreeMap::from([(
+            "the-link".to_string(),
+            OneLinkThisIngressFeeds {
+                where_its_hop_loss_is_counted: where_its_hop_loss_is_counted.clone(),
+                bags_the_hop_lost: Default::default(),
+            },
+        )]);
+        (every_link_it_feeds, where_its_hop_loss_is_counted)
+    }
+
+    /// The ordinary run: a gap in the sending runtime's numbering is what the
+    /// hop lost, counted once on the link.
+    #[test]
+    fn a_gap_in_the_numbering_is_charged_to_the_link() {
+        let (mut every_link_it_feeds, counted) = one_link_it_feeds();
+
+        for sequence_number in [1, 2, 7] {
+            charge_every_link_for_what_the_hop_lost_before(
+                &mut every_link_it_feeds,
+                &a_bag_numbered(sequence_number, a_machine(ONE_MACHINE)),
+                WhatNotingABagsClockDid::ItNamedTheSameMachineAgain,
+            );
+        }
+
+        assert_eq!(counted.dropped_bag_count(), 4, "bags 3, 4, 5 and 6");
+    }
+
+    /// The peer came back on another boot, so its numbering restarted with a
+    /// clock that has nothing to do with the one before it. The bag that says
+    /// so is a baseline: charging the difference would bill this link for a
+    /// whole run of a port it never had.
+    ///
+    /// Fail-without-fix: drop the re-wire and this counts 1_000_000 lost bags
+    /// the moment a rebooted peer's first bag lands.
+    #[test]
+    fn a_bag_from_another_machine_is_a_baseline_and_never_a_gap() {
+        let (mut every_link_it_feeds, counted) = one_link_it_feeds();
+        for sequence_number in [1_000_000, 1_000_001] {
+            charge_every_link_for_what_the_hop_lost_before(
+                &mut every_link_it_feeds,
+                &a_bag_numbered(sequence_number, a_machine(ONE_MACHINE)),
+                WhatNotingABagsClockDid::ItNamedTheSameMachineAgain,
+            );
+        }
+        assert_eq!(counted.dropped_bag_count(), 0);
+
+        charge_every_link_for_what_the_hop_lost_before(
+            &mut every_link_it_feeds,
+            &a_bag_numbered(1, a_machine(ANOTHER_MACHINE)),
+            WhatNotingABagsClockDid::ItNamedAnotherMachineThanBefore {
+                until_this_bag: a_machine(ONE_MACHINE),
+            },
+        );
+
+        assert_eq!(
+            counted.dropped_bag_count(),
+            0,
+            "the first bag of a new machine's run is where this link starts counting again"
+        );
+    }
+
+    /// Counting picks up from the new machine's own numbering, so a gap after
+    /// the re-wire is still a gap.
+    #[test]
+    fn the_hop_counts_the_new_machines_own_gaps_after_it_is_wired_afresh() {
+        let (mut every_link_it_feeds, counted) = one_link_it_feeds();
+        charge_every_link_for_what_the_hop_lost_before(
+            &mut every_link_it_feeds,
+            &a_bag_numbered(500, a_machine(ONE_MACHINE)),
+            WhatNotingABagsClockDid::ItNamedTheMachineForTheFirstTime,
+        );
+        charge_every_link_for_what_the_hop_lost_before(
+            &mut every_link_it_feeds,
+            &a_bag_numbered(1, a_machine(ANOTHER_MACHINE)),
+            WhatNotingABagsClockDid::ItNamedAnotherMachineThanBefore {
+                until_this_bag: a_machine(ONE_MACHINE),
+            },
+        );
+
+        charge_every_link_for_what_the_hop_lost_before(
+            &mut every_link_it_feeds,
+            &a_bag_numbered(4, a_machine(ANOTHER_MACHINE)),
+            WhatNotingABagsClockDid::ItNamedTheSameMachineAgain,
+        );
+
+        assert_eq!(counted.dropped_bag_count(), 2, "bags 2 and 3");
     }
 
     /// A message over the ceiling on its own is still taken: a port whose every

@@ -22,6 +22,7 @@ use zenoh::Wait;
 use crate::core::graph::{LinkUniqueId, MeshPortAddress, RemoteLinkResolution};
 use crate::core::runtime::mesh::OutputPortsOfferedOnTheMesh;
 use crate::core::runtime::mesh::gpu_context_the_mesh_copies_frames_with::GpuContextTheMeshCopiesFramesWith;
+use crate::core::runtime::mesh::machine_clock_a_remote_link_carries_from::MachineClockARemoteLinkCarriesFrom;
 use crate::core::runtime::mesh::mesh_link_ingress::MeshLinkIngress;
 use crate::core::runtime::mesh::output_ports_offered_on_the_mesh::ask_a_runtime_what_output_ports_it_offers;
 use crate::core::runtime::mesh::runtime_mesh_description::RuntimeMeshDescription;
@@ -67,6 +68,27 @@ struct ALinkFromAnotherRuntime {
 struct WhatThisRuntimeIsCarryingFromOtherRuntimes {
     links: BTreeMap<LinkUniqueId, ALinkFromAnotherRuntime>,
     carrying: BTreeMap<MeshPortAddress, MeshLinkIngress>,
+    /// The machine each address's stamps are taken on, one cell per address
+    /// and shared by every link and every destination reading it.
+    ///
+    /// Kept here rather than on an ingress because it outlives one: the source
+    /// runtime leaving tears the ingress down and the links from it stay,
+    /// still holding the cell they were wired with.
+    machine_clocks_by_address: BTreeMap<MeshPortAddress, Arc<MachineClockARemoteLinkCarriesFrom>>,
+}
+
+impl WhatThisRuntimeIsCarryingFromOtherRuntimes {
+    /// The cell for `address`, minted on first use.
+    fn machine_clock_carried_from(
+        &mut self,
+        address: &MeshPortAddress,
+    ) -> Arc<MachineClockARemoteLinkCarriesFrom> {
+        Arc::clone(
+            self.machine_clocks_by_address
+                .entry(address.clone())
+                .or_default(),
+        )
+    }
 }
 
 /// Every port on another runtime this runtime links from.
@@ -128,6 +150,21 @@ impl MeshLinkIngressTable {
             },
         );
         self.ask_the_resolver_to_look_again();
+    }
+
+    /// The cell naming the machine whose monotonic clock stamped the bags
+    /// arriving from `address`.
+    ///
+    /// Taken by the wiring op, which hands it to the link it renders and to the
+    /// destination that reads it — so both keep reading the same cell across
+    /// the source runtime leaving and coming back. Minted here on first use:
+    /// a link is wired long before its source runtime is known, so there is no
+    /// ingress yet to take it from.
+    pub fn machine_clock_carried_from(
+        &self,
+        address: &MeshPortAddress,
+    ) -> Arc<MachineClockARemoteLinkCarriesFrom> {
+        self.carried.lock().machine_clock_carried_from(address)
     }
 
     /// Record the notify service one link's destination waits on and where its
@@ -197,6 +234,9 @@ impl MeshLinkIngressTable {
                 if let Some(ingress) = carried.carrying.get(&forgotten.address) {
                     ingress.forget_a_local_destination(link_id.as_str());
                 }
+            }
+            if !still_read {
+                carried.machine_clocks_by_address.remove(&forgotten.address);
             }
             // Dropping the ingress undeclares this runtime's reader token,
             // which is what makes the source stop sending the port.
@@ -299,6 +339,9 @@ impl MeshLinkIngressTable {
                 *link.how_far_it_has_got.lock() = RemoteLinkResolution::AwaitingRemote {
                     reason: "this runtime has left the mesh".to_string(),
                 };
+            }
+            for machine_clock in carried.machine_clocks_by_address.values() {
+                machine_clock.forget_the_machine_because_nothing_is_arriving();
             }
             std::mem::take(&mut carried.carrying)
         };
@@ -562,6 +605,11 @@ fn a_refusal_naming_the_trouble_and_what_is_offered(
 
 /// Start carrying `address`, and tell every link from it.
 fn start_carrying(resolving: &ResolvingLinksNeeds, address: &MeshPortAddress) {
+    // Taken before the ingress starts and under its own short hold of the
+    // lock: starting one talks to the network, and the lock is what every
+    // `connect` and `disconnect` waits on.
+    let machine_clock_it_carries_from =
+        resolving.carried.lock().machine_clock_carried_from(address);
     let ingress = match MeshLinkIngress::start(
         &resolving.session,
         &resolving.key_space,
@@ -570,6 +618,7 @@ fn start_carrying(resolving: &ResolvingLinksNeeds, address: &MeshPortAddress) {
         &resolving.iceoryx2_node,
         resolving.wake_the_resolver.clone(),
         &resolving.gpu_context_the_mesh_copies_frames_with,
+        &machine_clock_it_carries_from,
     ) {
         Ok(ingress) => ingress,
         Err(cannot_start) => {
@@ -619,6 +668,13 @@ fn keep_carrying_or_stop(resolving: &ResolvingLinksNeeds, address: &MeshPortAddr
                 .filter(|link| &link.address == address)
             {
                 link.the_ingress_knows_about_it = false;
+            }
+            // Nothing is arriving from the address any more, so no clock is
+            // being carried from it. A source that comes back may come back on
+            // another machine, and a link that went on naming the old one
+            // while carrying nothing would say what no bag supports.
+            if let Some(machine_clock) = carried.machine_clocks_by_address.get(address) {
+                machine_clock.forget_the_machine_because_nothing_is_arriving();
             }
             carried.carrying.remove(address)
         };
