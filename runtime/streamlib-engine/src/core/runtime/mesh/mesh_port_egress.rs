@@ -33,7 +33,7 @@ use crate::core::runtime::mesh::mesh_data_message_attachment::{
     MeshDataMessageAttachment, PublisherGenerationOnTheMesh,
 };
 use crate::core::runtime::mesh::mesh_port_egress_table::{
-    SaysWhichEgressOfItsPortItIs, WhatTheReadersDid, WhichEgressOfAPortThisIs,
+    SaysWhichEgressOfItsPortItIs, WhatTheEgressTableIsTold, WhichEgressOfAPortThisIs,
 };
 use crate::core::runtime::mesh::output_ports_offered_on_the_mesh::{
     HowToReadAnOfferedOutputPort, OutputPortOfferedOnTheMesh,
@@ -117,12 +117,13 @@ impl SaysWhichEgressOfItsPortItIs for MeshPortEgress {
 /// Everything one egress thread needs, gathered so the spawn reads as one
 /// thing rather than eight arguments.
 pub(super) struct WhatOneEgressSends {
-    /// Where this egress says it stopped before it ever sent anything, so its
-    /// table stops claiming the port is being sent.
+    /// Where this egress says its thread ended, so its table stops claiming the
+    /// port is being sent.
     ///
     /// Weak because the table's own sender is what decides its thread's life,
     /// and this end is owned by that same thread through its map of egresses.
-    pub where_this_egress_says_it_gave_up: Weak<crossbeam_channel::Sender<WhatTheReadersDid>>,
+    pub where_this_egress_says_it_stopped:
+        Weak<crossbeam_channel::Sender<WhatTheEgressTableIsTold>>,
     /// Which egress of this port this one is, so what it says about itself
     /// never reaches the egress that replaced it.
     pub which_egress_of_this_port_this_is: WhichEgressOfAPortThisIs,
@@ -258,11 +259,46 @@ fn take_a_destination_slot_once_the_port_publishes(
     }
 }
 
+/// Tells one egress's table that its thread has ended, whatever ended it.
+///
+/// An egress *is* its thread: `MeshPortEgress::start` succeeds the moment that
+/// thread spawns, so a table holding one whose thread is gone renders a send
+/// that is not happening and lets no later reader replace it. On a drop rather
+/// than at each way out, because the ways out are not all `return`s — a
+/// publisher that will not declare and a channel subscriber that fails each
+/// leave the loop, and a panic leaves no statement at all.
+///
+/// Naming which egress of the port this is, because a cancelled one says this
+/// too and by then the port may hold the egress that replaced it.
+struct SaysThisEgressStoppedWhenItsThreadEnds {
+    where_this_egress_says_it_stopped: Weak<crossbeam_channel::Sender<WhatTheEgressTableIsTold>>,
+    port: OutputPortOfferedOnTheMesh,
+    which_egress_of_its_port_it_is: WhichEgressOfAPortThisIs,
+}
+
+impl Drop for SaysThisEgressStoppedWhenItsThreadEnds {
+    fn drop(&mut self) {
+        // No table left to tell: it drops the sender that keeps its own thread
+        // alive before that thread drops the egresses it still owns.
+        let Some(where_this_egress_says_it_stopped) =
+            self.where_this_egress_says_it_stopped.upgrade()
+        else {
+            return;
+        };
+        let _ = where_this_egress_says_it_stopped.send(
+            WhatTheEgressTableIsTold::AnEgressStoppedSendingItsPort {
+                port: self.port.clone(),
+                which_egress_of_its_port_it_was: self.which_egress_of_its_port_it_is,
+            },
+        );
+    }
+}
+
 /// The body of one egress thread: take a destination slot on the port's
 /// channel, say on the mesh that the port is being sent, and put every bag.
 fn send_one_port_to_the_mesh(sending: WhatOneEgressSends, stop: Arc<AtomicBool>) {
     let WhatOneEgressSends {
-        where_this_egress_says_it_gave_up,
+        where_this_egress_says_it_stopped,
         which_egress_of_this_port_this_is,
         session,
         key_space,
@@ -273,6 +309,16 @@ fn send_one_port_to_the_mesh(sending: WhatOneEgressSends, stop: Arc<AtomicBool>)
     let this_runtimes_name = addressed.runtime_name();
     let processor_display_name = addressed.processor_display_name();
     let port_name = addressed.port_name();
+    // Before anything that can end this thread, and dropped after the token is
+    // undeclared below, so the table hears the port stop only once the mesh has.
+    let _says_it_stopped = SaysThisEgressStoppedWhenItsThreadEnds {
+        where_this_egress_says_it_stopped,
+        port: OutputPortOfferedOnTheMesh {
+            processor_display_name: processor_display_name.to_string(),
+            port_name: port_name.to_string(),
+        },
+        which_egress_of_its_port_it_is: which_egress_of_this_port_this_is,
+    };
 
     let subscriber = take_a_destination_slot_once_the_port_publishes(
         &how_to_read_the_port,
@@ -299,25 +345,10 @@ fn send_one_port_to_the_mesh(sending: WhatOneEgressSends, stop: Arc<AtomicBool>)
             })
             .ok()
     });
+    // Whichever of the two is missing said why on this thread. The table hears
+    // that this egress stopped from the drop above, as it does for every other
+    // way this thread ends.
     let (Some(subscriber), Some(egress_token)) = (subscriber, egress_token) else {
-        // Said back rather than only logged: the table holds this egress, and
-        // one it goes on holding is one `graph` reports as a port being sent
-        // and one no later reader can replace. Named with which egress of the
-        // port this is, because a cancelled one reaches here too — its wait
-        // ends on `stop` — and by then the table may already hold the egress
-        // that replaced it.
-        if let Some(where_this_egress_says_it_gave_up) = where_this_egress_says_it_gave_up.upgrade()
-        {
-            let _ = where_this_egress_says_it_gave_up.send(
-                WhatTheReadersDid::AnEgressGaveUpOnItsPort {
-                    port: OutputPortOfferedOnTheMesh {
-                        processor_display_name: processor_display_name.to_string(),
-                        port_name: port_name.to_string(),
-                    },
-                    which_egress_of_its_port_it_was: which_egress_of_this_port_this_is,
-                },
-            );
-        }
         return;
     };
 
@@ -452,6 +483,10 @@ fn declare_the_publisher<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The one source of an egress's identity, reached here so a test's egress
+    // is named the way its table names one.
+    use crate::core::runtime::mesh::mesh_port_egress_table::HowManyEgressesThisTableHasStarted;
 
     /// One port's publisher and its replacement, which is the only way to get
     /// two `UniquePublisherId`s — iceoryx2 mints them and nothing else can.
@@ -635,5 +670,117 @@ mod tests {
         );
 
         assert!(took_a_slot.is_some());
+    }
+
+    /// A table's end of the channel its egresses report on: the sender it owns,
+    /// which is what makes an egress outliving it have nothing to say to.
+    fn a_table_listening_to_its_egresses() -> (
+        Arc<crossbeam_channel::Sender<WhatTheEgressTableIsTold>>,
+        crossbeam_channel::Receiver<WhatTheEgressTableIsTold>,
+    ) {
+        let (what_its_egresses_say, what_the_table_reads) = crossbeam_channel::unbounded();
+        (Arc::new(what_its_egresses_say), what_the_table_reads)
+    }
+
+    /// The port this test's egress sends.
+    fn the_port_one_egress_sends() -> OutputPortOfferedOnTheMesh {
+        OutputPortOfferedOnTheMesh {
+            processor_display_name: "Camera Source 2".to_string(),
+            port_name: "video".to_string(),
+        }
+    }
+
+    /// One egress's report to `its_table`, as its thread holds it.
+    fn an_egress_reporting_to(
+        its_table: &Arc<crossbeam_channel::Sender<WhatTheEgressTableIsTold>>,
+        which_egress_of_its_port_it_is: WhichEgressOfAPortThisIs,
+    ) -> SaysThisEgressStoppedWhenItsThreadEnds {
+        SaysThisEgressStoppedWhenItsThreadEnds {
+            where_this_egress_says_it_stopped: Arc::downgrade(its_table),
+            port: the_port_one_egress_sends(),
+            which_egress_of_its_port_it_is,
+        }
+    }
+
+    /// What one egress told its table, or `None` when it said nothing.
+    fn what_one_egress_told_its_table(
+        what_the_table_reads: &crossbeam_channel::Receiver<WhatTheEgressTableIsTold>,
+    ) -> Option<(OutputPortOfferedOnTheMesh, WhichEgressOfAPortThisIs)> {
+        match what_the_table_reads.try_recv().ok()? {
+            WhatTheEgressTableIsTold::AnEgressStoppedSendingItsPort {
+                port,
+                which_egress_of_its_port_it_was,
+            } => Some((port, which_egress_of_its_port_it_was)),
+            _ => panic!("an egress tells its table one thing, and this was not it"),
+        }
+    }
+
+    /// An egress's thread ending tells its table so, naming the port and which
+    /// egress of that port this one was.
+    ///
+    /// What it catches: the two ways a *running* egress ends — its publisher
+    /// refusing to declare on the first bag it has to send, and its channel
+    /// subscriber failing under it — each log, undeclare the token and return.
+    /// Saying nothing back leaves the table holding an egress whose thread is
+    /// gone, which `graph.mesh.egress_ports` renders as a send that is not
+    /// happening and which no later reader can replace, since
+    /// `a_runtime_started_reading` returns early on a port already in the table.
+    ///
+    /// Mental-revert: say it at the one exit that spells never starting, rather
+    /// than on the drop, and every later exit goes unreported.
+    #[test]
+    fn an_egress_whose_thread_ends_tells_its_table_which_egress_stopped() {
+        let (its_table, what_the_table_reads) = a_table_listening_to_its_egresses();
+        let mut how_many_this_table_has_started = HowManyEgressesThisTableHasStarted::default();
+        let which_one_it_is = how_many_this_table_has_started.the_next_egress();
+
+        drop(an_egress_reporting_to(&its_table, which_one_it_is));
+
+        assert_eq!(
+            what_one_egress_told_its_table(&what_the_table_reads),
+            Some((the_port_one_egress_sends(), which_one_it_is))
+        );
+    }
+
+    /// A thread that panics says it too — the one end no `return` spells, and
+    /// the one an egress reaches on a bag its own receive loop cannot handle.
+    #[test]
+    fn an_egress_whose_thread_panics_still_tells_its_table_it_stopped() {
+        let (its_table, what_the_table_reads) = a_table_listening_to_its_egresses();
+        let mut how_many_this_table_has_started = HowManyEgressesThisTableHasStarted::default();
+        let which_one_it_is = how_many_this_table_has_started.the_next_egress();
+        let reporting = an_egress_reporting_to(&its_table, which_one_it_is);
+
+        // On its own thread, so the unwind is contained the way one egress's is.
+        // The panic in this test's output is this test's own.
+        let how_the_thread_ended = std::thread::spawn(move || {
+            let _says_it_stopped = reporting;
+            panic!("an egress's receive loop panicked");
+        })
+        .join();
+
+        assert!(how_the_thread_ended.is_err());
+        assert_eq!(
+            what_one_egress_told_its_table(&what_the_table_reads),
+            Some((the_port_one_egress_sends(), which_one_it_is))
+        );
+    }
+
+    /// An egress outliving its table says nothing rather than failing: the table
+    /// drops the sender that keeps its own thread alive before that thread drops
+    /// the egresses it owns, so the last of them reach this with no table left.
+    #[test]
+    fn an_egress_outliving_its_table_says_nothing() {
+        let (its_table, what_the_table_reads) = a_table_listening_to_its_egresses();
+        let mut how_many_this_table_has_started = HowManyEgressesThisTableHasStarted::default();
+        let reporting = an_egress_reporting_to(
+            &its_table,
+            how_many_this_table_has_started.the_next_egress(),
+        );
+
+        drop(its_table);
+        drop(reporting);
+
+        assert!(what_the_table_reads.try_recv().is_err());
     }
 }
