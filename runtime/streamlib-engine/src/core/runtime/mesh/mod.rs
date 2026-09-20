@@ -13,7 +13,11 @@
 //! announces nothing.
 
 mod a_bags_top_level_surface_id;
+mod a_frames_pixels_on_the_mesh;
+mod a_frames_pixels_read_out_for_the_mesh;
+mod a_frames_pixels_written_into_a_local_surface;
 mod duplicate_runtime_name_on_the_mesh;
+mod gpu_context_the_mesh_copies_frames_with;
 mod host_identity;
 mod hosted_control_plane_endpoint;
 mod link_request_on_the_mesh;
@@ -45,6 +49,7 @@ mod zenoh_work_off_any_tokio_runtime;
 // duplicate-name check reads rather than re-spell the grammar beside it.
 // The observation is exported because the wheel's `streamlib nodes` door
 // calls it. Everything else the mesh is built from stays inside it.
+pub use gpu_context_the_mesh_copies_frames_with::GpuContextTheMeshCopiesFramesWith;
 pub use host_identity::HostIdentity;
 pub use hosted_control_plane_endpoint::HostedControlPlaneEndpointRegistry;
 pub use link_request_on_the_mesh::{

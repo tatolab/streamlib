@@ -21,6 +21,7 @@ use zenoh::Wait;
 
 use crate::core::graph::{LinkUniqueId, MeshPortAddress, RemoteLinkResolution};
 use crate::core::runtime::mesh::OutputPortsOfferedOnTheMesh;
+use crate::core::runtime::mesh::gpu_context_the_mesh_copies_frames_with::GpuContextTheMeshCopiesFramesWith;
 use crate::core::runtime::mesh::mesh_link_ingress::MeshLinkIngress;
 use crate::core::runtime::mesh::output_ports_offered_on_the_mesh::ask_a_runtime_what_output_ports_it_offers;
 use crate::core::runtime::mesh::runtime_mesh_description::RuntimeMeshDescription;
@@ -71,6 +72,10 @@ struct WhatThisRuntimeIsCarryingFromOtherRuntimes {
 /// Every port on another runtime this runtime links from.
 pub struct MeshLinkIngressTable {
     iceoryx2_node: Iceoryx2Node,
+    /// Where each ingress reads the GPU context it mints a local surface
+    /// with, for an arriving frame. A cell rather than a context, because a
+    /// link can be applied before the runtime has one.
+    gpu_context_the_mesh_copies_frames_with: Arc<GpuContextTheMeshCopiesFramesWith>,
     carried: Arc<Mutex<WhatThisRuntimeIsCarryingFromOtherRuntimes>>,
     /// Set once this runtime is on a mesh and the resolving thread is up.
     resolving: Mutex<Option<ResolvingEveryWaitingLink>>,
@@ -88,9 +93,15 @@ struct ResolvingEveryWaitingLink {
 
 impl MeshLinkIngressTable {
     /// A table for a runtime whose iceoryx2 node is `iceoryx2_node`.
-    pub fn of_this_runtime(iceoryx2_node: &Iceoryx2Node) -> Arc<Self> {
+    pub fn of_this_runtime(
+        iceoryx2_node: &Iceoryx2Node,
+        gpu_context_the_mesh_copies_frames_with: &Arc<GpuContextTheMeshCopiesFramesWith>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             iceoryx2_node: iceoryx2_node.clone(),
+            gpu_context_the_mesh_copies_frames_with: Arc::clone(
+                gpu_context_the_mesh_copies_frames_with,
+            ),
             carried: Arc::new(Mutex::new(
                 WhatThisRuntimeIsCarryingFromOtherRuntimes::default(),
             )),
@@ -247,6 +258,9 @@ impl MeshLinkIngressTable {
             peers: Arc::clone(peers),
             carried: Arc::clone(&self.carried),
             iceoryx2_node: self.iceoryx2_node.clone(),
+            gpu_context_the_mesh_copies_frames_with: Arc::clone(
+                &self.gpu_context_the_mesh_copies_frames_with,
+            ),
             wake_the_resolver: wake_the_resolver.clone(),
         };
         let whether_this_thread_keeps_resolving = Arc::clone(&whether_to_keep_resolving);
@@ -330,6 +344,7 @@ struct ResolvingLinksNeeds {
     peers: Arc<RuntimeMeshPeerTable>,
     carried: Arc<Mutex<WhatThisRuntimeIsCarryingFromOtherRuntimes>>,
     iceoryx2_node: Iceoryx2Node,
+    gpu_context_the_mesh_copies_frames_with: Arc<GpuContextTheMeshCopiesFramesWith>,
     /// Handed to each ingress, so the pass runs the moment the source starts or
     /// stops sending rather than on the next tick.
     wake_the_resolver: Sender<()>,
@@ -554,6 +569,7 @@ fn start_carrying(resolving: &ResolvingLinksNeeds, address: &MeshPortAddress) {
         address,
         &resolving.iceoryx2_node,
         resolving.wake_the_resolver.clone(),
+        &resolving.gpu_context_the_mesh_copies_frames_with,
     ) {
         Ok(ingress) => ingress,
         Err(cannot_start) => {

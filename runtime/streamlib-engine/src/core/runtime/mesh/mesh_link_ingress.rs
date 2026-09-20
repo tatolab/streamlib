@@ -22,7 +22,7 @@
 //! channel's ring, the bags the egress never sent, Zenoh's silent drop, the
 //! network, and this ring.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -30,6 +30,9 @@ use parking_lot::{Condvar, Mutex};
 use zenoh::Wait;
 
 use crate::core::graph::MeshPortAddress;
+use crate::core::runtime::mesh::a_frames_pixels_on_the_mesh::a_frames_pixels_off_the_mesh;
+use crate::core::runtime::mesh::a_frames_pixels_written_into_a_local_surface::WritesAFramesPixelsIntoALocalSurface;
+use crate::core::runtime::mesh::gpu_context_the_mesh_copies_frames_with::GpuContextTheMeshCopiesFramesWith;
 use crate::core::runtime::mesh::mesh_data_message_attachment::{
     MeshDataMessageAttachment, PublisherGenerationOnTheMesh,
 };
@@ -48,9 +51,15 @@ use crate::iceoryx2::{
 /// reader has to know.
 const THE_INGRESS_OUTPUT_PORT: &str = "bags";
 
-/// A bag as it arrives from the mesh, before the writing thread takes it.
+/// One message as it arrives from the mesh, before the writing thread takes
+/// it — the producer's bag, and a frame's description and pixels ahead of and
+/// behind it when the bag names a surface.
+///
+/// Split on the writing thread rather than in the callback: the callback runs
+/// on the link's receive loop and only hands off, and the split is free once
+/// the bytes are owned either way.
 struct ABagOffTheMesh {
-    bag_bytes: Vec<u8>,
+    payload_bytes: Vec<u8>,
     /// The record that rode beside it, whole: the stamp to write it under, the
     /// sending runtime's number for it and the run that number belongs to, and
     /// the clock its stamp was taken on.
@@ -151,6 +160,7 @@ impl MeshLinkIngress {
         address: &MeshPortAddress,
         iceoryx2_node: &Iceoryx2Node,
         wake_the_resolver: crossbeam_channel::Sender<()>,
+        gpu_context_the_mesh_copies_frames_with: &Arc<GpuContextTheMeshCopiesFramesWith>,
     ) -> crate::core::Result<Self> {
         let local_channel = mesh_ingress_channel_name(&address.to_string()).into_string();
         let writes_onto_the_local_channel = Arc::new(OutputWriterInner::new());
@@ -222,6 +232,9 @@ impl MeshLinkIngress {
             Arc::clone(&arrived),
             Arc::clone(&writes_onto_the_local_channel),
             Arc::clone(&every_link_it_feeds),
+            WritesAFramesPixelsIntoALocalSurface::minting_through(
+                gpu_context_the_mesh_copies_frames_with,
+            ),
         )?;
 
         tracing::info!("This runtime is reading {address} off the mesh into {local_channel}");
@@ -364,7 +377,7 @@ fn declare_the_data_subscriber(
                 arrived.ring.pop_front();
             }
             arrived.ring.push_back(ABagOffTheMesh {
-                bag_bytes: sample.payload().to_bytes().into_owned(),
+                payload_bytes: sample.payload().to_bytes().into_owned(),
                 attached,
             });
             someone_is_waiting.notify_one();
@@ -426,10 +439,16 @@ fn spawn_the_writing_thread(
     arrived: Arc<(Mutex<WhatHasArrivedFromTheMesh>, Condvar)>,
     writes_onto_the_local_channel: Arc<OutputWriterInner>,
     every_link_it_feeds: Arc<Mutex<BTreeMap<String, OneLinkThisIngressFeeds>>>,
+    mut writes_a_frames_pixels_into_a_local_surface: WritesAFramesPixelsIntoALocalSurface,
 ) -> std::io::Result<std::thread::JoinHandle<()>> {
     std::thread::Builder::new()
         .name("streamlib-mesh-ingress".to_string())
         .spawn(move || {
+            // Each reason a frame did not land, said once for this source:
+            // one arriving thirty times a second must not say the same thing
+            // thirty times a second, and two different reasons must both be
+            // said.
+            let mut said_why_a_frame_did_not_land: BTreeSet<&'static str> = BTreeSet::new();
             loop {
                 let taken = {
                     let (arrived_ring, someone_is_waiting) = &*arrived;
@@ -467,9 +486,24 @@ fn spawn_the_writing_thread(
                     }
                 }
 
+                let Some(bag_bytes) = the_bag_to_hand_downstream(
+                    &address,
+                    &taken,
+                    &mut writes_a_frames_pixels_into_a_local_surface,
+                    &mut said_why_a_frame_did_not_land,
+                ) else {
+                    // A frame that did not land is a bag this hop lost, on top
+                    // of whatever the gap above already said: it reached this
+                    // runtime and reaches no destination of it.
+                    for link in every_link_it_feeds.lock().values_mut() {
+                        link.where_its_hop_loss_is_counted.record_dropped_bags(1);
+                    }
+                    continue;
+                };
+
                 if let Err(write_failure) = writes_onto_the_local_channel.write_raw(
                     THE_INGRESS_OUTPUT_PORT,
-                    &taken.bag_bytes,
+                    &bag_bytes,
                     taken.attached.timestamp_ns,
                 ) {
                     tracing::warn!(
@@ -478,4 +512,50 @@ fn spawn_the_writing_thread(
                 }
             }
         })
+}
+
+/// The bag one arriving message is handed downstream as, or `None` when its
+/// frame did not land here.
+///
+/// A message carrying no frame is its producer's bag, untouched. One carrying
+/// a frame is that bag with its `surface_id` replaced by the local surface the
+/// pixels were just written into — no surface id, lease or lifetime state
+/// crosses, so the only id a destination here can resolve is one this runtime
+/// minted.
+fn the_bag_to_hand_downstream<'a>(
+    address: &MeshPortAddress,
+    taken: &'a ABagOffTheMesh,
+    writes_a_frames_pixels_into_a_local_surface: &mut WritesAFramesPixelsIntoALocalSurface,
+    said_why_a_frame_did_not_land: &mut BTreeSet<&'static str>,
+) -> Option<std::borrow::Cow<'a, [u8]>> {
+    if taken.attached.frame_pixel_description_bytes == 0 {
+        return Some(std::borrow::Cow::Borrowed(&taken.payload_bytes));
+    }
+    let Some(arrived) = a_frames_pixels_off_the_mesh(
+        &taken.payload_bytes,
+        taken.attached.frame_pixel_description_bytes,
+    ) else {
+        if said_why_a_frame_did_not_land.insert("the-message-could-not-be-read") {
+            tracing::warn!(
+                "a message on {address} says it carries a frame and its three parts do not fit \
+                 the {} bytes that arrived, so it is read past",
+                taken.payload_bytes.len()
+            );
+        }
+        return None;
+    };
+    match writes_a_frames_pixels_into_a_local_surface
+        .a_bag_naming_the_local_surface_this_frame_landed_in(&arrived)
+    {
+        Ok(bag_bytes) => Some(std::borrow::Cow::Owned(bag_bytes)),
+        Err(why_it_cannot_land) => {
+            if said_why_a_frame_did_not_land.insert(why_it_cannot_land.which_refusal_this_is()) {
+                tracing::warn!(
+                    "a frame from {address} did not land on this runtime, and each one is \
+                     counted against this link: {why_it_cannot_land}"
+                );
+            }
+            None
+        }
+    }
 }

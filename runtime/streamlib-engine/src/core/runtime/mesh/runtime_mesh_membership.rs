@@ -37,6 +37,7 @@ use crate::core::runtime::mesh::link_requests_from_other_runtimes::{
 };
 use crate::core::runtime::mesh::link_requests_this_runtime_has_sent::LinkRequestsThisRuntimeHasSent;
 use crate::core::runtime::mesh::mesh_link_ingress_table::MeshLinkIngressTable;
+use crate::core::runtime::mesh::gpu_context_the_mesh_copies_frames_with::GpuContextTheMeshCopiesFramesWith;
 use crate::core::runtime::mesh::mesh_port_egress_table::MeshPortEgressTable;
 use crate::core::runtime::mesh::output_ports_offered_on_the_mesh::{
     OfferedOutputPortsQueryable, WhatThisRuntimeOffersOnTheMeshRegistry,
@@ -268,6 +269,7 @@ impl RuntimeMeshMembership {
         &self,
         offered: &Arc<WhatThisRuntimeOffersOnTheMeshRegistry>,
         iceoryx2_node: &Iceoryx2Node,
+        gpu_context_the_mesh_copies_frames_with: &Arc<GpuContextTheMeshCopiesFramesWith>,
     ) {
         let Some(session) = self.the_session_it_is_announced_on() else {
             return;
@@ -297,6 +299,7 @@ impl RuntimeMeshMembership {
                 offered,
                 iceoryx2_node,
                 &being_read_by_other_runtimes,
+                gpu_context_the_mesh_copies_frames_with,
             )?;
             Ok::<_, zenoh::Error>(ServingThisRuntimesOutputPorts {
                 _offered_output_ports_queryable: offered_output_ports_queryable,

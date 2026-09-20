@@ -102,6 +102,18 @@ pub enum Error {
         current_generation: u64,
     },
 
+    #[error(
+        "every one of the {pool_capacity} pixel buffers in this runtime's {width}x{height} \
+         {pixel_format} pool is in use, so a frame is dropped rather than overwriting one \
+         something is still reading"
+    )]
+    EveryPixelBufferInThePoolIsInUse {
+        width: u32,
+        height: u32,
+        pixel_format: String,
+        pool_capacity: usize,
+    },
+
     #[error("Clock synchronization error: {0}")]
     ClockError(String),
 

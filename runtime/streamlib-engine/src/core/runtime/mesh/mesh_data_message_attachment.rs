@@ -3,12 +3,13 @@
 
 //! What rides beside a bag on the mesh.
 //!
-//! The payload is the bag's bytes exactly as the producer wrote them, so
-//! nothing the engine adds may be mixed into it. Everything the receiving
-//! runtime needs and the bag does not carry rides in the message's attachment
-//! instead, as a fixed little-endian record rather than a map: it is read once
-//! per bag on the ingress thread, and a self-describing encoding would cost a
-//! decode where the shape never varies.
+//! The payload is the bag's bytes exactly as the producer wrote them — beside
+//! a frame's pixels and their description, when the bag names a surface — so
+//! nothing the engine adds may be mixed into the bag itself. Everything the
+//! receiving runtime needs and the bag does not carry rides in the message's
+//! attachment instead, as a fixed little-endian record rather than a map: it
+//! is read once per bag on the ingress thread, and a self-describing encoding
+//! would cost a decode where the shape never varies.
 
 use crate::core::runtime::mesh::machine_clock_identity::{
     MACHINE_CLOCK_IDENTITY_BYTES, MachineClockIdentity,
@@ -22,10 +23,12 @@ const TIMESTAMP_NS_OFFSET: usize = 0;
 const SEQUENCE_NUMBER_OFFSET: usize = TIMESTAMP_NS_OFFSET + size_of::<i64>();
 const PUBLISHER_GENERATION_OFFSET: usize = SEQUENCE_NUMBER_OFFSET + size_of::<u64>();
 const CLOCK_IDENTITY_OFFSET: usize = PUBLISHER_GENERATION_OFFSET + size_of::<u64>();
+const FRAME_PIXEL_DESCRIPTION_BYTES_OFFSET: usize =
+    CLOCK_IDENTITY_OFFSET + MACHINE_CLOCK_IDENTITY_BYTES;
 
 /// How many bytes one attachment is on the wire.
 pub const MESH_DATA_MESSAGE_ATTACHMENT_BYTES: usize =
-    CLOCK_IDENTITY_OFFSET + MACHINE_CLOCK_IDENTITY_BYTES;
+    FRAME_PIXEL_DESCRIPTION_BYTES_OFFSET + size_of::<u32>();
 
 /// Which run of one port's numbering a bag belongs to, as the sending runtime
 /// counted it.
@@ -54,6 +57,14 @@ pub struct MeshDataMessageAttachment {
     pub publisher_generation: PublisherGenerationOnTheMesh,
     /// The machine whose monotonic clock produced `timestamp_ns`.
     pub clock_identity: MachineClockIdentity,
+    /// How many bytes at the head of the payload describe a frame's pixels,
+    /// and zero when the payload is the producer's bag and nothing else.
+    ///
+    /// Here rather than at the head of the payload because a bag naming no
+    /// surface crosses *verbatim*: with no field to read first, telling one
+    /// shape from the other would mean guessing from the producer's own first
+    /// bytes, and a producer may write anything there.
+    pub frame_pixel_description_bytes: u32,
 }
 
 impl MeshDataMessageAttachment {
@@ -66,8 +77,10 @@ impl MeshDataMessageAttachment {
             .copy_from_slice(&self.sequence_number.to_le_bytes());
         wire_bytes[PUBLISHER_GENERATION_OFFSET..CLOCK_IDENTITY_OFFSET]
             .copy_from_slice(&self.publisher_generation.0.to_le_bytes());
-        wire_bytes[CLOCK_IDENTITY_OFFSET..CLOCK_IDENTITY_OFFSET + MACHINE_CLOCK_IDENTITY_BYTES]
+        wire_bytes[CLOCK_IDENTITY_OFFSET..FRAME_PIXEL_DESCRIPTION_BYTES_OFFSET]
             .copy_from_slice(&self.clock_identity.to_wire_bytes());
+        wire_bytes[FRAME_PIXEL_DESCRIPTION_BYTES_OFFSET..MESH_DATA_MESSAGE_ATTACHMENT_BYTES]
+            .copy_from_slice(&self.frame_pixel_description_bytes.to_le_bytes());
         wire_bytes
     }
 
@@ -82,7 +95,8 @@ impl MeshDataMessageAttachment {
         let (timestamp_ns, rest) = wire_bytes.split_first_chunk::<8>()?;
         let (sequence_number, rest) = rest.split_first_chunk::<8>()?;
         let (publisher_generation, rest) = rest.split_first_chunk::<8>()?;
-        let clock_identity = rest.first_chunk::<MACHINE_CLOCK_IDENTITY_BYTES>()?;
+        let (clock_identity, rest) = rest.split_first_chunk::<MACHINE_CLOCK_IDENTITY_BYTES>()?;
+        let frame_pixel_description_bytes = rest.first_chunk::<4>()?;
         Some(Self {
             timestamp_ns: i64::from_le_bytes(*timestamp_ns),
             sequence_number: u64::from_le_bytes(*sequence_number),
@@ -90,6 +104,7 @@ impl MeshDataMessageAttachment {
                 *publisher_generation,
             )),
             clock_identity: MachineClockIdentity::from_wire_bytes(*clock_identity),
+            frame_pixel_description_bytes: u32::from_le_bytes(*frame_pixel_description_bytes),
         })
     }
 }
@@ -106,6 +121,7 @@ mod tests {
             clock_identity: MachineClockIdentity::of_the_machine_whose_boot_session_uuid_reads(
                 "2f1c8a30-6b4e-4d5a-9a11-2c7f0d5e8b93",
             ),
+            frame_pixel_description_bytes: 0x3132_3334,
         }
     }
 
@@ -126,14 +142,17 @@ mod tests {
                 0x28, 0x27, 0x26, 0x25, 0x24, 0x23, 0x22, 0x21, //
                 // clock_identity, verbatim rather than byte-swapped
                 0x2f, 0x1c, 0x8a, 0x30, 0x6b, 0x4e, 0x4d, 0x5a, 0x9a, 0x11, 0x2c, 0x7f, 0x0d, 0x5e,
-                0x8b, 0x93,
+                0x8b, 0x93, //
+                // frame_pixel_description_bytes
+                0x34, 0x33, 0x32, 0x31,
             ]
         );
-        assert_eq!(MESH_DATA_MESSAGE_ATTACHMENT_BYTES, 40);
+        assert_eq!(MESH_DATA_MESSAGE_ATTACHMENT_BYTES, 44);
         assert_eq!(TIMESTAMP_NS_OFFSET, 0);
         assert_eq!(SEQUENCE_NUMBER_OFFSET, 8);
         assert_eq!(PUBLISHER_GENERATION_OFFSET, 16);
         assert_eq!(CLOCK_IDENTITY_OFFSET, 24);
+        assert_eq!(FRAME_PIXEL_DESCRIPTION_BYTES_OFFSET, 40);
     }
 
     /// Every value each field can carry survives the wire — the stamp's
@@ -148,6 +167,7 @@ mod tests {
                     sequence_number: counter,
                     publisher_generation: PublisherGenerationOnTheMesh(counter),
                     clock_identity: MachineClockIdentity::of_this_machine(),
+                    frame_pixel_description_bytes: counter as u32,
                 };
                 assert_eq!(
                     MeshDataMessageAttachment::from_wire_bytes(&record.to_wire_bytes()),
@@ -181,6 +201,7 @@ mod tests {
             SEQUENCE_NUMBER_OFFSET,
             PUBLISHER_GENERATION_OFFSET,
             CLOCK_IDENTITY_OFFSET,
+            FRAME_PIXEL_DESCRIPTION_BYTES_OFFSET,
             MESH_DATA_MESSAGE_ATTACHMENT_BYTES - 1,
         ] {
             assert_eq!(
