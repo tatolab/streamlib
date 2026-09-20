@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.2](https://github.com/tatolab/streamlib/compare/v0.26.1...v0.26.2) (2026-09-20)
+
+
+### Bug Fixes
+
+* **engine:** the mesh egress table forgets an egress whose thread has ended ([#2376](https://github.com/tatolab/streamlib/issues/2376)) ([1ad44b9](https://github.com/tatolab/streamlib/commit/1ad44b9aee5ca1ef2f62d004f5a9bba5b4570066))
+
 ## [0.26.1](https://github.com/tatolab/streamlib/compare/v0.26.0...v0.26.1) (2026-09-20)
 
 
