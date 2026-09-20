@@ -155,6 +155,41 @@ pub struct HostVulkanVideoSession {
 unsafe impl Send for HostVulkanVideoSession {}
 unsafe impl Sync for HostVulkanVideoSession {}
 
+/// Refuse a video session on a device that never enabled the Vulkan Video
+/// extensions.
+///
+/// Vulkan Video is an absent tier, not a failure. A device that did not enable
+/// `VK_KHR_video_*` has no `vkCreateVideoSessionKHR` loaded, and vulkanalia
+/// installs a panicking stub for an unloaded command — so calling through
+/// aborts the process instead of returning an error. The tier has to be refused
+/// by name here, before the first entry point.
+///
+/// Takes the two capability answers rather than the device so the decision is
+/// testable without one.
+fn refuse_a_video_session_this_device_cannot_serve(
+    device_serves_video_encode: bool,
+    device_serves_video_decode: bool,
+    descriptor: &VideoSessionDescriptor<'_>,
+) -> Result<()> {
+    let (direction, device_serves_it) = match descriptor.codec_operation {
+        vk::VideoCodecOperationFlagsKHR::ENCODE_H264
+        | vk::VideoCodecOperationFlagsKHR::ENCODE_H265 => ("encode", device_serves_video_encode),
+        vk::VideoCodecOperationFlagsKHR::DECODE_H264
+        | vk::VideoCodecOperationFlagsKHR::DECODE_H265 => ("decode", device_serves_video_decode),
+        _ => return Ok(()),
+    };
+
+    if device_serves_it {
+        return Ok(());
+    }
+
+    Err(Error::GpuError(format!(
+        "video session '{}': this device serves no Vulkan Video {direction} — the \
+         VK_KHR_video_* extensions were not enabled on it, so {:?} cannot be created",
+        descriptor.label, descriptor.codec_operation,
+    )))
+}
+
 impl HostVulkanVideoSession {
     /// Build a new session. Runs `vkCreateVideoSessionKHR`,
     /// `vkGetVideoSessionMemoryRequirementsKHR`, VMA allocations for
@@ -176,6 +211,12 @@ impl HostVulkanVideoSession {
             max_active_reference_pictures = descriptor.max_active_reference_pictures,
             "HostVulkanVideoSession::new"
         );
+
+        refuse_a_video_session_this_device_cannot_serve(
+            vulkan_device.supports_video_encode(),
+            vulkan_device.supports_video_decode(),
+            descriptor,
+        )?;
 
         let std_header_version = std_header_version_for_codec(descriptor.codec_operation)?;
         let profile_info = descriptor.video_profile;
@@ -962,5 +1003,157 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A descriptor for the refusal tests. Pure data — no device involved.
+    fn descriptor_for(
+        label: &'static str,
+        codec_operation: vk::VideoCodecOperationFlagsKHR,
+    ) -> VideoSessionDescriptor<'static> {
+        let mut video_profile = vk::VideoProfileInfoKHR::default();
+        video_profile.video_codec_operation = codec_operation;
+        video_profile.chroma_subsampling = vk::VideoChromaSubsamplingFlagsKHR::_420;
+        video_profile.luma_bit_depth = vk::VideoComponentBitDepthFlagsKHR::_8;
+        video_profile.chroma_bit_depth = vk::VideoComponentBitDepthFlagsKHR::_8;
+
+        VideoSessionDescriptor {
+            label,
+            session_create_flags: vk::VideoSessionCreateFlagsKHR::empty(),
+            video_queue_family: 0,
+            video_profile,
+            codec_operation,
+            picture_format: vk::Format::G8_B8R8_2PLANE_420_UNORM,
+            max_coded_extent: vk::Extent2D {
+                width: 1920,
+                height: 1080,
+            },
+            reference_pictures_format: vk::Format::G8_B8R8_2PLANE_420_UNORM,
+            max_dpb_slots: 17,
+            max_active_reference_pictures: 16,
+        }
+    }
+
+    #[test]
+    fn a_decode_session_is_refused_when_the_device_serves_no_decode() {
+        for codec_operation in [
+            vk::VideoCodecOperationFlagsKHR::DECODE_H264,
+            vk::VideoCodecOperationFlagsKHR::DECODE_H265,
+        ] {
+            let refusal = refuse_a_video_session_this_device_cannot_serve(
+                true,
+                false,
+                &descriptor_for("absent-tier/decode", codec_operation),
+            )
+            .expect_err("no decode support must refuse a decode session");
+            assert!(
+                refusal.to_string().contains("no Vulkan Video decode"),
+                "the refusal must name the direction: {refusal}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_encode_session_is_refused_when_the_device_serves_no_encode() {
+        for codec_operation in [
+            vk::VideoCodecOperationFlagsKHR::ENCODE_H264,
+            vk::VideoCodecOperationFlagsKHR::ENCODE_H265,
+        ] {
+            let refusal = refuse_a_video_session_this_device_cannot_serve(
+                false,
+                true,
+                &descriptor_for("absent-tier/encode", codec_operation),
+            )
+            .expect_err("no encode support must refuse an encode session");
+            assert!(
+                refusal.to_string().contains("no Vulkan Video encode"),
+                "the refusal must name the direction: {refusal}"
+            );
+        }
+    }
+
+    /// The two directions are independent: decode support must not wave an
+    /// encode session through, which is what a single "supports video" flag
+    /// would do.
+    #[test]
+    fn support_in_one_direction_does_not_admit_a_session_in_the_other() {
+        assert!(
+            refuse_a_video_session_this_device_cannot_serve(
+                false,
+                true,
+                &descriptor_for("decode-only/encode", vk::VideoCodecOperationFlagsKHR::ENCODE_H264),
+            )
+            .is_err(),
+            "a decode-capable device must still refuse an encode session"
+        );
+        assert!(
+            refuse_a_video_session_this_device_cannot_serve(
+                true,
+                false,
+                &descriptor_for("encode-only/decode", vk::VideoCodecOperationFlagsKHR::DECODE_H264),
+            )
+            .is_err(),
+            "an encode-capable device must still refuse a decode session"
+        );
+    }
+
+    #[test]
+    fn a_served_direction_passes_the_guard() {
+        refuse_a_video_session_this_device_cannot_serve(
+            true,
+            true,
+            &descriptor_for("served/decode", vk::VideoCodecOperationFlagsKHR::DECODE_H264),
+        )
+        .expect("a device serving decode must pass the guard");
+    }
+
+    /// Vulkan Video is an absent tier on MoltenVK, not a failure. Without the
+    /// guard this reaches `vkCreateVideoSessionKHR`, which the loader never
+    /// resolved on such a device — vulkanalia installs a panicking stub for an
+    /// unloaded command, so the tier would abort the process instead of
+    /// refusing.
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn a_device_without_vulkan_video_refuses_a_session_rather_than_panicking() {
+        let device = HostVulkanDevice::new().expect("the rig must produce a Vulkan device");
+        if device.supports_video_decode() {
+            println!("skipping — this device serves Vulkan Video, so there is no tier to refuse");
+            return;
+        }
+
+        let mut h264_profile = vk::VideoDecodeH264ProfileInfoKHR::builder()
+            .std_profile_idc(vk::video::STD_VIDEO_H264_PROFILE_IDC_HIGH)
+            .picture_layout(vk::VideoDecodeH264PictureLayoutFlagsKHR::PROGRESSIVE);
+        let mut video_profile = vk::VideoProfileInfoKHR::default();
+        video_profile.video_codec_operation = vk::VideoCodecOperationFlagsKHR::DECODE_H264;
+        video_profile.chroma_subsampling = vk::VideoChromaSubsamplingFlagsKHR::_420;
+        video_profile.luma_bit_depth = vk::VideoComponentBitDepthFlagsKHR::_8;
+        video_profile.chroma_bit_depth = vk::VideoComponentBitDepthFlagsKHR::_8;
+        video_profile.next = &mut *h264_profile as *mut _ as *mut std::ffi::c_void;
+
+        let descriptor = VideoSessionDescriptor {
+            label: "absent-tier/h264-decode",
+            session_create_flags: vk::VideoSessionCreateFlagsKHR::empty(),
+            video_queue_family: 0,
+            video_profile,
+            codec_operation: vk::VideoCodecOperationFlagsKHR::DECODE_H264,
+            picture_format: vk::Format::G8_B8R8_2PLANE_420_UNORM,
+            max_coded_extent: vk::Extent2D {
+                width: 1920,
+                height: 1080,
+            },
+            reference_pictures_format: vk::Format::G8_B8R8_2PLANE_420_UNORM,
+            max_dpb_slots: 17,
+            max_active_reference_pictures: 16,
+        };
+
+        let refusal = HostVulkanVideoSession::new(&device, &descriptor)
+            .expect_err("a device that serves no Vulkan Video must refuse the session");
+        assert!(
+            matches!(refusal, Error::GpuError(_)),
+            "the refusal must be the engine's typed GPU error, got {refusal:?}"
+        );
     }
 }

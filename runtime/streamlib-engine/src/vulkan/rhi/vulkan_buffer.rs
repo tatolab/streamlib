@@ -156,8 +156,17 @@ enum HostVisibleAllocationIntent {
 }
 
 impl HostVisibleAllocationIntent {
-    fn is_exportable(self) -> bool {
-        matches!(self, Self::SequentialWriteExportable)
+    /// Whether the allocation declares a DMA-BUF export handle type.
+    ///
+    /// DMA-BUF is a Linux mechanism. Chaining `VkExternalMemoryBufferCreateInfo`
+    /// with `DMA_BUF_EXT` on a driver that has none — MoltenVK — makes
+    /// `vkCreateBuffer` refuse with `FEATURE_NOT_PRESENT`, so no host-visible
+    /// buffer allocates at all. Where the handle type does not exist the
+    /// declaration is omitted and the allocation is local; the Apple export
+    /// flavour is an IOSurface and arrives with the Apple interop seam (#2360),
+    /// not through this handle type.
+    fn declares_dma_buf_export(self) -> bool {
+        cfg!(target_os = "linux") && matches!(self, Self::SequentialWriteExportable)
     }
 
     fn vma_allocation_create_flags(self) -> vma::AllocationCreateFlags {
@@ -240,7 +249,7 @@ impl HostVulkanBuffer {
             .size(size)
             .usage(usage)
             .sharing_mode(vk::SharingMode::EXCLUSIVE);
-        if intent.is_exportable() {
+        if intent.declares_dma_buf_export() {
             buffer_info = buffer_info.push_next(&mut external_buffer_info);
         }
 
@@ -256,7 +265,7 @@ impl HostVulkanBuffer {
         let (buffer, allocation) = {
             #[cfg(target_os = "linux")]
             let result = match vulkan_device.dma_buf_buffer_pool() {
-                Some(pool) if intent.is_exportable() => unsafe {
+                Some(pool) if intent.declares_dma_buf_export() => unsafe {
                     pool.create_buffer(buffer_info, &alloc_opts)
                 },
                 _ => unsafe { allocator.create_buffer(buffer_info, &alloc_opts) },

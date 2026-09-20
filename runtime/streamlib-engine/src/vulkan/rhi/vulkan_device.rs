@@ -4767,4 +4767,98 @@ mod tests {
              that; the request is {major}.{minor}"
         );
     }
+
+    /// The loader's first candidate is vulkanalia's own platform name, so a host
+    /// that already resolves it is unaffected by the search list existing.
+    #[test]
+    fn the_vulkan_loader_search_list_starts_at_the_platform_default_name() {
+        let candidate_paths = vulkan_loader_library_candidate_paths();
+
+        assert_eq!(
+            candidate_paths.first().map(|path| path.as_os_str()),
+            Some(std::ffi::OsStr::new(LIBRARY)),
+            "the platform default must stay first so an already-resolving host is unchanged"
+        );
+    }
+
+    /// Apple needs more than the bare name: dyld's default search path excludes
+    /// Homebrew's prefix on Apple Silicon, so `libvulkan.dylib` alone resolves
+    /// nothing on a stock machine with the loader installed.
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[test]
+    fn the_vulkan_loader_search_list_reaches_a_stock_homebrew_install() {
+        let candidate_paths: Vec<String> = vulkan_loader_library_candidate_paths()
+            .iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect();
+
+        assert!(
+            candidate_paths
+                .iter()
+                .any(|path| path == "/opt/homebrew/lib/libvulkan.dylib"),
+            "a Homebrew install must be reachable: {candidate_paths:?}"
+        );
+    }
+
+    /// Linux keeps exactly one candidate — the search list must not change what
+    /// a Linux host loads.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_vulkan_loader_search_list_is_unchanged_on_linux() {
+        assert_eq!(
+            vulkan_loader_library_candidate_paths().len(),
+            1,
+            "Linux loads the platform default and nothing else"
+        );
+    }
+
+    /// The device this milestone exists to bring up. Unlike [`try_create_device`]
+    /// this refuses to pass by skipping: under `hardware-tests` the rig is
+    /// asserted to exist, and a MoltenVK that cannot produce a device is the
+    /// failure the test is for.
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn a_device_comes_up_on_this_hosts_driver_and_names_itself() {
+        let device = HostVulkanDevice::new()
+            .expect("the rig must produce a Vulkan device — on Apple that is MoltenVK");
+
+        let device_name = device.name();
+        assert!(
+            !device_name.trim().is_empty(),
+            "a device that cannot name itself is not a device the engine can report on"
+        );
+        println!("Vulkan device: {device_name}");
+    }
+
+    /// Ray tracing is an absent tier on MoltenVK, not a failure: construction
+    /// refuses by name rather than reaching an entry point that never loaded.
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn ray_tracing_on_a_device_without_it_refuses_rather_than_panicking() {
+        let device = HostVulkanDevice::new().expect("the rig must produce a Vulkan device");
+        if device.supports_ray_tracing_pipeline() {
+            println!("skipping — this device serves ray tracing, so there is no tier to refuse");
+            return;
+        }
+
+        let unit_triangle_vertices = [0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0];
+        let unit_triangle_indices = [0u32, 1, 2];
+        let refusal = crate::vulkan::rhi::VulkanAccelerationStructure::build_triangles_blas(
+            &device,
+            "absent-tier/blas",
+            &unit_triangle_vertices,
+            &unit_triangle_indices,
+        )
+        .expect_err("a device without ray tracing must refuse to build an acceleration structure");
+        assert!(
+            matches!(refusal, Error::GpuError(_)),
+            "the refusal must be the engine's typed GPU error, got {refusal:?}"
+        );
+    }
 }
