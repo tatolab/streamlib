@@ -80,9 +80,7 @@ impl TheClockAnInboundLinksStampsAreTakenOn {
     /// What this process can say about the clock right now.
     pub fn what_is_known_of_it(&self) -> WhatIsKnownOfAnInboundLinksStampClock {
         match self {
-            Self::ThisMachine => WhatIsKnownOfAnInboundLinksStampClock::TheMachine(
-                MachineClockIdentity::of_this_machine(),
-            ),
+            Self::ThisMachine => Some(MachineClockIdentity::of_this_machine()).into(),
             Self::WhicheverMachineTheMeshIsCarryingFrom(carries_from) => {
                 carries_from.what_it_is_now().into()
             }
@@ -104,6 +102,15 @@ pub enum WhatIsKnownOfAnInboundLinksStampClock {
     /// It carries from another runtime and is being read in a helper process,
     /// which holds no mesh session. The app process can answer.
     OnlyTheAppProcessCanSay,
+    /// The machine its bags were stamped on names no clock of its own — a
+    /// platform with no boot-session id to report.
+    ///
+    /// Never [`TheMachine`] carrying the nil id: two machines that each name no
+    /// clock are not one machine, and an identity two of them share is one a
+    /// reader would compare stamps across.
+    ///
+    /// [`TheMachine`]: Self::TheMachine
+    ItsMachineNamesNoClockOfItsOwn,
     /// Nothing of that name is bound on that port here — no such link, or a
     /// process that holds no binding for it at all.
     NoSuchLinkFeedsThatPort,
@@ -115,6 +122,7 @@ impl From<Option<MachineClockIdentity>> for WhatIsKnownOfAnInboundLinksStampCloc
     /// what an empty cell says.
     fn from(what_a_cell_reads: Option<MachineClockIdentity>) -> Self {
         match what_a_cell_reads {
+            Some(machine) if machine.is_unidentified() => Self::ItsMachineNamesNoClockOfItsOwn,
             Some(machine) => Self::TheMachine(machine),
             None => Self::NothingHasCrossedItYet,
         }
@@ -130,6 +138,7 @@ impl WhatIsKnownOfAnInboundLinksStampClock {
             Self::TheMachine(machine) => Some(machine),
             Self::NothingHasCrossedItYet
             | Self::OnlyTheAppProcessCanSay
+            | Self::ItsMachineNamesNoClockOfItsOwn
             | Self::NoSuchLinkFeedsThatPort => None,
         }
     }
@@ -240,8 +249,36 @@ mod tests {
         );
     }
 
+    /// A platform that names no clock is not a machine two links can share.
+    ///
+    /// Fail-without-fix: read the nil id as an identity and two tracks from two
+    /// such machines compare equal — the epoch-mixing this whole surface
+    /// exists to stop, reached on any platform that is neither Linux nor Apple
+    /// and on a Linux box whose boot id does not answer.
+    #[test]
+    fn a_machine_that_names_no_clock_is_never_one_two_links_can_share() {
+        let carries_from = Arc::new(MachineClockARemoteLinkCarriesFrom::default());
+        carries_from.note_the_machine_a_bag_was_stamped_on(MachineClockIdentity::UNIDENTIFIED);
+
+        let what_is_known =
+            TheClockAnInboundLinksStampsAreTakenOn::WhicheverMachineTheMeshIsCarryingFrom(
+                carries_from,
+            )
+            .what_is_known_of_it();
+
+        assert_eq!(
+            what_is_known,
+            WhatIsKnownOfAnInboundLinksStampClock::ItsMachineNamesNoClockOfItsOwn
+        );
+        assert_eq!(
+            what_is_known.the_machine_if_it_is_known(),
+            None,
+            "nothing may be compared against a machine that named no clock"
+        );
+    }
+
     /// Every way of not knowing reads as no machine for a caller that has one
-    /// thing to do with all three.
+    /// thing to do with all four.
     #[test]
     fn only_a_named_machine_is_a_machine() {
         let this_machine = MachineClockIdentity::of_this_machine();
@@ -254,6 +291,7 @@ mod tests {
         for not_known in [
             WhatIsKnownOfAnInboundLinksStampClock::NothingHasCrossedItYet,
             WhatIsKnownOfAnInboundLinksStampClock::OnlyTheAppProcessCanSay,
+            WhatIsKnownOfAnInboundLinksStampClock::ItsMachineNamesNoClockOfItsOwn,
             WhatIsKnownOfAnInboundLinksStampClock::NoSuchLinkFeedsThatPort,
         ] {
             assert_eq!(not_known.the_machine_if_it_is_known(), None);

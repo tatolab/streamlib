@@ -990,8 +990,10 @@ class LinkInputDataReader:
     ) -> str | None:
         """Which machine's monotonic clock one link's stamps are taken on.
 
-        The machine's boot-session UUID text, or `None` when no machine is
-        named yet. Every stamp is a machine's monotonic clock, whose epoch is
+        The machine's boot-session UUID text, or `None` — which covers a link
+        nothing has crossed yet, one whose machine names no clock of its own,
+        and a name no link on that port carries. Every stamp is a machine's
+        monotonic clock, whose epoch is
         that machine's own boot, so two stamps taken on two machines are
         readings of two unrelated clocks: compare one link's stamps against
         another's only where both answer the same string, and never where

@@ -22,6 +22,7 @@ use mp4_atom::{
 };
 use serde::Deserialize;
 use streamlib::sdk::error::{Error, Result};
+use streamlib::sdk::iceoryx2::WhatIsKnownOfAnInboundLinksStampClock;
 use streamlib::sdk::runtime::mesh::MachineClockIdentity;
 
 use crate::encoded_audio_packet::{EncodedAudioCodec, read_encoded_audio_packet_bag};
@@ -1570,6 +1571,57 @@ mod tests {
             2,
             "the track had already written its sample entry, so it keeps its trak and just stops"
         );
+    }
+
+    /// A machine that names no clock of its own is never one two tracks share.
+    ///
+    /// The sink is handed `None` for such a link, not the nil id — the read
+    /// surface downgrades it — so two tracks from two such machines settle no
+    /// clock between them and neither is latched against the other's epoch.
+    ///
+    /// Fail-without-fix: hand the nil id through as an identity and these two
+    /// compare equal, which is the epoch-mixing this check exists to stop.
+    #[test]
+    fn two_machines_that_each_name_no_clock_are_not_read_as_one() {
+        let mut file = Vec::new();
+        let mut writer = Mp4FragmentedFileWriter::new(
+            &mut file,
+            &["camera/video".to_string(), "microphone/audio".to_string()],
+        );
+
+        // What the read surface hands a sink for a machine naming no clock.
+        let names_no_clock =
+            WhatIsKnownOfAnInboundLinksStampClock::from(Some(MachineClockIdentity::UNIDENTIFIED))
+                .the_machine_if_it_is_known();
+        assert_eq!(
+            names_no_clock, None,
+            "the nil id never reaches a sink as a machine"
+        );
+
+        for index in 0..4u64 {
+            writer
+                .accept_bag(
+                    "camera/video",
+                    &h264_bag(index, index == 0, H264_SEQUENCE_PARAMETER_SET),
+                    index as i64 * ONE_VIDEO_FRAME_NS,
+                    names_no_clock,
+                )
+                .expect("accepted");
+            writer
+                .accept_bag(
+                    "microphone/audio",
+                    &opus_bag(index, 2),
+                    index as i64 * ONE_OPUS_PACKET_NS,
+                    names_no_clock,
+                )
+                .expect("accepted");
+        }
+
+        assert_eq!(
+            writer.the_machine_this_recording_is_on, None,
+            "neither track settled a clock, so neither is measured against the other's"
+        );
+        assert_eq!(writer.finish().expect("the file closes").tracks_latched, 0);
     }
 
     /// A link that names no machine is nothing to check: its bags are taken,

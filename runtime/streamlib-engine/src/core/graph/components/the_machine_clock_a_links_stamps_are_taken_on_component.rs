@@ -19,9 +19,14 @@ pub struct TheMachineClockALinksStampsAreTakenOnComponent(
 );
 
 impl TheMachineClockALinksStampsAreTakenOnComponent {
-    /// The machine as the canonical UUID text, or `None` while nothing has
-    /// crossed the link.
+    /// The machine as the canonical UUID text, or `None` where none is known.
+    ///
+    /// None covers a link nothing has crossed and one whose machine names no
+    /// clock of its own: the nil id is shared by every such machine, so
+    /// rendering it would hand a reader a string two of them match on.
     pub fn as_uuid_text(&self) -> Option<String> {
-        self.0.what_it_is_now().map(|machine| machine.to_string())
+        crate::iceoryx2::WhatIsKnownOfAnInboundLinksStampClock::from(self.0.what_it_is_now())
+            .the_machine_if_it_is_known()
+            .map(|machine| machine.to_string())
     }
 }

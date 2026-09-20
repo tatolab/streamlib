@@ -2190,6 +2190,7 @@ impl PythonLinkInputDataReader {
                 Ok(Some(machine.to_string()))
             }
             WhatIsKnownOfAnInboundLinksStampClock::NothingHasCrossedItYet
+            | WhatIsKnownOfAnInboundLinksStampClock::ItsMachineNamesNoClockOfItsOwn
             | WhatIsKnownOfAnInboundLinksStampClock::NoSuchLinkFeedsThatPort => Ok(None),
             WhatIsKnownOfAnInboundLinksStampClock::OnlyTheAppProcessCanSay => {
                 self.ask_the_parent_which_machine_stamped(python, inbound_link_name)

@@ -197,6 +197,7 @@ class _PublisherUnderTest:
         for index in range(inbound_links):
             link_data_access.wire_input_link(
                 "tracks", f"{unique}/encoder{index}", f"{unique}/encoder{index}",
+                "this_machine",
                 f"{unique}_dest/notify",
                 "read_next_in_order", 8, 8, 2, 4, f"L-{unique}-{index}",
             )  # fmt: skip
@@ -299,7 +300,7 @@ def test_a_multichannel_bag_is_refused_before_any_session_is_opened(request):
 
     destination = ProcessorLinkDataAccess()
     destination.wire_input_link(
-        "tracks", channel, channel, notify,
+        "tracks", channel, channel, "this_machine", notify,
         "read_next_in_order", 8, 8, 2, 1, f"L-{unique}",
     )  # fmt: skip
     source = ProcessorLinkDataAccess()

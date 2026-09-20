@@ -244,6 +244,8 @@ def _one_live_link(
         reading_port,
         channel_service_name,
         channel_service_name,
+        # This source is on this runtime, so its bags were stamped here.
+        "this_machine",
         notify_service_name,
         "read_next_in_order",
         8,
