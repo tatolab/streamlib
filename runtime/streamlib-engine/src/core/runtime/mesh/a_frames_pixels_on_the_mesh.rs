@@ -97,10 +97,13 @@ impl AFramesPixelDescriptionOnTheMesh {
 /// Build the message one frame crosses as, filling its pixel tail through
 /// `read_the_frames_pixels_into`.
 ///
-/// The tail is handed to the caller rather than taken from it, so a frame is
-/// copied once — straight out of the sender's staging into the bytes that go
-/// on the wire — rather than into an intermediate the message then copies
-/// again. At 1080p RGBA that second copy would be 8.3 MB per frame.
+/// The tail is handed to the caller rather than taken from it, so a frame's
+/// pixels are copied once — straight out of the sender's staging into the
+/// bytes that go on the wire — rather than into an intermediate the message
+/// then copies again. At 1080p RGBA that second copy would be 8.3 MB per
+/// frame. The tail is zeroed before it is handed over, which is a pass over
+/// those bytes but not a copy of them; taking it uninitialised would need
+/// `unsafe` here for a memset the allocator largely absorbs.
 pub fn a_mesh_message_carrying_a_frames_pixels(
     description: AFramesPixelDescriptionOnTheMesh,
     bag_bytes: &[u8],

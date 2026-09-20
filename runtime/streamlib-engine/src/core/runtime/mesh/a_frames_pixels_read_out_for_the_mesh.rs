@@ -11,7 +11,7 @@
 //! pool slot — at cap the producer drops its own frame rather than waiting on
 //! a peer.
 //!
-//! The copy door is [`SurfaceExportStaging`] at host-visible residency, whose
+//! The copy door is `SurfaceExportStaging` at host-visible residency, whose
 //! refill is a GPU copy into host-cached memory. Never a CPU memcpy out of a
 //! pooled allocation's own mapping: that memory is write-combined, and a
 //! 1080p RGBA read out of it cost 37 ms
@@ -304,29 +304,31 @@ impl Drop for AFrameClaimedWhileItsPixelsAreRead<'_> {
 }
 
 /// The format of `surface_id`'s backing when it carries more than one plane,
-/// and `None` otherwise — including for an id that resolves to nothing, whose
-/// refusal the staging below says in its own words.
+/// and `None` otherwise — including for an id neither in-process cache knows,
+/// whose refusal the staging below says in its own words.
 ///
 /// Read ahead of the staging only so that this refusal is named: the staging
 /// refuses a multi-plane source too, and a port that met one and then met a
 /// recycled frame would otherwise say only the first of the two.
+///
+/// The two in-process caches and nothing else. The full resolve reaches the
+/// surface-share service on a miss, which is a blocking socket round trip —
+/// and the staging below pays that one already, so asking here too would cost
+/// a second per frame for every helper-published surface, to name a refusal.
+/// An id only the service knows falls through, and the staging names it.
 #[cfg(target_os = "linux")]
 fn a_backing_of_more_than_one_plane(
     gpu_context: &crate::core::context::GpuContext,
     surface_id: &str,
 ) -> Option<String> {
-    use crate::core::context::surface_export_staging::ResolvedBlitSource;
     use streamlib_consumer_rhi::TextureFormat;
 
-    match gpu_context.resolve_device_export_source(surface_id).ok()? {
-        ResolvedBlitSource::PixelBuffer(pixel_buffer) => {
-            let pixel_format = pixel_buffer.format();
-            (pixel_format.plane_count() > 1).then(|| pixel_format.wire_name().to_string())
-        }
-        ResolvedBlitSource::RegisteredTexture(registration) => {
-            (registration.texture().format() == TextureFormat::Nv12).then(|| "nv12".to_string())
-        }
+    if let Some(pixel_buffer) = gpu_context.pooled_backing_held_in_this_process(surface_id) {
+        let pixel_format = pixel_buffer.format();
+        return (pixel_format.plane_count() > 1).then(|| pixel_format.wire_name().to_string());
     }
+    let registration = gpu_context.producer_registered_texture_for_surface_id(surface_id)?;
+    (registration.texture().format() == TextureFormat::Nv12).then(|| "nv12".to_string())
 }
 
 /// The refusal every read failure that is not one of the named ones takes.
