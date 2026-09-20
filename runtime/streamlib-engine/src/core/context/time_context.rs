@@ -65,12 +65,28 @@ mod tests {
         assert!(t2 > t1, "elapsed should increase over time");
     }
 
+    /// Bracketed by two `elapsed_ns` reads rather than compared against the
+    /// sleep: the subject is the divide by a billion, and how long a sleep
+    /// actually takes is the scheduler's business. Asserting an upper bound on
+    /// it fails on a loaded machine while the conversion is perfectly correct.
     #[test]
-    fn test_elapsed_secs_conversion() {
+    fn elapsed_secs_is_elapsed_ns_in_seconds() {
         let ctx = TimeContext::new();
-        thread::sleep(Duration::from_millis(100));
+        thread::sleep(Duration::from_millis(10));
+
+        let before_ns = ctx.elapsed_ns();
         let secs = ctx.elapsed_secs();
-        assert!((0.09..0.2).contains(&secs), "should be ~0.1 seconds");
+        let after_ns = ctx.elapsed_ns();
+
+        assert!(before_ns > 0, "the clock advanced across a sleep");
+        assert!(
+            secs >= before_ns as f64 / 1_000_000_000.0,
+            "{secs} is before the read that preceded it ({before_ns} ns)"
+        );
+        assert!(
+            secs <= after_ns as f64 / 1_000_000_000.0,
+            "{secs} is after the read that followed it ({after_ns} ns)"
+        );
     }
 
     #[test]
