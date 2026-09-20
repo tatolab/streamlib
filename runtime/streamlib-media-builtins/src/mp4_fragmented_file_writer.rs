@@ -253,8 +253,12 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
         }
     }
 
-    /// Whether this track's bags are stamped on the clock the recording is on,
-    /// latching the track by name when they are not.
+    /// Take the machine this track's bags are stamped on, or latch the track
+    /// by name when it is not the machine the recording is on.
+    ///
+    /// Whether the track may go on recording, the shape
+    /// [`Self::commit_or_latch_media`] uses for the same question about a
+    /// track's codec.
     ///
     /// Every stamp is a machine's monotonic clock, whose epoch is that
     /// machine's own boot, and the file's epoch is the earliest first stamp
@@ -267,7 +271,7 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
     /// A track whose clock changes mid-recording stops for the same reason:
     /// its peer came back on a fresh boot, and its stamps restart somewhere
     /// unrelated to where they left off.
-    fn the_tracks_clock_is_this_recordings(
+    fn commit_or_latch_the_tracks_stamp_clock(
         &mut self,
         track_index: usize,
         stamped_on: Option<MachineClockIdentity>,
@@ -362,7 +366,7 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
             self.tally.bags_discarded_after_latch += 1;
             return Ok(());
         }
-        if !self.the_tracks_clock_is_this_recordings(track_index, stamped_on) {
+        if !self.commit_or_latch_the_tracks_stamp_clock(track_index, stamped_on) {
             self.tracks[track_index].bags_discarded_after_latch += 1;
             self.tally.bags_discarded_after_latch += 1;
             return Ok(());
