@@ -200,6 +200,9 @@ pub fn open_iceoryx2_service(
     // side's startup envelope — either way wired the moment this op returns.
     let mut wire_replies_awaited_from_its_out_of_process_ends = Vec::new();
 
+    let the_clock_this_links_stamps_are_taken_on =
+        the_clock_this_links_stamps_are_taken_on(&from_port, mesh_link_ingress_table);
+
     // Source side: install the single channel publisher (first link out of this
     // port) and append this link's destination notifier. A source on another
     // runtime has no side to wire here — its ingress is the channel's publisher
@@ -269,7 +272,7 @@ pub fn open_iceoryx2_service(
             &dest_port,
             link_id,
             &inbound_link_name_of(&from_port, &channel_service_name),
-            the_clock_this_links_stamps_are_taken_on(&from_port, mesh_link_ingress_table),
+            the_clock_this_links_stamps_are_taken_on.clone(),
             dest_input_port_delivery,
             &service,
             notify_service_for_the_destination.as_ref(),
@@ -287,6 +290,20 @@ pub fn open_iceoryx2_service(
             notify_service_name_for_the_source.map(str::to_string),
             where_a_remote_links_hop_loss_is_counted(graph, &dest_proc_id, link_id),
         );
+    }
+    // Rendered off the ingress table's own cell, so `graph` says which machine
+    // the link is carrying from now rather than which one it was carrying from
+    // when it was wired. A link from this runtime carries none: it was stamped
+    // on this machine, which the renderer answers without being told.
+    if let TheClockAnInboundLinksStampsAreTakenOn::WhicheverMachineTheMeshIsCarryingFrom(
+        machine_clock,
+    ) = the_clock_this_links_stamps_are_taken_on
+    {
+        if let Some(link) = graph.traversal_mut().e(link_id).first_mut() {
+            link.insert_component_without_rendering_it(
+                crate::core::graph::TheMachineClockALinksStampsAreTakenOnComponent(machine_clock),
+            );
+        }
     }
 
     let link = graph

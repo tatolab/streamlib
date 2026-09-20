@@ -26,7 +26,8 @@ use streamlib::sdk::iceoryx2::{
     ChannelEgressConfig, ChannelTrustTier, HelperProcessLossCountBoardWriter,
     ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, Iceoryx2Node,
     InboundLinkLossCountBoardSlotAndWiringGeneration, InboundLinkName, InputMailboxesInner,
-    OutputWriterInner, ReadMode, ResolvedAudioWindowContract, TheClockAnInboundLinksStampsAreTakenOn,
+    OutputWriterInner, ReadMode, ResolvedAudioWindowContract,
+    TheClockAnInboundLinksStampsAreTakenOn,
 };
 
 use crate::python_bag_conversion::{
