@@ -34,12 +34,33 @@ use crate::core::runtime::LinkRequestsAppliedIntoThisRuntimesGraph;
 use crate::core::runtime::LoadedCapabilityExtensionRegistry;
 use crate::core::runtime::OutputPortsInThisRuntimesGraph;
 use crate::core::runtime::mesh::{
-    HostedControlPlaneEndpointRegistry, MeshLinkIngressTable, ResolvedRuntimeMeshConfiguration,
-    RuntimeMeshMembership, WhatThisRuntimeOffersOnTheMeshRegistry,
+    GpuContextTheMeshCopiesFramesWith, HostedControlPlaneEndpointRegistry, MeshLinkIngressTable,
+    ResolvedRuntimeMeshConfiguration, RuntimeMeshMembership,
+    WhatThisRuntimeOffersOnTheMeshRegistry,
 };
 use crate::core::signals::ScopedShutdownSignalOwnership;
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, Result};
 use crate::iceoryx2::Iceoryx2Node;
+
+/// Gives the mesh's GPU context back when `start()` leaves early.
+///
+/// The mesh reads that context on its own threads, so a `start()` that
+/// recorded one and then failed would leave the mesh holding a device
+/// belonging to a runtime that never ran — and a host that gives up on a
+/// failed `start()` never calls the `stop()` that would clear it.
+struct ForgetsTheMeshsGpuContextUnlessStartFinishes<'a> {
+    gpu_context_the_mesh_copies_frames_with: &'a GpuContextTheMeshCopiesFramesWith,
+    start_finished: bool,
+}
+
+impl Drop for ForgetsTheMeshsGpuContextUnlessStartFinishes<'_> {
+    fn drop(&mut self) {
+        if !self.start_finished {
+            self.gpu_context_the_mesh_copies_frames_with
+                .forget_the_runtimes_gpu_context();
+        }
+    }
+}
 
 /// Storage variant for tokio runtime in Runner.
 ///
@@ -147,6 +168,10 @@ pub struct Runner {
     /// mesh, which resolves each and opens its ingress, and to every
     /// `RuntimeContext`, through which the wiring op reaches it.
     pub(crate) mesh_link_ingress_table: Arc<MeshLinkIngressTable>,
+    /// Where the mesh reads the GPU context it copies a frame's pixels with.
+    /// The mesh joins in `new()`, which needs no GPU; this is filled in
+    /// `start()` and cleared in `stop()`.
+    gpu_context_the_mesh_copies_frames_with: Arc<GpuContextTheMeshCopiesFramesWith>,
     /// iceoryx2 Node for creating Services, Publishers, and Subscribers.
     /// Created in new(); cloned into the RuntimeContext during start().
     pub(crate) iceoryx2_node: Iceoryx2Node,
@@ -343,12 +368,25 @@ impl Runner {
         offered_on_the_mesh.record_how_to_read_this_runtimes_graph(
             OutputPortsInThisRuntimesGraph::of(&compiler, &iceoryx2_node),
         );
-        runtime_mesh.start_serving_this_runtimes_output_ports(&offered_on_the_mesh, &iceoryx2_node);
+        // Both halves of the mesh's frame carrying read this one cell: a
+        // surface id names a frame in this machine's pools, so a sender copies
+        // its pixels out and a receiver mints a local surface for them, and
+        // neither has a GPU context to do it with until `start()`.
+        let gpu_context_the_mesh_copies_frames_with =
+            Arc::new(GpuContextTheMeshCopiesFramesWith::default());
+        runtime_mesh.start_serving_this_runtimes_output_ports(
+            &offered_on_the_mesh,
+            &iceoryx2_node,
+            &gpu_context_the_mesh_copies_frames_with,
+        );
 
         // The other half: every port on another runtime this one links from.
         // `connect` notes a link here and the mesh resolves it afterwards, so
         // nothing about a remote link waits on a network call.
-        let mesh_link_ingress_table = MeshLinkIngressTable::of_this_runtime(&iceoryx2_node);
+        let mesh_link_ingress_table = MeshLinkIngressTable::of_this_runtime(
+            &iceoryx2_node,
+            &gpu_context_the_mesh_copies_frames_with,
+        );
         runtime_mesh.start_carrying_links_from_other_runtimes(&mesh_link_ingress_table);
 
         let runtime = Arc::new(Self {
@@ -363,6 +401,7 @@ impl Runner {
             _graph_change_listener: listener,
             _offered_on_the_mesh: offered_on_the_mesh,
             mesh_link_ingress_table,
+            gpu_context_the_mesh_copies_frames_with,
             iceoryx2_node,
             #[cfg(target_os = "linux")]
             surface_service,
@@ -546,6 +585,23 @@ impl Runner {
             tracing::info!("[start] SurfaceStore initialized against runtime-internal broker");
         }
 
+        // The mesh's own half of "fully live": an egress reads a frame out
+        // through this context and an ingress mints one with it. After the
+        // SurfaceStore, because the claim an egress takes over a frame it is
+        // copying is recorded in that store's lease table.
+        self.gpu_context_the_mesh_copies_frames_with
+            .record_the_runtimes_gpu_context(&gpu);
+        // Everything below here can leave early, and a host is under no
+        // obligation to call `stop()` after a `start()` that failed. Without
+        // this, the mesh would hold the last clone of a device belonging to a
+        // runtime that never ran.
+        let mut the_mesh_keeps_this_context_only_if_start_finishes =
+            ForgetsTheMeshsGpuContextUnlessStartFinishes {
+                gpu_context_the_mesh_copies_frames_with: &self
+                    .gpu_context_the_mesh_copies_frames_with,
+                start_finished: false,
+            };
+
         // Drain pre-start hooks now — after the GpuContext is FULLY live
         // (device + SurfaceStore) but before any processor setup runs.
         // Adapter bridges and surface registrations happen here so
@@ -649,6 +705,7 @@ impl Runner {
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeStarted),
         );
 
+        the_mesh_keeps_this_context_only_if_start_finishes.start_finished = true;
         Ok(())
     }
 
@@ -716,6 +773,11 @@ impl Runner {
                 tracing::debug!("[stop] SurfaceStore cleared");
             }
         }
+
+        // Before the context is dropped, so the mesh never holds the last
+        // clone of a device this runtime has finished with.
+        self.gpu_context_the_mesh_copies_frames_with
+            .forget_the_runtimes_gpu_context();
 
         // Clear runtime context - allows fresh context on next start().
         // This enables per-session tracking (e.g., AI agents analyzing runtime state).

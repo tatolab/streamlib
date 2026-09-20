@@ -2698,7 +2698,22 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   needs to rebuild them, and the receiving runtime writes the pixels into a freshly minted
   local surface and hands the bag on carrying that local `surface_id`. No surface id, lease,
   lifetime state or write-back crosses. The `surface_id` key is a stand-in the general
-  mechanism replaces in a later release. [runtime-mesh]
+  mechanism replaces in a later release.
+  As built: the message is `[pixel description][bag][pixel bytes]`, and the attachment carries
+  the description's length — zero for a bag naming no surface, which therefore still crosses
+  verbatim. The sender's copy door is `SurfaceExportStaging` at host-visible residency, held
+  under a check-out claim that spans the copy alone, so a slow network never pins the
+  producer's pool slot. The description's format, extent and byte length are read from the
+  backing, never from the bag, which names no format at all. Each refusal is counted and said
+  once per port or per source by its own name: a recycled frame, a multi-plane format, a pool
+  at its cap, and a source offering more than the four format-and-extent pairs one may mint
+  pools of (pools are never freed). The copy-out door is Linux-only, because
+  `SurfaceExportStaging` is; a non-Linux sender says once per port that its surface bags do
+  not cross. [runtime-mesh — SHIPPED #2290]
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::a_bags_top_level_surface_id -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::a_frames_pixels_on_the_mesh -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::a_frames_pixels_written_into_a_local_surface -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::a_frames_pixels_read_out_for_the_mesh -->
 - **DECIDED** — The mesh carries no authentication or access control in this work; security
   is its own later pass, and the auth posture OPEN under §Control plane & observability owns
   it. What shipped holds the line: `zenoh` is built with `default-features = false` and

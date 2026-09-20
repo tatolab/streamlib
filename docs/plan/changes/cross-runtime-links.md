@@ -221,8 +221,11 @@ and cannot map a remote monotonic stamp onto ours; the OPEN's PTP/NTP direction 
 
 1. **The number is `loss-visibility`'s**, carried end to end. Egress copies each sample's user-header
    sequence number into a fixed little-endian attachment `{timestamp_ns i64, sequence_number u64,
-   publisher_generation u64, clock_identity [u8; 16]}`, layout-tested; `timestamp_ns` is the frame header's
-   stamp. It bumps the generation when the sample's `origin()` changes.
+   publisher_generation u64, clock_identity [u8; 16], frame_pixel_description_bytes u32}`,
+   layout-tested; `timestamp_ns` is the frame header's
+   stamp. It bumps the generation when the sample's `origin()` changes. The fifth field is #2290's,
+   appended as this record's own rule allows: it says how many bytes of the payload describe a
+   frame's pixels, and zero for a bag naming no surface, which therefore still crosses verbatim.
 2. **Ingress counts the gap** after its ring. A gap covers the egress ring's overwrites, refused copies,
    Zenoh's silent drops, the network and the ingress ring — everything between the producer's send and
    the local write. A new generation is a baseline, never a gap.

@@ -23,6 +23,7 @@ use zenoh::Wait;
 use zenoh::sample::SampleKind;
 
 use crate::core::graph::MeshPortAddress;
+use crate::core::runtime::mesh::gpu_context_the_mesh_copies_frames_with::GpuContextTheMeshCopiesFramesWith;
 use crate::core::runtime::mesh::mesh_port_egress::{MeshPortEgress, WhatOneEgressSends};
 use crate::core::runtime::mesh::output_ports_offered_on_the_mesh::{
     OutputPortOfferedOnTheMesh, WhatThisRuntimeOffersOnTheMeshRegistry,
@@ -107,6 +108,7 @@ impl MeshPortEgressTable {
         offered: &Arc<WhatThisRuntimeOffersOnTheMeshRegistry>,
         iceoryx2_node: &Iceoryx2Node,
         being_read_by_other_runtimes: &Arc<OutputPortsOtherRuntimesAreReading>,
+        gpu_context_the_mesh_copies_frames_with: &Arc<GpuContextTheMeshCopiesFramesWith>,
     ) -> zenoh::Result<Self> {
         let (what_the_readers_did, what_the_egress_thread_reads) = crossbeam_channel::unbounded();
         // The subscriber owns the only sender that keeps the thread alive, and
@@ -128,6 +130,7 @@ impl MeshPortEgressTable {
             Arc::clone(offered),
             iceoryx2_node.clone(),
             Arc::clone(being_read_by_other_runtimes),
+            Arc::clone(gpu_context_the_mesh_copies_frames_with),
             what_the_egress_thread_reads,
             how_an_egress_reports_stopping,
         )?;
@@ -185,6 +188,7 @@ fn spawn_the_egress_thread(
     offered: Arc<WhatThisRuntimeOffersOnTheMeshRegistry>,
     iceoryx2_node: Iceoryx2Node,
     being_read_by_other_runtimes: Arc<OutputPortsOtherRuntimesAreReading>,
+    gpu_context_the_mesh_copies_frames_with: Arc<GpuContextTheMeshCopiesFramesWith>,
     what_the_egress_thread_reads: Receiver<WhatTheEgressTableIsTold>,
     how_an_egress_reports_stopping: WhereAnEgressSaysItStoppedToItsTable,
 ) -> std::io::Result<std::thread::JoinHandle<()>> {
@@ -209,6 +213,8 @@ fn spawn_the_egress_thread(
                                 offered: &offered,
                                 iceoryx2_node: &iceoryx2_node,
                                 how_an_egress_reports_stopping: &how_an_egress_reports_stopping,
+                                gpu_context_the_mesh_copies_frames_with:
+                                    &gpu_context_the_mesh_copies_frames_with,
                             },
                             &mut who_is_reading,
                             &mut sending,
@@ -249,6 +255,7 @@ struct AnEgressTablesOwnState<'a> {
     offered: &'a Arc<WhatThisRuntimeOffersOnTheMeshRegistry>,
     iceoryx2_node: &'a Iceoryx2Node,
     how_an_egress_reports_stopping: &'a WhereAnEgressSaysItStoppedToItsTable,
+    gpu_context_the_mesh_copies_frames_with: &'a Arc<GpuContextTheMeshCopiesFramesWith>,
 }
 
 /// Note one more reader of a port, and start sending it if it is the first.
@@ -303,6 +310,9 @@ fn a_runtime_started_reading(
         addressed,
         how_to_read_the_port,
         iceoryx2_node: table.iceoryx2_node.clone(),
+        gpu_context_the_mesh_copies_frames_with: Arc::clone(
+            table.gpu_context_the_mesh_copies_frames_with,
+        ),
         where_this_egress_says_it_stopped: table.how_an_egress_reports_stopping.clone(),
         which_egress_of_this_port_this_is: how_many_egresses_this_table_has_started
             .the_next_egress(),

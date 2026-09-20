@@ -34,9 +34,9 @@ use std::time::Duration;
 use parking_lot::Mutex;
 use streamlib_engine::core::graph::{MeshPortAddress, RemoteLinkResolution};
 use streamlib_engine::core::runtime::mesh::{
-    HowToReadAnOfferedOutputPort, MeshLinkIngressTable, OutputPortOfferedOnTheMesh,
-    OutputPortsOfferedOnTheMesh, ResolvedRuntimeMeshConfiguration, RuntimeMeshMembership,
-    WhatThisRuntimeOffersOnTheMesh, WhatThisRuntimeOffersOnTheMeshRegistry,
+    GpuContextTheMeshCopiesFramesWith, HowToReadAnOfferedOutputPort, MeshLinkIngressTable,
+    OutputPortOfferedOnTheMesh, OutputPortsOfferedOnTheMesh, ResolvedRuntimeMeshConfiguration,
+    RuntimeMeshMembership, WhatThisRuntimeOffersOnTheMesh, WhatThisRuntimeOffersOnTheMeshRegistry,
 };
 use streamlib_engine::core::runtime::{RuntimeMeshConfiguration, RuntimeName};
 use streamlib_engine::iceoryx2::{
@@ -146,7 +146,14 @@ fn run_as_the_source(
     }));
 
     let membership = how.join_the_mesh()?;
-    membership.start_serving_this_runtimes_output_ports(&offered, &iceoryx2_node);
+    // This peer runs with no `Runner`, so it never has a GPU context: a bag
+    // naming a surface crosses as the bag alone, said once by the egress. The
+    // frame-carrying arms are the rig's, which has a GPU.
+    membership.start_serving_this_runtimes_output_ports(
+        &offered,
+        &iceoryx2_node,
+        &Arc::new(GpuContextTheMeshCopiesFramesWith::default()),
+    );
     report.write_line(READY_LINE);
 
     // One bag per report interval, each carrying its own index so the reader
@@ -296,7 +303,10 @@ fn run_as_the_reader(
         .create_subscriber(streamlib_engine::iceoryx2::DeliveryProfile::ORDERED_DEPTH)
         .map_err(|why| why.to_string())?;
 
-    let ingress_table = MeshLinkIngressTable::of_this_runtime(&iceoryx2_node);
+    let ingress_table = MeshLinkIngressTable::of_this_runtime(
+        &iceoryx2_node,
+        &Arc::new(GpuContextTheMeshCopiesFramesWith::default()),
+    );
     let membership = how.join_the_mesh()?;
     membership.start_carrying_links_from_other_runtimes(&ingress_table);
 

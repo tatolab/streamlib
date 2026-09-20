@@ -629,9 +629,16 @@ impl PixelBufferPoolManager {
             format,
             POOL_MAX_BUFFER_COUNT
         );
-        Err(Error::Configuration(
-            "All pixel buffers are currently in use".into(),
-        ))
+        // A named variant rather than a message: a caller that has to tell
+        // "the pool is full" apart from every other refusal — the mesh
+        // ingress counts one as a bag the hop lost — would otherwise be
+        // matching on prose.
+        Err(Error::EveryPixelBufferInThePoolIsInUse {
+            width,
+            height,
+            pixel_format: format.wire_name().to_string(),
+            pool_capacity: POOL_MAX_BUFFER_COUNT,
+        })
     }
 
     /// Swap the slot's `buffer_cache` entry to the id just minted: the

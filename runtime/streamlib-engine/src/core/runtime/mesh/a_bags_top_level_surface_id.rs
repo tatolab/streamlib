@@ -1,50 +1,109 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Whether a bag names a surface at its top level.
+//! The surface a bag names at its top level, and the bag that names another.
 //!
 //! The one key the engine reads inside a bag on the way across the mesh, and it
 //! reads no other: a surface id names a frame in this machine's own pools, so a
 //! runtime on another machine cannot resolve it. §Processor model states the
-//! carve-out; §Networking states what happens to the frame.
+//! carve-out; §Networking states what happens to the frame — the sender copies
+//! its pixels out, and the receiver mints a local surface and hands the bag on
+//! naming that one instead.
 //!
 //! The walk decodes the top-level map's keys and nothing else — it steps over
 //! every value rather than building it, so a bag carrying megabytes of pixels
-//! costs a pointer walk over the lengths and no allocation at all.
+//! costs a pointer walk over the lengths and no allocation at all. The rewrite
+//! splices over the id's own bytes for the same reason: every other key, every
+//! other value and their order are the producer's, carried across untouched
+//! rather than decoded and re-encoded into whatever this engine would have
+//! written.
+
+use std::ops::Range;
 
 use rmp::Marker;
+
+use crate::core::error::{Error, Result};
 
 /// The one bag key the engine reads.
 const SURFACE_ID_KEY: &str = "surface_id";
 
-/// Whether `bag_bytes` is a msgpack map carrying `surface_id` at its top level.
+/// The longest header msgpack puts in front of a string: the `str32` marker
+/// plus its four length bytes. What a rewrite's allocation allows for, since
+/// the id going in may take a wider header than the one coming out.
+const LONGEST_MSGPACK_STRING_HEADER_BYTES: usize = 5;
+
+/// A bag's top-level `surface_id`, and where its value sits in the bag's bytes.
+pub struct ATopLevelSurfaceIdInABag<'a> {
+    bag_bytes: &'a [u8],
+    surface_id: &'a str,
+    /// The id's msgpack value, marker included — what a rewrite splices over.
+    value_span: Range<usize>,
+}
+
+impl<'a> ATopLevelSurfaceIdInABag<'a> {
+    /// The surface this bag names.
+    pub fn surface_id(&self) -> &'a str {
+        self.surface_id
+    }
+
+    /// The same bag naming `local_surface_id` instead.
+    ///
+    /// Errs only for an id msgpack cannot spell, which the engine never mints;
+    /// the alternative is an `unwrap` on a path a peer's bytes reach.
+    pub fn a_bag_naming_this_surface_instead(&self, local_surface_id: &str) -> Result<Vec<u8>> {
+        let mut rewritten = Vec::with_capacity(
+            self.bag_bytes.len() + local_surface_id.len() - self.value_span.len()
+                + LONGEST_MSGPACK_STRING_HEADER_BYTES,
+        );
+        rewritten.extend_from_slice(&self.bag_bytes[..self.value_span.start]);
+        rmp::encode::write_str(&mut rewritten, local_surface_id).map_err(|cannot_spell_it| {
+            Error::BagEncodeFailed(format!(
+                "the surface id {local_surface_id} this runtime minted for an arriving frame \
+                 cannot be written into the bag that names it: {cannot_spell_it}"
+            ))
+        })?;
+        rewritten.extend_from_slice(&self.bag_bytes[self.value_span.end..]);
+        Ok(rewritten)
+    }
+}
+
+/// The surface `bag_bytes` names at its top level, or `None` when it names one
+/// this engine cannot read.
 ///
-/// A payload that is not a map, or that ends mid-value, carries none: a bag the
-/// walk cannot read is sent verbatim, exactly as one with no surface would be,
-/// because the engine has no business deciding what a malformed bag means.
-pub fn a_bag_carries_a_top_level_surface_id(bag_bytes: &[u8]) -> bool {
+/// A payload that is not a map, that ends mid-value, or whose `surface_id` is
+/// not a string names none: a bag the walk cannot read crosses verbatim,
+/// exactly as one with no surface would, because the engine has no business
+/// deciding what a malformed bag means.
+pub fn the_top_level_surface_id_of_a_bag(bag_bytes: &[u8]) -> Option<ATopLevelSurfaceIdInABag<'_>> {
     let mut walk = MsgpackWalk::over(bag_bytes);
-    let Some(entries) = walk.read_a_map_header() else {
-        return false;
-    };
+    let entries = walk.read_a_map_header()?;
     for _ in 0..entries {
-        match walk.read_a_string_key() {
-            Some(key) if key == SURFACE_ID_KEY => return true,
-            Some(_) => {}
+        let this_key_is_the_surface_id = match walk.read_a_string() {
+            Some(key) => key == SURFACE_ID_KEY,
             None => {
                 // A key that is not a string is legal msgpack and is not a key
                 // the bag codec writes, so the walk steps over it like any
                 // other value rather than refusing the bag.
                 if !walk.step_over_one_value() {
-                    return false;
+                    return None;
                 }
+                false
             }
+        };
+        let value_begins_at = walk.at;
+        if this_key_is_the_surface_id {
+            let surface_id = walk.read_a_string()?;
+            return Some(ATopLevelSurfaceIdInABag {
+                bag_bytes,
+                surface_id,
+                value_span: value_begins_at..walk.at,
+            });
         }
         if !walk.step_over_one_value() {
-            return false;
+            return None;
         }
     }
-    false
+    None
 }
 
 /// A cursor over one msgpack document, reading only the shape it is asked for.
@@ -69,10 +128,10 @@ impl<'a> MsgpackWalk<'a> {
         }
     }
 
-    /// The key at the cursor when it is a string, leaving the cursor past it —
-    /// and leaving it where it was when the key is anything else, so the
-    /// caller can step over that value instead.
-    fn read_a_string_key(&mut self) -> Option<&'a str> {
+    /// The string at the cursor, leaving the cursor past it — and leaving it
+    /// where it was when the cursor is on anything else, so the caller can
+    /// step over that value instead.
+    fn read_a_string(&mut self) -> Option<&'a str> {
         let before = self.at;
         let length = match self.take_marker()? {
             Marker::FixStr(length) => u32::from(length),
@@ -213,26 +272,36 @@ mod tests {
         rmp_serde::to_vec_named(&shape).expect("a bag encodes")
     }
 
+    fn the_surface_named_by(bag_bytes: &[u8]) -> Option<&str> {
+        the_top_level_surface_id_of_a_bag(bag_bytes).map(|named| named.surface_id())
+    }
+
     /// A video frame names its surface at the top level, which is the one key
     /// the engine reads.
     #[test]
     fn a_bag_naming_a_surface_at_its_top_level_is_found() {
-        assert!(a_bag_carries_a_top_level_surface_id(&a_bag(json!({
-            "surface_id": "7#3",
-            "width": 1920,
-            "height": 1080,
-            "timestamp_ns": 1_726_000_000_000_000_000i64,
-        }))));
+        assert_eq!(
+            the_surface_named_by(&a_bag(json!({
+                "surface_id": "7#3",
+                "width": 1920,
+                "height": 1080,
+                "timestamp_ns": 1_726_000_000_000_000_000i64,
+            }))),
+            Some("7#3")
+        );
     }
 
     /// The key is read at the top level only: one nested inside another value
     /// names no surface this runtime resolves, so the bag crosses verbatim.
     #[test]
     fn a_surface_id_nested_inside_another_value_is_not_a_top_level_one() {
-        assert!(!a_bag_carries_a_top_level_surface_id(&a_bag(json!({
-            "thumbnail": { "surface_id": "7#3" },
-            "frames": [{ "surface_id": "8#1" }],
-        }))));
+        assert_eq!(
+            the_surface_named_by(&a_bag(json!({
+                "thumbnail": { "surface_id": "7#3" },
+                "frames": [{ "surface_id": "8#1" }],
+            }))),
+            None
+        );
     }
 
     /// Every value shape the bag codec writes is stepped over, so a key after
@@ -251,9 +320,7 @@ mod tests {
             "a_map": { "nested": { "deeper": [1, 2, 3] } },
             "surface_id": "7#3",
         });
-        assert!(a_bag_carries_a_top_level_surface_id(&a_bag(
-            after_everything
-        )));
+        assert_eq!(the_surface_named_by(&a_bag(after_everything)), Some("7#3"));
     }
 
     /// A bag carrying bytes — an encoded frame, an audio block — is walked past
@@ -266,22 +333,23 @@ mod tests {
         rmp::encode::write_bin(&mut bag, &vec![0xAB; 100_000]).expect("a payload");
         rmp::encode::write_str(&mut bag, "surface_id").expect("a key");
         rmp::encode::write_str(&mut bag, "7#3").expect("a value");
-        assert!(a_bag_carries_a_top_level_surface_id(&bag));
+        assert_eq!(the_surface_named_by(&bag), Some("7#3"));
     }
 
     /// A bag with no surface, and a payload that is not a bag at all, both
     /// carry none — a bag the walk cannot read crosses verbatim.
     #[test]
     fn a_bag_with_no_surface_and_a_payload_that_is_not_one_both_carry_none() {
-        assert!(!a_bag_carries_a_top_level_surface_id(&a_bag(json!({
-            "samples": "abc",
-            "sample_rate": 48_000,
-        }))));
-        assert!(!a_bag_carries_a_top_level_surface_id(&a_bag(json!([
-            1, 2, 3
-        ]))));
-        assert!(!a_bag_carries_a_top_level_surface_id(b"not msgpack at all"));
-        assert!(!a_bag_carries_a_top_level_surface_id(&[]));
+        assert_eq!(
+            the_surface_named_by(&a_bag(json!({
+                "samples": "abc",
+                "sample_rate": 48_000,
+            }))),
+            None
+        );
+        assert_eq!(the_surface_named_by(&a_bag(json!([1, 2, 3]))), None);
+        assert_eq!(the_surface_named_by(b"not msgpack at all"), None);
+        assert_eq!(the_surface_named_by(&[]), None);
     }
 
     /// A map header claiming more entries than the bytes hold ends the walk
@@ -292,6 +360,103 @@ mod tests {
         rmp::encode::write_map_len(&mut truncated, 4).expect("a map header");
         rmp::encode::write_str(&mut truncated, "width").expect("a key");
         rmp::encode::write_uint(&mut truncated, 1920).expect("a value");
-        assert!(!a_bag_carries_a_top_level_surface_id(&truncated));
+        assert_eq!(the_surface_named_by(&truncated), None);
+    }
+
+    /// A `surface_id` that is not a string names no surface this engine wrote,
+    /// so the bag crosses verbatim rather than being read as one it can carry.
+    #[test]
+    fn a_surface_id_that_is_not_a_string_names_no_surface() {
+        assert_eq!(
+            the_surface_named_by(&a_bag(json!({ "surface_id": 7, "width": 64 }))),
+            None
+        );
+        assert_eq!(
+            the_surface_named_by(&a_bag(json!({ "surface_id": null }))),
+            None
+        );
+    }
+
+    /// The rewrite is what the ingress hands downstream: the frame's own bag,
+    /// naming the surface this runtime minted, with every other key, every
+    /// other value and their order exactly as the producer wrote them.
+    #[test]
+    fn the_rewritten_bag_names_the_local_surface_and_changes_nothing_else() {
+        let produced = a_bag(json!({
+            "width": 1920,
+            "surface_id": "7#3",
+            "height": 1080,
+            "timestamp_ns": 1_726_000_000_000_000_000i64,
+            "texture_layout": "general",
+        }));
+        let named = the_top_level_surface_id_of_a_bag(&produced).expect("the bag names a surface");
+
+        let rewritten = named
+            .a_bag_naming_this_surface_instead("pool-slot-4e1f#12")
+            .expect("an engine-minted id is spellable");
+
+        assert_eq!(the_surface_named_by(&rewritten), Some("pool-slot-4e1f#12"));
+        let read_back: serde_json::Value =
+            rmp_serde::from_slice(&rewritten).expect("the rewrite is still one bag");
+        assert_eq!(
+            read_back,
+            json!({
+                "width": 1920,
+                "surface_id": "pool-slot-4e1f#12",
+                "height": 1080,
+                "timestamp_ns": 1_726_000_000_000_000_000i64,
+                "texture_layout": "general",
+            })
+        );
+        // Byte-for-byte outside the id: the splice must not re-encode a key or
+        // a value into whatever this engine would have written for it.
+        let produced_elsewhere = a_bag(json!({
+            "width": 1920,
+            "surface_id": "pool-slot-4e1f#12",
+            "height": 1080,
+            "timestamp_ns": 1_726_000_000_000_000_000i64,
+            "texture_layout": "general",
+        }));
+        assert_eq!(rewritten, produced_elsewhere);
+    }
+
+    /// An id of any length lands, whichever msgpack string header it takes —
+    /// the pool's ids are short today and the splice must not depend on that.
+    #[test]
+    fn an_id_shorter_or_longer_than_the_one_it_replaces_both_land() {
+        for local_surface_id in ["a", "7#3", &"p".repeat(200), &"p".repeat(70_000)] {
+            let produced = a_bag(json!({ "surface_id": "7#3", "width": 64 }));
+            let named =
+                the_top_level_surface_id_of_a_bag(&produced).expect("the bag names a surface");
+            let rewritten = named
+                .a_bag_naming_this_surface_instead(local_surface_id)
+                .expect("an id of any length is spellable");
+            assert_eq!(the_surface_named_by(&rewritten), Some(local_surface_id));
+            let read_back: serde_json::Value =
+                rmp_serde::from_slice(&rewritten).expect("the rewrite is still one bag");
+            assert_eq!(read_back["width"], json!(64));
+        }
+    }
+
+    /// A bag whose surface is the last key, and one whose surface is the
+    /// first, both splice — the tail and the head of the splice are the two
+    /// sides an off-by-one lands in.
+    #[test]
+    fn a_surface_at_either_end_of_the_map_splices() {
+        for produced in [
+            a_bag(json!({ "surface_id": "7#3", "width": 64, "height": 48 })),
+            a_bag(json!({ "width": 64, "height": 48, "surface_id": "7#3" })),
+        ] {
+            let named =
+                the_top_level_surface_id_of_a_bag(&produced).expect("the bag names a surface");
+            let rewritten = named
+                .a_bag_naming_this_surface_instead("11#2")
+                .expect("an engine-minted id is spellable");
+            let read_back: serde_json::Value =
+                rmp_serde::from_slice(&rewritten).expect("the rewrite is still one bag");
+            assert_eq!(read_back["surface_id"], json!("11#2"));
+            assert_eq!(read_back["width"], json!(64));
+            assert_eq!(read_back["height"], json!(48));
+        }
     }
 }

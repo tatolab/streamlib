@@ -262,6 +262,24 @@ impl SurfaceExportStaging {
         self.pixel_format
     }
 
+    /// What the last refill read in, as host memory — `None` at
+    /// `DeviceLocal`, whose allocation no CPU may read.
+    ///
+    /// The one place the staging's mapping is turned into a slice, so a
+    /// caller that wants the staged bytes never holds a raw pointer of
+    /// its own. Nothing here orders against a refill: the caller is the
+    /// one that submitted it and waited on the timeline.
+    pub fn staged_pixels_on_the_host(&self) -> Option<&[u8]> {
+        let mapped = self.staging_buffer.mapped_ptr();
+        if mapped.is_null() {
+            return None;
+        }
+        // SAFETY: a non-null `mapped_ptr` is this buffer's persistent
+        // host mapping, which is `staging_byte_size` bytes long and
+        // lives exactly as long as the buffer this borrows from.
+        Some(unsafe { std::slice::from_raw_parts(mapped, self.staging_byte_size as usize) })
+    }
+
     /// Whether a consumer may write and copy back — derived from the
     /// backing kind the staging was minted over, so each kind's write
     /// rule lives on its own variant.

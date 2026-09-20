@@ -22,7 +22,7 @@
 //! channel's ring, the bags the egress never sent, Zenoh's silent drop, the
 //! network, and this ring.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -30,6 +30,11 @@ use parking_lot::{Condvar, Mutex};
 use zenoh::Wait;
 
 use crate::core::graph::MeshPortAddress;
+use crate::core::runtime::mesh::a_frames_pixels_on_the_mesh::a_frames_pixels_off_the_mesh;
+use crate::core::runtime::mesh::a_frames_pixels_written_into_a_local_surface::{
+    WhyAFramesPixelsCannotLandHere, WritesAFramesPixelsIntoALocalSurface,
+};
+use crate::core::runtime::mesh::gpu_context_the_mesh_copies_frames_with::GpuContextTheMeshCopiesFramesWith;
 use crate::core::runtime::mesh::mesh_data_message_attachment::{
     MeshDataMessageAttachment, PublisherGenerationOnTheMesh,
 };
@@ -41,6 +46,20 @@ use crate::iceoryx2::{
     mesh_ingress_channel_name,
 };
 
+/// How many bytes of arriving messages one ingress's ring may hold.
+///
+/// The depth alone bounded a ring of bags. A ring that can also hold a frame's
+/// pixels needs a second bound: sixteen 1080p RGBA frames are 133 MB held
+/// against a hiccup on one thread, and several remote video links multiply it.
+/// The hop is not a second place to buffer — a consumer that cannot keep up
+/// must lose bags here rather than grow a queue somebody is paying for.
+///
+/// Engine-chosen; nothing authorable. Two 4K RGBA frames, or sixteen of
+/// anything smaller. A message over the ceiling on its own is still taken,
+/// evicting everything behind it: a port whose every frame is over it would
+/// otherwise carry nothing at all.
+const HOW_MANY_BYTES_ONE_INGRESS_RING_MAY_HOLD: usize = 64 * 1024 * 1024;
+
 /// The one output port name the ingress publishes under on its local channel.
 ///
 /// Engine-derived like the channel itself: destinations route by the subscriber
@@ -48,9 +67,21 @@ use crate::iceoryx2::{
 /// reader has to know.
 const THE_INGRESS_OUTPUT_PORT: &str = "bags";
 
-/// A bag as it arrives from the mesh, before the writing thread takes it.
+/// One message as it arrives from the mesh, before the writing thread takes
+/// it — the producer's bag, and a frame's description and pixels ahead of and
+/// behind it when the bag names a surface.
+///
+/// Split on the writing thread rather than in the callback: the callback runs
+/// on the link's receive loop and only hands off, and the split is free once
+/// the bytes are owned either way.
 struct ABagOffTheMesh {
-    bag_bytes: Vec<u8>,
+    /// Owned rather than Zenoh's own buffer, which is what costs the one
+    /// copy this hop makes. A received `ZSlice` points into the link's
+    /// `RecyclingObjectPool` of MTU-sized buffers, so a ring holding sixteen
+    /// of them — across every ingress — keeps that many out of circulation
+    /// and can stall the very receive loop the callback must never block.
+    /// Copying hands the pool its buffer straight back.
+    payload_bytes: Vec<u8>,
     /// The record that rode beside it, whole: the stamp to write it under, the
     /// sending runtime's number for it and the run that number belongs to, and
     /// the clock its stamp was taken on.
@@ -65,7 +96,37 @@ struct ABagOffTheMesh {
 #[derive(Default)]
 struct WhatHasArrivedFromTheMesh {
     ring: VecDeque<ABagOffTheMesh>,
+    /// What the ring currently holds, kept rather than summed: the callback
+    /// runs on the link's receive loop, where walking the ring per arrival
+    /// would be work done in the one place that may not do any.
+    bytes_in_the_ring: usize,
     the_ingress_is_stopping: bool,
+}
+
+impl WhatHasArrivedFromTheMesh {
+    /// Take one arriving message in, evicting the oldest until it fits both
+    /// bounds.
+    fn take_this_one_in(&mut self, arriving: ABagOffTheMesh) {
+        while self.ring.len() >= DeliveryProfile::ORDERED_DEPTH
+            || (!self.ring.is_empty()
+                && self.bytes_in_the_ring + arriving.payload_bytes.len()
+                    > HOW_MANY_BYTES_ONE_INGRESS_RING_MAY_HOLD)
+        {
+            let Some(evicted) = self.ring.pop_front() else {
+                break;
+            };
+            self.bytes_in_the_ring -= evicted.payload_bytes.len();
+        }
+        self.bytes_in_the_ring += arriving.payload_bytes.len();
+        self.ring.push_back(arriving);
+    }
+
+    /// Hand the writing thread the oldest message the ring holds.
+    fn take_the_oldest_out(&mut self) -> Option<ABagOffTheMesh> {
+        let taken = self.ring.pop_front()?;
+        self.bytes_in_the_ring -= taken.payload_bytes.len();
+        Some(taken)
+    }
 }
 
 /// One local link an ingress feeds, and what it takes to count its hop loss.
@@ -151,6 +212,7 @@ impl MeshLinkIngress {
         address: &MeshPortAddress,
         iceoryx2_node: &Iceoryx2Node,
         wake_the_resolver: crossbeam_channel::Sender<()>,
+        gpu_context_the_mesh_copies_frames_with: &Arc<GpuContextTheMeshCopiesFramesWith>,
     ) -> crate::core::Result<Self> {
         let local_channel = mesh_ingress_channel_name(&address.to_string()).into_string();
         let writes_onto_the_local_channel = Arc::new(OutputWriterInner::new());
@@ -222,6 +284,9 @@ impl MeshLinkIngress {
             Arc::clone(&arrived),
             Arc::clone(&writes_onto_the_local_channel),
             Arc::clone(&every_link_it_feeds),
+            WritesAFramesPixelsIntoALocalSurface::minting_through(
+                gpu_context_the_mesh_copies_frames_with,
+            ),
         )?;
 
         tracing::info!("This runtime is reading {address} off the mesh into {local_channel}");
@@ -360,11 +425,8 @@ fn declare_the_data_subscriber(
             };
             let (arrived, someone_is_waiting) = &*arrived;
             let mut arrived = arrived.lock();
-            if arrived.ring.len() >= DeliveryProfile::ORDERED_DEPTH {
-                arrived.ring.pop_front();
-            }
-            arrived.ring.push_back(ABagOffTheMesh {
-                bag_bytes: sample.payload().to_bytes().into_owned(),
+            arrived.take_this_one_in(ABagOffTheMesh {
+                payload_bytes: sample.payload().to_bytes().into_owned(),
                 attached,
             });
             someone_is_waiting.notify_one();
@@ -426,10 +488,16 @@ fn spawn_the_writing_thread(
     arrived: Arc<(Mutex<WhatHasArrivedFromTheMesh>, Condvar)>,
     writes_onto_the_local_channel: Arc<OutputWriterInner>,
     every_link_it_feeds: Arc<Mutex<BTreeMap<String, OneLinkThisIngressFeeds>>>,
+    mut writes_a_frames_pixels_into_a_local_surface: WritesAFramesPixelsIntoALocalSurface,
 ) -> std::io::Result<std::thread::JoinHandle<()>> {
     std::thread::Builder::new()
         .name("streamlib-mesh-ingress".to_string())
         .spawn(move || {
+            // Each reason a frame did not land, said once for this source:
+            // one arriving thirty times a second must not say the same thing
+            // thirty times a second, and two different reasons must both be
+            // said.
+            let mut said_why_a_frame_did_not_land: BTreeSet<&'static str> = BTreeSet::new();
             loop {
                 let taken = {
                     let (arrived_ring, someone_is_waiting) = &*arrived;
@@ -437,7 +505,7 @@ fn spawn_the_writing_thread(
                     while arrived_ring.ring.is_empty() && !arrived_ring.the_ingress_is_stopping {
                         someone_is_waiting.wait(&mut arrived_ring);
                     }
-                    match arrived_ring.ring.pop_front() {
+                    match arrived_ring.take_the_oldest_out() {
                         Some(taken) => taken,
                         // Drained and stopping: every bag that arrived before
                         // the ingress was torn down has been written.
@@ -467,9 +535,24 @@ fn spawn_the_writing_thread(
                     }
                 }
 
+                let Some(bag_bytes) = the_bag_to_hand_downstream(
+                    &address,
+                    &taken,
+                    &mut writes_a_frames_pixels_into_a_local_surface,
+                    &mut said_why_a_frame_did_not_land,
+                ) else {
+                    // A frame that did not land is a bag this hop lost, on top
+                    // of whatever the gap above already said: it reached this
+                    // runtime and reaches no destination of it.
+                    for link in every_link_it_feeds.lock().values_mut() {
+                        link.where_its_hop_loss_is_counted.record_dropped_bags(1);
+                    }
+                    continue;
+                };
+
                 if let Err(write_failure) = writes_onto_the_local_channel.write_raw(
                     THE_INGRESS_OUTPUT_PORT,
-                    &taken.bag_bytes,
+                    &bag_bytes,
                     taken.attached.timestamp_ns,
                 ) {
                     tracing::warn!(
@@ -478,4 +561,134 @@ fn spawn_the_writing_thread(
                 }
             }
         })
+}
+
+/// The bag one arriving message is handed downstream as, or `None` when its
+/// frame did not land here.
+///
+/// A message carrying no frame is its producer's bag, untouched. One carrying
+/// a frame is that bag with its `surface_id` replaced by the local surface the
+/// pixels were just written into — no surface id, lease or lifetime state
+/// crosses, so the only id a destination here can resolve is one this runtime
+/// minted.
+fn the_bag_to_hand_downstream<'a>(
+    address: &MeshPortAddress,
+    taken: &'a ABagOffTheMesh,
+    writes_a_frames_pixels_into_a_local_surface: &mut WritesAFramesPixelsIntoALocalSurface,
+    said_why_a_frame_did_not_land: &mut BTreeSet<&'static str>,
+) -> Option<std::borrow::Cow<'a, [u8]>> {
+    let payload_bytes = &taken.payload_bytes;
+    if taken.attached.frame_pixel_description_bytes == 0 {
+        return Some(std::borrow::Cow::Borrowed(payload_bytes));
+    }
+    let landed = match a_frames_pixels_off_the_mesh(
+        payload_bytes,
+        taken.attached.frame_pixel_description_bytes,
+    ) {
+        Some(arrived) => writes_a_frames_pixels_into_a_local_surface
+            .a_bag_naming_the_local_surface_this_frame_landed_in(&arrived),
+        None => Err(WhyAFramesPixelsCannotLandHere::ItsMessageCouldNotBeRead {
+            payload_bytes: payload_bytes.len(),
+        }),
+    };
+    match landed {
+        Ok(bag_bytes) => Some(std::borrow::Cow::Owned(bag_bytes)),
+        Err(why_it_cannot_land) => {
+            if said_why_a_frame_did_not_land.insert(why_it_cannot_land.which_refusal_this_is()) {
+                tracing::warn!(
+                    "a frame from {address} did not land on this runtime, and each one is \
+                     counted against this link: {why_it_cannot_land}"
+                );
+            }
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn a_message_of(payload_bytes: usize) -> ABagOffTheMesh {
+        ABagOffTheMesh {
+            payload_bytes: vec![0u8; payload_bytes],
+            attached: MeshDataMessageAttachment {
+                timestamp_ns: 0,
+                sequence_number: 0,
+                publisher_generation: PublisherGenerationOnTheMesh(0),
+                clock_identity: crate::core::runtime::mesh::MachineClockIdentity::UNIDENTIFIED,
+                frame_pixel_description_bytes: 0,
+            },
+        }
+    }
+
+    /// Bags are bounded by the depth, as they always were.
+    #[test]
+    fn the_ring_holds_no_more_messages_than_its_depth() {
+        let mut arrived = WhatHasArrivedFromTheMesh::default();
+        for _ in 0..DeliveryProfile::ORDERED_DEPTH * 3 {
+            arrived.take_this_one_in(a_message_of(512));
+        }
+        assert_eq!(arrived.ring.len(), DeliveryProfile::ORDERED_DEPTH);
+        assert_eq!(
+            arrived.bytes_in_the_ring,
+            512 * DeliveryProfile::ORDERED_DEPTH
+        );
+    }
+
+    /// Frames are bounded by the bytes long before the depth: sixteen 1080p
+    /// RGBA frames would be 133 MB, and the ring must never hold them.
+    #[test]
+    fn a_ring_of_frames_is_bounded_by_its_bytes_rather_than_by_its_depth() {
+        const A_1080P_RGBA_FRAME: usize = 1920 * 1080 * 4;
+        let mut arrived = WhatHasArrivedFromTheMesh::default();
+        for _ in 0..DeliveryProfile::ORDERED_DEPTH * 2 {
+            arrived.take_this_one_in(a_message_of(A_1080P_RGBA_FRAME));
+        }
+        assert!(
+            arrived.ring.len() < DeliveryProfile::ORDERED_DEPTH,
+            "frames must be evicted by the byte ceiling well before the depth is reached"
+        );
+        assert!(
+            arrived.bytes_in_the_ring <= HOW_MANY_BYTES_ONE_INGRESS_RING_MAY_HOLD,
+            "the ring holds {} bytes, over its {HOW_MANY_BYTES_ONE_INGRESS_RING_MAY_HOLD}-byte \
+             ceiling",
+            arrived.bytes_in_the_ring
+        );
+    }
+
+    /// A message over the ceiling on its own is still taken: a port whose every
+    /// frame is over it must carry its frames rather than none of them.
+    #[test]
+    fn a_message_over_the_ceiling_on_its_own_is_still_taken() {
+        let mut arrived = WhatHasArrivedFromTheMesh::default();
+        arrived.take_this_one_in(a_message_of(HOW_MANY_BYTES_ONE_INGRESS_RING_MAY_HOLD * 2));
+        assert_eq!(arrived.ring.len(), 1);
+
+        arrived.take_this_one_in(a_message_of(HOW_MANY_BYTES_ONE_INGRESS_RING_MAY_HOLD * 2));
+        assert_eq!(
+            arrived.ring.len(),
+            1,
+            "the one before it is evicted rather than held beside it"
+        );
+    }
+
+    /// What the ring says it holds is what it holds, across every eviction —
+    /// a count that drifted would either wedge the ring shut or stop bounding
+    /// it at all.
+    #[test]
+    fn the_rings_byte_count_follows_every_take_in_and_every_take_out() {
+        let mut arrived = WhatHasArrivedFromTheMesh::default();
+        for payload_bytes in [1, 1024, 4 * 1024 * 1024, 16, 8 * 1024 * 1024] {
+            arrived.take_this_one_in(a_message_of(payload_bytes));
+        }
+        let held: usize = arrived.ring.iter().map(|one| one.payload_bytes.len()).sum();
+        assert_eq!(arrived.bytes_in_the_ring, held);
+
+        while arrived.take_the_oldest_out().is_some() {
+            let still_held: usize = arrived.ring.iter().map(|one| one.payload_bytes.len()).sum();
+            assert_eq!(arrived.bytes_in_the_ring, still_held);
+        }
+        assert_eq!(arrived.bytes_in_the_ring, 0);
+    }
 }

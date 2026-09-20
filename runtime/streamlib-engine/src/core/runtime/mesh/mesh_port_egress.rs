@@ -17,17 +17,21 @@
 //! while a fragmented message queues. No producer ever waits on the network:
 //! the put runs here, never on the thread that wrote the bag.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use iceoryx2::identifiers::UniquePublisherId;
 use zenoh::Wait;
+use zenoh::bytes::ZBytes;
 use zenoh::qos::{CongestionControl, Priority};
 
 use crate::core::graph::MeshPortAddress;
 use crate::core::processors::{OutOfProcessLinkWireOutcome, OutOfProcessLinkWireReply};
-use crate::core::runtime::mesh::a_bags_top_level_surface_id::a_bag_carries_a_top_level_surface_id;
+use crate::core::runtime::mesh::a_bags_top_level_surface_id::the_top_level_surface_id_of_a_bag;
+use crate::core::runtime::mesh::a_frames_pixels_read_out_for_the_mesh::ReadsAFramesPixelsOutForTheMesh;
+use crate::core::runtime::mesh::gpu_context_the_mesh_copies_frames_with::GpuContextTheMeshCopiesFramesWith;
 use crate::core::runtime::mesh::machine_clock_identity::MachineClockIdentity;
 use crate::core::runtime::mesh::mesh_data_message_attachment::{
     MeshDataMessageAttachment, PublisherGenerationOnTheMesh,
@@ -132,6 +136,10 @@ pub(super) struct WhatOneEgressSends {
     pub addressed: MeshPortAddress,
     pub how_to_read_the_port: HowToReadAnOfferedOutputPort,
     pub iceoryx2_node: Iceoryx2Node,
+    /// Where this egress reads the GPU context it copies a frame's pixels
+    /// out with. A cell rather than a context, because an egress can exist
+    /// before the runtime has one.
+    pub gpu_context_the_mesh_copies_frames_with: Arc<GpuContextTheMeshCopiesFramesWith>,
 }
 
 impl MeshPortEgress {
@@ -302,6 +310,7 @@ fn send_one_port_to_the_mesh(sending: WhatOneEgressSends, stop: Arc<AtomicBool>)
         addressed,
         how_to_read_the_port,
         iceoryx2_node,
+        gpu_context_the_mesh_copies_frames_with,
     } = sending;
     let this_runtimes_name = addressed.runtime_name();
     let processor_display_name = addressed.processor_display_name();
@@ -352,7 +361,12 @@ fn send_one_port_to_the_mesh(sending: WhatOneEgressSends, stop: Arc<AtomicBool>)
     tracing::info!("The mesh is sending {addressed}");
     let data_key = key_space.data_key(&this_runtimes_name, &processor_display_name, &port_name);
     let mut publisher: Option<zenoh::pubsub::Publisher<'_>> = None;
-    let mut said_a_surface_will_not_cross = false;
+    // Each reason a frame did not cross, said once for this port: a port that
+    // met a recycled frame and then an NV12 one must say both, and a port
+    // meeting the same reason thirty times a second must say it once.
+    let mut said_why_a_frame_did_not_cross: BTreeSet<&'static str> = BTreeSet::new();
+    let mut reads_a_frames_pixels_out =
+        ReadsAFramesPixelsOutForTheMesh::reading_through(&gpu_context_the_mesh_copies_frames_with);
     let mut idle_poll_backoff = ChannelIdlePollBackoff::starting_at_the_shortest_sleep();
     let mut publisher_generations = PublisherGenerationsOnePortHasHad::default();
     // Read once: a boot id cannot change without a reboot, which ends this
@@ -376,31 +390,51 @@ fn send_one_port_to_the_mesh(sending: WhatOneEgressSends, stop: Arc<AtomicBool>)
                 let publisher_generation =
                     publisher_generations.generation_of_a_sample_numbered_by(sample.origin());
                 let bag_bytes = &framed[FRAME_HEADER_SIZE..];
-                let names_a_surface = a_bag_carries_a_top_level_surface_id(bag_bytes);
+                let named_surface = the_top_level_surface_id_of_a_bag(bag_bytes);
+                let names_a_surface = named_surface.is_some();
 
-                if names_a_surface {
-                    if !said_a_surface_will_not_cross {
-                        said_a_surface_will_not_cross = true;
-                        tracing::warn!(
-                            "{addressed} publishes bags naming a surface, and a surface id names \
-                             a frame in this machine's own pools — nothing another runtime can \
-                             resolve. Those bags are not sent, and each one reads on the reading \
-                             runtime as a bag this hop lost, which from that side is what it is. \
-                             The mesh carrying the pixels themselves is what ends both."
-                        );
+                // The one key the engine reads inside a bag, and it reads no
+                // other: the id names a frame in this machine's pools, so the
+                // picture itself is what crosses. A bag naming none goes out
+                // exactly as its producer wrote it.
+                let carrying_a_frame = match named_surface {
+                    None => None,
+                    Some(named) => {
+                        match reads_a_frames_pixels_out
+                            .a_mesh_message_carrying_the_frame_this_bag_names(
+                                named.surface_id(),
+                                bag_bytes,
+                            ) {
+                            Ok(carrying) => Some(carrying),
+                            Err(why_it_cannot_cross) => {
+                                // Skipped rather than sent empty, and counted
+                                // by the gap the reading runtime already reads
+                                // in the sequence number — from that side a
+                                // frame that never arrived is a frame the hop
+                                // lost, which is what it is.
+                                if said_why_a_frame_did_not_cross
+                                    .insert(why_it_cannot_cross.which_refusal_this_is())
+                                {
+                                    tracing::warn!(
+                                        "a frame on {addressed} is not crossing the mesh, and \
+                                         each one reads on the reading runtime as a bag this hop \
+                                         lost: {why_it_cannot_cross}"
+                                    );
+                                }
+                                continue;
+                            }
+                        }
                     }
-                    continue;
-                }
+                };
 
                 // One priority for the egress's life, decided by the first bag
                 // it actually sends: two priorities are two QUIC streams, which
                 // would reorder one port's sequence and read downstream as
-                // gaps. The rule is the change file's — `DataLow` for a bag
-                // naming a surface, `Data` otherwise — and until #2290 carries
-                // a frame's pixels no surface bag crosses, so the `DataLow` arm
-                // has no live input and this always declares `Data`. Declaring
-                // it above the skip instead would read the surface bag that is
-                // then thrown away, and put every ordinary bag behind it.
+                // gaps. `DataLow` for a port whose frames carry pixels, `Data`
+                // otherwise, so a 1080p frame never delays an audio block or a
+                // link request. Declared here rather than above the skip, so a
+                // port whose frames never cross does not take the raw-frame
+                // priority for every ordinary bag it does send.
                 let publisher = match publisher.as_ref() {
                     Some(publisher) => publisher,
                     None => match declare_the_publisher(&session, &data_key, names_a_surface) {
@@ -415,18 +449,29 @@ fn send_one_port_to_the_mesh(sending: WhatOneEgressSends, stop: Arc<AtomicBool>)
                     },
                 };
 
+                // Both arms hand `put` something it takes by move. Zenoh's
+                // `From<&[u8]> for ZBytes` is a `to_vec`, so passing a slice
+                // would copy the whole message a second time inside the put —
+                // another 8.3 MB per 1080p frame, per reading runtime, on
+                // this thread. `From<Vec<u8>>` moves. The ordinary-bag arm
+                // copies either way: that bag is the channel's sample and
+                // this thread does not own it.
+                let (payload, frame_pixel_description_bytes) = match carrying_a_frame {
+                    Some(carrying) => (
+                        ZBytes::from(carrying.message_bytes),
+                        carrying.description_bytes,
+                    ),
+                    None => (ZBytes::from(bag_bytes.to_vec()), 0),
+                };
                 let attached = MeshDataMessageAttachment {
                     timestamp_ns: stamp,
                     sequence_number,
                     publisher_generation: PublisherGenerationOnTheMesh(publisher_generation),
                     clock_identity,
+                    frame_pixel_description_bytes,
                 }
                 .to_wire_bytes();
-                if let Err(put_failure) = publisher
-                    .put(bag_bytes)
-                    .attachment(attached.to_vec())
-                    .wait()
-                {
+                if let Err(put_failure) = publisher.put(payload).attachment(attached).wait() {
                     tracing::warn!("a bag on {addressed} did not reach the mesh: {put_failure}");
                 }
             }
