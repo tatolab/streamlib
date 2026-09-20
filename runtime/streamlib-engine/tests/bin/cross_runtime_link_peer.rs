@@ -314,6 +314,7 @@ fn run_as_the_reader(
         reason: "this peer has only just asked for the link".to_string(),
     }));
     let link_id = streamlib_engine::core::graph::LinkUniqueId::new();
+    let reported_address = address.clone();
     membership.note_a_link_from_another_runtime(
         address,
         link_id.clone(),
@@ -380,6 +381,18 @@ fn run_as_the_reader(
                     serde_json::json!(
                         where_the_hop_loss_is_counted
                             .mesh_hop_dropped_bag_count_snapshot_by_inbound_link()
+                    ),
+                );
+                // What `graph` renders on the link, read off the same cell:
+                // absent until a bag has crossed, then the machine whose
+                // monotonic clock stamped it.
+                reported.insert(
+                    "stamp_clock_identity".to_string(),
+                    serde_json::json!(
+                        ingress_table
+                            .what_machine_an_address_is_carrying_from(&reported_address)
+                            .the_machine_if_it_is_known()
+                            .map(|machine| machine.to_string())
                     ),
                 );
                 counted.write_what_it_has_seen_into(reported);

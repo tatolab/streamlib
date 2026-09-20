@@ -95,8 +95,10 @@ fn a_process_with_no_display_server_answers_the_create_op_with_the_pumps_own_err
 /// nothing, because no link was ever noted on it.
 fn a_mesh_link_ingress_table_carrying_nothing()
 -> std::sync::Arc<streamlib_engine::core::runtime::mesh::MeshLinkIngressTable> {
+    let domain_root = tempfile::tempdir().expect("a domain root of its own");
     streamlib_engine::core::runtime::mesh::MeshLinkIngressTable::of_this_runtime(
-        &streamlib_engine::iceoryx2::Iceoryx2Node::for_this_test_process(),
+        &streamlib_engine::iceoryx2::Iceoryx2Node::new(domain_root.path(), "streamlib-test")
+            .expect("an iceoryx2 node"),
         &std::sync::Arc::new(
             streamlib_engine::core::runtime::mesh::GpuContextTheMeshCopiesFramesWith::default(),
         ),
