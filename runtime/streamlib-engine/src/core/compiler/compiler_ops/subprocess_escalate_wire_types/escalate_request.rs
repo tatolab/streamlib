@@ -37,6 +37,9 @@ pub(crate) enum EscalateRequest {
     #[serde(rename = "drain_processor_owned_window_events")]
     DrainProcessorOwnedWindowEvents(EscalateRequestDrainProcessorOwnedWindowEvents),
 
+    #[serde(rename = "inbound_link_stamp_clock_identity")]
+    InboundLinkStampClockIdentity(EscalateRequestInboundLinkStampClockIdentity),
+
     #[serde(rename = "log")]
     Log(EscalateRequestLog),
 
@@ -1966,6 +1969,24 @@ pub(crate) struct EscalateRequestShowSurfaceOnProcessorOwnedWindow {
     /// when the caller names a bare surface id.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) producer_published_texture_layout: Option<i32>,
+}
+
+/// Which machine's monotonic clock the bags arriving on one inbound link were
+/// stamped on — the one question a helper cannot answer for itself.
+///
+/// A helper opens no mesh session, so for a link carrying from another runtime
+/// it knows the link's name and nothing about the machine behind it. The name
+/// *is* the source port's mesh address, which is what the app process looks the
+/// answer up by.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EscalateRequestInboundLinkStampClockIdentity {
+    /// Correlates request with response. UUID string.
+    pub(crate) request_id: String,
+
+    /// The link's name, which for a link carrying from another runtime is the
+    /// source port's mesh address `<runtime name>/<display name>/<port>`.
+    pub(crate) inbound_link_name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

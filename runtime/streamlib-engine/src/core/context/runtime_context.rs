@@ -205,7 +205,7 @@ impl RuntimeContext {
     }
 
     /// Every port on another runtime this runtime links from.
-    pub(crate) fn mesh_link_ingress_table(&self) -> &Arc<MeshLinkIngressTable> {
+    pub fn mesh_link_ingress_table(&self) -> &Arc<MeshLinkIngressTable> {
         &self.mesh_link_ingress_table
     }
 
@@ -772,6 +772,15 @@ impl<'a> RuntimeContextFullAccess<'a> {
     /// shared/global context.
     pub fn processor_id(&self) -> Option<String> {
         self.host_base().processor_id().map(|id| id.to_string())
+    }
+
+    /// Every port on another runtime this runtime links from.
+    ///
+    /// What a processor spawning a helper hands its bridge: a helper opens no
+    /// mesh session, so which machine's clock a remote link's stamps are taken
+    /// on is a question only this side can answer.
+    pub fn mesh_link_ingress_table(&self) -> &Arc<MeshLinkIngressTable> {
+        self.host_base().mesh_link_ingress_table()
     }
 
     /// The processor's disambiguated display name, or `None` for the

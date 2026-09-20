@@ -701,6 +701,10 @@ impl PythonHelperProcessSpawnHostProcessor {
         let bridge = SubprocessBridge::new(
             escalate_transport.into_parent_stream(),
             ctx.gpu_limited_access().clone(),
+            // A helper opens no mesh session, so which machine's clock a
+            // remote link's stamps are taken on is a question only this side
+            // can answer.
+            std::sync::Arc::clone(ctx.mesh_link_ingress_table()),
             self.processor_id.clone(),
         )?;
 

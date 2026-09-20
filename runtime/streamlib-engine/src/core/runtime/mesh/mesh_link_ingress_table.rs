@@ -28,7 +28,9 @@ use crate::core::runtime::mesh::output_ports_offered_on_the_mesh::ask_a_runtime_
 use crate::core::runtime::mesh::runtime_mesh_description::RuntimeMeshDescription;
 use crate::core::runtime::mesh::runtime_mesh_key::{AnnouncedRuntimeIdentity, RuntimeMeshKeySpace};
 use crate::core::runtime::mesh::runtime_mesh_peer_table::RuntimeMeshPeerTable;
-use crate::iceoryx2::{Iceoryx2Node, MeshHopDroppedBagCountsByRemoteInboundLink};
+use crate::iceoryx2::{
+    Iceoryx2Node, MeshHopDroppedBagCountsByRemoteInboundLink, WhatIsKnownOfAnInboundLinksStampClock,
+};
 use streamlib_ipc_types::MAX_INBOUND_LINKS_PER_DESTINATION;
 
 /// How often every waiting link is looked at again.
@@ -165,6 +167,31 @@ impl MeshLinkIngressTable {
         address: &MeshPortAddress,
     ) -> Arc<MachineClockARemoteLinkCarriesFrom> {
         self.carried.lock().machine_clock_carried_from(address)
+    }
+
+    /// Which machine's monotonic clock the bags arriving from `address` were
+    /// stamped on, for a reader that holds no cell of its own.
+    ///
+    /// How a helper-placed destination's question is answered: a helper opens
+    /// no mesh session, so it asks the app process over the escalate bridge and
+    /// the app process reads it here. Mints nothing — an address this runtime
+    /// links from no port of has no cell, and asking about one must not make
+    /// one.
+    pub fn what_machine_an_address_is_carrying_from(
+        &self,
+        address: &MeshPortAddress,
+    ) -> WhatIsKnownOfAnInboundLinksStampClock {
+        match self
+            .carried
+            .lock()
+            .machine_clocks_by_address
+            .get(address)
+            .map(|machine_clock| machine_clock.what_it_is_now())
+        {
+            Some(Some(machine)) => WhatIsKnownOfAnInboundLinksStampClock::TheMachine(machine),
+            Some(None) => WhatIsKnownOfAnInboundLinksStampClock::NothingHasCrossedItYet,
+            None => WhatIsKnownOfAnInboundLinksStampClock::NoSuchLinkFeedsThatPort,
+        }
     }
 
     /// Record the notify service one link's destination waits on and where its
@@ -876,6 +903,54 @@ mod tests {
 
     /// A runtime nobody has announced leaves the link waiting, naming the
     /// runtime — which is what a reader has to go and start.
+    /// The one question a helper cannot answer for itself, answered here.
+    /// An address this runtime carries nothing from says so rather than
+    /// naming a machine, and minting a cell for it would leave an entry
+    /// behind for every address anybody ever asked about.
+    #[test]
+    fn an_address_this_runtime_carries_nothing_from_names_no_machine_and_mints_no_cell() {
+        let table = MeshLinkIngressTable::of_this_runtime(
+            &Iceoryx2Node::for_this_test_process(),
+            &Arc::new(crate::core::runtime::mesh::GpuContextTheMeshCopiesFramesWith::default()),
+        );
+
+        assert_eq!(
+            table.what_machine_an_address_is_carrying_from(&an_address()),
+            WhatIsKnownOfAnInboundLinksStampClock::NoSuchLinkFeedsThatPort
+        );
+        assert!(
+            table.carried.lock().machine_clocks_by_address.is_empty(),
+            "asking about an address must not mint a cell for it"
+        );
+    }
+
+    /// A link waiting on an address has a cell from the moment the wiring op
+    /// takes it, and the answer follows what the ingress writes into it.
+    #[test]
+    fn an_address_being_carried_names_whatever_machine_its_bags_were_stamped_on() {
+        let table = MeshLinkIngressTable::of_this_runtime(
+            &Iceoryx2Node::for_this_test_process(),
+            &Arc::new(crate::core::runtime::mesh::GpuContextTheMeshCopiesFramesWith::default()),
+        );
+        let machine_clock = table.machine_clock_carried_from(&an_address());
+
+        assert_eq!(
+            table.what_machine_an_address_is_carrying_from(&an_address()),
+            WhatIsKnownOfAnInboundLinksStampClock::NothingHasCrossedItYet
+        );
+
+        let another_machine =
+            crate::core::runtime::mesh::MachineClockIdentity::of_the_machine_whose_boot_session_uuid_reads(
+                "8b93a1c2-0000-4d5a-9a11-2c7f0d5e2f1c",
+            );
+        machine_clock.note_the_machine_a_bag_was_stamped_on(another_machine);
+
+        assert_eq!(
+            table.what_machine_an_address_is_carrying_from(&an_address()),
+            WhatIsKnownOfAnInboundLinksStampClock::TheMachine(another_machine)
+        );
+    }
+
     #[test]
     fn a_runtime_that_is_not_on_the_mesh_leaves_the_link_waiting_naming_it() {
         let outcome =

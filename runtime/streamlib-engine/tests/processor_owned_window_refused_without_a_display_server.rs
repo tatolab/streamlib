@@ -59,6 +59,7 @@ fn a_process_with_no_display_server_answers_the_create_op_with_the_pumps_own_err
     let bridge = SubprocessBridge::new(
         parent_end,
         gpu_context_limited_access,
+        a_mesh_link_ingress_table_carrying_nothing(),
         "processor-owned-window-headless".to_string(),
     )
     .expect("the bridge wraps the parent end");
@@ -88,4 +89,16 @@ fn a_process_with_no_display_server_answers_the_create_op_with_the_pumps_own_err
         "a process with no display server is not a phase error — reporting it as one sends the \
          author moving the call rather than handling the refusal, got: {refusal}"
     );
+}
+
+/// A table for a test whose helper never asks about a remote link: it carries
+/// nothing, because no link was ever noted on it.
+fn a_mesh_link_ingress_table_carrying_nothing()
+-> std::sync::Arc<streamlib_engine::core::runtime::mesh::MeshLinkIngressTable> {
+    streamlib_engine::core::runtime::mesh::MeshLinkIngressTable::of_this_runtime(
+        &streamlib_engine::iceoryx2::Iceoryx2Node::for_this_test_process(),
+        &std::sync::Arc::new(
+            streamlib_engine::core::runtime::mesh::GpuContextTheMeshCopiesFramesWith::default(),
+        ),
+    )
 }
