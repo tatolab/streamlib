@@ -17,7 +17,6 @@ use vulkanalia_vma as vma;
 use crate::core::rhi::TextureDescriptor;
 use crate::core::{Error, Result};
 
-#[cfg(target_os = "linux")]
 use streamlib_consumer_rhi::vulkan_extension_names_borrowed_from_properties;
 
 #[cfg(target_os = "linux")]
@@ -423,6 +422,97 @@ impl Drop for ExportPoolSentinel {
     }
 }
 
+/// What to install when the loader opened but no ICD behind it is usable.
+fn no_usable_vulkan_driver_guidance() -> &'static str {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    {
+        "No usable Vulkan driver (ICD) was found. MoltenVK is the driver on Apple \
+         hardware — install it (`brew install molten-vk`, or the LunarG SDK) and check \
+         that its ICD manifest is on the loader's search path."
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    {
+        "No usable Vulkan driver (ICD) was found. Install your GPU vendor's Vulkan \
+         driver — the proprietary NVIDIA driver, or `mesa-vulkan-drivers` for \
+         AMD/Intel — then check `vulkaninfo` runs."
+    }
+}
+
+/// Dynamic libraries the Vulkan loader may live in, in the order they are tried.
+///
+/// vulkanalia's own [`LIBRARY`] name is first on every platform, so a host that
+/// already resolves it keeps today's behaviour exactly. Apple needs the rest:
+/// dyld's default search path does not include Homebrew's prefix on Apple
+/// Silicon, so a bare `libvulkan.dylib` resolves nothing on a stock machine even
+/// with the loader installed. `VULKAN_SDK` is the LunarG SDK's own variable,
+/// read here to honour that convention rather than as a StreamLib dial — there
+/// is no engine setting for which loader to use, and the order is fixed.
+/// Shipping the loader inside the wheel is a separate concern (#2362); these
+/// cover a Homebrew or LunarG install.
+fn vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString> {
+    let mut candidate_paths: Vec<std::ffi::OsString> = vec![LIBRARY.into()];
+
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    {
+        candidate_paths.push("libvulkan.1.dylib".into());
+        if let Some(sdk_root) = std::env::var_os("VULKAN_SDK") {
+            let mut sdk_library_path = std::path::PathBuf::from(sdk_root);
+            sdk_library_path.push("lib");
+            sdk_library_path.push(LIBRARY);
+            candidate_paths.push(sdk_library_path.into_os_string());
+        }
+        candidate_paths.push("/opt/homebrew/lib/libvulkan.dylib".into());
+        candidate_paths.push("/usr/local/lib/libvulkan.dylib".into());
+    }
+
+    candidate_paths
+}
+
+/// Open the first Vulkan loader library that dlopens, or refuse naming every
+/// candidate tried so the failure says where it looked.
+fn load_the_first_vulkan_loader_library_that_opens() -> Result<LibloadingLoader> {
+    let candidate_paths = vulkan_loader_library_candidate_paths();
+    let mut refusal_per_candidate: Vec<String> = Vec::new();
+
+    for candidate_path in &candidate_paths {
+        match unsafe { LibloadingLoader::new(candidate_path) } {
+            Ok(loader) => {
+                tracing::info!(
+                    vulkan_loader_library = %candidate_path.to_string_lossy(),
+                    "Vulkan loader library opened"
+                );
+                return Ok(loader);
+            }
+            Err(open_failure) => refusal_per_candidate.push(format!(
+                "{}: {open_failure}",
+                candidate_path.to_string_lossy()
+            )),
+        }
+    }
+
+    Err(Error::GpuError(format!(
+        "{}\n  {}",
+        no_vulkan_loader_library_guidance(),
+        refusal_per_candidate.join("\n  "),
+    )))
+}
+
+/// What to install when no loader library opened, per platform.
+fn no_vulkan_loader_library_guidance() -> &'static str {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    {
+        "No Vulkan loader library could be opened. Install the loader and MoltenVK \
+         (`brew install vulkan-loader molten-vk`, or the LunarG SDK), then check that \
+         `libvulkan.dylib` resolves. Tried:"
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    {
+        "No Vulkan loader library could be opened. Install your GPU vendor's Vulkan \
+         driver and the loader (`libvulkan1` / `vulkan-loader`), then check `vulkaninfo` \
+         runs. Tried:"
+    }
+}
+
 impl HostVulkanDevice {
     /// Create a new Vulkan device.
     ///
@@ -441,13 +531,9 @@ impl HostVulkanDevice {
     /// removes that footgun for every consumer at the engine layer.
     pub fn new() -> Result<Arc<Self>> {
         // 1. Load Vulkan entry points via libloading
-        let loader = unsafe { LibloadingLoader::new(LIBRARY) }
-            .map_err(|e| Error::GpuError(format!("Failed to load Vulkan library: {e}")))?;
-        let entry = unsafe { vulkanalia::Entry::new(loader) }.map_err(|e| {
-            Error::GpuError(format!(
-                "Failed to load Vulkan. On macOS, ensure MoltenVK is installed: {e}"
-            ))
-        })?;
+        let loader = load_the_first_vulkan_loader_library_that_opens()?;
+        let entry = unsafe { vulkanalia::Entry::new(loader) }
+            .map_err(|e| Error::GpuError(format!("Failed to load Vulkan entry points: {e}")))?;
 
         // 2. Enumerate available instance extensions
         let available_extensions =
@@ -462,36 +548,43 @@ impl HostVulkanDevice {
         // 3. Build extension list
         let mut instance_extensions: Vec<*const c_char> = Vec::new();
 
-        // On macOS/iOS, we need portability enumeration for MoltenVK
+        // The platform-agnostic half of WSI. Probed, so a host without a display
+        // stack simply does not get it; the platform surface extensions below
+        // are what differ.
+        let surface_ext = c"VK_KHR_surface";
+        if available_ext_names.contains(&surface_ext) {
+            instance_extensions.push(surface_ext.as_ptr());
+            tracing::info!("VK_KHR_surface enabled");
+        }
+
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         {
-            // VK_KHR_portability_enumeration is required for MoltenVK
+            // MoltenVK is a non-conformant portability implementation: the loader
+            // hides it from enumeration unless this is asked for, together with
+            // ENUMERATE_PORTABILITY_KHR on the create flags below.
             let portability_enum = c"VK_KHR_portability_enumeration";
             if available_ext_names.contains(&portability_enum) {
                 instance_extensions.push(portability_enum.as_ptr());
+                tracing::info!("VK_KHR_portability_enumeration enabled");
             }
 
-            // VK_EXT_metal_objects for Metal interop
-            let metal_objects = c"VK_EXT_metal_objects";
-            if available_ext_names.contains(&metal_objects) {
-                instance_extensions.push(metal_objects.as_ptr());
-                tracing::info!("VK_EXT_metal_objects available - Metal interop enabled");
+            // The Metal WSI surface, for a swapchain over a CAMetalLayer.
+            // VK_EXT_metal_objects is a *device* extension — its commands are
+            // device-level — and is requested with the device, not here.
+            let metal_surface_ext = c"VK_EXT_metal_surface";
+            if available_ext_names.contains(&metal_surface_ext) {
+                instance_extensions.push(metal_surface_ext.as_ptr());
+                tracing::info!("VK_EXT_metal_surface enabled");
             } else {
                 tracing::warn!(
-                    "VK_EXT_metal_objects not available - Metal interop will be limited"
+                    "VK_EXT_metal_surface not available - no window surface can be created"
                 );
             }
         }
 
-        // On Linux, enable surface extensions for windowed display (Vulkan WSI)
+        // On Linux, enable the platform surface extensions for windowed display
         #[cfg(target_os = "linux")]
         {
-            let surface_ext = c"VK_KHR_surface";
-            if available_ext_names.contains(&surface_ext) {
-                instance_extensions.push(surface_ext.as_ptr());
-                tracing::info!("VK_KHR_surface enabled");
-            }
-
             // Enable all available platform surface extensions
             let wayland_ext = c"VK_KHR_wayland_surface";
             if available_ext_names.contains(&wayland_ext) {
@@ -518,17 +611,18 @@ impl HostVulkanDevice {
                 tracing::info!("VK_EXT_headless_surface available");
             }
 
-            // VK_EXT_swapchain_colorspace — exposes the wide-gamut + HDR
-            // VkColorSpaceKHR enumerants (HDR10_ST2084_EXT,
-            // EXTENDED_SRGB_LINEAR_EXT, DISPLAY_P3_*, BT709_*, etc.)
-            // through `vkGetPhysicalDeviceSurfaceFormatsKHR`. Without it,
-            // every WSI surface advertises only `SRGB_NONLINEAR_KHR` and
-            // the swapchain colorspace priority walk has nothing to walk.
-            let swapchain_colorspace_ext = c"VK_EXT_swapchain_colorspace";
-            if available_ext_names.contains(&swapchain_colorspace_ext) {
-                instance_extensions.push(swapchain_colorspace_ext.as_ptr());
-                tracing::info!("VK_EXT_swapchain_colorspace enabled");
-            }
+        }
+
+        // VK_EXT_swapchain_colorspace — exposes the wide-gamut + HDR
+        // VkColorSpaceKHR enumerants (HDR10_ST2084_EXT,
+        // EXTENDED_SRGB_LINEAR_EXT, DISPLAY_P3_*, BT709_*, etc.)
+        // through `vkGetPhysicalDeviceSurfaceFormatsKHR`. Without it,
+        // every WSI surface advertises only `SRGB_NONLINEAR_KHR` and
+        // the swapchain colorspace priority walk has nothing to walk.
+        let swapchain_colorspace_ext = c"VK_EXT_swapchain_colorspace";
+        if available_ext_names.contains(&swapchain_colorspace_ext) {
+            instance_extensions.push(swapchain_colorspace_ext.as_ptr());
+            tracing::info!("VK_EXT_swapchain_colorspace enabled");
         }
 
         // 4. Create Vulkan instance at API version 1.4
@@ -583,10 +677,7 @@ impl HostVulkanDevice {
 
         let instance = unsafe { entry.create_instance(&instance_info, None) }.map_err(|e| {
             Error::GpuError(if e == vk::ErrorCode::INCOMPATIBLE_DRIVER {
-                "No usable Vulkan driver (ICD) was found. Install your GPU vendor's Vulkan \
-                 driver — the proprietary NVIDIA driver, or `mesa-vulkan-drivers` for \
-                 AMD/Intel — then check `vulkaninfo` runs."
-                    .to_string()
+                no_usable_vulkan_driver_guidance().to_string()
             } else {
                 format!("Failed to create Vulkan instance: {e}")
             })
@@ -805,14 +896,7 @@ impl HostVulkanDevice {
         // Device extensions
         let mut device_extensions: Vec<*const c_char> = Vec::new();
 
-        // On macOS/iOS, we need portability subset
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
-        {
-            device_extensions.push(c"VK_KHR_portability_subset".as_ptr());
-        }
-
-        // On Linux, enumerate device extensions once and enable what's available
-        #[cfg(target_os = "linux")]
+        // Enumerate device extensions once and enable what's available
         let available_device_extension_properties =
             unsafe { instance.enumerate_device_extension_properties(physical_device, None) }
                 .inspect_err(|e| {
@@ -823,9 +907,34 @@ impl HostVulkanDevice {
                     );
                 })
                 .unwrap_or_default();
-        #[cfg(target_os = "linux")]
         let available_device_ext_names =
             vulkan_extension_names_borrowed_from_properties(&available_device_extension_properties);
+
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        {
+            // A portability implementation that advertises the subset extension
+            // requires it to be enabled (VUID-VkDeviceCreateInfo-pProperties-04451),
+            // so this is probed rather than pushed blind. The subset MoltenVK
+            // withholds is pointPolygons, samplerMipLodBias, tessellationIsolines
+            // and tessellationPointMode; the engine uses no geometry or
+            // tessellation shaders, so none of it is reachable from here.
+            let portability_subset_ext = c"VK_KHR_portability_subset";
+            if available_device_ext_names.contains(&portability_subset_ext) {
+                device_extensions.push(portability_subset_ext.as_ptr());
+                tracing::info!("VK_KHR_portability_subset enabled");
+            }
+
+            // Metal interop — importing an IOSurface-backed CVPixelBuffer as a
+            // VkImage goes through this. Device-level, unlike the surface
+            // extension requested on the instance.
+            let metal_objects_ext = c"VK_EXT_metal_objects";
+            if available_device_ext_names.contains(&metal_objects_ext) {
+                device_extensions.push(metal_objects_ext.as_ptr());
+                tracing::info!("VK_EXT_metal_objects enabled - Metal interop available");
+            } else {
+                tracing::warn!("VK_EXT_metal_objects not available - Metal interop will be limited");
+            }
+        }
 
         // On Linux, check for DMA-BUF external memory extensions
         #[cfg(target_os = "linux")]
@@ -948,8 +1057,7 @@ impl HostVulkanDevice {
         #[cfg(not(target_os = "linux"))]
         let has_ray_tracing_pipeline = false;
 
-        // On Linux, enable VK_KHR_swapchain for windowed display rendering
-        #[cfg(target_os = "linux")]
+        // Enable VK_KHR_swapchain for windowed display rendering
         let has_hdr_metadata = {
             let swapchain_ext = c"VK_KHR_swapchain";
             if available_device_ext_names.contains(&swapchain_ext) {
@@ -973,8 +1081,6 @@ impl HostVulkanDevice {
             }
             probe
         };
-        #[cfg(not(target_os = "linux"))]
-        let has_hdr_metadata = false;
 
         // On Linux, check for Vulkan Video encode extensions
         // VK_KHR_synchronization2 is core since Vulkan 1.3 — no extension string needed.
@@ -1140,20 +1246,22 @@ impl HostVulkanDevice {
         #[cfg(not(target_os = "linux"))]
         let supports_video_decode = false;
 
-        // Enable dynamic rendering, timeline semaphore, and synchronization2 features on Linux.
-        // Synchronization2 is a mandatory dependency of VK_KHR_video_encode_queue.
-        #[cfg(target_os = "linux")]
+        // Dynamic rendering, timeline semaphores and synchronization2 are the
+        // promoted-1.3 core the engine is written against; requesting them is
+        // not optional on any platform. Synchronization2 is also a mandatory
+        // dependency of VK_KHR_video_encode_queue. Measured on an M1 Max:
+        // MoltenVK accepts all three, so a device that refuses one fails
+        // creation with FEATURE_NOT_PRESENT rather than being quietly served a
+        // device the engine's call sites cannot use.
         let mut dynamic_rendering_features = vk::PhysicalDeviceDynamicRenderingFeatures::builder()
             .dynamic_rendering(true)
             .build();
 
-        #[cfg(target_os = "linux")]
         let mut timeline_semaphore_features =
             vk::PhysicalDeviceTimelineSemaphoreFeatures::builder()
                 .timeline_semaphore(true)
                 .build();
 
-        #[cfg(target_os = "linux")]
         let mut synchronization2_features = vk::PhysicalDeviceSynchronization2Features::builder()
             .synchronization2(true)
             .build();
@@ -1167,7 +1275,6 @@ impl HostVulkanDevice {
         // samplerYcbcrConversion is required to create NV12 image views / samplers
         // with VK_KHR_sampler_ycbcr_conversion (core in 1.1) on the codec layer's path.
         // Without it, VUID-vkCreateSamplerYcbcrConversion-None-01648 fires every frame.
-        #[cfg(target_os = "linux")]
         let mut vulkan_1_1_features = vk::PhysicalDeviceVulkan11Features::builder()
             .sampler_ycbcr_conversion(true)
             .build();
@@ -1209,13 +1316,11 @@ impl HostVulkanDevice {
         // undefined values per dispatch. The shader-side capability
         // pairing is locked by `vulkan_tone_mapper::tests::`
         // `tone_curve_spirv_declares_the_without_format_capabilities`.
-        #[cfg(target_os = "linux")]
         let enabled_device_features = vk::PhysicalDeviceFeatures::builder()
             .shader_storage_image_read_without_format(true)
             .shader_storage_image_write_without_format(true)
             .build();
 
-        #[cfg(target_os = "linux")]
         let device_create_info = {
             let mut builder = vk::DeviceCreateInfo::builder()
                 .queue_create_infos(&queue_create_infos)
@@ -1225,9 +1330,11 @@ impl HostVulkanDevice {
                 .push_next(&mut timeline_semaphore_features)
                 .push_next(&mut synchronization2_features)
                 .push_next(&mut vulkan_1_1_features);
+            #[cfg(target_os = "linux")]
             if supports_video_encode || supports_video_decode {
                 builder = builder.push_next(&mut video_maintenance1_features);
             }
+            #[cfg(target_os = "linux")]
             if has_ray_tracing_pipeline {
                 builder = builder
                     .push_next(&mut buffer_device_address_features)
@@ -1236,12 +1343,6 @@ impl HostVulkanDevice {
             }
             builder.build()
         };
-
-        #[cfg(not(target_os = "linux"))]
-        let device_create_info = vk::DeviceCreateInfo::builder()
-            .queue_create_infos(&queue_create_infos)
-            .enabled_extension_names(&device_extensions)
-            .build();
 
         let device = unsafe { instance.create_device(physical_device, &device_create_info, None) }
             .map_err(|e| Error::GpuError(format!("Failed to create logical device: {e}")))?;
