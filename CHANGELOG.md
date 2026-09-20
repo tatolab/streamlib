@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.3](https://github.com/tatolab/streamlib/compare/v0.26.2...v0.26.3) (2026-09-20)
+
+
+### Features
+
+* **engine:** carry a video frame's pixels across the mesh into a fresh local surface ([#2380](https://github.com/tatolab/streamlib/issues/2380)) ([68f2e7d](https://github.com/tatolab/streamlib/commit/68f2e7d719267bc520a9a7e5b0f40a1986606931))
+
 ## [0.26.2](https://github.com/tatolab/streamlib/compare/v0.26.1...v0.26.2) (2026-09-20)
 
 
