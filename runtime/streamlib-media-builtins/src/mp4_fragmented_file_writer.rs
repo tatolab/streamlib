@@ -22,7 +22,6 @@ use mp4_atom::{
 };
 use serde::Deserialize;
 use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::iceoryx2::WhatIsKnownOfAnInboundLinksStampClock;
 use streamlib::sdk::runtime::mesh::MachineClockIdentity;
 
 use crate::encoded_audio_packet::{EncodedAudioCodec, read_encoded_audio_packet_bag};
@@ -1359,6 +1358,8 @@ mod tests {
 
     const ONE_MACHINE: &str = "2f1c8a30-6b4e-4d5a-9a11-2c7f0d5e8b93";
     const ANOTHER_MACHINE: &str = "8b93a1c2-0000-4d5a-9a11-2c7f0d5e2f1c";
+
+    use streamlib::sdk::iceoryx2::WhatIsKnownOfAnInboundLinksStampClock;
 
     fn a_machine(boot_session_uuid: &str) -> Option<MachineClockIdentity> {
         Some(MachineClockIdentity::of_the_machine_whose_boot_session_uuid_reads(boot_session_uuid))
