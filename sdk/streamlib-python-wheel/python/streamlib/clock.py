@@ -14,7 +14,9 @@ That epoch is the machine's own boot, so a reading from another machine is a
 reading of an unrelated clock and subtracting the two means nothing. A bag
 that crossed the runtime mesh carries its producer's stamp unchanged; ask
 `ctx.inputs.inbound_link_stamp_clock_identity(port, link)` which machine a
-link's stamps were taken on before comparing them with another link's.
+link's stamps were taken on before comparing them with another link's, and
+[`this_machines_stamp_clock_identity`] which machine the readings taken here
+are on before comparing a link's stamps against one of those.
 
 Wall-clock APIs (`time.time`, `datetime.now`, `time.time_ns`) are NOT
 comparable across processes — they drift under NTP and reflect different
@@ -32,5 +34,12 @@ from __future__ import annotations
 
 from ._engine import MonotonicTimer as MonotonicTimer
 from ._engine import monotonic_now_ns as monotonic_now_ns
+from ._engine import (
+    this_machines_stamp_clock_identity as this_machines_stamp_clock_identity,
+)
 
-__all__ = ["MonotonicTimer", "monotonic_now_ns"]
+__all__ = [
+    "MonotonicTimer",
+    "monotonic_now_ns",
+    "this_machines_stamp_clock_identity",
+]

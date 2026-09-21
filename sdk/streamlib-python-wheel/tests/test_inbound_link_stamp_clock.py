@@ -23,7 +23,7 @@ from typing import Any
 
 import pytest
 
-from streamlib import RuntimeContextFullAccess
+from streamlib import RuntimeContextFullAccess, this_machines_stamp_clock_identity
 from streamlib._engine import ProcessorLinkDataAccess
 
 pytestmark = pytest.mark.usefixtures("private_iceoryx2_domain_for_this_test_process")
@@ -83,6 +83,44 @@ def test_a_link_from_this_runtime_names_this_machine(
     assert BOOT_SESSION_UUID.match(named), (
         f"{named!r} is not a boot-session UUID, which is what the answer is"
     )
+
+
+def test_this_machines_clock_is_the_one_a_link_from_this_runtime_names(
+    request: pytest.FixtureRequest,
+):
+    """The other half of a stamp comparison: a processor holding a link's
+    machine needs the machine its own readings are on to compare it against.
+
+    The two answers must be the one string, or a processor asking both is told
+    a local link is on a clock it is not — which is exactly the comparison the
+    per-machine rule exists to stop. Fail-without-fix: derive this machine's
+    identity anywhere but where a link's answer comes from, and the two drift
+    apart the day either changes.
+    """
+    unique = f"stampclockthismachine{os.getpid()}"
+    channel_service_name = f"{unique}/video_out"
+    context = _a_context_reading_one_link(
+        request, channel_service_name, channel_service_name
+    )
+
+    this_machine = this_machines_stamp_clock_identity()
+
+    assert this_machine is not None, (
+        "Linux names its boot session, so this platform names a clock"
+    )
+    assert BOOT_SESSION_UUID.match(this_machine), (
+        f"{this_machine!r} is not a boot-session UUID, which is what the answer is"
+    )
+    assert this_machine == context.inputs.inbound_link_stamp_clock_identity(
+        INPUT_PORT, channel_service_name
+    ), "a link from this runtime is stamped on this machine's clock, by that name"
+
+
+def test_this_machines_clock_is_read_from_the_boot_and_never_changes():
+    """A boot id cannot change without a reboot, which ends the process — so
+    the answer is a constant and a caller may read it once at setup.
+    """
+    assert this_machines_stamp_clock_identity() == this_machines_stamp_clock_identity()
 
 
 def test_a_link_from_another_runtime_names_nothing_with_no_runtime_to_ask(

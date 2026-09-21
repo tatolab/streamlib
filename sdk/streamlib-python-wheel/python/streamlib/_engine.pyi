@@ -1985,6 +1985,21 @@ def _observe_the_runtime_mesh(
 def monotonic_now_ns() -> int:
     """Current monotonic time in nanoseconds via `clock_gettime(CLOCK_MONOTONIC)`."""
 
+def this_machines_stamp_clock_identity() -> str | None:
+    """Which machine's monotonic clock `monotonic_now_ns` reads.
+
+    The machine's boot-session UUID text — the same string
+    `LinkInputDataReader.inbound_link_stamp_clock_identity` answers for a
+    link — or `None` where this platform names no clock of its own, which is
+    what a link carrying from that machine answers too.
+
+    This is the other half of a stamp comparison. A link's stamps may be aged
+    against a reading taken in this process exactly when the two strings match;
+    where they differ the two clocks share no epoch, and subtracting one from
+    the other is not an age. Read it once — a boot id cannot change without a
+    reboot, which ends the process.
+    """
+
 def runtime_log_directory() -> Path:
     """The directory the engine writes its per-runtime JSONL logs into."""
 
