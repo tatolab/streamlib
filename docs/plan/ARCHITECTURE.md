@@ -2490,7 +2490,14 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   `VIDEO_MEDIA_TRACK_PRIORITY = 127`, read in draft-16 §10.4.2's direction and never
   checked against a relay, which is free to ignore it; a data track rides video's rung as a
   stated placeholder until a consumer asks otherwise. Absent, the publisher is the shipped
-  baseline and every bag is written however late. [moq-data-tracks — SHIPPED #2159]
+  baseline and every bag is written however late. Both of the deadline's readings are
+  subtractions against the publisher's own machine's clock, so the stamp-age arm reads only a
+  track whose stamps are taken on it: a track fed across the mesh has no age here at any
+  offset, is never shed for one, and is said once in the log naming both machines, while its
+  uplink backlog is still read from the instant each object reached the transport. Refusing
+  such a track instead was rejected — the deadline is optional configuration and a CMAF
+  timeline is epoched per track, so nothing about the output is wrong. [moq-data-tracks —
+  SHIPPED #2159; the cross-clock arm — SHIPPED #2340]
 - **DECIDED** — The deadline alone cannot see the uplink, because `moq-transport` never
   blocks and never pre-empts: a bag hands off to a forwarder and the writer learns nothing
   of the backlog behind it. So the wheel vendors `moq-transport` 0.16.2 at
