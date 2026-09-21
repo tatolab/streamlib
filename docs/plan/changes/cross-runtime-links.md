@@ -168,10 +168,10 @@ sysctl Zenoh cannot set. TCP alone was never offered. `runtime-mesh.md:120-122`,
    Requests and tokens ride above both. With no reader it holds no subscriber, publisher or token.
 7. **Tap** resolves a remote link's local channel by the link's mesh address.
 8. **A port a runtime offers and stopped sending says why.** Its offered-ports answer gains
-   `ports_it_stopped_sending`, one entry per such port carrying the reason this runtime's last
-   attempt to send it ended — an egress that stopped, and equally one that was never started — in
-   the source's own words — beside the `ports_it_holds_and_cannot_send` refusal list #2345 added,
-   and never folded into it, because that list reads as `error`. A reader whose ingress is open
+   `ports_it_stopped_sending`, one entry per such port carrying, in the source's own words, why
+   this runtime's last attempt to send it ended: an egress that stopped, and equally one that was
+   never started. It sits beside the `ports_it_holds_and_cannot_send` refusal list #2345 added and
+   is never folded into it, because that list reads as `error`. A reader whose ingress is open
    over a port nothing is arriving on asks for it each resolution pass and puts it on the link,
    beside the plain statement that nothing is retrying it while that link keeps reading. The link
    stays `awaiting_remote`: the port is still offered, a runtime beginning to read a port nothing

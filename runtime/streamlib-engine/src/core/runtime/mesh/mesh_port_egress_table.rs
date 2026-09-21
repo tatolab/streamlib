@@ -353,9 +353,9 @@ struct HowThisRuntimeWouldSendAPort {
     how_to_read_the_port: HowToReadAnOfferedOutputPort,
 }
 
-/// How this runtime would send `port`, or why it cannot — a port it does not
-/// have, one whose channel will not open, or one whose names do not make a mesh
-/// address.
+/// How this runtime would send `port`, or why it cannot — a port whose names do
+/// not make a mesh address, or one there is no way to read: a port the graph no
+/// longer holds, or one whose channel will not open.
 ///
 /// Its own function so the answer is provable without a Zenoh session and an
 /// iceoryx2 node to start a thread against, which is the only way either arm is
@@ -374,12 +374,14 @@ fn how_this_runtime_would_send(
         &port.port_name,
     )
     .map_err(|not_an_address| format!("the port has no address on the mesh: {not_an_address}"))?;
-    // Why the channel could not open is said by the opener, in this runtime's
-    // log: the seam it is found at answers presence, not a reason.
+    // This answers `None` both for a port this runtime no longer has and for one
+    // whose channel will not open, and cannot say which — so the reason claims
+    // neither. Where a channel is what failed, this runtime's own log names it.
     let how_to_read_the_port = offered
         .how_to_read_an_offered_output_port(&port.processor_display_name, &port.port_name)
         .ok_or_else(|| {
-            "this runtime holds that port and could not open its channel to read it; its own log              names why"
+            "this runtime answered that it offers that port and then could not open a way to \
+             read it"
                 .to_string()
         })?;
     Ok(HowThisRuntimeWouldSendAPort {
@@ -667,9 +669,10 @@ mod tests {
     /// is offered, is never refused, and gets no egress — the reader waits out
     /// the run on a sentence that says the source is merely not sending it yet.
     ///
-    /// Mental-revert: drop the record from the cannot-send arm and this goes
-    /// red, which is the state the branch shipped in until the reviewers
-    /// caught it.
+    /// This locks the *wording* only — the recording itself lives in
+    /// `a_runtime_started_reading`, which needs a Zenoh session. What locks that
+    /// end to end is the two-process arm
+    /// `a_reader_of_a_port_its_source_cannot_read_is_told_so`.
     #[test]
     fn a_port_whose_channel_will_not_open_answers_why_rather_than_saying_nothing() {
         // A registry whose graph offers the port and answers no way to read it,
@@ -685,8 +688,13 @@ mod tests {
         .expect("a port with no way to read it is one this runtime cannot send");
 
         assert!(
-            why_it_cannot_be_sent.contains("could not open its channel"),
+            why_it_cannot_be_sent.contains("could not open a way to read it"),
             "{why_it_cannot_be_sent}"
+        );
+        assert!(
+            !why_it_cannot_be_sent.contains("  "),
+            "this sentence reaches a reader on another machine verbatim: \
+             {why_it_cannot_be_sent}"
         );
     }
 

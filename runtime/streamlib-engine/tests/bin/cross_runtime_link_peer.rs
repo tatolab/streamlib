@@ -143,6 +143,7 @@ fn run_as_the_source(
     offered.record_how_to_read_this_runtimes_graph(Arc::new(TheOnePortThisPeerOffers {
         processor_display_name: how.display_name.clone(),
         channel_service_name,
+        refuse_to_say_how_to_read_the_port: how.refuse_to_say_how_to_read_the_port,
     }));
 
     let membership = how.join_the_mesh()?;
@@ -522,6 +523,9 @@ pub fn a_stamp_for(published: u64) -> i64 {
 struct TheOnePortThisPeerOffers {
     processor_display_name: String,
     channel_service_name: String,
+    /// Offer the port and answer no way to read it, the shape a port whose
+    /// channel will not open takes in a real runtime.
+    refuse_to_say_how_to_read_the_port: bool,
 }
 
 impl WhatThisRuntimeOffersOnTheMesh for TheOnePortThisPeerOffers {
@@ -544,6 +548,9 @@ impl WhatThisRuntimeOffersOnTheMesh for TheOnePortThisPeerOffers {
         processor_display_name: &str,
         port_name: &str,
     ) -> Option<HowToReadAnOfferedOutputPort> {
+        if self.refuse_to_say_how_to_read_the_port {
+            return None;
+        }
         (processor_display_name == self.processor_display_name && port_name == THE_PORT).then(
             || HowToReadAnOfferedOutputPort {
                 channel_service_name: self.channel_service_name.clone(),
@@ -582,6 +589,10 @@ struct HowToRunThisPeer {
     /// Hold every destination slot on this source's own channel, so the egress
     /// a reader asks for is refused one and its thread ends.
     take_every_destination_slot: bool,
+    /// Keep the port on offer and answer no way to read it, which is what a
+    /// port whose channel will not open leaves behind. Its egress is then never
+    /// started at all, rather than started and refused.
+    refuse_to_say_how_to_read_the_port: bool,
 }
 
 impl HowToRunThisPeer {
@@ -594,6 +605,7 @@ impl HowToRunThisPeer {
         let mut burst_once_a_reader_arrives = None;
         let mut recreate_the_publisher_just_before_the_burst = false;
         let mut take_every_destination_slot = false;
+        let mut refuse_to_say_how_to_read_the_port = false;
         let mut arguments = std::env::args().skip(1);
         while let Some(flag) = arguments.next() {
             let mut value = || arguments.next().expect("every flag takes a value");
@@ -621,6 +633,7 @@ impl HowToRunThisPeer {
                     recreate_the_publisher_just_before_the_burst = true
                 }
                 "--take-every-destination-slot" => take_every_destination_slot = true,
+                "--refuse-to-say-how-to-read-the-port" => refuse_to_say_how_to_read_the_port = true,
                 unknown => panic!("unknown flag {unknown:?}"),
             }
         }
@@ -633,6 +646,7 @@ impl HowToRunThisPeer {
             burst_once_a_reader_arrives,
             recreate_the_publisher_just_before_the_burst,
             take_every_destination_slot,
+            refuse_to_say_how_to_read_the_port,
         }
     }
 
