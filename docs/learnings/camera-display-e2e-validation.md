@@ -3,7 +3,8 @@
 ## When you need this
 
 You changed anything in the GPU pipeline (`vulkan_device.rs`, `vulkan_buffer.rs`,
-`vulkan_texture.rs`, `runtime/streamlib-media-builtins/src/camera_source.rs`,
+`vulkan_texture.rs`, `runtime/streamlib-engine/src/linux/v4l2_video_device_backend.rs`,
+`runtime/streamlib-media-builtins/src/camera_source.rs`,
 `runtime/streamlib-media-builtins/src/display_window.rs`) and need to confirm:
 
 - Pipeline runs end-to-end without OOM or driver errors
