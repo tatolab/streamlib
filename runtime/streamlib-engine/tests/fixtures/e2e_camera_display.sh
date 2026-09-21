@@ -134,7 +134,7 @@ for _ in $(seq 1 "$RUN_SECS"); do
         tail -30 "$LOG_FILE"
         exit 1
     fi
-    RUNTIME_ID="$("$STREAMLIB" nodes 2>/dev/null | awk 'NR>1 && $4=="yes" {print $1; exit}')"
+    RUNTIME_ID="$("$STREAMLIB" nodes 2>/dev/null | awk 'NR>1 && $5=="yes" {print $2; exit}')"
     [ -n "$RUNTIME_ID" ] && break
     sleep 1
 done
