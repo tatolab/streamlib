@@ -5692,6 +5692,7 @@ name = "streamlib-surface-client"
 version = "0.26.10"
 dependencies = [
  "libc",
+ "mach2",
  "serde_json",
  "tempfile",
 ]

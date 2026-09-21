@@ -3,7 +3,7 @@
 
 [package]
 name = "streamlib-surface-client"
-description = "Consumer-side wire helpers for the StreamLib surface-sharing Unix-socket + SCM_RIGHTS protocol"
+description = "Wire helpers for the StreamLib surface-sharing service: Unix socket + SCM_RIGHTS on Linux, raw Mach on macOS"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -17,6 +17,12 @@ path = "src/lib.rs"
 [target.'cfg(target_os = "linux")'.dependencies]
 libc.workspace = true
 serde_json.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc.workspace = true
+serde_json.workspace = true
+# The Mach message, port and bootstrap bindings the macOS arm rides on.
+mach2 = "0.7"
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 # Each test socket gets a directory of its own: the kernel answers uniqueness,
