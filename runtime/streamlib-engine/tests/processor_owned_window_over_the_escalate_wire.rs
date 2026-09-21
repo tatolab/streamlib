@@ -80,8 +80,8 @@ fn create_window_titled(window_title: &str) -> Value {
     json!({
         "op": "create_processor_owned_window",
         "window_title": window_title,
-        "initial_width_in_physical_pixels": 320,
-        "initial_height_in_physical_pixels": 240,
+        "initial_width_in_logical_pixels": 320,
+        "initial_height_in_logical_pixels": 240,
     })
 }
 

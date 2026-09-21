@@ -191,13 +191,15 @@ pub(crate) struct EscalateRequestCopyDeviceExportStagingBackToSurface {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EscalateRequestCreateProcessorOwnedWindow {
-    /// Requested initial height of the drawable area, in physical pixels.
+    /// Requested initial height of the drawable area, in the desktop's
+    /// logical pixels.
     /// The window server is free to hand back another extent; the response
     /// carries what was actually minted.
-    pub(crate) initial_height_in_physical_pixels: u32,
+    pub(crate) initial_height_in_logical_pixels: u32,
 
-    /// Requested initial width of the drawable area, in physical pixels.
-    pub(crate) initial_width_in_physical_pixels: u32,
+    /// Requested initial width of the drawable area, in the desktop's logical
+    /// pixels.
+    pub(crate) initial_width_in_logical_pixels: u32,
 
     /// Correlates request with response. UUID string.
     pub(crate) request_id: String,

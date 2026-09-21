@@ -73,10 +73,10 @@ pub struct DisplayWindowConfig {
     /// Window title.
     #[serde(default = "default_title")]
     pub title: String,
-    /// Initial window width in pixels.
+    /// Initial window width, in the desktop's logical pixels.
     #[serde(default = "default_window_width")]
     pub width: u32,
-    /// Initial window height in pixels.
+    /// Initial window height, in the desktop's logical pixels.
     #[serde(default = "default_window_height")]
     pub height: u32,
     /// How the frame maps onto the window.
@@ -260,8 +260,8 @@ impl DisplayWindowRenderLoop {
                 ProcessorOwnedWindowRequest {
                     window_registration_request: WindowRegistrationRequestFromOwningProcessor {
                         window_title: self.config.title.clone(),
-                        initial_width_in_physical_pixels: self.config.width,
-                        initial_height_in_physical_pixels: self.config.height,
+                        initial_width_in_logical_pixels: self.config.width,
+                        initial_height_in_logical_pixels: self.config.height,
                     },
                     scaling_mode_for_frame_in_window: self.config.scaling.present_scaling_mode(),
                 },

@@ -108,7 +108,9 @@ class DisplayWindow:
     A marker type — pass the class itself to `Runtime.add`
     (`rt.add(DisplayWindow, config={"title": "My app", "scaling": "fit"})`);
     it is never instantiated and its per-frame path never enters the
-    interpreter. `scaling` is `"fit"`, `"fill"`, or `"stretch"`.
+    interpreter. `scaling` is `"fit"`, `"fill"`, or `"stretch"`. `width` and
+    `height` (1280 and 720 by default) are the window's initial size in the
+    desktop's logical pixels, so it is the same size on a 1x and a 2x display.
 
     Add as many as the graph needs: each instance registers its own window
     with the engine's shared event pump and renders on its own thread. An
@@ -1104,6 +1106,9 @@ class GpuContextFullAccess:
         self, title: str, width: int = 1280, height: int = 720
     ) -> ProcessorOwnedWindow:
         """Request a window this processor owns, presented by the engine.
+
+        `width` and `height` are the window's initial size in the desktop's
+        logical pixels, so it is the same size on a 1x and a 2x display.
 
         Constructed once in `setup()`, named frames per frame in `process()`.
         The window lives in the app process on its own present loop, so it

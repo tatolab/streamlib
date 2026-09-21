@@ -72,8 +72,8 @@ fn a_process_with_no_display_server_answers_the_create_op_with_the_pumps_own_err
     let refused = helper.escalate_request_to_the_parent(json!({
         "op": "create_processor_owned_window",
         "window_title": WINDOW_TITLE_THIS_PROCESS_CANNOT_SERVE,
-        "initial_width_in_physical_pixels": 320,
-        "initial_height_in_physical_pixels": 240,
+        "initial_width_in_logical_pixels": 320,
+        "initial_height_in_logical_pixels": 240,
     }));
 
     let refusal = refusal_message_of(&refused, "minting a window with no display server");

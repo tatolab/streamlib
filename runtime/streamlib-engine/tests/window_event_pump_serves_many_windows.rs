@@ -21,8 +21,8 @@ use streamlib_engine::core::window_event_pump::process_wide_window_event_pump;
 fn request_for(window_title: &str) -> WindowRegistrationRequestFromOwningProcessor {
     WindowRegistrationRequestFromOwningProcessor {
         window_title: window_title.to_string(),
-        initial_width_in_physical_pixels: 320,
-        initial_height_in_physical_pixels: 240,
+        initial_width_in_logical_pixels: 320,
+        initial_height_in_logical_pixels: 240,
     }
 }
 

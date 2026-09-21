@@ -27,8 +27,8 @@ pub fn request_for(window_title: &str) -> ProcessorOwnedWindowRequest {
     ProcessorOwnedWindowRequest {
         window_registration_request: WindowRegistrationRequestFromOwningProcessor {
             window_title: window_title.to_string(),
-            initial_width_in_physical_pixels: 320,
-            initial_height_in_physical_pixels: 240,
+            initial_width_in_logical_pixels: 320,
+            initial_height_in_logical_pixels: 240,
         },
         scaling_mode_for_frame_in_window: PresentScalingMode::Fit,
     }

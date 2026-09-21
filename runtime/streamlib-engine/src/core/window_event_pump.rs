@@ -31,7 +31,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use winit::application::ApplicationHandler;
-use winit::dpi::PhysicalSize;
+use winit::dpi::{LogicalSize, PhysicalSize};
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::window::{Window, WindowAttributes, WindowId};
@@ -52,10 +52,12 @@ const WINDOW_EVENT_PUMP_REPLY_TIMEOUT: Duration = Duration::from_secs(10);
 pub struct WindowRegistrationRequestFromOwningProcessor {
     /// Window title, owned by the requesting processor.
     pub window_title: String,
-    /// Requested initial width in physical pixels.
-    pub initial_width_in_physical_pixels: u32,
-    /// Requested initial height in physical pixels.
-    pub initial_height_in_physical_pixels: u32,
+    /// Requested initial width in the desktop's logical pixels — physical
+    /// pixels divided by the display's scale factor, so a window is the same
+    /// size on a 1x and a 2x display.
+    pub initial_width_in_logical_pixels: u32,
+    /// Requested initial height in the desktop's logical pixels.
+    pub initial_height_in_logical_pixels: u32,
 }
 
 /// A window event the pump forwards to the processor that owns that window.
@@ -817,9 +819,9 @@ fn window_attributes_for_request(
 ) -> WindowAttributes {
     WindowAttributes::default()
         .with_title(request.window_title.clone())
-        .with_inner_size(PhysicalSize::new(
-            request.initial_width_in_physical_pixels.max(1),
-            request.initial_height_in_physical_pixels.max(1),
+        .with_inner_size(LogicalSize::new(
+            request.initial_width_in_logical_pixels.max(1),
+            request.initial_height_in_logical_pixels.max(1),
         ))
 }
 
@@ -834,8 +836,8 @@ mod tests {
     ) -> WindowRegistrationRequestFromOwningProcessor {
         WindowRegistrationRequestFromOwningProcessor {
             window_title: title.to_string(),
-            initial_width_in_physical_pixels: width,
-            initial_height_in_physical_pixels: height,
+            initial_width_in_logical_pixels: width,
+            initial_height_in_logical_pixels: height,
         }
     }
 
@@ -928,7 +930,7 @@ mod tests {
         assert_eq!(attributes.title, "Debug view");
         assert_eq!(
             attributes.inner_size,
-            Some(PhysicalSize::new(640_u32, 480_u32).into())
+            Some(LogicalSize::new(640_u32, 480_u32).into())
         );
     }
 
@@ -937,7 +939,7 @@ mod tests {
         let attributes = window_attributes_for_request(&request_for("Zero", 0, 0));
         assert_eq!(
             attributes.inner_size,
-            Some(PhysicalSize::new(1_u32, 1_u32).into()),
+            Some(LogicalSize::new(1_u32, 1_u32).into()),
             "a zero extent is never handed to winit or to a swapchain"
         );
     }

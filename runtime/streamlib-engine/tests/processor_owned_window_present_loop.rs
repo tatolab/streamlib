@@ -128,8 +128,8 @@ fn the_engine_run_loop_shows_what_its_owner_names_without_ever_pacing_the_owner(
             ProcessorOwnedWindowRequest {
                 window_registration_request: WindowRegistrationRequestFromOwningProcessor {
                     window_title: "streamlib processor-owned window present loop".to_string(),
-                    initial_width_in_physical_pixels: 320,
-                    initial_height_in_physical_pixels: 240,
+                    initial_width_in_logical_pixels: 320,
+                    initial_height_in_logical_pixels: 240,
                 },
                 scaling_mode_for_frame_in_window: PresentScalingMode::Fit,
             },
