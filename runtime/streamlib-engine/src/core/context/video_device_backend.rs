@@ -62,6 +62,11 @@ pub struct CapturedVideoFrameFromDevice<'a> {
     /// The frame's colour as the device described it. An axis the device left
     /// unspecified is absent.
     pub color: H273ColorVui,
+    /// The instant the device captured the frame, in nanoseconds on the
+    /// machine's monotonic clock, resolved by the stream's
+    /// [`VideoCaptureInstantResolver`](super::VideoCaptureInstantResolver) —
+    /// never the instant of hand-off.
+    pub capture_timestamp_ns: i64,
 }
 
 /// What a capture stream calls with each frame it captures.
@@ -102,6 +107,10 @@ pub trait VideoCaptureStream: Send {
     /// failure it names outlives [`Self::start_delivering_to`] too:
     /// restarting delivery does not bring a device back.
     fn liveness_report(&self) -> DeviceStreamLivenessReport;
+
+    /// How many of this stream's device stamps were ahead of the instant their
+    /// frame was dequeued and were clamped to it.
+    fn future_capture_stamps_clamped_to_dequeue(&self) -> u64;
 
     /// Begin delivering captured frames to `hand_off`, replacing any delivery
     /// an earlier call started.

@@ -22,11 +22,12 @@ use v4l::video::Capture;
 
 use crate::core::color::{ColorSpaceKind, H273ColorVui, RangeId, TransferId};
 use crate::core::context::{
-    CapturedVideoFrameFromDevice, CapturedVideoFrameHandOff, DeviceStreamFailureReason,
-    DeviceStreamFailureRecorder, DeviceStreamLivenessReport, GpuContextLimitedAccess,
-    VideoCaptureDevice, VideoCaptureStream, VideoCaptureStreamFormat, VideoDeviceBackend,
-    VideoDeviceStreamRequest,
+    CapturedVideoFrameFromDevice, CapturedVideoFrameHandOff, DeviceReportedCaptureStamp,
+    DeviceStreamFailureReason, DeviceStreamFailureRecorder, DeviceStreamLivenessReport,
+    GpuContextLimitedAccess, VideoCaptureDevice, VideoCaptureInstantResolver, VideoCaptureStream,
+    VideoCaptureStreamFormat, VideoDeviceBackend, VideoDeviceStreamRequest,
 };
+use crate::core::media_clock::MediaClock;
 use crate::core::rhi::{
     PixelBuffer, PixelFormat, PublishedPixelBufferFrameId, RhiColorConverter, SourceLayoutInfo,
     StorageBuffer, Texture, TextureFormat, VulkanLayout,
@@ -187,6 +188,7 @@ struct V4l2VideoCaptureStream {
     gpu_context: GpuContextLimitedAccess,
     failure_recorder: DeviceStreamFailureRecorder,
     liveness_report: DeviceStreamLivenessReport,
+    capture_instant_resolver: Arc<VideoCaptureInstantResolver>,
     capture_thread: Option<V4l2CaptureThread>,
 }
 
@@ -257,6 +259,8 @@ impl V4l2VideoCaptureStream {
 
         let (failure_recorder, liveness_report) =
             DeviceStreamFailureRecorder::recording_into_a_new_report();
+        let capture_instant_resolver =
+            Arc::new(VideoCaptureInstantResolver::for_device(camera_name.clone()));
         Ok(Self {
             device: dev,
             opened_device: VideoCaptureDevice {
@@ -272,6 +276,7 @@ impl V4l2VideoCaptureStream {
             gpu_context: request.gpu_context.clone(),
             failure_recorder,
             liveness_report,
+            capture_instant_resolver,
             capture_thread: None,
         })
     }
@@ -288,6 +293,11 @@ impl VideoCaptureStream for V4l2VideoCaptureStream {
 
     fn liveness_report(&self) -> DeviceStreamLivenessReport {
         self.liveness_report.clone()
+    }
+
+    fn future_capture_stamps_clamped_to_dequeue(&self) -> u64 {
+        self.capture_instant_resolver
+            .future_capture_stamps_clamped_to_dequeue()
     }
 
     fn start_delivering_to(&mut self, hand_off: CapturedVideoFrameHandOff) -> Result<()> {
@@ -310,6 +320,7 @@ impl VideoCaptureStream for V4l2VideoCaptureStream {
         let VideoCaptureStreamFormat { width, height, .. } = self.stream_format;
         let capture_fourcc = self.capture_fourcc;
         let failure_recorder = self.failure_recorder.clone();
+        let capture_instant_resolver = Arc::clone(&self.capture_instant_resolver);
 
         let join_handle = std::thread::Builder::new()
             .name(format!("v4l2-capture-{}", self.opened_device.id))
@@ -324,6 +335,7 @@ impl VideoCaptureStream for V4l2VideoCaptureStream {
                     height,
                     capture_fourcc,
                     failure_recorder,
+                    capture_instant_resolver,
                 );
             })
             .map_err(|e| Error::Configuration(format!("Failed to spawn capture thread: {}", e)))?;
@@ -515,6 +527,7 @@ fn capture_thread_loop(
     height: u32,
     fourcc: FourCC,
     failure_recorder: DeviceStreamFailureRecorder,
+    capture_instant_resolver: Arc<VideoCaptureInstantResolver>,
 ) {
     let record_that_capture_ended_on_its_own = |reason: String| {
         failure_recorder
@@ -919,6 +932,7 @@ fn capture_thread_loop(
         let mut v4l2_requeue_buf: Option<v4l::v4l_sys::v4l2_buffer> = None;
         let frame_sequence: u32;
         let input_ssbo_index: usize;
+        let capture_timestamp_ns: i64;
 
         if use_dmabuf {
             unsafe {
@@ -958,6 +972,14 @@ fn capture_thread_loop(
                     continue;
                 }
 
+                capture_timestamp_ns = capture_instant_resolver.resolve_capture_timestamp_ns(
+                    v4l2_buffer_capture_stamp(
+                        v4l2_buf.flags,
+                        v4l2_buf.timestamp.tv_sec,
+                        v4l2_buf.timestamp.tv_usec,
+                    ),
+                    MediaClock::now().as_nanos() as i64,
+                );
                 input_ssbo_index = v4l2_buf.index as usize;
                 frame_sequence = v4l2_buf.sequence;
                 v4l2_requeue_buf = Some(v4l2_buf);
@@ -984,6 +1006,14 @@ fn capture_thread_loop(
             if !is_capturing.load(Ordering::Acquire) {
                 break;
             }
+            capture_timestamp_ns = capture_instant_resolver.resolve_capture_timestamp_ns(
+                v4l2_buffer_capture_stamp(
+                    meta.flags.bits(),
+                    meta.timestamp.sec,
+                    meta.timestamp.usec,
+                ),
+                MediaClock::now().as_nanos() as i64,
+            );
             frame_sequence = meta.sequence;
             input_ssbo_index = ping_pong_index;
 
@@ -1200,6 +1230,7 @@ fn capture_thread_loop(
             width,
             height,
             color: cached_color,
+            capture_timestamp_ns,
         });
 
         // The pooled pixel buffer must stay alive until the hand-off has
@@ -1259,9 +1290,58 @@ fn capture_thread_loop(
     drop(camera_timeline);
 }
 
+/// What a dequeued V4L2 buffer says about when its frame was captured.
+///
+/// The buffer's timestamp flags name the clock its stamp was taken on; only
+/// `V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC` is the machine's monotonic clock. The
+/// others — `UNKNOWN`, and `COPY` from an output queue — say nothing the
+/// engine can join to its own clock.
+fn v4l2_buffer_capture_stamp(
+    buffer_flags: u32,
+    timestamp_seconds: i64,
+    timestamp_microseconds: i64,
+) -> DeviceReportedCaptureStamp {
+    let timestamp_clock = buffer_flags & v4l::buffer::Flags::TIMESTAMP_MASK.bits();
+    if timestamp_clock != v4l::buffer::Flags::TIMESTAMP_MONOTONIC.bits() {
+        return DeviceReportedCaptureStamp::OffTheMachineMonotonicClock;
+    }
+    DeviceReportedCaptureStamp::OnTheMachineMonotonicClock {
+        capture_timestamp_ns: timestamp_seconds
+            .saturating_mul(1_000_000_000)
+            .saturating_add(timestamp_microseconds.saturating_mul(1_000)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_buffer_flagged_monotonic_carries_its_stamp_in_nanoseconds() {
+        let flags = v4l::buffer::Flags::TIMESTAMP_MONOTONIC.bits()
+            | v4l::buffer::Flags::DONE.bits()
+            | v4l::buffer::Flags::MAPPED.bits();
+        assert_eq!(
+            v4l2_buffer_capture_stamp(flags, 541_560, 123_456),
+            DeviceReportedCaptureStamp::OnTheMachineMonotonicClock {
+                capture_timestamp_ns: 541_560_123_456_000
+            }
+        );
+    }
+
+    #[test]
+    fn a_buffer_whose_stamp_clock_is_unknown_or_copied_is_off_the_monotonic_clock() {
+        for timestamp_clock in [
+            v4l::buffer::Flags::TIMESTAMP_UNKNOWN,
+            v4l::buffer::Flags::TIMESTAMP_COPY,
+        ] {
+            assert_eq!(
+                v4l2_buffer_capture_stamp(timestamp_clock.bits(), 541_560, 123_456),
+                DeviceReportedCaptureStamp::OffTheMachineMonotonicClock,
+                "{timestamp_clock:?}"
+            );
+        }
+    }
 
     #[test]
     fn list_devices_succeeds_with_or_without_cameras() {

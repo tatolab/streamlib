@@ -21,6 +21,7 @@ pub mod texture_pool;
 pub(crate) mod texture_registration;
 mod texture_ring;
 mod time_context;
+mod video_capture_instant_resolver;
 mod video_device_backend;
 
 pub use audio_clock::{
@@ -62,6 +63,7 @@ pub use texture_ring::{
     TEXTURE_RING_SLOT_SURFACE_ID_MAX_BYTES, TextureRing, TextureRingInner, TextureRingSlot,
 };
 pub use time_context::TimeContext;
+pub use video_capture_instant_resolver::{DeviceReportedCaptureStamp, VideoCaptureInstantResolver};
 pub use video_device_backend::{
     CapturedVideoFrameFromDevice, CapturedVideoFrameHandOff, SharedVideoDeviceBackend,
     VideoCaptureDevice, VideoCaptureStream, VideoCaptureStreamFormat, VideoDeviceBackend,

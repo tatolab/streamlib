@@ -18,7 +18,6 @@ use streamlib::sdk::context::{
 };
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::iceoryx2::OutputWriter;
-use streamlib::sdk::media_clock::MediaClock;
 use streamlib::sdk::processors::ManualProcessor;
 use streamlib::sdk::schemars::JsonSchema;
 
@@ -29,6 +28,8 @@ use crate::video_frame::VideoFrame;
 /// encoding guardrail, and high-resolution use cases opt in by raising it.
 const DEFAULT_MAX_WIDTH: u32 = 1920;
 const DEFAULT_MAX_HEIGHT: u32 = 1080;
+
+const VIDEO_OUTPUT_PORT: &str = "video";
 
 /// Configuration for [`CameraSource`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default, JsonSchema)]
@@ -89,6 +90,10 @@ impl ManualProcessor for CameraSource::Processor {
         tracing::info!(
             camera = %self.camera_name,
             frames = self.frame_counter.load(Ordering::Relaxed),
+            future_capture_stamps_clamped_to_dequeue = self
+                .capture_stream
+                .as_ref()
+                .map(|stream| stream.future_capture_stamps_clamped_to_dequeue()),
             capture_device_failure = ?self
                 .capture_stream
                 .as_ref()
@@ -137,7 +142,8 @@ impl CameraSource::Processor {
 }
 
 /// The hand-off the capture stream delivers into: each frame counted, named
-/// as a `VideoFrame` bag and written on `video`.
+/// as a `VideoFrame` bag and written on `video` stamped with its capture
+/// instant.
 fn video_frame_hand_off_publishing_to(
     outputs: OutputWriter,
     frame_counter: Arc<AtomicU64>,
@@ -146,12 +152,14 @@ fn video_frame_hand_off_publishing_to(
 ) -> CapturedVideoFrameHandOff {
     Box::new(move |captured: CapturedVideoFrameFromDevice<'_>| {
         frame_counter.fetch_add(1, Ordering::Relaxed);
-        let frame = video_frame_bag_for(
-            &captured,
-            frames_per_second,
-            MediaClock::now().as_nanos() as i64,
-        );
-        if let Err(e) = outputs.write("video", &frame) {
+        let frame = video_frame_bag_for(&captured, frames_per_second);
+        // A bag carries two stamps — this payload's own and the envelope's —
+        // and consumers split across them: the encoder reads the payload, the
+        // MP4 sink and the mesh read the envelope. `write`'s implicit
+        // `MediaClock::now()` would put the publication instant on the
+        // envelope, so the capture instant is written to both.
+        if let Err(e) = outputs.write_with_timestamp(VIDEO_OUTPUT_PORT, &frame, frame.timestamp_ns)
+        {
             tracing::error!(camera = camera_name, error = %e, "failed to write frame");
         }
     })
@@ -160,13 +168,12 @@ fn video_frame_hand_off_publishing_to(
 fn video_frame_bag_for(
     captured: &CapturedVideoFrameFromDevice<'_>,
     frames_per_second: Option<u32>,
-    timestamp_ns: i64,
 ) -> VideoFrame {
     VideoFrame {
         surface_id: captured.published_pixel_buffer_frame_id.to_string(),
         width: captured.width,
         height: captured.height,
-        timestamp_ns,
+        timestamp_ns: captured.capture_timestamp_ns,
         fps: frames_per_second,
         // Present even when the device described no axis: an empty map is how
         // a camera's bag says every axis is unspecified.
@@ -202,6 +209,7 @@ mod tests {
             width: 1280,
             height: 720,
             color,
+            capture_timestamp_ns: 1_234_567,
         }
     }
 
@@ -212,6 +220,8 @@ mod tests {
         assert_eq!((config.max_width, config.max_height), (None, None));
     }
 
+    /// The bag names the instant the device captured the frame, not the
+    /// instant it was published.
     #[test]
     fn a_captured_frame_is_published_as_the_bag_a_camera_has_always_published() {
         let published_frame_id = a_published_frame_id();
@@ -226,7 +236,6 @@ mod tests {
                 },
             ),
             Some(30),
-            1_234_567,
         );
         assert_eq!(
             frame,
@@ -258,7 +267,6 @@ mod tests {
         let frame = video_frame_bag_for(
             &a_captured_frame(&published_frame_id, H273ColorVui::default()),
             None,
-            0,
         );
         let bag = rmp_serde::to_vec_named(&frame).expect("a frame serialises");
         let entries = decode_msgpack_named_map_entries(&bag);
