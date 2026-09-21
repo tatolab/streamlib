@@ -176,6 +176,10 @@ zbus = "5"
 # Linux-bound: `SCM_RIGHTS` fd passing is what the Apple arm replaces rather
 # than ports.
 streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.26.8" }
+# The video device seam's V4L2 arm: device enumeration, format negotiation and
+# the mmap capture stream. A kernel ABI binding — no user-space library is
+# linked, so the wheel's `DT_NEEDED` set does not grow.
+v4l = "0.14"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24"

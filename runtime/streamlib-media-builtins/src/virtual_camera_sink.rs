@@ -41,13 +41,13 @@ use streamlib::sdk::engine::host_rhi::{
     HostMappingWrittenByGpu, PipeWireCameraFramePresentation, PipeWireCameraNode,
     RhiCommandRecorder, VulkanAccess, VulkanStage,
 };
+use streamlib::sdk::engine::linux_v4l2_color::resolved_color_to_v4l2_color;
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ReactiveProcessor;
 use streamlib::sdk::rhi::{PixelFormat, RhiColorConverter, VulkanLayout};
 use streamlib::sdk::schemars::JsonSchema;
 
 use crate::cumulative_count_report_threshold::CumulativeCountReportThreshold;
-use crate::v4l2_color::resolved_color_to_v4l2_color;
 use crate::video_frame::VideoFrame;
 
 /// The name every log line and refusal carries.

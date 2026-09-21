@@ -216,6 +216,11 @@ pub mod sdk {
         #[cfg(target_os = "linux")]
         pub use streamlib_engine::linux_surface_share;
 
+        /// The resolved colour → V4L2 map, for a built-in that signals a V4L2
+        /// output device at `S_FMT`.
+        #[cfg(target_os = "linux")]
+        pub use streamlib_engine::linux_v4l2_color;
+
         /// Vulkan Video codec layer — engine-tier H.264/H.265
         /// encode/decode primitives (`SimpleEncoder`, `SimpleDecoder`,
         /// `Codec`, `Preset`, `EncodePacket`, codec configuration

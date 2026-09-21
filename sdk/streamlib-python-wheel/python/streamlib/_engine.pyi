@@ -93,12 +93,14 @@ __all__ = [
 
 @final
 class CameraSource:
-    """Native built-in block: live V4L2 camera capture (Linux).
+    """Native built-in block: live camera capture (V4L2 on Linux).
 
     A marker type — pass the class itself to `Runtime.add`
     (`rt.add(CameraSource, config={"device_id": "/dev/video0"})`); it is
     never instantiated and its per-frame path never enters the interpreter.
-    Camera→GPU transport auto-selects zero-copy DMA-BUF or CPU upload.
+    Camera→GPU transport auto-selects zero-copy DMA-BUF or CPU upload. A named
+    `device_id` that cannot be opened is refused at `setup()` by name, as is
+    every camera on a platform no capture backend serves yet.
     """
 
 @final

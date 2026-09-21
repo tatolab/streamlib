@@ -31,7 +31,6 @@ mp4-atom = "0.15"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 v4l = "0.14"
-uuid = { version = "1.11", features = ["v4"] }
 libc = { workspace = true }
 
 [features]

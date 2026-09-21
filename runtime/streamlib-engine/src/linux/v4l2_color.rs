@@ -1,9 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-#![cfg(target_os = "linux")]
-
-//! V4L2 colorspace ↔ [`ColorInfo`] translation.
+//! V4L2 colorspace ↔ H.273 translation.
 //!
 //! Mirrors FFmpeg's `libavcodec/v4l2_buffers.c` mapping plus the
 //! V4L2 `*_DEFAULT` resolution rules from `<linux/videodev2.h>`. V4L2
@@ -12,18 +10,19 @@
 //! `*_DEFAULT` (= 0), V4L2's `V4L2_MAP_*_DEFAULT` macros derive the value
 //! from `colorspace`. We do the same here.
 //!
-//! Each axis returns `Option<T>` — `None` is the canonical "unknown"
-//! representation. `V4L2_COLORSPACE_DEFAULT` and any unrecognized
-//! enumerant propagate as `None`.
+//! Each axis returns an `Option` of its H.273 enumerant — `None` is the
+//! canonical "unknown" representation. `V4L2_COLORSPACE_DEFAULT` and any
+//! unrecognized enumerant propagate as `None`.
 //!
 //! The inverse, [`resolved_color_to_v4l2_color`], is what a V4L2 *output*
 //! device is told at `S_FMT`: the fully resolved description the engine's
 //! kernel encodes with, every axis explicit, so readers decode the pixels
 //! that were written rather than a default derived from the colorspace.
 
-use streamlib::sdk::color::{MatrixId, PrimariesId, RangeId, ResolvedColorInfo, TransferId};
-
-use crate::video_frame::{ColorInfo, Matrix, Primaries, Range, Transfer};
+use crate::core::color::h273_color_vui::{matrix, primaries, transfer};
+use crate::core::color::{
+    H273ColorVui, MatrixId, PrimariesId, RangeId, ResolvedColorInfo, TransferId,
+};
 
 // V4L2 `colorspace` enumerants (from `<linux/videodev2.h>`).
 const V4L2_COLORSPACE_DEFAULT: u32 = 0;
@@ -63,21 +62,21 @@ const V4L2_QUANTIZATION_DEFAULT: u32 = 0;
 const V4L2_QUANTIZATION_FULL_RANGE: u32 = 1;
 const V4L2_QUANTIZATION_LIM_RANGE: u32 = 2;
 
-/// Translate a V4L2 colorspace report to a [`ColorInfo`]. Sub-fields
+/// Translate a V4L2 colorspace report to an [`H273ColorVui`]. Sub-fields
 /// reported as `*_DEFAULT` are resolved from the `colorspace` field per the
 /// V4L2 mapping macros; `V4L2_COLORSPACE_DEFAULT` propagates as `None`
 /// across the board.
-pub fn v4l2_color_to_color_info(
+pub fn v4l2_color_to_h273_color_vui(
     colorspace: u32,
     xfer_func: u32,
     ycbcr_enc: u32,
     quantization: u32,
-) -> ColorInfo {
-    ColorInfo {
+) -> H273ColorVui {
+    H273ColorVui {
         primaries: primaries_from_v4l2(colorspace),
         transfer: transfer_from_v4l2(xfer_func, colorspace),
         matrix: matrix_from_v4l2(ycbcr_enc, colorspace),
-        range: range_from_v4l2(quantization, colorspace),
+        full_range: full_range_from_v4l2(quantization, colorspace),
     }
 }
 
@@ -134,27 +133,27 @@ pub fn resolved_color_to_v4l2_color(info: &ResolvedColorInfo) -> V4l2PixFormatCo
     }
 }
 
-fn primaries_from_v4l2(colorspace: u32) -> Option<Primaries> {
+fn primaries_from_v4l2(colorspace: u32) -> Option<u8> {
     match colorspace {
         V4L2_COLORSPACE_DEFAULT => None,
-        V4L2_COLORSPACE_SMPTE170M | V4L2_COLORSPACE_BT878 => Some(Primaries::Smpte170m),
-        V4L2_COLORSPACE_SMPTE240M => Some(Primaries::Smpte240m),
-        V4L2_COLORSPACE_REC709 => Some(Primaries::Bt709),
-        V4L2_COLORSPACE_470_SYSTEM_M => Some(Primaries::Bt470M),
-        V4L2_COLORSPACE_470_SYSTEM_BG => Some(Primaries::Bt470Bg),
+        V4L2_COLORSPACE_SMPTE170M | V4L2_COLORSPACE_BT878 => Some(primaries::SMPTE170M),
+        V4L2_COLORSPACE_SMPTE240M => Some(primaries::SMPTE240M),
+        V4L2_COLORSPACE_REC709 => Some(primaries::BT709),
+        V4L2_COLORSPACE_470_SYSTEM_M => Some(primaries::BT470_M),
+        V4L2_COLORSPACE_470_SYSTEM_BG => Some(primaries::BT470_BG),
         // V4L2_COLORSPACE_JPEG is "shorthand for SRGB primaries + BT.601
         // matrix + full range" per kernel comment.
-        V4L2_COLORSPACE_JPEG | V4L2_COLORSPACE_SRGB => Some(Primaries::Bt709),
+        V4L2_COLORSPACE_JPEG | V4L2_COLORSPACE_SRGB => Some(primaries::BT709),
         // OPRGB (Adobe RGB) primaries have no H.273 code point; don't guess.
         V4L2_COLORSPACE_OPRGB => None,
-        V4L2_COLORSPACE_BT2020 => Some(Primaries::Bt2020),
-        V4L2_COLORSPACE_DCI_P3 => Some(Primaries::Smpte431),
+        V4L2_COLORSPACE_BT2020 => Some(primaries::BT2020),
+        V4L2_COLORSPACE_DCI_P3 => Some(primaries::SMPTE431),
         // RAW, anything unrecognized: don't guess.
         _ => None,
     }
 }
 
-fn transfer_from_v4l2(xfer_func: u32, colorspace: u32) -> Option<Transfer> {
+fn transfer_from_v4l2(xfer_func: u32, colorspace: u32) -> Option<u8> {
     let resolved = if xfer_func == V4L2_XFER_FUNC_DEFAULT {
         // V4L2_MAP_XFER_FUNC_DEFAULT: derive from colorspace.
         match colorspace {
@@ -170,19 +169,19 @@ fn transfer_from_v4l2(xfer_func: u32, colorspace: u32) -> Option<Transfer> {
         xfer_func
     };
     match resolved {
-        V4L2_XFER_FUNC_709 => Some(Transfer::Bt709),
-        V4L2_XFER_FUNC_SRGB => Some(Transfer::Srgb),
+        V4L2_XFER_FUNC_709 => Some(transfer::BT709),
+        V4L2_XFER_FUNC_SRGB => Some(transfer::SRGB),
         // OPRGB / DCI_P3 have no direct H.273 mapping; report None rather
         // than misrepresent.
         V4L2_XFER_FUNC_OPRGB | V4L2_XFER_FUNC_DCI_P3 => None,
-        V4L2_XFER_FUNC_SMPTE240M => Some(Transfer::Smpte240m),
-        V4L2_XFER_FUNC_NONE => Some(Transfer::Linear),
-        V4L2_XFER_FUNC_SMPTE2084 => Some(Transfer::Smpte2084),
+        V4L2_XFER_FUNC_SMPTE240M => Some(transfer::SMPTE240M),
+        V4L2_XFER_FUNC_NONE => Some(transfer::LINEAR),
+        V4L2_XFER_FUNC_SMPTE2084 => Some(transfer::SMPTE2084),
         _ => None,
     }
 }
 
-fn matrix_from_v4l2(ycbcr_enc: u32, colorspace: u32) -> Option<Matrix> {
+fn matrix_from_v4l2(ycbcr_enc: u32, colorspace: u32) -> Option<u8> {
     let resolved = if ycbcr_enc == V4L2_YCBCR_ENC_DEFAULT {
         // V4L2_MAP_YCBCR_ENC_DEFAULT: derive from colorspace.
         match colorspace {
@@ -196,16 +195,16 @@ fn matrix_from_v4l2(ycbcr_enc: u32, colorspace: u32) -> Option<Matrix> {
         ycbcr_enc
     };
     match resolved {
-        V4L2_YCBCR_ENC_601 | V4L2_YCBCR_ENC_XV601 | V4L2_YCBCR_ENC_SYCC => Some(Matrix::Smpte170m),
-        V4L2_YCBCR_ENC_709 | V4L2_YCBCR_ENC_XV709 => Some(Matrix::Bt709),
-        V4L2_YCBCR_ENC_BT2020 => Some(Matrix::Bt2020Ncl),
-        V4L2_YCBCR_ENC_BT2020_CONST_LUM => Some(Matrix::Bt2020Cl),
-        V4L2_YCBCR_ENC_SMPTE240M => Some(Matrix::Smpte240m),
+        V4L2_YCBCR_ENC_601 | V4L2_YCBCR_ENC_XV601 | V4L2_YCBCR_ENC_SYCC => Some(matrix::SMPTE170M),
+        V4L2_YCBCR_ENC_709 | V4L2_YCBCR_ENC_XV709 => Some(matrix::BT709),
+        V4L2_YCBCR_ENC_BT2020 => Some(matrix::BT2020_NCL),
+        V4L2_YCBCR_ENC_BT2020_CONST_LUM => Some(matrix::BT2020_CL),
+        V4L2_YCBCR_ENC_SMPTE240M => Some(matrix::SMPTE240M),
         _ => None,
     }
 }
 
-fn range_from_v4l2(quantization: u32, colorspace: u32) -> Option<Range> {
+fn full_range_from_v4l2(quantization: u32, colorspace: u32) -> Option<bool> {
     let resolved = if quantization == V4L2_QUANTIZATION_DEFAULT {
         // V4L2_MAP_QUANTIZATION_DEFAULT with is_rgb_or_hsv = false (this
         // path is YUV-only): full range for JPEG only; SRGB and OPRGB YUV
@@ -222,8 +221,8 @@ fn range_from_v4l2(quantization: u32, colorspace: u32) -> Option<Range> {
         quantization
     };
     match resolved {
-        V4L2_QUANTIZATION_FULL_RANGE => Some(Range::Full),
-        V4L2_QUANTIZATION_LIM_RANGE => Some(Range::Limited),
+        V4L2_QUANTIZATION_FULL_RANGE => Some(true),
+        V4L2_QUANTIZATION_LIM_RANGE => Some(false),
         _ => None,
     }
 }
@@ -234,32 +233,32 @@ mod tests {
 
     #[test]
     fn rec709_explicit_maps_to_bt709() {
-        let info = v4l2_color_to_color_info(
+        let info = v4l2_color_to_h273_color_vui(
             V4L2_COLORSPACE_REC709,
             V4L2_XFER_FUNC_709,
             V4L2_YCBCR_ENC_709,
             V4L2_QUANTIZATION_LIM_RANGE,
         );
-        assert_eq!(info.primaries, Some(Primaries::Bt709));
-        assert_eq!(info.transfer, Some(Transfer::Bt709));
-        assert_eq!(info.matrix, Some(Matrix::Bt709));
-        assert_eq!(info.range, Some(Range::Limited));
+        assert_eq!(info.primaries, Some(primaries::BT709));
+        assert_eq!(info.transfer, Some(transfer::BT709));
+        assert_eq!(info.matrix, Some(matrix::BT709));
+        assert_eq!(info.full_range, Some(false));
     }
 
     #[test]
     fn vivid_smpte170m_with_defaults_resolves_to_bt601_525() {
         // Vivid reports V4L2_COLORSPACE_SMPTE170M with everything else
         // default. SMPTE 170M is BT.601 525-line.
-        let info = v4l2_color_to_color_info(
+        let info = v4l2_color_to_h273_color_vui(
             V4L2_COLORSPACE_SMPTE170M,
             V4L2_XFER_FUNC_DEFAULT,
             V4L2_YCBCR_ENC_DEFAULT,
             V4L2_QUANTIZATION_DEFAULT,
         );
-        assert_eq!(info.primaries, Some(Primaries::Smpte170m));
-        assert_eq!(info.transfer, Some(Transfer::Bt709));
-        assert_eq!(info.matrix, Some(Matrix::Smpte170m));
-        assert_eq!(info.range, Some(Range::Limited));
+        assert_eq!(info.primaries, Some(primaries::SMPTE170M));
+        assert_eq!(info.transfer, Some(transfer::BT709));
+        assert_eq!(info.matrix, Some(matrix::SMPTE170M));
+        assert_eq!(info.full_range, Some(false));
     }
 
     #[test]
@@ -268,34 +267,34 @@ mod tests {
         // primaries/transfer + BT.601 matrix, and the YUV quantization
         // default is LIMITED — V4L2_MAP_QUANTIZATION_DEFAULT returns full
         // only for JPEG when the data is YCbCr.
-        let info = v4l2_color_to_color_info(
+        let info = v4l2_color_to_h273_color_vui(
             V4L2_COLORSPACE_SRGB,
             V4L2_XFER_FUNC_DEFAULT,
             V4L2_YCBCR_ENC_DEFAULT,
             V4L2_QUANTIZATION_DEFAULT,
         );
-        assert_eq!(info.primaries, Some(Primaries::Bt709));
-        assert_eq!(info.transfer, Some(Transfer::Srgb));
-        assert_eq!(info.matrix, Some(Matrix::Smpte170m));
-        assert_eq!(info.range, Some(Range::Limited));
+        assert_eq!(info.primaries, Some(primaries::BT709));
+        assert_eq!(info.transfer, Some(transfer::SRGB));
+        assert_eq!(info.matrix, Some(matrix::SMPTE170M));
+        assert_eq!(info.full_range, Some(false));
     }
 
     #[test]
     fn jpeg_with_defaults_is_the_only_full_range_yuv_default() {
-        let info = v4l2_color_to_color_info(
+        let info = v4l2_color_to_h273_color_vui(
             V4L2_COLORSPACE_JPEG,
             V4L2_XFER_FUNC_DEFAULT,
             V4L2_YCBCR_ENC_DEFAULT,
             V4L2_QUANTIZATION_DEFAULT,
         );
-        assert_eq!(info.range, Some(Range::Full));
+        assert_eq!(info.full_range, Some(true));
     }
 
     #[test]
     fn oprgb_primaries_are_not_misrepresented() {
         // OPRGB has no H.273 primaries code point; both axes stay unknown
         // rather than guessing BT.709.
-        let info = v4l2_color_to_color_info(
+        let info = v4l2_color_to_h273_color_vui(
             V4L2_COLORSPACE_OPRGB,
             V4L2_XFER_FUNC_DEFAULT,
             V4L2_YCBCR_ENC_DEFAULT,
@@ -303,26 +302,26 @@ mod tests {
         );
         assert_eq!(info.primaries, None);
         assert_eq!(info.transfer, None);
-        assert_eq!(info.range, Some(Range::Limited));
+        assert_eq!(info.full_range, Some(false));
     }
 
     #[test]
     fn bt2020_with_defaults_resolves_to_bt2020_ncl() {
-        let info = v4l2_color_to_color_info(
+        let info = v4l2_color_to_h273_color_vui(
             V4L2_COLORSPACE_BT2020,
             V4L2_XFER_FUNC_DEFAULT,
             V4L2_YCBCR_ENC_DEFAULT,
             V4L2_QUANTIZATION_DEFAULT,
         );
-        assert_eq!(info.primaries, Some(Primaries::Bt2020));
-        assert_eq!(info.transfer, Some(Transfer::Bt709));
-        assert_eq!(info.matrix, Some(Matrix::Bt2020Ncl));
-        assert_eq!(info.range, Some(Range::Limited));
+        assert_eq!(info.primaries, Some(primaries::BT2020));
+        assert_eq!(info.transfer, Some(transfer::BT709));
+        assert_eq!(info.matrix, Some(matrix::BT2020_NCL));
+        assert_eq!(info.full_range, Some(false));
     }
 
     #[test]
     fn colorspace_default_propagates_none_on_every_axis() {
-        let info = v4l2_color_to_color_info(
+        let info = v4l2_color_to_h273_color_vui(
             V4L2_COLORSPACE_DEFAULT,
             V4L2_XFER_FUNC_DEFAULT,
             V4L2_YCBCR_ENC_DEFAULT,
@@ -331,33 +330,23 @@ mod tests {
         assert_eq!(info.primaries, None);
         assert_eq!(info.transfer, None);
         assert_eq!(info.matrix, None);
-        assert_eq!(info.range, None);
+        assert_eq!(info.full_range, None);
     }
 
     #[test]
     fn bt2020_with_pq_transfer_resolves_to_smpte2084() {
         // HDR10 source: BT.2020 primaries + PQ transfer + BT.2020 NCL
         // matrix + limited range.
-        let info = v4l2_color_to_color_info(
+        let info = v4l2_color_to_h273_color_vui(
             V4L2_COLORSPACE_BT2020,
             V4L2_XFER_FUNC_SMPTE2084,
             V4L2_YCBCR_ENC_BT2020,
             V4L2_QUANTIZATION_LIM_RANGE,
         );
-        assert_eq!(info.primaries, Some(Primaries::Bt2020));
-        assert_eq!(info.transfer, Some(Transfer::Smpte2084));
-        assert_eq!(info.matrix, Some(Matrix::Bt2020Ncl));
-        assert_eq!(info.range, Some(Range::Limited));
-    }
-
-    #[test]
-    fn default_color_info_is_all_none() {
-        // ColorInfo::default() must be the semantic "unknown" state.
-        let info = ColorInfo::default();
-        assert_eq!(info.primaries, None);
-        assert_eq!(info.transfer, None);
-        assert_eq!(info.matrix, None);
-        assert_eq!(info.range, None);
+        assert_eq!(info.primaries, Some(primaries::BT2020));
+        assert_eq!(info.transfer, Some(transfer::SMPTE2084));
+        assert_eq!(info.matrix, Some(matrix::BT2020_NCL));
+        assert_eq!(info.full_range, Some(false));
     }
 
     /// The inverse map round-trips through the forward one for every
@@ -365,7 +354,7 @@ mod tests {
     /// what a StreamLib camera reading that device resolves back to.
     #[test]
     fn resolved_color_to_v4l2_round_trips_through_the_forward_map() {
-        use streamlib::sdk::color::ColorSpaceKind;
+        use crate::core::color::ColorSpaceKind;
         let cases = [
             ResolvedColorInfo {
                 primaries: PrimariesId::Bt709,
@@ -394,7 +383,7 @@ mod tests {
         ];
         for info in cases {
             let fields = resolved_color_to_v4l2_color(&info);
-            let back = v4l2_color_to_color_info(
+            let back = v4l2_color_to_h273_color_vui(
                 fields.colorspace,
                 fields.xfer_func,
                 fields.ycbcr_enc,
