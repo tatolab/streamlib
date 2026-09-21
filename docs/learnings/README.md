@@ -136,3 +136,10 @@ Avoid the two failure modes:
   HLSL affordance, and GLSL has no selectable entry point at all. Refuse a
   non-`main` entry point at construction rather than letting the mismatch
   surface as a Vulkan pipeline-creation error
+- [@docs/learnings/iosurface-in-use-tracks-ports-and-use-counts.md](iosurface-in-use-tracks-ports-and-use-counts.md) —
+  `IOSurfaceIsInUse` is true for an outstanding Mach port or a use count in any process, not
+  for a cached `IOSurfaceRef`; a killed holder's use count clears promptly but asynchronously,
+  up to a few hundred microseconds after `waitpid`
+- [@docs/learnings/iosurface-first-call-scans-the-executables-directory.md](iosurface-first-call-scans-the-executables-directory.md) —
+  The first IOSurface call in a `cargo test` binary takes ~3 s: IOSurface reads the main bundle's
+  info dictionary, and an unbundled executable's bundle is its directory, which CFBundle lists
