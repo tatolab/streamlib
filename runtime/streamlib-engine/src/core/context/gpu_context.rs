@@ -1753,13 +1753,12 @@ impl GpuContext {
     /// drop it when teardown runs.
     ///
     /// The buffer carries `STORAGE_BUFFER | TRANSFER_SRC | TRANSFER_DST`
-    /// usage and DMA-BUF export flags; compute kernels bind it via
-    /// [`crate::vulkan::rhi::VulkanComputeKernel::set_storage_buffer`]
-    /// (which accepts any
-    /// [`crate::vulkan::rhi::VulkanStorageBufferBinding`], including
-    /// [`crate::core::rhi::StorageBuffer`]). `byte_size` must fit in
-    /// `u32` (4 GB cap); larger SSBOs are not a current consumer need.
-    #[cfg(target_os = "linux")]
+    /// usage, plus DMA-BUF export flags on Linux (macOS has no DMA-BUF and
+    /// allocates it unexported); compute kernels bind it via
+    /// [`crate::vulkan::rhi::VulkanComputeKernel::set_storage_buffer_storage`].
+    /// `byte_size` must fit in `u32` (4 GB cap); larger SSBOs are not a
+    /// current consumer need.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn acquire_storage_buffer(
         &self,
         byte_size: u64,
@@ -1870,10 +1869,10 @@ impl GpuContext {
     }
 
     /// A color converter of the caller's own — the same `(src, dst)` kernel
-    /// [`Self::color_converter`] would hand out, built fresh and never
+    /// the cached `color_converter` would hand out, built fresh and never
     /// placed in the cache, so a processor recording its dispatch from its
     /// own thread shares no pending state with any other.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn create_color_converter(
         &self,
         src: PixelFormat,
@@ -1925,7 +1924,7 @@ impl GpuContext {
     /// reinvented inline pre-#751. See
     /// [`RhiCommandRecorder`](crate::vulkan::rhi::RhiCommandRecorder)
     /// for the per-frame usage protocol.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn create_command_recorder(
         &self,
         label: &str,
@@ -1937,6 +1936,44 @@ impl GpuContext {
         );
         let vulkan_device = &self.device.inner;
         crate::vulkan::rhi::RhiCommandRecorder::new(vulkan_device, label)
+    }
+
+    /// A timeline semaphore for this process alone — signaled by a recorder
+    /// submit, waited on the host — that is never exported. Backs
+    /// [`GpuContextFullAccess::create_timeline_semaphore`].
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[tracing::instrument(
+        level = "debug",
+        skip(self),
+        fields(rhi_op = "create_timeline_semaphore")
+    )]
+    pub fn create_timeline_semaphore(
+        &self,
+        initial_value: u64,
+    ) -> Result<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>> {
+        let device = self.device.inner.device();
+        let semaphore =
+            crate::vulkan::rhi::HostVulkanTimelineSemaphore::new(device, initial_value)?;
+        Ok(Arc::new(semaphore))
+    }
+
+    /// Import an IOSurface's memory as a storage buffer, zero-copy, retaining
+    /// the surface for the buffer's life. Refused, naming the reason, when
+    /// the device cannot import host memory, the surface's base address is
+    /// off the import alignment, or the driver declines (MoltenVK before
+    /// 1.4.1 does). Backs
+    /// [`GpuContextFullAccess::import_iosurface_as_storage_buffer`].
+    #[cfg(target_os = "macos")]
+    #[tracing::instrument(
+        level = "debug",
+        skip(self, iosurface),
+        fields(rhi_op = "import_iosurface_as_storage_buffer")
+    )]
+    pub fn import_iosurface_as_storage_buffer(
+        &self,
+        iosurface: &objc2_io_surface::IOSurfaceRef,
+    ) -> Result<crate::vulkan::rhi::ImportedIOSurfaceStorageBuffer> {
+        crate::vulkan::rhi::ImportedIOSurfaceStorageBuffer::import(&self.device.inner, iosurface)
     }
 
     /// Import a caller-owned host range for GPU writes — the loopback
@@ -3927,6 +3964,16 @@ impl GpuContextFullAccess {
             .create_exportable_timeline_semaphore(initial_value)
     }
 
+    /// A non-exportable timeline semaphore for host-side waits on this
+    /// process's own submits. See [`GpuContext::create_timeline_semaphore`].
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn create_timeline_semaphore(
+        &self,
+        initial_value: u64,
+    ) -> Result<std::sync::Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>> {
+        self.host_inner().create_timeline_semaphore(initial_value)
+    }
+
     /// Build a swapchain-backed [`crate::vulkan::rhi::VulkanPresentTarget`]
     /// on a window's surface source.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -4005,7 +4052,7 @@ impl GpuContextFullAccess {
 
     /// Acquire a HOST_VISIBLE storage buffer for CPU→GPU SSBO upload.
     /// See [`GpuContext::acquire_storage_buffer`].
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn acquire_storage_buffer(
         &self,
         byte_size: u64,
@@ -4319,7 +4366,7 @@ impl GpuContextFullAccess {
 
     /// A color converter of the caller's own. See
     /// [`GpuContext::create_color_converter`](crate::core::context::GpuContext::create_color_converter).
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn create_color_converter(
         &self,
         src: PixelFormat,
@@ -4422,12 +4469,25 @@ impl GpuContextFullAccess {
     /// construction is excluded from the consumer-rhi carve-out). Subprocess
     /// consumers that need cross-process recording must escalate
     /// dispatch through the escalate IPC.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn create_command_recorder(
         &self,
         label: &str,
     ) -> Result<crate::vulkan::rhi::RhiCommandRecorder> {
         self.host_inner().create_command_recorder(label)
+    }
+
+    /// Import an IOSurface's memory as a storage buffer, zero-copy. See
+    /// [`GpuContext::import_iosurface_as_storage_buffer`].
+    ///
+    /// FullAccess-only: every import creates a buffer and imports memory.
+    #[cfg(target_os = "macos")]
+    pub fn import_iosurface_as_storage_buffer(
+        &self,
+        iosurface: &objc2_io_surface::IOSurfaceRef,
+    ) -> Result<crate::vulkan::rhi::ImportedIOSurfaceStorageBuffer> {
+        self.host_inner()
+            .import_iosurface_as_storage_buffer(iosurface)
     }
 
     /// Import a caller-owned host range for GPU writes. See

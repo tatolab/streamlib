@@ -136,6 +136,9 @@ objc2-io-surface.workspace = true
 objc2-core-foundation.workspace = true
 objc2-foundation.workspace = true
 objc2-av-foundation = { workspace = true, features = ["objc2-core-media", "objc2-core-video"] }
+# CoreVideo's IOSurface-backed pixel buffers — the surfaces the IOSurface
+# storage-buffer import is proven on.
+objc2-core-video = { workspace = true, features = ["objc2-io-surface"] }
 objc2-app-kit.workspace = true
 objc2-quartz-core.workspace = true
 objc2-core-text.workspace = true

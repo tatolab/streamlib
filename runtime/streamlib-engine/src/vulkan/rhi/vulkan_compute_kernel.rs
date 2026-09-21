@@ -86,7 +86,8 @@ struct PendingState {
 enum BindingResource {
     Buffer {
         buffer: vk::Buffer,
-        size: vk::DeviceSize,
+        offset: vk::DeviceSize,
+        range: vk::DeviceSize,
     },
     /// `COMBINED_IMAGE_SAMPLER` write — `sampler` may be `VK_NULL_HANDLE`
     /// when the descriptor-set layout slot uses an immutable sampler
@@ -359,12 +360,42 @@ impl VulkanComputeKernelInner {
         binding: u32,
         buffer: &(impl super::VulkanStorageBindable + ?Sized),
     ) -> Result<()> {
+        self.set_storage_buffer_from_byte_offset(binding, buffer, 0)
+    }
+
+    /// Bind the part of a storage buffer from `byte_offset` to its end at
+    /// `binding`, so the shader's byte 0 is the buffer's `byte_offset`.
+    /// Refused unless `byte_offset` is a multiple of the device's
+    /// `minStorageBufferOffsetAlignment` and inside the buffer.
+    pub(crate) fn set_storage_buffer_from_byte_offset(
+        &self,
+        binding: u32,
+        buffer: &(impl super::VulkanStorageBindable + ?Sized),
+        byte_offset: vk::DeviceSize,
+    ) -> Result<()> {
         self.expect_kind(binding, ComputeBindingKind::StorageBuffer)?;
+        let alignment = self.vulkan_device.min_storage_buffer_offset_alignment();
+        if alignment != 0 && !byte_offset.is_multiple_of(alignment) {
+            return Err(Error::Configuration(format!(
+                "Compute kernel '{}': storage-buffer offset {byte_offset} at binding {binding} is \
+                 not a multiple of the device's minStorageBufferOffsetAlignment {alignment}",
+                self.label
+            )));
+        }
+        let buffer_size = buffer.vk_buffer_size();
+        if byte_offset >= buffer_size {
+            return Err(Error::Configuration(format!(
+                "Compute kernel '{}': storage-buffer offset {byte_offset} at binding {binding} is \
+                 past the end of the {buffer_size}-byte buffer",
+                self.label
+            )));
+        }
         self.pending.lock().bindings.insert(
             binding,
             BindingResource::Buffer {
                 buffer: buffer.vk_buffer(),
-                size: buffer.vk_buffer_size(),
+                offset: byte_offset,
+                range: buffer_size - byte_offset,
             },
         );
         Ok(())
@@ -387,7 +418,8 @@ impl VulkanComputeKernelInner {
             binding,
             BindingResource::Buffer {
                 buffer: buffer.vk_buffer(),
-                size: buffer.vk_buffer_size(),
+                offset: 0,
+                range: buffer.vk_buffer_size(),
             },
         );
         Ok(())
@@ -770,13 +802,20 @@ impl VulkanComputeKernelInner {
         for spec in &self.bindings {
             let res = pending.bindings.get(&spec.binding).expect("checked above");
             match (spec.kind, res) {
-                (ComputeBindingKind::StorageBuffer, BindingResource::Buffer { buffer, size }) => {
+                (
+                    ComputeBindingKind::StorageBuffer,
+                    BindingResource::Buffer {
+                        buffer,
+                        offset,
+                        range,
+                    },
+                ) => {
                     let idx = buffer_infos.len();
                     buffer_infos.push(
                         vk::DescriptorBufferInfo::builder()
                             .buffer(*buffer)
-                            .offset(0)
-                            .range(*size)
+                            .offset(*offset)
+                            .range(*range)
                             .build(),
                     );
                     slots.push(Slot {
@@ -786,13 +825,20 @@ impl VulkanComputeKernelInner {
                         image_idx: None,
                     });
                 }
-                (ComputeBindingKind::UniformBuffer, BindingResource::Buffer { buffer, size }) => {
+                (
+                    ComputeBindingKind::UniformBuffer,
+                    BindingResource::Buffer {
+                        buffer,
+                        offset,
+                        range,
+                    },
+                ) => {
                     let idx = buffer_infos.len();
                     buffer_infos.push(
                         vk::DescriptorBufferInfo::builder()
                             .buffer(*buffer)
-                            .offset(0)
-                            .range(*size)
+                            .offset(*offset)
+                            .range(*range)
                             .build(),
                     );
                     slots.push(Slot {
@@ -1016,6 +1062,33 @@ impl VulkanComputeKernel {
         buffer: &crate::core::rhi::StorageBuffer,
     ) -> Result<()> {
         self.host_inner().set_storage_buffer(binding, buffer)
+    }
+
+    /// Bind a [`crate::core::rhi::StorageBuffer`] from `byte_offset` to its
+    /// end at `binding`. See
+    /// [`VulkanComputeKernelInner::set_storage_buffer_from_byte_offset`].
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub(crate) fn set_storage_buffer_storage_from_byte_offset(
+        &self,
+        binding: u32,
+        buffer: &crate::core::rhi::StorageBuffer,
+        byte_offset: u64,
+    ) -> Result<()> {
+        self.host_inner()
+            .set_storage_buffer_from_byte_offset(binding, buffer, byte_offset)
+    }
+
+    /// Bind a [`crate::core::rhi::PixelBuffer`] from `byte_offset` to its end
+    /// at `binding`. See
+    /// [`VulkanComputeKernelInner::set_storage_buffer_from_byte_offset`].
+    pub(crate) fn set_storage_buffer_pixel_from_byte_offset(
+        &self,
+        binding: u32,
+        buffer: &crate::core::rhi::PixelBuffer,
+        byte_offset: u64,
+    ) -> Result<()> {
+        self.host_inner()
+            .set_storage_buffer_from_byte_offset(binding, buffer, byte_offset)
     }
 
     /// Bind a [`crate::core::rhi::UniformBuffer`] (UBO) at `binding`.

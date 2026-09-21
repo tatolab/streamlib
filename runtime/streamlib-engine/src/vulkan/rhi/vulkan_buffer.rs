@@ -113,8 +113,9 @@ pub struct HostVulkanBuffer {
     buffer: vk::Buffer,
     /// VMA allocation (HOST_VISIBLE | DEDICATED_MEMORY for DMA-BUF export).
     allocation: Option<vma::Allocation>,
-    /// Imported device memory for DMA-BUF import path (VMA cannot import external memory).
-    #[cfg(target_os = "linux")]
+    /// Imported device memory for the DMA-BUF and host-pointer import paths
+    /// (VMA cannot import external memory).
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     imported_memory: Option<vk::DeviceMemory>,
     /// Whether this buffer was imported from a DMA-BUF fd.
     #[cfg(target_os = "linux")]
@@ -123,8 +124,13 @@ pub struct HostVulkanBuffer {
     /// through `VK_EXT_external_memory_host`. Never mapped by the driver:
     /// `mapped_ptr` is the caller's own pointer, and teardown frees the
     /// `VkDeviceMemory` without unmapping.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     imported_from_host_pointer: bool,
+    /// Whatever owns the pages a host-pointer import aliases, released only
+    /// after the importing `VkDeviceMemory` is freed. `None` when the caller
+    /// keeps the range alive itself, and on every other allocation path.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    imported_host_range_owner: Option<Box<dyn Send + Sync>>,
     /// Whether this buffer was allocated from the OPAQUE_FD export pool
     /// (vs the DMA_BUF export pool). Determines which `handle_type` is
     /// passed to `vkGetMemoryFdKHR` on export.
@@ -287,12 +293,14 @@ impl HostVulkanBuffer {
             vulkan_device: Arc::clone(vulkan_device),
             buffer,
             allocation: Some(allocation),
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             imported_memory: None,
             #[cfg(target_os = "linux")]
             imported_from_dma_buf: false,
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             imported_from_host_pointer: false,
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            imported_host_range_owner: None,
             #[cfg(target_os = "linux")]
             is_opaque_fd_export: false,
             mapped_ptr,
@@ -640,6 +648,7 @@ impl HostVulkanBuffer {
             imported_memory: None,
             imported_from_dma_buf: false,
             imported_from_host_pointer: false,
+            imported_host_range_owner: None,
             is_opaque_fd_export: true,
             mapped_ptr,
             extra_imported_planes: Vec::new(),
@@ -718,6 +727,7 @@ impl HostVulkanBuffer {
             imported_memory: None,
             imported_from_dma_buf: false,
             imported_from_host_pointer: false,
+            imported_host_range_owner: None,
             is_opaque_fd_export: true,
             mapped_ptr: std::ptr::null_mut(),
             extra_imported_planes: Vec::new(),
@@ -816,6 +826,7 @@ impl HostVulkanBuffer {
             imported_memory: None,
             imported_from_dma_buf: false,
             imported_from_host_pointer: false,
+            imported_host_range_owner: None,
             is_opaque_fd_export: false,
             mapped_ptr,
             extra_imported_planes: Vec::new(),
@@ -1009,6 +1020,7 @@ impl HostVulkanBuffer {
             imported_memory: Some(plane0.memory),
             imported_from_dma_buf: true,
             imported_from_host_pointer: false,
+            imported_host_range_owner: None,
             is_opaque_fd_export: false,
             mapped_ptr: plane0.mapped_ptr,
             extra_imported_planes: imported,
@@ -1055,6 +1067,7 @@ impl HostVulkanBuffer {
             imported_memory: Some(plane.memory),
             imported_from_dma_buf: true,
             imported_from_host_pointer: false,
+            imported_host_range_owner: None,
             is_opaque_fd_export: false,
             mapped_ptr: plane.mapped_ptr,
             extra_imported_planes: Vec::new(),
@@ -1063,22 +1076,26 @@ impl HostVulkanBuffer {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl HostVulkanBuffer {
     /// Import a caller-owned host range as a `STORAGE_BUFFER` through
-    /// `VK_EXT_external_memory_host`, so a compute pass writes the range
-    /// in place.
+    /// `VK_EXT_external_memory_host`, so a compute pass reads or writes the
+    /// range in place.
     ///
     /// `host_ptr` and `byte_len` must both be multiples of
     /// [`HostVulkanDevice::min_imported_host_pointer_alignment`], and the
     /// range must outlive the returned buffer — the driver pins it, it
-    /// never copies it. Refused by name when the extension is absent or
-    /// the driver declines this range (a mapping of another driver's
-    /// device memory is the case the caller has to expect).
+    /// never copies it. Pass the range's owner as `host_range_owner` and the
+    /// buffer keeps it alive itself, clones included; pass `None` only when
+    /// the caller guarantees the range outlives the buffer. Refused by name
+    /// when the extension is absent or the driver declines this range (a
+    /// mapping of another driver's device memory is the case the caller has
+    /// to expect).
     pub fn from_imported_host_pointer_as_storage_buffer(
         vulkan_device: &Arc<HostVulkanDevice>,
         host_ptr: *mut u8,
         byte_len: u64,
+        host_range_owner: Option<Box<dyn Send + Sync>>,
     ) -> Result<Self> {
         use vulkanalia::vk::ExtExternalMemoryHostExtensionDeviceCommands as _;
 
@@ -1161,15 +1178,22 @@ impl HostVulkanBuffer {
             buffer,
             allocation: None,
             imported_memory: Some(memory),
+            #[cfg(target_os = "linux")]
             imported_from_dma_buf: false,
             imported_from_host_pointer: true,
+            imported_host_range_owner: host_range_owner,
+            #[cfg(target_os = "linux")]
             is_opaque_fd_export: false,
             mapped_ptr: host_ptr,
+            #[cfg(target_os = "linux")]
             extra_imported_planes: Vec::new(),
             size: byte_len,
         })
     }
+}
 
+#[cfg(target_os = "linux")]
+impl HostVulkanBuffer {
     /// Allocate a `STORAGE_BUFFER` the CPU reads back after the GPU writes
     /// it — HOST_VISIBLE, persistently mapped, and on a HOST_CACHED type
     /// wherever the device has one. Never the sequential-write allocation
@@ -1271,7 +1295,7 @@ fn teardown_imported_plane(vulkan_device: &Arc<HostVulkanDevice>, plane: VulkanI
 
 impl Drop for HostVulkanBuffer {
     fn drop(&mut self) {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         if self.imported_from_host_pointer {
             unsafe {
                 self.vulkan_device
@@ -1281,6 +1305,9 @@ impl Drop for HostVulkanBuffer {
             if let Some(memory) = self.imported_memory.take() {
                 self.vulkan_device.free_imported_memory(memory);
             }
+            // VK_EXT_external_memory_host needs the range valid for as long
+            // as the memory importing it exists, so the owner goes last.
+            drop(self.imported_host_range_owner.take());
             return;
         }
         #[cfg(target_os = "linux")]
