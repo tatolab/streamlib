@@ -160,10 +160,13 @@ boot-session UUID (`/proc/sys/kernel/random/boot_id`, `kern.bootsessionuuid`), t
 alone, so a container and its host share one. It rides every mesh message's attachment,
 renders on every link in `graph` as `stamp_clock_identity`, and is read by
 `inbound_link_stamp_clock_identity(port, link)` against
-`this_machines_stamp_clock_identity()`. Two stamps are comparable exactly when their links
-name the same identity. _Avoid_: "host identity" (that is the boot id **plus** the
-pid-namespace inode, and it settles duplicate runtime names, never stamps), "boot id"
-unqualified, "clock id", "epoch".
+`this_machines_stamp_clock_identity()`. Two stamps are comparable when their links name the
+same identity **and** neither stamp was restated by a relay: what a link names is the clock
+of the machine that last wrote the bag, not necessarily of the machine that took the reading,
+so a processor restating an upstream stamp on a local output makes its link name this machine
+confidently and wrongly. That is the known relay gap, and it is the common-clock OPEN's to
+close. _Avoid_: "host identity" (that is the boot id **plus** the pid-namespace inode, and it
+settles duplicate runtime names, never stamps), "boot id" unqualified, "clock id", "epoch".
 
 **Wall clock**: UNIX time — permitted only on the three observability surfaces (log
 `host_ts`, log `source_ts`, log file naming), because they correlate with the outside
