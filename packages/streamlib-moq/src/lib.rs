@@ -32,7 +32,9 @@ mod moq_track_sample;
 mod streamlib_bag_object;
 mod transport_stack;
 
-use crate::delivery_deadline::{MoqPublisherDeliveryDeadline, UplinkBacklogOnOneTrack};
+use crate::delivery_deadline::{
+    MoqPublisherDeliveryDeadline, TheClockATracksStampsAreTakenOn, UplinkBacklogOnOneTrack,
+};
 use crate::encoded_media_sample::{EncodedAudioPacket, EncodedMediaSample, EncodedVideoAccessUnit};
 use crate::error::MoqExtensionError;
 use crate::monotonic_clock::monotonic_now_ns;
@@ -102,6 +104,35 @@ impl MoqBroadcastPublishingSession {
         python.detach(|| {
             self.locked_publisher()?
                 .declare_tracks(inbound_link_names, track_names)
+        })?;
+        Ok(())
+    }
+
+    /// Say which machine's clock one track's bags are stamped on, as its link
+    /// reported when the track opened.
+    ///
+    /// The delivery deadline ages a stamp against this process's own monotonic
+    /// clock, so a stamp taken on another machine's — a bag that crossed the
+    /// runtime mesh — has no age here at any offset. A track this is not told
+    /// about, or told `false` about, is never shed for its own stamp; its uplink
+    /// backlog is still read, off the instant each object reached the transport.
+    fn note_whether_a_tracks_stamps_are_on_this_publishers_clock(
+        &self,
+        python: Python<'_>,
+        inbound_link_name: &str,
+        the_stamps_are_on_this_publishers_clock: bool,
+    ) -> PyResult<()> {
+        let the_clock_its_stamps_are_taken_on = if the_stamps_are_on_this_publishers_clock {
+            TheClockATracksStampsAreTakenOn::ThisPublishersOwn
+        } else {
+            TheClockATracksStampsAreTakenOn::AnotherMachines
+        };
+        python.detach(|| {
+            self.locked_publisher()?
+                .note_the_clock_a_tracks_stamps_are_taken_on(
+                    inbound_link_name,
+                    the_clock_its_stamps_are_taken_on,
+                )
         })?;
         Ok(())
     }

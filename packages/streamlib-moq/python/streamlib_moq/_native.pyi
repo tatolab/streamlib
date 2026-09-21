@@ -79,6 +79,29 @@ class MoqBroadcastPublishingSession:
         altogether, whose names are a subscriber's interop contract.
         """
 
+    def note_whether_a_tracks_stamps_are_on_this_publishers_clock(
+        self,
+        inbound_link_name: str,
+        the_stamps_are_on_this_publishers_clock: bool,
+    ) -> None:
+        """Say which machine's clock one track's bags are stamped on.
+
+        The delivery deadline ages a stamp against this process's own monotonic
+        clock, whose epoch is this machine's boot — so a stamp taken on another
+        machine's clock, which is what a bag that crossed the runtime mesh
+        carries, has no age here at any offset.
+
+        A track this is not told about, or told `False` about, is never shed for
+        its own stamp however late it reads. Its uplink backlog is still read,
+        off the instant each of its objects reached the transport rather than the
+        media stamp, so the arm that sees a stalled uplink survives the hop.
+
+        Read the answer when a track opens and say it before that track's first
+        publish — asking the runtime costs a round trip, and the answer changes
+        only when a peer returns from a fresh boot. Refused by name for a link
+        this broadcast does not carry.
+        """
+
     def publish_video_access_unit(
         self,
         inbound_link_name: str,
