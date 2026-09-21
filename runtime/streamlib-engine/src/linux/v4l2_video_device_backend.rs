@@ -192,8 +192,9 @@ struct V4l2VideoCaptureStream {
 
 /// The thread one delivery runs on, with the flag that asks it to stop.
 ///
-/// Minted per delivery, so a thread that had to be detached can never be
-/// revived by a later start.
+/// Minted per delivery, so a stopped thread is never revived by a later start,
+/// and held until the thread is joined: one still running past its stop's
+/// grace window keeps the stream from starting a second delivery beside it.
 struct V4l2CaptureThread {
     is_capturing: Arc<AtomicBool>,
     join_handle: JoinHandle<()>,
@@ -344,7 +345,7 @@ impl VideoCaptureStream for V4l2VideoCaptureStream {
     }
 
     fn stop_delivering(&mut self) -> Result<()> {
-        let Some(capture_thread) = self.capture_thread.take() else {
+        let Some(capture_thread) = self.capture_thread.as_ref() else {
             return Ok(());
         };
         capture_thread.is_capturing.store(false, Ordering::Release);
@@ -352,20 +353,24 @@ impl VideoCaptureStream for V4l2VideoCaptureStream {
         // Bounded wait: the capture thread can be inside a long timeline wait
         // or a V4L2 dequeue when stop arrives; both exit promptly under normal
         // conditions but a stalled GPU / driver state can stretch them out.
-        // Detaching after a 2 s grace window keeps the runtime's shutdown
-        // chain moving; the detached thread is reaped at process exit.
+        // Giving up after a 2 s grace window keeps the runtime's shutdown
+        // chain moving. The thread stays held until it is joined, so a later
+        // start waits on it again rather than opening a delivery beside it; one
+        // still running at process exit is reaped there.
         let deadline = Instant::now() + Duration::from_secs(2);
         while !capture_thread.join_handle.is_finished() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
         if !capture_thread.join_handle.is_finished() {
             return Err(Error::Runtime(format!(
-                "V4L2 camera {}: capture thread did not exit within 2s and was detached; \
-                 a frame it was already converting may still be handed off",
+                "V4L2 camera {}: capture thread did not exit within 2s; it still holds the \
+                 device's buffers, so this stream will not deliver again until it exits",
                 self.opened_device.name
             )));
         }
-        let _ = capture_thread.join_handle.join();
+        if let Some(finished_capture_thread) = self.capture_thread.take() {
+            let _ = finished_capture_thread.join_handle.join();
+        }
         Ok(())
     }
 }
