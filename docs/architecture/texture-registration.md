@@ -491,9 +491,9 @@ When a new field lands on `TextureRegistration`:
   the pre-pivot `camera-python-display` example, which is retired — host-side
   surface pre-registration went with it, and a Python processor now acquires
   its own textures.
-- **In-tree producer**: the video device seam's V4L2 arm in
-  `runtime/streamlib-engine/src/linux/v4l2_video_device_backend.rs`, which
-  `CameraSource` captures through.
+- **In-tree producer**: `assign_texture_handle_id` and its caller in
+  `runtime/streamlib-engine/src/core/compiler/compiler_ops/subprocess_escalate.rs`,
+  the escalate path that hands a helper process a pooled texture.
 - **Adapter-scope sibling**: `SurfaceState` in
   `adapters/streamlib-adapter-vulkan/src/state.rs` (and the same-shape
   opengl + cuda + cpu-readback adapter state structs). These are at

@@ -63,8 +63,7 @@ pub struct CapturedVideoFrameFromDevice<'a> {
     /// unspecified is absent.
     pub color: H273ColorVui,
     /// The instant the device captured the frame, in nanoseconds on the
-    /// machine's monotonic clock, resolved by the stream's
-    /// [`VideoCaptureInstantResolver`](super::VideoCaptureInstantResolver) —
+    /// machine's monotonic clock — the device's own stamp where it is usable,
     /// never the instant of hand-off.
     pub capture_timestamp_ns: i64,
 }
@@ -138,6 +137,31 @@ pub trait VideoDeviceBackend: Send + Sync {
     ) -> Result<Box<dyn VideoCaptureStream>>;
 }
 
+/// Why a camera named by `device_id` cannot be opened when it is not attached:
+/// naming it and listing the cameras that are, or — when none is — saying how
+/// to check for one.
+pub(crate) fn refusal_for_a_named_camera_that_is_not_attached(
+    device_id: &str,
+    attached: &[VideoCaptureDevice],
+    how_to_check_a_camera_is_attached: &str,
+) -> String {
+    if attached.is_empty() {
+        return format!(
+            "Camera '{device_id}' does not exist and no other camera is attached. \
+             {how_to_check_a_camera_is_attached}, or use TestPatternSource to run without one."
+        );
+    }
+    let attached = attached
+        .iter()
+        .map(|device| format!("{} ({})", device.id, device.name))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "Camera '{device_id}' does not exist. Attached cameras: {attached}. Fix device_id, or \
+         omit it to use the first camera found."
+    )
+}
+
 /// Shared handle to the backend the chain probed.
 pub type SharedVideoDeviceBackend = Arc<dyn VideoDeviceBackend>;
 
@@ -200,6 +224,40 @@ fn platform_video_device_backend_arms() -> Vec<VideoDeviceBackendArm> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_named_camera_that_is_not_attached_is_refused_listing_the_ones_that_are() {
+        let refusal = refusal_for_a_named_camera_that_is_not_attached(
+            "/dev/video9",
+            &[VideoCaptureDevice {
+                id: "/dev/video0".into(),
+                name: "FaceTime HD Camera".into(),
+            }],
+            "Check the camera is plugged in",
+        );
+        assert!(
+            refusal.contains("'/dev/video9' does not exist"),
+            "{refusal}"
+        );
+        assert!(
+            refusal.contains("/dev/video0 (FaceTime HD Camera)"),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn a_named_camera_with_nothing_attached_says_how_to_check_and_how_to_run_without_one() {
+        let refusal = refusal_for_a_named_camera_that_is_not_attached(
+            "a-camera",
+            &[],
+            "Check the camera is plugged in",
+        );
+        assert!(
+            refusal.contains("Check the camera is plugged in"),
+            "{refusal}"
+        );
+        assert!(refusal.contains("TestPatternSource"), "{refusal}");
+    }
 
     #[test]
     fn the_video_chain_is_probed_once_and_hands_back_the_same_backend_every_time() {

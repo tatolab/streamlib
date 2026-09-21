@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// What a device reported about when it captured one frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DeviceReportedCaptureStamp {
+pub(crate) enum DeviceReportedCaptureStamp {
     /// A stamp the device reports on the machine's monotonic clock.
     OnTheMachineMonotonicClock {
         /// The device's capture instant, in nanoseconds.
@@ -30,7 +30,7 @@ pub enum DeviceReportedCaptureStamp {
 /// Shared between an arm's stream and whichever thread its frames are
 /// dequeued on, so it is read and written through `&self`.
 #[derive(Debug)]
-pub struct VideoCaptureInstantResolver {
+pub(crate) struct VideoCaptureInstantResolver {
     device_name: String,
     unusable_stamp_already_reported: AtomicBool,
     future_stamp_already_reported: AtomicBool,
@@ -40,7 +40,7 @@ pub struct VideoCaptureInstantResolver {
 impl VideoCaptureInstantResolver {
     /// A resolver for the device named `device_name`, which every line it
     /// logs names.
-    pub fn for_device(device_name: impl Into<String>) -> Self {
+    pub(crate) fn for_device(device_name: impl Into<String>) -> Self {
         Self {
             device_name: device_name.into(),
             unusable_stamp_already_reported: AtomicBool::new(false),
@@ -57,7 +57,7 @@ impl VideoCaptureInstantResolver {
     /// off-clock stamp falls back to `dequeued_at_ns` and is reported once for
     /// the device. A stamp ahead of `dequeued_at_ns` is clamped to it and
     /// counted, and the first one is reported.
-    pub fn resolve_capture_timestamp_ns(
+    pub(crate) fn resolve_capture_timestamp_ns(
         &self,
         device_stamp: DeviceReportedCaptureStamp,
         dequeued_at_ns: i64,
@@ -100,7 +100,7 @@ impl VideoCaptureInstantResolver {
 
     /// How many device stamps have been ahead of their dequeue instant and
     /// were clamped to it.
-    pub fn future_capture_stamps_clamped_to_dequeue(&self) -> u64 {
+    pub(crate) fn future_capture_stamps_clamped_to_dequeue(&self) -> u64 {
         self.future_capture_stamps_clamped_to_dequeue
             .load(Ordering::Relaxed)
     }

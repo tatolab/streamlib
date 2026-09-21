@@ -3,6 +3,8 @@
 
 mod audio_clock;
 mod audio_device_backend;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) mod captured_video_frame_to_pooled_rgba_conversion_stage;
 mod device_backend_probe_chain;
 mod device_stream_liveness_report;
 pub(crate) mod escalate_gate;
@@ -63,7 +65,10 @@ pub use texture_ring::{
     TEXTURE_RING_SLOT_SURFACE_ID_MAX_BYTES, TextureRing, TextureRingInner, TextureRingSlot,
 };
 pub use time_context::TimeContext;
-pub use video_capture_instant_resolver::{DeviceReportedCaptureStamp, VideoCaptureInstantResolver};
+pub(crate) use video_capture_instant_resolver::{
+    DeviceReportedCaptureStamp, VideoCaptureInstantResolver,
+};
+pub(crate) use video_device_backend::refusal_for_a_named_camera_that_is_not_attached;
 pub use video_device_backend::{
     CapturedVideoFrameFromDevice, CapturedVideoFrameHandOff, SharedVideoDeviceBackend,
     VideoCaptureDevice, VideoCaptureStream, VideoCaptureStreamFormat, VideoDeviceBackend,
