@@ -311,6 +311,18 @@ fn a_runtime_started_reading(
         addressed,
         how_to_read_the_port,
     } = how_to_send_the_port;
+    // Forgotten between the two, and the window on either side is why. After the
+    // arms above, because each of them records its own reason and returns, and
+    // clearing ahead of those would leave their readers with less than they had.
+    // Before the start, because that call returns the moment the thread spawns
+    // and the new egress declares its token later — so a peer's offered-ports
+    // query landing in between would be answered with the *old* attempt's reason
+    // and tell a reader nothing is retrying the port while a fresh attempt is
+    // running. A peer answered in the window this leaves reads that the port is
+    // not being sent yet, which is true.
+    table
+        .offered
+        .forget_that_it_stopped_sending_an_output_port(&port);
     match MeshPortEgress::start(WhatOneEgressSends {
         session: table.session.clone(),
         key_space: table.key_space.clone(),
@@ -325,14 +337,6 @@ fn a_runtime_started_reading(
             .the_next_egress(),
     }) {
         Ok(egress) => {
-            // Forgotten here rather than before the attempt: every way of not
-            // getting this far records its own reason, and clearing up front
-            // would leave those readers with less than they had. A reason that
-            // outlives a started egress is harmless — a link only ever reads one
-            // while its source is not sending.
-            table
-                .offered
-                .forget_that_it_stopped_sending_an_output_port(&port);
             sending.insert(port, egress);
         }
         Err(cannot_spawn) => {
