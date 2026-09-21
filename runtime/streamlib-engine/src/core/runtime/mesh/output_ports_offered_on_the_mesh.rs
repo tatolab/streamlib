@@ -256,7 +256,7 @@ impl WhatThisRuntimeOffersOnTheMeshRegistry {
     }
 
     /// Record why this runtime stopped sending `port`.
-    pub fn record_why_it_stopped_sending_an_output_port(
+    pub(super) fn record_why_it_stopped_sending_an_output_port(
         &self,
         port: OutputPortOfferedOnTheMesh,
         why_it_stopped_being_sent: String,
@@ -268,7 +268,10 @@ impl WhatThisRuntimeOffersOnTheMeshRegistry {
 
     /// Forget that this runtime stopped sending `port`, because something is
     /// sending it again or nobody is asking for it any more.
-    pub fn forget_that_it_stopped_sending_an_output_port(&self, port: &OutputPortOfferedOnTheMesh) {
+    pub(super) fn forget_that_it_stopped_sending_an_output_port(
+        &self,
+        port: &OutputPortOfferedOnTheMesh,
+    ) {
         self.why_each_port_stopped_being_sent.lock().remove(port);
     }
 
@@ -485,10 +488,12 @@ pub(crate) fn a_registry_whose_graph_offers(
         OutputPortsOfferedOnTheMesh {
             ports: ports
                 .iter()
-                .map(|(processor_display_name, port_name)| OutputPortOfferedOnTheMesh {
-                    processor_display_name: processor_display_name.to_string(),
-                    port_name: port_name.to_string(),
-                })
+                .map(
+                    |(processor_display_name, port_name)| OutputPortOfferedOnTheMesh {
+                        processor_display_name: processor_display_name.to_string(),
+                        port_name: port_name.to_string(),
+                    },
+                )
                 .collect(),
             ..Default::default()
         },
@@ -531,7 +536,6 @@ mod tests {
             }],
         }
     }
-
 
     /// The document survives the wire whole.
     #[test]
@@ -599,6 +603,27 @@ mod tests {
         assert!(listed.offers("CameraSource", "video"));
         assert!(listed.ports_it_holds_and_cannot_send.is_empty());
         assert!(listed.ports_it_stopped_sending.is_empty());
+    }
+
+    /// A key this engine does not know is read past rather than failing the
+    /// whole document.
+    ///
+    /// What it catches: the mirror of the absent-key case above. The version
+    /// gate compares crate versions, so a released wheel and a local build of
+    /// the same version both pass it — a peer carrying a key this build has not
+    /// learned yet is reachable, and a decode failure would strand *every* link
+    /// from it, the ones it can serve included.
+    #[test]
+    fn a_document_carrying_a_key_this_engine_does_not_know_still_decodes() {
+        let with_a_key_from_later = rmp_serde::to_vec_named(&serde_json::json!({
+            "ports": [{ "processor_display_name": "CameraSource", "port_name": "video" }],
+            "ports_a_later_engine_added": [{ "processor_display_name": "CameraSource" }],
+        }))
+        .expect("the later shape encodes");
+
+        let listed = OutputPortsOfferedOnTheMesh::decode(&with_a_key_from_later)
+            .expect("a document carrying an unknown key still decodes");
+        assert!(listed.offers("CameraSource", "video"));
     }
 
     /// A port whose last egress ended stays on offer and answers why under both

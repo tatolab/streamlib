@@ -26,7 +26,8 @@ use crate::core::graph::MeshPortAddress;
 use crate::core::runtime::mesh::gpu_context_the_mesh_copies_frames_with::GpuContextTheMeshCopiesFramesWith;
 use crate::core::runtime::mesh::mesh_port_egress::{MeshPortEgress, WhatOneEgressSends};
 use crate::core::runtime::mesh::output_ports_offered_on_the_mesh::{
-    OutputPortOfferedOnTheMesh, WhatThisRuntimeOffersOnTheMeshRegistry,
+    HowToReadAnOfferedOutputPort, OutputPortOfferedOnTheMesh,
+    WhatThisRuntimeOffersOnTheMeshRegistry,
 };
 use crate::core::runtime::mesh::output_ports_other_runtimes_are_reading::OutputPortsOtherRuntimesAreReading;
 use crate::core::runtime::mesh::runtime_mesh_key::{ReaderOfAnOutputPort, RuntimeMeshKeySpace};
@@ -287,38 +288,29 @@ fn a_runtime_started_reading(
     if sending.contains_key(&port) {
         return;
     }
-    // This runtime is about to try again, so whatever the last attempt said is
-    // no longer the account a reader should be given.
-    table
-        .offered
-        .forget_that_it_stopped_sending_an_output_port(&port);
-    // A port this runtime cannot send — one it does not have, or one whose
-    // channel it cannot open. Said rather than passed over: the reader wired
-    // against the offered-ports answer and will wait on an egress token that
-    // never comes, and this log is where the reason is. Why it could not open
-    // is said by the opener.
-    let Some(how_to_read_the_port) = table
-        .offered
-        .how_to_read_an_offered_output_port(&port.processor_display_name, &port.port_name)
-    else {
-        tracing::warn!(
-            "{} is reading {port} and this runtime cannot send it, so that link waits on an \
-             egress that never starts",
-            reader.reading_runtime_name
-        );
-        return;
-    };
-    let addressed = match MeshPortAddress::new(
-        table.this_runtimes_name,
-        &port.processor_display_name,
-        &port.port_name,
-    ) {
-        Ok(addressed) => addressed,
-        Err(not_an_address) => {
-            tracing::warn!("the mesh cannot send {port}: {not_an_address}");
-            return;
-        }
-    };
+    let how_to_send_the_port =
+        match how_this_runtime_would_send(table.offered, table.this_runtimes_name, &port) {
+            Ok(how_to_send_the_port) => how_to_send_the_port,
+            Err(why_it_cannot_be_sent) => {
+                // Said rather than passed over: the reader wired against the
+                // offered-ports answer and will wait on an egress token that
+                // never comes. Recorded as well as logged, because that reader
+                // is on another machine and this log is not.
+                tracing::warn!(
+                    "{} is reading {port} and this runtime cannot send it, so that link waits on \
+                     an egress that never starts: {why_it_cannot_be_sent}",
+                    reader.reading_runtime_name
+                );
+                table
+                    .offered
+                    .record_why_it_stopped_sending_an_output_port(port, why_it_cannot_be_sent);
+                return;
+            }
+        };
+    let HowThisRuntimeWouldSendAPort {
+        addressed,
+        how_to_read_the_port,
+    } = how_to_send_the_port;
     match MeshPortEgress::start(WhatOneEgressSends {
         session: table.session.clone(),
         key_space: table.key_space.clone(),
@@ -333,12 +325,67 @@ fn a_runtime_started_reading(
             .the_next_egress(),
     }) {
         Ok(egress) => {
+            // Forgotten here rather than before the attempt: every way of not
+            // getting this far records its own reason, and clearing up front
+            // would leave those readers with less than they had. A reason that
+            // outlives a started egress is harmless — a link only ever reads one
+            // while its source is not sending.
+            table
+                .offered
+                .forget_that_it_stopped_sending_an_output_port(&port);
             sending.insert(port, egress);
         }
-        Err(cannot_spawn) => tracing::warn!(
-            "the mesh could not start sending {port} for want of a thread: {cannot_spawn}"
-        ),
+        Err(cannot_spawn) => {
+            let why_it_cannot_be_sent =
+                format!("this runtime had no thread to send it on: {cannot_spawn}");
+            tracing::warn!("the mesh could not start sending {port}: {why_it_cannot_be_sent}");
+            table
+                .offered
+                .record_why_it_stopped_sending_an_output_port(port, why_it_cannot_be_sent);
+        }
     }
+}
+
+/// What starting one port's egress needs, once this runtime has answered that
+/// it can send it at all.
+struct HowThisRuntimeWouldSendAPort {
+    addressed: MeshPortAddress,
+    how_to_read_the_port: HowToReadAnOfferedOutputPort,
+}
+
+/// How this runtime would send `port`, or why it cannot — a port it does not
+/// have, one whose channel will not open, or one whose names do not make a mesh
+/// address.
+///
+/// Its own function so the answer is provable without a Zenoh session and an
+/// iceoryx2 node to start a thread against, which is the only way either arm is
+/// reachable in a test at all.
+fn how_this_runtime_would_send(
+    offered: &WhatThisRuntimeOffersOnTheMeshRegistry,
+    this_runtimes_name: &str,
+    port: &OutputPortOfferedOnTheMesh,
+) -> std::result::Result<HowThisRuntimeWouldSendAPort, String> {
+    // The address first: it reads two names and nothing else, while the seam
+    // below opens the port's channel. A port that can never be addressed is one
+    // no channel should be opened for.
+    let addressed = MeshPortAddress::new(
+        this_runtimes_name,
+        &port.processor_display_name,
+        &port.port_name,
+    )
+    .map_err(|not_an_address| format!("the port has no address on the mesh: {not_an_address}"))?;
+    // Why the channel could not open is said by the opener, in this runtime's
+    // log: the seam it is found at answers presence, not a reason.
+    let how_to_read_the_port = offered
+        .how_to_read_an_offered_output_port(&port.processor_display_name, &port.port_name)
+        .ok_or_else(|| {
+            "this runtime holds that port and could not open its channel to read it; its own log              names why"
+                .to_string()
+        })?;
+    Ok(HowThisRuntimeWouldSendAPort {
+        addressed,
+        how_to_read_the_port,
+    })
 }
 
 /// Forget an egress whose thread has ended, so `graph` stops claiming the port
@@ -608,6 +655,57 @@ mod tests {
                 .output_ports_it_offers_right_now()
                 .why_it_stopped_being_sent("KnownAudioSignalSource", "audio"),
             Some("it could not take a destination slot")
+        );
+    }
+
+    /// A port this runtime offers and cannot open the channel of answers why,
+    /// rather than leaving its reader on the still-coming-up sentence forever.
+    ///
+    /// What it catches: the one arm of `a_runtime_started_reading` that fires
+    /// for a port which *is* on offer. The offer checks that a port's channel
+    /// can be named, never that it opens, so a port whose channel will not open
+    /// is offered, is never refused, and gets no egress — the reader waits out
+    /// the run on a sentence that says the source is merely not sending it yet.
+    ///
+    /// Mental-revert: drop the record from the cannot-send arm and this goes
+    /// red, which is the state the branch shipped in until the reviewers
+    /// caught it.
+    #[test]
+    fn a_port_whose_channel_will_not_open_answers_why_rather_than_saying_nothing() {
+        // A registry whose graph offers the port and answers no way to read it,
+        // which is exactly what a channel that will not open leaves behind.
+        let offered = a_registry_whose_graph_offers(&[("CameraSource", "video")]);
+
+        let why_it_cannot_be_sent = how_this_runtime_would_send(
+            &offered,
+            "bench-cam-a1b2",
+            &a_port("CameraSource", "video"),
+        )
+        .err()
+        .expect("a port with no way to read it is one this runtime cannot send");
+
+        assert!(
+            why_it_cannot_be_sent.contains("could not open its channel"),
+            "{why_it_cannot_be_sent}"
+        );
+    }
+
+    /// A port whose names make no mesh address says that instead.
+    #[test]
+    fn a_port_with_no_mesh_address_says_so_rather_than_naming_its_channel() {
+        let offered = a_registry_whose_graph_offers(&[("CameraSource", "video")]);
+
+        let why_it_cannot_be_sent = how_this_runtime_would_send(
+            &offered,
+            "a runtime/named illegally",
+            &a_port("CameraSource", "video"),
+        )
+        .err()
+        .expect("a name that is not one key chunk is no mesh address");
+
+        assert!(
+            why_it_cannot_be_sent.contains("no address on the mesh"),
+            "{why_it_cannot_be_sent}"
         );
     }
 

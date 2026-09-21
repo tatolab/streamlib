@@ -746,11 +746,14 @@ fn keep_carrying_or_stop(resolving: &ResolvingLinksNeeds, address: &MeshPortAddr
         return;
     }
 
-    // Asked only while this runtime is open on the port and nothing is arriving
-    // on it, and never while a link is carrying: what ended the source's egress
-    // is the one thing this side cannot derive, and its own log is two machines
-    // away. It costs the same offered-ports query a not-yet-carrying address
-    // already pays each pass, and it stops the moment an egress token turns up.
+    // Asked only while this runtime is open on the port and nothing has ever
+    // arrived on it, and never while a link is carrying: what ended the source's
+    // attempt to send is the one thing this side cannot derive, and its own log
+    // is two machines away. The cost is new and worth stating — an address in
+    // this state paid no query before, and two of them on one peer pay two — but
+    // it is a steady-state cost on a link that is going nowhere, bounded by the
+    // same budget a not-yet-carrying address already spends each pass, and it
+    // stops the moment an egress token turns up.
     let why_the_source_stopped_sending_it = (!the_source_is_sending)
         .then(|| why_the_source_says_it_stopped_sending(resolving, address))
         .flatten();

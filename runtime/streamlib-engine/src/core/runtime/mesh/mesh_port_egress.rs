@@ -172,6 +172,18 @@ impl Drop for MeshPortEgress {
     }
 }
 
+/// Why one egress never got as far as sending its port.
+///
+/// A cancellation is not a failure and carries no words: the egress was dropped
+/// because its last reader left or its runtime is going, and nobody is waiting
+/// on an account of it. Everything else is the port being unsendable, said in
+/// the words a reader waiting on it reads.
+#[derive(Debug)]
+pub(super) enum WhyAnEgressNeverStarted {
+    ItWasCancelled,
+    ThePortCannotBeSent(String),
+}
+
 /// Wait for a helper-placed source to say it opened the publisher its parent
 /// asked it for, or say why it did not.
 ///
@@ -182,29 +194,29 @@ impl Drop for MeshPortEgress {
 fn a_helper_opened_its_publisher(
     the_helpers_answer: &OutOfProcessLinkWireReply,
     stop: &AtomicBool,
-) -> std::result::Result<(), String> {
+) -> std::result::Result<(), WhyAnEgressNeverStarted> {
     let gave_up_at = Instant::now() + HOW_LONG_A_HELPER_HAS_TO_OPEN_ITS_PUBLISHER;
     while !stop.load(Ordering::Acquire) {
         match the_helpers_answer.the_far_sides_answer() {
             Some(OutOfProcessLinkWireOutcome::OpenedByTheFarSide) => return Ok(()),
             Some(OutOfProcessLinkWireOutcome::RefusedByTheFarSide { reason }) => {
-                return Err(format!(
+                return Err(WhyAnEgressNeverStarted::ThePortCannotBeSent(format!(
                     "the helper process its processor runs in could not open the port's \
                      publisher: {reason}"
-                ));
+                )));
             }
             None => {
                 if Instant::now() >= gave_up_at {
-                    return Err(format!(
+                    return Err(WhyAnEgressNeverStarted::ThePortCannotBeSent(format!(
                         "the helper process its processor runs in did not open the port's \
                          publisher within {HOW_LONG_A_HELPER_HAS_TO_OPEN_ITS_PUBLISHER:?}"
-                    ));
+                    )));
                 }
                 std::thread::sleep(HOW_OFTEN_A_HELPERS_ANSWER_IS_LOOKED_AT);
             }
         }
     }
-    Err("it was cancelled before its port's publisher was open".to_string())
+    Err(WhyAnEgressNeverStarted::ItWasCancelled)
 }
 
 /// Take a destination slot on the port's channel, once whatever publishes that
@@ -218,7 +230,7 @@ fn take_a_destination_slot_once_the_port_publishes(
     how_to_read_the_port: &HowToReadAnOfferedOutputPort,
     iceoryx2_node: &Iceoryx2Node,
     stop: &AtomicBool,
-) -> std::result::Result<ChannelDataServiceSubscriber, String> {
+) -> std::result::Result<ChannelDataServiceSubscriber, WhyAnEgressNeverStarted> {
     if let Some(the_helpers_answer) = how_to_read_the_port
         .the_helpers_answer_that_it_opened_its_publisher
         .as_deref()
@@ -235,10 +247,10 @@ fn take_a_destination_slot_once_the_port_publishes(
                 .channel_service_creation_depth,
         )
         .map_err(|open_failure| {
-            format!(
+            WhyAnEgressNeverStarted::ThePortCannotBeSent(format!(
                 "its channel {} did not open: {open_failure}",
                 how_to_read_the_port.channel_service_name
-            )
+            ))
         })?;
     service
         .create_subscriber(
@@ -247,10 +259,10 @@ fn take_a_destination_slot_once_the_port_publishes(
                 .channel_service_creation_depth,
         )
         .map_err(|subscribe_failure| {
-            format!(
+            WhyAnEgressNeverStarted::ThePortCannotBeSent(format!(
                 "it could not take a destination slot on {}: {subscribe_failure}",
                 how_to_read_the_port.channel_service_name
-            )
+            ))
         })
 }
 
@@ -279,6 +291,28 @@ impl SaysThisEgressStoppedWhenItsThreadEnds {
     fn note_why_it_stopped(&mut self, why_it_stopped_sending_its_port: String) {
         self.why_it_stopped_sending_its_port = Some(why_it_stopped_sending_its_port);
     }
+
+    /// Say why this egress never got as far as sending its port: once in this
+    /// runtime's log, naming the port, and once to the table, which answers a
+    /// waiting reader with it.
+    ///
+    /// A cancellation says neither, being no failure. A real one says both
+    /// whatever else is happening — a no-slot refusal that lands as the last
+    /// reader leaves still belongs in this machine's log, and the table
+    /// discards its reason on its own, by the identity every egress carries.
+    fn this_egress_never_started(
+        &mut self,
+        addressed: &MeshPortAddress,
+        why_it_never_started: WhyAnEgressNeverStarted,
+    ) {
+        let WhyAnEgressNeverStarted::ThePortCannotBeSent(why_it_never_started) =
+            why_it_never_started
+        else {
+            return;
+        };
+        tracing::warn!("the mesh cannot send {addressed}: {why_it_never_started}");
+        self.note_why_it_stopped(why_it_never_started);
+    }
 }
 
 impl Drop for SaysThisEgressStoppedWhenItsThreadEnds {
@@ -292,10 +326,10 @@ impl Drop for SaysThisEgressStoppedWhenItsThreadEnds {
         };
         // A panic leaves no statement of its own, and a reader waiting on this
         // port would otherwise be told only that nothing is sending it.
-        let why_it_stopped_sending_its_port =
-            self.why_it_stopped_sending_its_port.take().or_else(|| {
-                std::thread::panicking().then(|| "its thread panicked".to_string())
-            });
+        let why_it_stopped_sending_its_port = self
+            .why_it_stopped_sending_its_port
+            .take()
+            .or_else(|| std::thread::panicking().then(|| "its thread panicked".to_string()));
         let _ = where_this_egress_says_it_stopped.send(
             WhatTheEgressTableIsTold::AnEgressStoppedSendingItsPort {
                 port: self.port.clone(),
@@ -304,24 +338,6 @@ impl Drop for SaysThisEgressStoppedWhenItsThreadEnds {
             },
         );
     }
-}
-
-/// Say why an egress never started: once in this runtime's log, naming the
-/// port, and once to the table, which answers a waiting reader with it.
-///
-/// A cancelled egress says neither. It was dropped because its last reader
-/// left or its runtime is going, and no reader is waiting on an account of it.
-fn this_egress_never_started(
-    says_it_stopped: &mut SaysThisEgressStoppedWhenItsThreadEnds,
-    addressed: &MeshPortAddress,
-    stop: &AtomicBool,
-    why_it_never_started: String,
-) {
-    if stop.load(Ordering::Acquire) {
-        return;
-    }
-    tracing::warn!("the mesh cannot send {addressed}: {why_it_never_started}");
-    says_it_stopped.note_why_it_stopped(why_it_never_started);
 }
 
 /// The body of one egress thread: take a destination slot on the port's
@@ -359,12 +375,7 @@ fn send_one_port_to_the_mesh(sending: WhatOneEgressSends, stop: Arc<AtomicBool>)
     ) {
         Ok(subscriber) => subscriber,
         Err(why_it_never_started) => {
-            this_egress_never_started(
-                &mut says_it_stopped,
-                &addressed,
-                &stop,
-                why_it_never_started,
-            );
+            says_it_stopped.this_egress_never_started(&addressed, why_it_never_started);
             return;
         }
     };
@@ -381,14 +392,12 @@ fn send_one_port_to_the_mesh(sending: WhatOneEgressSends, stop: Arc<AtomicBool>)
     {
         Ok(egress_token) => egress_token,
         Err(declare_failure) => {
-            this_egress_never_started(
-                &mut says_it_stopped,
+            says_it_stopped.this_egress_never_started(
                 &addressed,
-                &stop,
-                format!(
+                WhyAnEgressNeverStarted::ThePortCannotBeSent(format!(
                     "the mesh could not say it was being sent, so a reader would never learn it \
                      stopped: {declare_failure}"
-                ),
+                )),
             );
             return;
         }
@@ -517,8 +526,9 @@ fn send_one_port_to_the_mesh(sending: WhatOneEgressSends, stop: Arc<AtomicBool>)
                 std::thread::sleep(idle_poll_backoff.sleep_this_empty_poll_earns(Instant::now()))
             }
             Err(receive_failure) => {
-                why_it_stopped_sending =
-                    Some(format!("its channel subscriber failed: {receive_failure:?}"));
+                why_it_stopped_sending = Some(format!(
+                    "its channel subscriber failed: {receive_failure:?}"
+                ));
                 break;
             }
         }
@@ -635,10 +645,6 @@ mod tests {
         );
     }
 
-    fn a_port_addressed_on_the_mesh() -> MeshPortAddress {
-        MeshPortAddress::new("a-runtime", "AProcessor", "out1").expect("a legal mesh address")
-    }
-
     /// A helper that opened its publisher lets the egress carry on, and one
     /// that refused stops it — so a reader never sees the port declared sent
     /// by a runtime whose producer never opened. The refusal answers the
@@ -653,12 +659,11 @@ mod tests {
         });
         let never_stopped = AtomicBool::new(false);
 
-        assert_eq!(
-            a_helper_opened_its_publisher(&opened, &never_stopped),
-            Ok(())
+        assert!(a_helper_opened_its_publisher(&opened, &never_stopped).is_ok());
+        let why_it_never_started = the_words_of(
+            a_helper_opened_its_publisher(&refused, &never_stopped)
+                .expect_err("a refused helper is a port this runtime cannot send"),
         );
-        let why_it_never_started = a_helper_opened_its_publisher(&refused, &never_stopped)
-            .expect_err("a refused helper is a port this runtime cannot send");
         assert!(
             why_it_never_started.contains("its setup did not succeed"),
             "{why_it_never_started}"
@@ -670,14 +675,30 @@ mod tests {
         );
     }
 
-    /// An egress dropped while it is still waiting stops waiting, rather than
-    /// holding its thread for the rest of the helper's budget.
+    /// An egress dropped while it waits is cancelled, not refused — so nothing
+    /// warns about a port this runtime was never asked to send any more, and no
+    /// reader is answered with an account of it.
     #[test]
-    fn an_egress_stopped_while_it_waits_gives_up_at_once() {
+    fn an_egress_cancelled_while_it_waits_is_no_failure_and_says_nothing() {
         let never_answered = OutOfProcessLinkWireReply::awaiting_the_far_sides_answer();
         let stopped = AtomicBool::new(true);
 
-        assert!(a_helper_opened_its_publisher(&never_answered, &stopped).is_err());
+        assert!(matches!(
+            a_helper_opened_its_publisher(&never_answered, &stopped),
+            Err(WhyAnEgressNeverStarted::ItWasCancelled)
+        ));
+    }
+
+    /// The words one never-started answers, for an arm that reads them.
+    fn the_words_of(why_it_never_started: WhyAnEgressNeverStarted) -> String {
+        match why_it_never_started {
+            WhyAnEgressNeverStarted::ThePortCannotBeSent(why_it_never_started) => {
+                why_it_never_started
+            }
+            WhyAnEgressNeverStarted::ItWasCancelled => {
+                panic!("a cancellation carries no words, and this arm wanted some")
+            }
+        }
     }
 
     /// How to read a port whose publisher a helper was asked for and has not
@@ -785,6 +806,7 @@ mod tests {
         )
         .expect_err("a channel with every slot taken leaves none for an egress");
 
+        let why_it_never_started = the_words_of(why_it_never_started);
         assert!(
             why_it_never_started.contains("destination slot"),
             "{why_it_never_started}"
