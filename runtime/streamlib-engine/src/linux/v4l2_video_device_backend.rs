@@ -372,7 +372,12 @@ impl VideoCaptureStream for V4l2VideoCaptureStream {
 
 impl Drop for V4l2VideoCaptureStream {
     fn drop(&mut self) {
-        let _ = self.stop_delivering();
+        if let Err(stop_error) = self.stop_delivering() {
+            tracing::warn!(
+                error = %stop_error,
+                "V4L2 capture stream dropped while delivering"
+            );
+        }
     }
 }
 
