@@ -125,6 +125,10 @@ which this delta does not touch.
   pump; on Apple that pump runs on the process's first thread, which is the thread `rt.run()`
   blocks. Window policy, the raw-window-handle seam and the per-processor render thread are
   unchanged. The present target is minted from a `CAMetalLayer` on Apple.
+- ADDED: a window's requested size is in the desktop's logical pixels — physical pixels divided
+  by the display's scale factor — so `DisplayWindow`'s `width` and `height` mean the same apparent
+  size on a 1x and a 2x display, while the swapchain renders at the screen's full density. Owner,
+  2026-09-21, while shipping #2357, on a 640x360 test window showing at 320x180 on a Retina Mac.
 - ADDED: camera permission on Apple is requested, never merely queried, and never awaited on a
   path that would stall the graph. The engine is not the permission subject — the terminal that
   launched it is — so a refusal names the responsible application and the setting to change. The
