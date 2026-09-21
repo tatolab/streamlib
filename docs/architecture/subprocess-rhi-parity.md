@@ -43,12 +43,14 @@ mints windows on request; a window-owning processor registers with it,
 receives its window and that window's events, and keeps every window
 policy decision. On Linux the loop runs on its own thread (X11 and
 Wayland both permit an off-main-thread loop, each behind its own
-any-thread opt-in). On macOS the event loop is main-thread-bound
-(`NSApplication`), which changes where the loop is driven, not what a
-window owner asks for or is handed back. `vkQueuePresentKHR` itself is not main-thread-bound, so
+any-thread opt-in). On macOS the loop lives on the process's first
+thread and is driven there while `rt.run()` blocks; AppKit touches a
+view only from that thread, so the pump adds each window's `CAMetalLayer`
+as it mints the window, and the present target is minted from that layer.
+Neither changes what a window owner asks for or is handed back.
+`vkQueuePresentKHR` itself is not main-thread-bound, so
 host-owns-window + processor-presents-on-its-thread works on every
-platform. `raw_window_handle` carries the Win32 / AppKit window flavors
-already, so Windows / macOS activation lands a new host dispatch arm.
+platform.
 
 ## The carve-out
 

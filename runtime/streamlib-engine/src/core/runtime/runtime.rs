@@ -681,8 +681,8 @@ impl Runner {
         ));
         *self.runtime_context.lock() = Some(Arc::clone(&runtime_ctx));
 
-        // Platform-specific setup (macOS NSApplication, Windows Win32, etc.)
-        // RuntimeContext handles all platform-specific details internally.
+        // Platform-specific setup (the macOS window event pump, Windows Win32,
+        // etc.); RuntimeContext handles all platform-specific details internally.
         runtime_ctx.ensure_platform_ready()?;
 
         // Set graph state to Running
@@ -758,7 +758,7 @@ impl Runner {
             tracing::debug!("[stop] Processor teardown complete");
 
             #[cfg(target_os = "macos")]
-            crate::core::window_event_pump::close_the_windows_released_while_the_event_pump_was_not_driven();
+            crate::core::window_event_pump::release_the_windows_handed_back_while_the_event_pump_was_not_driven();
 
             crate::core::runtime::note_what_the_engine_teardown_is_waiting_on("the audio clock");
             tracing::debug!("[stop] Stopping audio clock");
@@ -1186,35 +1186,40 @@ impl Runner {
             }));
         PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&shutdown_listener))?;
 
+        let mut observe_the_shutdown_request_then_the_callback = || {
+            if runtime_shutdown_observed(&shutdown_flag) {
+                ControlFlow::Break(())
+            } else {
+                callback(self)
+            }
+        };
+
         // On Apple the window event pump lives on the process's first thread,
         // so a wait there drives it; anywhere else the wait polls.
         #[cfg(target_os = "macos")]
-        if crate::core::window_event_pump::drive_the_window_event_pump_on_the_first_thread_until(
-            crate::core::runtime::RUNTIME_SHUTDOWN_REQUEST_OBSERVATION_POLL_INTERVAL,
-            || {
-                if runtime_shutdown_observed(&shutdown_flag) {
-                    ControlFlow::Break(())
-                } else {
-                    callback(self)
-                }
-            },
-            || {
-                if let Err(e) = self.stop() {
-                    tracing::error!("Failed to stop runtime during shutdown: {}", e);
-                }
-            },
-        ) == crate::core::window_event_pump::WindowEventPumpDriveOnTheFirstThread::DrivenUntilTheObservationBroke
         {
-            return Ok(());
+            use crate::core::window_event_pump::{
+                WindowEventPumpDriveOnTheFirstThreadOutcome,
+                drive_the_window_event_pump_on_the_first_thread_until,
+            };
+
+            let drive_outcome = drive_the_window_event_pump_on_the_first_thread_until(
+                crate::core::runtime::RUNTIME_SHUTDOWN_REQUEST_OBSERVATION_POLL_INTERVAL,
+                &mut observe_the_shutdown_request_then_the_callback,
+                || {
+                    if let Err(e) = self.stop() {
+                        tracing::error!("Failed to stop runtime during shutdown: {}", e);
+                    }
+                },
+            );
+            if drive_outcome
+                == WindowEventPumpDriveOnTheFirstThreadOutcome::DrivenUntilTheObservationBroke
+            {
+                return Ok(());
+            }
         }
 
-        while !runtime_shutdown_observed(&shutdown_flag) {
-            // Call user callback
-            if let ControlFlow::Break(()) = callback(self) {
-                break;
-            }
-
-            // Small sleep to avoid busy-waiting
+        while observe_the_shutdown_request_then_the_callback().is_continue() {
             std::thread::sleep(
                 crate::core::runtime::RUNTIME_SHUTDOWN_REQUEST_OBSERVATION_POLL_INTERVAL,
             );

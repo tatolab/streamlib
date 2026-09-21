@@ -4,6 +4,7 @@
 //! Swapchain + window-surface orchestrator for the host RHI.
 
 use std::ffi::c_void;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 #[cfg(target_os = "linux")]
@@ -45,15 +46,10 @@ pub enum PresentSurfaceSource<'window> {
     /// The Metal layer the window event pump attached to the window's content
     /// view on the process's first thread.
     #[cfg(target_os = "macos")]
-    MetalLayerBackingWindowContentView(
-        &'window crate::apple::metal_layer_backing_window_content_view::MetalLayerBackingWindowContentView,
+    MetalLayerAddedAsSublayerOfWindowContentView(
+        &'window crate::apple::metal_layer_added_as_sublayer_of_window_content_view::MetalLayerAddedAsSublayerOfWindowContentView,
     ),
 }
-
-/// Whether a vsync-off request has already been told it got FIFO, so a
-/// process says so once rather than once per window or recreate.
-static VSYNC_OFF_REQUEST_TOOK_FIFO_WAS_REPORTED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
 
 /// Vulkan presentation orchestrator: owns a `VkSurfaceKHR` +
 /// `VkSwapchainKHR` bound to a windowing surface, per-swapchain-image
@@ -989,12 +985,15 @@ fn create_surface_for_present_target(
             display_handle,
         } => unsafe { vulkanalia::window::create_surface(instance, display_handle, window_handle) },
         #[cfg(target_os = "macos")]
-        PresentSurfaceSource::MetalLayerBackingWindowContentView(metal_layer) => {
+        PresentSurfaceSource::MetalLayerAddedAsSublayerOfWindowContentView(metal_layer) => {
             use vulkanalia::vk::ExtMetalSurfaceExtensionInstanceCommands as _;
 
             let metal_surface_create_info = vk::MetalSurfaceCreateInfoEXT::builder()
                 .layer(metal_layer.metal_layer_pointer())
                 .build();
+            // SAFETY: the layer outlives the surface — `ProcessorOwnedWindow`
+            // drops its present target before the registration that holds the
+            // layer.
             unsafe { instance.create_metal_surface_ext(&metal_surface_create_info, None) }
         }
     };
@@ -1114,9 +1113,11 @@ fn create_swapchain(
     );
 
     let present_mode_pick = pick_present_mode(vsync, &present_modes);
+    /// Whether a vsync-off request has already been told it got FIFO, so a
+    /// process says so once rather than once per window or recreate.
+    static VSYNC_OFF_REQUEST_TOOK_FIFO_WAS_REPORTED: AtomicBool = AtomicBool::new(false);
     if present_mode_pick.vsync_off_request_took_fifo
-        && !VSYNC_OFF_REQUEST_TOOK_FIFO_WAS_REPORTED
-            .swap(true, std::sync::atomic::Ordering::Relaxed)
+        && !VSYNC_OFF_REQUEST_TOOK_FIFO_WAS_REPORTED.swap(true, Ordering::Relaxed)
     {
         tracing::warn!(
             advertised_present_modes = ?present_modes,
@@ -1429,10 +1430,6 @@ mod tests {
         assert!(vk_format_to_texture_format(filtered_pick.format).is_some());
     }
 
-    /// `MAX_FRAMES_IN_FLIGHT = 2` is load-bearing across the engine
-    /// (see `docs/learnings/vulkan-frames-in-flight.md`). Locking the
-    /// constant here catches a silent change that would over-allocate
-    /// per-frame resources.
     #[test]
     fn a_vsync_off_request_takes_fifo_where_the_driver_advertises_no_mailbox() {
         let moltenvk_advertised_present_modes =
@@ -1475,6 +1472,10 @@ mod tests {
         );
     }
 
+    /// `MAX_FRAMES_IN_FLIGHT = 2` is load-bearing across the engine
+    /// (see `docs/learnings/vulkan-frames-in-flight.md`). Locking the
+    /// constant here catches a silent change that would over-allocate
+    /// per-frame resources.
     #[test]
     fn max_frames_in_flight_is_two() {
         assert_eq!(MAX_FRAMES_IN_FLIGHT, 2);

@@ -1,12 +1,12 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The `CAMetalLayer` a window presents through, attached to the window's
-//! content view on the process's first thread.
+//! The `CAMetalLayer` a window presents through, added as a sublayer of the
+//! window's content view on the process's first thread.
 //!
 //! AppKit lets only the first thread touch a view, and winit hands out a raw
 //! window handle only there, while a present target is minted on its owner's
-//! render thread. So the layer is attached here, when the window is minted, and
+//! render thread. So the layer is added here, when the window is minted, and
 //! the present target is minted from the layer alone.
 
 use std::ffi::c_void;
@@ -21,22 +21,21 @@ use winit::window::Window;
 use crate::core::{Error, Result};
 
 /// A `CAMetalLayer` sized to a window's content view, for its present target.
-pub struct MetalLayerBackingWindowContentView {
+pub struct MetalLayerAddedAsSublayerOfWindowContentView {
     metal_layer: Retained<CAMetalLayer>,
 }
 
-// SAFETY: every message that mutates the layer or its view is sent in
-// `attach_to_the_content_view_of`, on the first thread. Afterwards the value is
-// only read for its pointer, which `vkCreateMetalSurfaceEXT` accepts from any
-// thread, and retain/release of an Objective-C object is thread-safe.
-unsafe impl Send for MetalLayerBackingWindowContentView {}
-// SAFETY: as for `Send` — no `&self` method sends the layer a message.
-unsafe impl Sync for MetalLayerBackingWindowContentView {}
+// SAFETY: this type sends the layer no message after
+// `add_as_a_sublayer_of_the_content_view_of`, which runs on the first thread;
+// it only hands out the pointer, and MoltenVK's own thread-safety contract
+// covers what it sends through the surface minted from it. Retain and release
+// of an Objective-C object are thread-safe.
+unsafe impl Send for MetalLayerAddedAsSublayerOfWindowContentView {}
 
-impl MetalLayerBackingWindowContentView {
-    /// Attach a fresh `CAMetalLayer` over `window`'s content view, tracking its
+impl MetalLayerAddedAsSublayerOfWindowContentView {
+    /// Add a fresh `CAMetalLayer` over `window`'s content view, tracking its
     /// size and matching its backing scale.
-    pub fn attach_to_the_content_view_of(
+    pub fn add_as_a_sublayer_of_the_content_view_of(
         window: &Window,
         _only_on_the_first_thread: MainThreadMarker,
     ) -> Result<Self> {
@@ -63,7 +62,7 @@ impl MetalLayerBackingWindowContentView {
         content_view.setWantsLayer(true);
         let content_view_root_layer = content_view.layer().ok_or_else(|| {
             Error::DisplaySurfaceUnavailable(
-                "the window's content view has no backing layer to attach a Metal layer to".into(),
+                "the window's content view has no backing layer to add a Metal layer to".into(),
             )
         })?;
 

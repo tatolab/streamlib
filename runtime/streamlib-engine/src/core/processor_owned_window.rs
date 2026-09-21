@@ -180,7 +180,7 @@ impl ProcessorOwnedWindow {
             registered_window,
             request,
         } = registered_window;
-        let (width, height) = registered_window.current_physical_size();
+        let (width, height) = registered_window.physical_size_when_minted();
         let present_target = gpu_context_full_access.create_present_target(
             registered_window.present_surface_source(),
             width,

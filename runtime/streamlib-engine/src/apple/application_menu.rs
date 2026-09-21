@@ -49,38 +49,43 @@ pub fn install_the_application_menu_whose_quit_requests_a_runtime_shutdown(
     first_thread: MainThreadMarker,
 ) {
     QUIT_MENU_ITEM_TARGET.with(|quit_menu_item_target| {
-        if quit_menu_item_target.get().is_some() {
-            return;
-        }
-        let target: Retained<QuitMenuItemRequestsRuntimeShutdown> = unsafe {
-            msg_send![
-                QuitMenuItemRequestsRuntimeShutdown::alloc(first_thread),
-                init
-            ]
-        };
+        quit_menu_item_target.get_or_init(|| {
+            // SAFETY: `init` is `NSObject`'s designated initializer, and the
+            // class adds no state of its own to initialise.
+            let target: Retained<QuitMenuItemRequestsRuntimeShutdown> = unsafe {
+                msg_send![
+                    QuitMenuItemRequestsRuntimeShutdown::alloc(first_thread),
+                    init
+                ]
+            };
 
-        let quit_title = NSString::from_str(&format!(
-            "Quit {}",
-            NSProcessInfo::processInfo().processName()
-        ));
-        let quit_item = unsafe {
-            NSMenuItem::initWithTitle_action_keyEquivalent(
-                first_thread.alloc(),
-                &quit_title,
-                Some(sel!(requestRuntimeShutdown:)),
-                &NSString::from_str("q"),
-            )
-        };
-        unsafe { quit_item.setTarget(Some(&target)) };
+            let quit_title = NSString::from_str(&format!(
+                "Quit {}",
+                NSProcessInfo::processInfo().processName()
+            ));
+            // SAFETY: the action names a method the target defines, with the
+            // one-argument sender signature AppKit calls it with.
+            let quit_item = unsafe {
+                NSMenuItem::initWithTitle_action_keyEquivalent(
+                    first_thread.alloc(),
+                    &quit_title,
+                    Some(sel!(requestRuntimeShutdown:)),
+                    &NSString::from_str("q"),
+                )
+            };
+            // SAFETY: the item holds its target weakly; the target is kept for
+            // the process's life by `QUIT_MENU_ITEM_TARGET`.
+            unsafe { quit_item.setTarget(Some(&target)) };
 
-        let application_submenu = NSMenu::new(first_thread);
-        application_submenu.addItem(&quit_item);
-        let application_menu_item = NSMenuItem::new(first_thread);
-        application_menu_item.setSubmenu(Some(&application_submenu));
-        let menu_bar = NSMenu::new(first_thread);
-        menu_bar.addItem(&application_menu_item);
-        NSApplication::sharedApplication(first_thread).setMainMenu(Some(&menu_bar));
+            let application_submenu = NSMenu::new(first_thread);
+            application_submenu.addItem(&quit_item);
+            let application_menu_item = NSMenuItem::new(first_thread);
+            application_menu_item.setSubmenu(Some(&application_submenu));
+            let menu_bar = NSMenu::new(first_thread);
+            menu_bar.addItem(&application_menu_item);
+            NSApplication::sharedApplication(first_thread).setMainMenu(Some(&menu_bar));
 
-        let _ = quit_menu_item_target.set(target);
+            target
+        });
     });
 }

@@ -17,6 +17,7 @@ pub mod camera_source;
 pub(crate) mod captured_audio_block_hand_off_ring;
 pub(crate) mod consecutive_failure_report_schedule;
 pub(crate) mod cumulative_count_report_threshold;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod display_window;
 #[cfg(test)]
 mod emitted_log_line_test_support;
@@ -72,6 +73,7 @@ pub use audio_block::{AudioBlock, AudioSampleDtype};
 pub use audio_window_to_encoded_packet_encoder::{OpusEncoderApplication, OpusEncoderConfig};
 #[cfg(target_os = "linux")]
 pub use camera_source::{CameraSource, CameraSourceConfig};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use display_window::{DisplayWindow, DisplayWindowConfig};
 pub use encoded_audio_packet::{
     EncodedAudioCodec, EncodedAudioPacket, EncodedAudioPacketBagRefusal,
@@ -123,6 +125,7 @@ pub fn register_media_builtin_processor_types() {
     PROCESSOR_REGISTRY.register::<mp4_sink::Mp4Sink::Processor>();
     #[cfg(target_os = "linux")]
     PROCESSOR_REGISTRY.register::<camera_source::CameraSource::Processor>();
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     PROCESSOR_REGISTRY.register::<display_window::DisplayWindow::Processor>();
     #[cfg(target_os = "linux")]
     PROCESSOR_REGISTRY.register::<virtual_camera_sink::VirtualCameraSink::Processor>();

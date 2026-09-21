@@ -121,8 +121,14 @@ pub(crate) fn native_builtin_class_import_path(
         ));
     }
     if processor_class.is(python.get_type::<PythonDisplayWindowBlock>()) {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         return Ok(Some(
             streamlib_media_builtins::DisplayWindow::Processor::processor_class_import_path(),
+        ));
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        return Err(PyRuntimeError::new_err(
+            "DisplayWindow runs on Linux and macOS; this platform is not supported by the \
+             streamlib wheel yet",
         ));
     }
     if processor_class.is(python.get_type::<PythonMicrophoneSourceBlock>()) {

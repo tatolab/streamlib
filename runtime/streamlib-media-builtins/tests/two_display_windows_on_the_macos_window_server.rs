@@ -15,6 +15,9 @@
 //! leaves the other showing and the graph running, and the rest close when the
 //! run returns.
 
+#[cfg(target_os = "macos")]
+mod two_display_windows_harness;
+
 #[cfg(not(target_os = "macos"))]
 fn main() {}
 
@@ -37,30 +40,21 @@ mod apple_window_server {
         CGSessionCopyCurrentDictionary, CGWindowListCopyWindowInfo, CGWindowListOption,
         kCGNullWindowID, kCGWindowName, kCGWindowOwnerPID,
     };
-    use serde_json::json;
     use streamlib::sdk::App;
     use streamlib::sdk::runtime::{Runner, RuntimeStatus};
     use streamlib::sdk::runtime_control::request_runtime_shutdown;
-    use streamlib_media_builtins::{
-        DisplayWindow, TestPatternSource, register_media_builtin_processor_types,
-    };
+    use streamlib::sdk::window_event_pump::process_wide_window_event_pump;
 
-    const FIRST_WINDOW_TITLE: &str = "streamlib two-window harness — first";
-    const SECOND_WINDOW_TITLE: &str = "streamlib two-window harness — second";
+    use crate::two_display_windows_harness::{
+        FIRST_WINDOW_TITLE, SECOND_WINDOW_TITLE, add_one_source_fanned_out_to_two_display_windows,
+        harness_duration,
+    };
 
     /// Cold swapchain creation is the slow step, and it varies.
     const WINDOWS_MAPPED_DEADLINE: Duration = Duration::from_secs(20);
 
     /// How long the surviving window is watched after its neighbour closes.
     const SURVIVOR_OBSERVATION: Duration = Duration::from_secs(1);
-
-    fn harness_duration() -> Duration {
-        let seconds = std::env::var("STREAMLIB_TWO_WINDOW_HARNESS_SECONDS")
-            .ok()
-            .and_then(|raw| raw.parse::<u64>().ok())
-            .unwrap_or(6);
-        Duration::from_secs(seconds)
-    }
 
     /// How many windows of this process the window server shows on screen
     /// under `window_title`.
@@ -187,34 +181,8 @@ mod apple_window_server {
             "cannot run: the screen is locked, so the window server cannot say what is on \
              screen — unlock the session and rerun"
         );
-        register_media_builtin_processor_types();
-
         let app = App::new().expect("runtime");
-        let pattern_source = app
-            .add(
-                TestPatternSource::Processor::processor_class_import_path(),
-                json!({ "width": 1280, "height": 720 }),
-                Some("pattern-source"),
-            )
-            .expect("the test-pattern source");
-        let first_display = app
-            .add(
-                DisplayWindow::Processor::processor_class_import_path(),
-                json!({ "title": FIRST_WINDOW_TITLE, "width": 640, "height": 360 }),
-                Some("first-display"),
-            )
-            .expect("the first display");
-        let second_display = app
-            .add(
-                DisplayWindow::Processor::processor_class_import_path(),
-                json!({ "title": SECOND_WINDOW_TITLE, "width": 640, "height": 360 }),
-                Some("second-display"),
-            )
-            .expect("the second display");
-        app.connect((&pattern_source, "video"), (&first_display, "video"))
-            .expect("source to the first display");
-        app.connect((&pattern_source, "video"), (&second_display, "video"))
-            .expect("source to the second display");
+        add_one_source_fanned_out_to_two_display_windows(&app);
 
         let runner = Arc::clone(app.runner());
         let watcher = std::thread::Builder::new()
@@ -240,6 +208,14 @@ mod apple_window_server {
             windows_on_screen_titled(SECOND_WINDOW_TITLE),
             0,
             "the run tore the graph down, so its remaining window must leave the screen"
+        );
+        assert_eq!(
+            process_wide_window_event_pump()
+                .expect("the run built the pump on this thread")
+                .registered_window_count(),
+            0,
+            "teardown hands every window back to the pump, and the run releases them before \
+             it returns"
         );
     }
 }

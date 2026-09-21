@@ -1290,7 +1290,7 @@ impl GpuContext {
     /// declared layout default to `UNDEFINED` (back-compat —
     /// content-discard permitted on the consumer's first transition).
     ///
-    /// Path 3 (cross-process pixel buffer fallback) declares whatever
+    /// Path 3 (pixel buffer fallback) declares whatever
     /// terminal layout the upload reports leaving the host-owned
     /// texture in — `SHADER_READ_ONLY_OPTIMAL` for the sampled-capable
     /// texture that path allocates.
@@ -1298,8 +1298,16 @@ impl GpuContext {
         &self,
         surface_id: &str,
         #[cfg_attr(not(target_os = "linux"), allow(unused_variables))] texture_layout: Option<i32>,
-        #[cfg_attr(not(target_os = "linux"), allow(unused_variables))] width: u32,
-        #[cfg_attr(not(target_os = "linux"), allow(unused_variables))] height: u32,
+        #[cfg_attr(
+            not(any(target_os = "linux", target_os = "macos")),
+            allow(unused_variables)
+        )]
+        width: u32,
+        #[cfg_attr(
+            not(any(target_os = "linux", target_os = "macos")),
+            allow(unused_variables)
+        )]
+        height: u32,
     ) -> Result<TextureRegistration> {
         // A retired published frame id resolves to an error, not to the
         // slot's current pixels — every path below serves per-slot backings,
@@ -4827,7 +4835,7 @@ mod tests {
     /// Path 3 makes this test fail with "No texture or pixel buffer found".
     /// GPU-gated: skips when no device is present.
     #[test]
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn same_process_pixel_buffer_resolves_without_the_surface_store() {
         let gpu = match GpuContext::init_for_platform() {
             Ok(g) => g,
