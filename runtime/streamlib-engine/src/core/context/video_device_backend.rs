@@ -20,6 +20,7 @@ use super::device_stream_liveness_report::DeviceStreamLivenessReport;
 use super::refusing_null_video_device_backend::RefusingNullVideoDeviceBackend;
 use crate::core::Result;
 use crate::core::color::H273ColorVui;
+use crate::core::rhi::PublishedPixelBufferFrameId;
 
 /// A capture device a backend can open.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,7 +31,7 @@ pub struct VideoCaptureDevice {
     pub name: String,
 }
 
-/// What a capture stream negotiated with its device, fixed for its lifetime.
+/// What a capture stream negotiated with its device when it opened.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VideoCaptureStreamFormat {
     /// Frame width in pixels.
@@ -44,15 +45,16 @@ pub struct VideoCaptureStreamFormat {
 /// One frame as a capture stream delivered it, borrowed for the length of the
 /// hand-off.
 ///
-/// The frame is already on the GPU: `surface_id` names the pooled `Rgba32`
-/// pixel buffer the arm converted the device's pixels into, and the arm holds
-/// that slot until the hand-off returns — so a callee that publishes the id
-/// publishes a live slot, and one that keeps the frame past the hand-off must
-/// have published it first.
+/// The frame is already on the GPU, in the pooled `Rgba32` pixel buffer the
+/// arm converted the device's pixels into. The arm holds that slot until the
+/// hand-off returns, so a callee that publishes the frame's id publishes a
+/// live slot, and one that keeps the frame past the hand-off must have
+/// published it first.
 #[derive(Debug, Clone, Copy)]
 pub struct CapturedVideoFrameFromDevice<'a> {
-    /// Surface id of the pooled `Rgba32` pixel buffer holding the frame.
-    pub surface_id: &'a str,
+    /// The id the pooled pixel buffer holding the frame publishes it under —
+    /// what a bag's `surface_id` carries.
+    pub published_pixel_buffer_frame_id: &'a PublishedPixelBufferFrameId,
     /// Frame width in pixels.
     pub width: u32,
     /// Frame height in pixels.
@@ -68,7 +70,7 @@ pub struct CapturedVideoFrameFromDevice<'a> {
 /// pool slot held, so it must hand the frame on and return rather than block.
 /// It must not re-enter the stream it was installed on: calling
 /// [`VideoCaptureStream::stop_delivering`] from here waits on the thread that
-/// is running it.
+/// is running it, and never succeeds.
 pub type CapturedVideoFrameHandOff = Box<dyn Fn(CapturedVideoFrameFromDevice<'_>) + Send + Sync>;
 
 /// What a caller asks a backend to open a capture stream for.
@@ -105,7 +107,8 @@ pub trait VideoCaptureStream: Send {
     /// an earlier call started.
     fn start_delivering_to(&mut self, hand_off: CapturedVideoFrameHandOff) -> Result<()>;
 
-    /// Stop delivering. The hand-off is not called again once this returns.
+    /// Stop delivering. Once this returns `Ok` the hand-off is not called
+    /// again; an `Err` names a delivery that could not be confirmed stopped.
     fn stop_delivering(&mut self) -> Result<()>;
 }
 
@@ -151,24 +154,20 @@ pub fn probe_video_device_backend() -> SharedVideoDeviceBackend {
     }))
 }
 
-fn first_video_device_backend_arm_that_opens() -> SharedVideoDeviceBackend {
-    first_video_device_backend_arm_that_opens_among(platform_video_device_backend_arms())
-        .unwrap_or_else(|| Arc::new(RefusingNullVideoDeviceBackend))
-}
-
 /// Take the first arm that opens, logging each demotion with the reason that
-/// caused it. Separate from the platform arm list so the walk is exercised by
-/// arms that fail on purpose.
-fn first_video_device_backend_arm_that_opens_among(
-    arms: impl IntoIterator<Item = VideoDeviceBackendArm>,
-) -> Option<SharedVideoDeviceBackend> {
-    first_device_backend_arm_that_opens_among(arms, |backend_name, reason| {
-        tracing::info!(
-            video_backend = backend_name,
-            %reason,
-            "video device backend chain: demoting to the next arm"
-        );
-    })
+/// caused it, or the refusing backend once every arm has declined.
+fn first_video_device_backend_arm_that_opens() -> SharedVideoDeviceBackend {
+    first_device_backend_arm_that_opens_among(
+        platform_video_device_backend_arms(),
+        |backend_name, reason| {
+            tracing::info!(
+                video_backend = backend_name,
+                %reason,
+                "video device backend chain: demoting to the next arm"
+            );
+        },
+    )
+    .unwrap_or_else(|| Arc::new(RefusingNullVideoDeviceBackend))
 }
 
 /// The chain's real arms: V4L2, else — once it has declined — the refusing
@@ -192,42 +191,6 @@ fn platform_video_device_backend_arms() -> Vec<VideoDeviceBackendArm> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::context::DeviceBackendArmUnavailableReason;
-
-    /// An arm that opens, standing in for a real backend so the walk can be
-    /// driven without a camera.
-    struct ArmThatOpened(&'static str);
-
-    impl VideoDeviceBackend for ArmThatOpened {
-        fn backend_name(&self) -> &'static str {
-            self.0
-        }
-
-        fn list_capture_devices(&self) -> Result<Vec<VideoCaptureDevice>> {
-            unreachable!("the walk only ever opens the arm, never enumerates through it")
-        }
-
-        fn open_capture_stream(
-            &self,
-            _request: &VideoDeviceStreamRequest,
-        ) -> Result<Box<dyn VideoCaptureStream>> {
-            unreachable!("the walk only ever opens the arm, never a stream on it")
-        }
-    }
-
-    fn an_arm_that_opens(backend_name: &'static str) -> VideoDeviceBackendArm {
-        VideoDeviceBackendArm::named(backend_name, move || {
-            Ok(Arc::new(ArmThatOpened(backend_name)) as SharedVideoDeviceBackend)
-        })
-    }
-
-    fn an_arm_that_declines(backend_name: &'static str) -> VideoDeviceBackendArm {
-        VideoDeviceBackendArm::named(backend_name, move || {
-            Err(DeviceBackendArmUnavailableReason::of(format!(
-                "{backend_name} was made to decline by this test"
-            )))
-        })
-    }
 
     #[test]
     fn the_video_chain_is_probed_once_and_hands_back_the_same_backend_every_time() {
@@ -259,29 +222,5 @@ mod tests {
             .map(|arm| arm.backend_name)
             .collect();
         assert_eq!(arm_names, ["v4l2"]);
-    }
-
-    #[test]
-    fn the_video_walk_takes_the_first_arm_that_opens_and_asks_no_arm_behind_it() {
-        let chosen = first_video_device_backend_arm_that_opens_among([
-            an_arm_that_declines("first"),
-            an_arm_that_opens("second"),
-            VideoDeviceBackendArm::named("third", || {
-                unreachable!("an arm behind one that opened is never asked")
-            }),
-        ])
-        .expect("an arm opened");
-        assert_eq!(chosen.backend_name(), "second");
-    }
-
-    #[test]
-    fn a_video_chain_whose_arms_all_decline_yields_nothing_for_the_refusing_backend_to_answer() {
-        assert!(
-            first_video_device_backend_arm_that_opens_among([
-                an_arm_that_declines("first"),
-                an_arm_that_declines("second"),
-            ])
-            .is_none()
-        );
     }
 }

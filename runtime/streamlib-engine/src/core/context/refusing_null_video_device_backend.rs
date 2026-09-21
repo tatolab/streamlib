@@ -13,7 +13,7 @@ use crate::core::{Error, Result};
 /// There is no null camera the way there is a silent microphone: a graph that
 /// asked for a camera and got blank frames would look healthy while showing
 /// nothing, so the refusal is the answer.
-pub struct RefusingNullVideoDeviceBackend;
+pub(crate) struct RefusingNullVideoDeviceBackend;
 
 impl VideoDeviceBackend for RefusingNullVideoDeviceBackend {
     fn backend_name(&self) -> &'static str {

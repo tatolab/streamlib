@@ -26,7 +26,7 @@
 /// `TRANSFER_*` constants in the shader.
 ///
 /// H.273 → id translation lives in
-/// [`super::transfer_id_from_h273_byte`].
+/// [`super::H273ColorVui::resolve_defaults`].
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TransferId {

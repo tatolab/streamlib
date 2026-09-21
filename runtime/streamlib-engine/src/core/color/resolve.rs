@@ -110,10 +110,10 @@ mod tests {
         assert_eq!(r.matrix, MatrixId::Identity);
     }
 
-    /// Per-axis fallback matches what `v4l2_color.rs::tests` lock for
-    /// the vivid + UVC default cases. vivid reports
+    /// Per-axis fallback matches what `linux/v4l2_color.rs`'s tests lock
+    /// for the vivid + UVC default cases. vivid reports
     /// `colorspace = SMPTE170M` with everything else default — after
-    /// `v4l2_color_to_color_info` + schema→engine-ID translation
+    /// `v4l2_color_to_h273_color_vui` + the H.273 → engine-ID table
     /// that's primaries=Smpte170m, transfer=Bt709, matrix=Smpte170m,
     /// range=Limited. All axes set → resolver passes through.
     #[test]

@@ -529,10 +529,9 @@ mod tests {
         );
     }
 
-    /// Every colour name a bag can carry resolves to the engine id it always
-    /// has — the table now lives once, in the engine, keyed by H.273 byte, so
-    /// this pins what `DisplayWindow`, the encoders and every other resolver
-    /// of a bag's colour see through it.
+    /// Every colour name a bag can carry resolves through the engine's H.273
+    /// table to this id — what `DisplayWindow`, the encoders and every other
+    /// resolver of a bag's colour see.
     #[test]
     fn every_bag_colour_name_resolves_to_the_engine_id_it_always_has() {
         use streamlib::sdk::color::{ColorSpaceKind, MatrixId, PrimariesId, RangeId, TransferId};

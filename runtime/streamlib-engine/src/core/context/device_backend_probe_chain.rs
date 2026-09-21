@@ -76,3 +76,84 @@ pub(crate) fn first_device_backend_arm_that_opens_among<SharedBackend>(
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+
+    use super::*;
+
+    fn an_arm_that_opens(backend_name: &'static str) -> DeviceBackendArm<&'static str> {
+        DeviceBackendArm::named(backend_name, move || Ok(backend_name))
+    }
+
+    fn an_arm_that_declines(backend_name: &'static str) -> DeviceBackendArm<&'static str> {
+        DeviceBackendArm::named(backend_name, move || {
+            Err(DeviceBackendArmUnavailableReason::of(format!(
+                "{backend_name} was made to decline by this test"
+            )))
+        })
+    }
+
+    #[test]
+    fn the_walk_takes_the_first_arm_that_opens_and_asks_no_arm_behind_it() {
+        let chosen = first_device_backend_arm_that_opens_among(
+            [
+                an_arm_that_declines("first"),
+                an_arm_that_opens("second"),
+                DeviceBackendArm::named("third", || {
+                    unreachable!("an arm behind one that opened is never asked")
+                }),
+            ],
+            |_, _| {},
+        );
+        assert_eq!(chosen, Some("second"));
+    }
+
+    /// Every arm that declined before the chosen one is reported, in the order
+    /// the chain was given, each with the reason it gave — that report is the
+    /// only record of why a machine landed where it did.
+    #[test]
+    fn every_arm_that_declines_is_reported_in_order_with_its_reason() {
+        let demotions = RefCell::new(Vec::new());
+        first_device_backend_arm_that_opens_among(
+            [
+                an_arm_that_declines("first"),
+                an_arm_that_declines("second"),
+                an_arm_that_opens("third"),
+            ],
+            |backend_name, reason| {
+                demotions
+                    .borrow_mut()
+                    .push((backend_name, reason.to_string()))
+            },
+        );
+        assert_eq!(
+            demotions.into_inner(),
+            [
+                (
+                    "first",
+                    "first was made to decline by this test".to_string()
+                ),
+                (
+                    "second",
+                    "second was made to decline by this test".to_string()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_chain_whose_arms_all_decline_yields_no_backend() {
+        assert_eq!(
+            first_device_backend_arm_that_opens_among(
+                [
+                    an_arm_that_declines("first"),
+                    an_arm_that_declines("second")
+                ],
+                |_, _| {},
+            ),
+            None
+        );
+    }
+}

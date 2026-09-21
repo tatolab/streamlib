@@ -12,7 +12,7 @@ use super::TransferId;
 
 /// Engine-internal color-primaries id. Mirrors H.273
 /// `ColourPrimaries` variants — an H.273 primaries byte is
-/// translated into this by [`super::primaries_id_from_h273_byte`].
+/// translated into this by [`super::H273ColorVui::resolve_defaults`].
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PrimariesId {
@@ -31,7 +31,7 @@ pub enum PrimariesId {
 
 /// Engine-internal YCbCr-matrix id. Mirrors H.273
 /// `MatrixCoefficients` variants — an H.273 matrix byte is
-/// translated into this by [`super::matrix_id_from_h273_byte`].
+/// translated into this by [`super::H273ColorVui::resolve_defaults`].
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MatrixId {

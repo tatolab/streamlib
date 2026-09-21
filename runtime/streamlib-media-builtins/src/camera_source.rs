@@ -13,9 +13,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 use streamlib::sdk::context::{
-    CapturedVideoFrameFromDevice, CapturedVideoFrameHandOff, DeviceStreamLivenessReport,
-    RuntimeContextFullAccess, VideoCaptureStream, VideoDeviceStreamRequest,
-    probe_video_device_backend,
+    CapturedVideoFrameFromDevice, CapturedVideoFrameHandOff, RuntimeContextFullAccess,
+    VideoCaptureStream, VideoDeviceStreamRequest, probe_video_device_backend,
 };
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::iceoryx2::OutputWriter;
@@ -35,8 +34,9 @@ const DEFAULT_MAX_HEIGHT: u32 = 1080;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default, JsonSchema)]
 #[schemars(crate = "streamlib::sdk::schemars")]
 pub struct CameraSourceConfig {
-    /// V4L2 device path (`/dev/video0`). Absent: the first capture-capable
-    /// device found.
+    /// The capture backend's name for the device — a V4L2 device path
+    /// (`/dev/video0`) on Linux. Absent: the first capture-capable device
+    /// found.
     #[serde(default)]
     pub device_id: Option<String>,
     /// Resolution cap; the negotiated format is clamped to fit. Default 1920.
@@ -48,7 +48,7 @@ pub struct CameraSourceConfig {
 }
 
 #[streamlib::sdk::processor(
-    description = "Captures live video from a V4L2 camera (zero-copy DMA-BUF when the device exports it, CPU upload otherwise)",
+    description = "Captures live video from the platform's camera — V4L2 on Linux (zero-copy DMA-BUF when the device exports it, CPU upload otherwise)",
     execution = manual,
     scheduling = high,
     config = crate::camera_source::CameraSourceConfig,
@@ -56,9 +56,6 @@ pub struct CameraSourceConfig {
 )]
 pub struct CameraSource {
     capture_stream: Option<Box<dyn VideoCaptureStream>>,
-    /// Taken at open and kept beside the stream, so teardown can say why a
-    /// capture that ended early ended.
-    capture_stream_liveness_report: Option<DeviceStreamLivenessReport>,
     camera_name: String,
     frame_counter: Arc<AtomicU64>,
 }
@@ -70,8 +67,6 @@ impl ManualProcessor for CameraSource::Processor {
             device_id: self.config.device_id.clone(),
             max_width: self.config.max_width.unwrap_or(DEFAULT_MAX_WIDTH),
             max_height: self.config.max_height.unwrap_or(DEFAULT_MAX_HEIGHT),
-            // The capture thread needs an owned handle that escapes into the
-            // thread, so the clone at setup is load-bearing here.
             gpu_context: ctx.gpu_limited_access().clone(),
         })?;
         let stream_format = capture_stream.stream_format();
@@ -86,7 +81,6 @@ impl ManualProcessor for CameraSource::Processor {
             "CameraSource: capture stream opened"
         );
         self.camera_name = opened_device.name.clone();
-        self.capture_stream_liveness_report = Some(capture_stream.liveness_report());
         self.capture_stream = Some(capture_stream);
         Ok(())
     }
@@ -96,9 +90,9 @@ impl ManualProcessor for CameraSource::Processor {
             camera = %self.camera_name,
             frames = self.frame_counter.load(Ordering::Relaxed),
             capture_device_failure = ?self
-                .capture_stream_liveness_report
+                .capture_stream
                 .as_ref()
-                .and_then(|report| report.failure_that_ended_the_stream()),
+                .and_then(|stream| stream.liveness_report().failure_that_ended_the_stream()),
             "CameraSource: teardown"
         );
         self.stop_delivering();
@@ -169,7 +163,7 @@ fn video_frame_bag_for(
     timestamp_ns: i64,
 ) -> VideoFrame {
     VideoFrame {
-        surface_id: captured.surface_id.to_string(),
+        surface_id: captured.published_pixel_buffer_frame_id.to_string(),
         width: captured.width,
         height: captured.height,
         timestamp_ns,
@@ -193,10 +187,18 @@ mod tests {
     use crate::video_frame::{ColorInfo, Matrix, Primaries, Range, Transfer};
     use streamlib::sdk::color::H273ColorVui;
     use streamlib::sdk::color::h273_color_vui::{matrix, primaries, transfer};
+    use streamlib::sdk::rhi::{PixelBufferPoolSlotId, PublishedPixelBufferFrameId};
 
-    fn a_captured_frame(color: H273ColorVui) -> CapturedVideoFrameFromDevice<'static> {
+    fn a_published_frame_id() -> PublishedPixelBufferFrameId {
+        PublishedPixelBufferFrameId::new(PixelBufferPoolSlotId::from_str("pooled-slot"), 7)
+    }
+
+    fn a_captured_frame(
+        published_pixel_buffer_frame_id: &PublishedPixelBufferFrameId,
+        color: H273ColorVui,
+    ) -> CapturedVideoFrameFromDevice<'_> {
         CapturedVideoFrameFromDevice {
-            surface_id: "pooled-surface-7",
+            published_pixel_buffer_frame_id,
             width: 1280,
             height: 720,
             color,
@@ -212,20 +214,24 @@ mod tests {
 
     #[test]
     fn a_captured_frame_is_published_as_the_bag_a_camera_has_always_published() {
+        let published_frame_id = a_published_frame_id();
         let frame = video_frame_bag_for(
-            &a_captured_frame(H273ColorVui {
-                primaries: Some(primaries::SMPTE170M),
-                transfer: Some(transfer::BT709),
-                matrix: Some(matrix::SMPTE170M),
-                full_range: Some(false),
-            }),
+            &a_captured_frame(
+                &published_frame_id,
+                H273ColorVui {
+                    primaries: Some(primaries::SMPTE170M),
+                    transfer: Some(transfer::BT709),
+                    matrix: Some(matrix::SMPTE170M),
+                    full_range: Some(false),
+                },
+            ),
             Some(30),
             1_234_567,
         );
         assert_eq!(
             frame,
             VideoFrame {
-                surface_id: "pooled-surface-7".to_string(),
+                surface_id: "pooled-slot#7".to_string(),
                 width: 1280,
                 height: 720,
                 timestamp_ns: 1_234_567,
@@ -244,11 +250,16 @@ mod tests {
     }
 
     /// A device that describes no colour axis — `V4L2_COLORSPACE_DEFAULT`, or
-    /// a format query that failed — still publishes the key, as an empty map,
-    /// byte for byte what the camera wrote before the seam existed.
+    /// a format query that failed — publishes `color_info` as an empty map,
+    /// never an absent key.
     #[test]
     fn a_device_that_describes_no_colour_still_publishes_an_empty_colour_map() {
-        let frame = video_frame_bag_for(&a_captured_frame(H273ColorVui::default()), None, 0);
+        let published_frame_id = a_published_frame_id();
+        let frame = video_frame_bag_for(
+            &a_captured_frame(&published_frame_id, H273ColorVui::default()),
+            None,
+            0,
+        );
         let bag = rmp_serde::to_vec_named(&frame).expect("a frame serialises");
         let entries = decode_msgpack_named_map_entries(&bag);
         assert_eq!(

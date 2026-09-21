@@ -968,8 +968,8 @@ impl PendingStagedWriteBackToSurface {
 /// An access-discipline flag, not a synchronisation point — it performs
 /// no wait. Ordering against the producer comes from publication: a
 /// built-in source waits on its own timeline before it writes the
-/// surface id to its output port (`camera_source.rs` does this at its
-/// host-readback wait), so a frame a consumer can name is a frame the
+/// surface id to its output port (the camera's V4L2 capture arm does this
+/// at its host-readback wait), so a frame a consumer can name is a frame the
 /// GPU has finished writing. The gate's job is narrower: it makes the
 /// read/write intent explicit at the call site, and it is what carries
 /// `read_only` through to the exported tensor's flags.

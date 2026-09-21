@@ -109,7 +109,7 @@ impl H273ColorVui {
 
 /// The engine primaries id an H.273 `ColourPrimaries` byte names, `None` for
 /// Unspecified and for any value the engine has no id for.
-pub fn primaries_id_from_h273_byte(byte: u8) -> Option<PrimariesId> {
+fn primaries_id_from_h273_byte(byte: u8) -> Option<PrimariesId> {
     Some(match byte {
         primaries::BT709 => PrimariesId::Bt709,
         primaries::BT470_M => PrimariesId::Bt470M,
@@ -133,7 +133,7 @@ pub fn primaries_id_from_h273_byte(byte: u8) -> Option<PrimariesId> {
 /// share one: every SDR camera curve decodes as BT.709, and the encoded
 /// transfers with no exact engine curve take the BT.709 shape too, because
 /// `Linear` would skip decoding entirely.
-pub fn transfer_id_from_h273_byte(byte: u8) -> Option<TransferId> {
+fn transfer_id_from_h273_byte(byte: u8) -> Option<TransferId> {
     Some(match byte {
         transfer::SRGB => TransferId::Srgb,
         transfer::BT709
@@ -157,7 +157,7 @@ pub fn transfer_id_from_h273_byte(byte: u8) -> Option<TransferId> {
 
 /// The engine matrix id an H.273 `MatrixCoefficients` byte names, `None` for
 /// Unspecified and for any value the engine has no id for.
-pub fn matrix_id_from_h273_byte(byte: u8) -> Option<MatrixId> {
+fn matrix_id_from_h273_byte(byte: u8) -> Option<MatrixId> {
     Some(match byte {
         matrix::IDENTITY => MatrixId::Identity,
         matrix::BT709 => MatrixId::Bt709,
@@ -177,7 +177,7 @@ pub fn matrix_id_from_h273_byte(byte: u8) -> Option<MatrixId> {
 }
 
 /// The engine range id a `video_full_range_flag` names.
-pub fn range_id_from_h273_full_range_flag(full_range: bool) -> RangeId {
+fn range_id_from_h273_full_range_flag(full_range: bool) -> RangeId {
     if full_range {
         RangeId::Full
     } else {

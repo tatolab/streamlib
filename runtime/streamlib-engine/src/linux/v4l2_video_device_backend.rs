@@ -28,8 +28,8 @@ use crate::core::context::{
     VideoDeviceStreamRequest,
 };
 use crate::core::rhi::{
-    PixelBuffer, PixelFormat, RhiColorConverter, SourceLayoutInfo, StorageBuffer, Texture,
-    TextureFormat, VulkanLayout,
+    PixelBuffer, PixelFormat, PublishedPixelBufferFrameId, RhiColorConverter, SourceLayoutInfo,
+    StorageBuffer, Texture, TextureFormat, VulkanLayout,
 };
 use crate::core::{Error, Result};
 use crate::host_rhi::HostSurfaceStoreExt;
@@ -196,7 +196,7 @@ struct V4l2VideoCaptureStream {
 /// revived by a later start.
 struct V4l2CaptureThread {
     is_capturing: Arc<AtomicBool>,
-    handle: JoinHandle<()>,
+    join_handle: JoinHandle<()>,
 }
 
 impl V4l2VideoCaptureStream {
@@ -310,7 +310,7 @@ impl VideoCaptureStream for V4l2VideoCaptureStream {
         let capture_fourcc = self.capture_fourcc;
         let failure_recorder = self.failure_recorder.clone();
 
-        let handle = std::thread::Builder::new()
+        let join_handle = std::thread::Builder::new()
             .name(format!("v4l2-capture-{}", self.opened_device.id))
             .spawn(move || {
                 capture_thread_loop(
@@ -329,7 +329,7 @@ impl VideoCaptureStream for V4l2VideoCaptureStream {
 
         self.capture_thread = Some(V4l2CaptureThread {
             is_capturing,
-            handle,
+            join_handle,
         });
 
         tracing::info!(
@@ -355,17 +355,17 @@ impl VideoCaptureStream for V4l2VideoCaptureStream {
         // Detaching after a 2 s grace window keeps the runtime's shutdown
         // chain moving; the detached thread is reaped at process exit.
         let deadline = Instant::now() + Duration::from_secs(2);
-        while !capture_thread.handle.is_finished() && Instant::now() < deadline {
+        while !capture_thread.join_handle.is_finished() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(10));
         }
-        if capture_thread.handle.is_finished() {
-            let _ = capture_thread.handle.join();
-        } else {
-            tracing::warn!(
-                "V4L2 camera {}: capture thread did not exit within 2s, detaching",
+        if !capture_thread.join_handle.is_finished() {
+            return Err(Error::Runtime(format!(
+                "V4L2 camera {}: capture thread did not exit within 2s and was detached; \
+                 a frame it was already converting may still be handed off",
                 self.opened_device.name
-            );
+            )));
         }
+        let _ = capture_thread.join_handle.join();
         Ok(())
     }
 }
@@ -550,10 +550,11 @@ fn capture_thread_loop(
     };
 
     // Query V4L2 format once at start: (1) the colorspace 4-tuple, as the
-    // H.273 description every frame carries, (2) `bytesperline` for the source SSBO stride (vivid +
-    // some UVC drivers report stride > width even for NV12), (3) `sizeimage`
-    // for the SSBO allocation (must hold the full V4L2 frame including
-    // padding). V4L2 contract: all three stay constant during streaming.
+    // H.273 description every frame carries, (2) `bytesperline` for the
+    // source SSBO stride (vivid + some UVC drivers report stride > width even
+    // for NV12), (3) `sizeimage` for the SSBO allocation (must hold the full
+    // V4L2 frame including padding). V4L2 contract: all three stay constant
+    // during streaming.
     let (cached_color, v4l2_bytes_per_line, v4l2_size_image): (H273ColorVui, u32, u32) = unsafe {
         let mut v4l2_fmt: v4l::v4l_sys::v4l2_format = std::mem::zeroed();
         v4l2_fmt.type_ = v4l::buffer::Type::VideoCapture as u32;
@@ -706,7 +707,7 @@ fn capture_thread_loop(
                         if i == 0 {
                             if vulkan_device_name.to_lowercase().contains("nvidia") {
                                 tracing::info!(
-                                    "CameraSource {}: DMA-BUF import failed on NVIDIA GPU \
+                                    "V4L2 camera {}: DMA-BUF import failed on NVIDIA GPU \
                                      (cross-device DMA-BUF limitation). Falling back to \
                                      MMAP + memcpy. This is expected and performant with \
                                      GPU compute.",
@@ -714,7 +715,7 @@ fn capture_thread_loop(
                                 );
                             } else {
                                 tracing::warn!(
-                                    "CameraSource {}: DMA-BUF import failed (unexpected on {}): \
+                                    "V4L2 camera {}: DMA-BUF import failed (unexpected on {}): \
                                      {}. Falling back to MMAP + memcpy.",
                                     camera_name,
                                     vulkan_device_name,
@@ -954,7 +955,7 @@ fn capture_thread_loop(
         } else {
             // MMAP path: stream.next() issues VIDIOC_QBUF + VIDIOC_STREAMON
             // on its first call, then blocks on VIDIOC_DQBUF with the poll
-            // timeout applied in start(). Do NOT poll the fd before
+            // timeout applied in start_delivering_to(). Do NOT poll the fd before
             // stream.next() — strict-conformance drivers (v4l2loopback) only
             // signal POLLIN after STREAMON, so an earlier poll hangs.
             let (buf, meta) = match stream.next() {
@@ -1014,7 +1015,7 @@ fn capture_thread_loop(
         // one failure exit: the V4L2 buffer is requeued and the recorder
         // reset on every path, and the frame counter advances only after the
         // submit that signals its timeline value.
-        let frame_result: Result<(String, PixelBuffer)> = (|| {
+        let frame_result: Result<(PublishedPixelBufferFrameId, PixelBuffer)> = (|| {
             // Acquire the pooled pixel buffer for IPC + CPU readback. Its
             // pool_id is the surface_id — the universal key: same-process
             // texture cache, cross-process surface-share, and CPU readback
@@ -1022,7 +1023,6 @@ fn capture_thread_loop(
             let (pool_id, pooled_buffer) = gpu_context
                 .acquire_pixel_buffer(width, height, PixelFormat::Rgba32)
                 .map_err(|e| Error::GpuError(format!("acquire pixel buffer: {e}")))?;
-            let surface_id = pool_id.to_string();
 
             // The ring is this camera's own scratch space and answers to
             // nothing outside it. Publishing it under the frame's id used to
@@ -1151,7 +1151,7 @@ fn capture_thread_loop(
                 .wait(signaled_value, HOST_READBACK_WAIT_TIMEOUT_NS)
                 .map_err(|e| Error::GpuError(format!("host-readback timeline wait: {e}")))?;
 
-            Ok((surface_id, pooled_buffer))
+            Ok((pool_id, pooled_buffer))
         })();
 
         // The V4L2 buffer goes back to the driver on success and failure
@@ -1159,7 +1159,7 @@ fn capture_thread_loop(
         // V4L2_BUFFER_COUNT drops.
         requeue(v4l2_requeue_buf);
 
-        let (surface_id, pooled_buffer) = match frame_result {
+        let (published_pixel_buffer_frame_id, pooled_buffer) = match frame_result {
             Ok(frame_surfaces) => frame_surfaces,
             Err(frame_error) => {
                 // A begun-but-unsubmitted recording would fail the next
@@ -1180,8 +1180,13 @@ fn capture_thread_loop(
         };
         consecutive_dropped_frames = 0;
 
+        // A stop that arrived during this frame's GPU work ends delivery here,
+        // so a stop that returned `Ok` is never followed by a hand-off.
+        if !is_capturing.load(Ordering::Acquire) {
+            break;
+        }
         hand_off(CapturedVideoFrameFromDevice {
-            surface_id: &surface_id,
+            published_pixel_buffer_frame_id: &published_pixel_buffer_frame_id,
             width,
             height,
             color: cached_color,
