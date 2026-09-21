@@ -299,10 +299,12 @@ jobs:
           # taking its iceoryx2 node's files with it.
           # The video device seam beside the audio one: the probe chain both
           # walk and the device-stream liveness report both carry, the
-          # refusing backend a platform with no capture arm lands on, and the
-          # V4L2 arm — its colour map in both directions and its refusal of a
-          # named device that does not exist. Beside them, the one H.273 table
-          # every colour description resolves through.
+          # refusing backend a platform with no capture arm lands on, the rule
+          # every arm stamps its frames' capture instant under, and the V4L2
+          # arm — its colour map in both directions, the clock a dequeued
+          # buffer's stamp is on, and its refusal of a named device that does
+          # not exist. Beside them, the one H.273 table every colour
+          # description resolves through.
           cargo test --locked -p streamlib-engine --lib -- \
             core::processor_owned_window \
             processor_owned_window_ops \
@@ -315,10 +317,13 @@ jobs:
             core::context::device_stream_liveness_report \
             core::context::video_device_backend \
             core::context::refusing_null_video_device_backend \
+            core::context::video_capture_instant_resolver \
             core::color::h273_color_vui \
             linux::v4l2_color \
             linux::v4l2_video_device_backend::tests::list_devices_succeeds_with_or_without_cameras \
             linux::v4l2_video_device_backend::tests::a_named_device_that_does_not_exist_is_refused_naming_it \
+            linux::v4l2_video_device_backend::tests::a_buffer_flagged_monotonic_carries_its_stamp_in_nanoseconds \
+            linux::v4l2_video_device_backend::tests::a_buffer_whose_stamp_clock_is_unknown_or_copied_is_off_the_monotonic_clock \
             linux::alsa_audio_device_backend::tests::a_thread_that_stopped_because_it_was_told_to_reports_no_failure \
             linux::alsa_audio_device_backend::tests::every_way_a_thread_dies_early_reaches_the_owner_naming_what_happened \
             linux::alsa_audio_device_backend::tests::a_stalled_device_is_described_by_what_that_direction_stopped_doing \
@@ -796,6 +801,14 @@ jobs:
           # seconds. The Linux job names a slice of this suite instead, so this
           # is the broader of the two runs rather than a mirror of it.
           cargo test --locked -p streamlib-engine --lib -- --test-threads=1
+          # Compiled but not run: the AVFoundation arm against a real camera,
+          # and `CameraSource` → `DisplayWindow` on the window server, need a
+          # camera, camera access and a GPU no runner has. Building them here
+          # is what stops them rotting between rig runs.
+          cargo test --locked -p streamlib-engine -p streamlib-media-builtins \
+            --features streamlib-engine/hardware-tests,streamlib-media-builtins/hardware-tests \
+            --test avfoundation_camera_captures_through_the_video_device_seam \
+            --test camera_to_display_window_on_the_macos_window_server --no-run
 
       # The whole reason this job exists in the milestone's first ticket: the
       # source-walking gates now evaluate `cfg` for macOS as well as Linux, so
