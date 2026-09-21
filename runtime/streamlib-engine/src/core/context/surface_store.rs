@@ -148,8 +148,26 @@ const SURFACE_HANDLE_TYPE_OPAQUE_FD: &str = "opaque_fd";
 const SURFACE_RESOURCE_TYPE_TEXTURE: &str = "texture";
 
 /// Wire value of `resource_type` for a pixel-buffer registration.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const SURFACE_RESOURCE_TYPE_PIXEL_BUFFER: &str = "pixel_buffer";
+
+/// How long a connect waits for the service to admit this process.
+#[cfg(target_os = "macos")]
+const SURFACE_SHARE_MACH_CONNECT_HANDSHAKE_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(10);
+
+/// A fresh send right to the IOSurface `pixel_buffer`'s memory is, for a
+/// registration to move to the service.
+#[cfg(target_os = "macos")]
+fn exported_iosurface_port(
+    pixel_buffer: &PixelBuffer,
+) -> Result<streamlib_surface_client::OwnedMachSendRight> {
+    use crate::core::rhi::{RhiExternalHandle, RhiPixelBufferExport};
+
+    let RhiExternalHandle::IOSurfaceMachPort { port } = pixel_buffer.export_handle()?;
+    // SAFETY: the export minted this send right for us alone.
+    Ok(unsafe { streamlib_surface_client::OwnedMachSendRight::from_raw_name(port) })
+}
 
 /// Reply flag announcing a `produce_done` timeline edge appended after the
 /// plane fds.
@@ -342,10 +360,15 @@ pub(crate) struct SurfaceStoreInner {
     #[cfg(target_os = "linux")]
     connection: Mutex<Option<std::os::unix::net::UnixStream>>,
 
+    /// Mach connection to the surface-share service (macOS only).
+    #[cfg(target_os = "macos")]
+    connection: Mutex<Option<streamlib_surface_client::SurfaceShareMachServiceConnection>>,
+
     /// Local cache of checked-out surfaces (surface_id -> pixel_buffer).
     cache: Mutex<SurfaceCache>,
 
-    /// The Unix socket path to connect to.
+    /// The Unix socket path (Linux) or bootstrap service name (macOS) to
+    /// connect to.
     service_name: String,
 
     /// Runtime ID for tracking which surfaces belong to this runtime.
@@ -378,7 +401,7 @@ impl SurfaceStoreInner {
         check_out_leases: Option<Arc<SurfaceCheckOutLeaseRegistry>>,
     ) -> Arc<Self> {
         Arc::new(SurfaceStoreInner {
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             connection: Mutex::new(None),
             cache: Mutex::new(SurfaceCache::new()),
             service_name,
@@ -407,11 +430,15 @@ impl SurfaceStoreInner {
         {
             self.release_from_surface_share_unix(surface_id)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "macos")]
+        {
+            self.release_from_surface_share_mach(surface_id)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
             let _ = surface_id;
             Err(Error::NotSupported(
-                "SurfaceStore::release is only supported on Linux".into(),
+                "SurfaceStore::release is not supported on this platform".into(),
             ))
         }
     }
@@ -1256,48 +1283,240 @@ impl SurfaceStoreInner {
     }
 
     // =========================================================================
+    // macOS: raw Mach client
+    // =========================================================================
+
+    /// Connect to the surface-share service's bootstrap name.
+    #[cfg(target_os = "macos")]
+    pub fn connect(&self) -> Result<()> {
+        let connection = streamlib_surface_client::SurfaceShareMachServiceConnection::connect(
+            &self.service_name,
+            SURFACE_SHARE_MACH_CONNECT_HANDSHAKE_TIMEOUT,
+        )
+        .map_err(|e| {
+            Error::Configuration(format!(
+                "Failed to connect to surface-share Mach service '{}': {}",
+                self.service_name, e
+            ))
+        })?;
+        *self.connection.lock() = Some(connection);
+        tracing::info!(
+            "SurfaceStore: Connected to surface-share Mach service '{}'",
+            self.service_name
+        );
+        Ok(())
+    }
+
+    /// Disconnect from the surface-share service, dropping every surface this
+    /// store resolved. Closing the connection is the release: the service
+    /// frees whatever the connection leased when it sees the client go.
+    #[cfg(target_os = "macos")]
+    pub fn disconnect(&self) -> Result<()> {
+        self.cache.lock().clear();
+        self.connection.lock().take();
+        tracing::info!("SurfaceStore: Disconnected from surface-share Mach service");
+        Ok(())
+    }
+
+    /// Check in a pixel buffer's IOSurface, returning the id the service
+    /// minted for it.
+    #[cfg(target_os = "macos")]
+    pub fn check_in(&self, pixel_buffer: &PixelBuffer) -> Result<String> {
+        let request = serde_json::json!({
+            "op": "check_in",
+            "runtime_id": self.runtime_id,
+            "width": pixel_buffer.width,
+            "height": pixel_buffer.height,
+            "format": pixel_buffer.format().wire_name(),
+            "resource_type": SURFACE_RESOURCE_TYPE_PIXEL_BUFFER,
+        });
+        let (response, _) = self.send_surface_share_mach_request(
+            "check_in",
+            &request,
+            vec![exported_iosurface_port(pixel_buffer)?],
+        )?;
+        let surface_id = response
+            .get("surface_id")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| Error::Configuration("check_in: missing surface_id in response".into()))?
+            .to_string();
+        self.cache
+            .lock()
+            .insert(surface_id.clone(), pixel_buffer.clone());
+        tracing::debug!("SurfaceStore: Checked in as '{}'", surface_id);
+        Ok(surface_id)
+    }
+
+    /// Resolve a surface id to a pixel buffer over its IOSurface, caching it.
+    ///
+    /// `lookup`, not `check_out`, for the same reason as on Linux: this store
+    /// is the service owner's own process, and the cached clone is its claim.
+    #[cfg(target_os = "macos")]
+    pub fn check_out(&self, surface_id: &str) -> Result<PixelBuffer> {
+        {
+            let mut cache = self.cache.lock();
+            if let Some(cached) = cache.surfaces.get_mut(surface_id) {
+                cached.checkout_count += 1;
+                return Ok(cached.pixel_buffer.clone());
+            }
+        }
+        let pixel_buffer = self.import_looked_up_iosurface("check_out", surface_id)?;
+        self.cache
+            .lock()
+            .insert(surface_id.to_string(), pixel_buffer.clone());
+        Ok(pixel_buffer)
+    }
+
+    /// Register a pool slot's IOSurface under `pool_id`.
+    #[cfg(target_os = "macos")]
+    pub fn register_buffer(&self, pool_id: &str, pixel_buffer: &PixelBuffer) -> Result<()> {
+        let request = serde_json::json!({
+            "op": "register",
+            "surface_id": pool_id,
+            "runtime_id": self.runtime_id,
+            "width": pixel_buffer.width,
+            "height": pixel_buffer.height,
+            "format": pixel_buffer.format().wire_name(),
+            "resource_type": SURFACE_RESOURCE_TYPE_PIXEL_BUFFER,
+        });
+        let (response, _) = self.send_surface_share_mach_request(
+            "register",
+            &request,
+            vec![exported_iosurface_port(pixel_buffer)?],
+        )?;
+        if response.get("success").and_then(serde_json::Value::as_bool) == Some(false) {
+            return Err(Error::Configuration(
+                "register: the surface-share service refused the registration without naming \
+                 a reason; the id is most likely already registered"
+                    .into(),
+            ));
+        }
+        tracing::debug!("SurfaceStore: Registered buffer '{}'", pool_id);
+        Ok(())
+    }
+
+    /// Resolve a registered pool slot to a pixel buffer over its IOSurface.
+    #[cfg(target_os = "macos")]
+    pub fn lookup_buffer(&self, pool_id: &str) -> Result<PixelBuffer> {
+        if let Some(cached) = self.cache.lock().surfaces.get(pool_id) {
+            return Ok(cached.pixel_buffer.clone());
+        }
+        self.import_looked_up_iosurface("lookup", pool_id)
+    }
+
+    /// `lookup` `surface_id` and import the IOSurface the answer's port
+    /// names, zero-copy.
+    #[cfg(target_os = "macos")]
+    fn import_looked_up_iosurface(&self, operation: &str, surface_id: &str) -> Result<PixelBuffer> {
+        use crate::core::rhi::{PixelFormat, RhiExternalHandle, RhiPixelBufferImport};
+
+        let request = serde_json::json!({"op": "lookup", "surface_id": surface_id});
+        let (_, reply_ports) =
+            self.send_surface_share_mach_request(operation, &request, Vec::new())?;
+        let mut reply_ports = reply_ports.into_iter();
+        let (Some(iosurface_port), None) = (reply_ports.next(), reply_ports.next()) else {
+            return Err(Error::Configuration(format!(
+                "{operation}: the answer for '{surface_id}' did not carry exactly one IOSurface port"
+            )));
+        };
+        PixelBuffer::from_external_handle(
+            RhiExternalHandle::IOSurfaceMachPort {
+                port: iosurface_port.into_raw_name(),
+            },
+            0,
+            0,
+            PixelFormat::default(),
+        )
+    }
+
+    /// Send one request under `operation`'s name and hold the service to its
+    /// answer, returning it with the ports it carries.
+    #[cfg(target_os = "macos")]
+    fn send_surface_share_mach_request(
+        &self,
+        operation: &str,
+        request: &serde_json::Value,
+        ports: Vec<streamlib_surface_client::OwnedMachSendRight>,
+    ) -> Result<(
+        serde_json::Value,
+        Vec<streamlib_surface_client::OwnedMachSendRight>,
+    )> {
+        let connection = self.connection.lock();
+        let connection = connection.as_ref().ok_or_else(|| {
+            Error::Configuration("SurfaceStore not connected to surface-share service".into())
+        })?;
+        let (response, reply_ports) =
+            connection
+                .send_request_with_ports(request, ports)
+                .map_err(|failure| {
+                    Error::Configuration(format!(
+                        "Mach surface-share {operation} failed: {failure}"
+                    ))
+                })?;
+        if let Some(error) = response.get("error").and_then(serde_json::Value::as_str) {
+            return Err(Error::Configuration(format!("{operation}: {error}")));
+        }
+        Ok((response, reply_ports))
+    }
+
+    /// Best-effort `release`; with no connection there is nothing to release,
+    /// because the service already let go when the connection closed.
+    #[cfg(target_os = "macos")]
+    fn release_from_surface_share_mach(&self, surface_id: &str) -> Result<()> {
+        let request = serde_json::json!({
+            "op": "release",
+            "surface_id": surface_id,
+            "runtime_id": self.runtime_id,
+        });
+        if let Some(connection) = self.connection.lock().as_ref() {
+            let _ = connection.send_request_with_ports(&request, Vec::new());
+        }
+        Ok(())
+    }
+
+    // =========================================================================
     // Unsupported platform stubs
     // =========================================================================
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     pub fn connect(&self) -> Result<()> {
         Err(Error::NotSupported(
-            "SurfaceStore is only supported on Linux".into(),
+            "SurfaceStore is not supported on this platform".into(),
         ))
     }
 
     /// `Ok` rather than the refusal its siblings return: nothing was ever
     /// connected, and a shutdown path must not fail for having nothing to do.
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     pub fn disconnect(&self) -> Result<()> {
         Ok(())
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     pub fn check_in(&self, _pixel_buffer: &PixelBuffer) -> Result<String> {
         Err(Error::NotSupported(
-            "SurfaceStore is only supported on Linux".into(),
+            "SurfaceStore is not supported on this platform".into(),
         ))
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     pub fn check_out(&self, _surface_id: &str) -> Result<PixelBuffer> {
         Err(Error::NotSupported(
-            "SurfaceStore is only supported on Linux".into(),
+            "SurfaceStore is not supported on this platform".into(),
         ))
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     pub fn register_buffer(&self, _pool_id: &str, _pixel_buffer: &PixelBuffer) -> Result<()> {
         Err(Error::NotSupported(
-            "SurfaceStore is only supported on Linux".into(),
+            "SurfaceStore is not supported on this platform".into(),
         ))
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     pub fn lookup_buffer(&self, _pool_id: &str) -> Result<PixelBuffer> {
         Err(Error::NotSupported(
-            "SurfaceStore is only supported on Linux".into(),
+            "SurfaceStore is not supported on this platform".into(),
         ))
     }
 

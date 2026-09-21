@@ -51,10 +51,9 @@ impl GpuDevice {
                 RhiCommandQueue::from_arc_into_raw(std::sync::Arc::new(inner))
             };
 
-            // Store a global reference for DMA-BUF import (Linux only).
-            // The import trait (RhiPixelBufferImport::from_external_handle) is a
-            // static method with no device parameter, so the global bridges that gap.
-            #[cfg(target_os = "linux")]
+            // Store a global reference for external-handle import. The import
+            // trait (RhiPixelBufferImport::from_external_handle) is a static
+            // method with no device parameter, so the global bridges that gap.
             {
                 if crate::vulkan::rhi::vulkan_buffer::VULKAN_DEVICE_FOR_IMPORT
                     .set(std::sync::Arc::clone(&device_arc))

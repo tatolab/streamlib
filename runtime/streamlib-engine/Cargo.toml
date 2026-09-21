@@ -151,6 +151,9 @@ libc.workspace = true
 # Apple-specific crates
 dispatch2 = "0.3"  # GCD dispatch queues
 mach2 = "0.7"  # Mach kernel API: thread priorities, timing, and the surface-share channel
+# Wire-format helpers for the per-runtime surface-share service's raw Mach
+# channel, shared with the helper-process clients that talk to it.
+streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.26.10" }
 
 # The one RHI and everything that compiles with it. Not workspace-wide: a
 # workspace-wide entry would make a Windows or wasm target build a GPU stack
@@ -178,9 +181,7 @@ libc.workspace = true
 # fails with EPERM on every desktop process; rtkit-daemon does the
 # privileged syscall on the requesting thread's behalf.
 zbus = "5"
-# Wire-format helpers for the per-runtime surface-sharing socket. Genuinely
-# Linux-bound: `SCM_RIGHTS` fd passing is what the Apple arm replaces rather
-# than ports.
+# Wire-format helpers for the per-runtime surface-sharing socket.
 streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.26.10" }
 # The video device seam's V4L2 arm: device enumeration, format negotiation and
 # the mmap capture stream. A kernel ABI binding — no user-space library is

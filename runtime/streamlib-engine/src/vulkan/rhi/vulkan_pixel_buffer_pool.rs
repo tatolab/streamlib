@@ -10,6 +10,35 @@ use crate::core::{Error, Result};
 
 use super::{HostVulkanBuffer, HostVulkanDevice};
 
+/// One pool slot's memory in the flavour the surface-share wire carries: a
+/// DMA-BUF-exportable allocation on Linux, a private IOSurface on macOS.
+fn allocate_pool_slot_buffer(
+    device: &Arc<HostVulkanDevice>,
+    width: u32,
+    height: u32,
+    bytes_per_pixel: u32,
+    format: PixelFormat,
+) -> Result<HostVulkanBuffer> {
+    #[cfg(target_os = "macos")]
+    {
+        HostVulkanBuffer::new_iosurface_backed_pixel_buffer(
+            device,
+            width,
+            height,
+            bytes_per_pixel,
+            format,
+        )
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = format;
+        HostVulkanBuffer::new(
+            device,
+            (width as u64) * (height as u64) * (bytes_per_pixel as u64),
+        )
+    }
+}
+
 /// Reusable pool of [`HostVulkanBuffer`]s for efficient buffer recycling.
 pub struct VulkanPixelBufferPool {
     device: Arc<HostVulkanDevice>,
@@ -42,10 +71,7 @@ impl VulkanPixelBufferPool {
         let mut last_err: Option<Error> = None;
 
         for i in 0..pre_allocate {
-            match HostVulkanBuffer::new(
-                &device,
-                (width as u64) * (height as u64) * (bytes_per_pixel as u64),
-            ) {
+            match allocate_pool_slot_buffer(&device, width, height, bytes_per_pixel, format) {
                 Ok(buffer) => {
                     buffers.push(Arc::new(buffer));
                     buffer_to_pool_id.insert(i, PixelBufferPoolSlotId::new());
@@ -110,9 +136,12 @@ impl VulkanPixelBufferPool {
     /// caller that keeps its own permanent share of every buffer never sees a
     /// strong count of 1 again.
     pub fn allocate_additional_buffer(&mut self) -> Result<(PixelBufferPoolSlotId, PixelBuffer)> {
-        let buffer = HostVulkanBuffer::new(
+        let buffer = allocate_pool_slot_buffer(
             &self.device,
-            (self.width as u64) * (self.height as u64) * (self.bytes_per_pixel as u64),
+            self.width,
+            self.height,
+            self.bytes_per_pixel,
+            self.format,
         )?;
 
         let index = self.buffers.len();

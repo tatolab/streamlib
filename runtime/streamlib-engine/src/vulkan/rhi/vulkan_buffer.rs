@@ -17,12 +17,13 @@ use super::vulkan_device::memory_type_index_is_host_cached;
 #[cfg(target_os = "linux")]
 use super::vulkan_device::MappedOpaqueFdBufferHostAccessPattern;
 
-/// Process-global HostVulkanDevice reference for DMA-BUF import.
+/// Process-global HostVulkanDevice reference for external-handle import —
+/// DMA-BUF on Linux, IOSurface on macOS.
 ///
-/// Set once during [`GpuDevice::new()`] on Linux. The import trait
+/// Set once during [`GpuDevice::new()`]. The import trait
 /// (`RhiPixelBufferImport::from_external_handle`) is a static method with no
 /// device parameter, so this global bridges that gap.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) static VULKAN_DEVICE_FOR_IMPORT: std::sync::OnceLock<Arc<HostVulkanDevice>> =
     std::sync::OnceLock::new();
 
@@ -143,6 +144,10 @@ pub struct HostVulkanBuffer {
     /// imports and for VMA-allocated buffers.
     #[cfg(target_os = "linux")]
     extra_imported_planes: Vec<VulkanImportedPlane>,
+    /// The IOSurface whose pages this buffer's memory is, released only after
+    /// that memory is freed. `None` on every other allocation path.
+    #[cfg(target_os = "macos")]
+    backing_iosurface: Option<objc2_core_foundation::CFRetained<objc2_io_surface::IOSurfaceRef>>,
     /// Plane 0 size in bytes.
     size: vk::DeviceSize,
 }
@@ -306,6 +311,8 @@ impl HostVulkanBuffer {
             mapped_ptr,
             #[cfg(target_os = "linux")]
             extra_imported_planes: Vec::new(),
+            #[cfg(target_os = "macos")]
+            backing_iosurface: None,
             size,
         })
     }
@@ -1097,9 +1104,35 @@ impl HostVulkanBuffer {
         byte_len: u64,
         host_range_owner: Option<Box<dyn Send + Sync>>,
     ) -> Result<Self> {
+        Self::from_imported_host_range_as_buffer_of_size(
+            vulkan_device,
+            host_ptr,
+            byte_len,
+            byte_len,
+            host_range_owner,
+        )
+    }
+
+    /// As [`Self::from_imported_host_pointer_as_storage_buffer`], with the
+    /// buffer spanning only the first `buffer_byte_len` bytes of the
+    /// `byte_len` imported — for a range the import alignment rounds up past
+    /// what the buffer's user addresses.
+    pub(super) fn from_imported_host_range_as_buffer_of_size(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        host_ptr: *mut u8,
+        byte_len: u64,
+        buffer_byte_len: u64,
+        host_range_owner: Option<Box<dyn Send + Sync>>,
+    ) -> Result<Self> {
         use vulkanalia::vk::ExtExternalMemoryHostExtensionDeviceCommands as _;
 
         const CONSTRUCTOR: &str = "HostVulkanBuffer::from_imported_host_pointer_as_storage_buffer";
+        if buffer_byte_len == 0 || buffer_byte_len > byte_len {
+            return Err(Error::Configuration(format!(
+                "{CONSTRUCTOR}: a {buffer_byte_len}-byte buffer does not fit the {byte_len} bytes \
+                 imported"
+            )));
+        }
         if !vulkan_device.supports_host_pointer_import() {
             return Err(Error::NotSupported(format!(
                 "{CONSTRUCTOR}: VK_EXT_external_memory_host is not enabled on this device"
@@ -1142,7 +1175,7 @@ impl HostVulkanBuffer {
             .handle_types(handle_type)
             .build();
         let buffer_info = vk::BufferCreateInfo::builder()
-            .size(byte_len)
+            .size(buffer_byte_len)
             .usage(
                 vk::BufferUsageFlags::TRANSFER_SRC
                     | vk::BufferUsageFlags::TRANSFER_DST
@@ -1187,8 +1220,28 @@ impl HostVulkanBuffer {
             mapped_ptr: host_ptr,
             #[cfg(target_os = "linux")]
             extra_imported_planes: Vec::new(),
-            size: byte_len,
+            #[cfg(target_os = "macos")]
+            backing_iosurface: None,
+            size: buffer_byte_len,
         })
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl HostVulkanBuffer {
+    /// Record the IOSurface whose pages this host-pointer import aliases; the
+    /// buffer keeps it alive past the memory importing it.
+    pub(super) fn backed_by_iosurface(
+        mut self,
+        iosurface: objc2_core_foundation::CFRetained<objc2_io_surface::IOSurfaceRef>,
+    ) -> Self {
+        self.backing_iosurface = Some(iosurface);
+        self
+    }
+
+    /// The IOSurface this buffer's memory is, when it is one.
+    pub fn backing_iosurface(&self) -> Option<&objc2_io_surface::IOSurfaceRef> {
+        self.backing_iosurface.as_deref()
     }
 }
 

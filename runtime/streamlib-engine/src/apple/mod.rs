@@ -12,10 +12,10 @@ pub mod media_clock;
 pub mod metal_layer_added_as_sublayer_of_window_content_view;
 pub mod texture;
 pub mod vimage_ffi;
-pub mod xpc_ffi;
 
 pub mod permissions;
 pub mod responsible_gui_application;
+pub mod surface_share;
 
 pub mod main_thread;
 
