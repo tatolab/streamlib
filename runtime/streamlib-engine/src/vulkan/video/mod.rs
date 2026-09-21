@@ -24,7 +24,6 @@ pub mod video_context;
 pub use decode::{DecodedFrame, SimpleDecodedFrame, SimpleDecoder, SimpleDecoderConfig};
 pub use encode::{Codec, EncodePacket, Preset, SimpleEncoder, SimpleEncoderConfig};
 pub use encode::{EncodedOutput, FrameType};
-pub use encode::{H273ColorVui, color_vui};
 pub use nv12_to_rgb::Nv12ToRgbConverter;
 pub use rgb_to_nv12::RgbToNv12Converter;
 pub use video_context::{VideoContext, VideoError, VideoResult};

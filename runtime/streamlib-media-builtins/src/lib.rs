@@ -35,7 +35,6 @@ pub mod h264_encoder;
 pub mod h265_decoder;
 #[cfg(target_os = "linux")]
 pub mod h265_encoder;
-#[cfg(target_os = "linux")]
 pub mod h273_color_vui_translation;
 #[cfg(target_os = "linux")]
 pub mod hardware_video_codec_processor_identity;

@@ -23,9 +23,8 @@ use super::transfer::TransferId;
 /// data is already RGB.
 ///
 /// Each axis takes an `Option<EngineId>` — `None` means the on-wire
-/// value was absent (H.273 "Unspecified"). Schema → engine-ID
-/// translation happens at the consumer boundary via
-/// [`super::translate`].
+/// value was absent (H.273 "Unspecified"). H.273 → engine-ID
+/// translation is [`super::H273ColorVui::resolve_defaults`].
 pub fn resolve_color_defaults(
     primaries: Option<PrimariesId>,
     transfer: Option<TransferId>,

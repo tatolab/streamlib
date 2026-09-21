@@ -1,20 +1,20 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-#![cfg(target_os = "linux")]
-
-//! Translation between the bag vocabulary's [`ColorInfo`] and the codec
-//! layer's H.273 byte representation ([`H273ColorVui`], the enumerants that
-//! appear verbatim in the H.264 / H.265 bitstream VUI).
+//! Translation between the bag vocabulary's [`ColorInfo`] and the engine's
+//! H.273 byte representation ([`H273ColorVui`], the enumerants that appear
+//! verbatim in the H.264 / H.265 bitstream VUI and that a capture device
+//! reports).
 //!
 //! Encode direction: `ColorInfo` → `H273ColorVui` for the encoder session's
-//! SPS VUI. Decode direction: per-axis byte → `ColorInfo` variant for
-//! surfacing parsed VUI on decoded frames; an H.273 enumerant the bag
-//! vocabulary does not model decodes to `None` rather than fabricating a
-//! variant.
+//! SPS VUI, and for resolving a bag's colour through the engine's one
+//! byte → id table. Decode direction: per-axis byte → `ColorInfo` variant for
+//! surfacing parsed VUI on decoded frames and a camera's colour on captured
+//! ones; an H.273 enumerant the bag vocabulary does not model decodes to
+//! `None` rather than fabricating a variant.
 
-use streamlib::sdk::engine::video::H273ColorVui;
-use streamlib::sdk::engine::video::color_vui::{matrix, primaries, transfer};
+use streamlib::sdk::color::H273ColorVui;
+use streamlib::sdk::color::h273_color_vui::{matrix, primaries, transfer};
 
 use crate::video_frame::{ColorInfo, Matrix, Primaries, Range, Transfer};
 

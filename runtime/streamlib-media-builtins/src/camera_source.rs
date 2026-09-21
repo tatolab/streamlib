@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use streamlib::sdk::color::{ColorSpaceKind, RangeId, TransferId, resolve_color_defaults};
+use streamlib::sdk::color::{ColorSpaceKind, RangeId, TransferId};
 use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
 use streamlib::sdk::engine::host_rhi::{
     HostSurfaceStoreExt, HostVulkanTimelineSemaphore, ImageCopyRegion, RhiCommandRecorder,
@@ -36,7 +36,7 @@ use v4l::buffer::Type;
 use v4l::io::traits::CaptureStream;
 use v4l::video::Capture;
 
-use crate::video_frame::{ColorInfo, Matrix, Primaries, Range, Transfer, VideoFrame};
+use crate::video_frame::{ColorInfo, VideoFrame};
 
 /// Number of ring textures for the GPU-resident pipeline (matches
 /// MAX_FRAMES_IN_FLIGHT).
@@ -590,16 +590,7 @@ fn capture_thread_loop(
     // Resolve V4L2 ColorInfo to the fully-resolved description the color
     // converter's push constants use. Held for the life of the capture
     // thread — V4L2 colorspace doesn't change mid-stream.
-    let resolved_color = resolve_color_defaults(
-        cached_color_info
-            .primaries
-            .as_ref()
-            .map(Primaries::engine_id),
-        cached_color_info.transfer.as_ref().map(Transfer::engine_id),
-        cached_color_info.matrix.as_ref().map(Matrix::engine_id),
-        cached_color_info.range.as_ref().map(Range::engine_id),
-        ColorSpaceKind::Yuv,
-    );
+    let resolved_color = cached_color_info.resolve_defaults(ColorSpaceKind::Yuv);
 
     // Map (fourcc, resolved range) to the canonical PixelFormat used as the
     // converter cache key. The push-constant matrix bakes the range

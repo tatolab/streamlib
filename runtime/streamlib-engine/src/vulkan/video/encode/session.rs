@@ -573,7 +573,7 @@ impl SimpleEncoder {
                 // "Unspecified" (2) rather than "Reserved" (0) for
                 // spec-symmetry — the fields are part of the same byte
                 // budget the per-axis `_byte()` accessors already honor.
-                let unspec = crate::vulkan::video::encode::color_vui::H273_UNSPECIFIED;
+                let unspec = crate::core::color::H273_UNSPECIFIED;
                 let (vui_primaries, vui_transfer, vui_matrix) = color_vui
                     .map(|cv| (cv.primaries_byte(), cv.transfer_byte(), cv.matrix_byte()))
                     .unwrap_or((unspec, unspec, unspec));

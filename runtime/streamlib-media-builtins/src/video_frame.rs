@@ -13,6 +13,8 @@
 use serde::de::{self, DeserializeOwned, IntoDeserializer};
 use serde::{Deserialize, Deserializer, Serialize};
 
+use crate::h273_color_vui_translation::color_info_to_h273_color_vui;
+
 /// Video frame bag: references a GPU surface by id — pixels never ride the
 /// link. `surface_id` is the handoff contract (texture cache in-process,
 /// surface-share DMA-BUF cross-process, pixel buffer for CPU readback);
@@ -279,85 +281,9 @@ pub struct MasteringDisplay {
     pub white_point_y: u32,
 }
 
-// Per-axis maps from the bag's H.273 vocabulary to the engine's color IDs.
-// The engine accepts only its own primitive types in public signatures, so
-// this crate translates at the boundary.
-
-impl Primaries {
-    pub(crate) fn engine_id(&self) -> streamlib::sdk::color::PrimariesId {
-        use streamlib::sdk::color::PrimariesId;
-        match self {
-            Primaries::Bt709 => PrimariesId::Bt709,
-            Primaries::Bt470M => PrimariesId::Bt470M,
-            Primaries::Bt470Bg => PrimariesId::Bt470Bg,
-            Primaries::Smpte170m => PrimariesId::Smpte170m,
-            Primaries::Smpte240m => PrimariesId::Smpte240m,
-            Primaries::Film => PrimariesId::Film,
-            Primaries::Bt2020 => PrimariesId::Bt2020,
-            Primaries::Smpte428 => PrimariesId::Smpte428,
-            Primaries::Smpte431 => PrimariesId::Smpte431,
-            Primaries::Smpte432 => PrimariesId::Smpte432,
-            Primaries::Ebu3213 => PrimariesId::Ebu3213,
-        }
-    }
-}
-
-impl Transfer {
-    pub(crate) fn engine_id(&self) -> streamlib::sdk::color::TransferId {
-        use streamlib::sdk::color::TransferId;
-        match self {
-            Transfer::Srgb => TransferId::Srgb,
-            Transfer::Bt709
-            | Transfer::Smpte170m
-            | Transfer::Smpte240m
-            | Transfer::Bt2020TenBit
-            | Transfer::Bt2020TwelveBit => TransferId::Bt709,
-            Transfer::Smpte2084 => TransferId::Pq,
-            Transfer::AribStdB67 => TransferId::Hlg,
-            Transfer::Linear => TransferId::Linear,
-            // No exact engine id for these encoded transfers; a BT.709-shaped
-            // approximation beats Linear, which would skip decoding entirely.
-            Transfer::Gamma22
-            | Transfer::Gamma28
-            | Transfer::Bt1361
-            | Transfer::Log100
-            | Transfer::Log100Sqrt10
-            | Transfer::Smpte428
-            | Transfer::Xvycc => TransferId::Bt709,
-        }
-    }
-}
-
-impl Matrix {
-    pub(crate) fn engine_id(&self) -> streamlib::sdk::color::MatrixId {
-        use streamlib::sdk::color::MatrixId;
-        match self {
-            Matrix::Identity => MatrixId::Identity,
-            Matrix::Bt709 => MatrixId::Bt709,
-            Matrix::Fcc => MatrixId::Fcc,
-            Matrix::Bt470Bg => MatrixId::Bt470Bg,
-            Matrix::Smpte170m => MatrixId::Smpte170m,
-            Matrix::Smpte240m => MatrixId::Smpte240m,
-            Matrix::Ycgco => MatrixId::Ycgco,
-            Matrix::Bt2020Ncl => MatrixId::Bt2020Ncl,
-            Matrix::Bt2020Cl => MatrixId::Bt2020Cl,
-            Matrix::Smpte2085 => MatrixId::Smpte2085,
-            Matrix::ChromaNcl => MatrixId::ChromaNcl,
-            Matrix::ChromaCl => MatrixId::ChromaCl,
-            Matrix::Ictcp => MatrixId::Ictcp,
-        }
-    }
-}
-
-impl Range {
-    pub(crate) fn engine_id(&self) -> streamlib::sdk::color::RangeId {
-        use streamlib::sdk::color::RangeId;
-        match self {
-            Range::Limited => RangeId::Limited,
-            Range::Full => RangeId::Full,
-        }
-    }
-}
+// The engine accepts only its own primitive types in public signatures, so a
+// bag's colour reaches the engine as H.273 bytes and resolves through the
+// engine's one byte → id table.
 
 impl ColorInfo {
     /// The fully resolved description the engine's colour kernels take:
@@ -367,21 +293,12 @@ impl ColorInfo {
         &self,
         kind: streamlib::sdk::color::ColorSpaceKind,
     ) -> streamlib::sdk::color::ResolvedColorInfo {
-        streamlib::sdk::color::resolve_color_defaults(
-            self.primaries.as_ref().map(Primaries::engine_id),
-            self.transfer.as_ref().map(Transfer::engine_id),
-            self.matrix.as_ref().map(Matrix::engine_id),
-            self.range.as_ref().map(Range::engine_id),
-            kind,
-        )
+        color_info_to_h273_color_vui(self).resolve_defaults(kind)
     }
 
     /// The engine's colorspace-pick input: primaries + transfer only.
     pub fn engine_color_traits(&self) -> streamlib::sdk::color::ColorTraits {
-        streamlib::sdk::color::ColorTraits {
-            primaries: self.primaries.as_ref().map(Primaries::engine_id),
-            transfer: self.transfer.as_ref().map(Transfer::engine_id),
-        }
+        color_info_to_h273_color_vui(self).color_traits()
     }
 }
 
@@ -610,5 +527,104 @@ mod tests {
                 ..ColorInfo::default()
             })
         );
+    }
+
+    /// Every colour name a bag can carry resolves to the engine id it always
+    /// has — the table now lives once, in the engine, keyed by H.273 byte, so
+    /// this pins what `DisplayWindow`, the encoders and every other resolver
+    /// of a bag's colour see through it.
+    #[test]
+    fn every_bag_colour_name_resolves_to_the_engine_id_it_always_has() {
+        use streamlib::sdk::color::{ColorSpaceKind, MatrixId, PrimariesId, RangeId, TransferId};
+
+        let resolved = |color_info: ColorInfo| color_info.resolve_defaults(ColorSpaceKind::Yuv);
+
+        for (name, expected) in [
+            (Primaries::Bt709, PrimariesId::Bt709),
+            (Primaries::Bt470M, PrimariesId::Bt470M),
+            (Primaries::Bt470Bg, PrimariesId::Bt470Bg),
+            (Primaries::Smpte170m, PrimariesId::Smpte170m),
+            (Primaries::Smpte240m, PrimariesId::Smpte240m),
+            (Primaries::Film, PrimariesId::Film),
+            (Primaries::Bt2020, PrimariesId::Bt2020),
+            (Primaries::Smpte428, PrimariesId::Smpte428),
+            (Primaries::Smpte431, PrimariesId::Smpte431),
+            (Primaries::Smpte432, PrimariesId::Smpte432),
+            (Primaries::Ebu3213, PrimariesId::Ebu3213),
+        ] {
+            let color_info = ColorInfo {
+                primaries: Some(name.clone()),
+                ..ColorInfo::default()
+            };
+            assert_eq!(resolved(color_info.clone()).primaries, expected, "{name:?}");
+            assert_eq!(
+                color_info.engine_color_traits().primaries,
+                Some(expected),
+                "{name:?}"
+            );
+        }
+
+        for (name, expected) in [
+            (Transfer::Srgb, TransferId::Srgb),
+            (Transfer::Bt709, TransferId::Bt709),
+            (Transfer::Smpte170m, TransferId::Bt709),
+            (Transfer::Smpte240m, TransferId::Bt709),
+            (Transfer::Bt2020TenBit, TransferId::Bt709),
+            (Transfer::Bt2020TwelveBit, TransferId::Bt709),
+            (Transfer::Smpte2084, TransferId::Pq),
+            (Transfer::AribStdB67, TransferId::Hlg),
+            (Transfer::Linear, TransferId::Linear),
+            (Transfer::Gamma22, TransferId::Bt709),
+            (Transfer::Gamma28, TransferId::Bt709),
+            (Transfer::Bt1361, TransferId::Bt709),
+            (Transfer::Log100, TransferId::Bt709),
+            (Transfer::Log100Sqrt10, TransferId::Bt709),
+            (Transfer::Smpte428, TransferId::Bt709),
+            (Transfer::Xvycc, TransferId::Bt709),
+        ] {
+            let color_info = ColorInfo {
+                transfer: Some(name.clone()),
+                ..ColorInfo::default()
+            };
+            assert_eq!(resolved(color_info.clone()).transfer, expected, "{name:?}");
+            assert_eq!(
+                color_info.engine_color_traits().transfer,
+                Some(expected),
+                "{name:?}"
+            );
+        }
+
+        for (name, expected) in [
+            (Matrix::Identity, MatrixId::Identity),
+            (Matrix::Bt709, MatrixId::Bt709),
+            (Matrix::Fcc, MatrixId::Fcc),
+            (Matrix::Bt470Bg, MatrixId::Bt470Bg),
+            (Matrix::Smpte170m, MatrixId::Smpte170m),
+            (Matrix::Smpte240m, MatrixId::Smpte240m),
+            (Matrix::Ycgco, MatrixId::Ycgco),
+            (Matrix::Bt2020Ncl, MatrixId::Bt2020Ncl),
+            (Matrix::Bt2020Cl, MatrixId::Bt2020Cl),
+            (Matrix::Smpte2085, MatrixId::Smpte2085),
+            (Matrix::ChromaNcl, MatrixId::ChromaNcl),
+            (Matrix::ChromaCl, MatrixId::ChromaCl),
+            (Matrix::Ictcp, MatrixId::Ictcp),
+        ] {
+            let color_info = ColorInfo {
+                matrix: Some(name.clone()),
+                ..ColorInfo::default()
+            };
+            assert_eq!(resolved(color_info).matrix, expected, "{name:?}");
+        }
+
+        for (name, expected) in [
+            (Range::Full, RangeId::Full),
+            (Range::Limited, RangeId::Limited),
+        ] {
+            let color_info = ColorInfo {
+                range: Some(name.clone()),
+                ..ColorInfo::default()
+            };
+            assert_eq!(resolved(color_info).range, expected, "{name:?}");
+        }
     }
 }

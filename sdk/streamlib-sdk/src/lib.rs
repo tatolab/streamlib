@@ -219,7 +219,8 @@ pub mod sdk {
         /// Vulkan Video codec layer — engine-tier H.264/H.265
         /// encode/decode primitives (`SimpleEncoder`, `SimpleDecoder`,
         /// `Codec`, `Preset`, `EncodePacket`, codec configuration
-        /// types, `H273ColorVui`). Sessions are minted through the
+        /// types; their H.273 colour vocabulary is `sdk::color`'s
+        /// `H273ColorVui`). Sessions are minted through the
         /// `GpuContext` session surface — `create_encoder_session` /
         /// `create_decoder_session` — which wires the host RHI's queue
         /// mutex, allocator, and per-queue families internally;

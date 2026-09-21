@@ -1,21 +1,26 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! H.273 / VUI color metadata in its native bitstream byte representation.
+//! H.273 / VUI color metadata in its native enumerant-byte representation,
+//! and the one table that maps those bytes onto the engine's color ids.
 //!
-//! The codec layer (`vulkan/video/`) does not depend on the bag
-//! vocabulary's `ColorInfo` type. The encoder and decoder work in raw
-//! H.273 enumerant bytes (the representation that appears verbatim in
-//! the H.264 / H.265 / AV1 bitstream); the codec built-ins in
-//! `streamlib-media-builtins` translate `ColorInfo` ↔ [`H273ColorVui`]
-//! at the codec-processor seam.
+//! Every engine producer of a color description speaks this vocabulary: the
+//! codec layer reads and writes it verbatim in the H.264 / H.265 bitstream,
+//! and a capture device reports its color in it. The bag vocabulary's
+//! `ColorInfo` is translated to and from these bytes in
+//! `streamlib-media-builtins`, never here.
 
-/// H.273 color VUI carried by the H.264 / H.265 SPS.
+use super::ResolvedColorInfo;
+use super::resolve::resolve_color_defaults;
+use super::resolved::{ColorSpaceKind, ColorTraits, MatrixId, PrimariesId, RangeId};
+use super::transfer::TransferId;
+
+/// An H.273 color description: the four enumerants an H.264 / H.265 SPS VUI
+/// carries and a capture device reports.
 ///
-/// Each axis is optional: `None` means "the codec processor did not specify
-/// this axis." When the SPS VUI is emitted, an axis that is `None` while a
-/// peer axis is `Some` is written as H.273 value `2` (Unspecified) per
-/// ISO/IEC 23091-2.
+/// Each axis is optional: `None` means "this axis was not specified." When
+/// the SPS VUI is emitted, an axis that is `None` while a peer axis is `Some`
+/// is written as H.273 value `2` (Unspecified) per ISO/IEC 23091-2.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct H273ColorVui {
     /// ColourPrimaries — ITU-T H.273 §8.1. `bt709 == 1`, `smpte170m == 6`,
@@ -77,6 +82,106 @@ impl H273ColorVui {
     /// `video_signal_type_present_flag = 1`.
     pub fn full_range_bit(&self) -> u32 {
         u32::from(self.full_range.unwrap_or(false))
+    }
+
+    /// The fully resolved description the engine's color kernels take: every
+    /// axis this description leaves absent, or names with a byte the engine
+    /// has no id for, filled with `resolve_color_defaults`' answer for a
+    /// source of `kind`.
+    pub fn resolve_defaults(&self, kind: ColorSpaceKind) -> ResolvedColorInfo {
+        resolve_color_defaults(
+            self.primaries.and_then(primaries_id_from_h273_byte),
+            self.transfer.and_then(transfer_id_from_h273_byte),
+            self.matrix.and_then(matrix_id_from_h273_byte),
+            self.full_range.map(range_id_from_h273_full_range_flag),
+            kind,
+        )
+    }
+
+    /// The swapchain colorspace pick's input: primaries and transfer only.
+    pub fn color_traits(&self) -> ColorTraits {
+        ColorTraits {
+            primaries: self.primaries.and_then(primaries_id_from_h273_byte),
+            transfer: self.transfer.and_then(transfer_id_from_h273_byte),
+        }
+    }
+}
+
+/// The engine primaries id an H.273 `ColourPrimaries` byte names, `None` for
+/// Unspecified and for any value the engine has no id for.
+pub fn primaries_id_from_h273_byte(byte: u8) -> Option<PrimariesId> {
+    Some(match byte {
+        primaries::BT709 => PrimariesId::Bt709,
+        primaries::BT470_M => PrimariesId::Bt470M,
+        primaries::BT470_BG => PrimariesId::Bt470Bg,
+        primaries::SMPTE170M => PrimariesId::Smpte170m,
+        primaries::SMPTE240M => PrimariesId::Smpte240m,
+        primaries::FILM => PrimariesId::Film,
+        primaries::BT2020 => PrimariesId::Bt2020,
+        primaries::SMPTE428 => PrimariesId::Smpte428,
+        primaries::SMPTE431 => PrimariesId::Smpte431,
+        primaries::SMPTE432 => PrimariesId::Smpte432,
+        primaries::EBU3213 => PrimariesId::Ebu3213,
+        _ => return None,
+    })
+}
+
+/// The engine transfer id an H.273 `TransferCharacteristics` byte decodes
+/// with, `None` for Unspecified and for any value outside the H.273 set.
+///
+/// The engine's kernels implement five curves, so most encoded transfers
+/// share one: every SDR camera curve decodes as BT.709, and the encoded
+/// transfers with no exact engine curve take the BT.709 shape too, because
+/// `Linear` would skip decoding entirely.
+pub fn transfer_id_from_h273_byte(byte: u8) -> Option<TransferId> {
+    Some(match byte {
+        transfer::SRGB => TransferId::Srgb,
+        transfer::BT709
+        | transfer::SMPTE170M
+        | transfer::SMPTE240M
+        | transfer::BT2020_TEN_BIT
+        | transfer::BT2020_TWELVE_BIT => TransferId::Bt709,
+        transfer::SMPTE2084 => TransferId::Pq,
+        transfer::ARIB_STD_B67 => TransferId::Hlg,
+        transfer::LINEAR => TransferId::Linear,
+        transfer::GAMMA22
+        | transfer::GAMMA28
+        | transfer::BT1361
+        | transfer::LOG100
+        | transfer::LOG100_SQRT10
+        | transfer::SMPTE428
+        | transfer::XVYCC => TransferId::Bt709,
+        _ => return None,
+    })
+}
+
+/// The engine matrix id an H.273 `MatrixCoefficients` byte names, `None` for
+/// Unspecified and for any value the engine has no id for.
+pub fn matrix_id_from_h273_byte(byte: u8) -> Option<MatrixId> {
+    Some(match byte {
+        matrix::IDENTITY => MatrixId::Identity,
+        matrix::BT709 => MatrixId::Bt709,
+        matrix::FCC => MatrixId::Fcc,
+        matrix::BT470_BG => MatrixId::Bt470Bg,
+        matrix::SMPTE170M => MatrixId::Smpte170m,
+        matrix::SMPTE240M => MatrixId::Smpte240m,
+        matrix::YCGCO => MatrixId::Ycgco,
+        matrix::BT2020_NCL => MatrixId::Bt2020Ncl,
+        matrix::BT2020_CL => MatrixId::Bt2020Cl,
+        matrix::SMPTE2085 => MatrixId::Smpte2085,
+        matrix::CHROMA_NCL => MatrixId::ChromaNcl,
+        matrix::CHROMA_CL => MatrixId::ChromaCl,
+        matrix::ICTCP => MatrixId::Ictcp,
+        _ => return None,
+    })
+}
+
+/// The engine range id a `video_full_range_flag` names.
+pub fn range_id_from_h273_full_range_flag(full_range: bool) -> RangeId {
+    if full_range {
+        RangeId::Full
+    } else {
+        RangeId::Limited
     }
 }
 
@@ -187,6 +292,52 @@ mod tests {
         assert_eq!(v.transfer_byte(), H273_UNSPECIFIED);
         assert_eq!(v.matrix_byte(), 6);
         assert_eq!(v.full_range_bit(), 0);
+    }
+
+    /// Unspecified is how H.273 spells an absent axis, so it must resolve
+    /// exactly as an absent one does rather than landing on an id.
+    #[test]
+    fn unspecified_names_no_engine_id_on_any_axis() {
+        assert_eq!(primaries_id_from_h273_byte(primaries::UNSPECIFIED), None);
+        assert_eq!(transfer_id_from_h273_byte(transfer::UNSPECIFIED), None);
+        assert_eq!(matrix_id_from_h273_byte(matrix::UNSPECIFIED), None);
+    }
+
+    #[test]
+    fn a_byte_outside_the_h273_set_names_no_engine_id() {
+        assert_eq!(primaries_id_from_h273_byte(200), None);
+        assert_eq!(transfer_id_from_h273_byte(200), None);
+        assert_eq!(matrix_id_from_h273_byte(200), None);
+    }
+
+    #[test]
+    fn an_absent_description_resolves_to_the_per_kind_defaults() {
+        for kind in [ColorSpaceKind::Rgb, ColorSpaceKind::Yuv] {
+            assert_eq!(
+                H273ColorVui::default().resolve_defaults(kind),
+                resolve_color_defaults(None, None, None, None, kind)
+            );
+        }
+    }
+
+    #[test]
+    fn an_hdr10_description_resolves_to_pq_over_bt2020() {
+        let resolved = H273ColorVui {
+            primaries: Some(primaries::BT2020),
+            transfer: Some(transfer::SMPTE2084),
+            matrix: Some(matrix::BT2020_NCL),
+            full_range: Some(false),
+        }
+        .resolve_defaults(ColorSpaceKind::Yuv);
+        assert_eq!(
+            resolved,
+            ResolvedColorInfo {
+                primaries: PrimariesId::Bt2020,
+                transfer: TransferId::Pq,
+                matrix: MatrixId::Bt2020Ncl,
+                range: RangeId::Limited,
+            }
+        );
     }
 
     #[test]
