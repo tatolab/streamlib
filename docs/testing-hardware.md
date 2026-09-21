@@ -185,6 +185,18 @@ constructing a device) stay in tier 1.
    `--test-threads=1` invocation in tier 2 already serializes
    everything.
 
+### A window test on Apple
+
+On Apple only the process's first thread can drive the window event pump, and
+libtest never runs a test there. A window test is therefore its own
+`harness = false` binary whose `main` drives the pump, declared with
+`required-features = ["hardware-tests"]` so it is built only in tier 2, and with
+an empty `main` off Apple. Two exist today:
+`streamlib-engine`'s `processor_owned_window_on_the_first_thread` and
+`streamlib-media-builtins`' `two_display_windows_on_the_macos_window_server`.
+The second asserts against the window server, so it refuses to run while the
+login session's screen is locked.
+
 ## CI
 
 Tier 1 runs on every PR via `.github/workflows/test.yml`. A tier-2 CI

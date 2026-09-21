@@ -8,14 +8,16 @@
 //! failed" but "the second caller was answered differently from the first".
 //! Its own process, because building that one loop is irreversible.
 
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
+#[cfg(target_os = "linux")]
 use std::time::{Duration, Instant};
 
-use streamlib_engine::core::window_event_pump::{
-    WindowRegistrationRequestFromOwningProcessor, process_wide_window_event_pump,
-};
+#[cfg(target_os = "linux")]
+use streamlib_engine::core::window_event_pump::WindowRegistrationRequestFromOwningProcessor;
+use streamlib_engine::core::window_event_pump::process_wide_window_event_pump;
 
+#[cfg(target_os = "linux")]
 fn request_for(window_title: &str) -> WindowRegistrationRequestFromOwningProcessor {
     WindowRegistrationRequestFromOwningProcessor {
         window_title: window_title.to_string(),
@@ -27,7 +29,8 @@ fn request_for(window_title: &str) -> WindowRegistrationRequestFromOwningProcess
 /// Runs everywhere, including headless CI: whether or not a display server
 /// exists, the second caller must get the same answer as the first. A pump
 /// that could not start says so identically forever instead of letting a later
-/// caller burn a second event-loop attempt.
+/// caller burn a second event-loop attempt. On Apple, libtest's thread is never
+/// the process's first, so both callers are refused identically.
 #[test]
 fn every_caller_is_answered_by_the_same_pump() {
     let first = process_wide_window_event_pump();
@@ -60,7 +63,9 @@ fn every_caller_is_answered_by_the_same_pump() {
 
 /// Needs a display server, so it is rig-only under the hardware tier. This is
 /// the ticket's named check: a second window registration is accepted rather
-/// than degraded.
+/// than degraded. Apple's equivalent is `processor_owned_window_on_the_first_thread`,
+/// because only the first thread can drive the pump there.
+#[cfg(target_os = "linux")]
 #[cfg_attr(
     not(feature = "hardware-tests"),
     ignore = "needs a display server ($DISPLAY / $WAYLAND_DISPLAY) — set --features streamlib/hardware-tests. See docs/testing-hardware.md"
@@ -81,8 +86,8 @@ fn two_windows_register_at_once_and_each_is_addressed_alone() {
         );
 
     assert_ne!(
-        first_window.window_shared_with_event_pump().id(),
-        second_window.window_shared_with_event_pump().id(),
+        first_window.window_id(),
+        second_window.window_id(),
         "two live windows, not one handed out twice"
     );
     for (label, window) in [("first", &first_window), ("second", &second_window)] {

@@ -97,7 +97,7 @@ pub(crate) use vulkan_command_recorder::RhiCommandRecorderInner;
 mod vulkan_present_target;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use vulkan_present_target::{
-    MAX_FRAMES_IN_FLIGHT, PresentFrame, PresentTarget, VulkanPresentTarget,
+    MAX_FRAMES_IN_FLIGHT, PresentFrame, PresentSurfaceSource, PresentTarget, VulkanPresentTarget,
 };
 // `PresentTargetInner` is needed by `core::plugin::host_services` to
 // reclaim the `Box<Mutex<VulkanPresentTarget>>` in the `drop_present_target`

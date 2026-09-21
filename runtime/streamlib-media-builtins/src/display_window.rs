@@ -1,8 +1,6 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-#![cfg(target_os = "linux")]
-
 //! Built-in display: a processor-owned window, fed from an input port.
 //!
 //! The present machinery is the engine's — [`ProcessorOwnedWindow`] mints the

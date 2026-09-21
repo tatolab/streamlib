@@ -13,15 +13,18 @@
 //! The pump owns the scarce resource and nothing else. Window policy — title,
 //! size, what a resize means, when to redraw, what closing does — stays with
 //! the registering processor: it supplies the attributes and consumes the
-//! events. The raw-window-handle seam between the window and the present
-//! target is untouched; the pump never mints a surface and never draws.
+//! events. The pump never mints a surface and never draws; it hands the owner
+//! what a present target is minted from.
 //!
 //! In `core/` rather than `linux/` because it is one seam with a per-platform
-//! loop under it. Apple's rule — the loop must live on the process's first
-//! thread — changes where the loop is driven, not what a window owner asks for
-//! or what it is handed back.
+//! loop under it. On Linux the loop runs on a thread of its own. On Apple it
+//! must live on the process's first thread, so it is built there when the
+//! runtime starts and driven there while `rt.run()` blocks; AppKit touches a
+//! view only from that thread, so the pump also attaches each window's Metal
+//! layer as it mints the window. Neither changes what a window owner asks for.
 
 use std::collections::HashMap;
+use std::mem::ManuallyDrop;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, SyncSender, sync_channel};
 use std::sync::{Arc, OnceLock};
@@ -33,7 +36,10 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::window::{Window, WindowAttributes, WindowId};
 
+#[cfg(target_os = "macos")]
+use crate::apple::metal_layer_backing_window_content_view::MetalLayerBackingWindowContentView;
 use crate::core::error::{Error, Result};
+use crate::vulkan::rhi::PresentSurfaceSource;
 
 /// How long a caller waits for the pump thread to reach the point where it can
 /// mint windows, and for an individual window request to come back. Generous
@@ -68,21 +74,50 @@ pub enum WindowEventForOwningProcessor {
 
 /// A window minted by the pump on behalf of one processor.
 ///
-/// Dropping it closes the window and deregisters it: the pump holds no
-/// reference of its own, so this is the only thing keeping the window alive.
+/// Dropping it deregisters the window and hands it back to the pump, which
+/// closes it: the pump holds no reference of its own while it is registered,
+/// so this is the only thing keeping the window alive.
 pub struct WindowRegisteredWithEventPump {
     window_id: WindowId,
     events_from_event_pump: Receiver<WindowEventForOwningProcessor>,
     control_messages_to_event_pump: EventLoopProxy<WindowEventPumpControlMessage>,
-    window: Arc<Window>,
+    /// Taken in `Drop` and sent to the pump, so the window is released on the
+    /// pump's thread. AppKit closes a window only on the first thread and
+    /// winit blocks until it has, so an owner releasing it during teardown —
+    /// when nothing drives the loop — would otherwise hang there.
+    window_handed_back_to_the_event_pump_on_drop: ManuallyDrop<WindowMintedByTheEventPump>,
+}
+
+/// A window and what its present target is minted from, released together.
+struct WindowMintedByTheEventPump {
+    window: Window,
+    #[cfg(target_os = "macos")]
+    metal_layer_backing_window_content_view: MetalLayerBackingWindowContentView,
 }
 
 impl WindowRegisteredWithEventPump {
-    /// The window itself, for the raw-window-handle seam that mints a present
-    /// target. Cloning the `Arc` keeps the window alive past this
-    /// registration, which is what the present target's handle requires.
-    pub fn window_shared_with_event_pump(&self) -> &Arc<Window> {
-        &self.window
+    /// The pump's id for this window.
+    pub fn window_id(&self) -> WindowId {
+        self.window_id
+    }
+
+    /// What this window's present target is minted from. Borrowed, so the
+    /// window outlives the target only while this registration does.
+    pub fn present_surface_source(&self) -> PresentSurfaceSource<'_> {
+        let window_minted_by_the_event_pump = &*self.window_handed_back_to_the_event_pump_on_drop;
+        #[cfg(target_os = "linux")]
+        {
+            PresentSurfaceSource::NativeWindow {
+                window_handle: &window_minted_by_the_event_pump.window,
+                display_handle: &window_minted_by_the_event_pump.window,
+            }
+        }
+        #[cfg(target_os = "macos")]
+        {
+            PresentSurfaceSource::MetalLayerBackingWindowContentView(
+                &window_minted_by_the_event_pump.metal_layer_backing_window_content_view,
+            )
+        }
     }
 
     /// Every event the pump has routed to this window since the last drain,
@@ -108,16 +143,25 @@ impl WindowRegisteredWithEventPump {
     /// The window's current drawable size in physical pixels, clamped away
     /// from zero so it is always a legal swapchain extent.
     pub fn current_physical_size(&self) -> (u32, u32) {
-        let size = self.window.inner_size();
+        let size = self
+            .window_handed_back_to_the_event_pump_on_drop
+            .window
+            .inner_size();
         (size.width.max(1), size.height.max(1))
     }
 }
 
 impl Drop for WindowRegisteredWithEventPump {
     fn drop(&mut self) {
+        // SAFETY: `drop` runs once, and nothing reads the field after this.
+        let window_minted_by_the_event_pump =
+            unsafe { ManuallyDrop::take(&mut self.window_handed_back_to_the_event_pump_on_drop) };
+        // A pump that has stopped hands the message back, and the window is
+        // released here instead.
         let _ = self.control_messages_to_event_pump.send_event(
             WindowEventPumpControlMessage::ForgetWindowOfOwningProcessor {
                 window_id: self.window_id,
+                window_minted_by_the_event_pump,
             },
         );
     }
@@ -193,13 +237,21 @@ impl ProcessWideWindowEventPump {
 /// — no display server, or a non-winit consumer already took the one slot —
 /// answers with the same error forever rather than retrying per caller and
 /// burning the slot on a race.
+///
+/// On Apple the pump can only be built on the process's first thread, so a
+/// first call from any other thread settles the answer as a refusal.
 pub fn process_wide_window_event_pump() -> Result<&'static ProcessWideWindowEventPump> {
     static PROCESS_WIDE_WINDOW_EVENT_PUMP: OnceLock<
         std::result::Result<ProcessWideWindowEventPump, String>,
     > = OnceLock::new();
 
+    #[cfg(target_os = "linux")]
+    let start_the_process_wide_window_event_pump = start_window_event_pump_thread;
+    #[cfg(target_os = "macos")]
+    let start_the_process_wide_window_event_pump = build_the_window_event_pump_on_the_first_thread;
+
     PROCESS_WIDE_WINDOW_EVENT_PUMP
-        .get_or_init(start_window_event_pump_thread)
+        .get_or_init(start_the_process_wide_window_event_pump)
         .as_ref()
         .map_err(|reason| Error::DisplaySurfaceUnavailable(reason.clone()))
 }
@@ -213,9 +265,11 @@ enum WindowEventPumpControlMessage {
     },
     ForgetWindowOfOwningProcessor {
         window_id: WindowId,
+        window_minted_by_the_event_pump: WindowMintedByTheEventPump,
     },
 }
 
+#[cfg(target_os = "linux")]
 fn start_window_event_pump_thread() -> std::result::Result<ProcessWideWindowEventPump, String> {
     let (pump_startup_outcome_sender, pump_startup_outcome) = sync_channel(1);
     let registered_window_count = Arc::new(AtomicUsize::new(0));
@@ -272,43 +326,246 @@ fn start_window_event_pump_thread() -> std::result::Result<ProcessWideWindowEven
     }
 }
 
+#[cfg(target_os = "linux")]
 fn build_the_processes_one_event_loop()
 -> std::result::Result<EventLoop<WindowEventPumpControlMessage>, String> {
-    // AppKit has no any-thread opt-in to give, and winit does not report the
-    // violation — it panics inside `EventLoop::build`. The pump owns its own
-    // thread, so on Apple that panic would unwind a spawned thread and reach
-    // the caller as a startup timeout naming nothing. Refuse here instead,
-    // until the Apple pump is driven on the process's first thread (#2357).
-    #[cfg(target_os = "macos")]
-    {
-        Err(concat!(
-            "the window event pump builds its event loop on its own thread, and macOS ",
-            "requires the process's first thread; the Apple pump is not wired yet",
-        )
-        .to_string())
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let mut builder = EventLoop::<WindowEventPumpControlMessage>::with_user_event();
-        // Both Linux backends need their own any-thread opt-in (each trait
-        // method flags only its own backend).
-        #[cfg(target_os = "linux")]
-        {
-            use winit::platform::wayland::EventLoopBuilderExtWayland;
-            use winit::platform::x11::EventLoopBuilderExtX11;
+    use winit::platform::wayland::EventLoopBuilderExtWayland;
+    use winit::platform::x11::EventLoopBuilderExtX11;
 
-            EventLoopBuilderExtX11::with_any_thread(&mut builder, true);
-            EventLoopBuilderExtWayland::with_any_thread(&mut builder, true);
+    let mut builder = EventLoop::<WindowEventPumpControlMessage>::with_user_event();
+    // Both Linux backends need their own any-thread opt-in (each trait
+    // method flags only its own backend).
+    EventLoopBuilderExtX11::with_any_thread(&mut builder, true);
+    EventLoopBuilderExtWayland::with_any_thread(&mut builder, true);
+    builder
+        .build()
+        .map_err(|e| format!("failed to build the window event loop: {e}"))
+}
+
+/// The process's one event loop and the pump it serves, kept on the first
+/// thread — the only thread AppKit lets drive it. Taken out for the length of
+/// a drive, so a drive nested further up the same stack finds it absent.
+#[cfg(target_os = "macos")]
+struct EventLoopWithItsPumpOnTheFirstThread {
+    event_loop: EventLoop<WindowEventPumpControlMessage>,
+    window_event_pump: WindowEventPumpApplicationHandler,
+    /// Whether any drive has launched the application yet. A process that
+    /// never drove the loop has nothing on screen to close.
+    has_been_driven: bool,
+}
+
+#[cfg(target_os = "macos")]
+thread_local! {
+    static EVENT_LOOP_WITH_ITS_PUMP_ON_THE_FIRST_THREAD: std::cell::RefCell<
+        Option<EventLoopWithItsPumpOnTheFirstThread>,
+    > = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(target_os = "macos")]
+fn build_the_window_event_pump_on_the_first_thread()
+-> std::result::Result<ProcessWideWindowEventPump, String> {
+    use winit::platform::macos::EventLoopBuilderExtMacOS;
+
+    let Some(first_thread) = objc2::MainThreadMarker::new() else {
+        return Err(concat!(
+            "the window event pump is built on the process's first thread, and was first ",
+            "asked for on another — the runtime was started off the first thread, so no ",
+            "window can be created in this process",
+        )
+        .to_string());
+    };
+    if objc2_app_kit::NSApplication::sharedApplication(first_thread).isRunning() {
+        return Err(concat!(
+            "another NSApplication run loop already drives the process's first thread, so ",
+            "the window event pump cannot own it",
+        )
+        .to_string());
+    }
+
+    let mut builder = EventLoop::<WindowEventPumpControlMessage>::with_user_event();
+    // The engine installs its own menu, whose Quit requests a runtime shutdown
+    // instead of terminating the process under the run loop.
+    builder.with_default_menu(false);
+    let event_loop = builder
+        .build()
+        .map_err(|e| format!("failed to build the window event loop: {e}"))?;
+    let control_messages_to_event_pump = event_loop.create_proxy();
+    let registered_window_count = Arc::new(AtomicUsize::new(0));
+    let window_event_pump = WindowEventPumpApplicationHandler {
+        startup_reply: None,
+        control_messages_to_event_pump: control_messages_to_event_pump.clone(),
+        registered_windows: RegisteredWindowsByWindowId::new(Arc::clone(&registered_window_count)),
+    };
+    EVENT_LOOP_WITH_ITS_PUMP_ON_THE_FIRST_THREAD.with(|event_loop_with_its_pump| {
+        *event_loop_with_its_pump.borrow_mut() = Some(EventLoopWithItsPumpOnTheFirstThread {
+            event_loop,
+            window_event_pump,
+            has_been_driven: false,
+        });
+    });
+    tracing::info!("window event pump: ready on the process's first thread");
+    Ok(ProcessWideWindowEventPump {
+        control_messages_to_event_pump,
+        registered_window_count,
+    })
+}
+
+/// How a drive of the event loop on the process's first thread ended.
+#[cfg(target_os = "macos")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowEventPumpDriveOnTheFirstThread {
+    /// The loop ran on this thread until the observation broke.
+    DrivenUntilTheObservationBroke,
+    /// The loop did not run to the observation's end — this thread does not
+    /// hold it, it is already being driven further up this thread's stack, or
+    /// it stopped first. The caller keeps observing without it.
+    NotDrivenToTheObservationsEnd,
+}
+
+/// Drive the process's one event loop on the calling thread, calling
+/// `observe_between_events` about every `observation_interval` until it breaks.
+///
+/// `tear_down_before_the_application_terminates` runs only if AppKit
+/// terminates the process under the loop — the Dock's Quit, a logout — which
+/// exits the process as soon as the loop reports it.
+#[cfg(target_os = "macos")]
+pub fn drive_the_window_event_pump_on_the_first_thread_until(
+    observation_interval: Duration,
+    observe_between_events: impl FnMut() -> std::ops::ControlFlow<()>,
+    tear_down_before_the_application_terminates: impl FnOnce(),
+) -> WindowEventPumpDriveOnTheFirstThread {
+    use winit::platform::run_on_demand::EventLoopExtRunOnDemand;
+
+    let Some(mut event_loop_with_its_pump) = EVENT_LOOP_WITH_ITS_PUMP_ON_THE_FIRST_THREAD
+        .with(|event_loop_with_its_pump| event_loop_with_its_pump.borrow_mut().take())
+    else {
+        return WindowEventPumpDriveOnTheFirstThread::NotDrivenToTheObservationsEnd;
+    };
+    event_loop_with_its_pump.has_been_driven = true;
+
+    let mut window_event_pump_driven_until_the_observation_breaks =
+        WindowEventPumpDrivenUntilTheObservationBreaks {
+            window_event_pump: &mut event_loop_with_its_pump.window_event_pump,
+            observe_between_events,
+            observation_interval,
+            next_observation_at: std::time::Instant::now(),
+            observation_broke: false,
+            tear_down_before_the_application_terminates: Some(
+                tear_down_before_the_application_terminates,
+            ),
+        };
+    let run_outcome = event_loop_with_its_pump
+        .event_loop
+        .run_app_on_demand(&mut window_event_pump_driven_until_the_observation_breaks);
+    let observation_broke = window_event_pump_driven_until_the_observation_breaks.observation_broke;
+
+    EVENT_LOOP_WITH_ITS_PUMP_ON_THE_FIRST_THREAD.with(|slot| {
+        *slot.borrow_mut() = Some(event_loop_with_its_pump);
+    });
+    if let Err(e) = run_outcome {
+        tracing::error!(error = %e, "window event pump: the event loop stopped with an error");
+    }
+    if observation_broke {
+        WindowEventPumpDriveOnTheFirstThread::DrivenUntilTheObservationBroke
+    } else {
+        WindowEventPumpDriveOnTheFirstThread::NotDrivenToTheObservationsEnd
+    }
+}
+
+/// Close the windows whose owners let go while nothing drove the loop — a
+/// teardown's windows otherwise stay on screen until the next drive. Does
+/// nothing off the first thread, or where the loop was never driven.
+#[cfg(target_os = "macos")]
+pub fn close_the_windows_released_while_the_event_pump_was_not_driven() {
+    let has_been_driven = EVENT_LOOP_WITH_ITS_PUMP_ON_THE_FIRST_THREAD.with(|slot| {
+        slot.borrow()
+            .as_ref()
+            .is_some_and(|event_loop_with_its_pump| event_loop_with_its_pump.has_been_driven)
+    });
+    if has_been_driven {
+        // One turn: the loop hands its queued messages over before it first
+        // asks whether to wait, and the observation ends it there.
+        drive_the_window_event_pump_on_the_first_thread_until(
+            Duration::ZERO,
+            || std::ops::ControlFlow::Break(()),
+            || {},
+        );
+    }
+}
+
+/// The pump, for the length of one drive, with the observation that ends it.
+#[cfg(target_os = "macos")]
+struct WindowEventPumpDrivenUntilTheObservationBreaks<'pump, ObserveBetweenEvents, TearDown> {
+    window_event_pump: &'pump mut WindowEventPumpApplicationHandler,
+    observe_between_events: ObserveBetweenEvents,
+    observation_interval: Duration,
+    next_observation_at: std::time::Instant,
+    observation_broke: bool,
+    tear_down_before_the_application_terminates: Option<TearDown>,
+}
+
+#[cfg(target_os = "macos")]
+impl<ObserveBetweenEvents, TearDown> ApplicationHandler<WindowEventPumpControlMessage>
+    for WindowEventPumpDrivenUntilTheObservationBreaks<'_, ObserveBetweenEvents, TearDown>
+where
+    ObserveBetweenEvents: FnMut() -> std::ops::ControlFlow<()>,
+    TearDown: FnOnce(),
+{
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if let Some(first_thread) = objc2::MainThreadMarker::new() {
+            crate::apple::application_menu::install_the_application_menu_whose_quit_requests_a_runtime_shutdown(
+                first_thread,
+            );
         }
-        builder
-            .build()
-            .map_err(|e| format!("failed to build the window event loop: {e}"))
+        self.window_event_pump.resumed(event_loop);
+    }
+
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, message: WindowEventPumpControlMessage) {
+        self.window_event_pump.user_event(event_loop, message);
+    }
+
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        window_id: WindowId,
+        event: WindowEvent,
+    ) {
+        self.window_event_pump
+            .window_event(event_loop, window_id, event);
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let now = std::time::Instant::now();
+        if now >= self.next_observation_at {
+            if (self.observe_between_events)().is_break() {
+                self.observation_broke = true;
+                event_loop.exit();
+                return;
+            }
+            self.next_observation_at = now + self.observation_interval;
+        }
+        event_loop.set_control_flow(ControlFlow::WaitUntil(self.next_observation_at));
+    }
+
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        if self.observation_broke {
+            return;
+        }
+        tracing::warn!(
+            "window event pump: the application is terminating under the event loop; tearing \
+             the runtime down before the process exits"
+        );
+        if let Some(tear_down_before_the_application_terminates) =
+            self.tear_down_before_the_application_terminates.take()
+        {
+            tear_down_before_the_application_terminates();
+        }
     }
 }
 
 /// The pump thread's book of live windows. Holds the delivery end only — the
-/// window itself belongs to the processor that asked for it, so a registration
-/// dropped by its owner closes the window without the pump's involvement.
+/// window itself belongs to the processor that asked for it until its
+/// registration hands it back.
 struct RegisteredWindowsByWindowId {
     events_to_owning_processors: HashMap<WindowId, Sender<WindowEventForOwningProcessor>>,
     /// Published for [`ProcessWideWindowEventPump::registered_window_count`],
@@ -400,8 +657,12 @@ impl ApplicationHandler<WindowEventPumpControlMessage> for WindowEventPumpApplic
                     drop(unclaimed);
                 }
             }
-            WindowEventPumpControlMessage::ForgetWindowOfOwningProcessor { window_id } => {
+            WindowEventPumpControlMessage::ForgetWindowOfOwningProcessor {
+                window_id,
+                window_minted_by_the_event_pump,
+            } => {
                 self.registered_windows.forget(window_id);
+                drop(window_minted_by_the_event_pump);
                 tracing::debug!(
                     registered_window_count = self.registered_windows.registered_window_count(),
                     "window event pump: window deregistered"
@@ -459,20 +720,36 @@ impl WindowEventPumpApplicationHandler {
                     request.window_title
                 ))
             })?;
-        let window = Arc::new(window);
+        let window_minted_by_the_event_pump = WindowMintedByTheEventPump {
+            #[cfg(target_os = "macos")]
+            metal_layer_backing_window_content_view:
+                MetalLayerBackingWindowContentView::attach_to_the_content_view_of(
+                    &window,
+                    objc2::MainThreadMarker::new().ok_or_else(|| {
+                        Error::DisplaySurfaceUnavailable(
+                            "window event pump: a window was minted off the process's first thread"
+                                .into(),
+                        )
+                    })?,
+                )?,
+            window,
+        };
+        let window_id = window_minted_by_the_event_pump.window.id();
         let (events_to_owning_processor, events_from_event_pump) = std::sync::mpsc::channel();
         self.registered_windows
-            .register(window.id(), events_to_owning_processor);
+            .register(window_id, events_to_owning_processor);
         tracing::info!(
             window_title = %request.window_title,
             registered_window_count = self.registered_windows.registered_window_count(),
             "window event pump: window registered"
         );
         Ok(WindowRegisteredWithEventPump {
-            window_id: window.id(),
+            window_id,
             events_from_event_pump,
             control_messages_to_event_pump: self.control_messages_to_event_pump.clone(),
-            window,
+            window_handed_back_to_the_event_pump_on_drop: ManuallyDrop::new(
+                window_minted_by_the_event_pump,
+            ),
         })
     }
 }

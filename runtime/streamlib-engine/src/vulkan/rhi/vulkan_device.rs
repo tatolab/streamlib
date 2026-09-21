@@ -21,7 +21,7 @@ use streamlib_consumer_rhi::{
     REQUESTED_VULKAN_INSTANCE_API_VERSION, vulkan_extension_names_borrowed_from_properties,
 };
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::VulkanTextureLike;
 #[cfg(target_os = "linux")]
 use super::drm_modifier_probe::{self, DrmModifierTable};
@@ -3291,7 +3291,7 @@ impl VulkanRhiDevice for HostVulkanDevice {
 /// otherwise. Callers holding a
 /// [`crate::core::context::TextureRegistration`] write it back via
 /// `update_layout`; callers minting one pass it as the initial layout.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[must_use = "the terminal layout must reach the destination's registration — discarding it leaves a registration claiming a layout the image is not in, and the next consumer barriers out of a layout that was never recorded"]
 pub struct PixelBufferUploadFinalTextureLayout {
@@ -3311,7 +3311,7 @@ impl HostVulkanDevice {
     /// for the per-frame hot path. Hot-path callers should use
     /// [`HostVulkanUploadResources`] + [`Self::upload_buffer_to_image_amortized`]
     /// instead.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub unsafe fn upload_buffer_to_image(
         &self,
         src_buffer: vk::Buffer,
@@ -3416,7 +3416,7 @@ impl HostVulkanDevice {
     /// sequence into `cb`, submits to the shared queue
     /// (mutex-protected), and waits on `fence`. Caller owns cb + fence
     /// lifecycle.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     unsafe fn record_and_submit_buffer_to_image(
         &self,
         cb: vk::CommandBuffer,

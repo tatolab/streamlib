@@ -109,7 +109,7 @@ impl GpuDevice {
     /// Skips the DMA-BUF export pool where applicable. Use for textures that
     /// never cross process boundaries; reduces pressure on NVIDIA Linux's
     /// DMA-BUF allocation cap.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn create_texture_local(&self, desc: &TextureDescriptor) -> Result<Texture> {
         let vulkan_texture = self.inner.create_texture_local(desc)?;
         Ok(Texture::from_vulkan(vulkan_texture))

@@ -575,38 +575,15 @@ impl RuntimeContext {
 
     /// Ensure the platform is ready for runtime operations.
     ///
-    /// This method handles platform-specific initialization that must complete
-    /// before processors can safely use platform APIs. On macOS, this sets up
-    /// NSApplication and verifies the app has finished launching.
-    ///
-    /// Call this from `Runner::start()` after GPU context is initialized
-    /// but before starting any processors.
+    /// On macOS this builds the process's one window event pump when called on
+    /// the process's first thread, the only thread AppKit lets drive it, before
+    /// any processor can ask it for a window. Called anywhere else, the pump
+    /// settles as unavailable and every window request says why.
     #[cfg(target_os = "macos")]
     pub fn ensure_platform_ready(&self) -> crate::core::Result<()> {
-        use objc2::MainThreadMarker;
-        use objc2_app_kit::NSApplication;
-
-        // Detect if we're running as a standalone app
-        // (not embedded in another app with its own NSApplication event loop)
-        let is_standalone = if let Some(mtm) = MainThreadMarker::new() {
-            let app = NSApplication::sharedApplication(mtm);
-            !app.isRunning()
-        } else {
-            // Not on runtime thread - can't check NSApplication state
-            false
-        };
-
-        if is_standalone {
-            tracing::info!("[ensure_platform_ready] Setting up macOS application");
-            crate::apple::runtime_ext::setup_macos_app();
-
-            // CRITICAL: Verify the macOS platform is fully ready BEFORE starting
-            // any processors. This uses Apple's NSRunningApplication.isFinishedLaunching
-            // API to confirm the app has completed its launch sequence.
-            tracing::info!("[ensure_platform_ready] Verifying macOS platform readiness...");
-            crate::apple::runtime_ext::ensure_macos_platform_ready()?;
+        if let Err(reason) = crate::core::window_event_pump::process_wide_window_event_pump() {
+            tracing::info!(%reason, "[ensure_platform_ready] no window can be created in this process");
         }
-
         Ok(())
     }
 

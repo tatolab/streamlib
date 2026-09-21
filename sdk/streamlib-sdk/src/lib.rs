@@ -92,10 +92,10 @@ pub mod sdk {
     pub use streamlib_engine::core::rhi;
     pub use streamlib_engine::core::runtime;
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub use streamlib_engine::core::processor_owned_window;
     pub use streamlib_engine::core::texture;
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub use streamlib_engine::core::window_event_pump;
 
     // ---- App authoring sugar ----

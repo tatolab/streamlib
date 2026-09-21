@@ -103,7 +103,7 @@ class CameraSource:
 
 @final
 class DisplayWindow:
-    """Native built-in block: video frames in a vsync'd window (Linux).
+    """Native built-in block: video frames in a vsync'd window.
 
     A marker type — pass the class itself to `Runtime.add`
     (`rt.add(DisplayWindow, config={"title": "My app", "scaling": "fit"})`);
@@ -636,6 +636,10 @@ class Runtime:
         engine then stays alive beneath it until the process exits. A forced
         shutdown that abandoned nothing returns normally. A teardown still hung
         after about fifteen seconds ends the process with status 124.
+
+        On macOS the main thread drives the window event pump while this
+        blocks, so a `DisplayWindow` opens only under `run()`. There SIGINT and
+        SIGTERM are never handed back to Python, and SIGHUP is not owned.
         """
 
     def wait_until_every_processor_is_running(self, *, timeout: float = 30.0) -> None:
