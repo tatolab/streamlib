@@ -59,7 +59,9 @@ which this delta does not touch.
   declares a listener that is never called.
 - All twelve CI jobs are `ubuntu-latest`. `xtask lint_logging.rs:770,1156-1260` evaluates `cfg` as
   if the target were Linux and skips `apple/` and `metal/` — which is how this rotted unseen.
-- Proven on the hardware: IOSurface imports as a `VkImage` single-plane and biplanar;
+- Proven on the hardware: IOSurface imports as a `VkImage` single-plane and biplanar (superseded
+  for camera frames by #2359: a CoreVideo 4:2:0 surface imports only its luma plane as an image, and
+  imports whole as a storage buffer — see §Media I/O);
   `CAMetalLayer` yields a working swapchain; a spawned Python child edits a 1080p GPU frame through
   a numpy view over a Mach-passed IOSurface at 698 fps, verified pixel-exact; a timeline semaphore
   crosses to that child over public API with no launchd service, at 120 µs per round trip.
@@ -99,10 +101,17 @@ which this delta does not touch.
   platform-agnostic above it; the V4L2 implementation moves under `linux/` unchanged. The published
   contract does not move: a `VideoFrame` bag on port `video` whose `surface_id` names a pooled
   buffer, its timestamp in the machine monotonic epoch, colour as the H.273 four-tuple.
-- ADDED: Apple capture hands back an IOSurface-backed `CVPixelBuffer`, imported as a `VkImage`
-  through `VK_EXT_metal_objects`. Camera→GPU transport keeps its no-dial rule: importability is an
-  allocation flavour the engine derives per acquisition, and IOSurface joins DMA-BUF and OPAQUE_FD
-  as one of them.
+- ADDED: Apple capture hands back an IOSurface-backed `CVPixelBuffer`, ~~imported as a `VkImage`
+  through `VK_EXT_metal_objects`~~ whose memory is imported as a storage buffer through
+  `VK_EXT_external_memory_host` and read by the same NV12 kernel a V4L2 DMA-BUF import feeds, so
+  colour stays the engine's on both platforms. Camera→GPU transport keeps its no-dial rule:
+  importability is an allocation flavour the engine derives per acquisition, and IOSurface joins
+  DMA-BUF and OPAQUE_FD as one of them; a driver that refuses the import falls back to CPU upload.
+  Owner, 2026-09-21, while shipping #2359, on evidence that MoltenVK refuses every CoreVideo 4:2:0
+  surface as a multi-planar `VkImage` — its import check compares the surface's top-level element,
+  one byte in 1×1, against the whole six-byte 2×2 block, through v1.4.2 and on `main` — while
+  MoltenVK 1.4.2 imports the same surface's memory as a buffer and a compute kernel reads both
+  planes from it.
 - ADDED: **a camera frame carries one capture instant on both of its stamps.** A bag has two: the
   payload's own `timestamp_ns` and the envelope's, which `OutputWriter::write` sets from its own
   `MediaClock::now()` before delegating to `write_with_timestamp`. Today the camera writes plainly,
@@ -162,7 +171,10 @@ which this delta does not touch.
 - MODIFIED: the wheel portability model states what "the host may supply" means per platform. On
   Linux, system libraries are dlopen'd and never linked. On macOS the Vulkan driver is not present
   on a stock machine, so the wheel carries the Vulkan loader and MoltenVK and points the loader at
-  them additively, leaving a user's own driver discoverable. Everything else keeps the rule: only
+  them additively, leaving a user's own driver discoverable. The MoltenVK it carries is 1.4.1 or
+  later — camera zero-copy under §Media I/O depends on a host-pointer import in its spec-correct
+  form, which 1.4.0 refuses and 1.4.2 takes (measured), and which 1.4.1's source is the first to
+  accept. Owner, 2026-09-21, #2359. Everything else keeps the rule: only
   the system frameworks may be linked.
 - ADDED: the macOS artifact is an `aarch64-apple-darwin` wheel at the same abi3 floor, built on a
   macOS runner, with a pinned deployment target. No notarisation and no signing identity are
@@ -234,8 +246,9 @@ which this delta does not touch.
 - REMOVED: RhiBlitter::blit_copy_iosurface_raw
   And `blit_copy_iosurface` on `GpuContext`, `GpuContextFullAccess` and `GpuContextLimitedAccess`.
   The Metal blitter was its only implementation; what remained refused by name, making the three
-  facade layers a no-op chain with no callers. An IOSurface reaches the RHI as a `VkImage` through
-  `VK_EXT_metal_objects`, not a raw blit. Recorded while shipping #2355.
+  facade layers a no-op chain with no callers. An IOSurface reaches the RHI as ~~a `VkImage` through
+  `VK_EXT_metal_objects`~~ an imported storage buffer (#2359, §Media I/O), not a raw blit. Recorded
+  while shipping #2355.
 - REMOVED: Texture::iosurface_id
   An ungated `pub fn` that existed on Linux and answered `None` there; its only producer was the
   Metal texture. Recorded while shipping #2355.
