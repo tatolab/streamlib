@@ -173,45 +173,42 @@ impl Drop for MeshPortEgress {
 }
 
 /// Wait for a helper-placed source to say it opened the publisher its parent
-/// asked it for, reporting whether it did.
+/// asked it for, or say why it did not.
 ///
-/// A refusal and a silence are both said by name here, because this is the one
+/// A refusal and a silence are both answered by name, because this is the one
 /// side that knows a reader is waiting on the port: with no egress the reader's
-/// link stays `awaiting_remote`, and without this line nothing would say why.
+/// link stays `awaiting_remote`, and without this reason nothing would say why.
+/// The port is not named in it — the reader's link already names the address.
 fn a_helper_opened_its_publisher(
     the_helpers_answer: &OutOfProcessLinkWireReply,
-    addressed: &MeshPortAddress,
     stop: &AtomicBool,
-) -> bool {
+) -> std::result::Result<(), String> {
     let gave_up_at = Instant::now() + HOW_LONG_A_HELPER_HAS_TO_OPEN_ITS_PUBLISHER;
     while !stop.load(Ordering::Acquire) {
         match the_helpers_answer.the_far_sides_answer() {
-            Some(OutOfProcessLinkWireOutcome::OpenedByTheFarSide) => return true,
+            Some(OutOfProcessLinkWireOutcome::OpenedByTheFarSide) => return Ok(()),
             Some(OutOfProcessLinkWireOutcome::RefusedByTheFarSide { reason }) => {
-                tracing::warn!(
-                    "the mesh cannot send {addressed}: the helper process its processor runs in \
-                     could not open the port's publisher: {reason}"
-                );
-                return false;
+                return Err(format!(
+                    "the helper process its processor runs in could not open the port's \
+                     publisher: {reason}"
+                ));
             }
             None => {
                 if Instant::now() >= gave_up_at {
-                    tracing::warn!(
-                        "the mesh cannot send {addressed}: the helper process its processor runs \
-                         in did not open the port's publisher within \
-                         {HOW_LONG_A_HELPER_HAS_TO_OPEN_ITS_PUBLISHER:?}"
-                    );
-                    return false;
+                    return Err(format!(
+                        "the helper process its processor runs in did not open the port's \
+                         publisher within {HOW_LONG_A_HELPER_HAS_TO_OPEN_ITS_PUBLISHER:?}"
+                    ));
                 }
                 std::thread::sleep(HOW_OFTEN_A_HELPERS_ANSWER_IS_LOOKED_AT);
             }
         }
     }
-    false
+    Err("it was cancelled before its port's publisher was open".to_string())
 }
 
 /// Take a destination slot on the port's channel, once whatever publishes that
-/// port has opened — or `None` when this egress never starts, said by name.
+/// port has opened — or say why this egress never starts.
 ///
 /// Everything an egress does before it declares its liveliness token, and
 /// nothing that needs a Zenoh session: the ordering this holds — no token
@@ -219,49 +216,42 @@ fn a_helper_opened_its_publisher(
 /// provable without standing a session up.
 fn take_a_destination_slot_once_the_port_publishes(
     how_to_read_the_port: &HowToReadAnOfferedOutputPort,
-    addressed: &MeshPortAddress,
     iceoryx2_node: &Iceoryx2Node,
     stop: &AtomicBool,
-) -> Option<ChannelDataServiceSubscriber> {
+) -> std::result::Result<ChannelDataServiceSubscriber, String> {
     if let Some(the_helpers_answer) = how_to_read_the_port
         .the_helpers_answer_that_it_opened_its_publisher
         .as_deref()
-        && !a_helper_opened_its_publisher(the_helpers_answer, addressed, stop)
     {
-        return None;
+        a_helper_opened_its_publisher(the_helpers_answer, stop)?;
     }
 
-    let service = match iceoryx2_node.open_or_create_service(
-        &how_to_read_the_port.channel_service_name,
-        how_to_read_the_port.channel_sizing.max_subscribers,
-        how_to_read_the_port
-            .channel_sizing
-            .channel_service_creation_depth,
-    ) {
-        Ok(service) => service,
-        Err(open_failure) => {
-            tracing::warn!(
-                "the mesh cannot send {addressed}: its channel {} did not open: {open_failure}",
+    let service = iceoryx2_node
+        .open_or_create_service(
+            &how_to_read_the_port.channel_service_name,
+            how_to_read_the_port.channel_sizing.max_subscribers,
+            how_to_read_the_port
+                .channel_sizing
+                .channel_service_creation_depth,
+        )
+        .map_err(|open_failure| {
+            format!(
+                "its channel {} did not open: {open_failure}",
                 how_to_read_the_port.channel_service_name
-            );
-            return None;
-        }
-    };
-    match service.create_subscriber(
-        how_to_read_the_port
-            .channel_sizing
-            .channel_service_creation_depth,
-    ) {
-        Ok(subscriber) => Some(subscriber),
-        Err(subscribe_failure) => {
-            tracing::warn!(
-                "the mesh cannot send {addressed}: it could not take a destination slot on \
-                 {}: {subscribe_failure}",
+            )
+        })?;
+    service
+        .create_subscriber(
+            how_to_read_the_port
+                .channel_sizing
+                .channel_service_creation_depth,
+        )
+        .map_err(|subscribe_failure| {
+            format!(
+                "it could not take a destination slot on {}: {subscribe_failure}",
                 how_to_read_the_port.channel_service_name
-            );
-            None
-        }
-    }
+            )
+        })
 }
 
 /// Tells one egress's table that its thread has ended, whatever ended it.
@@ -279,6 +269,16 @@ struct SaysThisEgressStoppedWhenItsThreadEnds {
     where_this_egress_says_it_stopped: WhereAnEgressSaysItStoppedToItsTable,
     port: OutputPortOfferedOnTheMesh,
     which_egress_of_its_port_it_is: WhichEgressOfAPortThisIs,
+    /// Why it stopped, in the words a reader waiting on the port reads — no
+    /// reason for an ending nobody is owed an account of, which is this egress
+    /// being dropped as its last reader leaves or its runtime goes.
+    why_it_stopped_sending_its_port: Option<String>,
+}
+
+impl SaysThisEgressStoppedWhenItsThreadEnds {
+    fn note_why_it_stopped(&mut self, why_it_stopped_sending_its_port: String) {
+        self.why_it_stopped_sending_its_port = Some(why_it_stopped_sending_its_port);
+    }
 }
 
 impl Drop for SaysThisEgressStoppedWhenItsThreadEnds {
@@ -290,13 +290,38 @@ impl Drop for SaysThisEgressStoppedWhenItsThreadEnds {
         else {
             return;
         };
+        // A panic leaves no statement of its own, and a reader waiting on this
+        // port would otherwise be told only that nothing is sending it.
+        let why_it_stopped_sending_its_port =
+            self.why_it_stopped_sending_its_port.take().or_else(|| {
+                std::thread::panicking().then(|| "its thread panicked".to_string())
+            });
         let _ = where_this_egress_says_it_stopped.send(
             WhatTheEgressTableIsTold::AnEgressStoppedSendingItsPort {
                 port: self.port.clone(),
                 which_egress_of_its_port_it_was: self.which_egress_of_its_port_it_is,
+                why_it_stopped_sending_its_port,
             },
         );
     }
+}
+
+/// Say why an egress never started: once in this runtime's log, naming the
+/// port, and once to the table, which answers a waiting reader with it.
+///
+/// A cancelled egress says neither. It was dropped because its last reader
+/// left or its runtime is going, and no reader is waiting on an account of it.
+fn this_egress_never_started(
+    says_it_stopped: &mut SaysThisEgressStoppedWhenItsThreadEnds,
+    addressed: &MeshPortAddress,
+    stop: &AtomicBool,
+    why_it_never_started: String,
+) {
+    if stop.load(Ordering::Acquire) {
+        return;
+    }
+    tracing::warn!("the mesh cannot send {addressed}: {why_it_never_started}");
+    says_it_stopped.note_why_it_stopped(why_it_never_started);
 }
 
 /// The body of one egress thread: take a destination slot on the port's
@@ -317,45 +342,56 @@ fn send_one_port_to_the_mesh(sending: WhatOneEgressSends, stop: Arc<AtomicBool>)
     let port_name = addressed.port_name();
     // Before anything that can end this thread, and dropped after the token is
     // undeclared below, so the table hears the port stop only once the mesh has.
-    let _says_it_stopped = SaysThisEgressStoppedWhenItsThreadEnds {
+    let mut says_it_stopped = SaysThisEgressStoppedWhenItsThreadEnds {
         where_this_egress_says_it_stopped,
         port: OutputPortOfferedOnTheMesh {
             processor_display_name: processor_display_name.to_string(),
             port_name: port_name.to_string(),
         },
         which_egress_of_its_port_it_is: which_egress_of_this_port_this_is,
+        why_it_stopped_sending_its_port: None,
     };
 
-    let subscriber = take_a_destination_slot_once_the_port_publishes(
+    let subscriber = match take_a_destination_slot_once_the_port_publishes(
         &how_to_read_the_port,
-        &addressed,
         &iceoryx2_node,
         &stop,
-    );
+    ) {
+        Ok(subscriber) => subscriber,
+        Err(why_it_never_started) => {
+            this_egress_never_started(
+                &mut says_it_stopped,
+                &addressed,
+                &stop,
+                why_it_never_started,
+            );
+            return;
+        }
+    };
     // Declared after the subscriber, so a reader that sees the token and starts
     // counting is never counting against a port nothing is draining yet.
-    let egress_token = subscriber.as_ref().and_then(|_| {
-        session
-            .liveliness()
-            .declare_token(key_space.egress_token_key(
-                &this_runtimes_name,
-                &processor_display_name,
-                &port_name,
-            ))
-            .wait()
-            .inspect_err(|declare_failure| {
-                tracing::warn!(
-                    "the mesh cannot say that {addressed} is being sent, so a reader would never \
-                     learn it stopped: {declare_failure}"
-                )
-            })
-            .ok()
-    });
-    // Whichever of the two is missing said why on this thread. The table hears
-    // that this egress stopped from the drop above, as it does for every other
-    // way this thread ends.
-    let (Some(subscriber), Some(egress_token)) = (subscriber, egress_token) else {
-        return;
+    let egress_token = match session
+        .liveliness()
+        .declare_token(key_space.egress_token_key(
+            &this_runtimes_name,
+            &processor_display_name,
+            &port_name,
+        ))
+        .wait()
+    {
+        Ok(egress_token) => egress_token,
+        Err(declare_failure) => {
+            this_egress_never_started(
+                &mut says_it_stopped,
+                &addressed,
+                &stop,
+                format!(
+                    "the mesh could not say it was being sent, so a reader would never learn it \
+                     stopped: {declare_failure}"
+                ),
+            );
+            return;
+        }
     };
 
     tracing::info!("The mesh is sending {addressed}");
@@ -372,6 +408,10 @@ fn send_one_port_to_the_mesh(sending: WhatOneEgressSends, stop: Arc<AtomicBool>)
     // Read once: a boot id cannot change without a reboot, which ends this
     // process, and this rides every bag.
     let clock_identity = MachineClockIdentity::of_this_machine();
+    // Set by whichever way out of the loop below ended the sending, and left
+    // unset by the one that is no failure: the stop flag, which this egress's
+    // own drop sets.
+    let mut why_it_stopped_sending: Option<String> = None;
 
     while !stop.load(Ordering::Acquire) {
         match subscriber.receive() {
@@ -440,10 +480,8 @@ fn send_one_port_to_the_mesh(sending: WhatOneEgressSends, stop: Arc<AtomicBool>)
                     None => match declare_the_publisher(&session, &data_key, names_a_surface) {
                         Ok(declared) => publisher.insert(declared),
                         Err(declare_failure) => {
-                            tracing::warn!(
-                                "the mesh cannot send {addressed}: its publisher did not \
-                                 declare: {declare_failure}"
-                            );
+                            why_it_stopped_sending =
+                                Some(format!("its publisher did not declare: {declare_failure}"));
                             break;
                         }
                     },
@@ -479,10 +517,8 @@ fn send_one_port_to_the_mesh(sending: WhatOneEgressSends, stop: Arc<AtomicBool>)
                 std::thread::sleep(idle_poll_backoff.sleep_this_empty_poll_earns(Instant::now()))
             }
             Err(receive_failure) => {
-                tracing::warn!(
-                    "the mesh stopped sending {addressed}: its channel subscriber failed: \
-                     {receive_failure:?}"
-                );
+                why_it_stopped_sending =
+                    Some(format!("its channel subscriber failed: {receive_failure:?}"));
                 break;
             }
         }
@@ -497,7 +533,13 @@ fn send_one_port_to_the_mesh(sending: WhatOneEgressSends, stop: Arc<AtomicBool>)
              when this runtime's connections close instead: {undeclare_failure}"
         );
     }
-    tracing::info!("The mesh stopped sending {addressed}");
+    match why_it_stopped_sending {
+        Some(why_it_stopped_sending) => {
+            tracing::warn!("the mesh stopped sending {addressed}: {why_it_stopped_sending}");
+            says_it_stopped.note_why_it_stopped(why_it_stopped_sending);
+        }
+        None => tracing::info!("The mesh stopped sending {addressed}"),
+    }
 }
 
 /// Declare the publisher one egress puts on, at the priority its first bag
@@ -599,7 +641,8 @@ mod tests {
 
     /// A helper that opened its publisher lets the egress carry on, and one
     /// that refused stops it — so a reader never sees the port declared sent
-    /// by a runtime whose producer never opened.
+    /// by a runtime whose producer never opened. The refusal answers the
+    /// helper's own words, which is what a waiting reader is told.
     #[test]
     fn an_egress_starts_on_a_helpers_yes_and_stops_on_its_no() {
         let opened = OutOfProcessLinkWireReply::awaiting_the_far_sides_answer();
@@ -608,19 +651,23 @@ mod tests {
         refused.note_the_far_sides_answer(OutOfProcessLinkWireOutcome::RefusedByTheFarSide {
             reason: "its setup did not succeed".to_string(),
         });
-        let addressed = a_port_addressed_on_the_mesh();
         let never_stopped = AtomicBool::new(false);
 
-        assert!(a_helper_opened_its_publisher(
-            &opened,
-            &addressed,
-            &never_stopped
-        ));
-        assert!(!a_helper_opened_its_publisher(
-            &refused,
-            &addressed,
-            &never_stopped
-        ));
+        assert_eq!(
+            a_helper_opened_its_publisher(&opened, &never_stopped),
+            Ok(())
+        );
+        let why_it_never_started = a_helper_opened_its_publisher(&refused, &never_stopped)
+            .expect_err("a refused helper is a port this runtime cannot send");
+        assert!(
+            why_it_never_started.contains("its setup did not succeed"),
+            "{why_it_never_started}"
+        );
+        assert!(
+            !why_it_never_started.contains("AProcessor"),
+            "the reader's link already names the address, so the reason must not: \
+             {why_it_never_started}"
+        );
     }
 
     /// An egress dropped while it is still waiting stops waiting, rather than
@@ -630,11 +677,7 @@ mod tests {
         let never_answered = OutOfProcessLinkWireReply::awaiting_the_far_sides_answer();
         let stopped = AtomicBool::new(true);
 
-        assert!(!a_helper_opened_its_publisher(
-            &never_answered,
-            &a_port_addressed_on_the_mesh(),
-            &stopped
-        ));
+        assert!(a_helper_opened_its_publisher(&never_answered, &stopped).is_err());
     }
 
     /// How to read a port whose publisher a helper was asked for and has not
@@ -675,13 +718,12 @@ mod tests {
 
         let took_a_slot = take_a_destination_slot_once_the_port_publishes(
             &how_to_read_the_port,
-            &a_port_addressed_on_the_mesh(),
             &iceoryx2_node,
             &AtomicBool::new(false),
         );
 
         assert!(
-            took_a_slot.is_none(),
+            took_a_slot.is_err(),
             "a port whose publisher was refused is a port this runtime cannot send"
         );
         assert!(
@@ -706,12 +748,51 @@ mod tests {
 
         let took_a_slot = take_a_destination_slot_once_the_port_publishes(
             &how_to_read_the_port,
-            &a_port_addressed_on_the_mesh(),
             &iceoryx2_node,
             &AtomicBool::new(false),
         );
 
-        assert!(took_a_slot.is_some());
+        assert!(took_a_slot.is_ok());
+    }
+
+    /// A channel whose destination slots are all taken answers the refusal a
+    /// waiting reader is told, naming the channel.
+    ///
+    /// The readiest way to make an egress fail, and the one the two-process
+    /// proof stages: a channel's slots are fixed when it is created.
+    #[test]
+    fn a_channel_with_no_slot_left_answers_why_naming_the_channel() {
+        let iceoryx2_node = Iceoryx2Node::for_this_test_process();
+        let how_to_read_the_port = HowToReadAnOfferedOutputPort {
+            channel_service_name: format!("egress-no-slot-{}", std::process::id()),
+            channel_sizing: crate::iceoryx2::ChannelSizing {
+                max_subscribers: 1,
+                channel_service_creation_depth: 4,
+            },
+            the_helpers_answer_that_it_opened_its_publisher: None,
+        };
+        let _the_only_slot = take_a_destination_slot_once_the_port_publishes(
+            &how_to_read_the_port,
+            &iceoryx2_node,
+            &AtomicBool::new(false),
+        )
+        .expect("the first taker gets the one slot");
+
+        let why_it_never_started = take_a_destination_slot_once_the_port_publishes(
+            &how_to_read_the_port,
+            &iceoryx2_node,
+            &AtomicBool::new(false),
+        )
+        .expect_err("a channel with every slot taken leaves none for an egress");
+
+        assert!(
+            why_it_never_started.contains("destination slot"),
+            "{why_it_never_started}"
+        );
+        assert!(
+            why_it_never_started.contains(&how_to_read_the_port.channel_service_name),
+            "the channel is what a reader takes to the sending machine: {why_it_never_started}"
+        );
     }
 
     /// A table's end of the channel its egresses report on: the sender it owns,
@@ -748,6 +829,7 @@ mod tests {
                 where_this_egress_says_it_stopped: Arc::downgrade(its_table),
                 port: the_port_one_egress_sends(),
                 which_egress_of_its_port_it_is,
+                why_it_stopped_sending_its_port: None,
             },
             which_egress_of_its_port_it_is,
         )
@@ -756,12 +838,21 @@ mod tests {
     /// What one egress told its table, or `None` when it said nothing.
     fn what_one_egress_told_its_table(
         what_the_table_reads: &crossbeam_channel::Receiver<WhatTheEgressTableIsTold>,
-    ) -> Option<(OutputPortOfferedOnTheMesh, WhichEgressOfAPortThisIs)> {
+    ) -> Option<(
+        OutputPortOfferedOnTheMesh,
+        WhichEgressOfAPortThisIs,
+        Option<String>,
+    )> {
         match what_the_table_reads.try_recv().ok()? {
             WhatTheEgressTableIsTold::AnEgressStoppedSendingItsPort {
                 port,
                 which_egress_of_its_port_it_was,
-            } => Some((port, which_egress_of_its_port_it_was)),
+                why_it_stopped_sending_its_port,
+            } => Some((
+                port,
+                which_egress_of_its_port_it_was,
+                why_it_stopped_sending_its_port,
+            )),
             _ => panic!("an egress tells its table one thing, and this was not it"),
         }
     }
@@ -789,7 +880,34 @@ mod tests {
 
         assert_eq!(
             what_one_egress_told_its_table(&what_the_table_reads),
-            Some((the_port_one_egress_sends(), which_one_it_is))
+            Some((the_port_one_egress_sends(), which_one_it_is, None)),
+            "an egress nothing went wrong in is a drop, and no reader is owed an account of it"
+        );
+    }
+
+    /// An egress that noted why it stopped carries that to its table, which is
+    /// how a reader two machines away reads it instead of this runtime's log.
+    ///
+    /// Mental-revert: drop the reason on the way out of the thread and a
+    /// waiting reader is told only that nothing is sending the port, which is
+    /// what it already knew.
+    #[test]
+    fn an_egress_that_said_why_it_stopped_carries_that_to_its_table() {
+        let (its_table, what_the_table_reads) = a_table_listening_to_its_egresses();
+        let (mut the_egress_reporting_to_its_table, which_one_it_is) =
+            an_egress_reporting_to(&its_table);
+
+        the_egress_reporting_to_its_table
+            .note_why_it_stopped("its channel subscriber failed".to_string());
+        drop(the_egress_reporting_to_its_table);
+
+        assert_eq!(
+            what_one_egress_told_its_table(&what_the_table_reads),
+            Some((
+                the_port_one_egress_sends(),
+                which_one_it_is,
+                Some("its channel subscriber failed".to_string())
+            ))
         );
     }
 
@@ -812,7 +930,13 @@ mod tests {
         assert!(how_the_thread_ended.is_err());
         assert_eq!(
             what_one_egress_told_its_table(&what_the_table_reads),
-            Some((the_port_one_egress_sends(), which_one_it_is))
+            Some((
+                the_port_one_egress_sends(),
+                which_one_it_is,
+                Some("its thread panicked".to_string())
+            )),
+            "a panic writes no reason of its own, and a reader told nothing at all learns \
+             nothing from this runtime's log either"
         );
     }
 

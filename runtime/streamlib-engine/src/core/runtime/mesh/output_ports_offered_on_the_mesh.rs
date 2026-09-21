@@ -451,9 +451,61 @@ pub(super) fn ask_a_runtime_what_output_ports_it_offers(
     None
 }
 
+/// A graph reader that answers whatever it is handed, so a test can state what
+/// the graph says and read what the mesh answers.
+#[cfg(test)]
+struct AGraphOfferingExactly(OutputPortsOfferedOnTheMesh);
+
+#[cfg(test)]
+impl WhatThisRuntimeOffersOnTheMesh for AGraphOfferingExactly {
+    fn output_ports_it_offers_right_now(&self) -> OutputPortsOfferedOnTheMesh {
+        self.0.clone()
+    }
+
+    fn how_to_read_an_offered_output_port(
+        &self,
+        _processor_display_name: &str,
+        _port_name: &str,
+    ) -> Option<HowToReadAnOfferedOutputPort> {
+        None
+    }
+}
+
+/// A registry whose graph offers exactly `ports` and nothing else.
+///
+/// Here rather than in this module's own tests because the egress table reads
+/// its record back through this same door, and two fixtures standing up one
+/// registry are two chances to prove different things by accident.
+#[cfg(test)]
+pub(crate) fn a_registry_whose_graph_offers(
+    ports: &[(&str, &str)],
+) -> WhatThisRuntimeOffersOnTheMeshRegistry {
+    let registry = WhatThisRuntimeOffersOnTheMeshRegistry::default();
+    registry.record_how_to_read_this_runtimes_graph(std::sync::Arc::new(AGraphOfferingExactly(
+        OutputPortsOfferedOnTheMesh {
+            ports: ports
+                .iter()
+                .map(|(processor_display_name, port_name)| OutputPortOfferedOnTheMesh {
+                    processor_display_name: processor_display_name.to_string(),
+                    port_name: port_name.to_string(),
+                })
+                .collect(),
+            ..Default::default()
+        },
+    )));
+    registry
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn a_port(processor_display_name: &str, port_name: &str) -> OutputPortOfferedOnTheMesh {
+        OutputPortOfferedOnTheMesh {
+            processor_display_name: processor_display_name.to_string(),
+            port_name: port_name.to_string(),
+        }
+    }
 
     fn a_listing() -> OutputPortsOfferedOnTheMesh {
         OutputPortsOfferedOnTheMesh {
@@ -480,45 +532,6 @@ mod tests {
         }
     }
 
-    /// A graph reader that answers whatever it is handed, so a registry test
-    /// can state what the graph says and read what the mesh answers.
-    struct AGraphOfferingExactly(OutputPortsOfferedOnTheMesh);
-
-    impl WhatThisRuntimeOffersOnTheMesh for AGraphOfferingExactly {
-        fn output_ports_it_offers_right_now(&self) -> OutputPortsOfferedOnTheMesh {
-            self.0.clone()
-        }
-
-        fn how_to_read_an_offered_output_port(
-            &self,
-            _processor_display_name: &str,
-            _port_name: &str,
-        ) -> Option<HowToReadAnOfferedOutputPort> {
-            None
-        }
-    }
-
-    fn a_port(processor_display_name: &str, port_name: &str) -> OutputPortOfferedOnTheMesh {
-        OutputPortOfferedOnTheMesh {
-            processor_display_name: processor_display_name.to_string(),
-            port_name: port_name.to_string(),
-        }
-    }
-
-    fn a_registry_whose_graph_offers(ports: &[(&str, &str)]) -> WhatThisRuntimeOffersOnTheMeshRegistry
-    {
-        let registry = WhatThisRuntimeOffersOnTheMeshRegistry::default();
-        registry.record_how_to_read_this_runtimes_graph(std::sync::Arc::new(AGraphOfferingExactly(
-            OutputPortsOfferedOnTheMesh {
-                ports: ports
-                    .iter()
-                    .map(|(display, port)| a_port(display, port))
-                    .collect(),
-                ..Default::default()
-            },
-        )));
-        registry
-    }
 
     /// The document survives the wire whole.
     #[test]
