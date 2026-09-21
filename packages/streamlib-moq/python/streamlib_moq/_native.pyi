@@ -91,10 +91,13 @@ class MoqBroadcastPublishingSession:
         machine's clock, which is what a bag that crossed the runtime mesh
         carries, has no age here at any offset.
 
-        A track this is not told about, or told `False` about, is never shed for
-        its own stamp however late it reads. Its uplink backlog is still read,
-        off the instant each of its objects reached the transport rather than the
-        media stamp, so the arm that sees a stalled uplink survives the hop.
+        A track told `False`, and equally one never told at all, is never shed
+        for its own stamp however late it reads, and its objects are filed for
+        the uplink-backlog reading under the instant each reached the transport
+        rather than under the media stamp. That keeps the arm that sees a stalled
+        uplink working across the hop — but it also means **a track this is never
+        told about has its objects filed at their write instant**, so tell every
+        media track, whether or not a deadline is configured.
 
         Read the answer when a track opens and say it before that track's first
         publish — asking the runtime costs a round trip, and the answer changes

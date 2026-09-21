@@ -909,15 +909,32 @@ def test_the_clock_is_asked_once_per_link_however_many_bags_arrive():
     assert len(warned) == 1, "said once per link, not once per bag"
 
 
-def test_a_publisher_with_no_deadline_asks_the_runtime_about_no_links_clock():
-    """With no deadline nothing consults the answer — every bag is written
-    however late it is — so a round trip per link would buy nothing."""
+def test_a_publisher_with_no_deadline_still_describes_its_tracks_but_says_nothing():
+    """The answer decides more than the shed: a track nobody describes files its
+    objects under their write instant rather than their own stamp. Skipping the
+    read on the ordinary publisher would therefore rewrite every local track's
+    backlog stamp to save one round trip per link.
+
+    Nothing is said, though — with no deadline configured there is no reader with
+    anything to do about it.
+    """
     session, context, warned = _drive_bags_past_the_clock_question(
+        "camera", THIS_MACHINE, THIS_MACHINE, delivery_deadline_ms=None
+    )
+
+    assert context.inputs.clock_questions == ["camera"]
+    assert session.clocks_noted == [("camera", True)]
+    assert warned == []
+
+
+def test_a_mesh_fed_link_on_a_publisher_with_no_deadline_is_described_and_unremarked():
+    """Described because the object stamp depends on it, unremarked because a
+    publisher with no deadline sheds nothing whatever clock a track is on."""
+    session, _, warned = _drive_bags_past_the_clock_question(
         A_MESH_FED_LINK, ANOTHER_MACHINE, THIS_MACHINE, delivery_deadline_ms=None
     )
 
-    assert context.inputs.clock_questions == []
-    assert session.clocks_noted == []
+    assert session.clocks_noted == [(A_MESH_FED_LINK, False)]
     assert warned == []
 
 
@@ -964,6 +981,11 @@ class _SessionThatAnswers:
         self._answer = reaches_the_transport
         self.calls = 0
 
+    def note_whether_a_tracks_stamps_are_on_this_publishers_clock(
+        self, inbound_link_name: str, the_stamps_are_on_this_publishers_clock: bool
+    ) -> None:
+        del inbound_link_name, the_stamps_are_on_this_publishers_clock
+
     def publish_video_access_unit(self, *args, **kwargs) -> bool:
         del args, kwargs
         self.calls += 1
@@ -996,6 +1018,11 @@ class _InputsReadingOneVideoBag:
         assert port == "tracks"
         return (dict(A_VIDEO_BAG), "camera", 5_000_000_000)
 
+    def inbound_link_stamp_clock_identity(self, port: str, inbound_link_name: str):
+        del inbound_link_name
+        assert port == "tracks"
+        return THIS_MACHINE
+
 
 class _ContextReadingOneVideoBag:
     inputs = _InputsReadingOneVideoBag()
@@ -1011,6 +1038,11 @@ class _InputsReadingBagsInTurn:
         assert port == "tracks"
         return next(self._reads, None)
 
+    def inbound_link_stamp_clock_identity(self, port: str, inbound_link_name: str):
+        del inbound_link_name
+        assert port == "tracks"
+        return THIS_MACHINE
+
 
 class _ContextReadingBagsInTurn:
     def __init__(self, reads: "list[tuple[dict, str, int]]") -> None:
@@ -1023,6 +1055,11 @@ class _SessionRecordingWhatWasPublished:
     def __init__(self) -> None:
         self.data_objects: "list[tuple[str, bytes]]" = []
         self.media_calls = 0
+
+    def note_whether_a_tracks_stamps_are_on_this_publishers_clock(
+        self, inbound_link_name: str, the_stamps_are_on_this_publishers_clock: bool
+    ) -> None:
+        del inbound_link_name, the_stamps_are_on_this_publishers_clock
 
     def publish_data_object(self, inbound_link_name: str, object_bytes: bytes) -> None:
         self.data_objects.append((inbound_link_name, object_bytes))

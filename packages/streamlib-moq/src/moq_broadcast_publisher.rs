@@ -642,7 +642,7 @@ impl MoqBroadcastObjectWritePlanner {
             .get(&track.moq_media_track_name)
             .copied()
             .unwrap_or_default();
-        let the_clock_the_tracks_stamps_are_taken_on = track.the_clock_its_stamps_are_taken_on();
+        let the_clock_the_tracks_stamps_are_taken_on = track.the_clock_its_stamps_are_taken_on;
         match delivery_deadline.verdict_for_one_sample(
             &sample,
             now_ns,
@@ -713,11 +713,7 @@ impl MoqBroadcastObjectWritePlanner {
                 moq_track_name: track.moq_media_track_name.clone(),
                 object_payload,
                 publisher_priority: track_priority_of(sample.kind()),
-                object_stamp_ns: object_stamp_of(
-                    sample,
-                    now_ns,
-                    track.the_clock_its_stamps_are_taken_on(),
-                ),
+                object_stamp_ns: track.the_object_stamp_of(sample, now_ns),
             },
         );
         Ok(PlannedMoqObjectWrites {
@@ -1219,8 +1215,8 @@ impl MoqBroadcastObjectWritePlanner {
         the_clock_its_stamps_are_taken_on: TheClockATracksStampsAreTakenOn,
     ) -> Result<()> {
         let declared_track_index = self.declared_track_index_of(inbound_link_name)?;
-        self.declared_tracks[declared_track_index].the_clock_its_link_reported =
-            Some(the_clock_its_stamps_are_taken_on);
+        self.declared_tracks[declared_track_index].the_clock_its_stamps_are_taken_on =
+            the_clock_its_stamps_are_taken_on;
         Ok(())
     }
 
@@ -1300,10 +1296,10 @@ struct DeclaredMoqTrackPublicationState {
     parameter_sets_the_init_segment_states: ParameterSetsFromAnnexBAccessUnit,
     next_cmaf_fragment_sequence_number: u32,
     /// Which clock this track's bags are stamped on, as its link reported when
-    /// the track opened. `None` until it has, and read as another machine's —
-    /// a stamp whose clock is unknown is one no local reading may be subtracted
-    /// from, so the unknown answer costs a shed rather than risking a wrong one.
-    the_clock_its_link_reported: Option<TheClockATracksStampsAreTakenOn>,
+    /// the track opened. Until it has, `NotThisPublishersOwn` — a stamp whose
+    /// clock nothing has named is one no local reading may be subtracted from,
+    /// so an undescribed track costs a shed rather than risking a wrong one.
+    the_clock_its_stamps_are_taken_on: TheClockATracksStampsAreTakenOn,
     /// Whether the delivery deadline is shedding this track's open group. It
     /// ends at the next sync point, which is also what opens the next group.
     the_open_group_is_being_shed: bool,
@@ -1331,7 +1327,8 @@ impl DeclaredMoqTrackPublicationState {
             // ISO/IEC 14496-12 §8.8.5: `mfhd.sequence_number` counts one
             // track's fragments from one.
             next_cmaf_fragment_sequence_number: 1,
-            the_clock_its_link_reported: None,
+            the_clock_its_stamps_are_taken_on:
+                TheClockATracksStampsAreTakenOn::NotThisPublishersOwn,
             the_open_group_is_being_shed: false,
             objects_the_delivery_deadline_shed: 0,
             bytes_the_delivery_deadline_shed: 0,
@@ -1342,19 +1339,43 @@ impl DeclaredMoqTrackPublicationState {
         }
     }
 
-    fn count_one_more_delivered_bag(&mut self) {
-        self.bags_this_track_has_delivered = self.bags_this_track_has_delivered.saturating_add(1);
+    /// The stamp the backlog reading ages one of this track's objects by: a media
+    /// sample's own where this track's clock can be read here, and for a data
+    /// object — whose stamp is inside an envelope this Rust never parses — the
+    /// instant it is written.
+    ///
+    /// A method rather than a free function taking the clock, so one track's clock
+    /// can never be paired with another track's sample.
+    fn the_object_stamp_of(&self, sample: &MoqTrackSample, now_ns: i64) -> i64 {
+        match sample {
+            MoqTrackSample::EncodedMedia(sample) => {
+                self.the_object_stamp_of_one_media_sample(sample, now_ns)
+            }
+            MoqTrackSample::DataObject(_) => now_ns,
+        }
     }
 
-    /// Which clock this track's stamps are taken on, for a deadline that has to
-    /// decide whether it may age them.
+    /// The stamp one of this track's media objects is filed under for the
+    /// uplink-backlog reading.
     ///
-    /// A track nobody has said anything about reads as another machine's: the
-    /// deadline then sheds nothing for a stamp it cannot place, which is the
-    /// direction that cannot throw away media over a meaningless subtraction.
-    fn the_clock_its_stamps_are_taken_on(&self) -> TheClockATracksStampsAreTakenOn {
-        self.the_clock_its_link_reported
-            .unwrap_or(TheClockATracksStampsAreTakenOn::AnotherMachines)
+    /// Its own, where that stamp is on the clock the reading is taken against — so
+    /// the reading says how late the media itself is. Otherwise the instant it
+    /// reached the transport, which is on this clock and is what the reading asks
+    /// anyway: how long a forwarder has been parked on this object. A stamp from
+    /// another machine's clock would answer neither question.
+    fn the_object_stamp_of_one_media_sample(
+        &self,
+        sample: &EncodedMediaSample,
+        now_ns: i64,
+    ) -> i64 {
+        match self.the_clock_its_stamps_are_taken_on {
+            TheClockATracksStampsAreTakenOn::ThisPublishersOwn => sample.timestamp_ns(),
+            TheClockATracksStampsAreTakenOn::NotThisPublishersOwn => now_ns,
+        }
+    }
+
+    fn count_one_more_delivered_bag(&mut self) {
+        self.bags_this_track_has_delivered = self.bags_this_track_has_delivered.saturating_add(1);
     }
 
     fn record_one_object_the_delivery_deadline_shed(
@@ -1597,11 +1618,7 @@ impl DeclaredMoqTrackPublicationState {
                 moq_track_name: self.moq_media_track_name.clone(),
                 object_payload,
                 publisher_priority: track_priority_of(MoqTrackKind::Media(sample.medium())),
-                object_stamp_ns: object_stamp_of_one_media_sample(
-                    sample,
-                    now_ns,
-                    self.the_clock_its_stamps_are_taken_on(),
-                ),
+                object_stamp_ns: self.the_object_stamp_of_one_media_sample(sample, now_ns),
             },
         );
         Ok(instructions)
@@ -1686,42 +1703,6 @@ fn refuse_track_names_that_do_not_name_the_links(
         }
     }
     Ok(())
-}
-
-/// The stamp the backlog reading ages an object by: a media sample's own where
-/// this publisher's clock can read it, and for a data object — whose stamp is
-/// inside an envelope this Rust never parses — the instant it is written.
-fn object_stamp_of(
-    sample: &MoqTrackSample,
-    now_ns: i64,
-    the_clock_the_tracks_stamps_are_taken_on: TheClockATracksStampsAreTakenOn,
-) -> i64 {
-    match sample {
-        MoqTrackSample::EncodedMedia(sample) => object_stamp_of_one_media_sample(
-            sample,
-            now_ns,
-            the_clock_the_tracks_stamps_are_taken_on,
-        ),
-        MoqTrackSample::DataObject(_) => now_ns,
-    }
-}
-
-/// The stamp one media object is filed under for the uplink-backlog reading.
-///
-/// Its own, where that stamp is on the clock the reading is taken against — so
-/// the reading says how late the media itself is. Otherwise the instant it
-/// reached the transport, which is on this clock and is what the reading asks
-/// anyway: how long a forwarder has been parked on this object. A stamp from
-/// another machine's clock would answer neither question.
-fn object_stamp_of_one_media_sample(
-    sample: &EncodedMediaSample,
-    now_ns: i64,
-    the_clock_the_tracks_stamps_are_taken_on: TheClockATracksStampsAreTakenOn,
-) -> i64 {
-    match the_clock_the_tracks_stamps_are_taken_on {
-        TheClockATracksStampsAreTakenOn::ThisPublishersOwn => sample.timestamp_ns(),
-        TheClockATracksStampsAreTakenOn::AnotherMachines => now_ns,
-    }
 }
 
 /// The bytes one bag puts on the wire, whatever its kind.
@@ -1892,6 +1873,24 @@ mod tests {
                 )
                 .expect("each of these links was just declared");
         }
+    }
+
+    /// A planner whose tracks are declared and never described, which is the
+    /// state every track is in until its first bag names the clock it is
+    /// stamped on.
+    fn a_planner_whose_tracks_were_never_described(
+        inbound_link_names: &[&str],
+        delivery_deadline_ms: Option<u64>,
+    ) -> MoqBroadcastObjectWritePlanner {
+        let mut planner = MoqBroadcastObjectWritePlanner::of(
+            MoqContainerFormat::StreamlibBag,
+            BROADCAST_NAMESPACE.to_owned(),
+            MoqPublisherDeliveryDeadline::of_optional_milliseconds(delivery_deadline_ms),
+        );
+        planner
+            .declare_tracks(each_name_owned(inbound_link_names), None)
+            .expect("these inbound links are declarable");
+        planner
     }
 
     fn each_name_owned(names: &[&str]) -> Vec<String> {
@@ -3163,7 +3162,7 @@ mod tests {
         planner
             .note_the_clock_a_tracks_stamps_are_taken_on(
                 "remote-runtime/Camera Source/video",
-                TheClockATracksStampsAreTakenOn::AnotherMachines,
+                TheClockATracksStampsAreTakenOn::NotThisPublishersOwn,
             )
             .expect("the mesh-fed link is declared");
         for inbound_link_name in ["camera", "remote-runtime/Camera Source/video"] {
@@ -3213,18 +3212,13 @@ mod tests {
     }
 
     #[test]
-    fn a_track_whose_clock_nobody_named_is_never_shed_for_its_stamp() {
-        // Nothing in the publisher's own Python leaves a track unnamed, so this
-        // is the specification of the fallback rather than a live path: an
-        // unknown clock is not this one, and a shed on a subtraction against a
-        // clock that may be unrelated is the one outcome that destroys media
-        // for nothing.
-        let mut planner = a_planner_over_with_a_delivery_deadline_of(
-            MoqContainerFormat::StreamlibBag,
-            &["camera"],
-            Some(100),
-        );
-        planner.declared_tracks[0].the_clock_its_link_reported = None;
+    fn a_track_nobody_described_is_never_shed_for_its_stamp_and_is_filed_at_its_write() {
+        // The state a declared track is in before its first bag names its clock,
+        // reached the way a track reaches it rather than by writing the field.
+        // An unnamed clock is not this one: a shed on a subtraction against a
+        // clock that may be unrelated destroys media for nothing, and a stamp
+        // that may be unrelated is not what a local backlog reading may hold.
+        let mut planner = a_planner_whose_tracks_were_never_described(&["camera"], Some(100));
         plan_the_writes_at_and_report_them_all_written(
             &mut planner,
             "camera",
@@ -3245,6 +3239,10 @@ mod tests {
             describe_each_write_instruction_as_a_transport_verb(&a_very_late_frame),
             vec!["object:camera"]
         );
+        assert_eq!(
+            object_stamps_of_objects_written_to(&a_very_late_frame, "camera"),
+            vec![33_000_000 + 60_000_000_000]
+        );
     }
 
     #[test]
@@ -3258,7 +3256,7 @@ mod tests {
         let refusal = planner
             .note_the_clock_a_tracks_stamps_are_taken_on(
                 "microphone",
-                TheClockATracksStampsAreTakenOn::AnotherMachines,
+                TheClockATracksStampsAreTakenOn::NotThisPublishersOwn,
             )
             .expect_err("no track carries that link");
 
@@ -4286,7 +4284,7 @@ mod tests {
         planner
             .note_the_clock_a_tracks_stamps_are_taken_on(
                 "remote-runtime/Camera Source/video",
-                TheClockATracksStampsAreTakenOn::AnotherMachines,
+                TheClockATracksStampsAreTakenOn::NotThisPublishersOwn,
             )
             .expect("the mesh-fed link is declared");
 
@@ -4316,7 +4314,7 @@ mod tests {
         planner
             .note_the_clock_a_tracks_stamps_are_taken_on(
                 "remote/Camera Source/video",
-                TheClockATracksStampsAreTakenOn::AnotherMachines,
+                TheClockATracksStampsAreTakenOn::NotThisPublishersOwn,
             )
             .expect("the mesh-fed link is declared");
         let opened = plan_the_writes_at_and_report_them_all_written(

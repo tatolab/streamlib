@@ -764,20 +764,24 @@ class MoqBroadcastPublisher:
         when its peer returns from a fresh boot, and a peer that returns is on a
         machine other than this one either way.
 
-        Nothing is asked without a deadline configured, and nothing is asked of
-        a data track. The answer decides only what the deadline reads: a
-        publisher with no deadline writes every bag however late it is, and a
-        data object is never shed for its age and is filed under its write
-        instant whichever clock its bag carries. Asking either would spend a
-        round trip per link on an answer nothing consults.
+        Asked whether or not a deadline is configured, because the answer
+        decides more than the shed: a track nobody has described files its
+        objects under their write instant rather than their own stamp, which is
+        right for a track this publisher cannot read and wrong for one it can.
+        Leaving the ordinary publisher undescribed would make every local
+        track's backlog stamp the write instant for the sake of one round trip
+        per link.
+
+        A data track is the one link never asked: its objects carry no media
+        stamp to file at all, and a data object is never shed for its age.
 
         A link naming no machine — one whose runtime could not say, or a machine
         that names no clock of its own — is treated as not this one. That is the
         rule the engine states for every stamp comparison: compare only where
         both sides answer the same string, never where either answers nothing.
+        Only a publisher with a deadline says so, since that is the only reader
+        with something to do about it.
         """
-        if self._delivery_deadline_ms is None:
-            return
         if inbound_link in self._stamp_clock_asked_of_inbound_link:
             return
         self._stamp_clock_asked_of_inbound_link.add(inbound_link)
@@ -791,7 +795,7 @@ class MoqBroadcastPublisher:
         session.note_whether_a_tracks_stamps_are_on_this_publishers_clock(
             inbound_link, on_this_machines_clock
         )
-        if not on_this_machines_clock:
+        if not on_this_machines_clock and self._delivery_deadline_ms is not None:
             log.warn(
                 f"MoqBroadcastPublisher: `{inbound_link}` is stamped on "
                 f"{stamped_on or 'a machine this runtime cannot name'}, not on this "

@@ -113,9 +113,11 @@ impl MoqBroadcastPublishingSession {
     ///
     /// The delivery deadline ages a stamp against this process's own monotonic
     /// clock, so a stamp taken on another machine's — a bag that crossed the
-    /// runtime mesh — has no age here at any offset. A track this is not told
-    /// about, or told `false` about, is never shed for its own stamp; its uplink
-    /// backlog is still read, off the instant each object reached the transport.
+    /// runtime mesh — has no age here at any offset. A track told `false`, and
+    /// equally one never told at all, is never shed for its own stamp, and its
+    /// objects are filed for the uplink-backlog reading under the instant each
+    /// reached the transport rather than under the media stamp. So tell every
+    /// media track, whether or not a deadline is configured.
     fn note_whether_a_tracks_stamps_are_on_this_publishers_clock(
         &self,
         python: Python<'_>,
@@ -125,7 +127,7 @@ impl MoqBroadcastPublishingSession {
         let the_clock_its_stamps_are_taken_on = if the_stamps_are_on_this_publishers_clock {
             TheClockATracksStampsAreTakenOn::ThisPublishersOwn
         } else {
-            TheClockATracksStampsAreTakenOn::AnotherMachines
+            TheClockATracksStampsAreTakenOn::NotThisPublishersOwn
         };
         python.detach(|| {
             self.locked_publisher()?

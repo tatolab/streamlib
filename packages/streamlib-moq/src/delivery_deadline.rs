@@ -60,9 +60,8 @@ pub(crate) struct UplinkBacklogReading {
     pub(crate) oldest_unforwarded_stamp_ns: Option<i64>,
 }
 
-/// Which machine's monotonic clock one track's bags are stamped on, as far as
-/// the deadline is concerned: the clock it takes its own readings on, or one it
-/// shares no epoch with.
+/// Which clock one track's bags are stamped on, as far as the deadline is
+/// concerned: the one it takes its own readings on, or anything else.
 ///
 /// A type rather than a `bool` because it sits beside another per-track yes-or-no
 /// at every call site, and two adjacent booleans are one transposition away from
@@ -72,10 +71,11 @@ pub(crate) enum TheClockATracksStampsAreTakenOn {
     /// This publisher's own, so a stamp of it can be aged against a reading
     /// taken here.
     ThisPublishersOwn,
-    /// Another machine's — a bag that crossed the runtime mesh — whose epoch is
-    /// that machine's own boot, so no reading taken here may be subtracted from
-    /// a stamp of it.
-    AnotherMachines,
+    /// Not this publisher's own, which covers two cases the deadline has to treat
+    /// alike: another machine's — a bag that crossed the runtime mesh — whose epoch
+    /// is that machine's own boot, and a track nothing has yet named a clock for.
+    /// No reading taken here may be subtracted from a stamp of either.
+    NotThisPublishersOwn,
 }
 
 /// Why the deadline shed one sample.
@@ -242,7 +242,7 @@ mod tests {
     /// The track's bags crossed the runtime mesh carrying a stamp taken on
     /// another machine's clock, which shares no epoch with this one.
     const STAMPED_ON_ANOTHER_MACHINES_CLOCK: TheClockATracksStampsAreTakenOn =
-        TheClockATracksStampsAreTakenOn::AnotherMachines;
+        TheClockATracksStampsAreTakenOn::NotThisPublishersOwn;
 
     fn a_deadline_of_100_ms() -> MoqPublisherDeliveryDeadline {
         MoqPublisherDeliveryDeadline::of_optional_milliseconds(Some(100))
