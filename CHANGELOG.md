@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.6](https://github.com/tatolab/streamlib/compare/v0.26.5...v0.26.6) (2026-09-21)
+
+
+### Features
+
+* **engine:** a reader learns why a source stopped sending its port, and that nothing will retry ([#2386](https://github.com/tatolab/streamlib/issues/2386)) ([2ae9af4](https://github.com/tatolab/streamlib/commit/2ae9af4faad8e7e2fe5e387d8fb8260631c80026))
+
 ## [0.26.5](https://github.com/tatolab/streamlib/compare/v0.26.4...v0.26.5) (2026-09-21)
 
 
