@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.5](https://github.com/tatolab/streamlib/compare/v0.26.4...v0.26.5) (2026-09-21)
+
+
+### Bug Fixes
+
+* **moq:** the delivery deadline reads no stamp taken on another machine's clock ([#2384](https://github.com/tatolab/streamlib/issues/2384)) ([50aa94d](https://github.com/tatolab/streamlib/commit/50aa94d7569a4729430383fb93f6bda2b5b6e09e))
+
 ## [0.26.4](https://github.com/tatolab/streamlib/compare/v0.26.3...v0.26.4) (2026-09-20)
 
 
