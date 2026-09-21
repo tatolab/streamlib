@@ -130,6 +130,7 @@ struct HowToLaunchAPeer {
     burst_once_a_reader_arrives: Option<u64>,
     recreate_the_publisher_just_before_the_burst: bool,
     take_every_destination_slot: bool,
+    refuse_to_say_how_to_read_the_port: bool,
 }
 
 impl CrossRuntimeLinkPeerProcess {
@@ -170,6 +171,9 @@ impl CrossRuntimeLinkPeerProcess {
         }
         if how.recreate_the_publisher_just_before_the_burst {
             command.arg("--recreate-the-publisher-just-before-the-burst");
+        }
+        if how.refuse_to_say_how_to_read_the_port {
+            command.arg("--refuse-to-say-how-to-read-the-port");
         }
         if how.take_every_destination_slot {
             command.arg("--take-every-destination-slot");
@@ -350,6 +354,15 @@ impl CrossRuntimeLinkPeerProcess {
                     .and_then(|machine| machine.as_str())
                     .map(str::to_string)
             })
+            .collect()
+    }
+
+    /// Every reason this peer has reported its link waiting or refused on, in
+    /// order.
+    fn every_reason_it_has_reported(&self) -> Vec<String> {
+        self.everything_it_has_reported()
+            .iter()
+            .filter_map(|reported| Some(reported.get("reason")?.as_str()?.to_string()))
             .collect()
     }
 
@@ -791,7 +804,8 @@ fn a_sources_graph_names_the_port_the_mesh_reads_and_who_reads_it() {
 const HOW_MANY_REPORTS_A_SOURCES_RENDER_IS_READ_OVER: usize = 10;
 
 /// A source whose egress cannot take a destination slot on its own channel
-/// settles to rendering no egress port, rather than one it is not sending.
+/// settles to rendering no egress port, and the reader waiting on that port
+/// reads the refusal in the source's own words.
 ///
 /// What it catches: `MeshPortEgress::start` succeeds the moment its thread
 /// spawns, and everything that can refuse an egress happens inside that thread
@@ -807,8 +821,15 @@ const HOW_MANY_REPORTS_A_SOURCES_RENDER_IS_READ_OVER: usize = 10;
 /// egress that fails at all — the unit tests feed the table's two maps directly,
 /// which is what let this survive the surface it shipped on.
 ///
+/// The reader's half is #2379: until it, the only account of the refusal was in
+/// the *sending* runtime's log, and the reading runtime's link said the source
+/// offered the port and was not sending it — true, and indistinguishable from a
+/// source still coming up. Nothing else in CI carries a reason across the mesh
+/// for a port a runtime does offer.
+///
 /// Mental-revert: stop the egress thread saying it ended, and the source renders
-/// the port under its reader's name for the rest of the run.
+/// the port under its reader's name for the rest of the run; stop it saying
+/// *why*, and the reader is left with the sentence it already had.
 #[test]
 #[serial]
 fn a_source_whose_egress_cannot_take_a_slot_settles_to_no_egress_port() {
@@ -855,6 +876,26 @@ fn a_source_whose_egress_cannot_take_a_slot_settles_to_no_egress_port() {
             })
         },
     );
+    // Then the source's own account of the refusal reaches it, which is the
+    // thing the reading machine cannot derive: the slot was refused on the
+    // *other* process's channel.
+    reader.wait_until(
+        "the reader's link to name the slot refusal and say nothing is retrying it",
+        || {
+            reader.every_reason_it_has_reported().iter().any(|reason| {
+                reason.contains("destination slot") && reason.contains("Nothing is retrying it")
+            })
+        },
+    );
+    assert!(
+        reader
+            .every_state_it_has_reported()
+            .iter()
+            .all(|state| state == "awaiting_remote"),
+        "a failed egress leaves the link waiting and never final, or no later reader could \
+         revive the port: {:?}",
+        reader.every_state_it_has_reported()
+    );
     // Long enough for the table to have heard that the egress ended and to have
     // reported what it renders from then on, twice over: the first window is the
     // settling, the second is what the assertion reads.
@@ -877,6 +918,82 @@ fn a_source_whose_egress_cannot_take_a_slot_settles_to_no_egress_port() {
             .contains(&"wired".to_string()),
         "nothing was sent, so the reader's link must never have read wired: {:?}",
         reader.every_state_it_has_reported()
+    );
+}
+
+/// A source that offers a port it has no way to read tells its reader so, rather
+/// than leaving the link on the sentence a source still coming up shows.
+///
+/// What it catches: the arm of `a_runtime_started_reading` that fires before any
+/// egress exists. A runtime's offer answers whether a port's channel can be
+/// *named*, never whether it opens, so a port whose channel will not open is
+/// offered, is never refused, and gets no egress — and until #2379 the reader
+/// waited out the run on "is on the mesh and offers X/Y, and is not sending it",
+/// with the only account in the other machine's log. It is the other half of the
+/// no-slot arm above: that one starts an egress and has it refused, this one
+/// never starts one at all, and they record their reason at different seams.
+///
+/// The peer stages it by answering `None` from its own
+/// `how_to_read_an_offered_output_port` while still offering the port, which is
+/// exactly what a real runtime is left holding when
+/// `open_the_channel_of_an_output_port_nothing_local_reads` fails.
+///
+/// Mental-revert: drop the `record_why_it_stopped_sending_an_output_port` call
+/// from that arm and this goes red on the reason, which is the state this branch
+/// shipped in until the pre-PR reviewers caught it.
+#[test]
+#[serial]
+fn a_reader_of_a_port_its_source_cannot_read_is_told_so() {
+    let mesh_name = a_mesh_name_of_its_own("noread");
+    let (source_name, reader_name) = the_two_runtimes_of("noread");
+    let source_domain = a_domain_root_of_its_own("noread-source");
+    let reader_domain = a_domain_root_of_its_own("noread-reader");
+    let source_listen = format!("udp/{LOOPBACK_INTERFACE}:{}?rel=1", a_free_loopback_port());
+
+    let source = CrossRuntimeLinkPeerProcess::launch(HowToLaunchAPeer {
+        runtime_name: source_name.clone(),
+        mesh_name: mesh_name.clone(),
+        listen_endpoints: vec![source_listen.clone()],
+        display_name: THE_DISPLAY_NAME.to_string(),
+        iceoryx2_domain_root: source_domain.path().to_path_buf(),
+        refuse_to_say_how_to_read_the_port: true,
+        ..Default::default()
+    });
+    source.wait_until_it_is_up();
+
+    let reader = CrossRuntimeLinkPeerProcess::launch(HowToLaunchAPeer {
+        reader: true,
+        runtime_name: reader_name.clone(),
+        mesh_name,
+        peer_endpoints: vec![source_listen],
+        display_name: THE_DISPLAY_NAME.to_string(),
+        link_from: Some(source_name.clone()),
+        iceoryx2_domain_root: reader_domain.path().to_path_buf(),
+        ..Default::default()
+    });
+    reader.wait_until_it_is_up();
+
+    reader.wait_until(
+        "the reader's link to name what its source could not do and say nothing is retrying it",
+        || {
+            reader.every_reason_it_has_reported().iter().any(|reason| {
+                reason.contains("could not open a way to read it")
+                    && reason.contains("Nothing is retrying it")
+            })
+        },
+    );
+    assert!(
+        reader
+            .every_state_it_has_reported()
+            .iter()
+            .all(|state| state == "awaiting_remote"),
+        "the port is still offered, so the link waits rather than going final: {:?}",
+        reader.every_state_it_has_reported()
+    );
+    assert_eq!(
+        source.the_egress_ports_it_last_reported(),
+        Vec::new(),
+        "no egress was ever started, so the source must claim no send"
     );
 }
 

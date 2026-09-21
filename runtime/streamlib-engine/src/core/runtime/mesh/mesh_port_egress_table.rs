@@ -26,7 +26,8 @@ use crate::core::graph::MeshPortAddress;
 use crate::core::runtime::mesh::gpu_context_the_mesh_copies_frames_with::GpuContextTheMeshCopiesFramesWith;
 use crate::core::runtime::mesh::mesh_port_egress::{MeshPortEgress, WhatOneEgressSends};
 use crate::core::runtime::mesh::output_ports_offered_on_the_mesh::{
-    OutputPortOfferedOnTheMesh, WhatThisRuntimeOffersOnTheMeshRegistry,
+    HowToReadAnOfferedOutputPort, OutputPortOfferedOnTheMesh,
+    WhatThisRuntimeOffersOnTheMeshRegistry,
 };
 use crate::core::runtime::mesh::output_ports_other_runtimes_are_reading::OutputPortsOtherRuntimesAreReading;
 use crate::core::runtime::mesh::runtime_mesh_key::{ReaderOfAnOutputPort, RuntimeMeshKeySpace};
@@ -38,12 +39,14 @@ pub(super) enum WhatTheEgressTableIsTold {
     ARuntimeStartedReading(ReaderOfAnOutputPort),
     ARuntimeStoppedReading(ReaderOfAnOutputPort),
     /// One egress's thread ended, whatever ended it — it could not start, it
-    /// was cancelled, or it stopped sending a port it had been sending. It has
-    /// already said why on its own thread, or has nothing to say. Sent by the
-    /// egress; nothing else sends it.
+    /// was cancelled, or it stopped sending a port it had been sending. Sent by
+    /// the egress; nothing else sends it.
     AnEgressStoppedSendingItsPort {
         port: OutputPortOfferedOnTheMesh,
         which_egress_of_its_port_it_was: WhichEgressOfAPortThisIs,
+        /// Why, in the words a reader waiting on the port reads — `None` for a
+        /// cancelled egress, which nobody is owed an account of.
+        why_it_stopped_sending_its_port: Option<String>,
     },
 }
 
@@ -223,16 +226,24 @@ fn spawn_the_egress_thread(
                         );
                     }
                     WhatTheEgressTableIsTold::ARuntimeStoppedReading(reader) => {
-                        a_runtime_stopped_reading(&mut who_is_reading, &mut sending, &reader);
+                        a_runtime_stopped_reading(
+                            &offered,
+                            &mut who_is_reading,
+                            &mut sending,
+                            &reader,
+                        );
                     }
                     WhatTheEgressTableIsTold::AnEgressStoppedSendingItsPort {
                         port,
                         which_egress_of_its_port_it_was,
+                        why_it_stopped_sending_its_port,
                     } => {
                         an_egress_stopped_sending_its_port(
+                            &offered,
                             &mut sending,
                             &port,
                             which_egress_of_its_port_it_was,
+                            why_it_stopped_sending_its_port,
                         );
                     }
                 }
@@ -277,33 +288,41 @@ fn a_runtime_started_reading(
     if sending.contains_key(&port) {
         return;
     }
-    // A port this runtime cannot send — one it does not have, or one whose
-    // channel it cannot open. Said rather than passed over: the reader wired
-    // against the offered-ports answer and will wait on an egress token that
-    // never comes, and this log is where the reason is. Why it could not open
-    // is said by the opener.
-    let Some(how_to_read_the_port) = table
+    let how_to_send_the_port =
+        match how_this_runtime_would_send(table.offered, table.this_runtimes_name, &port) {
+            Ok(how_to_send_the_port) => how_to_send_the_port,
+            Err(why_it_cannot_be_sent) => {
+                // Said rather than passed over: the reader wired against the
+                // offered-ports answer and will wait on an egress token that
+                // never comes. Recorded as well as logged, because that reader
+                // is on another machine and this log is not.
+                tracing::warn!(
+                    "{} is reading {port} and this runtime cannot send it, so that link waits on \
+                     an egress that never starts: {why_it_cannot_be_sent}",
+                    reader.reading_runtime_name
+                );
+                table
+                    .offered
+                    .record_why_it_stopped_sending_an_output_port(port, why_it_cannot_be_sent);
+                return;
+            }
+        };
+    let HowThisRuntimeWouldSendAPort {
+        addressed,
+        how_to_read_the_port,
+    } = how_to_send_the_port;
+    // Forgotten between the two, and the window on either side is why. After the
+    // arms above, because each of them records its own reason and returns, and
+    // clearing ahead of those would leave their readers with less than they had.
+    // Before the start, because that call returns the moment the thread spawns
+    // and the new egress declares its token later — so a peer's offered-ports
+    // query landing in between would be answered with the *old* attempt's reason
+    // and tell a reader nothing is retrying the port while a fresh attempt is
+    // running. A peer answered in the window this leaves reads that the port is
+    // not being sent yet, which is true.
+    table
         .offered
-        .how_to_read_an_offered_output_port(&port.processor_display_name, &port.port_name)
-    else {
-        tracing::warn!(
-            "{} is reading {port} and this runtime cannot send it, so that link waits on an \
-             egress that never starts",
-            reader.reading_runtime_name
-        );
-        return;
-    };
-    let addressed = match MeshPortAddress::new(
-        table.this_runtimes_name,
-        &port.processor_display_name,
-        &port.port_name,
-    ) {
-        Ok(addressed) => addressed,
-        Err(not_an_address) => {
-            tracing::warn!("the mesh cannot send {port}: {not_an_address}");
-            return;
-        }
-    };
+        .forget_that_it_stopped_sending_an_output_port(&port);
     match MeshPortEgress::start(WhatOneEgressSends {
         session: table.session.clone(),
         key_space: table.key_space.clone(),
@@ -320,42 +339,117 @@ fn a_runtime_started_reading(
         Ok(egress) => {
             sending.insert(port, egress);
         }
-        Err(cannot_spawn) => tracing::warn!(
-            "the mesh could not start sending {port} for want of a thread: {cannot_spawn}"
-        ),
+        Err(cannot_spawn) => {
+            let why_it_cannot_be_sent =
+                format!("this runtime had no thread to send it on: {cannot_spawn}");
+            tracing::warn!("the mesh could not start sending {port}: {why_it_cannot_be_sent}");
+            table
+                .offered
+                .record_why_it_stopped_sending_an_output_port(port, why_it_cannot_be_sent);
+        }
     }
 }
 
+/// What starting one port's egress needs, once this runtime has answered that
+/// it can send it at all.
+struct HowThisRuntimeWouldSendAPort {
+    addressed: MeshPortAddress,
+    how_to_read_the_port: HowToReadAnOfferedOutputPort,
+}
+
+/// How this runtime would send `port`, or why it cannot — a port whose names do
+/// not make a mesh address, or one there is no way to read: a port the graph no
+/// longer holds, or one whose channel will not open.
+///
+/// Its own function so the answer is provable without a Zenoh session and an
+/// iceoryx2 node to start a thread against, which is the only way either arm is
+/// reachable in a test at all.
+fn how_this_runtime_would_send(
+    offered: &WhatThisRuntimeOffersOnTheMeshRegistry,
+    this_runtimes_name: &str,
+    port: &OutputPortOfferedOnTheMesh,
+) -> std::result::Result<HowThisRuntimeWouldSendAPort, String> {
+    // The address first: it reads two names and nothing else, while the seam
+    // below opens the port's channel. A port that can never be addressed is one
+    // no channel should be opened for.
+    let addressed = MeshPortAddress::new(
+        this_runtimes_name,
+        &port.processor_display_name,
+        &port.port_name,
+    )
+    .map_err(|not_an_address| format!("the port has no address on the mesh: {not_an_address}"))?;
+    // This answers `None` both for a port this runtime no longer has and for one
+    // whose channel will not open, and cannot say which — so the reason claims
+    // neither. Where a channel is what failed, this runtime's own log names it.
+    let how_to_read_the_port = offered
+        .how_to_read_an_offered_output_port(&port.processor_display_name, &port.port_name)
+        .ok_or_else(|| {
+            "this runtime answered that it offers that port and then could not open a way to \
+             read it"
+                .to_string()
+        })?;
+    Ok(HowThisRuntimeWouldSendAPort {
+        addressed,
+        how_to_read_the_port,
+    })
+}
+
 /// Forget an egress whose thread has ended, so `graph` stops claiming the port
-/// is being sent and a later reader starts a fresh one.
+/// is being sent and a later reader starts a fresh one — and record why, so a
+/// reader already waiting is told rather than left to read this runtime's log.
 ///
 /// Only if the port still holds the egress that spoke: every egress says this as
 /// its thread ends, a cancelled one included, and by then the port may hold the
-/// egress that replaced it.
+/// egress that replaced it. A message from one that no longer holds the port
+/// must record nothing either, or a healthy egress would answer a reader with a
+/// dead predecessor's reason.
 ///
 /// The egress said on its own thread why it stopped, so nothing is logged here.
 /// The readers are left alone: they are still reading, and what changed is only
-/// that this runtime is not answering them — the next reader token to arrive
-/// starts a fresh egress, which is the whole of the recovery. A reader already in
-/// the table when the egress it was reading stopped waits for that, rather than
-/// this retrying against a source that just refused.
+/// that this runtime is not answering them — a reader token arriving for a port
+/// nothing is sending starts a fresh egress, which is the whole of the recovery,
+/// and nothing here retries against a source that just refused.
+///
+/// What that means for a reader already in the table turns on how far the egress
+/// got. One that had declared its token is seen to *stop* sending, which takes
+/// the reading runtime's ingress down and re-declares its reader token on the
+/// next pass — so a fresh egress does start, at that runtime's own cadence, as a
+/// consequence of its teardown rather than by anything here. One that never
+/// declared a token is seen by nobody: that reader's ingress and token stay put
+/// and no egress is ever started again. The reason recorded here is what tells
+/// it so, through this runtime's offered-ports answer.
 fn an_egress_stopped_sending_its_port<AnEgress: SaysWhichEgressOfItsPortItIs>(
+    offered: &WhatThisRuntimeOffersOnTheMeshRegistry,
     sending: &mut BTreeMap<OutputPortOfferedOnTheMesh, AnEgress>,
     port: &OutputPortOfferedOnTheMesh,
     which_egress_of_its_port_it_was: WhichEgressOfAPortThisIs,
+    why_it_stopped_sending_its_port: Option<String>,
 ) {
     let it_is_still_the_ports_egress = sending.get(port).is_some_and(|egress| {
         egress.which_egress_of_its_port_it_is() == which_egress_of_its_port_it_was
     });
-    if it_is_still_the_ports_egress {
-        sending.remove(port);
+    if !it_is_still_the_ports_egress {
+        return;
+    }
+    sending.remove(port);
+    if let Some(why_it_stopped_sending_its_port) = why_it_stopped_sending_its_port {
+        offered.record_why_it_stopped_sending_an_output_port(
+            port.clone(),
+            why_it_stopped_sending_its_port,
+        );
     }
 }
 
 /// Note one fewer reader of a port, and stop sending it once the last leaves.
-fn a_runtime_stopped_reading(
+///
+/// Generic over what an egress *is* for [`what_this_runtime_is_sending`]'s
+/// reason: this reads nothing off one but its presence, and the rule that the
+/// last reader leaving takes the port's recorded reason with it is then
+/// provable without a Zenoh session and an iceoryx2 subscriber to own.
+fn a_runtime_stopped_reading<AnEgress>(
+    offered: &WhatThisRuntimeOffersOnTheMeshRegistry,
     who_is_reading: &mut BTreeMap<OutputPortOfferedOnTheMesh, BTreeSet<String>>,
-    sending: &mut BTreeMap<OutputPortOfferedOnTheMesh, MeshPortEgress>,
+    sending: &mut BTreeMap<OutputPortOfferedOnTheMesh, AnEgress>,
     reader: &ReaderOfAnOutputPort,
 ) {
     let port = OutputPortOfferedOnTheMesh::from(reader);
@@ -368,6 +462,9 @@ fn a_runtime_stopped_reading(
         // Dropping the egress stops its thread, drops its channel subscriber
         // and undeclares its token.
         sending.remove(&port);
+        // With nobody reading it, a port has no egress by design rather than by
+        // failure, so whatever the last one said is no longer true of it.
+        offered.forget_that_it_stopped_sending_an_output_port(&port);
     }
 }
 
@@ -409,6 +506,8 @@ mod tests {
     fn reading(runtime_names: &[&str]) -> BTreeSet<String> {
         runtime_names.iter().map(|it| it.to_string()).collect()
     }
+
+    use crate::core::runtime::mesh::output_ports_offered_on_the_mesh::a_registry_whose_graph_offers;
 
     /// An egress that is only its identity, which is all the table's
     /// bookkeeping ever reads off one.
@@ -473,7 +572,13 @@ mod tests {
         let which_one_it_was = the_one_that_stopped.which_egress_of_its_port_it_is();
         let mut sending = BTreeMap::from([(port.clone(), the_one_that_stopped)]);
 
-        an_egress_stopped_sending_its_port(&mut sending, &port, which_one_it_was);
+        an_egress_stopped_sending_its_port(
+            &a_registry_whose_graph_offers(&[]),
+            &mut sending,
+            &port,
+            which_one_it_was,
+            None,
+        );
 
         assert!(
             what_this_runtime_is_sending(&who_is_reading, &sending).is_empty(),
@@ -502,12 +607,156 @@ mod tests {
         let (the_cancelled_one, the_one_that_replaced_it) = the_first_two_egresses_a_table_starts();
         let which_one_was_cancelled = the_cancelled_one.which_egress_of_its_port_it_is();
         let mut sending = BTreeMap::from([(port.clone(), the_one_that_replaced_it)]);
+        let offered = a_registry_whose_graph_offers(&[("KnownAudioSignalSource", "audio")]);
 
-        an_egress_stopped_sending_its_port(&mut sending, &port, which_one_was_cancelled);
+        an_egress_stopped_sending_its_port(
+            &offered,
+            &mut sending,
+            &port,
+            which_one_was_cancelled,
+            Some("its channel subscriber failed".to_string()),
+        );
 
         assert!(
             sending.contains_key(&port),
             "the port's egress is a different one, and it is sending"
+        );
+        assert!(
+            offered
+                .output_ports_it_offers_right_now()
+                .ports_it_stopped_sending
+                .is_empty(),
+            "a healthy egress must not answer a reader with a dead predecessor's reason"
+        );
+    }
+
+    /// An egress that stopped answers why, through the document a reader on
+    /// another machine already asks this runtime for.
+    ///
+    /// What it catches: the reason reaching this runtime's log and stopping
+    /// there — which is the whole of the account today, and unreadable from the
+    /// machine whose link is the one waiting.
+    ///
+    /// Mental-revert: drop the record from
+    /// `an_egress_stopped_sending_its_port` and the reader is told only that
+    /// nothing is sending the port, which it already knew.
+    #[test]
+    fn an_egress_that_stopped_answers_why_to_a_reader_on_another_machine() {
+        let port = a_port("KnownAudioSignalSource", "audio");
+        let (the_one_that_stopped, _) = the_first_two_egresses_a_table_starts();
+        let which_one_it_was = the_one_that_stopped.which_egress_of_its_port_it_is();
+        let mut sending = BTreeMap::from([(port.clone(), the_one_that_stopped)]);
+        let offered = a_registry_whose_graph_offers(&[("KnownAudioSignalSource", "audio")]);
+
+        an_egress_stopped_sending_its_port(
+            &offered,
+            &mut sending,
+            &port,
+            which_one_it_was,
+            Some("it could not take a destination slot".to_string()),
+        );
+
+        assert_eq!(
+            offered
+                .output_ports_it_offers_right_now()
+                .why_it_stopped_being_sent("KnownAudioSignalSource", "audio"),
+            Some("it could not take a destination slot")
+        );
+    }
+
+    /// A port this runtime offers and cannot open the channel of answers why,
+    /// rather than leaving its reader on the still-coming-up sentence forever.
+    ///
+    /// What it catches: the one arm of `a_runtime_started_reading` that fires
+    /// for a port which *is* on offer. The offer checks that a port's channel
+    /// can be named, never that it opens, so a port whose channel will not open
+    /// is offered, is never refused, and gets no egress — the reader waits out
+    /// the run on a sentence that says the source is merely not sending it yet.
+    ///
+    /// This locks the *wording* only — the recording itself lives in
+    /// `a_runtime_started_reading`, which needs a Zenoh session. What locks that
+    /// end to end is the two-process arm
+    /// `a_reader_of_a_port_its_source_cannot_read_is_told_so`.
+    #[test]
+    fn a_port_whose_channel_will_not_open_answers_why_rather_than_saying_nothing() {
+        // A registry whose graph offers the port and answers no way to read it,
+        // which is exactly what a channel that will not open leaves behind.
+        let offered = a_registry_whose_graph_offers(&[("CameraSource", "video")]);
+
+        let why_it_cannot_be_sent = how_this_runtime_would_send(
+            &offered,
+            "bench-cam-a1b2",
+            &a_port("CameraSource", "video"),
+        )
+        .err()
+        .expect("a port with no way to read it is one this runtime cannot send");
+
+        assert!(
+            why_it_cannot_be_sent.contains("could not open a way to read it"),
+            "{why_it_cannot_be_sent}"
+        );
+        assert!(
+            !why_it_cannot_be_sent.contains("  "),
+            "this sentence reaches a reader on another machine verbatim: \
+             {why_it_cannot_be_sent}"
+        );
+    }
+
+    /// A port whose names make no mesh address says that instead.
+    #[test]
+    fn a_port_with_no_mesh_address_says_so_rather_than_naming_its_channel() {
+        let offered = a_registry_whose_graph_offers(&[("CameraSource", "video")]);
+
+        let why_it_cannot_be_sent = how_this_runtime_would_send(
+            &offered,
+            "a runtime/named illegally",
+            &a_port("CameraSource", "video"),
+        )
+        .err()
+        .expect("a name that is not one key chunk is no mesh address");
+
+        assert!(
+            why_it_cannot_be_sent.contains("no address on the mesh"),
+            "{why_it_cannot_be_sent}"
+        );
+    }
+
+    /// The last reader leaving takes the port's recorded reason with it.
+    ///
+    /// What it catches: a port nobody reads has no egress by design rather than
+    /// by failure, so a reason left behind would have this runtime answer the
+    /// *next* reader with an account of a run it was not part of — and answer
+    /// it while a fresh egress was coming up perfectly well.
+    #[test]
+    fn the_last_reader_leaving_takes_the_ports_recorded_reason_with_it() {
+        let port = a_port("KnownAudioSignalSource", "audio");
+        let offered = a_registry_whose_graph_offers(&[("KnownAudioSignalSource", "audio")]);
+        offered.record_why_it_stopped_sending_an_output_port(
+            port.clone(),
+            "its channel subscriber failed".to_string(),
+        );
+        let mut who_is_reading = BTreeMap::from([(port.clone(), reading(&["bench-rec-e5f6"]))]);
+        let mut sending: BTreeMap<OutputPortOfferedOnTheMesh, ()> =
+            BTreeMap::from([(port.clone(), ())]);
+
+        a_runtime_stopped_reading(
+            &offered,
+            &mut who_is_reading,
+            &mut sending,
+            &ReaderOfAnOutputPort {
+                source_runtime_name: "bench-cam-a1b2".to_string(),
+                processor_display_name: port.processor_display_name.clone(),
+                port_name: port.port_name.clone(),
+                reading_runtime_name: "bench-rec-e5f6".to_string(),
+            },
+        );
+
+        assert!(sending.is_empty(), "the last reader takes the egress too");
+        assert!(
+            offered
+                .output_ports_it_offers_right_now()
+                .ports_it_stopped_sending
+                .is_empty()
         );
     }
 

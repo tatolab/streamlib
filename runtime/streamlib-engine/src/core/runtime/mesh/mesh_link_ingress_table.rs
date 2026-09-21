@@ -682,7 +682,9 @@ fn start_carrying(resolving: &ResolvingLinksNeeds, address: &MeshPortAddress) {
     };
     let mut carried = resolving.carried.lock();
     carried.carrying.insert(address.clone(), ingress);
-    tell_the_ingress_about_every_link_from(&resolving.iceoryx2_node, &mut carried, address);
+    // No reason to carry: this pass has only just asked the source what it
+    // offers, and an egress that has not started yet is one still coming up.
+    tell_the_ingress_about_every_link_from(&resolving.iceoryx2_node, &mut carried, address, None);
 }
 
 /// Keep carrying `address`, or stop when the source stopped sending it or left
@@ -692,12 +694,16 @@ fn keep_carrying_or_stop(resolving: &ResolvingLinksNeeds, address: &MeshPortAddr
         .peers
         .every_peer_holding_the_name(&address.runtime_name())
         .is_empty();
-    let the_source_stopped_sending = resolving
-        .carried
-        .lock()
-        .carrying
-        .get(address)
-        .is_some_and(|ingress| ingress.the_source_stopped_sending());
+    let (the_source_stopped_sending, the_source_is_sending) = {
+        let carried = resolving.carried.lock();
+        match carried.carrying.get(address) {
+            Some(ingress) => (
+                ingress.the_source_stopped_sending(),
+                ingress.the_source_is_sending(),
+            ),
+            None => (false, false),
+        }
+    };
 
     if the_runtime_left || the_source_stopped_sending {
         let reason = if the_runtime_left {
@@ -740,9 +746,46 @@ fn keep_carrying_or_stop(resolving: &ResolvingLinksNeeds, address: &MeshPortAddr
         return;
     }
 
+    // Asked only while this runtime is open on the port and nothing has ever
+    // arrived on it, and never while a link is carrying: what ended the source's
+    // attempt to send is the one thing this side cannot derive, and its own log
+    // is two machines away. The cost is new and worth stating — an address in
+    // this state paid no query before, and two of them on one peer pay two — but
+    // it is a steady-state cost on a link that is going nowhere, bounded by the
+    // same budget a not-yet-carrying address already spends each pass, and it
+    // stops the moment an egress token turns up.
+    let why_the_source_stopped_sending_it = (!the_source_is_sending)
+        .then(|| why_the_source_says_it_stopped_sending(resolving, address))
+        .flatten();
+
     // A destination wired after the ingress opened still has to be told about.
     let mut carried = resolving.carried.lock();
-    tell_the_ingress_about_every_link_from(&resolving.iceoryx2_node, &mut carried, address);
+    tell_the_ingress_about_every_link_from(
+        &resolving.iceoryx2_node,
+        &mut carried,
+        address,
+        why_the_source_stopped_sending_it.as_deref(),
+    );
+}
+
+/// What the source says about a port whose egress stopped, or `None` when it
+/// says nothing about it.
+///
+/// Asked afresh rather than remembered: the reason is the source runtime's to
+/// state and to withdraw, and one that has started sending the port again
+/// answers nothing here at all.
+fn why_the_source_says_it_stopped_sending(
+    resolving: &ResolvingLinksNeeds,
+    address: &MeshPortAddress,
+) -> Option<String> {
+    let offered = ask_a_runtime_what_output_ports_it_offers(
+        &resolving.session,
+        &resolving.key_space,
+        address.runtime_name(),
+    )?;
+    offered
+        .why_it_stopped_being_sent(address.processor_display_name(), address.port_name())
+        .map(str::to_string)
 }
 
 /// How far one link from `address` has got, once this runtime's ingress for it
@@ -753,22 +796,44 @@ fn keep_carrying_or_stop(resolving: &ResolvingLinksNeeds, address: &MeshPortAddr
 /// the first two alone would say it was carrying over a port nothing was
 /// sending — and then fall back to `awaiting_remote` when an egress it never
 /// had went away.
+///
+/// A source that stopped sending and said why reads differently from one still
+/// coming up, which is the whole of what a waiting reader has to tell apart.
+/// Both stay `awaiting_remote`: the port is still offered, and the next runtime
+/// to begin reading it starts a fresh egress.
 fn how_far_a_link_from_here_has_got(
     address: &MeshPortAddress,
     its_destination_is_open: bool,
     the_source_is_sending: bool,
+    why_the_source_stopped_sending_it: Option<&str>,
 ) -> RemoteLinkResolution {
     match (its_destination_is_open, the_source_is_sending) {
         (false, _) => RemoteLinkResolution::AwaitingRemote {
             reason: format!("{address} is being read and this link is not wired to it yet"),
         },
         (true, false) => RemoteLinkResolution::AwaitingRemote {
-            reason: format!(
-                "the runtime {} is on the mesh and offers {}/{}, and is not sending it",
-                address.runtime_name(),
-                address.processor_display_name(),
-                address.port_name()
-            ),
+            reason: match why_the_source_stopped_sending_it {
+                // "While this link keeps reading" is the exact bound: the
+                // source starts a fresh egress for the first reader of a port
+                // nothing is sending, and this runtime is already one of its
+                // readers, so its token arriving again is the one thing that
+                // would — and nothing here takes it down to make that happen.
+                Some(why_the_source_stopped_sending_it) => format!(
+                    "the runtime {} offers {}/{} and its last attempt to send it stopped: \
+                     {why_the_source_stopped_sending_it}. Nothing is retrying it while this link \
+                     keeps reading: a fresh attempt starts when a runtime begins reading a port \
+                     nothing is sending.",
+                    address.runtime_name(),
+                    address.processor_display_name(),
+                    address.port_name()
+                ),
+                None => format!(
+                    "the runtime {} is on the mesh and offers {}/{}, and is not sending it",
+                    address.runtime_name(),
+                    address.processor_display_name(),
+                    address.port_name()
+                ),
+            },
         },
         (true, true) => RemoteLinkResolution::Wired,
     }
@@ -787,6 +852,7 @@ fn tell_the_ingress_about_every_link_from(
     iceoryx2_node: &Iceoryx2Node,
     carried: &mut WhatThisRuntimeIsCarryingFromOtherRuntimes,
     address: &MeshPortAddress,
+    why_the_source_stopped_sending_it: Option<&str>,
 ) {
     let Some(ingress) = carried.carrying.get(address) else {
         return;
@@ -825,6 +891,7 @@ fn tell_the_ingress_about_every_link_from(
             address,
             link.its_destination_is_open,
             the_source_is_sending,
+            why_the_source_stopped_sending_it,
         );
     }
 }
@@ -892,7 +959,7 @@ mod tests {
                     port_name: port.to_string(),
                 })
                 .collect(),
-            ports_it_holds_and_cannot_send: vec![],
+            ..Default::default()
         }
     }
 
@@ -1117,6 +1184,7 @@ mod tests {
                     "video",
                     "its channel cannot be named: it contains 'V'",
                 )]),
+                ..Default::default()
             }),
         );
         assert!(
@@ -1144,6 +1212,7 @@ mod tests {
                 "video",
                 "no channel name",
             )]),
+            ..Default::default()
         };
 
         let reason = the_reason(what_the_offered_ports_say(&an_address(), Some(&listing)));
@@ -1181,7 +1250,8 @@ mod tests {
     /// had went away.
     #[test]
     fn a_link_whose_source_is_not_sending_the_port_is_not_wired() {
-        let how_far = how_far_a_link_from_here_has_got(&the_address_being_read(), true, false);
+        let how_far =
+            how_far_a_link_from_here_has_got(&the_address_being_read(), true, false, None);
         let RemoteLinkResolution::AwaitingRemote { reason } = how_far else {
             panic!("a port nobody is sending is not wired; it read {how_far:?}");
         };
@@ -1189,12 +1259,75 @@ mod tests {
         assert!(reason.contains("is not sending it"), "{reason}");
     }
 
+    /// A source that said why its egress stopped puts that on the link, and
+    /// says plainly that nothing is working on it.
+    ///
+    /// What it catches: the two states a waiting reader cannot otherwise tell
+    /// apart — a source still coming up, which will start sending on its own,
+    /// and one whose egress ended, which will not. Today they read identically
+    /// and the reason lives only on the other machine.
+    ///
+    /// Mental-revert: fall through to the sentence below and the reader is told
+    /// exactly what it already knew.
+    #[test]
+    fn a_source_that_said_why_it_stopped_puts_that_on_the_link_with_the_no_retry_clause() {
+        let how_far = how_far_a_link_from_here_has_got(
+            &the_address_being_read(),
+            true,
+            false,
+            Some("it could not take a destination slot on scoutput--psource--video"),
+        );
+
+        let RemoteLinkResolution::AwaitingRemote { reason } = how_far else {
+            panic!("a port whose egress stopped is not final; it read {how_far:?}");
+        };
+        assert!(reason.contains("CameraSource/video"), "{reason}");
+        assert!(reason.contains("destination slot"), "{reason}");
+        assert!(reason.contains("Nothing is retrying it"), "{reason}");
+        assert!(
+            !reason.contains("is on the mesh and offers"),
+            "a source that said why must not also read as one still coming up: {reason}"
+        );
+    }
+
+    /// A source that says nothing keeps the still-coming-up sentence, which is
+    /// what a link a second old is genuinely waiting on.
+    #[test]
+    fn a_source_that_said_nothing_still_reads_as_one_coming_up() {
+        let how_far =
+            how_far_a_link_from_here_has_got(&the_address_being_read(), true, false, None);
+        let RemoteLinkResolution::AwaitingRemote { reason } = how_far else {
+            panic!("it read {how_far:?}");
+        };
+        assert!(
+            !reason.contains("Nothing is retrying it"),
+            "nothing may claim a recovery is not running while one is coming up: {reason}"
+        );
+    }
+
+    /// A source sending the port again is wired, whatever its last egress said.
+    ///
+    /// What it catches: a recorded reason outliving the trouble and holding a
+    /// carrying link at `awaiting_remote` for the rest of the run.
+    #[test]
+    fn a_source_sending_again_is_wired_whatever_its_last_egress_said() {
+        assert_eq!(
+            how_far_a_link_from_here_has_got(
+                &the_address_being_read(),
+                true,
+                true,
+                Some("its publisher did not declare"),
+            ),
+            RemoteLinkResolution::Wired
+        );
+    }
+
     /// The source sending the port is what turns an open ingress and an open
     /// destination into a link that is carrying.
     #[test]
     fn a_link_is_wired_once_its_destination_is_open_and_its_source_is_sending() {
         assert_eq!(
-            how_far_a_link_from_here_has_got(&the_address_being_read(), true, true),
+            how_far_a_link_from_here_has_got(&the_address_being_read(), true, true, None),
             RemoteLinkResolution::Wired
         );
     }
@@ -1208,6 +1341,7 @@ mod tests {
                 &the_address_being_read(),
                 false,
                 the_source_is_sending,
+                None,
             );
             let RemoteLinkResolution::AwaitingRemote { reason } = how_far else {
                 panic!("a link with no open destination is not wired; it read {how_far:?}");
