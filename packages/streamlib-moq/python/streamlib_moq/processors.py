@@ -638,7 +638,7 @@ class MoqBroadcastPublisher:
         self._track_names = _optional_track_names(config.track_names)
         self._session: "_native.MoqBroadcastPublishingSession | None" = None
         self._this_machines_stamp_clock: "str | None" = None
-        self._stamp_clock_asked_of_inbound_link: "set[str]" = set()
+        self._inbound_links_whose_stamp_clock_was_already_read: "set[str]" = set()
         self._kind_by_inbound_link: "dict[str, str]" = {}
         self._next_data_sequence_index_by_inbound_link: "dict[str, int]" = {}
         self._bags_handed_over = 0
@@ -782,9 +782,9 @@ class MoqBroadcastPublisher:
         Only a publisher with a deadline says so, since that is the only reader
         with something to do about it.
         """
-        if inbound_link in self._stamp_clock_asked_of_inbound_link:
+        if inbound_link in self._inbound_links_whose_stamp_clock_was_already_read:
             return
-        self._stamp_clock_asked_of_inbound_link.add(inbound_link)
+        self._inbound_links_whose_stamp_clock_was_already_read.add(inbound_link)
 
         stamped_on = ctx.inputs.inbound_link_stamp_clock_identity(
             TRACKS_INPUT_PORT, inbound_link

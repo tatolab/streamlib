@@ -2493,8 +2493,9 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   baseline and every bag is written however late. Both of the deadline's readings are
   subtractions against the publisher's own machine's clock, so the stamp-age arm reads only a
   track whose stamps are taken on it: a track fed across the mesh has no age here at any
-  offset, is never shed for one, and is said once in the log naming both machines, while its
-  uplink backlog is still read from the instant each object reached the transport. The reach of
+  offset, is never shed for one, and — where a deadline is configured, there being no other
+  reader to act on it — is said once in the log naming both machines, while its uplink backlog
+  is still read from the instant each object reached the transport. The reach of
   that is a mesh link and no further: a stamp a relay restated on a local link reads as local
   here too, which the clock entry below leaves to the common-clock OPEN, and
   `MoqBroadcastSubscriber` feeding `MoqBroadcastPublisher` is that case inside this wheel.

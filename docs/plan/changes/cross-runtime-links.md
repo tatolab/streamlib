@@ -203,12 +203,7 @@ call a stamp comparable "across every process" say "on one machine".
 **DECIDED (owner, 2026-09-14) — the inbound link carries the clock identity; the relay gap is recorded
 as known.** A remote link carries its peer's identity: `graph` renders it on the link, and the
 link-naming read surface gains `inbound_link_stamp_clock_identity(port, link)` in Rust and Python. A peer
-returning with a new identity re-wires as a new wiring. **The wheel also exports the other half of that
-comparison** — `streamlib.this_machines_stamp_clock_identity() -> str | None`, the boot-session UUID text
-a reading taken in this process is on — because a link's identity means nothing without a local identity
-to test it against, and a helper whose only link is mesh-fed has no local link to read one off. Engine
-code inside the extension's own change, the clause §Packages & extension model's bag-codec export
-(`ARCHITECTURE.md:124`) fired first. Recorded here at the consumer backlog this change filed, #2340. `Mp4Sink` compares first stamps across tracks
+returning with a new identity re-wires as a new wiring. `Mp4Sink` compares first stamps across tracks
 (`mp4_fragmented_file_writer.rs:731-735`), so it stops a track whose link's clock differs from the
 recording's first track, or changes mid-recording, by name — its existing per-track latch
 (`:1928-1938`). **Known gap:** a relay — `h264_decoder.rs:79-82`, `opus_encoder.rs:59-68`, any Python
@@ -221,6 +216,13 @@ which covers relays but changes every timestamped read and write signature in bo
 `zenoh/src/net/runtime/mod.rs:286`) — off for peers by default (`DEFAULT_CONFIG.json5:215`), refusing a
 stamp too far ahead and adjusting no clock. They order events between hosts that already share NTP time
 and cannot map a remote monotonic stamp onto ours; the OPEN's PTP/NTP direction stands.
+
+The wheel exports the other half of that comparison: `this_machines_stamp_clock_identity() -> str | None`,
+the boot-session UUID text a reading taken in this process is on, which is the same string a link from
+this runtime answers. A link's identity settles nothing without a local one to test it against, and a
+helper whose only link is mesh-fed has no local link to read one off. Engine work an extension needs is
+done as engine code inside the extension's own change (`ARCHITECTURE.md:110-123`), first fired by the
+bag-codec export (`:124`). [cross-runtime-links, SHIPPED #2340]
 
 ## MODIFIED: §Networking `:2458-2462` — how hop loss is read
 
