@@ -439,7 +439,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   [consumer-tree-disposition — SHIPPED; a standing convention, and by the same decision
   the showcase carries no CI check to run]
 
-## Processor model & scheduling — IN-FLIGHT (→ cross-runtime-links, macos-platform-floor)
+## Processor model & scheduling — IN-FLIGHT (→ macos-platform-floor)
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a bag
   (self-describing msgpack named map). The engine has no type layer: ports carry no
@@ -486,13 +486,24 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   inbound links at `setup()`
   (`inbound_link_names(port)`), which is how a sink learns how many tracks it owes. A bag
   the port never enumerated a link for is refused by name rather than borrowing one.
+  A helper-placed destination is *told* its link's name rather than deriving it: a link
+  carrying from another runtime rides a channel hashed from the source port's mesh address,
+  so a helper deriving the name from its channel would name its tracks by a hash. The wiring
+  envelope's input entry therefore carries `inbound_link_name` beside `channel_service_name`
+  for every link, and `wire_input_link` takes it as a required positional — not defaulted,
+  because a default meaning "the channel name" is the back-compat shim the doctrine bans and
+  would make a silently wrong name reachable. A helper-protocol change, made safe by the
+  build id above.
   [opus-mp4-recording-rung — SHIPPED #2124; the timestamped spelling with
-  networking-extension-wheels — #2150]
+  networking-extension-wheels — #2150; the mesh address and the envelope's link name —
+  cross-runtime-links, SHIPPED #2287]
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::input::tests::two_inbound_links_hand_a_reader_the_link_each_bag_arrived_on -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::input::tests::naming_the_inbound_link_a_bag_arrived_on_leaves_the_per_link_drop_counts_alone -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::input::tests::a_port_lists_the_inbound_links_wired_into_it_and_a_port_with_none_lists_none -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::input::tests::an_injected_bag_with_no_inbound_link_is_refused_by_name_rather_than_borrowing_one -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_inbound_link_read_with_timestamp.py -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_link_is_named_by_its_channel_at_home_and_by_its_address_across_the_mesh -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::the_envelope_hands_a_helper_the_address_beside_the_channel_it_subscribes_to -->
 - **DECIDED** — The delivery profile is the whole of channel policy: one word, declared
   port-locally at the consuming input port. Every input port declares its delivery profile explicitly — there is no default
   and nothing left to infer one from, so an input port without one is a wiring error.
@@ -1134,7 +1145,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   unbuilt engine capabilities rather than Python-reach gaps; equalising the construction
   surface with no pass to render against would buy nothing.
 
-## Media I/O — camera, display, audio, codecs — IN-FLIGHT (→ cross-runtime-links, macos-platform-floor)
+## Media I/O — camera, display, audio, codecs — IN-FLIGHT (→ macos-platform-floor)
 
 - **DECIDED** — First-party camera, display, and audio are native built-in processors
   in the engine tree, statically linked into the wheel — pre-built named blocks
@@ -1304,7 +1315,10 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
 - **DECIDED** — One clock on the data plane: every timestamp a processor stamps, reads,
   or compares — frames, bags, audio ticks, `ctx.time` — is the machine's monotonic clock
   (`CLOCK_MONOTONIC` on Linux, `mach_absolute_time` on Apple), the same epoch the V4L2
-  and ALSA driver stamps carry, comparable across every node on a host. No
+  and ALSA driver stamps carry, comparable across every node on a host — and on that host
+  alone, since the epoch is that machine's own boot: two stamps from two machines are
+  readings of two unrelated clocks, which is why every link names the machine its bags were
+  stamped on (§Networking). No
   process-relative epoch anywhere, and each language exports exactly one name for it.
   Wall clock is permitted on exactly three observability surfaces and nowhere else: log
   record `host_ts` and `source_ts`, and log file naming — their job is correlating with
@@ -2241,7 +2255,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   machine-global scan paths; the lane costs nothing when unused (no `DT_NEEDED`
   entries, no import-time work). [audio-subsystem]
 
-## Networking — transport, runtime mesh, moq, webrtc — IN-FLIGHT (→ cross-runtime-links, macos-platform-floor)
+## Networking — transport, runtime mesh, moq, webrtc — IN-FLIGHT (→ macos-platform-floor)
 
 - **DECIDED** — Cross-language interop happens on the wire between nodes, as
   self-describing bags — never in-graph. [importable-python-library — SHIPPED #1715]
@@ -2699,8 +2713,10 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   address.
   Stated residual: two runtimes that start inside one discovery window, or that meet when a
   partition heals, are not refused. Both keep running, each says so once naming the other's
-  host, and `graph` lists both; which one a remote link reaches is `cross-runtime-links`'s to
-  settle. [runtime-mesh — SHIPPED #2282, #2284]
+  host, and `graph` lists both. Which one a remote link reaches is settled below: neither —
+  the link is `error` naming both hosts and carries from neither until one leaves, because a
+  link that picked one could feed the wrong machine.
+  [runtime-mesh — SHIPPED #2282, #2284; the residual settled by cross-runtime-links #2292]
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::runtime_name -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::duplicate_runtime_name_on_the_mesh -->
   <!-- verify: cargo test -p streamlib-engine --test runtime_mesh_two_processes -->
@@ -2720,7 +2736,16 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   at its cap, and a source offering more than the four format-and-extent pairs one may mint
   pools of (pools are never freed). The copy-out door is Linux-only, because
   `SurfaceExportStaging` is; a non-Linux sender says once per port that its surface bags do
-  not cross. [runtime-mesh — SHIPPED #2290]
+  not cross.
+  Where it bites, stated rather than discovered. A texture-backed frame — a kernel output —
+  lands buffer-backed on the far side, inheriting the camera's existing gap: a bare-id kernel
+  dispatch refuses it, and the display's buffer fallback draws only RGBA correctly. An sRGB
+  texture label collapses to its linear buffer format. A bag's `texture_layout` crosses
+  verbatim, since the engine reads no other key, and is inert there: a pooled id never takes
+  the import path that reads it. And bandwidth is the reason encoded bags are the path for
+  ordinary links — 1080p RGBA is 8.3 MB, which must queue inside the transport's own window,
+  so raw frames over 1 GbE mostly drop and are counted.
+  [cross-runtime-links — SHIPPED #2290]
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::a_bags_top_level_surface_id -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::a_frames_pixels_on_the_mesh -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::a_frames_pixels_written_into_a_local_surface -->
@@ -2735,28 +2760,211 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: grep -n "transport_udp" runtime/streamlib-engine/Cargo.toml -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_the_native_extension_links_nothing_the_host_may_not_supply -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_third_party_notices.py -->
+- **DECIDED** — How a remote link is spelled. In Python,
+  `Runtime.remote_processor_output(runtime_name, display_name, port_name)` and
+  `Runtime.remote_processor_input(...)` mint `RemoteProcessorOutputPortReference` and
+  `RemoteProcessorInputPortReference`, stub-gated, and `connect(source, destination)` takes a
+  local or a remote reference on each end, before `run()` as today. The address is checked at
+  the mint, so a chunk the mesh cannot carry raises where the author wrote it rather than at a
+  wiring call several lines on, and the read goes straight into the engine's own
+  `OutputLinkPortRef` — there is no Python-side shadow type. In Rust, `OutputLinkPortRef` and
+  `InputLinkPortRef` each gained a variant carrying a `MeshPortAddress { runtime_name,
+  display_name, port_name }` — the existing types extended, never a parallel pair — with
+  `Runner::connect` applying a link on this runtime and
+  `Runner::request_link_on_remote_input_runtime` asking another runtime to apply one. Over
+  MCP, each end of `connect` is named one of two ways: `from_processor_id` / `to_processor_id`
+  for a port on this node, or `<end>_runtime_name` with `<end>_processor_display_name` for a
+  port on another runtime — the display name, because processor ids never appear on the mesh.
+  Giving both forms for one end, or neither, is refused by name and reaches no op: the two
+  name different ports and the tool cannot know which was meant. `disconnect` takes `link_id`,
+  with an optional `input_runtime_name` for a link another runtime holds, or a
+  `link_request_id` alone to cancel a request still waiting. A runtime name equal to one's own
+  is a local reference, resolved by display name.
+  [cross-runtime-links — SHIPPED #2292 for the Rust address and #2287 for the Python and MCP
+  spellings; the `to_*` pair with #2289]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_graph_building.py -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh_address_chunk -->
+  <!-- verify: cargo test -p streamlib-api-server tools_call_connect_names_a_source_on_another_runtime_by_its_mesh_address -->
+  <!-- verify: cargo test -p streamlib-api-server tools_call_disconnect_refuses_naming_both_a_link_and_a_request_or_neither -->
 - **DECIDED** — Any runtime on the mesh may create a remote link: a receiver pulling another
   runtime's output into its own input, a sender pushing its output into another runtime's
   input, or a third runtime wiring two others. The runtime that owns the input end applies the
   link through the same `connect` operation and the same refusals a local link meets, and the
   requesting runtime receives that outcome. The request travels over the mesh, so neither end
   needs a control plane, and `graph` on the input's runtime shows which runtime created the
-  link. Until the security pass, any runtime on the mesh may wire. [runtime-mesh]
+  link. Until the security pass, any runtime on the mesh may wire.
+  **The input's runtime always pulls**, so a push and a third-party wiring are one message — a
+  *link request* to the input's runtime, which applies it through `connect` itself with a
+  remote source. One data shape serves all three. The request is a Zenoh query to a queryable
+  under that runtime's own `@runtime/<runtime name>` prefix, sent at `Drop` on the control
+  priority with an engine-chosen timeout; the payload is msgpack carrying the operation, the
+  requester-minted `link_request_id`, the source and destination addresses or the `link_id`,
+  the requester's name and its engine version. The reply is `{link_id, state}` or a refusal by
+  `reply_err`.
+  **Silence is not a refusal, and Zenoh makes the two look identical**: a timed-out query
+  arrives as an error reply carrying the string `Timeout` through the same callback a real
+  `reply_err` uses, so only an error reply whose payload *decodes* as a refusal document
+  counts — everything else is silence, which leaves the request waiting with reason
+  `unanswered` and is resent on an engine-chosen backoff. The input's runtime keeps each
+  applied `link_request_id` on the link it made, for that link's life, so a resend returns the
+  link it already made and never a second one — and a link that goes takes its id with it,
+  leaving nothing to forget. **A refusal about the moment is not a refusal about the request**:
+  a runtime declares this queryable before it has a graph to apply into, and a request landing
+  in that window is refused *for now* and kept by the requester.
+  **`connect` never waits on the mesh** — the owner's helper ruling applied again: it returns
+  `awaiting_remote` or `pending`, and the outcome lands in `graph`. An absent or silent input
+  runtime leaves the request with the requester, rendered with its id under
+  `graph.mesh.link_requests_awaiting_runtime` and sent when that runtime appears; a request
+  dies with its requester, and `disconnect` naming its `link_request_id` cancels it.
+  `disconnect` over the mesh is the same request carrying `link_id`, and needs no idempotence
+  record — it is idempotent by what it asks for. Every link renders `created_by_runtime_name`,
+  its own runtime's name for a local link.
+  [runtime-mesh; cross-runtime-links — SHIPPED #2289]
+  <!-- verify: cargo test -p streamlib-engine --test cross_runtime_link_requests_two_processes -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::link_requests_applied_into_this_runtimes_graph -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::link_requests_this_runtime_has_sent -->
 - **DECIDED** — A remote link naming a runtime that is not on the mesh waits and wires when
   that runtime appears; a runtime that is present but offers no such processor or port refuses
   the link by name, listing what it does offer; and a link whose remote runtime leaves returns
   to waiting and restarts its loss count when the runtime returns. A sending runtime does no
   network work and copies no frame for a port until a remote link to that port exists.
-  [runtime-mesh]
+  **States.** `LinkState` gained `awaiting_remote`, rendered with an `awaiting_remote_reason`
+  naming the runtime or the port, beside the `pending`, `wired` and `error` a local link
+  already has. Unlike `error` it is not final: the link wires itself the moment what the
+  reason names turns up.
+  **The source runtime appears.** The input's runtime queries its offered output ports,
+  answered at query time off the source's own graph and never announced. A missing port is
+  `error` listing what *is* offered; so is a different `engine_version`, naming both (pre-1.0:
+  no cross-version wire). The runtime then declares a reader liveliness token under
+  `@runtime/<source name>/@readers/…`, subscribes to the port's mesh key, and reads `wired`
+  once that subscriber and the local destination are.
+  **The offer is only what the source can send.** A port the source holds and cannot send —
+  one whose names make no mesh address — is answered beside the offer under
+  `ports_it_holds_and_cannot_send` with the reason in the source's own words, and the reading
+  runtime refuses such a link by name rather than leaving it waiting on an egress that could
+  never start. The check is nameability alone, deliberately: a check that opened a channel
+  would be exactly the work the laziness rule above forbids.
+  **A port a runtime offers and stopped sending says why.** The offered-ports answer carries a
+  sibling list, `ports_it_stopped_sending`, one entry per such port carrying — in the source's
+  own words — why this runtime's last attempt to send it ended: an egress that stopped, and
+  equally one that was never started. It is never folded into
+  `ports_it_holds_and_cannot_send`, because that list reads as `error`. A reader whose ingress
+  is open over a port nothing is arriving on asks for it each resolution pass and puts it on
+  the link, beside the plain statement that nothing is retrying it while that link keeps
+  reading. The link stays `awaiting_remote`: the port is still offered, a runtime beginning to
+  read a port nothing is sending starts a fresh egress, and almost none of these failures are
+  provably permanent — so marking it final would end the one recovery there is. A source that
+  says nothing keeps the still-coming-up sentence, which is the pair a waiting reader could not
+  tell apart before. Owner direction 2026-09-20 at #2379, which settled it over an align;
+  whether anything retries, and on what cadence, is untouched and remains undecided.
+  **Leaving.** The source's token going returns the link to `awaiting_remote`; so does its
+  egress token going while the runtime stays, naming the port. A return re-wires and restarts
+  the count. **A name two live runtimes hold** makes the link `error` naming both hosts,
+  carrying from neither until one leaves — a link that picked one could feed the wrong machine,
+  which is the residual §Networking's runtime-name entry left for this change.
+  **Ingress.** One per remote source address on a runtime, shared by every link from it. Its
+  Zenoh callback only hands off into a bounded ring that evicts the oldest; the ingress's own
+  thread writes into a local channel as that channel's single publisher, with the carried stamp.
+  The channel is engine-named, hashed from the address, and its sizing, profile and caps read
+  the local destinations, never a missing source node. **Egress.** A source runtime watches the
+  reader tokens under its own name. The first reader of an existing output port creates one
+  egress, which takes one ordinary destination slot on that channel; the last reader's leave
+  removes it, so with no reader a runtime holds no subscriber, no publisher and no token. It
+  drains FIFO on its own OS thread and puts at `CongestionControl::Drop` on one priority for
+  its life — `Priority::DataLow` when its first bag carries a top-level `surface_id`,
+  `Priority::Data` otherwise, because two priorities are two QUIC streams, which would reorder
+  one port's sequence and read as gaps. Requests and tokens ride above both. A Python-authored
+  source is pulled the same way: the parent asks its helper for the publisher over the wiring
+  envelope a link would use, with no notify service and a hold id of the port's own, so the
+  primary authoring surface is not excluded from the mesh. **Tap** resolves a remote link's
+  local channel by the link's mesh address, because that channel is hashed from it and is
+  nothing a caller could spell.
+  [runtime-mesh; cross-runtime-links — SHIPPED #2292, #2287; the offer's split #2345, the
+  Python-authored source #2344, the forgotten egress #2346, and the stopped-sending reason
+  #2379]
+  <!-- verify: cargo test -p streamlib-engine --test cross_runtime_links_two_processes -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::output_ports_offered_on_the_mesh -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::mesh_port_egress -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::mesh_link_ingress -->
 - **DECIDED** — Stamps cross the mesh unchanged — the frame header's and every stamp in the
   bag — carrying the identity of the clock that produced them, and a stamp is never compared
   against one from another clock. The one monotonic clock of §Media I/O is therefore one
-  clock per machine. [runtime-mesh]
+  clock per machine.
+  A **clock identity** is the kernel's boot-session UUID — `/proc/sys/kernel/random/boot_id` on
+  Linux, `kern.bootsessionuuid` on macOS — the boot alone and never the pid-namespace inode
+  the duplicate-name `HostIdentity` pairs it with, because a container and its host share a
+  kernel and so share one monotonic epoch. It rides each mesh message's attachment. The frame
+  header does not change.
+  **The inbound link carries it, and the relay gap is recorded as known** (owner, 2026-09-14).
+  `graph` renders `stamp_clock_identity` on every link entry — on every link, not only a remote
+  one, so a reader comparing two links compares two strings instead of having to know which
+  crossed a mesh. A link inside this node names this machine; one whose source is on another
+  runtime names nothing until a bag has crossed it, and nothing again while its source runtime
+  is away, so a reader reads it again rather than caching it. The link-naming read surface
+  gained `inbound_link_stamp_clock_identity(port, link)` in Rust and Python, and the wheel
+  exports the other half of that comparison as `this_machines_stamp_clock_identity() -> str |
+  None` — a link's identity settles nothing without a local one to test it against, and a
+  helper whose only link is mesh-fed has no local link to read one off. A helper opens no mesh
+  session, so it asks the runtime over the escalate bridge for a link carrying from another
+  runtime and is answered in process for a local one; the design's claim that the wiring
+  envelope could carry it was falsified in the build — a remote link's destination is wired
+  before its source runtime is ever known, and nothing re-issues a helper's `wire_input_link`
+  afterwards — so the envelope carries only the local-vs-remote decision the engine makes,
+  rather than letting the helper infer it from two names being equal.
+  A peer returning with a new identity re-wires every link from that address afresh, with the
+  hop count back to zero — both the gap baseline and the total `graph` renders — because what a
+  link lost under the machine that has gone describes a hop that no longer exists. `Mp4Sink`
+  compares first stamps across tracks, so it takes its clock from the first track to deliver
+  and stops by name, through its existing per-track latch, a track whose link names another
+  machine or changes machine mid-recording, while every other track keeps recording.
+  **Known gap:** a relay — a decoder, an encoder, any Python `write(…, timestamp_ns=)` —
+  restates an upstream stamp on a local output, where it now renders as a confident "this
+  machine" rather than as an absent key, so mixing machines downstream of a relay goes uncaught
+  until the common-clock OPEN below closes. Rejected: the identity on every bag, in the user
+  header beside the sequence number, which covers relays but changes every timestamped read and
+  write signature in both languages. **Zenoh's own timestamps were rechecked** at the owner's
+  request and are not the answer: a hybrid logical clock of wall time plus a counter and the
+  session id, off for peers by default, refusing a stamp too far ahead and adjusting no clock.
+  They order events between hosts that already share NTP time and cannot map a remote monotonic
+  stamp onto ours.
+  [runtime-mesh; cross-runtime-links — SHIPPED #2288 for the carried identity and #2291 for its
+  reads, rendering and the `Mp4Sink` refusal; the MoQ deadline's arm #2340]
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::machine_clock_identity -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::machine_clock_a_remote_link_carries_from -->
+  <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_fragmented_file_writer -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_inbound_link_stamp_clock.py -->
+  <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-09-21-cross-runtime-links.md -->
 - **DECIDED** — No link ever blocks a producer across the mesh either: a send the network
   cannot take is dropped rather than waited for, and every bag lost between two runtimes is
   counted on its remote link in `graph`, beside the drops its ports already count. Notify
   services, the runtime event bus, request-response and blackboard never cross the mesh.
-  [runtime-mesh]
+  **The number is the one `loss-visibility` already mints**, carried end to end rather than a
+  second numbering minted at the egress. Egress copies each sample's user-header sequence
+  number into a fixed little-endian attachment — `{timestamp_ns i64, sequence_number u64,
+  publisher_generation u64, clock_identity [u8; 16], frame_pixel_description_bytes u32}`, every
+  offset pinned by a golden-bytes test — where `timestamp_ns` is the frame header's stamp, and
+  bumps the generation when the sample's `origin()` changes. The fifth field is the surface
+  entry's: how many bytes of the payload describe a frame's pixels, and zero for a bag naming
+  no surface, which therefore still crosses verbatim. The attachment is the engine's
+  append-extensible side channel, and this record's own rule is that a later field may join its
+  end.
+  **Ingress counts the gap** after its ring, on its writing thread rather than in its Zenoh
+  callback — which is what puts its own ring's evictions inside the jump. One gap therefore
+  covers the sending channel's ring, the bags the egress never sent, Zenoh's silent drops, the
+  network and the ingress ring: everything between the producer's send and the local write. A
+  new publisher generation is a baseline, never a gap.
+  **It counts on both profiles**, since nothing on the hop skips by design — a `newest`
+  destination's hop loss is loss, while its own port passing over bags stays uncounted.
+  **Rendering** is `metrics.mesh_hop_dropped_bags_by_link: {link_id: n}` on the destination
+  node, beside `dropped_bags_by_link` and never inside it, and only where a remote link exists
+  to have lost anything. The ingress runs in the app process wherever the destination runs, so
+  a helper-placed destination's hop count reaches `graph` with no blackboard while its ports'
+  own counts still come off its helper's board.
+  [runtime-mesh; cross-runtime-links — SHIPPED #2288]
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::mesh_data_message_attachment -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::graph::components::processor_metrics::tests::a_processors_metrics_render_mesh_hop_loss_beside_its_ports_own_and_never_inside_it -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::graph::components::processor_metrics::tests::a_processor_with_no_remote_link_renders_no_mesh_hop_key_rather_than_an_empty_one -->
+  <!-- verify: cargo test -p streamlib-engine --test cross_runtime_links_two_processes -->
 - **DECIDED** — `graph` carries the runtime's mesh peers, and `streamlib nodes` lists mesh
   peers beside the nodes in the local registry. A runtime that hosts no control plane still
   joins the mesh and carries remote links; it is not drivable remotely.
@@ -2776,15 +2984,32 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   registry row is not repeated, and the cost is about a second more per `nodes` call — the
   scouting delay plus the query bound. `nodes` stays a registry surface rather than a tool,
   so the CLI is still a pure JSON-RPC client for every tool there is.
-  [runtime-mesh — SHIPPED #2283, #2285]
+  A link's own rendering follows: its `source` or `target` is one of two shapes — a
+  `processor_id` for a port on this node, or `{runtime_name, processor_display_name,
+  port_name}` for a port on another runtime — with the schema, the MCP prompt fixture and the
+  generated schemas following. Beside the peers, `mesh` gained `egress_ports:
+  [{processor_display_name, port_name, reader_runtime_names}]` — every output port another
+  runtime is pulling, with the runtimes reading it, because every other sign of a remote link
+  lives on the runtime that owns the *input*, so without it an agent driving the sending node
+  cannot tell that anybody is pulling from it. One entry per live egress, never per reader: a
+  port this runtime cannot send has readers and no egress, and rendering it would claim a send
+  that is not happening. And `mesh.link_requests_awaiting_runtime` carries the requests this
+  node has not had applied, each `awaiting_runtime` while its runtime is absent, `unanswered`
+  while it is not replying, or `refused` with that runtime's own words.
+  [runtime-mesh — SHIPPED #2283, #2285; the link shape and the two request keys —
+  cross-runtime-links, SHIPPED #2292, #2287, #2289, and the stopped-egress correction #2346]
   <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::capability_extension_and_mesh_rendering_tests -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::capability_extension_and_mesh_rendering_tests::a_port_another_runtime_reads_renders_with_the_runtimes_reading_it -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_a_runtime_on_the_mesh_is_listed_once_with_what_it_says_it_is -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_an_empty_mesh_says_so_and_names_the_mesh -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_a_verb_targets_a_node_by_its_runtime_name -->
 - **OPEN** — A common clock across machines: intended, do not build until designed. Direction:
   runtimes on a mesh negotiate a shared network time (PTP, NTP or similar) so stamps from
-  different machines become comparable; until then the per-clock rule above stands.
-  [runtime-mesh]
+  different machines become comparable; until then the per-clock rule above stands. It also
+  owns the relay gap the per-link identity leaves: a processor restating an upstream stamp on
+  a local output renders that link as this machine, confidently and wrongly, so whatever
+  closes this has to correct that reading too and not only add a shared epoch.
+  [runtime-mesh; the relay gap named by cross-runtime-links]
 
 ## Language SDKs & parity — SHIPPED
 <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py -->
@@ -2873,7 +3098,8 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_the_native_extension_links_nothing_the_host_may_not_supply -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_the_glsl_compiler_is_linked_statically -->
 
-## Control plane & observability — IN-FLIGHT (→ cross-runtime-links)
+## Control plane & observability — SHIPPED
+<!-- verify: cargo test -p streamlib-api-server tools_list_advertises_exactly_the_control_vocabulary -->
 
 - **DECIDED** — The control plane carries no optional capability's routes natively. A
   capability extension that needs an endpoint contributes it through the `host` door
@@ -2920,13 +3146,21 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   `insert_processor_between_linked_processors`, `fan_output_to_another_consumer`,
   `show_channel_on_virtual_camera` and `look_at_what_a_channel_carries` — whose every
   step is a call to a served tool: a prompt is text, never a mutation path, so the tool
-  set stays the whole of the control vocabulary.
+  set stays the whole of the control vocabulary. The vocabulary does not grow for the
+  mesh: `connect` and `disconnect` gained arguments rather than gaining siblings
+  (§Networking), so a caller drives a remote link with the verbs it already had, and the
+  instructions carry what the new states mean — `awaiting_remote` and its reason,
+  `created_by_runtime_name`, `stamp_clock_identity`, and a `connect` whose input is on
+  another runtime answering a `link_request_id` rather than a `link_id`, because only the
+  runtime owning an input wires a link into it.
   [importable-python-library, mcp-served-with-the-node — SHIPPED #1712;
   control-plane-surface-pixel-exchange — SHIPPED #1972, #1974 for the vocabulary
   sentence; live graph mutation restored by owner ruling 2026-09-06; resources and
   prompts — SHIPPED #2232, the catalog they serve from agent-readable-processor-catalog;
   local-transport-hardening — SHIPPED #2263, #2265 made the late-joiner sizing clause true
-  in the tree and gave a helper's link the `pending` state the instructions now explain]
+  in the tree and gave a helper's link the `pending` state the instructions now explain;
+  cross-runtime-links — SHIPPED #2287, #2289 for the mesh arguments and the states the
+  instructions explain]
   <!-- verify: sdk/streamlib-python-wheel/tests/test_cli.py::test_the_wheel_serves_no_mcp_verb -->
   <!-- verify: cargo test -p streamlib-api-server tools_list_advertises_exactly_the_control_vocabulary -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_live_graph_mutation.py -->
