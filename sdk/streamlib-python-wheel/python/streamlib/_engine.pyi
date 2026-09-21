@@ -88,6 +88,7 @@ __all__ = [
     "processor_class_import_paths_in_this_processes_catalog",
     "register_declared_processor_class",
     "runtime_log_directory",
+    "this_machines_stamp_clock_identity",
 ]
 
 @final
