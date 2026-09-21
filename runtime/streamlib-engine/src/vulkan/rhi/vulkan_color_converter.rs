@@ -95,7 +95,11 @@ impl VulkanColorConverter {
         dst_transfer: TransferId,
     ) -> Result<Arc<VulkanComputeKernel>> {
         let kernel = self.get_or_build_buffer_to_image_kernel()?;
-        kernel.set_storage_buffer_storage(0, src)?;
+        kernel.set_storage_buffer_storage_from_byte_offset(
+            0,
+            src,
+            u64::from(src_layout.plane0_offset_bytes),
+        )?;
         self.finish_buffer_to_image(&kernel, dst, info, dst_transfer, src_layout)?;
         Ok(kernel)
     }
@@ -114,7 +118,11 @@ impl VulkanColorConverter {
         dst_transfer: TransferId,
     ) -> Result<Arc<VulkanComputeKernel>> {
         let kernel = self.get_or_build_buffer_to_image_kernel()?;
-        kernel.set_storage_buffer_pixel(0, src)?;
+        kernel.set_storage_buffer_pixel_from_byte_offset(
+            0,
+            src,
+            u64::from(src_layout.plane0_offset_bytes),
+        )?;
         self.finish_buffer_to_image(&kernel, dst, info, dst_transfer, src_layout)?;
         Ok(kernel)
     }
@@ -869,6 +877,181 @@ mod tests {
             64,
             32,
             "bt709→srgb",
+        );
+    }
+
+    fn host_visible_storage_buffer_holding(
+        device: &Arc<HostVulkanDevice>,
+        byte_len: usize,
+        bytes_at: &[(usize, &[u8])],
+    ) -> crate::core::rhi::StorageBuffer {
+        let buffer = HostVulkanBuffer::new_storage_buffer_host_visible(
+            device,
+            byte_len.next_multiple_of(4) as u64,
+        )
+        .expect("host-visible storage buffer");
+        unsafe {
+            std::ptr::write_bytes(buffer.mapped_ptr(), 0xA7, byte_len);
+            for (offset, bytes) in bytes_at {
+                std::ptr::copy_nonoverlapping(
+                    bytes.as_ptr(),
+                    buffer.mapped_ptr().add(*offset),
+                    bytes.len(),
+                );
+            }
+        }
+        crate::core::rhi::StorageBuffer::from_host_vulkan_buffer(Arc::new(buffer))
+    }
+
+    fn convert_and_read_back(
+        device: &Arc<HostVulkanDevice>,
+        converter: &VulkanColorConverter,
+        source: &crate::core::rhi::StorageBuffer,
+        layout: SourceLayoutInfo,
+        info: &ResolvedColorInfo,
+        width: u32,
+        height: u32,
+    ) -> Vec<u8> {
+        let output_texture = allocate_storage_target_in_general(device, width, height);
+        converter
+            .prepare_buffer_to_image_storage(
+                source,
+                layout,
+                &output_texture,
+                info,
+                TransferId::Srgb,
+            )
+            .expect("prepare")
+            .dispatch(
+                width.div_ceil(COLOR_CONVERTER_WORKGROUP_SIZE),
+                height.div_ceil(COLOR_CONVERTER_WORKGROUP_SIZE),
+                1,
+            )
+            .expect("dispatch");
+        let readback = VulkanTextureReadback::new(
+            device,
+            &TextureReadbackDescriptor {
+                label: "color-converter-offset-test-readback",
+                format: TextureFormat::Rgba8Unorm,
+                width,
+                height,
+            },
+        )
+        .expect("readback handle");
+        let ticket = readback
+            .submit(&output_texture, TextureSourceLayout::General)
+            .expect("readback submit");
+        readback
+            .wait_and_read(ticket, u64::MAX)
+            .expect("readback wait")
+            .to_vec()
+    }
+
+    /// NV12 whose Y plane starts past byte 0 of the bound buffer — behind
+    /// bytes the kernel must not read — converts byte-identically to the
+    /// same NV12 starting at byte 0.
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn nv12_starting_past_byte_0_converts_identically_to_the_same_bytes_at_byte_0() {
+        let Some(device) = try_device() else { return };
+        let (width, height) = (64u32, 32u32);
+        let nv12_bytes = build_deterministic_nv12(width, height);
+        let plane0_offset = device.min_storage_buffer_offset_alignment().max(1) as usize * 32;
+        let info = ResolvedColorInfo {
+            primaries: PrimariesId::Bt709,
+            transfer: TransferId::Srgb,
+            matrix: MatrixId::Smpte170m,
+            range: RangeId::Full,
+        };
+        let converter =
+            VulkanColorConverter::new(&device, PixelFormat::Nv12FullRange, PixelFormat::Rgba32)
+                .expect("converter construction");
+
+        let at_byte_0 =
+            host_visible_storage_buffer_holding(&device, nv12_bytes.len(), &[(0, &nv12_bytes)]);
+        let expected = convert_and_read_back(
+            &device,
+            &converter,
+            &at_byte_0,
+            SourceLayoutInfo::nv12_tight(width, height),
+            &info,
+            width,
+            height,
+        );
+        let past_byte_0 = host_visible_storage_buffer_holding(
+            &device,
+            plane0_offset + nv12_bytes.len(),
+            &[(plane0_offset, &nv12_bytes)],
+        );
+        let actual = convert_and_read_back(
+            &device,
+            &converter,
+            &past_byte_0,
+            SourceLayoutInfo::nv12_starting_at(plane0_offset as u32, width, width, width * height),
+            &info,
+            width,
+            height,
+        );
+        assert!(
+            expected.chunks_exact(4).all(|px| px[3] == 255),
+            "the reference conversion wrote every pixel"
+        );
+        assert_eq!(
+            actual, expected,
+            "Y plane at byte {plane0_offset} converts like the same bytes at byte 0"
+        );
+    }
+
+    /// A plane-0 offset that is not a multiple of the device's
+    /// `minStorageBufferOffsetAlignment` is refused, naming both numbers,
+    /// before anything reaches the driver.
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn a_plane0_offset_off_the_storage_buffer_offset_alignment_is_refused_naming_both_numbers() {
+        let Some(device) = try_device() else { return };
+        let alignment = device.min_storage_buffer_offset_alignment();
+        if alignment < 2 {
+            tracing::warn!(
+                alignment,
+                "skipping — every offset is aligned on this device"
+            );
+            return;
+        }
+        let misaligned_offset = (alignment + alignment / 2) as u32;
+        let source = host_visible_storage_buffer_holding(&device, 4096, &[]);
+        let output_texture = allocate_storage_target_in_general(&device, 16, 16);
+        let converter =
+            VulkanColorConverter::new(&device, PixelFormat::Nv12VideoRange, PixelFormat::Rgba32)
+                .expect("converter construction");
+        let refusal = converter
+            .prepare_buffer_to_image_storage(
+                &source,
+                SourceLayoutInfo::nv12_starting_at(misaligned_offset, 16, 16, 256),
+                &output_texture,
+                &ResolvedColorInfo {
+                    primaries: PrimariesId::Bt709,
+                    transfer: TransferId::Srgb,
+                    matrix: MatrixId::Smpte170m,
+                    range: RangeId::Limited,
+                },
+                TransferId::Srgb,
+            )
+            .expect_err("a misaligned storage-buffer offset is refused");
+        assert!(
+            matches!(refusal, Error::Configuration(_)),
+            "typed refusal: {refusal}"
+        );
+        let message = refusal.to_string();
+        assert!(
+            message.contains(&format!("offset {misaligned_offset} "))
+                && message.contains(&format!("minStorageBufferOffsetAlignment {alignment}")),
+            "the refusal names the offset and the alignment: {message}"
         );
     }
 }

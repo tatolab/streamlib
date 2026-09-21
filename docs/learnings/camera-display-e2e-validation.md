@@ -4,6 +4,7 @@
 
 You changed anything in the GPU pipeline (`vulkan_device.rs`, `vulkan_buffer.rs`,
 `vulkan_texture.rs`, `runtime/streamlib-engine/src/linux/v4l2_video_device_backend.rs`,
+`runtime/streamlib-engine/src/core/context/captured_video_frame_to_pooled_rgba_conversion_stage.rs`,
 `runtime/streamlib-media-builtins/src/camera_source.rs`,
 `runtime/streamlib-media-builtins/src/display_window.rs`) and need to confirm:
 

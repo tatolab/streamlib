@@ -94,6 +94,7 @@ impl HostMappingWrittenByGpu {
                 vulkan_device,
                 host_range_ptr,
                 byte_len,
+                None,
             ) {
                 Ok(imported) => {
                     return Ok(Self {

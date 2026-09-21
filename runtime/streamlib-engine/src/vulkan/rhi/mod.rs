@@ -142,7 +142,12 @@ mod vulkan_texture_readback;
 pub use vulkan_texture_readback::VulkanTextureReadback;
 
 mod vulkan_color_converter;
-pub use vulkan_color_converter::VulkanColorConverter;
+pub use vulkan_color_converter::{COLOR_CONVERTER_WORKGROUP_SIZE, VulkanColorConverter};
+
+#[cfg(target_os = "macos")]
+mod vulkan_imported_iosurface_storage_buffer;
+#[cfg(target_os = "macos")]
+pub use vulkan_imported_iosurface_storage_buffer::ImportedIOSurfaceStorageBuffer;
 
 #[cfg(target_os = "linux")]
 mod vulkan_host_mapping_imported_as_buffer;

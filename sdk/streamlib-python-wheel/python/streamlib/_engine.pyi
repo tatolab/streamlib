@@ -93,14 +93,25 @@ __all__ = [
 
 @final
 class CameraSource:
-    """Native built-in block: live camera capture (V4L2 on Linux).
+    """Native built-in block: live camera capture (V4L2 on Linux, AVFoundation
+    on macOS).
 
     A marker type — pass the class itself to `Runtime.add`
     (`rt.add(CameraSource, config={"device_id": "/dev/video0"})`); it is
     never instantiated and its per-frame path never enters the interpreter.
-    Camera→GPU transport auto-selects zero-copy DMA-BUF or CPU upload. A named
-    `device_id` that cannot be opened is refused at `setup()` by name, as is
-    every camera on a platform no capture backend serves yet.
+    `device_id` is a V4L2 device path on Linux and an AVFoundation camera's
+    unique ID on macOS; absent, the first camera found — the first built-in
+    camera on macOS, ahead of external cameras and camera extensions.
+    Camera→GPU transport auto-selects zero-copy (DMA-BUF on Linux, IOSurface on
+    macOS) or CPU upload. A named `device_id` that cannot be opened is refused
+    at `setup()` by name, as is every camera on a platform no capture backend
+    serves. Each frame's `timestamp_ns` is the instant the device captured it,
+    on the machine's monotonic clock.
+
+    On macOS the first run asks for camera access without waiting: the graph
+    starts, and frames begin once the user allows it. macOS asks on behalf of
+    the application that launched the process — the terminal, not Python — so a
+    refusal names that application and the setting to change.
     """
 
 @final

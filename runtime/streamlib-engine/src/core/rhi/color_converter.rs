@@ -64,9 +64,9 @@ pub struct ColorConverterPushConstants {
     /// NV12). Set to `width` for tightly-packed NV12; ignored for
     /// single-plane formats (YUYV).
     pub plane1_stride_bytes: u32,
-    /// Byte offset where the secondary plane begins inside the
-    /// source SSBO. For NV12, `plane0_stride_bytes * height`. Zero
-    /// for single-plane formats (YUYV).
+    /// Byte offset where the secondary plane begins, from the start of
+    /// the bound source range — which begins at plane 0. For tight NV12,
+    /// `plane0_stride_bytes * height`. Zero for single-plane formats (YUYV).
     pub plane1_offset_bytes: u32,
 }
 
@@ -160,12 +160,17 @@ impl ColorConverterPushConstants {
 /// stride for NV12).
 #[derive(Debug, Clone, Copy)]
 pub struct SourceLayoutInfo {
+    /// Where plane 0 begins in the source buffer, in bytes. The converter
+    /// binds the buffer from here, so it must be a multiple of the device's
+    /// `minStorageBufferOffsetAlignment`. Zero when plane 0 starts the
+    /// buffer, as it does for V4L2.
+    pub plane0_offset_bytes: u32,
     /// Y plane (NV12) or packed plane (YUYV) row stride in bytes.
     pub plane0_stride_bytes: u32,
     /// UV plane row stride in bytes for NV12; zero for YUYV.
     pub plane1_stride_bytes: u32,
-    /// Offset of the UV plane from the start of the source SSBO,
-    /// in bytes. Zero for YUYV (single plane).
+    /// Offset of the UV plane from the start of plane 0, in bytes. Zero for
+    /// YUYV (single plane).
     pub plane1_offset_bytes: u32,
 }
 
@@ -175,10 +180,23 @@ impl SourceLayoutInfo {
     /// `v4l2_pix_format.bytesperline` for the stride; UV plane stride
     /// matches Y stride by V4L2 convention.
     pub fn nv12(y_stride_bytes: u32, uv_stride_bytes: u32, uv_offset_bytes: u32) -> Self {
+        Self::nv12_starting_at(0, y_stride_bytes, uv_stride_bytes, uv_offset_bytes)
+    }
+
+    /// NV12 whose Y plane begins `plane0_offset_bytes` into the source
+    /// buffer — an imported IOSurface, whose planes sit past a header — with
+    /// the UV plane `uv_offset_from_plane0_bytes` past the Y plane's start.
+    pub fn nv12_starting_at(
+        plane0_offset_bytes: u32,
+        y_stride_bytes: u32,
+        uv_stride_bytes: u32,
+        uv_offset_from_plane0_bytes: u32,
+    ) -> Self {
         Self {
+            plane0_offset_bytes,
             plane0_stride_bytes: y_stride_bytes,
             plane1_stride_bytes: uv_stride_bytes,
-            plane1_offset_bytes: uv_offset_bytes,
+            plane1_offset_bytes: uv_offset_from_plane0_bytes,
         }
     }
 
@@ -192,6 +210,7 @@ impl SourceLayoutInfo {
     /// `bytesperline` for the YUYV plane (must be a multiple of 4).
     pub fn yuyv(packed_stride_bytes: u32) -> Self {
         Self {
+            plane0_offset_bytes: 0,
             plane0_stride_bytes: packed_stride_bytes,
             plane1_stride_bytes: 0,
             plane1_offset_bytes: 0,

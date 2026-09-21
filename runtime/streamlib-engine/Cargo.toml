@@ -136,6 +136,12 @@ objc2-io-surface.workspace = true
 objc2-core-foundation.workspace = true
 objc2-foundation.workspace = true
 objc2-av-foundation = { workspace = true, features = ["objc2-core-media", "objc2-core-video"] }
+# The capture arm's sample buffers, their pixel buffers' IOSurfaces and colour
+# attachments, and the host clock their stamps convert to.
+objc2-core-media.workspace = true
+objc2-core-video = { workspace = true, features = ["objc2-io-surface"] }
+# The completion handler camera authorization answers through.
+block2 = "0.6"
 objc2-app-kit.workspace = true
 objc2-quartz-core.workspace = true
 objc2-core-text.workspace = true
@@ -292,6 +298,14 @@ path = "tests/cross_runtime_link_requests_two_processes.rs"
 name = "processor_owned_window_on_the_first_thread"
 path = "tests/processor_owned_window_on_the_first_thread.rs"
 harness = false
+required-features = ["hardware-tests"]
+# The AVFoundation arm capturing from a real camera through the video device
+# seam. Rig tier — a camera, the GPU, and camera access allowed for the
+# terminal running it — so it builds only under `hardware-tests`. Empty off
+# Apple.
+[[test]]
+name = "avfoundation_camera_captures_through_the_video_device_seam"
+path = "tests/avfoundation_camera_captures_through_the_video_device_seam.rs"
 required-features = ["hardware-tests"]
 
 # Strace-backed no-syscalls test child. Built under `cargo test` via

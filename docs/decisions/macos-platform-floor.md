@@ -21,9 +21,17 @@ macOS floor to Intel, or before treating macOS as a best-effort target.
 > pre-pivot `src/metal/` tree and the `backend-metal` feature are deleted.
 
 > **Apple frameworks appear only at the edges Vulkan cannot reach**, each meeting Vulkan at a defined
-> handoff: AVFoundation for capture (IOSurface → `VkImage`), AppKit/`CAMetalLayer` for present
-> (→ `VkSurfaceKHR`), IOSurface plus Mach ports for cross-process frames, `MTLSharedEvent` for the
-> cross-process timeline, `mach_absolute_time` for the clock.
+> handoff: AVFoundation for capture (IOSurface → ~~`VkImage`~~ storage buffer),
+> AppKit/`CAMetalLayer` for present (→ `VkSurfaceKHR`), IOSurface plus Mach ports for cross-process
+> frames, `MTLSharedEvent` for the cross-process timeline, `mach_absolute_time` for the clock.
+
+> ~~AVFoundation for capture (IOSurface → `VkImage`)~~ — Superseded 2026-09-21 by the owner, on
+> #2359's measurement. MoltenVK refuses every CoreVideo 4:2:0 surface as a multi-planar `VkImage`
+> through v1.4.2 and on `main`: its import check compares the surface's top-level element — one
+> byte in 1×1, which is how CoreVideo describes it — against the whole six-byte 2×2 block, and a
+> single-plane import reaches only the luma plane. The frame's memory is imported as a storage
+> buffer through `VK_EXT_external_memory_host` instead — measured on MoltenVK 1.4.2, which the wheel
+> therefore carries at 1.4.1 or later — and read by the NV12 kernel a V4L2 DMA-BUF import feeds.
 
 > **The artifact is the wheel, identical to Linux** — `aarch64-apple-darwin` only, no Intel, no
 > Rosetta. No `.app` bundle, no launchd service, no installer, under any justification. macOS
@@ -42,8 +50,11 @@ Vulkan code with nothing Linux in it. Against that, a revived Metal backend is 2
 for 89 332 LOC of Vulkan RHI, and every kernel, buffer, timeline and present primitive would be
 written twice forever.
 
-**The Apple edges are real, and each was proven rather than assumed.** IOSurface imports as a
-`VkImage` single-plane and biplanar; `CAMetalLayer` yields a working swapchain; a spawned Python
+**The Apple edges are real, and each was proven rather than assumed.** ~~IOSurface imports as a
+`VkImage` single-plane and biplanar~~ — superseded 2026-09-21 by #2359's measurement: a single-plane
+surface imports as a `VkImage`, but a CoreVideo 4:2:0 surface — every camera frame — imports only
+its luma plane as one, so camera frames import as a storage buffer (see the annotated handoff line
+above); `CAMetalLayer` yields a working swapchain; a spawned Python
 child edits a 1080p GPU frame through a numpy view over a Mach-passed IOSurface at 698 fps, verified
 pixel-exact; a Vulkan timeline semaphore crosses to that child at 120 µs per round trip.
 

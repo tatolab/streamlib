@@ -62,6 +62,10 @@ pub struct CapturedVideoFrameFromDevice<'a> {
     /// The frame's colour as the device described it. An axis the device left
     /// unspecified is absent.
     pub color: H273ColorVui,
+    /// The instant the device captured the frame, in nanoseconds on the
+    /// machine's monotonic clock — the device's own stamp where it is usable,
+    /// never the instant of hand-off.
+    pub capture_timestamp_ns: i64,
 }
 
 /// What a capture stream calls with each frame it captures.
@@ -103,6 +107,10 @@ pub trait VideoCaptureStream: Send {
     /// restarting delivery does not bring a device back.
     fn liveness_report(&self) -> DeviceStreamLivenessReport;
 
+    /// How many of this stream's device stamps were ahead of the instant their
+    /// frame was dequeued and were clamped to it.
+    fn future_capture_stamps_clamped_to_dequeue(&self) -> u64;
+
     /// Begin delivering captured frames to `hand_off`, replacing any delivery
     /// an earlier call started.
     fn start_delivering_to(&mut self, hand_off: CapturedVideoFrameHandOff) -> Result<()>;
@@ -127,6 +135,31 @@ pub trait VideoDeviceBackend: Send + Sync {
         &self,
         request: &VideoDeviceStreamRequest,
     ) -> Result<Box<dyn VideoCaptureStream>>;
+}
+
+/// Why a camera named by `device_id` cannot be opened when it is not attached:
+/// naming it and listing the cameras that are, or — when none is — saying how
+/// to check for one.
+pub(crate) fn refusal_for_a_named_camera_that_is_not_attached(
+    device_id: &str,
+    attached: &[VideoCaptureDevice],
+    how_to_check_a_camera_is_attached: &str,
+) -> String {
+    if attached.is_empty() {
+        return format!(
+            "Camera '{device_id}' does not exist and no other camera is attached. \
+             {how_to_check_a_camera_is_attached}, or use TestPatternSource to run without one."
+        );
+    }
+    let attached = attached
+        .iter()
+        .map(|device| format!("{} ({})", device.id, device.name))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "Camera '{device_id}' does not exist. Attached cameras: {attached}. Fix device_id, or \
+         omit it to use the first camera found."
+    )
 }
 
 /// Shared handle to the backend the chain probed.
@@ -181,9 +214,20 @@ fn platform_video_device_backend_arms() -> Vec<VideoDeviceBackendArm> {
     })]
 }
 
-/// No capture arm serves this platform yet; the walk falls through to the
+/// The chain's real arms: AVFoundation, else — once it has declined — the
+/// refusing backend the walk falls through to.
+#[cfg(target_os = "macos")]
+fn platform_video_device_backend_arms() -> Vec<VideoDeviceBackendArm> {
+    use crate::apple::avfoundation_video_device_backend::AvFoundationVideoDeviceBackend;
+
+    vec![VideoDeviceBackendArm::named("avfoundation", || {
+        Ok(Arc::new(AvFoundationVideoDeviceBackend) as SharedVideoDeviceBackend)
+    })]
+}
+
+/// No capture arm serves this platform; the walk falls through to the
 /// refusing backend.
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn platform_video_device_backend_arms() -> Vec<VideoDeviceBackendArm> {
     Vec::new()
 }
@@ -191,6 +235,40 @@ fn platform_video_device_backend_arms() -> Vec<VideoDeviceBackendArm> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_named_camera_that_is_not_attached_is_refused_listing_the_ones_that_are() {
+        let refusal = refusal_for_a_named_camera_that_is_not_attached(
+            "/dev/video9",
+            &[VideoCaptureDevice {
+                id: "/dev/video0".into(),
+                name: "FaceTime HD Camera".into(),
+            }],
+            "Check the camera is plugged in",
+        );
+        assert!(
+            refusal.contains("'/dev/video9' does not exist"),
+            "{refusal}"
+        );
+        assert!(
+            refusal.contains("/dev/video0 (FaceTime HD Camera)"),
+            "{refusal}"
+        );
+    }
+
+    #[test]
+    fn a_named_camera_with_nothing_attached_says_how_to_check_and_how_to_run_without_one() {
+        let refusal = refusal_for_a_named_camera_that_is_not_attached(
+            "a-camera",
+            &[],
+            "Check the camera is plugged in",
+        );
+        assert!(
+            refusal.contains("Check the camera is plugged in"),
+            "{refusal}"
+        );
+        assert!(refusal.contains("TestPatternSource"), "{refusal}");
+    }
 
     #[test]
     fn the_video_chain_is_probed_once_and_hands_back_the_same_backend_every_time() {
@@ -206,7 +284,7 @@ mod tests {
     fn the_video_chain_always_lands_on_an_arm_whether_or_not_the_platform_captures() {
         let backend = probe_video_device_backend();
         assert!(
-            ["v4l2", "refusing-null"].contains(&backend.backend_name()),
+            ["v4l2", "avfoundation", "refusing-null"].contains(&backend.backend_name()),
             "the chain resolved to an arm nothing declares: {}",
             backend.backend_name()
         );
@@ -222,5 +300,15 @@ mod tests {
             .map(|arm| arm.backend_name)
             .collect();
         assert_eq!(arm_names, ["v4l2"]);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_macos_video_chain_offers_avfoundation_before_falling_through_to_the_refusing_backend() {
+        let arm_names: Vec<&str> = platform_video_device_backend_arms()
+            .iter()
+            .map(|arm| arm.backend_name)
+            .collect();
+        assert_eq!(arm_names, ["avfoundation"]);
     }
 }

@@ -302,6 +302,9 @@ pub struct HostVulkanDevice {
     /// CUDA device whose `cudaDeviceProp::uuid` equals this value;
     /// using a mismatched device silently fails on the import.
     physical_device_uuid: [u8; 16],
+    /// `VkPhysicalDeviceLimits::minStorageBufferOffsetAlignment`: every
+    /// storage-buffer descriptor's offset must be a multiple of it.
+    min_storage_buffer_offset_alignment: u64,
     /// Render-target-capable DRM modifiers per format from the EGL probe at
     /// device init. Empty when libEGL is unavailable or the probe failed.
     /// Callers consult this before requesting
@@ -714,6 +717,8 @@ impl HostVulkanDevice {
 
         let device_props = unsafe { instance.get_physical_device_properties(physical_device) };
         let device_name = device_props.device_name.as_cstr().to_string_lossy();
+        let min_storage_buffer_offset_alignment =
+            device_props.limits.min_storage_buffer_offset_alignment;
 
         // PCI vendor IDs assigned by Khronos Vulkan registry. NVIDIA's
         // proprietary Linux driver (and currently NVK on the same
@@ -915,7 +920,7 @@ impl HostVulkanDevice {
             vulkan_extension_names_borrowed_from_properties(&available_device_extension_properties);
 
         #[cfg(any(target_os = "macos", target_os = "ios"))]
-        {
+        let has_external_memory_host = {
             // A portability implementation that advertises the subset extension
             // requires it to be enabled (VUID-VkDeviceCreateInfo-pProperties-04451),
             // so this is probed rather than pushed blind. The subset MoltenVK
@@ -940,7 +945,20 @@ impl HostVulkanDevice {
                     "VK_EXT_metal_objects not available - Metal interop will be limited"
                 );
             }
-        }
+
+            // Import an IOSurface's pages as a storage buffer, zero-copy.
+            // MoltenVK 1.4.0 advertises it but refuses the spec's
+            // `VkExternalMemoryBufferCreateInfo{HOST_ALLOCATION}`; 1.4.1
+            // accepts it, so the refusal surfaces at import time.
+            let external_memory_host_ext = c"VK_EXT_external_memory_host";
+            let has_external_memory_host =
+                available_device_ext_names.contains(&external_memory_host_ext);
+            if has_external_memory_host {
+                device_extensions.push(external_memory_host_ext.as_ptr());
+                tracing::info!("VK_EXT_external_memory_host enabled");
+            }
+            has_external_memory_host
+        };
 
         // On Linux, check for DMA-BUF external memory extensions
         #[cfg(target_os = "linux")]
@@ -1187,9 +1205,9 @@ impl HostVulkanDevice {
 
         #[cfg(not(target_os = "linux"))]
         let has_acquire_unmodified = false;
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "ios")))]
         let has_external_memory_host = false;
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "ios")))]
         let min_imported_host_pointer_alignment: u64 = 0;
 
         // Snapshot the RT pipeline properties (SBT alignment + handle
@@ -1224,7 +1242,7 @@ impl HostVulkanDevice {
 
         // The host-pointer import alignment is a physical-device property;
         // well-defined to chain once the extension is advertised.
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos", target_os = "ios"))]
         let min_imported_host_pointer_alignment: u64 = if has_external_memory_host {
             let mut host_props =
                 vk::PhysicalDeviceExternalMemoryHostPropertiesEXT::builder().build();
@@ -1646,6 +1664,7 @@ impl HostVulkanDevice {
             #[cfg(target_os = "linux")]
             _opaque_fd_image_export_info: opaque_fd_image_export_info,
             physical_device_uuid,
+            min_storage_buffer_offset_alignment,
             #[cfg(target_os = "linux")]
             drm_modifier_table,
             validation_messenger,
@@ -3837,7 +3856,7 @@ impl HostVulkanDevice {
     /// buffer's requirements and what `vkGetMemoryHostPointerPropertiesEXT`
     /// reported for the range; a HOST_CACHED type wins when one qualifies,
     /// since the caller is going to read the range back on the CPU.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn import_host_pointer_memory(
         &self,
         host_ptr: *mut u8,
@@ -3976,6 +3995,12 @@ impl HostVulkanDevice {
     /// OPAQUE_FD memory or semaphore exported from this device.
     pub fn physical_device_uuid(&self) -> [u8; 16] {
         self.physical_device_uuid
+    }
+
+    /// `VkPhysicalDeviceLimits::minStorageBufferOffsetAlignment` — the
+    /// multiple every storage-buffer descriptor offset must be.
+    pub fn min_storage_buffer_offset_alignment(&self) -> u64 {
+        self.min_storage_buffer_offset_alignment
     }
 
     /// Render-target-capable DRM format modifiers, by DRM FOURCC, from the

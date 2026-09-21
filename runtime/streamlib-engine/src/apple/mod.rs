@@ -3,6 +3,8 @@
 
 pub mod appkit_content_view_of_winit_window;
 pub mod audio_clock;
+pub mod avfoundation_video_device_backend;
+pub mod core_video_pixel_buffer_color;
 pub mod corevideo_ffi;
 pub mod iosurface;
 pub mod machine_clock_identity;
@@ -13,6 +15,7 @@ pub mod vimage_ffi;
 pub mod xpc_ffi;
 
 pub mod permissions;
+pub mod responsible_gui_application;
 
 pub mod main_thread;
 

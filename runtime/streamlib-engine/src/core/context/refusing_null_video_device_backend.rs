@@ -40,7 +40,7 @@ fn refusal_for_a_platform_no_capture_arm_serves(device_id: Option<&str>) -> Erro
         .unwrap_or_default();
     Error::Configuration(format!(
         "No camera capture backend serves {}{named_device}: camera capture runs on Linux \
-         (V4L2) only for now. Use TestPatternSource to run without a camera.",
+         (V4L2) and macOS (AVFoundation). Use TestPatternSource to run without a camera.",
         crate::platform::name()
     ))
 }
