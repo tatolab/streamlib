@@ -2492,13 +2492,15 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   stated placeholder until a consumer asks otherwise. Absent, the publisher is the shipped
   baseline and every bag is written however late. Both of the deadline's readings are
   subtractions against the publisher's own machine's clock, so the stamp-age arm reads only a
-  track whose stamps are taken on it: a track fed across the mesh has no age here at any
-  offset, is never shed for one, and — where a deadline is configured, there being no other
-  reader to act on it — is said once in the log naming both machines, while its uplink backlog
-  is still read from the instant each object reached the transport. The reach of
-  that is a mesh link and no further: a stamp a relay restated on a local link reads as local
-  here too, which the common-clock OPEN below owns, and `MoqBroadcastSubscriber` feeding
-  `MoqBroadcastPublisher` is that case inside this wheel.
+  track whose stamps are taken on that clock — which a mesh-fed track may well be, two runtimes
+  on one machine sharing a boot session and so an epoch. A track stamped on another machine, or
+  naming no clock at all, has no age here at any offset, is never shed for one, and — where a
+  deadline is configured, there being no other reader to act on it — is said once in the log
+  naming both machines, while its uplink backlog is still read from the instant each object
+  reached the transport. What defeats it is a stamp whose clock the link cannot report: a relay
+  restating an upstream stamp on a local link reads as local here too, which the common-clock
+  OPEN below owns, and `MoqBroadcastSubscriber` feeding `MoqBroadcastPublisher` is that case
+  inside this wheel.
   [moq-data-tracks — SHIPPED #2159; the cross-clock arm — cross-runtime-links, SHIPPED #2340]
 - **DECIDED** — The deadline alone cannot see the uplink, because `moq-transport` never
   blocks and never pre-empts: a bag hands off to a forwarder and the writer learns nothing

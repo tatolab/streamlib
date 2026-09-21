@@ -88,8 +88,10 @@ class MoqBroadcastPublishingSession:
 
         The delivery deadline ages a stamp against this process's own monotonic
         clock, whose epoch is this machine's boot — so a stamp taken on another
-        machine's clock, which is what a bag that crossed the runtime mesh
-        carries, has no age here at any offset.
+        machine's clock has no age here at any offset. The identity decides that,
+        never the hop: two runtimes on one machine share a boot session, so a
+        track fed across the mesh from one of them is on this clock and is aged
+        like any local track.
 
         A track told `False`, and equally one never told at all, is never shed
         for its own stamp however late it reads, and its objects are filed for

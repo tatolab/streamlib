@@ -25,15 +25,16 @@
 //! the uplink stops carrying it, rather than finished.
 //!
 //! Both readings are subtractions against this machine's monotonic clock, so
-//! both need a stamp taken on it. A bag that crossed the runtime mesh carries
-//! the stamp its producer wrote on *that* machine's clock, whose epoch is that
-//! machine's own boot — so a local `now` minus one of those is not an age at
-//! any offset, and no offset is available to make it one. A track whose stamps
-//! are taken on another machine therefore has no readable stamp age here and is
-//! never shed for one. Its uplink backlog is still read: an object of such a
-//! track is stamped for that reading at the instant it reached the transport,
-//! which is on this clock and is what the reading asks about anyway — how long
-//! a forwarder has been parked on it.
+//! both need a stamp taken on it. A stamp taken on another machine's clock,
+//! whose epoch is that machine's own boot, is one a local `now` cannot be
+//! subtracted from at any offset, and no offset is available to make it one — so
+//! a track stamped there has no readable stamp age here and is never shed for
+//! one. The hop is not what decides that: two runtimes on one machine share a
+//! boot session and so share an epoch, so a track fed across the mesh from one
+//! of them is stamped on this very clock. A track stamped elsewhere still has
+//! its uplink backlog read: an object of one is stamped for that reading at the
+//! instant it reached the transport, which is on this clock and is what the
+//! reading asks about anyway — how long a forwarder has been parked on it.
 
 use crate::moq_track_sample::MoqTrackSample;
 
