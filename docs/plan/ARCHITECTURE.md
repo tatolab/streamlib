@@ -2497,8 +2497,8 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   reader to act on it — is said once in the log naming both machines, while its uplink backlog
   is still read from the instant each object reached the transport. The reach of
   that is a mesh link and no further: a stamp a relay restated on a local link reads as local
-  here too, which the clock entry below leaves to the common-clock OPEN, and
-  `MoqBroadcastSubscriber` feeding `MoqBroadcastPublisher` is that case inside this wheel.
+  here too, which the common-clock OPEN below owns, and `MoqBroadcastSubscriber` feeding
+  `MoqBroadcastPublisher` is that case inside this wheel.
   [moq-data-tracks — SHIPPED #2159; the cross-clock arm — cross-runtime-links, SHIPPED #2340]
 - **DECIDED** — The deadline alone cannot see the uplink, because `moq-transport` never
   blocks and never pre-empts: a bag hands off to a forwarder and the writer learns nothing

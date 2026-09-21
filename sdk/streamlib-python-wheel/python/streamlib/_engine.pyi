@@ -1990,9 +1990,9 @@ def this_machines_stamp_clock_identity() -> str | None:
     """Which machine's monotonic clock `monotonic_now_ns` reads.
 
     The machine's boot-session UUID text — the same string
-    `LinkInputDataReader.inbound_link_stamp_clock_identity` answers for a
-    link — or `None` where this platform names no clock of its own, which is
-    what a link carrying from that machine answers too.
+    `LinkInputDataReader.inbound_link_stamp_clock_identity` answers for a link
+    *from this runtime* — or `None` where this platform names no clock of its
+    own, which is what a link carrying from that machine answers too.
 
     This is the other half of a stamp comparison. A link's stamps may be aged
     against a reading taken in this process exactly when the two strings match;

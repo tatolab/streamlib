@@ -604,7 +604,8 @@ class MoqBroadcastPublisher:
     subtraction by. Its uplink backlog is still read, from the instant each
     object reached the transport rather than the media stamp, so the arm that
     sees a stalled uplink survives the hop. Which clock a track is on is read
-    once, as the track opens, and said in the log when it is not this one.
+    once, as the track opens, and — where a deadline is configured — said in the
+    log when it is not this one.
 
     The deadline reads two things. The stamp ages on the way to this
     publisher — capture, encode, the link into the helper. The uplink backlog
