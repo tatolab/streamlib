@@ -938,6 +938,28 @@ def test_a_mesh_fed_link_on_a_publisher_with_no_deadline_is_described_and_unrema
     assert warned == []
 
 
+def test_the_clock_note_really_crosses_into_this_wheels_rust():
+    """The one seam every other test here fakes: `note_whether_...` reaching the
+    native session. Constructing one dials nothing — the first bag opens the
+    connection — so this needs no relay.
+
+    A link the broadcast does not carry is what makes the call observable from
+    Python at all: the accepted note returns nothing, so the refusal is the only
+    evidence the name and the argument arrived where they were sent.
+    """
+    session = _native.MoqBroadcastPublishingSession(
+        A_RELAY, A_BROADCAST, "streamlib_bag", 100
+    )
+    session.declare_tracks(["camera"], None)
+
+    session.note_whether_a_tracks_stamps_are_on_this_publishers_clock("camera", True)
+
+    with pytest.raises(ValueError, match="microphone"):
+        session.note_whether_a_tracks_stamps_are_on_this_publishers_clock(
+            "microphone", False
+        )
+
+
 def test_setup_reads_the_machine_its_own_monotonic_readings_are_on():
     """Half of every comparison the deadline makes, and read from the wheel
     rather than derived here, so it is the same string a link answers."""

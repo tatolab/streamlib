@@ -19,6 +19,7 @@ not know rather than answer with this machine.
 import os
 import re
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -29,6 +30,10 @@ from streamlib._engine import ProcessorLinkDataAccess
 pytestmark = pytest.mark.usefixtures("private_iceoryx2_domain_for_this_test_process")
 
 INPUT_PORT = "tracks"
+
+#: Where Linux reports the boot session the monotonic epoch belongs to. The
+#: engine reads this file and nothing else, which is the claim under test.
+LINUX_BOOT_SESSION_PATH = "/proc/sys/kernel/random/boot_id"
 
 BOOT_SESSION_UUID = re.compile(
     r"\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z"
@@ -116,11 +121,24 @@ def test_this_machines_clock_is_the_one_a_link_from_this_runtime_names(
     ), "a link from this runtime is stamped on this machine's clock, by that name"
 
 
-def test_this_machines_clock_is_read_from_the_boot_and_never_changes():
-    """A boot id cannot change without a reboot, which ends the process — so
-    the answer is a constant and a caller may read it once at setup.
+@pytest.mark.skipif(
+    not Path(LINUX_BOOT_SESSION_PATH).exists(),
+    reason="only Linux reports its boot session at this path",
+)
+def test_this_machines_clock_is_the_kernels_own_boot_session():
+    """Locked to the kernel's own answer rather than to itself: the identity is
+    the boot session and nothing else — deliberately not the host identity, which
+    pairs the same boot id with the pid namespace, so a container and its host
+    read as two machines there and as one clock here.
+
+    Fail-without-fix: derive it from anything that distinguishes a container from
+    its host, and two processes that genuinely share a monotonic epoch stop being
+    allowed to compare stamps.
     """
-    assert this_machines_stamp_clock_identity() == this_machines_stamp_clock_identity()
+    assert (
+        this_machines_stamp_clock_identity()
+        == Path(LINUX_BOOT_SESSION_PATH).read_text().strip()
+    )
 
 
 def test_a_link_from_another_runtime_names_nothing_with_no_runtime_to_ask(

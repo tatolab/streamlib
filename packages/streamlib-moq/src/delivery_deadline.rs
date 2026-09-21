@@ -132,11 +132,9 @@ impl MoqPublisherDeliveryDeadline {
     /// one may be dropped at all is undecided — answered here by dropping
     /// none.
     ///
-    /// A sample on a track whose stamps are not taken on this publisher's own
-    /// clock is never shed for its stamp, however old `now_ns` makes it look:
-    /// the two clocks share no epoch, so that subtraction is not an age. Such a
-    /// track is still shed for its uplink backlog, whose stamps are this
-    /// publisher's own.
+    /// A sample on a track not stamped on this publisher's own clock is never
+    /// shed for its stamp however old `now_ns` makes it look, and is still shed
+    /// for its uplink backlog — see this module's own doc for why.
     pub(crate) fn verdict_for_one_sample(
         &self,
         sample: &MoqTrackSample,
