@@ -524,9 +524,6 @@ pub fn release_the_windows_handed_back_while_the_event_pump_was_not_driven() {
             || std::ops::ControlFlow::Break(()),
             || {},
         );
-        if std::env::var("SCRATCH_2357_FLUSH").is_ok() {
-            objc2_quartz_core::CATransaction::flush();
-        }
     }
 }
 
