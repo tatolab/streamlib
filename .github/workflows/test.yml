@@ -656,9 +656,10 @@ jobs:
           # source holds no egress until somebody reads its port and loses it
           # when the last reader leaves, a source whose egress cannot take a
           # destination slot settles to rendering none rather than to one it is
-          # not sending, a link named before its runtime exists waits and then
-          # wires, and a killed source returns the link to waiting until it
-          # comes back. GPU-free — neither peer builds a `Runner`, because
+          # not sending and its reader's link names that refusal in the source's
+          # own words while staying non-final, a link named before its runtime
+          # exists waits and then wires, and a killed source returns the link to
+          # waiting until it comes back. GPU-free — neither peer builds a `Runner`, because
           # `start()` needs a GPU.
           cargo test --locked -p streamlib-engine \
             --test cross_runtime_links_two_processes

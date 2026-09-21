@@ -353,12 +353,18 @@ fn a_runtime_started_reading(
 ///
 /// The egress said on its own thread why it stopped, so nothing is logged here.
 /// The readers are left alone: they are still reading, and what changed is only
-/// that this runtime is not answering them — the next reader token to arrive
-/// starts a fresh egress, which is the whole of the recovery. A reader already
-/// in the table when the egress it was reading stopped waits for that, rather
-/// than this retrying against a source that just refused; the reason recorded
-/// here is what tells that reader so, through this runtime's offered-ports
-/// answer.
+/// that this runtime is not answering them — a reader token arriving for a port
+/// nothing is sending starts a fresh egress, which is the whole of the recovery,
+/// and nothing here retries against a source that just refused.
+///
+/// What that means for a reader already in the table turns on how far the egress
+/// got. One that had declared its token is seen to *stop* sending, which takes
+/// the reading runtime's ingress down and re-declares its reader token on the
+/// next pass — so a fresh egress does start, at that runtime's own cadence, as a
+/// consequence of its teardown rather than by anything here. One that never
+/// declared a token is seen by nobody: that reader's ingress and token stay put
+/// and no egress is ever started again. The reason recorded here is what tells
+/// it so, through this runtime's offered-ports answer.
 fn an_egress_stopped_sending_its_port<AnEgress: SaysWhichEgressOfItsPortItIs>(
     offered: &WhatThisRuntimeOffersOnTheMeshRegistry,
     sending: &mut BTreeMap<OutputPortOfferedOnTheMesh, AnEgress>,

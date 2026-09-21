@@ -167,6 +167,18 @@ sysctl Zenoh cannot set. TCP alone was never offered. `runtime-mesh.md:120-122`,
    Two priorities are two QUIC streams, which would reorder one port's sequence and read as gaps.
    Requests and tokens ride above both. With no reader it holds no subscriber, publisher or token.
 7. **Tap** resolves a remote link's local channel by the link's mesh address.
+8. **A port a runtime offers and stopped sending says why.** Its offered-ports answer gains
+   `ports_it_stopped_sending`, one entry per such port carrying the reason its last egress ended in
+   the source's own words — beside the `ports_it_holds_and_cannot_send` refusal list #2345 added,
+   and never folded into it, because that list reads as `error`. A reader whose ingress is open
+   over a port nothing is arriving on asks for it each resolution pass and puts it on the link,
+   beside the plain statement that nothing is retrying it while that link keeps reading. The link
+   stays `awaiting_remote`: the port is still offered, a runtime beginning to read a port nothing
+   is sending starts a fresh egress, and almost none of these failures are provably permanent — so
+   marking it final would end the one recovery there is. A source that says nothing keeps the
+   still-coming-up sentence, which is the pair a waiting reader could not tell apart before. Owner
+   direction 2026-09-20 at #2379, which settled it over an align; whether anything retries, and on
+   what cadence, is untouched and remains undecided. [cross-runtime-links, SHIPPED #2379]
 
 ## MODIFIED: §Networking `:2432-2437` — how a surface crosses
 

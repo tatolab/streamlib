@@ -353,6 +353,15 @@ impl CrossRuntimeLinkPeerProcess {
             .collect()
     }
 
+    /// Every reason this peer has reported its link waiting or refused on, in
+    /// order.
+    fn every_reason_it_has_reported(&self) -> Vec<String> {
+        self.everything_it_has_reported()
+            .iter()
+            .filter_map(|reported| Some(reported.get("reason")?.as_str()?.to_string()))
+            .collect()
+    }
+
     /// Every state this peer has reported its link in, in order.
     fn every_state_it_has_reported(&self) -> Vec<String> {
         self.everything_it_has_reported()
@@ -791,7 +800,8 @@ fn a_sources_graph_names_the_port_the_mesh_reads_and_who_reads_it() {
 const HOW_MANY_REPORTS_A_SOURCES_RENDER_IS_READ_OVER: usize = 10;
 
 /// A source whose egress cannot take a destination slot on its own channel
-/// settles to rendering no egress port, rather than one it is not sending.
+/// settles to rendering no egress port, and the reader waiting on that port
+/// reads the refusal in the source's own words.
 ///
 /// What it catches: `MeshPortEgress::start` succeeds the moment its thread
 /// spawns, and everything that can refuse an egress happens inside that thread
@@ -807,8 +817,15 @@ const HOW_MANY_REPORTS_A_SOURCES_RENDER_IS_READ_OVER: usize = 10;
 /// egress that fails at all — the unit tests feed the table's two maps directly,
 /// which is what let this survive the surface it shipped on.
 ///
+/// The reader's half is #2379: until it, the only account of the refusal was in
+/// the *sending* runtime's log, and the reading runtime's link said the source
+/// offered the port and was not sending it — true, and indistinguishable from a
+/// source still coming up. Nothing else in CI carries a reason across the mesh
+/// for a port a runtime does offer.
+///
 /// Mental-revert: stop the egress thread saying it ended, and the source renders
-/// the port under its reader's name for the rest of the run.
+/// the port under its reader's name for the rest of the run; stop it saying
+/// *why*, and the reader is left with the sentence it already had.
 #[test]
 #[serial]
 fn a_source_whose_egress_cannot_take_a_slot_settles_to_no_egress_port() {
@@ -854,6 +871,26 @@ fn a_source_whose_egress_cannot_take_a_slot_settles_to_no_egress_port() {
                         .is_some_and(|reason| reason.contains("is not sending it"))
             })
         },
+    );
+    // Then the source's own account of the refusal reaches it, which is the
+    // thing the reading machine cannot derive: the slot was refused on the
+    // *other* process's channel.
+    reader.wait_until(
+        "the reader's link to name the slot refusal and say nothing is retrying it",
+        || {
+            reader.every_reason_it_has_reported().iter().any(|reason| {
+                reason.contains("destination slot") && reason.contains("Nothing is retrying it")
+            })
+        },
+    );
+    assert!(
+        reader
+            .every_state_it_has_reported()
+            .iter()
+            .all(|state| state == "awaiting_remote"),
+        "a failed egress leaves the link waiting and never final, or no later reader could \
+         revive the port: {:?}",
+        reader.every_state_it_has_reported()
     );
     // Long enough for the table to have heard that the egress ended and to have
     // reported what it renders from then on, twice over: the first window is the
