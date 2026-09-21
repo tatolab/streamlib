@@ -29,7 +29,7 @@ mod apple_first_thread {
     use std::sync::mpsc::channel;
     use std::time::{Duration, Instant};
 
-    use objc2::MainThreadMarker;
+    use objc2::{MainThreadMarker, sel};
     use objc2_app_kit::NSApplication;
     use streamlib_engine::core::context::{GpuContext, GpuContextLimitedAccess};
     use streamlib_engine::core::processor_owned_window::{
@@ -53,6 +53,27 @@ mod apple_first_thread {
     /// here is one a display's teardown would have detached and leaked.
     const TEARDOWN_TIME_STEP_BUDGET: Duration = Duration::from_secs(3);
 
+    /// Set on `run`'s last line. AppKit can end the process from under the
+    /// loop with status 0, which would read as a pass, so an exit before it
+    /// fails instead.
+    static RUN_REACHED_ITS_END: AtomicBool = AtomicBool::new(false);
+
+    extern "C" fn fail_an_exit_that_did_not_come_from_the_end_of_run() {
+        if !RUN_REACHED_ITS_END.load(Ordering::SeqCst) {
+            const EXITED_BEFORE_THE_END_OF_RUN: &[u8] =
+                b"the process exited before run() finished - AppKit ended it from under the loop\n";
+            // SAFETY: two async-signal-safe calls on a static buffer.
+            unsafe {
+                libc::write(
+                    libc::STDERR_FILENO,
+                    EXITED_BEFORE_THE_END_OF_RUN.as_ptr().cast(),
+                    EXITED_BEFORE_THE_END_OF_RUN.len(),
+                );
+                libc::_exit(1);
+            }
+        }
+    }
+
     /// What the window owner does once the first thread has stopped driving
     /// the loop, and how long each step took.
     struct StepsTakenWhileTheLoopWasNotDriven {
@@ -61,6 +82,8 @@ mod apple_first_thread {
     }
 
     pub fn run() {
+        // SAFETY: registers a plain `extern "C"` fn that captures nothing.
+        unsafe { libc::atexit(fail_an_exit_that_did_not_come_from_the_end_of_run) };
         let _logging = streamlib_engine::logging::init(StreamlibLoggingConfig {
             service_name: "processor-owned-window-on-the-first-thread".to_string(),
             runtime_id: None,
@@ -171,6 +194,7 @@ mod apple_first_thread {
             0,
             "one turn of the pump after teardown releases what teardown handed back"
         );
+        RUN_REACHED_ITS_END.store(true, Ordering::SeqCst);
     }
 
     /// Three windows at once: one deregistered while driven, one held to the
@@ -226,6 +250,7 @@ mod apple_first_thread {
     /// Choose the application menu's Quit as a user would, and check it asks
     /// the runtime to shut down rather than terminating the process.
     fn quit_from_the_application_menu_while_the_loop_is_driven() {
+        let mut quit_item_action = None;
         dispatch2::DispatchQueue::main().exec_sync(|| {
             let first_thread =
                 MainThreadMarker::new().expect("the main queue runs on the first thread");
@@ -234,8 +259,18 @@ mod apple_first_thread {
                 .and_then(|menu_bar| menu_bar.itemAtIndex(0))
                 .and_then(|application_menu_item| application_menu_item.submenu())
                 .expect("the pump installs an application menu on its first drive");
-            application_submenu.performActionForItemAtIndex(0);
+            quit_item_action = application_submenu
+                .itemAtIndex(0)
+                .and_then(|quit_item| quit_item.action());
+            if quit_item_action == Some(sel!(requestRuntimeShutdown:)) {
+                application_submenu.performActionForItemAtIndex(0);
+            }
         });
+        assert_eq!(
+            quit_item_action,
+            Some(sel!(requestRuntimeShutdown:)),
+            "the menu's Quit must request a shutdown, never send `terminate:`"
+        );
         assert!(
             is_runtime_shutdown_requested(),
             "the menu's Quit must reach the runtime's shutdown request"

@@ -43,8 +43,8 @@ pub enum PresentSurfaceSource<'window> {
         window_handle: &'window dyn HasWindowHandle,
         display_handle: &'window dyn HasDisplayHandle,
     },
-    /// The Metal layer the window event pump attached to the window's content
-    /// view on the process's first thread.
+    /// The Metal layer the window event pump added as a sublayer of the
+    /// window's content view on the process's first thread.
     #[cfg(target_os = "macos")]
     MetalLayerAddedAsSublayerOfWindowContentView(
         &'window crate::apple::metal_layer_added_as_sublayer_of_window_content_view::MetalLayerAddedAsSublayerOfWindowContentView,
@@ -991,9 +991,9 @@ fn create_surface_for_present_target(
             let metal_surface_create_info = vk::MetalSurfaceCreateInfoEXT::builder()
                 .layer(metal_layer.metal_layer_pointer())
                 .build();
-            // SAFETY: the layer outlives the surface — `ProcessorOwnedWindow`
-            // drops its present target before the registration that holds the
-            // layer.
+            // SAFETY: the layer is live for this call — the source borrows it
+            // from the registration that holds it — and MoltenVK's surface
+            // retains the layer for its own life.
             unsafe { instance.create_metal_surface_ext(&metal_surface_create_info, None) }
         }
     };

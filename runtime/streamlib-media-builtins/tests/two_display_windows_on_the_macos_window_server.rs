@@ -29,6 +29,7 @@ fn main() {
 #[cfg(target_os = "macos")]
 mod apple_window_server {
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::{Duration, Instant};
 
     use objc2::MainThreadMarker;
@@ -86,6 +87,27 @@ mod apple_window_server {
                 owner_pid == Some(this_process) && window_name.as_deref() == Some(window_title)
             })
             .count()
+    }
+
+    /// Set on `run`'s last line. AppKit can end the process from under the
+    /// loop with status 0, which would read as a pass, so an exit before it
+    /// fails instead.
+    static RUN_REACHED_ITS_END: AtomicBool = AtomicBool::new(false);
+
+    extern "C" fn fail_an_exit_that_did_not_come_from_the_end_of_run() {
+        if !RUN_REACHED_ITS_END.load(Ordering::SeqCst) {
+            const EXITED_BEFORE_THE_END_OF_RUN: &[u8] =
+                b"the process exited before run() finished - AppKit ended it from under the loop\n";
+            // SAFETY: two async-signal-safe calls on a static buffer.
+            unsafe {
+                libc::write(
+                    libc::STDERR_FILENO,
+                    EXITED_BEFORE_THE_END_OF_RUN.as_ptr().cast(),
+                    EXITED_BEFORE_THE_END_OF_RUN.len(),
+                );
+                libc::_exit(1);
+            }
+        }
     }
 
     /// Whether the login session's screen is locked. The lock screen covers
@@ -176,6 +198,8 @@ mod apple_window_server {
     }
 
     pub fn run() {
+        // SAFETY: registers a plain `extern "C"` fn that captures nothing.
+        unsafe { libc::atexit(fail_an_exit_that_did_not_come_from_the_end_of_run) };
         assert!(
             !the_login_sessions_screen_is_locked(),
             "cannot run: the screen is locked, so the window server cannot say what is on \
@@ -217,5 +241,6 @@ mod apple_window_server {
             "teardown hands every window back to the pump, and the run releases them before \
              it returns"
         );
+        RUN_REACHED_ITS_END.store(true, Ordering::SeqCst);
     }
 }

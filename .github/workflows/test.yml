@@ -173,6 +173,13 @@ jobs:
           # `remove_processor` needs a started `Runner`, and so a GpuContext.
           cargo test --locked -p streamlib-engine \
             --test a_processor_thread_that_ignores_shutdown_is_abandoned_and_named --no-run
+          # Compiled but not run: the display tier's window tests need a display
+          # server and a GPU no CI runner has, and each shares a test module with
+          # its macOS counterpart, so a change to that module reaches Linux here.
+          cargo test --locked -p streamlib-engine \
+            --test processor_owned_window_shows_named_surfaces --no-run
+          cargo test --locked -p streamlib-media-builtins \
+            --test two_display_windows_live --no-run
           # The engine-owned codec round-trip rig. Examples are not a default
           # cargo target, so nothing above builds it and it would rot between
           # rig runs unnoticed; running it needs the queues, a display server

@@ -56,6 +56,7 @@ objc2-app-kit = { workspace = true }
 objc2-core-foundation = { workspace = true }
 objc2-core-graphics = { workspace = true }
 dispatch2 = "0.3"
+libc = { workspace = true }
 
 # Two `DisplayWindow`s asserted against the macOS window server. `harness =
 # false` because `App::run` must drive the window event pump on the process's
