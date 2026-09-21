@@ -17,9 +17,9 @@ use parking_lot::Mutex;
 use super::audio_device_backend::{
     AudioBlockForPlaybackHandOff, AudioBlockRequestedByDevice, AudioCaptureStream,
     AudioDeviceBackend, AudioDeviceStreamRequest, AudioPlaybackStream, AudioSampleFormat,
-    AudioStreamFormat, AudioStreamLivenessReport, CapturedAudioBlockFromDevice,
-    CapturedAudioBlockHandOff,
+    AudioStreamFormat, CapturedAudioBlockFromDevice, CapturedAudioBlockHandOff,
 };
+use super::device_stream_liveness_report::DeviceStreamLivenessReport;
 use super::{AudioTickContext, SharedAudioClock};
 use crate::core::{Error, Result};
 
@@ -118,7 +118,7 @@ struct SilentNullAudioCaptureStreamPacing {
 struct SilentNullAudioCaptureStream {
     pacing_clock: SharedAudioClock,
     capture_stream_format: AudioStreamFormat,
-    liveness_report: AudioStreamLivenessReport,
+    liveness_report: DeviceStreamLivenessReport,
     pacing: Arc<Mutex<SilentNullAudioCaptureStreamPacing>>,
 }
 
@@ -150,7 +150,7 @@ impl SilentNullAudioCaptureStream {
         Self {
             pacing_clock,
             capture_stream_format,
-            liveness_report: AudioStreamLivenessReport::of_a_stream_that_cannot_fail(),
+            liveness_report: DeviceStreamLivenessReport::of_a_stream_that_cannot_fail(),
             pacing,
         }
     }
@@ -170,7 +170,7 @@ impl AudioCaptureStream for SilentNullAudioCaptureStream {
     /// Cloned from a field rather than minted per call, like every other arm:
     /// two callers have to be looking at one report, and satisfying that by
     /// having nothing to report would make it true by luck.
-    fn liveness_report(&self) -> AudioStreamLivenessReport {
+    fn liveness_report(&self) -> DeviceStreamLivenessReport {
         self.liveness_report.clone()
     }
 
@@ -260,7 +260,7 @@ struct SilentNullAudioPlaybackStreamPacing {
 struct SilentNullAudioPlaybackStream {
     pacing_clock: SharedAudioClock,
     playback_stream_format: AudioStreamFormat,
-    liveness_report: AudioStreamLivenessReport,
+    liveness_report: DeviceStreamLivenessReport,
     pacing: Arc<Mutex<SilentNullAudioPlaybackStreamPacing>>,
 }
 
@@ -290,7 +290,7 @@ impl SilentNullAudioPlaybackStream {
         Self {
             pacing_clock,
             playback_stream_format,
-            liveness_report: AudioStreamLivenessReport::of_a_stream_that_cannot_fail(),
+            liveness_report: DeviceStreamLivenessReport::of_a_stream_that_cannot_fail(),
             pacing,
         }
     }
@@ -310,7 +310,7 @@ impl AudioPlaybackStream for SilentNullAudioPlaybackStream {
     /// Cloned from a field rather than minted per call, like every other arm:
     /// two callers have to be looking at one report, and satisfying that by
     /// having nothing to report would make it true by luck.
-    fn liveness_report(&self) -> AudioStreamLivenessReport {
+    fn liveness_report(&self) -> DeviceStreamLivenessReport {
         self.liveness_report.clone()
     }
 

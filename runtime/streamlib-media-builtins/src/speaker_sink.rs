@@ -22,7 +22,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use streamlib::sdk::context::{
     AudioBlockForPlaybackHandOff, AudioBlockRequestedByDevice, AudioDeviceStreamRequest,
-    AudioPlaybackStream, AudioStreamFormat, AudioStreamLivenessReport, RuntimeContextFullAccess,
+    AudioPlaybackStream, AudioStreamFormat, DeviceStreamLivenessReport, RuntimeContextFullAccess,
     probe_audio_device_backend,
 };
 use streamlib::sdk::error::{Error, Result};
@@ -111,7 +111,7 @@ pub struct SpeakerSink {
     /// Taken at open and kept beside the stream rather than read off it: the
     /// drain thread is what has to notice a device that stopped, and it never
     /// holds the stream.
-    playback_stream_liveness_report: Option<AudioStreamLivenessReport>,
+    playback_stream_liveness_report: Option<DeviceStreamLivenessReport>,
     samples_awaiting_playback: Option<Arc<AudioSamplesAwaitingPlaybackRing>>,
     /// Minted per drain thread, so a thread that had to be detached can never
     /// be revived by a later `start()` into an endless spin.
@@ -313,7 +313,7 @@ fn drain_blocks_into_playback(
     inputs: &InputMailboxes,
     samples_awaiting_playback: &AudioSamplesAwaitingPlaybackRing,
     is_draining: &AtomicBool,
-    playback_stream_liveness_report: &AudioStreamLivenessReport,
+    playback_stream_liveness_report: &DeviceStreamLivenessReport,
     played_block_counter: &AtomicU64,
     stream_format: AudioStreamFormat,
 ) {
@@ -416,9 +416,9 @@ mod tests {
     use std::sync::Mutex;
     use std::time::Instant;
     use streamlib::sdk::context::{
-        AudioClock, AudioClockConfig, AudioDeviceBackend, AudioSampleFormat,
-        AudioStreamFailureReason, AudioStreamFailureRecorder, AudioTickCallback, AudioTickContext,
-        SharedAudioClock, SilentNullAudioDeviceBackend,
+        AudioClock, AudioClockConfig, AudioDeviceBackend, AudioSampleFormat, AudioTickCallback,
+        AudioTickContext, DeviceStreamFailureReason, DeviceStreamFailureRecorder, SharedAudioClock,
+        SilentNullAudioDeviceBackend,
     };
 
     use crate::emitted_log_line_test_support::{CountingTracingSubscriber, EmittedLogLineCounts};
@@ -721,8 +721,8 @@ mod tests {
         let played_block_counter = Arc::new(AtomicU64::new(0));
 
         let (failure_recorder, liveness_report) =
-            AudioStreamFailureRecorder::recording_into_a_new_report();
-        failure_recorder.record_the_failure_that_ended_the_stream(AudioStreamFailureReason::of(
+            DeviceStreamFailureRecorder::recording_into_a_new_report();
+        failure_recorder.record_the_failure_that_ended_the_stream(DeviceStreamFailureReason::of(
             "the PipeWire stream stopped serving its device: node destroyed",
         ));
 
@@ -783,7 +783,7 @@ mod tests {
         let is_draining = Arc::new(AtomicBool::new(true));
         let played_block_counter = Arc::new(AtomicU64::new(0));
         let (_failure_recorder, liveness_report) =
-            AudioStreamFailureRecorder::recording_into_a_new_report();
+            DeviceStreamFailureRecorder::recording_into_a_new_report();
 
         let draining = std::thread::spawn({
             let samples_awaiting_playback = Arc::clone(&samples_awaiting_playback);
