@@ -66,6 +66,9 @@ from ._engine import (
     gpu_limited_access_of_the_typed_read_in_progress as gpu_limited_access_of_the_typed_read_in_progress,
 )
 from ._engine import monotonic_now_ns as monotonic_now_ns
+from ._engine import (
+    this_machines_stamp_clock_identity as this_machines_stamp_clock_identity,
+)
 from ._processor_declaration import AudioWindowContract as AudioWindowContract
 from ._processor_declaration import input as input  # noqa: A004 — deliberate, see below
 from ._processor_declaration import output as output
@@ -144,6 +147,7 @@ __all__ = [
     "monotonic_now_ns",
     "output",
     "processor",
+    "this_machines_stamp_clock_identity",
 ]
 
 

@@ -22,6 +22,7 @@ use std::time::Duration;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
+use streamlib::sdk::iceoryx2::TheClockAnInboundLinksStampsAreTakenOn;
 use streamlib::sdk::logging::{
     self as engine_logging, EngineLogRecordForTheParentProcess, HelperProcessEngineLogRecordRing,
     LogLevel, emit_app_process_python_log_record, log_dir,
@@ -118,13 +119,31 @@ fn engine_log_record_as_python_mapping<'py>(
 /// Current monotonic time in nanoseconds via `clock_gettime(CLOCK_MONOTONIC)`.
 ///
 /// The kernel's `CLOCK_MONOTONIC` epoch, so values are comparable across
-/// processes — the same domain Python's
+/// processes on one machine — the same domain Python's
 /// `time.clock_gettime_ns(time.CLOCK_MONOTONIC)` reads. Matches the engine's
 /// bag stamps on Linux; on Apple the engine stamps with `mach_absolute_time`,
 /// which stops across system sleep.
 #[pyfunction]
 pub(crate) fn monotonic_now_ns() -> u64 {
     monotonic_clock_now_ns()
+}
+
+/// Which machine's monotonic clock [`monotonic_now_ns`] reads, as that
+/// machine's boot-session UUID text.
+///
+/// The same string `inbound_link_stamp_clock_identity` answers for a link, so
+/// a processor holding one link's machine has something to compare it against:
+/// a stamp may be aged against a reading taken here exactly when the two
+/// strings match.
+#[pyfunction]
+pub(crate) fn this_machines_stamp_clock_identity() -> Option<String> {
+    // Asked of the engine as a link from this runtime asks it, rather than
+    // spelling the same derivation a third time: what a local link answers is
+    // exactly what this has to agree with, so it comes from that arm itself.
+    TheClockAnInboundLinksStampsAreTakenOn::ThisMachine
+        .what_is_known_of_it()
+        .the_machine_if_it_is_known()
+        .map(|machine| machine.to_string())
 }
 
 /// The directory the engine writes its per-runtime JSONL logs into.

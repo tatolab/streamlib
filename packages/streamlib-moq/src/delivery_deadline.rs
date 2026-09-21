@@ -23,6 +23,18 @@
 //! reading decides what a group cut does with the group it supersedes: one
 //! whose backlog is past the deadline is abandoned with a stream reset, so
 //! the uplink stops carrying it, rather than finished.
+//!
+//! Both readings are subtractions against this machine's monotonic clock, so
+//! both need a stamp taken on it. A stamp taken on another machine's clock,
+//! whose epoch is that machine's own boot, is one a local `now` cannot be
+//! subtracted from at any offset, and no offset is available to make it one — so
+//! a track stamped there has no readable stamp age here and is never shed for
+//! one. The hop is not what decides that: two runtimes on one machine share a
+//! boot session and so share an epoch, so a track fed across the mesh from one
+//! of them is stamped on this very clock. A track stamped elsewhere still has
+//! its uplink backlog read: an object of one is stamped for that reading at the
+//! instant it reached the transport, which is on this clock and is what the
+//! reading asks about anyway — how long a forwarder has been parked on it.
 
 use crate::moq_track_sample::MoqTrackSample;
 
@@ -47,6 +59,24 @@ pub(crate) struct UplinkBacklogReading {
     /// The stamp of the oldest unforwarded object: the one the forwarder is
     /// on, however long it has been on it.
     pub(crate) oldest_unforwarded_stamp_ns: Option<i64>,
+}
+
+/// Which clock one track's bags are stamped on, as far as the deadline is
+/// concerned: the one it takes its own readings on, or anything else.
+///
+/// A type rather than a `bool` because it sits beside another per-track yes-or-no
+/// at every call site, and two adjacent booleans are one transposition away from
+/// a deadline that sheds a track it cannot read and reads a track it should shed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum TheClockATracksStampsAreTakenOn {
+    /// This publisher's own, so a stamp of it can be aged against a reading
+    /// taken here.
+    ThisPublishersOwn,
+    /// Not this publisher's own, which covers two cases the deadline has to treat
+    /// alike: another machine's — a bag that crossed the runtime mesh — whose epoch
+    /// is that machine's own boot, and a track nothing has yet named a clock for.
+    /// No reading taken here may be subtracted from a stamp of either.
+    NotThisPublishersOwn,
 }
 
 /// Why the deadline shed one sample.
@@ -102,10 +132,15 @@ impl MoqPublisherDeliveryDeadline {
     /// stands alone, so a late one leaves no group undecodable, and whether
     /// one may be dropped at all is undecided — answered here by dropping
     /// none.
+    ///
+    /// A sample on a track not stamped on this publisher's own clock is never
+    /// shed for its stamp however old `now_ns` makes it look, and is still shed
+    /// for its uplink backlog — see this module's own doc for why.
     pub(crate) fn verdict_for_one_sample(
         &self,
         sample: &MoqTrackSample,
         now_ns: i64,
+        the_clock_the_tracks_stamps_are_taken_on: TheClockATracksStampsAreTakenOn,
         the_tracks_open_group_is_already_being_shed: bool,
         the_tracks_uplink_backlog: UplinkBacklogReading,
     ) -> DeliveryDeadlineVerdict {
@@ -124,7 +159,10 @@ impl MoqPublisherDeliveryDeadline {
                 WhyTheDeadlineSheds::ItsGroupIsAlreadyBeingShed,
             );
         }
-        if age_of(sample.timestamp_ns(), now_ns) > longest_object_age_ns {
+        if the_clock_the_tracks_stamps_are_taken_on
+            == TheClockATracksStampsAreTakenOn::ThisPublishersOwn
+            && age_of(sample.timestamp_ns(), now_ns) > longest_object_age_ns
+        {
             return DeliveryDeadlineVerdict::ShedItAndTheRestOfItsGroup(
                 WhyTheDeadlineSheds::ItsStampIsPastTheDeadline,
             );
@@ -195,6 +233,16 @@ mod tests {
 
     const A_STAMP_NS: i64 = 5_000_000_000;
 
+    /// This publisher stamped the track's bags itself, which is the ordinary
+    /// case and the one every verdict here but the cross-clock ones is read on.
+    const STAMPED_ON_THIS_PUBLISHERS_CLOCK: TheClockATracksStampsAreTakenOn =
+        TheClockATracksStampsAreTakenOn::ThisPublishersOwn;
+
+    /// The track's bags crossed the runtime mesh carrying a stamp taken on
+    /// another machine's clock, which shares no epoch with this one.
+    const STAMPED_ON_ANOTHER_MACHINES_CLOCK: TheClockATracksStampsAreTakenOn =
+        TheClockATracksStampsAreTakenOn::NotThisPublishersOwn;
+
     fn a_deadline_of_100_ms() -> MoqPublisherDeliveryDeadline {
         MoqPublisherDeliveryDeadline::of_optional_milliseconds(Some(100))
     }
@@ -250,6 +298,7 @@ mod tests {
             a_deadline_of_100_ms().verdict_for_one_sample(
                 &a_delta_frame_stamped_at(A_STAMP_NS),
                 A_STAMP_NS + 99_000_000,
+                STAMPED_ON_THIS_PUBLISHERS_CLOCK,
                 false,
                 no_backlog()
             ),
@@ -263,6 +312,7 @@ mod tests {
             a_deadline_of_100_ms().verdict_for_one_sample(
                 &a_delta_frame_stamped_at(A_STAMP_NS),
                 A_STAMP_NS + 100_000_000,
+                STAMPED_ON_THIS_PUBLISHERS_CLOCK,
                 false,
                 no_backlog()
             ),
@@ -276,6 +326,7 @@ mod tests {
             a_deadline_of_100_ms().verdict_for_one_sample(
                 &a_delta_frame_stamped_at(A_STAMP_NS),
                 A_STAMP_NS + 100_000_001,
+                STAMPED_ON_THIS_PUBLISHERS_CLOCK,
                 false,
                 no_backlog()
             ),
@@ -286,11 +337,71 @@ mod tests {
     }
 
     #[test]
+    fn a_sample_stamped_on_another_machines_clock_is_published_however_late_it_reads() {
+        // Its producer's clock and this one share no epoch, so the subtraction
+        // that makes it look an hour late is not an age at all — and there is
+        // no offset to correct it by. Publishing is the only honest answer.
+        assert_eq!(
+            a_deadline_of_100_ms().verdict_for_one_sample(
+                &a_delta_frame_stamped_at(A_STAMP_NS),
+                A_STAMP_NS + 3_600_000_000_000,
+                STAMPED_ON_ANOTHER_MACHINES_CLOCK,
+                false,
+                no_backlog()
+            ),
+            DeliveryDeadlineVerdict::PublishIt
+        );
+    }
+
+    #[test]
+    fn a_sample_stamped_on_another_machines_clock_is_shed_for_its_uplink_backlog() {
+        // The backlog reading is this publisher's own: an object of a track
+        // stamped elsewhere is stamped for it at the instant it reached the
+        // transport, so the arm that sees congestion survives the cross-clock
+        // hop. Fail-without-fix: skip both arms for such a track, and a
+        // mesh-fed broadcast can no longer shed anything under a stalled
+        // uplink.
+        assert_eq!(
+            a_deadline_of_100_ms().verdict_for_one_sample(
+                &a_delta_frame_stamped_at(A_STAMP_NS),
+                A_STAMP_NS + 10_000_000,
+                STAMPED_ON_ANOTHER_MACHINES_CLOCK,
+                false,
+                a_backlog_from(A_STAMP_NS - 100_000_001, 3)
+            ),
+            DeliveryDeadlineVerdict::ShedItAndTheRestOfItsGroup(
+                WhyTheDeadlineSheds::TheUplinkBacklogIsPastTheDeadline
+            )
+        );
+    }
+
+    #[test]
+    fn a_sample_stamped_on_another_machines_clock_is_still_shed_with_the_rest_of_its_group() {
+        // The shed that a backlog or a peer track's sync point began runs to
+        // the next sync point on every track alike: a decoder cannot use a
+        // frame whose reference never went, and which clock stamped it does
+        // not change that.
+        assert_eq!(
+            a_deadline_of_100_ms().verdict_for_one_sample(
+                &a_delta_frame_stamped_at(A_STAMP_NS),
+                A_STAMP_NS,
+                STAMPED_ON_ANOTHER_MACHINES_CLOCK,
+                true,
+                no_backlog()
+            ),
+            DeliveryDeadlineVerdict::ShedItAndTheRestOfItsGroup(
+                WhyTheDeadlineSheds::ItsGroupIsAlreadyBeingShed
+            )
+        );
+    }
+
+    #[test]
     fn a_sample_inside_the_deadline_is_still_shed_while_its_group_is_being_shed() {
         assert_eq!(
             a_deadline_of_100_ms().verdict_for_one_sample(
                 &a_delta_frame_stamped_at(A_STAMP_NS),
                 A_STAMP_NS,
+                STAMPED_ON_THIS_PUBLISHERS_CLOCK,
                 true,
                 no_backlog()
             ),
@@ -306,6 +417,7 @@ mod tests {
             a_deadline_of_100_ms().verdict_for_one_sample(
                 &a_sync_point_stamped_at(A_STAMP_NS),
                 A_STAMP_NS + 60_000_000_000,
+                STAMPED_ON_THIS_PUBLISHERS_CLOCK,
                 true,
                 no_backlog()
             ),
@@ -319,6 +431,7 @@ mod tests {
             a_deadline_of_100_ms().verdict_for_one_sample(
                 &a_data_object(),
                 i64::MAX,
+                STAMPED_ON_THIS_PUBLISHERS_CLOCK,
                 true,
                 no_backlog()
             ),
@@ -334,6 +447,7 @@ mod tests {
             unconfigured.verdict_for_one_sample(
                 &a_delta_frame_stamped_at(A_STAMP_NS),
                 A_STAMP_NS + 60_000_000_000,
+                STAMPED_ON_THIS_PUBLISHERS_CLOCK,
                 false,
                 no_backlog()
             ),
@@ -347,6 +461,7 @@ mod tests {
             a_deadline_of_100_ms().verdict_for_one_sample(
                 &a_delta_frame_stamped_at(A_STAMP_NS),
                 0,
+                STAMPED_ON_THIS_PUBLISHERS_CLOCK,
                 false,
                 no_backlog()
             ),
@@ -362,6 +477,7 @@ mod tests {
             shed_everything.verdict_for_one_sample(
                 &a_delta_frame_stamped_at(A_STAMP_NS),
                 A_STAMP_NS + 1,
+                STAMPED_ON_THIS_PUBLISHERS_CLOCK,
                 false,
                 no_backlog()
             ),
@@ -373,6 +489,7 @@ mod tests {
             shed_everything.verdict_for_one_sample(
                 &a_sync_point_stamped_at(A_STAMP_NS),
                 A_STAMP_NS + 1,
+                STAMPED_ON_THIS_PUBLISHERS_CLOCK,
                 false,
                 no_backlog()
             ),
@@ -388,6 +505,7 @@ mod tests {
             saturated.verdict_for_one_sample(
                 &a_delta_frame_stamped_at(0),
                 i64::MAX,
+                STAMPED_ON_THIS_PUBLISHERS_CLOCK,
                 false,
                 no_backlog()
             ),
@@ -403,6 +521,7 @@ mod tests {
             a_deadline_of_100_ms().verdict_for_one_sample(
                 &a_delta_frame_stamped_at(A_STAMP_NS),
                 A_STAMP_NS + 10_000_000,
+                STAMPED_ON_THIS_PUBLISHERS_CLOCK,
                 false,
                 a_backlog_from(A_STAMP_NS - 100_000_001, 3)
             ),
@@ -418,6 +537,7 @@ mod tests {
             a_deadline_of_100_ms().verdict_for_one_sample(
                 &a_delta_frame_stamped_at(A_STAMP_NS),
                 A_STAMP_NS + 10_000_000,
+                STAMPED_ON_THIS_PUBLISHERS_CLOCK,
                 false,
                 a_backlog_from(A_STAMP_NS - 50_000_000, 40)
             ),
@@ -437,6 +557,7 @@ mod tests {
             a_deadline_of_100_ms().verdict_for_one_sample(
                 &a_delta_frame_stamped_at(A_STAMP_NS),
                 A_STAMP_NS + 10_000_000,
+                STAMPED_ON_THIS_PUBLISHERS_CLOCK,
                 false,
                 nobody_forwarding
             ),
@@ -454,6 +575,7 @@ mod tests {
             a_deadline_of_100_ms().verdict_for_one_sample(
                 &a_sync_point_stamped_at(A_STAMP_NS),
                 A_STAMP_NS,
+                STAMPED_ON_THIS_PUBLISHERS_CLOCK,
                 false,
                 a_backlog_from(0, 60)
             ),
@@ -470,6 +592,7 @@ mod tests {
             unconfigured.verdict_for_one_sample(
                 &a_delta_frame_stamped_at(A_STAMP_NS),
                 A_STAMP_NS,
+                STAMPED_ON_THIS_PUBLISHERS_CLOCK,
                 false,
                 stale
             ),

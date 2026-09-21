@@ -44,8 +44,8 @@ use crate::cmaf_track_timeline::{
 };
 use crate::delivery_deadline::{
     DeliveryDeadlineVerdict, MoqPublisherDeliveryDeadline,
-    ObjectsTheDeliveryDeadlineShedOnOneTrack, UplinkBacklogOnOneTrack, UplinkBacklogReading,
-    WhyTheDeadlineSheds,
+    ObjectsTheDeliveryDeadlineShedOnOneTrack, TheClockATracksStampsAreTakenOn,
+    UplinkBacklogOnOneTrack, UplinkBacklogReading, WhyTheDeadlineSheds,
 };
 use crate::encoded_media_sample::{EncodedMediaSample, TrackMedium};
 use crate::error::{MoqExtensionError, Result};
@@ -151,6 +151,24 @@ impl MoqBroadcastPublisher {
     ) -> Result<()> {
         self.object_write_planner
             .declare_tracks(inbound_link_names, track_names)
+    }
+
+    /// Say which machine's clock one track's bags are stamped on, as its link
+    /// reported when the track opened.
+    ///
+    /// Until a track is told, the delivery deadline reads none of its stamps:
+    /// there is no clock to relate them to, and a subtraction against the wrong
+    /// one is not an age.
+    pub(crate) fn note_the_clock_a_tracks_stamps_are_taken_on(
+        &mut self,
+        inbound_link_name: &str,
+        the_clock_its_stamps_are_taken_on: TheClockATracksStampsAreTakenOn,
+    ) -> Result<()> {
+        self.object_write_planner
+            .note_the_clock_a_tracks_stamps_are_taken_on(
+                inbound_link_name,
+                the_clock_its_stamps_are_taken_on,
+            )
     }
 
     /// Publish one bag, connecting the session on the first bag the broadcast
@@ -624,9 +642,11 @@ impl MoqBroadcastObjectWritePlanner {
             .get(&track.moq_media_track_name)
             .copied()
             .unwrap_or_default();
+        let the_clock_the_tracks_stamps_are_taken_on = track.the_clock_its_stamps_are_taken_on;
         match delivery_deadline.verdict_for_one_sample(
             &sample,
             now_ns,
+            the_clock_the_tracks_stamps_are_taken_on,
             track.the_open_group_is_being_shed,
             the_tracks_uplink_backlog,
         ) {
@@ -687,14 +707,13 @@ impl MoqBroadcastObjectWritePlanner {
                 abandon_the_superseded_group_of,
             });
         }
+        let track = &self.declared_tracks[declared_track_index];
         instructions.push(
             MoqObjectWriteInstruction::AppendOneObjectToATracksOpenGroup {
-                moq_track_name: self.declared_tracks[declared_track_index]
-                    .moq_media_track_name
-                    .clone(),
+                moq_track_name: track.moq_media_track_name.clone(),
                 object_payload,
                 publisher_priority: track_priority_of(sample.kind()),
-                object_stamp_ns: object_stamp_of(sample, now_ns),
+                object_stamp_ns: track.the_object_stamp_of(sample, now_ns),
             },
         );
         Ok(PlannedMoqObjectWrites {
@@ -740,8 +759,11 @@ impl MoqBroadcastObjectWritePlanner {
                 });
             }
             instructions.extend(
-                self.declared_tracks[declared_track_index]
-                    .plan_the_cmaf_fragment_of(&sample, &abandon_the_superseded_group_of)?,
+                self.declared_tracks[declared_track_index].plan_the_cmaf_fragment_of(
+                    &sample,
+                    now_ns,
+                    &abandon_the_superseded_group_of,
+                )?,
             );
             return Ok(PlannedMoqObjectWrites {
                 instructions,
@@ -770,12 +792,19 @@ impl MoqBroadcastObjectWritePlanner {
         // a cut inside the flush to abandon.
         for held_sample in &self.samples_held_until_every_cmaf_track_is_described {
             instructions.extend(
-                self.declared_tracks[held_sample.declared_track_index]
-                    .plan_the_cmaf_fragment_of(&held_sample.sample, &[])?,
+                self.declared_tracks[held_sample.declared_track_index].plan_the_cmaf_fragment_of(
+                    &held_sample.sample,
+                    now_ns,
+                    &[],
+                )?,
             );
         }
         instructions.extend(
-            self.declared_tracks[declared_track_index].plan_the_cmaf_fragment_of(&sample, &[])?,
+            self.declared_tracks[declared_track_index].plan_the_cmaf_fragment_of(
+                &sample,
+                now_ns,
+                &[],
+            )?,
         );
         Ok(PlannedMoqObjectWrites {
             instructions,
@@ -1173,6 +1202,24 @@ impl MoqBroadcastObjectWritePlanner {
         catalog.catalog_json_bytes()
     }
 
+    /// Record which machine's clock one track's bags are stamped on, as the
+    /// link learned it when the track opened.
+    ///
+    /// Read at a track's open rather than per bag because a helper holds no mesh
+    /// session and asking costs a round trip to the runtime; a link's answer
+    /// changes only when its peer returns from a fresh boot, which is a machine
+    /// other than this one either way.
+    fn note_the_clock_a_tracks_stamps_are_taken_on(
+        &mut self,
+        inbound_link_name: &str,
+        the_clock_its_stamps_are_taken_on: TheClockATracksStampsAreTakenOn,
+    ) -> Result<()> {
+        let declared_track_index = self.declared_track_index_of(inbound_link_name)?;
+        self.declared_tracks[declared_track_index].the_clock_its_stamps_are_taken_on =
+            the_clock_its_stamps_are_taken_on;
+        Ok(())
+    }
+
     fn declared_track_index_of(&self, inbound_link_name: &str) -> Result<usize> {
         self.declared_track_index_by_inbound_link_name
             .get(inbound_link_name)
@@ -1248,6 +1295,11 @@ struct DeclaredMoqTrackPublicationState {
     cmaf_description: Option<CmafTrackDescriptionLearnedFromItsFirstUsableSample>,
     parameter_sets_the_init_segment_states: ParameterSetsFromAnnexBAccessUnit,
     next_cmaf_fragment_sequence_number: u32,
+    /// Which clock this track's bags are stamped on, as its link reported when
+    /// the track opened. Until it has, `NotThisPublishersOwn` — a stamp whose
+    /// clock nothing has named is one no local reading may be subtracted from,
+    /// so an undescribed track costs a shed rather than risking a wrong one.
+    the_clock_its_stamps_are_taken_on: TheClockATracksStampsAreTakenOn,
     /// Whether the delivery deadline is shedding this track's open group. It
     /// ends at the next sync point, which is also what opens the next group.
     the_open_group_is_being_shed: bool,
@@ -1275,6 +1327,8 @@ impl DeclaredMoqTrackPublicationState {
             // ISO/IEC 14496-12 §8.8.5: `mfhd.sequence_number` counts one
             // track's fragments from one.
             next_cmaf_fragment_sequence_number: 1,
+            the_clock_its_stamps_are_taken_on:
+                TheClockATracksStampsAreTakenOn::NotThisPublishersOwn,
             the_open_group_is_being_shed: false,
             objects_the_delivery_deadline_shed: 0,
             bytes_the_delivery_deadline_shed: 0,
@@ -1282,6 +1336,41 @@ impl DeclaredMoqTrackPublicationState {
             groups_the_uplink_backlog_abandoned: 0,
             objects_the_uplink_backlog_abandoned: 0,
             bytes_the_uplink_backlog_abandoned: 0,
+        }
+    }
+
+    /// The stamp the backlog reading ages one of this track's objects by: a media
+    /// sample's own where this track's clock can be read here, and for a data
+    /// object — whose stamp is inside an envelope this Rust never parses — the
+    /// instant it is written.
+    ///
+    /// A method rather than a free function taking the clock, so one track's clock
+    /// can never be paired with another track's sample.
+    fn the_object_stamp_of(&self, sample: &MoqTrackSample, now_ns: i64) -> i64 {
+        match sample {
+            MoqTrackSample::EncodedMedia(sample) => {
+                self.the_object_stamp_of_one_media_sample(sample, now_ns)
+            }
+            MoqTrackSample::DataObject(_) => now_ns,
+        }
+    }
+
+    /// The stamp one of this track's media objects is filed under for the
+    /// uplink-backlog reading.
+    ///
+    /// Its own, where that stamp is on the clock the reading is taken against — so
+    /// the reading says how late the media itself is. Otherwise the instant it
+    /// reached the transport, which is on this clock and is what the reading asks
+    /// anyway: how long a forwarder has been parked on this object. A stamp from
+    /// another machine's clock would answer neither question.
+    fn the_object_stamp_of_one_media_sample(
+        &self,
+        sample: &EncodedMediaSample,
+        now_ns: i64,
+    ) -> i64 {
+        match self.the_clock_its_stamps_are_taken_on {
+            TheClockATracksStampsAreTakenOn::ThisPublishersOwn => sample.timestamp_ns(),
+            TheClockATracksStampsAreTakenOn::NotThisPublishersOwn => now_ns,
         }
     }
 
@@ -1478,6 +1567,7 @@ impl DeclaredMoqTrackPublicationState {
     fn plan_the_cmaf_fragment_of(
         &mut self,
         sample: &EncodedMediaSample,
+        now_ns: i64,
         abandon_the_superseded_group_of: &[String],
     ) -> Result<Vec<MoqObjectWriteInstruction>> {
         let sample_bytes = self.mdat_sample_bytes_of(sample)?;
@@ -1528,7 +1618,7 @@ impl DeclaredMoqTrackPublicationState {
                 moq_track_name: self.moq_media_track_name.clone(),
                 object_payload,
                 publisher_priority: track_priority_of(MoqTrackKind::Media(sample.medium())),
-                object_stamp_ns: sample.timestamp_ns(),
+                object_stamp_ns: self.the_object_stamp_of_one_media_sample(sample, now_ns),
             },
         );
         Ok(instructions)
@@ -1613,16 +1703,6 @@ fn refuse_track_names_that_do_not_name_the_links(
         }
     }
     Ok(())
-}
-
-/// The stamp the backlog reading ages an object by: a media sample's own, and
-/// for a data object — whose stamp is inside an envelope this Rust never
-/// parses — the instant it is written.
-fn object_stamp_of(sample: &MoqTrackSample, now_ns: i64) -> i64 {
-    match sample {
-        MoqTrackSample::EncodedMedia(sample) => sample.timestamp_ns(),
-        MoqTrackSample::DataObject(_) => now_ns,
-    }
 }
 
 /// The bytes one bag puts on the wire, whatever its kind.
@@ -1767,6 +1847,43 @@ mod tests {
     ) -> MoqBroadcastObjectWritePlanner {
         let mut planner = MoqBroadcastObjectWritePlanner::of(
             container_format,
+            BROADCAST_NAMESPACE.to_owned(),
+            MoqPublisherDeliveryDeadline::of_optional_milliseconds(delivery_deadline_ms),
+        );
+        planner
+            .declare_tracks(each_name_owned(inbound_link_names), None)
+            .expect("these inbound links are declarable");
+        note_every_track_as_stamped_on_this_publishers_clock(&mut planner, inbound_link_names);
+        planner
+    }
+
+    /// Tell every declared track what an ordinary local link reports: this
+    /// publisher's own clock stamped its bags, so their stamps are readable
+    /// here. A test about the cross-clock behaviour says otherwise for the one
+    /// track it is about.
+    fn note_every_track_as_stamped_on_this_publishers_clock(
+        planner: &mut MoqBroadcastObjectWritePlanner,
+        inbound_link_names: &[&str],
+    ) {
+        for inbound_link_name in inbound_link_names {
+            planner
+                .note_the_clock_a_tracks_stamps_are_taken_on(
+                    inbound_link_name,
+                    TheClockATracksStampsAreTakenOn::ThisPublishersOwn,
+                )
+                .expect("each of these links was just declared");
+        }
+    }
+
+    /// A planner whose tracks are declared and never described, which is the
+    /// state every track is in until its first bag names the clock it is
+    /// stamped on.
+    fn a_planner_whose_tracks_were_never_described(
+        inbound_link_names: &[&str],
+        delivery_deadline_ms: Option<u64>,
+    ) -> MoqBroadcastObjectWritePlanner {
+        let mut planner = MoqBroadcastObjectWritePlanner::of(
+            MoqContainerFormat::StreamlibBag,
             BROADCAST_NAMESPACE.to_owned(),
             MoqPublisherDeliveryDeadline::of_optional_milliseconds(delivery_deadline_ms),
         );
@@ -3032,6 +3149,123 @@ mod tests {
     }
 
     #[test]
+    fn a_track_stamped_on_another_machines_clock_is_never_shed_beside_a_local_track_that_is() {
+        // The bug this is against: a bag that crossed the runtime mesh carries
+        // its producer's stamp on that machine's clock, and subtracting a local
+        // `now` from it is not an age — so a deadline that shed on it would
+        // throw away a whole GOP per offset sign, or none of them ever.
+        let mut planner = a_planner_over_with_a_delivery_deadline_of(
+            MoqContainerFormat::StreamlibBag,
+            &["camera", "remote-runtime/Camera Source/video"],
+            Some(100),
+        );
+        planner
+            .note_the_clock_a_tracks_stamps_are_taken_on(
+                "remote-runtime/Camera Source/video",
+                TheClockATracksStampsAreTakenOn::NotThisPublishersOwn,
+            )
+            .expect("the mesh-fed link is declared");
+        for inbound_link_name in ["camera", "remote-runtime/Camera Source/video"] {
+            plan_the_writes_at_and_report_them_all_written(
+                &mut planner,
+                inbound_link_name,
+                a_video_sync_point(0),
+                0,
+            )
+            .expect("each track's first sync point plans");
+        }
+
+        let the_local_tracks_late_frame = plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "camera",
+            a_video_delta_frame(33_000_000),
+            33_000_000 + 100_000_001,
+        )
+        .expect("planning a shed bag is not a failure");
+        let the_mesh_fed_tracks_late_frame = plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "remote-runtime/Camera Source/video",
+            a_video_delta_frame(33_000_000),
+            33_000_000 + 100_000_001,
+        )
+        .expect("the mesh-fed frame plans");
+
+        assert_eq!(
+            describe_each_write_instruction_as_a_transport_verb(&the_local_tracks_late_frame),
+            Vec::<String>::new(),
+            "the local track's stamp is readable here, so the deadline still sheds on it"
+        );
+        assert_eq!(
+            describe_each_write_instruction_as_a_transport_verb(&the_mesh_fed_tracks_late_frame),
+            vec!["object:remote-runtime/Camera Source/video"],
+            "the mesh-fed track's stamp names another machine's clock, so it has no age here"
+        );
+        assert_eq!(
+            planner
+                .objects_the_delivery_deadline_shed()
+                .into_iter()
+                .map(|track| track.inbound_link_name)
+                .collect::<Vec<_>>(),
+            vec!["camera"],
+            "only the track whose stamps this publisher can read was shed"
+        );
+    }
+
+    #[test]
+    fn a_track_nobody_described_is_never_shed_for_its_stamp_and_is_filed_at_its_write() {
+        // The state a declared track is in before its first bag names its clock,
+        // reached the way a track reaches it rather than by writing the field.
+        // An unnamed clock is not this one: a shed on a subtraction against a
+        // clock that may be unrelated destroys media for nothing, and a stamp
+        // that may be unrelated is not what a local backlog reading may hold.
+        let mut planner = a_planner_whose_tracks_were_never_described(&["camera"], Some(100));
+        plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "camera",
+            a_video_sync_point(0),
+            0,
+        )
+        .expect("the first sync point plans");
+
+        let a_very_late_frame = plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "camera",
+            a_video_delta_frame(33_000_000),
+            33_000_000 + 60_000_000_000,
+        )
+        .expect("the frame plans");
+
+        assert_eq!(
+            describe_each_write_instruction_as_a_transport_verb(&a_very_late_frame),
+            vec!["object:camera"]
+        );
+        assert_eq!(
+            object_stamps_of_objects_written_to(&a_very_late_frame, "camera"),
+            vec![33_000_000 + 60_000_000_000]
+        );
+    }
+
+    #[test]
+    fn noting_the_clock_of_a_link_this_broadcast_does_not_carry_is_refused_naming_the_links() {
+        let mut planner = a_planner_over_with_a_delivery_deadline_of(
+            MoqContainerFormat::StreamlibBag,
+            &["camera"],
+            Some(100),
+        );
+
+        let refusal = planner
+            .note_the_clock_a_tracks_stamps_are_taken_on(
+                "microphone",
+                TheClockATracksStampsAreTakenOn::NotThisPublishersOwn,
+            )
+            .expect_err("no track carries that link");
+
+        let refusal = refusal.to_string();
+        assert!(refusal.contains("microphone"), "{refusal}");
+        assert!(refusal.contains("camera"), "{refusal}");
+    }
+
+    #[test]
     fn an_opus_packet_is_never_shed_however_late_it_is_and_a_video_shed_beside_it_is_unaffected() {
         let mut planner = a_planner_over_with_a_delivery_deadline_of(
             MoqContainerFormat::StreamlibBag,
@@ -3765,6 +3999,7 @@ mod tests {
             each_name_owned(inbound_link_names),
             track_names.map(each_name_owned),
         )?;
+        note_every_track_as_stamped_on_this_publishers_clock(&mut planner, inbound_link_names);
         Ok(planner)
     }
 
@@ -4033,6 +4268,86 @@ mod tests {
         assert_eq!(
             object_stamps_of_objects_written_to(&data, "telemetry"),
             vec![1_700_000_000]
+        );
+    }
+
+    #[test]
+    fn an_appended_object_of_a_track_stamped_elsewhere_is_filed_under_its_write_instant() {
+        // What the backlog reading asks is how long a forwarder has been parked
+        // on an object, and the instant the object reached the transport is the
+        // only reading of that on this clock — so the arm that sees a stalled
+        // uplink keeps working across the mesh hop.
+        let mut planner = a_planner_over(
+            MoqContainerFormat::StreamlibBag,
+            &["remote-runtime/Camera Source/video"],
+        );
+        planner
+            .note_the_clock_a_tracks_stamps_are_taken_on(
+                "remote-runtime/Camera Source/video",
+                TheClockATracksStampsAreTakenOn::NotThisPublishersOwn,
+            )
+            .expect("the mesh-fed link is declared");
+
+        let planned = plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "remote-runtime/Camera Source/video",
+            a_video_sync_point(1_000_000_000),
+            1_500_000_000,
+        )
+        .expect("the sync point plans");
+
+        assert_eq!(
+            object_stamps_of_objects_written_to(&planned, "remote-runtime/Camera Source/video"),
+            vec![1_500_000_000],
+            "its own stamp is on another machine's clock, so the write instant is what is filed"
+        );
+    }
+
+    #[test]
+    fn a_cmaf_fragment_of_a_track_stamped_elsewhere_keeps_its_samples_stamp_in_the_container() {
+        // Two different questions, two different answers: `tfdt` places a
+        // sample on its own track's timeline, whose epoch is that track's first
+        // stamp, so one clock's readings are all it ever subtracts and it is
+        // right across the mesh untouched. The backlog stamp is a local
+        // reading and takes the write instant.
+        let mut planner = a_planner_over(MoqContainerFormat::Cmaf, &["remote/Camera Source/video"]);
+        planner
+            .note_the_clock_a_tracks_stamps_are_taken_on(
+                "remote/Camera Source/video",
+                TheClockATracksStampsAreTakenOn::NotThisPublishersOwn,
+            )
+            .expect("the mesh-fed link is declared");
+        let opened = plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "remote/Camera Source/video",
+            a_video_sync_point(1_000_000_000),
+            1_500_000_000,
+        )
+        .expect("the only track describes itself and the broadcast opens");
+        let later = plan_the_writes_at_and_report_them_all_written(
+            &mut planner,
+            "remote/Camera Source/video",
+            a_video_delta_frame(1_033_000_000),
+            1_600_000_000,
+        )
+        .expect("the delta frame plans");
+
+        assert_eq!(
+            object_stamps_of_objects_written_to(&later, "1.m4s"),
+            vec![1_600_000_000],
+            "the backlog stamp is this publisher's own reading"
+        );
+        let decode_times: Vec<u64> = [&opened, &later]
+            .into_iter()
+            .flat_map(|instructions| object_payloads_written_to(instructions, "1.m4s"))
+            .map(|fragment| {
+                read_cmaf_fragment(&fragment).expect("the fragment reads back")[0].decode_time
+            })
+            .collect();
+        assert_eq!(
+            decode_times,
+            vec![0, 33_000_000],
+            "`tfdt` subtracts the track's own stamps from each other, which stays right"
         );
     }
 

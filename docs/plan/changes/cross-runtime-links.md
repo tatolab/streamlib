@@ -217,6 +217,13 @@ which covers relays but changes every timestamped read and write signature in bo
 stamp too far ahead and adjusting no clock. They order events between hosts that already share NTP time
 and cannot map a remote monotonic stamp onto ours; the OPEN's PTP/NTP direction stands.
 
+The wheel exports the other half of that comparison: `this_machines_stamp_clock_identity() -> str | None`,
+the boot-session UUID text a reading taken in this process is on, which is the same string a link from
+this runtime answers. A link's identity settles nothing without a local one to test it against, and a
+helper whose only link is mesh-fed has no local link to read one off. Engine work an extension needs is
+done as engine code inside the extension's own change (`ARCHITECTURE.md:110-123`), first fired by the
+bag-codec export (`:124`). [cross-runtime-links, SHIPPED #2340]
+
 ## MODIFIED: §Networking `:2458-2462` — how hop loss is read
 
 1. **The number is `loss-visibility`'s**, carried end to end. Egress copies each sample's user-header

@@ -32,7 +32,9 @@ mod moq_track_sample;
 mod streamlib_bag_object;
 mod transport_stack;
 
-use crate::delivery_deadline::{MoqPublisherDeliveryDeadline, UplinkBacklogOnOneTrack};
+use crate::delivery_deadline::{
+    MoqPublisherDeliveryDeadline, TheClockATracksStampsAreTakenOn, UplinkBacklogOnOneTrack,
+};
 use crate::encoded_media_sample::{EncodedAudioPacket, EncodedMediaSample, EncodedVideoAccessUnit};
 use crate::error::MoqExtensionError;
 use crate::monotonic_clock::monotonic_now_ns;
@@ -102,6 +104,31 @@ impl MoqBroadcastPublishingSession {
         python.detach(|| {
             self.locked_publisher()?
                 .declare_tracks(inbound_link_names, track_names)
+        })?;
+        Ok(())
+    }
+
+    /// Say which machine's clock one track's bags are stamped on, as its link
+    /// reported when the track opened.
+    ///
+    /// A track told `false`, and equally one never told at all, has no readable
+    /// stamp age here, so tell every media track whether or not a deadline is
+    /// configured — `_native.pyi` states what each answer costs a track, and
+    /// [`crate::delivery_deadline`] why.
+    fn note_whether_a_tracks_stamps_are_on_this_publishers_clock(
+        &self,
+        python: Python<'_>,
+        inbound_link_name: &str,
+        the_stamps_are_on_this_publishers_clock: bool,
+    ) -> PyResult<()> {
+        let the_clock_its_stamps_are_taken_on =
+            the_clock_a_python_caller_named(the_stamps_are_on_this_publishers_clock);
+        python.detach(|| {
+            self.locked_publisher()?
+                .note_the_clock_a_tracks_stamps_are_taken_on(
+                    inbound_link_name,
+                    the_clock_its_stamps_are_taken_on,
+                )
         })?;
         Ok(())
     }
@@ -635,6 +662,24 @@ impl ReceivedDataObject {
     }
 }
 
+/// Which clock a Python caller's `bool` names.
+///
+/// The wire is a `bool` because the comparison itself happens in Python — this
+/// crate links no engine crate, so it holds no machine identity to compare — and
+/// this is the one line where getting it backwards would invert the whole
+/// policy: every track would be aged against a clock it is not on, and every
+/// mesh-fed track would be the only one the deadline trusted. Named and tested
+/// rather than inlined for exactly that reason.
+fn the_clock_a_python_caller_named(
+    the_stamps_are_on_this_publishers_clock: bool,
+) -> TheClockATracksStampsAreTakenOn {
+    if the_stamps_are_on_this_publishers_clock {
+        TheClockATracksStampsAreTakenOn::ThisPublishersOwn
+    } else {
+        TheClockATracksStampsAreTakenOn::NotThisPublishersOwn
+    }
+}
+
 #[pymodule]
 fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(bring_up_the_transport_stack, module)?)?;
@@ -646,4 +691,25 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<MoqPublisherUplinkBacklogOnOneTrack>()?;
     module.add_class::<MoqPublisherQuicUplinkReadings>()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The two arms, pinned in the direction they must have. A transposition
+    /// here leaves every other suite in this crate green: the Rust tests call
+    /// the planner's enum API directly and the Python tests assert the `bool`
+    /// they handed over, so neither crosses this line.
+    #[test]
+    fn a_python_caller_saying_true_names_this_publishers_own_clock() {
+        assert_eq!(
+            the_clock_a_python_caller_named(true),
+            TheClockATracksStampsAreTakenOn::ThisPublishersOwn
+        );
+        assert_eq!(
+            the_clock_a_python_caller_named(false),
+            TheClockATracksStampsAreTakenOn::NotThisPublishersOwn
+        );
+    }
 }

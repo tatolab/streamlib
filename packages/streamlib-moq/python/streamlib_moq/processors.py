@@ -30,6 +30,7 @@ from streamlib import (
     log,
     output,
     processor,
+    this_machines_stamp_clock_identity,
 )
 
 from . import _native
@@ -595,6 +596,19 @@ class MoqBroadcastPublisher:
     is one. The shed decides what is written; a superseded audio group the
     uplink is behind on is still abandoned at the cut, like video's.
 
+    Both of the deadline's readings are subtractions against this machine's
+    monotonic clock, whose epoch is this machine's own boot. A track whose bags
+    are stamped on another machine's clock shares no epoch with it, so those bags
+    have no readable age here and are never shed for one — there is no offset to
+    correct the subtraction by. Crossing the mesh is not what decides that: two
+    runtimes on one machine share a boot session, so a mesh-fed track from one of
+    them is on this clock and is aged like any other. A track that is not still
+    has its uplink backlog read, from the instant each object reached the
+    transport rather than the media stamp, so the arm that sees a stalled uplink
+    survives the hop. Which clock a track is on is read once, as the track opens,
+    and — where a deadline is configured — said in the log when it is not this
+    one.
+
     The deadline reads two things. The stamp ages on the way to this
     publisher — capture, encode, the link into the helper. The uplink backlog
     says how far the transport is behind: the wheel's vendored `moq-transport`
@@ -626,6 +640,8 @@ class MoqBroadcastPublisher:
         )
         self._track_names = _optional_track_names(config.track_names)
         self._session: "_native.MoqBroadcastPublishingSession | None" = None
+        self._this_machines_stamp_clock: "str | None" = None
+        self._inbound_links_whose_stamp_clock_was_already_read: "set[str]" = set()
         self._kind_by_inbound_link: "dict[str, str]" = {}
         self._next_data_sequence_index_by_inbound_link: "dict[str, int]" = {}
         self._bags_handed_over = 0
@@ -649,6 +665,9 @@ class MoqBroadcastPublisher:
                 "there is no media to publish. Connect an H264Encoder or an "
                 "OpusEncoder output to this port."
             )
+        # Half of every stamp comparison the deadline makes, and a constant: a
+        # boot id cannot change without a reboot, which ends this helper.
+        self._this_machines_stamp_clock = this_machines_stamp_clock_identity()
         broadcast = self._broadcast or f"streamlib/{ctx.runtime_id}"
         self._session = _native.MoqBroadcastPublishingSession(
             self._relay_url,
@@ -683,6 +702,7 @@ class MoqBroadcastPublisher:
             )
             self._record_one_bag(reaches_the_transport=True, is_a_data_object=True)
             return
+        self._tell_the_session_which_clock_stamped_this_link(ctx, session, inbound_link)
         if kind == "video":
             frame = EncodedVideoFrame(**bag)
             reaches_the_transport = session.publish_video_access_unit(
@@ -732,6 +752,62 @@ class MoqBroadcastPublisher:
             f"MoqBroadcastPublisher: teardown, {self._describe_what_was_published()}, "
             f"{shed}, {uplink}"
         )
+
+    def _tell_the_session_which_clock_stamped_this_link(
+        self,
+        ctx: RuntimeContextLimitedAccess,
+        session: "_native.MoqBroadcastPublishingSession",
+        inbound_link: str,
+    ) -> None:
+        """Read which machine stamped one link's bags, once, as its track opens.
+
+        Asked at the track's open and never per bag: a link carrying from
+        another runtime costs a round trip to the runtime, which this helper
+        holds no mesh session to answer for itself. A link's answer changes only
+        when its peer returns from a fresh boot, and a peer that returns is on a
+        machine other than this one either way.
+
+        Asked whether or not a deadline is configured, because the answer
+        decides more than the shed: a track nobody has described files its
+        objects under their write instant rather than their own stamp, which is
+        right for a track this publisher cannot read and wrong for one it can.
+        Leaving the ordinary publisher undescribed would make every local
+        track's backlog stamp the write instant for the sake of one round trip
+        per link.
+
+        A data track is the one link never asked: its objects carry no media
+        stamp to file at all, and a data object is never shed for its age.
+
+        A link naming no machine — one whose runtime could not say, or a machine
+        that names no clock of its own — is treated as not this one. That is the
+        rule the engine states for every stamp comparison: compare only where
+        both sides answer the same string, never where either answers nothing.
+        Only a publisher with a deadline says so, since that is the only reader
+        with something to do about it.
+        """
+        if inbound_link in self._inbound_links_whose_stamp_clock_was_already_read:
+            return
+        self._inbound_links_whose_stamp_clock_was_already_read.add(inbound_link)
+
+        stamped_on = ctx.inputs.inbound_link_stamp_clock_identity(
+            TRACKS_INPUT_PORT, inbound_link
+        )
+        on_this_machines_clock = (
+            stamped_on is not None and stamped_on == self._this_machines_stamp_clock
+        )
+        session.note_whether_a_tracks_stamps_are_on_this_publishers_clock(
+            inbound_link, on_this_machines_clock
+        )
+        if not on_this_machines_clock and self._delivery_deadline_ms is not None:
+            log.warn(
+                f"MoqBroadcastPublisher: `{inbound_link}` is stamped on "
+                f"{stamped_on or 'a machine this runtime cannot name'}, not on this "
+                f"machine ({self._this_machines_stamp_clock or 'which names no clock'}) — "
+                f"two clocks with no shared epoch, so this track's bags have no age "
+                f"here. They are published however late they read, and the "
+                f"delivery_deadline_ms={self._delivery_deadline_ms} applies to this "
+                f"track only through its uplink backlog."
+            )
 
     def _record_one_bag(self, reaches_the_transport: bool, is_a_data_object: bool) -> None:
         # The cadence counts every bag handed over, or a run shedding

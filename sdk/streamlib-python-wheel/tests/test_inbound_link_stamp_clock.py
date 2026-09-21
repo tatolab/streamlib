@@ -19,16 +19,21 @@ not know rather than answer with this machine.
 import os
 import re
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import pytest
 
-from streamlib import RuntimeContextFullAccess
+from streamlib import RuntimeContextFullAccess, this_machines_stamp_clock_identity
 from streamlib._engine import ProcessorLinkDataAccess
 
 pytestmark = pytest.mark.usefixtures("private_iceoryx2_domain_for_this_test_process")
 
 INPUT_PORT = "tracks"
+
+#: Where Linux reports the boot session the monotonic epoch belongs to. The
+#: engine reads this file and nothing else, which is the claim under test.
+LINUX_BOOT_SESSION_PATH = "/proc/sys/kernel/random/boot_id"
 
 BOOT_SESSION_UUID = re.compile(
     r"\A[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z"
@@ -82,6 +87,57 @@ def test_a_link_from_this_runtime_names_this_machine(
     assert named is not None, "a link from this runtime always names a machine"
     assert BOOT_SESSION_UUID.match(named), (
         f"{named!r} is not a boot-session UUID, which is what the answer is"
+    )
+
+
+def test_this_machines_clock_is_the_one_a_link_from_this_runtime_names(
+    request: pytest.FixtureRequest,
+):
+    """The other half of a stamp comparison: a processor holding a link's
+    machine needs the machine its own readings are on to compare it against.
+
+    The two answers must be the one string, or a processor asking both is told
+    a local link is on a clock it is not — which is exactly the comparison the
+    per-machine rule exists to stop. Fail-without-fix: derive this machine's
+    identity anywhere but where a link's answer comes from, and the two drift
+    apart the day either changes.
+    """
+    unique = f"stampclockthismachine{os.getpid()}"
+    channel_service_name = f"{unique}/video_out"
+    context = _a_context_reading_one_link(
+        request, channel_service_name, channel_service_name
+    )
+
+    this_machine = this_machines_stamp_clock_identity()
+
+    assert this_machine is not None, (
+        "Linux names its boot session, so this platform names a clock"
+    )
+    assert BOOT_SESSION_UUID.match(this_machine), (
+        f"{this_machine!r} is not a boot-session UUID, which is what the answer is"
+    )
+    assert this_machine == context.inputs.inbound_link_stamp_clock_identity(
+        INPUT_PORT, channel_service_name
+    ), "a link from this runtime is stamped on this machine's clock, by that name"
+
+
+@pytest.mark.skipif(
+    not Path(LINUX_BOOT_SESSION_PATH).exists(),
+    reason="only Linux reports its boot session at this path",
+)
+def test_this_machines_clock_is_the_kernels_own_boot_session():
+    """Locked to the kernel's own answer rather than to itself: the identity is
+    the boot session and nothing else — deliberately not the host identity, which
+    pairs the same boot id with the pid namespace, so a container and its host
+    read as two machines there and as one clock here.
+
+    Fail-without-fix: derive it from anything that distinguishes a container from
+    its host, and two processes that genuinely share a monotonic epoch stop being
+    allowed to compare stamps.
+    """
+    assert (
+        this_machines_stamp_clock_identity()
+        == Path(LINUX_BOOT_SESSION_PATH).read_text().strip()
     )
 
 

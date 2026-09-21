@@ -27,6 +27,7 @@ from streamlib import (
     input,
     output,
     processor,
+    this_machines_stamp_clock_identity,
 )
 from streamlib_moq import (
     MoqBroadcastPublisher,
@@ -747,6 +748,230 @@ def test_the_deadline_a_publisher_runs_under_is_said_where_it_is_configured(
     assert describe_the_delivery_deadline(delivery_deadline_ms) == said
 
 
+# =============================================================================
+# Which machine's clock a track's stamps are taken on
+#
+# The deadline ages a stamp against this machine's monotonic clock, so a bag
+# that crossed the runtime mesh — stamped on its producer's machine, whose epoch
+# is that machine's own boot — has no age here. The publisher reads which clock
+# each link is on as its track opens and tells its session, because a helper
+# holds no mesh session and asking costs a round trip to the runtime.
+# =============================================================================
+
+#: Stands in for whatever this machine's boot session actually is: these
+#: tests are about the comparison, so the two strings are set by hand.
+THIS_MACHINE = "11111111-2222-4333-8444-555555555555"
+ANOTHER_MACHINE = "8b93a1c2-0000-4d5a-9a11-2c7f0d5e2f1c"
+A_MESH_FED_LINK = "bench-cam-a1b2/Camera Source/video"
+
+
+class _InputsAnsweringOneLinksClock:
+    """One video bag per read, arriving on a link whose stamp clock is what the
+    engine says it is — and recording every time it was asked."""
+
+    def __init__(self, inbound_link: str, stamped_on: "str | None") -> None:
+        self._inbound_link = inbound_link
+        self._stamped_on = stamped_on
+        self.clock_questions: "list[str]" = []
+
+    def read_from_inbound_link_with_timestamp(self, port: str):
+        assert port == "tracks"
+        return (dict(A_VIDEO_BAG), self._inbound_link, 5_000_000_000)
+
+    def inbound_link_stamp_clock_identity(self, port: str, inbound_link_name: str):
+        assert port == "tracks"
+        self.clock_questions.append(inbound_link_name)
+        return self._stamped_on
+
+
+class _ContextAnsweringOneLinksClock:
+    def __init__(self, inbound_link: str, stamped_on: "str | None") -> None:
+        self.inputs = _InputsAnsweringOneLinksClock(inbound_link, stamped_on)
+
+
+class _SessionRecordingEachTracksClock:
+    """A publishing session that keeps what it was told about each track's
+    clock, and takes every publish."""
+
+    def __init__(self) -> None:
+        self.clocks_noted: "list[tuple[str, bool]]" = []
+
+    def note_whether_a_tracks_stamps_are_on_this_publishers_clock(
+        self, inbound_link_name: str, the_stamps_are_on_this_publishers_clock: bool
+    ) -> None:
+        self.clocks_noted.append(
+            (inbound_link_name, the_stamps_are_on_this_publishers_clock)
+        )
+
+    def publish_video_access_unit(self, *args, **kwargs) -> bool:
+        del args, kwargs
+        return True
+
+    def objects_the_delivery_deadline_shed(self) -> "list[tuple[str, int, int]]":
+        return []
+
+    def uplink_backlog_by_track(self) -> "list[_UplinkBacklogOnOneTrack]":
+        return []
+
+    def quic_uplink_readings(self) -> "_QuicUplinkReadings | None":
+        return None
+
+    def close(self) -> "str | None":
+        return None
+
+
+def _drive_bags_past_the_clock_question(
+    inbound_link: str,
+    stamped_on: "str | None",
+    this_machines_clock: "str | None",
+    delivery_deadline_ms: "int | None" = 100,
+    bag_count: int = 1,
+) -> "tuple[_SessionRecordingEachTracksClock, _ContextAnsweringOneLinksClock, list[str]]":
+    publisher = MoqBroadcastPublisher(
+        MoqBroadcastPublisherConfig(
+            relay_url=A_RELAY, delivery_deadline_ms=delivery_deadline_ms
+        )
+    )
+    session = _SessionRecordingEachTracksClock()
+    publisher._session = session  # type: ignore[assignment]
+    publisher._this_machines_stamp_clock = this_machines_clock
+    context = _ContextAnsweringOneLinksClock(inbound_link, stamped_on)
+    warned: "list[str]" = []
+    with mock.patch.object(log, "warn", warned.append):
+        for _ in range(bag_count):
+            publisher.process(context)  # type: ignore[arg-type]
+    return session, context, warned
+
+
+def test_a_link_stamped_on_this_machine_is_noted_as_such_and_said_nothing_about():
+    """The ordinary local link: its stamps and this publisher's readings are on
+    one clock, so the deadline reads them and there is nothing to report."""
+    session, context, warned = _drive_bags_past_the_clock_question(
+        "camera", THIS_MACHINE, THIS_MACHINE
+    )
+
+    assert session.clocks_noted == [("camera", True)]
+    assert context.inputs.clock_questions == ["camera"]
+    assert warned == []
+
+
+def test_a_link_stamped_on_another_machine_is_noted_and_said_once_naming_both():
+    """The bug's own case. The publisher must tell its session the stamps are
+    unreadable here — otherwise the deadline sheds on a subtraction between two
+    unrelated clocks — and must say so, because a configured deadline silently
+    not applying to a track is the kind of quiet degradation this wheel reports.
+    """
+    session, _, warned = _drive_bags_past_the_clock_question(
+        A_MESH_FED_LINK, ANOTHER_MACHINE, THIS_MACHINE
+    )
+
+    assert session.clocks_noted == [(A_MESH_FED_LINK, False)]
+    assert len(warned) == 1
+    assert A_MESH_FED_LINK in warned[0]
+    assert ANOTHER_MACHINE in warned[0], "the machine it is stamped on is named"
+    assert THIS_MACHINE in warned[0], "and the machine it is not stamped on"
+
+
+def test_a_link_whose_machine_the_runtime_cannot_name_is_read_as_another_clock():
+    """`None` covers a runtime that could not answer and a machine that names no
+    clock of its own. Reading either as this machine is the one answer that gets
+    a stamp compared across clocks, so both read as not-this-one.
+    """
+    session, _, warned = _drive_bags_past_the_clock_question(
+        A_MESH_FED_LINK, None, THIS_MACHINE
+    )
+
+    assert session.clocks_noted == [(A_MESH_FED_LINK, False)]
+    assert len(warned) == 1
+
+
+def test_a_machine_that_names_no_clock_of_its_own_reads_no_link_as_its_own():
+    """Nothing matches an unknown local clock either — not even a link that
+    answers the same nothing, since two machines that each name no clock are not
+    one machine.
+    """
+    session, _, _ = _drive_bags_past_the_clock_question("camera", None, None)
+
+    assert session.clocks_noted == [("camera", False)]
+
+
+def test_the_clock_is_asked_once_per_link_however_many_bags_arrive():
+    """A remote link's answer costs a round trip to the runtime, so it is read
+    when the track opens and never per bag. Fail-without-fix: ask per bag, and a
+    30 fps track spends thirty escalate round trips a second on a constant.
+    """
+    session, context, warned = _drive_bags_past_the_clock_question(
+        A_MESH_FED_LINK, ANOTHER_MACHINE, THIS_MACHINE, bag_count=40
+    )
+
+    assert context.inputs.clock_questions == [A_MESH_FED_LINK]
+    assert session.clocks_noted == [(A_MESH_FED_LINK, False)]
+    assert len(warned) == 1, "said once per link, not once per bag"
+
+
+def test_a_publisher_with_no_deadline_still_describes_its_tracks_but_says_nothing():
+    """The answer decides more than the shed: a track nobody describes files its
+    objects under their write instant rather than their own stamp. Skipping the
+    read on the ordinary publisher would therefore rewrite every local track's
+    backlog stamp to save one round trip per link.
+
+    Nothing is said, though — with no deadline configured there is no reader with
+    anything to do about it.
+    """
+    session, context, warned = _drive_bags_past_the_clock_question(
+        "camera", THIS_MACHINE, THIS_MACHINE, delivery_deadline_ms=None
+    )
+
+    assert context.inputs.clock_questions == ["camera"]
+    assert session.clocks_noted == [("camera", True)]
+    assert warned == []
+
+
+def test_a_mesh_fed_link_on_a_publisher_with_no_deadline_is_described_and_unremarked():
+    """Described because the object stamp depends on it, unremarked because a
+    publisher with no deadline sheds nothing whatever clock a track is on."""
+    session, _, warned = _drive_bags_past_the_clock_question(
+        A_MESH_FED_LINK, ANOTHER_MACHINE, THIS_MACHINE, delivery_deadline_ms=None
+    )
+
+    assert session.clocks_noted == [(A_MESH_FED_LINK, False)]
+    assert warned == []
+
+
+def test_the_clock_note_really_crosses_into_this_wheels_rust():
+    """The one seam every other test here fakes: `note_whether_...` reaching the
+    native session. Constructing one dials nothing — the first bag opens the
+    connection — so this needs no relay.
+
+    A link the broadcast does not carry is what makes the call observable from
+    Python at all: the accepted note returns nothing, so the refusal is the only
+    evidence the name and the argument arrived where they were sent.
+    """
+    session = _native.MoqBroadcastPublishingSession(
+        A_RELAY, A_BROADCAST, "streamlib_bag", 100
+    )
+    session.declare_tracks(["camera"], None)
+
+    session.note_whether_a_tracks_stamps_are_on_this_publishers_clock("camera", True)
+
+    with pytest.raises(ValueError, match="microphone"):
+        session.note_whether_a_tracks_stamps_are_on_this_publishers_clock(
+            "microphone", False
+        )
+
+
+def test_setup_reads_the_machine_its_own_monotonic_readings_are_on():
+    """Half of every comparison the deadline makes, and read from the wheel
+    rather than derived here, so it is the same string a link answers."""
+    publisher = MoqBroadcastPublisher(
+        MoqBroadcastPublisherConfig(relay_url=A_RELAY, delivery_deadline_ms=100)
+    )
+    with mock.patch.object(processors_module, "_native"):
+        publisher.setup(_SetupContextWiredTo(["camera"]))  # type: ignore[arg-type]
+
+    assert publisher._this_machines_stamp_clock == this_machines_stamp_clock_identity()
+
+
 @dataclass(frozen=True)
 class _UplinkBacklogOnOneTrack:
     inbound_link_name: str
@@ -777,6 +1002,11 @@ class _SessionThatAnswers:
     def __init__(self, reaches_the_transport: bool) -> None:
         self._answer = reaches_the_transport
         self.calls = 0
+
+    def note_whether_a_tracks_stamps_are_on_this_publishers_clock(
+        self, inbound_link_name: str, the_stamps_are_on_this_publishers_clock: bool
+    ) -> None:
+        del inbound_link_name, the_stamps_are_on_this_publishers_clock
 
     def publish_video_access_unit(self, *args, **kwargs) -> bool:
         del args, kwargs
@@ -810,6 +1040,11 @@ class _InputsReadingOneVideoBag:
         assert port == "tracks"
         return (dict(A_VIDEO_BAG), "camera", 5_000_000_000)
 
+    def inbound_link_stamp_clock_identity(self, port: str, inbound_link_name: str):
+        del inbound_link_name
+        assert port == "tracks"
+        return THIS_MACHINE
+
 
 class _ContextReadingOneVideoBag:
     inputs = _InputsReadingOneVideoBag()
@@ -825,6 +1060,11 @@ class _InputsReadingBagsInTurn:
         assert port == "tracks"
         return next(self._reads, None)
 
+    def inbound_link_stamp_clock_identity(self, port: str, inbound_link_name: str):
+        del inbound_link_name
+        assert port == "tracks"
+        return THIS_MACHINE
+
 
 class _ContextReadingBagsInTurn:
     def __init__(self, reads: "list[tuple[dict, str, int]]") -> None:
@@ -837,6 +1077,11 @@ class _SessionRecordingWhatWasPublished:
     def __init__(self) -> None:
         self.data_objects: "list[tuple[str, bytes]]" = []
         self.media_calls = 0
+
+    def note_whether_a_tracks_stamps_are_on_this_publishers_clock(
+        self, inbound_link_name: str, the_stamps_are_on_this_publishers_clock: bool
+    ) -> None:
+        del inbound_link_name, the_stamps_are_on_this_publishers_clock
 
     def publish_data_object(self, inbound_link_name: str, object_bytes: bytes) -> None:
         self.data_objects.append((inbound_link_name, object_bytes))
