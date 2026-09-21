@@ -484,15 +484,24 @@ static MACOS_TERMINATION_HANDLERS_INSTALLED: std::sync::OnceLock<()> = std::sync
 #[cfg(target_os = "macos")]
 fn install_sigterm_handler_macos() -> std::io::Result<()> {
     use signal_hook::consts::signal::SIGTERM;
-    use signal_hook::flag;
     use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
 
-    let term_flag = Arc::new(AtomicBool::new(false));
-    flag::register(SIGTERM, Arc::clone(&term_flag))?;
+    // Counted rather than flagged, so SIGTERMs landing within one poll still
+    // escalate one step each.
+    let sigterm_deliveries_not_yet_escalated = Arc::new(AtomicUsize::new(0));
+    let sigterm_deliveries_counted_by_the_handler =
+        Arc::clone(&sigterm_deliveries_not_yet_escalated);
+    // SAFETY: the handler only increments an atomic, which is async-signal-safe.
+    unsafe {
+        signal_hook::low_level::register(SIGTERM, move || {
+            sigterm_deliveries_counted_by_the_handler.fetch_add(1, Ordering::SeqCst);
+        })
+    }?;
 
     std::thread::spawn(move || {
         loop {
-            if term_flag.swap(false, Ordering::Relaxed) {
+            for _ in 0..sigterm_deliveries_not_yet_escalated.swap(0, Ordering::SeqCst) {
                 escalate_the_runtime_shutdown_one_step_for_a_delivered_signal("SIGTERM");
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
