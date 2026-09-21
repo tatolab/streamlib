@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.7](https://github.com/tatolab/streamlib/compare/v0.26.6...v0.26.7) (2026-09-21)
+
+
+### Features
+
+* **engine:** a window presents on macOS, with the event pump on the process's first thread ([#2389](https://github.com/tatolab/streamlib/issues/2389)) ([943412f](https://github.com/tatolab/streamlib/commit/943412ff55252059718a306c97ba6920b7171c80))
+
 ## [0.26.6](https://github.com/tatolab/streamlib/compare/v0.26.5...v0.26.6) (2026-09-21)
 
 
