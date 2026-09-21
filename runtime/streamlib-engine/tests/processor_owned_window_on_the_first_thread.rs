@@ -156,21 +156,26 @@ mod apple_first_thread {
         );
 
         // The loop is no longer driven: this is where a runtime's teardown
-        // releases its windows.
-        the_loop_is_no_longer_driven
-            .send(())
-            .expect("the window owner is waiting");
-        let undriven_steps = undriven_steps_reported
-            .recv_timeout(2 * TEARDOWN_TIME_STEP_BUDGET)
-            .unwrap_or_else(|_| {
-                panic!(
-                    "a window step blocked while nothing drove the loop — it waited on the \
-                     first thread instead of on the pump's own record"
-                )
-            });
-        window_owner
-            .join()
-            .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+        // releases its windows. The owner is joined only once it has finished,
+        // so a panic of its own surfaces rather than the channel failure after it.
+        let the_owner_was_waiting = the_loop_is_no_longer_driven.send(()).is_ok();
+        let undriven_steps_report =
+            undriven_steps_reported.recv_timeout(2 * TEARDOWN_TIME_STEP_BUDGET);
+        if undriven_steps_report.is_ok() || window_owner.is_finished() {
+            window_owner
+                .join()
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+        }
+        assert!(
+            the_owner_was_waiting,
+            "the window owner stopped before the loop did"
+        );
+        let undriven_steps = undriven_steps_report.unwrap_or_else(|_| {
+            panic!(
+                "a window step blocked while nothing drove the loop — it waited on the first \
+                 thread instead of on the pump's own record"
+            )
+        });
         assert!(
             undriven_steps.present_target_opened_after < TEARDOWN_TIME_STEP_BUDGET,
             "opening a present target while nothing drove the loop took {:?}",

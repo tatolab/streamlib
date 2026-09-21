@@ -33,7 +33,7 @@ use std::time::Duration;
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalSize};
 use winit::event::WindowEvent;
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopClosed, EventLoopProxy};
 use winit::window::{Window, WindowAttributes, WindowId};
 
 #[cfg(target_os = "macos")]
@@ -175,14 +175,23 @@ impl Drop for WindowRegisteredWithEventPump {
         // SAFETY: `drop` runs once, and nothing reads the field after this.
         let window_minted_by_the_event_pump =
             unsafe { ManuallyDrop::take(&mut self.window_handed_back_to_the_event_pump_on_drop) };
-        // A pump that has stopped hands the message back, and the window is
-        // released here instead.
-        let _ = self.control_messages_to_event_pump.send_event(
+        let sent_to_the_event_pump = self.control_messages_to_event_pump.send_event(
             WindowEventPumpControlMessage::ForgetAndCloseWindowOfOwningProcessor {
                 window_id: self.window_id,
                 window_minted_by_the_event_pump,
             },
         );
+        if let Err(EventLoopClosed(message_the_stopped_event_pump_handed_back)) =
+            sent_to_the_event_pump
+        {
+            // A stopped pump never runs again. On Apple only it may close a
+            // window, and closing one here would wait on it forever, so the
+            // window is left for the process's exit; elsewhere it closes here.
+            #[cfg(target_os = "macos")]
+            std::mem::forget(message_the_stopped_event_pump_handed_back);
+            #[cfg(not(target_os = "macos"))]
+            drop(message_the_stopped_event_pump_handed_back);
+        }
     }
 }
 

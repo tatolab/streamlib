@@ -54,6 +54,9 @@ mod apple_window_server {
     /// Cold swapchain creation is the slow step, and it varies.
     const WINDOWS_MAPPED_DEADLINE: Duration = Duration::from_secs(20);
 
+    /// How long the window server's on-screen list may trail an order-out.
+    const WINDOW_SERVER_ORDER_OUT_LAG: Duration = Duration::from_millis(100);
+
     /// How long the surviving window is watched after its neighbour closes.
     const SURVIVOR_OBSERVATION: Duration = Duration::from_secs(1);
 
@@ -110,6 +113,16 @@ mod apple_window_server {
         }
     }
 
+    /// Requests the shutdown that ends `App::run` when dropped — on a panic
+    /// too, so a watcher that fails cannot leave the run blocked forever.
+    struct RequestTheShutdownThatEndsTheRunOnDrop;
+
+    impl Drop for RequestTheShutdownThatEndsTheRunOnDrop {
+        fn drop(&mut self) {
+            let _ = request_runtime_shutdown("the window-server watcher is done");
+        }
+    }
+
     /// Whether the login session's screen is locked. The lock screen covers
     /// every window, so the window server's on-screen list stops describing
     /// what a user sees and this test cannot run.
@@ -132,7 +145,7 @@ mod apple_window_server {
             if condition() {
                 return true;
             }
-            std::thread::sleep(Duration::from_millis(100));
+            std::thread::sleep(Duration::from_millis(10));
         }
         condition()
     }
@@ -212,10 +225,8 @@ mod apple_window_server {
         let watcher = std::thread::Builder::new()
             .name("window-server-watcher".to_string())
             .spawn(move || {
-                let watched = watch_the_window_server_while_the_graph_runs(&runner);
-                request_runtime_shutdown("the window-server watcher is done")
-                    .expect("request the shutdown that ends the run");
-                watched
+                let _ends_the_run_however_the_watch_ends = RequestTheShutdownThatEndsTheRunOnDrop;
+                watch_the_window_server_while_the_graph_runs(&runner)
             })
             .expect("spawn the watcher");
 
@@ -228,11 +239,15 @@ mod apple_window_server {
             panic!("{what_the_window_server_showed}");
         }
         run_outcome.expect("the graph stops cleanly after one of its windows was closed");
+        // Bounded well under AppKit's ~270 ms close animation, so a window
+        // still animating out when `run` returned fails here; the window
+        // server's own list trails an order-out by a few milliseconds.
         assert!(
-            wait_until(Duration::from_secs(5), || {
+            wait_until(WINDOW_SERVER_ORDER_OUT_LAG, || {
                 windows_on_screen_titled(SECOND_WINDOW_TITLE) == 0
             }),
-            "the run tore the graph down, so its remaining window must leave the screen"
+            "the run tore the graph down, so its remaining window must have left the screen \
+             when it returned"
         );
         assert_eq!(
             process_wide_window_event_pump()
