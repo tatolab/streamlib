@@ -148,9 +148,25 @@ reserved subscriber slot missed — different subject, and the two are never sum
 
 **Monotonic clock**: the machine's boot-relative clock (`CLOCK_MONOTONIC` /
 `mach_absolute_time`) — the epoch of every data-plane timestamp and of the V4L2 and ALSA
-driver stamps. The default; anything a processor stamps or compares uses it. _Avoid_:
-"media clock" for the epoch (`MediaClock` is the Rust naming seam, not a second clock),
-"timestamp" unqualified where the epoch matters.
+driver stamps. One per machine, not one per mesh: two stamps from two machines are
+readings of two unrelated clocks and subtracting them means nothing, which is what
+**clock identity** exists to say. The default; anything a processor stamps or compares
+uses it. _Avoid_: "media clock" for the epoch (`MediaClock` is the Rust naming seam, not a
+second clock), "timestamp" unqualified where the epoch matters, "one clock" where the
+machine matters.
+
+**Clock identity**: which machine's monotonic clock a stamp was taken on — the kernel's
+boot-session UUID (`/proc/sys/kernel/random/boot_id`, `kern.bootsessionuuid`), the boot
+alone, so a container and its host share one. It rides every mesh message's attachment,
+renders on every link in `graph` as `stamp_clock_identity`, and is read by
+`inbound_link_stamp_clock_identity(port, link)` against
+`this_machines_stamp_clock_identity()`. Two stamps are comparable when their links name the
+same identity **and** neither stamp was restated by a relay: what a link names is the clock
+of the machine that last wrote the bag, not necessarily of the machine that took the reading,
+so a processor restating an upstream stamp on a local output makes its link name this machine
+confidently and wrongly. That is the known relay gap, and it is the common-clock OPEN's to
+close. _Avoid_: "host identity" (that is the boot id **plus** the pid-namespace inode, and it
+settles duplicate runtime names, never stamps), "boot id" unqualified, "clock id", "epoch".
 
 **Wall clock**: UNIX time — permitted only on the three observability surfaces (log
 `host_ts`, log `source_ts`, log file naming), because they correlate with the outside
