@@ -533,6 +533,9 @@ impl WhatThisRuntimeOffersOnTheMesh for TheOnePortThisPeerOffers {
             }],
             // This peer's one port is nameable, so it holds none it cannot send.
             ports_it_holds_and_cannot_send: vec![],
+            // Filled by the registry from what the egress table recorded, the
+            // same way a real runtime's graph reader leaves it empty.
+            ports_it_stopped_sending: vec![],
         }
     }
 

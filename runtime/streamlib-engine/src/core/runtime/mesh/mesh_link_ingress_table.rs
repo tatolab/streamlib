@@ -892,7 +892,7 @@ mod tests {
                     port_name: port.to_string(),
                 })
                 .collect(),
-            ports_it_holds_and_cannot_send: vec![],
+            ..Default::default()
         }
     }
 
@@ -1117,6 +1117,7 @@ mod tests {
                     "video",
                     "its channel cannot be named: it contains 'V'",
                 )]),
+                ..Default::default()
             }),
         );
         assert!(
@@ -1144,6 +1145,7 @@ mod tests {
                 "video",
                 "no channel name",
             )]),
+            ..Default::default()
         };
 
         let reason = the_reason(what_the_offered_ports_say(&an_address(), Some(&listing)));

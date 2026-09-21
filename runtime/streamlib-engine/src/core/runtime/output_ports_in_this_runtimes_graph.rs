@@ -157,6 +157,9 @@ fn every_output_port_in(graph: &Graph) -> OutputPortsOfferedOnTheMesh {
     OutputPortsOfferedOnTheMesh {
         ports,
         ports_it_holds_and_cannot_send,
+        // Empty from the graph, always: a graph holds no egresses, so why one
+        // ended is the registry's to add to this answer.
+        ports_it_stopped_sending: Vec::new(),
     }
 }
 

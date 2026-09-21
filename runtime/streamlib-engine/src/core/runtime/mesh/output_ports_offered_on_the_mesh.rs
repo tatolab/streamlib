@@ -12,9 +12,16 @@
 //! right there, and a reader told nothing at all would wait on an egress that
 //! can never start.
 //!
+//! A port it offers and stopped sending is answered the same way, under its own
+//! key: the port is on offer and a later reader still revives it, so the answer
+//! is not a refusal — but the reason its last egress ended lives only in this
+//! runtime's log until it rides this document, and a reader two machines away
+//! cannot read that log.
+//!
 //! The wire is msgpack, the same codec every bag rides, and the field names are
 //! the contract — a peer of another engine version reads this document.
 
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use parking_lot::Mutex;
@@ -71,6 +78,24 @@ pub struct OutputPortThisRuntimeHoldsAndCannotSend {
     pub why_it_cannot_be_sent: String,
 }
 
+/// One output port a runtime offers and stopped sending, and why its last
+/// egress ended.
+///
+/// Separate from [`OutputPortThisRuntimeHoldsAndCannotSend`] because the two
+/// read differently at the reader: that one is a refusal, and this port is
+/// still on offer — the next runtime to begin reading it starts a fresh egress.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct OutputPortThisRuntimeStoppedSending {
+    /// The display name of the processor that owns the port.
+    pub processor_display_name: String,
+    /// The port's own name.
+    pub port_name: String,
+    /// Why this runtime stopped sending it, in its own words — what a waiting
+    /// reader's link names, so the reason never lives only in this runtime's
+    /// log.
+    pub why_it_stopped_being_sent: String,
+}
+
 /// The document a runtime answers with when a peer asks what it offers.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct OutputPortsOfferedOnTheMesh {
@@ -89,6 +114,13 @@ pub struct OutputPortsOfferedOnTheMesh {
     /// answered.
     #[serde(default)]
     pub ports_it_holds_and_cannot_send: Vec<OutputPortThisRuntimeHoldsAndCannotSend>,
+    /// Every port it offers whose last egress ended, each with the reason.
+    ///
+    /// Absent reads as empty for the reason the key above states, and a port
+    /// here is still listed under `ports`: it is offered, and a runtime that
+    /// begins reading it starts a fresh egress.
+    #[serde(default)]
+    pub ports_it_stopped_sending: Vec<OutputPortThisRuntimeStoppedSending>,
 }
 
 impl OutputPortsOfferedOnTheMesh {
@@ -124,6 +156,23 @@ impl OutputPortsOfferedOnTheMesh {
                 held.processor_display_name == processor_display_name && held.port_name == port_name
             })
             .map(|held| held.why_it_cannot_be_sent.as_str())
+    }
+
+    /// Why the runtime stopped sending `port_name` on `processor_display_name`,
+    /// for a port it offers and said its last egress ended — `None` for every
+    /// other port.
+    pub fn why_it_stopped_being_sent(
+        &self,
+        processor_display_name: &str,
+        port_name: &str,
+    ) -> Option<&str> {
+        self.ports_it_stopped_sending
+            .iter()
+            .find(|stopped| {
+                stopped.processor_display_name == processor_display_name
+                    && stopped.port_name == port_name
+            })
+            .map(|stopped| stopped.why_it_stopped_being_sent.as_str())
     }
 
     /// Every offered port, rendered for a refusal that has to say what *is*
@@ -188,6 +237,13 @@ pub struct HowToReadAnOfferedOutputPort {
 #[derive(Default)]
 pub struct WhatThisRuntimeOffersOnTheMeshRegistry {
     reader: Mutex<Option<std::sync::Arc<dyn WhatThisRuntimeOffersOnTheMesh>>>,
+    /// Why each port's last egress ended, written by the egress table and read
+    /// into every answer.
+    ///
+    /// Here rather than on the graph reader because a graph knows nothing of
+    /// egresses, and this is already the seam between what the runtime has and
+    /// what the mesh says about it.
+    why_each_port_stopped_being_sent: Mutex<BTreeMap<OutputPortOfferedOnTheMesh, String>>,
 }
 
 impl WhatThisRuntimeOffersOnTheMeshRegistry {
@@ -199,6 +255,23 @@ impl WhatThisRuntimeOffersOnTheMeshRegistry {
         *self.reader.lock() = Some(reader);
     }
 
+    /// Record why this runtime stopped sending `port`.
+    pub fn record_why_it_stopped_sending_an_output_port(
+        &self,
+        port: OutputPortOfferedOnTheMesh,
+        why_it_stopped_being_sent: String,
+    ) {
+        self.why_each_port_stopped_being_sent
+            .lock()
+            .insert(port, why_it_stopped_being_sent);
+    }
+
+    /// Forget that this runtime stopped sending `port`, because something is
+    /// sending it again or nobody is asking for it any more.
+    pub fn forget_that_it_stopped_sending_an_output_port(&self, port: &OutputPortOfferedOnTheMesh) {
+        self.why_each_port_stopped_being_sent.lock().remove(port);
+    }
+
     /// Every output port this runtime offers right now.
     ///
     /// The reader is cloned out from under the lock before it is called: it
@@ -206,9 +279,27 @@ impl WhatThisRuntimeOffersOnTheMeshRegistry {
     /// one across that would queue every other caller behind a compile.
     pub fn output_ports_it_offers_right_now(&self) -> OutputPortsOfferedOnTheMesh {
         let reader = self.reader.lock().clone();
-        reader
+        let mut offered = reader
             .map(|reader| reader.output_ports_it_offers_right_now())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        // Only ports the graph still offers: a record for a port whose
+        // processor has since been removed would answer a reader about a port
+        // this runtime no longer has, where the missing-port refusal is the
+        // true answer.
+        offered.ports_it_stopped_sending = self
+            .why_each_port_stopped_being_sent
+            .lock()
+            .iter()
+            .filter(|(port, _)| offered.offers(&port.processor_display_name, &port.port_name))
+            .map(
+                |(port, why_it_stopped_being_sent)| OutputPortThisRuntimeStoppedSending {
+                    processor_display_name: port.processor_display_name.clone(),
+                    port_name: port.port_name.clone(),
+                    why_it_stopped_being_sent: why_it_stopped_being_sent.clone(),
+                },
+            )
+            .collect();
+        offered
     }
 
     /// How to read one offered port's channel, or `None` while this runtime has
@@ -381,7 +472,52 @@ mod tests {
                 port_name: "depthOut".to_string(),
                 why_it_cannot_be_sent: "its channel cannot be named: it contains 'O'".to_string(),
             }],
+            ports_it_stopped_sending: vec![OutputPortThisRuntimeStoppedSending {
+                processor_display_name: "MicrophoneSource".to_string(),
+                port_name: "audio".to_string(),
+                why_it_stopped_being_sent: "it could not take a destination slot".to_string(),
+            }],
         }
+    }
+
+    /// A graph reader that answers whatever it is handed, so a registry test
+    /// can state what the graph says and read what the mesh answers.
+    struct AGraphOfferingExactly(OutputPortsOfferedOnTheMesh);
+
+    impl WhatThisRuntimeOffersOnTheMesh for AGraphOfferingExactly {
+        fn output_ports_it_offers_right_now(&self) -> OutputPortsOfferedOnTheMesh {
+            self.0.clone()
+        }
+
+        fn how_to_read_an_offered_output_port(
+            &self,
+            _processor_display_name: &str,
+            _port_name: &str,
+        ) -> Option<HowToReadAnOfferedOutputPort> {
+            None
+        }
+    }
+
+    fn a_port(processor_display_name: &str, port_name: &str) -> OutputPortOfferedOnTheMesh {
+        OutputPortOfferedOnTheMesh {
+            processor_display_name: processor_display_name.to_string(),
+            port_name: port_name.to_string(),
+        }
+    }
+
+    fn a_registry_whose_graph_offers(ports: &[(&str, &str)]) -> WhatThisRuntimeOffersOnTheMeshRegistry
+    {
+        let registry = WhatThisRuntimeOffersOnTheMeshRegistry::default();
+        registry.record_how_to_read_this_runtimes_graph(std::sync::Arc::new(AGraphOfferingExactly(
+            OutputPortsOfferedOnTheMesh {
+                ports: ports
+                    .iter()
+                    .map(|(display, port)| a_port(display, port))
+                    .collect(),
+                ..Default::default()
+            },
+        )));
+        registry
     }
 
     /// The document survives the wire whole.
@@ -413,6 +549,13 @@ mod tests {
                         "why_it_cannot_be_sent": "its channel cannot be named: it contains 'O'",
                     },
                 ],
+                "ports_it_stopped_sending": [
+                    {
+                        "processor_display_name": "MicrophoneSource",
+                        "port_name": "audio",
+                        "why_it_stopped_being_sent": "it could not take a destination slot",
+                    },
+                ],
             })
         );
     }
@@ -442,6 +585,93 @@ mod tests {
             .expect("a document with no unsendable ports still decodes");
         assert!(listed.offers("CameraSource", "video"));
         assert!(listed.ports_it_holds_and_cannot_send.is_empty());
+        assert!(listed.ports_it_stopped_sending.is_empty());
+    }
+
+    /// A port whose last egress ended stays on offer and answers why under both
+    /// of its own names.
+    ///
+    /// What it catches: folding this into `ports_it_holds_and_cannot_send`,
+    /// which a reader reads as a refusal — the link would go final and no later
+    /// reader could revive the port.
+    #[test]
+    fn a_port_that_stopped_being_sent_is_still_offered_and_answers_why() {
+        let listed = a_listing();
+        assert!(
+            listed.offers("MicrophoneSource", "audio"),
+            "a port whose egress ended is still one a later reader revives"
+        );
+        assert_eq!(
+            listed.why_it_cannot_send("MicrophoneSource", "audio"),
+            None,
+            "a port that stopped being sent is not one this runtime refuses"
+        );
+        assert_eq!(
+            listed.why_it_stopped_being_sent("MicrophoneSource", "audio"),
+            Some("it could not take a destination slot")
+        );
+        assert_eq!(
+            listed.why_it_stopped_being_sent("CameraSource", "video"),
+            None
+        );
+        assert_eq!(
+            listed.why_it_stopped_being_sent("MicrophoneSource", "video"),
+            None
+        );
+    }
+
+    /// What the egress table records reaches the answer a peer reads, and
+    /// something sending the port again takes it back out.
+    #[test]
+    fn what_stopped_being_sent_rides_the_answer_until_it_is_forgotten() {
+        let registry = a_registry_whose_graph_offers(&[("CameraSource", "video")]);
+        assert!(
+            registry
+                .output_ports_it_offers_right_now()
+                .ports_it_stopped_sending
+                .is_empty()
+        );
+
+        registry.record_why_it_stopped_sending_an_output_port(
+            a_port("CameraSource", "video"),
+            "its publisher did not declare".to_string(),
+        );
+        assert_eq!(
+            registry
+                .output_ports_it_offers_right_now()
+                .why_it_stopped_being_sent("CameraSource", "video"),
+            Some("its publisher did not declare")
+        );
+
+        registry.forget_that_it_stopped_sending_an_output_port(&a_port("CameraSource", "video"));
+        assert!(
+            registry
+                .output_ports_it_offers_right_now()
+                .ports_it_stopped_sending
+                .is_empty()
+        );
+    }
+
+    /// A record for a port the graph no longer holds is not answered.
+    ///
+    /// What it catches: a processor removed while its egress was failing would
+    /// otherwise have this runtime answer about a port it does not have, where
+    /// the missing-port refusal — which names what *is* offered — is the true
+    /// answer.
+    #[test]
+    fn a_record_for_a_port_the_graph_no_longer_holds_is_not_answered() {
+        let registry = a_registry_whose_graph_offers(&[]);
+        registry.record_why_it_stopped_sending_an_output_port(
+            a_port("CameraSource", "video"),
+            "its publisher did not declare".to_string(),
+        );
+
+        assert!(
+            registry
+                .output_ports_it_offers_right_now()
+                .ports_it_stopped_sending
+                .is_empty()
+        );
     }
 
     /// A port the runtime holds and cannot send is not offered, and answers the

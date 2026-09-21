@@ -83,7 +83,7 @@ pub use output_ports_offered_on_the_mesh::{
 };
 pub use output_ports_offered_on_the_mesh::{
     OutputPortOfferedOnTheMesh, OutputPortThisRuntimeHoldsAndCannotSend,
-    OutputPortsOfferedOnTheMesh,
+    OutputPortThisRuntimeStoppedSending, OutputPortsOfferedOnTheMesh,
 };
 pub use resolved_runtime_mesh_configuration::ResolvedRuntimeMeshConfiguration;
 // Reachable rather than supported: `core::runtime` is a public module, and the
