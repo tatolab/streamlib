@@ -16,25 +16,17 @@
 
 #![cfg(target_os = "linux")]
 
+mod two_display_windows_harness;
+
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use serde_json::json;
 use streamlib::sdk::App;
-use streamlib_media_builtins::{
-    DisplayWindow, TestPatternSource, register_media_builtin_processor_types,
+
+use two_display_windows_harness::{
+    FIRST_WINDOW_TITLE, SECOND_WINDOW_TITLE, add_one_source_fanned_out_to_two_display_windows,
+    harness_duration,
 };
-
-const FIRST_WINDOW_TITLE: &str = "streamlib two-window harness — first";
-const SECOND_WINDOW_TITLE: &str = "streamlib two-window harness — second";
-
-fn harness_duration() -> Duration {
-    let seconds = std::env::var("STREAMLIB_TWO_WINDOW_HARNESS_SECONDS")
-        .ok()
-        .and_then(|raw| raw.parse::<u64>().ok())
-        .unwrap_or(6);
-    Duration::from_secs(seconds)
-}
 
 /// How many windows the window server currently shows under `title`.
 ///
@@ -58,38 +50,8 @@ fn windows_on_screen_titled(title: &str) -> usize {
 )]
 #[test]
 fn one_source_feeds_two_display_windows_at_once() {
-    register_media_builtin_processor_types();
-
     let app = App::new().expect("runtime");
-    let pattern_source = app
-        .add(
-            TestPatternSource::Processor::processor_class_import_path(),
-            json!({ "width": 1280, "height": 720 }),
-            Some("pattern-source"),
-        )
-        .expect("the test-pattern source");
-    let first_display = app
-        .add(
-            DisplayWindow::Processor::processor_class_import_path(),
-            json!({ "title": FIRST_WINDOW_TITLE, "width": 640, "height": 360 }),
-            Some("first-display"),
-        )
-        .expect("the first display");
-    let second_display = app
-        .add(
-            DisplayWindow::Processor::processor_class_import_path(),
-            json!({ "title": SECOND_WINDOW_TITLE, "width": 640, "height": 360 }),
-            Some("second-display"),
-        )
-        .expect(
-            "the second display — one process may hold only one winit event loop, and before \
-             the shared pump this is where a second window-owning processor died",
-        );
-
-    app.connect((&pattern_source, "video"), (&first_display, "video"))
-        .expect("source to the first display");
-    app.connect((&pattern_source, "video"), (&second_display, "video"))
-        .expect("source to the second display");
+    add_one_source_fanned_out_to_two_display_windows(&app);
 
     app.runner().start().expect("the graph starts");
 

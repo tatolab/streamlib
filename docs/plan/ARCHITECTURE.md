@@ -831,8 +831,9 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   logged rather than raising SIGPIPE, and each reader thread lives only while a survivor
   holds its pipe. And the ladder is Linux-first: process groups, `waitid` and
   CLOEXEC-at-source compile on both platforms, with macOS closing descriptors one at a time
-  where `close_range` is absent, while escalation and SIGHUP on macOS's
-  `ctrlc` / `NSApplication` path are not built.
+  where `close_range` is absent. On macOS SIGINT and SIGTERM escalate the same way, from
+  handlers installed once for the process's life; SIGHUP is not owned there and no
+  disposition is handed back.
   [shutdown-ladder; local-transport-hardening — SHIPPED #2264, #2266]
   <!-- verify: sdk/streamlib-python-wheel/tests/test_helper_placement.py -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_helper_placement.py::test_a_processor_interrupted_while_still_setting_up_still_tears_down -->

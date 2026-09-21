@@ -103,12 +103,14 @@ class CameraSource:
 
 @final
 class DisplayWindow:
-    """Native built-in block: video frames in a vsync'd window (Linux).
+    """Native built-in block: video frames in a vsync'd window.
 
     A marker type — pass the class itself to `Runtime.add`
     (`rt.add(DisplayWindow, config={"title": "My app", "scaling": "fit"})`);
     it is never instantiated and its per-frame path never enters the
-    interpreter. `scaling` is `"fit"`, `"fill"`, or `"stretch"`.
+    interpreter. `scaling` is `"fit"`, `"fill"`, or `"stretch"`. `width` and
+    `height` (1280 and 720 by default) are the window's initial size in the
+    desktop's logical pixels, so it is the same size on a 1x and a 2x display.
 
     Add as many as the graph needs: each instance registers its own window
     with the engine's shared event pump and renders on its own thread. An
@@ -636,6 +638,10 @@ class Runtime:
         engine then stays alive beneath it until the process exits. A forced
         shutdown that abandoned nothing returns normally. A teardown still hung
         after about fifteen seconds ends the process with status 124.
+
+        On macOS the main thread drives the window event pump while this
+        blocks, so a `DisplayWindow` opens only under `run()`. There SIGINT and
+        SIGTERM are never handed back to Python, and SIGHUP is not owned.
         """
 
     def wait_until_every_processor_is_running(self, *, timeout: float = 30.0) -> None:
@@ -1100,6 +1106,9 @@ class GpuContextFullAccess:
         self, title: str, width: int = 1280, height: int = 720
     ) -> ProcessorOwnedWindow:
         """Request a window this processor owns, presented by the engine.
+
+        `width` and `height` are the window's initial size in the desktop's
+        logical pixels, so it is the same size on a 1x and a 2x display.
 
         Constructed once in `setup()`, named frames per frame in `process()`.
         The window lives in the app process on its own present loop, so it

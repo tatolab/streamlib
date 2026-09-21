@@ -15,7 +15,7 @@
 //! the shutdown one step — graceful, forced, then every helper's process group
 //! killed and the process gone with status 130.
 
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(unix)]
 use crate::core::runtime::{
     RuntimeShutdownEscalation, escalate_runtime_shutdown_for_a_delivered_signal,
 };
@@ -33,10 +33,10 @@ static SHUTDOWN_SIGNALS_OWNED: AtomicBool = AtomicBool::new(false);
 /// `nohup` and a supervisor tell a process to outlive its terminal.
 ///
 /// Dropping it stops the forwarding thread, joins it, and restores the signal
-/// dispositions captured at construction. macOS instead routes termination
-/// through `NSApplication.terminate` (reaching the same teardown via
-/// `applicationWillTerminate`), which cannot be uninstalled — there, drop
-/// releases the ownership claim only.
+/// dispositions captured at construction. macOS instead installs its handlers
+/// once for the process's life, because they cannot be uninstalled, and feeds
+/// the same escalation from them — there, drop releases the ownership claim
+/// only.
 pub struct ScopedShutdownSignalOwnership {
     #[cfg(all(unix, not(target_os = "macos")))]
     signal_forwarding: Option<UnixSignalForwarding>,
@@ -138,7 +138,7 @@ static SHUTDOWN_SIGNAL_SELF_PIPE: std::sync::OnceLock<ShutdownSignalSelfPipe> =
 
 /// The status a third interrupt exits with: 128 plus SIGINT, the shell's own
 /// convention for a process ended by Ctrl-C.
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(unix)]
 const EXIT_STATUS_OF_A_THIRD_INTERRUPT: libc::c_int = 130;
 
 /// Wakes the forwarding thread for shutdown rather than for a signal. Real
@@ -253,12 +253,8 @@ impl ScopedShutdownSignalOwnership {
         // therefore the claim alone — which is also why `Drop` restores nothing
         // here.
         if MACOS_TERMINATION_HANDLERS_INSTALLED.get().is_none() {
-            // Ctrl+C reaches teardown through `NSApplication.terminate` rather
-            // than the request funnel, because an AppKit app's shutdown must
-            // run `applicationWillTerminate` on the main thread.
-            ctrlc::set_handler(move || {
-                tracing::info!("Ctrl+C received, triggering graceful shutdown");
-                trigger_macos_termination();
+            ctrlc::set_handler(|| {
+                escalate_the_runtime_shutdown_one_step_for_a_delivered_signal("SIGINT");
             })
             .map_err(std::io::Error::other)?;
             // Claimed here rather than after the SIGTERM install below: the
@@ -397,15 +393,22 @@ fn forward_signals_until_stopped(read_end: std::os::fd::RawFd) {
 
         let signal_name = signal_hook::low_level::signal_name(libc::c_int::from(delivered))
             .unwrap_or("unrecognized signal");
-        if escalate_runtime_shutdown_for_a_delivered_signal(&format!("posix signal {signal_name}"))
-            == RuntimeShutdownEscalation::ExitAtOnce
-        {
-            crate::core::runtime::kill_every_helper_process_group_and_end_the_process_at_once(
-                EXIT_STATUS_OF_A_THIRD_INTERRUPT,
-            );
-        }
+        escalate_the_runtime_shutdown_one_step_for_a_delivered_signal(signal_name);
     }
     tracing::debug!("Shutdown-signal forwarding thread exiting");
+}
+
+/// Escalate the runtime shutdown one step for a delivered signal, ending the
+/// process at once on the step that says so.
+#[cfg(unix)]
+fn escalate_the_runtime_shutdown_one_step_for_a_delivered_signal(signal_name: &str) {
+    if escalate_runtime_shutdown_for_a_delivered_signal(&format!("posix signal {signal_name}"))
+        == RuntimeShutdownEscalation::ExitAtOnce
+    {
+        crate::core::runtime::kill_every_helper_process_group_and_end_the_process_at_once(
+            EXIT_STATUS_OF_A_THIRD_INTERRUPT,
+        );
+    }
 }
 
 /// Whether `signal` is a SIGHUP this process was already set to ignore.
@@ -481,44 +484,31 @@ static MACOS_TERMINATION_HANDLERS_INSTALLED: std::sync::OnceLock<()> = std::sync
 #[cfg(target_os = "macos")]
 fn install_sigterm_handler_macos() -> std::io::Result<()> {
     use signal_hook::consts::signal::SIGTERM;
-    use signal_hook::flag;
     use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
 
-    let term_flag = Arc::new(AtomicBool::new(false));
-    flag::register(SIGTERM, Arc::clone(&term_flag))?;
+    // Counted rather than flagged, so SIGTERMs landing within one poll still
+    // escalate one step each.
+    let sigterm_deliveries_not_yet_escalated = Arc::new(AtomicUsize::new(0));
+    let sigterm_deliveries_counted_by_the_handler =
+        Arc::clone(&sigterm_deliveries_not_yet_escalated);
+    // SAFETY: the handler only increments an atomic, which is async-signal-safe.
+    unsafe {
+        signal_hook::low_level::register(SIGTERM, move || {
+            sigterm_deliveries_counted_by_the_handler.fetch_add(1, Ordering::SeqCst);
+        })
+    }?;
 
     std::thread::spawn(move || {
         loop {
-            if term_flag.load(Ordering::Relaxed) {
-                tracing::info!("SIGTERM received, triggering graceful shutdown");
-                trigger_macos_termination();
-                break;
+            for _ in 0..sigterm_deliveries_not_yet_escalated.swap(0, Ordering::SeqCst) {
+                escalate_the_runtime_shutdown_one_step_for_a_delivered_signal("SIGTERM");
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
     });
 
     Ok(())
-}
-
-#[cfg(target_os = "macos")]
-fn trigger_macos_termination() {
-    use dispatch2::DispatchQueue;
-
-    DispatchQueue::main().exec_async(move || {
-        use objc2::MainThreadMarker;
-        use objc2_app_kit::NSApplication;
-
-        if let Some(mtm) = MainThreadMarker::new() {
-            let app = NSApplication::sharedApplication(mtm);
-            tracing::info!("Signal handler: Calling NSApplication.terminate()");
-            app.terminate(None);
-        } else {
-            tracing::error!(
-                "Signal handler: Not on main thread, cannot call NSApplication.terminate()"
-            );
-        }
-    });
 }
 
 #[cfg(test)]

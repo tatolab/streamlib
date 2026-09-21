@@ -957,8 +957,8 @@ fn handle_create_processor_owned_window(
             ProcessorOwnedWindowRequest {
                 window_registration_request: WindowRegistrationRequestFromOwningProcessor {
                     window_title: request.window_title,
-                    initial_width_in_physical_pixels: request.initial_width_in_physical_pixels,
-                    initial_height_in_physical_pixels: request.initial_height_in_physical_pixels,
+                    initial_width_in_logical_pixels: request.initial_width_in_logical_pixels,
+                    initial_height_in_logical_pixels: request.initial_height_in_logical_pixels,
                 },
                 // Letterbox, and no dial on the request: the compositor's
                 // default is the decided behaviour, and a scaling mode is
@@ -5531,8 +5531,8 @@ mod tests {
                     EscalateRequestCreateProcessorOwnedWindow {
                         request_id: "req-create".into(),
                         window_title: "a window asked for mid-pipeline".into(),
-                        initial_width_in_physical_pixels: 320,
-                        initial_height_in_physical_pixels: 240,
+                        initial_width_in_logical_pixels: 320,
+                        initial_height_in_logical_pixels: 240,
                     },
                 ),
             )

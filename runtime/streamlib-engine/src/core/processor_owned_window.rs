@@ -20,8 +20,6 @@ use std::sync::{Arc, Mutex};
 use std::thread::{JoinHandle, Thread};
 use std::time::{Duration, Instant};
 
-use winit::window::Window;
-
 use crate::core::color::{ColorTraits, HdrStaticMetadata};
 use crate::core::context::{GpuContextFullAccess, GpuContextLimitedAccess, TextureRegistration};
 use crate::core::error::{Error, Result};
@@ -122,6 +120,9 @@ pub struct ProcessorOwnedWindow {
     current_height_in_physical_pixels: u32,
     present_target: VulkanPresentTarget,
     compositor: VulkanPresentCompositor,
+    /// Declared after `present_target` so it drops after it: the target's
+    /// surface was minted from this window, and dropping the registration
+    /// hands the window back to the pump to close.
     registered_window: WindowRegisteredWithEventPump,
     /// Last-applied colorspace-pick input; a change renegotiates the
     /// swapchain.
@@ -134,12 +135,6 @@ pub struct ProcessorOwnedWindow {
     /// The last color description whose recreate failed, so the failure warns
     /// once per description instead of once per frame (each frame retries).
     last_failed_recreate_color_traits: Option<Option<ColorTraits>>,
-    /// Declared after `registered_window` so it drops after it: the present
-    /// target's `VkSurfaceKHR` was minted from this window's raw handle, and
-    /// the registration is otherwise the window's only owner. Holding a clone
-    /// keeps the platform window alive past the registration however the
-    /// fields above are ordered.
-    _window_kept_alive_past_the_present_surface: Arc<Window>,
 }
 
 /// A window the pump has minted, holding the request it was minted from
@@ -185,10 +180,9 @@ impl ProcessorOwnedWindow {
             registered_window,
             request,
         } = registered_window;
-        let window = Arc::clone(registered_window.window_shared_with_event_pump());
-        let (width, height) = registered_window.current_physical_size();
+        let (width, height) = registered_window.physical_size_when_minted();
         let present_target = gpu_context_full_access.create_present_target(
-            window.as_ref(),
+            registered_window.present_surface_source(),
             width,
             height,
             true,
@@ -218,7 +212,6 @@ impl ProcessorOwnedWindow {
             last_applied_color_traits: None,
             last_unresolved_pool_slot_key: None,
             last_failed_recreate_color_traits: None,
-            _window_kept_alive_past_the_present_surface: window,
         })
     }
 

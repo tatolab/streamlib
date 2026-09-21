@@ -2703,19 +2703,19 @@ impl HelperProcessGpuExchangeClient {
         &self,
         python: Python<'_>,
         window_title: &str,
-        initial_width_in_physical_pixels: u32,
-        initial_height_in_physical_pixels: u32,
+        initial_width_in_logical_pixels: u32,
+        initial_height_in_logical_pixels: u32,
     ) -> PyResult<String> {
         let op = PyDict::new(python);
         op.set_item("op", "create_processor_owned_window")?;
         op.set_item("window_title", window_title)?;
         op.set_item(
-            "initial_width_in_physical_pixels",
-            initial_width_in_physical_pixels,
+            "initial_width_in_logical_pixels",
+            initial_width_in_logical_pixels,
         )?;
         op.set_item(
-            "initial_height_in_physical_pixels",
-            initial_height_in_physical_pixels,
+            "initial_height_in_logical_pixels",
+            initial_height_in_logical_pixels,
         )?;
         let response =
             escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;

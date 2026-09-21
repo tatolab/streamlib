@@ -125,6 +125,10 @@ which this delta does not touch.
   pump; on Apple that pump runs on the process's first thread, which is the thread `rt.run()`
   blocks. Window policy, the raw-window-handle seam and the per-processor render thread are
   unchanged. The present target is minted from a `CAMetalLayer` on Apple.
+- ADDED: a window's requested size is in the desktop's logical pixels — physical pixels divided
+  by the display's scale factor — so `DisplayWindow`'s `width` and `height` mean the same apparent
+  size on a 1x and a 2x display, while the swapchain renders at the screen's full density. Owner,
+  2026-09-21, while shipping #2357, on a 640x360 test window showing at 320x180 on a Retina Mac.
 - ADDED: camera permission on Apple is requested, never merely queried, and never awaited on a
   path that would stall the graph. The engine is not the permission subject — the terminal that
   launched it is — so a refusal names the responsible application and the setting to change. The
@@ -149,7 +153,9 @@ which this delta does not touch.
   seconds loses the device unrecoverably.
 - MODIFIED: the shutdown ladder's "Linux-first" clause narrows to what is still true. Process
   groups, `waitid` and CLOEXEC-at-source compile on both platforms; the parent-death signal has no
-  Apple equivalent and stays unbuilt.
+  Apple equivalent and stays unbuilt. Recorded while shipping #2357: on macOS, SIGINT and SIGTERM
+  now escalate through the same ladder, from handlers installed once for the process's life;
+  SIGHUP is not owned there, and no disposition is handed back when a run ends.
 
 ## §Distribution & versioning
 
@@ -267,6 +273,18 @@ which this delta does not touch.
   `build.rs` names neither it nor protobuf.
 - REMOVED: prost-build
   Its sibling, same dead block at `Cargo.toml:299-301`.
+- REMOVED: runtime/streamlib-engine/src/apple/runtime_ext.rs
+  The hand-rolled `NSApplication` loop (`run_macos_event_loop`) with `setup_macos_app`,
+  `ensure_macos_platform_ready` and `StreamlibAppDelegate`. winit's own application delegate
+  launches the app, sets its activation policy and dispatches `Init`/`Resumed`, so a second
+  delegate would have kept the one pump from ever starting. Recorded while shipping #2357.
+- REMOVED: window_shared_with_event_pump
+  The registration's `Arc<Window>` accessor. A registration now hands its window back to the
+  pump to close — winit closes an AppKit window only on the first thread — and the present
+  target is minted from `present_surface_source`. Recorded while shipping #2357.
+- REMOVED: trigger_macos_termination
+  The macOS signal arm's hop to `NSApplication.terminate`. Ctrl-C and SIGTERM feed the same
+  escalation the Linux arm does. Recorded while shipping #2357.
 
 ---
 

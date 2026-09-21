@@ -37,7 +37,7 @@ impl PythonTestPatternSourceBlock {
 #[pyclass(name = "CameraSource", module = "streamlib", frozen)]
 pub(crate) struct PythonCameraSourceBlock;
 
-/// `streamlib.DisplayWindow` — video frames in a vsync'd window (Linux).
+/// `streamlib.DisplayWindow` — video frames in a vsync'd window.
 #[pyclass(name = "DisplayWindow", module = "streamlib", frozen)]
 pub(crate) struct PythonDisplayWindowBlock;
 
@@ -121,13 +121,13 @@ pub(crate) fn native_builtin_class_import_path(
         ));
     }
     if processor_class.is(python.get_type::<PythonDisplayWindowBlock>()) {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         return Ok(Some(
             streamlib_media_builtins::DisplayWindow::Processor::processor_class_import_path(),
         ));
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         return Err(PyRuntimeError::new_err(
-            "DisplayWindow is Linux-only today; this platform is not supported by the \
+            "DisplayWindow runs on Linux and macOS; this platform is not supported by the \
              streamlib wheel yet",
         ));
     }

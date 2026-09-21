@@ -506,10 +506,10 @@ impl PythonRuntimeHandle {
     /// begin finalizing while this is still inside teardown, and the thread is
     /// killed the moment it reattaches.
     ///
-    /// Linux only, matching the platform floor. On macOS the engine's run loop
-    /// is an `NSApplication` loop that terminates the process instead of
-    /// returning, so none of the above holds there — not the return, not the
-    /// teardown, not the handback.
+    /// On macOS the main thread drives the window event pump while this
+    /// blocks, so a window opens only under `run()`. There the SIGINT and
+    /// SIGTERM handlers are installed once for the process's life and never
+    /// handed back, and SIGHUP is not owned.
     ///
     /// [`shutdown`]: PythonRuntimeHandle::shutdown
     fn run(&self, python: Python<'_>) -> PyResult<()> {

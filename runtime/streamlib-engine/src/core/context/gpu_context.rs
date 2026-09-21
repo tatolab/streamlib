@@ -12,7 +12,7 @@ use crate::core::rhi::{
     pool_slot_key_of_surface_id,
 };
 use crate::core::{Error, Result};
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::host_rhi::HostTextureExt;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
@@ -1290,7 +1290,7 @@ impl GpuContext {
     /// declared layout default to `UNDEFINED` (back-compat —
     /// content-discard permitted on the consumer's first transition).
     ///
-    /// Path 3 (cross-process pixel buffer fallback) declares whatever
+    /// Path 3 (pixel buffer fallback) declares whatever
     /// terminal layout the upload reports leaving the host-owned
     /// texture in — `SHADER_READ_ONLY_OPTIMAL` for the sampled-capable
     /// texture that path allocates.
@@ -1298,8 +1298,16 @@ impl GpuContext {
         &self,
         surface_id: &str,
         #[cfg_attr(not(target_os = "linux"), allow(unused_variables))] texture_layout: Option<i32>,
-        #[cfg_attr(not(target_os = "linux"), allow(unused_variables))] width: u32,
-        #[cfg_attr(not(target_os = "linux"), allow(unused_variables))] height: u32,
+        #[cfg_attr(
+            not(any(target_os = "linux", target_os = "macos")),
+            allow(unused_variables)
+        )]
+        width: u32,
+        #[cfg_attr(
+            not(any(target_os = "linux", target_os = "macos")),
+            allow(unused_variables)
+        )]
+        height: u32,
     ) -> Result<TextureRegistration> {
         // A retired published frame id resolves to an error, not to the
         // slot's current pixels — every path below serves per-slot backings,
@@ -1361,27 +1369,26 @@ impl GpuContext {
             }
         }
 
-        // Path 3: cross-process pixel buffer fallback — refresh a private
-        // host-owned texture from the latest buffer contents. The cache is
-        // separate from `texture_cache` because a pool slot serves a new
-        // frame every cycle and a cache hit on stale contents would
-        // silently render the previous one.
-        #[cfg(target_os = "linux")]
+        // Path 3: pixel buffer fallback — refresh a private host-owned
+        // texture from the latest buffer contents. The cache is separate
+        // from `texture_cache` because a pool slot serves a new frame every
+        // cycle and a cache hit on stale contents would silently render the
+        // previous one.
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             // Same-process pool first: a producer that published only a
             // pixel buffer (no texture registration) resolves through the
             // pool's local cache without any socket round-trip — the
             // cross-process store can't serve OPAQUE_FD-backed buffers to a
             // host-side consumer at all.
-            let buffer = self
-                .pixel_buffer_pool_manager
-                .get_from_cache(surface_id)
-                .or_else(|| {
-                    let surface_store = self.surface_store.lock().unwrap();
-                    surface_store
-                        .as_ref()
-                        .and_then(|store| store.lookup_buffer(surface_id).ok())
-                });
+            let buffer = self.pixel_buffer_pool_manager.get_from_cache(surface_id);
+            #[cfg(target_os = "linux")]
+            let buffer = buffer.or_else(|| {
+                let surface_store = self.surface_store.lock().unwrap();
+                surface_store
+                    .as_ref()
+                    .and_then(|store| store.lookup_buffer(surface_id).ok())
+            });
             if let Some(buffer) = buffer {
                 return self.refresh_pixel_buffer_texture(surface_id, &buffer, width, height);
             }
@@ -1437,7 +1444,7 @@ impl GpuContext {
     /// `surface_id`; contents are re-uploaded every time so rotating-pool
     /// producers see fresh frames. The returned registration declares the
     /// terminal layout the upload reports leaving the texture in.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn refresh_pixel_buffer_texture(
         &self,
         surface_id: &str,
@@ -1964,24 +1971,24 @@ impl GpuContext {
     }
 
     /// Build a swapchain-backed [`PresentTarget`](crate::vulkan::rhi::PresentTarget)
-    /// from a native `window` handle, at the requested initial extent +
+    /// on a window's `surface_source`, at the requested initial extent +
     /// vsync preference. `color_traits` drives the `VkColorSpaceKHR`
-    /// priority walk; `None` keeps the legacy SDR pick. The window handle
-    /// must outlive the returned target (the host owns the `VkSurfaceKHR`
+    /// priority walk; `None` keeps the legacy SDR pick. The window must
+    /// outlive the returned target (the host owns the `VkSurfaceKHR`
     /// from creation, never the window). Display processors reach this
     /// through the SDK `create_present_target` wrapper, never
     /// `VulkanPresentTarget::new` on a raw device.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn create_present_target(
         &self,
-        window: &(impl raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle),
+        surface_source: crate::vulkan::rhi::PresentSurfaceSource<'_>,
         width: u32,
         height: u32,
         vsync: bool,
         color_traits: Option<&crate::core::color::ColorTraits>,
     ) -> Result<crate::vulkan::rhi::PresentTarget> {
         let target =
-            self.create_vulkan_present_target(window, width, height, vsync, color_traits)?;
+            self.create_vulkan_present_target(surface_source, width, height, vsync, color_traits)?;
         Ok(crate::vulkan::rhi::PresentTarget::from_target(target))
     }
 
@@ -1992,7 +1999,7 @@ impl GpuContext {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn create_vulkan_present_target(
         &self,
-        window: &(impl raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle),
+        surface_source: crate::vulkan::rhi::PresentSurfaceSource<'_>,
         width: u32,
         height: u32,
         vsync: bool,
@@ -2007,7 +2014,7 @@ impl GpuContext {
         );
         crate::vulkan::rhi::VulkanPresentTarget::new(
             &self.device.inner,
-            window,
+            surface_source,
             width,
             height,
             vsync,
@@ -3921,18 +3928,23 @@ impl GpuContextFullAccess {
     }
 
     /// Build a swapchain-backed [`crate::vulkan::rhi::VulkanPresentTarget`]
-    /// from a native window handle.
+    /// on a window's surface source.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn create_present_target(
         &self,
-        window: &(impl raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle),
+        surface_source: crate::vulkan::rhi::PresentSurfaceSource<'_>,
         width: u32,
         height: u32,
         vsync: bool,
         color_traits: Option<&crate::core::color::ColorTraits>,
     ) -> Result<crate::vulkan::rhi::VulkanPresentTarget> {
-        self.host_inner()
-            .create_vulkan_present_target(window, width, height, vsync, color_traits)
+        self.host_inner().create_vulkan_present_target(
+            surface_source,
+            width,
+            height,
+            vsync,
+            color_traits,
+        )
     }
 
     /// Build a [`crate::vulkan::rhi::VulkanPresentCompositor`] for
@@ -4823,7 +4835,7 @@ mod tests {
     /// Path 3 makes this test fail with "No texture or pixel buffer found".
     /// GPU-gated: skips when no device is present.
     #[test]
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn same_process_pixel_buffer_resolves_without_the_surface_store() {
         let gpu = match GpuContext::init_for_platform() {
             Ok(g) => g,

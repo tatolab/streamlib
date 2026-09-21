@@ -829,6 +829,35 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "--no-run",
             ],
         ),
+        // The display tier's window tests, compiled only: they need a display
+        // server and a GPU, and each shares a test module with its macOS
+        // counterpart, so a change to that module reaches Linux here.
+        (
+            "the window integration binaries compile",
+            "cargo",
+            &[
+                "test",
+                "--locked",
+                "-p",
+                "streamlib-engine",
+                "--test",
+                "processor_owned_window_shows_named_surfaces",
+                "--no-run",
+            ],
+        ),
+        (
+            "the two-window integration binary compiles",
+            "cargo",
+            &[
+                "test",
+                "--locked",
+                "-p",
+                "streamlib-media-builtins",
+                "--test",
+                "two_display_windows_live",
+                "--no-run",
+            ],
+        ),
         // The engine-owned codec round-trip rig. Examples are not a default
         // cargo target, so no other entry here builds it and it would rot
         // between rig runs unnoticed.

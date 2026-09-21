@@ -4,8 +4,10 @@
 //! Swapchain + window-surface orchestrator for the host RHI.
 
 use std::ffi::c_void;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+#[cfg(target_os = "linux")]
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
@@ -32,6 +34,22 @@ use super::vulkan_sync::HostVulkanTimelineSemaphore;
 /// count. See [`docs/learnings/vulkan-frames-in-flight.md`] for the
 /// per-image-vs-per-frame distinction.
 pub const MAX_FRAMES_IN_FLIGHT: usize = 2;
+
+/// What a present target's `VkSurfaceKHR` is minted from.
+pub enum PresentSurfaceSource<'window> {
+    /// A native window, read through the raw-window-handle seam.
+    #[cfg(target_os = "linux")]
+    NativeWindow {
+        window_handle: &'window dyn HasWindowHandle,
+        display_handle: &'window dyn HasDisplayHandle,
+    },
+    /// The Metal layer the window event pump added as a sublayer of the
+    /// window's content view on the process's first thread.
+    #[cfg(target_os = "macos")]
+    MetalLayerAddedAsSublayerOfWindowContentView(
+        &'window crate::apple::metal_layer_added_as_sublayer_of_window_content_view::MetalLayerAddedAsSublayerOfWindowContentView,
+    ),
+}
 
 /// Vulkan presentation orchestrator: owns a `VkSurfaceKHR` +
 /// `VkSwapchainKHR` bound to a windowing surface, per-swapchain-image
@@ -193,35 +211,30 @@ struct PresentFrameInner {
 }
 
 impl VulkanPresentTarget {
-    /// Build a present target bound to `window` at the requested initial
+    /// Build a present target on `surface_source` at the requested initial
     /// extent + vsync preference. `color_traits` drives the
     /// `VkColorSpaceKHR` priority walk; `None` keeps the legacy SDR
     /// pick (`B8G8R8A8_UNORM` + `SRGB_NONLINEAR`). Consumers translate
     /// their schema `ColorInfo` via
     /// [`crate::core::color::color_traits_from_color_info`] at the call
-    /// site. The window handle must outlive the present target;
+    /// site. The window behind the source must outlive the present target;
     /// dropping the target destroys the surface + swapchain +
     /// per-frame resources.
     #[tracing::instrument(
         level = "trace",
-        skip(device, window, color_traits),
+        skip(device, surface_source, color_traits),
         fields(width, height, vsync)
     )]
     pub fn new(
         device: &Arc<HostVulkanDevice>,
-        window: &(impl HasWindowHandle + HasDisplayHandle),
+        surface_source: PresentSurfaceSource<'_>,
         width: u32,
         height: u32,
         vsync: bool,
         color_traits: Option<&ColorTraits>,
     ) -> Result<Self> {
         let instance = device.instance();
-        let surface = unsafe { vulkanalia::window::create_surface(instance, window, window) }
-            .map_err(|e| {
-                Error::DisplaySurfaceUnavailable(format!(
-                    "VulkanPresentTarget: create_surface failed: {e}"
-                ))
-            })?;
+        let surface = create_surface_for_present_target(instance, surface_source)?;
 
         let physical_device = device.physical_device();
         let queue_family_index = device.queue_family_index();
@@ -961,6 +974,65 @@ impl std::fmt::Debug for PresentTarget {
     }
 }
 
+fn create_surface_for_present_target(
+    instance: &vulkanalia::Instance,
+    surface_source: PresentSurfaceSource<'_>,
+) -> Result<vk::SurfaceKHR> {
+    let surface = match surface_source {
+        #[cfg(target_os = "linux")]
+        PresentSurfaceSource::NativeWindow {
+            window_handle,
+            display_handle,
+        } => unsafe { vulkanalia::window::create_surface(instance, display_handle, window_handle) },
+        #[cfg(target_os = "macos")]
+        PresentSurfaceSource::MetalLayerAddedAsSublayerOfWindowContentView(metal_layer) => {
+            use vulkanalia::vk::ExtMetalSurfaceExtensionInstanceCommands as _;
+
+            let metal_surface_create_info = vk::MetalSurfaceCreateInfoEXT::builder()
+                .layer(metal_layer.metal_layer_pointer())
+                .build();
+            // SAFETY: the layer is live for this call — the source borrows it
+            // from the registration that holds it — and MoltenVK's surface
+            // retains the layer for its own life.
+            unsafe { instance.create_metal_surface_ext(&metal_surface_create_info, None) }
+        }
+    };
+    surface.map_err(|e| {
+        Error::DisplaySurfaceUnavailable(format!("VulkanPresentTarget: create_surface failed: {e}"))
+    })
+}
+
+/// The present mode a swapchain takes for a vsync preference, and whether a
+/// vsync-off request had to take FIFO because the surface advertises no
+/// `MAILBOX` — as MoltenVK's does not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PresentModePick {
+    present_mode: vk::PresentModeKHR,
+    vsync_off_request_took_fifo: bool,
+}
+
+fn pick_present_mode(
+    vsync: bool,
+    advertised_present_modes: &[vk::PresentModeKHR],
+) -> PresentModePick {
+    if vsync {
+        PresentModePick {
+            present_mode: vk::PresentModeKHR::FIFO,
+            vsync_off_request_took_fifo: false,
+        }
+    } else if advertised_present_modes.contains(&vk::PresentModeKHR::MAILBOX) {
+        PresentModePick {
+            present_mode: vk::PresentModeKHR::MAILBOX,
+            vsync_off_request_took_fifo: false,
+        }
+    } else {
+        PresentModePick {
+            present_mode: vk::PresentModeKHR::FIFO,
+            vsync_off_request_took_fifo: true,
+        }
+    }
+}
+
 /// Engine-internal: surface + dimensions + ColorTraits hint → swapchain
 /// handle chain. Returns `(swapchain, images, image_views, format,
 /// extent, color_pick)`. Colorspace negotiation is delegated to
@@ -1040,13 +1112,21 @@ fn create_swapchain(
         color_traits,
     );
 
-    let present_mode = if vsync {
-        vk::PresentModeKHR::FIFO
-    } else if present_modes.contains(&vk::PresentModeKHR::MAILBOX) {
-        vk::PresentModeKHR::MAILBOX
-    } else {
-        vk::PresentModeKHR::FIFO
-    };
+    let present_mode_pick = pick_present_mode(vsync, &present_modes);
+    /// Whether a vsync-off request has already been told it got FIFO, so a
+    /// process says so once rather than once per window or recreate.
+    static VSYNC_OFF_REQUEST_TOOK_FIFO_WAS_REPORTED: AtomicBool = AtomicBool::new(false);
+    if present_mode_pick.vsync_off_request_took_fifo
+        && !VSYNC_OFF_REQUEST_TOOK_FIFO_WAS_REPORTED.swap(true, Ordering::Relaxed)
+    {
+        tracing::warn!(
+            advertised_present_modes = ?present_modes,
+            "VulkanPresentTarget: vsync off was requested, but the display advertises no MAILBOX \
+             present mode, so the swapchain presents with FIFO — frames are paced to the \
+             display's refresh"
+        );
+    }
+    let present_mode = present_mode_pick.present_mode;
 
     let extent = if capabilities.current_extent.width != u32::MAX {
         capabilities.current_extent
@@ -1348,6 +1428,48 @@ mod tests {
         assert_eq!(filtered_pick.color_space, vk::ColorSpaceKHR::SRGB_NONLINEAR);
         assert!(!filtered_pick.is_hdr);
         assert!(vk_format_to_texture_format(filtered_pick.format).is_some());
+    }
+
+    #[test]
+    fn a_vsync_off_request_takes_fifo_where_the_driver_advertises_no_mailbox() {
+        let moltenvk_advertised_present_modes =
+            [vk::PresentModeKHR::FIFO, vk::PresentModeKHR::IMMEDIATE];
+        assert_eq!(
+            pick_present_mode(false, &moltenvk_advertised_present_modes),
+            PresentModePick {
+                present_mode: vk::PresentModeKHR::FIFO,
+                vsync_off_request_took_fifo: true,
+            },
+            "IMMEDIATE tears, so it is never the fallback; the fall to FIFO is reported"
+        );
+    }
+
+    #[test]
+    fn a_vsync_off_request_takes_mailbox_where_the_driver_advertises_it() {
+        let advertised_present_modes = [
+            vk::PresentModeKHR::FIFO,
+            vk::PresentModeKHR::MAILBOX,
+            vk::PresentModeKHR::IMMEDIATE,
+        ];
+        assert_eq!(
+            pick_present_mode(false, &advertised_present_modes),
+            PresentModePick {
+                present_mode: vk::PresentModeKHR::MAILBOX,
+                vsync_off_request_took_fifo: false,
+            }
+        );
+    }
+
+    #[test]
+    fn a_vsync_request_takes_fifo_and_reports_nothing() {
+        assert_eq!(
+            pick_present_mode(true, &[vk::PresentModeKHR::FIFO]),
+            PresentModePick {
+                present_mode: vk::PresentModeKHR::FIFO,
+                vsync_off_request_took_fifo: false,
+            },
+            "FIFO is what vsync asked for, so there is nothing to say"
+        );
     }
 
     /// `MAX_FRAMES_IN_FLIGHT = 2` is load-bearing across the engine

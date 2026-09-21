@@ -49,5 +49,24 @@ serde_json = { workspace = true }
 rmp-serde = { workspace = true }
 rmpv = { workspace = true }
 
+# The window-server assertions of the macOS display test.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc2 = { workspace = true }
+objc2-app-kit = { workspace = true }
+objc2-core-foundation = { workspace = true }
+objc2-core-graphics = { workspace = true }
+dispatch2 = "0.3"
+libc = { workspace = true }
+
+# Two `DisplayWindow`s asserted against the macOS window server. `harness =
+# false` because `App::run` must drive the window event pump on the process's
+# first thread, where libtest never runs a test; display tier, so it builds only
+# under `hardware-tests`. Its `main` is empty off Apple.
+[[test]]
+name = "two_display_windows_on_the_macos_window_server"
+path = "tests/two_display_windows_on_the_macos_window_server.rs"
+harness = false
+required-features = ["hardware-tests"]
+
 [lints]
 workspace = true

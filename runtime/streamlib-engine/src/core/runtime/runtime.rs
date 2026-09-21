@@ -681,8 +681,8 @@ impl Runner {
         ));
         *self.runtime_context.lock() = Some(Arc::clone(&runtime_ctx));
 
-        // Platform-specific setup (macOS NSApplication, Windows Win32, etc.)
-        // RuntimeContext handles all platform-specific details internally.
+        // Platform-specific setup (the macOS window event pump, Windows Win32,
+        // etc.); RuntimeContext handles all platform-specific details internally.
         runtime_ctx.ensure_platform_ready()?;
 
         // Set graph state to Running
@@ -756,6 +756,9 @@ impl Runner {
                 tracing::error!("[stop] Removing the processors failed: {removal_failure}");
             }
             tracing::debug!("[stop] Processor teardown complete");
+
+            #[cfg(target_os = "macos")]
+            crate::core::window_event_pump::release_the_windows_handed_back_while_the_event_pump_was_not_driven();
 
             crate::core::runtime::note_what_the_engine_teardown_is_waiting_on("the audio clock");
             tracing::debug!("[stop] Stopping audio clock");
@@ -1094,9 +1097,6 @@ impl Runner {
     /// nothing down — for an embedding host that holds the shutdown signals
     /// through its own teardown and the engine's drop, so a second or third
     /// interrupt still escalates wherever that teardown is.
-    ///
-    /// On macOS the run loop is an `NSApplication` loop that stops the runtime
-    /// and terminates the process instead of returning.
     pub fn start_and_block_until_shutdown_is_requested(
         self: &Arc<Self>,
         _shutdown_signals_held_by_the_caller: &ScopedShutdownSignalOwnership,
@@ -1186,57 +1186,46 @@ impl Runner {
             }));
         PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&shutdown_listener))?;
 
-        // On macOS, run the NSApplication event loop (required for GUI)
+        let mut observe_the_shutdown_request_then_the_callback = || {
+            if runtime_shutdown_observed(&shutdown_flag) {
+                ControlFlow::Break(())
+            } else {
+                callback(self)
+            }
+        };
+
+        // On Apple the window event pump lives on the process's first thread,
+        // so a wait there drives it; anywhere else the wait polls.
         #[cfg(target_os = "macos")]
         {
-            let runtime = Arc::clone(self);
-            let runtime_for_callback = Arc::clone(self);
-            let shutdown_flag_for_callback = Arc::clone(&shutdown_flag);
-            crate::apple::runtime_ext::run_macos_event_loop(
-                move || {
-                    // Called by applicationWillTerminate before app exits
-                    if let Err(e) = runtime.stop() {
+            use crate::core::window_event_pump::{
+                WindowEventPumpDriveOnTheFirstThreadOutcome,
+                drive_the_window_event_pump_on_the_first_thread_until,
+            };
+
+            let drive_outcome = drive_the_window_event_pump_on_the_first_thread_until(
+                crate::core::runtime::RUNTIME_SHUTDOWN_REQUEST_OBSERVATION_POLL_INTERVAL,
+                &mut observe_the_shutdown_request_then_the_callback,
+                || {
+                    if let Err(e) = self.stop() {
                         tracing::error!("Failed to stop runtime during shutdown: {}", e);
                     }
                 },
-                move || {
-                    // The NSApplication loop has no shutdown-flag hook of its
-                    // own — `ControlFlow::Break` is its only exit — so the
-                    // shutdown observation rides in on the periodic callback,
-                    // which routes through `app.terminate` →
-                    // `applicationWillTerminate` → the stop callback above.
-                    let control_flow = if runtime_shutdown_observed(&shutdown_flag_for_callback) {
-                        ControlFlow::Break(())
-                    } else {
-                        callback(&runtime_for_callback)
-                    };
-                    if control_flow.is_break() {
-                        crate::core::runtime::take_runtime_shutdown_escalation();
-                    }
-                    control_flow
-                },
             );
-            // Note: run_macos_event_loop never returns - app terminates after stop callback
-            Ok(())
-        }
-
-        // Non-macOS: poll loop
-        #[cfg(not(target_os = "macos"))]
-        {
-            while !runtime_shutdown_observed(&shutdown_flag) {
-                // Call user callback
-                if let ControlFlow::Break(()) = callback(self) {
-                    break;
-                }
-
-                // Small sleep to avoid busy-waiting
-                std::thread::sleep(
-                    crate::core::runtime::RUNTIME_SHUTDOWN_REQUEST_OBSERVATION_POLL_INTERVAL,
-                );
+            if drive_outcome
+                == WindowEventPumpDriveOnTheFirstThreadOutcome::DrivenUntilTheObservationBroke
+            {
+                return Ok(());
             }
-
-            Ok(())
         }
+
+        while observe_the_shutdown_request_then_the_callback().is_continue() {
+            std::thread::sleep(
+                crate::core::runtime::RUNTIME_SHUTDOWN_REQUEST_OBSERVATION_POLL_INTERVAL,
+            );
+        }
+
+        Ok(())
     }
 
     pub fn status(&self) -> RuntimeStatus {
