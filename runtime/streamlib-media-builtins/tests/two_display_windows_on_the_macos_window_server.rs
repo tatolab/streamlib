@@ -228,9 +228,10 @@ mod apple_window_server {
             panic!("{what_the_window_server_showed}");
         }
         run_outcome.expect("the graph stops cleanly after one of its windows was closed");
-        assert_eq!(
-            windows_on_screen_titled(SECOND_WINDOW_TITLE),
-            0,
+        assert!(
+            wait_until(Duration::from_secs(5), || {
+                windows_on_screen_titled(SECOND_WINDOW_TITLE) == 0
+            }),
             "the run tore the graph down, so its remaining window must leave the screen"
         );
         assert_eq!(

@@ -1,6 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+pub mod appkit_content_view_of_winit_window;
 pub mod audio_clock;
 pub mod corevideo_ffi;
 pub mod iosurface;

@@ -513,6 +513,9 @@ pub fn release_the_windows_handed_back_while_the_event_pump_was_not_driven() {
             || std::ops::ControlFlow::Break(()),
             || {},
         );
+        if std::env::var("SCRATCH_2357_FLUSH").is_ok() {
+            objc2_quartz_core::CATransaction::flush();
+        }
     }
 }
 
@@ -756,6 +759,11 @@ impl WindowEventPumpApplicationHandler {
         &self,
         window: Window,
     ) -> Result<WindowMintedByTheEventPump> {
+        #[cfg(target_os = "macos")]
+        crate::apple::appkit_content_view_of_winit_window::close_without_animating(
+            &window,
+            self.first_thread,
+        )?;
         Ok(WindowMintedByTheEventPump {
             #[cfg(target_os = "macos")]
             metal_layer_added_as_sublayer_of_window_content_view:

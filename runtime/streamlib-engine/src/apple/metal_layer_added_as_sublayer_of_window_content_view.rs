@@ -13,11 +13,10 @@ use std::ffi::c_void;
 
 use objc2::MainThreadMarker;
 use objc2::rc::Retained;
-use objc2_app_kit::NSView;
 use objc2_quartz_core::{CAAutoresizingMask, CAMetalLayer};
-use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::Window;
 
+use super::appkit_content_view_of_winit_window::appkit_content_view_of;
 use crate::core::{Error, Result};
 
 /// A `CAMetalLayer` sized to a window's content view, for its present target.
@@ -37,24 +36,9 @@ impl MetalLayerAddedAsSublayerOfWindowContentView {
     /// size and matching its backing scale.
     pub fn add_as_a_sublayer_of_the_content_view_of(
         window: &Window,
-        _only_on_the_first_thread: MainThreadMarker,
+        first_thread: MainThreadMarker,
     ) -> Result<Self> {
-        let raw_window_handle = window
-            .window_handle()
-            .map_err(|e| {
-                Error::DisplaySurfaceUnavailable(format!(
-                    "the window's AppKit handle is unavailable: {e}"
-                ))
-            })?
-            .as_raw();
-        let RawWindowHandle::AppKit(appkit_window_handle) = raw_window_handle else {
-            return Err(Error::DisplaySurfaceUnavailable(format!(
-                "expected an AppKit window handle, got {raw_window_handle:?}"
-            )));
-        };
-        // SAFETY: winit's handle names the live content view of `window`, which
-        // the caller keeps alive for this call, and this is the first thread.
-        let content_view = unsafe { appkit_window_handle.ns_view.cast::<NSView>().as_ref() };
+        let content_view = appkit_content_view_of(window, first_thread)?;
 
         // winit makes its content view layer-backed, so AppKit owns the root
         // layer and resizes it with the view; the Metal layer rides it as a
