@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.10](https://github.com/tatolab/streamlib/compare/v0.26.9...v0.26.10) (2026-09-21)
+
+
+### Features
+
+* **engine:** AVFoundation capture behind the video device seam ([#2395](https://github.com/tatolab/streamlib/issues/2395)) ([07706d9](https://github.com/tatolab/streamlib/commit/07706d9317099856e26f34dc5eeb74d8c8d5f928))
+
 ## [0.26.9](https://github.com/tatolab/streamlib/compare/v0.26.8...v0.26.9) (2026-09-21)
 
 
