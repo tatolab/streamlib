@@ -280,6 +280,16 @@ path = "tests/bin/cross_runtime_link_request_peer.rs"
 [[test]]
 name = "cross_runtime_link_requests_two_processes"
 path = "tests/cross_runtime_link_requests_two_processes.rs"
+# A processor-owned window presented while the process's first thread drives
+# the window event pump. `harness = false` because AppKit lets only the first
+# thread drive the loop and libtest never runs a test there; display tier, so it
+# builds only under `hardware-tests`. Its `main` is empty off Apple.
+[[test]]
+name = "processor_owned_window_on_the_first_thread"
+path = "tests/processor_owned_window_on_the_first_thread.rs"
+harness = false
+required-features = ["hardware-tests"]
+
 # Strace-backed no-syscalls test child. Built under `cargo test` via
 # the path dep; not needed for normal builds.
 

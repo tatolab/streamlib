@@ -1,0 +1,245 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+//! One source fanned out to two `DisplayWindow` instances in one process on
+//! Apple, asserted against the window server — the macOS counterpart of
+//! `two_display_windows_live`.
+//!
+//! `harness = false`: the graph runs under `App::run`, which drives the
+//! window event pump on the process's first thread, and libtest never runs a
+//! test there. Display tier — it needs the window server and a GPU, so Cargo
+//! builds it only under `hardware-tests`. `STREAMLIB_TWO_WINDOW_HARNESS_SECONDS`
+//! holds both windows up long enough to photograph.
+//!
+//! Beyond two live windows it pins what a close means: closing one window
+//! leaves the other showing and the graph running, and the rest close when the
+//! run returns.
+
+#[cfg(not(target_os = "macos"))]
+fn main() {}
+
+#[cfg(target_os = "macos")]
+fn main() {
+    apple_window_server::run();
+}
+
+#[cfg(target_os = "macos")]
+mod apple_window_server {
+    use std::sync::Arc;
+    use std::time::{Duration, Instant};
+
+    use objc2::MainThreadMarker;
+    use objc2_app_kit::NSApplication;
+    use objc2_core_foundation::{
+        CFArray, CFBoolean, CFDictionary, CFNumber, CFRetained, CFString, CFType,
+    };
+    use objc2_core_graphics::{
+        CGSessionCopyCurrentDictionary, CGWindowListCopyWindowInfo, CGWindowListOption,
+        kCGNullWindowID, kCGWindowName, kCGWindowOwnerPID,
+    };
+    use serde_json::json;
+    use streamlib::sdk::App;
+    use streamlib::sdk::runtime::{Runner, RuntimeStatus};
+    use streamlib::sdk::runtime_control::request_runtime_shutdown;
+    use streamlib_media_builtins::{
+        DisplayWindow, TestPatternSource, register_media_builtin_processor_types,
+    };
+
+    const FIRST_WINDOW_TITLE: &str = "streamlib two-window harness — first";
+    const SECOND_WINDOW_TITLE: &str = "streamlib two-window harness — second";
+
+    /// Cold swapchain creation is the slow step, and it varies.
+    const WINDOWS_MAPPED_DEADLINE: Duration = Duration::from_secs(20);
+
+    /// How long the surviving window is watched after its neighbour closes.
+    const SURVIVOR_OBSERVATION: Duration = Duration::from_secs(1);
+
+    fn harness_duration() -> Duration {
+        let seconds = std::env::var("STREAMLIB_TWO_WINDOW_HARNESS_SECONDS")
+            .ok()
+            .and_then(|raw| raw.parse::<u64>().ok())
+            .unwrap_or(6);
+        Duration::from_secs(seconds)
+    }
+
+    /// How many windows of this process the window server shows on screen
+    /// under `window_title`.
+    fn windows_on_screen_titled(window_title: &str) -> usize {
+        let Some(on_screen_windows) = CGWindowListCopyWindowInfo(
+            CGWindowListOption::OptionOnScreenOnly | CGWindowListOption::ExcludeDesktopElements,
+            kCGNullWindowID,
+        ) else {
+            return 0;
+        };
+        // SAFETY: the window server documents the list as an array of
+        // CFDictionaries keyed by CFString.
+        let on_screen_windows: CFRetained<CFArray<CFDictionary<CFString, CFType>>> =
+            unsafe { CFRetained::cast_unchecked(on_screen_windows) };
+        let this_process = i64::from(std::process::id());
+        // SAFETY: reading two constant CFString keys the framework exports.
+        let (owner_pid_key, window_name_key) = unsafe { (kCGWindowOwnerPID, kCGWindowName) };
+        on_screen_windows
+            .iter()
+            .filter(|window| {
+                let owner_pid = window
+                    .get(owner_pid_key)
+                    .and_then(|value| value.downcast::<CFNumber>().ok())
+                    .and_then(|number| number.as_i64());
+                let window_name = window
+                    .get(window_name_key)
+                    .and_then(|value| value.downcast::<CFString>().ok())
+                    .map(|name| name.to_string());
+                owner_pid == Some(this_process) && window_name.as_deref() == Some(window_title)
+            })
+            .count()
+    }
+
+    /// Whether the login session's screen is locked. The lock screen covers
+    /// every window, so the window server's on-screen list stops describing
+    /// what a user sees and this test cannot run.
+    fn the_login_sessions_screen_is_locked() -> bool {
+        let Some(login_session) = CGSessionCopyCurrentDictionary() else {
+            return false;
+        };
+        // SAFETY: the session dictionary is keyed by CFString.
+        let login_session: CFRetained<CFDictionary<CFString, CFType>> =
+            unsafe { CFRetained::cast_unchecked(login_session) };
+        login_session
+            .get(&CFString::from_static_str("CGSSessionScreenIsLocked"))
+            .and_then(|value| value.downcast::<CFBoolean>().ok())
+            .is_some_and(|screen_is_locked| screen_is_locked.as_bool())
+    }
+
+    fn wait_until(deadline: Duration, condition: impl Fn() -> bool) -> bool {
+        let give_up_at = Instant::now() + deadline;
+        while Instant::now() < give_up_at {
+            if condition() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        condition()
+    }
+
+    /// Close the window titled `window_title` as its close button would, on
+    /// the first thread the pump is running on.
+    fn close_the_window_as_the_user_would(window_title: &'static str) {
+        dispatch2::DispatchQueue::main().exec_async(move || {
+            let Some(first_thread) = MainThreadMarker::new() else {
+                return;
+            };
+            for window in NSApplication::sharedApplication(first_thread).windows() {
+                if window.title().to_string() == window_title {
+                    window.performClose(None);
+                }
+            }
+        });
+    }
+
+    /// What the watcher saw, checked on the first thread once the run returns.
+    fn watch_the_window_server_while_the_graph_runs(runner: &Runner) -> Result<(), String> {
+        if !wait_until(WINDOWS_MAPPED_DEADLINE, || {
+            windows_on_screen_titled(FIRST_WINDOW_TITLE) > 0
+                && windows_on_screen_titled(SECOND_WINDOW_TITLE) > 0
+        }) {
+            return Err(format!(
+                "both displays must own a live window at the same time; the window server \
+                 showed {} titled '{FIRST_WINDOW_TITLE}' and {} titled '{SECOND_WINDOW_TITLE}'",
+                windows_on_screen_titled(FIRST_WINDOW_TITLE),
+                windows_on_screen_titled(SECOND_WINDOW_TITLE),
+            ));
+        }
+        let (first_seen, second_seen) = (
+            windows_on_screen_titled(FIRST_WINDOW_TITLE),
+            windows_on_screen_titled(SECOND_WINDOW_TITLE),
+        );
+        if (first_seen, second_seen) != (1, 1) {
+            return Err(format!(
+                "one window per display, got {first_seen} and {second_seen}"
+            ));
+        }
+
+        // Hold the graph up so a capture can be taken against live windows.
+        std::thread::sleep(harness_duration());
+
+        close_the_window_as_the_user_would(FIRST_WINDOW_TITLE);
+        if !wait_until(Duration::from_secs(10), || {
+            windows_on_screen_titled(FIRST_WINDOW_TITLE) == 0
+        }) {
+            return Err("closing the first window never took it off the screen".into());
+        }
+        std::thread::sleep(SURVIVOR_OBSERVATION);
+        if windows_on_screen_titled(SECOND_WINDOW_TITLE) != 1 {
+            return Err("closing one window took its neighbour down with it".into());
+        }
+        if runner.status() != RuntimeStatus::Started {
+            return Err(format!(
+                "closing one window must leave the graph running, but the runtime is {:?}",
+                runner.status()
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn run() {
+        assert!(
+            !the_login_sessions_screen_is_locked(),
+            "cannot run: the screen is locked, so the window server cannot say what is on \
+             screen — unlock the session and rerun"
+        );
+        register_media_builtin_processor_types();
+
+        let app = App::new().expect("runtime");
+        let pattern_source = app
+            .add(
+                TestPatternSource::Processor::processor_class_import_path(),
+                json!({ "width": 1280, "height": 720 }),
+                Some("pattern-source"),
+            )
+            .expect("the test-pattern source");
+        let first_display = app
+            .add(
+                DisplayWindow::Processor::processor_class_import_path(),
+                json!({ "title": FIRST_WINDOW_TITLE, "width": 640, "height": 360 }),
+                Some("first-display"),
+            )
+            .expect("the first display");
+        let second_display = app
+            .add(
+                DisplayWindow::Processor::processor_class_import_path(),
+                json!({ "title": SECOND_WINDOW_TITLE, "width": 640, "height": 360 }),
+                Some("second-display"),
+            )
+            .expect("the second display");
+        app.connect((&pattern_source, "video"), (&first_display, "video"))
+            .expect("source to the first display");
+        app.connect((&pattern_source, "video"), (&second_display, "video"))
+            .expect("source to the second display");
+
+        let runner = Arc::clone(app.runner());
+        let watcher = std::thread::Builder::new()
+            .name("window-server-watcher".to_string())
+            .spawn(move || {
+                let watched = watch_the_window_server_while_the_graph_runs(&runner);
+                request_runtime_shutdown("the window-server watcher is done")
+                    .expect("request the shutdown that ends the run");
+                watched
+            })
+            .expect("spawn the watcher");
+
+        let run_outcome = app.run();
+
+        let watched = watcher
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+        if let Err(what_the_window_server_showed) = watched {
+            panic!("{what_the_window_server_showed}");
+        }
+        run_outcome.expect("the graph stops cleanly after one of its windows was closed");
+        assert_eq!(
+            windows_on_screen_titled(SECOND_WINDOW_TITLE),
+            0,
+            "the run tore the graph down, so its remaining window must leave the screen"
+        );
+    }
+}
