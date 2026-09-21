@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.8](https://github.com/tatolab/streamlib/compare/v0.26.7...v0.26.8) (2026-09-21)
+
+
+### Bug Fixes
+
+* **engine:** remove a leftover close-flush experiment from the window pump ([#2391](https://github.com/tatolab/streamlib/issues/2391)) ([80b897a](https://github.com/tatolab/streamlib/commit/80b897a0ee5c944277a3af728cc7b2263676d7bd))
+
 ## [0.26.7](https://github.com/tatolab/streamlib/compare/v0.26.6...v0.26.7) (2026-09-21)
 
 
