@@ -214,9 +214,20 @@ fn platform_video_device_backend_arms() -> Vec<VideoDeviceBackendArm> {
     })]
 }
 
-/// No capture arm serves this platform yet; the walk falls through to the
+/// The chain's real arms: AVFoundation, else — once it has declined — the
+/// refusing backend the walk falls through to.
+#[cfg(target_os = "macos")]
+fn platform_video_device_backend_arms() -> Vec<VideoDeviceBackendArm> {
+    use crate::apple::avfoundation_video_device_backend::AvFoundationVideoDeviceBackend;
+
+    vec![VideoDeviceBackendArm::named("avfoundation", || {
+        Ok(Arc::new(AvFoundationVideoDeviceBackend) as SharedVideoDeviceBackend)
+    })]
+}
+
+/// No capture arm serves this platform; the walk falls through to the
 /// refusing backend.
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn platform_video_device_backend_arms() -> Vec<VideoDeviceBackendArm> {
     Vec::new()
 }
@@ -273,7 +284,7 @@ mod tests {
     fn the_video_chain_always_lands_on_an_arm_whether_or_not_the_platform_captures() {
         let backend = probe_video_device_backend();
         assert!(
-            ["v4l2", "refusing-null"].contains(&backend.backend_name()),
+            ["v4l2", "avfoundation", "refusing-null"].contains(&backend.backend_name()),
             "the chain resolved to an arm nothing declares: {}",
             backend.backend_name()
         );
@@ -289,5 +300,15 @@ mod tests {
             .map(|arm| arm.backend_name)
             .collect();
         assert_eq!(arm_names, ["v4l2"]);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_macos_video_chain_offers_avfoundation_before_falling_through_to_the_refusing_backend() {
+        let arm_names: Vec<&str> = platform_video_device_backend_arms()
+            .iter()
+            .map(|arm| arm.backend_name)
+            .collect();
+        assert_eq!(arm_names, ["avfoundation"]);
     }
 }

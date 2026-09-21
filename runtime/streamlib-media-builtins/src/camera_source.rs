@@ -4,9 +4,9 @@
 //! Built-in camera source: frames from the engine's video device seam,
 //! published as `VideoFrame` bags.
 //!
-//! The platform's capture arm — V4L2 on Linux — hands off every frame already
-//! converted into a pooled `Rgba32` pixel buffer, so this processor opens the
-//! stream, names the frame, and publishes it.
+//! The platform's capture arm — V4L2 on Linux, AVFoundation on macOS — hands
+//! off every frame already converted into a pooled `Rgba32` pixel buffer, so
+//! this processor opens the stream, names the frame, and publishes it.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -36,8 +36,8 @@ const VIDEO_OUTPUT_PORT: &str = "video";
 #[schemars(crate = "streamlib::sdk::schemars")]
 pub struct CameraSourceConfig {
     /// The capture backend's name for the device — a V4L2 device path
-    /// (`/dev/video0`) on Linux. Absent: the first capture-capable device
-    /// found.
+    /// (`/dev/video0`) on Linux, an AVFoundation camera's unique ID on macOS.
+    /// Absent: the first capture-capable device found.
     #[serde(default)]
     pub device_id: Option<String>,
     /// Resolution cap; the negotiated format is clamped to fit. Default 1920.
@@ -49,7 +49,7 @@ pub struct CameraSourceConfig {
 }
 
 #[streamlib::sdk::processor(
-    description = "Captures live video from the platform's camera — V4L2 on Linux (zero-copy DMA-BUF when the device exports it, CPU upload otherwise)",
+    description = "Captures live video from the platform's camera — V4L2 on Linux (zero-copy DMA-BUF when the device exports it, CPU upload otherwise), AVFoundation on macOS (zero-copy IOSurface import, CPU upload otherwise)",
     execution = manual,
     scheduling = high,
     config = crate::camera_source::CameraSourceConfig,

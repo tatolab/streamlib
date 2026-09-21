@@ -56,6 +56,8 @@ objc2-core-foundation = { workspace = true }
 objc2-core-graphics = { workspace = true }
 dispatch2 = "0.3"
 libc = { workspace = true }
+# The camera→display harness writes the frame it scores.
+png = "0.17"
 
 # Two `DisplayWindow`s asserted against the macOS window server. `harness =
 # false` because `App::run` must drive the window event pump on the process's
@@ -64,6 +66,17 @@ libc = { workspace = true }
 [[test]]
 name = "two_display_windows_on_the_macos_window_server"
 path = "tests/two_display_windows_on_the_macos_window_server.rs"
+harness = false
+required-features = ["hardware-tests"]
+
+# `CameraSource` → `DisplayWindow` asserted against the macOS window server,
+# with the camera's frames scored beside the window. `harness = false` for the
+# same first-thread reason; rig tier — a camera, and camera access allowed for
+# the terminal running it — so it builds only under `hardware-tests`. Its
+# `main` is empty off Apple.
+[[test]]
+name = "camera_to_display_window_on_the_macos_window_server"
+path = "tests/camera_to_display_window_on_the_macos_window_server.rs"
 harness = false
 required-features = ["hardware-tests"]
 

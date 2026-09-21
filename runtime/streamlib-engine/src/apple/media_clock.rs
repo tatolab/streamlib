@@ -23,6 +23,13 @@ impl MediaClock {
         unsafe { mach_absolute_time() }
     }
 
+    /// A reading in raw mach ticks, converted to the nanoseconds [`Self::now`]
+    /// reports.
+    #[inline]
+    pub fn nanos_from_raw_timestamp(raw_host_ticks: u64) -> Duration {
+        Duration::from_nanos(Self::host_time_to_nanos(raw_host_ticks))
+    }
+
     #[inline]
     fn host_time_to_nanos(host_time: u64) -> u64 {
         // The timebase ratio is fixed for the life of the machine, so one
