@@ -10,12 +10,14 @@
 //! these IDs at their own call sites; the engine does not accept a
 //! wire type in any public method signature.
 
+pub mod h273_color_vui;
 mod matrix;
 mod resolve;
 mod resolved;
 mod tone;
 mod transfer;
 
+pub use h273_color_vui::{H273_UNSPECIFIED, H273ColorVui};
 pub use matrix::{
     RgbToYuvDecomposition, YuvToRgbDecomposition, rgb_to_yuv_matrix, yuv_to_rgb_matrix,
 };

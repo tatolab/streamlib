@@ -17,7 +17,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use streamlib::sdk::context::{
     AudioCaptureStream, AudioDeviceStreamRequest, AudioSampleFormat, AudioStreamFormat,
-    AudioStreamLivenessReport, CapturedAudioBlockFromDevice, CapturedAudioBlockHandOff,
+    CapturedAudioBlockFromDevice, CapturedAudioBlockHandOff, DeviceStreamLivenessReport,
     RuntimeContextFullAccess, probe_audio_device_backend,
 };
 use streamlib::sdk::error::{Error, Result};
@@ -91,7 +91,7 @@ pub struct MicrophoneSource {
     /// Taken at open and kept beside the stream rather than read off it: the
     /// publishing thread is what has to notice a device that stopped, and it
     /// never holds the stream.
-    capture_stream_liveness_report: Option<AudioStreamLivenessReport>,
+    capture_stream_liveness_report: Option<DeviceStreamLivenessReport>,
     hand_off_ring: Option<Arc<CapturedAudioBlockHandOffRing>>,
     /// Minted per publishing thread, so a thread that had to be detached can
     /// never be revived by a later `start()` into an endless spin.
@@ -247,7 +247,7 @@ fn device_callback_handing_off_into(
 fn publish_captured_blocks(
     hand_off_ring: &CapturedAudioBlockHandOffRing,
     is_publishing: &AtomicBool,
-    capture_stream_liveness_report: &AudioStreamLivenessReport,
+    capture_stream_liveness_report: &DeviceStreamLivenessReport,
     published_block_counter: &AtomicU64,
     outputs: &OutputWriter,
     stream_format: AudioStreamFormat,
@@ -402,8 +402,8 @@ mod tests {
     use std::sync::Mutex;
     use std::time::Instant;
     use streamlib::sdk::context::{
-        AudioClock, AudioClockConfig, AudioDeviceBackend, AudioStreamFailureReason,
-        AudioStreamFailureRecorder, AudioTickCallback, AudioTickContext, SharedAudioClock,
+        AudioClock, AudioClockConfig, AudioDeviceBackend, AudioTickCallback, AudioTickContext,
+        DeviceStreamFailureReason, DeviceStreamFailureRecorder, SharedAudioClock,
         SilentNullAudioDeviceBackend,
     };
 
@@ -696,8 +696,8 @@ mod tests {
         let published_block_counter = Arc::new(AtomicU64::new(0));
 
         let (failure_recorder, liveness_report) =
-            AudioStreamFailureRecorder::recording_into_a_new_report();
-        failure_recorder.record_the_failure_that_ended_the_stream(AudioStreamFailureReason::of(
+            DeviceStreamFailureRecorder::recording_into_a_new_report();
+        failure_recorder.record_the_failure_that_ended_the_stream(DeviceStreamFailureReason::of(
             "the ALSA capture device delivered nothing for 25 consecutive waits",
         ));
 
@@ -751,7 +751,7 @@ mod tests {
         let is_publishing = Arc::new(AtomicBool::new(true));
         let published_block_counter = Arc::new(AtomicU64::new(0));
         let (_failure_recorder, liveness_report) =
-            AudioStreamFailureRecorder::recording_into_a_new_report();
+            DeviceStreamFailureRecorder::recording_into_a_new_report();
 
         let publishing = std::thread::spawn({
             let hand_off_ring = Arc::clone(&hand_off_ring);

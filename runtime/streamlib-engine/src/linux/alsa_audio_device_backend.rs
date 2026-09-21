@@ -27,10 +27,10 @@ use libloading::Library;
 
 use crate::core::context::{
     AudioBlockForPlaybackHandOff, AudioBlockRequestedByDevice, AudioCaptureStream,
-    AudioDeviceBackend, AudioDeviceBackendArmUnavailableReason, AudioDeviceStreamRequest,
-    AudioPlaybackStream, AudioSampleFormat, AudioStreamFailureReason, AudioStreamFailureRecorder,
-    AudioStreamFormat, AudioStreamLivenessReport, CapturedAudioBlockFromDevice,
-    CapturedAudioBlockHandOff,
+    AudioDeviceBackend, AudioDeviceStreamRequest, AudioPlaybackStream, AudioSampleFormat,
+    AudioStreamFormat, CapturedAudioBlockFromDevice, CapturedAudioBlockHandOff,
+    DeviceBackendArmUnavailableReason, DeviceStreamFailureReason, DeviceStreamFailureRecorder,
+    DeviceStreamLivenessReport,
 };
 use crate::core::execution::ThreadPriority;
 use crate::core::media_clock::MediaClock;
@@ -163,12 +163,12 @@ macro_rules! alsa_library_entry_points {
             /// are reachable from a test without an ALSA-shaped stub on disk.
             fn resolve_from(
                 library_soname: &str,
-            ) -> std::result::Result<Self, AudioDeviceBackendArmUnavailableReason> {
+            ) -> std::result::Result<Self, DeviceBackendArmUnavailableReason> {
                 // SAFETY: `dlopen` of a soname. Loading an audio library can run
                 // its initialisers, which is what the chain's probe-by-opening
                 // accepts; nothing is dereferenced until `get` succeeds.
                 let library = unsafe { Library::new(library_soname) }.map_err(|e| {
-                    AudioDeviceBackendArmUnavailableReason::of(format!(
+                    DeviceBackendArmUnavailableReason::of(format!(
                         "{library_soname} could not be loaded: {e}"
                     ))
                 })?;
@@ -182,7 +182,7 @@ macro_rules! alsa_library_entry_points {
                     }
                     .map(|symbol| *symbol)
                     .map_err(|_| {
-                        AudioDeviceBackendArmUnavailableReason::of(format!(
+                        DeviceBackendArmUnavailableReason::of(format!(
                             "{library_soname} exports no {}, so it is not the ALSA library \
                              this arm binds against",
                             stringify!($entry_point),
@@ -251,7 +251,7 @@ alsa_library_entry_points! {
 }
 
 impl AlsaLibraryEntryPoints {
-    fn resolve() -> std::result::Result<Self, AudioDeviceBackendArmUnavailableReason> {
+    fn resolve() -> std::result::Result<Self, DeviceBackendArmUnavailableReason> {
         Self::resolve_from(ALSA_LIBRARY_SONAME)
     }
 
@@ -420,7 +420,7 @@ impl AlsaAudioDeviceBackend {
     /// opening rather than a later check, because a device whose stamps are not
     /// on the machine monotonic clock cannot serve this seam at all — and an
     /// arm that cannot serve demotes, exactly as a missing library does.
-    pub fn load_and_open() -> std::result::Result<Self, AudioDeviceBackendArmUnavailableReason> {
+    pub fn load_and_open() -> std::result::Result<Self, DeviceBackendArmUnavailableReason> {
         let entry_points = Arc::new(AlsaLibraryEntryPoints::resolve()?);
         let backend = Self { entry_points };
 
@@ -430,7 +430,7 @@ impl AlsaAudioDeviceBackend {
             .open_alsa_capture_stream(DEFAULT_PCM_NAME)
             .and_then(|mut probe| probe.prove_the_device_can_be_timed());
         if let Err(refusal) = probe_outcome {
-            return Err(AudioDeviceBackendArmUnavailableReason::of(format!(
+            return Err(DeviceBackendArmUnavailableReason::of(format!(
                 "{ALSA_LIBRARY_SONAME} loaded but no capture device answered on \
                  '{DEFAULT_PCM_NAME}': {refusal}"
             )));
@@ -474,7 +474,7 @@ impl AlsaAudioDeviceBackend {
         )?;
 
         let (failure_recorder, liveness_report) =
-            AudioStreamFailureRecorder::recording_into_a_new_report();
+            DeviceStreamFailureRecorder::recording_into_a_new_report();
         Ok(AlsaAudioCaptureStream {
             opened_pcm: Arc::new(opened_pcm),
             capture_stream_format: negotiated.stream_format,
@@ -505,7 +505,7 @@ impl AlsaAudioDeviceBackend {
         )?;
 
         let (failure_recorder, liveness_report) =
-            AudioStreamFailureRecorder::recording_into_a_new_report();
+            DeviceStreamFailureRecorder::recording_into_a_new_report();
         Ok(AlsaAudioPlaybackStream {
             opened_pcm: Arc::new(opened_pcm),
             playback_stream_format: negotiated.stream_format,
@@ -963,8 +963,8 @@ struct AlsaAudioPlaybackStream {
     device_name: String,
     /// The write and read halves, minted with the stream for the reason its
     /// capture sibling states.
-    failure_recorder: AudioStreamFailureRecorder,
-    liveness_report: AudioStreamLivenessReport,
+    failure_recorder: DeviceStreamFailureRecorder,
+    liveness_report: DeviceStreamLivenessReport,
     playback: Option<PlaybackWriterThread>,
 }
 
@@ -973,7 +973,7 @@ impl AudioPlaybackStream for AlsaAudioPlaybackStream {
         self.playback_stream_format
     }
 
-    fn liveness_report(&self) -> AudioStreamLivenessReport {
+    fn liveness_report(&self) -> DeviceStreamLivenessReport {
         self.liveness_report.clone()
     }
 
@@ -1080,21 +1080,21 @@ impl AlsaDeviceThreadExit {
     fn failure_that_ended_the_stream(
         &self,
         direction: AlsaStreamDirection,
-    ) -> Option<AudioStreamFailureReason> {
+    ) -> Option<DeviceStreamFailureReason> {
         let direction_word = direction.as_word();
         match self {
             AlsaDeviceThreadExit::StopThatWasAskedFor => None,
             AlsaDeviceThreadExit::DeviceWentQuiet {
                 consecutive_silent_waits,
-            } => Some(AudioStreamFailureReason::of(format!(
+            } => Some(DeviceStreamFailureReason::of(format!(
                 "the ALSA {direction_word} device {} nothing for {consecutive_silent_waits} \
                  consecutive waits",
                 direction.what_a_stalled_device_stopped_doing(),
             ))),
-            AlsaDeviceThreadExit::DeviceRefused(refusal) => Some(AudioStreamFailureReason::of(
+            AlsaDeviceThreadExit::DeviceRefused(refusal) => Some(DeviceStreamFailureReason::of(
                 format!("the ALSA {direction_word} device refused while it was running: {refusal}"),
             )),
-            AlsaDeviceThreadExit::StreamCouldNotBeRecovered => Some(AudioStreamFailureReason::of(
+            AlsaDeviceThreadExit::StreamCouldNotBeRecovered => Some(DeviceStreamFailureReason::of(
                 format!("the ALSA {direction_word} stream broke and could not be recovered"),
             )),
         }
@@ -1130,7 +1130,7 @@ fn record_an_alsa_device_thread_exit(
     exit: &AlsaDeviceThreadExit,
     direction: AlsaStreamDirection,
     device_name: &str,
-    failure_recorder: &AudioStreamFailureRecorder,
+    failure_recorder: &DeviceStreamFailureRecorder,
 ) {
     let Some(reason) = exit.failure_that_ended_the_stream(direction) else {
         return;
@@ -1151,7 +1151,7 @@ struct PlaybackWriterThreadInputs {
     period_sample_count: u32,
     device_name: String,
     stop_requested: Arc<AtomicBool>,
-    failure_recorder: AudioStreamFailureRecorder,
+    failure_recorder: DeviceStreamFailureRecorder,
     hand_off: AudioBlockForPlaybackHandOff,
 }
 
@@ -1311,9 +1311,9 @@ struct AlsaAudioCaptureStream {
     /// The write half, handed to each reader thread. Minted with the stream
     /// rather than with a delivery, so the reason a reader died outlives the
     /// reader.
-    failure_recorder: AudioStreamFailureRecorder,
+    failure_recorder: DeviceStreamFailureRecorder,
     /// The read half, cloned to whoever owns the stream.
-    liveness_report: AudioStreamLivenessReport,
+    liveness_report: DeviceStreamLivenessReport,
     delivery: Option<CaptureDeliveryThread>,
 }
 
@@ -1322,7 +1322,7 @@ impl AudioCaptureStream for AlsaAudioCaptureStream {
         self.capture_stream_format
     }
 
-    fn liveness_report(&self) -> AudioStreamLivenessReport {
+    fn liveness_report(&self) -> DeviceStreamLivenessReport {
         self.liveness_report.clone()
     }
 
@@ -1505,7 +1505,7 @@ struct CaptureReaderThreadInputs {
     period_sample_count: u32,
     device_name: String,
     stop_requested: Arc<AtomicBool>,
-    failure_recorder: AudioStreamFailureRecorder,
+    failure_recorder: DeviceStreamFailureRecorder,
     hand_off: CapturedAudioBlockHandOff,
 }
 
@@ -1901,7 +1901,7 @@ mod tests {
     fn a_thread_that_stopped_because_it_was_told_to_reports_no_failure() {
         for direction in [AlsaStreamDirection::Capture, AlsaStreamDirection::Playback] {
             let (failure_recorder, liveness_report) =
-                AudioStreamFailureRecorder::recording_into_a_new_report();
+                DeviceStreamFailureRecorder::recording_into_a_new_report();
 
             record_an_alsa_device_thread_exit(
                 &AlsaDeviceThreadExit::StopThatWasAskedFor,
@@ -1948,7 +1948,7 @@ mod tests {
         for (exit, what_the_reason_must_say) in exits_and_what_they_must_say {
             for direction in [AlsaStreamDirection::Capture, AlsaStreamDirection::Playback] {
                 let (failure_recorder, liveness_report) =
-                    AudioStreamFailureRecorder::recording_into_a_new_report();
+                    DeviceStreamFailureRecorder::recording_into_a_new_report();
 
                 record_an_alsa_device_thread_exit(&exit, direction, "hw:0,0", &failure_recorder);
 

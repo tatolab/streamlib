@@ -385,8 +385,9 @@ the other by Path 1 (in-process, via the registry held in
 [`TextureRegistration` anti-pattern #2 — descriptor-side claims
 that don't match registration](texture-registration.md#anti-patterns).
 
-The reference in-tree producer is the `CameraSource` built-in —
-`runtime/streamlib-media-builtins/src/camera_source.rs` calls both
+The reference in-tree producer is the video device seam's V4L2 arm, which
+`CameraSource` captures through —
+`runtime/streamlib-engine/src/linux/v4l2_video_device_backend.rs` calls both
 `store.register_texture(...)` and
 `gpu_context.register_texture_with_layout(...)` (outside the
 `escalate(|full| ...)` closure where the ring textures were

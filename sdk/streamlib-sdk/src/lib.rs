@@ -216,10 +216,16 @@ pub mod sdk {
         #[cfg(target_os = "linux")]
         pub use streamlib_engine::linux_surface_share;
 
+        /// The resolved colour → V4L2 map, for a built-in that signals a V4L2
+        /// output device at `S_FMT`.
+        #[cfg(target_os = "linux")]
+        pub use streamlib_engine::linux_v4l2_color;
+
         /// Vulkan Video codec layer — engine-tier H.264/H.265
         /// encode/decode primitives (`SimpleEncoder`, `SimpleDecoder`,
         /// `Codec`, `Preset`, `EncodePacket`, codec configuration
-        /// types, `H273ColorVui`). Sessions are minted through the
+        /// types; their H.273 colour vocabulary is `sdk::color`'s
+        /// `H273ColorVui`). Sessions are minted through the
         /// `GpuContext` session surface — `create_encoder_session` /
         /// `create_decoder_session` — which wires the host RHI's queue
         /// mutex, allocator, and per-queue families internally;

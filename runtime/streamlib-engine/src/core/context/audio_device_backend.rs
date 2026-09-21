@@ -11,6 +11,10 @@
 use std::sync::{Arc, OnceLock};
 
 use super::SharedAudioClock;
+use super::device_backend_probe_chain::{
+    DeviceBackendArm, first_device_backend_arm_that_opens_among,
+};
+use super::device_stream_liveness_report::DeviceStreamLivenessReport;
 use super::silent_null_audio_device_backend::SilentNullAudioDeviceBackend;
 use crate::core::Result;
 
@@ -92,125 +96,6 @@ pub struct AudioDeviceStreamRequest {
     pub deviceless_pacing_clock: SharedAudioClock,
 }
 
-/// Why a stream stopped serving its device without being asked to.
-///
-/// Text rather than a core [`crate::core::Error`]: it is read repeatedly off an
-/// [`AudioStreamLivenessReport`] long after the thread that produced it is
-/// gone, and `Error` is not `Clone`. What an owner does with it is decide —
-/// log it, fail, retry — and every one of those needs the reason to survive
-/// being read.
-#[derive(Clone, PartialEq, Eq)]
-pub struct AudioStreamFailureReason(String);
-
-impl AudioStreamFailureReason {
-    /// State why a stream stopped serving its device.
-    pub fn of(reason: impl Into<String>) -> Self {
-        Self(reason.into())
-    }
-}
-
-impl std::fmt::Display for AudioStreamFailureReason {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.0)
-    }
-}
-
-// Written by hand rather than derived, and the same text as `Display`: this is
-// read in a log field, where the derived `AudioStreamFailureReason("…")`
-// wrapper would be noise around the only part anyone acts on.
-impl std::fmt::Debug for AudioStreamFailureReason {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.0)
-    }
-}
-
-/// Whether a stream is still serving its device, and why it stopped if it is
-/// not.
-///
-/// Handed out and cloned rather than answered off the stream itself, because
-/// the thread that would act on the answer is never the one holding the
-/// stream: a source owns its stream on the processor and does its work on a
-/// publishing thread, so it hands that thread a report instead of the stream.
-///
-/// A device that dies is otherwise indistinguishable from one that went quiet
-/// — a finished reader thread looks exactly like a running one, and stopping
-/// the stream still succeeds — so without this an owner has no way to notice,
-/// retry, or fail.
-///
-/// Read-only by construction: stating a failure needs an
-/// [`AudioStreamFailureRecorder`], which only the arm that owns the device
-/// holds. An owner cannot forge a death it then reads back as real.
-///
-/// A failure latches for the life of the stream, and nothing clears it.
-/// Restarting delivery on a stream whose device died does not revive it — the
-/// device is gone, and a report that forgot would let a source go back to
-/// looking healthy, which is the defect this exists to remove. Recovering
-/// means opening a new stream, which mints a new report with it.
-#[derive(Clone, Debug)]
-pub struct AudioStreamLivenessReport {
-    failure_that_ended_the_stream: Arc<OnceLock<AudioStreamFailureReason>>,
-}
-
-impl AudioStreamLivenessReport {
-    /// A report for a stream nothing can stop serving its device.
-    ///
-    /// The null backend's whole answer: a stream paced by a timer against no
-    /// device has no device to lose, so there is no recorder to pair this
-    /// with. Its own constructor rather than a recorder whose failure branch
-    /// is unreachable, because "never dies" is part of that arm's design and
-    /// deserves to be stated.
-    pub fn of_a_stream_that_cannot_fail() -> Self {
-        Self {
-            failure_that_ended_the_stream: Arc::new(OnceLock::new()),
-        }
-    }
-
-    /// Why the stream stopped serving its device on its own, or `None` while
-    /// it is still serving it.
-    ///
-    /// A stream its owner stopped deliberately answers `None`: being told to
-    /// stop is not a failure, and reporting it as one would make the signal
-    /// useless at exactly the moment an owner reads it.
-    pub fn failure_that_ended_the_stream(&self) -> Option<AudioStreamFailureReason> {
-        self.failure_that_ended_the_stream.get().cloned()
-    }
-}
-
-/// The write side of a stream's liveness, held by the arm that owns the device.
-///
-/// Separate from the report so the direction is structural rather than a rule
-/// in prose: an owner reads, an arm states, and neither can do the other's job.
-#[derive(Clone, Debug)]
-pub struct AudioStreamFailureRecorder {
-    failure_that_ended_the_stream: Arc<OnceLock<AudioStreamFailureReason>>,
-}
-
-impl AudioStreamFailureRecorder {
-    /// Mint the pair a stream opens with: the recorder its own device thread
-    /// keeps, and the report its owner reads.
-    pub fn recording_into_a_new_report() -> (Self, AudioStreamLivenessReport) {
-        let failure_that_ended_the_stream = Arc::new(OnceLock::new());
-        (
-            Self {
-                failure_that_ended_the_stream: Arc::clone(&failure_that_ended_the_stream),
-            },
-            AudioStreamLivenessReport {
-                failure_that_ended_the_stream,
-            },
-        )
-    }
-
-    /// Record why the stream stopped serving its device.
-    ///
-    /// The first reason recorded is the one kept — `OnceLock` is what makes
-    /// that a property of the type rather than a convention: a stream on its
-    /// way down reports more than once, and the first names the cause where
-    /// everything after it names a consequence.
-    pub fn record_the_failure_that_ended_the_stream(&self, reason: AudioStreamFailureReason) {
-        let _ = self.failure_that_ended_the_stream.set(reason);
-    }
-}
-
 /// A capture stream a backend opened.
 pub trait AudioCaptureStream: Send {
     /// The rate, channel count and scalar encoding of every block this stream
@@ -225,7 +110,7 @@ pub trait AudioCaptureStream: Send {
     /// during a run — and a failure it names outlives
     /// [`Self::start_delivering_to`] too, because restarting delivery does not
     /// bring a device back.
-    fn liveness_report(&self) -> AudioStreamLivenessReport;
+    fn liveness_report(&self) -> DeviceStreamLivenessReport;
 
     /// Begin delivering captured blocks to `hand_off`, replacing any hand-off
     /// an earlier call installed.
@@ -271,7 +156,7 @@ pub trait AudioPlaybackStream: Send {
     /// Whether this stream is still playing, readable from whatever thread the
     /// owner does its work on — the capture seam's report, in the direction a
     /// sink cares about, under the same latching rule.
-    fn liveness_report(&self) -> AudioStreamLivenessReport;
+    fn liveness_report(&self) -> DeviceStreamLivenessReport;
 
     /// Begin asking `hand_off` for samples, replacing any hand-off an earlier
     /// call installed.
@@ -304,57 +189,8 @@ pub trait AudioDeviceBackend: Send + Sync {
 /// Shared handle to the backend the chain probed.
 pub type SharedAudioDeviceBackend = Arc<dyn AudioDeviceBackend>;
 
-/// Why an arm of the chain cannot serve, in the words the demotion log line
-/// carries.
-///
-/// Not a core [`crate::core::Error`]: nothing failed that a caller must handle.
-/// The chain has another arm, and this is what tells a reader whether the
-/// library was absent, the daemon was, or the device was.
-#[derive(Debug)]
-pub struct AudioDeviceBackendArmUnavailableReason(String);
-
-impl AudioDeviceBackendArmUnavailableReason {
-    /// State why this arm cannot serve.
-    pub fn of(reason: impl Into<String>) -> Self {
-        Self(reason.into())
-    }
-}
-
-impl std::fmt::Display for AudioDeviceBackendArmUnavailableReason {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&self.0)
-    }
-}
-
-/// What opening one arm of the chain yields.
-type AudioDeviceBackendArmOpenOutcome =
-    std::result::Result<SharedAudioDeviceBackend, AudioDeviceBackendArmUnavailableReason>;
-
-/// One arm of the chain: its name, and the attempt to open it.
-///
-/// The attempt is held unrun so the chain's *order* can be read — and asserted
-/// — without loading an audio library or touching a device. Private to the
-/// walk: nothing outside chooses an arm, because no dial selects a backend.
-struct AudioDeviceBackendArm {
-    backend_name: &'static str,
-    open: Box<dyn FnOnce() -> AudioDeviceBackendArmOpenOutcome>,
-}
-
-impl AudioDeviceBackendArm {
-    /// The only way to build one, so an arm's name always comes from the same
-    /// place as the attempt that opens it.
-    // A platform whose floor is the null backend has no arms to construct.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-    fn named(
-        backend_name: &'static str,
-        open: impl FnOnce() -> AudioDeviceBackendArmOpenOutcome + 'static,
-    ) -> Self {
-        Self {
-            backend_name,
-            open: Box::new(open),
-        }
-    }
-}
+/// One arm of the audio chain.
+type AudioDeviceBackendArm = DeviceBackendArm<SharedAudioDeviceBackend>;
 
 static PROBED_AUDIO_DEVICE_BACKEND: OnceLock<SharedAudioDeviceBackend> = OnceLock::new();
 
@@ -397,23 +233,17 @@ fn first_audio_device_backend_arm_that_opens() -> SharedAudioDeviceBackend {
 fn first_audio_device_backend_arm_that_opens_among(
     arms: impl IntoIterator<Item = AudioDeviceBackendArm>,
 ) -> Option<SharedAudioDeviceBackend> {
-    for arm in arms {
-        match (arm.open)() {
-            Ok(backend) => return Some(backend),
-            Err(reason) => {
-                // Info rather than warn: a machine with no audio server is a
-                // supported environment, and the next arm is the answer rather
-                // than the consolation prize. The reason is what tells a reader
-                // whether the library was absent or the device was.
-                tracing::info!(
-                    audio_backend = arm.backend_name,
-                    %reason,
-                    "audio device backend chain: demoting to the next arm"
-                );
-            }
-        }
-    }
-    None
+    first_device_backend_arm_that_opens_among(arms, |backend_name, reason| {
+        // Info rather than warn: a machine with no audio server is a
+        // supported environment, and the next arm is the answer rather than
+        // the consolation prize. The reason is what tells a reader whether
+        // the library was absent or the device was.
+        tracing::info!(
+            audio_backend = backend_name,
+            %reason,
+            "audio device backend chain: demoting to the next arm"
+        );
+    })
 }
 
 /// The chain's real arms, in the order the plan decided: PipeWire, else ALSA,
@@ -445,6 +275,7 @@ fn platform_audio_device_backend_arms() -> Vec<AudioDeviceBackendArm> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::context::DeviceBackendArmUnavailableReason;
 
     /// An arm that opens, standing in for a real backend so the walk can be
     /// driven without an audio library or a device.
@@ -478,7 +309,7 @@ mod tests {
 
     fn an_arm_that_declines(backend_name: &'static str) -> AudioDeviceBackendArm {
         AudioDeviceBackendArm::named(backend_name, move || {
-            Err(AudioDeviceBackendArmUnavailableReason::of(format!(
+            Err(DeviceBackendArmUnavailableReason::of(format!(
                 "{backend_name} was made to decline by this test"
             )))
         })
@@ -587,76 +418,5 @@ mod tests {
     fn a_scalars_width_is_the_width_the_wire_dtype_names() {
         assert_eq!(AudioSampleFormat::F32.bytes_per_sample(), 4);
         assert_eq!(AudioSampleFormat::I16.bytes_per_sample(), 2);
-    }
-
-    #[test]
-    fn a_stream_nothing_has_gone_wrong_with_reports_no_failure() {
-        let (_recorder, report) = AudioStreamFailureRecorder::recording_into_a_new_report();
-        assert!(
-            report.failure_that_ended_the_stream().is_none(),
-            "a report that answered a failure before one happened would fire on every \
-             healthy stream, which is worth no more than the silence it replaces"
-        );
-    }
-
-    /// The arm that cannot lose a device answers the same question, so an
-    /// owner writes one piece of code and it means the same thing everywhere.
-    #[test]
-    fn a_stream_that_cannot_fail_reports_no_failure() {
-        assert!(
-            AudioStreamLivenessReport::of_a_stream_that_cannot_fail()
-                .failure_that_ended_the_stream()
-                .is_none()
-        );
-    }
-
-    /// The whole point of the shape: the thread that records the failure is
-    /// never the thread that reads it.
-    #[test]
-    fn a_failure_the_arm_records_is_read_through_the_owners_own_clone() {
-        let (recorder, report) = AudioStreamFailureRecorder::recording_into_a_new_report();
-        let report_the_publishing_thread_holds = report.clone();
-
-        recorder.record_the_failure_that_ended_the_stream(AudioStreamFailureReason::of(
-            "the device delivered nothing for 25 consecutive waits",
-        ));
-
-        assert_eq!(
-            report_the_publishing_thread_holds
-                .failure_that_ended_the_stream()
-                .map(|reason| reason.to_string()),
-            Some("the device delivered nothing for 25 consecutive waits".to_string())
-        );
-    }
-
-    /// A dying stream reports more than once — the read that failed, then the
-    /// teardown behind it — and the first is the one that says what happened.
-    #[test]
-    fn the_first_reason_recorded_is_the_one_the_owner_reads() {
-        let (recorder, report) = AudioStreamFailureRecorder::recording_into_a_new_report();
-
-        recorder.record_the_failure_that_ended_the_stream(AudioStreamFailureReason::of(
-            "what actually killed the stream",
-        ));
-        recorder.record_the_failure_that_ended_the_stream(AudioStreamFailureReason::of(
-            "a consequence of the first",
-        ));
-
-        assert_eq!(
-            report
-                .failure_that_ended_the_stream()
-                .map(|reason| reason.to_string()),
-            Some("what actually killed the stream".to_string()),
-            "the reason kept has to be the cause, not the last thing the teardown said"
-        );
-    }
-
-    /// The reason is read in a log field, so its `Debug` is the text and not a
-    /// wrapper around it.
-    #[test]
-    fn a_reason_reads_the_same_whether_it_is_printed_for_a_human_or_a_log_field() {
-        let reason = AudioStreamFailureReason::of("the device went away");
-        assert_eq!(format!("{reason:?}"), "the device went away");
-        assert_eq!(reason.to_string(), "the device went away");
     }
 }

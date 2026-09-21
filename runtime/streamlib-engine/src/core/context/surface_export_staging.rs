@@ -1363,9 +1363,9 @@ mod tests {
     /// The producer-published shape #1755 is about: one surface id over a
     /// pooled backing *and* a producer-internal ring texture registered
     /// under that same id, which the producer overwrites in place every
-    /// `RING_TEXTURE_COUNT` frames. Replicates `camera_source.rs` —
-    /// acquire the pool member, register the ring slot under its id,
-    /// render into the slot.
+    /// `RING_TEXTURE_COUNT` frames. Replicates the camera capture loop's
+    /// shape when #1755 was filed — acquire the pool member, register the
+    /// ring slot under its id, render into the slot.
     struct RotatingProducerPublishedFrame {
         surface_id: String,
         /// Held for the fixture's life: the pool reclaims a slot when the

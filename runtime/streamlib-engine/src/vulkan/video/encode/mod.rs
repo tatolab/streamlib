@@ -8,7 +8,6 @@
 //! `encode_image` methods for callers who want encoded bitstream output
 //! from either raw NV12 pixels or GPU-resident RGBA images.
 
-pub mod color_vui;
 pub mod config;
 mod gop;
 mod session;
@@ -19,7 +18,6 @@ mod vui_patch;
 #[cfg(test)]
 mod tests;
 
-pub use color_vui::H273ColorVui;
 pub use config::*;
 #[cfg(test)]
 pub(crate) use session::SPS_VUI_CHROMA_SAMPLE_LOC_TYPE;

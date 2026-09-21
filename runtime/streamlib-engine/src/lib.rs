@@ -167,6 +167,14 @@ pub mod linux_alsa_audio_device_backend {
     pub use crate::linux::alsa_audio_device_backend::AlsaAudioDeviceBackend;
 }
 
+/// The resolved colour → V4L2 direction of the engine's V4L2 colour map, for
+/// the virtual camera's loopback door, which signals a V4L2 output device at
+/// `S_FMT` with it.
+#[cfg(target_os = "linux")]
+pub mod linux_v4l2_color {
+    pub use crate::linux::v4l2_color::{V4l2PixFormatColorFields, resolved_color_to_v4l2_color};
+}
+
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub mod host_rhi;
 

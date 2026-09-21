@@ -13,6 +13,8 @@ pub mod pipewire_video_source;
 pub mod rtkit;
 pub mod surface_share;
 pub mod thread_priority;
+pub mod v4l2_color;
+pub mod v4l2_video_device_backend;
 
 pub use audio_clock::LinuxTimerFdAudioClock;
 

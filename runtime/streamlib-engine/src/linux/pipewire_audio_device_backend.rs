@@ -13,10 +13,10 @@ use std::sync::Arc;
 
 use crate::core::context::{
     AudioBlockForPlaybackHandOff, AudioBlockRequestedByDevice, AudioCaptureStream,
-    AudioDeviceBackend, AudioDeviceBackendArmUnavailableReason, AudioDeviceStreamRequest,
-    AudioPlaybackStream, AudioSampleFormat, AudioStreamFailureReason, AudioStreamFailureRecorder,
-    AudioStreamFormat, AudioStreamLivenessReport, CapturedAudioBlockFromDevice,
-    CapturedAudioBlockHandOff,
+    AudioDeviceBackend, AudioDeviceStreamRequest, AudioPlaybackStream, AudioSampleFormat,
+    AudioStreamFormat, CapturedAudioBlockFromDevice, CapturedAudioBlockHandOff,
+    DeviceBackendArmUnavailableReason, DeviceStreamFailureReason, DeviceStreamFailureRecorder,
+    DeviceStreamLivenessReport,
 };
 use crate::core::{Error, Result};
 use crate::linux::pipewire_runtime_library::{PipeWireLibraryEntryPoints, ShimFailureText};
@@ -156,13 +156,13 @@ impl PipeWireAudioDeviceBackend {
     /// The connection round trip is the point: `libpipewire` present with no
     /// daemon behind it is the ordinary container case, and probing on presence
     /// alone would strand exactly the machines the chain exists to serve.
-    pub fn load_and_connect() -> std::result::Result<Self, AudioDeviceBackendArmUnavailableReason> {
+    pub fn load_and_connect() -> std::result::Result<Self, DeviceBackendArmUnavailableReason> {
         let entry_points = PipeWireLibraryEntryPoints::loaded_once_per_process()
-            .map_err(|reason| AudioDeviceBackendArmUnavailableReason::of(reason.to_string()))?;
+            .map_err(|reason| DeviceBackendArmUnavailableReason::of(reason.to_string()))?;
 
         entry_points
             .daemon_answers()
-            .map_err(AudioDeviceBackendArmUnavailableReason::of)?;
+            .map_err(DeviceBackendArmUnavailableReason::of)?;
 
         tracing::debug!(
             version = %entry_points.loaded_library_version(),
@@ -187,7 +187,7 @@ impl AudioDeviceBackend for PipeWireAudioDeviceBackend {
         let (opened, capture_stream_format) =
             self.open_audio_stream(audio_shim::STREAM_DIRECTION_CAPTURE, request)?;
         let (failure_recorder, liveness_report) =
-            AudioStreamFailureRecorder::recording_into_a_new_report();
+            DeviceStreamFailureRecorder::recording_into_a_new_report();
         let capture_stream = PipeWireAudioCaptureStream {
             opened,
             capture_stream_format,
@@ -214,7 +214,7 @@ impl AudioDeviceBackend for PipeWireAudioDeviceBackend {
         let (opened, playback_stream_format) =
             self.open_audio_stream(audio_shim::STREAM_DIRECTION_PLAYBACK, request)?;
         let (failure_recorder, liveness_report) =
-            AudioStreamFailureRecorder::recording_into_a_new_report();
+            DeviceStreamFailureRecorder::recording_into_a_new_report();
         let playback_stream = PipeWireAudioPlaybackStream {
             opened,
             playback_stream_format,
@@ -371,7 +371,7 @@ unsafe extern "C" fn record_a_stream_failure_in_the_liveness_report(
     // retires this hand-off under that same lock before the box is dropped, so
     // the recorder is live for the length of this call.
     let failure_recorder =
-        unsafe { &*failure_recorder_context.cast::<AudioStreamFailureRecorder>() };
+        unsafe { &*failure_recorder_context.cast::<DeviceStreamFailureRecorder>() };
     let reason: Cow<'_, str> = if reason.is_null() {
         Cow::Borrowed("the PipeWire stream entered its error state")
     } else {
@@ -379,7 +379,7 @@ unsafe extern "C" fn record_a_stream_failure_in_the_liveness_report(
         // which stays valid until this returns.
         unsafe { CStr::from_ptr(reason) }.to_string_lossy()
     };
-    failure_recorder.record_the_failure_that_ended_the_stream(AudioStreamFailureReason::of(
+    failure_recorder.record_the_failure_that_ended_the_stream(DeviceStreamFailureReason::of(
         format!("the PipeWire stream stopped serving its device: {reason}"),
     ));
 }
@@ -396,7 +396,7 @@ unsafe extern "C" fn record_a_stream_failure_in_the_liveness_report(
 /// is what the drop order on both stream structs guarantees.
 unsafe fn install_the_shims_failure_hand_off_pointing_at(
     audio_stream: *mut audio_shim::AudioStream,
-    failure_recorder: &AudioStreamFailureRecorder,
+    failure_recorder: &DeviceStreamFailureRecorder,
 ) {
     let failure_recorder_context = (&raw const *failure_recorder).cast_mut().cast::<c_void>();
     // SAFETY: the caller's contract, and the shim takes the loop lock around
@@ -427,10 +427,10 @@ struct PipeWireAudioCaptureStream {
     /// What the shim's failure hand-off points at, boxed for a stable address
     /// and declared after `opened` for the same reason `installed_hand_off`
     /// is.
-    failure_recorder: Box<AudioStreamFailureRecorder>,
+    failure_recorder: Box<DeviceStreamFailureRecorder>,
     /// The read half handed to whoever owns the stream. Not boxed: nothing in
     /// C points at it.
-    liveness_report: AudioStreamLivenessReport,
+    liveness_report: DeviceStreamLivenessReport,
 }
 
 /// What the shim calls on PipeWire's thread-loop thread, with that loop's lock
@@ -472,7 +472,7 @@ impl AudioCaptureStream for PipeWireAudioCaptureStream {
         self.capture_stream_format
     }
 
-    fn liveness_report(&self) -> AudioStreamLivenessReport {
+    fn liveness_report(&self) -> DeviceStreamLivenessReport {
         self.liveness_report.clone()
     }
 
@@ -523,8 +523,8 @@ struct PipeWireAudioPlaybackStream {
     installed_hand_off: Option<Box<AudioBlockForPlaybackHandOff>>,
     /// What the shim's failure hand-off points at, under the same drop-order
     /// requirement, beside the read half its owner is handed.
-    failure_recorder: Box<AudioStreamFailureRecorder>,
-    liveness_report: AudioStreamLivenessReport,
+    failure_recorder: Box<DeviceStreamFailureRecorder>,
+    liveness_report: DeviceStreamLivenessReport,
 }
 
 /// What the shim calls on PipeWire's thread-loop thread when it needs samples,
@@ -566,7 +566,7 @@ impl AudioPlaybackStream for PipeWireAudioPlaybackStream {
         self.playback_stream_format
     }
 
-    fn liveness_report(&self) -> AudioStreamLivenessReport {
+    fn liveness_report(&self) -> DeviceStreamLivenessReport {
         self.liveness_report.clone()
     }
 
@@ -665,7 +665,7 @@ mod tests {
     #[test]
     fn a_failure_the_shim_reports_lands_in_the_report_the_owner_holds() {
         let (failure_recorder, liveness_report) =
-            AudioStreamFailureRecorder::recording_into_a_new_report();
+            DeviceStreamFailureRecorder::recording_into_a_new_report();
         let reason_the_daemon_gave = CString::new("node destroyed").expect("no interior NUL");
 
         // SAFETY: the context is the address of a live report, and the reason
@@ -696,7 +696,7 @@ mod tests {
     #[test]
     fn a_failure_the_daemon_did_not_explain_is_still_reported_as_one() {
         let (failure_recorder, liveness_report) =
-            AudioStreamFailureRecorder::recording_into_a_new_report();
+            DeviceStreamFailureRecorder::recording_into_a_new_report();
 
         // SAFETY: as above, with the NULL reason libpipewire is allowed to
         // pass.

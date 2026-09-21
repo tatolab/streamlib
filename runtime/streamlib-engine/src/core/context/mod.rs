@@ -3,9 +3,12 @@
 
 mod audio_clock;
 mod audio_device_backend;
+mod device_backend_probe_chain;
+mod device_stream_liveness_report;
 pub(crate) mod escalate_gate;
 mod gpu_context;
 pub(crate) mod isolation;
+mod refusing_null_video_device_backend;
 mod runtime_context;
 pub(crate) mod silent_null_audio_device_backend;
 pub(crate) mod surface_check_out_lease_registry;
@@ -18,6 +21,7 @@ pub mod texture_pool;
 pub(crate) mod texture_registration;
 mod texture_ring;
 mod time_context;
+mod video_device_backend;
 
 pub use audio_clock::{
     AudioClock, AudioClockConfig, AudioTickCallback, AudioTickContext, SharedAudioClock,
@@ -25,10 +29,13 @@ pub use audio_clock::{
 };
 pub use audio_device_backend::{
     AudioBlockForPlaybackHandOff, AudioBlockRequestedByDevice, AudioCaptureStream,
-    AudioDeviceBackend, AudioDeviceBackendArmUnavailableReason, AudioDeviceStreamRequest,
-    AudioPlaybackStream, AudioSampleFormat, AudioStreamFailureReason, AudioStreamFailureRecorder,
-    AudioStreamFormat, AudioStreamLivenessReport, CapturedAudioBlockFromDevice,
-    CapturedAudioBlockHandOff, SharedAudioDeviceBackend, probe_audio_device_backend,
+    AudioDeviceBackend, AudioDeviceStreamRequest, AudioPlaybackStream, AudioSampleFormat,
+    AudioStreamFormat, CapturedAudioBlockFromDevice, CapturedAudioBlockHandOff,
+    SharedAudioDeviceBackend, probe_audio_device_backend,
+};
+pub use device_backend_probe_chain::DeviceBackendArmUnavailableReason;
+pub use device_stream_liveness_report::{
+    DeviceStreamFailureReason, DeviceStreamFailureRecorder, DeviceStreamLivenessReport,
 };
 #[cfg(target_os = "linux")]
 pub use gpu_context::GpuCapabilitiesSnapshot;
@@ -55,3 +62,8 @@ pub use texture_ring::{
     TEXTURE_RING_SLOT_SURFACE_ID_MAX_BYTES, TextureRing, TextureRingInner, TextureRingSlot,
 };
 pub use time_context::TimeContext;
+pub use video_device_backend::{
+    CapturedVideoFrameFromDevice, CapturedVideoFrameHandOff, SharedVideoDeviceBackend,
+    VideoCaptureDevice, VideoCaptureStream, VideoCaptureStreamFormat, VideoDeviceBackend,
+    VideoDeviceStreamRequest, probe_video_device_backend,
+};

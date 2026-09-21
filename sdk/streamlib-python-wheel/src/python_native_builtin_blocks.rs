@@ -33,7 +33,9 @@ impl PythonTestPatternSourceBlock {
     }
 }
 
-/// `streamlib.CameraSource` — live V4L2 camera capture (Linux).
+/// `streamlib.CameraSource` — live camera capture through the engine's video
+/// device seam (V4L2 on Linux; a platform with no capture backend refuses at
+/// `setup()`).
 #[pyclass(name = "CameraSource", module = "streamlib", frozen)]
 pub(crate) struct PythonCameraSourceBlock;
 
@@ -110,14 +112,8 @@ pub(crate) fn native_builtin_class_import_path(
         ));
     }
     if processor_class.is(python.get_type::<PythonCameraSourceBlock>()) {
-        #[cfg(target_os = "linux")]
         return Ok(Some(
             streamlib_media_builtins::CameraSource::Processor::processor_class_import_path(),
-        ));
-        #[cfg(not(target_os = "linux"))]
-        return Err(PyRuntimeError::new_err(
-            "CameraSource is Linux-only (V4L2 capture); this platform is not supported \
-             by the streamlib wheel yet",
         ));
     }
     if processor_class.is(python.get_type::<PythonDisplayWindowBlock>()) {

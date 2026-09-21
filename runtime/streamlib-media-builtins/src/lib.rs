@@ -12,7 +12,6 @@
 pub mod audio_block;
 pub(crate) mod audio_samples_awaiting_playback_ring;
 pub mod audio_window_to_encoded_packet_encoder;
-#[cfg(target_os = "linux")]
 pub mod camera_source;
 pub(crate) mod captured_audio_block_hand_off_ring;
 pub(crate) mod consecutive_failure_report_schedule;
@@ -35,7 +34,6 @@ pub mod h264_encoder;
 pub mod h265_decoder;
 #[cfg(target_os = "linux")]
 pub mod h265_encoder;
-#[cfg(target_os = "linux")]
 pub mod h273_color_vui_translation;
 #[cfg(target_os = "linux")]
 pub mod hardware_video_codec_processor_identity;
@@ -61,8 +59,6 @@ pub(crate) mod processor_thread_join;
 pub mod published_surface_to_encoded_frame_encoder;
 pub mod speaker_sink;
 pub mod test_pattern_source;
-#[cfg(target_os = "linux")]
-pub mod v4l2_color;
 pub mod video_frame;
 #[cfg(target_os = "linux")]
 pub mod virtual_camera_sink;
@@ -71,7 +67,6 @@ mod worker_thread_test_support;
 
 pub use audio_block::{AudioBlock, AudioSampleDtype};
 pub use audio_window_to_encoded_packet_encoder::{OpusEncoderApplication, OpusEncoderConfig};
-#[cfg(target_os = "linux")]
 pub use camera_source::{CameraSource, CameraSourceConfig};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use display_window::{DisplayWindow, DisplayWindowConfig};
@@ -123,7 +118,6 @@ pub fn register_media_builtin_processor_types() {
     PROCESSOR_REGISTRY.register::<opus_decoder::OpusDecoder::Processor>();
     #[cfg(target_os = "linux")]
     PROCESSOR_REGISTRY.register::<mp4_sink::Mp4Sink::Processor>();
-    #[cfg(target_os = "linux")]
     PROCESSOR_REGISTRY.register::<camera_source::CameraSource::Processor>();
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     PROCESSOR_REGISTRY.register::<display_window::DisplayWindow::Processor>();

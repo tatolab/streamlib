@@ -5578,6 +5578,7 @@ dependencies = [
  "trybuild",
  "utoipa",
  "uuid",
+ "v4l",
  "winit",
  "zbus",
  "zenoh",
@@ -5635,7 +5636,6 @@ dependencies = [
  "serde_json",
  "streamlib",
  "tracing",
- "uuid",
  "v4l",
 ]
 

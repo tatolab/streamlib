@@ -9,7 +9,7 @@
 use vulkanalia::vk;
 use vulkanalia::vk::Handle;
 
-use super::color_vui::H273ColorVui;
+use crate::core::color::H273ColorVui;
 use crate::vulkan::video::video_context::{VideoError, VideoResult};
 use crate::vulkan::video::vk_video_encoder::vk_video_encoder_def::{
     H264_MB_SIZE_ALIGNMENT, align_size,

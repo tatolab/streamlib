@@ -30,8 +30,8 @@
 use std::marker::PhantomData;
 
 use serde::{Deserialize, Serialize};
+use streamlib::sdk::color::H273ColorVui;
 use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
-use streamlib::sdk::engine::video::H273ColorVui;
 use streamlib::sdk::engine::video::decode::{
     SimpleDecodedFrame, SimpleDecoder, SimpleDecoderConfig,
 };

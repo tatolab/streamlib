@@ -4,15 +4,15 @@
 //! Fully-resolved color description — every axis has a concrete value.
 //!
 //! Engine-internal ID enums mirror the H.273 / ITU-T VUI 4-tuple
-//! variants of the on-wire `ColorInfo` schema. Schema↔engine-ID
-//! translation lives in [`super::translate`] — engine core math and
+//! variants of the on-wire `ColorInfo` schema. H.273-byte → engine-ID
+//! translation lives in [`super::h273_color_vui`] — engine core math and
 //! kernel inputs consume only the IDs here.
 
 use super::TransferId;
 
 /// Engine-internal color-primaries id. Mirrors H.273
-/// `ColourPrimaries` variants — the schema's primaries enum is
-/// translated into this in [`super::translate`].
+/// `ColourPrimaries` variants — an H.273 primaries byte is
+/// translated into this by [`super::H273ColorVui::resolve_defaults`].
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PrimariesId {
@@ -30,8 +30,8 @@ pub enum PrimariesId {
 }
 
 /// Engine-internal YCbCr-matrix id. Mirrors H.273
-/// `MatrixCoefficients` variants — the schema's matrix enum is
-/// translated into this in [`super::translate`].
+/// `MatrixCoefficients` variants — an H.273 matrix byte is
+/// translated into this by [`super::H273ColorVui::resolve_defaults`].
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MatrixId {
@@ -75,8 +75,8 @@ pub struct ResolvedColorInfo {
 /// Engine-internal trait pair consumed by swapchain colorspace
 /// negotiation. Holds only the axes [`super::pick_swapchain_format`]
 /// actually inspects — primaries (Bt2020 vs other) and transfer
-/// (`Pq` / `Hlg` vs other). Schema → traits translation in
-/// [`super::translate::color_traits_from_color_info`].
+/// (`Pq` / `Hlg` vs other). H.273 → traits translation in
+/// [`super::H273ColorVui::color_traits`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct ColorTraits {
     pub primaries: Option<PrimariesId>,

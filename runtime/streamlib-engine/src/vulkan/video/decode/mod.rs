@@ -673,7 +673,7 @@ impl SimpleDecoder {
     /// that the bitstream omitted or marked Unspecified come back as
     /// `None`. Callers translate these byte values to their domain
     /// `ColorInfo` at the codec-processor seam.
-    pub fn current_color_vui(&self) -> Option<crate::vulkan::video::H273ColorVui> {
+    pub fn current_color_vui(&self) -> Option<crate::core::color::H273ColorVui> {
         match self.config.codec {
             crate::vulkan::video::encode::Codec::H264 => {
                 let parser = self.h264_parser.as_ref()?;
@@ -1117,7 +1117,7 @@ fn decoded_byte_to_option(value: i32) -> Option<u8> {
         return None;
     }
     let byte = value as u8;
-    if byte == crate::vulkan::video::encode::color_vui::H273_UNSPECIFIED {
+    if byte == crate::core::color::H273_UNSPECIFIED {
         return None;
     }
     Some(byte)
@@ -1131,11 +1131,11 @@ fn build_color_vui(
     transfer: Option<u8>,
     matrix: Option<u8>,
     full_range: Option<bool>,
-) -> Option<crate::vulkan::video::H273ColorVui> {
+) -> Option<crate::core::color::H273ColorVui> {
     if primaries.is_none() && transfer.is_none() && matrix.is_none() && full_range.is_none() {
         return None;
     }
-    Some(crate::vulkan::video::H273ColorVui {
+    Some(crate::core::color::H273ColorVui {
         primaries,
         transfer,
         matrix,
@@ -1146,7 +1146,7 @@ fn build_color_vui(
 #[cfg(test)]
 mod color_vui_helper_tests {
     use super::*;
-    use crate::vulkan::video::encode::color_vui;
+    use crate::core::color::h273_color_vui;
 
     #[test]
     fn unspecified_byte_becomes_none() {
@@ -1182,9 +1182,9 @@ mod color_vui_helper_tests {
     #[test]
     fn hdr10_axes_round_trip_to_h273_bytes() {
         let vui = build_color_vui(
-            Some(color_vui::primaries::BT2020),
-            Some(color_vui::transfer::SMPTE2084),
-            Some(color_vui::matrix::BT2020_NCL),
+            Some(h273_color_vui::primaries::BT2020),
+            Some(h273_color_vui::transfer::SMPTE2084),
+            Some(h273_color_vui::matrix::BT2020_NCL),
             Some(true),
         )
         .expect("non-empty axes yield Some");

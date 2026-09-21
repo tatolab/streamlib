@@ -25,8 +25,8 @@
 /// slots — the shader switches on it. Must stay in sync with the
 /// `TRANSFER_*` constants in the shader.
 ///
-/// Schema → id translation lives in
-/// [`super::translate::transfer_id_from_schema`].
+/// H.273 → id translation lives in
+/// [`super::H273ColorVui::resolve_defaults`].
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TransferId {
