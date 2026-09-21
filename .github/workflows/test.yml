@@ -801,6 +801,12 @@ jobs:
           # seconds. The Linux job names a slice of this suite instead, so this
           # is the broader of the two runs rather than a mirror of it.
           cargo test --locked -p streamlib-engine --lib -- --test-threads=1
+          # The surface-share service's raw-Mach arm: the wire in its client
+          # crate, then the service across real processes — a helper reading and
+          # editing a shared IOSurface, an impostor refused, and each side's
+          # death seen by the other. IOSurface and Mach need no GPU.
+          cargo test --locked -p streamlib-surface-client
+          cargo test --locked -p streamlib-engine --test surface_share_over_raw_mach
           # Compiled but not run: the AVFoundation arm against a real camera,
           # and `CameraSource` → `DisplayWindow` on the window server, need a
           # camera, camera access and a GPU no runner has. Building them here

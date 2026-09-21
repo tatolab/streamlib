@@ -90,7 +90,7 @@ impl PixelBufferRingEntry {
 
     /// Whether the kernel reports the slot's IOSurface in use by any
     /// process: a Mach port to it still in flight, or a use count a helper
-    /// holds. Kernel-truthful, and dropped atomically when that process
+    /// holds. Kernel-truthful, and cleared by the kernel when that process
     /// dies, so it holds a slot even where no checkout lease was taken.
     #[cfg(target_os = "macos")]
     fn is_in_use_per_the_kernel(&self) -> bool {

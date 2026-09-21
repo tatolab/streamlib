@@ -2547,3 +2547,158 @@ mod fd_ownership_tests {
         service.stop();
     }
 }
+
+#[cfg(test)]
+#[cfg(target_os = "macos")]
+mod mach_surface_share_pool_tests {
+    use std::time::Duration;
+
+    use objc2_io_surface::IOSurfaceRef;
+    use streamlib_surface_client::SurfaceShareMachServiceConnection;
+
+    use crate::apple::surface_share::{IOSurfaceShareState, MachSurfaceShareService};
+    use crate::core::context::{GpuContext, SurfaceStore};
+    use crate::core::rhi::{PixelFormat, pool_slot_key_of_surface_id};
+
+    fn gpu_or_skip() -> Option<GpuContext> {
+        match GpuContext::init_for_platform() {
+            Ok(gpu) => Some(gpu),
+            Err(e) => {
+                tracing::warn!("skipping — no GPU device: {e}");
+                None
+            }
+        }
+    }
+
+    fn engine_pattern_byte(index: usize) -> u8 {
+        (index.wrapping_mul(13).wrapping_add(5)) as u8
+    }
+
+    /// A pooled frame is an IOSurface the service hands out: another
+    /// connection checks the published frame id out, and the surface its port
+    /// names holds the pixels the producer wrote into the pooled buffer.
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn a_pooled_frame_crosses_the_mach_service_as_the_iosurface_holding_its_pixels() {
+        let Some(gpu) = gpu_or_skip() else {
+            return;
+        };
+        let state = IOSurfaceShareState::new();
+        let mut service = MachSurfaceShareService::new(
+            state.clone(),
+            format!(
+                "com.tatolab.streamlib.surface-share-test.pool.{}",
+                std::process::id()
+            ),
+        );
+        service.start().expect("the service starts");
+        let store = SurfaceStore::new_reading_check_out_leases(
+            service.service_name().to_string(),
+            "R-pool-test".to_string(),
+            std::sync::Arc::clone(state.check_out_leases()),
+        );
+        store.connect().expect("the store connects");
+        gpu.set_surface_store(store);
+
+        let (frame_id, pooled_buffer) = gpu
+            .acquire_pixel_buffer(64, 32, PixelFormat::Bgra32)
+            .expect("a pooled frame");
+        let pooled_bytes = unsafe {
+            std::slice::from_raw_parts_mut(
+                pooled_buffer.buffer_ref().inner.mapped_ptr(),
+                64 * 32 * 4,
+            )
+        };
+        for (index, byte) in pooled_bytes.iter_mut().enumerate() {
+            *byte = engine_pattern_byte(index);
+        }
+        assert!(
+            state
+                .surface_ids()
+                .contains(&pool_slot_key_of_surface_id(frame_id.to_string().as_str()).to_string()),
+            "the pool registered its slot with the service"
+        );
+
+        let reader = SurfaceShareMachServiceConnection::connect(
+            service.service_name(),
+            Duration::from_secs(10),
+        )
+        .expect("a reader connects");
+        let (answer, ports) = reader
+            .send_request_with_ports(
+                &serde_json::json!({"op": "check_out", "surface_id": frame_id.to_string()}),
+                Vec::new(),
+            )
+            .expect("check_out round-trip");
+        assert!(answer.get("error").is_none(), "{answer}");
+        assert_eq!(answer["plane_strides"], serde_json::json!([64 * 4]));
+        let iosurface = IOSurfaceRef::lookup_from_mach_port(ports[0].as_raw_name())
+            .expect("the port names the slot's IOSurface");
+        let shared_bytes = unsafe {
+            std::slice::from_raw_parts(iosurface.base_address().as_ptr().cast::<u8>(), 64 * 32 * 4)
+        };
+        assert!(
+            shared_bytes
+                .iter()
+                .enumerate()
+                .all(|(index, byte)| *byte == engine_pattern_byte(index)),
+            "the shared surface holds the pooled buffer's pixels"
+        );
+    }
+
+    /// The pool never rehands a slot whose IOSurface the kernel reports in
+    /// use — here by a use count this process holds, which counts the same
+    /// as one a helper holds — and takes it back once the use ends.
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn a_slot_whose_iosurface_is_in_use_is_not_rehanded_to_its_producer() {
+        let Some(gpu) = gpu_or_skip() else {
+            return;
+        };
+        // Every acquisition below is dropped at once, so the ring never grows
+        // past its pre-allocated slots and this many visits each several times.
+        let acquisitions_that_revisit_every_slot = 16;
+        let slot_key_of = |frame_id: &crate::core::rhi::PublishedPixelBufferFrameId| {
+            pool_slot_key_of_surface_id(frame_id.to_string().as_str()).to_string()
+        };
+
+        let (held_frame_id, held_buffer) = gpu
+            .acquire_pixel_buffer(32, 32, PixelFormat::Bgra32)
+            .expect("a pooled frame");
+        let held_slot_key = slot_key_of(&held_frame_id);
+        let held_iosurface = held_buffer
+            .buffer_ref()
+            .inner
+            .backing_iosurface()
+            .map(objc2_core_foundation::CFRetained::<IOSurfaceRef>::from)
+            .expect("a macOS pool slot is an IOSurface");
+        held_iosurface.increment_use_count();
+        drop(held_buffer);
+
+        for _ in 0..acquisitions_that_revisit_every_slot {
+            let (frame_id, _) = gpu
+                .acquire_pixel_buffer(32, 32, PixelFormat::Bgra32)
+                .expect("a pooled frame");
+            assert_ne!(
+                slot_key_of(&frame_id),
+                held_slot_key,
+                "a slot in use was rehanded"
+            );
+        }
+
+        held_iosurface.decrement_use_count();
+        let the_slot_came_back = (0..acquisitions_that_revisit_every_slot).any(|_| {
+            let (frame_id, _) = gpu
+                .acquire_pixel_buffer(32, 32, PixelFormat::Bgra32)
+                .expect("a pooled frame");
+            slot_key_of(&frame_id) == held_slot_key
+        });
+        assert!(the_slot_came_back, "the slot returns once nothing uses it");
+    }
+}

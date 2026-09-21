@@ -316,6 +316,19 @@ path = "tests/bin/surface_share_crash_helper.rs"
 # (runtime/streamlib-engine/tests/surface_share_subprocess_crash.rs). Linux only.
 required-features = []
 
+# Helper process for the raw-Mach surface-share integration test: reads and
+# edits a surface the engine shares, holds one to be killed, or plays the
+# engine a helper outlives. Empty off macOS.
+[[bin]]
+name = "surface_share_mach_helper"
+path = "tests/bin/surface_share_mach_helper.rs"
+
+# The raw-Mach surface-share proof across processes. No GPU, so it runs on the
+# macOS CI runner; named in `.github/workflows/test.yml`'s macOS job.
+[[test]]
+name = "surface_share_over_raw_mach"
+path = "tests/surface_share_over_raw_mach.rs"
+
 [build-dependencies]
 serde_json = { workspace = true }
 # Reads the manifests of the crates the engine links through path dependencies,
