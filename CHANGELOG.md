@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.9](https://github.com/tatolab/streamlib/compare/v0.26.8...v0.26.9) (2026-09-21)
+
+
+### Features
+
+* **engine:** a video device backend seam, with V4L2 moved behind it ([#2393](https://github.com/tatolab/streamlib/issues/2393)) ([75dd632](https://github.com/tatolab/streamlib/commit/75dd6324838b485c5753fa1e46473f68a194785b))
+
 ## [0.26.8](https://github.com/tatolab/streamlib/compare/v0.26.7...v0.26.8) (2026-09-21)
 
 
