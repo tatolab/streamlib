@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.12](https://github.com/tatolab/streamlib/compare/v0.26.11...v0.26.12) (2026-09-22)
+
+
+### Features
+
+* **wheel:** the wheel builds, tests and lints on macOS in CI ([#2416](https://github.com/tatolab/streamlib/issues/2416)) ([e87bb27](https://github.com/tatolab/streamlib/commit/e87bb2750929ea95f533479322584a7a8af2a696))
+
 ## [0.26.11](https://github.com/tatolab/streamlib/compare/v0.26.10...v0.26.11) (2026-09-22)
 
 
