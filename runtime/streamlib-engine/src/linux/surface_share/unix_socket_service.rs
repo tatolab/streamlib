@@ -1768,11 +1768,11 @@ mod tests {
     }
 
     /// Watchdog primitive (pure-function): given a state populated with
-    /// surfaces under multiple runtime_ids, `cleanup_runtime_surfaces`
+    /// surfaces under multiple runtime_ids, `release_every_surface_registered_by`
     /// releases only the targeted runtime's surfaces and is idempotent on
     /// second call.
     #[test]
-    fn cleanup_runtime_surfaces_is_scoped_and_idempotent() {
+    fn release_every_surface_registered_by_is_scoped_and_idempotent() {
         let state = SurfaceShareState::new();
         // Use real memfds so release_surface's libc::close calls operate on
         // valid fds (no fd-table corruption from -1 sentinels).
@@ -2524,7 +2524,7 @@ mod tests {
 
         // Updating an unknown surface_id reports failure rather than a
         // crash — handle_update_layout must be idempotent against the
-        // race with cleanup_runtime_surfaces.
+        // race with release_every_surface_registered_by.
         let bad_update = serde_json::json!({
             "op": "update_layout",
             "surface_id": "missing",

@@ -1241,9 +1241,7 @@ impl HostVulkanBuffer {
 
     /// The IOSurface this buffer's memory is, when it is one.
     pub fn backing_iosurface(&self) -> Option<&objc2_io_surface::IOSurfaceRef> {
-        self.backing_iosurface
-            .as_ref()
-            .map(|iosurface| -> &objc2_io_surface::IOSurfaceRef { iosurface })
+        self.backing_iosurface.as_deref()
     }
 }
 

@@ -510,10 +510,11 @@ pub fn send_surface_share_mach_message(
             unsafe { mach_msg_destroy(header) };
             Err(mach_send_failure(send_result))
         }
-        // Any other failure is a malformed message that the kernel may have
-        // copied part of before refusing, consuming those rights. Releasing
-        // `ports` again could free a right some other holder now owns under
-        // the same name, so they are left unreleased instead.
+        // Any other failure is a malformed message, or one refused for lack
+        // of kernel resources, and the kernel may have copied part of it in
+        // before refusing, consuming those rights. Releasing `ports` again
+        // could free a right some other holder now owns under the same name,
+        // so they are left unreleased instead.
         _ => {
             for possibly_consumed in ports {
                 let _ = possibly_consumed.into_raw_name();
