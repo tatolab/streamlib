@@ -770,6 +770,8 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::runtime::stated_configuration_value",
                 "linux::host_identity",
                 "linux::machine_clock_identity",
+                "linux::surface_share",
+                "core::context::surface_share_wire_verbs",
             ],
         ),
         // The rig-tier integration binary that drives the two `match_device`
@@ -913,6 +915,18 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "silent_null_arm_plays_what_it_is_given",
                 "--test",
                 "silent_null_arm_captures_without_ever_dying",
+            ],
+        ),
+        (
+            "the surface-share watchdog across a real process",
+            "cargo",
+            &[
+                "test",
+                "--locked",
+                "-p",
+                "streamlib-engine",
+                "--test",
+                "surface_share_subprocess_crash",
             ],
         ),
         (

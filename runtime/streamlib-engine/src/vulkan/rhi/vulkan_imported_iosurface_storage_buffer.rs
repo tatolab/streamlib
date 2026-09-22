@@ -155,6 +155,7 @@ impl HostVulkanBuffer {
             imported_byte_size,
             buffer_byte_len.unwrap_or(imported_byte_size),
             None,
+            "HostVulkanBuffer::from_iosurface_pages",
         )
         .map_err(|refusal| match refusal {
             Error::GpuError(driver_refusal) => Error::NotSupported(format!(

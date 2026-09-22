@@ -1110,37 +1110,39 @@ impl HostVulkanBuffer {
             byte_len,
             byte_len,
             host_range_owner,
+            "HostVulkanBuffer::from_imported_host_pointer_as_storage_buffer",
         )
     }
 
     /// As [`Self::from_imported_host_pointer_as_storage_buffer`], with the
     /// buffer spanning only the first `buffer_byte_len` bytes of the
     /// `byte_len` imported — for a range the import alignment rounds up past
-    /// what the buffer's user addresses.
+    /// what the buffer's user addresses. Refusals name `constructor_label`,
+    /// the public constructor the caller came through.
     pub(super) fn from_imported_host_range_as_buffer_of_size(
         vulkan_device: &Arc<HostVulkanDevice>,
         host_ptr: *mut u8,
         byte_len: u64,
         buffer_byte_len: u64,
         host_range_owner: Option<Box<dyn Send + Sync>>,
+        constructor_label: &'static str,
     ) -> Result<Self> {
         use vulkanalia::vk::ExtExternalMemoryHostExtensionDeviceCommands as _;
 
-        const CONSTRUCTOR: &str = "HostVulkanBuffer::from_imported_host_range_as_buffer_of_size";
         if buffer_byte_len == 0 || buffer_byte_len > byte_len {
             return Err(Error::Configuration(format!(
-                "{CONSTRUCTOR}: a {buffer_byte_len}-byte buffer does not fit the {byte_len} bytes \
+                "{constructor_label}: a {buffer_byte_len}-byte buffer does not fit the {byte_len} bytes \
                  imported"
             )));
         }
         if !vulkan_device.supports_host_pointer_import() {
             return Err(Error::NotSupported(format!(
-                "{CONSTRUCTOR}: VK_EXT_external_memory_host is not enabled on this device"
+                "{constructor_label}: VK_EXT_external_memory_host is not enabled on this device"
             )));
         }
         if byte_len == 0 {
             return Err(Error::Configuration(format!(
-                "{CONSTRUCTOR}: byte_len must be > 0"
+                "{constructor_label}: byte_len must be > 0"
             )));
         }
         let alignment = vulkan_device.min_imported_host_pointer_alignment();
@@ -1149,7 +1151,7 @@ impl HostVulkanBuffer {
             || !byte_len.is_multiple_of(alignment)
         {
             return Err(Error::Configuration(format!(
-                "{CONSTRUCTOR}: host range {host_ptr:p}+{byte_len} is not aligned to the \
+                "{constructor_label}: host range {host_ptr:p}+{byte_len} is not aligned to the \
                  driver's {alignment}-byte import alignment"
             )));
         }
@@ -1167,7 +1169,7 @@ impl HostVulkanBuffer {
         }
         .map_err(|e| {
             Error::GpuError(format!(
-                "{CONSTRUCTOR}: the driver declined to import the host range {host_ptr:p}+{byte_len}: {e}"
+                "{constructor_label}: the driver declined to import the host range {host_ptr:p}+{byte_len}: {e}"
             ))
         })?;
 
@@ -1184,14 +1186,15 @@ impl HostVulkanBuffer {
             .sharing_mode(vk::SharingMode::EXCLUSIVE)
             .push_next(&mut external_buffer_info)
             .build();
-        let buffer = unsafe { device.create_buffer(&buffer_info, None) }
-            .map_err(|e| Error::GpuError(format!("{CONSTRUCTOR}: vkCreateBuffer failed: {e}")))?;
+        let buffer = unsafe { device.create_buffer(&buffer_info, None) }.map_err(|e| {
+            Error::GpuError(format!("{constructor_label}: vkCreateBuffer failed: {e}"))
+        })?;
 
         let requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
         if requirements.size > byte_len {
             unsafe { device.destroy_buffer(buffer, None) };
             return Err(Error::GpuError(format!(
-                "{CONSTRUCTOR}: the buffer needs {} bytes of memory but the host range is {byte_len}",
+                "{constructor_label}: the buffer needs {} bytes of memory but the host range is {byte_len}",
                 requirements.size
             )));
         }
@@ -1203,7 +1206,9 @@ impl HostVulkanBuffer {
         unsafe { device.bind_buffer_memory(buffer, memory, 0) }.map_err(|e| {
             vulkan_device.free_imported_memory(memory);
             unsafe { device.destroy_buffer(buffer, None) };
-            Error::GpuError(format!("{CONSTRUCTOR}: vkBindBufferMemory failed: {e}"))
+            Error::GpuError(format!(
+                "{constructor_label}: vkBindBufferMemory failed: {e}"
+            ))
         })?;
 
         Ok(Self {
