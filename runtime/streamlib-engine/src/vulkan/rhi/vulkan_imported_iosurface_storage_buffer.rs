@@ -38,7 +38,8 @@ impl ImportedIOSurfaceStorageBuffer {
     ///
     /// Refused, naming the reason, when `VK_EXT_external_memory_host` is not
     /// enabled, when the surface's base address is not on the import
-    /// alignment, or when the driver declines the import.
+    /// alignment, when that rounding would reach past the surface's mapped
+    /// pages, or when the driver declines the import.
     #[tracing::instrument(level = "debug", skip(vulkan_device, iosurface), fields(
         surface = %describe_iosurface(iosurface),
     ))]
@@ -118,8 +119,10 @@ impl HostVulkanBuffer {
     /// `None`, and retains the surface until its memory is freed.
     ///
     /// Refused, naming the reason, when the extension is not enabled, when
-    /// the surface's base address is not on the import alignment, or when
-    /// the driver declines the import.
+    /// the surface's base address is not on the import alignment, when that
+    /// rounding would reach past the whole pages the surface is mapped on —
+    /// importing memory the surface does not own — or when the driver
+    /// declines the import.
     pub fn from_iosurface_pages(
         vulkan_device: &Arc<HostVulkanDevice>,
         iosurface: &IOSurfaceRef,
@@ -147,7 +150,26 @@ impl HostVulkanBuffer {
                  on the driver's {import_alignment}-byte host-pointer import alignment"
             )));
         }
+        // A surface is mapped a whole page at a time, and CoreVideo's report
+        // an allocation that ends mid-page, so the rounding stays inside the
+        // surface for any alignment up to the page size and leaves it beyond.
+        // SAFETY: `sysconf` reads a system constant and touches no memory.
+        let page_byte_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+        let page_byte_size = u64::try_from(page_byte_size)
+            .ok()
+            .filter(|page_byte_size| *page_byte_size > 0)
+            .ok_or_else(|| {
+                Error::Configuration(format!("{OPERATION}: the system page size is unreadable"))
+            })?;
+        let mapped_byte_size = allocation_byte_size.next_multiple_of(page_byte_size);
         let imported_byte_size = allocation_byte_size.next_multiple_of(import_alignment);
+        if imported_byte_size > mapped_byte_size {
+            return Err(Error::NotSupported(format!(
+                "{OPERATION}: the {surface_description}'s {allocation_byte_size}-byte allocation \
+                 rounds up to {imported_byte_size} bytes on the driver's {import_alignment}-byte \
+                 import alignment, past the {mapped_byte_size} bytes of pages it is mapped on"
+            )));
+        }
 
         let buffer = HostVulkanBuffer::from_imported_host_range_as_buffer_of_size(
             vulkan_device,
