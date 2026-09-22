@@ -1292,7 +1292,7 @@ pub(crate) fn spawn_host_for_processor_node(
 mod tests {
     use super::*;
     use std::ffi::OsStr;
-    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+    use std::os::fd::{AsRawFd, OwnedFd};
 
     // =========================================================================
     // What a child inherits
@@ -1311,22 +1311,17 @@ if os.fork() == 0:
     /// A pipe whose write end is inheritable on purpose, standing in for any
     /// descriptor this process holds that a helper must not keep.
     fn an_inheritable_pipe() -> (OwnedFd, OwnedFd) {
-        let mut ends: [libc::c_int; 2] = [-1, -1];
-        // SAFETY: `ends` is a two-element array, which is what `pipe2` fills.
+        let (read_end, write_end) = std::io::pipe().expect("pipe");
+        let (read_end, write_end) = (OwnedFd::from(read_end), OwnedFd::from(write_end));
+        // SAFETY: `write_end` is a live descriptor this process owns; clearing
+        // its close-on-exec flag is what makes it the inheritable descriptor the
+        // sweep must catch.
         assert_eq!(
-            unsafe { libc::pipe2(ends.as_mut_ptr(), libc::O_CLOEXEC) },
-            0,
-            "pipe2"
-        );
-        // SAFETY: `ends[1]` was just created here; clearing its close-on-exec
-        // flag is what makes it the inheritable descriptor the sweep must catch.
-        assert_eq!(
-            unsafe { libc::fcntl(ends[1], libc::F_SETFD, 0) },
+            unsafe { libc::fcntl(write_end.as_raw_fd(), libc::F_SETFD, 0) },
             0,
             "F_SETFD"
         );
-        // SAFETY: both descriptors are freshly created and owned by nobody else.
-        unsafe { (OwnedFd::from_raw_fd(ends[0]), OwnedFd::from_raw_fd(ends[1])) }
+        (read_end, write_end)
     }
 
     /// Whether the descriptor reports end of file inside `budget`, which it can
@@ -1409,14 +1404,20 @@ if os.fork() == 0:
             // SAFETY: this process signalling itself, which is what leaves the
             // node registered with no process behind it.
             unsafe { libc::kill(std::process::id() as libc::pid_t, libc::SIGKILL) };
-            unreachable!("SIGKILL to self does not return");
+            // Darwin can return from `kill` before a self-directed SIGKILL has
+            // landed; parking holds the node until it does.
+            loop {
+                std::thread::park();
+            }
         }
 
         // Named from this test process's own pid rather than through a
         // temp-directory crate, so the one test needing a private domain adds
         // no dependency to the wheel.
-        let domain =
-            std::env::temp_dir().join(format!("streamlib-host-sweep-{}", std::process::id()));
+        // `/tmp` rather than `std::env::temp_dir()`: on macOS that is a
+        // `/var/folders/...` path long enough to overrun the budget iceoryx2's
+        // socket paths leave a domain root.
+        let domain = Path::new("/tmp").join(format!("streamlib-host-sweep-{}", std::process::id()));
         let domain_root = domain.join("iox2");
         std::fs::create_dir_all(&domain_root).expect("a private domain root");
         let dead_node_owner = Command::new(std::env::current_exe().unwrap())
