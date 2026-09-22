@@ -50,6 +50,17 @@ class OuterProbe:
 
 
 @processor(execution="manual")
+class ImportsADmaBufOffLinuxProbe:
+    """Adopts a DMA-BUF in `setup`, off Linux, and fails with the refusal."""
+
+    @output()
+    def frames_to_downstream(self) -> None: ...
+
+    def setup(self, ctx) -> None:
+        ctx.gpu_full_access.import_dma_buf(fd=0, width=16, height=16)
+
+
+@processor(execution="manual")
 class RefusesSetupProbe:
     """Raises out of `setup`, which the parent must hear about."""
 

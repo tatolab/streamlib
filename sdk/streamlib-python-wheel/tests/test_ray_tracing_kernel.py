@@ -33,7 +33,10 @@ import pytest
 
 from ray_tracing_kernel_probes import SCENE_BINDING, TRACED_OUTPUT_BINDING
 
-pytestmark = pytest.mark.requires_gpu
+pytestmark = [
+    pytest.mark.requires_gpu,
+    pytest.mark.linux_only_capability(reason="MoltenVK has no VK_KHR_ray_tracing_pipeline"),
+]
 
 APP = Path(__file__).parent / "ray_tracing_kernel_app.py"
 

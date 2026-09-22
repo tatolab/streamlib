@@ -87,6 +87,7 @@ def test_the_marker_class_cannot_be_instantiated(marker_class):
         marker_class()
 
 
+@pytest.mark.awaiting_macos_parity(issue=2413)
 @pytest.mark.parametrize("marker_class", FOUR_CODEC_MARKERS)
 def test_display_name_defaults_to_the_type_name(marker_class):
     runtime = streamlib.Runtime()
@@ -97,6 +98,7 @@ def test_display_name_defaults_to_the_type_name(marker_class):
         runtime.shutdown()
 
 
+@pytest.mark.awaiting_macos_parity(issue=2413)
 @pytest.mark.parametrize("codec", sorted(CODEC_ROUND_TRIPS))
 def test_the_round_trip_wires_without_an_adapter(codec):
     """Pattern into encoder, encoder into decoder, decoder into window — the
@@ -119,6 +121,7 @@ def test_the_round_trip_wires_without_an_adapter(codec):
 # ---- the round trip in a real graph (GPU) ----------------------------------
 
 
+@pytest.mark.awaiting_macos_parity(issue=2413)
 @pytest.mark.requires_gpu
 @pytest.mark.parametrize("codec", sorted(CODEC_ROUND_TRIPS))
 def test_the_codec_round_trip_publishes_decoded_frames_at_the_source_extent(
@@ -184,6 +187,7 @@ def _reported_encoded_frames(app_output: str) -> "list[dict]":
     return [json.loads(report) for report in ENCODED_FRAME.findall(app_output)]
 
 
+@pytest.mark.awaiting_macos_parity(issue=2413)
 @pytest.mark.requires_gpu
 @pytest.mark.parametrize("codec", sorted(CODEC_ROUND_TRIPS))
 def test_the_encoded_channel_casts_and_carries_the_ordering_contract(
@@ -256,6 +260,7 @@ def test_the_encoded_channel_casts_and_carries_the_ordering_contract(
     )
 
 
+@pytest.mark.awaiting_macos_parity(issue=2413)
 @pytest.mark.requires_gpu
 @pytest.mark.parametrize("codec", sorted(CODEC_ROUND_TRIPS))
 def test_each_decoded_frame_carries_the_stamp_of_the_encoded_frame_it_came_from(

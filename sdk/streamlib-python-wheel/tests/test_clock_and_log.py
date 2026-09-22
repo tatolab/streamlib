@@ -75,6 +75,7 @@ def test_python_exports_exactly_one_name_for_the_monotonic_clock():
         )
 
 
+@pytest.mark.awaiting_macos_parity(issue=2408)
 def test_a_timer_ticks_at_roughly_its_interval():
     with MonotonicTimer(TIMER_TEST_INTERVAL_NS) as timer:
         before_first_tick = monotonic_now_ns()
@@ -89,18 +90,21 @@ def test_a_timer_ticks_at_roughly_its_interval():
     )
 
 
+@pytest.mark.awaiting_macos_parity(issue=2408)
 def test_a_wait_that_times_out_returns_zero():
     one_hour_ns = 3_600_000_000_000
     with MonotonicTimer(one_hour_ns) as timer:
         assert timer.wait(timeout_ms=10) == 0
 
 
+@pytest.mark.awaiting_macos_parity(issue=2408)
 def test_waiting_on_a_closed_timer_returns_minus_one():
     timer = MonotonicTimer(TIMER_TEST_INTERVAL_NS)
     timer.close()
     assert timer.wait(timeout_ms=10) == -1
 
 
+@pytest.mark.awaiting_macos_parity(issue=2408)
 def test_the_context_manager_closes_the_timer():
     with MonotonicTimer(TIMER_TEST_INTERVAL_NS) as timer:
         assert timer.interval_ns == TIMER_TEST_INTERVAL_NS

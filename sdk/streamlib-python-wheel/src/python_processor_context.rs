@@ -29,12 +29,12 @@ use crate::python_bag_conversion::{json_value_to_python_object, python_object_to
 use crate::python_gpu_surface_pixel_exchange::{
     CpuAccessGate, GpuSurfaceOwnedMemory, HOST_VISIBLE_DLPACK_DEVICE, device_export_available,
     exchange_shape_for_max_version, host_visible_dlpack_capsule,
+    map_the_cpu_staging_without_reading_a_frame_in,
 };
 #[cfg(target_os = "linux")]
 use crate::python_gpu_surface_pixel_exchange::{
     PreparedDeviceExport, StagedWriteBackSource, device_dlpack_capsule, imported_device_for,
-    map_the_cpu_staging_without_reading_a_frame_in, prepare_device_export,
-    read_the_frame_into_its_cpu_staging,
+    prepare_device_export, read_the_frame_into_its_cpu_staging,
 };
 use crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient;
 #[cfg(target_os = "linux")]
@@ -76,6 +76,16 @@ fn escalate_scope_cannot_cross_the_process_boundary_error(
 /// three call sites.
 fn left_by_a_propagating_exception(exception_type: Option<&Bound<'_, PyAny>>) -> bool {
     exception_type.is_some()
+}
+
+/// The refusal an fd-shaped raw-handle method gives on a platform whose
+/// surfaces are IOSurfaces, not file descriptors.
+#[cfg(not(target_os = "linux"))]
+fn fd_shaped_raw_handle_is_linux_only_error(method_name: &str) -> PyErr {
+    PyRuntimeError::new_err(format!(
+        "{method_name} is Linux-only: DMA-BUF and OPAQUE_FD are Linux file-descriptor handles, \
+         and a surface on this platform is an IOSurface: its raw handle is `export_iosurface`"
+    ))
 }
 
 fn gpu_unreachable_from_a_helper_process_error() -> PyErr {
@@ -1703,6 +1713,20 @@ impl PythonGpuContextFullAccess {
         python.detach(|| owned_memory.export_dma_buf())
     }
 
+    /// Refuses by name: DMA-BUF is a Linux handle.
+    #[cfg(not(target_os = "linux"))]
+    #[expect(
+        clippy::unused_self,
+        reason = "the refusal is this capability's whole answer off Linux"
+    )]
+    #[expect(
+        unused_variables,
+        reason = "the Python-visible parameter name is the API; stubtest compares it"
+    )]
+    fn export_dma_buf(&self, surface: &PythonGpuSurfaceHandle) -> PyResult<(i32, u64)> {
+        Err(fd_shaped_raw_handle_is_linux_only_error("export_dma_buf"))
+    }
+
     /// Export the OPAQUE_FD texture handle for `surface`, for native code
     /// that runs its own Vulkan or CUDA external-memory import against
     /// the allocation.
@@ -1726,6 +1750,23 @@ impl PythonGpuContextFullAccess {
     ) -> PyResult<PythonOpaqueFdTextureExport> {
         let owned_memory = surface.owned_memory()?;
         Ok(python.detach(|| owned_memory.export_opaque_fd())?.into())
+    }
+
+    /// Refuses by name: OPAQUE_FD is a Linux handle.
+    #[cfg(not(target_os = "linux"))]
+    #[expect(
+        clippy::unused_self,
+        reason = "the refusal is this capability's whole answer off Linux"
+    )]
+    #[expect(
+        unused_variables,
+        reason = "the Python-visible parameter name is the API; stubtest compares it"
+    )]
+    fn export_opaque_fd(
+        &self,
+        surface: &PythonGpuSurfaceHandle,
+    ) -> PyResult<PythonOpaqueFdTextureExport> {
+        Err(fd_shaped_raw_handle_is_linux_only_error("export_opaque_fd"))
     }
 
     /// Import a foreign DMA-BUF file descriptor as a surface this graph can
@@ -1772,6 +1813,28 @@ impl PythonGpuContextFullAccess {
             ));
         }
         Err(gpu_unreachable_from_a_helper_process_error())
+    }
+
+    /// Refuses by name: DMA-BUF is a Linux handle.
+    #[cfg(not(target_os = "linux"))]
+    #[expect(
+        clippy::unused_self,
+        reason = "the refusal is this capability's whole answer off Linux"
+    )]
+    #[expect(
+        unused_variables,
+        reason = "the Python-visible parameter names are the API; stubtest compares them"
+    )]
+    #[pyo3(signature = (fd, width, height, format = "bgra", byte_size = None))]
+    fn import_dma_buf(
+        &self,
+        fd: i32,
+        width: u32,
+        height: u32,
+        format: &str,
+        byte_size: Option<u64>,
+    ) -> PyResult<PythonGpuSurfaceHandle> {
+        Err(fd_shaped_raw_handle_is_linux_only_error("import_dma_buf"))
     }
 
     /// Block until the GPU device is idle.

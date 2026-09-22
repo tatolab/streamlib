@@ -218,6 +218,7 @@ def test_camera_device_pixels_match_host_across_ring_cycles(start_app_under_test
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.linux_only_capability(reason="DMA-BUF and OPAQUE_FD are Linux file-descriptor handles")
 def test_a_dma_buf_fd_round_trips_out_of_and_back_into_the_graph(
     start_app_under_test,
 ):
@@ -242,6 +243,7 @@ def test_a_dma_buf_fd_round_trips_out_of_and_back_into_the_graph(
     )
 
 
+@pytest.mark.linux_only_capability(reason="DMA-BUF and OPAQUE_FD are Linux file-descriptor handles")
 def test_a_texture_handle_round_trips_across_the_process_boundary(
     start_app_under_test,
 ):

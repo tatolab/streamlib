@@ -5,6 +5,7 @@
 
 import os
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 from typing import Callable, Iterator
@@ -27,6 +28,27 @@ SHARED_TEMPORARY_DIRECTORY = Path("/tmp")
 # environment as it is spawned, and a test that forgets to ask for a fixture
 # would otherwise join the owner's desk.
 os.environ.setdefault(MESH_MULTICAST_DISCOVERY_ENVIRONMENT_VARIABLE, "0")
+
+
+def pytest_collection_modifyitems(config: pytest.Config, items: "list[pytest.Item]") -> None:
+    """Turns the two platform markers into a skip or a strict xfail."""
+    for item in items:
+        linux_only = item.get_closest_marker("linux_only_capability")
+        if linux_only is not None:
+            reason = linux_only.kwargs.get("reason")
+            if not reason:
+                raise pytest.UsageError(f"{item.nodeid}: linux_only_capability needs reason=")
+            if sys.platform != "linux":
+                item.add_marker(pytest.mark.skip(reason=f"Linux-only: {reason}"))
+        awaiting = item.get_closest_marker("awaiting_macos_parity")
+        if awaiting is not None:
+            issue = awaiting.kwargs.get("issue")
+            if not isinstance(issue, int):
+                raise pytest.UsageError(f"{item.nodeid}: awaiting_macos_parity needs issue=<number>")
+            if sys.platform == "darwin":
+                item.add_marker(
+                    pytest.mark.xfail(strict=True, reason=f"#{issue} brings this to macOS")
+                )
 
 
 @pytest.fixture

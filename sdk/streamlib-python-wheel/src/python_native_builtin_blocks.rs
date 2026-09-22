@@ -192,8 +192,14 @@ pub(crate) fn native_builtin_class_import_path(
         ));
     }
     if processor_class.is(python.get_type::<PythonMp4SinkBlock>()) {
+        #[cfg(target_os = "linux")]
         return Ok(Some(
             streamlib_media_builtins::Mp4Sink::Processor::processor_class_import_path(),
+        ));
+        #[cfg(not(target_os = "linux"))]
+        return Err(PyRuntimeError::new_err(
+            "Mp4Sink is Linux-only today: its muxer reads parameter sets through the Vulkan \
+             Video NAL parser; this platform is not supported by the streamlib wheel yet",
         ));
     }
     if processor_class.is(python.get_type::<PythonVirtualCameraSinkBlock>()) {

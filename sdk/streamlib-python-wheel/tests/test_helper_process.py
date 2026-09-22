@@ -659,6 +659,7 @@ def test_an_answer_delivered_before_the_channel_closes_is_still_its_callers(
     assert slot.message == answer
 
 
+@pytest.mark.linux_only_capability(reason="MoltenVK has no VK_KHR_ray_tracing_pipeline")
 def test_teardown_is_answered_only_after_the_releases_its_hook_owed(
     stand_in_parent, monkeypatch
 ):
@@ -740,6 +741,7 @@ def test_an_interrupt_during_teardowns_wait_for_releases_still_answers_teardown(
     assert not lifecycle_thread.is_alive()
 
 
+@pytest.mark.linux_only_capability(reason="MoltenVK has no VK_KHR_ray_tracing_pipeline")
 def test_a_release_a_finalizer_owes_on_the_bridge_reader_never_holds_the_reader(
     stand_in_parent, monkeypatch
 ):
@@ -929,6 +931,27 @@ def test_a_processor_that_cannot_set_itself_up_reports_the_failure(stand_in_pare
     refusal = stand_in_parent.receive()
     assert refusal["rpc"] == "error"
     assert "cannot set itself up" in refusal["error"]
+
+    stand_in_parent.send({"cmd": "teardown", "capability": "full"})
+    assert stand_in_parent.receive()["rpc"] == "done"
+    lifecycle_thread.join(timeout=5.0)
+
+
+@pytest.mark.skipif(sys.platform == "linux", reason="Linux adopts the fd rather than refusing")
+def test_an_fd_shaped_raw_handle_refuses_by_name_off_linux(stand_in_parent):
+    """The method exists on every floor, so the stub is one, and off Linux it
+    names the Linux handle it cannot give and its IOSurface peer."""
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    lifecycle_thread = drive_lifecycle_on_a_thread(
+        bridge, load_processor_class(f"{PROBE_MODULE}:ImportsADmaBufOffLinuxProbe")
+    )
+
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    refusal = stand_in_parent.receive()
+    assert refusal["rpc"] == "error"
+    assert "import_dma_buf is Linux-only" in refusal["error"]
+    assert "export_iosurface" in refusal["error"]
 
     stand_in_parent.send({"cmd": "teardown", "capability": "full"})
     assert stand_in_parent.receive()["rpc"] == "done"
@@ -1223,6 +1246,7 @@ def hooks_the_interrupt_probes_reached():
     HOOKS_THE_INTERRUPT_PROBES_REACHED.clear()
 
 
+@pytest.mark.awaiting_macos_parity(issue=2408)
 def test_an_interrupt_inside_a_callback_still_leaves_stop_and_teardown_to_run(
     stand_in_parent, hooks_the_interrupt_probes_reached
 ):
@@ -1725,6 +1749,7 @@ def run_the_pacing_probe(stand_in_parent, interval_ms: int, running_seconds: flo
     return run_sent_ns
 
 
+@pytest.mark.awaiting_macos_parity(issue=2408)
 def test_a_continuous_processor_runs_once_per_interval_longer_than_the_command_wait(
     stand_in_parent, when_the_pacing_probe_processed_ns
 ):
@@ -1743,6 +1768,7 @@ def test_a_continuous_processor_runs_once_per_interval_longer_than_the_command_w
     )
 
 
+@pytest.mark.awaiting_macos_parity(issue=2408)
 def test_a_continuous_processor_runs_at_the_start_rather_than_one_interval_in(
     stand_in_parent, when_the_pacing_probe_processed_ns
 ):
@@ -1761,6 +1787,7 @@ def test_a_continuous_processor_runs_at_the_start_rather_than_one_interval_in(
     )
 
 
+@pytest.mark.awaiting_macos_parity(issue=2408)
 def test_a_continuous_processor_with_no_interval_never_runs_faster_than_the_floor(
     stand_in_parent, when_the_pacing_probe_processed_ns
 ):

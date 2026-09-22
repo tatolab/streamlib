@@ -64,6 +64,14 @@ markers = [
     # device memory. A software rasterizer (lavapipe) cannot, so a GPU-less
     # runner deselects these with `-m "not requires_gpu"`.
     "requires_gpu: needs a Vulkan device that can allocate exportable DMA-BUF memory",
+    # The closed list of what macOS does not have, each with its reason:
+    # ray-tracing kernels, VirtualCameraSink, the CUDA Array Interface, the
+    # fd-shaped raw handles, and a test whose body is a Linux mechanism.
+    # `test_platform_markers.py` pins it. Skipped off Linux.
+    "linux_only_capability(reason): a capability the closed list names as absent off Linux",
+    # A capability a named open parity ticket brings to macOS. Strict xfail
+    # there, so the ticket's own fix turns it red until the mark comes off.
+    "awaiting_macos_parity(issue): red on macOS until the named parity ticket lands",
 ]
 
 [tool.maturin]

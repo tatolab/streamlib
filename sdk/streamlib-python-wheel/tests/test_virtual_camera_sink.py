@@ -343,6 +343,7 @@ def test_the_marker_class_cannot_be_instantiated():
         streamlib.VirtualCameraSink()
 
 
+@pytest.mark.linux_only_capability(reason="VirtualCameraSink is v4l2loopback and PipeWire")
 def test_display_name_defaults_to_the_type_name():
     runtime = streamlib.Runtime()
     try:
@@ -355,6 +356,7 @@ def test_display_name_defaults_to_the_type_name():
 # ---- without the permission: a refusal by name, and the runtime keeps running
 
 
+@pytest.mark.linux_only_capability(reason="VirtualCameraSink is v4l2loopback and PipeWire")
 @pytest.mark.requires_gpu
 @pytest.mark.skipif(
     control_node_is_writable(),
@@ -385,6 +387,7 @@ def test_without_the_permission_the_sink_refuses_naming_the_verb_and_the_runtime
 # ---- the door a machine with no permission gets ---------------------------
 
 
+@pytest.mark.linux_only_capability(reason="VirtualCameraSink is v4l2loopback and PipeWire")
 @pytest.mark.requires_gpu
 @needs_a_pipewire_session
 def test_without_the_control_node_a_pipewire_camera_node_appears(start_app_under_test):
@@ -415,6 +418,7 @@ def test_without_the_control_node_a_pipewire_camera_node_appears(start_app_under
 # ---- a camera other applications see (GPU + the loopback permission) -------
 
 
+@pytest.mark.linux_only_capability(reason="VirtualCameraSink is v4l2loopback and PipeWire")
 @pytest.mark.requires_gpu
 @needs_the_loopback_permission
 def test_a_camera_appears_while_the_graph_runs_and_is_gone_after_shutdown(
@@ -447,6 +451,7 @@ def test_a_camera_appears_while_the_graph_runs_and_is_gone_after_shutdown(
     assert not video_nodes_named(second_name)
 
 
+@pytest.mark.linux_only_capability(reason="VirtualCameraSink is v4l2loopback and PipeWire")
 @pytest.mark.requires_gpu
 @needs_the_loopback_permission
 def test_frames_reach_the_loopback_device_and_read_back_as_yuyv(start_app_under_test):

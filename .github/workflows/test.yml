@@ -739,14 +739,15 @@ jobs:
   # against. arm64, and free for public repositories.
   #
   # No GPU work runs here. A Vulkan device on MoltenVK is #2356 and a window is
-  # #2357; this job's whole claim is that the tree compiles and that the tests
-  # needing no device pass.
+  # #2357; this job's whole claim is that the tree compiles, that the tests
+  # needing no device pass, and that the wheel's stub and Python suite hold on
+  # this binary as on the Linux one.
   rust-build-macos:
     name: Rust Build (macOS)
     runs-on: macos-15
     # A cold cache builds shaderc — glslang and SPIRV-Tools from source — before
     # it reaches a single test, which is most of a 22-minute first run.
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@v4
@@ -773,20 +774,22 @@ jobs:
           shared-key: rust-macos
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      # Two exclusions, the same count Linux carries, and neither of them is
-      # "macOS is broken": `streamlib-adapter-skia` is excluded on Linux too
-      # (skia-bindings 404s on its prebuilt download), and
-      # `streamlib-python-wheel` spawns its helper with `libc::pipe2`, which
-      # Darwin has no equivalent of — that is #2362's, and it needs the
-      # portable-CLOEXEC allowance `check-no-inheritable-descriptor` does not
-      # yet make. Every other workspace member compiles here, including the
-      # Linux-only adapters, whose `tests/bin` fixtures carry an empty `main`
-      # off Linux so the crate keeps building and cannot rot unseen.
+      # The Python the wheel crate's unit tests link and the venv below is
+      # built from, pinned rather than whichever the runner image carries.
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # One exclusion, the one Linux carries too: `streamlib-adapter-skia`
+      # (skia-bindings 404s on its prebuilt download). Every other workspace
+      # member compiles here, the wheel included, and so do the Linux-only
+      # adapters, whose `tests/bin` fixtures carry an empty `main` off Linux
+      # so the crate keeps building and cannot rot unseen.
       - name: cargo clippy (workspace, default targets)
         run: |
           cargo clippy --locked --workspace --no-deps \
-            --exclude streamlib-adapter-skia \
-            --exclude streamlib-python-wheel
+            --exclude streamlib-adapter-skia
 
       # `--all-targets` where the Linux job's clippy takes default targets: the
       # tests, benches and example targets are exactly where a macOS-only
@@ -794,8 +797,7 @@ jobs:
       - name: cargo check (workspace, all targets)
         run: |
           cargo check --locked --workspace --all-targets \
-            --exclude streamlib-adapter-skia \
-            --exclude streamlib-python-wheel
+            --exclude streamlib-adapter-skia
 
       - name: Run unit tests
         run: |
@@ -832,3 +834,48 @@ jobs:
       # the Apple tree unlinted the way it was.
       - name: cargo xtask lint-logging
         run: cargo run --locked -q -p xtask -- lint-logging
+
+      # Its prescriptions name Linux calls Darwin lacks; the portable spelling
+      # it accepts is what the macOS arms use.
+      - name: cargo xtask check-no-inheritable-descriptor
+        run: cargo run --locked -q -p xtask -- check-no-inheritable-descriptor
+
+      # `--test-threads=1` for the reason the Linux wheel job gives: every test
+      # embeds the same interpreter and takes the same GIL.
+      - name: Wheel crate unit tests
+        run: cargo test --locked -p streamlib-python-wheel --lib -- --test-threads=1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Build and install the wheel
+        working-directory: sdk/streamlib-python-wheel
+        run: |
+          uv venv --python 3.12 .venv
+          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy numpy pydantic typing_extensions
+          VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
+
+      # One `_engine.pyi` for both binaries: a method the macOS build lacks
+      # fails here.
+      - name: Type stubs match the compiled module
+        working-directory: sdk/streamlib-python-wheel
+        run: .venv/bin/python -m mypy.stubtest streamlib._engine
+
+      # The suite the Linux wheel job runs. A test absent on macOS carries
+      # `linux_only_capability` (the closed list) or `awaiting_macos_parity`
+      # (a strict xfail naming its ticket); `test_platform_markers.py` holds
+      # both to that. The `requires_gpu` half joins this lane with the parity
+      # ticket that first makes it green.
+      - name: Python suite (GPU-free half)
+        working-directory: sdk/streamlib-python-wheel
+        run: .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"
+
+      # Record-only: whether MoltenVK finds a Metal device on this runner,
+      # which decides whether the `requires_gpu` half can ever run in CI here.
+      # Last, so the suite above runs without MoltenVK installed.
+      - name: Probe for a Metal device under MoltenVK
+        continue-on-error: true
+        run: |
+          system_profiler SPDisplaysDataType
+          brew install molten-vk vulkan-loader vulkan-tools
+          vulkaninfo --summary
