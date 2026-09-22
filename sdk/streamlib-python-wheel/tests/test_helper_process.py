@@ -937,6 +937,27 @@ def test_a_processor_that_cannot_set_itself_up_reports_the_failure(stand_in_pare
     lifecycle_thread.join(timeout=5.0)
 
 
+@pytest.mark.skipif(sys.platform == "linux", reason="Linux adopts the fd rather than refusing")
+def test_an_fd_shaped_raw_handle_refuses_by_name_off_linux(stand_in_parent):
+    """The method exists on every floor, so the stub is one, and off Linux it
+    names the Linux handle it cannot give and the IOSurface peer."""
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    lifecycle_thread = drive_lifecycle_on_a_thread(
+        bridge, load_processor_class(f"{PROBE_MODULE}:ImportsADmaBufOffLinuxProbe")
+    )
+
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    refusal = stand_in_parent.receive()
+    assert refusal["rpc"] == "error"
+    assert "import_dma_buf is Linux-only" in refusal["error"]
+    assert "IOSurface" in refusal["error"]
+
+    stand_in_parent.send({"cmd": "teardown", "capability": "full"})
+    assert stand_in_parent.receive()["rpc"] == "done"
+    lifecycle_thread.join(timeout=5.0)
+
+
 def test_pause_and_resume_are_answered_and_tracked_without_an_engine(stand_in_parent):
     """`ctx.is_paused()` reads a leased engine view in the parent; a child has
     none, so it answers from what the parent last announced."""
