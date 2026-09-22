@@ -121,6 +121,7 @@ def test_this_machines_clock_is_the_one_a_link_from_this_runtime_names(
     ), "a link from this runtime is stamped on this machine's clock, by that name"
 
 
+@pytest.mark.linux_only_capability(reason="the boot session is a Linux kernel file")
 @pytest.mark.skipif(
     not Path(LINUX_BOOT_SESSION_PATH).exists(),
     reason="only Linux reports its boot session at this path",

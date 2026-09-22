@@ -753,6 +753,7 @@ def _v4l2loopback_is_loaded() -> bool:
         return False
 
 
+@pytest.mark.linux_only_capability(reason="v4l2loopback and udev are Linux")
 @pytest.mark.skipif(not _v4l2loopback_is_loaded(), reason="v4l2loopback is not loaded here")
 def test_the_udev_trigger_selects_the_control_node():
     """The re-trigger the verb runs must name the module's misc device, so the
@@ -774,6 +775,7 @@ def test_the_udev_trigger_selects_the_control_node():
     )
 
 
+@pytest.mark.linux_only_capability(reason="v4l2loopback and udev are Linux")
 @pytest.mark.skipif(
     os.environ.get("STREAMLIB_RUN_PRIVILEGED_VERB") != "1",
     reason=(

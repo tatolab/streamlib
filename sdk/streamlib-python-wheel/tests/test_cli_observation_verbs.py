@@ -214,12 +214,16 @@ def stub_control_plane():
 
 @pytest.fixture
 def isolated_registry(tmp_path, monkeypatch):
-    """Point the node registry at a temp dir so tests never see real nodes."""
-    registry = tmp_path / "runtime-dir"
-    registry.mkdir()
-    monkeypatch.setenv("XDG_RUNTIME_DIR", str(registry))
+    """Point the node registry at a temp dir so tests never see real nodes.
+
+    The resolver itself is replaced rather than steered through
+    `XDG_RUNTIME_DIR`, which macOS ignores by design.
+    """
+    runtime_directory = tmp_path / "runtime-dir" / "streamlib"
+    runtime_directory.mkdir(parents=True)
+    monkeypatch.setattr(_node_registry, "runtime_directory", lambda: runtime_directory)
     monkeypatch.delenv("STREAMLIB_MCP_TOKEN", raising=False)
-    return registry / "streamlib" / "nodes"
+    return runtime_directory / "nodes"
 
 
 def write_registry_entry(
@@ -251,8 +255,10 @@ def write_registry_entry(
 # ─── The node registry ───────────────────────────────────────────────────────
 
 
-def test_registry_directory_follows_xdg_runtime_dir(isolated_registry):
-    assert registry_directory() == isolated_registry
+@pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
+def test_registry_directory_follows_xdg_runtime_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
+    assert registry_directory() == tmp_path / "streamlib" / "nodes"
 
 
 def test_a_reachable_entry_is_listed_as_alive(isolated_registry, stub_control_plane):
