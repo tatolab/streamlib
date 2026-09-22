@@ -147,7 +147,7 @@ pub struct HostVulkanBuffer {
     /// The IOSurface whose pages this buffer's memory is, released only after
     /// that memory is freed. `None` on every other allocation path.
     #[cfg(target_os = "macos")]
-    backing_iosurface: Option<objc2_core_foundation::CFRetained<objc2_io_surface::IOSurfaceRef>>,
+    backing_iosurface: Option<crate::apple::iosurface::RetainedIOSurfaceSharedAcrossThreads>,
     /// Plane 0 size in bytes.
     size: vk::DeviceSize,
 }
@@ -1126,7 +1126,7 @@ impl HostVulkanBuffer {
     ) -> Result<Self> {
         use vulkanalia::vk::ExtExternalMemoryHostExtensionDeviceCommands as _;
 
-        const CONSTRUCTOR: &str = "HostVulkanBuffer::from_imported_host_pointer_as_storage_buffer";
+        const CONSTRUCTOR: &str = "HostVulkanBuffer::from_imported_host_range_as_buffer_of_size";
         if buffer_byte_len == 0 || buffer_byte_len > byte_len {
             return Err(Error::Configuration(format!(
                 "{CONSTRUCTOR}: a {buffer_byte_len}-byte buffer does not fit the {byte_len} bytes \
@@ -1233,7 +1233,7 @@ impl HostVulkanBuffer {
     /// buffer keeps it alive past the memory importing it.
     pub(super) fn backed_by_iosurface(
         mut self,
-        iosurface: objc2_core_foundation::CFRetained<objc2_io_surface::IOSurfaceRef>,
+        iosurface: crate::apple::iosurface::RetainedIOSurfaceSharedAcrossThreads,
     ) -> Self {
         self.backing_iosurface = Some(iosurface);
         self
@@ -1241,7 +1241,9 @@ impl HostVulkanBuffer {
 
     /// The IOSurface this buffer's memory is, when it is one.
     pub fn backing_iosurface(&self) -> Option<&objc2_io_surface::IOSurfaceRef> {
-        self.backing_iosurface.as_deref()
+        self.backing_iosurface
+            .as_ref()
+            .map(|iosurface| -> &objc2_io_surface::IOSurfaceRef { iosurface })
     }
 }
 

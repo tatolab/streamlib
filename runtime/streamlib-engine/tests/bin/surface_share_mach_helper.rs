@@ -40,25 +40,26 @@ fn main() {
 }
 
 #[cfg(target_os = "macos")]
+#[path = "../support/surface_share_mach_test_pixels.rs"]
+mod surface_share_mach_test_pixels;
+
+#[cfg(target_os = "macos")]
 mod mach_helper {
     use std::io::Write as _;
     use std::time::Duration;
 
     use objc2_core_foundation::CFRetained;
-    use objc2_io_surface::{IOSurfaceLockOptions, IOSurfaceRef};
+    use objc2_io_surface::IOSurfaceRef;
     use streamlib_engine::apple_surface_share::{
-        IOSurfaceShareState, MachSurfaceShareService, create_private_iosurface_with_packed_rows,
+        IOSurfaceShareState, MachSurfaceShareService, create_iosurface_mach_send_right,
+        create_private_iosurface_with_packed_rows,
     };
     use streamlib_engine::core::rhi::PixelFormat;
     use streamlib_surface_client::{
-        OwnedMachSendRight, SURFACE_SHARE_MACH_SERVICE_ENVIRONMENT_VARIABLE,
-        SurfaceShareMachServiceConnection,
+        SURFACE_SHARE_MACH_SERVICE_ENVIRONMENT_VARIABLE, SurfaceShareMachServiceConnection,
     };
 
-    /// The byte the engine writes at `index` of a shared surface.
-    pub fn engine_pattern_byte(index: usize) -> u8 {
-        (index.wrapping_mul(31).wrapping_add(7)) as u8
-    }
+    use super::surface_share_mach_test_pixels::{engine_pattern_byte, with_the_surface_bytes};
 
     fn report(line: &str) {
         let mut stdout = std::io::stdout().lock();
@@ -101,21 +102,6 @@ mod mach_helper {
             .expect("the port names an IOSurface")
     }
 
-    fn with_the_surface_bytes<R>(
-        iosurface: &IOSurfaceRef,
-        touch: impl FnOnce(&mut [u8]) -> R,
-    ) -> R {
-        let locked = unsafe { iosurface.lock(IOSurfaceLockOptions::empty(), std::ptr::null_mut()) };
-        assert_eq!(locked, 0, "IOSurfaceLock");
-        let byte_len = iosurface.bytes_per_row() * iosurface.height();
-        let bytes = unsafe {
-            std::slice::from_raw_parts_mut(iosurface.base_address().as_ptr().cast::<u8>(), byte_len)
-        };
-        let touched = touch(bytes);
-        unsafe { iosurface.unlock(IOSurfaceLockOptions::empty(), std::ptr::null_mut()) };
-        touched
-    }
-
     pub fn read_and_edit(surface_id: &str) {
         let connection = connect_or_exit();
         let iosurface = check_out_or_exit(&connection, surface_id);
@@ -155,7 +141,7 @@ mod mach_helper {
         let own_surface = create_private_iosurface_with_packed_rows(8, 8, 4, PixelFormat::Bgra32)
             .expect("the helper's own surface");
         let own_surface_port =
-            unsafe { OwnedMachSendRight::from_raw_name(own_surface.create_mach_port()) };
+            create_iosurface_mach_send_right(&own_surface).expect("a port to the surface");
         let (registered, _) = connection
             .send_request_with_ports(
                 &serde_json::json!({
@@ -210,7 +196,7 @@ mod mach_helper {
         )
         .expect("the engine connects to its own service");
         let iosurface_port =
-            unsafe { OwnedMachSendRight::from_raw_name(iosurface.create_mach_port()) };
+            create_iosurface_mach_send_right(&iosurface).expect("a port to the surface");
         connection
             .send_request_with_ports(
                 &serde_json::json!({
@@ -222,7 +208,7 @@ mod mach_helper {
             )
             .expect("register round-trip");
 
-        let child = std::process::Command::new(std::env::current_exe().expect("this binary"))
+        let mut child = std::process::Command::new(std::env::current_exe().expect("this binary"))
             .args(["hold-until-the-engine-dies", "slot-engine"])
             .env(
                 SURFACE_SHARE_MACH_SERVICE_ENVIRONMENT_VARIABLE,
@@ -232,6 +218,7 @@ mod mach_helper {
             .expect("spawn the helper");
         let _admission = rendezvous.admit_helper_process(child.id());
         report(&format!("CHILD {}", child.id()));
+        let _ = child.wait();
         loop {
             std::thread::park();
         }

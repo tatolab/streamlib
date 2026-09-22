@@ -27,11 +27,17 @@ use streamlib_surface_client::{
     request_dead_name_notification, send_surface_share_mach_message,
 };
 
-use crate::core::context::SurfaceCheckOutLeaseHolderId;
-
-use super::state::{
-    IOSurfaceRetainedByTheShareTable, IOSurfaceShareRegistration, IOSurfaceShareState,
+use crate::apple::iosurface::{
+    RetainedIOSurfaceSharedAcrossThreads, create_iosurface_mach_send_right,
 };
+use crate::core::context::SurfaceCheckOutLeaseHolderId;
+use crate::core::context::surface_share_wire_verbs::{
+    answer_release_check_out, answer_unregister, latch_the_first_named_runtime_id,
+    record_check_out_lease_or_refusal, refusal_of_a_retired_frame_id,
+    release_what_a_closed_connection_held, requested_runtime_id, requested_surface_id,
+};
+
+use super::state::{IOSurfaceShareRegistration, IOSurfaceShareState};
 
 /// How long a connect from a pid nobody has admitted yet waits before it is
 /// refused. A spawner learns its child's pid only after the child is
@@ -41,9 +47,14 @@ const UNADMITTED_CONNECTION_WAIT_BUDGET: Duration = Duration::from_secs(5);
 /// Connects allowed to wait for admission at once; more are refused.
 const MAX_CONNECTIONS_WAITING_FOR_ADMISSION: usize = 64;
 
-/// How long the service thread waits on a full reply queue before giving the
-/// connection up — one wedged client must not stall every other one.
+/// How long the service thread waits on a connection's full reply queue
+/// before giving the connection up — one wedged client must not stall every
+/// other one.
 const REPLY_SEND_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// A connect answer or refusal goes to a reply port its sender just made, so
+/// a full queue there is the sender stalling the service on purpose.
+const CONNECT_ANSWER_SEND_TIMEOUT: Duration = Duration::ZERO;
 
 const SERVICE_STOP_MESSAGE_ID: i32 = 0x534C_5310;
 const SERVICE_ADMISSIONS_CHANGED_MESSAGE_ID: i32 = 0x534C_5311;
@@ -77,6 +88,7 @@ struct AdmittedHelperProcess {
 ///
 /// Hold it until the spawner has reaped the process: from then on its pid
 /// may belong to any process on the machine.
+#[must_use = "dropping the admission withdraws it; hold it until the child is reaped"]
 pub struct SurfaceShareHelperProcessAdmission {
     admissions: SurfaceShareHelperProcessAdmissions,
     pid: libc::pid_t,
@@ -154,6 +166,12 @@ impl SurfaceShareHelperProcessAdmissions {
                 sender.pid, sender.pidversion
             )),
         }
+    }
+
+    /// Where an admission wakes the service thread, so a connect already
+    /// waiting on it is answered at once; `None` once the service stops.
+    fn set_service_to_wake(&self, service_control_send_right: Option<OwnedMachSendRight>) {
+        *self.inner.service_to_wake.lock() = service_control_send_right;
     }
 
     fn wake_the_service(&self) {
@@ -242,11 +260,6 @@ impl MachSurfaceShareService {
         &self.service_name
     }
 
-    /// Where a spawner admits the helper processes it starts.
-    pub fn helper_process_admissions(&self) -> &SurfaceShareHelperProcessAdmissions {
-        &self.helper_process_admissions
-    }
-
     /// The name and admissions a spawner hands on, detached from the
     /// service's own lifetime.
     pub fn rendezvous(&self) -> MachSurfaceShareServiceRendezvous {
@@ -268,8 +281,8 @@ impl MachSurfaceShareService {
         let peer_death_notification_receive_right = OwnedMachReceiveRight::allocate()?;
         port_set.insert_member(&peer_death_notification_receive_right)?;
         let service_control_send_right = control_receive_right.make_send_right()?;
-        *self.helper_process_admissions.inner.service_to_wake.lock() =
-            Some(service_control_send_right.try_clone()?);
+        self.helper_process_admissions
+            .set_service_to_wake(Some(service_control_send_right.try_clone()?));
 
         let service_loop = MachSurfaceShareServiceLoop {
             state: self.state.clone(),
@@ -300,11 +313,7 @@ impl MachSurfaceShareService {
     /// Stop serving. The bootstrap name goes, and every connected client
     /// sees the service die.
     pub fn stop(&mut self) {
-        self.helper_process_admissions
-            .inner
-            .service_to_wake
-            .lock()
-            .take();
+        self.helper_process_admissions.set_service_to_wake(None);
         if let Some(service_control_send_right) = self.service_control_send_right.take()
             && let Err(unsent) = send_surface_share_mach_message(
                 &service_control_send_right,
@@ -345,12 +354,12 @@ impl Drop for MachSurfaceShareService {
 }
 
 struct ConnectedSurfaceSharePeer {
+    /// Destroying it is how a closed connection tells its client: the
+    /// client's request port becomes a dead name.
     request_receive_right: OwnedMachReceiveRight,
     reply_send_right: OwnedMachSendRight,
     sender: SurfaceShareMachSenderAuditIdentity,
     lease_holder: SurfaceCheckOutLeaseHolderId,
-    /// The first real `runtime_id` this connection named — whose
-    /// registrations go when an out-of-process client dies.
     observed_runtime_id: Option<String>,
 }
 
@@ -407,7 +416,7 @@ impl MachSurfaceShareServiceLoop {
                     }
                 }
                 Ok(ReceivedSurfaceShareMachTraffic::DeadName { dead_name }) => {
-                    self.forget_the_client_answering_on(dead_name.as_raw_name());
+                    self.forget_every_client_answering_on(dead_name.as_raw_name());
                 }
                 Ok(_) => {}
                 Err(timed_out) if timed_out.kind() == io::ErrorKind::TimedOut => {}
@@ -434,9 +443,15 @@ impl MachSurfaceShareServiceLoop {
             sender,
             ..
         } = message;
-        let Some(reply_send_right) =
-            reply_send_right.filter(|_| message_id == SURFACE_SHARE_MACH_CONNECT_MESSAGE_ID)
-        else {
+        if message_id != SURFACE_SHARE_MACH_CONNECT_MESSAGE_ID {
+            tracing::warn!(
+                "[Surface share] ignored message id {:#x} from pid {} on the connect port",
+                message_id,
+                sender.pid
+            );
+            return;
+        }
+        let Some(reply_send_right) = reply_send_right else {
             tracing::warn!(
                 "[Surface share] ignored a connect from pid {} with no reply port",
                 sender.pid
@@ -524,7 +539,7 @@ impl MachSurfaceShareServiceLoop {
             SURFACE_SHARE_MACH_REPLY_MESSAGE_ID,
             br#"{"success":true}"#,
             vec![request_receive_right.make_send_right()?],
-            Some(REPLY_SEND_TIMEOUT),
+            Some(CONNECT_ANSWER_SEND_TIMEOUT),
         )?;
         Ok(request_receive_right)
     }
@@ -595,10 +610,10 @@ impl MachSurfaceShareServiceLoop {
             );
             return;
         }
-        let response_and_ports =
+        let (response, reply_ports) =
             match serde_json::from_slice::<serde_json::Value>(&message.json_payload) {
                 Ok(request) => {
-                    latch_the_first_real_runtime_id(&mut peer.observed_runtime_id, &request);
+                    latch_the_first_named_runtime_id(&mut peer.observed_runtime_id, &request);
                     answer_surface_share_request(
                         &self.state,
                         &request,
@@ -611,7 +626,6 @@ impl MachSurfaceShareServiceLoop {
                     Vec::new(),
                 ),
             };
-        let (response, reply_ports) = response_and_ports;
         let answered = send_surface_share_mach_message(
             &peer.reply_send_right,
             None,
@@ -630,51 +644,37 @@ impl MachSurfaceShareServiceLoop {
         }
     }
 
-    fn forget_the_client_answering_on(&mut self, dead_reply_port: mach_port_name_t) {
+    /// Close every connection that answers on `dead_reply_port`. Send rights
+    /// to one port share one name in this task, so a client that opened
+    /// several connections on one reply port dies for all of them at once.
+    fn forget_every_client_answering_on(&mut self, dead_reply_port: mach_port_name_t) {
         self.connections_waiting_for_admission
             .retain(|waiting| waiting.reply_send_right.as_raw_name() != dead_reply_port);
-        let dead_connection = self
+        let dead_connections: Vec<mach_port_name_t> = self
             .connected_peers
             .iter()
-            .find(|(_, peer)| peer.reply_send_right.as_raw_name() == dead_reply_port)
-            .map(|(request_port, _)| *request_port);
-        if let Some(request_port) = dead_connection {
+            .filter(|(_, peer)| peer.reply_send_right.as_raw_name() == dead_reply_port)
+            .map(|(request_port, _)| *request_port)
+            .collect();
+        for request_port in dead_connections {
             self.close_connection(request_port);
         }
     }
 
-    /// Drop a connection: every checkout lease it held is released, and — for
-    /// a client in another process — every surface it registered, because a
-    /// lease may never outlive its reader and a dead helper leaks otherwise.
-    /// This process's own registrations outlive its connections by design.
     fn close_connection(&mut self, request_port: mach_port_name_t) {
         let Some(peer) = self.connected_peers.remove(&request_port) else {
             return;
         };
-        match self
-            .state
-            .check_out_leases()
-            .release_every_check_out_lease_held_by(peer.lease_holder)
-        {
-            Ok(0) => {}
-            Ok(freed) => tracing::debug!(
-                "[Surface share] pid {}'s connection closed, freeing {} slot(s) for their \
-                 producers",
-                peer.sender.pid,
-                freed
-            ),
-            Err(unreadable) => tracing::error!(
-                "[Surface share] could not reclaim pid {}'s checkout leases: {}. Their pool \
-                 slots stay pinned until the runtime stops.",
-                peer.sender.pid,
-                unreadable
-            ),
-        }
-        if peer.sender.pid != self.this_process_pid
-            && let Some(runtime_id) = &peer.observed_runtime_id
-        {
-            release_every_surface_registered_by(&self.state, runtime_id);
-        }
+        let out_of_process_runtime_id = peer
+            .observed_runtime_id
+            .as_deref()
+            .filter(|_| peer.sender.pid != self.this_process_pid);
+        release_what_a_closed_connection_held(
+            self.state.check_out_leases(),
+            peer.lease_holder,
+            &format_args!("pid {}'s connection", peer.sender.pid),
+            out_of_process_runtime_id.map(|runtime_id| (&self.state as _, runtime_id)),
+        );
         drop(peer.request_receive_right);
     }
 }
@@ -697,38 +697,8 @@ fn refuse_connection(
         SURFACE_SHARE_MACH_REPLY_MESSAGE_ID,
         refusal.as_bytes(),
         Vec::new(),
-        Some(REPLY_SEND_TIMEOUT),
+        Some(CONNECT_ANSWER_SEND_TIMEOUT),
     );
-}
-
-/// Latch the first `runtime_id` a connection names, skipping the empty and
-/// `"unknown"` defaults the handlers fall back to.
-fn latch_the_first_real_runtime_id(
-    observed_runtime_id: &mut Option<String>,
-    request: &serde_json::Value,
-) {
-    if observed_runtime_id.is_none() {
-        *observed_runtime_id = request
-            .get("runtime_id")
-            .and_then(serde_json::Value::as_str)
-            .filter(|runtime_id| !runtime_id.is_empty() && *runtime_id != "unknown")
-            .map(str::to_string);
-    }
-}
-
-fn release_every_surface_registered_by(state: &IOSurfaceShareState, runtime_id: &str) {
-    let surface_ids = state.surface_ids_by_runtime(runtime_id);
-    if surface_ids.is_empty() {
-        return;
-    }
-    tracing::info!(
-        "[Surface share] releasing {} surface(s) registered by '{}' after its connection closed",
-        surface_ids.len(),
-        runtime_id,
-    );
-    for surface_id in surface_ids {
-        let _ = state.release_surface(&surface_id, runtime_id);
-    }
 }
 
 /// Answer one request, returning the reply and the ports it carries.
@@ -751,21 +721,15 @@ fn answer_surface_share_request(
         "lookup" => handle_lookup(state, request),
         "check_out" => handle_check_out(state, request, lease_holder),
         "release_check_out" => (
-            handle_release_check_out(state, request, lease_holder),
+            answer_release_check_out(state.check_out_leases(), request, lease_holder),
             Vec::new(),
         ),
-        "unregister" | "release" => (handle_unregister(state, request), Vec::new()),
+        "unregister" | "release" => (answer_unregister(state, request), Vec::new()),
         _ => (
             serde_json::json!({"error": format!("unknown operation: {op}")}),
             Vec::new(),
         ),
     }
-}
-
-fn requested_surface_id(request: &serde_json::Value) -> Option<&str> {
-    request
-        .get("surface_id")
-        .and_then(serde_json::Value::as_str)
 }
 
 /// The registration a `register` or `check_in` describes, holding the one
@@ -796,13 +760,12 @@ fn registration_of_request(
     };
     Ok(IOSurfaceShareRegistration {
         surface_id,
-        runtime_id: requested_str("runtime_id", "unknown"),
+        runtime_id: requested_runtime_id(request).to_string(),
         width: requested_u32("width").unwrap_or(iosurface.width() as u32),
         height: requested_u32("height").unwrap_or(iosurface.height() as u32),
         format: requested_str("format", "unknown"),
         resource_type: requested_str("resource_type", "pixel_buffer"),
-        iosurface: IOSurfaceRetainedByTheShareTable::new(iosurface),
-        checkout_count: 0,
+        iosurface: RetainedIOSurfaceSharedAcrossThreads::new(iosurface),
     })
 }
 
@@ -872,40 +835,24 @@ fn handle_lookup(
             Vec::new(),
         );
     };
-    // A retired published frame id fails here, loudly, before any port
-    // crosses: the slot's registration still exists, the frame it named does
-    // not.
-    if let Err(retired) = state
-        .check_out_leases()
-        .refuse_a_retired_frame_id(surface_id)
-    {
-        tracing::warn!(
-            "[Surface share] refusing lookup of '{}': {}",
-            surface_id,
-            retired
-        );
-        return (
-            serde_json::json!({"error": retired.to_string()}),
-            Vec::new(),
-        );
+    if let Some(refusal) = refusal_of_a_retired_frame_id(state.check_out_leases(), surface_id) {
+        return (refusal, Vec::new());
     }
-    let Some(registration) = state.get_surface_for_lookup(surface_id) else {
+    let Some(registration) = state.registration_of(surface_id) else {
         return (
             serde_json::json!({"error": "surface not found"}),
             Vec::new(),
         );
     };
-    let iosurface_port_name = registration.iosurface.create_mach_port();
-    if iosurface_port_name == mach2::port::MACH_PORT_NULL {
-        return (
-            serde_json::json!({"error": format!(
-                "IOSurfaceCreateMachPort failed for surface '{surface_id}'"
-            )}),
-            Vec::new(),
-        );
-    }
-    // SAFETY: `IOSurfaceCreateMachPort` hands this task a fresh send right.
-    let iosurface_port = unsafe { OwnedMachSendRight::from_raw_name(iosurface_port_name) };
+    let iosurface_port = match create_iosurface_mach_send_right(&registration.iosurface) {
+        Ok(iosurface_port) => iosurface_port,
+        Err(unminted) => {
+            return (
+                serde_json::json!({"error": unminted.to_string()}),
+                Vec::new(),
+            );
+        }
+    };
     (
         serde_json::json!({
             "surface_id": surface_id,
@@ -923,8 +870,8 @@ fn handle_lookup(
 }
 
 /// `lookup` plus a claim: the surface is pinned against producer reuse until
-/// this connection releases it or closes. A lease that cannot be recorded
-/// refuses the checkout, and the port already minted is released unsent.
+/// this connection releases it or closes. A refused lease releases the port
+/// already minted, unsent.
 fn handle_check_out(
     state: &IOSurfaceShareState,
     request: &serde_json::Value,
@@ -940,57 +887,10 @@ fn handle_check_out(
     if response.get("error").is_some() {
         return (response, reply_ports);
     }
-    if let Err(unrecordable) = state
-        .check_out_leases()
-        .record_check_out_lease(surface_id, lease_holder)
-    {
-        tracing::error!(
-            "[Surface share] refusing check_out of '{}' for {}: {}",
-            surface_id,
-            lease_holder,
-            unrecordable
-        );
-        let error = match &unrecordable {
-            crate::core::Error::SurfaceFrameRecycled { .. } => unrecordable.to_string(),
-            _ => format!(
-                "no checkout lease could be recorded for surface '{surface_id}', so its \
-                 producer could recycle the slot while you read it: {unrecordable}"
-            ),
-        };
-        return (serde_json::json!({ "error": error }), Vec::new());
+    match record_check_out_lease_or_refusal(state.check_out_leases(), surface_id, lease_holder) {
+        Ok(()) => (response, reply_ports),
+        Err(refusal) => (refusal, Vec::new()),
     }
-    (response, reply_ports)
-}
-
-fn handle_release_check_out(
-    state: &IOSurfaceShareState,
-    request: &serde_json::Value,
-    lease_holder: SurfaceCheckOutLeaseHolderId,
-) -> serde_json::Value {
-    let Some(surface_id) = requested_surface_id(request) else {
-        return serde_json::json!({"error": "missing surface_id"});
-    };
-    match state
-        .check_out_leases()
-        .release_one_check_out_lease(surface_id, lease_holder)
-    {
-        Ok(released) => serde_json::json!({"success": true, "released": released}),
-        Err(unreadable) => serde_json::json!({"error": unreadable.to_string()}),
-    }
-}
-
-fn handle_unregister(
-    state: &IOSurfaceShareState,
-    request: &serde_json::Value,
-) -> serde_json::Value {
-    let Some(surface_id) = requested_surface_id(request) else {
-        return serde_json::json!({"error": "missing surface_id"});
-    };
-    let runtime_id = request
-        .get("runtime_id")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("unknown");
-    serde_json::json!({"success": state.release_surface(surface_id, runtime_id)})
 }
 
 #[cfg(test)]
@@ -1007,7 +907,7 @@ mod tests {
     }
 
     fn a_port_to(iosurface: &IOSurfaceRef) -> OwnedMachSendRight {
-        unsafe { OwnedMachSendRight::from_raw_name(iosurface.create_mach_port()) }
+        create_iosurface_mach_send_right(iosurface).expect("a port to the surface")
     }
 
     fn this_process() -> SurfaceShareMachSenderAuditIdentity {

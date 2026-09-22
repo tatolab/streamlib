@@ -311,6 +311,12 @@ which this delta does not touch.
   shortcut the plan forbids: a private surface's id does not resolve cross-process, and making it
   resolve means a global surface. Its `mach_port()` accessor, which had no callers, went with it.
   `IOSurfaceMachPort` is the one Apple handle. Recorded while shipping #2360.
+- REMOVED: pub static kIOSurfaceIsGlobal
+  With the rest of `apple/corevideo_ffi.rs`'s hand-declared IOSurface and Mach block —
+  `IOSurfaceGetID`, `IOSurfaceLookup`, the use-count and Mach-port functions, and its own
+  `mach_port_deallocate` / `mach_task_self` — none with a caller. The global-surface half is the
+  shortcut the plan forbids; the rest is carried by `objc2-io-surface` and `mach2`. Recorded while
+  shipping #2360.
 - REMOVED: create_metal_texture_from_iosurface
   With `iosurface_format_to_metal` — Metal-RHI residue in `apple/iosurface.rs` with no callers.
   The file now holds the private-IOSurface allocator the pool's slots come from. Recorded while

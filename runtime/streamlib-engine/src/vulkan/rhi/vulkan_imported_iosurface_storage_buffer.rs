@@ -13,6 +13,9 @@ use crate::core::rhi::{PixelFormat, SourceLayoutInfo, StorageBuffer};
 use crate::core::{Error, Result};
 
 use super::{HostVulkanBuffer, HostVulkanDevice};
+use crate::apple::iosurface::{
+    RetainedIOSurfaceSharedAcrossThreads, create_iosurface_mach_send_right,
+};
 
 /// An IOSurface's memory imported as a storage buffer, zero-copy.
 ///
@@ -24,15 +27,9 @@ use super::{HostVulkanBuffer, HostVulkanDevice};
 /// that reads it.
 pub struct ImportedIOSurfaceStorageBuffer {
     storage_buffer: StorageBuffer,
-    iosurface: CFRetained<IOSurfaceRef>,
+    iosurface: RetainedIOSurfaceSharedAcrossThreads,
     imported_base_address: usize,
 }
-
-// SAFETY: the buffer is Send + Sync, and an IOSurface's retain count and
-// geometry queries are thread-safe; nothing is mutated after construction.
-unsafe impl Send for ImportedIOSurfaceStorageBuffer {}
-// SAFETY: as above.
-unsafe impl Sync for ImportedIOSurfaceStorageBuffer {}
 
 impl ImportedIOSurfaceStorageBuffer {
     /// Import `iosurface`'s whole allocation — its base address for its
@@ -52,7 +49,7 @@ impl ImportedIOSurfaceStorageBuffer {
         let buffer = HostVulkanBuffer::from_iosurface_pages(vulkan_device, iosurface, None)?;
         Ok(Self {
             storage_buffer: StorageBuffer::from_host_vulkan_buffer(Arc::new(buffer)),
-            iosurface: CFRetained::from(iosurface),
+            iosurface: RetainedIOSurfaceSharedAcrossThreads::new(CFRetained::from(iosurface)),
             imported_base_address: iosurface.base_address().as_ptr() as usize,
         })
     }
@@ -167,7 +164,11 @@ impl HostVulkanBuffer {
             )),
             other => other,
         })?;
-        Ok(buffer.backed_by_iosurface(CFRetained::from(iosurface)))
+        Ok(
+            buffer.backed_by_iosurface(RetainedIOSurfaceSharedAcrossThreads::new(
+                CFRetained::from(iosurface),
+            )),
+        )
     }
 
     /// A pixel buffer whose memory is a fresh private IOSurface of
@@ -192,19 +193,15 @@ impl HostVulkanBuffer {
 
     /// A fresh send right naming this buffer's IOSurface, for the
     /// surface-share wire. Refused for a buffer that is not IOSurface-backed.
-    pub fn export_iosurface_mach_port(&self) -> Result<u32> {
+    pub fn export_iosurface_mach_send_right(
+        &self,
+    ) -> Result<streamlib_surface_client::OwnedMachSendRight> {
         let iosurface = self.backing_iosurface().ok_or_else(|| {
             Error::NotSupported(
-                "export_iosurface_mach_port: this buffer's memory is not an IOSurface".into(),
+                "export_iosurface_mach_send_right: this buffer's memory is not an IOSurface".into(),
             )
         })?;
-        match iosurface.create_mach_port() {
-            0 => Err(Error::TextureError(format!(
-                "export_iosurface_mach_port: IOSurfaceCreateMachPort failed for the {}",
-                describe_iosurface(iosurface)
-            ))),
-            port => Ok(port),
-        }
+        create_iosurface_mach_send_right(iosurface)
     }
 }
 

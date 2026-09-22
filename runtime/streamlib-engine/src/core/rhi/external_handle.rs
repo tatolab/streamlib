@@ -147,16 +147,25 @@ impl RhiPixelBufferExport for super::PixelBuffer {
     /// for a buffer that is not IOSurface-backed.
     fn export_handle(&self) -> Result<RhiExternalHandle> {
         Ok(RhiExternalHandle::IOSurfaceMachPort {
-            port: self.buffer_ref().inner.export_iosurface_mach_port()?,
+            port: self
+                .buffer_ref()
+                .inner
+                .export_iosurface_mach_send_right()?
+                .into_raw_name(),
         })
     }
 }
 
 #[cfg(target_os = "macos")]
 impl RhiPixelBufferImport for super::PixelBuffer {
-    /// Import the IOSurface a Mach port names, zero-copy. The port is
-    /// consumed whatever the outcome. A zero `width` or `height` takes the
-    /// surface's own geometry and, where it carries one, its pixel format.
+    /// Import the IOSurface a Mach port names, zero-copy, as a `width`x
+    /// `height` `format` pixel buffer. The port is consumed whatever the
+    /// outcome.
+    ///
+    /// Refused, naming the numbers, when the extent is empty, when the
+    /// format has no whole bytes per pixel, or when the surface's rows are
+    /// not packed at `width` pixels — a padded surface would read at the
+    /// wrong stride.
     fn from_external_handle(
         handle: RhiExternalHandle,
         width: u32,
@@ -176,6 +185,20 @@ impl RhiPixelBufferImport for super::PixelBuffer {
                 })?;
         drop(iosurface_port);
 
+        let bytes_per_pixel = format.bits_per_pixel() / 8;
+        if width == 0 || height == 0 || bytes_per_pixel == 0 {
+            return Err(crate::core::Error::Configuration(format!(
+                "IOSurface import: {width}x{height} {format:?} describes no whole-byte pixels"
+            )));
+        }
+        let packed_bytes_per_row = u64::from(width) * u64::from(bytes_per_pixel);
+        if iosurface.bytes_per_row() as u64 != packed_bytes_per_row {
+            return Err(crate::core::Error::Configuration(format!(
+                "IOSurface import: the surface's rows are {} bytes, and a {width}x{height} \
+                 {format:?} pixel buffer packs them at {packed_bytes_per_row}",
+                iosurface.bytes_per_row()
+            )));
+        }
         let vulkan_device = crate::vulkan::rhi::vulkan_buffer::VULKAN_DEVICE_FOR_IMPORT
             .get()
             .ok_or_else(|| {
@@ -184,32 +207,10 @@ impl RhiPixelBufferImport for super::PixelBuffer {
                         .into(),
                 )
             })?;
-        let (width, height, format) = if width == 0 || height == 0 {
-            let tagged_format =
-                super::PixelFormat::from_cv_pixel_format_type(iosurface.pixel_format());
-            (
-                iosurface.width() as u32,
-                iosurface.height() as u32,
-                if tagged_format == super::PixelFormat::Unknown {
-                    format
-                } else {
-                    tagged_format
-                },
-            )
-        } else {
-            (width, height, format)
-        };
-        let bytes_per_pixel = format.bits_per_pixel() / 8;
-        if bytes_per_pixel == 0 {
-            return Err(crate::core::Error::Configuration(format!(
-                "IOSurface import: {format:?} has no whole bytes per pixel"
-            )));
-        }
-        let pixel_byte_len = u64::from(width) * u64::from(height) * u64::from(bytes_per_pixel);
         let vulkan_buffer = crate::vulkan::rhi::HostVulkanBuffer::from_iosurface_pages(
             vulkan_device,
             &iosurface,
-            Some(pixel_byte_len),
+            Some(packed_bytes_per_row * u64::from(height)),
         )?;
         Ok(Self::new(super::PixelBufferRef {
             inner: std::sync::Arc::new(vulkan_buffer),

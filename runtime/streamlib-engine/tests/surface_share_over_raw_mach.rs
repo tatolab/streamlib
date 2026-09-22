@@ -11,31 +11,31 @@
 
 #![cfg(target_os = "macos")]
 
+#[path = "support/surface_share_mach_test_pixels.rs"]
+mod surface_share_mach_test_pixels;
+
 use std::io::BufRead as _;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use objc2_core_foundation::CFRetained;
-use objc2_io_surface::{IOSurfaceLockOptions, IOSurfaceRef};
+use objc2_io_surface::IOSurfaceRef;
 use streamlib_engine::apple_surface_share::{
-    IOSurfaceShareState, MachSurfaceShareService, create_private_iosurface_with_packed_rows,
+    IOSurfaceShareState, MachSurfaceShareService, create_iosurface_mach_send_right,
+    create_private_iosurface_with_packed_rows,
 };
 use streamlib_engine::core::rhi::PixelFormat;
 use streamlib_surface_client::{
-    OwnedMachSendRight, SURFACE_SHARE_MACH_SERVICE_ENVIRONMENT_VARIABLE,
-    SurfaceShareMachServiceConnection,
+    SURFACE_SHARE_MACH_SERVICE_ENVIRONMENT_VARIABLE, SurfaceShareMachServiceConnection,
 };
+use surface_share_mach_test_pixels::{engine_pattern_byte, with_the_surface_bytes};
 
 const HELPER_BINARY: &str = env!("CARGO_BIN_EXE_surface_share_mach_helper");
 
 /// Generous: a helper's first IOSurface call reads its executable's directory
 /// as the main bundle, which is slow in a build tree.
 const HELPER_EVENT_BUDGET: Duration = Duration::from_secs(20);
-
-fn engine_pattern_byte(index: usize) -> u8 {
-    (index.wrapping_mul(31).wrapping_add(7)) as u8
-}
 
 fn a_unique_service_name(label: &str) -> String {
     format!(
@@ -73,7 +73,7 @@ impl EngineWithOneSharedSurface {
         )
         .expect("this process connects to its own service");
         let iosurface_port =
-            unsafe { OwnedMachSendRight::from_raw_name(iosurface.create_mach_port()) };
+            create_iosurface_mach_send_right(&iosurface).expect("a port to the surface");
         let (registered, _) = registering_connection
             .send_request_with_ports(
                 &serde_json::json!({
@@ -104,18 +104,6 @@ impl EngineWithOneSharedSurface {
     }
 }
 
-fn with_the_surface_bytes<R>(iosurface: &IOSurfaceRef, touch: impl FnOnce(&mut [u8]) -> R) -> R {
-    let locked = unsafe { iosurface.lock(IOSurfaceLockOptions::empty(), std::ptr::null_mut()) };
-    assert_eq!(locked, 0, "IOSurfaceLock");
-    let byte_len = iosurface.bytes_per_row() * iosurface.height();
-    let bytes = unsafe {
-        std::slice::from_raw_parts_mut(iosurface.base_address().as_ptr().cast::<u8>(), byte_len)
-    };
-    let touched = touch(bytes);
-    unsafe { iosurface.unlock(IOSurfaceLockOptions::empty(), std::ptr::null_mut()) };
-    touched
-}
-
 /// A helper process whose stdout lines arrive on a channel, `None` marking
 /// the end of its output — which is when every process holding the pipe
 /// has exited.
@@ -125,16 +113,18 @@ struct SpawnedHelperProcess {
 }
 
 impl SpawnedHelperProcess {
-    fn spawn(service_name: &str, arguments: &[&str]) -> Self {
-        let mut child = Command::new(HELPER_BINARY)
-            .args(arguments)
-            .env(
+    /// Run the helper binary with `arguments`, handing it `service_name`
+    /// when there is one to connect to.
+    fn spawn(service_name: Option<&str>, arguments: &[&str]) -> Self {
+        let mut command = Command::new(HELPER_BINARY);
+        command.args(arguments).stdout(Stdio::piped());
+        if let Some(service_name) = service_name {
+            command.env(
                 SURFACE_SHARE_MACH_SERVICE_ENVIRONMENT_VARIABLE,
                 service_name,
-            )
-            .stdout(Stdio::piped())
-            .spawn()
-            .expect("spawn the helper");
+            );
+        }
+        let mut child = command.spawn().expect("spawn the helper");
         let stdout = child.stdout.take().expect("the helper's stdout");
         let (line_sender, stdout_lines) = mpsc::channel();
         std::thread::spawn(move || {
@@ -189,12 +179,12 @@ fn an_admitted_helper_reads_the_pixels_the_engine_wrote_and_its_edit_lands() {
     let engine =
         EngineWithOneSharedSurface::start("round-trip", "slot-round-trip", Duration::from_secs(5));
     let helper = SpawnedHelperProcess::spawn(
-        engine.service.service_name(),
+        Some(engine.service.service_name()),
         &["read-and-edit", "slot-round-trip"],
     );
     let _admission = engine
         .service
-        .helper_process_admissions()
+        .rendezvous()
         .admit_helper_process(helper.child.id());
 
     let report = helper.next_line();
@@ -221,7 +211,7 @@ fn a_helper_nobody_admitted_is_refused_and_given_no_port() {
     let engine =
         EngineWithOneSharedSurface::start("impostor", "slot-impostor", Duration::from_millis(300));
     let impostor = SpawnedHelperProcess::spawn(
-        engine.service.service_name(),
+        Some(engine.service.service_name()),
         &["read-and-edit", "slot-impostor"],
     );
 
@@ -253,10 +243,10 @@ fn killing_a_helper_that_holds_a_surface_releases_it_and_its_registrations() {
     let engine =
         EngineWithOneSharedSurface::start("helper-death", "slot-held", Duration::from_secs(5));
     let mut helper =
-        SpawnedHelperProcess::spawn(engine.service.service_name(), &["hold", "slot-held"]);
+        SpawnedHelperProcess::spawn(Some(engine.service.service_name()), &["hold", "slot-held"]);
     let _admission = engine
         .service
-        .helper_process_admissions()
+        .rendezvous()
         .admit_helper_process(helper.child.id());
 
     assert_eq!(helper.next_line().as_deref(), Some("HOLDING"));
@@ -307,42 +297,22 @@ fn killing_a_helper_that_holds_a_surface_releases_it_and_its_registrations() {
 
 #[test]
 fn killing_the_engine_makes_its_helper_tear_down() {
-    let mut engine = Command::new(HELPER_BINARY)
-        .arg("engine")
-        .stdout(Stdio::piped())
-        .spawn()
-        .expect("spawn the engine");
-    let stdout = engine.stdout.take().expect("the engine's stdout");
-    let (line_sender, lines) = mpsc::channel();
-    std::thread::spawn(move || {
-        for line in std::io::BufReader::new(stdout)
-            .lines()
-            .map_while(Result::ok)
-        {
-            let _ = line_sender.send(Some(line));
-        }
-        let _ = line_sender.send(None);
-    });
-    let next_line = || {
-        lines
-            .recv_timeout(HELPER_EVENT_BUDGET)
-            .expect("a report within the budget")
-    };
+    let mut engine = SpawnedHelperProcess::spawn(None, &["engine"]);
 
-    let child_report = next_line().unwrap_or_default();
+    let child_report = engine.next_line().unwrap_or_default();
     assert!(child_report.starts_with("CHILD "), "{child_report}");
-    assert_eq!(next_line().as_deref(), Some("HOLDING"));
+    assert_eq!(engine.next_line().as_deref(), Some("HOLDING"));
 
-    engine.kill().expect("SIGKILL the engine");
-    engine.wait().expect("reap the engine");
+    engine.child.kill().expect("SIGKILL the engine");
+    engine.child.wait().expect("reap the engine");
 
     assert_eq!(
-        next_line().as_deref(),
+        engine.next_line().as_deref(),
         Some("TORE DOWN"),
         "the helper saw the engine die and released its surface"
     );
     assert_eq!(
-        next_line(),
+        engine.next_line(),
         None,
         "the helper exited, closing the last end of the pipe"
     );

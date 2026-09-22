@@ -16,6 +16,5 @@ pub mod state;
 
 pub use mach_surface_share_service::{
     MachSurfaceShareService, MachSurfaceShareServiceRendezvous, SurfaceShareHelperProcessAdmission,
-    SurfaceShareHelperProcessAdmissions,
 };
 pub use state::IOSurfaceShareState;

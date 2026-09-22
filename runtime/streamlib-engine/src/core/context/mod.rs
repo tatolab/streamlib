@@ -18,6 +18,7 @@ pub(crate) mod surface_check_out_lease_registry;
 pub(crate) mod surface_export_staging;
 #[cfg(target_os = "linux")]
 pub(crate) mod surface_pixel_exchange;
+pub(crate) mod surface_share_wire_verbs;
 pub(crate) mod surface_store;
 pub mod texture_pool;
 pub(crate) mod texture_registration;
@@ -58,6 +59,7 @@ pub use surface_check_out_lease_registry::{
 };
 #[cfg(target_os = "linux")]
 pub use surface_export_staging::{SurfaceExportStaging, SurfaceExportStagingResidency};
+pub(crate) use surface_share_wire_verbs::SurfaceShareRegistrationsByRuntime;
 pub use surface_store::SurfaceStore;
 pub use texture_pool::*;
 pub use texture_registration::TextureRegistration;

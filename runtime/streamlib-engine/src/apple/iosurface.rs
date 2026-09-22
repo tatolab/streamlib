@@ -16,6 +16,52 @@ use objc2_io_surface::{
 use crate::core::rhi::PixelFormat;
 use crate::core::{Error, Result};
 
+/// A retained IOSurface that may be held and read from any thread.
+///
+/// Everything done through it — retain, release, geometry and in-use
+/// queries, `IOSurfaceCreateMachPort` — is thread-safe per IOSurface's own
+/// contract; the binding simply does not say so.
+#[derive(Clone)]
+pub struct RetainedIOSurfaceSharedAcrossThreads(CFRetained<IOSurfaceRef>);
+
+// SAFETY: see the type's doc — IOSurface's retain count, property reads and
+// port minting are thread-safe, and nothing here mutates the surface.
+unsafe impl Send for RetainedIOSurfaceSharedAcrossThreads {}
+// SAFETY: as above.
+unsafe impl Sync for RetainedIOSurfaceSharedAcrossThreads {}
+
+impl RetainedIOSurfaceSharedAcrossThreads {
+    /// Hold `iosurface`.
+    pub fn new(iosurface: CFRetained<IOSurfaceRef>) -> Self {
+        Self(iosurface)
+    }
+}
+
+impl std::ops::Deref for RetainedIOSurfaceSharedAcrossThreads {
+    type Target = IOSurfaceRef;
+    fn deref(&self) -> &IOSurfaceRef {
+        &self.0
+    }
+}
+
+/// A fresh send right naming `iosurface`, owned — the one way a surface
+/// leaves this process. Refused when IOSurface mints no port.
+pub fn create_iosurface_mach_send_right(
+    iosurface: &IOSurfaceRef,
+) -> Result<streamlib_surface_client::OwnedMachSendRight> {
+    match iosurface.create_mach_port() {
+        mach2::port::MACH_PORT_NULL => Err(Error::TextureError(format!(
+            "IOSurfaceCreateMachPort failed for the {}x{} IOSurface {}",
+            iosurface.width(),
+            iosurface.height(),
+            iosurface.id()
+        ))),
+        // SAFETY: `IOSurfaceCreateMachPort` hands this task a fresh send
+        // right that nothing else holds.
+        port => Ok(unsafe { streamlib_surface_client::OwnedMachSendRight::from_raw_name(port) }),
+    }
+}
+
 /// A private IOSurface of `height` rows of `width` elements, each
 /// `bytes_per_element` wide, with rows packed back to back — no padding — so
 /// its pages read as one tightly laid-out pixel buffer.
@@ -30,10 +76,10 @@ pub fn create_private_iosurface_with_packed_rows(
     pixel_format: PixelFormat,
 ) -> Result<CFRetained<IOSurfaceRef>> {
     const OPERATION: &str = "create_private_iosurface_with_packed_rows";
-    let packed_bytes_per_row = width
+    let Some(packed_bytes_per_row) = width
         .checked_mul(bytes_per_element)
-        .filter(|bytes| *bytes > 0);
-    let (Some(packed_bytes_per_row), true) = (packed_bytes_per_row, height > 0) else {
+        .filter(|bytes| *bytes > 0 && height > 0)
+    else {
         return Err(Error::Configuration(format!(
             "{OPERATION}: {width}x{height} at {bytes_per_element} byte(s) per element describes \
              no memory"

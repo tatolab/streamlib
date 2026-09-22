@@ -3420,9 +3420,9 @@ impl GpuContext {
 
     /// Check out a surface by ID, returning the pixel buffer.
     ///
-    /// Returns from local cache if available, otherwise fetches from the surface-share service.
-    /// The first checkout for a given ID incurs XPC overhead (~100-200µs),
-    /// subsequent checkouts are cache hits (~10-50ns).
+    /// Returns from local cache if available, otherwise looks the surface up
+    /// over the surface-share service's Mach channel and imports its
+    /// IOSurface, zero-copy.
     #[cfg(target_os = "macos")]
     pub fn check_out_surface(&self, surface_id: &str) -> Result<PixelBuffer> {
         let store = self.surface_store.lock().unwrap();

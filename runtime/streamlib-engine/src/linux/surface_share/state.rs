@@ -500,6 +500,16 @@ impl SurfaceShareState {
     }
 }
 
+impl crate::core::context::SurfaceShareRegistrationsByRuntime for SurfaceShareState {
+    fn surface_ids_by_runtime(&self, runtime_id: &str) -> Vec<String> {
+        SurfaceShareState::surface_ids_by_runtime(self, runtime_id)
+    }
+
+    fn release_surface(&self, surface_id: &str, runtime_id: &str) -> bool {
+        SurfaceShareState::release_surface(self, surface_id, runtime_id)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -655,7 +665,7 @@ mod tests {
         );
 
         // Updating a missing surface_id returns false rather than panicking
-        // — producer-side races with cleanup_runtime_surfaces shouldn't
+        // — producer-side races with release_every_surface_registered_by shouldn't
         // bring the daemon down.
         assert!(!state.update_image_layout("missing", 0));
     }

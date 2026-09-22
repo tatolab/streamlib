@@ -158,10 +158,12 @@ pub mod linux_surface_share {
 /// through [`Runner`].
 #[cfg(target_os = "macos")]
 pub mod apple_surface_share {
-    pub use crate::apple::iosurface::create_private_iosurface_with_packed_rows;
+    pub use crate::apple::iosurface::{
+        create_iosurface_mach_send_right, create_private_iosurface_with_packed_rows,
+    };
     pub use crate::apple::surface_share::{
         IOSurfaceShareState, MachSurfaceShareService, MachSurfaceShareServiceRendezvous,
-        SurfaceShareHelperProcessAdmission, SurfaceShareHelperProcessAdmissions,
+        SurfaceShareHelperProcessAdmission,
     };
 }
 

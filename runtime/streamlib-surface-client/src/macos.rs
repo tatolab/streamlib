@@ -19,11 +19,12 @@ use mach2::mach_port::{
 use mach2::message::{
     MACH_MSG_PORT_DESCRIPTOR, MACH_MSG_TYPE_COPY_SEND, MACH_MSG_TYPE_MAKE_SEND,
     MACH_MSG_TYPE_MAKE_SEND_ONCE, MACH_MSG_TYPE_MOVE_SEND, MACH_MSG_TYPE_PORT_SEND, MACH_MSGH_BITS,
-    MACH_MSGH_BITS_COMPLEX, MACH_MSGH_BITS_REMOTE_MASK, MACH_RCV_MSG, MACH_RCV_TIMED_OUT,
-    MACH_RCV_TIMEOUT, MACH_RCV_TOO_LARGE, MACH_RCV_TRAILER_AUDIT, MACH_SEND_INTERRUPTED,
-    MACH_SEND_INVALID_DEST, MACH_SEND_MSG, MACH_SEND_TIMED_OUT, MACH_SEND_TIMEOUT, audit_token_t,
-    mach_msg, mach_msg_audit_trailer_t, mach_msg_body_t, mach_msg_destroy, mach_msg_header_t,
-    mach_msg_id_t, mach_msg_option_t, mach_msg_port_descriptor_t, mach_msg_timeout_t,
+    MACH_MSGH_BITS_COMPLEX, MACH_MSGH_BITS_LOCAL_MASK, MACH_MSGH_BITS_REMOTE_MASK, MACH_RCV_MSG,
+    MACH_RCV_TIMED_OUT, MACH_RCV_TIMEOUT, MACH_RCV_TOO_LARGE, MACH_RCV_TRAILER_AUDIT,
+    MACH_SEND_INTERRUPTED, MACH_SEND_INVALID_DEST, MACH_SEND_MSG, MACH_SEND_TIMED_OUT,
+    MACH_SEND_TIMEOUT, audit_token_t, mach_msg, mach_msg_audit_trailer_t, mach_msg_body_t,
+    mach_msg_destroy, mach_msg_header_t, mach_msg_id_t, mach_msg_option_t,
+    mach_msg_port_descriptor_t, mach_msg_timeout_t,
 };
 use mach2::notify::{
     MACH_NOTIFY_DEAD_NAME, MACH_NOTIFY_FIRST, MACH_NOTIFY_LAST, MACH_NOTIFY_NO_SENDERS,
@@ -214,16 +215,15 @@ impl OwnedMachReceiveRight {
         Ok(OwnedMachSendRight { name: self.name })
     }
 
-    /// Ask the kernel to deliver `MACH_NOTIFY_NO_SENDERS` to `notification_port`
-    /// once no send right to this port remains — at once, if none does now.
-    pub fn request_no_senders_notification(
-        &self,
-        notification_port: &OwnedMachReceiveRight,
-    ) -> io::Result<()> {
+    /// Ask the kernel to deliver `MACH_NOTIFY_NO_SENDERS` to this port itself
+    /// once no send right to it remains. Arms only after a send right to the
+    /// port has been made; from then on a port with no senders notifies at
+    /// once.
+    pub fn request_no_senders_notification(&self) -> io::Result<()> {
         request_notification(
             self.name,
             MACH_NOTIFY_NO_SENDERS,
-            notification_port,
+            self,
             "mach_port_request_notification(NO_SENDERS)",
         )
     }
@@ -484,17 +484,42 @@ pub fn send_surface_share_mach_message(
             }
             Ok(())
         }
-        // A pseudo-receive: the kernel handed the message back into this
-        // task's space, rights included, and destroying it releases them.
+        // The kernel handed the message back into this task's space — as a
+        // pseudo-receive once its rights were copied in, untouched when the
+        // destination was already dead — and destroying it releases the
+        // rights it carries either way.
         MACH_SEND_TIMED_OUT | MACH_SEND_INTERRUPTED | MACH_SEND_INVALID_DEST => {
             for handed_back in ports {
                 let _ = handed_back.into_raw_name();
             }
-            // SAFETY: the buffer now holds the pseudo-received message.
-            unsafe { mach_msg_destroy(encoded_message.header_mut()) };
+            let header = encoded_message.header_mut();
+            // SAFETY: the buffer holds the handed-back message's header.
+            let (local_bits, local_port) = unsafe {
+                (
+                    ((*header).msgh_bits & MACH_MSGH_BITS_LOCAL_MASK) >> 8,
+                    (*header).msgh_local_port,
+                )
+            };
+            // A pseudo-receive keeps the reply right it already minted in
+            // `msgh_local_port`, which `mach_msg_destroy` never touches.
+            if local_bits == MACH_MSG_TYPE_PORT_SEND && local_port != MACH_PORT_NULL {
+                // SAFETY: the kernel minted this reference for the message.
+                unsafe { mach_port_deallocate(mach_task_self(), local_port) };
+            }
+            // SAFETY: the buffer holds the handed-back message.
+            unsafe { mach_msg_destroy(header) };
             Err(mach_send_failure(send_result))
         }
-        _ => Err(mach_send_failure(send_result)),
+        // Any other failure is a malformed message that the kernel may have
+        // copied part of before refusing, consuming those rights. Releasing
+        // `ports` again could free a right some other holder now owns under
+        // the same name, so they are left unreleased instead.
+        _ => {
+            for possibly_consumed in ports {
+                let _ = possibly_consumed.into_raw_name();
+            }
+            Err(mach_send_failure(send_result))
+        }
     }
 }
 
@@ -635,7 +660,10 @@ pub enum ReceivedSurfaceShareMachTraffic {
     },
     /// No send right to a watched receive right remains.
     NoSenders {
-        /// The receive right that lost its last sender.
+        /// The receive right that lost its last sender — the port the
+        /// notification arrived on, which is where
+        /// [`OwnedMachReceiveRight::request_no_senders_notification`] has it
+        /// delivered.
         port_without_senders: mach_port_name_t,
     },
     /// A kernel notification this protocol has no use for.
@@ -870,7 +898,7 @@ pub struct SurfaceShareMachServiceConnection {
     request_send_right: OwnedMachSendRight,
     reply_receive_right: OwnedMachReceiveRight,
     service_death_notification_receive_right: OwnedMachReceiveRight,
-    one_request_at_a_time: Mutex<SurfaceShareMachMessageReceiveBuffer>,
+    reply_receive_buffer_one_request_at_a_time: Mutex<SurfaceShareMachMessageReceiveBuffer>,
     service_went_away: AtomicBool,
 }
 
@@ -954,13 +982,13 @@ impl SurfaceShareMachServiceConnection {
         )?;
         // Delivered to the reply port itself, so a request blocked on its
         // answer wakes when the service is gone rather than waiting forever.
-        reply_receive_right.request_no_senders_notification(&reply_receive_right)?;
+        reply_receive_right.request_no_senders_notification()?;
 
         Ok(Self {
             request_send_right,
             reply_receive_right,
             service_death_notification_receive_right,
-            one_request_at_a_time: Mutex::new(receive_buffer),
+            reply_receive_buffer_one_request_at_a_time: Mutex::new(receive_buffer),
             service_went_away: AtomicBool::new(false),
         })
     }
@@ -978,7 +1006,7 @@ impl SurfaceShareMachServiceConnection {
             io::Error::other(format!("failed to serialise request: {serialize_failure}"))
         })?;
         let mut receive_buffer = self
-            .one_request_at_a_time
+            .reply_receive_buffer_one_request_at_a_time
             .lock()
             .map_err(|_| io::Error::other("the connection's request lock is poisoned"))?;
         if self.service_went_away.load(Ordering::Acquire) {
@@ -1027,6 +1055,9 @@ impl SurfaceShareMachServiceConnection {
     /// A helper wires this to its teardown: an IOSurface it still holds stays
     /// readable after the engine dies, so nothing else releases it.
     pub fn wait_for_the_service_to_go_away(&self, timeout: Option<Duration>) -> io::Result<bool> {
+        if self.service_went_away.load(Ordering::Acquire) {
+            return Ok(true);
+        }
         let mut receive_buffer = SurfaceShareMachMessageReceiveBuffer::new();
         loop {
             match receive_surface_share_mach_traffic(
@@ -1145,6 +1176,19 @@ mod tests {
             right: mach2::port::mach_port_right_t,
             references: *mut mach2::port::mach_port_urefs_t,
         ) -> kern_return_t;
+    }
+
+    fn send_references_of(name: mach_port_name_t) -> mach2::port::mach_port_urefs_t {
+        let mut send_references: mach2::port::mach_port_urefs_t = 0;
+        unsafe {
+            mach_port_get_refs(
+                mach_task_self(),
+                name,
+                mach2::port::MACH_PORT_RIGHT_SEND,
+                &mut send_references,
+            )
+        };
+        send_references
     }
 
     fn port_is_alive(name: mach_port_name_t) -> bool {
@@ -1268,6 +1312,56 @@ mod tests {
         assert_eq!(
             send_references, 0,
             "the moved send right was released, not leaked"
+        );
+    }
+
+    #[test]
+    fn a_send_timing_out_on_a_full_queue_releases_its_reply_right_and_its_ports() {
+        let full_receive_right = OwnedMachReceiveRight::allocate().unwrap();
+        let mut limits = mach2::port::mach_port_limits_t { mpl_qlimit: 1 };
+        let limited = unsafe {
+            mach2::mach_port::mach_port_set_attributes(
+                mach_task_self(),
+                full_receive_right.as_raw_name(),
+                mach2::port::MACH_PORT_LIMITS_INFO,
+                (&mut limits as *mut mach2::port::mach_port_limits_t).cast(),
+                mach2::port::MACH_PORT_LIMITS_INFO_COUNT,
+            )
+        };
+        assert_eq!(limited, KERN_SUCCESS);
+        let full_destination = full_receive_right.make_send_right().unwrap();
+        send_surface_share_mach_message(
+            &full_destination,
+            None,
+            SURFACE_SHARE_MACH_REQUEST_MESSAGE_ID,
+            b"{}",
+            Vec::new(),
+            Some(Duration::ZERO),
+        )
+        .expect("the one message the queue holds");
+        let reply_receive_right = OwnedMachReceiveRight::allocate().unwrap();
+        let carried_port = OwnedMachReceiveRight::allocate().unwrap();
+
+        let refused = send_surface_share_mach_message(
+            &full_destination,
+            Some(&reply_receive_right),
+            SURFACE_SHARE_MACH_REQUEST_MESSAGE_ID,
+            b"{}",
+            vec![carried_port.make_send_right().unwrap()],
+            Some(Duration::ZERO),
+        )
+        .unwrap_err();
+
+        assert_eq!(refused.kind(), io::ErrorKind::TimedOut);
+        assert_eq!(
+            send_references_of(reply_receive_right.as_raw_name()),
+            0,
+            "the reply right the kernel minted was released"
+        );
+        assert_eq!(
+            send_references_of(carried_port.as_raw_name()),
+            0,
+            "the moved send right was released"
         );
     }
 

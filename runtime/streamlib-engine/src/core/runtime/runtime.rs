@@ -191,7 +191,7 @@ pub struct Runner {
     /// `STREAMLIB_SURFACE_MACH_SERVICE`. `Mutex<Option<...>>` so `stop()` can
     /// drop it deterministically, which unregisters the name.
     #[cfg(target_os = "macos")]
-    pub(crate) mach_surface_service:
+    pub(crate) mach_surface_share_service:
         Arc<Mutex<Option<crate::apple::surface_share::MachSurfaceShareService>>>,
     /// The Mach service's name and helper-process admissions.
     #[cfg(target_os = "macos")]
@@ -346,8 +346,11 @@ impl Runner {
         let (surface_service, surface_socket_path, surface_check_out_leases) =
             bring_up_surface_service(&runtime_directory, &runtime_id)?;
         #[cfg(target_os = "macos")]
-        let (mach_surface_service, surface_share_mach_service_rendezvous, surface_check_out_leases) =
-            bring_up_mach_surface_service(&runtime_id)?;
+        let (
+            mach_surface_share_service,
+            surface_share_mach_service_rendezvous,
+            surface_check_out_leases,
+        ) = bring_up_mach_surface_share_service(&runtime_id)?;
 
         crate::iceoryx2::warn_when_posix_shared_memory_is_short_for_a_runtime();
 
@@ -422,7 +425,7 @@ impl Runner {
             #[cfg(target_os = "linux")]
             surface_socket_path,
             #[cfg(target_os = "macos")]
-            mach_surface_service,
+            mach_surface_share_service,
             #[cfg(target_os = "macos")]
             surface_share_mach_service_rendezvous,
             runtime_directory,
@@ -814,8 +817,10 @@ impl Runner {
             crate::core::runtime::note_what_the_engine_teardown_is_waiting_on(
                 "the surface-sharing service",
             );
-            if let Some(mut mach_surface_service) = self.mach_surface_service.lock().take() {
-                mach_surface_service.stop();
+            if let Some(mut mach_surface_share_service) =
+                self.mach_surface_share_service.lock().take()
+            {
+                mach_surface_share_service.stop();
             }
         }
 
@@ -1622,7 +1627,7 @@ fn bring_up_surface_service(
 /// if another live runtime already holds this id's name. A crashed runtime's
 /// name went with its process, so there is nothing stale to clean up.
 #[cfg(target_os = "macos")]
-fn bring_up_mach_surface_service(
+fn bring_up_mach_surface_share_service(
     runtime_id: &RuntimeUniqueId,
 ) -> Result<(
     Arc<Mutex<Option<crate::apple::surface_share::MachSurfaceShareService>>>,
@@ -1650,11 +1655,6 @@ fn bring_up_mach_surface_service(
         }
     })?;
     let rendezvous = service.rendezvous();
-
-    tracing::info!(
-        "[new] Runtime-internal surface-sharing Mach service registered as '{}'",
-        service_name
-    );
 
     Ok((
         Arc::new(Mutex::new(Some(service))),

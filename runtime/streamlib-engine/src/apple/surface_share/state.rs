@@ -6,51 +6,29 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use objc2_core_foundation::CFRetained;
-use objc2_io_surface::IOSurfaceRef;
 use parking_lot::RwLock;
 
-use crate::core::context::SurfaceCheckOutLeaseRegistry;
+use crate::apple::iosurface::RetainedIOSurfaceSharedAcrossThreads;
+use crate::core::context::{SurfaceCheckOutLeaseRegistry, SurfaceShareRegistrationsByRuntime};
 use crate::core::rhi::pool_slot_key_of_surface_id;
-
-/// An IOSurface the table holds a reference to.
-///
-/// The table only retains, releases and reads the surface's geometry and
-/// in-use state, all of which IOSurface allows from any thread.
-#[derive(Clone)]
-pub struct IOSurfaceRetainedByTheShareTable(CFRetained<IOSurfaceRef>);
-
-// SAFETY: see the type's doc — nothing the table does with the surface is
-// thread-affine.
-unsafe impl Send for IOSurfaceRetainedByTheShareTable {}
-// SAFETY: as above.
-unsafe impl Sync for IOSurfaceRetainedByTheShareTable {}
-
-impl IOSurfaceRetainedByTheShareTable {
-    /// Hold `iosurface` in the table.
-    pub fn new(iosurface: CFRetained<IOSurfaceRef>) -> Self {
-        Self(iosurface)
-    }
-}
-
-impl std::ops::Deref for IOSurfaceRetainedByTheShareTable {
-    type Target = IOSurfaceRef;
-    fn deref(&self) -> &IOSurfaceRef {
-        &self.0
-    }
-}
 
 /// One registered surface.
 #[derive(Clone)]
 pub struct IOSurfaceShareRegistration {
+    /// The pool slot key (or checked-in id) the surface is registered under.
     pub surface_id: String,
+    /// The runtime that registered it, and the only one that may release it.
     pub runtime_id: String,
-    pub iosurface: IOSurfaceRetainedByTheShareTable,
+    /// The surface itself; every lookup mints a fresh port to it.
+    pub iosurface: RetainedIOSurfaceSharedAcrossThreads,
+    /// Width in pixels, as the registration stated it.
     pub width: u32,
+    /// Height in pixels, as the registration stated it.
     pub height: u32,
+    /// The pixel format's wire name, as the registration stated it.
     pub format: String,
+    /// `pixel_buffer` or `texture`, as the registration stated it.
     pub resource_type: String,
-    pub checkout_count: u64,
 }
 
 /// Thread-safe IOSurface table for the runtime-internal Mach surface-share
@@ -86,29 +64,14 @@ impl IOSurfaceShareState {
         Ok(())
     }
 
-    /// The registration behind `surface_id` — a published frame id resolves
-    /// through its pool slot — counted as one more checkout.
-    pub fn get_surface_for_lookup(&self, surface_id: &str) -> Option<IOSurfaceShareRegistration> {
-        let mut surfaces = self.inner.surfaces.write();
-        surfaces
-            .get_mut(pool_slot_key_of_surface_id(surface_id))
-            .map(|registration| {
-                registration.checkout_count += 1;
-                registration.clone()
-            })
-    }
-
-    /// Drop `surface_id`'s registration when `runtime_id` made it.
-    pub fn release_surface(&self, surface_id: &str, runtime_id: &str) -> bool {
-        let surface_id = pool_slot_key_of_surface_id(surface_id);
-        let mut surfaces = self.inner.surfaces.write();
-        match surfaces.get(surface_id) {
-            Some(registration) if registration.runtime_id == runtime_id => {
-                surfaces.remove(surface_id);
-                true
-            }
-            _ => false,
-        }
+    /// The registration behind `surface_id`; a published frame id resolves
+    /// through its pool slot.
+    pub fn registration_of(&self, surface_id: &str) -> Option<IOSurfaceShareRegistration> {
+        self.inner
+            .surfaces
+            .read()
+            .get(pool_slot_key_of_surface_id(surface_id))
+            .cloned()
     }
 
     /// Every registered surface id.
@@ -116,9 +79,15 @@ impl IOSurfaceShareState {
         self.inner.surfaces.read().keys().cloned().collect()
     }
 
-    /// Surface ids `runtime_id` registered — what a dropped out-of-process
-    /// connection's registrations are released by.
-    pub fn surface_ids_by_runtime(&self, runtime_id: &str) -> Vec<String> {
+    /// The checkout leases cross-process consumers hold against this table,
+    /// shared with the pixel-buffer pool.
+    pub fn check_out_leases(&self) -> &Arc<SurfaceCheckOutLeaseRegistry> {
+        &self.inner.check_out_leases
+    }
+}
+
+impl SurfaceShareRegistrationsByRuntime for IOSurfaceShareState {
+    fn surface_ids_by_runtime(&self, runtime_id: &str) -> Vec<String> {
         self.inner
             .surfaces
             .read()
@@ -128,9 +97,15 @@ impl IOSurfaceShareState {
             .collect()
     }
 
-    /// The checkout leases cross-process consumers hold against this table,
-    /// shared with the pixel-buffer pool.
-    pub fn check_out_leases(&self) -> &Arc<SurfaceCheckOutLeaseRegistry> {
-        &self.inner.check_out_leases
+    fn release_surface(&self, surface_id: &str, runtime_id: &str) -> bool {
+        let surface_id = pool_slot_key_of_surface_id(surface_id);
+        let mut surfaces = self.inner.surfaces.write();
+        match surfaces.get(surface_id) {
+            Some(registration) if registration.runtime_id == runtime_id => {
+                surfaces.remove(surface_id);
+                true
+            }
+            _ => false,
+        }
     }
 }

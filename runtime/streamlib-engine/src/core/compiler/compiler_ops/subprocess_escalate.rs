@@ -1366,8 +1366,8 @@ fn now_ns() -> u64 {
 /// On Linux, the buffer is checked in with the surface-share service so the polyglot
 /// subprocess shim can later `check_out` the DMA-BUF FD; the surface-share service-assigned
 /// `surface_id` becomes the handle_id. On other platforms the published frame
-/// id stays as-is (macOS uses its own XPC `check_in_surface` path via the
-/// native lib directly).
+/// id stays as-is: a macOS pool slot is already registered with the
+/// surface-share service under its slot key, so the frame id resolves there.
 #[allow(unused_variables)]
 fn assign_buffer_handle_id(
     full: &crate::core::context::GpuContextFullAccess,
