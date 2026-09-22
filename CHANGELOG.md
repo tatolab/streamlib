@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.11](https://github.com/tatolab/streamlib/compare/v0.26.10...v0.26.11) (2026-09-22)
+
+
+### Features
+
+* **engine:** a surface handle crosses to a helper process on macOS, over raw Mach ([#2397](https://github.com/tatolab/streamlib/issues/2397)) ([1586fe7](https://github.com/tatolab/streamlib/commit/1586fe7796304ae2dd43d1cf994e66c1eba775d9))
+
 ## [0.26.10](https://github.com/tatolab/streamlib/compare/v0.26.9...v0.26.10) (2026-09-21)
 
 
