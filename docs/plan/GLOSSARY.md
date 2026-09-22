@@ -237,6 +237,18 @@ Retired by the 2026-08-02 pivot (see `docs/decisions/importable-python-library.m
 **Lag by design** — these named the deleted plugin-ABI / module-system world; do not
 reuse them.
 
+**Floor**: a supported platform the product promises the same capabilities on — Linux +
+NVIDIA, and Apple Silicon. A capability absent on one floor is on a closed list and refuses
+by name. _Avoid_: "target", "backend" (a floor is the promise, not the driver).
+
+**Cross-floor check**: the source-reading check that names what binds a Python processor
+to one floor and the portable spelling for it. _Avoid_: "portability check" (that word
+belongs to the **portability gate**).
+
+**Portability gate**: the test that the wheel's native extension links nothing the host
+may not supply. _Avoid_: using it for code that runs on only one floor — that is the
+**cross-floor check**.
+
 Retired by the 2026-08-03 schema-free-ports decision (see
 `docs/decisions/schema-free-ports.md`): **Schema**, **SchemaIdent**, **Schema
 agreement**, **Wire tag**, **Flow class** — the engine has no type layer, so these name
