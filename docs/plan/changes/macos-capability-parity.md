@@ -131,13 +131,19 @@ was measured on the M1 Max in three probes left under `/tmp/iosurf-nocopy/` and
 - MODIFIED: importability has three flavours. IOSurface joins DMA-BUF and OPAQUE_FD in
   `TextureCrossProcessImportability`, derived per acquisition and never a dial: on macOS a
   texture that must cross — a Python `acquire_texture`, a kernel output published downstream — is
-  allocated on a private IOSurface the engine creates, imported at `vkCreateImage`, bound to
-  memory type 0, `OPTIMAL` tiling with strides read from the surface. Everything else keeps a
+  allocated on a private IOSurface the engine creates, imported at `vkCreateImage`, and bound to
+  a device-local memory type the image's `memoryTypeBits` admit — never a host-visible one, which
+  eagerly allocates a private `MTLBuffer` per image (measured: 859 µs and 8 MB each); on MoltenVK
+  and Apple Silicon that resolves to type 0, chosen by query, never assumed. `OPTIMAL` tiling,
+  strides read from the surface. Everything else keeps a
   non-importable allocation. A flavour the driver refuses falls back and the later import
   refuses by naming the flavour, as on Linux.
-- MODIFIED: **the staged door has a direct arm.** On macOS an IOSurface-backed texture is linear
-  and host-visible, so `cpu()` and the device tensor over a texture read and write the surface
-  itself, ordered on the surface's shared-event timeline — the engine's next read waits, bounded,
+- MODIFIED: **the staged door has a direct arm.** On macOS the Vulkan image stays declared
+  `OPTIMAL`, but its storage is the IOSurface's own linear rows — an IOSurface-backed Metal
+  texture is linear by construction, and MoltenVK treats the tiling as metadata. `cpu()` reaches
+  those rows through the surface's host mapping and the device tensor through a no-copy
+  `MTLBuffer` over the same pages, so both read and write the surface itself, ordered on the
+  surface's shared-event timeline — the engine's next read waits, bounded,
   on the helper's write-done value — with no export staging and no readback copy. The six
   staging escalate ops are not needed on macOS and refuse by name saying so. Owner, 2026-09-22,
   over a Linux-identical staging: what this narrows is stated — the texture door's edit is
