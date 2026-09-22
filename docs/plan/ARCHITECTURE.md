@@ -8,7 +8,7 @@ never round-tripped back) move together: every DECIDED entry is represented in t
 
 Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an owner decision.
 
-## Product (the MVP sentence) — IN-FLIGHT (→ macos-platform-floor)
+## Product (the MVP sentence) — IN-FLIGHT (→ macos-platform-floor, macos-capability-parity)
 <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py -->
 
 - **DECIDED** — A Python developer on Linux with an NVIDIA GPU pip-installs streamlib
@@ -43,7 +43,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   format; third-party Rust processors for Rust apps are ordinary cargo dependencies,
   source-compiled. [importable-python-library — SHIPPED #1715]
 
-## Packages & extension model — IN-FLIGHT
+## Packages & extension model — IN-FLIGHT (→ macos-capability-parity)
 
 - **DECIDED** — PyPI and cargo are the package systems. The custom module system is
   deleted in full: `streamlib_modules/`, the `.slpkg` format, `streamlib.lock`, the
@@ -439,7 +439,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   [consumer-tree-disposition — SHIPPED; a standing convention, and by the same decision
   the showcase carries no CI check to run]
 
-## Processor model & scheduling — IN-FLIGHT (→ macos-platform-floor)
+## Processor model & scheduling — IN-FLIGHT (→ macos-platform-floor, macos-capability-parity)
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a bag
   (self-describing msgpack named map). The engine has no type layer: ports carry no
@@ -948,7 +948,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   green-thread style): intended, do not build until designed; hard constraint — no new
   configuration dials. [execution-model]
 
-## Graphics (RHI / GPU) — IN-FLIGHT (→ macos-platform-floor)
+## Graphics (RHI / GPU) — IN-FLIGHT (→ macos-platform-floor, macos-capability-parity)
 
 - **DECIDED** — All Vulkan lives in the RHI (`vulkan/rhi/` + `streamlib-consumer-rhi`); one
   kernel abstraction per pipeline kind; consumers go through `GpuContext` only.
@@ -1146,7 +1146,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   unbuilt engine capabilities rather than Python-reach gaps; equalising the construction
   surface with no pass to render against would buy nothing.
 
-## Media I/O — camera, display, audio, codecs — IN-FLIGHT (→ macos-platform-floor)
+## Media I/O — camera, display, audio, codecs — IN-FLIGHT (→ macos-platform-floor, macos-capability-parity)
 
 - **DECIDED** — First-party camera, display, and audio are native built-in processors
   in the engine tree, statically linked into the wheel — pre-built named blocks
@@ -2256,7 +2256,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   machine-global scan paths; the lane costs nothing when unused (no `DT_NEEDED`
   entries, no import-time work). [audio-subsystem]
 
-## Networking — transport, runtime mesh, moq, webrtc — IN-FLIGHT (→ macos-platform-floor)
+## Networking — transport, runtime mesh, moq, webrtc — IN-FLIGHT (→ macos-platform-floor, macos-capability-parity)
 
 - **DECIDED** — Cross-language interop happens on the wire between nodes, as
   self-describing bags — never in-graph. [importable-python-library — SHIPPED #1715]
@@ -3073,7 +3073,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_sighup_tears_the_graph_down_gracefully -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_a_runtime_held_by_a_live_thread_is_torn_down_at_exit -->
 
-## Distribution & versioning — IN-FLIGHT (→ macos-platform-floor)
+## Distribution & versioning — IN-FLIGHT (→ macos-platform-floor, macos-capability-parity)
 <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py -->
 
 - **DECIDED** — Two artifacts, one version, released together: the streamlib wheel
@@ -3099,7 +3099,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_the_native_extension_links_nothing_the_host_may_not_supply -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_the_glsl_compiler_is_linked_statically -->
 
-## Control plane & observability — SHIPPED
+## Control plane & observability — IN-FLIGHT (→ macos-capability-parity)
 <!-- verify: cargo test -p streamlib-api-server tools_list_advertises_exactly_the_control_vocabulary -->
 
 - **DECIDED** — The control plane carries no optional capability's routes natively. A
