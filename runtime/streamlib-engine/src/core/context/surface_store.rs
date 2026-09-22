@@ -148,8 +148,25 @@ const SURFACE_HANDLE_TYPE_OPAQUE_FD: &str = "opaque_fd";
 const SURFACE_RESOURCE_TYPE_TEXTURE: &str = "texture";
 
 /// Wire value of `resource_type` for a pixel-buffer registration.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const SURFACE_RESOURCE_TYPE_PIXEL_BUFFER: &str = "pixel_buffer";
+
+/// How long a connect waits for the service to admit this process.
+#[cfg(target_os = "macos")]
+const SURFACE_SHARE_MACH_CONNECT_HANDSHAKE_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(10);
+
+/// A fresh send right to the IOSurface `pixel_buffer`'s memory is, for a
+/// registration to move to the service.
+#[cfg(target_os = "macos")]
+fn exported_iosurface_port(
+    pixel_buffer: &PixelBuffer,
+) -> Result<streamlib_surface_client::OwnedMachSendRight> {
+    pixel_buffer
+        .buffer_ref()
+        .inner
+        .export_iosurface_mach_send_right()
+}
 
 /// Reply flag announcing a `produce_done` timeline edge appended after the
 /// plane fds.
@@ -269,6 +286,35 @@ fn leave_plane_fds_to_the_import(plane_fds: Vec<OwnedFd>) {
     }
 }
 
+/// The id a `check_in` answer names for the surface it registered.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn surface_id_of_check_in_answer(answer: &serde_json::Value) -> Result<String> {
+    answer
+        .get("surface_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| Error::Configuration("check_in: missing surface_id in response".into()))
+}
+
+/// Hold a registration answer to what it says: an `error` string is a
+/// refusal, and so is `success: false` without one — a duplicate surface id is
+/// the one that matters, because reading it as success would leave every
+/// consumer checking out the previous allocation while this one is never
+/// refilled.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn refusal_of_a_registration_answer(operation: &str, answer: &serde_json::Value) -> Result<()> {
+    if let Some(error) = answer.get("error").and_then(serde_json::Value::as_str) {
+        return Err(Error::Configuration(format!("{operation}: {error}")));
+    }
+    if answer.get("success").and_then(serde_json::Value::as_bool) == Some(false) {
+        return Err(Error::Configuration(format!(
+            "{operation}: the surface-share service refused the registration without \
+             naming a reason; the id is most likely already registered"
+        )));
+    }
+    Ok(())
+}
+
 /// Surface metadata stored alongside the cached pixel buffer.
 #[derive(Debug, Clone)]
 pub struct CachedSurface {
@@ -325,6 +371,25 @@ impl SurfaceCache {
         self.surfaces.remove(surface_id);
     }
 
+    /// The cached buffer for `surface_id`, counted as one more checkout.
+    fn checked_out_clone(&mut self, surface_id: &str) -> Option<PixelBuffer> {
+        let cached = self.surfaces.get_mut(surface_id)?;
+        cached.checkout_count += 1;
+        tracing::trace!(
+            "SurfaceStore: Cache hit for '{}' (checkout #{})",
+            surface_id,
+            cached.checkout_count
+        );
+        Some(cached.pixel_buffer.clone())
+    }
+
+    /// The cached buffer for `surface_id`, uncounted.
+    fn cached_clone(&self, surface_id: &str) -> Option<PixelBuffer> {
+        self.surfaces
+            .get(surface_id)
+            .map(|cached| cached.pixel_buffer.clone())
+    }
+
     fn clear(&mut self) {
         self.surfaces.clear();
     }
@@ -342,10 +407,15 @@ pub(crate) struct SurfaceStoreInner {
     #[cfg(target_os = "linux")]
     connection: Mutex<Option<std::os::unix::net::UnixStream>>,
 
+    /// Mach connection to the surface-share service (macOS only).
+    #[cfg(target_os = "macos")]
+    connection: Mutex<Option<streamlib_surface_client::SurfaceShareMachServiceConnection>>,
+
     /// Local cache of checked-out surfaces (surface_id -> pixel_buffer).
     cache: Mutex<SurfaceCache>,
 
-    /// The Unix socket path to connect to.
+    /// The Unix socket path (Linux) or bootstrap service name (macOS) to
+    /// connect to.
     service_name: String,
 
     /// Runtime ID for tracking which surfaces belong to this runtime.
@@ -378,7 +448,7 @@ impl SurfaceStoreInner {
         check_out_leases: Option<Arc<SurfaceCheckOutLeaseRegistry>>,
     ) -> Arc<Self> {
         Arc::new(SurfaceStoreInner {
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             connection: Mutex::new(None),
             cache: Mutex::new(SurfaceCache::new()),
             service_name,
@@ -407,11 +477,15 @@ impl SurfaceStoreInner {
         {
             self.release_from_surface_share_unix(surface_id)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "macos")]
+        {
+            self.release_from_surface_share_mach(surface_id)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
             let _ = surface_id;
             Err(Error::NotSupported(
-                "SurfaceStore::release is only supported on Linux".into(),
+                "SurfaceStore::release is not supported on this platform".into(),
             ))
         }
     }
@@ -443,17 +517,14 @@ impl SurfaceStoreInner {
     /// Disconnect from the surface-share service, dropping every surface this
     /// store resolved.
     ///
-    /// Closing the socket is the release: the service treats a client's
-    /// socket-close as a full release of everything that client checked in,
-    /// which is why nothing is released one id at a time here.
-    #[cfg(target_os = "linux")]
+    /// Closing the connection is the release: the service treats a client's
+    /// connection closing as a full release of everything it held, which is
+    /// why nothing is released one id at a time here.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn disconnect(&self) -> Result<()> {
         self.cache.lock().clear();
-
-        // Drop the connection
         self.connection.lock().take();
-
-        tracing::info!("SurfaceStore: Disconnected from surface-share socket");
+        tracing::info!("SurfaceStore: Disconnected from the surface-share service");
         Ok(())
     }
 
@@ -479,11 +550,7 @@ impl SurfaceStoreInner {
             exported_planes.plane_fds,
         )?;
 
-        let surface_id = response
-            .get("surface_id")
-            .and_then(|v: &serde_json::Value| v.as_str())
-            .ok_or_else(|| Error::Configuration("check_in: missing surface_id in response".into()))?
-            .to_string();
+        let surface_id = surface_id_of_check_in_answer(&response)?;
 
         self.cache
             .lock()
@@ -497,18 +564,8 @@ impl SurfaceStoreInner {
     /// Check out a surface by ID via Unix socket.
     #[cfg(target_os = "linux")]
     pub fn check_out(&self, surface_id: &str) -> Result<PixelBuffer> {
-        // Check cache first
-        {
-            let mut cache = self.cache.lock();
-            if let Some(cached) = cache.surfaces.get_mut(surface_id) {
-                cached.checkout_count += 1;
-                tracing::trace!(
-                    "SurfaceStore: Cache hit for '{}' (checkout #{})",
-                    surface_id,
-                    cached.checkout_count
-                );
-                return Ok(cached.pixel_buffer.clone());
-            }
+        if let Some(cached) = self.cache.lock().checked_out_clone(surface_id) {
+            return Ok(cached);
         }
 
         // Cache miss - fetch from the surface-share service
@@ -624,24 +681,7 @@ impl SurfaceStoreInner {
         fds: Vec<OwnedFd>,
     ) -> Result<()> {
         let response = self.send_surface_share_request_owning_fds(operation, request, fds)?;
-
-        if let Some(error) = response
-            .get("error")
-            .and_then(|value: &serde_json::Value| value.as_str())
-        {
-            return Err(Error::Configuration(format!("{operation}: {error}")));
-        }
-        // A refusal the service reports without an `error` string — a
-        // duplicate surface id is the one that matters, because reading it
-        // as success would leave every consumer checking out the previous
-        // allocation while this one is never refilled.
-        if response.get("success").and_then(serde_json::Value::as_bool) == Some(false) {
-            return Err(Error::Configuration(format!(
-                "{operation}: the surface-share service refused the registration without \
-                 naming a reason; the id is most likely already registered"
-            )));
-        }
-        Ok(())
+        refusal_of_a_registration_answer(operation, &response)
     }
 
     /// Register a buffer with the surface-share service via Unix socket.
@@ -995,11 +1035,8 @@ impl SurfaceStoreInner {
     /// per-frame unix-socket round-trip and DMA-BUF re-import.
     #[cfg(target_os = "linux")]
     pub fn lookup_buffer(&self, pool_id: &str) -> Result<PixelBuffer> {
-        {
-            let cache = self.cache.lock();
-            if let Some(cached) = cache.surfaces.get(pool_id) {
-                return Ok(cached.pixel_buffer.clone());
-            }
+        if let Some(cached) = self.cache.lock().cached_clone(pool_id) {
+            return Ok(cached);
         }
 
         let request = serde_json::json!({
@@ -1256,48 +1293,228 @@ impl SurfaceStoreInner {
     }
 
     // =========================================================================
+    // macOS: raw Mach client
+    // =========================================================================
+
+    /// Connect to the surface-share service's bootstrap name.
+    #[cfg(target_os = "macos")]
+    pub fn connect(&self) -> Result<()> {
+        let connection = streamlib_surface_client::SurfaceShareMachServiceConnection::connect(
+            &self.service_name,
+            SURFACE_SHARE_MACH_CONNECT_HANDSHAKE_TIMEOUT,
+        )
+        .map_err(|e| {
+            Error::Configuration(format!(
+                "Failed to connect to surface-share Mach service '{}': {}",
+                self.service_name, e
+            ))
+        })?;
+        *self.connection.lock() = Some(connection);
+        tracing::info!(
+            "SurfaceStore: Connected to surface-share Mach service '{}'",
+            self.service_name
+        );
+        Ok(())
+    }
+
+    /// Check in a pixel buffer's IOSurface, returning the id the service
+    /// minted for it.
+    #[cfg(target_os = "macos")]
+    pub fn check_in(&self, pixel_buffer: &PixelBuffer) -> Result<String> {
+        let request = serde_json::json!({
+            "op": "check_in",
+            "runtime_id": self.runtime_id,
+            "width": pixel_buffer.width,
+            "height": pixel_buffer.height,
+            "format": pixel_buffer.format().wire_name(),
+            "resource_type": SURFACE_RESOURCE_TYPE_PIXEL_BUFFER,
+        });
+        let (response, _) = self.send_surface_share_mach_request(
+            "check_in",
+            &request,
+            vec![exported_iosurface_port(pixel_buffer)?],
+        )?;
+        let surface_id = surface_id_of_check_in_answer(&response)?;
+        self.cache
+            .lock()
+            .insert(surface_id.clone(), pixel_buffer.clone());
+        tracing::debug!("SurfaceStore: Checked in as '{}'", surface_id);
+        Ok(surface_id)
+    }
+
+    /// Resolve a surface id to a pixel buffer over its IOSurface, caching it.
+    ///
+    /// `lookup`, not `check_out`, for the same reason as on Linux: this store
+    /// is the service owner's own process, and the cached clone is its claim.
+    #[cfg(target_os = "macos")]
+    pub fn check_out(&self, surface_id: &str) -> Result<PixelBuffer> {
+        if let Some(cached) = self.cache.lock().checked_out_clone(surface_id) {
+            return Ok(cached);
+        }
+        let pixel_buffer = self.import_looked_up_iosurface("check_out", surface_id)?;
+        self.cache
+            .lock()
+            .insert(surface_id.to_string(), pixel_buffer.clone());
+        Ok(pixel_buffer)
+    }
+
+    /// Register a pool slot's IOSurface under `pool_id`.
+    #[cfg(target_os = "macos")]
+    pub fn register_buffer(&self, pool_id: &str, pixel_buffer: &PixelBuffer) -> Result<()> {
+        let request = serde_json::json!({
+            "op": "register",
+            "surface_id": pool_id,
+            "runtime_id": self.runtime_id,
+            "width": pixel_buffer.width,
+            "height": pixel_buffer.height,
+            "format": pixel_buffer.format().wire_name(),
+            "resource_type": SURFACE_RESOURCE_TYPE_PIXEL_BUFFER,
+        });
+        let (response, _) = self.send_surface_share_mach_request(
+            "register",
+            &request,
+            vec![exported_iosurface_port(pixel_buffer)?],
+        )?;
+        refusal_of_a_registration_answer("register", &response)?;
+        tracing::debug!("SurfaceStore: Registered buffer '{}'", pool_id);
+        Ok(())
+    }
+
+    /// Resolve a registered pool slot to a pixel buffer over its IOSurface.
+    #[cfg(target_os = "macos")]
+    pub fn lookup_buffer(&self, pool_id: &str) -> Result<PixelBuffer> {
+        if let Some(cached) = self.cache.lock().cached_clone(pool_id) {
+            return Ok(cached);
+        }
+        self.import_looked_up_iosurface("lookup", pool_id)
+    }
+
+    /// `lookup` `surface_id` and import the IOSurface the answer's port
+    /// names, zero-copy.
+    #[cfg(target_os = "macos")]
+    fn import_looked_up_iosurface(&self, operation: &str, surface_id: &str) -> Result<PixelBuffer> {
+        use crate::core::rhi::{PixelFormat, RhiExternalHandle, RhiPixelBufferImport};
+
+        let request = serde_json::json!({"op": "lookup", "surface_id": surface_id});
+        let (answer, reply_ports) =
+            self.send_surface_share_mach_request(operation, &request, Vec::new())?;
+        let mut reply_ports = reply_ports.into_iter();
+        let (Some(iosurface_port), None) = (reply_ports.next(), reply_ports.next()) else {
+            return Err(Error::Configuration(format!(
+                "{operation}: the answer for '{surface_id}' did not carry exactly one IOSurface port"
+            )));
+        };
+        let stated_u32 = |key: &str| {
+            answer
+                .get(key)
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|value| u32::try_from(value).ok())
+                .unwrap_or(0)
+        };
+        let format = answer
+            .get("format")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| format!("the answer for '{surface_id}' names no format"))
+            .and_then(PixelFormat::parse_wire_name)
+            .map_err(|unreadable| Error::Configuration(format!("{operation}: {unreadable}")))?;
+        PixelBuffer::from_external_handle(
+            RhiExternalHandle::IOSurfaceMachPort {
+                port: iosurface_port.into_raw_name(),
+            },
+            stated_u32("width"),
+            stated_u32("height"),
+            format,
+        )
+    }
+
+    /// Send one request under `operation`'s name and hold the service to its
+    /// answer, returning it with the ports it carries.
+    #[cfg(target_os = "macos")]
+    fn send_surface_share_mach_request(
+        &self,
+        operation: &str,
+        request: &serde_json::Value,
+        ports: Vec<streamlib_surface_client::OwnedMachSendRight>,
+    ) -> Result<(
+        serde_json::Value,
+        Vec<streamlib_surface_client::OwnedMachSendRight>,
+    )> {
+        let connection = self.connection.lock();
+        let connection = connection.as_ref().ok_or_else(|| {
+            Error::Configuration("SurfaceStore not connected to surface-share service".into())
+        })?;
+        let (response, reply_ports) =
+            connection
+                .send_request_with_ports(request, ports)
+                .map_err(|failure| {
+                    Error::Configuration(format!(
+                        "Mach surface-share {operation} failed: {failure}"
+                    ))
+                })?;
+        if let Some(error) = response.get("error").and_then(serde_json::Value::as_str) {
+            return Err(Error::Configuration(format!("{operation}: {error}")));
+        }
+        Ok((response, reply_ports))
+    }
+
+    /// Best-effort `release`; with no connection there is nothing to release,
+    /// because the service already let go when the connection closed.
+    #[cfg(target_os = "macos")]
+    fn release_from_surface_share_mach(&self, surface_id: &str) -> Result<()> {
+        let request = serde_json::json!({
+            "op": "release",
+            "surface_id": surface_id,
+            "runtime_id": self.runtime_id,
+        });
+        if let Some(connection) = self.connection.lock().as_ref() {
+            let _ = connection.send_request_with_ports(&request, Vec::new());
+        }
+        Ok(())
+    }
+
+    // =========================================================================
     // Unsupported platform stubs
     // =========================================================================
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     pub fn connect(&self) -> Result<()> {
         Err(Error::NotSupported(
-            "SurfaceStore is only supported on Linux".into(),
+            "SurfaceStore is not supported on this platform".into(),
         ))
     }
 
     /// `Ok` rather than the refusal its siblings return: nothing was ever
     /// connected, and a shutdown path must not fail for having nothing to do.
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     pub fn disconnect(&self) -> Result<()> {
         Ok(())
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     pub fn check_in(&self, _pixel_buffer: &PixelBuffer) -> Result<String> {
         Err(Error::NotSupported(
-            "SurfaceStore is only supported on Linux".into(),
+            "SurfaceStore is not supported on this platform".into(),
         ))
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     pub fn check_out(&self, _surface_id: &str) -> Result<PixelBuffer> {
         Err(Error::NotSupported(
-            "SurfaceStore is only supported on Linux".into(),
+            "SurfaceStore is not supported on this platform".into(),
         ))
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     pub fn register_buffer(&self, _pool_id: &str, _pixel_buffer: &PixelBuffer) -> Result<()> {
         Err(Error::NotSupported(
-            "SurfaceStore is only supported on Linux".into(),
+            "SurfaceStore is not supported on this platform".into(),
         ))
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     pub fn lookup_buffer(&self, _pool_id: &str) -> Result<PixelBuffer> {
         Err(Error::NotSupported(
-            "SurfaceStore is only supported on Linux".into(),
+            "SurfaceStore is not supported on this platform".into(),
         ))
     }
 
@@ -2326,5 +2543,308 @@ mod fd_ownership_tests {
             "every failed buffer lookup must close the plane fds the service sent with its reply"
         );
         service.stop();
+    }
+}
+
+#[cfg(test)]
+#[cfg(target_os = "macos")]
+mod mach_surface_share_pool_tests {
+    use std::time::Duration;
+
+    use objc2_io_surface::IOSurfaceRef;
+    use streamlib_surface_client::SurfaceShareMachServiceConnection;
+
+    use crate::apple::surface_share::{IOSurfaceShareState, MachSurfaceShareService};
+    use crate::core::context::{GpuContext, SurfaceStore};
+    use crate::core::rhi::{PixelFormat, pool_slot_key_of_surface_id};
+
+    fn gpu_or_skip() -> Option<GpuContext> {
+        match GpuContext::init_for_platform() {
+            Ok(gpu) => Some(gpu),
+            Err(e) => {
+                tracing::warn!("skipping — no GPU device: {e}");
+                None
+            }
+        }
+    }
+
+    fn engine_pattern_byte(index: usize) -> u8 {
+        (index.wrapping_mul(13).wrapping_add(5)) as u8
+    }
+
+    /// A pooled frame is an IOSurface the service hands out: another
+    /// connection checks the published frame id out, and the surface its port
+    /// names holds the pixels the producer wrote into the pooled buffer.
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn a_pooled_frame_crosses_the_mach_service_as_the_iosurface_holding_its_pixels() {
+        let Some(gpu) = gpu_or_skip() else {
+            return;
+        };
+        let state = IOSurfaceShareState::new();
+        let mut service = MachSurfaceShareService::new(
+            state.clone(),
+            format!(
+                "com.tatolab.streamlib.surface-share-test.pool.{}",
+                std::process::id()
+            ),
+        );
+        service.start().expect("the service starts");
+        let store = SurfaceStore::new_reading_check_out_leases(
+            service.service_name().to_string(),
+            "R-pool-test".to_string(),
+            std::sync::Arc::clone(state.check_out_leases()),
+        );
+        store.connect().expect("the store connects");
+        gpu.set_surface_store(store);
+
+        let (frame_id, pooled_buffer) = gpu
+            .acquire_pixel_buffer(64, 32, PixelFormat::Bgra32)
+            .expect("a pooled frame");
+        let pooled_bytes = unsafe {
+            std::slice::from_raw_parts_mut(
+                pooled_buffer.buffer_ref().inner.mapped_ptr(),
+                64 * 32 * 4,
+            )
+        };
+        for (index, byte) in pooled_bytes.iter_mut().enumerate() {
+            *byte = engine_pattern_byte(index);
+        }
+        assert!(
+            state
+                .surface_ids()
+                .contains(&pool_slot_key_of_surface_id(frame_id.to_string().as_str()).to_string()),
+            "the pool registered its slot with the service"
+        );
+
+        let reader = SurfaceShareMachServiceConnection::connect(
+            service.service_name(),
+            Duration::from_secs(10),
+        )
+        .expect("a reader connects");
+        let (answer, ports) = reader
+            .send_request_with_ports(
+                &serde_json::json!({"op": "check_out", "surface_id": frame_id.to_string()}),
+                Vec::new(),
+            )
+            .expect("check_out round-trip");
+        assert!(answer.get("error").is_none(), "{answer}");
+        assert_eq!(answer["plane_strides"], serde_json::json!([64 * 4]));
+        let iosurface = IOSurfaceRef::lookup_from_mach_port(ports[0].as_raw_name())
+            .expect("the port names the slot's IOSurface");
+        let shared_bytes = unsafe {
+            std::slice::from_raw_parts(iosurface.base_address().as_ptr().cast::<u8>(), 64 * 32 * 4)
+        };
+        assert!(
+            shared_bytes
+                .iter()
+                .enumerate()
+                .all(|(index, byte)| *byte == engine_pattern_byte(index)),
+            "the shared surface holds the pooled buffer's pixels"
+        );
+    }
+
+    /// A started service with this process's store connected to it, the way
+    /// the runtime's `start()` builds one.
+    fn a_store_connected_to_a_started_service(
+        gpu: &GpuContext,
+        label: &str,
+    ) -> (IOSurfaceShareState, MachSurfaceShareService) {
+        let state = IOSurfaceShareState::new();
+        let mut service = MachSurfaceShareService::new(
+            state.clone(),
+            format!(
+                "com.tatolab.streamlib.surface-share-test.{label}.{}",
+                std::process::id()
+            ),
+        );
+        service.start().expect("the service starts");
+        let store = SurfaceStore::new_reading_check_out_leases(
+            service.service_name().to_string(),
+            "R-store-test".to_string(),
+            std::sync::Arc::clone(state.check_out_leases()),
+        );
+        store.connect().expect("the store connects");
+        gpu.set_surface_store(store);
+        (state, service)
+    }
+
+    /// Register `iosurface` under `surface_id` from a connection of its own,
+    /// stating `width` pixels a row.
+    fn register_from_another_connection(
+        service: &MachSurfaceShareService,
+        surface_id: &str,
+        iosurface: &IOSurfaceRef,
+        width: u32,
+    ) -> SurfaceShareMachServiceConnection {
+        let registering_connection = SurfaceShareMachServiceConnection::connect(
+            service.service_name(),
+            Duration::from_secs(10),
+        )
+        .expect("a registering connection");
+        let (registered, _) = registering_connection
+            .send_request_with_ports(
+                &serde_json::json!({
+                    "op": "register",
+                    "surface_id": surface_id,
+                    "runtime_id": "R-elsewhere",
+                    "width": width,
+                    "height": iosurface.height(),
+                    "format": "bgra32",
+                }),
+                vec![
+                    crate::apple::iosurface::create_iosurface_mach_send_right(iosurface)
+                        .expect("a port to the surface"),
+                ],
+            )
+            .expect("register round-trip");
+        assert_eq!(registered, serde_json::json!({"success": true}));
+        registering_connection
+    }
+
+    /// The store resolves a surface another connection registered into a
+    /// pixel buffer over its IOSurface, at the extent and format the service
+    /// states, holding the registering side's pixels byte for byte.
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn the_store_resolves_a_surface_registered_elsewhere_into_its_pixels() {
+        let Some(gpu) = gpu_or_skip() else {
+            return;
+        };
+        let (_state, service) = a_store_connected_to_a_started_service(&gpu, "store-lookup");
+        let iosurface = crate::apple::iosurface::create_private_iosurface_with_packed_rows(
+            48,
+            16,
+            4,
+            PixelFormat::Bgra32,
+        )
+        .expect("a private IOSurface");
+        let surface_bytes = unsafe {
+            std::slice::from_raw_parts_mut(
+                iosurface.base_address().as_ptr().cast::<u8>(),
+                48 * 16 * 4,
+            )
+        };
+        for (index, byte) in surface_bytes.iter_mut().enumerate() {
+            *byte = engine_pattern_byte(index);
+        }
+        let _registering_connection =
+            register_from_another_connection(&service, "slot-elsewhere", &iosurface, 48);
+
+        let store = gpu.surface_store().expect("the store");
+        for resolved in [
+            store
+                .lookup_buffer("slot-elsewhere")
+                .expect("lookup_buffer resolves it"),
+            store
+                .check_out("slot-elsewhere")
+                .expect("check_out resolves it"),
+        ] {
+            assert_eq!((resolved.width, resolved.height), (48, 16));
+            assert_eq!(resolved.format(), PixelFormat::Bgra32);
+            let resolved_bytes = unsafe {
+                std::slice::from_raw_parts(resolved.buffer_ref().inner.mapped_ptr(), 48 * 16 * 4)
+            };
+            assert!(
+                resolved_bytes
+                    .iter()
+                    .enumerate()
+                    .all(|(index, byte)| *byte == engine_pattern_byte(index)),
+                "the resolved buffer holds the registered surface's pixels"
+            );
+        }
+    }
+
+    /// A surface whose rows do not pack at the stated width is refused by
+    /// name rather than read at the wrong stride.
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn a_surface_whose_rows_do_not_pack_at_the_stated_width_is_refused() {
+        let Some(gpu) = gpu_or_skip() else {
+            return;
+        };
+        let (_state, service) = a_store_connected_to_a_started_service(&gpu, "store-stride");
+        let seventeen_pixel_rows =
+            crate::apple::iosurface::create_private_iosurface_with_packed_rows(
+                17,
+                8,
+                4,
+                PixelFormat::Bgra32,
+            )
+            .expect("a private IOSurface");
+        let _registering_connection =
+            register_from_another_connection(&service, "slot-padded", &seventeen_pixel_rows, 16);
+
+        let refusal = gpu
+            .surface_store()
+            .expect("the store")
+            .lookup_buffer("slot-padded")
+            .expect_err("rows of 68 bytes are not 16 packed BGRA pixels");
+        assert!(
+            refusal.to_string().contains("rows are 68 bytes"),
+            "the refusal names the stride: {refusal}"
+        );
+    }
+
+    /// The pool never rehands a slot whose IOSurface the kernel reports in
+    /// use — here by a use count this process holds, which counts the same
+    /// as one a helper holds — and takes it back once the use ends.
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn a_slot_whose_iosurface_is_in_use_is_not_rehanded_to_its_producer() {
+        let Some(gpu) = gpu_or_skip() else {
+            return;
+        };
+        // Every acquisition below is dropped at once, so the ring never grows
+        // past its pre-allocated slots and this many visits each several times.
+        let acquisitions_that_revisit_every_slot = 16;
+        let slot_key_of = |frame_id: &crate::core::rhi::PublishedPixelBufferFrameId| {
+            pool_slot_key_of_surface_id(frame_id.to_string().as_str()).to_string()
+        };
+
+        let (held_frame_id, held_buffer) = gpu
+            .acquire_pixel_buffer(32, 32, PixelFormat::Bgra32)
+            .expect("a pooled frame");
+        let held_slot_key = slot_key_of(&held_frame_id);
+        let held_iosurface = held_buffer
+            .buffer_ref()
+            .inner
+            .backing_iosurface()
+            .map(objc2_core_foundation::CFRetained::<IOSurfaceRef>::from)
+            .expect("a macOS pool slot is an IOSurface");
+        held_iosurface.increment_use_count();
+        drop(held_buffer);
+
+        for _ in 0..acquisitions_that_revisit_every_slot {
+            let (frame_id, _) = gpu
+                .acquire_pixel_buffer(32, 32, PixelFormat::Bgra32)
+                .expect("a pooled frame");
+            assert_ne!(
+                slot_key_of(&frame_id),
+                held_slot_key,
+                "a slot in use was rehanded"
+            );
+        }
+
+        held_iosurface.decrement_use_count();
+        let the_slot_came_back = (0..acquisitions_that_revisit_every_slot).any(|_| {
+            let (frame_id, _) = gpu
+                .acquire_pixel_buffer(32, 32, PixelFormat::Bgra32)
+                .expect("a pooled frame");
+            slot_key_of(&frame_id) == held_slot_key
+        });
+        assert!(the_slot_came_back, "the slot returns once nothing uses it");
     }
 }

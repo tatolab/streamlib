@@ -22,6 +22,11 @@ use streamlib_surface_client::{
 };
 
 use crate::core::context::SurfaceCheckOutLeaseHolderId;
+use crate::core::context::surface_share_wire_verbs::{
+    answer_release_check_out, answer_unregister, latch_the_first_named_runtime_id,
+    record_check_out_lease_or_refusal, refusal_of_a_retired_frame_id,
+    release_what_a_closed_connection_held, requested_runtime_id, requested_surface_id,
+};
 
 use super::state::{
     SurfaceRegistration, SurfaceShareState, VK_IMAGE_ALLOCATION_SIZE_DEFAULT,
@@ -143,40 +148,20 @@ fn run_listener(
                     if let Err(e) = conn_result {
                         tracing::debug!("[Surface share] Client connection ended: {}", e);
                     }
-                    // The lease backstop, and the reason it is not gated on
-                    // `is_subprocess_peer` the way the registration watchdog
-                    // below is: a registered surface may outlive its
-                    // publisher's connection by design, but a lease may never
-                    // outlive the reader holding it. A child killed mid-frame
-                    // leaves its pool slots pinned forever otherwise.
-                    match state
-                        .check_out_leases()
-                        .release_every_check_out_lease_held_by(lease_holder)
-                    {
-                        Ok(0) => {}
-                        Ok(freed) => tracing::debug!(
-                            "[Surface share] {} dropped its claims, freeing {} slot(s) for \
-                             their producers",
-                            lease_holder,
-                            freed
-                        ),
-                        Err(unreadable) => tracing::error!(
-                            "[Surface share] could not reclaim {}'s checkout leases: {}. Their \
-                             pool slots stay pinned until the runtime stops.",
-                            lease_holder,
-                            unreadable
-                        ),
-                    }
                     // EPOLLHUP-equivalent watchdog: when the kernel closes the
                     // socket (typical on subprocess SIGKILL), the per-connection
-                    // read loop above exits with `UnexpectedEof`. Release every
-                    // surface this client registered so a crashed subprocess
-                    // doesn't leak the backing. Same-process connections (host
-                    // runtime publishing to its own service) skip the watchdog
-                    // — those surfaces are intentionally long-lived.
-                    if let Some(runtime_id) = connection_runtime_id.filter(|_| is_subprocess_peer) {
-                        cleanup_runtime_surfaces(&state, &runtime_id);
-                    }
+                    // read loop above exits with `UnexpectedEof`, and a crashed
+                    // subprocess's leases and registrations are released.
+                    let subprocess_runtime_id =
+                        connection_runtime_id.filter(|_| is_subprocess_peer);
+                    release_what_a_closed_connection_held(
+                        state.check_out_leases(),
+                        lease_holder,
+                        &lease_holder,
+                        subprocess_runtime_id
+                            .as_deref()
+                            .map(|runtime_id| (&state as _, runtime_id)),
+                    );
                 });
             }
             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -231,32 +216,10 @@ fn handle_client_connection(
 
         let op = request.get("op").and_then(|v| v.as_str()).unwrap_or("");
 
-        // Latch the first non-default runtime_id we observe so the watchdog
-        // knows whose surfaces to release on disconnect. Pure consumers
-        // (check_out only) carry no runtime_id; a runtime that registers and
-        // crashes is exactly the leak the watchdog cleans up.
-        //
-        // Invariant: one runtime_id per connection for the connection's
-        // lifetime. Subprocesses inherit STREAMLIB_RUNTIME_ID once at spawn
-        // and never multiplex sibling runtimes over a single socket. If
-        // that ever changes, the watchdog must move to a per-request scope
-        // (or per-surface ownership tag) — first-latched-then-frozen drops
-        // sibling runtimes' surfaces on the floor.
-        //
-        // The empty-string and `"unknown"` filter rejects the default
-        // sentinels every wire handler falls back to when no runtime_id
-        // is provided (`unwrap_or("unknown")` in `handle_register` /
-        // `handle_unregister` / `handle_check_in`). Keep these filters in
-        // sync if the handler defaults change.
-        if observed_runtime_id.is_none() {
-            let candidate = request
-                .get("runtime_id")
-                .and_then(|v| v.as_str())
-                .filter(|rid| !rid.is_empty() && *rid != "unknown");
-            if let Some(rid) = candidate {
-                *observed_runtime_id = Some(rid.to_string());
-            }
-        }
+        // Latch the runtime whose registrations the watchdog releases on
+        // disconnect. Pure consumers (check_out only) carry none; a runtime
+        // that registers and crashes is exactly the leak the watchdog cleans up.
+        latch_the_first_named_runtime_id(observed_runtime_id, &request);
 
         let (response, reply_fds) = match op {
             "register" => handle_register(&state, &request, &received_fds),
@@ -420,10 +383,7 @@ fn handle_register(
         );
     }
 
-    let runtime_id = request
-        .get("runtime_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown");
+    let runtime_id = requested_runtime_id(request);
 
     // Peel off the optional trailing timeline FDs in the order the host
     // attached them: plane FDs first, then `produce_done` (if present),
@@ -681,70 +641,27 @@ fn handle_check_out(
         return (response, reply_fds);
     }
 
-    if let Err(unrecordable) = state
-        .check_out_leases()
-        .record_check_out_lease(surface_id, lease_holder)
+    if let Err(refusal) =
+        record_check_out_lease_or_refusal(state.check_out_leases(), surface_id, lease_holder)
     {
         for fd in &reply_fds {
             unsafe { libc::close(*fd) };
         }
-        tracing::error!(
-            "[Surface share] refusing check_out of '{}' for {}: {}",
-            surface_id,
-            lease_holder,
-            unrecordable
-        );
-        // The recycled-frame refusal is its own story and travels verbatim;
-        // wrapping fits only the lease-bookkeeping failures.
-        let error = match &unrecordable {
-            crate::core::Error::SurfaceFrameRecycled { .. } => unrecordable.to_string(),
-            _ => format!(
-                "no checkout lease could be recorded for surface '{surface_id}', so its \
-                 producer could recycle the slot while you read it: {unrecordable}"
-            ),
-        };
-        return (serde_json::json!({ "error": error }), Vec::new());
+        return (refusal, Vec::new());
     }
 
     (response, reply_fds)
 }
 
-/// Drop one of this connection's claims on a surface.
-///
-/// `released: false` means this connection held no lease on that id — a
-/// double release, or a release of somebody else's frame. Reported rather
-/// than raised: the caller is usually a `Drop` that has nowhere to raise to,
-/// and one connection must never be able to unpin another's frame.
 fn handle_release_check_out(
     state: &SurfaceShareState,
     request: &serde_json::Value,
     lease_holder: SurfaceCheckOutLeaseHolderId,
 ) -> (serde_json::Value, Vec<RawFd>) {
-    let Some(surface_id) = requested_surface_id(request) else {
-        return (
-            serde_json::json!({"error": "missing surface_id"}),
-            Vec::new(),
-        );
-    };
-
-    match state
-        .check_out_leases()
-        .release_one_check_out_lease(surface_id, lease_holder)
-    {
-        Ok(released) => (
-            serde_json::json!({"success": true, "released": released}),
-            Vec::new(),
-        ),
-        Err(unreadable) => (
-            serde_json::json!({"error": unreadable.to_string()}),
-            Vec::new(),
-        ),
-    }
-}
-
-/// The surface a request names, or `None` when it names none.
-fn requested_surface_id(request: &serde_json::Value) -> Option<&str> {
-    request.get("surface_id").and_then(|v| v.as_str())
+    (
+        answer_release_check_out(state.check_out_leases(), request, lease_holder),
+        Vec::new(),
+    )
 }
 
 fn handle_lookup(
@@ -758,22 +675,8 @@ fn handle_lookup(
         );
     };
 
-    // A retired published frame id fails here, loudly, before any planes
-    // cross the wire: the slot's registration still exists (it is per-slot),
-    // but the frame this id named does not.
-    if let Err(retired) = state
-        .check_out_leases()
-        .refuse_a_retired_frame_id(surface_id)
-    {
-        tracing::warn!(
-            "[Surface share] refusing lookup of '{}': {}",
-            surface_id,
-            retired
-        );
-        return (
-            serde_json::json!({"error": retired.to_string()}),
-            Vec::new(),
-        );
+    if let Some(refusal) = refusal_of_a_retired_frame_id(state.check_out_leases(), surface_id) {
+        return (refusal, Vec::new());
     }
 
     let checkout = match state.get_surface_planes(surface_id) {
@@ -923,23 +826,7 @@ fn handle_unregister(
     state: &SurfaceShareState,
     request: &serde_json::Value,
 ) -> (serde_json::Value, Vec<RawFd>) {
-    let surface_id = match request.get("surface_id").and_then(|v| v.as_str()) {
-        Some(id) => id,
-        None => {
-            return (
-                serde_json::json!({"error": "missing surface_id"}),
-                Vec::new(),
-            );
-        }
-    };
-
-    let runtime_id = request
-        .get("runtime_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown");
-
-    let released = state.release_surface(surface_id, runtime_id);
-    (serde_json::json!({"success": released}), Vec::new())
+    (answer_unregister(state, request), Vec::new())
 }
 
 fn handle_check_in(
@@ -947,10 +834,7 @@ fn handle_check_in(
     request: &serde_json::Value,
     received_fds: &[RawFd],
 ) -> (serde_json::Value, Vec<RawFd>) {
-    let runtime_id = request
-        .get("runtime_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown");
+    let runtime_id = requested_runtime_id(request);
 
     if received_fds.is_empty() {
         return (
@@ -1103,26 +987,6 @@ fn is_out_of_process_peer(stream: &UnixStream) -> bool {
     ucred.pid != host_pid
 }
 
-/// Release every surface registered by `runtime_id`. Called when a client
-/// connection drops (kernel-side equivalent of EPOLLHUP — typical when a
-/// polyglot subprocess SIGKILLs mid-flight). Idempotent: any surface the
-/// subprocess already released cleanly is simply absent from the table, and
-/// `release_surface` returns `false`.
-fn cleanup_runtime_surfaces(state: &SurfaceShareState, runtime_id: &str) {
-    let surface_ids = state.surface_ids_by_runtime(runtime_id);
-    if surface_ids.is_empty() {
-        return;
-    }
-    tracing::info!(
-        "[Surface share] Watchdog: releasing {} surface(s) registered by '{}' after disconnect",
-        surface_ids.len(),
-        runtime_id,
-    );
-    for surface_id in surface_ids {
-        let _ = state.release_surface(&surface_id, runtime_id);
-    }
-}
-
 unsafe impl Send for UnixSocketSurfaceService {}
 unsafe impl Sync for UnixSocketSurfaceService {}
 
@@ -1130,6 +994,7 @@ unsafe impl Sync for UnixSocketSurfaceService {}
 mod tests {
     use super::*;
     use crate::core::context::SurfaceCheckOutLeaseRegistry;
+    use crate::core::context::surface_share_wire_verbs::release_every_surface_registered_by;
     use std::os::unix::io::FromRawFd;
     use streamlib_surface_client::{connect_to_surface_share_socket, send_request_with_fds};
     use tempfile::TempDir;
@@ -1903,11 +1768,11 @@ mod tests {
     }
 
     /// Watchdog primitive (pure-function): given a state populated with
-    /// surfaces under multiple runtime_ids, `cleanup_runtime_surfaces`
+    /// surfaces under multiple runtime_ids, `release_every_surface_registered_by`
     /// releases only the targeted runtime's surfaces and is idempotent on
     /// second call.
     #[test]
-    fn cleanup_runtime_surfaces_is_scoped_and_idempotent() {
+    fn release_every_surface_registered_by_is_scoped_and_idempotent() {
         let state = SurfaceShareState::new();
         // Use real memfds so release_surface's libc::close calls operate on
         // valid fds (no fd-table corruption from -1 sentinels).
@@ -1952,7 +1817,7 @@ mod tests {
                 .expect("register");
         }
 
-        cleanup_runtime_surfaces(&state, "victim-runtime");
+        release_every_surface_registered_by(&state, "victim-runtime");
         assert!(state.surface_ids_by_runtime("victim-runtime").is_empty());
         assert_eq!(
             state.surface_ids_by_runtime("survivor-runtime"),
@@ -1961,14 +1826,14 @@ mod tests {
 
         // Idempotent second call: nothing left for the victim, survivor
         // unaffected. Nothing panics.
-        cleanup_runtime_surfaces(&state, "victim-runtime");
+        release_every_surface_registered_by(&state, "victim-runtime");
         assert_eq!(
             state.surface_ids_by_runtime("survivor-runtime"),
             vec!["survivor".to_string()]
         );
 
         // Cleanup of a runtime with no registrations is a no-op.
-        cleanup_runtime_surfaces(&state, "never-registered");
+        release_every_surface_registered_by(&state, "never-registered");
         assert_eq!(
             state.surface_ids_by_runtime("survivor-runtime"),
             vec!["survivor".to_string()]
@@ -2659,7 +2524,7 @@ mod tests {
 
         // Updating an unknown surface_id reports failure rather than a
         // crash — handle_update_layout must be idempotent against the
-        // race with cleanup_runtime_surfaces.
+        // race with release_every_surface_registered_by.
         let bad_update = serde_json::json!({
             "op": "update_layout",
             "surface_id": "missing",

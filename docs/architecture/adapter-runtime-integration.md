@@ -50,6 +50,23 @@ Metadata travels alongside FDs: `width`, `height`, `format`,
 extensible — additional JSON fields can be added without breaking
 existing clients.
 
+On macOS the same ops, fields and replies ride a raw Mach channel —
+`runtime/streamlib-engine/src/apple/surface_share/` plus client at
+`runtime/streamlib-surface-client/src/macos.rs`. The runtime registers
+a dynamic bootstrap name (no launchd plist, no bundle) that a helper
+reads from `STREAMLIB_SURFACE_MACH_SERVICE`; each message carries its
+JSON beside port descriptors, and a surface travels as an IOSurface
+Mach port where Linux passes fds (`handle_type` `iosurface`). Surfaces
+are never global. Because the name is listed in the user's launchd
+domain, a connect is admitted only for this process or a helper pid
+its spawner admitted, pinned by the kernel audit token's pid version;
+each connection then gets a request port of its own. A helper's death
+reaches the service as a dead-name notification and releases its
+leases and registrations; the engine's death reaches the helper the
+same way, and the helper must release what it holds, because an
+IOSurface stays readable after its creator dies. A pool slot is a
+private IOSurface, and the pool skips one the kernel reports in use.
+
 Reached from a Python helper process via
 `ctx.gpu_limited_access.resolve_surface(id)`, which under the hood
 does a `check_out` and hands back a handle the helper can `lock` /

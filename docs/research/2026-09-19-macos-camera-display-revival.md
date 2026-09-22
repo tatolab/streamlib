@@ -938,6 +938,12 @@ a dead task's refs and use counts atomically with teardown, and a child that exi
 decrementing leaks nothing. The residual hazard is narrower than "orphans leak": a **live** child can
 pin a surface indefinitely, exactly as a live Linux child can hold a DMA-BUF fd open.
 
+> ~~`IOSurfaceIsInUse` drops to false **by the time `waitpid` returns** — the kernel releases a dead
+> task's refs and use counts atomically with teardown~~ — Superseded in part 2026-09-21 by #2360's
+> measurement (`docs/learnings/iosurface-in-use-tracks-ports-and-use-counts.md`). The release is
+> prompt but asynchronous: on an idle machine it has happened by `waitpid`, and with other work
+> running it lands 100–400 µs after the reap. A dead child still leaks nothing.
+
 macOS is actually *ahead* here: `IOSurfaceIsInUse` is a kernel-truthful liveness signal with no
 protocol needed, and DMA-BUF offers nothing equivalent. Recycle a slot when
 `consume_done ≥ frame` **and** `IOSurfaceIsInUse == false`.

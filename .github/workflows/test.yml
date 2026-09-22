@@ -297,6 +297,9 @@ jobs:
           # runtime id refused before the runtime writes anything, a live
           # runtime's id refused before a node is created, and a dropped runner
           # taking its iceoryx2 node's files with it.
+          # The surface-share service's Linux arm whole, and the verbs its Linux
+          # and macOS arms share, named by module: none of their tests needs a
+          # device.
           # The video device seam beside the audio one: the probe chain both
           # walk and the device-stream liveness report both carry, the
           # refusing backend a platform with no capture arm lands on, the rule
@@ -654,7 +657,9 @@ jobs:
             iceoryx2::channel_name \
             core::runtime::stated_configuration_value \
             linux::host_identity \
-            linux::machine_clock_identity
+            linux::machine_clock_identity \
+            linux::surface_share \
+            core::context::surface_share_wire_verbs
           # The two arms' own liveness tests are named one by one rather than
           # by module: their modules also hold tests that dlopen libasound and
           # walk a real PCM, which this runner has no `/dev/snd` for. These
@@ -667,6 +672,11 @@ jobs:
           cargo test --locked -p streamlib-engine \
             --test silent_null_arm_plays_what_it_is_given \
             --test silent_null_arm_captures_without_ever_dying
+          # The surface-share watchdog across a real process: a helper that
+          # checked a surface in is SIGKILLed, and the service releases the
+          # surface and its fds. GPU-free — the surface is a memfd.
+          cargo test --locked -p streamlib-engine \
+            --test surface_share_subprocess_crash
           # The mesh's own proof, and the only thing in CI that runs two
           # runtimes at once: two OS processes under one test mesh name find
           # each other by pinned multicast and by explicit QUIC and TCP peers,
@@ -801,6 +811,12 @@ jobs:
           # seconds. The Linux job names a slice of this suite instead, so this
           # is the broader of the two runs rather than a mirror of it.
           cargo test --locked -p streamlib-engine --lib -- --test-threads=1
+          # The surface-share service's raw-Mach arm: the wire in its client
+          # crate, then the service across real processes — a helper reading and
+          # editing a shared IOSurface, an impostor refused, and each side's
+          # death seen by the other. IOSurface and Mach need no GPU.
+          cargo test --locked -p streamlib-surface-client
+          cargo test --locked -p streamlib-engine --test surface_share_over_raw_mach
           # Compiled but not run: the AVFoundation arm against a real camera,
           # and `CameraSource` → `DisplayWindow` on the window server, need a
           # camera, camera access and a GPU no runner has. Building them here

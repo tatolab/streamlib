@@ -13,6 +13,9 @@ use crate::core::rhi::{PixelFormat, SourceLayoutInfo, StorageBuffer};
 use crate::core::{Error, Result};
 
 use super::{HostVulkanBuffer, HostVulkanDevice};
+use crate::apple::iosurface::{
+    RetainedIOSurfaceSharedAcrossThreads, create_iosurface_mach_send_right,
+};
 
 /// An IOSurface's memory imported as a storage buffer, zero-copy.
 ///
@@ -24,27 +27,9 @@ use super::{HostVulkanBuffer, HostVulkanDevice};
 /// that reads it.
 pub struct ImportedIOSurfaceStorageBuffer {
     storage_buffer: StorageBuffer,
-    iosurface: CFRetained<IOSurfaceRef>,
+    iosurface: RetainedIOSurfaceSharedAcrossThreads,
     imported_base_address: usize,
 }
-
-// SAFETY: the buffer is Send + Sync, and an IOSurface's retain count and
-// geometry queries are thread-safe; nothing is mutated after construction.
-unsafe impl Send for ImportedIOSurfaceStorageBuffer {}
-// SAFETY: as above.
-unsafe impl Sync for ImportedIOSurfaceStorageBuffer {}
-
-/// The retain a host-pointer import holds on the surface whose pages it
-/// aliases.
-struct IOSurfaceRetainedForItsImportedPages {
-    _retained_iosurface: CFRetained<IOSurfaceRef>,
-}
-
-// SAFETY: held only to be released, and an IOSurface's release is
-// thread-safe.
-unsafe impl Send for IOSurfaceRetainedForItsImportedPages {}
-// SAFETY: as above.
-unsafe impl Sync for IOSurfaceRetainedForItsImportedPages {}
 
 impl ImportedIOSurfaceStorageBuffer {
     /// Import `iosurface`'s whole allocation — its base address for its
@@ -53,7 +38,8 @@ impl ImportedIOSurfaceStorageBuffer {
     ///
     /// Refused, naming the reason, when `VK_EXT_external_memory_host` is not
     /// enabled, when the surface's base address is not on the import
-    /// alignment, or when the driver declines the import.
+    /// alignment, when that rounding would reach past the surface's mapped
+    /// pages, or when the driver declines the import.
     #[tracing::instrument(level = "debug", skip(vulkan_device, iosurface), fields(
         surface = %describe_iosurface(iosurface),
     ))]
@@ -61,51 +47,11 @@ impl ImportedIOSurfaceStorageBuffer {
         vulkan_device: &Arc<HostVulkanDevice>,
         iosurface: &IOSurfaceRef,
     ) -> Result<Self> {
-        const OPERATION: &str = "import_iosurface_as_storage_buffer";
-        let surface_description = describe_iosurface(iosurface);
-        if !vulkan_device.supports_host_pointer_import() {
-            return Err(Error::NotSupported(format!(
-                "{OPERATION}: the {surface_description} cannot be imported — \
-                 VK_EXT_external_memory_host is not enabled on this device"
-            )));
-        }
-        let import_alignment = vulkan_device.min_imported_host_pointer_alignment();
-        let base_address = iosurface.base_address().as_ptr().cast::<u8>();
-        let allocation_byte_size = iosurface.alloc_size() as u64;
-        if allocation_byte_size == 0 {
-            return Err(Error::Configuration(format!(
-                "{OPERATION}: the {surface_description} has no allocation to import"
-            )));
-        }
-        if import_alignment == 0 || !(base_address as u64).is_multiple_of(import_alignment) {
-            return Err(Error::NotSupported(format!(
-                "{OPERATION}: the {surface_description}'s base address {base_address:p} is not \
-                 on the driver's {import_alignment}-byte host-pointer import alignment"
-            )));
-        }
-        let imported_byte_size = allocation_byte_size.next_multiple_of(import_alignment);
-
-        let buffer = HostVulkanBuffer::from_imported_host_pointer_as_storage_buffer(
-            vulkan_device,
-            base_address,
-            imported_byte_size,
-            Some(Box::new(IOSurfaceRetainedForItsImportedPages {
-                _retained_iosurface: CFRetained::from(iosurface),
-            })),
-        )
-        .map_err(|refusal| match refusal {
-            Error::GpuError(driver_refusal) => Error::NotSupported(format!(
-                "{OPERATION}: the driver declined to import the {surface_description}'s \
-                 {imported_byte_size} bytes as a storage buffer (MoltenVK before 1.4.1 refuses \
-                 host-pointer buffers): {driver_refusal}"
-            )),
-            other => other,
-        })?;
-
+        let buffer = HostVulkanBuffer::from_iosurface_pages(vulkan_device, iosurface, None)?;
         Ok(Self {
             storage_buffer: StorageBuffer::from_host_vulkan_buffer(Arc::new(buffer)),
-            iosurface: CFRetained::from(iosurface),
-            imported_base_address: base_address as usize,
+            iosurface: RetainedIOSurfaceSharedAcrossThreads::new(CFRetained::from(iosurface)),
+            imported_base_address: iosurface.base_address().as_ptr() as usize,
         })
     }
 
@@ -162,6 +108,123 @@ impl ImportedIOSurfaceStorageBuffer {
             fits_in_u32("chroma stride", Some(iosurface.bytes_per_row_of_plane(1)))?,
             fits_in_u32("chroma offset from the luma plane", chroma_offset_from_luma)?,
         ))
+    }
+}
+
+impl HostVulkanBuffer {
+    /// Import `iosurface`'s pages as a buffer through
+    /// `VK_EXT_external_memory_host`, zero-copy: its base address for its
+    /// allocation size rounded up to the device's import alignment. The
+    /// buffer spans `buffer_byte_len` bytes of that, or all of it for
+    /// `None`, and retains the surface until its memory is freed.
+    ///
+    /// Refused, naming the reason, when the extension is not enabled, when
+    /// the surface's base address is not on the import alignment, when that
+    /// rounding would reach past the whole pages the surface is mapped on —
+    /// importing memory the surface does not own — or when the driver
+    /// declines the import.
+    pub fn from_iosurface_pages(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        iosurface: &IOSurfaceRef,
+        buffer_byte_len: Option<u64>,
+    ) -> Result<Self> {
+        const OPERATION: &str = "import_iosurface_pages";
+        let surface_description = describe_iosurface(iosurface);
+        if !vulkan_device.supports_host_pointer_import() {
+            return Err(Error::NotSupported(format!(
+                "{OPERATION}: the {surface_description} cannot be imported — \
+                 VK_EXT_external_memory_host is not enabled on this device"
+            )));
+        }
+        let import_alignment = vulkan_device.min_imported_host_pointer_alignment();
+        let base_address = iosurface.base_address().as_ptr().cast::<u8>();
+        let allocation_byte_size = iosurface.alloc_size() as u64;
+        if allocation_byte_size == 0 {
+            return Err(Error::Configuration(format!(
+                "{OPERATION}: the {surface_description} has no allocation to import"
+            )));
+        }
+        if import_alignment == 0 || !(base_address as u64).is_multiple_of(import_alignment) {
+            return Err(Error::NotSupported(format!(
+                "{OPERATION}: the {surface_description}'s base address {base_address:p} is not \
+                 on the driver's {import_alignment}-byte host-pointer import alignment"
+            )));
+        }
+        // A surface is mapped a whole page at a time, and CoreVideo's report
+        // an allocation that ends mid-page, so the rounding stays inside the
+        // surface for any alignment up to the page size and leaves it beyond.
+        // SAFETY: `sysconf` reads a system constant and touches no memory.
+        let page_byte_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+        let page_byte_size = u64::try_from(page_byte_size)
+            .ok()
+            .filter(|page_byte_size| *page_byte_size > 0)
+            .ok_or_else(|| {
+                Error::Configuration(format!("{OPERATION}: the system page size is unreadable"))
+            })?;
+        let mapped_byte_size = allocation_byte_size.next_multiple_of(page_byte_size);
+        let imported_byte_size = allocation_byte_size.next_multiple_of(import_alignment);
+        if imported_byte_size > mapped_byte_size {
+            return Err(Error::NotSupported(format!(
+                "{OPERATION}: the {surface_description}'s {allocation_byte_size}-byte allocation \
+                 rounds up to {imported_byte_size} bytes on the driver's {import_alignment}-byte \
+                 import alignment, past the {mapped_byte_size} bytes of pages it is mapped on"
+            )));
+        }
+
+        let buffer = HostVulkanBuffer::from_imported_host_range_as_buffer_of_size(
+            vulkan_device,
+            base_address,
+            imported_byte_size,
+            buffer_byte_len.unwrap_or(imported_byte_size),
+            None,
+            "HostVulkanBuffer::from_iosurface_pages",
+        )
+        .map_err(|refusal| match refusal {
+            Error::GpuError(driver_refusal) => Error::NotSupported(format!(
+                "{OPERATION}: the driver declined to import the {surface_description}'s \
+                 {imported_byte_size} bytes as a storage buffer (MoltenVK before 1.4.1 refuses \
+                 host-pointer buffers): {driver_refusal}"
+            )),
+            other => other,
+        })?;
+        Ok(
+            buffer.backed_by_iosurface(RetainedIOSurfaceSharedAcrossThreads::new(
+                CFRetained::from(iosurface),
+            )),
+        )
+    }
+
+    /// A pixel buffer whose memory is a fresh private IOSurface of
+    /// `width`x`height` packed rows, so it can cross to a helper process as
+    /// a Mach port. The buffer spans exactly the pixels.
+    pub fn new_iosurface_backed_pixel_buffer(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        width: u32,
+        height: u32,
+        bytes_per_pixel: u32,
+        pixel_format: PixelFormat,
+    ) -> Result<Self> {
+        let iosurface = crate::apple::iosurface::create_private_iosurface_with_packed_rows(
+            width,
+            height,
+            bytes_per_pixel,
+            pixel_format,
+        )?;
+        let pixel_byte_len = u64::from(width) * u64::from(height) * u64::from(bytes_per_pixel);
+        Self::from_iosurface_pages(vulkan_device, &iosurface, Some(pixel_byte_len))
+    }
+
+    /// A fresh send right naming this buffer's IOSurface, for the
+    /// surface-share wire. Refused for a buffer that is not IOSurface-backed.
+    pub fn export_iosurface_mach_send_right(
+        &self,
+    ) -> Result<streamlib_surface_client::OwnedMachSendRight> {
+        let iosurface = self.backing_iosurface().ok_or_else(|| {
+            Error::NotSupported(
+                "export_iosurface_mach_send_right: this buffer's memory is not an IOSurface".into(),
+            )
+        })?;
+        create_iosurface_mach_send_right(iosurface)
     }
 }
 

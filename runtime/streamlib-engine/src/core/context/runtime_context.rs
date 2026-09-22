@@ -63,6 +63,12 @@ pub struct RuntimeContext {
     /// rather than an external daemon.
     #[cfg(target_os = "linux")]
     surface_socket_path: std::path::PathBuf,
+    /// Per-runtime surface-sharing Mach service. Helper-process spawn ops
+    /// hand the child its name as `STREAMLIB_SURFACE_MACH_SERVICE` and admit
+    /// the child's pid through it.
+    #[cfg(target_os = "macos")]
+    surface_share_mach_service_rendezvous:
+        crate::apple::surface_share::MachSurfaceShareServiceRendezvous,
 }
 
 impl RuntimeContext {
@@ -79,6 +85,8 @@ impl RuntimeContext {
         runtime_directory: StreamlibRuntimeDirectory,
         hosted_control_plane: Arc<HostedControlPlaneEndpointRegistry>,
         #[cfg(target_os = "linux")] surface_socket_path: std::path::PathBuf,
+        #[cfg(target_os = "macos")]
+        surface_share_mach_service_rendezvous: crate::apple::surface_share::MachSurfaceShareServiceRendezvous,
     ) -> Self {
         Self {
             gpu,
@@ -97,6 +105,8 @@ impl RuntimeContext {
             hosted_control_plane,
             #[cfg(target_os = "linux")]
             surface_socket_path,
+            #[cfg(target_os = "macos")]
+            surface_share_mach_service_rendezvous,
         }
     }
 
@@ -162,6 +172,16 @@ impl RuntimeContext {
     #[cfg(target_os = "linux")]
     pub fn surface_socket_path(&self) -> &std::path::Path {
         &self.surface_socket_path
+    }
+
+    /// Per-runtime surface-sharing Mach service. Helper-process spawn ops
+    /// hand the child its name and admit the child's pid through it, so the
+    /// child's `streamlib-surface-client` can connect.
+    #[cfg(target_os = "macos")]
+    pub fn surface_share_mach_service_rendezvous(
+        &self,
+    ) -> &crate::apple::surface_share::MachSurfaceShareServiceRendezvous {
+        &self.surface_share_mach_service_rendezvous
     }
 
     /// Get the processor's unique identifier (None for shared/global context).
@@ -237,6 +257,10 @@ impl RuntimeContext {
             hosted_control_plane: Arc::clone(&self.hosted_control_plane),
             #[cfg(target_os = "linux")]
             surface_socket_path: self.surface_socket_path.clone(),
+            #[cfg(target_os = "macos")]
+            surface_share_mach_service_rendezvous: self
+                .surface_share_mach_service_rendezvous
+                .clone(),
         }
     }
 
@@ -259,6 +283,10 @@ impl RuntimeContext {
             hosted_control_plane: Arc::clone(&self.hosted_control_plane),
             #[cfg(target_os = "linux")]
             surface_socket_path: self.surface_socket_path.clone(),
+            #[cfg(target_os = "macos")]
+            surface_share_mach_service_rendezvous: self
+                .surface_share_mach_service_rendezvous
+                .clone(),
         }
     }
 
@@ -816,6 +844,15 @@ impl<'a> RuntimeContextFullAccess<'a> {
     #[cfg(target_os = "linux")]
     pub fn surface_socket_path(&self) -> &std::path::Path {
         self.host_base().surface_socket_path()
+    }
+
+    /// Per-runtime surface-sharing Mach service, for a spawn host to hand its
+    /// child the service name and admit the child's pid.
+    #[cfg(target_os = "macos")]
+    pub fn surface_share_mach_service_rendezvous(
+        &self,
+    ) -> &crate::apple::surface_share::MachSurfaceShareServiceRendezvous {
+        self.host_base().surface_share_mach_service_rendezvous()
     }
 
     /// The runtime directory, for a control plane's registry and a spawn host's

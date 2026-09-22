@@ -1,153 +1,136 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-// TODO(@jonathan): IOSurface module has unused utilities (PixelFormat enum, create_iosurface(), pixel_format_to_iosurface())
-// Review if these are needed for future texture format support or can be removed
-#![allow(dead_code)]
+//! Private IOSurface allocation.
+//!
+//! Never `kIOSurfaceIsGlobal`: a global surface's id resolves from any
+//! process on the machine. A private one reaches another process only
+//! through a Mach port this process chose to send.
 
+use objc2_core_foundation::{CFDictionary, CFNumber, CFRetained, CFString, CFType};
+use objc2_io_surface::{
+    IOSurfaceRef, kIOSurfaceBytesPerElement, kIOSurfaceBytesPerRow, kIOSurfaceHeight,
+    kIOSurfacePixelFormat, kIOSurfaceWidth,
+};
+
+use crate::core::rhi::PixelFormat;
 use crate::core::{Error, Result};
-use objc2::msg_send;
-use objc2::rc::Retained;
-use objc2::runtime::ProtocolObject;
-use objc2_io_surface::IOSurface;
-use objc2_metal::{MTLDevice, MTLPixelFormat, MTLTexture, MTLTextureDescriptor, MTLTextureUsage};
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum PixelFormat {
-    Bgra32,
-    Rgba32,
+/// A retained IOSurface that may be held and read from any thread.
+///
+/// Everything done through it — retain, release, geometry and in-use
+/// queries, `IOSurfaceCreateMachPort` — is thread-safe per IOSurface's own
+/// contract; the binding simply does not say so.
+#[derive(Clone)]
+pub struct RetainedIOSurfaceSharedAcrossThreads(CFRetained<IOSurfaceRef>);
+
+// SAFETY: see the type's doc — IOSurface's retain count, property reads and
+// port minting are thread-safe, and nothing here mutates the surface.
+unsafe impl Send for RetainedIOSurfaceSharedAcrossThreads {}
+// SAFETY: as above.
+unsafe impl Sync for RetainedIOSurfaceSharedAcrossThreads {}
+
+impl RetainedIOSurfaceSharedAcrossThreads {
+    /// Hold `iosurface`.
+    pub fn new(iosurface: CFRetained<IOSurfaceRef>) -> Self {
+        Self(iosurface)
+    }
 }
 
-/// Creates a Metal texture from an IOSurface.
-///
-/// This is used for READING from IOSurface-backed buffers (e.g., camera frames).
-/// For WRITING to IOSurface/CVPixelBuffer (e.g., MP4 export), see the module-level
-/// documentation for the blitting pattern.
-pub fn create_metal_texture_from_iosurface(
-    device: &ProtocolObject<dyn MTLDevice>,
-    iosurface: &IOSurface,
-    plane: usize,
-) -> Result<Retained<ProtocolObject<dyn MTLTexture>>> {
-    let width = iosurface.width();
-    let height = iosurface.height();
-    let pixel_format = iosurface.pixelFormat();
-
-    let metal_format = iosurface_format_to_metal(pixel_format)?;
-
-    let descriptor = MTLTextureDescriptor::new();
-    unsafe {
-        descriptor.setWidth(width as usize);
-        descriptor.setHeight(height as usize);
-        descriptor.setPixelFormat(metal_format);
-        descriptor.setUsage(MTLTextureUsage::ShaderRead | MTLTextureUsage::RenderTarget);
+impl std::ops::Deref for RetainedIOSurfaceSharedAcrossThreads {
+    type Target = IOSurfaceRef;
+    fn deref(&self) -> &IOSurfaceRef {
+        &self.0
     }
+}
 
-    use objc2_io_surface::IOSurfaceRef;
-    let iosurface_ptr: *const IOSurfaceRef = iosurface as *const IOSurface as *const IOSurfaceRef;
+/// A fresh send right naming `iosurface`, owned — the one way a surface
+/// leaves this process. Refused when IOSurface mints no port.
+pub fn create_iosurface_mach_send_right(
+    iosurface: &IOSurfaceRef,
+) -> Result<streamlib_surface_client::OwnedMachSendRight> {
+    match iosurface.create_mach_port() {
+        mach2::port::MACH_PORT_NULL => Err(Error::TextureError(format!(
+            "IOSurfaceCreateMachPort failed for the {}x{} IOSurface {}",
+            iosurface.width(),
+            iosurface.height(),
+            iosurface.id()
+        ))),
+        // SAFETY: `IOSurfaceCreateMachPort` hands this task a fresh send
+        // right that nothing else holds.
+        port => Ok(unsafe { streamlib_surface_client::OwnedMachSendRight::from_raw_name(port) }),
+    }
+}
 
-    let texture: Option<Retained<ProtocolObject<dyn MTLTexture>>> = unsafe {
-        msg_send![
-            device,
-            newTextureWithDescriptor: &*descriptor,
-            iosurface: iosurface_ptr,
-            plane: plane
+/// A private IOSurface of `height` rows of `width` elements, each
+/// `bytes_per_element` wide, with rows packed back to back — no padding — so
+/// its pages read as one tightly laid-out pixel buffer.
+///
+/// Tagged with `pixel_format`'s CoreVideo code when it is a packed,
+/// single-plane format; otherwise the surface is described as elements
+/// alone. Refused when IOSurface would not honour the packed row pitch.
+pub fn create_private_iosurface_with_packed_rows(
+    width: u32,
+    height: u32,
+    bytes_per_element: u32,
+    pixel_format: PixelFormat,
+) -> Result<CFRetained<IOSurfaceRef>> {
+    const OPERATION: &str = "create_private_iosurface_with_packed_rows";
+    let Some(packed_bytes_per_row) = width
+        .checked_mul(bytes_per_element)
+        .filter(|bytes| *bytes > 0 && height > 0)
+    else {
+        return Err(Error::Configuration(format!(
+            "{OPERATION}: {width}x{height} at {bytes_per_element} byte(s) per element describes \
+             no memory"
+        )));
+    };
+    let as_cf_number = |value: u32| CFNumber::new_i64(i64::from(value));
+    let width_number = as_cf_number(width);
+    let height_number = as_cf_number(height);
+    let bytes_per_element_number = as_cf_number(bytes_per_element);
+    let bytes_per_row_number = as_cf_number(packed_bytes_per_row);
+    let pixel_format_number = (!pixel_format.is_yuv() && pixel_format != PixelFormat::Unknown)
+        .then(|| as_cf_number(pixel_format.as_cv_pixel_format_type()));
+
+    // SAFETY: the IOSurface property keys are immutable framework statics.
+    let mut keys: Vec<&CFString> = unsafe {
+        vec![
+            kIOSurfaceWidth,
+            kIOSurfaceHeight,
+            kIOSurfaceBytesPerElement,
+            kIOSurfaceBytesPerRow,
         ]
     };
-
-    texture.ok_or_else(|| {
-        Error::TextureError(format!(
-            "Failed to create Metal texture from IOSurface (width={}, height={}, format={})",
-            width, height, pixel_format
-        ))
-    })
-}
-
-pub fn create_iosurface(
-    width: usize,
-    height: usize,
-    pixel_format: PixelFormat,
-) -> Result<Retained<IOSurface>> {
-    use objc2::runtime::AnyObject;
-    use objc2_foundation::{NSNumber, NSString, ns_string};
-
-    let ios_format = pixel_format_to_iosurface(pixel_format)?;
-
-    let bytes_per_element = match pixel_format {
-        PixelFormat::Rgba32 | PixelFormat::Bgra32 => 4,
-    };
-    let bytes_per_row = (width * bytes_per_element).div_ceil(64) * 64; // Align to 64 bytes
-
-    let val_width = NSNumber::new_usize(width);
-    let val_height = NSNumber::new_usize(height);
-    let val_pixel_format = NSNumber::new_u32(ios_format);
-    let val_bytes_per_element = NSNumber::new_usize(bytes_per_element);
-    let val_bytes_per_row = NSNumber::new_usize(bytes_per_row);
-
-    use objc2_foundation::NSDictionary;
-
-    let keys: Vec<&NSString> = vec![
-        ns_string!("IOSurfaceWidth"),
-        ns_string!("IOSurfaceHeight"),
-        ns_string!("IOSurfacePixelFormat"),
-        ns_string!("IOSurfaceBytesPerElement"),
-        ns_string!("IOSurfaceBytesPerRow"),
+    let mut values: Vec<&CFType> = vec![
+        &width_number,
+        &height_number,
+        &bytes_per_element_number,
+        &bytes_per_row_number,
     ];
+    if let Some(pixel_format_number) = pixel_format_number.as_deref() {
+        // SAFETY: as above.
+        keys.push(unsafe { kIOSurfacePixelFormat });
+        values.push(pixel_format_number);
+    }
+    let properties = CFDictionary::<CFString, CFType>::from_slices(&keys, &values);
 
-    let values: Vec<&AnyObject> = vec![
-        (&*val_width as &NSNumber).as_super(),
-        (&*val_height as &NSNumber).as_super(),
-        (&*val_pixel_format as &NSNumber).as_super(),
-        (&*val_bytes_per_element as &NSNumber).as_super(),
-        (&*val_bytes_per_row as &NSNumber).as_super(),
-    ];
-
-    let properties = NSDictionary::from_slices(&keys, &values);
-
-    use objc2::ClassType;
-    use objc2::runtime::AnyClass;
-
-    let cls: &AnyClass = IOSurface::class();
-    let allocated_ptr: *mut IOSurface = unsafe { msg_send![cls, alloc] };
-
-    let surface_ptr: *mut IOSurface =
-        unsafe { msg_send![allocated_ptr, initWithProperties: &*properties] };
-
-    let surface = unsafe { Retained::from_raw(surface_ptr) }.ok_or_else(|| {
+    // SAFETY: the dictionary holds only the documented property keys, with
+    // CFNumber values.
+    let iosurface = unsafe { IOSurfaceRef::new(properties.as_opaque()) }.ok_or_else(|| {
         Error::TextureError(format!(
-            "Failed to create IOSurface with dimensions {}x{}, format={:?}",
-            width, height, pixel_format
+            "{OPERATION}: IOSurfaceCreate refused {width}x{height} at {bytes_per_element} \
+             byte(s) per element"
         ))
     })?;
-
-    let actual_width = surface.width() as usize;
-    let actual_height = surface.height() as usize;
-
-    if actual_width != width || actual_height != height {
+    if iosurface.bytes_per_row() != packed_bytes_per_row as usize {
         return Err(Error::TextureError(format!(
-            "IOSurface created with wrong dimensions: expected {}x{}, got {}x{}",
-            width, height, actual_width, actual_height
+            "{OPERATION}: IOSurface padded {width}x{height}'s rows to {} bytes; the packed \
+             layout needs {packed_bytes_per_row}",
+            iosurface.bytes_per_row()
         )));
     }
-
-    Ok(surface)
-}
-
-fn iosurface_format_to_metal(ios_format: u32) -> Result<MTLPixelFormat> {
-    match ios_format {
-        0x42475241 => Ok(MTLPixelFormat::BGRA8Unorm), // 'BGRA' - most common on macOS
-        0x52474241 => Ok(MTLPixelFormat::RGBA8Unorm), // 'RGBA'
-        _ => Err(Error::NotSupported(format!(
-            "IOSurface pixel format 0x{:08X} not supported",
-            ios_format
-        ))),
-    }
-}
-
-fn pixel_format_to_iosurface(format: PixelFormat) -> Result<u32> {
-    match format {
-        PixelFormat::Bgra32 => Ok(0x42475241), // 'BGRA'
-        PixelFormat::Rgba32 => Ok(0x52474241), // 'RGBA'
-    }
+    Ok(iosurface)
 }
 
 #[cfg(test)]
@@ -155,51 +138,41 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_iosurface_creation() {
-        let surface = create_iosurface(1920, 1080, PixelFormat::Bgra32);
-        assert!(surface.is_ok());
-
-        let surface = surface.unwrap();
-        assert_eq!(surface.width(), 1920);
-        assert_eq!(surface.height(), 1080);
+    fn an_odd_width_keeps_its_rows_packed_and_its_base_page_aligned() {
+        let iosurface = create_private_iosurface_with_packed_rows(641, 3, 4, PixelFormat::Bgra32)
+            .expect("a private IOSurface");
+        assert_eq!(iosurface.width(), 641);
+        assert_eq!(iosurface.height(), 3);
+        assert_eq!(iosurface.bytes_per_row(), 641 * 4);
+        assert_eq!(
+            iosurface.pixel_format(),
+            PixelFormat::Bgra32.as_cv_pixel_format_type()
+        );
+        assert!(iosurface.alloc_size() >= 641 * 4 * 3);
+        let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
+        assert_eq!(iosurface.base_address().as_ptr() as usize % page_size, 0);
     }
 
     #[test]
-    fn test_metal_texture_from_iosurface() {
-        use objc2_metal::MTLCreateSystemDefaultDevice;
-
-        let device = MTLCreateSystemDefaultDevice().expect("No Metal device available");
-
-        let surface =
-            create_iosurface(1920, 1080, PixelFormat::Bgra32).expect("Failed to create IOSurface");
-
-        let texture = create_metal_texture_from_iosurface(&device, &surface, 0);
-        assert!(texture.is_ok());
-
-        let texture = texture.unwrap();
-        assert_eq!(texture.width(), 1920);
-        assert_eq!(texture.height(), 1080);
-        assert_eq!(texture.pixelFormat(), MTLPixelFormat::BGRA8Unorm);
+    fn a_fresh_surface_is_not_in_use() {
+        let iosurface = create_private_iosurface_with_packed_rows(64, 64, 4, PixelFormat::Rgba32)
+            .expect("a private IOSurface");
+        assert!(!iosurface.is_in_use());
     }
 
     #[test]
-    fn test_format_conversions() {
-        assert_eq!(
-            iosurface_format_to_metal(0x42475241).unwrap(),
-            MTLPixelFormat::BGRA8Unorm
-        );
-        assert_eq!(
-            iosurface_format_to_metal(0x52474241).unwrap(),
-            MTLPixelFormat::RGBA8Unorm
-        );
+    fn a_yuv_format_is_described_by_elements_alone() {
+        let iosurface =
+            create_private_iosurface_with_packed_rows(64, 64, 1, PixelFormat::Nv12VideoRange)
+                .expect("a private IOSurface");
+        assert_eq!(iosurface.pixel_format(), 0);
+        assert_eq!(iosurface.bytes_per_row(), 64);
+    }
 
-        assert_eq!(
-            pixel_format_to_iosurface(PixelFormat::Bgra32).unwrap(),
-            0x42475241
-        );
-        assert_eq!(
-            pixel_format_to_iosurface(PixelFormat::Rgba32).unwrap(),
-            0x52474241
-        );
+    #[test]
+    fn an_empty_extent_is_refused_by_name() {
+        let refused =
+            create_private_iosurface_with_packed_rows(0, 64, 4, PixelFormat::Bgra32).unwrap_err();
+        assert!(refused.to_string().contains("describes no memory"));
     }
 }

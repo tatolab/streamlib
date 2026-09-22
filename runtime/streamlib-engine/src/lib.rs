@@ -152,6 +152,21 @@ pub mod linux_surface_share {
     pub use crate::linux::surface_share::{SurfaceShareState, UnixSocketSurfaceService};
 }
 
+/// Per-runtime surface-share service primitives over raw Mach, the macOS
+/// peer of `linux_surface_share`. Exposed for the service's multi-process
+/// tests and tooling that drives it in isolation; production callers go
+/// through [`Runner`].
+#[cfg(target_os = "macos")]
+pub mod apple_surface_share {
+    pub use crate::apple::iosurface::{
+        create_iosurface_mach_send_right, create_private_iosurface_with_packed_rows,
+    };
+    pub use crate::apple::surface_share::{
+        IOSurfaceShareState, MachSurfaceShareService, MachSurfaceShareServiceRendezvous,
+        SurfaceShareHelperProcessAdmission,
+    };
+}
+
 /// The ALSA audio arm's own entry point, for the audio tier only.
 ///
 /// The chain's probe takes the first arm that opens and no dial overrides it,

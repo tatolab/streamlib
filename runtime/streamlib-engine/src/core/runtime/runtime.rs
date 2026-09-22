@@ -186,13 +186,24 @@ pub struct Runner {
     /// Path of the per-runtime surface-sharing socket, inside the runtime directory.
     #[cfg(target_os = "linux")]
     pub(crate) surface_socket_path: std::path::PathBuf,
+    /// Per-runtime surface-sharing service, registered under a dynamic
+    /// bootstrap name in `new()`; helper processes connect to it through
+    /// `STREAMLIB_SURFACE_MACH_SERVICE`. `Mutex<Option<...>>` so `stop()` can
+    /// drop it deterministically, which unregisters the name.
+    #[cfg(target_os = "macos")]
+    pub(crate) mach_surface_share_service:
+        Arc<Mutex<Option<crate::apple::surface_share::MachSurfaceShareService>>>,
+    /// The Mach service's name and helper-process admissions.
+    #[cfg(target_os = "macos")]
+    pub(crate) surface_share_mach_service_rendezvous:
+        crate::apple::surface_share::MachSurfaceShareServiceRendezvous,
     /// The runtime directory this runtime resolved as it started.
     pub(crate) runtime_directory: StreamlibRuntimeDirectory,
     /// The surfaces cross-process consumers currently hold checked out, owned
     /// by the service above and read by the pixel-buffer pool through the
     /// `SurfaceStore` `start()` hands it. Held here because the service is
     /// brought up in `new()` and the store is built in `start()`.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) surface_check_out_leases: Arc<crate::core::context::SurfaceCheckOutLeaseRegistry>,
     /// Logging guard — keeps the drain worker alive for the runtime's
     /// lifetime. On drop, flushes buffered JSONL records and
@@ -334,6 +345,12 @@ impl Runner {
         #[cfg(target_os = "linux")]
         let (surface_service, surface_socket_path, surface_check_out_leases) =
             bring_up_surface_service(&runtime_directory, &runtime_id)?;
+        #[cfg(target_os = "macos")]
+        let (
+            mach_surface_share_service,
+            surface_share_mach_service_rendezvous,
+            surface_check_out_leases,
+        ) = bring_up_mach_surface_share_service(&runtime_id)?;
 
         crate::iceoryx2::warn_when_posix_shared_memory_is_short_for_a_runtime();
 
@@ -407,8 +424,12 @@ impl Runner {
             surface_service,
             #[cfg(target_os = "linux")]
             surface_socket_path,
+            #[cfg(target_os = "macos")]
+            mach_surface_share_service,
+            #[cfg(target_os = "macos")]
+            surface_share_mach_service_rendezvous,
             runtime_directory,
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             surface_check_out_leases,
             #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
             _logging_guard,
@@ -452,6 +473,15 @@ impl Runner {
     #[cfg(target_os = "linux")]
     pub fn surface_socket_path(&self) -> &std::path::Path {
         &self.surface_socket_path
+    }
+
+    /// The per-runtime surface-sharing Mach service's name and helper-process
+    /// admissions, registered during [`Runner::new`].
+    #[cfg(target_os = "macos")]
+    pub fn surface_share_mach_service_rendezvous(
+        &self,
+    ) -> &crate::apple::surface_share::MachSurfaceShareServiceRendezvous {
+        &self.surface_share_mach_service_rendezvous
     }
 
     /// Unique identifier for this runtime instance.
@@ -527,58 +557,34 @@ impl Runner {
         let gpu = GpuContext::init_for_platform_sync()?;
         tracing::info!("[start] GPU context initialized");
 
-        // Initialize SurfaceStore for cross-process GPU surface sharing (macOS only)
-        #[cfg(target_os = "macos")]
-        {
-            use crate::core::context::SurfaceStore;
-
-            if let Ok(xpc_service_name) = std::env::var("STREAMLIB_XPC_SERVICE_NAME") {
-                tracing::info!(
-                    "[start] Initializing SurfaceStore with XPC service '{}'...",
-                    xpc_service_name
-                );
-                let surface_store =
-                    SurfaceStore::new(xpc_service_name, self.runtime_id.to_string());
-                if let Err(e) = surface_store.connect() {
-                    tracing::warn!(
-                        "[start] SurfaceStore XPC connection failed (surface sharing disabled): {}",
-                        e
-                    );
-                } else {
-                    gpu.set_surface_store(surface_store);
-                    tracing::info!("[start] SurfaceStore initialized");
-                }
-            } else {
-                tracing::debug!(
-                    "[start] STREAMLIB_XPC_SERVICE_NAME not set, surface sharing disabled"
-                );
-            }
-        }
-
-        // Initialize SurfaceStore for cross-process GPU surface sharing (Linux).
-        // Connects to the runtime-internal surface-sharing service that
-        // `new()` already brought up — fail fast if the connection fails,
+        // Connect the GPU context's SurfaceStore to the runtime-internal
+        // surface-sharing service `new()` already brought up — failing fast,
         // because the service is guaranteed to be running.
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             use crate::core::context::SurfaceStore;
 
-            let socket_path = self.surface_socket_path.to_string_lossy().to_string();
+            #[cfg(target_os = "linux")]
+            let surface_share_address = self.surface_socket_path.to_string_lossy().to_string();
+            #[cfg(target_os = "macos")]
+            let surface_share_address = self
+                .surface_share_mach_service_rendezvous
+                .service_name()
+                .to_string();
             tracing::info!(
-                "[start] Initializing SurfaceStore against runtime-internal Unix socket '{}'...",
-                socket_path
+                "[start] Initializing SurfaceStore against the runtime-internal surface-sharing \
+                 service '{}'...",
+                surface_share_address
             );
-            // `SurfaceStore::new` constructs the handle from a fresh
-            // `Arc<SurfaceStoreInner>`.
             let surface_store = SurfaceStore::new_reading_check_out_leases(
-                socket_path.clone(),
+                surface_share_address.clone(),
                 self.runtime_id.to_string(),
                 Arc::clone(&self.surface_check_out_leases),
             );
             surface_store.connect().map_err(|e| {
                 Error::Runtime(format!(
                     "Failed to connect to runtime-internal surface-sharing service at {}: {}",
-                    socket_path, e
+                    surface_share_address, e
                 ))
             })?;
             gpu.set_surface_store(surface_store);
@@ -678,6 +684,8 @@ impl Runner {
             Arc::clone(&self.hosted_control_plane),
             #[cfg(target_os = "linux")]
             self.surface_socket_path.clone(),
+            #[cfg(target_os = "macos")]
+            self.surface_share_mach_service_rendezvous.clone(),
         ));
         *self.runtime_context.lock() = Some(Arc::clone(&runtime_ctx));
 
@@ -802,6 +810,17 @@ impl Runner {
                     "[stop] Runtime-internal surface-sharing service stopped at {}",
                     self.surface_socket_path.display()
                 );
+            }
+        }
+        #[cfg(target_os = "macos")]
+        {
+            crate::core::runtime::note_what_the_engine_teardown_is_waiting_on(
+                "the surface-sharing service",
+            );
+            if let Some(mut mach_surface_share_service) =
+                self.mach_surface_share_service.lock().take()
+            {
+                mach_surface_share_service.stop();
             }
         }
 
@@ -1604,6 +1623,46 @@ fn bring_up_surface_service(
     ))
 }
 
+/// Register the per-runtime surface-sharing Mach service, refusing to start
+/// if another live runtime already holds this id's name. A crashed runtime's
+/// name went with its process, so there is nothing stale to clean up.
+#[cfg(target_os = "macos")]
+fn bring_up_mach_surface_share_service(
+    runtime_id: &RuntimeUniqueId,
+) -> Result<(
+    Arc<Mutex<Option<crate::apple::surface_share::MachSurfaceShareService>>>,
+    crate::apple::surface_share::MachSurfaceShareServiceRendezvous,
+    Arc<crate::core::context::SurfaceCheckOutLeaseRegistry>,
+)> {
+    use crate::apple::surface_share::{IOSurfaceShareState, MachSurfaceShareService};
+
+    let service_name = MachSurfaceShareService::service_name_for_runtime(runtime_id.as_str());
+    let state = IOSurfaceShareState::new();
+    let check_out_leases = Arc::clone(state.check_out_leases());
+    let mut service = MachSurfaceShareService::new(state, service_name.clone());
+    service.start().map_err(|start_failure| {
+        if start_failure.kind() == std::io::ErrorKind::AddrInUse {
+            Error::Runtime(format!(
+                "Surface-sharing Mach service '{service_name}' is already registered by a live \
+                 process. Each Runner requires a unique runtime_id; check for a duplicate \
+                 STREAMLIB_RUNTIME_ID env var or another runtime in the same session."
+            ))
+        } else {
+            Error::Runtime(format!(
+                "Failed to start runtime-internal surface-sharing service '{service_name}': \
+                 {start_failure}"
+            ))
+        }
+    })?;
+    let rendezvous = service.rendezvous();
+
+    Ok((
+        Arc::new(Mutex::new(Some(service))),
+        rendezvous,
+        check_out_leases,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1822,52 +1881,109 @@ mod tests {
     // Per-runtime surface-sharing service (#428)
     // =========================================================================
 
+    /// Each variable's value before a test set it, put back on drop — so a test
+    /// that panics still leaves the environment as it found it.
+    struct EnvironmentVariablesRestoredOnDrop {
+        previous_values: Vec<(String, Option<std::ffi::OsString>)>,
+    }
+
+    impl Drop for EnvironmentVariablesRestoredOnDrop {
+        fn drop(&mut self) {
+            // SAFETY: serialized via #[serial]; no concurrent env mutation.
+            unsafe {
+                for (name, previous_value) in self.previous_values.drain(..) {
+                    match previous_value {
+                        Some(value) => std::env::set_var(name, value),
+                        None => std::env::remove_var(name),
+                    }
+                }
+            }
+        }
+    }
+
+    /// Set each variable for the duration of the closure, restoring what was
+    /// there before. Tests using this must be `#[serial]`.
+    fn with_environment_variables_set<F: FnOnce() -> R, R>(
+        variables: &[(&str, &std::ffi::OsStr)],
+        f: F,
+    ) -> R {
+        let _restored_on_drop = EnvironmentVariablesRestoredOnDrop {
+            previous_values: variables
+                .iter()
+                .map(|(name, _)| (name.to_string(), std::env::var_os(name)))
+                .collect(),
+        };
+        // SAFETY: serialized via #[serial]; no concurrent env mutation.
+        unsafe {
+            for (name, value) in variables {
+                std::env::set_var(name, value);
+            }
+        }
+        f()
+    }
+
+    #[cfg(target_os = "macos")]
+    mod runtime_internal_mach_surface_share {
+        use super::*;
+        use streamlib_surface_client::SurfaceShareMachServiceConnection;
+
+        fn a_unique_pinned_runtime_id() -> String {
+            format!("Rmachtest{}", uuid::Uuid::new_v4().simple())
+        }
+
+        #[test]
+        #[serial]
+        fn a_runtime_registers_a_surface_share_mach_service_this_process_can_use() {
+            let runtime = Runner::new().expect("runtime should construct");
+            let service_name = runtime
+                .surface_share_mach_service_rendezvous()
+                .service_name()
+                .to_string();
+            assert!(
+                service_name.ends_with(runtime.runtime_id().as_str()),
+                "the service name {service_name} is keyed by the runtime id"
+            );
+            let connection =
+                SurfaceShareMachServiceConnection::connect(&service_name, Duration::from_secs(5))
+                    .expect("this process connects to its own runtime's service");
+            let (answer, ports) = connection
+                .send_request_with_ports(
+                    &serde_json::json!({"op": "lookup", "surface_id": "no-such"}),
+                    Vec::new(),
+                )
+                .expect("round-trip");
+            assert!(answer.get("error").is_some());
+            assert!(ports.is_empty());
+        }
+
+        #[test]
+        #[serial]
+        fn a_second_runtime_pinned_to_a_live_runtimes_id_is_refused_and_a_dropped_one_frees_it() {
+            let pinned_id = a_unique_pinned_runtime_id();
+            with_environment_variables_set(
+                &[("STREAMLIB_RUNTIME_ID", std::ffi::OsStr::new(&pinned_id))],
+                || {
+                    let first = Runner::new().expect("first runtime");
+                    let refusal = Runner::new()
+                        .err()
+                        .expect("a second runtime under a live id is refused")
+                        .to_string();
+                    assert!(
+                        refusal.contains("already registered by a live process"),
+                        "{refusal}"
+                    );
+                    drop(first);
+                    Runner::new().expect("the id is free once its runtime is gone");
+                },
+            );
+        }
+    }
+
     #[cfg(target_os = "linux")]
     mod runtime_internal_surface_share {
         use super::*;
         use std::os::unix::net::UnixStream;
         use streamlib_surface_client::{MAX_DMA_BUF_PLANES, send_request_with_fds};
-
-        /// Each variable's value before a test set it, put back on drop — so a test
-        /// that panics still leaves the environment as it found it.
-        struct EnvironmentVariablesRestoredOnDrop {
-            previous_values: Vec<(String, Option<std::ffi::OsString>)>,
-        }
-
-        impl Drop for EnvironmentVariablesRestoredOnDrop {
-            fn drop(&mut self) {
-                // SAFETY: serialized via #[serial]; no concurrent env mutation.
-                unsafe {
-                    for (name, previous_value) in self.previous_values.drain(..) {
-                        match previous_value {
-                            Some(value) => std::env::set_var(name, value),
-                            None => std::env::remove_var(name),
-                        }
-                    }
-                }
-            }
-        }
-
-        /// Set each variable for the duration of the closure, restoring what was
-        /// there before. Tests using this must be `#[serial]`.
-        fn with_environment_variables_set<F: FnOnce() -> R, R>(
-            variables: &[(&str, &std::ffi::OsStr)],
-            f: F,
-        ) -> R {
-            let _restored_on_drop = EnvironmentVariablesRestoredOnDrop {
-                previous_values: variables
-                    .iter()
-                    .map(|(name, _)| (name.to_string(), std::env::var_os(name)))
-                    .collect(),
-            };
-            // SAFETY: serialized via #[serial]; no concurrent env mutation.
-            unsafe {
-                for (name, value) in variables {
-                    std::env::set_var(name, value);
-                }
-            }
-            f()
-        }
 
         /// Replace XDG_RUNTIME_DIR with a fresh tempdir for the duration of the
         /// closure. Tests using this must be `#[serial]` so no other runtime

@@ -88,6 +88,19 @@ impl PixelBufferRingEntry {
         (self.buffer.strong_count() <= 2).then(|| self.buffer.clone())
     }
 
+    /// Whether the kernel reports the slot's IOSurface in use by any
+    /// process: a Mach port to it still in flight, or a use count a helper
+    /// holds. Kernel-truthful, and cleared by the kernel when that process
+    /// dies, so it holds a slot even where no checkout lease was taken.
+    #[cfg(target_os = "macos")]
+    fn is_in_use_per_the_kernel(&self) -> bool {
+        self.buffer
+            .buffer_ref()
+            .inner
+            .backing_iosurface()
+            .is_some_and(objc2_io_surface::IOSurfaceRef::is_in_use)
+    }
+
     /// Advance to the next frame generation and answer with the id it
     /// publishes — the single mint for reuse and growth alike.
     fn mint_next_published_frame_id(&mut self) -> PublishedPixelBufferFrameId {
@@ -485,7 +498,8 @@ impl PixelBufferPoolManager {
         // A slot is free only when nobody holds it in this address space and
         // nobody holds it out of one. The first is an Arc refcount, the second
         // a checkout lease — see
-        // `docs/decisions/surface-id-lifetime-contract.md`.
+        // `docs/decisions/surface-id-lifetime-contract.md` — and on macOS also
+        // the kernel's own in-use answer for the slot's IOSurface.
         //
         // Held for the whole scan, so the lease answer a slot is tested
         // against is still the answer when that slot is handed over AND when
@@ -510,6 +524,10 @@ impl PixelBufferPoolManager {
 
             let entry = &mut ring_pool.buffers[idx];
             if !reuse.permits(entry.pool_slot_id.as_str()) {
+                continue;
+            }
+            #[cfg(target_os = "macos")]
+            if entry.is_in_use_per_the_kernel() {
                 continue;
             }
 
@@ -3402,9 +3420,9 @@ impl GpuContext {
 
     /// Check out a surface by ID, returning the pixel buffer.
     ///
-    /// Returns from local cache if available, otherwise fetches from the surface-share service.
-    /// The first checkout for a given ID incurs XPC overhead (~100-200µs),
-    /// subsequent checkouts are cache hits (~10-50ns).
+    /// Returns from local cache if available, otherwise looks the surface up
+    /// over the surface-share service's Mach channel and imports its
+    /// IOSurface, zero-copy.
     #[cfg(target_os = "macos")]
     pub fn check_out_surface(&self, surface_id: &str) -> Result<PixelBuffer> {
         let store = self.surface_store.lock().unwrap();

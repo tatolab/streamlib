@@ -11,14 +11,9 @@ use crate::core::Result;
 /// which can then import the GPU resource without copying data.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum RhiExternalHandle {
-    /// macOS: IOSurface ID (u32).
-    /// Can be looked up in another process via IOSurfaceLookup().
-    /// Note: This only works with kIOSurfaceIsGlobal (deprecated/removed).
-    #[cfg(target_os = "macos")]
-    IOSurface { id: u32 },
-
-    /// macOS: IOSurface via mach port for cross-process sharing.
-    /// The mach port is created via IOSurfaceCreateMachPort().
+    /// macOS: a send right naming an IOSurface, from
+    /// `IOSurfaceCreateMachPort()`. Must travel as a Mach port descriptor;
+    /// the surface itself is private, so no id resolves it elsewhere.
     #[cfg(target_os = "macos")]
     IOSurfaceMachPort { port: u32 },
 
@@ -61,15 +56,6 @@ unsafe impl Send for RhiExternalHandle {}
 unsafe impl Sync for RhiExternalHandle {}
 
 impl RhiExternalHandle {
-    /// Extract the mach port from an IOSurfaceMachPort handle (macOS only).
-    #[cfg(target_os = "macos")]
-    pub fn mach_port(&self) -> Option<u32> {
-        match self {
-            RhiExternalHandle::IOSurfaceMachPort { port } => Some(*port),
-            _ => None,
-        }
-    }
-
     /// The plane size the exporter stated for this fd (Linux only).
     #[cfg(target_os = "linux")]
     pub fn stated_size(&self) -> usize {
@@ -152,6 +138,87 @@ impl RhiPixelBufferExport for super::PixelBuffer {
     /// returned variant.
     fn export_handle(&self) -> Result<RhiExternalHandle> {
         self.buffer_ref().inner.export_external_handle()
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl RhiPixelBufferExport for super::PixelBuffer {
+    /// A fresh send right to the IOSurface this buffer's memory is; refused
+    /// for a buffer that is not IOSurface-backed.
+    fn export_handle(&self) -> Result<RhiExternalHandle> {
+        Ok(RhiExternalHandle::IOSurfaceMachPort {
+            port: self
+                .buffer_ref()
+                .inner
+                .export_iosurface_mach_send_right()?
+                .into_raw_name(),
+        })
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl RhiPixelBufferImport for super::PixelBuffer {
+    /// Import the IOSurface a Mach port names, zero-copy, as a `width`x
+    /// `height` `format` pixel buffer. The port is consumed whatever the
+    /// outcome.
+    ///
+    /// Refused, naming the numbers, when the extent is empty, when the
+    /// format has no whole bytes per pixel, or when the surface's rows are
+    /// not packed at `width` pixels — a padded surface would read at the
+    /// wrong stride.
+    fn from_external_handle(
+        handle: RhiExternalHandle,
+        width: u32,
+        height: u32,
+        format: super::PixelFormat,
+    ) -> Result<Self> {
+        let RhiExternalHandle::IOSurfaceMachPort { port } = handle;
+        // SAFETY: the caller surrendered this send right to the import.
+        let iosurface_port =
+            unsafe { streamlib_surface_client::OwnedMachSendRight::from_raw_name(port) };
+        let iosurface =
+            objc2_io_surface::IOSurfaceRef::lookup_from_mach_port(iosurface_port.as_raw_name())
+                .ok_or_else(|| {
+                    crate::core::Error::Configuration(
+                        "IOSurface import: the port names no IOSurface".into(),
+                    )
+                })?;
+        drop(iosurface_port);
+
+        let bytes_per_pixel = format.bits_per_pixel() / 8;
+        if width == 0 || height == 0 || bytes_per_pixel == 0 {
+            return Err(crate::core::Error::Configuration(format!(
+                "IOSurface import: {width}x{height} {format:?} describes no whole-byte pixels"
+            )));
+        }
+        let packed_bytes_per_row = u64::from(width) * u64::from(bytes_per_pixel);
+        if iosurface.bytes_per_row() as u64 != packed_bytes_per_row {
+            return Err(crate::core::Error::Configuration(format!(
+                "IOSurface import: the surface's rows are {} bytes, and a {width}x{height} \
+                 {format:?} pixel buffer packs them at {packed_bytes_per_row}",
+                iosurface.bytes_per_row()
+            )));
+        }
+        let vulkan_device = crate::vulkan::rhi::vulkan_buffer::VULKAN_DEVICE_FOR_IMPORT
+            .get()
+            .ok_or_else(|| {
+                crate::core::Error::NotSupported(
+                    "IOSurface import: HostVulkanDevice not initialized (GpuDevice::new() not called)"
+                        .into(),
+                )
+            })?;
+        let vulkan_buffer = crate::vulkan::rhi::HostVulkanBuffer::from_iosurface_pages(
+            vulkan_device,
+            &iosurface,
+            Some(packed_bytes_per_row * u64::from(height)),
+        )?;
+        Ok(Self::new(super::PixelBufferRef {
+            inner: std::sync::Arc::new(vulkan_buffer),
+            width,
+            height,
+            bytes_per_pixel,
+            format,
+        }))
     }
 }
 

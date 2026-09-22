@@ -298,6 +298,33 @@ which this delta does not touch.
 - REMOVED: trigger_macos_termination
   The macOS signal arm's hop to `NSApplication.terminate`. Ctrl-C and SIGTERM feed the same
   escalation the Linux arm does. Recorded while shipping #2357.
+- REMOVED: runtime/streamlib-engine/src/apple/xpc_ffi.rs
+  The XPC FFI surface, whose listener was never called; the transport is raw Mach, carried by
+  `streamlib-surface-client`'s macOS arm. Recorded while shipping #2360.
+- REMOVED: STREAMLIB_XPC_SERVICE_NAME
+  The `start()` arm that read it and connected a `SurfaceStore` whose macOS `connect()` refused.
+  The runtime now registers its own Mach service in `new()` and connects to it in `start()`,
+  exactly as the Linux arm does with its socket. Recorded while shipping #2360.
+- REMOVED: macOS: IOSurface ID
+  The `RhiExternalHandle::IOSurface { id }` variant, named by its doc line because the surviving
+  `IOSurfaceMachPort` shares its prefix — a global-id handle with no constructor, and the
+  shortcut the plan forbids: a private surface's id does not resolve cross-process, and making it
+  resolve means a global surface. Its `mach_port()` accessor, which had no callers, went with it.
+  `IOSurfaceMachPort` is the one Apple handle. Recorded while shipping #2360.
+- REMOVED: pub static kIOSurfaceIsGlobal
+  With the rest of `apple/corevideo_ffi.rs`'s hand-declared IOSurface and Mach block —
+  `IOSurfaceGetID`, `IOSurfaceLookup`, the use-count and Mach-port functions, and its own
+  `mach_port_deallocate` / `mach_task_self` — none with a caller. The global-surface half is the
+  shortcut the plan forbids; the rest is carried by `objc2-io-surface` and `mach2`. Recorded while
+  shipping #2360.
+- REMOVED: create_metal_texture_from_iosurface
+  With `iosurface_format_to_metal` — Metal-RHI residue in `apple/iosurface.rs` with no callers.
+  The file now holds the private-IOSurface allocator the pool's slots come from. Recorded while
+  shipping #2360.
+- REMOVED: core-graphics = "0.24"
+  The engine's direct dependency, with no use site; the macOS tests reach Core Graphics through
+  `objc2-core-graphics`. The crate stays in the lockfile through the vendored vulkanalia fork.
+  Recorded while shipping #2360.
 
 ---
 

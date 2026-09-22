@@ -150,7 +150,10 @@ libc.workspace = true
 
 # Apple-specific crates
 dispatch2 = "0.3"  # GCD dispatch queues
-mach2 = "0.4"  # Mach kernel API for thread priorities and timing
+mach2 = "0.7"  # Mach kernel API: thread priorities, timing, and the surface-share channel
+# Wire-format helpers for the per-runtime surface-share service's raw Mach
+# channel, shared with the helper-process clients that talk to it.
+streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.26.10" }
 
 # The one RHI and everything that compiles with it. Not workspace-wide: a
 # workspace-wide entry would make a Windows or wasm target build a GPU stack
@@ -178,17 +181,12 @@ libc.workspace = true
 # fails with EPERM on every desktop process; rtkit-daemon does the
 # privileged syscall on the requesting thread's behalf.
 zbus = "5"
-# Wire-format helpers for the per-runtime surface-sharing socket. Genuinely
-# Linux-bound: `SCM_RIGHTS` fd passing is what the Apple arm replaces rather
-# than ports.
+# Wire-format helpers for the per-runtime surface-sharing socket.
 streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.26.10" }
 # The video device seam's V4L2 arm: device enumeration, format negotiation and
 # the mmap capture stream. A kernel ABI binding — no user-space library is
 # linked, so the wheel's `DT_NEEDED` set does not grow.
 v4l = "0.14"
-
-[target.'cfg(target_os = "macos")'.dependencies]
-core-graphics = "0.24"
 
 [dev-dependencies]
 # Self-alias via the SDK so engine tests / benches that use
@@ -317,6 +315,19 @@ path = "tests/bin/surface_share_crash_helper.rs"
 # Subprocess fixture for the EPOLLHUP watchdog integration test
 # (runtime/streamlib-engine/tests/surface_share_subprocess_crash.rs). Linux only.
 required-features = []
+
+# Helper process for the raw-Mach surface-share integration test: reads and
+# edits a surface the engine shares, holds one to be killed, or plays the
+# engine a helper outlives. Empty off macOS.
+[[bin]]
+name = "surface_share_mach_helper"
+path = "tests/bin/surface_share_mach_helper.rs"
+
+# The raw-Mach surface-share proof across processes. No GPU, so it runs on the
+# macOS CI runner; named in `.github/workflows/test.yml`'s macOS job.
+[[test]]
+name = "surface_share_over_raw_mach"
+path = "tests/surface_share_over_raw_mach.rs"
 
 [build-dependencies]
 serde_json = { workspace = true }
