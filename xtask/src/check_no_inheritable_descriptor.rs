@@ -17,6 +17,10 @@
 //! `open`, `openat`, `memfd_create`, `socket`, `socketpair` and `accept` are
 //! not gated.
 //!
+//! Darwin has no `pipe2`, so a pipe in code that also builds there is
+//! `std::io::pipe()`, which std creates close-on-exec on every platform —
+//! atomically where the platform can. The Linux prescriptions do not change.
+//!
 //! Cheap substring scan (no `syn`/compile) over every Rust file git knows under
 //! `runtime/`, `sdk/` and `adapters/`, test code included — a test that leaks an
 //! inheritable pipe into a child it spawns hangs on the same shape. Whole-line
@@ -41,6 +45,9 @@ struct DescriptorCreatingCall {
     close_on_exec_spelling: &'static str,
 }
 
+const PIPE_CLOSE_ON_EXEC_SPELLING: &str = "libc::pipe2(fds, libc::O_CLOEXEC)` on Linux, or `std::io::pipe()` where the code also \
+     builds on Darwin, which has no `pipe2";
+
 const DESCRIPTOR_CREATING_CALLS: &[DescriptorCreatingCall] = &[
     DescriptorCreatingCall {
         callee: "libc::dup",
@@ -50,12 +57,12 @@ const DESCRIPTOR_CREATING_CALLS: &[DescriptorCreatingCall] = &[
     DescriptorCreatingCall {
         callee: "libc::pipe",
         close_on_exec_flag: None,
-        close_on_exec_spelling: "libc::pipe2(fds, libc::O_CLOEXEC)",
+        close_on_exec_spelling: PIPE_CLOSE_ON_EXEC_SPELLING,
     },
     DescriptorCreatingCall {
         callee: "libc::pipe2",
         close_on_exec_flag: Some("O_CLOEXEC"),
-        close_on_exec_spelling: "libc::pipe2(fds, libc::O_CLOEXEC)",
+        close_on_exec_spelling: PIPE_CLOSE_ON_EXEC_SPELLING,
     },
     DescriptorCreatingCall {
         callee: "libc::epoll_create",
@@ -268,6 +275,19 @@ mod tests {
         );
         let refused_lines: Vec<usize> = report.violations.iter().map(|v| v.line).collect();
         assert_eq!(refused_lines, vec![1, 3], "got {:?}", report.violations);
+    }
+
+    #[test]
+    fn the_portable_std_pipe_is_accepted_and_a_refused_pipe_names_it() {
+        let report = scan_one_engine_file(
+            "let (read_end, write_end) = std::io::pipe()?;\n\
+             unsafe { libc::pipe(fds.as_mut_ptr()) };\n",
+        );
+        let refused_lines: Vec<usize> = report.violations.iter().map(|v| v.line).collect();
+        assert_eq!(refused_lines, vec![2], "got {:?}", report.violations);
+        let spelling = report.violations[0].close_on_exec_spelling;
+        assert!(spelling.contains("libc::O_CLOEXEC"), "{spelling}");
+        assert!(spelling.contains("std::io::pipe()"), "{spelling}");
     }
 
     #[test]
