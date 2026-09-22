@@ -128,3 +128,41 @@ not just develop on it"* — is what the nine tickets trace to.
 - KosmicKrisp — MIT, fully Vulkan 1.3 conformant, Apple Silicon only — becomes the migration target
   worth evaluating once a macOS 26 floor is acceptable. Bundling the Vulkan *loader* rather than
   linking MoltenVK directly is what keeps that path open.
+
+## Capability parity — decided 2026-09-22
+
+Read this before giving a helper process its own Metal code, before adding a staging copy on
+macOS because Linux has one, and before deciding a Linux-only capability "has no macOS
+equivalent". The floor above reaches the MVP sentence; `docs/plan/changes/macos-capability-
+parity.md` carries everything else the Linux floor offers, and the owner's ruling is the
+trigger: *"streamlib on osx requires the full capabilities and feature set"* — the first delta's
+"Not in scope" block was a session's reading of the MVP sentence, not the intent.
+
+> **The helper's importer stays Vulkan.** `streamlib-consumer-rhi` gains a MoltenVK arm — an
+> IOSurface imported as a `VkBuffer` or `VkImage`, a Metal shared event imported as a
+> `VkSemaphore` — and Metal appears only as exported handles at the boundary: the shared-event
+> port, the `MTLBuffer` behind an imported buffer for the DLPack capsule. A Metal-direct shim in
+> the wheel was rejected as a second system beside the one that exists, even though it would
+> have saved the per-helper device bring-up (~0.5 s cold, 26–70 ms warm), which is inside the
+> startup budget the plan already tests.
+
+> **Unified memory removes the staging, not the ordering.** An IOSurface-backed texture is
+> linear and host-visible, so on macOS the CPU door and the device tensor over a texture are
+> the surface itself, ordered on its shared-event timeline. The device tensor is a `kDLMetal`
+> capsule over a no-copy `MTLBuffer` on the frame's own IOSurface — measured on torch 2.14 MPS
+> and MLX 0.32.2 with write-through — so the CUDA peer on macOS is zero copies where Linux is
+> one blit. What this narrows is stated in the change: the texture door publishes per store, as
+> the pixel-buffer door already does everywhere.
+
+> **Absent tiers are typed and closed.** Ray tracing (no `VK_KHR_ray_tracing_pipeline` under
+> MoltenVK), `VirtualCameraSink` (a Camera Extension needs a bundle; the DAL plug-in stopped
+> loading in macOS 14.1), the CUDA Array Interface, the fd-shaped raw handles (peer:
+> `export_iosurface`), and the OpenGL adapter (its seam is EGL and DMA-BUF; OpenGL is deprecated
+> on macOS; a native consumer takes the Vulkan adapter). Each refuses by name before a frame
+> flows, and the same Python test suite proves parity on both CI lanes with a skip marker that
+> may name only this list.
+
+Rejected alongside: a CGL-and-IOSurface arm of the OpenGL adapter (Zink or any GL on macOS
+would still need one, making it the Vulkan adapter behind a translation layer); one milestone
+for floor and parity together (the floor delta is over the line cap and is a shippable
+increment on its own — parity is its own milestone).

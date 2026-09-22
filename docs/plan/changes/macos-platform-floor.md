@@ -430,9 +430,14 @@ split, and the clamp the monotonic flag cannot give. **The gate on the timestamp
 
 ## Not in scope
 
-VideoToolbox codecs and the four Vulkan Video built-ins, which MoltenVK cannot serve. CoreAudio and
-the audio device backend's Apple arm. Ray tracing. The Apple `VirtualCameraSink`, which is a
-CoreMediaIO Camera Extension and therefore a different distribution artifact entirely, not a port.
-`MonotonicTimer`, so continuous-execution Python processors lag one release. The six surface
-adapters. `packages/screen-capture`'s disposition. KosmicKrisp, the conformant Vulkan-on-Metal
-driver, which is worth revisiting once macOS 26 is the floor.
+> ~~VideoToolbox codecs and the four Vulkan Video built-ins, which MoltenVK cannot serve. CoreAudio
+> and the audio device backend's Apple arm. Ray tracing. The Apple `VirtualCameraSink`, which is a
+> CoreMediaIO Camera Extension and therefore a different distribution artifact entirely, not a
+> port. `MonotonicTimer`, so continuous-execution Python processors lag one release. The six
+> surface adapters. `packages/screen-capture`'s disposition.~~ — Superseded 2026-09-22 by the
+> owner: this block was a session's reading of the MVP sentence, not the intent. Every item but
+> ray tracing and the Apple virtual camera is carried by `macos-capability-parity.md`, the second
+> delta on the same floor; those two are named absent tiers there, with the reason.
+
+KosmicKrisp, the conformant Vulkan-on-Metal driver, which is worth revisiting once macOS 26 is the
+floor — a change of its own.
