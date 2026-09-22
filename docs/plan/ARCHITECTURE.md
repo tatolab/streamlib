@@ -328,6 +328,28 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_claimed_surface_pixel_access.py::test_a_frame_that_cannot_take_a_write_back_arrives_read_only -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_video_frame_claim.py -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_compute_kernel.py::test_a_raise_inside_the_staged_cpu_door_discards_the_edit -->
+- **DECIDED** — The portable path for GPU math in a Python processor is torch over the
+  frame's own DLPack capsule: `torch.from_dlpack(frame)` on every floor, the device taken
+  from that tensor or from `torch.accelerator`, and never spelled by name. Any DLPack
+  consumer may read a frame on the floor that supports it — cupy and jax on Linux, MLX on
+  macOS — and the engine refuses none; only the torch path is portable, and the cross-floor
+  check says which is which. Array-API wrappers are neither modelled nor refused. The
+  scaffold and the shipped examples model this path and no other for GPU math; torch is a
+  dependency of neither the wheel nor the scaffold. [portable-gpu-interop]
+- **DECIDED** — A frame's DLPack export honours a request for the host side on every
+  floor: `dl_device=(kDLCPU, 0)` hands back the surface's host mapping, so
+  `numpy.from_dlpack(frame, device="cpu")` is one line on both floors — on macOS the same
+  IOSurface pages the Metal capsule aliases, not a copy. `copy=True` stays refused by name
+  at every door. [portable-gpu-interop]
+- **DECIDED** — The cross-floor check reads a Python processor's source and its
+  `pyproject.toml` for what binds it to one floor — a floor-bound library's import, a
+  device named as a literal, a closed-list method, a floor-bound dependency with no
+  platform marker — and names the portable spelling for each. It runs inside
+  `streamlib dev` and `streamlib run` as a warning that never blocks a start, gates in CI
+  the wheel's own Python and the scaffold's output, and runs over `examples/` when a change
+  ships; it is no CLI verb of its own. It reads source, not behaviour: a dynamic import or
+  a dependency's own device choice is left to the same Python suite running on both
+  floors' CI lanes. [portable-gpu-interop]
 
 ## Consumers — examples & packages — SHIPPED
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-31-consumer-tree-disposition.md -->
@@ -1139,6 +1161,14 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   go; the command-recorder flow keeps its seam by carrying bindings to the recorder
   rather than stashing them on the kernel. The Rust convergence is its own change,
   sequenced after the Python surface. [python-kernel-api]
+- **DECIDED** — Python copies one surface into another through the engine:
+  `copy_surface_to_surface(source_surface_id, destination_surface)` on the Limited GPU
+  capability, and so on Full. Any backing pair, same format and extent, no conversion: the
+  engine picks the copy the two backings need and orders it on the destination's timeline
+  ahead of its next read. The source is claimed for the copy's duration; the destination
+  must take a write-back; a format or extent mismatch, or a destination that cannot take a
+  write-back, refuses by name. A frame lands in a kernel's input texture this way, with no
+  array library. [portable-gpu-interop]
 - **OPEN** — Everything else, including the two graphics capabilities no language can
   render: depth attachments — Rust constructs a depth-testing pipeline that Python cannot
   name, and no pass in either language renders against one — and MSAA, refused for every
