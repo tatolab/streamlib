@@ -75,8 +75,8 @@ why cupy or MLX "is not supported" or why the check only warns.
 
 ## Consequences
 
-- The shipped GPU examples convert off cupy and off device literals; the scaffold does not
-  change for this decision.
+- The shipped GPU examples owe a conversion off cupy and off device literals, carried by
+  the change that schedules it; the scaffold does not change for this decision.
 - Every DLPack export arm on every floor honours the host-device request, and each new
   floor's arm must.
 - The cross-floor check's findings are advisory for users and blocking for the project's

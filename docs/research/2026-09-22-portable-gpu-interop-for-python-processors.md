@@ -63,8 +63,8 @@ an engine copy, and does its array work either through `array_namespace()` over 
 or through torch with `torch.accelerator` (which reports `mps` here). That can be checked
 mechanically: TID251 plus a small AST rule plus a dependency-marker rule, with the same test
 suite on both CI lanes as the backstop. "Bring any library" is not portable. CuPy is Linux-only,
-MLX is macOS-only at the GPU-DLPack level, and jax cannot read either floor's capsule without a
-copy. The honest promise is interop with any DLPack consumer on the floor it supports, and
+MLX is macOS-only at the GPU-DLPack level, and jax reads the Linux capsule (by source) but
+cannot read the macOS one without a copy. The honest promise is interop with any DLPack consumer on the floor it supports, and
 portability through one named path.
 
 ## Evidence
