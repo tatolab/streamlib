@@ -19,7 +19,7 @@
 //!
 //! Darwin has no `pipe2`, so a pipe in code that also builds there is
 //! `std::io::pipe()`, which std creates close-on-exec on every platform —
-//! atomically where the platform can. The Linux prescriptions do not change.
+//! atomically where the platform can.
 //!
 //! Cheap substring scan (no `syn`/compile) over every Rust file git knows under
 //! `runtime/`, `sdk/` and `adapters/`, test code included — a test that leaks an
@@ -43,51 +43,59 @@ struct DescriptorCreatingCall {
     /// close-on-exec form at all and is refused outright.
     close_on_exec_flag: Option<&'static str>,
     close_on_exec_spelling: &'static str,
+    /// The spelling for code that also builds on Darwin, where the Linux
+    /// form does not exist.
+    portable_close_on_exec_spelling: Option<&'static str>,
 }
-
-const PIPE_CLOSE_ON_EXEC_SPELLING: &str = "libc::pipe2(fds, libc::O_CLOEXEC)` on Linux, or `std::io::pipe()` where the code also \
-     builds on Darwin, which has no `pipe2";
 
 const DESCRIPTOR_CREATING_CALLS: &[DescriptorCreatingCall] = &[
     DescriptorCreatingCall {
         callee: "libc::dup",
         close_on_exec_flag: None,
         close_on_exec_spelling: "libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0)",
+        portable_close_on_exec_spelling: None,
     },
     DescriptorCreatingCall {
         callee: "libc::pipe",
         close_on_exec_flag: None,
-        close_on_exec_spelling: PIPE_CLOSE_ON_EXEC_SPELLING,
+        close_on_exec_spelling: "libc::pipe2(fds, libc::O_CLOEXEC)",
+        portable_close_on_exec_spelling: Some("std::io::pipe()"),
     },
     DescriptorCreatingCall {
         callee: "libc::pipe2",
         close_on_exec_flag: Some("O_CLOEXEC"),
-        close_on_exec_spelling: PIPE_CLOSE_ON_EXEC_SPELLING,
+        close_on_exec_spelling: "libc::pipe2(fds, libc::O_CLOEXEC)",
+        portable_close_on_exec_spelling: Some("std::io::pipe()"),
     },
     DescriptorCreatingCall {
         callee: "libc::epoll_create",
         close_on_exec_flag: None,
         close_on_exec_spelling: "libc::epoll_create1(libc::EPOLL_CLOEXEC)",
+        portable_close_on_exec_spelling: None,
     },
     DescriptorCreatingCall {
         callee: "libc::epoll_create1",
         close_on_exec_flag: Some("EPOLL_CLOEXEC"),
         close_on_exec_spelling: "libc::epoll_create1(libc::EPOLL_CLOEXEC)",
+        portable_close_on_exec_spelling: None,
     },
     DescriptorCreatingCall {
         callee: "libc::timerfd_create",
         close_on_exec_flag: Some("TFD_CLOEXEC"),
         close_on_exec_spelling: "libc::timerfd_create(clock, libc::TFD_CLOEXEC | …)",
+        portable_close_on_exec_spelling: None,
     },
     DescriptorCreatingCall {
         callee: "libc::eventfd",
         close_on_exec_flag: Some("EFD_CLOEXEC"),
         close_on_exec_spelling: "libc::eventfd(initial, libc::EFD_CLOEXEC | …)",
+        portable_close_on_exec_spelling: None,
     },
     DescriptorCreatingCall {
         callee: "libc::recvmsg",
         close_on_exec_flag: Some("MSG_CMSG_CLOEXEC"),
         close_on_exec_spelling: "libc::recvmsg(socket, &mut message, libc::MSG_CMSG_CLOEXEC)",
+        portable_close_on_exec_spelling: None,
     },
 ];
 
@@ -97,6 +105,7 @@ pub struct InheritableDescriptorViolation {
     pub line: usize,
     pub call_text: String,
     pub close_on_exec_spelling: &'static str,
+    pub portable_close_on_exec_spelling: Option<&'static str>,
 }
 
 #[derive(Debug, Default)]
@@ -123,10 +132,16 @@ pub fn run(workspace_root: &Path) -> Result<()> {
         .violations
         .iter()
         .map(|violation| {
+            let portable_clause = violation
+                .portable_close_on_exec_spelling
+                .map(|portable_spelling| {
+                    format!(", or `{portable_spelling}` where the code also builds on Darwin")
+                })
+                .unwrap_or_default();
             format!(
                 "  {}:{}: `{}` creates a descriptor every process this one spawns inherits, \
                  so a grandchild can hold it open past this process's exit. Create it \
-                 close-on-exec: `{}`.",
+                 close-on-exec: `{}`{portable_clause}.",
                 violation.file.display(),
                 violation.line,
                 violation.call_text,
@@ -219,6 +234,8 @@ fn inheritable_descriptor_calls(
                     line: call_site.line,
                     call_text: call_site.collapsed_call_text,
                     close_on_exec_spelling: descriptor_creating_call.close_on_exec_spelling,
+                    portable_close_on_exec_spelling: descriptor_creating_call
+                        .portable_close_on_exec_spelling,
                 })
         })
         .collect();
@@ -285,9 +302,14 @@ mod tests {
         );
         let refused_lines: Vec<usize> = report.violations.iter().map(|v| v.line).collect();
         assert_eq!(refused_lines, vec![2], "got {:?}", report.violations);
-        let spelling = report.violations[0].close_on_exec_spelling;
-        assert!(spelling.contains("libc::O_CLOEXEC"), "{spelling}");
-        assert!(spelling.contains("std::io::pipe()"), "{spelling}");
+        assert_eq!(
+            report.violations[0].close_on_exec_spelling,
+            "libc::pipe2(fds, libc::O_CLOEXEC)"
+        );
+        assert_eq!(
+            report.violations[0].portable_close_on_exec_spelling,
+            Some("std::io::pipe()")
+        );
     }
 
     #[test]

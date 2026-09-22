@@ -26,10 +26,10 @@ use streamlib::sdk::rhi::PixelFormat;
 use streamlib_adapter_cuda::dlpack::DeviceType;
 
 use crate::python_bag_conversion::{json_value_to_python_object, python_object_to_json_value};
-use crate::python_gpu_surface_pixel_exchange::map_the_cpu_staging_without_reading_a_frame_in;
 use crate::python_gpu_surface_pixel_exchange::{
     CpuAccessGate, GpuSurfaceOwnedMemory, HOST_VISIBLE_DLPACK_DEVICE, device_export_available,
     exchange_shape_for_max_version, host_visible_dlpack_capsule,
+    map_the_cpu_staging_without_reading_a_frame_in,
 };
 #[cfg(target_os = "linux")]
 use crate::python_gpu_surface_pixel_exchange::{
@@ -84,9 +84,8 @@ fn left_by_a_propagating_exception(exception_type: Option<&Bound<'_, PyAny>>) ->
 fn fd_shaped_raw_handle_is_linux_only_error(method_name: &str) -> PyErr {
     PyRuntimeError::new_err(format!(
         "{method_name} is Linux-only: DMA-BUF and OPAQUE_FD are Linux file-descriptor handles, \
-         and a surface on this platform is an IOSurface. The IOSurface raw handle is its peer \
-         here (#2405); until it lands, reach the frame through surface ids and \
-         `as_device_tensor()`"
+         and a surface on this platform is an IOSurface; reach the frame through surface ids \
+         and `as_device_tensor()`"
     ))
 }
 
