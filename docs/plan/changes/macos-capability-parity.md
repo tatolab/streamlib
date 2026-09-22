@@ -254,22 +254,22 @@ justification.
 
 ## Tickets
 
-Derived 2026-09-22; blockers first. Numbers are filled in at publish.
+Derived 2026-09-22; blockers first. Tickets 1 and 2 sit in milestone 52 (the floor); 3–17 in milestone 53, *Full feature parity on Apple Silicon*.
 
-1. The wheel builds, tests and lints on macOS in CI — *floor milestone*, blocks everything.
-2. A Python processor edits a pooled frame on macOS — #2361 reshaped; *floor milestone*.
-3. The timeline crosses to a helper as a Metal shared event — blocked by 2.
-4. A texture crosses to a helper on macOS — blocked by 3.
-5. Kernels from Python run on macOS — blocked by 4.
-6. Device tensors on macOS, for torch-MPS and MLX — blocked by 4.
-7. An IOSurface raw handle from Python — blocked by 4.
-8. A published frame's pixels read out on macOS — blocked by 3.
-9. Processor-owned windows from Python on macOS — blocked by 2.
-10. `MonotonicTimer` on macOS, and the wheel's clock on the plan's domain — blocked by 1.
-11. Reactive wakeups on macOS pace like Linux — independent.
-12. A helper never outlives its engine on macOS — blocked by 2.
-13. CoreAudio behind the audio device seam — independent.
-14. A video codec backend seam, with Vulkan Video moved behind it — independent.
-15. VideoToolbox behind the codec seam — blocked by 14.
-16. `Mp4Sink` on every platform — independent.
-17. The in-process adapters build on macOS — independent.
+1. #2400 — The wheel builds, tests and lints on macOS in CI — *floor milestone*, blocks everything.
+2. #2361 — A Python processor edits a pooled frame on macOS — reshaped; *floor milestone*.
+3. #2401 — The timeline crosses to a helper as a Metal shared event — blocked by 2.
+4. #2402 — A texture crosses to a helper on macOS — blocked by 3.
+5. #2403 — Kernels from Python run on macOS — blocked by 4.
+6. #2404 — Device tensors on macOS, for torch-MPS and MLX — blocked by 4.
+7. #2405 — An IOSurface raw handle from Python — blocked by 4.
+8. #2406 — A published frame's pixels read out on macOS — blocked by 3.
+9. #2407 — Processor-owned windows from Python on macOS — blocked by 2.
+10. #2408 — `MonotonicTimer` on macOS, and the wheel's clock on the plan's domain — blocked by 1.
+11. #2409 — Reactive wakeups on macOS pace like Linux — independent.
+12. #2410 — A helper never outlives its engine on macOS — blocked by 2.
+13. #2411 — CoreAudio behind the audio device seam — independent.
+14. #2412 — A video codec backend seam, with Vulkan Video moved behind it — independent.
+15. #2413 — VideoToolbox behind the codec seam — blocked by 14.
+16. #2414 — `Mp4Sink` on every platform — independent.
+17. #2415 — The in-process adapters build on macOS — independent.
