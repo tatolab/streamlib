@@ -6,7 +6,8 @@
 `linux_only_capability` names only the closed list in
 `docs/plan/changes/macos-capability-parity.md`, so a test red on macOS cannot
 be quietly skipped. `awaiting_macos_parity` names only a ticket an active
-change still carries, so the mark cannot outlive the work it waits on.
+change still lists under `## Tickets`, so the mark cannot outlive the work it
+waits on.
 """
 
 import re
@@ -29,6 +30,7 @@ LINUX_ONLY_CAPABILITY_CLOSED_LIST_REASONS = {
 MARKER_USE = re.compile(r"pytest\.mark\.(linux_only_capability|awaiting_macos_parity)\(([^)]*)\)")
 LINUX_ONLY_CAPABILITY_ARGUMENTS = re.compile(r'^reason="([^"]+)"$')
 AWAITING_MACOS_PARITY_ARGUMENTS = re.compile(r"^issue=(\d+)$")
+TICKET_LIST_ENTRY = re.compile(r"^\d+\. #(\d+)\b", re.M)
 
 
 def _marker_uses() -> "list[tuple[str, str, str]]":
@@ -58,16 +60,31 @@ def test_linux_only_capability_names_only_the_closed_list():
         )
 
 
-def test_awaiting_macos_parity_names_a_ticket_an_active_change_carries():
-    active_change_text = "\n".join(
-        change.read_text(encoding="utf-8") for change in ACTIVE_CHANGES_DIRECTORY.glob("*.md")
+def parity_tickets_an_active_change_still_lists() -> "set[int]":
+    """Every ticket numbered under an active change's `## Tickets`, but #2400,
+    which installs the markers rather than awaiting one."""
+    listed = set()
+    for change in ACTIVE_CHANGES_DIRECTORY.glob("*.md"):
+        tickets_section = change.read_text(encoding="utf-8").partition("\n## Tickets\n")[2]
+        tickets_section = tickets_section.split("\n## ", 1)[0]
+        listed.update(int(number) for number in TICKET_LIST_ENTRY.findall(tickets_section))
+    return listed - {2400}
+
+
+def test_a_ticket_named_only_in_prose_is_not_read_as_listed():
+    assert 2357 not in parity_tickets_an_active_change_still_lists(), (
+        "#2357 is a shipped floor ticket the changes cite in prose"
     )
+
+
+def test_awaiting_macos_parity_names_a_ticket_an_active_change_carries():
+    parity_tickets = parity_tickets_an_active_change_still_lists()
     for test_file_name, marker_name, arguments in _marker_uses():
         if marker_name != "awaiting_macos_parity":
             continue
         issue = AWAITING_MACOS_PARITY_ARGUMENTS.match(arguments)
         assert issue is not None, f"{test_file_name}: spell the issue as one literal: {arguments}"
-        assert re.search(rf"#{issue.group(1)}\b", active_change_text), (
-            f"{test_file_name}: #{issue.group(1)} is named by no active change in "
-            f"{ACTIVE_CHANGES_DIRECTORY}"
+        assert int(issue.group(1)) in parity_tickets, (
+            f"{test_file_name}: #{issue.group(1)} is listed under `## Tickets` by no active "
+            f"change in {ACTIVE_CHANGES_DIRECTORY}"
         )

@@ -21,7 +21,7 @@ from typing import cast
 import pytest
 from app_under_test import ENGINE_STARTING_LOG_LINE
 
-from streamlib import Runtime, cli
+from streamlib import Runtime, _node_registry, cli
 
 MINIMAL_APP_SOURCE = "def setup(rt):\n    pass\n"
 
@@ -352,16 +352,13 @@ def test_the_observation_verbs_are_served_by_this_wheel(
     running node to talk to, so it proves the verb is wired end to end rather
     than merely present in the parser.
 
-    `XDG_RUNTIME_DIR` is redirected first: `nodes` liveness-checks and prunes
-    every entry it finds, and this test must not reach a real node on a
-    developer's machine, let alone delete its registry entry.
+    `nodes` runs in-process against a replaced resolver: it liveness-checks
+    and prunes every entry it finds, and this test must not reach a real node
+    on a developer's machine, let alone delete its registry entry. Only Linux
+    reads `XDG_RUNTIME_DIR`, so a child process cannot be pointed elsewhere.
     """
-    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
-    finished = run_cli("nodes")
-
-    assert finished.returncode == 0, f"stderr was:\n{finished.stderr}"
-    assert "invalid choice" not in finished.stderr
-    assert "not in this wheel yet" not in finished.stderr
+    monkeypatch.setattr(_node_registry, "runtime_directory", lambda: tmp_path / "streamlib")
+    assert cli.main(["nodes"]) == 0
 
     listed = run_cli("--help")
     for verb in ("graph", "tap", "logs", "exchange"):
@@ -754,7 +751,10 @@ def _v4l2loopback_is_loaded() -> bool:
 
 
 @pytest.mark.linux_only_capability(reason="v4l2loopback and udev are Linux")
-@pytest.mark.skipif(not _v4l2loopback_is_loaded(), reason="v4l2loopback is not loaded here")
+@pytest.mark.skipif(
+    sys.platform == "linux" and not _v4l2loopback_is_loaded(),
+    reason="v4l2loopback is not loaded here",
+)
 def test_the_udev_trigger_selects_the_control_node():
     """The re-trigger the verb runs must name the module's misc device, so the
     freshly written `uaccess` rule is applied to a node that already exists.
@@ -777,7 +777,7 @@ def test_the_udev_trigger_selects_the_control_node():
 
 @pytest.mark.linux_only_capability(reason="v4l2loopback and udev are Linux")
 @pytest.mark.skipif(
-    os.environ.get("STREAMLIB_RUN_PRIVILEGED_VERB") != "1",
+    sys.platform == "linux" and os.environ.get("STREAMLIB_RUN_PRIVILEGED_VERB") != "1",
     reason=(
         "runs the privileged verb (a password prompt); set "
         "STREAMLIB_RUN_PRIVILEGED_VERB=1 in a terminal to opt in"

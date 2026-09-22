@@ -1345,9 +1345,9 @@ def start_runtime_on_a_test_mesh():
 
     Each also takes a short runtime directory of its own, directly under
     `/tmp`: the runtime opens a Unix socket inside it, and `pytest`'s own
-    `tmp_path` is long enough to overrun `SUN_LEN`. That directory is the
-    child's alone, so the registry an arm reads stays the isolated one the
-    parent points at.
+    `tmp_path` is long enough to overrun `SUN_LEN`. Only Linux reads
+    `XDG_RUNTIME_DIR`; on macOS the child takes the per-user directory. Either
+    way it hosts no control plane, so it writes no registry row an arm reads.
     """
     started: "list[subprocess.Popen[str]]" = []
     runtime_directories: "list[Path]" = []

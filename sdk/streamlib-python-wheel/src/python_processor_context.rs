@@ -84,8 +84,7 @@ fn left_by_a_propagating_exception(exception_type: Option<&Bound<'_, PyAny>>) ->
 fn fd_shaped_raw_handle_is_linux_only_error(method_name: &str) -> PyErr {
     PyRuntimeError::new_err(format!(
         "{method_name} is Linux-only: DMA-BUF and OPAQUE_FD are Linux file-descriptor handles, \
-         and a surface on this platform is an IOSurface; reach the frame through surface ids \
-         and `as_device_tensor()`"
+         and a surface on this platform is an IOSurface: its raw handle is `export_iosurface`"
     ))
 }
 

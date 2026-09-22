@@ -741,7 +741,7 @@ def test_an_interrupt_during_teardowns_wait_for_releases_still_answers_teardown(
     assert not lifecycle_thread.is_alive()
 
 
-@pytest.mark.awaiting_macos_parity(issue=2361)
+@pytest.mark.linux_only_capability(reason="MoltenVK has no VK_KHR_ray_tracing_pipeline")
 def test_a_release_a_finalizer_owes_on_the_bridge_reader_never_holds_the_reader(
     stand_in_parent, monkeypatch
 ):
@@ -940,7 +940,7 @@ def test_a_processor_that_cannot_set_itself_up_reports_the_failure(stand_in_pare
 @pytest.mark.skipif(sys.platform == "linux", reason="Linux adopts the fd rather than refusing")
 def test_an_fd_shaped_raw_handle_refuses_by_name_off_linux(stand_in_parent):
     """The method exists on every floor, so the stub is one, and off Linux it
-    names the Linux handle it cannot give and the IOSurface peer."""
+    names the Linux handle it cannot give and its IOSurface peer."""
     bridge = ParentProcessBridge(stand_in_parent.child_end)
     bridge.start_reading()
     lifecycle_thread = drive_lifecycle_on_a_thread(
@@ -951,7 +951,7 @@ def test_an_fd_shaped_raw_handle_refuses_by_name_off_linux(stand_in_parent):
     refusal = stand_in_parent.receive()
     assert refusal["rpc"] == "error"
     assert "import_dma_buf is Linux-only" in refusal["error"]
-    assert "IOSurface" in refusal["error"]
+    assert "export_iosurface" in refusal["error"]
 
     stand_in_parent.send({"cmd": "teardown", "capability": "full"})
     assert stand_in_parent.receive()["rpc"] == "done"
