@@ -264,6 +264,17 @@ impl ConsumerVulkanDevice {
             device_extensions.push(portability_subset_ext.as_ptr());
         }
 
+        // Optional: without it a Metal shared event does not import, and the
+        // helper's timeline edges fall back to host-side ordering rather than
+        // the whole device refusing.
+        #[cfg(target_os = "macos")]
+        {
+            let metal_objects_ext = c"VK_EXT_metal_objects";
+            if available_device_ext_names.contains(&metal_objects_ext) {
+                device_extensions.push(metal_objects_ext.as_ptr());
+            }
+        }
+
         let imported_host_pointer_alignment = REQUIRED_DEVICE_EXTENSIONS
             .contains(&c"VK_EXT_external_memory_host")
             .then(|| {
