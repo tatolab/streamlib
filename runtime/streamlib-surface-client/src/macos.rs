@@ -44,6 +44,22 @@ pub const SURFACE_SHARE_MACH_SERVICE_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_SUR
 /// headroom for the timeline edges that ride beside it.
 pub const MAX_SURFACE_SHARE_MACH_MESSAGE_PORTS: usize = 4;
 
+/// Flag on a registration or a lookup reply: a `produce_done` shared-event
+/// port follows the IOSurface port.
+pub const SURFACE_SHARE_HAS_PRODUCE_DONE_PORT: &str = "has_produce_done_port";
+
+/// Flag on a registration or a lookup reply: a `consume_done` shared-event
+/// port follows the `produce_done` one.
+pub const SURFACE_SHARE_HAS_CONSUME_DONE_PORT: &str = "has_consume_done_port";
+
+/// Verb a helper reports its release of a frame with when its surface orders
+/// host-side: `{"op", "surface_id", "value"}`.
+pub const SURFACE_SHARE_OP_SIGNAL_CONSUME_DONE: &str = "signal_consume_done";
+
+/// Verb a helper reports a timeline pair it could not import with, moving the
+/// surface to host-side ordering: `{"op", "surface_id", "reason"}`.
+pub const SURFACE_SHARE_OP_TIMELINE_IMPORT_REFUSED: &str = "timeline_import_refused";
+
 /// Largest JSON payload one surface-share message carries.
 pub const MAX_SURFACE_SHARE_MACH_MESSAGE_JSON_BYTES: usize = 64 * 1024;
 

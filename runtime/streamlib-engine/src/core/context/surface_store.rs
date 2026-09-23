@@ -429,6 +429,13 @@ pub(crate) struct SurfaceStoreInner {
     /// cross-process consumer can exist, and the pool's in-process refcount
     /// test alone is a complete answer.
     check_out_leases: Option<Arc<SurfaceCheckOutLeaseRegistry>>,
+
+    /// The engine's timeline pairs by surface, shared with the Mach service
+    /// that answers helpers' host-side reports against them. `None` for a
+    /// store built without a service.
+    #[cfg(target_os = "macos")]
+    cross_process_timeline_pairs:
+        Option<Arc<crate::apple::surface_share::CrossProcessTimelinePairsBySurface>>,
 }
 
 impl SurfaceStoreInner {
@@ -454,6 +461,30 @@ impl SurfaceStoreInner {
             service_name,
             runtime_id,
             check_out_leases,
+            #[cfg(target_os = "macos")]
+            cross_process_timeline_pairs: None,
+        })
+    }
+
+    /// As [`Self::new_reading_check_out_leases`], also sharing the Mach
+    /// service's timeline-pair table so a registration with a pair can be
+    /// ordered host-side when a helper cannot import it.
+    #[cfg(target_os = "macos")]
+    pub fn new_sharing_the_mach_services_tables(
+        service_name: String,
+        runtime_id: String,
+        check_out_leases: Arc<SurfaceCheckOutLeaseRegistry>,
+        cross_process_timeline_pairs: Arc<
+            crate::apple::surface_share::CrossProcessTimelinePairsBySurface,
+        >,
+    ) -> Arc<Self> {
+        Arc::new(SurfaceStoreInner {
+            connection: Mutex::new(None),
+            cache: Mutex::new(SurfaceCache::new()),
+            service_name,
+            runtime_id,
+            check_out_leases: Some(check_out_leases),
+            cross_process_timeline_pairs: Some(cross_process_timeline_pairs),
         })
     }
 
@@ -1380,6 +1411,60 @@ impl SurfaceStoreInner {
         Ok(())
     }
 
+    /// Register a pool slot's IOSurface under `surface_id` with its timeline
+    /// pair. The pair's shared events cross beside the surface; when either
+    /// will not export, the registration crosses without them and the pair
+    /// orders host-side.
+    #[cfg(target_os = "macos")]
+    pub fn register_pixel_buffer_with_timeline_pair(
+        &self,
+        surface_id: &str,
+        pixel_buffer: &PixelBuffer,
+        timeline_pair: &Arc<crate::apple::surface_share::CrossProcessTimelinePair>,
+    ) -> Result<()> {
+        let cross_process_timeline_pairs =
+            self.cross_process_timeline_pairs.as_ref().ok_or_else(|| {
+                Error::Configuration(format!(
+                    "register_pixel_buffer_with_timeline_pair('{surface_id}'): this store shares \
+                     no timeline-pair table with a surface-share service"
+                ))
+            })?;
+        let mut ports = vec![exported_iosurface_port(pixel_buffer)?];
+        let carries_timeline_pair =
+            match timeline_pair.exported_mach_send_rights_or_host_side_fallback() {
+                Some((produce_done, consume_done)) => {
+                    ports.extend([produce_done, consume_done]);
+                    true
+                }
+                None => false,
+            };
+        let request = serde_json::json!({
+            "op": "register",
+            "surface_id": surface_id,
+            "runtime_id": self.runtime_id,
+            "width": pixel_buffer.width,
+            "height": pixel_buffer.height,
+            "format": pixel_buffer.format().wire_name(),
+            "resource_type": SURFACE_RESOURCE_TYPE_PIXEL_BUFFER,
+            streamlib_surface_client::SURFACE_SHARE_HAS_PRODUCE_DONE_PORT: carries_timeline_pair,
+            streamlib_surface_client::SURFACE_SHARE_HAS_CONSUME_DONE_PORT: carries_timeline_pair,
+        });
+        cross_process_timeline_pairs.insert(surface_id, Arc::clone(timeline_pair));
+        let registered = self
+            .send_surface_share_mach_request("register", &request, ports)
+            .and_then(|(response, _)| refusal_of_a_registration_answer("register", &response));
+        if registered.is_err() {
+            cross_process_timeline_pairs.remove(surface_id);
+        }
+        registered?;
+        tracing::debug!(
+            "SurfaceStore: Registered buffer '{}' with its timeline pair (host-side ordering: {})",
+            surface_id,
+            timeline_pair.orders_host_side()
+        );
+        Ok(())
+    }
+
     /// Resolve a registered pool slot to a pixel buffer over its IOSurface.
     #[cfg(target_os = "macos")]
     pub fn lookup_buffer(&self, pool_id: &str) -> Result<PixelBuffer> {
@@ -1398,10 +1483,11 @@ impl SurfaceStoreInner {
         let request = serde_json::json!({"op": "lookup", "surface_id": surface_id});
         let (answer, reply_ports) =
             self.send_surface_share_mach_request(operation, &request, Vec::new())?;
-        let mut reply_ports = reply_ports.into_iter();
-        let (Some(iosurface_port), None) = (reply_ports.next(), reply_ports.next()) else {
+        // Any timeline ports after the IOSurface's are the engine's own
+        // timelines, which this process already holds; they are released here.
+        let Some(iosurface_port) = reply_ports.into_iter().next() else {
             return Err(Error::Configuration(format!(
-                "{operation}: the answer for '{surface_id}' did not carry exactly one IOSurface port"
+                "{operation}: the answer for '{surface_id}' carried no IOSurface port"
             )));
         };
         let stated_u32 = |key: &str| {
@@ -1723,6 +1809,26 @@ impl SurfaceStore {
         ))
     }
 
+    /// As [`Self::new_reading_check_out_leases`], also sharing the Mach
+    /// service's timeline-pair table — the shape the runtime's `start()`
+    /// builds on macOS.
+    #[cfg(target_os = "macos")]
+    pub fn new_sharing_the_mach_services_tables(
+        service_name: String,
+        runtime_id: String,
+        check_out_leases: Arc<SurfaceCheckOutLeaseRegistry>,
+        cross_process_timeline_pairs: Arc<
+            crate::apple::surface_share::CrossProcessTimelinePairsBySurface,
+        >,
+    ) -> Self {
+        Self::from_arc_into_raw(SurfaceStoreInner::new_sharing_the_mach_services_tables(
+            service_name,
+            runtime_id,
+            check_out_leases,
+            cross_process_timeline_pairs,
+        ))
+    }
+
     /// The checkout leases backing this store, if a service owns any.
     ///
     /// `None` also for the null-handle sentinel — nothing is checked out of a
@@ -1853,6 +1959,28 @@ impl SurfaceStore {
             produce_done,
             consume_done,
             current_image_layout,
+        )
+    }
+
+    /// **Engine-only** — register a pool slot with its cross-process timeline
+    /// pair (macOS). See
+    /// [`SurfaceStoreInner::register_pixel_buffer_with_timeline_pair`].
+    #[cfg(target_os = "macos")]
+    pub(crate) fn host_register_pixel_buffer_with_timeline_pair(
+        &self,
+        surface_id: &str,
+        pixel_buffer: &PixelBuffer,
+        timeline_pair: &Arc<crate::apple::surface_share::CrossProcessTimelinePair>,
+    ) -> Result<()> {
+        if self.is_none() {
+            return Err(Error::Configuration(
+                "SurfaceStore::register_pixel_buffer_with_timeline_pair: null handle".into(),
+            ));
+        }
+        self.host_inner().register_pixel_buffer_with_timeline_pair(
+            surface_id,
+            pixel_buffer,
+            timeline_pair,
         )
     }
 
@@ -2662,14 +2790,117 @@ mod mach_surface_share_pool_tests {
             ),
         );
         service.start().expect("the service starts");
-        let store = SurfaceStore::new_reading_check_out_leases(
+        let store = SurfaceStore::new_sharing_the_mach_services_tables(
             service.service_name().to_string(),
             "R-store-test".to_string(),
             std::sync::Arc::clone(state.check_out_leases()),
+            std::sync::Arc::clone(state.cross_process_timeline_pairs()),
         );
         store.connect().expect("the store connects");
         gpu.set_surface_store(store);
         (state, service)
+    }
+
+    fn a_timeline_pair(
+        gpu: &GpuContext,
+        exportable: bool,
+    ) -> std::sync::Arc<crate::apple::surface_share::CrossProcessTimelinePair> {
+        use crate::vulkan::rhi::HostVulkanTimelineSemaphore;
+        let device = gpu.device().inner.device();
+        let timeline = || {
+            std::sync::Arc::new(if exportable {
+                HostVulkanTimelineSemaphore::new_exportable(device, 0).expect("a timeline")
+            } else {
+                HostVulkanTimelineSemaphore::new(device, 0).expect("a timeline")
+            })
+        };
+        std::sync::Arc::new(crate::apple::surface_share::CrossProcessTimelinePair::new(
+            timeline(),
+            timeline(),
+        ))
+    }
+
+    /// A pool slot registered with its timeline pair checks out with both
+    /// shared-event ports after its IOSurface's, and the service can reach
+    /// the engine's pair for a helper's host-side reports.
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn a_slot_registered_with_its_timeline_pair_checks_out_with_both_shared_event_ports() {
+        let Some(gpu) = gpu_or_skip() else {
+            return;
+        };
+        let (state, service) = a_store_connected_to_a_started_service(&gpu, "timeline-pair");
+        let store = gpu.surface_store().expect("the store");
+        let (_, pixel_buffer) = gpu
+            .acquire_pixel_buffer(16, 8, PixelFormat::Bgra32)
+            .expect("a pooled frame");
+        let pair = a_timeline_pair(&gpu, true);
+
+        store
+            .host_register_pixel_buffer_with_timeline_pair("slot-with-pair", &pixel_buffer, &pair)
+            .expect("the registration crosses");
+
+        let reader = SurfaceShareMachServiceConnection::connect(
+            service.service_name(),
+            Duration::from_secs(10),
+        )
+        .expect("a reader connects");
+        let (answer, ports) = reader
+            .send_request_with_ports(
+                &serde_json::json!({"op": "check_out", "surface_id": "slot-with-pair"}),
+                Vec::new(),
+            )
+            .expect("check_out round-trip");
+        assert_eq!(answer["has_produce_done_port"], true, "{answer}");
+        assert_eq!(ports.len(), 3);
+        assert!(!pair.orders_host_side());
+        assert!(
+            state
+                .cross_process_timeline_pairs()
+                .pair_of("slot-with-pair")
+                .is_some()
+        );
+    }
+
+    /// A pair whose timelines will not export crosses without ports and
+    /// orders host-side, without a rebuild or a refused registration.
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn a_slot_whose_timelines_will_not_export_registers_ordering_host_side() {
+        let Some(gpu) = gpu_or_skip() else {
+            return;
+        };
+        let (_state, service) = a_store_connected_to_a_started_service(&gpu, "timeline-fallback");
+        let store = gpu.surface_store().expect("the store");
+        let (_, pixel_buffer) = gpu
+            .acquire_pixel_buffer(16, 8, PixelFormat::Bgra32)
+            .expect("a pooled frame");
+        let pair = a_timeline_pair(&gpu, false);
+
+        store
+            .host_register_pixel_buffer_with_timeline_pair("slot-host-side", &pixel_buffer, &pair)
+            .expect("the registration still crosses");
+
+        let reader = SurfaceShareMachServiceConnection::connect(
+            service.service_name(),
+            Duration::from_secs(10),
+        )
+        .expect("a reader connects");
+        let (answer, ports) = reader
+            .send_request_with_ports(
+                &serde_json::json!({"op": "lookup", "surface_id": "slot-host-side"}),
+                Vec::new(),
+            )
+            .expect("lookup round-trip");
+        assert_eq!(answer["has_produce_done_port"], false, "{answer}");
+        assert_eq!(ports.len(), 1);
+        assert!(pair.orders_host_side());
     }
 
     /// Register `iosurface` under `surface_id` from a connection of its own,

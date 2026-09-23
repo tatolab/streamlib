@@ -205,6 +205,11 @@ pub struct Runner {
     /// brought up in `new()` and the store is built in `start()`.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) surface_check_out_leases: Arc<crate::core::context::SurfaceCheckOutLeaseRegistry>,
+    /// The Mach service's table of engine timeline pairs by surface, shared
+    /// with the GPU context's surface store.
+    #[cfg(target_os = "macos")]
+    surface_share_cross_process_timeline_pairs:
+        Arc<crate::apple::surface_share::CrossProcessTimelinePairsBySurface>,
     /// Logging guard — keeps the drain worker alive for the runtime's
     /// lifetime. On drop, flushes buffered JSONL records and
     /// `fdatasync`s the log file.
@@ -350,6 +355,7 @@ impl Runner {
             mach_surface_share_service,
             surface_share_mach_service_rendezvous,
             surface_check_out_leases,
+            surface_share_cross_process_timeline_pairs,
         ) = bring_up_mach_surface_share_service(&runtime_id)?;
 
         crate::iceoryx2::warn_when_posix_shared_memory_is_short_for_a_runtime();
@@ -431,6 +437,8 @@ impl Runner {
             runtime_directory,
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             surface_check_out_leases,
+            #[cfg(target_os = "macos")]
+            surface_share_cross_process_timeline_pairs,
             #[cfg(any(target_os = "macos", target_os = "ios", target_os = "linux"))]
             _logging_guard,
             setup_hooks: Arc::new(Mutex::new(Vec::new())),
@@ -576,10 +584,18 @@ impl Runner {
                  service '{}'...",
                 surface_share_address
             );
+            #[cfg(target_os = "linux")]
             let surface_store = SurfaceStore::new_reading_check_out_leases(
                 surface_share_address.clone(),
                 self.runtime_id.to_string(),
                 Arc::clone(&self.surface_check_out_leases),
+            );
+            #[cfg(target_os = "macos")]
+            let surface_store = SurfaceStore::new_sharing_the_mach_services_tables(
+                surface_share_address.clone(),
+                self.runtime_id.to_string(),
+                Arc::clone(&self.surface_check_out_leases),
+                Arc::clone(&self.surface_share_cross_process_timeline_pairs),
             );
             surface_store.connect().map_err(|e| {
                 Error::Runtime(format!(
@@ -1633,12 +1649,14 @@ fn bring_up_mach_surface_share_service(
     Arc<Mutex<Option<crate::apple::surface_share::MachSurfaceShareService>>>,
     crate::apple::surface_share::MachSurfaceShareServiceRendezvous,
     Arc<crate::core::context::SurfaceCheckOutLeaseRegistry>,
+    Arc<crate::apple::surface_share::CrossProcessTimelinePairsBySurface>,
 )> {
     use crate::apple::surface_share::{IOSurfaceShareState, MachSurfaceShareService};
 
     let service_name = MachSurfaceShareService::service_name_for_runtime(runtime_id.as_str());
     let state = IOSurfaceShareState::new();
     let check_out_leases = Arc::clone(state.check_out_leases());
+    let cross_process_timeline_pairs = Arc::clone(state.cross_process_timeline_pairs());
     let mut service = MachSurfaceShareService::new(state, service_name.clone());
     service.start().map_err(|start_failure| {
         if start_failure.kind() == std::io::ErrorKind::AddrInUse {
@@ -1660,6 +1678,7 @@ fn bring_up_mach_surface_share_service(
         Arc::new(Mutex::new(Some(service))),
         rendezvous,
         check_out_leases,
+        cross_process_timeline_pairs,
     ))
 }
 

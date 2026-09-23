@@ -43,9 +43,11 @@ mod macos;
 pub use macos::{
     MAX_SURFACE_SHARE_MACH_MESSAGE_JSON_BYTES, MAX_SURFACE_SHARE_MACH_MESSAGE_PORTS,
     OwnedMachPortSet, OwnedMachReceiveRight, OwnedMachSendRight, ReceivedSurfaceShareMachMessage,
-    ReceivedSurfaceShareMachTraffic, SURFACE_SHARE_MACH_CONNECT_MESSAGE_ID,
+    ReceivedSurfaceShareMachTraffic, SURFACE_SHARE_HAS_CONSUME_DONE_PORT,
+    SURFACE_SHARE_HAS_PRODUCE_DONE_PORT, SURFACE_SHARE_MACH_CONNECT_MESSAGE_ID,
     SURFACE_SHARE_MACH_REPLY_MESSAGE_ID, SURFACE_SHARE_MACH_REQUEST_MESSAGE_ID,
-    SURFACE_SHARE_MACH_SERVICE_ENVIRONMENT_VARIABLE, SurfaceShareMachMessageReceiveBuffer,
+    SURFACE_SHARE_MACH_SERVICE_ENVIRONMENT_VARIABLE, SURFACE_SHARE_OP_SIGNAL_CONSUME_DONE,
+    SURFACE_SHARE_OP_TIMELINE_IMPORT_REFUSED, SurfaceShareMachMessageReceiveBuffer,
     SurfaceShareMachSenderAuditIdentity, SurfaceShareMachServiceConnection,
     check_in_surface_share_mach_service, receive_surface_share_mach_traffic,
     request_dead_name_notification, send_surface_share_mach_message,
