@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import traceback
+from typing import TypedDict
 
 import numpy
 
@@ -295,6 +296,10 @@ def _sha256_of_every_pixel(pixels: numpy.ndarray) -> str:
     return hashlib.sha256(numpy.ascontiguousarray(pixels).tobytes()).hexdigest()
 
 
+class ReportingInvertingEffectConfig(TypedDict, total=False):
+    skip_edit: bool
+
+
 @processor
 class ReportingInvertingEffect:
     """The scaffold's edit, reporting what the frame must read afterwards.
@@ -311,8 +316,8 @@ class ReportingInvertingEffect:
     @output()
     def video_to_downstream(self) -> None: ...
 
-    def setup(self, ctx) -> None:
-        self.skip_edit = bool(ctx.config.get("skip_edit", False))
+    def __init__(self, config: ReportingInvertingEffectConfig) -> None:
+        self.skip_edit = config.get("skip_edit", False)
         self.claim_on_the_edited_frame = None
 
     def process(self, ctx) -> None:

@@ -3,7 +3,7 @@
 
 [package]
 name = "streamlib-consumer-rhi"
-description = "Consumer-side carve-out of the StreamLib Vulkan RHI: DMA-BUF FD import + bind + map and the trait machinery surface adapters use to abstract over device flavors. Cdylibs depend on this crate (NOT the full streamlib) so the FullAccess capability boundary is type-system enforced."
+description = "Consumer-side carve-out of the StreamLib Vulkan RHI: DMA-BUF FD import (Linux) or IOSurface host-memory import (macOS) + bind + map and the trait machinery surface adapters use to abstract over device flavors. Cdylibs depend on this crate (NOT the full streamlib) so the FullAccess capability boundary is type-system enforced."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
