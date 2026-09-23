@@ -204,6 +204,7 @@ def await_marker(node: LaunchedNode, marker: str) -> None:
     node.await_captured_output_containing(f"MARKER:{marker}", FIRST_FRAME_TIMEOUT_SECONDS)
 
 
+@pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
 def test_a_processor_written_after_launch_is_added_wired_and_removed_live(
     tmp_path: Path, isolated_runtime_directory: Path, launch_node
 ):
@@ -410,6 +411,7 @@ def seconds_taken_by(call: Callable[[], Returned]) -> "tuple[float, Returned]":
     return time.monotonic() - started, returned
 
 
+@pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
 def test_graph_calls_made_while_a_helper_imports_never_wait_for_its_import(
     tmp_path: Path, isolated_runtime_directory: Path, launch_node
 ):
@@ -489,6 +491,7 @@ def test_graph_calls_made_while_a_helper_imports_never_wait_for_its_import(
     assert node.await_exit(CLEAN_EXIT_TIMEOUT_SECONDS) == 0, node.recent_output()
 
 
+@pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
 def test_a_mutation_that_cannot_take_is_refused_by_the_call_itself(
     tmp_path: Path, isolated_runtime_directory: Path, launch_node
 ):

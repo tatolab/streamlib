@@ -102,6 +102,7 @@ def assert_nothing_raised_after_reporting(app) -> None:
     )
 
 
+@pytest.mark.awaiting_macos_parity(issue=2407)
 @needs_a_window_server
 def test_all_three_ways_of_naming_a_published_surface_reach_the_window(
     start_app_under_test,
@@ -122,6 +123,7 @@ def test_all_three_ways_of_naming_a_published_surface_reach_the_window(
     assert observed["is_closed"] is False
 
 
+@pytest.mark.awaiting_macos_parity(issue=2407)
 @needs_a_window_server
 def test_the_window_reports_an_extent_of_its_own(start_app_under_test):
     """Not the requested one: the window server is free to hand back another,
@@ -138,6 +140,7 @@ def test_the_window_reports_an_extent_of_its_own(start_app_under_test):
     assert observed["window_is_closed"] is False
 
 
+@pytest.mark.awaiting_macos_parity(issue=2407)
 @needs_a_window_server
 def test_a_closed_window_leaves_the_pipeline_running_and_every_show_a_no_op(
     start_app_under_test,
@@ -153,6 +156,7 @@ def test_a_closed_window_leaves_the_pipeline_running_and_every_show_a_no_op(
     # three more times — in all three argument shapes — without raising.
 
 
+@pytest.mark.awaiting_macos_parity(issue=2407)
 def test_a_process_that_can_get_no_window_raises_at_setup(start_app_under_test):
     """The refusal an author wraps in `try/except` when the window is
     optional, carrying the pump's own account of why."""
@@ -326,6 +330,7 @@ def test_a_users_close_leaves_the_pipeline_running_and_the_owner_informed(
     assert_nothing_raised_after_reporting(app)
 
 
+@pytest.mark.awaiting_macos_parity(issue=2407)
 @needs_a_window_server
 def test_showing_something_that_names_no_surface_is_refused_by_the_three_shapes(
     start_app_under_test,
@@ -345,6 +350,7 @@ def test_showing_something_that_names_no_surface_is_refused_by_the_three_shapes(
         assert "surface id" in refusal, refusal
 
 
+@pytest.mark.awaiting_macos_parity(issue=2407)
 @needs_a_window_server
 def test_a_frame_that_names_its_colour_reaches_the_window_with_its_hdr_sidecar(
     start_app_under_test,
@@ -364,6 +370,7 @@ def test_a_frame_that_names_its_colour_reaches_the_window_with_its_hdr_sidecar(
     assert observed["is_closed"] is False
 
 
+@pytest.mark.awaiting_macos_parity(issue=2407)
 @needs_a_window_server
 def test_a_closed_window_still_refuses_an_argument_that_names_no_surface(
     start_app_under_test,

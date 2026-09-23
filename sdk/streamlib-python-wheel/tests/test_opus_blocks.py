@@ -105,6 +105,7 @@ def _reported(pattern: "re.Pattern[str]", app_output: str) -> "list[dict]":
     return [json.loads(report) for report in pattern.findall(app_output)]
 
 
+@pytest.mark.awaiting_macos_parity(issue=2408)
 @pytest.mark.requires_gpu
 def test_the_encoded_channel_casts_and_carries_the_ordering_contract(
     start_app_under_test,
@@ -168,6 +169,7 @@ def test_the_encoded_channel_casts_and_carries_the_ordering_contract(
         )
 
 
+@pytest.mark.awaiting_macos_parity(issue=2408)
 @pytest.mark.requires_gpu
 def test_the_decoded_blocks_are_one_per_packet_and_stamped_a_lookahead_earlier(
     start_app_under_test,

@@ -1432,7 +1432,7 @@ pub(crate) struct HelperProcessGpuExchangeClient {
     /// The engine's write-back answer memoised per pool slot, seeded by
     /// whichever door asks first — both exports carry the same mint-time
     /// answer — so no two doors disagree about one frame.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     write_back_answers_by_pool_slot: Mutex<std::collections::HashMap<String, bool>>,
 }
 
@@ -1569,7 +1569,7 @@ impl HelperProcessGpuExchangeClient {
             device_exports_by_surface: Mutex::new(std::collections::HashMap::new()),
             #[cfg(target_os = "linux")]
             cpu_readback_exports_by_pool_slot: Mutex::new(std::collections::HashMap::new()),
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             write_back_answers_by_pool_slot: Mutex::new(std::collections::HashMap::new()),
         }
     }
@@ -1674,7 +1674,7 @@ impl HelperProcessGpuExchangeClient {
     /// A real wait, not an acknowledgement: the parent runs it inside its
     /// escalate scope, so the reply means the device was idle on that
     /// side — which is the only side there is.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) fn wait_device_idle(&self, python: Python<'_>) -> PyResult<()> {
         let op = PyDict::new(python);
         op.set_item("op", "wait_device_idle")?;
@@ -3171,6 +3171,49 @@ impl HelperProcessGpuExchangeClient {
                     "the surface-share request failed: {request_failure}"
                 ))
             })
+    }
+
+    /// Whether an edit written back into `surface_id` publishes at all.
+    ///
+    /// On macOS a pooled pixel buffer's CPU view is its IOSurface's own
+    /// pages, which every other holder of the frame imports too, so the
+    /// pooled allocation is the frame's only backing and the edit reaches
+    /// every holder: a pixel buffer answers yes. Textures do not cross to a
+    /// macOS helper yet, so nothing else answers. One checkout per pool slot,
+    /// memoised on the same key the Linux door uses.
+    pub(crate) fn surface_can_take_write_back(
+        self: &Arc<Self>,
+        python: Python<'_>,
+        surface_id: &str,
+    ) -> PyResult<bool> {
+        let source_pool_slot_key = streamlib::sdk::rhi::pool_slot_key_of_surface_id(surface_id);
+        if let Some(already_answered) = self
+            .write_back_answers_by_pool_slot
+            .lock()
+            .get(source_pool_slot_key)
+        {
+            return Ok(*already_answered);
+        }
+        let (response, _transferred_handles_released_by_scope) =
+            python.detach(|| self.check_out_surface(surface_id))?;
+        refuse_check_out_the_service_declined(format_args!("{surface_id:?}"), &response)?;
+        let _release_the_check_out_on_return = HelperSurfaceCheckOutLeaseDebt {
+            exchange_client: Arc::clone(self),
+            surface_id: surface_id.to_string(),
+        };
+        let registered_as = |field: &str, default: &'static str| {
+            response
+                .get(field)
+                .and_then(|value| value.as_str())
+                .unwrap_or(default)
+                .to_string()
+        };
+        let can_take_write_back = registered_as("resource_type", "pixel_buffer") == "pixel_buffer"
+            && registered_as("handle_type", "iosurface") == "iosurface";
+        self.write_back_answers_by_pool_slot
+            .lock()
+            .insert(source_pool_slot_key.to_string(), can_take_write_back);
+        Ok(can_take_write_back)
     }
 
     /// The import of a checked-out frame's IOSurface: the pool slot's cached

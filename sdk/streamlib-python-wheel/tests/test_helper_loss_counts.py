@@ -219,6 +219,7 @@ def any_dropped_bags_on(link_id: str) -> "Callable[[dict], bool]":
     return lambda metrics: metrics.get("dropped_bags_by_link", {}).get(link_id, 0) > 0
 
 
+@pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
 def test_an_overrun_helper_placed_ordered_destination_renders_its_dropped_bags_per_link(
     tmp_path: Path, isolated_runtime_directory: Path, launch_node, monkeypatch
 ):
@@ -248,6 +249,7 @@ def test_an_overrun_helper_placed_ordered_destination_renders_its_dropped_bags_p
     assert metrics["refused_bags_by_output_port"] == {}
 
 
+@pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
 def test_a_helper_placed_producers_write_refused_at_the_ceiling_renders_on_its_output_port(
     tmp_path: Path, isolated_runtime_directory: Path, launch_node, monkeypatch
 ):
@@ -283,6 +285,7 @@ def test_a_helper_placed_producers_write_refused_at_the_ceiling_renders_on_its_o
     )
 
 
+@pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
 def test_a_killed_helpers_last_counts_render_until_its_processor_is_removed(
     tmp_path: Path, isolated_runtime_directory: Path, launch_node, monkeypatch
 ):

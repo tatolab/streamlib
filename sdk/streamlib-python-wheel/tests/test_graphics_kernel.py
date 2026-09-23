@@ -102,6 +102,7 @@ def test_a_graphics_kernel_carries_no_depth_or_vertex_input_state():
     )
 
 
+@pytest.mark.awaiting_macos_parity(issue=2403)
 @pytest.mark.requires_gpu
 def test_a_python_processor_draws_through_a_graphics_kernel(start_app_under_test):
     """The demo: a pass rendered from a helper process, with named bindings and
@@ -119,6 +120,7 @@ def test_a_python_processor_draws_through_a_graphics_kernel(start_app_under_test
     )
 
 
+@pytest.mark.awaiting_macos_parity(issue=2403)
 @pytest.mark.requires_gpu
 def test_a_binding_declared_for_a_stage_that_does_not_read_it_is_refused_at_construction(
     start_app_under_test,
@@ -153,6 +155,7 @@ def test_a_binding_declared_for_a_stage_that_does_not_read_it_is_refused_at_cons
     )
 
 
+@pytest.mark.awaiting_macos_parity(issue=2403)
 @pytest.mark.requires_gpu
 def test_a_binding_the_shaders_do_not_declare_is_refused_at_construction(
     start_app_under_test,
@@ -168,6 +171,7 @@ def test_a_binding_the_shaders_do_not_declare_is_refused_at_construction(
     )
 
 
+@pytest.mark.awaiting_macos_parity(issue=2403)
 @pytest.mark.requires_gpu
 def test_a_binding_declared_as_the_wrong_kind_is_refused_at_construction(
     start_app_under_test,
@@ -184,6 +188,7 @@ def test_a_binding_declared_as_the_wrong_kind_is_refused_at_construction(
     )
 
 
+@pytest.mark.awaiting_macos_parity(issue=2403)
 @pytest.mark.requires_gpu
 def test_leaving_one_of_the_shaders_bindings_undeclared_is_refused(
     start_app_under_test,
@@ -197,6 +202,7 @@ def test_leaving_one_of_the_shaders_bindings_undeclared_is_refused(
     assert "accounted for" in undeclared, undeclared
 
 
+@pytest.mark.awaiting_macos_parity(issue=2403)
 @pytest.mark.requires_gpu
 def test_a_binding_the_shaders_do_not_declare_is_refused_at_the_draw(
     start_app_under_test,
@@ -210,6 +216,7 @@ def test_a_binding_the_shaders_do_not_declare_is_refused_at_the_draw(
     )
 
 
+@pytest.mark.awaiting_macos_parity(issue=2403)
 @pytest.mark.requires_gpu
 def test_an_unsupplied_binding_is_refused_naming_the_shaders_bindings(
     start_app_under_test,
@@ -226,6 +233,7 @@ def test_an_unsupplied_binding_is_refused_naming_the_shaders_bindings(
     )
 
 
+@pytest.mark.awaiting_macos_parity(issue=2403)
 @pytest.mark.requires_gpu
 def test_a_binding_naming_an_unknown_surface_is_refused(start_app_under_test):
     observed = run_probe(start_app_under_test, "GraphicsBindingRefusalProbe")
@@ -239,6 +247,7 @@ def test_a_binding_naming_an_unknown_surface_is_refused(start_app_under_test):
     )
 
 
+@pytest.mark.awaiting_macos_parity(issue=2403)
 @pytest.mark.requires_gpu
 def test_a_refused_draw_leaves_the_kernel_drawable(start_app_under_test):
     """Every refusal above raises before anything is submitted, so none of them
@@ -247,6 +256,7 @@ def test_a_refused_draw_leaves_the_kernel_drawable(start_app_under_test):
     assert observed["drew_after_the_refusals"] is True
 
 
+@pytest.mark.awaiting_macos_parity(issue=2403)
 @pytest.mark.requires_gpu
 def test_a_buffer_kind_binding_is_refused_naming_the_kinds_a_draw_can_bind(
     start_app_under_test,
@@ -265,6 +275,7 @@ def test_a_buffer_kind_binding_is_refused_naming_the_kinds_a_draw_can_bind(
     )
 
 
+@pytest.mark.awaiting_macos_parity(issue=2403)
 @pytest.mark.requires_gpu
 def test_a_draw_naming_anything_but_one_colour_target_is_refused(
     start_app_under_test,
@@ -280,6 +291,7 @@ def test_a_draw_naming_anything_but_one_colour_target_is_refused(
     assert "exactly one" in two_formats, two_formats
 
 
+@pytest.mark.awaiting_macos_parity(issue=2403)
 @pytest.mark.requires_gpu
 def test_a_draw_offers_no_argument_for_the_shapes_the_host_cannot_honour(
     start_app_under_test,

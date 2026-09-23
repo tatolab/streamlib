@@ -199,6 +199,7 @@ def numbered_steps(prompt_text: str) -> "list[tuple[str, str]]":
 # three: the sink is only the first consumer to open the source's channel —
 # which is created deep enough for a consumer of any profile — and the effect's
 # input then joins it live, in the last pair reading deeper than the opener.
+@pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
 @pytest.mark.parametrize(
     ("sink_input_delivery_profile", "inserted_input_delivery_profile"),
     [

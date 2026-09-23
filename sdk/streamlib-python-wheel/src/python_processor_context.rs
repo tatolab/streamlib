@@ -1234,7 +1234,7 @@ impl PythonGpuContextLimitedAccess {
     /// `writable()` refuses on this answer; `cpu()` hands its array out
     /// read-only on it.
     fn surface_can_take_write_back(&self, python: Python<'_>, surface_id: &str) -> PyResult<bool> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         if let Some(exchange_client) = &self.helper_process_exchange_client {
             return exchange_client.surface_can_take_write_back(python, surface_id);
         }
@@ -1866,7 +1866,7 @@ impl PythonGpuContextFullAccess {
 
     /// Block until the GPU device is idle.
     fn wait_device_idle(&self, python: Python<'_>) -> PyResult<()> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         if let Some(exchange_client) = &self.helper_process_exchange_client {
             return exchange_client.wait_device_idle(python);
         }
