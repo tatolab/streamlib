@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.15](https://github.com/tatolab/streamlib/compare/v0.26.14...v0.26.15) (2026-09-23)
+
+
+### Features
+
+* **engine:** the cross-process timeline crosses to a helper as a Metal shared event ([#2445](https://github.com/tatolab/streamlib/issues/2445)) ([90c12ce](https://github.com/tatolab/streamlib/commit/90c12ce27568b5dcd2ce003bb2c8d7cbcebaada5))
+
 ## [0.26.14](https://github.com/tatolab/streamlib/compare/v0.26.13...v0.26.14) (2026-09-23)
 
 
