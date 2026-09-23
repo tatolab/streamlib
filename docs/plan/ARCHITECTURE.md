@@ -8,7 +8,7 @@ never round-tripped back) move together: every DECIDED entry is represented in t
 
 Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an owner decision.
 
-## Product (the MVP sentence) — IN-FLIGHT (→ macos-platform-floor, macos-capability-parity)
+## Product (the MVP sentence) — IN-FLIGHT (→ macos-platform-floor, macos-capability-parity, engine-steps)
 <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py -->
 
 - **DECIDED** — A Python developer on Linux with an NVIDIA GPU pip-installs streamlib
@@ -978,7 +978,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   green-thread style): intended, do not build until designed; hard constraint — no new
   configuration dials. [execution-model]
 
-## Graphics (RHI / GPU) — IN-FLIGHT (→ macos-platform-floor, macos-capability-parity, portable-gpu-interop)
+## Graphics (RHI / GPU) — IN-FLIGHT (→ macos-platform-floor, macos-capability-parity, portable-gpu-interop, engine-steps)
 
 - **DECIDED** — All Vulkan lives in the RHI (`vulkan/rhi/` + `streamlib-consumer-rhi`); one
   kernel abstraction per pipeline kind; consumers go through `GpuContext` only.
