@@ -87,7 +87,9 @@ was measured on the M1 Max in three probes left under `/tmp/iosurf-nocopy/` and
   a no-copy `MTLBuffer` on the frame's own IOSurface on macOS** — zero copies and no staging,
   because unified memory makes the surface's bytes the device's bytes. `torch.from_dlpack`
   yields `cuda` there and `mps` here; `mx.from_dlpack` consumes the same capsule. Floors stated
-  where the capsule is minted: torch ≥ 2.12, MLX ≥ 0.32. The CUDA Array Interface is Linux by
+  where the capsule is minted: torch ≥ 2.10 (2.9 by source for the mapping, 2.10 for the
+  sliced-tensor fix; measured on 2.14 — the 2.12 once stated here had no measurement behind
+  it), MLX ≥ 0.32. The CUDA Array Interface is Linux by
   nature and is not offered on macOS.
 - MODIFIED: raw-handle export gains the IOSurface flavour. `export_iosurface` on the Full
   surface returns a typed object carrying a Mach send right to the allocation's IOSurface plus
@@ -249,6 +251,10 @@ parity. B: this second delta and a second milestone, *Full feature parity on App
 with *Camera → display on Apple Silicon* finishing as the floor it is six tickets into.
 **RESOLVED — B.** The first delta is over the line cap, and the floor is a shippable increment
 on its own.
+> ~~Two milestones.~~ — Superseded 2026-09-22 by the owner: the floor, this delta and
+> `portable-gpu-interop` share one milestone, *Apple Silicon at Linux parity* (52, renamed; 53
+> deleted), because the Mac work has to come together as one multiplatform unification. The
+> two deltas stay separate files — the line cap still holds.
 
 ## Not in scope
 
@@ -260,7 +266,7 @@ justification.
 
 ## Tickets
 
-Derived 2026-09-22; blockers first. Tickets 1 and 2 sit in milestone 52 (the floor); 3–17 in milestone 53, *Full feature parity on Apple Silicon*.
+Derived 2026-09-22; blockers first. ~~Tickets 1 and 2 sit in milestone 52 (the floor); 3–17 in milestone 53, *Full feature parity on Apple Silicon*.~~ All seventeen sit in milestone 52, *Apple Silicon at Linux parity* (owner, 2026-09-22).
 
 1. #2400 — The wheel builds, tests and lints on macOS in CI — *floor milestone*, blocks everything.
 2. #2361 — A Python processor edits a pooled frame on macOS — reshaped; *floor milestone*.

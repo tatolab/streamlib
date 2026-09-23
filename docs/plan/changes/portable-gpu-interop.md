@@ -222,3 +222,18 @@ The starter effect's default and a shader-body effect helper; model-input prepro
 engine step; buffer bindings from Python kernels (#516's gap). Those go to the next `/align`
 round, after a design pass. A ruff courtesy config in the scaffold. Array-API wrappers in any
 example.
+
+## Tickets
+
+Derived 2026-09-22; milestone 52, *Apple Silicon at Linux parity*. Blockers first.
+
+1. #2420 — Python copies one surface into another through the engine — independent; its
+   macOS test waits on #2403 as a strict xfail.
+2. #2421 — The cross-floor check warns at dev and run, and gates the wheel and the scaffold —
+   independent.
+3. #2422 — The three kernel examples land frames with the engine copy — blocked by 1, 2.
+4. #2423 — fisheye-object-detection takes its device from torch.accelerator — blocked by 2.
+5. #2424 — camera-python-effects runs on the portable path — blocked by 1, 2; may slip.
+
+The host-side DLPack request on macOS rides #2404 (scope added 2026-09-22), which carries the
+one `REMOVED:` bullet.
