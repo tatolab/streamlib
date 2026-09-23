@@ -143,13 +143,18 @@ unsafe impl Sync for VulkanFence {}
 pub struct HostVulkanTimelineSemaphore {
     device: vulkanalia::Device,
     semaphore: vk::Semaphore,
-    /// Whether the caller asked for fd export via [`Self::new_exportable`].
+    /// Whether the caller asked for cross-process export via
+    /// [`Self::new_exportable`].
     ///
-    /// What was asked for, not what the object can do: where the platform has
-    /// no fd handle type the request is honoured without chaining
-    /// `VkExportSemaphoreCreateInfo`, and [`Self::export_opaque_fd`] refuses on
-    /// the platform rather than on this flag.
-    export_by_file_descriptor_was_requested: bool,
+    /// What was asked for, not what the object can do: where the platform or
+    /// driver has no export mechanism the request is honoured without the
+    /// export declaration, and the export methods refuse.
+    cross_process_export_was_requested: bool,
+    /// Whether `VkExportMetalObjectCreateInfoEXT{METAL_SHARED_EVENT}` was
+    /// chained at creation, so MoltenVK hands the backing `MTLSharedEvent`
+    /// to [`Self::export_metal_shared_event_mach_send_right`].
+    #[cfg(target_os = "macos")]
+    metal_shared_event_export_was_declared: bool,
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -170,9 +175,12 @@ impl HostVulkanTimelineSemaphore {
 
     /// Create an exportable timeline semaphore.
     ///
-    /// `vkGetSemaphoreFdKHR` will hand a fresh OPAQUE_FD per
+    /// On Linux `vkGetSemaphoreFdKHR` hands a fresh OPAQUE_FD per
     /// [`Self::export_opaque_fd`] call; ownership transfers to the caller
-    /// (close after use, or pass via SCM_RIGHTS).
+    /// (close after use, or pass via SCM_RIGHTS). On macOS the backing
+    /// `MTLSharedEvent` is declared exportable, and
+    /// [`Self::export_metal_shared_event_mach_send_right`] mints a Mach send
+    /// right to it.
     pub fn new_exportable(device: &vulkanalia::Device, initial_value: u64) -> Result<Self> {
         Self::create(device, initial_value, true)
     }
@@ -180,27 +188,38 @@ impl HostVulkanTimelineSemaphore {
     fn create(
         device: &vulkanalia::Device,
         initial_value: u64,
-        export_by_file_descriptor_was_requested: bool,
+        cross_process_export_was_requested: bool,
     ) -> Result<Self> {
         let mut type_info = vk::SemaphoreTypeCreateInfo::builder()
             .semaphore_type(vk::SemaphoreType::TIMELINE)
             .initial_value(initial_value)
             .build();
-
         let mut export_info = vk::ExportSemaphoreCreateInfo::builder()
             .handle_types(vk::ExternalSemaphoreHandleTypeFlags::OPAQUE_FD)
             .build();
+        let mut metal_export_info = vk::ExportMetalObjectCreateInfoEXT::builder()
+            .export_object_type(vk::ExportMetalObjectTypeFlagsEXT::METAL_SHARED_EVENT)
+            .build();
+        let metal_shared_event_export_is_declared = cfg!(target_os = "macos")
+            && cross_process_export_was_requested
+            && device
+                .extensions()
+                .contains(&vk::EXT_METAL_OBJECTS_EXTENSION.name);
 
-        let info = if export_by_file_descriptor_was_requested
+        // Each export struct is chained ahead of `type_info` by hand: the
+        // builder's pNext takes `&mut` and would borrow `type_info` for the
+        // struct's life.
+        let info = if cross_process_export_was_requested
             && super::CROSS_PROCESS_EXPORT_BY_FILE_DESCRIPTOR_EXISTS_ON_THIS_PLATFORM
         {
-            // Chain order: SemaphoreCreateInfo -> ExportSemaphoreCreateInfo -> SemaphoreTypeCreateInfo.
-            // p_next is set manually to avoid moving the local `type_info`
-            // into the builder's pNext (vulkanalia's builder takes &mut and
-            // would borrow `type_info`).
             export_info.next = (&mut type_info as *mut _) as *mut std::ffi::c_void;
             vk::SemaphoreCreateInfo::builder()
                 .push_next(&mut export_info)
+                .build()
+        } else if metal_shared_event_export_is_declared {
+            metal_export_info.next = (&mut type_info as *mut _) as *mut std::ffi::c_void;
+            vk::SemaphoreCreateInfo::builder()
+                .push_next(&mut metal_export_info)
                 .build()
         } else {
             vk::SemaphoreCreateInfo::builder()
@@ -211,14 +230,16 @@ impl HostVulkanTimelineSemaphore {
         let semaphore = unsafe { device.create_semaphore(&info, None) }.map_err(|e| {
             Error::GpuError(format!(
                 "Failed to create timeline semaphore \
-                 (exportable={export_by_file_descriptor_was_requested}): {e}"
+                 (exportable={cross_process_export_was_requested}): {e}"
             ))
         })?;
 
         Ok(Self {
             device: device.clone(),
             semaphore,
-            export_by_file_descriptor_was_requested,
+            cross_process_export_was_requested,
+            #[cfg(target_os = "macos")]
+            metal_shared_event_export_was_declared: metal_shared_event_export_is_declared,
         })
     }
 
@@ -270,7 +291,9 @@ impl HostVulkanTimelineSemaphore {
         Ok(Self {
             device: device.clone(),
             semaphore,
-            export_by_file_descriptor_was_requested: false,
+            cross_process_export_was_requested: false,
+            #[cfg(target_os = "macos")]
+            metal_shared_event_export_was_declared: false,
         })
     }
 
@@ -279,7 +302,7 @@ impl HostVulkanTimelineSemaphore {
     /// the returned fd and must close it after use (or after the
     /// subprocess has imported its own copy).
     pub fn export_opaque_fd(&self) -> Result<std::os::unix::io::RawFd> {
-        if !self.export_by_file_descriptor_was_requested {
+        if !self.cross_process_export_was_requested {
             return Err(Error::GpuError(
                 "HostVulkanTimelineSemaphore::export_opaque_fd: semaphore was not created with `new_exportable`".into(),
             ));
@@ -288,7 +311,8 @@ impl HostVulkanTimelineSemaphore {
             return Err(Error::GpuError(
                 "HostVulkanTimelineSemaphore::export_opaque_fd: OPAQUE_FD semaphore export is \
                  a Linux mechanism and this platform has no vkGetSemaphoreFdKHR — the Apple \
-                 cross-process timeline is a Metal shared event (#2360)"
+                 cross-process timeline is a Metal shared event \
+                 (export_metal_shared_event_mach_send_right)"
                     .into(),
             ));
         }
@@ -360,9 +384,57 @@ impl HostVulkanTimelineSemaphore {
         self.semaphore
     }
 
-    /// Whether [`Self::export_opaque_fd`] can be called.
+    /// Whether cross-process export was requested at creation.
     pub fn is_exportable(&self) -> bool {
-        self.export_by_file_descriptor_was_requested
+        self.cross_process_export_was_requested
+    }
+
+    /// A Mach send right to the `MTLSharedEvent` MoltenVK backs this timeline
+    /// with — the macOS peer of [`Self::export_opaque_fd`]. The Vulkan value
+    /// is the event's `signaledValue`, one to one. Errors when the export was
+    /// not declared at creation (no [`Self::new_exportable`], or no
+    /// `VK_EXT_metal_objects`) or MoltenVK hands back no event; the caller
+    /// then orders host-side.
+    #[cfg(target_os = "macos")]
+    pub fn export_metal_shared_event_mach_send_right(
+        &self,
+    ) -> Result<streamlib_surface_client::OwnedMachSendRight> {
+        use objc2_metal::MTLSharedEvent;
+        use vulkanalia::vk::ExtMetalObjectsExtensionDeviceCommands;
+
+        if !self.metal_shared_event_export_was_declared {
+            return Err(Error::GpuError(
+                "HostVulkanTimelineSemaphore: no Metal shared-event export was declared at \
+                 creation (not new_exportable, or the device lacks VK_EXT_metal_objects)"
+                    .into(),
+            ));
+        }
+        let mut shared_event_info = vk::ExportMetalSharedEventInfoEXT::builder()
+            .semaphore(self.semaphore)
+            .build();
+        let mut objects_info = vk::ExportMetalObjectsInfoEXT::builder().build();
+        objects_info.next = (&mut shared_event_info as *mut _) as *const std::ffi::c_void;
+        // SAFETY: the extension is enabled (checked at creation) and the chain
+        // names this semaphore; MoltenVK writes the event pointer back.
+        unsafe { self.device.export_metal_objects_ext(&mut objects_info) };
+
+        let shared_event_pointer = shared_event_info.mtl_shared_event
+            as *mut objc2::runtime::ProtocolObject<dyn MTLSharedEvent>;
+        // SAFETY: MoltenVK returns the semaphore's own `MTLSharedEvent`,
+        // alive for the semaphore's lifetime and not retained for the caller.
+        let shared_event = unsafe { shared_event_pointer.as_ref() }.ok_or_else(|| {
+            Error::GpuError(
+                "vkExportMetalObjectsEXT returned no MTLSharedEvent for the timeline".into(),
+            )
+        })?;
+        streamlib_surface_client::mach_send_right_of_metal_shared_event_handle(
+            &shared_event.newSharedEventHandle(),
+        )
+        .map_err(|e| {
+            Error::GpuError(format!(
+                "the timeline's MTLSharedEvent did not yield a Mach send right: {e}"
+            ))
+        })
     }
 }
 
@@ -525,6 +597,61 @@ mod tests {
         assert!(
             refusal.to_string().contains("Linux mechanism"),
             "the refusal must say why rather than blaming the caller: {refusal}"
+        );
+    }
+
+    /// The exported send right names the timeline's own `MTLSharedEvent`:
+    /// a value set on either side is the value the other reads. Without the
+    /// export declaration chained at creation, MoltenVK hands back no event
+    /// and the export errors.
+    #[cfg(target_os = "macos")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn timeline_semaphore_exports_its_metal_shared_event_as_a_mach_send_right() {
+        use objc2_metal::{MTLCreateSystemDefaultDevice, MTLDevice, MTLSharedEvent};
+
+        let device = HostVulkanDevice::new().expect("the rig must produce a Vulkan device");
+        let semaphore = HostVulkanTimelineSemaphore::new_exportable(device.device(), 3)
+            .expect("an exportable timeline");
+        let send_right = semaphore
+            .export_metal_shared_event_mach_send_right()
+            .expect("MoltenVK exports the timeline's shared event");
+        let handle =
+            streamlib_surface_client::metal_shared_event_handle_of_mach_send_right(&send_right)
+                .expect("the send right rebuilds a handle");
+        let shared_event = MTLCreateSystemDefaultDevice()
+            .expect("a Metal device")
+            .newSharedEventWithHandle(&handle)
+            .expect("the handle names a live shared event");
+
+        assert_eq!(shared_event.signaledValue(), 3);
+        semaphore.signal_host(5).expect("host signal");
+        assert_eq!(shared_event.signaledValue(), 5);
+        shared_event.setSignaledValue(9);
+        assert_eq!(semaphore.current_value().expect("counter"), 9);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn a_timeline_not_created_exportable_refuses_the_metal_shared_event_export() {
+        let device = HostVulkanDevice::new().expect("the rig must produce a Vulkan device");
+        let semaphore =
+            HostVulkanTimelineSemaphore::new(device.device(), 0).expect("an in-process timeline");
+        let refusal = semaphore
+            .export_metal_shared_event_mach_send_right()
+            .expect_err("no export was declared");
+        assert!(
+            refusal
+                .to_string()
+                .contains("no Metal shared-event export was declared"),
+            "the refusal names the missing declaration: {refusal}"
         );
     }
 
