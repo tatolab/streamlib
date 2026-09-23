@@ -199,7 +199,7 @@ fn a_killed_helper_releases_the_frame_it_held() {
         std::process::Command::new(std::env::current_exe().expect("this test binary's path"))
             .args([
                 "--exact",
-                "python_helper_process_pixel_exchange::iosurface_pool_slot_import_tests::\
+                "python_helper_process_pixel_exchange::macos::iosurface_pool_slot_import_tests::\
          helper_process_that_holds_a_frame_until_it_is_killed",
                 "--ignored",
                 "--nocapture",

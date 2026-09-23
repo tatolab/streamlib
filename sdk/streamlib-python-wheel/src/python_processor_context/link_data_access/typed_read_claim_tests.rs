@@ -15,14 +15,14 @@ const INPUT_PORT: &str = "frames_from_upstream";
 /// keeps the claim in a field. Nothing marks it, and nothing registers it.
 const FRAME_CLASS_THE_WHEEL_DOES_NOT_SHIP: &str = "\
 class FrameSomebodyElseWrote:
-def __init__(self, surface_id, **rest_of_the_bag):
-    self.surface_id = surface_id
-    gpu_limited_access = gpu_limited_access_of_the_typed_read_in_progress()
-    self.claim = (
-        None
-        if gpu_limited_access is None
-        else gpu_limited_access.claim_surface_against_producer_reuse(surface_id)
-    )
+    def __init__(self, surface_id, **rest_of_the_bag):
+        self.surface_id = surface_id
+        gpu_limited_access = gpu_limited_access_of_the_typed_read_in_progress()
+        self.claim = (
+            None
+            if gpu_limited_access is None
+            else gpu_limited_access.claim_surface_against_producer_reuse(surface_id)
+        )
 ";
 
 /// One link, wired to itself, plus a reader carrying a capability that
