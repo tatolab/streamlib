@@ -21,7 +21,7 @@ use vulkanalia::loader::{LIBRARY, LibloadingLoader};
 /// manager must never appear in anything a user reads.
 pub(crate) fn vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString> {
     let mut candidate_paths: Vec<std::ffi::OsString> = vec![LIBRARY.into()];
-    candidate_paths.extend(apple_vulkan_loader_library_candidate_paths());
+    candidate_paths.extend(macos_vulkan_loader_library_candidate_paths());
     candidate_paths
 }
 
@@ -32,12 +32,18 @@ pub(crate) fn vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString>
 #[cfg(target_os = "macos")]
 const BUNDLED_VULKAN_DRIVER_DIRECTORY_NAME: &str = "_vulkan_driver";
 
-/// The Apple-only tail of the search list: the versioned soname, a LunarG SDK
+/// The loader's versioned soname — the bare name dyld searches for, and the one
+/// real file the wheel stages under [`BUNDLED_VULKAN_DRIVER_DIRECTORY_NAME`].
+#[cfg(target_os = "macos")]
+const VERSIONED_VULKAN_LOADER_LIBRARY_FILE_NAME: &str = "libvulkan.1.dylib";
+
+/// The macOS-only tail of the search list: the versioned soname, a LunarG SDK
 /// root if one is exported, the loader the wheel carries, and the two prefixes
 /// dyld does not search itself.
 #[cfg(target_os = "macos")]
-fn apple_vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString> {
-    let mut candidate_paths: Vec<std::ffi::OsString> = vec!["libvulkan.1.dylib".into()];
+fn macos_vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString> {
+    let mut candidate_paths: Vec<std::ffi::OsString> =
+        vec![VERSIONED_VULKAN_LOADER_LIBRARY_FILE_NAME.into()];
     if let Some(sdk_root) = std::env::var_os("VULKAN_SDK") {
         let mut sdk_library_path = std::path::PathBuf::from(sdk_root);
         sdk_library_path.push("lib");
@@ -64,13 +70,15 @@ fn vulkan_loader_library_bundled_beside_this_image() -> Option<std::path::PathBu
     let mut image_containing_this_function: libc::Dl_info = unsafe { std::mem::zeroed() };
     // SAFETY: `dladdr` only reads the address it is given and writes the struct
     // it is handed, which outlives the call.
-    let found = unsafe {
+    let dladdr_named_the_image_containing_this_function = unsafe {
         libc::dladdr(
             vulkan_loader_library_bundled_beside_this_image as *const libc::c_void,
             &mut image_containing_this_function,
         )
     };
-    if found == 0 || image_containing_this_function.dli_fname.is_null() {
+    if dladdr_named_the_image_containing_this_function == 0
+        || image_containing_this_function.dli_fname.is_null()
+    {
         return None;
     }
     // SAFETY: `dli_fname` is a NUL-terminated path dyld owns for as long as the
@@ -82,12 +90,12 @@ fn vulkan_loader_library_bundled_beside_this_image() -> Option<std::path::PathBu
         image_path
             .parent()?
             .join(BUNDLED_VULKAN_DRIVER_DIRECTORY_NAME)
-            .join("libvulkan.1.dylib"),
+            .join(VERSIONED_VULKAN_LOADER_LIBRARY_FILE_NAME),
     )
 }
 
 #[cfg(not(target_os = "macos"))]
-fn apple_vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString> {
+fn macos_vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString> {
     Vec::new()
 }
 
@@ -166,7 +174,8 @@ mod tests {
     }
 
     /// A stock Mac has no loader of its own, so the one the wheel carries is
-    /// tried before any developer-machine prefix could shadow it.
+    /// tried before the Homebrew prefixes listed explicitly. A bare soname dyld
+    /// resolves, or an exported `VULKAN_SDK`, still comes first.
     #[cfg(target_os = "macos")]
     #[test]
     fn the_loader_the_wheel_carries_is_tried_before_any_homebrew_prefix() {
@@ -174,16 +183,19 @@ mod tests {
             .iter()
             .map(|path| path.to_string_lossy().into_owned())
             .collect();
-        let position_of =
-            |wanted: &dyn Fn(&str) -> bool| candidate_paths.iter().position(|path| wanted(path));
+        let bundled_loader_suffix = format!(
+            "/{BUNDLED_VULKAN_DRIVER_DIRECTORY_NAME}/{VERSIONED_VULKAN_LOADER_LIBRARY_FILE_NAME}"
+        );
 
-        let bundled_loader_position = position_of(&|path| {
-            path.ends_with(&format!(
-                "/{BUNDLED_VULKAN_DRIVER_DIRECTORY_NAME}/libvulkan.1.dylib"
-            ))
-        })
-        .unwrap_or_else(|| panic!("the wheel's own loader is not searched: {candidate_paths:?}"));
-        let first_homebrew_position = position_of(&|path| path.starts_with("/opt/homebrew/"))
+        let bundled_loader_position = candidate_paths
+            .iter()
+            .position(|path| path.ends_with(&bundled_loader_suffix))
+            .unwrap_or_else(|| {
+                panic!("the wheel's own loader is not searched: {candidate_paths:?}")
+            });
+        let first_homebrew_position = candidate_paths
+            .iter()
+            .position(|path| path.starts_with("/opt/homebrew/"))
             .unwrap_or_else(|| panic!("no Homebrew prefix is searched: {candidate_paths:?}"));
 
         assert!(
