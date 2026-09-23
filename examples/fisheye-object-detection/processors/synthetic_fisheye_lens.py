@@ -25,6 +25,11 @@ import struct
 from dataclasses import dataclass
 
 import torch
+
+from processors.radial_distortion_model import (
+    RADIAL_DISTORTION_MODEL_GLSL,
+    workgroups_covering,
+)
 from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
     ProcessorOutputTextureRing,
     RuntimeContextFullAccess,
@@ -34,11 +39,6 @@ from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
     log,
     output,
     processor,
-)
-
-from processors.radial_distortion_model import (
-    RADIAL_DISTORTION_MODEL_GLSL,
-    workgroups_covering,
 )
 
 CAMERA_FRAME_INPUT_PORT = "camera_frame_from_upstream"
@@ -142,6 +142,10 @@ class SyntheticFisheyeLens:
     def __init__(self, config: SyntheticFisheyeLensConfig) -> None:
         radial_distortion_k1 = config.radial_distortion_k1
         radial_distortion_k2 = config.radial_distortion_k2
+        # Packed once, because a lens does not change its coefficients while
+        # it is bolted on. It is still handed to every dispatch below: push
+        # constants travel with a dispatch and never persist on the kernel,
+        # exactly as bindings do.
         self.lens_coefficient_push_constants = struct.pack(
             LENS_COEFFICIENT_PUSH_CONSTANT_FORMAT,
             float(radial_distortion_k1),

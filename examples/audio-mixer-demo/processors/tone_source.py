@@ -13,6 +13,7 @@ import math
 from dataclasses import dataclass
 
 import numpy
+
 from streamlib import RuntimeContextLimitedAccess, log, output, processor
 
 VOICE_OUTPUT_PORT = "voice_to_downstream"

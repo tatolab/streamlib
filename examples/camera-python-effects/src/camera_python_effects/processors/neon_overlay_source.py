@@ -16,6 +16,7 @@ from dataclasses import dataclass
 
 import numpy
 import skia
+
 from streamlib import (
     ProcessorOutputTextureRing,
     RuntimeContextFullAccess,

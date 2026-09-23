@@ -27,6 +27,13 @@ from dataclasses import dataclass
 from typing import Any
 
 import torch
+from ultralytics import YOLO
+
+from processors.radial_distortion_model import (
+    RADIAL_DISTORTION_MODEL_GLSL,
+    largest_recoverable_normalised_radius,
+    workgroups_covering,
+)
 from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
     ProcessorOutputTextureRing,
     RuntimeContextFullAccess,
@@ -36,13 +43,6 @@ from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
     log,
     output,
     processor,
-)
-from ultralytics import YOLO
-
-from processors.radial_distortion_model import (
-    RADIAL_DISTORTION_MODEL_GLSL,
-    largest_recoverable_normalised_radius,
-    workgroups_covering,
 )
 
 FISHEYE_FRAME_INPUT_PORT = "fisheye_frame_from_upstream"

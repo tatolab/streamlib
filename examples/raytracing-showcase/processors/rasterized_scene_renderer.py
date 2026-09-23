@@ -33,7 +33,6 @@ from streamlib import (
     output,
     processor,
 )
-
 from processors.showcase_box_scene import (
     SHOWCASE_BOXES,
     SHOWCASE_CUBE_MESH_GLSL,

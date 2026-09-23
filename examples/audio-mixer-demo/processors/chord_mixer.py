@@ -20,6 +20,7 @@ import collections
 from dataclasses import dataclass
 
 import numpy
+
 from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
     AudioBlock,
     AudioWindowContract,

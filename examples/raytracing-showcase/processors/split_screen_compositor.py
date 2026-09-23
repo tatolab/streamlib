@@ -44,7 +44,6 @@ from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
     output,
     processor,
 )
-
 from processors.label_font import (
     GLYPH_HEIGHT,
     label_pixel_rows,

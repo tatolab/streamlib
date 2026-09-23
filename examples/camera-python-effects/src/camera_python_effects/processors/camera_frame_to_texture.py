@@ -15,6 +15,7 @@ with no CPU copy in the path.
 from __future__ import annotations
 
 import cupy
+
 from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
     ProcessorOutputTextureRing,
     RuntimeContextFullAccess,

@@ -21,6 +21,7 @@ import struct
 from dataclasses import dataclass
 
 import cupy
+
 from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
     ProcessorOutputTextureRing,
     RuntimeContextFullAccess,

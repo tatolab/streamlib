@@ -36,7 +36,6 @@ from streamlib import (
     output,
     processor,
 )
-
 from processors.showcase_box_scene import (
     SHOWCASE_SCENE_GLSL,
     UNIT_CUBE_CORNER_POSITIONS,
