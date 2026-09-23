@@ -30,6 +30,11 @@ import pytest
 # binary. `cargo about` reads `cargo metadata`, and none of those is a package
 # in that graph, so tooling cannot find them.
 #
+# The macOS wheel carries a prebuilt Vulkan loader and MoltenVK, so the projects
+# compiled into those two dylibs — MoltenVK, SPIRV-Cross, cereal, Vulkan-Loader
+# and the loader's cJSON — have their notices checked in under
+# `vendor/macos-bundled-vulkan-driver-notices/` and appended the same way.
+#
 # Eclipse zenoh is the one entry that *is* an ordinary Cargo dependency: its
 # crates ship no `LICENSE` and no `NOTICE`, and `cargo about` collects no NOTICE
 # file from any crate, so the Apache-2.0 §4(d) obligation is met by the same
@@ -44,6 +49,11 @@ NOTICES_CARGO_ABOUT_CANNOT_PRODUCE = (
     "Vulkan-Headers",
     "PipeWire",
     "Eclipse zenoh",
+    "MoltenVK",
+    "SPIRV-Cross",
+    "cereal",
+    "Vulkan-Loader",
+    "cJSON",
 )
 
 # A thin sample of the Rust closure, one per link shape: the same-host IPC

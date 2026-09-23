@@ -83,6 +83,14 @@ features = ["extension-module"]
 # one interpreter's stale `.pyc` files inside an abi3 wheel.
 exclude = ["**/__pycache__/**"]
 
+# Apple Silicon only, and the newest macOS the pinned `macos-15` builder can
+# both build against and run the wheel on. Every Apple Silicon Mac can run it,
+# and it clears MoltenVK's own floor (12) and AVFoundation's
+# `AVCaptureDeviceTypeExternal` (14). Pinned so it cannot drift with rustc;
+# `scripts/stage_macos_bundled_vulkan_driver.sh` builds the bundled loader here.
+[tool.maturin.target.aarch64-apple-darwin]
+macos-deployment-target = "15.0"
+
 [tool.pyright]
 # The wheel's Python half, checked at the version floor rather than whatever
 # interpreter the venv happens to be — `requires-python` is the promise.

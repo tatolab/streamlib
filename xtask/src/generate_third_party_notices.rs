@@ -133,15 +133,17 @@ enum NoticeRosterCargoAboutCannotProduce {
     CompiledByTheVulkanaliaVmaForksBuildScript,
     CompiledByTheEnginesBuildScript,
     AnUpstreamNoticeCargoAboutDoesNotCollect,
+    CarriedPrebuiltByTheMacOSWheel,
 }
 
 impl NoticeRosterCargoAboutCannotProduce {
-    const ALL: [Self; 5] = [
+    const ALL: [Self; 6] = [
         Self::LinkedThroughShadercSys,
         Self::LinkedThroughOpusicSys,
         Self::CompiledByTheVulkanaliaVmaForksBuildScript,
         Self::CompiledByTheEnginesBuildScript,
         Self::AnUpstreamNoticeCargoAboutDoesNotCollect,
+        Self::CarriedPrebuiltByTheMacOSWheel,
     ];
 
     /// How the bullet introduces the projects it then names.
@@ -165,6 +167,11 @@ impl NoticeRosterCargoAboutCannotProduce {
             Self::AnUpstreamNoticeCargoAboutDoesNotCollect => {
                 "An ordinary Cargo dependency whose upstream `NOTICE` Apache-2.0 §4(d) \
                  requires propagating, and which `cargo about` does not collect"
+            }
+            Self::CarriedPrebuiltByTheMacOSWheel => {
+                "In the macOS wheel only, compiled into the Vulkan loader and MoltenVK \
+                 libraries it carries beside the engine (SPIRV-Tools, SPIRV-Headers and \
+                 Vulkan-Headers reach MoltenVK too, under the notices above)"
             }
         }
     }
@@ -340,6 +347,56 @@ const PROJECTS_WHOSE_NOTICES_CARGO_ABOUT_CANNOT_PRODUCE:
             path_relative_to_workspace_root: "vendor/zenoh-notice/NOTICE.md",
         },
         roster: NoticeRosterCargoAboutCannotProduce::AnUpstreamNoticeCargoAboutDoesNotCollect,
+    },
+    // The five below are what `scripts/stage_macos_bundled_vulkan_driver.sh`
+    // puts in the macOS wheel, each notice checked in at the revision the
+    // pinned MoltenVK and Vulkan-Loader build from.
+    ProjectWhoseNoticeCargoAboutCannotProduce {
+        display_name: "MoltenVK",
+        upstream_repository_url: "https://github.com/KhronosGroup/MoltenVK",
+        license_summary: "Apache-2.0",
+        notice_source: NoticeSource::VendoredLicenseFile {
+            path_relative_to_workspace_root: "vendor/macos-bundled-vulkan-driver-notices/MoltenVK/LICENSE",
+        },
+        roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltByTheMacOSWheel,
+    },
+    ProjectWhoseNoticeCargoAboutCannotProduce {
+        display_name: "SPIRV-Cross",
+        upstream_repository_url: "https://github.com/KhronosGroup/SPIRV-Cross",
+        license_summary: "Apache-2.0",
+        notice_source: NoticeSource::VendoredLicenseFile {
+            path_relative_to_workspace_root: "vendor/macos-bundled-vulkan-driver-notices/SPIRV-Cross/LICENSE",
+        },
+        roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltByTheMacOSWheel,
+    },
+    ProjectWhoseNoticeCargoAboutCannotProduce {
+        display_name: "cereal",
+        upstream_repository_url: "https://github.com/USCiLab/cereal",
+        license_summary: "BSD-3-Clause",
+        notice_source: NoticeSource::VendoredLicenseFile {
+            path_relative_to_workspace_root: "vendor/macos-bundled-vulkan-driver-notices/cereal/LICENSE",
+        },
+        roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltByTheMacOSWheel,
+    },
+    ProjectWhoseNoticeCargoAboutCannotProduce {
+        display_name: "Vulkan-Loader",
+        upstream_repository_url: "https://github.com/KhronosGroup/Vulkan-Loader",
+        license_summary: "Apache-2.0",
+        notice_source: NoticeSource::VendoredLicenseFile {
+            path_relative_to_workspace_root: "vendor/macos-bundled-vulkan-driver-notices/Vulkan-Loader/LICENSE.txt",
+        },
+        roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltByTheMacOSWheel,
+    },
+    ProjectWhoseNoticeCargoAboutCannotProduce {
+        display_name: "cJSON",
+        upstream_repository_url: "https://github.com/DaveGamble/cJSON",
+        // Compiled into the loader as `loader/cJSON.c`, the one file there
+        // under a licence other than Apache-2.0.
+        license_summary: "MIT",
+        notice_source: NoticeSource::VendoredLicenseFile {
+            path_relative_to_workspace_root: "vendor/macos-bundled-vulkan-driver-notices/cJSON/LICENSE",
+        },
+        roster: NoticeRosterCargoAboutCannotProduce::CarriedPrebuiltByTheMacOSWheel,
     },
 ];
 
@@ -604,7 +661,8 @@ fn render_the_appendix_cargo_about_cannot_produce(
          \n\
          Every project below ships inside the wheel and owes terms the generated half above\n\
          cannot carry: most are compiled in from vendored sources and so appear in no resolve\n\
-         graph `cargo about` walks, and one is an ordinary Cargo dependency whose upstream\n\
+         graph `cargo about` walks, some ship only in the macOS wheel inside the prebuilt\n\
+         Vulkan driver it carries, and one is an ordinary Cargo dependency whose upstream\n\
          `NOTICE` cargo-about does not collect. These sections are appended by\n\
          `cargo xtask generate-third-party-notices`.\n\
          \n\

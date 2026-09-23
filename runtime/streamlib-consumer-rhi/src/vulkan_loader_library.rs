@@ -16,33 +16,86 @@ use vulkanalia::loader::{LIBRARY, LibloadingLoader};
 /// convention rather than as a StreamLib dial — there is no setting for which
 /// loader to use, and the order is fixed.
 ///
-/// **These are developer-machine fallbacks, never the install experience.** The
-/// wheel carries the loader and MoltenVK and points the loader at them (#2362),
-/// and a package manager must never appear in anything a user reads.
+/// The macOS wheel carries its own loader, which is what a stock machine opens;
+/// the Homebrew prefixes after it are developer-machine fallbacks, and a package
+/// manager must never appear in anything a user reads.
 pub(crate) fn vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString> {
     let mut candidate_paths: Vec<std::ffi::OsString> = vec![LIBRARY.into()];
-    candidate_paths.extend(apple_vulkan_loader_library_candidate_paths());
+    candidate_paths.extend(macos_vulkan_loader_library_candidate_paths());
     candidate_paths
 }
 
-/// The Apple-only tail of the search list: the versioned soname, a LunarG SDK
-/// root if one is exported, and the two prefixes dyld does not search itself.
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-fn apple_vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString> {
-    let mut candidate_paths: Vec<std::ffi::OsString> = vec!["libvulkan.1.dylib".into()];
+/// Where the macOS wheel stages the loader, MoltenVK and its ICD manifest,
+/// relative to the directory of the image this crate is linked into — the
+/// wheel's `_engine` extension. `scripts/stage_macos_bundled_vulkan_driver.sh`
+/// writes it and `streamlib/__init__.py` points the loader at the manifest.
+#[cfg(target_os = "macos")]
+const BUNDLED_VULKAN_DRIVER_DIRECTORY_NAME: &str = "_vulkan_driver";
+
+/// The loader's versioned soname — the bare name dyld searches for, and the one
+/// real file the wheel stages under [`BUNDLED_VULKAN_DRIVER_DIRECTORY_NAME`].
+#[cfg(target_os = "macos")]
+const VERSIONED_VULKAN_LOADER_LIBRARY_FILE_NAME: &str = "libvulkan.1.dylib";
+
+/// The macOS-only tail of the search list: the versioned soname, a LunarG SDK
+/// root if one is exported, the loader the wheel carries, and the two prefixes
+/// dyld does not search itself.
+#[cfg(target_os = "macos")]
+fn macos_vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString> {
+    let mut candidate_paths: Vec<std::ffi::OsString> =
+        vec![VERSIONED_VULKAN_LOADER_LIBRARY_FILE_NAME.into()];
     if let Some(sdk_root) = std::env::var_os("VULKAN_SDK") {
         let mut sdk_library_path = std::path::PathBuf::from(sdk_root);
         sdk_library_path.push("lib");
         sdk_library_path.push(LIBRARY);
         candidate_paths.push(sdk_library_path.into_os_string());
     }
+    if let Some(bundled_loader_path) = vulkan_loader_library_bundled_beside_this_image() {
+        candidate_paths.push(bundled_loader_path.into_os_string());
+    }
     candidate_paths.push("/opt/homebrew/lib/libvulkan.dylib".into());
     candidate_paths.push("/usr/local/lib/libvulkan.dylib".into());
     candidate_paths
 }
 
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
-fn apple_vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString> {
+/// The loader the wheel carries, beside the image this code was linked into.
+///
+/// A path with a slash, so dlopen takes it verbatim and no `@rpath` or install
+/// name is consulted. `None` only if dyld cannot name the image.
+#[cfg(target_os = "macos")]
+fn vulkan_loader_library_bundled_beside_this_image() -> Option<std::path::PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+
+    // SAFETY: `Dl_info` is plain C data; all-zero is a valid value to overwrite.
+    let mut image_containing_this_function: libc::Dl_info = unsafe { std::mem::zeroed() };
+    // SAFETY: `dladdr` only reads the address it is given and writes the struct
+    // it is handed, which outlives the call.
+    let dladdr_named_the_image_containing_this_function = unsafe {
+        libc::dladdr(
+            vulkan_loader_library_bundled_beside_this_image as *const libc::c_void,
+            &mut image_containing_this_function,
+        )
+    };
+    if dladdr_named_the_image_containing_this_function == 0
+        || image_containing_this_function.dli_fname.is_null()
+    {
+        return None;
+    }
+    // SAFETY: `dli_fname` is a NUL-terminated path dyld owns for as long as the
+    // image stays loaded, which is at least as long as this function exists.
+    let image_path_bytes =
+        unsafe { std::ffi::CStr::from_ptr(image_containing_this_function.dli_fname) }.to_bytes();
+    let image_path = std::path::Path::new(std::ffi::OsStr::from_bytes(image_path_bytes));
+    Some(
+        image_path
+            .parent()?
+            .join(BUNDLED_VULKAN_DRIVER_DIRECTORY_NAME)
+            .join(VERSIONED_VULKAN_LOADER_LIBRARY_FILE_NAME),
+    )
+}
+
+#[cfg(not(target_os = "macos"))]
+fn macos_vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString> {
     Vec::new()
 }
 
@@ -104,7 +157,7 @@ mod tests {
     /// Apple needs more than the bare name: dyld's default search path excludes
     /// Homebrew's prefix on Apple Silicon, so `libvulkan.dylib` alone resolves
     /// nothing on a stock machine with the loader installed.
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[cfg(target_os = "macos")]
     #[test]
     fn the_vulkan_loader_search_list_reaches_a_stock_homebrew_install() {
         let candidate_paths: Vec<String> = vulkan_loader_library_candidate_paths()
@@ -117,6 +170,62 @@ mod tests {
                 .iter()
                 .any(|path| path == "/opt/homebrew/lib/libvulkan.dylib"),
             "a Homebrew install must be reachable: {candidate_paths:?}"
+        );
+    }
+
+    /// A stock Mac has no loader of its own, so the one the wheel carries is
+    /// tried before the Homebrew prefixes listed explicitly. A bare soname dyld
+    /// resolves, or an exported `VULKAN_SDK`, still comes first.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_loader_the_wheel_carries_is_tried_before_any_homebrew_prefix() {
+        let candidate_paths: Vec<String> = vulkan_loader_library_candidate_paths()
+            .iter()
+            .map(|path| path.to_string_lossy().into_owned())
+            .collect();
+        let bundled_loader_suffix = format!(
+            "/{BUNDLED_VULKAN_DRIVER_DIRECTORY_NAME}/{VERSIONED_VULKAN_LOADER_LIBRARY_FILE_NAME}"
+        );
+
+        let bundled_loader_position = candidate_paths
+            .iter()
+            .position(|path| path.ends_with(&bundled_loader_suffix))
+            .unwrap_or_else(|| {
+                panic!("the wheel's own loader is not searched: {candidate_paths:?}")
+            });
+        let first_homebrew_position = candidate_paths
+            .iter()
+            .position(|path| path.starts_with("/opt/homebrew/"))
+            .unwrap_or_else(|| panic!("no Homebrew prefix is searched: {candidate_paths:?}"));
+
+        assert!(
+            bundled_loader_position < first_homebrew_position,
+            "the wheel's loader must come before Homebrew's: {candidate_paths:?}"
+        );
+    }
+
+    /// The bundled loader is looked for beside the image this crate is linked
+    /// into — for the wheel, `_engine`'s own directory.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_bundled_loader_is_looked_for_beside_the_image_this_code_is_in() {
+        let bundled_loader_path = vulkan_loader_library_bundled_beside_this_image()
+            .expect("dyld names the image a function of this test binary is in");
+        let running_test_binary = std::env::current_exe().expect("the test binary has a path");
+
+        assert_eq!(
+            bundled_loader_path
+                .parent()
+                .and_then(std::path::Path::parent)
+                .map(std::fs::canonicalize)
+                .transpose()
+                .expect("the image's directory exists"),
+            running_test_binary
+                .parent()
+                .map(std::fs::canonicalize)
+                .transpose()
+                .expect("exists"),
+            "the loader must be looked for in the directory of the image this code is in"
         );
     }
 
