@@ -1182,8 +1182,11 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   declared tensor shape and element type, named by surface id like every surface. A
   kernel binds it at dispatch as `storage_buffer`, by id; it leaves the processor as a
   DLPack capsule of that shape on the floor's own device — CUDA on Linux, Metal on macOS
-  — and travels downstream in a bag by id. Uniform buffers trail it; push constants carry
-  per-dispatch parameters meanwhile. [engine-steps-for-effects-and-model-input]
+  — and travels downstream in a bag by id. It is held to the surface-id lifetime contract
+  every surface id is (§Packages): immutable while any holder has it, and a ring slot a
+  holder still retains is skipped, never rewritten under a live tensor. Uniform buffers
+  trail it; push constants carry per-dispatch parameters meanwhile.
+  [engine-steps-for-effects-and-model-input]
 - **DECIDED** — A pixel effect is written as a shader body: `GlslPixelEffect`, wheel
   grammar over the shipped kernel, texture-ring and surface-copy primitives with no engine
   change and no wire change. The user writes one GLSL function, `vec4 effect(vec4 source,

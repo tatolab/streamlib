@@ -20,11 +20,12 @@ an engine object of its own.
    low-code fullscreen pass, GStreamer's `glshader`) leads with a few-line shader body with
    the plumbing declared for you. Every AI pipeline runtime surveyed (Holoscan, DeepStream,
    MediaPipe) ships model-input pre-processing as a built-in GPU step.
-2. **Both steps are wheel grammar over primitives that already exist.** `GlslPixelEffect`
-   compiles an ordinary compute kernel around the user's body and uses the texture ring and
-   the engine surface copy. `ModelInputTensorKernel` is one compute pass into a tensor
-   buffer. Neither is a second kernel system; the engine and the wire gain nothing for
-   either. The plan already builds `ProcessorOutputTextureRing` and `VideoFrame` this way.
+2. **Both steps are wheel grammar, never a second kernel system.** `GlslPixelEffect`
+   compiles an ordinary compute kernel around the user's body over primitives that already
+   exist — the texture ring and the engine surface copy — so the engine and the wire gain
+   nothing for it. `ModelInputTensorKernel` is one compute pass into a tensor buffer, the
+   one new engine capability (item 3); the step itself adds nothing beyond it. The plan
+   already builds `ProcessorOutputTextureRing` and `VideoFrame` this way.
 3. **The tensor buffer is the one engine capability, and it serves two consumers.** Python
    could not hold a storage buffer: no door acquired one, dispatch refused buffer bindings,
    and DLPack export was pixel-shaped. Model input needs one, and so does a learning

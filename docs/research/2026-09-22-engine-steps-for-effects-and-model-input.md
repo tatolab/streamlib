@@ -333,7 +333,9 @@ ships this as a built-in GPU step:
 
 The union is small and stable: **target size, fit (stretch / letterbox / pad), channel order
 and alpha drop, layout (NCHW / NHWC), dtype (float32 / float16 / uint8), and an affine
-`(x * scale - mean) / std`**. That is one compute pass.
+`(x * scale - mean) / std`**. That is one compute pass. The preset recommended below takes
+float32 and float16 only; uint8 stays with the generic tensor buffer, whose dtype is the
+caller's.
 
 ### What blocks it today: the output is a buffer, and Python cannot reach one
 
