@@ -37,8 +37,8 @@ beside this delta, and its macOS arms are prerequisites here, never duplicated.
 - A new escalate op touches `escalate_request.rs` (variant + `deny_unknown_fields` struct),
   `escalate_wire_encoding_tests.rs`, `subprocess_escalate.rs` (`request_id` arm `:121-148`, a
   dispatch arm plus its cfg refusal twin, the handler, and a parent test), the helper client
-  (`python_helper_process_pixel_exchange.rs`), the two `#[pymethods]` blocks
-  (`python_processor_context.rs:1079`, `:1236`), and `_engine.pyi` (`:1050`, `:1097`). The
+  (`python_helper_process_pixel_exchange/`), the two `#[pymethods]` blocks
+  (`python_processor_context/gpu_context.rs:69`, `:226`), and `_engine.pyi` (`:1050`, `:1097`). The
   closest model is `run_cpu_readback_copy` (`escalate_request.rs:1538`, handler
   `subprocess_escalate.rs:1672-1706`). The reply needs no new type: `EscalateResponseOk`
   already carries `handle_id` and `timeline_value`.
@@ -50,12 +50,12 @@ beside this delta, and its macOS arms are prerequisites here, never duplicated.
 - Whether a surface takes a write-back is derived on the parent by `SurfaceExportStaging::writable()`
   (`surface_export_staging.rs:286-295`) and re-checked live by `resolve_write_back_destination`
   (`:1005-1085`). The wheel learns it only through `open_cpu_readback_staging`
-  (`python_helper_process_pixel_exchange.rs:1850`), which mints a staging.
+  (`python_helper_process_pixel_exchange/linux/export_staging.rs:309`), which mints a staging.
 - Any-backing resolution exists: `resolve_device_export_source` → `ResolvedBlitSource`
   (`surface_export_staging.rs:414-440`), plus the layout save and restore of `record_write_back`
   (`:817`, `:1088-1150`).
-- DLPack: the surface handle's Linux arm honours `dl_device` (`python_processor_context.rs:567-599`);
-  its macOS arm discards it (`:600-604`, `let _ = dl_device;`), which is right today only
+- DLPack: the surface handle's Linux arm honours `dl_device` (`python_processor_context/gpu_surface_handle.rs:514-545`);
+  its macOS arm discards it (`:546-550`, `let _ = dl_device;`), which is right today only
   because macOS has no device side yet. `copy=True` is refused before the platform split
   (`:552-556`, and the scope at `:822-826`). The one test of the explicit host request is
   `requires_gpu` and CUDA-shaped (`test_device_exchange.py:145`, probe

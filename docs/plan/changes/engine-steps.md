@@ -63,7 +63,7 @@ dispatch.
   - `VulkanComputeKernel::set_storage_buffer_storage` (`vulkan_compute_kernel.rs:1059`, offset
     alignment checked `:377-384`).
   - The wire already spells `storage_buffer` (`escalate_request.rs:455-479`, `:563`, `:1207`), and
-    so does the helper (`python_processor_context.rs:2440-2468`).
+    so does the helper (`python_processor_context/kernel_wire_encoding.rs:69-95`).
   - Python dispatch refuses it twice. The planner rejects it by name
     (`subprocess_escalate.rs:2133-2139`, and graphics at `:2600`). The engine binding value is
     texture-only (`BatchedComputeKernelDispatchBinding`, `gpu_context.rs:752-781`), and the batch
@@ -74,7 +74,7 @@ dispatch.
 - **The surface-share service is nearly shape-agnostic.** `resource_type` is a free string
   (`surface_store.rs:148-152`) and width/height/format are opaque. The consumer side is
   pixel-shaped: `import_checked_out_surface` refuses unknown types and derives a `PixelFormat`
-  (`python_helper_process_pixel_exchange.rs:2467-2503`). `PixelExchangeTensorLayout {shape, strides,
+  (`python_helper_process_pixel_exchange/linux/mod.rs:378-400`). `PixelExchangeTensorLayout {shape, strides,
   dtype}` is general, and only its constructors are pixel-derived (`python_gpu_surface_pixel_exchange.rs:234-300`).
 - **Lifetime machinery.**
   - Reusable: the lease registry (`surface_check_out_lease_registry.rs`, counted checkouts,
@@ -85,7 +85,7 @@ dispatch.
     unconditionally (`processor_output_texture_ring.py:93-108`) — it never skips a held slot.
 - **Downstream reading.** A bag moves a `surface_id` string and nothing more. `VideoFrame` requires
   width/height (`video_frame.py:57`), and `PythonGpuSurfaceHandle` exposes width/height/format
-  (`python_processor_context.rs:111-131`). A tensor surface needs a `resolve_surface` arm and a
+  (`python_processor_context/gpu_surface_handle.rs:41-62`). A tensor surface needs a `resolve_surface` arm and a
   handle that states its shape.
 - **Fan-out.** One output feeds up to 32 inputs (`streamlib-ipc-types/src/lib.rs:341`), and the
   fisheye app already fans out (`examples/fisheye-object-detection/app.py:86-96`).

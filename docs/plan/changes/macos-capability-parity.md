@@ -29,8 +29,8 @@ was measured on the M1 Max in three probes left under `/tmp/iosurf-nocopy/` and
 `/tmp/torchprobe/`; every "measured" below is from there or from the memo.
 
 - Every GPU capability a Python processor has on Linux answers one refusal on macOS — *"its
-  helper process was started without a surface-share channel"* (`python_processor_context.rs:
-  81-87`) — because the spawn host passes the surface channel only on Linux
+  helper process was started without a surface-share channel"* (`python_processor_context/mod.rs:
+  95-108`) — because the spawn host passes the surface channel only on Linux
   (`python_helper_process_spawn_host.rs:626-629`) and the helper's exchange client has no
   macOS arm (`python_helper_process_pixel_exchange.rs`: ~180 Linux gates, zero fallback arms).
 - The wheel crate is excluded from the macOS CI lane (`.github/workflows/test.yml:786-797`).
