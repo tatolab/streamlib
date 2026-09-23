@@ -115,11 +115,18 @@ jobs:
           /tmp/wheel-check/bin/pip install --no-index sdk/streamlib-python-wheel/dist/*.whl
           # The scaffolded effect's own declared dependency, and the tests'.
           /tmp/wheel-check/bin/pip install 'numpy>=2.1' pytest
-          installed_package="$(/tmp/wheel-check/bin/python -c 'import streamlib, pathlib; print(pathlib.Path(streamlib.__file__).parent)')"
-          case "$installed_package" in
-            /tmp/wheel-check/*) ;;
-            *) echo "::error::streamlib imported from $installed_package, not the installed wheel"; exit 1 ;;
-          esac
+          # Compared against the venv's own site-packages, resolved on both
+          # sides: macOS's `/tmp` is a symlink to `/private/tmp`.
+          installed_package="$(/tmp/wheel-check/bin/python - <<'EOF'
+          import pathlib, sysconfig, streamlib
+          installed_package = pathlib.Path(streamlib.__file__).resolve().parent
+          site_packages = pathlib.Path(sysconfig.get_path("purelib")).resolve()
+          assert installed_package.parent == site_packages, (
+              f"streamlib imported from {installed_package}, not the installed wheel in {site_packages}"
+          )
+          print(installed_package)
+          EOF
+          )"
           find "$installed_package" \( -name '*.so' -o -name '*.dylib' \) \
             -exec codesign --verify --strict --verbose=1 {} +
 
