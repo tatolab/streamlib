@@ -5,17 +5,17 @@
 //!
 //! A liveliness token carries no payload, so the token key has to carry what a
 //! runtime that is already dead must still answer about itself. Its host is
-//! half of that: only a runtime on this very machine, in this very pid
-//! namespace, has a pid another runtime here can go and check.
+//! half of that: only a runtime on this very machine, sharing this process
+//! table, has a pid another runtime here can go and check.
 
 /// A host, as far as another runtime on the mesh can tell.
 ///
 /// The derived equality is the peer table's: it keys on the whole announced
 /// identity, and two `Unidentified` hosts there are the same key. Stated
-/// residual: two macOS runtimes sharing a name *and* a pid collapse into one
-/// peer row. The same-host question a duplicate-name check asks is a different
-/// one — an unidentified host is never this host — and belongs with the check
-/// that asks it.
+/// residual: two runtimes on unidentified hosts sharing a name *and* a pid
+/// collapse into one peer row. The same-host question a duplicate-name check
+/// asks is a different one — an unidentified host is never this host — and
+/// belongs with the check that asks it.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum HostIdentity {
     /// A host that can be recognised again: this kernel boot and this pid
@@ -27,6 +27,13 @@ pub enum HostIdentity {
         /// The inode of this process's pid namespace.
         pid_namespace_inode: u64,
     },
+    /// A host that can be recognised again on a kernel with no pid namespaces:
+    /// this kernel boot session, whose one process table every process on the
+    /// boot shares. What Apple reports.
+    ThisKernelBootSession {
+        /// The kernel's boot session UUID, which changes on every boot.
+        kernel_boot_session_uuid: String,
+    },
     /// A platform that reports nothing another runtime could match against.
     /// Two `Unidentified` hosts are never the same host.
     Unidentified,
@@ -35,9 +42,12 @@ pub enum HostIdentity {
 /// What an [`HostIdentity::Unidentified`] host renders as on a key.
 const UNIDENTIFIED_HOST_CHUNK: &str = "unidentified";
 
-/// The prefix an identified host's chunk carries, so a reader can tell the two
-/// shapes apart without guessing at the field count.
-const IDENTIFIED_HOST_CHUNK_PREFIX: &str = "kernel";
+/// The prefix a [`HostIdentity::ThisKernelBootAndPidNamespace`] chunk carries,
+/// so a reader can tell the shapes apart without guessing at the field count.
+const KERNEL_BOOT_AND_PID_NAMESPACE_HOST_CHUNK_PREFIX: &str = "kernel";
+
+/// The prefix a [`HostIdentity::ThisKernelBootSession`] chunk carries.
+const KERNEL_BOOT_SESSION_HOST_CHUNK_PREFIX: &str = "bootsession";
 
 /// What separates the fields inside one host chunk. A `.` because the boot id
 /// carries `-` and the chunk has to stay parseable; both are legal in a key
@@ -51,10 +61,11 @@ impl HostIdentity {
         {
             crate::linux::host_identity::read_this_hosts_identity()
         }
-        // Apple reports no boot id and no pid namespace, so a runtime there
-        // recognises no host — including its own. The duplicate-name exception
-        // that reads this is Linux-only for exactly that reason.
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        {
+            crate::apple::host_identity::read_this_hosts_identity()
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "ios")))]
         {
             Self::Unidentified
         }
@@ -67,8 +78,14 @@ impl HostIdentity {
                 kernel_boot_id,
                 pid_namespace_inode,
             } => format!(
-                "{IDENTIFIED_HOST_CHUNK_PREFIX}{HOST_CHUNK_FIELD_SEPARATOR}{kernel_boot_id}\
-                 {HOST_CHUNK_FIELD_SEPARATOR}{pid_namespace_inode}"
+                "{KERNEL_BOOT_AND_PID_NAMESPACE_HOST_CHUNK_PREFIX}{HOST_CHUNK_FIELD_SEPARATOR}\
+                 {kernel_boot_id}{HOST_CHUNK_FIELD_SEPARATOR}{pid_namespace_inode}"
+            ),
+            Self::ThisKernelBootSession {
+                kernel_boot_session_uuid,
+            } => format!(
+                "{KERNEL_BOOT_SESSION_HOST_CHUNK_PREFIX}{HOST_CHUNK_FIELD_SEPARATOR}\
+                 {kernel_boot_session_uuid}"
             ),
             Self::Unidentified => UNIDENTIFIED_HOST_CHUNK.to_string(),
         }
@@ -80,10 +97,10 @@ impl HostIdentity {
     ///
     /// [`HostIdentity::Unidentified`] is never this host, on either side. A
     /// platform that recognises no host recognises none of its own runtimes
-    /// either, which is what makes the exception Linux-only without a `#[cfg]`
-    /// spelling it that way.
+    /// either, so the exception never fires there without a `#[cfg]` spelling
+    /// it that way.
     pub fn is_the_same_host_a_pid_can_be_checked_on(&self, announced_host: &Self) -> bool {
-        matches!(self, Self::ThisKernelBootAndPidNamespace { .. }) && self == announced_host
+        !matches!(self, Self::Unidentified) && self == announced_host
     }
 
     /// The identity a key chunk carries, or `None` when the chunk is not one
@@ -93,18 +110,33 @@ impl HostIdentity {
             return Some(Self::Unidentified);
         }
         let mut fields = chunk.split(HOST_CHUNK_FIELD_SEPARATOR);
-        if fields.next()? != IDENTIFIED_HOST_CHUNK_PREFIX {
+        let identity = match fields.next()? {
+            KERNEL_BOOT_AND_PID_NAMESPACE_HOST_CHUNK_PREFIX => {
+                let kernel_boot_id = fields.next()?.to_string();
+                let pid_namespace_inode = fields.next()?.parse().ok()?;
+                if kernel_boot_id.is_empty() {
+                    return None;
+                }
+                Self::ThisKernelBootAndPidNamespace {
+                    kernel_boot_id,
+                    pid_namespace_inode,
+                }
+            }
+            KERNEL_BOOT_SESSION_HOST_CHUNK_PREFIX => {
+                let kernel_boot_session_uuid = fields.next()?.to_string();
+                if kernel_boot_session_uuid.is_empty() {
+                    return None;
+                }
+                Self::ThisKernelBootSession {
+                    kernel_boot_session_uuid,
+                }
+            }
+            _ => return None,
+        };
+        if fields.next().is_some() {
             return None;
         }
-        let kernel_boot_id = fields.next()?.to_string();
-        let pid_namespace_inode = fields.next()?.parse().ok()?;
-        if fields.next().is_some() || kernel_boot_id.is_empty() {
-            return None;
-        }
-        Some(Self::ThisKernelBootAndPidNamespace {
-            kernel_boot_id,
-            pid_namespace_inode,
-        })
+        Some(identity)
     }
 }
 
@@ -120,11 +152,19 @@ mod tests {
         }
     }
 
-    /// Both shapes survive the key and come back as what they were.
+    fn a_boot_session(kernel_boot_session_uuid: &str) -> HostIdentity {
+        HostIdentity::ThisKernelBootSession {
+            kernel_boot_session_uuid: kernel_boot_session_uuid.to_string(),
+        }
+    }
+
+    /// Every shape survives the key and comes back as what it was.
     #[test]
     fn every_identity_round_trips_through_its_key_chunk() {
         for identity in [
+            HostIdentity::of_this_host(),
             identified("2f1c8a30-6b4e-4d5a-9a11-2c7f0d5e8b93", 4_026_531_836),
+            a_boot_session("2F1C8A30-6B4E-4D5A-9A11-2C7F0D5E8B93"),
             HostIdentity::Unidentified,
         ] {
             let chunk = identity.as_one_key_chunk();
@@ -143,6 +183,7 @@ mod tests {
         for identity in [
             HostIdentity::of_this_host(),
             identified("2f1c8a30-6b4e-4d5a-9a11-2c7f0d5e8b93", 4_026_531_836),
+            a_boot_session("2F1C8A30-6B4E-4D5A-9A11-2C7F0D5E8B93"),
             HostIdentity::Unidentified,
         ] {
             let chunk = identity.as_one_key_chunk();
@@ -162,6 +203,30 @@ mod tests {
         assert_ne!(identified("boot", 1), identified("boot", 2));
         assert_ne!(identified("boot", 1), identified("other-boot", 1));
         assert_ne!(identified("boot", 1), HostIdentity::Unidentified);
+        assert_ne!(a_boot_session("boot"), a_boot_session("other-boot"));
+        assert_ne!(a_boot_session("boot"), HostIdentity::Unidentified);
+    }
+
+    /// A platform that reports a host identifies itself, and the same way
+    /// twice — the property a restart racing its predecessor's exit depends on.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn this_host_is_identified_and_the_same_host_every_time() {
+        let here = HostIdentity::of_this_host();
+        assert_ne!(here, HostIdentity::Unidentified);
+        assert_eq!(here, HostIdentity::of_this_host());
+        assert!(here.is_the_same_host_a_pid_can_be_checked_on(&HostIdentity::of_this_host()));
+    }
+
+    /// A Linux host and an Apple host never read as one, whatever their boot
+    /// ids spell: the two shapes are different keys.
+    #[test]
+    fn a_linux_host_is_never_an_apple_host() {
+        let linux = identified("2f1c8a30-6b4e-4d5a-9a11-2c7f0d5e8b93", 4_026_531_836);
+        let apple = a_boot_session("2f1c8a30-6b4e-4d5a-9a11-2c7f0d5e8b93");
+        assert_ne!(linux, apple);
+        assert!(!linux.is_the_same_host_a_pid_can_be_checked_on(&apple));
+        assert!(!apple.is_the_same_host_a_pid_can_be_checked_on(&linux));
     }
 
     /// The same-host question the duplicate-name exception asks, which is not
@@ -175,6 +240,19 @@ mod tests {
         assert!(!here.is_the_same_host_a_pid_can_be_checked_on(&identified("boot", 2)));
         assert!(!here.is_the_same_host_a_pid_can_be_checked_on(&identified("other-boot", 1)));
         assert!(!here.is_the_same_host_a_pid_can_be_checked_on(&HostIdentity::Unidentified));
+
+        let this_boot_session = a_boot_session("boot");
+        assert!(
+            this_boot_session.is_the_same_host_a_pid_can_be_checked_on(&a_boot_session("boot"))
+        );
+        assert!(
+            !this_boot_session
+                .is_the_same_host_a_pid_can_be_checked_on(&a_boot_session("other-boot"))
+        );
+        assert!(
+            !this_boot_session
+                .is_the_same_host_a_pid_can_be_checked_on(&HostIdentity::Unidentified)
+        );
 
         assert!(
             !HostIdentity::Unidentified
@@ -194,6 +272,9 @@ mod tests {
             "kernel.boot.notanumber",
             "kernel..7",
             "other.boot.7",
+            "bootsession",
+            "bootsession.",
+            "bootsession.boot.7",
         ] {
             assert_eq!(
                 HostIdentity::from_one_key_chunk(foreign),

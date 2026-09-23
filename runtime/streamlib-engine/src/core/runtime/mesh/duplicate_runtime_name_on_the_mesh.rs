@@ -88,10 +88,10 @@ fn every_live_holder_of(
 /// testable without a second host.
 ///
 /// A name is free only when its holder is on this very host — this kernel boot,
-/// this pid namespace — and its process has left the process table. Everything
-/// else refuses: another host's pid is not one this host can check, a container
-/// on this kernel has its own pid namespace, and a host that reports no
-/// identity is never this one.
+/// and on Linux this pid namespace — and its process has left the process
+/// table. Everything else refuses: another host's pid is not one this host can
+/// check, a container on this kernel has its own pid namespace, and a host that
+/// reports no identity is never this one.
 fn a_runtime_here_may_take_this_name_over(
     this_host: &HostIdentity,
     holder: &AnnouncedRuntimeIdentity,
@@ -102,19 +102,43 @@ fn a_runtime_here_may_take_this_name_over(
 }
 
 /// Whether a pid on this host has left its process table.
+///
+/// Only ever asked about a pid read off a token whose host identity equals this
+/// host's, so the pid is in this process's own table and `kill` can see it.
+/// A pid the kernel still knows — `EPERM`, another user's process, included —
+/// is still there, and anything but `ESRCH` is read that way: the refusal is
+/// the safe answer, and a name taken over from a live runtime is not
+/// recoverable.
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "ios"))]
 fn a_process_here_is_gone(process_id: u32) -> bool {
-    #[cfg(target_os = "linux")]
-    {
-        crate::linux::host_identity::a_process_on_this_host_is_gone(process_id)
-    }
-    // No other platform reports a host identity, so no announced host ever
-    // equals this one and this arm is never reached. It answers "still there",
-    // which keeps the refusal — the same posture as the probe's own error arms.
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = process_id;
-        false
-    }
+    let Ok(process_id) = libc::pid_t::try_from(process_id) else {
+        return false;
+    };
+    // SAFETY: signal 0 delivers nothing; `kill` only reports reachability.
+    let signalled = unsafe { libc::kill(process_id, 0) };
+    a_process_is_gone_when_signalling_it_said(
+        signalled,
+        std::io::Error::last_os_error().raw_os_error(),
+    )
+}
+
+/// No other platform reports a host identity, so no announced host ever
+/// equals this one and this is never reached. It answers "still there", which
+/// keeps the refusal — the same posture as the `kill` probe's error arms.
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "ios")))]
+fn a_process_here_is_gone(_process_id: u32) -> bool {
+    false
+}
+
+/// What `kill`'s answer means, split out because the interesting arm is the one
+/// a test cannot choose to get: whether this process may signal pid 1 depends
+/// on whether it is root, so asking the kernel does not exercise `EPERM`.
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "ios"))]
+fn a_process_is_gone_when_signalling_it_said(
+    signalled: libc::c_int,
+    errno: Option<libc::c_int>,
+) -> bool {
+    signalled != 0 && errno == Some(libc::ESRCH)
 }
 
 /// The refusal: the name, who holds it, and both ways out.
@@ -150,6 +174,9 @@ fn where_the_holder_is(this_host: &HostIdentity, announced_host: &HostIdentity) 
         } => format!(
             "another host (kernel boot {kernel_boot_id}, pid namespace {pid_namespace_inode})"
         ),
+        HostIdentity::ThisKernelBootSession {
+            kernel_boot_session_uuid,
+        } => format!("another host (kernel boot session {kernel_boot_session_uuid})"),
         HostIdentity::Unidentified => "a host that reports no identity".to_string(),
     }
 }
@@ -232,7 +259,40 @@ mod tests {
                 &held_by(HostIdentity::Unidentified, 4321),
                 every_process_is_gone
             ),
-            "a platform that recognises no host takes no name over, macOS included"
+            "a platform that recognises no host takes no name over"
+        );
+
+        let this_boot_session = HostIdentity::ThisKernelBootSession {
+            kernel_boot_session_uuid: "this-boot".to_string(),
+        };
+        assert!(
+            a_runtime_here_may_take_this_name_over(
+                &this_boot_session,
+                &held_by(this_boot_session.clone(), 4321),
+                every_process_is_gone
+            ),
+            "a token this boot session left behind must free its name"
+        );
+        assert!(
+            !a_runtime_here_may_take_this_name_over(
+                &this_boot_session,
+                &held_by(this_boot_session.clone(), 4321),
+                |_| false
+            ),
+            "a live process in this boot session must keep its name"
+        );
+        assert!(
+            !a_runtime_here_may_take_this_name_over(
+                &this_boot_session,
+                &held_by(
+                    HostIdentity::ThisKernelBootSession {
+                        kernel_boot_session_uuid: "another-boot".to_string(),
+                    },
+                    4321
+                ),
+                every_process_is_gone
+            ),
+            "a pid from another boot session is not this host's"
         );
     }
 
@@ -284,6 +344,15 @@ mod tests {
             "another host (kernel boot another-boot, pid namespace 7)"
         );
         assert_eq!(
+            where_the_holder_is(
+                &here,
+                &HostIdentity::ThisKernelBootSession {
+                    kernel_boot_session_uuid: "another-boot".to_string(),
+                }
+            ),
+            "another host (kernel boot session another-boot)"
+        );
+        assert_eq!(
             where_the_holder_is(&here, &HostIdentity::Unidentified),
             "a host that reports no identity"
         );
@@ -292,5 +361,58 @@ mod tests {
             "a host that reports no identity",
             "a platform that recognises no host must not call a peer its own"
         );
+    }
+
+    /// The probe the same-host exception rests on: a process that has exited
+    /// is gone, and one that is running — this very test — is not.
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "ios"))]
+    #[test]
+    fn a_reaped_process_is_gone_and_a_running_one_is_not() {
+        let mut exited = std::process::Command::new("true")
+            .spawn()
+            .expect("a process this host can run");
+        let reaped_process_id = exited.id();
+        exited.wait().expect("the process is reaped");
+
+        assert!(a_process_here_is_gone(reaped_process_id));
+        assert!(!a_process_here_is_gone(std::process::id()));
+    }
+
+    /// Only `ESRCH` frees a name. `EPERM` — a process this one may not signal —
+    /// is a process that is still there, and so is any other errno: the refusal
+    /// is the recoverable answer, and a name taken from a live runtime is not.
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "ios"))]
+    #[test]
+    fn only_no_such_process_means_gone_and_every_other_answer_means_still_there() {
+        assert!(a_process_is_gone_when_signalling_it_said(
+            -1,
+            Some(libc::ESRCH)
+        ));
+
+        assert!(!a_process_is_gone_when_signalling_it_said(0, None));
+        assert!(!a_process_is_gone_when_signalling_it_said(
+            -1,
+            Some(libc::EPERM)
+        ));
+        assert!(!a_process_is_gone_when_signalling_it_said(
+            -1,
+            Some(libc::EINVAL)
+        ));
+        assert!(!a_process_is_gone_when_signalling_it_said(-1, None));
+    }
+
+    /// Pid 1 is always there, whether this process may signal it or not — the
+    /// two answers the kernel gives for it are covered above.
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "ios"))]
+    #[test]
+    fn pid_one_is_never_read_as_gone() {
+        assert!(!a_process_here_is_gone(1));
+    }
+
+    /// A number no pid could be is not read as a free name.
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "ios"))]
+    #[test]
+    fn a_number_that_is_no_pid_at_all_is_not_read_as_gone() {
+        assert!(!a_process_here_is_gone(u32::MAX));
     }
 }
