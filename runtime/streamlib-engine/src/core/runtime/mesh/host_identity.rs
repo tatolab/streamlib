@@ -100,7 +100,10 @@ impl HostIdentity {
     /// either, so the exception never fires there without a `#[cfg]` spelling
     /// it that way.
     pub fn is_the_same_host_a_pid_can_be_checked_on(&self, announced_host: &Self) -> bool {
-        !matches!(self, Self::Unidentified) && self == announced_host
+        matches!(
+            self,
+            Self::ThisKernelBootAndPidNamespace { .. } | Self::ThisKernelBootSession { .. }
+        ) && self == announced_host
     }
 
     /// The identity a key chunk carries, or `None` when the chunk is not one
@@ -209,7 +212,7 @@ mod tests {
 
     /// A platform that reports a host identifies itself, and the same way
     /// twice — the property a restart racing its predecessor's exit depends on.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "ios"))]
     #[test]
     fn this_host_is_identified_and_the_same_host_every_time() {
         let here = HostIdentity::of_this_host();

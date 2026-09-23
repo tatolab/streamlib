@@ -13,10 +13,6 @@ use crate::core::runtime::mesh::MachineClockIdentity;
 pub fn read_this_machines_clock_identity() -> MachineClockIdentity {
     let Some(boot_session_uuid) = crate::apple::host_identity::read_the_kernel_boot_session_uuid()
     else {
-        tracing::debug!(
-            "this machine reports no boot session, so nothing it sends across the mesh can say \
-             which clock stamped it"
-        );
         return MachineClockIdentity::UNIDENTIFIED;
     };
     let identity =

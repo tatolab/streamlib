@@ -21,26 +21,17 @@ const HOW_MANY_BYTES_A_BOOT_SESSION_UUID_ANSWER_TAKES: usize = 64;
 /// this boot shares one process table and the boot session is the whole of
 /// what a pid needs to be checkable here.
 pub fn read_this_hosts_identity() -> HostIdentity {
-    match read_the_kernel_boot_session_uuid() {
-        Some(kernel_boot_session_uuid) => HostIdentity::ThisKernelBootSession {
+    read_the_kernel_boot_session_uuid().map_or(
+        HostIdentity::Unidentified,
+        |kernel_boot_session_uuid| HostIdentity::ThisKernelBootSession {
             kernel_boot_session_uuid,
         },
-        None => {
-            tracing::debug!(
-                "this host reports no kern.bootsessionuuid; mesh peers here are all remote to \
-                 each other"
-            );
-            HostIdentity::Unidentified
-        }
-    }
+    )
 }
 
 /// The kernel's boot session UUID as this machine reports it, or `None` when
-/// the kernel does not answer.
-///
-/// Shared with the machine clock identity, which is this same UUID: one read
-/// site, because a second reader of one sysctl is a second answer waiting to
-/// disagree.
+/// the kernel does not answer. The one read site the machine clock identity
+/// shares; a failure is logged here, once.
 pub fn read_the_kernel_boot_session_uuid() -> Option<String> {
     let mut answer = [0u8; HOW_MANY_BYTES_A_BOOT_SESSION_UUID_ANSWER_TAKES];
     let mut answer_length = answer.len();
@@ -59,7 +50,8 @@ pub fn read_the_kernel_boot_session_uuid() -> Option<String> {
     };
     if answered != 0 {
         tracing::debug!(
-            "this machine's kernel did not answer kern.bootsessionuuid: {}",
+            "this machine's kernel did not answer kern.bootsessionuuid, so it names neither its \
+             host nor its clock on the mesh: {}",
             std::io::Error::last_os_error()
         );
         return None;
@@ -67,15 +59,17 @@ pub fn read_the_kernel_boot_session_uuid() -> Option<String> {
     the_boot_session_uuid_the_kernel_wrote(&answer[..answer_length.min(answer.len())])
 }
 
-/// The text of a sysctl answer, split out so a malformed answer is testable
-/// without a second kernel.
+/// The text of a sysctl answer.
 ///
 /// The kernel writes a NUL-terminated string and counts the terminator in the
 /// length it reports, so the text is what precedes the first NUL.
 fn the_boot_session_uuid_the_kernel_wrote(written: &[u8]) -> Option<String> {
     let text = written.split(|byte| *byte == 0).next().unwrap_or(&[]);
     let Ok(boot_session_uuid) = std::str::from_utf8(text) else {
-        tracing::debug!("this machine's kern.bootsessionuuid is not text");
+        tracing::debug!(
+            "this machine's kern.bootsessionuuid is not text, so it names neither its host nor \
+             its clock on the mesh"
+        );
         return None;
     };
     let boot_session_uuid = boot_session_uuid.trim();
