@@ -11,7 +11,6 @@ pub mod iosurface;
 pub mod machine_clock_identity;
 pub mod media_clock;
 pub mod metal_layer_added_as_sublayer_of_window_content_view;
-pub mod texture;
 pub mod vimage_ffi;
 
 pub mod permissions;

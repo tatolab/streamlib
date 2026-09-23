@@ -76,38 +76,89 @@ pub fn create_private_iosurface_with_packed_rows(
     pixel_format: PixelFormat,
 ) -> Result<CFRetained<IOSurfaceRef>> {
     const OPERATION: &str = "create_private_iosurface_with_packed_rows";
-    let Some(packed_bytes_per_row) = width
+    let packed_bytes_per_row =
+        byte_size_of_one_packed_row(OPERATION, width, height, bytes_per_element)?;
+    let iosurface = create_private_iosurface(
+        OPERATION,
+        width,
+        height,
+        bytes_per_element,
+        Some(packed_bytes_per_row),
+        pixel_format,
+    )?;
+    if iosurface.bytes_per_row() != packed_bytes_per_row as usize {
+        return Err(Error::TextureError(format!(
+            "{OPERATION}: IOSurface padded {width}x{height}'s rows to {} bytes; the packed \
+             layout needs {packed_bytes_per_row}",
+            iosurface.bytes_per_row()
+        )));
+    }
+    Ok(iosurface)
+}
+
+/// A private IOSurface of `height` rows of `width` elements, each
+/// `bytes_per_element` wide, with the row pitch IOSurface chooses — the
+/// alignment a Metal texture over the surface needs. Readers take the
+/// stride from the surface, never from `width`.
+pub fn create_private_iosurface_for_a_gpu_image(
+    width: u32,
+    height: u32,
+    bytes_per_element: u32,
+) -> Result<CFRetained<IOSurfaceRef>> {
+    const OPERATION: &str = "create_private_iosurface_for_a_gpu_image";
+    byte_size_of_one_packed_row(OPERATION, width, height, bytes_per_element)?;
+    create_private_iosurface(
+        OPERATION,
+        width,
+        height,
+        bytes_per_element,
+        None,
+        PixelFormat::Unknown,
+    )
+}
+
+fn byte_size_of_one_packed_row(
+    operation: &str,
+    width: u32,
+    height: u32,
+    bytes_per_element: u32,
+) -> Result<u32> {
+    width
         .checked_mul(bytes_per_element)
         .filter(|bytes| *bytes > 0 && height > 0)
-    else {
-        return Err(Error::Configuration(format!(
-            "{OPERATION}: {width}x{height} at {bytes_per_element} byte(s) per element describes \
-             no memory"
-        )));
-    };
+        .ok_or_else(|| {
+            Error::Configuration(format!(
+                "{operation}: {width}x{height} at {bytes_per_element} byte(s) per element \
+                 describes no memory"
+            ))
+        })
+}
+
+fn create_private_iosurface(
+    operation: &str,
+    width: u32,
+    height: u32,
+    bytes_per_element: u32,
+    bytes_per_row: Option<u32>,
+    pixel_format: PixelFormat,
+) -> Result<CFRetained<IOSurfaceRef>> {
     let as_cf_number = |value: u32| CFNumber::new_i64(i64::from(value));
     let width_number = as_cf_number(width);
     let height_number = as_cf_number(height);
     let bytes_per_element_number = as_cf_number(bytes_per_element);
-    let bytes_per_row_number = as_cf_number(packed_bytes_per_row);
+    let bytes_per_row_number = bytes_per_row.map(as_cf_number);
     let pixel_format_number = (!pixel_format.is_yuv() && pixel_format != PixelFormat::Unknown)
         .then(|| as_cf_number(pixel_format.as_cv_pixel_format_type()));
 
     // SAFETY: the IOSurface property keys are immutable framework statics.
-    let mut keys: Vec<&CFString> = unsafe {
-        vec![
-            kIOSurfaceWidth,
-            kIOSurfaceHeight,
-            kIOSurfaceBytesPerElement,
-            kIOSurfaceBytesPerRow,
-        ]
-    };
-    let mut values: Vec<&CFType> = vec![
-        &width_number,
-        &height_number,
-        &bytes_per_element_number,
-        &bytes_per_row_number,
-    ];
+    let mut keys: Vec<&CFString> =
+        unsafe { vec![kIOSurfaceWidth, kIOSurfaceHeight, kIOSurfaceBytesPerElement] };
+    let mut values: Vec<&CFType> = vec![&width_number, &height_number, &bytes_per_element_number];
+    if let Some(bytes_per_row_number) = bytes_per_row_number.as_deref() {
+        // SAFETY: as above.
+        keys.push(unsafe { kIOSurfaceBytesPerRow });
+        values.push(bytes_per_row_number);
+    }
     if let Some(pixel_format_number) = pixel_format_number.as_deref() {
         // SAFETY: as above.
         keys.push(unsafe { kIOSurfacePixelFormat });
@@ -117,20 +168,12 @@ pub fn create_private_iosurface_with_packed_rows(
 
     // SAFETY: the dictionary holds only the documented property keys, with
     // CFNumber values.
-    let iosurface = unsafe { IOSurfaceRef::new(properties.as_opaque()) }.ok_or_else(|| {
+    unsafe { IOSurfaceRef::new(properties.as_opaque()) }.ok_or_else(|| {
         Error::TextureError(format!(
-            "{OPERATION}: IOSurfaceCreate refused {width}x{height} at {bytes_per_element} \
+            "{operation}: IOSurfaceCreate refused {width}x{height} at {bytes_per_element} \
              byte(s) per element"
         ))
-    })?;
-    if iosurface.bytes_per_row() != packed_bytes_per_row as usize {
-        return Err(Error::TextureError(format!(
-            "{OPERATION}: IOSurface padded {width}x{height}'s rows to {} bytes; the packed \
-             layout needs {packed_bytes_per_row}",
-            iosurface.bytes_per_row()
-        )));
-    }
-    Ok(iosurface)
+    })
 }
 
 #[cfg(test)]
@@ -167,6 +210,16 @@ mod tests {
                 .expect("a private IOSurface");
         assert_eq!(iosurface.pixel_format(), 0);
         assert_eq!(iosurface.bytes_per_row(), 64);
+    }
+
+    #[test]
+    fn a_gpu_image_surface_takes_the_row_pitch_iosurface_aligns() {
+        let iosurface =
+            create_private_iosurface_for_a_gpu_image(641, 3, 4).expect("a private IOSurface");
+        assert_eq!(iosurface.width(), 641);
+        assert_eq!(iosurface.bytes_per_element(), 4);
+        assert!(iosurface.bytes_per_row() >= 641 * 4);
+        assert!(iosurface.alloc_size() >= iosurface.bytes_per_row() * 3);
     }
 
     #[test]

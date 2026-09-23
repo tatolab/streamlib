@@ -2009,6 +2009,21 @@ impl HostVulkanDevice {
     }
 }
 
+/// The first memory type in `memory_type_bits` that is device-local and not
+/// host-visible.
+#[cfg(target_os = "macos")]
+fn device_local_memory_type_that_is_not_host_visible(
+    memory_properties: &vk::PhysicalDeviceMemoryProperties,
+    memory_type_bits: u32,
+) -> Option<u32> {
+    (0..memory_properties.memory_type_count).find(|&index| {
+        let flags = memory_properties.memory_types[index as usize].property_flags;
+        memory_type_bits & (1 << index) != 0
+            && flags.contains(vk::MemoryPropertyFlags::DEVICE_LOCAL)
+            && !flags.contains(vk::MemoryPropertyFlags::HOST_VISIBLE)
+    })
+}
+
 /// Whether the memory type at `memory_type_index` carries HOST_CACHED.
 ///
 /// [`HostVulkanDevice::create_opaque_fd_buffer_pool_host_cached`] turns
@@ -2849,6 +2864,16 @@ impl HostVulkanDevice {
         desc: &TextureDescriptor,
     ) -> Result<HostVulkanTexture> {
         HostVulkanTexture::new_opaque_fd_export(self, desc)
+    }
+
+    /// Create a texture over a fresh private IOSurface — see
+    /// [`HostVulkanTexture::new_iosurface_backed`].
+    #[cfg(target_os = "macos")]
+    pub fn create_texture_iosurface_backed(
+        self: &Arc<Self>,
+        desc: &TextureDescriptor,
+    ) -> Result<HostVulkanTexture> {
+        HostVulkanTexture::new_iosurface_backed(self, desc)
     }
 
     /// Create a DMA-BUF-exportable texture with an explicit DRM format
@@ -3960,6 +3985,57 @@ impl HostVulkanDevice {
             .is_some_and(|fourcc| self.drm_modifier_table.has_rt_modifier(fourcc))
     }
 
+    /// Whether `VK_EXT_metal_objects` was enabled — what an image over an
+    /// IOSurface and a timeline's Metal shared event both need.
+    #[cfg(target_os = "macos")]
+    pub fn supports_metal_objects_interop(&self) -> bool {
+        self.device
+            .extensions()
+            .contains(&vk::EXT_METAL_OBJECTS_EXTENSION.name)
+    }
+
+    /// Memory for an image created over an IOSurface, raw `vkAllocateMemory`
+    /// like the imports above, on a device-local type that is not
+    /// host-visible — never assumed to be type 0, though it resolves there on
+    /// MoltenVK and Apple Silicon. A host-visible binding would have MoltenVK
+    /// back every such image with a private `MTLBuffer` of its own.
+    #[cfg(target_os = "macos")]
+    pub fn allocate_device_local_memory_for_an_iosurface_backed_image(
+        &self,
+        allocation_size: vk::DeviceSize,
+        memory_type_bits: u32,
+    ) -> Result<vk::DeviceMemory> {
+        let memory_type_index = device_local_memory_type_that_is_not_host_visible(
+            &self.memory_properties,
+            memory_type_bits,
+        )
+        .ok_or_else(|| {
+            Error::GpuError(format!(
+                "allocate_device_local_memory_for_an_iosurface_backed_image: no device-local \
+                 memory type without host visibility is in the image's memory_type_bits \
+                 ({memory_type_bits:#x})"
+            ))
+        })?;
+        let alloc_info = vk::MemoryAllocateInfo::builder()
+            .allocation_size(allocation_size)
+            .memory_type_index(memory_type_index)
+            .build();
+        let memory = unsafe { self.device.allocate_memory(&alloc_info, None) }.map_err(|e| {
+            Error::GpuError(format!(
+                "allocate_device_local_memory_for_an_iosurface_backed_image: the driver refused \
+                 {allocation_size} bytes on memory type {memory_type_index}: {e}"
+            ))
+        })?;
+        let count = self.live_allocation_count.fetch_add(1, Ordering::Relaxed) + 1;
+        tracing::debug!(
+            allocation_size,
+            memory_type_index,
+            live = count,
+            "HostVulkanDevice: memory bound for an IOSurface-backed image"
+        );
+        Ok(memory)
+    }
+
     /// Free device memory allocated via raw vkAllocateMemory (import path only).
     ///
     /// VMA-managed allocations are freed via [`vma::Allocator::destroy_image`] or
@@ -4188,7 +4264,7 @@ mod tests {
 
     /// Build a `VkPhysicalDeviceMemoryProperties` whose first
     /// `property_flags.len()` types carry the given flags.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn memory_properties_with_types(
         property_flags: &[vk::MemoryPropertyFlags],
     ) -> vk::PhysicalDeviceMemoryProperties {
@@ -4260,6 +4336,28 @@ mod tests {
             &memory_properties,
             u32::MAX
         ));
+    }
+
+    /// MoltenVK on Apple Silicon lists its private type first and its
+    /// shared, host-visible one after; the image binding must take the
+    /// private type even when the shared one is also admitted, and refuse
+    /// rather than fall back when only a host-visible type is.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn an_iosurface_backed_image_binds_device_local_memory_that_is_not_host_visible() {
+        let shared = vk::MemoryPropertyFlags::DEVICE_LOCAL
+            | vk::MemoryPropertyFlags::HOST_VISIBLE
+            | vk::MemoryPropertyFlags::HOST_COHERENT;
+        let memory_properties =
+            memory_properties_with_types(&[shared, vk::MemoryPropertyFlags::DEVICE_LOCAL]);
+        assert_eq!(
+            device_local_memory_type_that_is_not_host_visible(&memory_properties, 0b11),
+            Some(1)
+        );
+        assert_eq!(
+            device_local_memory_type_that_is_not_host_visible(&memory_properties, 0b01),
+            None
+        );
     }
 
     /// Try to create a HostVulkanDevice; return None if GPU/Vulkan is unavailable (CI).
