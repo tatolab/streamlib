@@ -11,8 +11,14 @@ every lifecycle hook.
 """
 
 import atexit
+import os
 import weakref
 from typing import Optional
+
+from ._bundled_vulkan_driver import point_the_vulkan_loader_at_the_bundled_driver
+
+# Before `_engine` loads, so no Vulkan instance can predate the driver search.
+point_the_vulkan_loader_at_the_bundled_driver(os.environ)
 
 from . import clock as clock
 from . import log as log
