@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.13](https://github.com/tatolab/streamlib/compare/v0.26.12...v0.26.13) (2026-09-23)
+
+
+### Features
+
+* **python:** a Python processor edits a pooled frame on macOS through the helper's IOSurface arm ([#2436](https://github.com/tatolab/streamlib/issues/2436)) ([47ac9c7](https://github.com/tatolab/streamlib/commit/47ac9c767ab7fcba979106f38410dee13864ca68))
+
 ## [0.26.12](https://github.com/tatolab/streamlib/compare/v0.26.11...v0.26.12) (2026-09-22)
 
 
