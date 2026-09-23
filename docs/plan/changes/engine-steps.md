@@ -176,6 +176,16 @@ dispatch.
     `(tensor_surface, geometry)`, where `geometry.boxes_to_source(...)` maps detections back to
     source coordinates.
   - No colour conversion.
+- ADDED: the engine's lease-aware pool serves tensor surfaces and textures as well as pixel
+  buffers (decision 1). A pool key on the acquire picks the pool:
+  - each publication mints `<slot>#<gen>` through `publish_frame_generation`;
+  - a leased slot is skipped;
+  - the pool grows to its cap and, at the cap, refuses by name so the producer drops its own
+    frame.
+- MODIFIED: `ProcessorOutputTextureRing` and the tensor ring ask the engine pool for the next
+  slot instead of rotating blindly (`processor_output_texture_ring.py:93-108`), so a downstream
+  holder of an earlier kernel output never sees it rewritten. This closes a gap the shipped
+  texture ring has against the surface-id lifetime contract today.
 
 ## §Product — the MVP sentence
 
@@ -206,7 +216,7 @@ dispatch.
 
 ---
 
-## [NEEDS DECISION] 1 — Where a tensor ring lives
+## Decision 1 — Where a tensor ring lives (resolved by the owner, 2026-09-22)
 
 The surface-id lifetime contract (DECIDED, `:251-283`) says a published surface is immutable
 while held: "the pool skips leased slots and grows to its cap; at cap the producer drops its own
@@ -216,7 +226,7 @@ and neither does it for anything but pixel buffers: the pixel-buffer pool's leas
 and a wheel ring that rotates blindly. (`ProcessorOutputTextureRing` has the same gap for
 textures today — see Notes.)
 
-**A — An engine-owned pool for tensor surfaces (recommended).** `acquire_storage_buffer` takes an
+**A — An engine-owned pool for tensor surfaces.** `acquire_storage_buffer` takes an
 optional pool key, and the engine's lease-aware acquire hands back a free slot:
 - it mints `<slot>#<gen>` per publication with `publish_frame_generation`;
 - it skips leased slots and grows to a cap;
@@ -233,7 +243,8 @@ ids minted outside the pool — two lifetime systems.
 consumer releases it, which is safe only when the consumer is the producing processor itself.
 Cost: it cannot publish downstream, which the DECIDED entry allows.
 
-Recommendation: **A.** It is the existing system extended rather than a parallel one.
+**RESOLVED — A.** It is the existing system extended rather than a parallel one. The owner also
+put `ProcessorOutputTextureRing` onto the same engine pool in this change (see §Graphics).
 
 ## Not in scope
 
@@ -244,10 +255,3 @@ Recommendation: **A.** It is the existing system extended rather than a parallel
 - a Rust `GlslPixelEffect`;
 - folding the copy into the dispatch;
 - #516's forward-forward layer itself, which consumes this capability later.
-
-## Notes
-
-- `ProcessorOutputTextureRing` rotates without checking leases, so a downstream holder of an
-  earlier output can see it rewritten. That contradicts the surface-id lifetime contract for
-  kernel outputs today. It is outside this delta's scope unless decision 1 is A and the owner
-  wants the texture ring moved onto the same engine pool in the same change.
