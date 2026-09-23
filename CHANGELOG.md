@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.17](https://github.com/tatolab/streamlib/compare/v0.26.16...v0.26.17) (2026-09-23)
+
+
+### Features
+
+* **engine:** the runtime mesh works on macOS — a real host identity, and name reclaim on restart ([#2449](https://github.com/tatolab/streamlib/issues/2449)) ([d246b8c](https://github.com/tatolab/streamlib/commit/d246b8c3def5799a47d0eee1a034c5f9b5994e00))
+
 ## [0.26.16](https://github.com/tatolab/streamlib/compare/v0.26.15...v0.26.16) (2026-09-23)
 
 
