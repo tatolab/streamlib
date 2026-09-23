@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Consumer-side generic Vulkan `VkBuffer` — imports a host-allocated
-//! DMA-BUF or OPAQUE_FD and exposes a CPU-mapped pointer for staging
-//! upload / readback. Role-specific shape (pixel `width`/`height`,
-//! vertex stride, etc.) lives on the wrapping struct in the calling
-//! adapter, not on this primitive.
+//! DMA-BUF or OPAQUE_FD on Linux, or an IOSurface's pages on macOS, and
+//! exposes a CPU-mapped pointer for staging upload / readback.
+//! Role-specific shape (pixel `width`/`height`, vertex stride, etc.) lives
+//! on the wrapping struct in the calling adapter, not on this primitive.
 //!
 //! Mirrors [`crate::ConsumerVulkanTexture`] for buffer handles.
 //! Single-plane and multi-plane import constructors only — no
@@ -16,9 +16,7 @@ use std::sync::Arc;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
-#[cfg(target_os = "linux")]
-use crate::{ConsumerRhiError, Result};
-use crate::{ConsumerVulkanDevice, VulkanRhiBuffer};
+use crate::{ConsumerRhiError, ConsumerVulkanDevice, Result, VulkanRhiBuffer};
 
 /// One imported plane: buffer + memory + mapped pointer + size.
 struct ConsumerImportedPlane {
@@ -40,14 +38,17 @@ pub struct ConsumerVulkanBuffer {
     extra_imported_planes: Vec<ConsumerImportedPlane>,
     /// Size of plane 0 in bytes.
     size: vk::DeviceSize,
+    /// The IOSurface whose pages plane 0's memory is, kept alive past the
+    /// memory importing it.
+    #[cfg(target_os = "macos")]
+    #[expect(dead_code, reason = "held for its retain; nothing reads it")]
+    backing_iosurface: Option<objc2_core_foundation::CFRetained<objc2_io_surface::IOSurfaceRef>>,
 }
 
 /// Every import below takes a file descriptor, so the whole block is
 /// Linux-only: MoltenVK advertises neither `VK_KHR_external_memory_fd` nor
 /// `VK_EXT_external_memory_dma_buf`, and the Apple arm imports an IOSurface
-/// rather than a descriptor. The type itself still compiles there — it is
-/// `ConsumerMarker::Buffer`, so the privilege ladder needs it — and simply has
-/// nothing that mints one until that arm exists.
+/// rather than a descriptor.
 #[cfg(target_os = "linux")]
 impl ConsumerVulkanBuffer {
     /// Import a single-plane DMA-BUF as a HOST_VISIBLE `VkBuffer`.
@@ -144,6 +145,8 @@ impl ConsumerVulkanBuffer {
             mapped_ptr: plane.mapped_ptr,
             extra_imported_planes: Vec::new(),
             size: plane.size,
+            #[cfg(target_os = "macos")]
+            backing_iosurface: None,
         })
     }
 
@@ -211,6 +214,124 @@ impl ConsumerVulkanBuffer {
             mapped_ptr: plane0.mapped_ptr,
             extra_imported_planes: imported,
             size: plane0.size,
+            #[cfg(target_os = "macos")]
+            backing_iosurface: None,
+        })
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl ConsumerVulkanBuffer {
+    /// Import `iosurface`'s pages as a single-plane HOST_VISIBLE `VkBuffer`
+    /// through `VK_EXT_external_memory_host`, zero-copy: its base address
+    /// for its allocation size rounded up to the device's import alignment.
+    /// The mapping is the IOSurface's own base address, and the buffer
+    /// retains the surface until its memory is freed.
+    ///
+    /// Never import the surface through a `VkImage`'s memory to map it:
+    /// MoltenVK maps a private copy there. No cache mode is set on the
+    /// surface — the default mapping is cached; write-combined reads run
+    /// ~200x slower and inhibit-cache faults.
+    ///
+    /// Refused, naming the reason, when the device cannot import host
+    /// memory, the base address is off the import alignment, the rounding
+    /// would reach past the pages the surface is mapped on, or the driver
+    /// declines.
+    pub fn from_iosurface_pages(
+        vulkan_device: &Arc<ConsumerVulkanDevice>,
+        iosurface: &objc2_io_surface::IOSurfaceRef,
+    ) -> Result<Self> {
+        let surface_description = format!("{}x{} IOSurface", iosurface.width(), iosurface.height());
+        let refusal = |reason: String| {
+            ConsumerRhiError::Gpu(format!(
+                "ConsumerVulkanBuffer::from_iosurface_pages: the {surface_description} {reason}"
+            ))
+        };
+        let import_alignment = vulkan_device
+            .imported_host_pointer_alignment()
+            .filter(|alignment| *alignment > 0)
+            .ok_or_else(|| {
+                refusal("cannot be imported: VK_EXT_external_memory_host is not enabled".into())
+            })?;
+        let base_address = iosurface.base_address().as_ptr().cast::<u8>();
+        let allocation_byte_size = iosurface.alloc_size() as u64;
+        if allocation_byte_size == 0 {
+            return Err(refusal("has no allocation to import".into()));
+        }
+        if !(base_address as u64).is_multiple_of(import_alignment) {
+            return Err(refusal(format!(
+                "has base address {base_address:p}, off the driver's {import_alignment}-byte \
+                 host-pointer import alignment"
+            )));
+        }
+        // A surface is mapped a whole page at a time and reports an
+        // allocation that can end mid-page, so rounding up stays inside the
+        // surface for any alignment up to the page size.
+        // SAFETY: `sysconf` reads a system constant and touches no memory.
+        let page_byte_size = u64::try_from(unsafe { libc::sysconf(libc::_SC_PAGESIZE) })
+            .ok()
+            .filter(|page_byte_size| *page_byte_size > 0)
+            .ok_or_else(|| refusal("cannot be sized: the system page size is unreadable".into()))?;
+        let mapped_byte_size = allocation_byte_size.next_multiple_of(page_byte_size);
+        let imported_byte_size = allocation_byte_size.next_multiple_of(import_alignment);
+        if imported_byte_size > mapped_byte_size {
+            return Err(refusal(format!(
+                "has a {allocation_byte_size}-byte allocation that rounds up to \
+                 {imported_byte_size} bytes on the import alignment, past the \
+                 {mapped_byte_size} bytes of pages it is mapped on"
+            )));
+        }
+
+        let device = vulkan_device.device();
+        let handle_type = vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT;
+        let mut external_buffer_info = vk::ExternalMemoryBufferCreateInfo::builder()
+            .handle_types(handle_type)
+            .build();
+        let buffer_info = vk::BufferCreateInfo::builder()
+            .size(imported_byte_size)
+            .usage(
+                vk::BufferUsageFlags::TRANSFER_SRC
+                    | vk::BufferUsageFlags::TRANSFER_DST
+                    | vk::BufferUsageFlags::STORAGE_BUFFER,
+            )
+            .sharing_mode(vk::SharingMode::EXCLUSIVE)
+            .push_next(&mut external_buffer_info)
+            .build();
+        let buffer = unsafe { device.create_buffer(&buffer_info, None) }.map_err(|e| {
+            refusal(format!(
+                "could not get a buffer: vkCreateBuffer failed: {e}"
+            ))
+        })?;
+        let requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
+        let memory = vulkan_device
+            .import_host_pointer_memory(
+                base_address,
+                imported_byte_size,
+                requirements.memory_type_bits,
+            )
+            .inspect_err(|_| unsafe { device.destroy_buffer(buffer, None) })?;
+        if let Err(e) = unsafe { device.bind_buffer_memory(buffer, memory, 0) } {
+            vulkan_device.free_imported_memory(memory);
+            unsafe { device.destroy_buffer(buffer, None) };
+            return Err(refusal(format!(
+                "could not bind: vkBindBufferMemory failed: {e}"
+            )));
+        }
+        let mapped_ptr = vulkan_device
+            .map_imported_memory(memory, imported_byte_size)
+            .inspect_err(|_| {
+                vulkan_device.free_imported_memory(memory);
+                unsafe { device.destroy_buffer(buffer, None) };
+            })?;
+
+        Ok(Self {
+            vulkan_device: Arc::clone(vulkan_device),
+            buffer,
+            imported_memory: memory,
+            mapped_ptr,
+            extra_imported_planes: Vec::new(),
+            size: imported_byte_size,
+            backing_iosurface: Some(objc2_core_foundation::CFRetained::from(iosurface)),
         })
     }
 }
@@ -529,5 +650,86 @@ mod stated_memory_type_index_tests {
             refusal.contains("memoryTypeBits=0xa"),
             "must name what the buffer can bind: {refusal}"
         );
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod iosurface_import_tests {
+    use super::*;
+    use objc2_core_foundation::{CFDictionary, CFNumber, CFRetained, CFString, CFType};
+    use objc2_io_surface::{
+        IOSurfaceLockOptions, IOSurfaceRef, kIOSurfaceBytesPerElement, kIOSurfaceHeight,
+        kIOSurfaceWidth,
+    };
+
+    fn a_private_bgra_iosurface(width: u32, height: u32) -> CFRetained<IOSurfaceRef> {
+        let width_number = CFNumber::new_i64(i64::from(width));
+        let height_number = CFNumber::new_i64(i64::from(height));
+        let bytes_per_element_number = CFNumber::new_i64(4);
+        // SAFETY: the IOSurface property keys are immutable framework statics.
+        let keys: [&CFString; 3] =
+            unsafe { [kIOSurfaceWidth, kIOSurfaceHeight, kIOSurfaceBytesPerElement] };
+        let values: [&CFType; 3] = [&width_number, &height_number, &bytes_per_element_number];
+        let properties = CFDictionary::<CFString, CFType>::from_slices(&keys, &values);
+        // SAFETY: the dictionary holds only documented keys with CFNumber values.
+        unsafe { IOSurfaceRef::new(properties.as_opaque()) }.expect("IOSurfaceCreate")
+    }
+
+    fn try_create_device() -> Option<Arc<ConsumerVulkanDevice>> {
+        match ConsumerVulkanDevice::new() {
+            Ok(device) => Some(Arc::new(device)),
+            Err(unavailable) => {
+                println!("Skipping test — ConsumerVulkanDevice unavailable: {unavailable}");
+                None
+            }
+        }
+    }
+
+    /// The mapping is the surface's own memory, not a driver copy: a write
+    /// through it reads back through the surface's own base address.
+    #[test]
+    fn an_iosurface_import_maps_the_surfaces_own_pages() {
+        let Some(device) = try_create_device() else {
+            return;
+        };
+        let iosurface = a_private_bgra_iosurface(64, 32);
+        let buffer = ConsumerVulkanBuffer::from_iosurface_pages(&device, &iosurface)
+            .expect("an IOSurface imports as host memory");
+
+        assert_eq!(
+            buffer.mapped_ptr(),
+            iosurface.base_address().as_ptr().cast::<u8>(),
+            "the mapping must be the IOSurface's base address, never a private copy"
+        );
+        assert!(buffer.size() >= iosurface.alloc_size() as u64);
+
+        unsafe { iosurface.lock(IOSurfaceLockOptions::empty(), std::ptr::null_mut()) };
+        // SAFETY: the mapping spans the surface's allocation.
+        unsafe { buffer.mapped_ptr().add(17).write(0xA5) };
+        let read_through_the_surface = unsafe {
+            iosurface
+                .base_address()
+                .as_ptr()
+                .cast::<u8>()
+                .add(17)
+                .read()
+        };
+        unsafe { iosurface.unlock(IOSurfaceLockOptions::empty(), std::ptr::null_mut()) };
+        assert_eq!(read_through_the_surface, 0xA5);
+    }
+
+    /// Importing takes a retain on the surface, never a use count, so a
+    /// cached import does not report the surface in use.
+    #[test]
+    fn an_iosurface_import_does_not_mark_the_surface_in_use() {
+        let Some(device) = try_create_device() else {
+            return;
+        };
+        let iosurface = a_private_bgra_iosurface(16, 16);
+        let buffer = ConsumerVulkanBuffer::from_iosurface_pages(&device, &iosurface)
+            .expect("an IOSurface imports as host memory");
+        assert!(!iosurface.is_in_use());
+        drop(buffer);
+        assert_eq!(device.live_import_allocation_count(), 0);
     }
 }

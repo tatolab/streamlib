@@ -37,7 +37,6 @@ use std::ffi::{CStr, c_char};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use vulkanalia::loader::{LIBRARY, LibloadingLoader};
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
@@ -55,6 +54,22 @@ fn default_color_subresource_range() -> vk::ImageSubresourceRange {
         layer_count: 1,
     }
 }
+
+/// Device extensions the platform's imports need; the device refuses to
+/// construct without any of them.
+#[cfg(target_os = "linux")]
+const REQUIRED_DEVICE_EXTENSIONS: &[&CStr] = &[
+    c"VK_KHR_external_memory",
+    c"VK_KHR_external_memory_fd",
+    c"VK_EXT_external_memory_dma_buf",
+    c"VK_EXT_image_drm_format_modifier",
+    c"VK_KHR_external_semaphore_fd",
+];
+
+/// Device extensions the platform's imports need. MoltenVK has no fd
+/// handles; an IOSurface's pages import as host memory.
+#[cfg(target_os = "macos")]
+const REQUIRED_DEVICE_EXTENSIONS: &[&CStr] = &[c"VK_EXT_external_memory_host"];
 
 /// Consumer-only Vulkan device — see module docs.
 pub struct ConsumerVulkanDevice {
@@ -87,6 +102,9 @@ pub struct ConsumerVulkanDevice {
     /// CUDA's default device may differ from the Vulkan-selected
     /// physical device and OPAQUE_FD imports land on the wrong GPU.
     physical_device_uuid: [u8; 16],
+    /// `minImportedHostPointerAlignment` when `VK_EXT_external_memory_host`
+    /// is enabled — the Apple arm's IOSurface import — and `None` otherwise.
+    imported_host_pointer_alignment: Option<vk::DeviceSize>,
     /// Live count of memory allocations made via [`Self::import_dma_buf_memory`]
     /// (raw `vkAllocateMemory`). Mirrors the host counterpart; surfaces leaks
     /// on drop via the warning emitted in [`Drop`].
@@ -102,18 +120,21 @@ impl ConsumerVulkanDevice {
     /// Construct a fresh consumer-only Vulkan device targeting the
     /// system's preferred discrete GPU.
     ///
-    /// Enables only the extensions / features the carve-out needs:
-    /// `VK_KHR_external_memory{,_fd}`, `VK_EXT_external_memory_dma_buf`,
-    /// `VK_EXT_image_drm_format_modifier`,
-    /// `VK_KHR_external_semaphore_fd`, plus the Vulkan 1.3 sync-2 and
-    /// timeline-semaphore features. Every requested device extension
-    /// is *required* — failure surfaces as
+    /// Enables only the extensions / features the carve-out needs — the
+    /// platform's import extensions ([`REQUIRED_DEVICE_EXTENSIONS`]) plus
+    /// the Vulkan 1.3 sync-2 and timeline-semaphore features. Every
+    /// required device extension is *required* — failure surfaces as
     /// [`ConsumerRhiError::Gpu`] rather than a silent capability
-    /// downgrade, so cdylib code never tries to import a render-target
-    /// modifier on a driver that doesn't expose the extension.
+    /// downgrade, so cdylib code never tries an import the driver cannot
+    /// serve.
     pub fn new() -> Result<Self> {
-        let loader = unsafe { LibloadingLoader::new(LIBRARY) }
-            .map_err(|e| ConsumerRhiError::Gpu(format!("Failed to load Vulkan library: {e}")))?;
+        let loader =
+            crate::open_the_first_vulkan_loader_library_that_opens().map_err(|refusals| {
+                ConsumerRhiError::Gpu(format!(
+                    "Failed to load the Vulkan loader library; tried:\n  {}",
+                    refusals.join("\n  ")
+                ))
+            })?;
         let entry = unsafe { vulkanalia::Entry::new(loader) }
             .map_err(|e| ConsumerRhiError::Gpu(format!("Failed to load Vulkan entry: {e}")))?;
 
@@ -127,8 +148,20 @@ impl ConsumerVulkanDevice {
             .api_version(crate::REQUESTED_VULKAN_INSTANCE_API_VERSION)
             .build();
 
+        // MoltenVK is a non-conformant portability implementation: the loader
+        // enumerates it only for an instance that opts in.
+        #[cfg(target_os = "macos")]
+        let (instance_extensions, instance_create_flags) = (
+            [c"VK_KHR_portability_enumeration".as_ptr()],
+            vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR,
+        );
+        #[cfg(not(target_os = "macos"))]
+        let (instance_extensions, instance_create_flags): ([*const c_char; 0], _) =
+            ([], vk::InstanceCreateFlags::empty());
         let instance_info = vk::InstanceCreateInfo::builder()
             .application_info(&app_info)
+            .enabled_extension_names(&instance_extensions)
+            .flags(instance_create_flags)
             .build();
 
         let instance = unsafe { entry.create_instance(&instance_info, None) }
@@ -183,9 +216,9 @@ impl ConsumerVulkanDevice {
                 ConsumerRhiError::Gpu("No graphics queue family on consumer device".into())
             })?;
 
-        // Required device extensions. All four are mandatory on the
-        // carve-out path — refusing to construct the device on a driver
-        // that doesn't expose them is the right shape (see module docs).
+        // Required device extensions — refusing to construct the device on
+        // a driver that doesn't expose them is the right shape (see module
+        // docs).
         let available_device_extension_properties = unsafe {
             instance
                 .enumerate_device_extension_properties(physical_device, None)
@@ -196,15 +229,9 @@ impl ConsumerVulkanDevice {
         let available_device_ext_names =
             vulkan_extension_names_borrowed_from_properties(&available_device_extension_properties);
 
-        const REQUIRED: &[&CStr] = &[
-            c"VK_KHR_external_memory",
-            c"VK_KHR_external_memory_fd",
-            c"VK_EXT_external_memory_dma_buf",
-            c"VK_EXT_image_drm_format_modifier",
-            c"VK_KHR_external_semaphore_fd",
-        ];
-        let mut device_extensions: Vec<*const c_char> = Vec::with_capacity(REQUIRED.len() + 2);
-        for ext in REQUIRED {
+        let mut device_extensions: Vec<*const c_char> =
+            Vec::with_capacity(REQUIRED_DEVICE_EXTENSIONS.len() + 2);
+        for ext in REQUIRED_DEVICE_EXTENSIONS {
             if !available_device_ext_names.contains(ext) {
                 return Err(ConsumerRhiError::Gpu(format!(
                     "ConsumerVulkanDevice: required extension {} not available on this driver",
@@ -230,6 +257,27 @@ impl ConsumerVulkanDevice {
         if has_acquire_unmodified {
             device_extensions.push(acquire_unmodified_ext.as_ptr());
         }
+
+        // A portability implementation that advertises the subset extension
+        // requires it enabled (VUID-VkDeviceCreateInfo-pProperties-04451).
+        let portability_subset_ext = c"VK_KHR_portability_subset";
+        if available_device_ext_names.contains(&portability_subset_ext) {
+            device_extensions.push(portability_subset_ext.as_ptr());
+        }
+
+        let imported_host_pointer_alignment = REQUIRED_DEVICE_EXTENSIONS
+            .contains(&c"VK_EXT_external_memory_host")
+            .then(|| {
+                let mut external_memory_host_properties =
+                    vk::PhysicalDeviceExternalMemoryHostPropertiesEXT::default();
+                let mut properties2 = vk::PhysicalDeviceProperties2::builder()
+                    .push_next(&mut external_memory_host_properties)
+                    .build();
+                unsafe {
+                    instance.get_physical_device_properties2(physical_device, &mut properties2)
+                };
+                external_memory_host_properties.min_imported_host_pointer_alignment
+            });
 
         // Logical device. Sync2 + timeline semaphore are core in 1.3 but
         // still need their feature flags enabled.
@@ -293,6 +341,7 @@ impl ConsumerVulkanDevice {
             device_name,
             has_acquire_unmodified,
             physical_device_uuid,
+            imported_host_pointer_alignment,
             live_allocation_count: AtomicUsize::new(0),
             queue_mutex: Mutex::new(()),
         })
@@ -304,6 +353,12 @@ impl ConsumerVulkanDevice {
     /// shares this Vulkan device's PCI identity.
     pub fn physical_device_uuid(&self) -> [u8; 16] {
         self.physical_device_uuid
+    }
+
+    /// The driver's `minImportedHostPointerAlignment`, or `None` when this
+    /// device cannot import host memory.
+    pub fn imported_host_pointer_alignment(&self) -> Option<vk::DeviceSize> {
+        self.imported_host_pointer_alignment
     }
 
     /// Device label from `VkPhysicalDeviceProperties::deviceName`.
@@ -509,8 +564,48 @@ impl ConsumerVulkanDevice {
         Ok(memory)
     }
 
-    /// Free imported memory. Pair with [`Self::import_dma_buf_memory`] or
-    /// [`Self::import_opaque_fd_memory`]. Calling on memory not allocated
+    /// Import a caller-owned host range as `VkDeviceMemory` through
+    /// `VK_EXT_external_memory_host`, on a HOST_CACHED type where one takes
+    /// it. The driver pins the range, never copies it, so it must outlive
+    /// the memory. Pairs with [`Self::free_imported_memory`].
+    pub fn import_host_pointer_memory(
+        &self,
+        host_ptr: *mut u8,
+        byte_len: vk::DeviceSize,
+        memory_type_bits: u32,
+    ) -> Result<vk::DeviceMemory> {
+        let host_visible =
+            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
+        let memory_type_index = self
+            .find_memory_type(
+                memory_type_bits,
+                host_visible | vk::MemoryPropertyFlags::HOST_CACHED,
+            )
+            .or_else(|_| self.find_memory_type(memory_type_bits, host_visible))?;
+
+        let mut import_info = vk::ImportMemoryHostPointerInfoEXT::builder()
+            .handle_type(vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT)
+            .build();
+        import_info.host_pointer = host_ptr.cast();
+        let alloc_info = vk::MemoryAllocateInfo::builder()
+            .allocation_size(byte_len)
+            .memory_type_index(memory_type_index)
+            .push_next(&mut import_info)
+            .build();
+
+        let memory = unsafe { self.device.allocate_memory(&alloc_info, None) }.map_err(|e| {
+            ConsumerRhiError::Gpu(format!(
+                "ConsumerVulkanDevice: the driver refused to import the host range \
+                 {host_ptr:p}+{byte_len}: {e}"
+            ))
+        })?;
+        self.live_allocation_count.fetch_add(1, Ordering::Relaxed);
+        Ok(memory)
+    }
+
+    /// Free imported memory. Pair with [`Self::import_dma_buf_memory`],
+    /// [`Self::import_opaque_fd_memory`] or
+    /// [`Self::import_host_pointer_memory`]. Calling on memory not allocated
     /// through one of those methods is undefined behavior at the Vulkan
     /// level.
     pub fn free_imported_memory(&self, memory: vk::DeviceMemory) {

@@ -27,5 +27,10 @@ libc.workspace = true
 [target.'cfg(target_os = "linux")'.dependencies]
 streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.26.12" }
 
+# The IOSurface a macOS helper imports; its pages map as host memory.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-io-surface.workspace = true
+objc2-core-foundation.workspace = true
+
 [lints]
 workspace = true

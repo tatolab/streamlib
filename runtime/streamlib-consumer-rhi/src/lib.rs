@@ -67,6 +67,8 @@ mod vulkan_extension_names;
 mod vulkan_instance_api_version;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod vulkan_layout;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod vulkan_loader_library;
 
 pub use error::{ConsumerRhiError, Result};
 pub use formats::{TextureFormat, TextureUsages};
@@ -98,6 +100,10 @@ pub use vulkan_extension_names::vulkan_extension_names_borrowed_from_properties;
 pub use vulkan_instance_api_version::REQUESTED_VULKAN_INSTANCE_API_VERSION;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use vulkan_layout::VulkanLayout;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub use vulkan_loader_library::{
+    open_the_first_vulkan_loader_library_that_opens, vulkan_loader_library_candidate_paths,
+};
 
 /// Sealing supertrait module for [`DevicePrivilege`]. Re-exported so
 /// `streamlib::vulkan::rhi::HostMarker` can `impl Sealed for HostMarker`

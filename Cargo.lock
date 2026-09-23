@@ -5499,6 +5499,8 @@ name = "streamlib-consumer-rhi"
 version = "0.26.12"
 dependencies = [
  "libc",
+ "objc2-core-foundation",
+ "objc2-io-surface",
  "streamlib-surface-client",
  "tatolab-vulkanalia",
  "thiserror 2.0.18",
