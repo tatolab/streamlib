@@ -342,6 +342,19 @@ path = "tests/bin/metal_shared_event_timeline_helper.rs"
 name = "timeline_crosses_to_a_helper_as_a_metal_shared_event"
 path = "tests/timeline_crosses_to_a_helper_as_a_metal_shared_event.rs"
 
+# The helper process the IOSurface texture test spawns: checks a texture out
+# and reads its pixels back through its own import. Empty off macOS.
+[[bin]]
+name = "iosurface_texture_helper"
+path = "tests/bin/iosurface_texture_helper.rs"
+
+# A texture crossing to a helper process on an IOSurface: the registration
+# whole over the Mach channel, the helper's own import, and the engine's GPU
+# write read back pixel-exact. Needs MoltenVK on a GPU.
+[[test]]
+name = "texture_crosses_to_a_helper_on_an_iosurface"
+path = "tests/texture_crosses_to_a_helper_on_an_iosurface.rs"
+
 [build-dependencies]
 serde_json = { workspace = true }
 # Reads the manifests of the crates the engine links through path dependencies,

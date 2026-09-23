@@ -241,6 +241,59 @@ pub trait HostSurfaceStoreExt {
     ) -> crate::core::error::Result<()>;
 }
 
+/// The macOS arm of the engine-only registration surface: a registration
+/// carries its [`CrossProcessTimelinePair`], whose shared events cross beside
+/// the IOSurface and which the engine orders on.
+///
+/// [`CrossProcessTimelinePair`]: crate::apple::surface_share::CrossProcessTimelinePair
+#[cfg(target_os = "macos")]
+pub trait HostSurfaceStoreExt {
+    /// Register an IOSurface-backed texture whole — its surface, image
+    /// recipe and layout — with its timeline pair.
+    fn register_texture_with_timeline_pair(
+        &self,
+        surface_id: &str,
+        texture: &Texture,
+        timeline_pair: &std::sync::Arc<crate::apple::surface_share::CrossProcessTimelinePair>,
+        current_image_layout: streamlib_consumer_rhi::VulkanLayout,
+    ) -> crate::core::error::Result<()>;
+
+    /// Register a pool slot's IOSurface with its timeline pair.
+    fn register_pixel_buffer_with_timeline_pair(
+        &self,
+        surface_id: &str,
+        pixel_buffer: &crate::core::rhi::PixelBuffer,
+        timeline_pair: &std::sync::Arc<crate::apple::surface_share::CrossProcessTimelinePair>,
+    ) -> crate::core::error::Result<()>;
+}
+
+#[cfg(target_os = "macos")]
+impl HostSurfaceStoreExt for crate::core::context::SurfaceStore {
+    fn register_texture_with_timeline_pair(
+        &self,
+        surface_id: &str,
+        texture: &Texture,
+        timeline_pair: &std::sync::Arc<crate::apple::surface_share::CrossProcessTimelinePair>,
+        current_image_layout: streamlib_consumer_rhi::VulkanLayout,
+    ) -> crate::core::error::Result<()> {
+        self.host_register_texture_with_timeline_pair(
+            surface_id,
+            texture,
+            timeline_pair,
+            current_image_layout,
+        )
+    }
+
+    fn register_pixel_buffer_with_timeline_pair(
+        &self,
+        surface_id: &str,
+        pixel_buffer: &crate::core::rhi::PixelBuffer,
+        timeline_pair: &std::sync::Arc<crate::apple::surface_share::CrossProcessTimelinePair>,
+    ) -> crate::core::error::Result<()> {
+        self.host_register_pixel_buffer_with_timeline_pair(surface_id, pixel_buffer, timeline_pair)
+    }
+}
+
 #[cfg(target_os = "linux")]
 impl HostSurfaceStoreExt for crate::core::context::SurfaceStore {
     fn register_texture(

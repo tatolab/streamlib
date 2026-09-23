@@ -2139,13 +2139,6 @@ impl SurfaceStore {
     /// pair (macOS). See
     /// [`SurfaceStoreInner::register_pixel_buffer_with_timeline_pair`].
     #[cfg(target_os = "macos")]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "no pool slot registers with its timeline pair outside tests yet"
-        )
-    )]
     pub(crate) fn host_register_pixel_buffer_with_timeline_pair(
         &self,
         surface_id: &str,

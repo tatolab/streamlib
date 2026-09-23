@@ -459,7 +459,8 @@ impl ConsumerVulkanTexture {
     /// MoltenVK binds the surface when the image is created and checks only
     /// its extent and element size against `format`, so both are checked
     /// here first and refused by name. The image is `OPTIMAL` over the
-    /// surface's own rows, with `usage` as the registration stated it, bound
+    /// surface's own rows, with the `VkImageUsageFlags` bits the registration
+    /// stated, bound
     /// to device-local memory that is not host-visible. Reach the pixels on
     /// the CPU through the surface, never by mapping the image's memory:
     /// MoltenVK maps a private copy there.
@@ -470,9 +471,10 @@ impl ConsumerVulkanTexture {
         width: u32,
         height: u32,
         format: TextureFormat,
-        usage_flags: vk::ImageUsageFlags,
+        vk_image_usage_bits: u32,
     ) -> Result<Self> {
         const OPERATION: &str = "ConsumerVulkanTexture::from_iosurface";
+        let usage_flags = vk::ImageUsageFlags::from_bits_truncate(vk_image_usage_bits);
         if !vulkan_device.supports_metal_objects_interop() {
             return Err(ConsumerRhiError::Gpu(format!(
                 "{OPERATION}: VK_EXT_metal_objects is not enabled on this device, so an \
@@ -732,12 +734,10 @@ mod iosurface_import_tests {
         }
     }
 
-    const STORAGE_AND_TRANSFER: vk::ImageUsageFlags = vk::ImageUsageFlags::from_bits_truncate(
-        vk::ImageUsageFlags::TRANSFER_SRC.bits()
-            | vk::ImageUsageFlags::TRANSFER_DST.bits()
-            | vk::ImageUsageFlags::SAMPLED.bits()
-            | vk::ImageUsageFlags::STORAGE.bits(),
-    );
+    const STORAGE_AND_TRANSFER: u32 = vk::ImageUsageFlags::TRANSFER_SRC.bits()
+        | vk::ImageUsageFlags::TRANSFER_DST.bits()
+        | vk::ImageUsageFlags::SAMPLED.bits()
+        | vk::ImageUsageFlags::STORAGE.bits();
 
     #[test]
     fn an_iosurface_imports_as_an_image_that_holds_its_surface() {

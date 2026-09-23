@@ -159,7 +159,8 @@ pub mod linux_surface_share {
 #[cfg(target_os = "macos")]
 pub mod apple_surface_share {
     pub use crate::apple::iosurface::{
-        create_iosurface_mach_send_right, create_private_iosurface_with_packed_rows,
+        create_iosurface_mach_send_right, create_private_iosurface_for_a_gpu_image,
+        create_private_iosurface_with_packed_rows,
     };
     pub use crate::apple::surface_share::{
         CROSS_PROCESS_TIMELINE_WAIT_BOUND, ConsumerReleaseOutcome, CrossProcessTimelinePair,
@@ -197,7 +198,7 @@ pub mod host_rhi;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use host_rhi::{HostGpuDeviceExt, HostPixelBufferRefExt, HostTextureExt};
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use host_rhi::HostSurfaceStoreExt;
 
 /// Vulkan Video codec layer — engine-tier H.264/H.265 encode/decode
@@ -318,7 +319,6 @@ pub mod sdk {
     /// [`streamlib::sdk::engine`](../../streamlib-sdk/src/lib.rs).
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub mod engine {
-        #[cfg(target_os = "linux")]
         pub use crate::HostSurfaceStoreExt;
         pub use crate::host_rhi;
         #[cfg(target_os = "linux")]
