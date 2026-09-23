@@ -102,7 +102,9 @@ class CameraSource:
     `device_id` is a V4L2 device path on Linux and an AVFoundation camera's
     unique ID on macOS; absent, the first camera found — the first built-in
     camera on macOS, ahead of external cameras and camera extensions.
-    Camera→GPU transport auto-selects zero-copy (DMA-BUF on Linux, IOSurface on
+    `max_width` and `max_height` (1920 and 1080 by default) cap the negotiated
+    format, which is clamped to fit. Output `video` publishes an ordinary
+    `streamlib.VideoFrame`. Camera→GPU transport auto-selects zero-copy (DMA-BUF on Linux, IOSurface on
     macOS) or CPU upload. A named `device_id` that cannot be opened is refused
     at `setup()` by name, as is every camera on a platform no capture backend
     serves. Each frame's `timestamp_ns` is the instant the device captured it,
@@ -124,6 +126,7 @@ class DisplayWindow:
     interpreter. `scaling` is `"fit"`, `"fill"`, or `"stretch"`. `width` and
     `height` (1280 and 720 by default) are the window's initial size in the
     desktop's logical pixels, so it is the same size on a 1x and a 2x display.
+    Input `video` (`newest`) takes any published `streamlib.VideoFrame`.
 
     Add as many as the graph needs: each instance registers its own window
     with the engine's shared event pump and renders on its own thread. An
