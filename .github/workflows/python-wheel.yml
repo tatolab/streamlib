@@ -307,6 +307,10 @@ jobs:
   # The aarch64-apple-darwin wheel exactly as a release builds it, installed on
   # a runner with no Vulkan SDK and run there.
   macos-wheel:
+    # Compiles and runs PR-authored code, and attaches nothing to a release
+    # here, so its token reads and does nothing else.
+    permissions:
+      contents: read
     uses: ./.github/workflows/macos-wheel.yml
 
   python-types:
