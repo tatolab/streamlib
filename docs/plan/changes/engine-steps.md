@@ -255,3 +255,21 @@ put `ProcessorOutputTextureRing` onto the same engine pool in this change (see �
 - a Rust `GlslPixelEffect`;
 - folding the copy into the dispatch;
 - #516's forward-forward layer itself, which consumes this capability later.
+
+## Tickets
+
+Derived 2026-09-22; milestone 52, *Apple Silicon at Linux parity*. Blockers first.
+
+1. #2427 — Every processor output ring hands out slots from the engine's lease-aware pool —
+   independent.
+2. #2428 — `GlslPixelEffect`: a pixel effect as one shader function — blocked by #2420.
+3. #2429 — A tensor buffer from Python, handed to torch with no copy, on Linux — blocked by 1.
+4. #2430 — A kernel binds a tensor buffer by surface id — blocked by 3; carries the `REMOVED:`
+   bullet.
+5. #2431 — Tensor buffers on macOS, on a byte-shaped IOSurface as kDLMetal — blocked by 3, 4,
+   #2402, #2403, #2404.
+6. #2432 — `ModelInputTensorKernel`: model input prepared on the GPU — blocked by 4.
+7. #2433 — fisheye-object-detection prepares its model input with `ModelInputTensorKernel` —
+   blocked by 6, #2423.
+8. #2434 — `streamlib new` scaffolds a pixel effect plus a CPU logic processor — blocked by 2,
+   #2420, #2421, #2403, #2361.
