@@ -94,9 +94,9 @@ fn fd_shaped_raw_handle_is_linux_only_error(method_name: &str) -> PyErr {
 /// The variable the parent names its surface-share channel to a helper in:
 /// the Unix socket's path on Linux, the Mach service's name on macOS.
 #[cfg(not(target_os = "macos"))]
-const SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_SURFACE_SOCKET";
+pub(crate) const SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_SURFACE_SOCKET";
 #[cfg(target_os = "macos")]
-const SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE: &str =
+pub(crate) const SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE: &str =
     streamlib_surface_client::SURFACE_SHARE_MACH_SERVICE_ENVIRONMENT_VARIABLE;
 
 fn gpu_unreachable_from_a_helper_process_error() -> PyErr {

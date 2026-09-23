@@ -41,7 +41,6 @@ pub struct ConsumerVulkanBuffer {
     /// The IOSurface whose pages plane 0's memory is, kept alive past the
     /// memory importing it.
     #[cfg(target_os = "macos")]
-    #[expect(dead_code, reason = "held for its retain; nothing reads it")]
     backing_iosurface: Option<objc2_core_foundation::CFRetained<objc2_io_surface::IOSurfaceRef>>,
 }
 
@@ -282,57 +281,44 @@ impl ConsumerVulkanBuffer {
             )));
         }
 
-        let device = vulkan_device.device();
-        let handle_type = vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT;
-        let mut external_buffer_info = vk::ExternalMemoryBufferCreateInfo::builder()
-            .handle_types(handle_type)
-            .build();
-        let buffer_info = vk::BufferCreateInfo::builder()
-            .size(imported_byte_size)
-            .usage(
-                vk::BufferUsageFlags::TRANSFER_SRC
-                    | vk::BufferUsageFlags::TRANSFER_DST
-                    | vk::BufferUsageFlags::STORAGE_BUFFER,
-            )
-            .sharing_mode(vk::SharingMode::EXCLUSIVE)
-            .push_next(&mut external_buffer_info)
-            .build();
-        let buffer = unsafe { device.create_buffer(&buffer_info, None) }.map_err(|e| {
-            refusal(format!(
-                "could not get a buffer: vkCreateBuffer failed: {e}"
-            ))
-        })?;
-        let requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
-        let memory = vulkan_device
-            .import_host_pointer_memory(
-                base_address,
-                imported_byte_size,
-                requirements.memory_type_bits,
-            )
-            .inspect_err(|_| unsafe { device.destroy_buffer(buffer, None) })?;
-        if let Err(e) = unsafe { device.bind_buffer_memory(buffer, memory, 0) } {
-            vulkan_device.free_imported_memory(memory);
-            unsafe { device.destroy_buffer(buffer, None) };
-            return Err(refusal(format!(
-                "could not bind: vkBindBufferMemory failed: {e}"
-            )));
-        }
-        let mapped_ptr = vulkan_device
-            .map_imported_memory(memory, imported_byte_size)
-            .inspect_err(|_| {
-                vulkan_device.free_imported_memory(memory);
-                unsafe { device.destroy_buffer(buffer, None) };
-            })?;
+        let plane = create_bind_and_map_imported_plane(
+            vulkan_device,
+            imported_byte_size,
+            vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT,
+            |requirements, _| {
+                // Host memory imports exactly the range handed over; a buffer
+                // needing more would bind past the surface's pages.
+                if requirements.size > imported_byte_size {
+                    return Err(refusal(format!(
+                        "cannot back a buffer needing {} bytes with its {imported_byte_size}",
+                        requirements.size
+                    )));
+                }
+                vulkan_device.import_host_pointer_memory(
+                    base_address,
+                    imported_byte_size,
+                    requirements.memory_type_bits,
+                )
+            },
+        )?;
 
         Ok(Self {
             vulkan_device: Arc::clone(vulkan_device),
-            buffer,
-            imported_memory: memory,
-            mapped_ptr,
+            buffer: plane.buffer,
+            imported_memory: plane.memory,
+            mapped_ptr: plane.mapped_ptr,
             extra_imported_planes: Vec::new(),
-            size: imported_byte_size,
+            size: plane.size,
             backing_iosurface: Some(objc2_core_foundation::CFRetained::from(iosurface)),
         })
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl ConsumerVulkanBuffer {
+    /// The IOSurface this buffer's memory is, when it was imported from one.
+    pub fn backing_iosurface(&self) -> Option<&objc2_io_surface::IOSurfaceRef> {
+        self.backing_iosurface.as_deref()
     }
 }
 
@@ -419,8 +405,6 @@ fn import_single_plane_with_handle_type(
     effective_size: vk::DeviceSize,
     handle_type: ImportHandleType,
 ) -> Result<ConsumerImportedPlane> {
-    let device = vulkan_device.device();
-
     let vk_handle_type = match handle_type {
         ImportHandleType::DmaBuf => vk::ExternalMemoryHandleTypeFlags::DMA_BUF_EXT,
         ImportHandleType::OpaqueFdAtFirstMatchingMemoryType
@@ -428,11 +412,56 @@ fn import_single_plane_with_handle_type(
             vk::ExternalMemoryHandleTypeFlags::OPAQUE_FD
         }
     };
+    let host_visible =
+        vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
+    create_bind_and_map_imported_plane(
+        vulkan_device,
+        effective_size,
+        vk_handle_type,
+        |requirements, alloc_size| match handle_type {
+            ImportHandleType::DmaBuf => vulkan_device.import_dma_buf_memory(
+                fd,
+                alloc_size,
+                requirements.memory_type_bits,
+                host_visible,
+            ),
+            ImportHandleType::OpaqueFdAtFirstMatchingMemoryType => vulkan_device
+                .import_opaque_fd_memory(
+                    fd,
+                    alloc_size,
+                    requirements.memory_type_bits,
+                    host_visible,
+                ),
+            ImportHandleType::OpaqueFdAtStatedMemoryTypeIndex(stated_memory_type_index) => {
+                refuse_unless_the_buffer_can_bind_the_stated_memory_type_index(
+                    requirements.memory_type_bits,
+                    stated_memory_type_index,
+                )?;
+                vulkan_device.import_opaque_fd_memory_at_stated_memory_type_index(
+                    fd,
+                    alloc_size,
+                    stated_memory_type_index,
+                )
+            }
+        },
+    )
+}
 
+/// Create a `VkBuffer` of `effective_size` for external memory of
+/// `vk_handle_type`, bind the memory `import_memory` imports for it, and map
+/// it. `import_memory` is handed the buffer's requirements and the
+/// allocation size — `effective_size` or the requirements' size, whichever
+/// is larger. Every failure unwinds what was created before it.
+fn create_bind_and_map_imported_plane(
+    vulkan_device: &Arc<ConsumerVulkanDevice>,
+    effective_size: vk::DeviceSize,
+    vk_handle_type: vk::ExternalMemoryHandleTypeFlags,
+    import_memory: impl FnOnce(&vk::MemoryRequirements, vk::DeviceSize) -> Result<vk::DeviceMemory>,
+) -> Result<ConsumerImportedPlane> {
+    let device = vulkan_device.device();
     let mut external_buffer_info = vk::ExternalMemoryBufferCreateInfo::builder()
         .handle_types(vk_handle_type)
         .build();
-
     let buffer_info = vk::BufferCreateInfo::builder()
         .size(effective_size)
         .usage(
@@ -444,64 +473,33 @@ fn import_single_plane_with_handle_type(
         .push_next(&mut external_buffer_info)
         .build();
 
+    // SAFETY: `buffer_info` and the struct it chains outlive the call.
     let buffer = unsafe { device.create_buffer(&buffer_info, None) }.map_err(|e| {
         ConsumerRhiError::Gpu(format!("ConsumerVulkanBuffer: create_buffer failed: {e}"))
     })?;
+    // SAFETY: `buffer` was created on this device just above; every
+    // `destroy_buffer` below runs once, on a failure path that returns.
+    let requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
+    let alloc_size = effective_size.max(requirements.size);
 
-    let mem_requirements = unsafe { device.get_buffer_memory_requirements(buffer) };
-    let alloc_size = effective_size.max(mem_requirements.size);
+    let memory = import_memory(&requirements, alloc_size)
+        .inspect_err(|_| unsafe { device.destroy_buffer(buffer, None) })?;
 
-    if let ImportHandleType::OpaqueFdAtStatedMemoryTypeIndex(stated_memory_type_index) = handle_type
-        && let Err(refusal) = refuse_unless_the_buffer_can_bind_the_stated_memory_type_index(
-            mem_requirements.memory_type_bits,
-            stated_memory_type_index,
-        )
-    {
-        unsafe { device.destroy_buffer(buffer, None) };
-        return Err(refusal);
-    }
-
-    let memory = match handle_type {
-        ImportHandleType::DmaBuf => vulkan_device.import_dma_buf_memory(
-            fd,
-            alloc_size,
-            mem_requirements.memory_type_bits,
-            vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-        ),
-        ImportHandleType::OpaqueFdAtFirstMatchingMemoryType => vulkan_device
-            .import_opaque_fd_memory(
-                fd,
-                alloc_size,
-                mem_requirements.memory_type_bits,
-                vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
-            ),
-        ImportHandleType::OpaqueFdAtStatedMemoryTypeIndex(stated_memory_type_index) => {
-            vulkan_device.import_opaque_fd_memory_at_stated_memory_type_index(
-                fd,
-                alloc_size,
-                stated_memory_type_index,
-            )
-        }
-    }
-    .map_err(|e| {
-        unsafe { device.destroy_buffer(buffer, None) };
-        e
-    })?;
-
-    unsafe { device.bind_buffer_memory(buffer, memory, 0) }.map_err(|e| {
+    // SAFETY: `memory` was imported for this buffer's requirements and is
+    // bound once, at offset 0.
+    if let Err(e) = unsafe { device.bind_buffer_memory(buffer, memory, 0) } {
         vulkan_device.free_imported_memory(memory);
         unsafe { device.destroy_buffer(buffer, None) };
-        ConsumerRhiError::Gpu(format!(
+        return Err(ConsumerRhiError::Gpu(format!(
             "ConsumerVulkanBuffer: bind_buffer_memory failed: {e}"
-        ))
-    })?;
+        )));
+    }
 
     let mapped_ptr = vulkan_device
         .map_imported_memory(memory, effective_size)
-        .map_err(|e| {
+        .inspect_err(|_| {
             vulkan_device.free_imported_memory(memory);
             unsafe { device.destroy_buffer(buffer, None) };
-            e
         })?;
 
     Ok(ConsumerImportedPlane {
@@ -558,6 +556,10 @@ impl Drop for ConsumerVulkanBuffer {
     }
 }
 
+// SAFETY: the handles are used only through the device's own externally
+// synchronised calls, and the mapping is plain memory. The backing
+// IOSurface's retain, lock and use-count calls are thread-safe; `CFRetained`
+// is not marked `Send`/`Sync` only because not every CoreFoundation type is.
 unsafe impl Send for ConsumerVulkanBuffer {}
 unsafe impl Sync for ConsumerVulkanBuffer {}
 

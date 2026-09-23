@@ -103,7 +103,7 @@ pub use vulkan_instance_api_version::REQUESTED_VULKAN_INSTANCE_API_VERSION;
 pub use vulkan_layout::VulkanLayout;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use vulkan_loader_library::{
-    open_the_first_vulkan_loader_library_that_opens, vulkan_loader_library_candidate_paths,
+    VulkanLoaderLibraryNotFound, open_the_first_vulkan_loader_library_that_opens,
 };
 
 /// Sealing supertrait module for [`DevicePrivilege`]. Re-exported so

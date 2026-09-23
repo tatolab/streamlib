@@ -131,14 +131,6 @@ impl SurfaceShareUnderTest {
             .to_string()
     }
 
-    /// How many claims are outstanding on `surface_id` — what the pool asks
-    /// before it rehands a slot.
-    pub(crate) fn outstanding_claims_on(&self, surface_id: &str) -> u32 {
-        self.check_out_leases
-            .outstanding_check_out_count(surface_id)
-            .expect("the lease table stays readable")
-    }
-
     /// Register `slot_id` as a pool-slot surface and publish `frame_generation`
     /// as its current frame — the state a pool producer's acquire leaves
     /// behind, without needing a pool or a GPU.
@@ -301,14 +293,6 @@ impl SurfaceShareUnderTest {
         surface_id
     }
 
-    /// How many claims are outstanding on `surface_id` — what the pool asks
-    /// before it rehands a slot.
-    pub(crate) fn outstanding_claims_on(&self, surface_id: &str) -> u32 {
-        self.check_out_leases
-            .outstanding_check_out_count(surface_id)
-            .expect("the lease table stays readable")
-    }
-
     /// Register `slot_id` as a pool-slot surface and publish `frame_generation`
     /// as its current frame — the state a pool producer's acquire leaves
     /// behind, without needing a pool or a GPU.
@@ -345,5 +329,16 @@ impl SurfaceShareUnderTest {
             .get(surface_id)
             .cloned()
             .expect("a surface this harness registered")
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl SurfaceShareUnderTest {
+    /// How many claims are outstanding on `surface_id` — what the pool asks
+    /// before it rehands a slot.
+    pub(crate) fn outstanding_claims_on(&self, surface_id: &str) -> u32 {
+        self.check_out_leases
+            .outstanding_check_out_count(surface_id)
+            .expect("the lease table stays readable")
     }
 }

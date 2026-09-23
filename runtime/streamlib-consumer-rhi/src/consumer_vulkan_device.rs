@@ -129,10 +129,9 @@ impl ConsumerVulkanDevice {
     /// serve.
     pub fn new() -> Result<Self> {
         let loader =
-            crate::open_the_first_vulkan_loader_library_that_opens().map_err(|refusals| {
+            crate::open_the_first_vulkan_loader_library_that_opens().map_err(|not_found| {
                 ConsumerRhiError::Gpu(format!(
-                    "Failed to load the Vulkan loader library; tried:\n  {}",
-                    refusals.join("\n  ")
+                    "Failed to load the Vulkan loader library; tried:\n{not_found}"
                 ))
             })?;
         let entry = unsafe { vulkanalia::Entry::new(loader) }

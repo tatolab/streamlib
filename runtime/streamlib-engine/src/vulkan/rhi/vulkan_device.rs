@@ -454,13 +454,7 @@ const NO_VULKAN_LOADER_LIBRARY_GUIDANCE: &str = if cfg!(any(target_os = "macos",
 /// naming every candidate tried so the failure says where it looked.
 fn load_the_first_vulkan_loader_library_that_opens() -> Result<LibloadingLoader> {
     streamlib_consumer_rhi::open_the_first_vulkan_loader_library_that_opens().map_err(
-        |refusal_per_candidate| {
-            Error::GpuError(format!(
-                "{}\n  {}",
-                NO_VULKAN_LOADER_LIBRARY_GUIDANCE,
-                refusal_per_candidate.join("\n  "),
-            ))
-        },
+        |not_found| Error::GpuError(format!("{NO_VULKAN_LOADER_LIBRARY_GUIDANCE}\n{not_found}")),
     )
 }
 

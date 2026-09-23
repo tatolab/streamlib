@@ -580,6 +580,20 @@ pub(crate) struct HelperCheckedOutPixelSurface {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 impl HelperCheckedOutPixelSurface {
+    /// The host view of this surface's own mapping; null where the import
+    /// has no host mapping.
+    pub(crate) fn host_visible_pixel_plane_view(
+        &self,
+    ) -> crate::python_gpu_surface_pixel_exchange::HostVisiblePixelPlaneView {
+        crate::python_gpu_surface_pixel_exchange::HostVisiblePixelPlaneView {
+            base_address: self.host_mapped_base_address(),
+            bytes_per_row: self.bytes_per_row,
+            width: self.width,
+            height: self.height,
+            format: self.format,
+        }
+    }
+
     /// Where the CPU addresses this surface's pixels in this process, or
     /// null when its import has no host mapping.
     pub(crate) fn host_mapped_base_address(&self) -> *mut u8 {
@@ -1150,21 +1164,32 @@ impl Drop for HelperForeignSurfaceUnregisterDebt {
     }
 }
 
-/// A pool slot's IOSurface, retained in this process, and its pages
-/// imported as host memory on this helper's consumer device.
+/// A pool slot's IOSurface pages imported as host memory on this helper's
+/// consumer device; the import retains the surface.
 #[cfg(target_os = "macos")]
 pub(crate) struct HelperIOSurfacePoolSlotImport {
-    iosurface: objc2_core_foundation::CFRetained<objc2_io_surface::IOSurfaceRef>,
     consumer_buffer: ConsumerVulkanBuffer,
 }
 
-// SAFETY: IOSurface's retain, lock and use-count calls are thread-safe, and
-// the consumer buffer is `Send + Sync` itself; `CFRetained` is only not
-// marked so because not every CoreFoundation type is.
 #[cfg(target_os = "macos")]
-unsafe impl Send for HelperIOSurfacePoolSlotImport {}
-#[cfg(target_os = "macos")]
-unsafe impl Sync for HelperIOSurfacePoolSlotImport {}
+impl HelperIOSurfacePoolSlotImport {
+    /// Import `iosurface`'s pages on `vulkan_device`.
+    fn import(
+        vulkan_device: &Arc<ConsumerVulkanDevice>,
+        iosurface: &objc2_io_surface::IOSurfaceRef,
+    ) -> streamlib_consumer_rhi::Result<Self> {
+        Ok(Self {
+            consumer_buffer: ConsumerVulkanBuffer::from_iosurface_pages(vulkan_device, iosurface)?,
+        })
+    }
+
+    /// The slot's IOSurface.
+    fn iosurface(&self) -> &objc2_io_surface::IOSurfaceRef {
+        self.consumer_buffer
+            .backing_iosurface()
+            .expect("an import built by `import` is backed by the IOSurface it was built from")
+    }
+}
 
 /// The per-slot cache, shared with the thread that empties it when the
 /// parent's service goes away.
@@ -1186,7 +1211,7 @@ pub(crate) struct HelperIOSurfaceUseCountClaim {
 #[cfg(target_os = "macos")]
 impl HelperIOSurfaceUseCountClaim {
     fn claiming(iosurface_pool_slot_import: Arc<HelperIOSurfacePoolSlotImport>) -> Self {
-        iosurface_pool_slot_import.iosurface.increment_use_count();
+        iosurface_pool_slot_import.iosurface().increment_use_count();
         Self {
             iosurface_pool_slot_import,
         }
@@ -1197,8 +1222,23 @@ impl HelperIOSurfaceUseCountClaim {
 impl Drop for HelperIOSurfaceUseCountClaim {
     fn drop(&mut self) {
         self.iosurface_pool_slot_import
-            .iosurface
+            .iosurface()
             .decrement_use_count();
+    }
+}
+
+/// IOSurfaceLock or IOSurfaceUnlock refused, with the kernel's code.
+#[cfg(target_os = "macos")]
+#[derive(Debug)]
+struct IOSurfaceLockRefused {
+    operation: &'static str,
+    kern_return: i32,
+}
+
+#[cfg(target_os = "macos")]
+impl std::fmt::Display for IOSurfaceLockRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} refused ({:#x})", self.operation, self.kern_return)
     }
 }
 
@@ -1210,8 +1250,10 @@ impl HelperCheckedOutPixelSurface {
     pub(crate) fn lock_the_iosurface_for_cpu_access(&self, read_only: bool) -> PyResult<()> {
         use objc2_io_surface::IOSurfaceLockOptions;
         let mut held_lock = self.iosurface_cpu_lock.lock();
-        if let Some(held_options) = held_lock.take() {
-            self.unlock_the_iosurface_held_with(held_options)?;
+        if let Some(held_options) = *held_lock {
+            self.unlock_the_iosurface_held_with(held_options)
+                .map_err(|refused| self.iosurface_lock_error(refused))?;
+            *held_lock = None;
         }
         let lock_options = if read_only {
             IOSurfaceLockOptions::ReadOnly
@@ -1221,14 +1263,14 @@ impl HelperCheckedOutPixelSurface {
         // SAFETY: a null seed pointer is documented as "not wanted".
         let kern_return = unsafe {
             self.iosurface_pool_slot_import
-                .iosurface
+                .iosurface()
                 .lock(lock_options, std::ptr::null_mut())
         };
         if kern_return != 0 {
-            return Err(PyRuntimeError::new_err(format!(
-                "IOSurfaceLock refused surface {:?} ({kern_return:#x})",
-                self.surface_id
-            )));
+            return Err(self.iosurface_lock_error(IOSurfaceLockRefused {
+                operation: "IOSurfaceLock",
+                kern_return,
+            }));
         }
         *held_lock = Some(lock_options);
         Ok(())
@@ -1236,29 +1278,41 @@ impl HelperCheckedOutPixelSurface {
 
     /// Release the IOSurface lock this surface's CPU access holds, if any.
     pub(crate) fn unlock_the_iosurface_after_cpu_access(&self) -> PyResult<()> {
-        match self.iosurface_cpu_lock.lock().take() {
-            Some(held_options) => self.unlock_the_iosurface_held_with(held_options),
-            None => Ok(()),
+        self.release_the_held_iosurface_lock()
+            .map_err(|refused| self.iosurface_lock_error(refused))
+    }
+
+    /// Release the held lock; a refused unlock leaves it recorded as held.
+    fn release_the_held_iosurface_lock(&self) -> Result<(), IOSurfaceLockRefused> {
+        let mut held_lock = self.iosurface_cpu_lock.lock();
+        if let Some(held_options) = *held_lock {
+            self.unlock_the_iosurface_held_with(held_options)?;
+            *held_lock = None;
         }
+        Ok(())
     }
 
     fn unlock_the_iosurface_held_with(
         &self,
         held_options: objc2_io_surface::IOSurfaceLockOptions,
-    ) -> PyResult<()> {
+    ) -> Result<(), IOSurfaceLockRefused> {
         // SAFETY: unlocks with the options the matching lock took.
         let kern_return = unsafe {
             self.iosurface_pool_slot_import
-                .iosurface
+                .iosurface()
                 .unlock(held_options, std::ptr::null_mut())
         };
         if kern_return != 0 {
-            return Err(PyRuntimeError::new_err(format!(
-                "IOSurfaceUnlock refused surface {:?} ({kern_return:#x})",
-                self.surface_id
-            )));
+            return Err(IOSurfaceLockRefused {
+                operation: "IOSurfaceUnlock",
+                kern_return,
+            });
         }
         Ok(())
+    }
+
+    fn iosurface_lock_error(&self, refused: IOSurfaceLockRefused) -> PyErr {
+        PyRuntimeError::new_err(format!("{refused} on surface {:?}", self.surface_id))
     }
 }
 
@@ -1267,15 +1321,30 @@ impl Drop for HelperCheckedOutPixelSurface {
     /// A surface dropped mid-access lets its IOSurface lock go before its
     /// use-count claim does.
     fn drop(&mut self) {
-        if let Err(unlock_failure) = self.unlock_the_iosurface_after_cpu_access() {
-            tracing::warn!("{unlock_failure}");
+        if let Err(refused) = self.release_the_held_iosurface_lock() {
+            tracing::warn!("{refused} on surface {:?}", self.surface_id);
         }
     }
 }
 
-/// How long a request on the surface-share connection waits for its answer.
+/// What memory crosses the surface-share channel as: a descriptor over
+/// SCM_RIGHTS on Linux.
+#[cfg(target_os = "linux")]
+type SurfaceShareTransferredHandle = OwnedFd;
+/// What memory crosses the surface-share channel as: a Mach port right on
+/// macOS.
+#[cfg(target_os = "macos")]
+type SurfaceShareTransferredHandle = streamlib_surface_client::OwnedMachSendRight;
+
+/// A surface-share answer and the handles it carried.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+type SurfaceShareAnswer = (serde_json::Value, Vec<SurfaceShareTransferredHandle>);
+
+/// How long the surface-share channel may keep a helper waiting: every
+/// request on Linux, the connect handshake on macOS. A Mach request carries
+/// no receive timeout; the service's death is what wakes one still pending.
 ///
-/// The service answers from in-memory state and duplicated fds, never GPU
+/// The service answers from in-memory state and duplicated handles, never GPU
 /// work, so this bounds only a service that has stopped answering — and with
 /// it the time every other thread waits on the connection's lock.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -1299,9 +1368,10 @@ pub(crate) struct HelperProcessGpuExchangeClient {
     release_to_parent_without_waiting: Py<PyAny>,
     #[cfg(target_os = "linux")]
     surface_socket_path: PathBuf,
-    /// The bootstrap name of the parent's surface-share Mach service.
+    /// The bootstrap name of the parent's surface-share Mach service, as the
+    /// environment carried it.
     #[cfg(target_os = "macos")]
-    surface_share_mach_service_name: String,
+    surface_share_mach_service_name: std::ffi::OsString,
     /// One connection per child, opened at first checkout; the service
     /// releases every claim it holds when it closes.
     #[cfg(target_os = "macos")]
@@ -1310,7 +1380,9 @@ pub(crate) struct HelperProcessGpuExchangeClient {
     /// Each pool slot's IOSurface and its import, looked up once per slot
     /// rather than per frame: a child's first lookup of a surface costs
     /// 9–10 ms. Holding them does not pin a slot — only a frame's use-count
-    /// claim does — and the parent going away empties it.
+    /// claim does. Slot ids are never reused, so an entry never names the
+    /// wrong surface; one whose pool the engine dropped stays retained until
+    /// this helper stops or the parent goes away, which empties it.
     #[cfg(target_os = "macos")]
     iosurface_imports_by_pool_slot: HelperIOSurfaceImportsByPoolSlot,
     /// The runtime id this client's foreign-surface adoptions register and
@@ -1481,9 +1553,7 @@ impl HelperProcessGpuExchangeClient {
             #[cfg(target_os = "linux")]
             surface_socket_path: PathBuf::from(surface_share_channel_name),
             #[cfg(target_os = "macos")]
-            surface_share_mach_service_name: surface_share_channel_name
-                .to_string_lossy()
-                .into_owned(),
+            surface_share_mach_service_name: surface_share_channel_name,
             #[cfg(target_os = "macos")]
             surface_share_mach_connection: Mutex::new(None),
             #[cfg(target_os = "macos")]
@@ -1579,7 +1649,8 @@ impl HelperProcessGpuExchangeClient {
         self: &Arc<Self>,
         surface_id: &str,
     ) -> PyResult<HelperSurfaceCheckOutLeaseDebt> {
-        let (response, _plane_fds_closed_by_scope) = self.check_out_surface(surface_id)?;
+        let (response, _transferred_handles_released_by_scope) =
+            self.check_out_surface(surface_id)?;
         refuse_check_out_the_service_declined(format_args!("{surface_id:?}"), &response)?;
         Ok(HelperSurfaceCheckOutLeaseDebt {
             exchange_client: Arc::clone(self),
@@ -1594,8 +1665,8 @@ impl HelperProcessGpuExchangeClient {
         self: &Arc<Self>,
         surface_id: &str,
     ) -> PyResult<HelperCheckedOutSurface> {
-        let (response, received_fds) = self.check_out_surface(surface_id)?;
-        self.import_checked_out_surface(surface_id, &response, received_fds)
+        let (response, received_handles) = self.check_out_surface(surface_id)?;
+        self.import_checked_out_surface(surface_id, &response, received_handles)
     }
 
     /// Wait for the parent's GPU device to go idle.
@@ -2462,12 +2533,13 @@ impl HelperProcessGpuExchangeClient {
         Ok((response, received_fds))
     }
 
-    /// Claim a surface against producer reuse and take its plane fds.
+    /// Claim a surface against producer reuse and take the handles its
+    /// memory crosses as.
     ///
     /// The one place this op is spelled: a checkout is what pins the frame,
     /// and every caller owes the matching [`Self::release_check_out`].
-    #[cfg(target_os = "linux")]
-    fn check_out_surface(&self, surface_id: &str) -> PyResult<(serde_json::Value, Vec<OwnedFd>)> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn check_out_surface(&self, surface_id: &str) -> PyResult<SurfaceShareAnswer> {
         self.surface_share_request(&serde_json::json!({
             "op": "check_out",
             "surface_id": surface_id,
@@ -2475,8 +2547,8 @@ impl HelperProcessGpuExchangeClient {
     }
 
     /// Let go of one claim on a surface, freeing its slot for its producer.
-    #[cfg(target_os = "linux")]
-    fn release_check_out(&self, surface_id: &str) -> PyResult<(serde_json::Value, Vec<OwnedFd>)> {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn release_check_out(&self, surface_id: &str) -> PyResult<SurfaceShareAnswer> {
         self.surface_share_request(&serde_json::json!({
             "op": "release_check_out",
             "surface_id": surface_id,
@@ -3023,9 +3095,6 @@ impl HelperProcessGpuExchangeClient {
     }
 }
 
-/// Whether the parent's answer says the window has closed. Every present-class
-/// op carries it, and reading it off each answer is what keeps the object's own
-/// closed state current without a poll of its own.
 #[cfg(target_os = "macos")]
 impl HelperProcessGpuExchangeClient {
     /// This helper's connection to the parent's surface-share Mach service,
@@ -3040,17 +3109,26 @@ impl HelperProcessGpuExchangeClient {
         if let Some(open_connection) = connection.as_ref() {
             return Ok(Arc::clone(open_connection));
         }
+        let service_name = self
+            .surface_share_mach_service_name
+            .to_str()
+            .ok_or_else(|| {
+                PyRuntimeError::new_err(format!(
+                    "the surface-share Mach service name {:?} is not UTF-8, so it names no \
+                 bootstrap service",
+                    self.surface_share_mach_service_name
+                ))
+            })?;
         let opened = Arc::new(
             streamlib_surface_client::SurfaceShareMachServiceConnection::connect(
-                &self.surface_share_mach_service_name,
+                service_name,
                 SURFACE_SHARE_RESPONSE_TIMEOUT,
             )
             .map_err(|connect_failure| {
                 PyRuntimeError::new_err(format!(
-                    "could not reach the surface-share Mach service '{}': {connect_failure}. \
-                     The parent runtime owns that service; if it is gone, this helper is \
-                     orphaned",
-                    self.surface_share_mach_service_name,
+                    "could not reach the surface-share Mach service '{service_name}': \
+                     {connect_failure}. The parent runtime owns that service; if it is gone, \
+                     this helper is orphaned",
                 ))
             })?,
         );
@@ -3085,13 +3163,7 @@ impl HelperProcessGpuExchangeClient {
         Ok(opened)
     }
 
-    fn surface_share_request(
-        &self,
-        request: &serde_json::Value,
-    ) -> PyResult<(
-        serde_json::Value,
-        Vec<streamlib_surface_client::OwnedMachSendRight>,
-    )> {
+    fn surface_share_request(&self, request: &serde_json::Value) -> PyResult<SurfaceShareAnswer> {
         self.surface_share_mach_connection()?
             .send_request_with_ports(request, Vec::new())
             .map_err(|request_failure| {
@@ -3099,38 +3171,6 @@ impl HelperProcessGpuExchangeClient {
                     "the surface-share request failed: {request_failure}"
                 ))
             })
-    }
-
-    /// Claim a surface against producer reuse and take the IOSurface port
-    /// the answer carries.
-    ///
-    /// The one place this op is spelled: a checkout is what pins the frame,
-    /// and every caller owes the matching [`Self::release_check_out`].
-    fn check_out_surface(
-        &self,
-        surface_id: &str,
-    ) -> PyResult<(
-        serde_json::Value,
-        Vec<streamlib_surface_client::OwnedMachSendRight>,
-    )> {
-        self.surface_share_request(&serde_json::json!({
-            "op": "check_out",
-            "surface_id": surface_id,
-        }))
-    }
-
-    /// Let go of one claim on a surface, freeing its slot for its producer.
-    fn release_check_out(
-        &self,
-        surface_id: &str,
-    ) -> PyResult<(
-        serde_json::Value,
-        Vec<streamlib_surface_client::OwnedMachSendRight>,
-    )> {
-        self.surface_share_request(&serde_json::json!({
-            "op": "release_check_out",
-            "surface_id": surface_id,
-        }))
     }
 
     /// The import of a checked-out frame's IOSurface: the pool slot's cached
@@ -3141,7 +3181,7 @@ impl HelperProcessGpuExchangeClient {
         self: &Arc<Self>,
         surface_id: &str,
         response: &serde_json::Value,
-        received_ports: Vec<streamlib_surface_client::OwnedMachSendRight>,
+        received_ports: Vec<SurfaceShareTransferredHandle>,
     ) -> PyResult<HelperCheckedOutSurface> {
         refuse_check_out_the_service_declined(format_args!("{surface_id:?}"), response)?;
         // From here the lease is this surface's, so every refusal below
@@ -3176,7 +3216,7 @@ impl HelperProcessGpuExchangeClient {
 
         let iosurface_pool_slot_import =
             self.iosurface_pool_slot_import_for(surface_id, received_ports)?;
-        let iosurface = &iosurface_pool_slot_import.iosurface;
+        let iosurface = iosurface_pool_slot_import.iosurface();
         let bytes_per_row = iosurface.bytes_per_row() as u64;
         if iosurface.width() < width as usize
             || iosurface.height() < height as usize
@@ -3213,7 +3253,7 @@ impl HelperProcessGpuExchangeClient {
     fn iosurface_pool_slot_import_for(
         &self,
         surface_id: &str,
-        received_ports: Vec<streamlib_surface_client::OwnedMachSendRight>,
+        received_ports: Vec<SurfaceShareTransferredHandle>,
     ) -> PyResult<Arc<HelperIOSurfacePoolSlotImport>> {
         let mut received_ports = received_ports.into_iter();
         let (Some(iosurface_port), None) = (received_ports.next(), received_ports.next()) else {
@@ -3240,19 +3280,16 @@ impl HelperProcessGpuExchangeClient {
         // surface reading in use.
         drop(iosurface_port);
         let vulkan_device = self.consumer_vulkan_device()?;
-        let consumer_buffer = ConsumerVulkanBuffer::from_iosurface_pages(
-            &vulkan_device,
-            &iosurface,
-        )
-        .map_err(|import_failure| {
-            PyRuntimeError::new_err(format!(
-                "Vulkan could not import surface {surface_id:?}'s IOSurface: {import_failure}"
-            ))
-        })?;
-        let imported = Arc::new(HelperIOSurfacePoolSlotImport {
-            iosurface,
-            consumer_buffer,
-        });
+        let imported = Arc::new(
+            HelperIOSurfacePoolSlotImport::import(&vulkan_device, &iosurface).map_err(
+                |import_failure| {
+                    PyRuntimeError::new_err(format!(
+                        "Vulkan could not import surface {surface_id:?}'s IOSurface: \
+                         {import_failure}"
+                    ))
+                },
+            )?,
+        );
         Ok(Arc::clone(
             self.iosurface_imports_by_pool_slot
                 .lock()
@@ -3262,6 +3299,9 @@ impl HelperProcessGpuExchangeClient {
     }
 }
 
+/// Whether the parent's answer says the window has closed. Every present-class
+/// op carries it, and reading it off each answer is what keeps the object's own
+/// closed state current without a poll of its own.
 #[cfg(target_os = "linux")]
 fn processor_owned_window_is_closed_in(response: &Bound<'_, PyAny>) -> PyResult<bool> {
     response_field(response, "processor_owned_window_is_closed")?.extract()
@@ -3461,6 +3501,7 @@ mod surface_check_out_lease_debt_tests {
 mod iosurface_pool_slot_import_tests {
     use super::*;
     use crate::python_surface_share_service_for_tests::SurfaceShareUnderTest;
+    use std::io::Write as _;
 
     fn exchange_client_on(share: &SurfaceShareUnderTest) -> Arc<HelperProcessGpuExchangeClient> {
         Python::initialize();
@@ -3478,7 +3519,10 @@ mod iosurface_pool_slot_import_tests {
         match ConsumerVulkanDevice::new() {
             Ok(_) => true,
             Err(unavailable) => {
-                println!("Skipping test — no consumer Vulkan device: {unavailable}");
+                let _ = writeln!(
+                    std::io::stdout(),
+                    "Skipping test — no consumer Vulkan device: {unavailable}"
+                );
                 false
             }
         }
@@ -3631,8 +3675,9 @@ mod iosurface_pool_slot_import_tests {
         frame
             .lock_the_iosurface_for_cpu_access(false)
             .expect("the write lock");
-        println!("{HELPER_HOLDS_THE_FRAME_MARKER}");
-        std::io::Write::flush(&mut std::io::stdout()).expect("flush the marker");
+        let mut standard_output = std::io::stdout();
+        writeln!(standard_output, "{HELPER_HOLDS_THE_FRAME_MARKER}").expect("write the marker");
+        standard_output.flush().expect("flush the marker");
         loop {
             std::thread::park();
         }

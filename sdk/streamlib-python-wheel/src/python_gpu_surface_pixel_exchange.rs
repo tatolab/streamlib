@@ -204,13 +204,7 @@ impl GpuSurfaceOwnedMemory {
         if let HelperCheckedOutSurface::PixelBuffer(pixel_surface) = &self.checked_out_surface
             && !pixel_surface.host_mapped_base_address().is_null()
         {
-            return Ok(HostVisiblePixelPlaneView {
-                base_address: pixel_surface.host_mapped_base_address(),
-                bytes_per_row: pixel_surface.bytes_per_row,
-                width: pixel_surface.width,
-                height: pixel_surface.height,
-                format: pixel_surface.format,
-            });
+            return Ok(pixel_surface.host_visible_pixel_plane_view());
         }
         let surface_id = self.checked_out_surface.surface_id();
         let staged = self
@@ -239,13 +233,7 @@ impl GpuSurfaceOwnedMemory {
     #[cfg(target_os = "macos")]
     pub(crate) fn host_visible_pixel_plane(&self) -> PyResult<HostVisiblePixelPlaneView> {
         let HelperCheckedOutSurface::PixelBuffer(pixel_surface) = &self.checked_out_surface;
-        Ok(HostVisiblePixelPlaneView {
-            base_address: pixel_surface.host_mapped_base_address(),
-            bytes_per_row: pixel_surface.bytes_per_row,
-            width: pixel_surface.width,
-            height: pixel_surface.height,
-            format: pixel_surface.format,
-        })
+        Ok(pixel_surface.host_visible_pixel_plane_view())
     }
 
     /// No surface exchange exists here, so no handle reaches this.

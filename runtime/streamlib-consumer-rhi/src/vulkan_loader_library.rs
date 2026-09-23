@@ -19,7 +19,7 @@ use vulkanalia::loader::{LIBRARY, LibloadingLoader};
 /// **These are developer-machine fallbacks, never the install experience.** The
 /// wheel carries the loader and MoltenVK and points the loader at them (#2362),
 /// and a package manager must never appear in anything a user reads.
-pub fn vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString> {
+pub(crate) fn vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString> {
     let mut candidate_paths: Vec<std::ffi::OsString> = vec![LIBRARY.into()];
     candidate_paths.extend(apple_vulkan_loader_library_candidate_paths());
     candidate_paths
@@ -46,10 +46,22 @@ fn apple_vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString> {
     Vec::new()
 }
 
-/// Open the first Vulkan loader library that dlopens, or return one
-/// `path: reason` line per candidate tried, so a refusal says where it looked.
+/// No Vulkan loader library opened: why each candidate on the search list
+/// refused, one `path: reason` line apiece.
+#[derive(Debug)]
+pub struct VulkanLoaderLibraryNotFound {
+    refusal_per_candidate: Vec<String>,
+}
+
+impl std::fmt::Display for VulkanLoaderLibraryNotFound {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "  {}", self.refusal_per_candidate.join("\n  "))
+    }
+}
+
+/// Open the first Vulkan loader library that dlopens, or say where it looked.
 pub fn open_the_first_vulkan_loader_library_that_opens()
--> std::result::Result<LibloadingLoader, Vec<String>> {
+-> std::result::Result<LibloadingLoader, VulkanLoaderLibraryNotFound> {
     let mut refusal_per_candidate: Vec<String> = Vec::new();
     for candidate_path in vulkan_loader_library_candidate_paths() {
         // SAFETY: loading the Vulkan loader runs only its own initialisers.
@@ -67,7 +79,9 @@ pub fn open_the_first_vulkan_loader_library_that_opens()
             )),
         }
     }
-    Err(refusal_per_candidate)
+    Err(VulkanLoaderLibraryNotFound {
+        refusal_per_candidate,
+    })
 }
 
 #[cfg(test)]

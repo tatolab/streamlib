@@ -643,7 +643,8 @@ impl PythonHelperProcessSpawnHostProcessor {
     ) -> Result<()> {
         #[cfg(target_os = "linux")]
         let surface_share_channel = Some(SurfaceShareChannelNamedToTheHelperProcess {
-            environment_variable: "STREAMLIB_SURFACE_SOCKET",
+            environment_variable:
+                crate::python_processor_context::SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE,
             channel_name: ctx.surface_socket_path().as_os_str(),
         });
         #[cfg(target_os = "macos")]
@@ -651,7 +652,7 @@ impl PythonHelperProcessSpawnHostProcessor {
         #[cfg(target_os = "macos")]
         let surface_share_channel = Some(SurfaceShareChannelNamedToTheHelperProcess {
             environment_variable:
-                streamlib_surface_client::SURFACE_SHARE_MACH_SERVICE_ENVIRONMENT_VARIABLE,
+                crate::python_processor_context::SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE,
             channel_name: std::ffi::OsStr::new(
                 surface_share_mach_service_rendezvous.service_name(),
             ),
