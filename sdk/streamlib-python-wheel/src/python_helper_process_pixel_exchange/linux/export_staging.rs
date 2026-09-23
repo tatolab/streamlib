@@ -45,7 +45,7 @@ struct DeviceExportStagingDescription {
 /// fd-properties query to discover it with. A registration without one
 /// would leave the import guessing, and a guess binds the wrong memory
 /// type rather than failing — silently, until the pixels are wrong.
-pub(super) fn memory_type_index_stated_by_a_staging_registration(
+fn memory_type_index_stated_by_a_staging_registration(
     staging_kind: &str,
     staging_share_id: &str,
     registration: &serde_json::Value,
@@ -133,7 +133,7 @@ pub(crate) enum CpuReadbackCopyDirection {
 }
 
 impl CpuReadbackCopyDirection {
-    pub(super) fn wire_name(self) -> &'static str {
+    fn wire_name(self) -> &'static str {
         match self {
             Self::SurfaceIntoStaging => "image_to_buffer",
             Self::StagingBackIntoSurface => "buffer_to_image",
@@ -599,3 +599,8 @@ impl HelperProcessGpuExchangeClient {
         })
     }
 }
+
+/// The readback staging's wire spellings: the copy direction's token and the
+/// exporter's memory-type index a registration must state.
+#[cfg(test)]
+mod export_staging_wire_tests;

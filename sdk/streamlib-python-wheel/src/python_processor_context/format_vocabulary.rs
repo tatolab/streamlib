@@ -40,4 +40,4 @@ pub(super) fn parse_texture_format_name(name: &str) -> PyResult<&'static str> {
 }
 
 #[cfg(test)]
-mod tests;
+mod pixel_format_name_round_trip_tests;

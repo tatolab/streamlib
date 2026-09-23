@@ -1,7 +1,4 @@
 use super::*;
-use crate::python_helper_process_pixel_exchange::linux::export_staging::{
-    CpuReadbackCopyDirection, memory_type_index_stated_by_a_staging_registration,
-};
 
 /// Every recipe value deliberately non-default, so a parse that stops
 /// reading the wire and serves its absent-defaults fails on the first
@@ -135,54 +132,4 @@ fn a_dma_buf_checkout_never_carries_the_export_contract() {
         TextureCheckOutRegistrationMetadata::from_check_out_response("surface#1", &response)
             .expect("a DMA-BUF registration parses without the contract fields");
     assert!(metadata.opaque_fd_export_contract.is_none());
-}
-
-/// The direction is the only thing separating a read-in from a
-/// publish on one wire op, so a token typo would quietly copy the
-/// wrong way — over a frame the author meant to read.
-#[test]
-fn each_readback_direction_spells_the_wire_token_its_copy_runs() {
-    assert_eq!(
-        CpuReadbackCopyDirection::SurfaceIntoStaging.wire_name(),
-        "image_to_buffer"
-    );
-    assert_eq!(
-        CpuReadbackCopyDirection::StagingBackIntoSurface.wire_name(),
-        "buffer_to_image"
-    );
-}
-
-#[test]
-fn a_readback_staging_registration_states_the_exporters_memory_type_index() {
-    let registration = serde_json::json!({ "vk_memory_type_index": 3u32 });
-    assert_eq!(
-        memory_type_index_stated_by_a_staging_registration("readback", "staging#1", &registration)
-            .expect("a stated index parses"),
-        3
-    );
-}
-
-#[test]
-fn a_readback_staging_registration_without_a_memory_type_index_is_refused_naming_it() {
-    Python::initialize();
-    for unusable in [
-        serde_json::json!({}),
-        serde_json::json!({ "vk_memory_type_index": serde_json::Value::Null }),
-        serde_json::json!({ "vk_memory_type_index": "7" }),
-        serde_json::json!({ "vk_memory_type_index": u64::from(u32::MAX) + 1 }),
-    ] {
-        let refusal =
-            memory_type_index_stated_by_a_staging_registration("readback", "staging#1", &unusable)
-                .err()
-                .expect("an unusable index refuses the import")
-                .to_string();
-        assert!(
-            refusal.contains("vk_memory_type_index"),
-            "the refusal must name the field it could not read: {refusal:?}"
-        );
-        assert!(
-            refusal.contains("staging#1"),
-            "the refusal must name the staging it is about: {refusal:?}"
-        );
-    }
 }

@@ -7,8 +7,8 @@ use pyo3::types::{PyDict, PyList};
 
 use super::format_vocabulary::parse_texture_format_name;
 use super::kernels::{
-    PythonAccelerationStructureHandle, ReflectedKernelBinding, bound_acceleration_structure_id,
-    bound_surface_id, reflected_binding_names,
+    PythonAccelerationStructureHandle, ReflectedKernelBinding, bound_surface_id,
+    reflected_binding_names,
 };
 
 /// Lowercase hex, no `0x`, no separators — the encoding every escalate blob
@@ -815,6 +815,30 @@ pub(super) fn supplied_kernel_bindings_to_wire<'py>(
         wire_bindings.append(entry)?;
     }
     Ok(wire_bindings)
+}
+
+/// The acceleration structure a value bound at `name` names.
+///
+/// The only binding kind that is not a surface, and the only one whose handle
+/// cannot be spelled as an id string — nothing publishes an acceleration
+/// structure for another processor to resolve, so the object a build returned
+/// is the whole way to name it.
+fn bound_acceleration_structure_id(name: &str, bound_to: &Bound<'_, PyAny>) -> PyResult<String> {
+    let structure = bound_to
+        .extract::<PyRef<'_, PythonAccelerationStructureHandle>>()
+        .map_err(|_| {
+            PyTypeError::new_err(format!(
+                "binding {name:?} is an acceleration_structure; bind the handle `build_tlas` \
+                 returned"
+            ))
+        })?;
+    if !structure.is_top_level {
+        return Err(PyValueError::new_err(format!(
+            "binding {name:?} was given a bottom-level structure; a trace binds the top-level one \
+             `build_tlas` returned, which is what holds the instances"
+        )));
+    }
+    Ok(structure.acceleration_structure_id.clone())
 }
 
 /// What a caller can get wrong building a graphics or ray-tracing kernel,
