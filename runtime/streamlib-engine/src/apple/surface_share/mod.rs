@@ -22,4 +22,4 @@ pub use cross_process_timeline_pair::{
 pub use mach_surface_share_service::{
     MachSurfaceShareService, MachSurfaceShareServiceRendezvous, SurfaceShareHelperProcessAdmission,
 };
-pub use state::{IOSurfaceShareRegistration, IOSurfaceShareState, SharedTimelineSendRights};
+pub use state::IOSurfaceShareState;
