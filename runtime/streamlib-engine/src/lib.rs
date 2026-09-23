@@ -162,8 +162,9 @@ pub mod apple_surface_share {
         create_iosurface_mach_send_right, create_private_iosurface_with_packed_rows,
     };
     pub use crate::apple::surface_share::{
-        IOSurfaceShareState, MachSurfaceShareService, MachSurfaceShareServiceRendezvous,
-        SurfaceShareHelperProcessAdmission,
+        CROSS_PROCESS_TIMELINE_WAIT_BOUND, ConsumerReleaseOutcome, CrossProcessTimelinePair,
+        CrossProcessTimelinePairsBySurface, IOSurfaceShareState, MachSurfaceShareService,
+        MachSurfaceShareServiceRendezvous, SurfaceShareHelperProcessAdmission,
     };
 }
 

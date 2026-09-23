@@ -11,9 +11,14 @@
 //! processes it spawned, by the audit token the kernel appends to every
 //! message.
 
+pub mod cross_process_timeline_pair;
 pub mod mach_surface_share_service;
 pub mod state;
 
+pub use cross_process_timeline_pair::{
+    CROSS_PROCESS_TIMELINE_WAIT_BOUND, ConsumerReleaseOutcome, CrossProcessTimelinePair,
+    CrossProcessTimelinePairsBySurface,
+};
 pub use mach_surface_share_service::{
     MachSurfaceShareService, MachSurfaceShareServiceRendezvous, SurfaceShareHelperProcessAdmission,
 };

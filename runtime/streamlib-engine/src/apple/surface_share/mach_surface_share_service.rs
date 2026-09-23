@@ -20,8 +20,10 @@ use objc2_io_surface::IOSurfaceRef;
 use parking_lot::Mutex;
 use streamlib_surface_client::{
     OwnedMachPortSet, OwnedMachReceiveRight, OwnedMachSendRight, ReceivedSurfaceShareMachMessage,
-    ReceivedSurfaceShareMachTraffic, SURFACE_SHARE_MACH_CONNECT_MESSAGE_ID,
+    ReceivedSurfaceShareMachTraffic, SURFACE_SHARE_HAS_CONSUME_DONE_PORT,
+    SURFACE_SHARE_HAS_PRODUCE_DONE_PORT, SURFACE_SHARE_MACH_CONNECT_MESSAGE_ID,
     SURFACE_SHARE_MACH_REPLY_MESSAGE_ID, SURFACE_SHARE_MACH_REQUEST_MESSAGE_ID,
+    SURFACE_SHARE_OP_SIGNAL_CONSUME_DONE, SURFACE_SHARE_OP_TIMELINE_IMPORT_REFUSED,
     SurfaceShareMachMessageReceiveBuffer, SurfaceShareMachSenderAuditIdentity,
     check_in_surface_share_mach_service, receive_surface_share_mach_traffic,
     request_dead_name_notification, send_surface_share_mach_message,
@@ -37,7 +39,7 @@ use crate::core::context::surface_share_wire_verbs::{
     release_what_a_closed_connection_held, requested_runtime_id, requested_surface_id,
 };
 
-use super::state::{IOSurfaceShareRegistration, IOSurfaceShareState};
+use super::state::{IOSurfaceShareRegistration, IOSurfaceShareState, SharedTimelineSendRights};
 
 /// How long a connect from a pid nobody has admitted yet waits before it is
 /// refused. A spawner learns its child's pid only after the child is
@@ -725,6 +727,12 @@ fn answer_surface_share_request(
             Vec::new(),
         ),
         "unregister" | "release" => (answer_unregister(state, request), Vec::new()),
+        SURFACE_SHARE_OP_SIGNAL_CONSUME_DONE => {
+            (answer_signal_consume_done(state, request), Vec::new())
+        }
+        SURFACE_SHARE_OP_TIMELINE_IMPORT_REFUSED => {
+            (answer_timeline_import_refused(state, request), Vec::new())
+        }
         _ => (
             serde_json::json!({"error": format!("unknown operation: {op}")}),
             Vec::new(),
@@ -733,16 +741,54 @@ fn answer_surface_share_request(
 }
 
 /// The registration a `register` or `check_in` describes, holding the one
-/// IOSurface its port names.
+/// IOSurface its first port names and, when the flags announce them, the
+/// timeline pair's shared-event ports after it.
 fn registration_of_request(
     request: &serde_json::Value,
     surface_id: String,
     received_ports: Vec<OwnedMachSendRight>,
 ) -> Result<IOSurfaceShareRegistration, String> {
+    let announced = |flag: &str| {
+        request
+            .get(flag)
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+    };
+    let announces_timeline_pair = match (
+        announced(SURFACE_SHARE_HAS_PRODUCE_DONE_PORT),
+        announced(SURFACE_SHARE_HAS_CONSUME_DONE_PORT),
+    ) {
+        (false, false) => false,
+        (true, true) => true,
+        _ => {
+            return Err(
+                "a registration carries both timeline ports or neither, never one".to_string(),
+            );
+        }
+    };
     let mut received_ports = received_ports.into_iter();
-    let (Some(iosurface_port), None) = (received_ports.next(), received_ports.next()) else {
+    let Some(iosurface_port) = received_ports.next() else {
         return Err("a registration carries exactly one IOSurface port".to_string());
     };
+    let timeline_send_rights = if announces_timeline_pair {
+        let (Some(produce_done), Some(consume_done)) =
+            (received_ports.next(), received_ports.next())
+        else {
+            return Err("the announced timeline ports did not arrive".to_string());
+        };
+        Some(Arc::new(SharedTimelineSendRights {
+            produce_done,
+            consume_done,
+        }))
+    } else {
+        None
+    };
+    if received_ports.next().is_some() {
+        return Err(
+            "a registration carries exactly one IOSurface port, then the ports its flags announce"
+                .to_string(),
+        );
+    }
     let iosurface = IOSurfaceRef::lookup_from_mach_port(iosurface_port.as_raw_name())
         .ok_or_else(|| "the registered port names no IOSurface".to_string())?;
     let requested_u32 = |key: &str| {
@@ -766,6 +812,7 @@ fn registration_of_request(
         format: requested_str("format", "unknown"),
         resource_type: requested_str("resource_type", "pixel_buffer"),
         iosurface: RetainedIOSurfaceSharedAcrossThreads::new(iosurface),
+        timeline_send_rights,
     })
 }
 
@@ -853,6 +900,25 @@ fn handle_lookup(
             );
         }
     };
+    let mut reply_ports = vec![iosurface_port];
+    let carries_timeline_pair = match &registration.timeline_send_rights {
+        Some(timeline_send_rights) => match (
+            timeline_send_rights.produce_done.try_clone(),
+            timeline_send_rights.consume_done.try_clone(),
+        ) {
+            (Ok(produce_done), Ok(consume_done)) => {
+                reply_ports.extend([produce_done, consume_done]);
+                true
+            }
+            (Err(unminted), _) | (_, Err(unminted)) => {
+                return (
+                    serde_json::json!({"error": unminted.to_string()}),
+                    Vec::new(),
+                );
+            }
+        },
+        None => false,
+    };
     (
         serde_json::json!({
             "surface_id": surface_id,
@@ -864,9 +930,58 @@ fn handle_lookup(
             "plane_sizes": [registration.iosurface.alloc_size()],
             "plane_offsets": [0],
             "plane_strides": [registration.iosurface.bytes_per_row()],
+            SURFACE_SHARE_HAS_PRODUCE_DONE_PORT: carries_timeline_pair,
+            SURFACE_SHARE_HAS_CONSUME_DONE_PORT: carries_timeline_pair,
         }),
-        vec![iosurface_port],
+        reply_ports,
     )
+}
+
+/// A helper's host-side report that it released the frame at `value`,
+/// signalled on the engine's own `consume_done`.
+fn answer_signal_consume_done(
+    state: &IOSurfaceShareState,
+    request: &serde_json::Value,
+) -> serde_json::Value {
+    let Some(surface_id) = requested_surface_id(request) else {
+        return serde_json::json!({"error": "missing surface_id"});
+    };
+    let Some(value) = request.get("value").and_then(serde_json::Value::as_u64) else {
+        return serde_json::json!({"error": "missing value"});
+    };
+    match state
+        .cross_process_timeline_pairs()
+        .pair_or_refusal(surface_id)
+        .and_then(|pair| pair.record_consumer_release_reported_over_the_channel(value))
+    {
+        Ok(()) => serde_json::json!({"success": true}),
+        Err(refusal) => serde_json::json!({"error": refusal.to_string()}),
+    }
+}
+
+/// A helper could not import `surface_id`'s timeline pair; the engine orders
+/// that surface host-side from now on.
+fn answer_timeline_import_refused(
+    state: &IOSurfaceShareState,
+    request: &serde_json::Value,
+) -> serde_json::Value {
+    let Some(surface_id) = requested_surface_id(request) else {
+        return serde_json::json!({"error": "missing surface_id"});
+    };
+    let reason = request
+        .get("reason")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("the helper gave no reason");
+    match state
+        .cross_process_timeline_pairs()
+        .pair_or_refusal(surface_id)
+    {
+        Ok(pair) => {
+            pair.fall_back_to_host_side_ordering(reason);
+            serde_json::json!({"success": true})
+        }
+        Err(refusal) => serde_json::json!({"error": refusal.to_string()}),
+    }
 }
 
 /// `lookup` plus a claim: the surface is pinned against producer reuse until
@@ -1000,6 +1115,167 @@ mod tests {
             admissions.verdict_for(helper, 1),
             SurfaceShareConnectionAdmissionVerdict::NotYetAdmitted
         );
+    }
+
+    fn a_send_right_to_a_fresh_shared_event_at(
+        value: u64,
+    ) -> Option<(
+        objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLSharedEvent>>,
+        OwnedMachSendRight,
+    )> {
+        use objc2_metal::{MTLCreateSystemDefaultDevice, MTLDevice, MTLSharedEvent};
+        let shared_event = MTLCreateSystemDefaultDevice()?.newSharedEvent()?;
+        shared_event.setSignaledValue(value);
+        let send_right = streamlib_surface_client::mach_send_right_of_metal_shared_event_handle(
+            &shared_event.newSharedEventHandle(),
+        )
+        .expect("the handle's send right");
+        Some((shared_event, send_right))
+    }
+
+    fn signaled_value_behind(send_right: &OwnedMachSendRight) -> u64 {
+        use objc2_metal::{MTLCreateSystemDefaultDevice, MTLDevice, MTLSharedEvent};
+        let handle =
+            streamlib_surface_client::metal_shared_event_handle_of_mach_send_right(send_right)
+                .expect("a handle");
+        MTLCreateSystemDefaultDevice()
+            .and_then(|device| device.newSharedEventWithHandle(&handle))
+            .expect("the port names a live shared event")
+            .signaledValue()
+    }
+
+    #[test]
+    fn a_registration_with_a_timeline_pair_looks_up_with_both_ports_after_the_surface() {
+        let (Some((_produce_done, produce_done_port)), Some((_consume_done, consume_done_port))) = (
+            a_send_right_to_a_fresh_shared_event_at(11),
+            a_send_right_to_a_fresh_shared_event_at(22),
+        ) else {
+            return;
+        };
+        let state = IOSurfaceShareState::new();
+        let iosurface = a_small_iosurface();
+        let holder = state.check_out_leases().mint_holder_id();
+        let mut request = register_request("slot-timelines");
+        request[SURFACE_SHARE_HAS_PRODUCE_DONE_PORT] = true.into();
+        request[SURFACE_SHARE_HAS_CONSUME_DONE_PORT] = true.into();
+
+        let (registered, _) = answer_surface_share_request(
+            &state,
+            &request,
+            vec![a_port_to(&iosurface), produce_done_port, consume_done_port],
+            holder,
+        );
+        assert_eq!(registered, serde_json::json!({"success": true}));
+
+        let (looked_up, ports) = answer_surface_share_request(
+            &state,
+            &serde_json::json!({"op": "check_out", "surface_id": "slot-timelines"}),
+            Vec::new(),
+            holder,
+        );
+        assert_eq!(looked_up[SURFACE_SHARE_HAS_PRODUCE_DONE_PORT], true);
+        assert_eq!(looked_up[SURFACE_SHARE_HAS_CONSUME_DONE_PORT], true);
+        assert_eq!(ports.len(), 3);
+        assert_eq!(signaled_value_behind(&ports[1]), 11);
+        assert_eq!(signaled_value_behind(&ports[2]), 22);
+    }
+
+    #[test]
+    fn a_registration_announcing_one_timeline_port_is_refused() {
+        let Some((_produce_done, produce_done_port)) = a_send_right_to_a_fresh_shared_event_at(0)
+        else {
+            return;
+        };
+        let state = IOSurfaceShareState::new();
+        let iosurface = a_small_iosurface();
+        let mut request = register_request("slot-half-pair");
+        request[SURFACE_SHARE_HAS_PRODUCE_DONE_PORT] = true.into();
+
+        let (refused, _) = answer_surface_share_request(
+            &state,
+            &request,
+            vec![a_port_to(&iosurface), produce_done_port],
+            state.check_out_leases().mint_holder_id(),
+        );
+        assert!(
+            refused["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("both timeline ports or neither")),
+            "{refused}"
+        );
+        assert!(state.registration_of("slot-half-pair").is_none());
+    }
+
+    #[test]
+    fn a_host_side_report_against_a_surface_with_no_engine_pair_is_refused() {
+        let state = IOSurfaceShareState::new();
+        for op in [
+            SURFACE_SHARE_OP_SIGNAL_CONSUME_DONE,
+            SURFACE_SHARE_OP_TIMELINE_IMPORT_REFUSED,
+        ] {
+            let (refused, _) = answer_surface_share_request(
+                &state,
+                &serde_json::json!({"op": op, "surface_id": "slot-unpaired", "value": 1}),
+                Vec::new(),
+                state.check_out_leases().mint_holder_id(),
+            );
+            assert!(
+                refused["error"]
+                    .as_str()
+                    .is_some_and(|error| error.contains("no engine timeline pair")),
+                "{op}: {refused}"
+            );
+        }
+    }
+
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn a_helpers_host_side_reports_move_the_engines_own_pair() {
+        use crate::apple::surface_share::CrossProcessTimelinePair;
+        use crate::vulkan::rhi::{HostVulkanDevice, HostVulkanTimelineSemaphore};
+
+        let device = HostVulkanDevice::new().expect("the rig must produce a Vulkan device");
+        let pair = Arc::new(CrossProcessTimelinePair::new(
+            Arc::new(HostVulkanTimelineSemaphore::new_exportable(device.device(), 0).unwrap()),
+            Arc::new(HostVulkanTimelineSemaphore::new_exportable(device.device(), 0).unwrap()),
+        ));
+        let state = IOSurfaceShareState::new();
+        state
+            .cross_process_timeline_pairs()
+            .insert("slot-paired", Arc::clone(&pair));
+        let holder = state.check_out_leases().mint_holder_id();
+
+        let (refused_import, _) = answer_surface_share_request(
+            &state,
+            &serde_json::json!({
+                "op": SURFACE_SHARE_OP_TIMELINE_IMPORT_REFUSED,
+                "surface_id": "slot-paired#3",
+                "reason": "no VK_EXT_metal_objects",
+            }),
+            Vec::new(),
+            holder,
+        );
+        assert_eq!(refused_import, serde_json::json!({"success": true}));
+        assert!(pair.orders_host_side());
+
+        pair.produce_done()
+            .signal_host(4)
+            .expect("produce four frames");
+        let (signalled, _) = answer_surface_share_request(
+            &state,
+            &serde_json::json!({
+                "op": SURFACE_SHARE_OP_SIGNAL_CONSUME_DONE,
+                "surface_id": "slot-paired#3",
+                "value": 4,
+            }),
+            Vec::new(),
+            holder,
+        );
+        assert_eq!(signalled, serde_json::json!({"success": true}));
+        assert_eq!(pair.consume_done().current_value().unwrap(), 4);
     }
 
     #[test]
