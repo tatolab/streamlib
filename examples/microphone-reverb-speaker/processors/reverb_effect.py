@@ -1,5 +1,3 @@
-from dataclasses import dataclass
-
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 """A Schroeder-Moorer reverb, authored as an ordinary Python processor.
@@ -15,6 +13,8 @@ The contract also has to be `ordered`. A reverb is an accumulator whose output
 depends on every sample that came before it; `newest` skips bags by design, and
 a skipped block is a hole in a delay line.
 """
+
+from dataclasses import dataclass
 
 import numpy
 
