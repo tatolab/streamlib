@@ -38,8 +38,29 @@ def scenario_inverting_effect() -> None:
     print("MARKER:CLEAN_EXIT", flush=True)
 
 
+def scenario_cross_process_edit(skip_edit: bool) -> None:
+    """Native source → Python effect → a second Python processor: the edit
+    one child makes is read back by another, through the engine's memory."""
+    runtime = streamlib.Runtime()
+    pattern = runtime.add(
+        streamlib.TestPatternSource, config={"width": 320, "height": 180}
+    )
+    effect = runtime.add(
+        pixel_exchange_probes.ReportingInvertingEffect, config={"skip_edit": skip_edit}
+    )
+    verifier = runtime.add(pixel_exchange_probes.FrameDigestVerifier)
+    runtime.connect(pattern.output("video"), effect.input("video_from_upstream"))
+    runtime.connect(effect.output("video_to_downstream"), verifier.input("video_from_upstream"))
+    runtime.run()
+    print("MARKER:CLEAN_EXIT", flush=True)
+
+
 if __name__ == "__main__":
     if sys.argv[1] == "inverting_effect":
         scenario_inverting_effect()
+    elif sys.argv[1] == "cross_process_edit":
+        scenario_cross_process_edit(skip_edit=False)
+    elif sys.argv[1] == "cross_process_edit_negative_control":
+        scenario_cross_process_edit(skip_edit=True)
     else:
         scenario_probe(sys.argv[1])

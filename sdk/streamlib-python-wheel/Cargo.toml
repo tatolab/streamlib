@@ -85,13 +85,19 @@ parking_lot = "0.12"
 [target.'cfg(target_os = "linux")'.dependencies]
 cudarc = { workspace = true }
 
-# The helper child's half of the pixel exchange: the SCM_RIGHTS client that
-# checks a surface out of the parent's surface-share service, and the
-# consumer-side Vulkan import that turns its DMA-BUF plane fds into mapped
-# memory. Both already ride in the binary via the engine; named here so the
-# wheel can call them.
+# The helper child's half of the pixel exchange: the client that checks a
+# surface out of the parent's surface-share service — SCM_RIGHTS on Linux, raw
+# Mach on macOS — and the consumer-side Vulkan import that turns what it
+# carries into mapped memory. Both already ride in the binary via the engine;
+# named here so the wheel can call them.
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 streamlib-surface-client = { path = "../../runtime/streamlib-surface-client", version = "0.26.12" }
 streamlib-consumer-rhi = { path = "../../runtime/streamlib-consumer-rhi", version = "0.26.12" }
+
+# The IOSurface a macOS helper looks up from the port a check-out carries.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-io-surface.workspace = true
+objc2-core-foundation.workspace = true
 
 [dev-dependencies]
 # Unit tests open helper data planes over a node in the test process's own

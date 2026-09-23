@@ -216,6 +216,11 @@ pub mod sdk {
         #[cfg(target_os = "linux")]
         pub use streamlib_engine::linux_surface_share;
 
+        /// The macOS peer of `linux_surface_share`: the raw-Mach service, its
+        /// rendezvous, and the helper-process admission a spawner holds.
+        #[cfg(target_os = "macos")]
+        pub use streamlib_engine::apple_surface_share;
+
         /// The resolved colour → V4L2 map, for a built-in that signals a V4L2
         /// output device at `S_FMT`.
         #[cfg(target_os = "linux")]

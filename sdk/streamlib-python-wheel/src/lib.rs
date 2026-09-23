@@ -29,7 +29,7 @@ mod python_processor_owned_window;
 mod python_processor_registration;
 mod python_runtime_lifecycle;
 mod python_runtime_mesh_observation;
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod python_surface_share_service_for_tests;
 mod python_test_harness_endpoints;
 

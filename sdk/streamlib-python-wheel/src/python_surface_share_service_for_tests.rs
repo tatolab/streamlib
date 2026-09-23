@@ -6,17 +6,22 @@
 //! The lease is the whole lifetime contract, and the wheel's device tests are
 //! `requires_gpu` while CI declares no GPU runner — so anything about leases
 //! that is not provable here is not protected anywhere. The service is the real
-//! one; only the surface behind it is a stand-in, a sized memfd, because a
-//! claim is bookkeeping over an id and never touches the memory.
+//! one on each platform — the Unix socket on Linux, raw Mach on macOS. On Linux
+//! the surface behind it is a stand-in, a sized memfd, because a claim is
+//! bookkeeping over an id and never touches the memory; on macOS it is a small
+//! private IOSurface, the only thing the service registers.
 
+#[cfg(target_os = "linux")]
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use streamlib::sdk::context::SurfaceCheckOutLeaseRegistry;
+#[cfg(target_os = "linux")]
 use streamlib::sdk::engine::linux_surface_share::{SurfaceShareState, UnixSocketSurfaceService};
 
 /// A running service, and the lease table the pool reads to decide whether a
 /// slot may be rehanded.
+#[cfg(target_os = "linux")]
 pub(crate) struct SurfaceShareUnderTest {
     _service: UnixSocketSurfaceService,
     pub(crate) socket_path: PathBuf,
@@ -27,13 +32,20 @@ pub(crate) struct SurfaceShareUnderTest {
     held_publisher_connections: parking_lot::Mutex<Vec<std::os::unix::net::UnixStream>>,
 }
 
+#[cfg(target_os = "linux")]
 impl Drop for SurfaceShareUnderTest {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.socket_directory);
     }
 }
 
+#[cfg(target_os = "linux")]
 impl SurfaceShareUnderTest {
+    /// What the parent names the channel by in a helper's environment.
+    pub(crate) fn channel_name_for_the_helper(&self) -> std::ffi::OsString {
+        self.socket_path.clone().into_os_string()
+    }
+
     /// Start a service on a socket of this test's own.
     pub(crate) fn start(label: &str) -> Self {
         let socket_directory = Self::a_directory_short_enough_for_a_unix_socket(label);
@@ -183,5 +195,155 @@ impl SurfaceShareUnderTest {
         self.check_out_leases
             .publish_frame_generation(slot_id, frame_generation)
             .expect("the lease table stays readable");
+    }
+}
+
+/// A running Mach service, the connection its surfaces were registered over,
+/// and the lease table the pool reads to decide whether a slot may be
+/// rehanded.
+#[cfg(target_os = "macos")]
+pub(crate) struct SurfaceShareUnderTest {
+    service: streamlib::sdk::engine::apple_surface_share::MachSurfaceShareService,
+    check_out_leases: Arc<SurfaceCheckOutLeaseRegistry>,
+    /// Held open for the test's lifetime, as a publisher's would be.
+    publisher_connection: streamlib_surface_client::SurfaceShareMachServiceConnection,
+    published_iosurfaces_by_surface_id: parking_lot::Mutex<
+        std::collections::HashMap<
+            String,
+            objc2_core_foundation::CFRetained<objc2_io_surface::IOSurfaceRef>,
+        >,
+    >,
+}
+
+#[cfg(target_os = "macos")]
+impl SurfaceShareUnderTest {
+    /// Start a service under a bootstrap name of this test's own.
+    pub(crate) fn start(label: &str) -> Self {
+        use streamlib::sdk::engine::apple_surface_share::{
+            IOSurfaceShareState, MachSurfaceShareService,
+        };
+        let state = IOSurfaceShareState::new();
+        let check_out_leases = Arc::clone(state.check_out_leases());
+        let service_name = format!(
+            "com.tatolab.streamlib.wheel-surface-share-test.{label}.{}",
+            std::process::id()
+        );
+        let mut service = MachSurfaceShareService::new(state, service_name);
+        service.start().expect("the surface-share service starts");
+        let publisher_connection =
+            streamlib_surface_client::SurfaceShareMachServiceConnection::connect(
+                service.service_name(),
+                std::time::Duration::from_secs(5),
+            )
+            .expect("the test process is admitted to its own service");
+        Self {
+            service,
+            check_out_leases,
+            publisher_connection,
+            published_iosurfaces_by_surface_id: parking_lot::Mutex::new(
+                std::collections::HashMap::new(),
+            ),
+        }
+    }
+
+    /// What the parent names the channel by in a helper's environment.
+    pub(crate) fn channel_name_for_the_helper(&self) -> std::ffi::OsString {
+        self.service.service_name().into()
+    }
+
+    /// Register `surface_id` over a fresh 32x32 BGRA IOSurface.
+    fn register_an_iosurface_as(&self, surface_id: &str) {
+        use streamlib::sdk::engine::apple_surface_share::{
+            create_iosurface_mach_send_right, create_private_iosurface_with_packed_rows,
+        };
+        let iosurface = create_private_iosurface_with_packed_rows(
+            32,
+            32,
+            4,
+            streamlib::sdk::rhi::PixelFormat::Bgra32,
+        )
+        .expect("a private IOSurface");
+        let iosurface_port = create_iosurface_mach_send_right(&iosurface).expect("a port to it");
+        let (response, _no_reply_ports) = self
+            .publisher_connection
+            .send_request_with_ports(
+                &serde_json::json!({
+                    "op": "register",
+                    "surface_id": surface_id,
+                    "runtime_id": "lease-debt-test-runtime",
+                    "width": 32,
+                    "height": 32,
+                    "format": "bgra32",
+                    "resource_type": "pixel_buffer",
+                }),
+                vec![iosurface_port],
+            )
+            .expect("register");
+        assert_eq!(
+            response.get("success").and_then(serde_json::Value::as_bool),
+            Some(true),
+            "the registration must succeed: {response:?}"
+        );
+        self.published_iosurfaces_by_surface_id
+            .lock()
+            .insert(surface_id.to_string(), iosurface);
+    }
+
+    /// Publish one surface and return the id it lives under.
+    pub(crate) fn publish_one_surface(&self) -> String {
+        static SURFACES_PUBLISHED_IN_THIS_PROCESS: std::sync::atomic::AtomicU64 =
+            std::sync::atomic::AtomicU64::new(0);
+        let surface_id = format!(
+            "surface-under-test-{}",
+            SURFACES_PUBLISHED_IN_THIS_PROCESS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        );
+        self.register_an_iosurface_as(&surface_id);
+        surface_id
+    }
+
+    /// How many claims are outstanding on `surface_id` — what the pool asks
+    /// before it rehands a slot.
+    pub(crate) fn outstanding_claims_on(&self, surface_id: &str) -> u32 {
+        self.check_out_leases
+            .outstanding_check_out_count(surface_id)
+            .expect("the lease table stays readable")
+    }
+
+    /// Register `slot_id` as a pool-slot surface and publish `frame_generation`
+    /// as its current frame — the state a pool producer's acquire leaves
+    /// behind, without needing a pool or a GPU.
+    pub(crate) fn publish_pool_slot_frame(&self, slot_id: &str, frame_generation: u64) {
+        if self
+            .check_out_leases
+            .current_frame_generation(slot_id)
+            .expect("the lease table stays readable")
+            .is_none()
+        {
+            self.register_an_iosurface_as(slot_id);
+        }
+        self.check_out_leases
+            .publish_frame_generation(slot_id, frame_generation)
+            .expect("the lease table stays readable");
+    }
+
+    /// Admit `pid` — a helper process this test spawned — to the service.
+    pub(crate) fn admit_helper_process(
+        &self,
+        pid: u32,
+    ) -> streamlib::sdk::engine::apple_surface_share::SurfaceShareHelperProcessAdmission {
+        self.service.rendezvous().admit_helper_process(pid)
+    }
+
+    /// The IOSurface registered as `surface_id`, for asking the kernel
+    /// whether anything holds it.
+    pub(crate) fn iosurface_registered_as(
+        &self,
+        surface_id: &str,
+    ) -> objc2_core_foundation::CFRetained<objc2_io_surface::IOSurfaceRef> {
+        self.published_iosurfaces_by_surface_id
+            .lock()
+            .get(surface_id)
+            .cloned()
+            .expect("a surface this harness registered")
     }
 }

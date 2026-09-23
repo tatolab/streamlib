@@ -372,10 +372,11 @@ class {SCAFFOLDED_EFFECT_CLASS_NAME}:
         with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
             surface.lock(read_only=False)
             pixels = surface.as_numpy()
-            # One bulk read out, edit on the host, one bulk write back. The
-            # mapping is write-combined: CPU reads of it run around 175 MB/s,
-            # so editing in place through a strided view re-reads that memory
-            # per channel and costs ~225ms a frame against ~30ms this way.
+            # One bulk read out, edit on the host, one bulk write back. On
+            # Linux the mapping is write-combined: CPU reads of it run around
+            # 175 MB/s, so editing in place through a strided view re-reads
+            # that memory per channel and costs ~225ms a frame against ~30ms
+            # this way. On a Mac the mapping is cached and both ways are fast.
             edited = pixels.copy()
             # Color channels only — inverting alpha would erase the picture.
             edited[:, :, :3] = 255 - edited[:, :, :3]

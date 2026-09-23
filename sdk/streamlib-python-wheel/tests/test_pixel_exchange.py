@@ -208,6 +208,54 @@ def test_a_processor_edits_a_synthetic_frames_pixels_in_place(start_app_under_te
     ), "a fresh resolve did not see the edit — the pixels Python wrote were a copy"
 
 
+def run_cross_process_edit(start_app_under_test, scenario: str) -> tuple[dict, dict]:
+    """The editor's and the verifier's observations of one frame."""
+    app = start_app_under_test(APP, scenario)
+    app.await_output_containing('"role": "verifier"', "the verifier's digest of the edited frame")
+    app.interrupt()
+    app.await_marker("CLEAN_EXIT")
+    app.await_clean_exit()
+    observations = [json.loads(line) for line in PROBE_RESULT.findall(app.output)]
+    for observation in observations:
+        if "failure" in observation:
+            pytest.fail(f"a processor raised in its helper process:\n{observation['failure']}")
+    by_role = {observation["role"]: observation for observation in observations}
+    return by_role["editor"], by_role["verifier"]
+
+
+def test_an_edit_lands_in_the_engines_memory_where_another_process_reads_it(
+    start_app_under_test,
+):
+    """The scaffold's story across three processes: the app's native source
+    writes a frame, one child inverts it in place through a numpy view, and a
+    second child reads the frame back.
+
+    Every pixel is compared, through a digest: a copy handed to the editor, a
+    stride the two children derive differently, or a write that never reached
+    the engine's memory each leave the verifier reading something else.
+    """
+    editor, verifier = run_cross_process_edit(start_app_under_test, "cross_process_edit")
+    assert editor["pid"] != verifier["pid"], "the verifier must read from its own process"
+    assert verifier["surface_id"] == editor["surface_id"]
+    assert verifier["observed_sha256"] == editor["expected_sha256"], (
+        "the frame another process read is not the frame the effect wrote"
+    )
+
+
+def test_the_cross_process_check_fails_when_the_effect_skips_its_edit(
+    start_app_under_test,
+):
+    """The negative control: an effect that reports the inverted digest but
+    leaves the pixels alone must be caught, or the check above proves nothing."""
+    editor, verifier = run_cross_process_edit(
+        start_app_under_test, "cross_process_edit_negative_control"
+    )
+    assert verifier["surface_id"] == editor["surface_id"]
+    assert verifier["observed_sha256"] != editor["expected_sha256"], (
+        "the verifier matched a frame nobody edited"
+    )
+
+
 def test_a_multi_plane_format_is_refused_rather_than_exported_as_luma(
     start_app_under_test,
 ):

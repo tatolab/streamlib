@@ -5663,6 +5663,8 @@ version = "0.26.12"
 dependencies = [
  "cudarc",
  "libc",
+ "objc2-core-foundation",
+ "objc2-io-surface",
  "parking_lot",
  "pyo3",
  "rmp-serde",
