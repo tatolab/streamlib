@@ -21,7 +21,7 @@ use crate::core::rhi::PixelFormat;
 use crate::core::{Error, Result};
 
 use super::surface_check_out_lease_registry::SurfaceCheckOutLeaseRegistry;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::host_rhi::HostTextureExt;
 
 /// Every plane of a pixel buffer exported for the surface-share wire: the
@@ -1447,22 +1447,201 @@ impl SurfaceStoreInner {
         pixel_buffer: &PixelBuffer,
         timeline_pair: Option<&crate::apple::surface_share::CrossProcessTimelinePair>,
     ) -> Result<()> {
-        let mut ports = vec![exported_iosurface_port(pixel_buffer)?];
+        self.send_iosurface_registration(
+            exported_iosurface_port(pixel_buffer)?,
+            serde_json::json!({
+                "surface_id": surface_id,
+                "width": pixel_buffer.width,
+                "height": pixel_buffer.height,
+                "format": pixel_buffer.format().wire_name(),
+                "resource_type": SURFACE_RESOURCE_TYPE_PIXEL_BUFFER,
+            }),
+            timeline_pair,
+        )
+    }
+
+    /// Register an IOSurface-backed texture under `surface_id` whole: its
+    /// surface, its image recipe, the layout it is in, and its timeline pair.
+    /// When the pair will not export, the registration crosses without it and
+    /// the pair orders host-side.
+    #[cfg(target_os = "macos")]
+    pub fn register_texture_with_timeline_pair(
+        &self,
+        surface_id: &str,
+        texture: &crate::core::rhi::Texture,
+        timeline_pair: &Arc<crate::apple::surface_share::CrossProcessTimelinePair>,
+        current_image_layout: streamlib_consumer_rhi::VulkanLayout,
+    ) -> Result<()> {
+        use crate::vulkan::rhi::VulkanTextureLike as _;
+
+        let cross_process_timeline_pairs =
+            self.cross_process_timeline_pairs.as_ref().ok_or_else(|| {
+                Error::Configuration(format!(
+                    "register_texture_with_timeline_pair('{surface_id}'): this store shares no \
+                     timeline-pair table with a surface-share service"
+                ))
+            })?;
+        let image = texture.vulkan_inner();
+        let mut registration = serde_json::json!({
+            "surface_id": surface_id,
+            "width": texture.width(),
+            "height": texture.height(),
+            "format": texture.format().wire_name(),
+            "resource_type": SURFACE_RESOURCE_TYPE_TEXTURE,
+            "current_image_layout": current_image_layout.as_vk().as_raw(),
+        });
+        if let Some(registration_fields) = registration.as_object_mut() {
+            use super::surface_share_wire_verbs as wire;
+            wire::VkImageCreateInfoFields {
+                vk_image_type: wire::VK_IMAGE_TYPE_DEFAULT,
+                vk_image_mip_levels: wire::VK_IMAGE_MIP_LEVELS_DEFAULT,
+                vk_image_array_layers: wire::VK_IMAGE_ARRAY_LAYERS_DEFAULT,
+                vk_image_samples: wire::VK_IMAGE_SAMPLES_DEFAULT,
+                vk_image_tiling: image.vk_image_tiling().as_raw(),
+                vk_image_usage: image.vk_image_usage_flags().bits(),
+                vk_image_allocation_size: image.iosurface_backed_allocation_size(),
+            }
+            .insert_into_reply(registration_fields);
+        }
+        // Recorded only once the service accepted the id: a refused duplicate
+        // must not displace the live registration's pair.
+        self.send_iosurface_registration(
+            image.export_iosurface_mach_send_right()?,
+            registration,
+            Some(timeline_pair),
+        )?;
+        cross_process_timeline_pairs.insert(surface_id, Arc::clone(timeline_pair));
+        tracing::debug!(
+            "SurfaceStore: Registered texture '{}' with its timeline pair (host-side ordering: {})",
+            surface_id,
+            timeline_pair.orders_host_side()
+        );
+        Ok(())
+    }
+
+    /// Send one `register` of `registration`'s fields, with the IOSurface's
+    /// port first and the timeline pair's shared events after it when there
+    /// is a pair and it exports.
+    #[cfg(target_os = "macos")]
+    fn send_iosurface_registration(
+        &self,
+        iosurface_port: streamlib_surface_client::OwnedMachSendRight,
+        mut registration: serde_json::Value,
+        timeline_pair: Option<&crate::apple::surface_share::CrossProcessTimelinePair>,
+    ) -> Result<()> {
+        let mut ports = vec![iosurface_port];
         let carries_timeline_pair = timeline_pair
             .is_some_and(|timeline_pair| timeline_pair.append_exported_send_rights_to(&mut ports));
-        let request = serde_json::json!({
-            "op": "register",
-            "surface_id": surface_id,
-            "runtime_id": self.runtime_id,
-            "width": pixel_buffer.width,
-            "height": pixel_buffer.height,
-            "format": pixel_buffer.format().wire_name(),
-            "resource_type": SURFACE_RESOURCE_TYPE_PIXEL_BUFFER,
-            streamlib_surface_client::SURFACE_SHARE_HAS_PRODUCE_DONE_PORT: carries_timeline_pair,
-            streamlib_surface_client::SURFACE_SHARE_HAS_CONSUME_DONE_PORT: carries_timeline_pair,
-        });
-        let (response, _) = self.send_surface_share_mach_request("register", &request, ports)?;
+        if let Some(registration_fields) = registration.as_object_mut() {
+            registration_fields.insert("op".into(), "register".into());
+            registration_fields.insert("runtime_id".into(), self.runtime_id.clone().into());
+            registration_fields.insert(
+                streamlib_surface_client::SURFACE_SHARE_HAS_PRODUCE_DONE_PORT.into(),
+                carries_timeline_pair.into(),
+            );
+            registration_fields.insert(
+                streamlib_surface_client::SURFACE_SHARE_HAS_CONSUME_DONE_PORT.into(),
+                carries_timeline_pair.into(),
+            );
+        }
+        let (response, _) =
+            self.send_surface_share_mach_request("register", &registration, ports)?;
         refusal_of_a_registration_answer("register", &response)
+    }
+
+    /// Resolve a texture another runtime registered to an image over its
+    /// IOSurface, with the layout it was last published in.
+    #[cfg(target_os = "macos")]
+    pub fn lookup_texture(
+        &self,
+        surface_id: &str,
+    ) -> Result<(
+        crate::core::rhi::Texture,
+        streamlib_consumer_rhi::VulkanLayout,
+    )> {
+        const OPERATION: &str = "lookup_texture";
+        let request = serde_json::json!({"op": "lookup", "surface_id": surface_id});
+        let (answer, reply_ports) =
+            self.send_surface_share_mach_request(OPERATION, &request, Vec::new())?;
+        if answer
+            .get("resource_type")
+            .and_then(serde_json::Value::as_str)
+            != Some(SURFACE_RESOURCE_TYPE_TEXTURE)
+        {
+            return Err(Error::Configuration(format!(
+                "{OPERATION}: '{surface_id}' is registered as {}, not a texture",
+                answer["resource_type"]
+            )));
+        }
+        // Ports after the IOSurface's are the pair's shared events, which the
+        // registering runtime orders; they are released here.
+        let iosurface_port = reply_ports.into_iter().next().ok_or_else(|| {
+            Error::Configuration(format!(
+                "{OPERATION}: the answer for '{surface_id}' carried no IOSurface port"
+            ))
+        })?;
+        let iosurface =
+            objc2_io_surface::IOSurfaceRef::lookup_from_mach_port(iosurface_port.as_raw_name())
+                .ok_or_else(|| {
+                    Error::Configuration(format!(
+                        "{OPERATION}: the port answered for '{surface_id}' names no IOSurface"
+                    ))
+                })?;
+        let format = answer
+            .get("format")
+            .and_then(serde_json::Value::as_str)
+            .and_then(crate::core::rhi::TextureFormat::from_wire_name)
+            .ok_or_else(|| {
+                Error::Configuration(format!(
+                    "{OPERATION}: the answer for '{surface_id}' names no texture format"
+                ))
+            })?;
+        let recipe = super::surface_share_wire_verbs::parse_vk_image_create_info_fields(&answer);
+        let vulkan_device = crate::vulkan::rhi::vulkan_buffer::VULKAN_DEVICE_FOR_IMPORT
+            .get()
+            .ok_or_else(|| {
+                Error::NotSupported(format!(
+                    "{OPERATION}: HostVulkanDevice not initialized for import"
+                ))
+            })?;
+        let vulkan_texture = crate::vulkan::rhi::HostVulkanTexture::from_iosurface(
+            vulkan_device,
+            iosurface,
+            format,
+            recipe.vk_image_usage,
+        )?;
+        let current_image_layout = answer
+            .get("current_image_layout")
+            .and_then(serde_json::Value::as_i64)
+            .map(|raw| streamlib_consumer_rhi::VulkanLayout(raw as i32))
+            .unwrap_or(streamlib_consumer_rhi::VulkanLayout::UNDEFINED);
+        Ok((
+            crate::core::rhi::Texture::from_vulkan(vulkan_texture),
+            current_image_layout,
+        ))
+    }
+
+    /// Publish the layout a registered texture was left in, so the next
+    /// holder transitions out of the layout the image is actually in.
+    #[cfg(target_os = "macos")]
+    pub fn update_image_layout(
+        &self,
+        surface_id: &str,
+        layout: streamlib_consumer_rhi::VulkanLayout,
+    ) -> Result<()> {
+        let request = serde_json::json!({
+            "op": "update_layout",
+            "surface_id": surface_id,
+            "current_image_layout": layout.as_vk().as_raw(),
+        });
+        let (response, _) =
+            self.send_surface_share_mach_request("update_layout", &request, Vec::new())?;
+        match response.get("success").and_then(serde_json::Value::as_bool) {
+            Some(true) => Ok(()),
+            _ => Err(Error::Configuration(format!(
+                "update_layout: no texture is registered as '{surface_id}'"
+            ))),
+        }
     }
 
     /// Resolve a registered pool slot to a pixel buffer over its IOSurface.
@@ -1604,13 +1783,7 @@ impl SurfaceStoreInner {
         ))
     }
 
-    // Non-Linux stubs. `_current_image_layout` and the (timeline,
-    // layout) tuple shape mirror the Linux signatures so a future
-    // non-Linux caller hits the same API surface; they always error
-    // because the surface-share daemon and texture import paths are
-    // Linux-only today. Layout is `i32` rather than `VulkanLayout`
-    // because `VulkanLayout` is itself Linux-only.
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     pub fn register_texture(
         &self,
         _surface_id: &str,
@@ -1623,14 +1796,14 @@ impl SurfaceStoreInner {
         ))
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     pub fn lookup_texture(&self, _surface_id: &str) -> Result<(crate::core::rhi::Texture, i32)> {
         Err(Error::NotSupported(
             "Texture lookup not supported on this platform".into(),
         ))
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     pub fn update_image_layout(&self, _surface_id: &str, _layout: i32) -> Result<()> {
         Err(Error::NotSupported(
             "update_image_layout not supported on this platform".into(),
@@ -1970,7 +2143,7 @@ impl SurfaceStore {
         not(test),
         expect(
             dead_code,
-            reason = "the macOS texture and escalate arms call it (#2402)"
+            reason = "no pool slot registers with its timeline pair outside tests yet"
         )
     )]
     pub(crate) fn host_register_pixel_buffer_with_timeline_pair(
@@ -1988,6 +2161,30 @@ impl SurfaceStore {
             surface_id,
             pixel_buffer,
             timeline_pair,
+        )
+    }
+
+    /// **Engine-only** — register an IOSurface-backed texture with its
+    /// cross-process timeline pair (macOS). See
+    /// [`SurfaceStoreInner::register_texture_with_timeline_pair`].
+    #[cfg(target_os = "macos")]
+    pub(crate) fn host_register_texture_with_timeline_pair(
+        &self,
+        surface_id: &str,
+        texture: &crate::core::rhi::Texture,
+        timeline_pair: &Arc<crate::apple::surface_share::CrossProcessTimelinePair>,
+        current_image_layout: streamlib_consumer_rhi::VulkanLayout,
+    ) -> Result<()> {
+        if self.is_none() {
+            return Err(Error::Configuration(
+                "SurfaceStore::register_texture_with_timeline_pair: null handle".into(),
+            ));
+        }
+        self.host_inner().register_texture_with_timeline_pair(
+            surface_id,
+            texture,
+            timeline_pair,
+            current_image_layout,
         )
     }
 
@@ -2016,8 +2213,8 @@ impl SurfaceStore {
         )
     }
 
-    /// Look up a registered texture by surface_id (Linux).
-    #[cfg(target_os = "linux")]
+    /// Look up a registered texture by surface_id.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn lookup_texture(
         &self,
         surface_id: &str,
@@ -2033,8 +2230,8 @@ impl SurfaceStore {
         self.host_inner().lookup_texture(surface_id)
     }
 
-    /// Update the published `VkImageLayout` for a registered texture (Linux).
-    #[cfg(target_os = "linux")]
+    /// Update the published `VkImageLayout` for a registered texture.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn update_image_layout(
         &self,
         surface_id: &str,
