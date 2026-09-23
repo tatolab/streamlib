@@ -1,0 +1,424 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
+use std::sync::Arc;
+
+use parking_lot::Mutex;
+use pyo3::exceptions::PyRuntimeError;
+use pyo3::prelude::*;
+use streamlib_consumer_rhi::{ConsumerVulkanBuffer, ConsumerVulkanDevice};
+
+use super::{
+    HelperCheckedOutPixelSurface, HelperCheckedOutSurface, HelperProcessGpuExchangeClient,
+    HelperSurfaceCheckOutLeaseDebt, SURFACE_SHARE_RESPONSE_TIMEOUT, SurfaceShareAnswer,
+    SurfaceShareTransferredHandle, refuse_check_out_the_service_declined,
+    required_positive_u32_check_out_metadata_field,
+};
+
+/// A pool slot's IOSurface pages imported as host memory on this helper's
+/// consumer device; the import retains the surface.
+pub(crate) struct HelperIOSurfacePoolSlotImport {
+    pub(super) consumer_buffer: ConsumerVulkanBuffer,
+}
+
+impl HelperIOSurfacePoolSlotImport {
+    /// Import `iosurface`'s pages on `vulkan_device`.
+    fn import(
+        vulkan_device: &Arc<ConsumerVulkanDevice>,
+        iosurface: &objc2_io_surface::IOSurfaceRef,
+    ) -> streamlib_consumer_rhi::Result<Self> {
+        Ok(Self {
+            consumer_buffer: ConsumerVulkanBuffer::from_iosurface_pages(vulkan_device, iosurface)?,
+        })
+    }
+
+    /// The slot's IOSurface.
+    fn iosurface(&self) -> &objc2_io_surface::IOSurfaceRef {
+        self.consumer_buffer
+            .backing_iosurface()
+            .expect("an import built by `import` is backed by the IOSurface it was built from")
+    }
+}
+
+/// The per-slot cache, shared with the thread that empties it when the
+/// parent's service goes away.
+pub(super) type HelperIOSurfaceImportsByPoolSlot =
+    Arc<Mutex<std::collections::HashMap<String, Arc<HelperIOSurfacePoolSlotImport>>>>;
+
+/// One frame's raise of its IOSurface's use count, lowered on drop.
+///
+/// This is the claim `IOSurfaceIsInUse` answers across processes, so the pool
+/// skips the slot while a view of the frame is live — even after a lease was
+/// reclaimed on a connection drop — and the kernel lowers it if this process
+/// dies. A cached `IOSurfaceRef` alone raises nothing.
+pub(crate) struct HelperIOSurfaceUseCountClaim {
+    iosurface_pool_slot_import: Arc<HelperIOSurfacePoolSlotImport>,
+}
+
+impl HelperIOSurfaceUseCountClaim {
+    fn claiming(iosurface_pool_slot_import: Arc<HelperIOSurfacePoolSlotImport>) -> Self {
+        iosurface_pool_slot_import.iosurface().increment_use_count();
+        Self {
+            iosurface_pool_slot_import,
+        }
+    }
+}
+
+impl Drop for HelperIOSurfaceUseCountClaim {
+    fn drop(&mut self) {
+        self.iosurface_pool_slot_import
+            .iosurface()
+            .decrement_use_count();
+    }
+}
+
+/// IOSurfaceLock or IOSurfaceUnlock refused, with the kernel's code.
+#[derive(Debug)]
+struct IOSurfaceLockRefused {
+    operation: &'static str,
+    kern_return: i32,
+}
+
+impl std::fmt::Display for IOSurfaceLockRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} refused ({:#x})", self.operation, self.kern_return)
+    }
+}
+
+impl HelperCheckedOutPixelSurface {
+    /// Take the IOSurface lock for CPU access, read-only or read-write,
+    /// replacing any lock this surface already holds. On a discrete-GPU Mac
+    /// the lock is what makes the host view coherent with the GPU's copy.
+    pub(crate) fn lock_the_iosurface_for_cpu_access(&self, read_only: bool) -> PyResult<()> {
+        use objc2_io_surface::IOSurfaceLockOptions;
+        let mut held_lock = self.iosurface_cpu_lock.lock();
+        if let Some(held_options) = *held_lock {
+            self.unlock_the_iosurface_held_with(held_options)
+                .map_err(|refused| self.iosurface_lock_error(refused))?;
+            *held_lock = None;
+        }
+        let lock_options = if read_only {
+            IOSurfaceLockOptions::ReadOnly
+        } else {
+            IOSurfaceLockOptions::empty()
+        };
+        // SAFETY: a null seed pointer is documented as "not wanted".
+        let kern_return = unsafe {
+            self.iosurface_pool_slot_import
+                .iosurface()
+                .lock(lock_options, std::ptr::null_mut())
+        };
+        if kern_return != 0 {
+            return Err(self.iosurface_lock_error(IOSurfaceLockRefused {
+                operation: "IOSurfaceLock",
+                kern_return,
+            }));
+        }
+        *held_lock = Some(lock_options);
+        Ok(())
+    }
+
+    /// Release the IOSurface lock this surface's CPU access holds, if any.
+    pub(crate) fn unlock_the_iosurface_after_cpu_access(&self) -> PyResult<()> {
+        self.release_the_held_iosurface_lock()
+            .map_err(|refused| self.iosurface_lock_error(refused))
+    }
+
+    /// Release the held lock; a refused unlock leaves it recorded as held.
+    fn release_the_held_iosurface_lock(&self) -> Result<(), IOSurfaceLockRefused> {
+        let mut held_lock = self.iosurface_cpu_lock.lock();
+        if let Some(held_options) = *held_lock {
+            self.unlock_the_iosurface_held_with(held_options)?;
+            *held_lock = None;
+        }
+        Ok(())
+    }
+
+    fn unlock_the_iosurface_held_with(
+        &self,
+        held_options: objc2_io_surface::IOSurfaceLockOptions,
+    ) -> Result<(), IOSurfaceLockRefused> {
+        // SAFETY: unlocks with the options the matching lock took.
+        let kern_return = unsafe {
+            self.iosurface_pool_slot_import
+                .iosurface()
+                .unlock(held_options, std::ptr::null_mut())
+        };
+        if kern_return != 0 {
+            return Err(IOSurfaceLockRefused {
+                operation: "IOSurfaceUnlock",
+                kern_return,
+            });
+        }
+        Ok(())
+    }
+
+    fn iosurface_lock_error(&self, refused: IOSurfaceLockRefused) -> PyErr {
+        PyRuntimeError::new_err(format!("{refused} on surface {:?}", self.surface_id))
+    }
+}
+
+impl Drop for HelperCheckedOutPixelSurface {
+    /// A surface dropped mid-access lets its IOSurface lock go before its
+    /// use-count claim does.
+    fn drop(&mut self) {
+        if let Err(refused) = self.release_the_held_iosurface_lock() {
+            tracing::warn!("{refused} on surface {:?}", self.surface_id);
+        }
+    }
+}
+
+impl HelperProcessGpuExchangeClient {
+    /// This helper's connection to the parent's surface-share Mach service,
+    /// opened on first use together with the thread that empties the
+    /// per-slot cache when the service goes away — an IOSurface this helper
+    /// still holds stays readable after the engine dies, so nothing else
+    /// would release it.
+    fn surface_share_mach_connection(
+        &self,
+    ) -> PyResult<Arc<streamlib_surface_client::SurfaceShareMachServiceConnection>> {
+        let mut connection = self.surface_share_mach_connection.lock();
+        if let Some(open_connection) = connection.as_ref() {
+            return Ok(Arc::clone(open_connection));
+        }
+        let service_name = self
+            .surface_share_mach_service_name
+            .to_str()
+            .ok_or_else(|| {
+                PyRuntimeError::new_err(format!(
+                    "the surface-share Mach service name {:?} is not UTF-8, so it names no \
+                 bootstrap service",
+                    self.surface_share_mach_service_name
+                ))
+            })?;
+        let opened = Arc::new(
+            streamlib_surface_client::SurfaceShareMachServiceConnection::connect(
+                service_name,
+                SURFACE_SHARE_RESPONSE_TIMEOUT,
+            )
+            .map_err(|connect_failure| {
+                PyRuntimeError::new_err(format!(
+                    "could not reach the surface-share Mach service '{service_name}': \
+                     {connect_failure}. The parent runtime owns that service; if it is gone, \
+                     this helper is orphaned",
+                ))
+            })?,
+        );
+        let watched_connection = Arc::clone(&opened);
+        let iosurface_imports_by_pool_slot = Arc::clone(&self.iosurface_imports_by_pool_slot);
+        std::thread::Builder::new()
+            .name("surface-share-service-watch".into())
+            .spawn(
+                move || match watched_connection.wait_for_the_service_to_go_away(None) {
+                    Ok(_) => {
+                        let released = std::mem::take(&mut *iosurface_imports_by_pool_slot.lock());
+                        tracing::info!(
+                            "the surface-share service went away; released the {} pool slot(s) \
+                             this helper had imported",
+                            released.len()
+                        );
+                    }
+                    Err(watch_failure) => tracing::warn!(
+                        "could not watch the surface-share service for its going away \
+                         ({watch_failure}); this helper keeps its imported pool slots until it \
+                         stops"
+                    ),
+                },
+            )
+            .map_err(|spawn_failure| {
+                PyRuntimeError::new_err(format!(
+                    "could not start the thread that watches the surface-share service: \
+                     {spawn_failure}"
+                ))
+            })?;
+        *connection = Some(Arc::clone(&opened));
+        Ok(opened)
+    }
+
+    pub(super) fn surface_share_request(
+        &self,
+        request: &serde_json::Value,
+    ) -> PyResult<SurfaceShareAnswer> {
+        self.surface_share_mach_connection()?
+            .send_request_with_ports(request, Vec::new())
+            .map_err(|request_failure| {
+                PyRuntimeError::new_err(format!(
+                    "the surface-share request failed: {request_failure}"
+                ))
+            })
+    }
+
+    /// Whether an edit written back into `surface_id` publishes at all.
+    ///
+    /// On macOS a pooled pixel buffer's CPU view is its IOSurface's own
+    /// pages, which every other holder of the frame imports too, so the
+    /// pooled allocation is the frame's only backing and the edit reaches
+    /// every holder: a pixel buffer answers yes. Textures do not cross to a
+    /// macOS helper yet, so nothing else answers. One checkout per pool slot,
+    /// memoised on the same key the Linux door uses.
+    pub(crate) fn surface_can_take_write_back(
+        self: &Arc<Self>,
+        python: Python<'_>,
+        surface_id: &str,
+    ) -> PyResult<bool> {
+        let source_pool_slot_key = streamlib::sdk::rhi::pool_slot_key_of_surface_id(surface_id);
+        if let Some(already_answered) = self
+            .write_back_answers_by_pool_slot
+            .lock()
+            .get(source_pool_slot_key)
+        {
+            return Ok(*already_answered);
+        }
+        let (response, _transferred_handles_released_by_scope) =
+            python.detach(|| self.check_out_surface(surface_id))?;
+        refuse_check_out_the_service_declined(format_args!("{surface_id:?}"), &response)?;
+        let _release_the_check_out_on_return = HelperSurfaceCheckOutLeaseDebt {
+            exchange_client: Arc::clone(self),
+            surface_id: surface_id.to_string(),
+        };
+        let registered_as = |field: &str, default: &'static str| {
+            response
+                .get(field)
+                .and_then(|value| value.as_str())
+                .unwrap_or(default)
+                .to_string()
+        };
+        let can_take_write_back = registered_as("resource_type", "pixel_buffer") == "pixel_buffer"
+            && registered_as("handle_type", "iosurface") == "iosurface";
+        self.write_back_answers_by_pool_slot
+            .lock()
+            .insert(source_pool_slot_key.to_string(), can_take_write_back);
+        Ok(can_take_write_back)
+    }
+
+    /// The import of a checked-out frame's IOSurface: the pool slot's cached
+    /// import, or a lookup of the port and a fresh import on the slot's first
+    /// touch — plus this frame's use-count claim. The CPU reaches the pixels
+    /// through the import's mapping, which is the IOSurface's own memory.
+    pub(super) fn import_checked_out_surface(
+        self: &Arc<Self>,
+        surface_id: &str,
+        response: &serde_json::Value,
+        received_ports: Vec<SurfaceShareTransferredHandle>,
+    ) -> PyResult<HelperCheckedOutSurface> {
+        refuse_check_out_the_service_declined(format_args!("{surface_id:?}"), response)?;
+        // From here the lease is this surface's, so every refusal below
+        // releases it on the way out.
+        let release_check_out_to_surface_share = HelperSurfaceCheckOutLeaseDebt {
+            exchange_client: Arc::clone(self),
+            surface_id: surface_id.to_string(),
+        };
+
+        let resource_type = response
+            .get("resource_type")
+            .and_then(|value| value.as_str())
+            .unwrap_or("pixel_buffer");
+        let handle_type = response
+            .get("handle_type")
+            .and_then(|value| value.as_str())
+            .unwrap_or("iosurface");
+        if resource_type != "pixel_buffer" || handle_type != "iosurface" {
+            return Err(PyRuntimeError::new_err(format!(
+                "surface {surface_id:?} is registered as a {resource_type:?} over a \
+                 {handle_type:?} handle; a macOS helper maps IOSurface-backed pixel buffers only"
+            )));
+        }
+        let width = required_positive_u32_check_out_metadata_field(response, surface_id, "width")?;
+        let height =
+            required_positive_u32_check_out_metadata_field(response, surface_id, "height")?;
+        let format_name = response
+            .get("format")
+            .and_then(|value| value.as_str())
+            .unwrap_or("unknown");
+        let format = crate::python_processor_context::parse_pixel_format_name(format_name)?;
+
+        let iosurface_pool_slot_import =
+            self.iosurface_pool_slot_import_for(surface_id, received_ports)?;
+        let iosurface = iosurface_pool_slot_import.iosurface();
+        let bytes_per_row = iosurface.bytes_per_row() as u64;
+        if iosurface.width() < width as usize
+            || iosurface.height() < height as usize
+            || bytes_per_row * u64::from(height) > iosurface.alloc_size() as u64
+        {
+            return Err(PyRuntimeError::new_err(format!(
+                "surface {surface_id:?} is registered as {width}x{height}, which its {}x{} \
+                 IOSurface of {bytes_per_row}-byte rows cannot hold",
+                iosurface.width(),
+                iosurface.height(),
+            )));
+        }
+
+        Ok(HelperCheckedOutSurface::PixelBuffer(
+            HelperCheckedOutPixelSurface {
+                surface_id: surface_id.to_string(),
+                iosurface_use_count_claim: HelperIOSurfaceUseCountClaim::claiming(Arc::clone(
+                    &iosurface_pool_slot_import,
+                )),
+                iosurface_pool_slot_import,
+                iosurface_cpu_lock: Mutex::new(None),
+                width,
+                height,
+                format,
+                bytes_per_row,
+                release_to_parent: None,
+                release_check_out_to_surface_share,
+            },
+        ))
+    }
+
+    /// The pool slot's import, from the cache — releasing the fresh port
+    /// unlooked-up — or from the port on the slot's first touch.
+    fn iosurface_pool_slot_import_for(
+        &self,
+        surface_id: &str,
+        received_ports: Vec<SurfaceShareTransferredHandle>,
+    ) -> PyResult<Arc<HelperIOSurfacePoolSlotImport>> {
+        let mut received_ports = received_ports.into_iter();
+        let (Some(iosurface_port), None) = (received_ports.next(), received_ports.next()) else {
+            return Err(PyRuntimeError::new_err(format!(
+                "check_out of {surface_id:?} did not carry exactly one IOSurface port"
+            )));
+        };
+        let pool_slot_key = streamlib::sdk::rhi::pool_slot_key_of_surface_id(surface_id);
+        if let Some(cached) = self
+            .iosurface_imports_by_pool_slot
+            .lock()
+            .get(pool_slot_key)
+        {
+            return Ok(Arc::clone(cached));
+        }
+        let iosurface =
+            objc2_io_surface::IOSurfaceRef::lookup_from_mach_port(iosurface_port.as_raw_name())
+                .ok_or_else(|| {
+                    PyRuntimeError::new_err(format!(
+                        "check_out of {surface_id:?} carried a port that names no IOSurface"
+                    ))
+                })?;
+        // Released as soon as it is looked up: a live port keeps the
+        // surface reading in use.
+        drop(iosurface_port);
+        let vulkan_device = self.consumer_vulkan_device()?;
+        let imported = Arc::new(
+            HelperIOSurfacePoolSlotImport::import(&vulkan_device, &iosurface).map_err(
+                |import_failure| {
+                    PyRuntimeError::new_err(format!(
+                        "Vulkan could not import surface {surface_id:?}'s IOSurface: \
+                         {import_failure}"
+                    ))
+                },
+            )?,
+        );
+        Ok(Arc::clone(
+            self.iosurface_imports_by_pool_slot
+                .lock()
+                .entry(pool_slot_key.to_string())
+                .or_insert(imported),
+        ))
+    }
+}
+
+/// The macOS frame path against a real Mach service: the per-slot IOSurface
+/// cache and the use-count claim a held frame raises. Needs a Vulkan device
+/// for the import, and says so rather than failing where there is none.
+#[cfg(test)]
+mod iosurface_pool_slot_import_tests;
