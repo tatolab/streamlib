@@ -26,6 +26,7 @@ shadows in them.
 from __future__ import annotations
 
 import struct
+from dataclasses import dataclass
 
 from streamlib import (
     ProcessorOutputTextureRing,
@@ -247,6 +248,14 @@ DECLARED_BINDINGS: dict[str, str | tuple[str, list[str]]] = {
 MAX_RECURSION_DEPTH = 2
 
 
+@dataclass
+class RayTracedSceneRendererConfig:
+    """RayTracedSceneRenderer's settings, as `rt.add(..., config={...})` spells them."""
+
+    width: int = 1280
+    height: int = 720
+
+
 @processor(
     execution="continuous",
     interval_ms=16,
@@ -255,7 +264,9 @@ MAX_RECURSION_DEPTH = 2
 class RayTracedSceneRenderer:
     """Ray tracing on: hard shadows that track the light, and reflections."""
 
-    def __init__(self, width: int = 1280, height: int = 720) -> None:
+    def __init__(self, config: RayTracedSceneRendererConfig) -> None:
+        width = config.width
+        height = config.height
         self.frame_width = width
         self.frame_height = height
 

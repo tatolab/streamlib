@@ -12,6 +12,8 @@ says so in its name; an overlay redrawn at 30 Hz is what it is for.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import numpy
 import skia
 
@@ -39,6 +41,14 @@ from ..single_pass_video_effect import NANOSECONDS_PER_SECOND
 OVERLAY_REDRAW_INTERVAL_MS = 33
 
 
+@dataclass
+class NeonOverlaySourceConfig:
+    """NeonOverlaySource's settings, as `rt.add(..., config={...})` spells them."""
+
+    width: int = 1920
+    height: int = 1080
+
+
 @processor(
     execution="continuous",
     interval_ms=OVERLAY_REDRAW_INTERVAL_MS,
@@ -47,7 +57,9 @@ OVERLAY_REDRAW_INTERVAL_MS = 33
 class NeonOverlaySource:
     """A transparent RGBA layer, redrawn every tick."""
 
-    def __init__(self, width: int = 1920, height: int = 1080) -> None:
+    def __init__(self, config: NeonOverlaySourceConfig) -> None:
+        width = config.width
+        height = config.height
         self.overlay_width = width
         self.overlay_height = height
 

@@ -34,9 +34,9 @@ def setup(rt: Runtime) -> None:
         camera_configuration["device_id"] = requested_camera_device
 
     camera = rt.add(CameraSource, config=camera_configuration)
-    # These three are ordinary constructor keywords with ordinary Python
-    # defaults — `config` is how a processor's own `__init__` is called, and
-    # nothing about the dials is streamlib surface.
+    # These three are fields of the processor's own `HalftoneComputeConfig`
+    # dataclass — the helper builds that from this dict, and nothing about the
+    # dials is streamlib surface.
     halftone = rt.add(
         HalftoneCompute,
         config={"cell_size": 8, "dot_boost": 1.3, "background_level": 0.0627},

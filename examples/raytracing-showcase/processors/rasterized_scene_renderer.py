@@ -23,6 +23,7 @@ honest about what it is:
 from __future__ import annotations
 
 import struct
+from dataclasses import dataclass
 
 from streamlib import (
     ProcessorOutputTextureRing,
@@ -172,6 +173,14 @@ void main() {
 )
 
 
+@dataclass
+class RasterizedSceneRendererConfig:
+    """RasterizedSceneRenderer's settings, as `rt.add(..., config={...})` spells them."""
+
+    width: int = 1280
+    height: int = 720
+
+
 @processor(
     execution="continuous",
     interval_ms=16,
@@ -180,7 +189,9 @@ void main() {
 class RasterizedSceneRenderer:
     """Ray tracing off: flat direct lighting, no shadows, no reflections."""
 
-    def __init__(self, width: int = 1280, height: int = 720) -> None:
+    def __init__(self, config: RasterizedSceneRendererConfig) -> None:
+        width = config.width
+        height = config.height
         self.frame_width = width
         self.frame_height = height
 

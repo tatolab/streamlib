@@ -14,6 +14,8 @@ depends on every sample that came before it; `newest` skips bags by design, and
 a skipped block is a hole in a delay line.
 """
 
+from dataclasses import dataclass
+
 import numpy
 
 from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
@@ -185,17 +187,25 @@ class ReverbDiffuserFilter:
         return delayed - window
 
 
+@dataclass
+class ReverbEffectConfig:
+    """ReverbEffect's settings, as `rt.add(..., config={...})` spells them."""
+
+    room_size: float = 0.7
+    damping: float = 0.5
+    wet_level: float = 0.25
+    dry_level: float = 0.7
+
+
 @processor(description="Adds a reverb tail to the audio it is given")
 class ReverbEffect:
     """Mixes a decaying tail under the audio that produced it."""
 
-    def __init__(
-        self,
-        room_size: float = 0.7,
-        damping: float = 0.5,
-        wet_level: float = 0.25,
-        dry_level: float = 0.7,
-    ) -> None:
+    def __init__(self, config: ReverbEffectConfig) -> None:
+        room_size = config.room_size
+        damping = config.damping
+        wet_level = config.wet_level
+        dry_level = config.dry_level
         for dial_name, value in (
             ("room_size", room_size),
             ("damping", damping),

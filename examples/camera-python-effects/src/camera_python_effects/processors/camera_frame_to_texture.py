@@ -37,7 +37,7 @@ from ..gpu_surface_conventions import (
 class CameraFrameToTexture:
     """Buffer-backed camera frame in, texture-backed frame out."""
 
-    @input(delivery_profile="latest")
+    @input(delivery_profile="newest")
     def video_from_camera(self) -> VideoFrame: ...
 
     @output()

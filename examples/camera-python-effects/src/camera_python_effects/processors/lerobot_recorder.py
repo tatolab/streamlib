@@ -17,6 +17,8 @@ and the recorder catches back up on the frames its channels held.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import cupy
 import numpy
 
@@ -44,19 +46,29 @@ CAMERA_STREAM = "camera"
 STYLIZED_STREAM = "stylized"
 
 
+@dataclass
+class LeRobotRecorderConfig:
+    """LeRobotRecorder's settings, as `rt.add(..., config={...})` spells them."""
+
+    dataset_root: str
+    repo_id: str = "tatolab/camera-python-effects-poses"
+    fps: int = 30
+    episode_seconds: float = 10.0
+    task: str = "mirror the operator's pose"
+    record_stylized: bool = True
+
+
 @processor(description="Writes camera, stylized view and pose into a LeRobotDataset")
 class LeRobotRecorder:
     """Three timestamp-joined streams in, imitation-learning episodes out."""
 
-    def __init__(
-        self,
-        dataset_root: str,
-        repo_id: str = "tatolab/camera-python-effects-poses",
-        fps: int = 30,
-        episode_seconds: float = 10.0,
-        task: str = "mirror the operator's pose",
-        record_stylized: bool = True,
-    ) -> None:
+    def __init__(self, config: LeRobotRecorderConfig) -> None:
+        dataset_root = config.dataset_root
+        repo_id = config.repo_id
+        fps = config.fps
+        episode_seconds = config.episode_seconds
+        task = config.task
+        record_stylized = config.record_stylized
         self.dataset_root = dataset_root
         self.repo_id = repo_id
         self.fps = fps
@@ -70,10 +82,10 @@ class LeRobotRecorder:
     # window). At camera cadence the drain below still catches essentially
     # every frame; what a long episode-encode stall costs is dropped rows,
     # counted, never a wedged pipeline.
-    @input(delivery_profile="latest")
+    @input(delivery_profile="newest")
     def video_from_camera(self) -> VideoFrame: ...
 
-    @input(delivery_profile="latest")
+    @input(delivery_profile="newest")
     def stylized_from_compositor(self) -> VideoFrame: ...
 
     @input(delivery_profile="every_sample")

@@ -34,9 +34,9 @@ def setup(rt: Runtime) -> None:
         camera_configuration["device_id"] = requested_camera_device
 
     camera = rt.add(CameraSource, config=camera_configuration)
-    # `strength` is an ordinary constructor keyword with an ordinary Python
-    # default — `config` is how a processor's own `__init__` is called, and
-    # nothing about the dial is streamlib surface.
+    # `strength` is a field of the processor's own `GrayscaleComputeConfig`
+    # dataclass — the helper builds that from this dict, and nothing about the
+    # dial is streamlib surface.
     grayscale = rt.add(GrayscaleCompute, config={"strength": 1.0})
     window = rt.add(
         DisplayWindow,

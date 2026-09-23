@@ -17,6 +17,7 @@ arrival order, which would freeze that startup skew in for the whole run.
 """
 
 import collections
+from dataclasses import dataclass
 
 import numpy
 
@@ -71,11 +72,19 @@ WINDOW_DURATION_NS = (
 ALIGNMENT_TOLERANCE_NS = WINDOW_DURATION_NS
 
 
+@dataclass
+class ChordMixerConfig:
+    """ChordMixer's settings, as `rt.add(..., config={...})` spells them."""
+
+    voice_gain: float = 1.0
+
+
 @processor(description="Sums three voices into one chord")
 class ChordMixer:
     """Emits one mixed window per set of three, one per voice."""
 
-    def __init__(self, voice_gain: float = 1.0) -> None:
+    def __init__(self, config: ChordMixerConfig) -> None:
+        voice_gain = config.voice_gain
         self.voice_gain = float(voice_gain)
         self.pending_windows_by_port: dict[str, collections.deque] = {
             port_name: collections.deque(maxlen=MAXIMUM_PENDING_WINDOWS_PER_VOICE)

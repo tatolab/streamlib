@@ -23,6 +23,7 @@ timeline, no `torch.cuda.synchronize()`, and no copy through the host.
 from __future__ import annotations
 
 import struct
+from dataclasses import dataclass
 from typing import Any
 
 import torch
@@ -171,17 +172,25 @@ void main() {
 )
 
 
+@dataclass
+class UndistortingObjectDetectorConfig:
+    """UndistortingObjectDetector's settings, as `rt.add(..., config={...})` spells them."""
+
+    radial_distortion_k1: float = -0.25
+    radial_distortion_k2: float = 0.0
+    detection_confidence_threshold: float = 0.35
+    detection_model_weights: str = "yolov8n.pt"
+
+
 @processor(description="Rectifies the fisheye frame, then detects objects in it")
 class UndistortingObjectDetector:
     """Fisheye frame in, the rectified picture with its detections drawn on out."""
 
-    def __init__(
-        self,
-        radial_distortion_k1: float = -0.25,
-        radial_distortion_k2: float = 0.0,
-        detection_confidence_threshold: float = 0.35,
-        detection_model_weights: str = "yolov8n.pt",
-    ) -> None:
+    def __init__(self, config: UndistortingObjectDetectorConfig) -> None:
+        radial_distortion_k1 = config.radial_distortion_k1
+        radial_distortion_k2 = config.radial_distortion_k2
+        detection_confidence_threshold = config.detection_confidence_threshold
+        detection_model_weights = config.detection_model_weights
         self.largest_recoverable_radius = largest_recoverable_normalised_radius(
             float(radial_distortion_k1), float(radial_distortion_k2)
         )

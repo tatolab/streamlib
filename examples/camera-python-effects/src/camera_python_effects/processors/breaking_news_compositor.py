@@ -73,13 +73,13 @@ def pip_slide_progress_at(elapsed_seconds: float) -> float:
 class BreakingNewsCompositor:
     """Video underneath, overlay over it, the android's stage inside the PiP."""
 
-    @input(delivery_profile="latest")
+    @input(delivery_profile="newest")
     def video_from_upstream(self) -> VideoFrame: ...
 
-    @input(delivery_profile="latest")
+    @input(delivery_profile="newest")
     def overlay_from_neon_source(self) -> VideoFrame: ...
 
-    @input(delivery_profile="latest")
+    @input(delivery_profile="newest")
     def avatar_from_pose_scene(self) -> VideoFrame: ...
 
     @output()

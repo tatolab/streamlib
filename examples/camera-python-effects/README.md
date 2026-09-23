@@ -53,7 +53,7 @@ maturin develop --manifest-path ../../sdk/streamlib-python-wheel/Cargo.toml
 Effects live in `src/camera_python_effects/shaders/` as ordinary `.frag` files.
 Edit one and re-run `streamlib dev` — that is the whole edit loop.
 
-Config is constructor keyword arguments with ordinary Python defaults —
+Each processor's config is a dataclass beside it with ordinary Python defaults —
 `rt.add(CrtFilmGrain, config={"barrel_curve": 0.0})` flattens the tube.
 `CrtFilmGrain` takes every CRT parameter that way; `CyberpunkAvatar` takes
 `scene_width`, `scene_height` and `detection_confidence`.

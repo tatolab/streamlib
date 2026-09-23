@@ -22,6 +22,7 @@ that copy; the pixels never touch the host.
 from __future__ import annotations
 
 import struct
+from dataclasses import dataclass
 
 import torch
 
@@ -126,15 +127,21 @@ void main() {
 )
 
 
+@dataclass
+class SyntheticFisheyeLensConfig:
+    """SyntheticFisheyeLens's settings, as `rt.add(..., config={...})` spells them."""
+
+    radial_distortion_k1: float = -0.25
+    radial_distortion_k2: float = 0.0
+
+
 @processor(description="Barrels each camera frame the way a wide-FOV lens would")
 class SyntheticFisheyeLens:
     """Camera frame in, the same picture through a fisheye lens out."""
 
-    def __init__(
-        self,
-        radial_distortion_k1: float = -0.25,
-        radial_distortion_k2: float = 0.0,
-    ) -> None:
+    def __init__(self, config: SyntheticFisheyeLensConfig) -> None:
+        radial_distortion_k1 = config.radial_distortion_k1
+        radial_distortion_k2 = config.radial_distortion_k2
         # Packed once, because a lens does not change its coefficients while
         # it is bolted on. It is still handed to every dispatch below: push
         # constants travel with a dispatch and never persist on the kernel,

@@ -15,6 +15,8 @@ instead of freezing it, and glides it back onto you when you return.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import cupy
 
 from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
@@ -52,23 +54,31 @@ CAMERA_DECIMATION_STRIDE = 2
 TRACKING_ACCOUNTING_EVERY_FRAMES = 300
 
 
+@dataclass
+class CyberpunkAvatarConfig:
+    """CyberpunkAvatar's settings, as `rt.add(..., config={...})` spells them."""
+
+    scene_width: int = 960
+    scene_height: int = 675
+    detection_confidence: float = 0.35
+    pose_model_path: "str | None" = None
+
+
 @processor(description="3D android on a neon stage, dancing your pose")
 class CyberpunkAvatar:
     """Camera frame in, rendered avatar stage out."""
 
-    def __init__(
-        self,
-        scene_width: int = 960,
-        scene_height: int = 675,
-        detection_confidence: float = 0.35,
-        pose_model_path: "str | None" = None,
-    ) -> None:
+    def __init__(self, config: CyberpunkAvatarConfig) -> None:
+        scene_width = config.scene_width
+        scene_height = config.scene_height
+        detection_confidence = config.detection_confidence
+        pose_model_path = config.pose_model_path
         self.scene_width = scene_width
         self.scene_height = scene_height
         self.detection_confidence = detection_confidence
         self.pose_model_path = pose_model_path
 
-    @input(delivery_profile="latest")
+    @input(delivery_profile="newest")
     def video_from_camera(self) -> VideoFrame: ...
 
     @output()
