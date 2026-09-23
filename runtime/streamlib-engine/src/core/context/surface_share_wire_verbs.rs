@@ -14,6 +14,13 @@ use super::{SurfaceCheckOutLeaseHolderId, SurfaceCheckOutLeaseRegistry};
 /// runtime, so a connection that only ever sends it latches none.
 pub(crate) const SURFACE_SHARE_UNNAMED_RUNTIME_ID: &str = "unknown";
 
+/// Wire value of `resource_type` for a texture registration — the only
+/// kind a texture lookup imports.
+pub(crate) const SURFACE_RESOURCE_TYPE_TEXTURE: &str = "texture";
+
+/// Wire value of `resource_type` for a pixel-buffer registration.
+pub(crate) const SURFACE_RESOURCE_TYPE_PIXEL_BUFFER: &str = "pixel_buffer";
+
 /// A surface-share table's registrations, by the runtime that made them.
 pub(crate) trait SurfaceShareRegistrationsByRuntime {
     /// Surface ids `runtime_id` registered.
@@ -187,6 +194,91 @@ pub(crate) fn release_what_a_closed_connection_held(
     }
     if let Some((registrations, runtime_id)) = registrations_of_its_runtime {
         release_every_surface_registered_by(registrations, runtime_id);
+    }
+}
+
+/// Defaults for the `vk_image_*` fields a registration omits — the shape
+/// `HostVulkanTexture::new_opaque_fd_export` allocates and the consumer's
+/// `from_opaque_fd` rebuilds.
+pub const VK_IMAGE_TYPE_DEFAULT: i32 = 1; // VK_IMAGE_TYPE_2D
+pub const VK_IMAGE_MIP_LEVELS_DEFAULT: u32 = 1;
+pub const VK_IMAGE_ARRAY_LAYERS_DEFAULT: u32 = 1;
+pub const VK_IMAGE_SAMPLES_DEFAULT: i32 = 1; // VK_SAMPLE_COUNT_1_BIT
+pub const VK_IMAGE_TILING_DEFAULT: i32 = 0; // VK_IMAGE_TILING_OPTIMAL
+/// `TRANSFER_SRC (0x01) | TRANSFER_DST (0x02) | SAMPLED (0x04) | STORAGE (0x08)`.
+pub const VK_IMAGE_USAGE_DEFAULT: u32 = 0x0F;
+pub const VK_IMAGE_ALLOCATION_SIZE_DEFAULT: u64 = 0;
+
+/// The seven `vk_image_*` fields a cross-process `VkImage`'s registration
+/// carries so a consumer can rebuild a matching `VkImageCreateInfo`; a field
+/// the registration omits takes its `VK_IMAGE_*_DEFAULT`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct VkImageCreateInfoFields {
+    pub(crate) vk_image_type: i32,
+    pub(crate) vk_image_mip_levels: u32,
+    pub(crate) vk_image_array_layers: u32,
+    pub(crate) vk_image_samples: i32,
+    pub(crate) vk_image_tiling: i32,
+    pub(crate) vk_image_usage: u32,
+    pub(crate) vk_image_allocation_size: u64,
+}
+
+impl VkImageCreateInfoFields {
+    /// The fields under their wire keys, for a lookup's reply.
+    #[cfg_attr(
+        target_os = "linux",
+        expect(dead_code, reason = "the Unix-socket arm replies from its own table")
+    )]
+    pub(crate) fn insert_into_reply(&self, reply: &mut serde_json::Map<String, Value>) {
+        reply.insert("vk_image_type".into(), self.vk_image_type.into());
+        reply.insert(
+            "vk_image_mip_levels".into(),
+            self.vk_image_mip_levels.into(),
+        );
+        reply.insert(
+            "vk_image_array_layers".into(),
+            self.vk_image_array_layers.into(),
+        );
+        reply.insert("vk_image_samples".into(), self.vk_image_samples.into());
+        reply.insert("vk_image_tiling".into(), self.vk_image_tiling.into());
+        reply.insert("vk_image_usage".into(), self.vk_image_usage.into());
+        reply.insert(
+            "vk_image_allocation_size".into(),
+            self.vk_image_allocation_size.into(),
+        );
+    }
+}
+
+/// The `vk_image_*` fields a registration request carries.
+pub(crate) fn parse_vk_image_create_info_fields(request: &Value) -> VkImageCreateInfoFields {
+    let as_i32 = |key: &str, default: i32| -> i32 {
+        request
+            .get(key)
+            .and_then(|v| v.as_i64())
+            .map(|v| v as i32)
+            .unwrap_or(default)
+    };
+    let as_u32 = |key: &str, default: u32| -> u32 {
+        request
+            .get(key)
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
+            .unwrap_or(default)
+    };
+    let as_u64 = |key: &str, default: u64| -> u64 {
+        request.get(key).and_then(|v| v.as_u64()).unwrap_or(default)
+    };
+    VkImageCreateInfoFields {
+        vk_image_type: as_i32("vk_image_type", VK_IMAGE_TYPE_DEFAULT),
+        vk_image_mip_levels: as_u32("vk_image_mip_levels", VK_IMAGE_MIP_LEVELS_DEFAULT),
+        vk_image_array_layers: as_u32("vk_image_array_layers", VK_IMAGE_ARRAY_LAYERS_DEFAULT),
+        vk_image_samples: as_i32("vk_image_samples", VK_IMAGE_SAMPLES_DEFAULT),
+        vk_image_tiling: as_i32("vk_image_tiling", VK_IMAGE_TILING_DEFAULT),
+        vk_image_usage: as_u32("vk_image_usage", VK_IMAGE_USAGE_DEFAULT),
+        vk_image_allocation_size: as_u64(
+            "vk_image_allocation_size",
+            VK_IMAGE_ALLOCATION_SIZE_DEFAULT,
+        ),
     }
 }
 

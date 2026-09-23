@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI32, Ordering};
 
 use parking_lot::RwLock;
 
@@ -12,6 +13,7 @@ use streamlib_surface_client::OwnedMachSendRight;
 
 use super::CrossProcessTimelinePairsBySurface;
 use crate::apple::iosurface::RetainedIOSurfaceSharedAcrossThreads;
+use crate::core::context::surface_share_wire_verbs::VkImageCreateInfoFields;
 use crate::core::context::{SurfaceCheckOutLeaseRegistry, SurfaceShareRegistrationsByRuntime};
 use crate::core::rhi::pool_slot_key_of_surface_id;
 
@@ -35,6 +37,36 @@ pub struct IOSurfaceShareRegistration {
     /// The surface's timeline pair as shared-event send rights, when the
     /// registrant sent them; every lookup hands out a fresh reference to each.
     pub timeline_send_rights: Option<Arc<SharedTimelineSendRights>>,
+    /// The image a `texture` registration's surface backs; `None` for a
+    /// pixel buffer.
+    pub texture_image: Option<Arc<RegisteredTextureImage>>,
+}
+
+/// What a texture registration carries beyond its surface: the recipe a
+/// helper rebuilds the image from, and the layout the image was last left in.
+#[derive(Debug)]
+pub struct RegisteredTextureImage {
+    pub(crate) recipe: VkImageCreateInfoFields,
+    current_image_layout: AtomicI32,
+}
+
+impl RegisteredTextureImage {
+    /// A texture image built from `recipe`, in `current_image_layout`.
+    pub(crate) fn new(recipe: VkImageCreateInfoFields, current_image_layout: i32) -> Self {
+        Self {
+            recipe,
+            current_image_layout: AtomicI32::new(current_image_layout),
+        }
+    }
+
+    /// The `VkImageLayout` the image was last published in.
+    pub fn current_image_layout(&self) -> i32 {
+        self.current_image_layout.load(Ordering::Acquire)
+    }
+
+    fn update_image_layout(&self, layout: i32) {
+        self.current_image_layout.store(layout, Ordering::Release);
+    }
 }
 
 /// Send rights to a surface's `produce_done` and `consume_done` Metal shared
@@ -89,6 +121,24 @@ impl IOSurfaceShareState {
             .read()
             .get(pool_slot_key_of_surface_id(surface_id))
             .cloned()
+    }
+
+    /// Publish the layout `surface_id`'s texture image was left in; `false`
+    /// when no texture is registered under it.
+    pub fn update_image_layout(&self, surface_id: &str, layout: i32) -> bool {
+        match self
+            .inner
+            .surfaces
+            .read()
+            .get(pool_slot_key_of_surface_id(surface_id))
+            .and_then(|registration| registration.texture_image.as_ref())
+        {
+            Some(texture_image) => {
+                texture_image.update_image_layout(layout);
+                true
+            }
+            None => false,
+        }
     }
 
     /// Every registered surface id.

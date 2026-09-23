@@ -24,14 +24,17 @@ use streamlib_surface_client::{
 use crate::core::context::SurfaceCheckOutLeaseHolderId;
 use crate::core::context::surface_share_wire_verbs::{
     answer_release_check_out, answer_unregister, latch_the_first_named_runtime_id,
-    record_check_out_lease_or_refusal, refusal_of_a_retired_frame_id,
-    release_what_a_closed_connection_held, requested_runtime_id, requested_surface_id,
+    parse_vk_image_create_info_fields, record_check_out_lease_or_refusal,
+    refusal_of_a_retired_frame_id, release_what_a_closed_connection_held, requested_runtime_id,
+    requested_surface_id,
 };
 
+use super::state::{SurfaceRegistration, SurfaceShareState};
+#[cfg(test)]
 use super::state::{
-    SurfaceRegistration, SurfaceShareState, VK_IMAGE_ALLOCATION_SIZE_DEFAULT,
-    VK_IMAGE_ARRAY_LAYERS_DEFAULT, VK_IMAGE_MIP_LEVELS_DEFAULT, VK_IMAGE_SAMPLES_DEFAULT,
-    VK_IMAGE_TILING_DEFAULT, VK_IMAGE_TYPE_DEFAULT, VK_IMAGE_USAGE_DEFAULT,
+    VK_IMAGE_ALLOCATION_SIZE_DEFAULT, VK_IMAGE_ARRAY_LAYERS_DEFAULT, VK_IMAGE_MIP_LEVELS_DEFAULT,
+    VK_IMAGE_SAMPLES_DEFAULT, VK_IMAGE_TILING_DEFAULT, VK_IMAGE_TYPE_DEFAULT,
+    VK_IMAGE_USAGE_DEFAULT,
 };
 
 pub struct UnixSocketSurfaceService {
@@ -257,59 +260,6 @@ fn handle_client_connection(
         for fd in &reply_fds {
             unsafe { libc::close(*fd) };
         }
-    }
-}
-
-/// Parsed view of the seven optional `vk_image_*` fields a producer of an
-/// OPAQUE_FD `VkImage` ships across the wire so the consumer can rebuild a
-/// matching `VkImageCreateInfo` (required for
-/// `cudaExternalMemoryGetMappedMipmappedArray` byte-for-byte parity, and
-/// for the consumer-side `vkAllocateMemory(VkImportMemoryFdInfoKHR)` size
-/// argument).
-///
-/// Each field is absent-defaultable to the documented constants in
-/// [`super::state`], so a register payload that omits the section behaves
-/// exactly like the pre-#800 wire — the existing DMA-BUF and OPAQUE_FD
-/// VkBuffer callers ride the defaults transparently.
-struct VkImageCreateInfoFields {
-    vk_image_type: i32,
-    vk_image_mip_levels: u32,
-    vk_image_array_layers: u32,
-    vk_image_samples: i32,
-    vk_image_tiling: i32,
-    vk_image_usage: u32,
-    vk_image_allocation_size: u64,
-}
-
-fn parse_vk_image_create_info_fields(request: &serde_json::Value) -> VkImageCreateInfoFields {
-    let as_i32 = |key: &str, default: i32| -> i32 {
-        request
-            .get(key)
-            .and_then(|v| v.as_i64())
-            .map(|v| v as i32)
-            .unwrap_or(default)
-    };
-    let as_u32 = |key: &str, default: u32| -> u32 {
-        request
-            .get(key)
-            .and_then(|v| v.as_u64())
-            .map(|v| v as u32)
-            .unwrap_or(default)
-    };
-    let as_u64 = |key: &str, default: u64| -> u64 {
-        request.get(key).and_then(|v| v.as_u64()).unwrap_or(default)
-    };
-    VkImageCreateInfoFields {
-        vk_image_type: as_i32("vk_image_type", VK_IMAGE_TYPE_DEFAULT),
-        vk_image_mip_levels: as_u32("vk_image_mip_levels", VK_IMAGE_MIP_LEVELS_DEFAULT),
-        vk_image_array_layers: as_u32("vk_image_array_layers", VK_IMAGE_ARRAY_LAYERS_DEFAULT),
-        vk_image_samples: as_i32("vk_image_samples", VK_IMAGE_SAMPLES_DEFAULT),
-        vk_image_tiling: as_i32("vk_image_tiling", VK_IMAGE_TILING_DEFAULT),
-        vk_image_usage: as_u32("vk_image_usage", VK_IMAGE_USAGE_DEFAULT),
-        vk_image_allocation_size: as_u64(
-            "vk_image_allocation_size",
-            VK_IMAGE_ALLOCATION_SIZE_DEFAULT,
-        ),
     }
 }
 

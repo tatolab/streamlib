@@ -142,14 +142,10 @@ const SURFACE_HANDLE_TYPE_DMA_BUF: &str = "dma_buf";
 #[cfg(target_os = "linux")]
 const SURFACE_HANDLE_TYPE_OPAQUE_FD: &str = "opaque_fd";
 
-/// Wire value of `resource_type` for a texture registration — the only
-/// kind a texture lookup imports.
-#[cfg(target_os = "linux")]
-const SURFACE_RESOURCE_TYPE_TEXTURE: &str = "texture";
-
-/// Wire value of `resource_type` for a pixel-buffer registration.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-const SURFACE_RESOURCE_TYPE_PIXEL_BUFFER: &str = "pixel_buffer";
+use super::surface_share_wire_verbs::{
+    SURFACE_RESOURCE_TYPE_PIXEL_BUFFER, SURFACE_RESOURCE_TYPE_TEXTURE,
+};
 
 /// How long a connect waits for the service to admit this process.
 #[cfg(target_os = "macos")]

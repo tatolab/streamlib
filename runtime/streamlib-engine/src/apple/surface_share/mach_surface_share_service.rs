@@ -34,12 +34,16 @@ use crate::apple::iosurface::{
 };
 use crate::core::context::SurfaceCheckOutLeaseHolderId;
 use crate::core::context::surface_share_wire_verbs::{
-    answer_release_check_out, answer_unregister, latch_the_first_named_runtime_id,
+    SURFACE_RESOURCE_TYPE_PIXEL_BUFFER, SURFACE_RESOURCE_TYPE_TEXTURE, answer_release_check_out,
+    answer_unregister, latch_the_first_named_runtime_id, parse_vk_image_create_info_fields,
     record_check_out_lease_or_refusal, refusal_of_a_retired_frame_id,
     release_what_a_closed_connection_held, requested_runtime_id, requested_surface_id,
 };
 
-use super::state::{IOSurfaceShareRegistration, IOSurfaceShareState, SharedTimelineSendRights};
+use super::state::{
+    IOSurfaceShareRegistration, IOSurfaceShareState, RegisteredTextureImage,
+    SharedTimelineSendRights,
+};
 
 /// How long a connect from a pid nobody has admitted yet waits before it is
 /// refused. A spawner learns its child's pid only after the child is
@@ -727,6 +731,7 @@ fn answer_surface_share_request(
             Vec::new(),
         ),
         "unregister" | "release" => (answer_unregister(state, request), Vec::new()),
+        "update_layout" => (handle_update_layout(state, request), Vec::new()),
         SURFACE_SHARE_OP_SIGNAL_CONSUME_DONE => {
             (answer_signal_consume_done(state, request), Vec::new())
         }
@@ -804,15 +809,23 @@ fn registration_of_request(
             .unwrap_or(default)
             .to_string()
     };
+    let resource_type = requested_str("resource_type", SURFACE_RESOURCE_TYPE_PIXEL_BUFFER);
+    let texture_image = (resource_type == SURFACE_RESOURCE_TYPE_TEXTURE).then(|| {
+        Arc::new(RegisteredTextureImage::new(
+            parse_vk_image_create_info_fields(request),
+            requested_image_layout(request).unwrap_or(0),
+        ))
+    });
     Ok(IOSurfaceShareRegistration {
         surface_id,
         runtime_id: requested_runtime_id(request).to_string(),
         width: requested_u32("width").unwrap_or(iosurface.width() as u32),
         height: requested_u32("height").unwrap_or(iosurface.height() as u32),
         format: requested_str("format", "unknown"),
-        resource_type: requested_str("resource_type", "pixel_buffer"),
+        resource_type,
         iosurface: RetainedIOSurfaceSharedAcrossThreads::new(iosurface),
         timeline_send_rights,
+        texture_image,
     })
 }
 
@@ -919,22 +932,52 @@ fn handle_lookup(
         },
         None => false,
     };
-    (
-        serde_json::json!({
-            "surface_id": surface_id,
-            "width": registration.width,
-            "height": registration.height,
-            "format": registration.format,
-            "resource_type": registration.resource_type,
-            "handle_type": SURFACE_HANDLE_TYPE_IOSURFACE,
-            "plane_sizes": [registration.iosurface.alloc_size()],
-            "plane_offsets": [0],
-            "plane_strides": [registration.iosurface.bytes_per_row()],
-            SURFACE_SHARE_HAS_PRODUCE_DONE_PORT: carries_timeline_pair,
-            SURFACE_SHARE_HAS_CONSUME_DONE_PORT: carries_timeline_pair,
-        }),
-        reply_ports,
-    )
+    let mut reply = serde_json::json!({
+        "surface_id": surface_id,
+        "width": registration.width,
+        "height": registration.height,
+        "format": registration.format,
+        "resource_type": registration.resource_type,
+        "handle_type": SURFACE_HANDLE_TYPE_IOSURFACE,
+        "plane_sizes": [registration.iosurface.alloc_size()],
+        "plane_offsets": [0],
+        "plane_strides": [registration.iosurface.bytes_per_row()],
+        SURFACE_SHARE_HAS_PRODUCE_DONE_PORT: carries_timeline_pair,
+        SURFACE_SHARE_HAS_CONSUME_DONE_PORT: carries_timeline_pair,
+    });
+    if let (Some(texture_image), Some(reply_fields)) =
+        (&registration.texture_image, reply.as_object_mut())
+    {
+        texture_image.recipe.insert_into_reply(reply_fields);
+        reply_fields.insert(
+            "current_image_layout".into(),
+            texture_image.current_image_layout().into(),
+        );
+    }
+    (reply, reply_ports)
+}
+
+/// The `VkImageLayout` a request names under `current_image_layout`.
+fn requested_image_layout(request: &serde_json::Value) -> Option<i32> {
+    request
+        .get("current_image_layout")
+        .and_then(serde_json::Value::as_i64)
+        .and_then(|layout| i32::try_from(layout).ok())
+}
+
+/// Publish the layout a helper left a texture in, for the next holder to
+/// transition out of.
+fn handle_update_layout(
+    state: &IOSurfaceShareState,
+    request: &serde_json::Value,
+) -> serde_json::Value {
+    let Some(surface_id) = requested_surface_id(request) else {
+        return serde_json::json!({"error": "missing surface_id"});
+    };
+    let Some(layout) = requested_image_layout(request) else {
+        return serde_json::json!({"error": "missing current_image_layout"});
+    };
+    serde_json::json!({"success": state.update_image_layout(surface_id, layout)})
 }
 
 /// A helper's host-side report that it released the frame at `value`,
@@ -1012,6 +1055,10 @@ fn handle_check_out(
 mod tests {
     use super::*;
     use crate::apple::iosurface::create_private_iosurface_with_packed_rows;
+    use crate::core::context::surface_share_wire_verbs::{
+        VK_IMAGE_ARRAY_LAYERS_DEFAULT, VK_IMAGE_MIP_LEVELS_DEFAULT, VK_IMAGE_SAMPLES_DEFAULT,
+        VK_IMAGE_TILING_DEFAULT, VK_IMAGE_TYPE_DEFAULT,
+    };
     use crate::core::rhi::PixelFormat;
     use objc2_core_foundation::CFRetained;
     use streamlib_surface_client::SurfaceShareMachServiceConnection;
@@ -1498,6 +1545,119 @@ mod tests {
         let resolved = IOSurfaceRef::lookup_from_mach_port(ports[0].as_raw_name())
             .expect("the answered port names the surface");
         assert_eq!(resolved.id(), iosurface.id());
+    }
+
+    /// The whole texture registration crosses the channel and comes back on
+    /// a check-out: the recipe, the layout, and the pair's ports after the
+    /// surface's. A later `update_layout` is what the next holder sees.
+    #[test]
+    fn a_texture_registration_round_trips_its_recipe_layout_and_timeline_ports() {
+        let (Some((_produce_done, produce_done_port)), Some((_consume_done, consume_done_port))) = (
+            a_send_right_to_a_fresh_shared_event_at(5),
+            a_send_right_to_a_fresh_shared_event_at(6),
+        ) else {
+            return;
+        };
+        const VK_IMAGE_LAYOUT_GENERAL: i32 = 1;
+        const VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL: i32 = 5;
+        let (_state, service) = started_service("texture-round-trip");
+        let connection = connect_to(&service);
+        let iosurface = a_small_iosurface();
+        let mut request = register_request("texture-slot");
+        request["resource_type"] = "texture".into();
+        request["current_image_layout"] = VK_IMAGE_LAYOUT_GENERAL.into();
+        request["vk_image_usage"] = 0x1B.into();
+        request["vk_image_allocation_size"] = 4096.into();
+        request[SURFACE_SHARE_HAS_PRODUCE_DONE_PORT] = true.into();
+        request[SURFACE_SHARE_HAS_CONSUME_DONE_PORT] = true.into();
+
+        let (registered, _) = connection
+            .send_request_with_ports(
+                &request,
+                vec![a_port_to(&iosurface), produce_done_port, consume_done_port],
+            )
+            .unwrap();
+        assert_eq!(registered, serde_json::json!({"success": true}));
+
+        let check_out = serde_json::json!({"op": "check_out", "surface_id": "texture-slot"});
+        let (checked_out, ports) = connection
+            .send_request_with_ports(&check_out, Vec::new())
+            .unwrap();
+        assert_eq!(checked_out["resource_type"], "texture");
+        assert_eq!(checked_out["handle_type"], SURFACE_HANDLE_TYPE_IOSURFACE);
+        assert_eq!(checked_out["current_image_layout"], VK_IMAGE_LAYOUT_GENERAL);
+        assert_eq!(checked_out["vk_image_usage"], 0x1B);
+        assert_eq!(checked_out["vk_image_allocation_size"], 4096);
+        assert_eq!(checked_out["vk_image_type"], VK_IMAGE_TYPE_DEFAULT);
+        assert_eq!(
+            checked_out["vk_image_mip_levels"],
+            VK_IMAGE_MIP_LEVELS_DEFAULT
+        );
+        assert_eq!(
+            checked_out["vk_image_array_layers"],
+            VK_IMAGE_ARRAY_LAYERS_DEFAULT
+        );
+        assert_eq!(checked_out["vk_image_samples"], VK_IMAGE_SAMPLES_DEFAULT);
+        assert_eq!(checked_out["vk_image_tiling"], VK_IMAGE_TILING_DEFAULT);
+        assert_eq!(ports.len(), 3);
+        let resolved = IOSurfaceRef::lookup_from_mach_port(ports[0].as_raw_name())
+            .expect("the first port names the surface");
+        assert_eq!(resolved.id(), iosurface.id());
+        assert_eq!(signaled_value_behind(&ports[1]), 5);
+        assert_eq!(signaled_value_behind(&ports[2]), 6);
+
+        let (updated, _) = connection
+            .send_request_with_ports(
+                &serde_json::json!({
+                    "op": "update_layout",
+                    "surface_id": "texture-slot",
+                    "current_image_layout": VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+                }),
+                Vec::new(),
+            )
+            .unwrap();
+        assert_eq!(updated, serde_json::json!({"success": true}));
+        let (looked_up, _) = connection
+            .send_request_with_ports(
+                &serde_json::json!({"op": "lookup", "surface_id": "texture-slot"}),
+                Vec::new(),
+            )
+            .unwrap();
+        assert_eq!(
+            looked_up["current_image_layout"],
+            VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+        );
+    }
+
+    /// A pixel buffer has no image, so no recipe or layout to publish.
+    #[test]
+    fn a_layout_update_for_a_pixel_buffer_is_answered_unsuccessful() {
+        let state = IOSurfaceShareState::new();
+        let iosurface = a_small_iosurface();
+        let holder = state.check_out_leases().mint_holder_id();
+        answer_surface_share_request(
+            &state,
+            &register_request("pixel-slot"),
+            vec![a_port_to(&iosurface)],
+            holder,
+        );
+        let (updated, _) = answer_surface_share_request(
+            &state,
+            &serde_json::json!({
+                "op": "update_layout", "surface_id": "pixel-slot", "current_image_layout": 1,
+            }),
+            Vec::new(),
+            holder,
+        );
+        assert_eq!(updated, serde_json::json!({"success": false}));
+        let (looked_up, _) = answer_surface_share_request(
+            &state,
+            &serde_json::json!({"op": "lookup", "surface_id": "pixel-slot"}),
+            Vec::new(),
+            holder,
+        );
+        assert!(looked_up.get("current_image_layout").is_none());
+        assert!(looked_up.get("vk_image_usage").is_none());
     }
 
     #[test]

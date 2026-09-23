@@ -184,20 +184,11 @@ impl Clone for SurfaceMetadata {
     }
 }
 
-/// Documented defaults for the `vk_image_*` fields when the wire
-/// payload omits them. Match
-/// [`crate::vulkan::rhi::HostVulkanTexture::new_opaque_fd_export`]'s
-/// hardcoded shape so a daemon serving these defaults produces a
-/// `VkImageCreateInfo` byte-equal to what the existing consumer-side
-/// `from_opaque_fd` constructor already builds.
-pub const VK_IMAGE_TYPE_DEFAULT: i32 = 1; // VK_IMAGE_TYPE_2D
-pub const VK_IMAGE_MIP_LEVELS_DEFAULT: u32 = 1;
-pub const VK_IMAGE_ARRAY_LAYERS_DEFAULT: u32 = 1;
-pub const VK_IMAGE_SAMPLES_DEFAULT: i32 = 1; // VK_SAMPLE_COUNT_1_BIT
-pub const VK_IMAGE_TILING_DEFAULT: i32 = 0; // VK_IMAGE_TILING_OPTIMAL
-/// `TRANSFER_SRC (0x01) | TRANSFER_DST (0x02) | SAMPLED (0x04) | STORAGE (0x08)`.
-pub const VK_IMAGE_USAGE_DEFAULT: u32 = 0x0F;
-pub const VK_IMAGE_ALLOCATION_SIZE_DEFAULT: u64 = 0;
+pub use crate::core::context::surface_share_wire_verbs::{
+    VK_IMAGE_ALLOCATION_SIZE_DEFAULT, VK_IMAGE_ARRAY_LAYERS_DEFAULT, VK_IMAGE_MIP_LEVELS_DEFAULT,
+    VK_IMAGE_SAMPLES_DEFAULT, VK_IMAGE_TILING_DEFAULT, VK_IMAGE_TYPE_DEFAULT,
+    VK_IMAGE_USAGE_DEFAULT,
+};
 
 /// Thread-safe surface table for the runtime-internal surface-share service.
 #[derive(Clone, Default)]
