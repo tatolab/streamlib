@@ -42,6 +42,14 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   cargo project depending on the `streamlib` crate — no wrapper generation, no special
   format; third-party Rust processors for Rust apps are ordinary cargo dependencies,
   source-compiled. [importable-python-library — SHIPPED #1715]
+- **DECIDED** — The scaffold models the pathway: pixels on the GPU, logic on the CPU, the
+  pixel view explicit. `streamlib new` writes two processors — a `GlslPixelEffect` invert
+  in the camera-to-window path, and a numpy processor on a fan-out of the effect's output
+  that reads a strided CPU view of the frame and logs a number once a second — with
+  dependencies `streamlib` and `numpy`, nothing more. The scaffold takes this shape only
+  once the surface copy and Python kernels run on both floors; until then it stays the
+  numpy CPU effect, so the first minute is the same on Linux and macOS.
+  [engine-steps-for-effects-and-model-input]
 
 ## Packages & extension model — IN-FLIGHT (→ macos-capability-parity, portable-gpu-interop)
 
@@ -986,10 +994,10 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   kind is Rust-only. Pipeline state and buffer resources inside a kind are a narrower
   claim, and the two a Python processor cannot reach are named rather than left silent:
   vertex and index buffers with indexed draws — no escalate op mints either buffer, and
-  no consumer in either language binds one; and storage- and uniform-buffer bindings —
-  Rust consumers in the engine tree hold them, and the only by-surface-id resolution the
-  escalate path has is texture-shaped, so a Python processor is refused by name. Both
-  are undesigned.
+  no consumer in either language binds one; and uniform-buffer bindings — Rust consumers
+  in the engine tree hold them, and the only by-surface-id resolution the escalate path
+  has is texture-shaped, so a Python processor is refused by name. Both are undesigned.
+  Storage buffers are decided below as the tensor buffer.
   [python-kernel-api; python-kernel-surface — SHIPPED #1773, #1774, #1777;
   kernel-kind-parity-bar — the parity claim narrowed to kernel kinds]
   <!-- verify: cargo test -p streamlib-engine compute_kernel_dispatch -->
@@ -1169,6 +1177,37 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   must take a write-back; a format or extent mismatch, or a destination that cannot take a
   write-back, refuses by name. A frame lands in a kernel's input texture this way, with no
   array library. [portable-gpu-interop]
+- **DECIDED** — Python holds a tensor buffer: `acquire_storage_buffer(shape, dtype)` on the
+  Limited GPU capability, and so on Full, mints an engine-owned storage buffer with a
+  declared tensor shape and element type, named by surface id like every surface. A
+  kernel binds it at dispatch as `storage_buffer`, by id; it leaves the processor as a
+  DLPack capsule of that shape on the floor's own device — CUDA on Linux, Metal on macOS
+  — and travels downstream in a bag by id. It is held to the surface-id lifetime contract
+  every surface id is (§Packages): immutable while any holder has it, and a ring slot a
+  holder still retains is skipped, never rewritten under a live tensor. Uniform buffers
+  trail it; push constants carry per-dispatch parameters meanwhile.
+  [engine-steps-for-effects-and-model-input]
+- **DECIDED** — A pixel effect is written as a shader body: `GlslPixelEffect`, wheel
+  grammar over the shipped kernel, texture-ring and surface-copy primitives with no engine
+  change and no wire change. The user writes one GLSL function, `vec4 effect(vec4 source,
+  ivec2 at)`; `GlslPixelEffect.compile(gpu_full_access, effect_glsl=, dials=)` in
+  `setup()` builds an ordinary compute kernel around it, and
+  `apply_to_frame(gpu_limited_access, frame, dials=)` in `process()` lands the frame
+  with the engine copy, dispatches, and returns the output bag. One single-plane RGBA
+  source, output at its extent in `rgba8_unorm`. Dials are push constants typed `float`,
+  `int`, `vec2` or `vec4` — `vec3` refused by name — declared at compile and supplied at
+  every apply; the frame's extent, the monotonic elapsed seconds and two sampling helpers
+  are pre-declared; a compiler diagnostic names the user's own line. Refusals are named at
+  the line the user can fix. No Rust peer until a Rust consumer names one.
+  [engine-steps-for-effects-and-model-input]
+- **DECIDED** — Model input is prepared on the GPU by `ModelInputTensorKernel`, wheel
+  grammar over the tensor buffer and a compute kernel: one pass from an RGBA surface to a
+  tensor buffer at the model's input size — fit `stretch`, `letterbox` or
+  `pad_bottom_right` with an optional pad-to-multiple, channel order with alpha dropped,
+  layout `nchw` or `nhwc`, `float32` or `float16`, scale, mean and std — returning the
+  tensor surface, which `torch.from_dlpack` reads zero-copy, and the fit's geometry, which
+  maps detections back to source coordinates. No colour conversion: a YUV frame is
+  converted by the engine before it is published. [engine-steps-for-effects-and-model-input]
 - **OPEN** — Everything else, including the two graphics capabilities no language can
   render: depth attachments — Rust constructs a depth-testing pipeline that Python cannot
   name, and no pass in either language renders against one — and MSAA, refused for every

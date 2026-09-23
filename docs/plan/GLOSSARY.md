@@ -237,6 +237,14 @@ Retired by the 2026-08-02 pivot (see `docs/decisions/importable-python-library.m
 **Lag by design** — these named the deleted plugin-ABI / module-system world; do not
 reuse them.
 
+**Pixel effect**: a GPU effect written as one shader function over a frame's pixels, run
+by the engine as an ordinary kernel. _Avoid_: "filter", "shader node" (it is not a graph
+node of its own).
+
+**Tensor buffer**: an engine-owned GPU buffer with a declared tensor shape and element
+type, named by surface id and read by tensor libraries over DLPack. _Avoid_: "float
+pixel buffer" (a pixel buffer is image-shaped).
+
 **Floor**: a supported platform the product promises the same capabilities on — Linux +
 NVIDIA, and Apple Silicon. A capability absent on one floor is on a closed list and refuses
 by name. _Avoid_: "target", "backend" (a floor is the promise, not the driver).
