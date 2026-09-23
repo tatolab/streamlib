@@ -799,12 +799,22 @@ impl Runner {
                 ctx.gpu.clear_surface_store();
                 tracing::debug!("[stop] SurfaceStore cleared");
             }
-            // The table holds engine timeline semaphores, which must be
-            // destroyed while the device that made them still exists.
-            #[cfg(target_os = "macos")]
+        }
+
+        // The service thread answers helpers' reports against the timeline
+        // pairs, so it is joined before the pairs go, and both go while the
+        // device that made their semaphores still exists.
+        #[cfg(target_os = "macos")]
+        {
+            crate::core::runtime::note_what_the_engine_teardown_is_waiting_on(
+                "the surface-sharing service",
+            );
+            if let Some(mut mach_surface_share_service) =
+                self.mach_surface_share_service.lock().take()
             {
-                self.surface_share_cross_process_timeline_pairs.clear();
+                mach_surface_share_service.stop();
             }
+            self.surface_share_cross_process_timeline_pairs.clear();
         }
 
         // Before the context is dropped, so the mesh never holds the last
@@ -834,18 +844,6 @@ impl Runner {
                 );
             }
         }
-        #[cfg(target_os = "macos")]
-        {
-            crate::core::runtime::note_what_the_engine_teardown_is_waiting_on(
-                "the surface-sharing service",
-            );
-            if let Some(mut mach_surface_share_service) =
-                self.mach_surface_share_service.lock().take()
-            {
-                mach_surface_share_service.stop();
-            }
-        }
-
         // Last, so every processor is down before peers stop seeing this
         // runtime: the token goes first and the session follows it.
         crate::core::runtime::note_what_the_engine_teardown_is_waiting_on("the runtime mesh");
