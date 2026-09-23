@@ -1,5 +1,9 @@
+// Copyright (c) 2025 Jonathan Fontanez
+// SPDX-License-Identifier: BUSL-1.1
+
 use std::io::Read as _;
-use std::os::unix::net::UnixListener;
+use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::PathBuf;
 
 use super::*;
 use crate::python_helper_process_pixel_exchange::{

@@ -57,7 +57,8 @@ beside this delta, and its macOS arms are prerequisites here, never duplicated.
 - DLPack: the surface handle's Linux arm honours `dl_device` (`python_processor_context/gpu_surface_handle.rs:514-545`);
   its macOS arm discards it (`:546-550`, `let _ = dl_device;`), which is right today only
   because macOS has no device side yet. `copy=True` is refused before the platform split
-  (`:552-556`, and the scope at `:822-826`). The one test of the explicit host request is
+  (`:498-502`, and the scope at
+  `python_processor_context/gpu_surface_device_tensor_scope.rs:177-181`). The one test of the explicit host request is
   `requires_gpu` and CUDA-shaped (`test_device_exchange.py:145`, probe
   `device_exchange_probes.py:189-198`), so nothing asserts it on macOS. No test asserts the
   `copy=True` refusal.

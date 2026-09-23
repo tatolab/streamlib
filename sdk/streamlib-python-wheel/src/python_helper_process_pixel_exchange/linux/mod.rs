@@ -2,8 +2,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use std::os::fd::{FromRawFd as _, IntoRawFd as _, OwnedFd, RawFd};
-use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use pyo3::exceptions::PyRuntimeError;
