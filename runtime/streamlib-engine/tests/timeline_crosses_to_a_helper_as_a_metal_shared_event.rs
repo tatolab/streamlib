@@ -11,31 +11,28 @@
 
 #![cfg(target_os = "macos")]
 
-#[path = "support/surface_share_mach_test_pixels.rs"]
-mod surface_share_mach_test_pixels;
-
 use std::io::{BufRead as _, Write as _};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use objc2_core_foundation::CFRetained;
-use objc2_io_surface::IOSurfaceRef;
+use streamlib_engine::HostGpuDeviceExt;
 use streamlib_engine::apple_surface_share::{
     CROSS_PROCESS_TIMELINE_WAIT_BOUND, ConsumerReleaseOutcome, CrossProcessTimelinePair,
-    IOSurfaceShareState, MachSurfaceShareService, create_iosurface_mach_send_right,
-    create_private_iosurface_with_packed_rows,
+    IOSurfaceShareState, MachSurfaceShareService,
 };
-use streamlib_engine::core::rhi::PixelFormat;
+use streamlib_engine::core::context::GpuContext;
+use streamlib_engine::core::rhi::{
+    PixelBuffer, PixelFormat, RhiExternalHandle, RhiPixelBufferExport,
+};
 use streamlib_engine::host_rhi::{
-    HostVulkanDevice, HostVulkanTimelineSemaphore, RhiCommandRecorder,
+    HostVulkanBuffer, HostVulkanDevice, HostVulkanTimelineSemaphore, RhiCommandRecorder,
 };
 use streamlib_surface_client::{
-    SURFACE_SHARE_HAS_CONSUME_DONE_PORT, SURFACE_SHARE_HAS_PRODUCE_DONE_PORT,
+    OwnedMachSendRight, SURFACE_SHARE_HAS_CONSUME_DONE_PORT, SURFACE_SHARE_HAS_PRODUCE_DONE_PORT,
     SURFACE_SHARE_MACH_SERVICE_ENVIRONMENT_VARIABLE, SurfaceShareMachServiceConnection,
 };
-use surface_share_mach_test_pixels::with_the_surface_bytes;
 
 const HELPER_BINARY: &str = env!("CARGO_BIN_EXE_metal_shared_event_timeline_helper");
 
@@ -46,26 +43,36 @@ const HELPER_EVENT_BUDGET: Duration = Duration::from_secs(30);
 const PING_PONG_ROUNDS: u64 = 500;
 const HOST_SIDE_ROUNDS: u64 = 120;
 
-/// An engine: its own Vulkan device, a running surface-share service, and one
-/// surface registered with a timeline pair.
-struct EngineWithOneSurfaceAndItsTimelinePair {
-    device: Arc<HostVulkanDevice>,
+/// Frame extent: large enough that the GPU copy into it outlasts a hand-off
+/// that does not wait for it.
+const FRAME_WIDTH: u32 = 2048;
+const FRAME_HEIGHT: u32 = 1024;
+const FRAME_BYTES: u64 = FRAME_WIDTH as u64 * FRAME_HEIGHT as u64 * 4;
+
+/// An engine: a GPU context, a running surface-share service, and one pooled
+/// frame registered with a timeline pair. Fields drop in order, so the GPU
+/// context — and the device every timeline was made on — goes last.
+struct EngineWithOneFrameAndItsTimelinePair {
     service: MachSurfaceShareService,
-    iosurface: CFRetained<IOSurfaceRef>,
     pair: Arc<CrossProcessTimelinePair>,
+    frame: PixelBuffer,
+    frame_staging: HostVulkanBuffer,
     _registering_connection: SurfaceShareMachServiceConnection,
+    device: Arc<HostVulkanDevice>,
+    _gpu: GpuContext,
 }
 
-impl EngineWithOneSurfaceAndItsTimelinePair {
-    /// `None` when this machine has no Vulkan device to run on.
+impl EngineWithOneFrameAndItsTimelinePair {
+    /// `None` when this machine has no GPU to run on.
     fn start(label: &str, surface_id: &str, timelines_export: bool) -> Option<Self> {
-        let device = match HostVulkanDevice::new() {
-            Ok(device) => device,
+        let gpu = match GpuContext::init_for_platform() {
+            Ok(gpu) => gpu,
             Err(unavailable) => {
-                tracing::warn!("skipping — no Vulkan device: {unavailable}");
+                tracing::warn!("skipping — no GPU: {unavailable}");
                 return None;
             }
         };
+        let device = Arc::clone(gpu.device().vulkan_device());
         let timeline = || {
             Arc::new(if timelines_export {
                 HostVulkanTimelineSemaphore::new_exportable(device.device(), 0)
@@ -75,6 +82,11 @@ impl EngineWithOneSurfaceAndItsTimelinePair {
             })
         };
         let pair = Arc::new(CrossProcessTimelinePair::new(timeline(), timeline()));
+        let (_, frame) = gpu
+            .acquire_pixel_buffer(FRAME_WIDTH, FRAME_HEIGHT, PixelFormat::Bgra32)
+            .expect("a pooled, IOSurface-backed frame");
+        let frame_staging = HostVulkanBuffer::new_storage_buffer_host_visible(&device, FRAME_BYTES)
+            .expect("a staging buffer");
 
         let state = IOSurfaceShareState::new();
         let mut service = MachSurfaceShareService::new(
@@ -89,10 +101,10 @@ impl EngineWithOneSurfaceAndItsTimelinePair {
             .cross_process_timeline_pairs()
             .insert(surface_id, Arc::clone(&pair));
 
-        let iosurface = create_private_iosurface_with_packed_rows(16, 16, 4, PixelFormat::Bgra32)
-            .expect("a private IOSurface");
-        let mut ports =
-            vec![create_iosurface_mach_send_right(&iosurface).expect("a port to the surface")];
+        let RhiExternalHandle::IOSurfaceMachPort { port } =
+            frame.export_handle().expect("the frame's IOSurface port");
+        // SAFETY: the export handed this process one reference to the right.
+        let mut ports = vec![unsafe { OwnedMachSendRight::from_raw_name(port) }];
         let carries_timeline_pair = pair.append_exported_send_rights_to(&mut ports);
         let registering_connection = SurfaceShareMachServiceConnection::connect(
             service.service_name(),
@@ -105,8 +117,8 @@ impl EngineWithOneSurfaceAndItsTimelinePair {
                     "op": "register",
                     "surface_id": surface_id,
                     "runtime_id": "R-engine",
-                    "width": 16,
-                    "height": 16,
+                    "width": FRAME_WIDTH,
+                    "height": FRAME_HEIGHT,
                     "format": "bgra32",
                     SURFACE_SHARE_HAS_PRODUCE_DONE_PORT: carries_timeline_pair,
                     SURFACE_SHARE_HAS_CONSUME_DONE_PORT: carries_timeline_pair,
@@ -117,17 +129,39 @@ impl EngineWithOneSurfaceAndItsTimelinePair {
         assert_eq!(registered, serde_json::json!({"success": true}));
 
         Some(Self {
-            device,
             service,
-            iosurface,
             pair,
+            frame,
+            frame_staging,
             _registering_connection: registering_connection,
+            device,
+            _gpu: gpu,
         })
     }
 
     /// Signal `produce_done` at `value` from the engine's GPU queue.
-    fn produce_on_the_gpu(&self, recorder: &mut RhiCommandRecorder, value: u64) {
+    fn signal_produce_done_on_the_gpu(&self, recorder: &mut RhiCommandRecorder, value: u64) {
         recorder.begin().expect("begin");
+        recorder
+            .submit_signaling_timeline(self.pair.produce_done(), value)
+            .expect("the engine's GPU signals produce_done");
+    }
+
+    /// Fill the frame with `value`'s low byte on the GPU — a copy from a
+    /// staging buffer — and signal `produce_done` at `value` when it lands.
+    fn write_the_frame_on_the_gpu(&self, recorder: &mut RhiCommandRecorder, value: u64) {
+        recorder.begin().expect("begin");
+        // SAFETY: `begin` waited out the previous copy that read the staging.
+        unsafe {
+            std::ptr::write_bytes(
+                self.frame_staging.mapped_ptr(),
+                (value % 256) as u8,
+                FRAME_BYTES as usize,
+            );
+        }
+        recorder
+            .record_copy_buffer_to_buffer(&self.frame_staging, &self.frame, FRAME_BYTES)
+            .expect("record the frame's copy");
         recorder
             .submit_signaling_timeline(self.pair.produce_done(), value)
             .expect("the engine's GPU signals produce_done");
@@ -141,7 +175,7 @@ struct SpawnedHelperProcess {
 }
 
 impl SpawnedHelperProcess {
-    fn spawn(engine: &EngineWithOneSurfaceAndItsTimelinePair, arguments: &[&str]) -> Self {
+    fn spawn(engine: &EngineWithOneFrameAndItsTimelinePair, arguments: &[&str]) -> Self {
         let mut child = Command::new(HELPER_BINARY)
             .args(arguments)
             .env(
@@ -208,7 +242,7 @@ impl SpawnedHelperProcess {
 )]
 #[test]
 fn engine_and_helper_order_hundreds_of_frames_on_the_shared_events() {
-    let Some(engine) = EngineWithOneSurfaceAndItsTimelinePair::start("ping-pong", "slot-pp", true)
+    let Some(engine) = EngineWithOneFrameAndItsTimelinePair::start("ping-pong", "slot-pp", true)
     else {
         return;
     };
@@ -223,7 +257,7 @@ fn engine_and_helper_order_hundreds_of_frames_on_the_shared_events() {
     let mut recorder = RhiCommandRecorder::new(&engine.device, "ping-pong").expect("a recorder");
     let mut mismatched_rounds = Vec::new();
     for round in 1..=PING_PONG_ROUNDS {
-        engine.produce_on_the_gpu(&mut recorder, round);
+        engine.signal_produce_done_on_the_gpu(&mut recorder, round);
         let outcome = engine
             .pair
             .wait_for_consumer_release(round)
@@ -244,15 +278,17 @@ fn engine_and_helper_order_hundreds_of_frames_on_the_shared_events() {
 }
 
 /// Timelines that will not export register without ports, and the same
-/// frames order host-side: the engine completes production before each
-/// hand-off, and the helper's release arrives as a message.
+/// frames order host-side: the engine's GPU writes each frame, the engine
+/// completes that write before the hand-off, and the helper's release
+/// arrives as a message. Without the completion the helper reads a frame the
+/// copy has not reached.
 #[cfg_attr(
     not(feature = "hardware-tests"),
     ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
 )]
 #[test]
 fn frames_order_host_side_when_the_timeline_export_fails() {
-    let Some(engine) = EngineWithOneSurfaceAndItsTimelinePair::start("host-side", "slot-hs", false)
+    let Some(engine) = EngineWithOneFrameAndItsTimelinePair::start("host-side", "slot-hs", false)
     else {
         return;
     };
@@ -267,8 +303,7 @@ fn frames_order_host_side_when_the_timeline_export_fails() {
 
     let mut recorder = RhiCommandRecorder::new(&engine.device, "host-side").expect("a recorder");
     for round in 1..=HOST_SIDE_ROUNDS {
-        with_the_surface_bytes(&engine.iosurface, |bytes| bytes[0] = (round % 256) as u8);
-        engine.produce_on_the_gpu(&mut recorder, round);
+        engine.write_the_frame_on_the_gpu(&mut recorder, round);
         engine
             .pair
             .complete_production_before_hand_off(round)
@@ -299,7 +334,7 @@ fn frames_order_host_side_when_the_timeline_export_fails() {
 )]
 #[test]
 fn a_stalled_then_killed_helper_leaves_the_engine_producing_on_a_live_device() {
-    let Some(engine) = EngineWithOneSurfaceAndItsTimelinePair::start("stall", "slot-stall", true)
+    let Some(engine) = EngineWithOneFrameAndItsTimelinePair::start("stall", "slot-stall", true)
     else {
         return;
     };
@@ -312,7 +347,7 @@ fn a_stalled_then_killed_helper_leaves_the_engine_producing_on_a_live_device() {
     let stall_began = Instant::now();
 
     let mut recorder = RhiCommandRecorder::new(&engine.device, "stall").expect("a recorder");
-    engine.produce_on_the_gpu(&mut recorder, 1);
+    engine.signal_produce_done_on_the_gpu(&mut recorder, 1);
     let started = Instant::now();
     assert_eq!(
         engine
@@ -329,7 +364,7 @@ fn a_stalled_then_killed_helper_leaves_the_engine_producing_on_a_live_device() {
     let mut round = 1;
     while stall_began.elapsed() < Duration::from_secs(7) {
         round += 1;
-        engine.produce_on_the_gpu(&mut recorder, round);
+        engine.signal_produce_done_on_the_gpu(&mut recorder, round);
         recorder
             .wait_for_completion()
             .expect("the engine's device is alive");

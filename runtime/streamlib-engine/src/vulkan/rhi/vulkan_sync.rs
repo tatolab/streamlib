@@ -601,9 +601,7 @@ mod tests {
     }
 
     /// The exported send right names the timeline's own `MTLSharedEvent`:
-    /// a value set on either side is the value the other reads. Without the
-    /// export declaration chained at creation, MoltenVK hands back no event
-    /// and the export errors.
+    /// a value set on either side is the value the other reads.
     #[cfg(target_os = "macos")]
     #[cfg_attr(
         not(feature = "hardware-tests"),

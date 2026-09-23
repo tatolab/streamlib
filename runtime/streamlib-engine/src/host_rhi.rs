@@ -275,33 +275,3 @@ impl HostSurfaceStoreExt for crate::core::context::SurfaceStore {
         )
     }
 }
-
-/// Privileged engine-side accessor for [`SurfaceStore`] registrations that
-/// carry a cross-process timeline pair — the macOS arm, where the pair
-/// crosses as two Metal shared events and can fall back to host-side
-/// ordering at runtime.
-///
-/// [`SurfaceStore`]: crate::core::context::SurfaceStore
-#[cfg(target_os = "macos")]
-pub trait HostSurfaceStoreExt {
-    /// Register a pool slot's IOSurface under `surface_id` with its
-    /// `produce_done` / `consume_done` timeline pair.
-    fn register_pixel_buffer_with_timeline_pair(
-        &self,
-        surface_id: &str,
-        pixel_buffer: &crate::core::rhi::PixelBuffer,
-        timeline_pair: &Arc<crate::apple::surface_share::CrossProcessTimelinePair>,
-    ) -> crate::core::error::Result<()>;
-}
-
-#[cfg(target_os = "macos")]
-impl HostSurfaceStoreExt for crate::core::context::SurfaceStore {
-    fn register_pixel_buffer_with_timeline_pair(
-        &self,
-        surface_id: &str,
-        pixel_buffer: &crate::core::rhi::PixelBuffer,
-        timeline_pair: &Arc<crate::apple::surface_share::CrossProcessTimelinePair>,
-    ) -> crate::core::error::Result<()> {
-        self.host_register_pixel_buffer_with_timeline_pair(surface_id, pixel_buffer, timeline_pair)
-    }
-}

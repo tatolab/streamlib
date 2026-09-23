@@ -206,7 +206,7 @@ pub mod sdk {
         /// `register_pixel_buffer_with_timeline`).
         pub use streamlib_engine::{HostGpuDeviceExt, HostPixelBufferRefExt, HostTextureExt};
 
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        #[cfg(target_os = "linux")]
         pub use streamlib_engine::HostSurfaceStoreExt;
 
         /// Per-runtime surface-share service primitives. For adapter

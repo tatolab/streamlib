@@ -1261,6 +1261,9 @@ mod tests {
         assert_eq!(refused_import, serde_json::json!({"success": true}));
         assert!(pair.orders_host_side());
 
+        pair.produce_done()
+            .signal_host(4)
+            .expect("produce four frames");
         let (signalled, _) = answer_surface_share_request(
             &state,
             &serde_json::json!({

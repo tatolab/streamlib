@@ -799,6 +799,12 @@ impl Runner {
                 ctx.gpu.clear_surface_store();
                 tracing::debug!("[stop] SurfaceStore cleared");
             }
+            // The table holds engine timeline semaphores, which must be
+            // destroyed while the device that made them still exists.
+            #[cfg(target_os = "macos")]
+            {
+                self.surface_share_cross_process_timeline_pairs.clear();
+            }
         }
 
         // Before the context is dropped, so the mesh never holds the last

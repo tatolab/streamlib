@@ -10,7 +10,7 @@
 //!   signal `consume_done` to r" for every round up front.
 //! - `host-side <surface_id> <rounds>` checks out a surface registered with
 //!   no timeline ports; for each `FRAME r` line on stdin it reads the frame's
-//!   first byte and reports its release with `signal_consume_done`.
+//!   last byte and reports its release with `signal_consume_done`.
 //! - `stall <surface_id>` imports the pair, queues a device-side wait for a
 //!   `produce_done` value the engine never signals, and waits to be killed.
 //!
@@ -164,10 +164,17 @@ mod timeline_helper {
                 .strip_prefix("FRAME ")
                 .and_then(|value| value.parse().ok())
                 .unwrap_or_else(|| fail(&format!("BAD_LINE {line}")));
-            // SAFETY: the engine wrote the byte before handing the frame
-            // off, and writes the next one only after this release.
-            let first_byte = unsafe { *iosurface.base_address().as_ptr().cast::<u8>() };
-            if handed_off != round || u64::from(first_byte) != round % 256 {
+            let last_byte_offset = iosurface.bytes_per_row() * iosurface.height() - 1;
+            // SAFETY: an offset inside the surface's packed rows; the engine
+            // writes the next frame only after this release.
+            let last_byte = unsafe {
+                *iosurface
+                    .base_address()
+                    .as_ptr()
+                    .cast::<u8>()
+                    .add(last_byte_offset)
+            };
+            if handed_off != round || u64::from(last_byte) != round % 256 {
                 mismatches += 1;
             }
             let (released, _) = connection

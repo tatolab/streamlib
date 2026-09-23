@@ -197,7 +197,7 @@ pub mod host_rhi;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use host_rhi::{HostGpuDeviceExt, HostPixelBufferRefExt, HostTextureExt};
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "linux")]
 pub use host_rhi::HostSurfaceStoreExt;
 
 /// Vulkan Video codec layer — engine-tier H.264/H.265 encode/decode
@@ -318,7 +318,7 @@ pub mod sdk {
     /// [`streamlib::sdk::engine`](../../streamlib-sdk/src/lib.rs).
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub mod engine {
-        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        #[cfg(target_os = "linux")]
         pub use crate::HostSurfaceStoreExt;
         pub use crate::host_rhi;
         #[cfg(target_os = "linux")]

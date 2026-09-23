@@ -1430,9 +1430,10 @@ impl SurfaceStoreInner {
                      no timeline-pair table with a surface-share service"
                 ))
             })?;
+        // Recorded only once the service accepted the id: a refused duplicate
+        // must not displace the live registration's pair.
+        self.send_pixel_buffer_registration(surface_id, pixel_buffer, Some(timeline_pair))?;
         cross_process_timeline_pairs.insert(surface_id, Arc::clone(timeline_pair));
-        self.send_pixel_buffer_registration(surface_id, pixel_buffer, Some(timeline_pair))
-            .inspect_err(|_| cross_process_timeline_pairs.remove(surface_id))?;
         tracing::debug!(
             "SurfaceStore: Registered buffer '{}' with its timeline pair (host-side ordering: {})",
             surface_id,
@@ -1969,6 +1970,13 @@ impl SurfaceStore {
     /// pair (macOS). See
     /// [`SurfaceStoreInner::register_pixel_buffer_with_timeline_pair`].
     #[cfg(target_os = "macos")]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the macOS texture and escalate arms call it (#2402)"
+        )
+    )]
     pub(crate) fn host_register_pixel_buffer_with_timeline_pair(
         &self,
         surface_id: &str,
@@ -2866,6 +2874,42 @@ mod mach_surface_share_pool_tests {
                 .pair_of("slot-with-pair")
                 .is_some()
         );
+    }
+
+    /// A second registration under a live id is refused, and the first
+    /// registration keeps its pair.
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn a_refused_duplicate_registration_leaves_the_live_registrations_pair() {
+        let Some(gpu) = gpu_or_skip() else {
+            return;
+        };
+        let (state, _service) = a_store_connected_to_a_started_service(&gpu, "timeline-dup");
+        let store = gpu.surface_store().expect("the store");
+        let (_, pixel_buffer) = gpu
+            .acquire_pixel_buffer(16, 8, PixelFormat::Bgra32)
+            .expect("a pooled frame");
+        let live_pair = a_timeline_pair(&gpu, true);
+        store
+            .host_register_pixel_buffer_with_timeline_pair("slot-dup", &pixel_buffer, &live_pair)
+            .expect("the first registration crosses");
+
+        store
+            .host_register_pixel_buffer_with_timeline_pair(
+                "slot-dup",
+                &pixel_buffer,
+                &a_timeline_pair(&gpu, true),
+            )
+            .expect_err("a second registration under a live id is refused");
+
+        let kept = state
+            .cross_process_timeline_pairs()
+            .pair_of("slot-dup")
+            .expect("the live registration keeps a pair");
+        assert!(std::sync::Arc::ptr_eq(&kept, &live_pair));
     }
 
     /// A pair whose timelines will not export crosses without ports and

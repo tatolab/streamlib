@@ -15,7 +15,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use streamlib_surface_client::OwnedMachSendRight;
 
 use crate::core::rhi::pool_slot_key_of_surface_id;
@@ -50,6 +50,11 @@ pub struct CrossProcessTimelinePair {
     produce_done: Arc<HostVulkanTimelineSemaphore>,
     consume_done: Arc<HostVulkanTimelineSemaphore>,
     orders_host_side: AtomicBool,
+    /// Serialises the engine's host signals of `consume_done`: the service
+    /// thread (a helper's report) and the producer (forcing past a stall)
+    /// each read the counter and then signal, and a host signal at or below
+    /// the counter is invalid.
+    consume_done_host_signal: Mutex<()>,
 }
 
 impl CrossProcessTimelinePair {
@@ -63,6 +68,7 @@ impl CrossProcessTimelinePair {
             produce_done,
             consume_done,
             orders_host_side: AtomicBool::new(false),
+            consume_done_host_signal: Mutex::new(()),
         }
     }
 
@@ -152,11 +158,9 @@ impl CrossProcessTimelinePair {
         // A device that still answers its counter timed out waiting on the
         // helper; one that does not is the engine's own failure, and is
         // returned as that rather than blamed on a stalled helper.
-        let reached = self.consume_done.current_value()?;
-        if reached >= value {
+        let Some(reached) = self.advance_consume_done_to_at_least(value)? else {
             return Ok(ConsumerReleaseOutcome::Released);
-        }
-        self.consume_done.signal_host(value)?;
+        };
         tracing::warn!(
             value,
             reached,
@@ -170,16 +174,33 @@ impl CrossProcessTimelinePair {
 
     /// A helper's host-side report that it released the frame at `value`.
     /// A value the counter already reached — the engine forced it past a
-    /// stall — is not signalled again.
+    /// stall — is not signalled again; a value past what the engine has
+    /// produced is refused, since no frame can be released before it exists.
     pub fn record_consumer_release_reported_over_the_channel(&self, value: u64) -> Result<()> {
-        self.advance_consume_done_to_at_least(value)
+        let produced = self.produce_done.current_value()?;
+        if value > produced {
+            return Err(Error::Configuration(format!(
+                "a release reported at {value} is past the {produced} frames produced"
+            )));
+        }
+        self.advance_consume_done_to_at_least(value).map(|_| ())
     }
 
-    fn advance_consume_done_to_at_least(&self, value: u64) -> Result<()> {
-        if self.consume_done.current_value()? >= value {
-            return Ok(());
+    /// Host-signal `consume_done` to `value` unless it already reached it,
+    /// answering the value it stood at when it had not.
+    fn advance_consume_done_to_at_least(&self, value: u64) -> Result<Option<u64>> {
+        let _one_host_signaller = self.consume_done_host_signal.lock();
+        let reached = self.consume_done.current_value()?;
+        if reached >= value {
+            return Ok(None);
         }
-        self.consume_done.signal_host(value)
+        match self.consume_done.signal_host(value) {
+            Ok(()) => Ok(Some(reached)),
+            // The helper's own device-side signal can land between the read
+            // and this signal.
+            Err(_) if self.consume_done.current_value()? >= value => Ok(None),
+            Err(refused) => Err(refused),
+        }
     }
 }
 
@@ -206,6 +227,12 @@ impl CrossProcessTimelinePairsBySurface {
             .read()
             .get(pool_slot_key_of_surface_id(surface_id))
             .cloned()
+    }
+
+    /// Forget every pair, destroying the engine semaphores no other owner
+    /// holds. The runtime calls this at stop, while its device still exists.
+    pub fn clear(&self) {
+        self.pairs.write().clear();
     }
 
     /// Forget `surface_id`'s pair.
@@ -245,6 +272,9 @@ mod tests {
     fn a_stalled_consumer_is_forced_past_within_the_bound_and_a_late_report_is_harmless() {
         let device = HostVulkanDevice::new().expect("the rig must produce a Vulkan device");
         let pair = a_pair(&device);
+        pair.produce_done()
+            .signal_host(1)
+            .expect("produce one frame");
 
         let started = std::time::Instant::now();
         let outcome = pair.wait_for_consumer_release(1).expect("bounded wait");
@@ -267,12 +297,37 @@ mod tests {
     fn a_reported_release_ends_the_wait_without_forcing() {
         let device = HostVulkanDevice::new().expect("the rig must produce a Vulkan device");
         let pair = a_pair(&device);
+        pair.produce_done()
+            .signal_host(3)
+            .expect("produce three frames");
         pair.record_consumer_release_reported_over_the_channel(3)
             .expect("the report signals");
         assert_eq!(
             pair.wait_for_consumer_release(3).expect("wait"),
             ConsumerReleaseOutcome::Released
         );
+    }
+
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn a_release_reported_past_what_was_produced_is_refused_and_moves_nothing() {
+        let device = HostVulkanDevice::new().expect("the rig must produce a Vulkan device");
+        let pair = a_pair(&device);
+        pair.produce_done()
+            .signal_host(2)
+            .expect("produce two frames");
+
+        let refusal = pair
+            .record_consumer_release_reported_over_the_channel(u64::MAX)
+            .expect_err("no frame past the second exists to release");
+        assert!(
+            refusal.to_string().contains("past the 2 frames produced"),
+            "{refusal}"
+        );
+        assert_eq!(pair.consume_done().current_value().unwrap(), 0);
     }
 
     #[cfg_attr(
