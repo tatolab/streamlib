@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.16](https://github.com/tatolab/streamlib/compare/v0.26.15...v0.26.16) (2026-09-23)
+
+
+### Features
+
+* **dist:** an aarch64-apple-darwin wheel that installs and runs with no setup ([#2447](https://github.com/tatolab/streamlib/issues/2447)) ([dbba5da](https://github.com/tatolab/streamlib/commit/dbba5daf91a54f28c427615eb4412feaf2d95c5e))
+
 ## [0.26.15](https://github.com/tatolab/streamlib/compare/v0.26.14...v0.26.15) (2026-09-23)
 
 
