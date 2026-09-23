@@ -454,16 +454,13 @@ impl SurfaceStoreInner {
         runtime_id: String,
         check_out_leases: Option<Arc<SurfaceCheckOutLeaseRegistry>>,
     ) -> Arc<Self> {
-        Arc::new(SurfaceStoreInner {
-            #[cfg(any(target_os = "linux", target_os = "macos"))]
-            connection: Mutex::new(None),
-            cache: Mutex::new(SurfaceCache::new()),
+        Self::sharing_the_services_tables(
             service_name,
             runtime_id,
             check_out_leases,
             #[cfg(target_os = "macos")]
-            cross_process_timeline_pairs: None,
-        })
+            None,
+        )
     }
 
     /// As [`Self::new_reading_check_out_leases`], also sharing the Mach
@@ -478,13 +475,31 @@ impl SurfaceStoreInner {
             crate::apple::surface_share::CrossProcessTimelinePairsBySurface,
         >,
     ) -> Arc<Self> {
+        Self::sharing_the_services_tables(
+            service_name,
+            runtime_id,
+            Some(check_out_leases),
+            Some(cross_process_timeline_pairs),
+        )
+    }
+
+    fn sharing_the_services_tables(
+        service_name: String,
+        runtime_id: String,
+        check_out_leases: Option<Arc<SurfaceCheckOutLeaseRegistry>>,
+        #[cfg(target_os = "macos")] cross_process_timeline_pairs: Option<
+            Arc<crate::apple::surface_share::CrossProcessTimelinePairsBySurface>,
+        >,
+    ) -> Arc<Self> {
         Arc::new(SurfaceStoreInner {
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             connection: Mutex::new(None),
             cache: Mutex::new(SurfaceCache::new()),
             service_name,
             runtime_id,
-            check_out_leases: Some(check_out_leases),
-            cross_process_timeline_pairs: Some(cross_process_timeline_pairs),
+            check_out_leases,
+            #[cfg(target_os = "macos")]
+            cross_process_timeline_pairs,
         })
     }
 
@@ -1392,21 +1407,7 @@ impl SurfaceStoreInner {
     /// Register a pool slot's IOSurface under `pool_id`.
     #[cfg(target_os = "macos")]
     pub fn register_buffer(&self, pool_id: &str, pixel_buffer: &PixelBuffer) -> Result<()> {
-        let request = serde_json::json!({
-            "op": "register",
-            "surface_id": pool_id,
-            "runtime_id": self.runtime_id,
-            "width": pixel_buffer.width,
-            "height": pixel_buffer.height,
-            "format": pixel_buffer.format().wire_name(),
-            "resource_type": SURFACE_RESOURCE_TYPE_PIXEL_BUFFER,
-        });
-        let (response, _) = self.send_surface_share_mach_request(
-            "register",
-            &request,
-            vec![exported_iosurface_port(pixel_buffer)?],
-        )?;
-        refusal_of_a_registration_answer("register", &response)?;
+        self.send_pixel_buffer_registration(pool_id, pixel_buffer, None)?;
         tracing::debug!("SurfaceStore: Registered buffer '{}'", pool_id);
         Ok(())
     }
@@ -1429,15 +1430,29 @@ impl SurfaceStoreInner {
                      no timeline-pair table with a surface-share service"
                 ))
             })?;
+        cross_process_timeline_pairs.insert(surface_id, Arc::clone(timeline_pair));
+        self.send_pixel_buffer_registration(surface_id, pixel_buffer, Some(timeline_pair))
+            .inspect_err(|_| cross_process_timeline_pairs.remove(surface_id))?;
+        tracing::debug!(
+            "SurfaceStore: Registered buffer '{}' with its timeline pair (host-side ordering: {})",
+            surface_id,
+            timeline_pair.orders_host_side()
+        );
+        Ok(())
+    }
+
+    /// Send one `register` for a pool slot's IOSurface, with its timeline
+    /// pair's shared events after it when there is a pair and it exports.
+    #[cfg(target_os = "macos")]
+    fn send_pixel_buffer_registration(
+        &self,
+        surface_id: &str,
+        pixel_buffer: &PixelBuffer,
+        timeline_pair: Option<&crate::apple::surface_share::CrossProcessTimelinePair>,
+    ) -> Result<()> {
         let mut ports = vec![exported_iosurface_port(pixel_buffer)?];
-        let carries_timeline_pair =
-            match timeline_pair.exported_mach_send_rights_or_host_side_fallback() {
-                Some((produce_done, consume_done)) => {
-                    ports.extend([produce_done, consume_done]);
-                    true
-                }
-                None => false,
-            };
+        let carries_timeline_pair = timeline_pair
+            .is_some_and(|timeline_pair| timeline_pair.append_exported_send_rights_to(&mut ports));
         let request = serde_json::json!({
             "op": "register",
             "surface_id": surface_id,
@@ -1449,20 +1464,8 @@ impl SurfaceStoreInner {
             streamlib_surface_client::SURFACE_SHARE_HAS_PRODUCE_DONE_PORT: carries_timeline_pair,
             streamlib_surface_client::SURFACE_SHARE_HAS_CONSUME_DONE_PORT: carries_timeline_pair,
         });
-        cross_process_timeline_pairs.insert(surface_id, Arc::clone(timeline_pair));
-        let registered = self
-            .send_surface_share_mach_request("register", &request, ports)
-            .and_then(|(response, _)| refusal_of_a_registration_answer("register", &response));
-        if registered.is_err() {
-            cross_process_timeline_pairs.remove(surface_id);
-        }
-        registered?;
-        tracing::debug!(
-            "SurfaceStore: Registered buffer '{}' with its timeline pair (host-side ordering: {})",
-            surface_id,
-            timeline_pair.orders_host_side()
-        );
-        Ok(())
+        let (response, _) = self.send_surface_share_mach_request("register", &request, ports)?;
+        refusal_of_a_registration_answer("register", &response)
     }
 
     /// Resolve a registered pool slot to a pixel buffer over its IOSurface.

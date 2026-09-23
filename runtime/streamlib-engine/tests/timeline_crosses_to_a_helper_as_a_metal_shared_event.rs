@@ -93,13 +93,7 @@ impl EngineWithOneSurfaceAndItsTimelinePair {
             .expect("a private IOSurface");
         let mut ports =
             vec![create_iosurface_mach_send_right(&iosurface).expect("a port to the surface")];
-        let carries_timeline_pair = match pair.exported_mach_send_rights_or_host_side_fallback() {
-            Some((produce_done, consume_done)) => {
-                ports.extend([produce_done, consume_done]);
-                true
-            }
-            None => false,
-        };
+        let carries_timeline_pair = pair.append_exported_send_rights_to(&mut ports);
         let registering_connection = SurfaceShareMachServiceConnection::connect(
             service.service_name(),
             Duration::from_secs(10),
@@ -191,14 +185,15 @@ impl SpawnedHelperProcess {
     }
 
     fn wait_for_exit(mut self) -> std::process::ExitStatus {
-        let deadline = Instant::now() + HELPER_EVENT_BUDGET;
-        loop {
-            if let Some(status) = self.child.try_wait().expect("try_wait") {
-                return status;
-            }
-            assert!(Instant::now() < deadline, "the helper did not exit");
-            std::thread::yield_now();
-        }
+        let end_of_output = self
+            .stdout_lines
+            .recv_timeout(HELPER_EVENT_BUDGET)
+            .expect("the helper closed its output within the budget");
+        assert_eq!(
+            end_of_output, None,
+            "the helper reported more than expected"
+        );
+        self.child.wait().expect("reap the helper")
     }
 }
 

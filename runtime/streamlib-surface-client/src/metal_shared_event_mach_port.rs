@@ -29,12 +29,16 @@ use crate::OwnedMachSendRight;
 /// The key `MTLSharedEventHandle` encodes its Mach send right under.
 const METAL_SHARED_EVENT_HANDLE_PORT_KEY: &str = "Port";
 
+fn is_the_port_key(key: &NSString) -> bool {
+    key.isEqualToString(&NSString::from_str(METAL_SHARED_EVENT_HANDLE_PORT_KEY))
+}
+
 /// Scratch key the send right is parked under in a one-entry XPC dictionary.
 const XPC_DICTIONARY_SCRATCH_KEY: &CStr = c"port";
 
-// libxpc, part of libSystem. objc2 generates no bindings for it.
+// libxpc's public `<xpc/xpc.h>`, part of libSystem; objc2 generates no
+// bindings for it.
 unsafe extern "C" {
-    static _xpc_type_mach_send: c_void;
     fn xpc_dictionary_create(
         keys: *const *const c_char,
         values: *const *mut AnyObject,
@@ -74,10 +78,6 @@ unsafe impl RefEncode for XpcType {
     const ENCODING_REF: Encoding = Encoding::Pointer(&Self::ENCODING);
 }
 
-fn xpc_type_mach_send() -> XpcType {
-    XpcType(&raw const _xpc_type_mach_send)
-}
-
 /// A fresh, empty XPC dictionary, released on drop.
 fn new_xpc_dictionary() -> io::Result<Retained<AnyObject>> {
     // SAFETY: an empty dictionary; the create call returns +1.
@@ -94,8 +94,10 @@ struct MachPortCapturingXPCCoderIvars {
 }
 
 define_class!(
-    // SAFETY: `NSXPCCoder` has no subclassing requirements beyond keyed-coding
-    // overrides, and the subclass does not implement `Drop`.
+    // SAFETY: every overridden selector keeps `NSXPCCoder`'s signature and
+    // type encoding — `XpcType` encodes as `^{_xpc_type_s=}`, and the keys
+    // are non-null `NSString`s by the `NSCoder` contract — and the subclass
+    // does not implement `Drop`.
     #[unsafe(super(NSXPCCoder, NSCoder, NSObject))]
     #[ivars = MachPortCapturingXPCCoderIvars]
     #[name = "StreamlibMachPortCapturingXPCCoder"]
@@ -126,7 +128,7 @@ define_class!(
 
         #[unsafe(method(decodeXPCObjectOfType:forKey:))]
         fn decode_xpc_object(&self, xpc_type: XpcType, key: &NSString) -> *mut AnyObject {
-            if key.to_string() != METAL_SHARED_EVENT_HANDLE_PORT_KEY {
+            if !is_the_port_key(key) {
                 return std::ptr::null_mut();
             }
             let replayed = self.ivars().replayed_port_object.borrow();
@@ -163,10 +165,7 @@ define_class!(
 
         #[unsafe(method(containsValueForKey:))]
         fn contains_value_for_key(&self, key: &NSString) -> Bool {
-            Bool::new(
-                key.to_string() == METAL_SHARED_EVENT_HANDLE_PORT_KEY
-                    && self.ivars().replayed_port_object.borrow().is_some(),
-            )
+            Bool::new(is_the_port_key(key) && self.ivars().replayed_port_object.borrow().is_some())
         }
     }
 );
@@ -205,16 +204,13 @@ pub fn mach_send_right_of_metal_shared_event_handle(
             captured.len()
         ))
     })?;
-    let port_object_raw = Retained::as_ptr(&port_object).cast_mut();
-    // SAFETY: a live XPC object the coder retained.
-    if key != METAL_SHARED_EVENT_HANDLE_PORT_KEY
-        || unsafe { xpc_get_type(port_object_raw) } != xpc_type_mach_send()
-    {
+    if key != METAL_SHARED_EVENT_HANDLE_PORT_KEY {
         return Err(io::Error::other(format!(
-            "MTLSharedEventHandle encoded an XPC object under {key:?} that is not a send right \
-             under {METAL_SHARED_EVENT_HANDLE_PORT_KEY:?}"
+            "MTLSharedEventHandle encoded its XPC object under {key:?}, not \
+             {METAL_SHARED_EVENT_HANDLE_PORT_KEY:?}"
         )));
     }
+    let port_object_raw = Retained::as_ptr(&port_object).cast_mut();
 
     let dictionary = new_xpc_dictionary()?;
     let dictionary_raw = Retained::as_ptr(&dictionary).cast_mut();
@@ -228,9 +224,10 @@ pub fn mach_send_right_of_metal_shared_event_handle(
         );
         xpc_dictionary_copy_mach_send(dictionary_raw, XPC_DICTIONARY_SCRATCH_KEY.as_ptr())
     };
+    // `copy_mach_send` answers null for a value that is not a send right.
     if port == MACH_PORT_NULL || port == MACH_PORT_DEAD {
         return Err(io::Error::other(
-            "xpc_dictionary_copy_mach_send yielded no send right for the shared event",
+            "MTLSharedEventHandle encoded an XPC object that is not a Mach send right",
         ));
     }
     // SAFETY: `copy_mach_send` handed this task one reference.

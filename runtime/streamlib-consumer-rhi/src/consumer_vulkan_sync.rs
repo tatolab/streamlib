@@ -132,6 +132,9 @@ impl ConsumerVulkanTimelineSemaphore {
         let info = vk::SemaphoreCreateInfo::builder()
             .push_next(&mut type_info)
             .build();
+        // SAFETY: the pNext chain's structs live on this stack frame through
+        // the call, and MoltenVK retains the imported event for the
+        // semaphore's life, so `shared_event` may drop on return.
         let semaphore = unsafe { device.create_semaphore(&info, None) }.map_err(|e| {
             ConsumerRhiError::Gpu(format!(
                 "ConsumerVulkanTimelineSemaphore: create_semaphore importing the shared \
@@ -205,6 +208,12 @@ impl ConsumerVulkanTimelineSemaphore {
         then_signal: &ConsumerVulkanTimelineSemaphore,
         signal_value: u64,
     ) -> Result<()> {
+        if !Arc::ptr_eq(&self.vulkan_device, &then_signal.vulkan_device) {
+            return Err(ConsumerRhiError::Gpu(
+                "submit_device_wait_then_signal: both timelines must live on one consumer device"
+                    .into(),
+            ));
+        }
         let waits = [vk::SemaphoreSubmitInfo::builder()
             .semaphore(self.semaphore)
             .value(wait_value)
@@ -219,8 +228,8 @@ impl ConsumerVulkanTimelineSemaphore {
             .wait_semaphore_infos(&waits)
             .signal_semaphore_infos(&signals)
             .build()];
-        // SAFETY: both semaphores live on this device, and the submission
-        // references no command buffer.
+        // SAFETY: both semaphores live on this device (checked above), and
+        // the submission references no command buffer.
         unsafe {
             self.vulkan_device.submit_to_queue(
                 self.vulkan_device.queue(),
@@ -274,7 +283,7 @@ mod tests {
         match ConsumerVulkanDevice::new() {
             Ok(device) => Some(Arc::new(device)),
             Err(unavailable) => {
-                println!("Skipping test — ConsumerVulkanDevice unavailable: {unavailable}");
+                tracing::info!("Skipping test — ConsumerVulkanDevice unavailable: {unavailable}");
                 None
             }
         }
@@ -311,6 +320,35 @@ mod tests {
         imported
             .wait(45, 1_000_000_000)
             .expect("the consumer observes the producer's signal");
+    }
+
+    #[test]
+    fn a_device_side_hand_back_refuses_a_timeline_from_another_device() {
+        let (Some(device), Some(other_device)) = (try_create_device(), try_create_device()) else {
+            return;
+        };
+        let shared_event = MTLCreateSystemDefaultDevice()
+            .and_then(|metal_device| metal_device.newSharedEvent())
+            .expect("a Metal shared event");
+        let send_right = streamlib_surface_client::mach_send_right_of_metal_shared_event_handle(
+            &shared_event.newSharedEventHandle(),
+        )
+        .expect("the handle's send right");
+        let import = |device| {
+            ConsumerVulkanTimelineSemaphore::from_imported_metal_shared_event_mach_send_right(
+                device,
+                &send_right,
+            )
+            .expect("the shared event imports")
+        };
+        let on_this_device = import(&device);
+        let on_the_other_device = import(&other_device);
+
+        assert!(
+            on_this_device
+                .submit_device_wait_then_signal(0, &on_the_other_device, 1)
+                .is_err()
+        );
     }
 
     #[test]

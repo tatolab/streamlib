@@ -767,30 +767,28 @@ fn registration_of_request(
         }
     };
     let mut received_ports = received_ports.into_iter();
-    let (Some(iosurface_port), timeline_send_rights, None) = (
-        received_ports.next(),
-        if announces_timeline_pair {
-            match (received_ports.next(), received_ports.next()) {
-                (Some(produce_done), Some(consume_done)) => {
-                    Some(Arc::new(SharedTimelineSendRights {
-                        produce_done,
-                        consume_done,
-                    }))
-                }
-                _ => {
-                    return Err("the announced timeline ports did not arrive".to_string());
-                }
-            }
-        } else {
-            None
-        },
-        received_ports.next(),
-    ) else {
+    let Some(iosurface_port) = received_ports.next() else {
+        return Err("a registration carries exactly one IOSurface port".to_string());
+    };
+    let timeline_send_rights = if announces_timeline_pair {
+        let (Some(produce_done), Some(consume_done)) =
+            (received_ports.next(), received_ports.next())
+        else {
+            return Err("the announced timeline ports did not arrive".to_string());
+        };
+        Some(Arc::new(SharedTimelineSendRights {
+            produce_done,
+            consume_done,
+        }))
+    } else {
+        None
+    };
+    if received_ports.next().is_some() {
         return Err(
             "a registration carries exactly one IOSurface port, then the ports its flags announce"
                 .to_string(),
         );
-    };
+    }
     let iosurface = IOSurfaceRef::lookup_from_mach_port(iosurface_port.as_raw_name())
         .ok_or_else(|| "the registered port names no IOSurface".to_string())?;
     let requested_u32 = |key: &str| {
@@ -903,13 +901,14 @@ fn handle_lookup(
         }
     };
     let mut reply_ports = vec![iosurface_port];
-    if let Some(timeline_send_rights) = &registration.timeline_send_rights {
-        match (
+    let carries_timeline_pair = match &registration.timeline_send_rights {
+        Some(timeline_send_rights) => match (
             timeline_send_rights.produce_done.try_clone(),
             timeline_send_rights.consume_done.try_clone(),
         ) {
             (Ok(produce_done), Ok(consume_done)) => {
                 reply_ports.extend([produce_done, consume_done]);
+                true
             }
             (Err(unminted), _) | (_, Err(unminted)) => {
                 return (
@@ -917,9 +916,9 @@ fn handle_lookup(
                     Vec::new(),
                 );
             }
-        }
-    }
-    let carries_timeline_pair = reply_ports.len() == 3;
+        },
+        None => false,
+    };
     (
         serde_json::json!({
             "surface_id": surface_id,

@@ -31,6 +31,9 @@ use crate::vulkan::rhi::HostVulkanTimelineSemaphore;
 /// value itself.
 pub const CROSS_PROCESS_TIMELINE_WAIT_BOUND: Duration = Duration::from_secs(2);
 
+const CROSS_PROCESS_TIMELINE_WAIT_BOUND_NS: u64 =
+    CROSS_PROCESS_TIMELINE_WAIT_BOUND.as_nanos() as u64;
+
 /// How a wait for a helper's release of a frame ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConsumerReleaseOutcome {
@@ -89,9 +92,21 @@ impl CrossProcessTimelinePair {
         }
     }
 
-    /// Send rights to both timelines' shared events, or `None` — having
-    /// fallen back to host-side ordering — when either will not export.
-    pub fn exported_mach_send_rights_or_host_side_fallback(
+    /// Append send rights to `produce_done`'s and `consume_done`'s shared
+    /// events to a registration's ports, answering whether they went on — the
+    /// value of its two `has_*_done_port` flags. When either will not export,
+    /// nothing is appended and the pair falls back to host-side ordering.
+    pub fn append_exported_send_rights_to(&self, ports: &mut Vec<OwnedMachSendRight>) -> bool {
+        match self.exported_mach_send_rights_or_host_side_fallback() {
+            Some((produce_done, consume_done)) => {
+                ports.extend([produce_done, consume_done]);
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn exported_mach_send_rights_or_host_side_fallback(
         &self,
     ) -> Option<(OwnedMachSendRight, OwnedMachSendRight)> {
         let exported = self
@@ -120,7 +135,7 @@ impl CrossProcessTimelinePair {
             return Ok(());
         }
         self.produce_done
-            .wait(value, CROSS_PROCESS_TIMELINE_WAIT_BOUND.as_nanos() as u64)
+            .wait(value, CROSS_PROCESS_TIMELINE_WAIT_BOUND_NS)
     }
 
     /// Wait, bounded, for a helper to release the frame it signals
@@ -128,19 +143,25 @@ impl CrossProcessTimelinePair {
     /// helper's value on macOS: host-side, ahead of any submit that reuses
     /// the frame, never a device-side wait.
     pub fn wait_for_consumer_release(&self, value: u64) -> Result<ConsumerReleaseOutcome> {
-        if self
+        let Err(wait_failure) = self
             .consume_done
-            .wait(value, CROSS_PROCESS_TIMELINE_WAIT_BOUND.as_nanos() as u64)
-            .is_ok()
-        {
+            .wait(value, CROSS_PROCESS_TIMELINE_WAIT_BOUND_NS)
+        else {
+            return Ok(ConsumerReleaseOutcome::Released);
+        };
+        // A device that still answers its counter timed out waiting on the
+        // helper; one that does not is the engine's own failure, and is
+        // returned as that rather than blamed on a stalled helper.
+        let reached = self.consume_done.current_value()?;
+        if reached >= value {
             return Ok(ConsumerReleaseOutcome::Released);
         }
-        // A driver error rather than a timeout surfaces here too; either
-        // way the counter below `value` is what must not block the engine.
-        self.advance_consume_done_to_at_least(value)?;
+        self.consume_done.signal_host(value)?;
         tracing::warn!(
             value,
+            reached,
             bound_ms = CROSS_PROCESS_TIMELINE_WAIT_BOUND.as_millis() as u64,
+            error = %wait_failure,
             "a helper did not release a frame within the bound; the engine signalled \
              consume_done itself and the frame is stale"
         );
@@ -173,7 +194,9 @@ pub struct CrossProcessTimelinePairsBySurface {
 impl CrossProcessTimelinePairsBySurface {
     /// Record `pair` as `surface_id`'s, replacing any earlier one.
     pub fn insert(&self, surface_id: &str, pair: Arc<CrossProcessTimelinePair>) {
-        self.pairs.write().insert(surface_id.to_string(), pair);
+        self.pairs
+            .write()
+            .insert(pool_slot_key_of_surface_id(surface_id).to_string(), pair);
     }
 
     /// The pair behind `surface_id`; a published frame id resolves through
@@ -195,7 +218,7 @@ impl CrossProcessTimelinePairsBySurface {
     /// The pair behind `surface_id`, or the refusal a helper's report gets.
     pub fn pair_or_refusal(&self, surface_id: &str) -> Result<Arc<CrossProcessTimelinePair>> {
         self.pair_of(surface_id).ok_or_else(|| {
-            Error::GpuError(format!(
+            Error::Configuration(format!(
                 "surface '{surface_id}' has no engine timeline pair to report against"
             ))
         })
@@ -260,22 +283,18 @@ mod tests {
     fn a_timeline_that_will_not_export_falls_the_pair_back_to_host_side() {
         let device = HostVulkanDevice::new().expect("the rig must produce a Vulkan device");
         let exportable = a_pair(&device);
-        assert!(
-            exportable
-                .exported_mach_send_rights_or_host_side_fallback()
-                .is_some()
-        );
+        let mut ports = Vec::new();
+        assert!(exportable.append_exported_send_rights_to(&mut ports));
+        assert_eq!(ports.len(), 2);
         assert!(!exportable.orders_host_side());
 
         let unexportable = CrossProcessTimelinePair::new(
             Arc::new(HostVulkanTimelineSemaphore::new(device.device(), 0).unwrap()),
             Arc::new(HostVulkanTimelineSemaphore::new(device.device(), 0).unwrap()),
         );
-        assert!(
-            unexportable
-                .exported_mach_send_rights_or_host_side_fallback()
-                .is_none()
-        );
+        let mut ports = Vec::new();
+        assert!(!unexportable.append_exported_send_rights_to(&mut ports));
+        assert!(ports.is_empty());
         assert!(unexportable.orders_host_side());
     }
 }
