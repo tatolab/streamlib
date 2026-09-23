@@ -50,13 +50,6 @@ pub(crate) use runtime_context::{
     PythonRuntimeContextFullAccess, PythonRuntimeContextLimitedAccess,
 };
 
-/// The refusal a GPU call gets when this process has neither an engine view
-/// nor a channel to a parent that has one.
-///
-/// In a helper process the pixel exchange normally crosses to the parent;
-/// reaching this refusal means the helper was started without its
-/// surface-share channel — a platform without one, or a parent too old to
-/// pass it.
 /// The refusal `escalate` gives on either capability.
 ///
 /// `sibling_capability_attribute_name` is the other capability on the same
@@ -99,6 +92,13 @@ pub(crate) const SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_S
 pub(crate) const SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE: &str =
     streamlib_surface_client::SURFACE_SHARE_MACH_SERVICE_ENVIRONMENT_VARIABLE;
 
+/// The refusal a GPU call gets when this process has neither an engine view
+/// nor a channel to a parent that has one.
+///
+/// In a helper process the pixel exchange normally crosses to the parent;
+/// reaching this refusal means the helper was started without its
+/// surface-share channel — a platform without one, or a parent too old to
+/// pass it.
 fn gpu_unreachable_from_a_helper_process_error() -> PyErr {
     PyRuntimeError::new_err(
         "the GPU is not reachable from this Python processor: its helper process was started \
