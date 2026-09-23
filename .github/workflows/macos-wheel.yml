@@ -1,0 +1,173 @@
+name: macOS Wheel
+
+# The aarch64-apple-darwin wheel, built the way a release builds it and then
+# installed on a runner that has never seen a Vulkan SDK. Called by
+# python-wheel.yml on every PR — the portability proof must fail on the PR that
+# breaks it, not on release day — and by release-wheel.yml, which attaches the
+# wheel to the release beside the manylinux one.
+#
+# A stock Mac has no Vulkan driver, so the wheel carries the loader and MoltenVK
+# (`scripts/stage_macos_bundled_vulkan_driver.sh`). The runner image ships
+# neither, which is what makes it a clean machine for that claim: a scaffolded
+# app that runs here ran on the driver inside the wheel.
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: "What to check out and build (blank = the calling run's own ref)"
+        type: string
+        required: false
+        default: ""
+      release_tag_name:
+        description: "Release tag to attach the wheel to (blank = attach nothing)"
+        type: string
+        required: false
+        default: ""
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  STREAMLIB_MESH_MULTICAST_DISCOVERY: "0"
+
+jobs:
+  build-and-prove-macos-wheel:
+    name: aarch64-apple-darwin wheel
+    # Pinned, not `macos-latest` (macOS 26): the image decides the SDK the wheel
+    # links against, and the wheel's deployment target is the newest macOS this
+    # label can both build for and run.
+    runs-on: macos-15
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          # Builds and runs PR-authored code; a persisted token would be
+          # readable by it. The release upload below takes its own.
+          persist-credentials: false
+
+      # `glslc` stages the engine's SPIR-V for `include_bytes!`; cmake and ninja
+      # build the `shaderc` crate's C++ and the bundled Vulkan loader.
+      - name: Install glslc and the C++ build tools
+        run: brew install shaderc cmake ninja
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: rust-macos-wheel-release
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      # maturin writes `[tool.maturin.target.aarch64-apple-darwin]
+      # macos-deployment-target` into the wheel's tag but does not hand it to
+      # the link, so without this the binaries inside claim whatever rustc
+      # defaults to. Read from the one place it is pinned.
+      - name: Export the wheel's deployment target
+        run: |
+          python3 - >> "$GITHUB_ENV" <<'EOF'
+          import tomllib
+          with open("sdk/streamlib-python-wheel/pyproject.toml", "rb") as pyproject:
+              maturin_target = tomllib.load(pyproject)["tool"]["maturin"]["target"]["aarch64-apple-darwin"]
+          print(f"MACOSX_DEPLOYMENT_TARGET={maturin_target['macos-deployment-target']}")
+          EOF
+
+      - name: Stage the Vulkan loader and MoltenVK into the package
+        run: scripts/stage_macos_bundled_vulkan_driver.sh
+
+      - name: Build the wheel
+        working-directory: sdk/streamlib-python-wheel
+        run: uvx maturin@1.9.6 build --release --out dist
+
+      # The signature is file content, so the zip round-trip and pip should
+      # both preserve it — but a binary whose signature did not survive fails
+      # on every user's machine and never on this one, so it is checked on the
+      # artifact itself and again after install.
+      - name: Every binary in the built wheel is still signed
+        run: |
+          rm -rf /tmp/unzipped-wheel
+          unzip -q sdk/streamlib-python-wheel/dist/*.whl -d /tmp/unzipped-wheel
+          # `-exec … +`, not a `while read` loop: find's status is non-zero if
+          # any codesign fails, where a loop reports only the last one.
+          find /tmp/unzipped-wheel \( -name '*.so' -o -name '*.dylib' \) \
+            -exec codesign --verify --strict --verbose=1 {} +
+
+      - name: Install the wheel into a fresh venv
+        run: |
+          python3 -m venv /tmp/wheel-check
+          /tmp/wheel-check/bin/pip install --no-index sdk/streamlib-python-wheel/dist/*.whl
+          # The scaffolded effect's own declared dependency, and the tests'.
+          /tmp/wheel-check/bin/pip install 'numpy>=2.1' pytest
+          installed_package="$(/tmp/wheel-check/bin/python -c 'import streamlib, pathlib; print(pathlib.Path(streamlib.__file__).parent)')"
+          case "$installed_package" in
+            /tmp/wheel-check/*) ;;
+            *) echo "::error::streamlib imported from $installed_package, not the installed wheel"; exit 1 ;;
+          esac
+          find "$installed_package" \( -name '*.so' -o -name '*.dylib' \) \
+            -exec codesign --verify --strict --verbose=1 {} +
+
+      # Against the installed artifact, not a checkout: the portability proof
+      # reads every Mach-O the wheel carries, and the notices are read out of
+      # `.dist-info/licenses/`.
+      - name: Portability, notices and driver-search tests against the installed wheel
+        working-directory: sdk/streamlib-python-wheel
+        run: |
+          /tmp/wheel-check/bin/python -m pytest -v \
+            tests/test_wheel_portability.py \
+            tests/test_third_party_notices.py \
+            tests/test_bundled_vulkan_driver.py
+
+      # The MVP sentence on a clean machine, minus the camera no runner has:
+      # the scaffold's test-pattern variant through the Python effect into a
+      # window, on the Vulkan driver the wheel carries.
+      - name: The scaffolded app runs on the driver the wheel carries
+        run: |
+          /tmp/wheel-check/bin/streamlib new /tmp/scaffold-check --test-pattern
+          cd /tmp/scaffold-check
+          /tmp/wheel-check/bin/streamlib run --no-mesh-multicast-discovery > /tmp/scaffold-run.log 2>&1 &
+          scaffold_pid=$!
+          sleep 20
+          kill -INT "$scaffold_pid"
+          wait "$scaffold_pid" || true
+          cat /tmp/scaffold-run.log
+
+          if ! grep -q 'Vulkan loader library opened.*_vulkan_driver/libvulkan.1.dylib' /tmp/scaffold-run.log; then
+            echo "::error::the engine did not open the Vulkan loader the wheel carries"
+            exit 1
+          fi
+          if grep -q 'process() failed' /tmp/scaffold-run.log; then
+            echo "::error::the scaffolded effect raised on a live frame"
+            exit 1
+          fi
+          frames_shown="$(sed -n 's/.*DisplayWindow: stopped (\([0-9]*\) frames).*/\1/p' /tmp/scaffold-run.log | tail -1)"
+          # Far enough to prove the graph runs end to end, not a frame-rate bar:
+          # the runner's GPU is a paravirtual device.
+          if [ -z "$frames_shown" ] || [ "$frames_shown" -lt 60 ]; then
+            echo "::error::the window showed ${frames_shown:-no} frames in 20s"
+            exit 1
+          fi
+          echo "the window showed $frames_shown frames"
+
+      - name: Keep the wheel for a clean-machine run
+        uses: actions/upload-artifact@v4
+        with:
+          name: streamlib-macos-wheel
+          path: sdk/streamlib-python-wheel/dist/*.whl
+          retention-days: 14
+
+      - name: Attach the wheel to the release
+        if: inputs.release_tag_name != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ inputs.release_tag_name }}" \
+            sdk/streamlib-python-wheel/dist/*.whl --clobber --repo "${{ github.repository }}"

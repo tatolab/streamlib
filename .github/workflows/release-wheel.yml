@@ -255,6 +255,18 @@ jobs:
           gh release upload "${{ inputs.tag_name }}" \
             sdk/streamlib-python-wheel/dist/*.whl --clobber
 
+  # The same engine release for Apple Silicon, built on a macOS runner and
+  # attached beside the manylinux wheel. The index groups by project name, so a
+  # second platform tag needs nothing from it.
+  build-macos-wheel:
+    if: inputs.tag_name != ''
+    permissions:
+      contents: write
+    uses: ./.github/workflows/macos-wheel.yml
+    with:
+      ref: ${{ inputs.tag_name }}
+      release_tag_name: ${{ inputs.tag_name }}
+
   # An extension wheel is a standalone project with its own release cadence, so
   # each is called out by name and only when its own tag was cut. Two blocks
   # rather than a matrix over a JSON array: an empty `include` is a matrix
@@ -288,7 +300,9 @@ jobs:
     # an index-only rebuild skips every wheel job, and a run that releases one
     # project skips the others — a skipped dependency must not skip this too.
     #
-    # The failure check names `build-wheel` alone, deliberately. The generator
+    # The failure check names the two engine wheels alone, deliberately — macOS
+    # is a supported floor, so its wheel failing withholds the index exactly as
+    # the manylinux one does. The generator
     # rebuilds from the whole release history rather than appending, so a failed
     # extension build attaches no asset and leaves that project's page exactly
     # where it was — nothing is corrupted and nothing is omitted that was there
@@ -298,9 +312,10 @@ jobs:
     # index-only `workflow_dispatch` above is the repair.
     needs:
       - build-wheel
+      - build-macos-wheel
       - build-streamlib-webrtc-wheel
       - build-streamlib-moq-wheel
-    if: always() && needs.build-wheel.result != 'failure'
+    if: always() && needs.build-wheel.result != 'failure' && needs.build-macos-wheel.result != 'failure'
     runs-on: ubuntu-latest
     timeout-minutes: 15
 

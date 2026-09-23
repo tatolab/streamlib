@@ -304,6 +304,11 @@ jobs:
         run: |
           .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"
 
+  # The aarch64-apple-darwin wheel exactly as a release builds it, installed on
+  # a runner with no Vulkan SDK and run there.
+  macos-wheel:
+    uses: ./.github/workflows/macos-wheel.yml
+
   python-types:
     name: Pyright (no build)
     runs-on: ubuntu-latest
