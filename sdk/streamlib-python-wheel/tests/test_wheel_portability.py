@@ -12,7 +12,8 @@ promise into a toolchain requirement discovered at import.
 The macOS wheel also carries the Vulkan loader and MoltenVK, because a stock
 Mac has neither. Every Mach-O it carries must still link only what macOS itself
 supplies, must be code signed — an arm64 binary whose signature a post-link
-rewrite broke loads on the machine that built it and fails on every other — and
+rewrite broke loads on the machine that built it and fails on every other, so
+on macOS the signature is verified, not merely found — and
 must not ask for a newer macOS than the wheel's tag admits.
 
 Binaries are parsed here rather than shelled out to `readelf` or `otool`,
@@ -23,7 +24,10 @@ them. A binary this cannot parse fails the test; it is never skipped.
 import importlib
 import importlib.util
 import re
+import shutil
 import struct
+import subprocess
+import sys
 from dataclasses import dataclass
 from importlib.metadata import distribution
 from pathlib import Path
@@ -72,6 +76,7 @@ LC_LOAD_UPWARD_DYLIB = 0x23 | LC_REQ_DYLD
 LC_CODE_SIGNATURE = 0x1D
 LC_VERSION_MIN_MACOSX = 0x24
 LC_BUILD_VERSION = 0x32
+PLATFORM_MACOS = 1
 # Every command that makes dyld load another image. `LC_ID_DYLIB` is a dylib's
 # own install name and is deliberately not among them.
 MACH_O_LINKING_LOAD_COMMANDS = frozenset(
@@ -152,6 +157,9 @@ class MachOLoadCommandSummary:
     linked_library_paths: list[str]
     is_code_signed: bool
     minimum_macos_version: Optional[MacOSVersion]
+    # `LC_BUILD_VERSION.platform`; absent for a binary that states its floor
+    # through the older `LC_VERSION_MIN_MACOSX`, which is macOS by definition.
+    build_platform: Optional[int] = None
 
 
 def _macos_version_from_nibbles(encoded_version: int) -> MacOSVersion:
@@ -183,6 +191,7 @@ def _read_mach_o_load_commands(data: bytes, mach_o_path: Path) -> MachOLoadComma
     linked_library_paths = []
     is_code_signed = False
     minimum_macos_version = None
+    build_platform = None
     command_offset = 32  # sizeof(mach_header_64)
     for _ in range(load_command_count):
         if command_offset + 8 > load_commands_end:
@@ -198,7 +207,7 @@ def _read_mach_o_load_commands(data: bytes, mach_o_path: Path) -> MachOLoadComma
         elif command == LC_CODE_SIGNATURE:
             is_code_signed = True
         elif command == LC_BUILD_VERSION:
-            encoded_minimum, = struct.unpack_from("<I", data, command_offset + 12)
+            build_platform, encoded_minimum = struct.unpack_from("<II", data, command_offset + 8)
             minimum_macos_version = _macos_version_from_nibbles(encoded_minimum)
         elif command == LC_VERSION_MIN_MACOSX:
             encoded_minimum, = struct.unpack_from("<I", data, command_offset + 8)
@@ -209,6 +218,7 @@ def _read_mach_o_load_commands(data: bytes, mach_o_path: Path) -> MachOLoadComma
         linked_library_paths=linked_library_paths,
         is_code_signed=is_code_signed,
         minimum_macos_version=minimum_macos_version,
+        build_platform=build_platform,
     )
 
 
@@ -248,6 +258,11 @@ def mach_o_portability_violations(
             "carries no LC_CODE_SIGNATURE — arm64 macOS refuses to load it; a post-link "
             "rewrite needs `codesign -f -s -` after it"
         )
+    if load_commands.build_platform not in (None, PLATFORM_MACOS):
+        violations.append(
+            f"is built for platform {load_commands.build_platform}, not macOS — its minimum "
+            "version says nothing about the macOS floor"
+        )
     if load_commands.minimum_macos_version is None:
         violations.append("declares no minimum macOS version")
     elif load_commands.minimum_macos_version > wheel_minimum_macos_version:
@@ -256,6 +271,23 @@ def mach_o_portability_violations(
             f"than the wheel's tag admits ({'.'.join(map(str, wheel_minimum_macos_version))})"
         )
     return violations
+
+
+def code_signature_verification_failure(mach_o_path: Path) -> Optional[str]:
+    """What `codesign --verify --strict` says is wrong with a signature, if anything.
+
+    Presence of `LC_CODE_SIGNATURE` is not validity: a byte rewritten after
+    signing leaves the command in place and the signature broken, and only
+    macOS's own verifier can say so.
+    """
+    verification = subprocess.run(
+        ["codesign", "--verify", "--strict", str(mach_o_path)],
+        capture_output=True,
+        text=True,
+    )
+    if verification.returncode == 0:
+        return None
+    return f"fails `codesign --verify --strict`: {verification.stderr.strip()}"
 
 
 def _native_binaries_in(package_directory: Path) -> list[Path]:
@@ -359,16 +391,21 @@ def test_every_mach_o_the_wheel_carries_is_portable(
     assert wheel_minimum_macos_version is not None, (
         "the installed wheel carries Mach-O but its tag names no macOS version"
     )
-    violations_per_binary = {
-        str(binary): violations
-        for binary in mach_o_binaries_the_package_carries
-        if (
-            violations := mach_o_portability_violations(
-                _read_mach_o_load_commands(binary.read_bytes(), binary),
-                wheel_minimum_macos_version,
-            )
+    # A macOS host carries `codesign`, so there the signature is verified as
+    # well as found. A Linux host carries no Mach-O to verify.
+    signatures_are_verifiable = shutil.which("codesign") is not None
+    violations_per_binary = {}
+    for binary in mach_o_binaries_the_package_carries:
+        violations = mach_o_portability_violations(
+            _read_mach_o_load_commands(binary.read_bytes(), binary),
+            wheel_minimum_macos_version,
         )
-    }
+        if signatures_are_verifiable and (
+            verification_failure := code_signature_verification_failure(binary)
+        ):
+            violations.append(verification_failure)
+        if violations:
+            violations_per_binary[str(binary)] = violations
     assert not violations_per_binary, f"non-portable Mach-O in the wheel: {violations_per_binary}"
 
 
@@ -471,6 +508,32 @@ def test_a_binary_needing_a_newer_macos_than_the_tag_is_caught():
         [_synthetic_build_version_load_command((26, 0, 0)), _synthetic_code_signature_load_command()]
     )
     assert any("needs macOS 26.0.0" in violation for violation in violations), violations
+
+
+def test_a_binary_built_for_another_apple_platform_is_caught():
+    ios_platform = 2
+    build_version_for_ios = struct.pack("<IIIIII", LC_BUILD_VERSION, 24, ios_platform, 12 << 16, 12 << 16, 0)
+    violations = _violations_of_synthetic(
+        [build_version_for_ios, _synthetic_code_signature_load_command()]
+    )
+    assert any("not macOS" in violation for violation in violations), violations
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="`codesign` is macOS's own verifier")
+def test_a_signed_binary_rewritten_after_signing_is_caught(
+    mach_o_binaries_the_package_carries, tmp_path: Path
+):
+    """The failure a presence check cannot see: the command survives, the
+    signature does not."""
+    smallest_signed_binary = min(mach_o_binaries_the_package_carries, key=lambda binary: binary.stat().st_size)
+    rewritten_copy = tmp_path / smallest_signed_binary.name
+    rewritten_bytes = bytearray(smallest_signed_binary.read_bytes())
+    rewritten_bytes[len(rewritten_bytes) // 2] ^= 0xFF
+    rewritten_copy.write_bytes(bytes(rewritten_bytes))
+
+    assert code_signature_verification_failure(smallest_signed_binary) is None
+    assert _read_mach_o_load_commands(bytes(rewritten_bytes), rewritten_copy).is_code_signed
+    assert code_signature_verification_failure(rewritten_copy) is not None
 
 
 def test_a_fat_binary_fails_rather_than_skips():

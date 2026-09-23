@@ -96,6 +96,14 @@ jobs:
         run: |
           rm -rf /tmp/unzipped-wheel
           unzip -q sdk/streamlib-python-wheel/dist/*.whl -d /tmp/unzipped-wheel
+          # Named, so a driver maturin left out fails here by name rather than
+          # passing every check below with less to check.
+          for staged_file in libvulkan.1.dylib libMoltenVK.dylib MoltenVK_icd.json; do
+            if [ ! -f "/tmp/unzipped-wheel/streamlib/_vulkan_driver/$staged_file" ]; then
+              echo "::error::the wheel does not carry _vulkan_driver/$staged_file"
+              exit 1
+            fi
+          done
           # `-exec … +`, not a `while read` loop: find's status is non-zero if
           # any codesign fails, where a loop reports only the last one.
           find /tmp/unzipped-wheel \( -name '*.so' -o -name '*.dylib' \) \
