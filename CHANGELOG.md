@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.14](https://github.com/tatolab/streamlib/compare/v0.26.13...v0.26.14) (2026-09-23)
+
+
+### Bug Fixes
+
+* **examples:** Python processors take one config dataclass, and "newest" replaces "latest" ([#2443](https://github.com/tatolab/streamlib/issues/2443)) ([fe86202](https://github.com/tatolab/streamlib/commit/fe862025314b0a0103647fef0a48e6fa8913136d))
+
 ## [0.26.13](https://github.com/tatolab/streamlib/compare/v0.26.12...v0.26.13) (2026-09-23)
 
 
