@@ -18,9 +18,9 @@ pixels never touch the host.
 from __future__ import annotations
 
 import struct
+from dataclasses import dataclass
 
 import cupy
-
 from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
     ProcessorOutputTextureRing,
     RuntimeContextFullAccess,
@@ -105,11 +105,19 @@ def _workgroups_covering(pixels: int) -> int:
     return (pixels + WORKGROUP_TILE_SIZE - 1) // WORKGROUP_TILE_SIZE
 
 
+@dataclass
+class GrayscaleComputeConfig:
+    """GrayscaleCompute's settings, as `rt.add(..., config={...})` spells them."""
+
+    strength: float = 1.0
+
+
 @processor(description="Grades each frame toward its luma with a compute kernel")
 class GrayscaleCompute:
     """Camera frame in, the same picture in black and white out."""
 
-    def __init__(self, strength: float = 1.0) -> None:
+    def __init__(self, config: GrayscaleComputeConfig) -> None:
+        strength = config.strength
         if not 0.0 <= float(strength) <= 1.0:
             raise ValueError(
                 f"GrayscaleCompute was configured with strength={strength} — the "

@@ -10,9 +10,9 @@ knows nothing about its consumer.
 """
 
 import math
+from dataclasses import dataclass
 
 import numpy
-
 from streamlib import RuntimeContextLimitedAccess, log, output, processor
 
 VOICE_OUTPUT_PORT = "voice_to_downstream"
@@ -27,6 +27,17 @@ MAXIMUM_BLOCKS_OF_CATCH_UP = 4
 NANOSECONDS_PER_SECOND = 1_000_000_000
 
 
+@dataclass
+class ToneSourceConfig:
+    """ToneSource's settings, as `rt.add(..., config={...})` spells them."""
+
+    frequency_hz: float = 440.0
+    sample_rate: int = 48_000
+    channels: int = 1
+    block_size: int = 512
+    amplitude: float = 0.3
+
+
 @processor(execution="continuous", interval_ms=5, description="A sine-wave voice")
 class ToneSource:
     """A phase-continuous sine wave, paced by the monotonic clock.
@@ -37,14 +48,12 @@ class ToneSource:
     tick the engine cannot express as an integer millisecond.
     """
 
-    def __init__(
-        self,
-        frequency_hz: float = 440.0,
-        sample_rate: int = 48_000,
-        channels: int = 1,
-        block_size: int = 512,
-        amplitude: float = 0.3,
-    ) -> None:
+    def __init__(self, config: ToneSourceConfig) -> None:
+        frequency_hz = config.frequency_hz
+        sample_rate = config.sample_rate
+        channels = config.channels
+        block_size = config.block_size
+        amplitude = config.amplitude
         self.frequency_hz = float(frequency_hz)
         self.sample_rate = int(sample_rate)
         self.channels = int(channels)

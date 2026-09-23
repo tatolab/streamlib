@@ -26,9 +26,9 @@ from __future__ import annotations
 
 import math
 import struct
+from dataclasses import dataclass
 
 import cupy
-
 from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
     ProcessorOutputTextureRing,
     RuntimeContextFullAccess,
@@ -154,16 +154,23 @@ def _workgroups_covering(pixels: int) -> int:
     return (pixels + WORKGROUP_TILE_SIZE - 1) // WORKGROUP_TILE_SIZE
 
 
+@dataclass
+class HalftoneComputeConfig:
+    """HalftoneCompute's settings, as `rt.add(..., config={...})` spells them."""
+
+    cell_size: int = DEFAULT_CELL_SIZE
+    dot_boost: float = DEFAULT_DOT_BOOST
+    background_level: float = DEFAULT_BACKGROUND_LEVEL
+
+
 @processor(description="Screens each frame into halftone dots with a compute kernel")
 class HalftoneCompute:
     """Camera frame in, the same picture as a screen of ink dots out."""
 
-    def __init__(
-        self,
-        cell_size: int = DEFAULT_CELL_SIZE,
-        dot_boost: float = DEFAULT_DOT_BOOST,
-        background_level: float = DEFAULT_BACKGROUND_LEVEL,
-    ) -> None:
+    def __init__(self, config: HalftoneComputeConfig) -> None:
+        cell_size = config.cell_size
+        dot_boost = config.dot_boost
+        background_level = config.background_level
         if int(cell_size) < 2:
             raise ValueError(
                 f"HalftoneCompute was configured with cell_size={cell_size} — a "

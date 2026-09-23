@@ -33,6 +33,7 @@ picture, never a torn one.
 from __future__ import annotations
 
 import struct
+from dataclasses import dataclass
 
 from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
     ProcessorOutputTextureRing,
@@ -43,6 +44,7 @@ from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
     output,
     processor,
 )
+
 from processors.label_font import (
     GLYPH_HEIGHT,
     label_pixel_rows,
@@ -221,16 +223,23 @@ def _workgroups_covering(pixels: int) -> int:
     return (pixels + WORKGROUP_TILE_SIZE - 1) // WORKGROUP_TILE_SIZE
 
 
+@dataclass
+class SplitScreenCompositorConfig:
+    """SplitScreenCompositor's settings, as `rt.add(..., config={...})` spells them."""
+
+    split_fraction: float = 0.5
+    left_label: str = DEFAULT_LEFT_LABEL
+    right_label: str = DEFAULT_RIGHT_LABEL
+
+
 @processor(description="Cuts the rasterized and ray-traced frames together")
 class SplitScreenCompositor:
     """Rasterized on the left, ray traced on the right, one labelled frame out."""
 
-    def __init__(
-        self,
-        split_fraction: float = 0.5,
-        left_label: str = DEFAULT_LEFT_LABEL,
-        right_label: str = DEFAULT_RIGHT_LABEL,
-    ) -> None:
+    def __init__(self, config: SplitScreenCompositorConfig) -> None:
+        split_fraction = config.split_fraction
+        left_label = config.left_label
+        right_label = config.right_label
         if not 0.0 <= float(split_fraction) <= 1.0:
             raise ValueError(
                 f"SplitScreenCompositor was configured with "

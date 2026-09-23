@@ -37,9 +37,9 @@ def setup(rt: Runtime) -> None:
     # clock every processor shares, never from its own first frame.
     rasterizer = rt.add(RasterizedSceneRenderer, config=frame_size)
     ray_tracer = rt.add(RayTracedSceneRenderer, config=frame_size)
-    # These three are ordinary constructor keywords with ordinary Python
-    # defaults — `config` is how a processor's own `__init__` is called, and
-    # nothing about them is streamlib surface. The labels reach the compositor
+    # These three are fields of the processor's own `SplitScreenCompositorConfig`
+    # dataclass — the helper builds that from this dict, and nothing about them
+    # is streamlib surface. The labels reach the compositor
     # before it builds its kernel, so they end up baked into its GLSL.
     compositor = rt.add(
         SplitScreenCompositor,

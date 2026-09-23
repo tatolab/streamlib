@@ -95,7 +95,7 @@ class SinglePassVideoEffect:
     def push_constants_for(self, frame: VideoFrame, elapsed_seconds: float) -> bytes:
         raise NotImplementedError
 
-    @input(delivery_profile="latest")
+    @input(delivery_profile="newest")
     def video_from_upstream(self) -> VideoFrame: ...
 
     @output()

@@ -15,7 +15,6 @@ with no CPU copy in the path.
 from __future__ import annotations
 
 import cupy
-
 from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
     ProcessorOutputTextureRing,
     RuntimeContextFullAccess,
@@ -37,7 +36,7 @@ from ..gpu_surface_conventions import (
 class CameraFrameToTexture:
     """Buffer-backed camera frame in, texture-backed frame out."""
 
-    @input(delivery_profile="latest")
+    @input(delivery_profile="newest")
     def video_from_camera(self) -> VideoFrame: ...
 
     @output()
