@@ -819,6 +819,15 @@ jobs:
           # death seen by the other. IOSurface and Mach need no GPU.
           cargo test --locked -p streamlib-surface-client
           cargo test --locked -p streamlib-engine --test surface_share_over_raw_mach
+          # The mesh on macOS, the same three proofs the Linux job runs: two and
+          # three runtimes in separate processes find each other by pinned
+          # loopback multicast and by explicit peers, a dead runtime's name is
+          # reclaimed on this boot session and a live one's is refused, and bags
+          # cross byte-equal. GPU-free — no peer starts a `Runner`.
+          cargo test --locked -p streamlib-engine \
+            --test runtime_mesh_two_processes \
+            --test cross_runtime_links_two_processes \
+            --test cross_runtime_link_requests_two_processes
           # Compiled but not run: the AVFoundation arm against a real camera,
           # and `CameraSource` → `DisplayWindow` on the window server, need a
           # camera, camera access and a GPU no runner has. Building them here
