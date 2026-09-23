@@ -329,6 +329,19 @@ path = "tests/bin/surface_share_mach_helper.rs"
 name = "surface_share_over_raw_mach"
 path = "tests/surface_share_over_raw_mach.rs"
 
+# The helper process the cross-process timeline test spawns: imports a
+# surface's timeline pair as Metal shared events. Empty off macOS.
+[[bin]]
+name = "metal_shared_event_timeline_helper"
+path = "tests/bin/metal_shared_event_timeline_helper.rs"
+
+# The cross-process timeline pair across real processes: shared-event
+# ordering, the host-side fallback, and a stalled helper that never costs the
+# engine its device. Needs MoltenVK on a GPU, so it is a hardware test.
+[[test]]
+name = "timeline_crosses_to_a_helper_as_a_metal_shared_event"
+path = "tests/timeline_crosses_to_a_helper_as_a_metal_shared_event.rs"
+
 [build-dependencies]
 serde_json = { workspace = true }
 # Reads the manifests of the crates the engine links through path dependencies,

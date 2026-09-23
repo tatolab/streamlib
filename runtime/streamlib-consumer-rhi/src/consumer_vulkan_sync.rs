@@ -195,6 +195,41 @@ impl ConsumerVulkanTimelineSemaphore {
         .map_err(|e| ConsumerRhiError::Gpu(format!("get_semaphore_counter_value: {e}")))
     }
 
+    /// Queue a GPU-side wait for this timeline to reach `wait_value`, then a
+    /// GPU-side signal of `then_signal` to `signal_value` — an empty
+    /// submission that orders one timeline after another with no CPU in the
+    /// loop.
+    pub fn submit_device_wait_then_signal(
+        &self,
+        wait_value: u64,
+        then_signal: &ConsumerVulkanTimelineSemaphore,
+        signal_value: u64,
+    ) -> Result<()> {
+        let waits = [vk::SemaphoreSubmitInfo::builder()
+            .semaphore(self.semaphore)
+            .value(wait_value)
+            .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+            .build()];
+        let signals = [vk::SemaphoreSubmitInfo::builder()
+            .semaphore(then_signal.semaphore)
+            .value(signal_value)
+            .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+            .build()];
+        let submits = [vk::SubmitInfo2::builder()
+            .wait_semaphore_infos(&waits)
+            .signal_semaphore_infos(&signals)
+            .build()];
+        // SAFETY: both semaphores live on this device, and the submission
+        // references no command buffer.
+        unsafe {
+            self.vulkan_device.submit_to_queue(
+                self.vulkan_device.queue(),
+                &submits,
+                vk::Fence::null(),
+            )
+        }
+    }
+
     /// Raw `vk::Semaphore` handle for inclusion in queue submit infos.
     pub fn semaphore(&self) -> vk::Semaphore {
         self.semaphore
