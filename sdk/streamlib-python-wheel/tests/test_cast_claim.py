@@ -176,6 +176,7 @@ def _assert_the_bare_view_is_this_frames_pixels(observation: dict) -> None:
     )
 
 
+@pytest.mark.awaiting_macos_parity(issue=2404)
 def test_a_user_authored_cast_type_reaches_its_pixels_with_no_ceremony(
     start_app_under_test,
 ):
@@ -195,6 +196,7 @@ def test_a_user_authored_cast_type_reaches_its_pixels_with_no_ceremony(
     _assert_the_bare_view_is_this_frames_pixels(observation)
 
 
+@pytest.mark.awaiting_macos_parity(issue=2404)
 def test_the_shipped_video_frame_reaches_its_pixels_the_same_way(
     start_app_under_test,
 ):

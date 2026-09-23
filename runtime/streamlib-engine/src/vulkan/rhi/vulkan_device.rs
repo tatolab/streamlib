@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 
 #[cfg(target_os = "linux")]
 use vma::Alloc as _;
-use vulkanalia::loader::{LIBRARY, LibloadingLoader};
+use vulkanalia::loader::LibloadingLoader;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk::{self, KhrSwapchainExtensionDeviceCommands};
 use vulkanalia_vma as vma;
@@ -450,76 +450,12 @@ const NO_VULKAN_LOADER_LIBRARY_GUIDANCE: &str = if cfg!(any(target_os = "macos",
      runs. Tried:"
 };
 
-/// Dynamic libraries the Vulkan loader may live in, in the order they are tried.
-///
-/// vulkanalia's own [`LIBRARY`] name is first on every platform, so a host that
-/// already resolves it keeps today's behaviour exactly. Apple needs the rest:
-/// dyld's default search path does not include Homebrew's prefix on Apple
-/// Silicon, so a bare `libvulkan.dylib` resolves nothing on a stock machine even
-/// with the loader installed. `VULKAN_SDK` is the LunarG SDK's own variable,
-/// read here to honour that convention rather than as a StreamLib dial — there
-/// is no engine setting for which loader to use, and the order is fixed.
-///
-/// **These are developer-machine fallbacks, never the install experience.** The
-/// user story is `pip install streamlib` and nothing else: the wheel carries the
-/// loader and MoltenVK and points the loader at them (#2362). A package manager
-/// is a way a contributor may already have the driver, and must never appear in
-/// anything a user reads — see
-/// [`the_guidance_a_user_reads_never_names_a_third_party_package_manager`].
-fn vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString> {
-    let mut candidate_paths: Vec<std::ffi::OsString> = vec![LIBRARY.into()];
-    candidate_paths.extend(apple_vulkan_loader_library_candidate_paths());
-    candidate_paths
-}
-
-/// The Apple-only tail of the search list: the versioned soname, a LunarG SDK
-/// root if one is exported, and the two prefixes dyld does not search itself.
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-fn apple_vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString> {
-    let mut candidate_paths: Vec<std::ffi::OsString> = vec!["libvulkan.1.dylib".into()];
-    if let Some(sdk_root) = std::env::var_os("VULKAN_SDK") {
-        let mut sdk_library_path = std::path::PathBuf::from(sdk_root);
-        sdk_library_path.push("lib");
-        sdk_library_path.push(LIBRARY);
-        candidate_paths.push(sdk_library_path.into_os_string());
-    }
-    candidate_paths.push("/opt/homebrew/lib/libvulkan.dylib".into());
-    candidate_paths.push("/usr/local/lib/libvulkan.dylib".into());
-    candidate_paths
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
-fn apple_vulkan_loader_library_candidate_paths() -> Vec<std::ffi::OsString> {
-    Vec::new()
-}
-
-/// Open the first Vulkan loader library that dlopens, or refuse naming every
-/// candidate tried so the failure says where it looked.
+/// Open the first Vulkan loader library on the shared search list, or refuse
+/// naming every candidate tried so the failure says where it looked.
 fn load_the_first_vulkan_loader_library_that_opens() -> Result<LibloadingLoader> {
-    let candidate_paths = vulkan_loader_library_candidate_paths();
-    let mut refusal_per_candidate: Vec<String> = Vec::new();
-
-    for candidate_path in &candidate_paths {
-        match unsafe { LibloadingLoader::new(candidate_path) } {
-            Ok(loader) => {
-                tracing::info!(
-                    vulkan_loader_library = %candidate_path.to_string_lossy(),
-                    "Vulkan loader library opened"
-                );
-                return Ok(loader);
-            }
-            Err(open_failure) => refusal_per_candidate.push(format!(
-                "{}: {open_failure}",
-                candidate_path.to_string_lossy()
-            )),
-        }
-    }
-
-    Err(Error::GpuError(format!(
-        "{}\n  {}",
-        NO_VULKAN_LOADER_LIBRARY_GUIDANCE,
-        refusal_per_candidate.join("\n  "),
-    )))
+    streamlib_consumer_rhi::open_the_first_vulkan_loader_library_that_opens().map_err(|not_found| {
+        Error::GpuError(format!("{NO_VULKAN_LOADER_LIBRARY_GUIDANCE}\n{not_found}"))
+    })
 }
 
 impl HostVulkanDevice {
@@ -4799,19 +4735,6 @@ mod tests {
         );
     }
 
-    /// The loader's first candidate is vulkanalia's own platform name, so a host
-    /// that already resolves it is unaffected by the search list existing.
-    #[test]
-    fn the_vulkan_loader_search_list_starts_at_the_platform_default_name() {
-        let candidate_paths = vulkan_loader_library_candidate_paths();
-
-        assert_eq!(
-            candidate_paths.first().map(|path| path.as_os_str()),
-            Some(std::ffi::OsStr::new(LIBRARY)),
-            "the platform default must stay first so an already-resolving host is unchanged"
-        );
-    }
-
     /// The install story is `pip install streamlib` and nothing else, so nothing a
     /// user can read may send them to a third-party package manager. The wheel
     /// carries the loader and MoltenVK (#2362); a contributor who happens to have
@@ -4834,37 +4757,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    /// Apple needs more than the bare name: dyld's default search path excludes
-    /// Homebrew's prefix on Apple Silicon, so `libvulkan.dylib` alone resolves
-    /// nothing on a stock machine with the loader installed.
-    #[cfg(any(target_os = "macos", target_os = "ios"))]
-    #[test]
-    fn the_vulkan_loader_search_list_reaches_a_stock_homebrew_install() {
-        let candidate_paths: Vec<String> = vulkan_loader_library_candidate_paths()
-            .iter()
-            .map(|path| path.to_string_lossy().into_owned())
-            .collect();
-
-        assert!(
-            candidate_paths
-                .iter()
-                .any(|path| path == "/opt/homebrew/lib/libvulkan.dylib"),
-            "a Homebrew install must be reachable: {candidate_paths:?}"
-        );
-    }
-
-    /// Linux keeps exactly one candidate — the search list must not change what
-    /// a Linux host loads.
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn the_vulkan_loader_search_list_is_unchanged_on_linux() {
-        assert_eq!(
-            vulkan_loader_library_candidate_paths().len(),
-            1,
-            "Linux loads the platform default and nothing else"
-        );
     }
 
     /// The device this milestone exists to bring up. Unlike [`try_create_device`]

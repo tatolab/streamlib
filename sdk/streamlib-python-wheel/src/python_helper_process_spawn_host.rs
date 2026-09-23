@@ -176,6 +176,13 @@ pub(crate) fn engine_build_id_compiled_into_this_extension() -> &'static str {
 // The host
 // =============================================================================
 
+/// How a helper reaches the engine's surface-share service: the variable its
+/// exchange client reads, and the socket path or Mach service name it holds.
+pub(crate) struct SurfaceShareChannelNamedToTheHelperProcess<'a> {
+    pub(crate) environment_variable: &'static str,
+    pub(crate) channel_name: &'a std::ffi::OsStr,
+}
+
 pub(crate) struct PythonHelperProcessSpawnHostProcessor {
     /// `module:qualname` — what the child imports the class back by, and what
     /// it receives as `STREAMLIB_ENTRYPOINT`.
@@ -201,6 +208,12 @@ pub(crate) struct PythonHelperProcessSpawnHostProcessor {
     /// own belt-and-braces call cannot make it a second time.
     shutdown_was_already_asked_of_this_helper: bool,
     link_wiring: Arc<OutOfProcessLinkWiringEnvelope>,
+    /// The helper's admission to the engine's surface-share Mach service,
+    /// held until the helper is reaped — from then on its pid may belong to
+    /// any process on the machine.
+    #[cfg(target_os = "macos")]
+    surface_share_admission_of_the_helper_process:
+        Option<streamlib::sdk::engine::apple_surface_share::SurfaceShareHelperProcessAdmission>,
 }
 
 impl PythonHelperProcessSpawnHostProcessor {
@@ -212,7 +225,7 @@ impl PythonHelperProcessSpawnHostProcessor {
         &self,
         runtime_id: &str,
         iceoryx2_domain_root: &Path,
-        surface_socket_path: Option<&Path>,
+        surface_share_channel: Option<SurfaceShareChannelNamedToTheHelperProcess<'_>>,
     ) -> Command {
         let mut command = Command::new(&self.interpreter_path);
         command
@@ -243,8 +256,11 @@ impl PythonHelperProcessSpawnHostProcessor {
                 iceoryx2_domain_root,
             )
             .env(ENGINE_BUILD_ID_ENVIRONMENT_VARIABLE, ENGINE_BUILD_ID);
-        if let Some(surface_socket_path) = surface_socket_path {
-            command.env("STREAMLIB_SURFACE_SOCKET", surface_socket_path);
+        if let Some(surface_share_channel) = surface_share_channel {
+            command.env(
+                surface_share_channel.environment_variable,
+                surface_share_channel.channel_name,
+            );
         }
         detach_child_from_the_terminal_and_bind_its_lifetime_to_ours(&mut command);
         // Registered before `EscalateTransport::attach`, whose own `pre_exec`
@@ -565,6 +581,8 @@ impl PythonHelperProcessSpawnHostProcessor {
                 "[{}] helper process exited: {exit_status}",
                 self.processor_display_name
             );
+            #[cfg(target_os = "macos")]
+            self.surface_share_admission_of_the_helper_process.take();
         }
         if outcome.is_some() {
             self.reclaim_the_iceoryx2_nodes_the_helper_left();
@@ -624,9 +642,23 @@ impl PythonHelperProcessSpawnHostProcessor {
         ctx: &RuntimeContextFullAccess<'_>,
     ) -> Result<()> {
         #[cfg(target_os = "linux")]
-        let surface_socket_path = Some(ctx.surface_socket_path());
-        #[cfg(not(target_os = "linux"))]
-        let surface_socket_path: Option<&Path> = None;
+        let surface_share_channel = Some(SurfaceShareChannelNamedToTheHelperProcess {
+            environment_variable:
+                crate::python_processor_context::SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE,
+            channel_name: ctx.surface_socket_path().as_os_str(),
+        });
+        #[cfg(target_os = "macos")]
+        let surface_share_mach_service_rendezvous = ctx.surface_share_mach_service_rendezvous();
+        #[cfg(target_os = "macos")]
+        let surface_share_channel = Some(SurfaceShareChannelNamedToTheHelperProcess {
+            environment_variable:
+                crate::python_processor_context::SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE,
+            channel_name: std::ffi::OsStr::new(
+                surface_share_mach_service_rendezvous.service_name(),
+            ),
+        });
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        let surface_share_channel = None;
 
         // Before the child exists, so its first counts have a board to land on
         // and the board outlives whatever becomes of it.
@@ -652,7 +684,7 @@ impl PythonHelperProcessSpawnHostProcessor {
         let mut command = self.build_helper_process_command(
             &ctx.runtime_id(),
             &iceoryx2_domain_root,
-            surface_socket_path,
+            surface_share_channel,
         );
         self.iceoryx2_domain_root = Some(iceoryx2_domain_root);
         let mut escalate_transport = EscalateTransport::attach(&mut command)?;
@@ -665,6 +697,13 @@ impl PythonHelperProcessSpawnHostProcessor {
                 self.interpreter_path.display(),
             ))
         })?;
+        // At once: a connect that arrives before its admission waits for it,
+        // but only for a bounded while.
+        #[cfg(target_os = "macos")]
+        {
+            self.surface_share_admission_of_the_helper_process =
+                Some(surface_share_mach_service_rendezvous.admit_helper_process(child.id()));
+        }
         // After the spawn, so the child is the only holder of its end and sees
         // EOF when this process lets go.
         escalate_transport.release_child_end();
@@ -1285,6 +1324,8 @@ pub(crate) fn spawn_host_for_processor_node(
         link_wiring: Arc::new(OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(
             child_execution_config.execution,
         )),
+        #[cfg(target_os = "macos")]
+        surface_share_admission_of_the_helper_process: None,
     })
 }
 
@@ -1637,6 +1678,8 @@ sys.exit(0)
             link_wiring: Arc::new(OutOfProcessLinkWiringEnvelope::for_a_far_side_driven_in(
                 ProcessExecution::Reactive,
             )),
+            #[cfg(target_os = "macos")]
+            surface_share_admission_of_the_helper_process: None,
         }
     }
 
@@ -1835,6 +1878,38 @@ sys.exit(0)
             value_of(&environment, "STREAMLIB_ENGINE_BUILD_ID"),
             Some(ENGINE_BUILD_ID)
         );
+    }
+
+    /// The surface-share channel reaches the child under the variable its
+    /// exchange client reads — the socket path on Linux, the Mach service
+    /// name on macOS — and a helper started without one is told nothing.
+    #[test]
+    fn the_child_is_handed_the_surface_share_channel_under_its_variable() {
+        let spawn_host = spawn_host_for_test(None);
+        let command = spawn_host.build_helper_process_command(
+            "Rtest",
+            Path::new("/tmp/streamlib-1000/iox2"),
+            Some(SurfaceShareChannelNamedToTheHelperProcess {
+                environment_variable: "STREAMLIB_SURFACE_MACH_SERVICE",
+                channel_name: OsStr::new("com.tatolab.streamlib.surface-share.Rtest"),
+            }),
+        );
+        assert_eq!(
+            value_of(&environment_of(&command), "STREAMLIB_SURFACE_MACH_SERVICE"),
+            Some("com.tatolab.streamlib.surface-share.Rtest")
+        );
+
+        let without_a_channel = spawn_host.build_helper_process_command(
+            "Rtest",
+            Path::new("/tmp/streamlib-1000/iox2"),
+            None,
+        );
+        let environment = environment_of(&without_a_channel);
+        assert_eq!(
+            value_of(&environment, "STREAMLIB_SURFACE_MACH_SERVICE"),
+            None
+        );
+        assert_eq!(value_of(&environment, "STREAMLIB_SURFACE_SOCKET"), None);
     }
 
     /// A helper refuses its own start on raw standard error before its log

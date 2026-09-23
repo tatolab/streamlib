@@ -71,7 +71,7 @@ markers = [
     "linux_only_capability(reason): a capability the closed list names as absent off Linux",
     # A capability a named open parity ticket brings to macOS. Strict xfail
     # there, so the ticket's own fix turns it red until the mark comes off.
-    "awaiting_macos_parity(issue): red on macOS until the named parity ticket lands",
+    "awaiting_macos_parity(issue): red on macOS until the named parity ticket lands; not run there unless STREAMLIB_RUN_AWAITING_MACOS_PARITY=1",
 ]
 
 [tool.maturin]

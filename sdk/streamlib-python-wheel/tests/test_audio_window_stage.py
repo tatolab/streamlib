@@ -169,6 +169,7 @@ def test_a_hop_below_the_window_rolls_at_the_hops_cadence_not_the_windows(
     )
 
 
+@pytest.mark.awaiting_macos_parity(issue=2408)
 @pytest.mark.requires_gpu
 def test_a_helper_placed_consumer_with_no_declared_count_reads_the_sources_own(
     start_app_under_test,
@@ -291,6 +292,7 @@ def setup(rt: Runtime) -> None:
 '''
 
 
+@pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
 @pytest.mark.requires_gpu
 def test_a_helper_placed_windowed_consumers_flush_renders_its_discarded_samples_on_its_link(
     tmp_path: Path, isolated_runtime_directory: Path, launch_node

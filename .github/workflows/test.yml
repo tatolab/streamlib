@@ -863,7 +863,8 @@ jobs:
 
       # The suite the Linux wheel job runs. A test absent on macOS carries
       # `linux_only_capability` (the closed list) or `awaiting_macos_parity`
-      # (a strict xfail naming its ticket); `test_platform_markers.py` holds
+      # (a strict xfail naming its ticket, not run unless
+      # STREAMLIB_RUN_AWAITING_MACOS_PARITY=1); `test_platform_markers.py` holds
       # both to that. The `requires_gpu` half joins this lane with the parity
       # ticket that first makes it green.
       - name: Python suite (GPU-free half)

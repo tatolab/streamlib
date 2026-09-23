@@ -15,7 +15,8 @@
 //! - [`ConsumerVulkanDevice`] — own `VkInstance` + `VkDevice` for the
 //!   subprocess; only the carve-out methods listed in
 //!   `docs/architecture/subprocess-rhi-parity.md` (DMA-BUF AND OPAQUE_FD
-//!   FD import + bind + map, single-shot layout transitions, sync
+//!   FD import + bind + map on Linux, an IOSurface's pages imported as
+//!   host memory on macOS, single-shot layout transitions, sync
 //!   wait/signal on imported timeline semaphores). DMA-BUF imports back
 //!   memory that EGL / V4L2 / multi-plane Vulkan importers consume;
 //!   OPAQUE_FD imports back memory that Vulkan-aware importers (CUDA via
@@ -67,6 +68,8 @@ mod vulkan_extension_names;
 mod vulkan_instance_api_version;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod vulkan_layout;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod vulkan_loader_library;
 
 pub use error::{ConsumerRhiError, Result};
 pub use formats::{TextureFormat, TextureUsages};
@@ -98,6 +101,10 @@ pub use vulkan_extension_names::vulkan_extension_names_borrowed_from_properties;
 pub use vulkan_instance_api_version::REQUESTED_VULKAN_INSTANCE_API_VERSION;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use vulkan_layout::VulkanLayout;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub use vulkan_loader_library::{
+    VulkanLoaderLibraryNotFound, open_the_first_vulkan_loader_library_that_opens,
+};
 
 /// Sealing supertrait module for [`DevicePrivilege`]. Re-exported so
 /// `streamlib::vulkan::rhi::HostMarker` can `impl Sealed for HostMarker`

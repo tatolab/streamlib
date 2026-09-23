@@ -52,6 +52,7 @@ def run_probe(start_app_under_test, probe_class_name: str) -> dict:
     return observation
 
 
+@pytest.mark.awaiting_macos_parity(issue=2403)
 def test_a_two_pass_filter_runs_as_one_batch(start_app_under_test):
     """The change file's own demo, written the way a user writes it: two
     kernels, an intermediate surface, one scope."""
@@ -72,6 +73,7 @@ def test_a_two_pass_filter_runs_as_one_batch(start_app_under_test):
     )
 
 
+@pytest.mark.awaiting_macos_parity(issue=2403)
 def test_a_batch_scope_leaves_the_engines_recorder_ready_for_the_next_one(
     start_app_under_test,
 ):
@@ -86,6 +88,7 @@ def test_a_batch_scope_leaves_the_engines_recorder_ready_for_the_next_one(
     )
 
 
+@pytest.mark.awaiting_macos_parity(issue=2403)
 def test_a_raise_inside_a_batch_propagates_unsuppressed(start_app_under_test):
     """Discarding the batch is not swallowing the exception — `__exit__`
     returns False, so the raise reaches the author."""
@@ -95,6 +98,7 @@ def test_a_raise_inside_a_batch_propagates_unsuppressed(start_app_under_test):
     )
 
 
+@pytest.mark.awaiting_macos_parity(issue=2403)
 def test_a_batch_discarded_by_a_raise_leaves_the_engine_usable(start_app_under_test):
     """Nothing was submitted, and nothing was stranded: the probe runs a fresh
     batch after the discarded one and it completes."""
@@ -102,6 +106,7 @@ def test_a_batch_discarded_by_a_raise_leaves_the_engine_usable(start_app_under_t
     assert observed["dispatched_after_the_raise"] is True
 
 
+@pytest.mark.awaiting_macos_parity(issue=2403)
 def test_a_binding_the_shader_does_not_declare_is_refused_at_the_dispatch_line(
     start_app_under_test,
 ):
@@ -116,6 +121,7 @@ def test_a_binding_the_shader_does_not_declare_is_refused_at_the_dispatch_line(
     )
 
 
+@pytest.mark.awaiting_macos_parity(issue=2403)
 def test_dispatching_one_kernel_twice_in_a_batch_is_refused_saying_why(
     start_app_under_test,
 ):
@@ -130,6 +136,7 @@ def test_dispatching_one_kernel_twice_in_a_batch_is_refused_saying_why(
     assert "dispatch 0" in twice, f"must name the dispatch it repeats: {twice}"
 
 
+@pytest.mark.awaiting_macos_parity(issue=2403)
 def test_a_batch_that_has_already_run_refuses_a_further_dispatch(
     start_app_under_test,
 ):
@@ -145,6 +152,7 @@ def test_a_batch_that_has_already_run_refuses_a_further_dispatch(
     )
 
 
+@pytest.mark.awaiting_macos_parity(issue=2403)
 def test_a_batch_that_was_never_entered_refuses_rather_than_swallowing_the_work(
     start_app_under_test,
 ):

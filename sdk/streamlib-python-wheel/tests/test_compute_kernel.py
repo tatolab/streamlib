@@ -61,6 +61,7 @@ def run_probe(start_app_under_test, probe_class_name: str) -> dict:
     return observation
 
 
+@pytest.mark.awaiting_macos_parity(issue=2403)
 def test_a_python_processor_reads_one_surface_and_writes_another(start_app_under_test):
     """The whole point: one dispatch, two distinct surfaces, bound by name."""
     observed = run_probe(start_app_under_test, "ReadOneWriteAnotherProbe")
@@ -76,12 +77,14 @@ def test_a_python_processor_reads_one_surface_and_writes_another(start_app_under
     )
 
 
+@pytest.mark.awaiting_macos_parity(issue=2403)
 def test_the_kernel_takes_its_binding_names_from_the_shader(start_app_under_test):
     """Nothing declares these names but the shader itself."""
     observed = run_probe(start_app_under_test, "ReadOneWriteAnotherProbe")
     assert observed["binding_names"] == [SOURCE_BINDING, OUTPUT_BINDING]
 
 
+@pytest.mark.awaiting_macos_parity(issue=2403)
 def test_an_unsupplied_binding_is_refused_naming_the_shaders_bindings(
     start_app_under_test,
 ):
@@ -97,6 +100,7 @@ def test_an_unsupplied_binding_is_refused_naming_the_shaders_bindings(
     )
 
 
+@pytest.mark.awaiting_macos_parity(issue=2403)
 def test_a_binding_the_shader_does_not_declare_is_refused(start_app_under_test):
     observed = run_probe(start_app_under_test, "BindingRefusalProbe")
 
@@ -107,6 +111,7 @@ def test_a_binding_the_shader_does_not_declare_is_refused(start_app_under_test):
     )
 
 
+@pytest.mark.awaiting_macos_parity(issue=2403)
 def test_a_declaration_disagreeing_with_reflection_is_refused_at_construction(
     start_app_under_test,
 ):
@@ -121,6 +126,7 @@ def test_a_declaration_disagreeing_with_reflection_is_refused_at_construction(
     )
 
 
+@pytest.mark.awaiting_macos_parity(issue=2403)
 def test_a_push_constant_payload_of_the_wrong_size_is_refused(start_app_under_test):
     observed = run_probe(start_app_under_test, "BindingRefusalProbe")
 
@@ -131,6 +137,7 @@ def test_a_push_constant_payload_of_the_wrong_size_is_refused(start_app_under_te
     )
 
 
+@pytest.mark.awaiting_macos_parity(issue=2403)
 def test_a_binding_naming_an_unknown_surface_is_refused(start_app_under_test):
     observed = run_probe(start_app_under_test, "BindingRefusalProbe")
 
@@ -143,6 +150,7 @@ def test_a_binding_naming_an_unknown_surface_is_refused(start_app_under_test):
     )
 
 
+@pytest.mark.awaiting_macos_parity(issue=2403)
 def test_a_texture_backed_surfaces_pixels_reach_the_cpu_with_numpy_alone(
     start_app_under_test,
 ):
@@ -178,6 +186,7 @@ def test_a_texture_backed_surfaces_pixels_reach_the_cpu_with_numpy_alone(
     )
 
 
+@pytest.mark.awaiting_macos_parity(issue=2403)
 def test_a_raise_inside_the_staged_cpu_door_discards_the_edit(start_app_under_test):
     """Over a texture backing the door publishes at the block edge, so a
     propagating raise leaves the frame the engine already held."""
@@ -192,6 +201,7 @@ def test_a_raise_inside_the_staged_cpu_door_discards_the_edit(start_app_under_te
     )
 
 
+@pytest.mark.awaiting_macos_parity(issue=2403)
 def test_an_acquired_texture_takes_a_write_back_with_no_copy_usage_spelled(
     start_app_under_test,
 ):
@@ -211,6 +221,7 @@ def test_an_acquired_texture_takes_a_write_back_with_no_copy_usage_spelled(
     )
 
 
+@pytest.mark.awaiting_macos_parity(issue=2403)
 def test_a_kernel_is_built_with_no_shader_toolchain_on_path(
     start_app_under_test, tmp_path, monkeypatch
 ):
@@ -241,6 +252,7 @@ def test_a_kernel_is_built_with_no_shader_toolchain_on_path(
     assert sorted(observed["binding_names"]) == sorted([SOURCE_BINDING, OUTPUT_BINDING])
 
 
+@pytest.mark.awaiting_macos_parity(issue=2403)
 def test_a_kernel_built_from_neither_source_nor_spirv_is_refused_naming_both(
     start_app_under_test,
 ):
@@ -249,6 +261,7 @@ def test_a_kernel_built_from_neither_source_nor_spirv_is_refused_naming_both(
     assert "spv_hex" in observed["neither"]
 
 
+@pytest.mark.awaiting_macos_parity(issue=2403)
 def test_a_kernel_built_from_both_source_and_spirv_is_refused_naming_both(
     start_app_under_test,
 ):
@@ -258,6 +271,7 @@ def test_a_kernel_built_from_both_source_and_spirv_is_refused_naming_both(
     assert "spv_hex" in observed["both"]
 
 
+@pytest.mark.awaiting_macos_parity(issue=2403)
 def test_a_shader_that_does_not_compile_reports_the_compilers_own_diagnostic(
     start_app_under_test,
 ):
@@ -268,6 +282,7 @@ def test_a_shader_that_does_not_compile_reports_the_compilers_own_diagnostic(
     assert ":2" in observed["does_not_compile"]
 
 
+@pytest.mark.awaiting_macos_parity(issue=2403)
 def test_a_glsl_entry_point_other_than_main_is_refused(start_app_under_test):
     """glslang will not rename a GLSL entry point, so accepting one would build
     a pipeline against a function the module does not contain."""

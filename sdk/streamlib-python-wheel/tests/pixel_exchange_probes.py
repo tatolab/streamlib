@@ -9,13 +9,15 @@ the same child→parent log forwarding every processor's records ride, so the
 observation crosses the process boundary without any channel a test invented.
 """
 
+import hashlib
 import json
 import os
 import traceback
+from typing import TypedDict
 
 import numpy
 
-from streamlib import VideoFrame, input, log, processor
+from streamlib import VideoFrame, input, log, output, processor
 
 SURFACE_WIDTH = 64
 SURFACE_HEIGHT = 32
@@ -286,3 +288,93 @@ class InvertingEffect:
             }
 
         _report(probe)
+
+
+def _sha256_of_every_pixel(pixels: numpy.ndarray) -> str:
+    """A digest over the whole frame, row padding excluded — equal digests
+    mean every pixel matches."""
+    return hashlib.sha256(numpy.ascontiguousarray(pixels).tobytes()).hexdigest()
+
+
+class ReportingInvertingEffectConfig(TypedDict, total=False):
+    skip_edit: bool
+
+
+@processor
+class ReportingInvertingEffect:
+    """The scaffold's edit, reporting what the frame must read afterwards.
+
+    It claims its first frame for the rest of its life, so the verifier
+    downstream resolves the same pixels whatever the producer does next.
+    `skip_edit` makes it the negative control: it reports the inverted digest
+    and leaves the pixels alone.
+    """
+
+    @input(delivery_profile="ordered")
+    def video_from_upstream(self) -> None: ...
+
+    @output()
+    def video_to_downstream(self) -> None: ...
+
+    def __init__(self, config: ReportingInvertingEffectConfig) -> None:
+        self.skip_edit = config.get("skip_edit", False)
+        self.claim_on_the_edited_frame = None
+
+    def process(self, ctx) -> None:
+        bag = ctx.inputs.read("video_from_upstream")
+        if bag is None or self.claim_on_the_edited_frame is not None:
+            return
+        frame = VideoFrame.from_bag(bag)
+        self.claim_on_the_edited_frame = (
+            ctx.gpu_limited_access.claim_surface_against_producer_reuse(frame.surface_id)
+        )
+
+        def edit() -> dict:
+            with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
+                surface.lock(read_only=False)
+                pixels = surface.as_numpy()
+                inverted = pixels.copy()
+                inverted[:, :, :3] = 255 - inverted[:, :, :3]
+                if not self.skip_edit:
+                    pixels[...] = inverted
+                surface.unlock()
+            return {
+                "role": "editor",
+                "surface_id": frame.surface_id,
+                "expected_sha256": _sha256_of_every_pixel(inverted),
+            }
+
+        _report(edit)
+        ctx.outputs.write("video_to_downstream", bag)
+
+
+@processor
+class FrameDigestVerifier:
+    """Reads the first frame it is handed, in a process of its own, and
+    reports a digest of every pixel."""
+
+    @input(delivery_profile="ordered")
+    def video_from_upstream(self) -> None: ...
+
+    def __init__(self) -> None:
+        self.reported = False
+
+    def process(self, ctx) -> None:
+        bag = ctx.inputs.read("video_from_upstream")
+        if bag is None or self.reported:
+            return
+        self.reported = True
+        frame = VideoFrame.from_bag(bag)
+
+        def verify() -> dict:
+            with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
+                surface.lock(read_only=True)
+                observed_sha256 = _sha256_of_every_pixel(surface.as_numpy())
+                surface.unlock()
+            return {
+                "role": "verifier",
+                "surface_id": frame.surface_id,
+                "observed_sha256": observed_sha256,
+            }
+
+        _report(verify)

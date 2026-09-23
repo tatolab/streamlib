@@ -338,6 +338,7 @@ def test_a_texture_handle_round_trips_across_the_process_boundary(
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.awaiting_macos_parity(issue=2404)
 def test_the_privileged_capability_works_from_a_helper_process(start_app_under_test):
     """`ctx.gpu_full_access` is reachable from a `setup` hook running in a
     child: each method is its own escalate round trip to the parent, which runs
@@ -367,6 +368,7 @@ def test_the_privileged_capability_works_from_a_helper_process(start_app_under_t
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.awaiting_macos_parity(issue=2404)
 def test_a_kernel_output_doubles_in_place_through_the_device_tensor_scope(
     start_app_under_test,
 ):
@@ -391,6 +393,7 @@ def test_a_kernel_output_doubles_in_place_through_the_device_tensor_scope(
     )
 
 
+@pytest.mark.awaiting_macos_parity(issue=2404)
 def test_a_raise_inside_the_device_tensor_scope_discards_the_write(
     start_app_under_test,
 ):
@@ -425,6 +428,7 @@ def test_a_raise_inside_the_pixel_buffer_scope_discards_the_write(
     )
 
 
+@pytest.mark.awaiting_macos_parity(issue=2404)
 def test_a_pooled_texture_exports_a_device_tensor(start_app_under_test):
     """Resurrected from #1737 (removed by #1754, carried by #1757): the
     texture-first blit arm serves an acquired pooled texture through the
@@ -439,6 +443,7 @@ def test_a_pooled_texture_exports_a_device_tensor(start_app_under_test):
     assert observation["texture_tensor_device"].startswith("cuda")
 
 
+@pytest.mark.awaiting_macos_parity(issue=2404)
 def test_no_acquire_texture_usage_can_close_the_device_tensor_scope(
     start_app_under_test,
 ):

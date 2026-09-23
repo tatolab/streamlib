@@ -30,6 +30,11 @@ SHARED_TEMPORARY_DIRECTORY = Path("/tmp")
 os.environ.setdefault(MESH_MULTICAST_DISCOVERY_ENVIRONMENT_VARIABLE, "0")
 
 
+#: Set to 1 to run the tests an `awaiting_macos_parity` mark would not run on
+#: macOS — what the ticket bringing them does to prove it.
+RUN_AWAITING_MACOS_PARITY_ENVIRONMENT_VARIABLE = "STREAMLIB_RUN_AWAITING_MACOS_PARITY"
+
+
 def pytest_collection_modifyitems(config: pytest.Config, items: "list[pytest.Item]") -> None:
     """Turns the two platform markers into a skip or a strict xfail."""
     for item in items:
@@ -46,8 +51,16 @@ def pytest_collection_modifyitems(config: pytest.Config, items: "list[pytest.Ite
             if not isinstance(issue, int):
                 raise pytest.UsageError(f"{item.nodeid}: awaiting_macos_parity needs issue=<number>")
             if sys.platform == "darwin":
+                # Not run by default: a test waiting on another ticket's code
+                # fails slowly, often at a timeout. The ticket that brings it
+                # sets the variable, and the strict xfail then turns red the
+                # moment the test passes, forcing the mark off.
                 item.add_marker(
-                    pytest.mark.xfail(strict=True, reason=f"#{issue} brings this to macOS")
+                    pytest.mark.xfail(
+                        strict=True,
+                        run=os.environ.get(RUN_AWAITING_MACOS_PARITY_ENVIRONMENT_VARIABLE) == "1",
+                        reason=f"#{issue} brings this to macOS",
+                    )
                 )
 
 

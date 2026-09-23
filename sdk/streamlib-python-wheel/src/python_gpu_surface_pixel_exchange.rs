@@ -25,15 +25,17 @@ use std::ffi::{CStr, c_void};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 use pyo3::exceptions::PyNotImplementedError;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use streamlib::sdk::rhi::PixelFormat;
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use crate::python_helper_process_pixel_exchange::HelperCheckedOutSurface;
 #[cfg(target_os = "linux")]
 use crate::python_helper_process_pixel_exchange::{
-    CpuReadbackCopyDirection, HelperCheckedOutSurface, HelperCpuReadbackExport, HelperDeviceExport,
+    CpuReadbackCopyDirection, HelperCpuReadbackExport, HelperDeviceExport,
     HelperProcessGpuExchangeClient,
 };
 use streamlib_adapter_cuda::dlpack::{
@@ -77,11 +79,10 @@ pub(crate) struct GpuSurfaceOwnedMemory {
     /// its own helper process, so every surface it holds came out of the
     /// parent's surface-share service.
     ///
-    /// Linux-gated because the exchange is: the service, the SCM_RIGHTS
-    /// check-out and the consumer import are all Linux paths, and on a
-    /// platform without them no handle is constructible at all — every
-    /// entry point refuses before reaching this type.
-    #[cfg(target_os = "linux")]
+    /// Gated to the platforms the exchange runs on; elsewhere no handle is
+    /// constructible at all — every entry point refuses before reaching
+    /// this type.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     checked_out_surface: HelperCheckedOutSurface,
     minted_surface_id: Option<String>,
     /// The one staged edit outstanding against this surface, whichever
@@ -98,7 +99,7 @@ pub(crate) struct GpuSurfaceOwnedMemory {
 }
 
 impl GpuSurfaceOwnedMemory {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) fn new(
         checked_out_surface: HelperCheckedOutSurface,
         minted_surface_id: Option<String>,
@@ -106,8 +107,25 @@ impl GpuSurfaceOwnedMemory {
         Arc::new(Self {
             checked_out_surface,
             minted_surface_id,
+            #[cfg(target_os = "linux")]
             pending_staged_write_back: PendingStagedWriteBackToSurface::new_unarmed(),
         })
+    }
+
+    /// Bracket CPU access with the surface's IOSurface lock, read-only or
+    /// read-write — what keeps the host view coherent on a discrete-GPU
+    /// Mac, and ~0.6 µs on unified memory.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn lock_the_iosurface_for_cpu_access(&self, read_only: bool) -> PyResult<()> {
+        let HelperCheckedOutSurface::PixelBuffer(pixel_surface) = &self.checked_out_surface;
+        pixel_surface.lock_the_iosurface_for_cpu_access(read_only)
+    }
+
+    /// Release the IOSurface lock CPU access took, if it holds one.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn unlock_the_iosurface_after_cpu_access(&self) -> PyResult<()> {
+        let HelperCheckedOutSurface::PixelBuffer(pixel_surface) = &self.checked_out_surface;
+        pixel_surface.unlock_the_iosurface_after_cpu_access()
     }
 
     /// A DMA-BUF fd for this surface's first plane, plus its byte size.
@@ -149,9 +167,9 @@ impl GpuSurfaceOwnedMemory {
         }
     }
 
-    /// Off Linux no surface exchange exists, so no staging does either and
-    /// `host_visible_pixel_plane` is the one answer — which refuses,
-    /// naming the platform.
+    /// Off Linux no export staging exists: a macOS pixel buffer is its
+    /// IOSurface's own mapping, and elsewhere `host_visible_pixel_plane`
+    /// refuses, naming the platform.
     #[cfg(not(target_os = "linux"))]
     pub(crate) fn cpu_reach_goes_through_the_export_staging(&self) -> bool {
         false
@@ -184,15 +202,9 @@ impl GpuSurfaceOwnedMemory {
     #[cfg(target_os = "linux")]
     pub(crate) fn host_visible_pixel_plane(&self) -> PyResult<HostVisiblePixelPlaneView> {
         if let HelperCheckedOutSurface::PixelBuffer(pixel_surface) = &self.checked_out_surface
-            && !pixel_surface.consumer_buffer.mapped_ptr().is_null()
+            && !pixel_surface.host_mapped_base_address().is_null()
         {
-            return Ok(HostVisiblePixelPlaneView {
-                base_address: pixel_surface.consumer_buffer.mapped_ptr(),
-                bytes_per_row: pixel_surface.bytes_per_row,
-                width: pixel_surface.width,
-                height: pixel_surface.height,
-                format: pixel_surface.format,
-            });
+            return Ok(pixel_surface.host_visible_pixel_plane_view());
         }
         let surface_id = self.checked_out_surface.surface_id();
         let staged = self
@@ -216,8 +228,16 @@ impl GpuSurfaceOwnedMemory {
         })
     }
 
-    /// No surface exchange exists off Linux, so no handle reaches this.
-    #[cfg(not(target_os = "linux"))]
+    /// A macOS pixel buffer's view is its IOSurface's own pages, mapped by
+    /// the import.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn host_visible_pixel_plane(&self) -> PyResult<HostVisiblePixelPlaneView> {
+        let HelperCheckedOutSurface::PixelBuffer(pixel_surface) = &self.checked_out_surface;
+        Ok(pixel_surface.host_visible_pixel_plane_view())
+    }
+
+    /// No surface exchange exists here, so no handle reaches this.
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     pub(crate) fn host_visible_pixel_plane(&self) -> PyResult<HostVisiblePixelPlaneView> {
         Err(PyNotImplementedError::new_err(
             "the GPU surface exchange is a Linux path: it needs the surface-share service and \

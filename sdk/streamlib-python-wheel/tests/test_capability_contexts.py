@@ -65,6 +65,7 @@ def test_setup_receives_the_full_access_context_with_gpu_full_access(
     assert observation["gpu_limited_access_type"] == "GpuContextLimitedAccess"
 
 
+@pytest.mark.awaiting_macos_parity(issue=2408)
 def test_process_receives_the_limited_context_without_gpu_full_access(
     start_app_under_test,
 ):
@@ -112,6 +113,7 @@ def test_ctx_time_is_kernel_monotonic_nanoseconds(start_app_under_test):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.awaiting_macos_parity(issue=2408)
 def test_an_explicit_write_timestamp_reaches_the_reader_unchanged(
     start_app_under_test,
 ):
@@ -119,6 +121,7 @@ def test_an_explicit_write_timestamp_reaches_the_reader_unchanged(
     assert observation["timestamp_ns"] == EXPLICIT_TIMESTAMP_NS
 
 
+@pytest.mark.awaiting_macos_parity(issue=2408)
 def test_a_default_write_timestamp_is_kernel_monotonic(start_app_under_test):
     """The stamp a writer defaults to is the machine's monotonic clock, so it
     is comparable against one a reader takes in a different process."""
@@ -171,6 +174,7 @@ def test_outputs_captured_in_setup_still_write_from_a_worker_thread(
 ZERO_ARGUMENT_PROCESS_APP = Path(__file__).parent / "zero_argument_process_app.py"
 
 
+@pytest.mark.awaiting_macos_parity(issue=2408)
 def test_a_zero_argument_process_hook_fails_loudly_with_a_type_error(
     start_app_under_test,
 ):

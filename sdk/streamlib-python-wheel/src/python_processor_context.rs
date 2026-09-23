@@ -39,9 +39,12 @@ use crate::python_gpu_surface_pixel_exchange::{
 use crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient;
 #[cfg(target_os = "linux")]
 use crate::python_helper_process_pixel_exchange::{
-    HelperAcquiredTexture, HelperCheckedOutSurface, HelperProcessGraphicsDraw,
-    HelperProcessGraphicsKernelRegistration, HelperProcessRayTracingKernelRegistration,
-    HelperSurfaceCheckOutLeaseDebt,
+    HelperAcquiredTexture, HelperProcessGraphicsDraw, HelperProcessGraphicsKernelRegistration,
+    HelperProcessRayTracingKernelRegistration,
+};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use crate::python_helper_process_pixel_exchange::{
+    HelperCheckedOutSurface, HelperSurfaceCheckOutLeaseDebt,
 };
 use crate::python_logging::monotonic_clock_now_ns;
 use crate::python_processor_link_data_access::PythonProcessorLinkDataAccess;
@@ -87,6 +90,14 @@ fn fd_shaped_raw_handle_is_linux_only_error(method_name: &str) -> PyErr {
          and a surface on this platform is an IOSurface: its raw handle is `export_iosurface`"
     ))
 }
+
+/// The variable the parent names its surface-share channel to a helper in:
+/// the Unix socket's path on Linux, the Mach service's name on macOS.
+#[cfg(not(target_os = "macos"))]
+pub(crate) const SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_SURFACE_SOCKET";
+#[cfg(target_os = "macos")]
+pub(crate) const SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE: &str =
+    streamlib_surface_client::SURFACE_SHARE_MACH_SERVICE_ENVIRONMENT_VARIABLE;
 
 fn gpu_unreachable_from_a_helper_process_error() -> PyErr {
     PyRuntimeError::new_err(
@@ -262,7 +273,7 @@ impl PythonGpuSurfaceHandle {
     /// A surface a helper process checked out of its parent — pixel buffer
     /// or texture, whichever the registration named — behind the same handle
     /// surface the engine path mints.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn from_helper_checked_out_surface(checked_out: HelperCheckedOutSurface) -> Self {
         let surface_id = checked_out.surface_id().to_string();
         let (width, height) = (checked_out.width(), checked_out.height());
@@ -290,6 +301,16 @@ impl PythonGpuSurfaceHandle {
     fn release_owned_engine_value(&self) {
         let released_share = self.owned_memory.lock().take();
         drop(released_share);
+    }
+
+    /// Release the IOSurface lock this handle's CPU access holds; a closed
+    /// handle holds none.
+    #[cfg(target_os = "macos")]
+    fn unlock_the_iosurface_after_cpu_access(&self) -> PyResult<()> {
+        match self.owned_memory.lock().clone() {
+            Some(owned_memory) => owned_memory.unlock_the_iosurface_after_cpu_access(),
+            None => Ok(()),
+        }
     }
 
     /// Borrow the shared memory anchor, or fail if the handle is closed.
@@ -419,11 +440,13 @@ impl PythonGpuSurfaceHandle {
         // failure.
         #[cfg(target_os = "linux")]
         let publish_outcome = self.publish_pending_staged_write(python);
+        #[cfg(target_os = "macos")]
+        let publish_outcome = self.unlock_the_iosurface_after_cpu_access();
         python.detach(|| {
             self.cpu_access.unlock();
             self.release_owned_engine_value();
         });
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         publish_outcome?;
         Ok(())
     }
@@ -480,6 +503,8 @@ impl PythonGpuSurfaceHandle {
             #[cfg(target_os = "linux")]
             self.cpu_staging_holds_this_locks_frame
                 .store(false, std::sync::atomic::Ordering::SeqCst);
+            #[cfg(target_os = "macos")]
+            owned_memory.lock_the_iosurface_for_cpu_access(read_only)?;
             self.cpu_access.lock_for(read_only);
             Ok(())
         })
@@ -495,8 +520,10 @@ impl PythonGpuSurfaceHandle {
         // the real failure this raises.
         #[cfg(target_os = "linux")]
         let publish_outcome = self.publish_pending_staged_write(python);
+        #[cfg(target_os = "macos")]
+        let publish_outcome = self.unlock_the_iosurface_after_cpu_access();
         python.detach(|| self.cpu_access.unlock());
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         publish_outcome?;
         Ok(())
     }
@@ -883,7 +910,7 @@ impl PythonGpuSurfaceDeviceTensorScope {
 pub(crate) struct PythonGpuSurfaceCheckOutLease {
     claimed_surface_id: String,
     /// Settled by its own `Drop`; nothing reads it, and that is the point.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[expect(dead_code, reason = "the field is the claim; its Drop is the release")]
     release_check_out_to_surface_share: HelperSurfaceCheckOutLeaseDebt,
 }
@@ -1092,7 +1119,7 @@ impl PythonGpuContextLimitedAccess {
         format: &str,
     ) -> PyResult<PythonGpuSurfaceHandle> {
         let pixel_format = parse_pixel_format_name(format)?;
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         if let Some(exchange_client) = &self.helper_process_exchange_client {
             let checked_out = exchange_client.acquire_pixel_buffer(
                 python,
@@ -1161,7 +1188,7 @@ impl PythonGpuContextLimitedAccess {
         python: Python<'_>,
         surface_id: &str,
     ) -> PyResult<PythonGpuSurfaceHandle> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         if let Some(exchange_client) = &self.helper_process_exchange_client {
             let checked_out = exchange_client.resolve_surface(python, surface_id)?;
             return Ok(PythonGpuSurfaceHandle::from_helper_checked_out_surface(
@@ -1186,7 +1213,7 @@ impl PythonGpuContextLimitedAccess {
         python: Python<'_>,
         surface_id: &str,
     ) -> PyResult<PythonGpuSurfaceCheckOutLease> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         if let Some(exchange_client) = &self.helper_process_exchange_client {
             let claimed = python
                 .detach(|| exchange_client.claim_surface_against_producer_reuse(surface_id))?;
@@ -1207,7 +1234,7 @@ impl PythonGpuContextLimitedAccess {
     /// `writable()` refuses on this answer; `cpu()` hands its array out
     /// read-only on it.
     fn surface_can_take_write_back(&self, python: Python<'_>, surface_id: &str) -> PyResult<bool> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         if let Some(exchange_client) = &self.helper_process_exchange_client {
             return exchange_client.surface_can_take_write_back(python, surface_id);
         }
@@ -1245,7 +1272,7 @@ impl PythonGpuContextFullAccess {
         format: &str,
     ) -> PyResult<PythonGpuSurfaceHandle> {
         let pixel_format = parse_pixel_format_name(format)?;
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         if let Some(exchange_client) = &self.helper_process_exchange_client {
             let checked_out = exchange_client.acquire_pixel_buffer(
                 python,
@@ -1839,7 +1866,7 @@ impl PythonGpuContextFullAccess {
 
     /// Block until the GPU device is idle.
     fn wait_device_idle(&self, python: Python<'_>) -> PyResult<()> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         if let Some(exchange_client) = &self.helper_process_exchange_client {
             return exchange_client.wait_device_idle(python);
         }
@@ -1895,13 +1922,13 @@ impl PythonRuntimeContextFullAccess {
         let helper_process_exchange_client = match (
             escalate_request_to_parent,
             release_to_parent_without_waiting,
-            std::env::var("STREAMLIB_SURFACE_SOCKET").ok(),
+            std::env::var_os(SURFACE_SHARE_CHANNEL_ENVIRONMENT_VARIABLE),
         ) {
-            (Some(requester), Some(releaser), Some(surface_socket_path)) => {
+            (Some(requester), Some(releaser), Some(surface_share_channel_name)) => {
                 Some(Arc::new(HelperProcessGpuExchangeClient::new(
                     requester.clone().unbind(),
                     releaser.clone().unbind(),
-                    surface_socket_path.into(),
+                    surface_share_channel_name,
                     // Child-scoped, never the node's own runtime id — the
                     // service's crash watchdog sweeps registrations by
                     // runtime id, and this child's crash must sweep only

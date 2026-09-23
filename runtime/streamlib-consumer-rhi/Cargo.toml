@@ -3,7 +3,7 @@
 
 [package]
 name = "streamlib-consumer-rhi"
-description = "Consumer-side carve-out of the StreamLib Vulkan RHI: DMA-BUF FD import + bind + map and the trait machinery surface adapters use to abstract over device flavors. Cdylibs depend on this crate (NOT the full streamlib) so the FullAccess capability boundary is type-system enforced."
+description = "Consumer-side carve-out of the StreamLib Vulkan RHI: DMA-BUF FD import (Linux) or IOSurface host-memory import (macOS) + bind + map and the trait machinery surface adapters use to abstract over device flavors. Cdylibs depend on this crate (NOT the full streamlib) so the FullAccess capability boundary is type-system enforced."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -26,6 +26,11 @@ libc.workspace = true
 # because fd import is: the Apple arm imports an IOSurface, not a descriptor.
 [target.'cfg(target_os = "linux")'.dependencies]
 streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.26.12" }
+
+# The IOSurface a macOS helper imports; its pages map as host memory.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-io-surface.workspace = true
+objc2-core-foundation.workspace = true
 
 [lints]
 workspace = true

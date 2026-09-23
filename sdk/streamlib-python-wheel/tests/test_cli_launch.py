@@ -275,6 +275,7 @@ def launch_node(isolated_runtime_directory: Path):
             node.kill_process_group()
 
 
+@pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
 @pytest.mark.parametrize("verb", ["run", "dev"])
 def test_a_launched_app_registers_as_a_node_and_tears_down(
     verb: str, tmp_path: Path, isolated_runtime_directory: Path, launch_node
@@ -315,6 +316,7 @@ def test_a_launched_app_registers_as_a_node_and_tears_down(
     )
 
 
+@pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
 def test_a_launched_app_takes_the_runtime_name_its_command_line_gave_it(
     tmp_path: Path, isolated_runtime_directory: Path, launch_node
 ):
@@ -339,6 +341,7 @@ def test_a_launched_app_takes_the_runtime_name_its_command_line_gave_it(
     assert node.await_exit(CLEAN_EXIT_TIMEOUT_SECONDS) == 0
 
 
+@pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
 def test_a_node_launched_with_xdg_runtime_dir_unset_keeps_everything_live_in_the_per_user_fallback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
@@ -416,6 +419,7 @@ def test_a_node_launched_with_xdg_runtime_dir_unset_keeps_everything_live_in_the
         node.kill_process_group()
 
 
+@pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
 def test_a_native_block_added_without_config_reaches_a_running_graph(
     tmp_path: Path, isolated_runtime_directory: Path, launch_node
 ):
@@ -447,6 +451,7 @@ def test_a_native_block_added_without_config_reaches_a_running_graph(
     )
 
 
+@pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
 def test_the_scaffolded_app_reaches_a_running_graph(
     tmp_path: Path, isolated_runtime_directory: Path, launch_node
 ):
@@ -622,6 +627,7 @@ def edit_the_scaffolded_effect(app_directory: Path) -> None:
     effect_module.write_text(edited)
 
 
+@pytest.mark.linux_only_capability(reason="only Linux resolves the runtime directory from XDG_RUNTIME_DIR")
 def test_the_edit_loop_survives_a_bad_save_and_shows_a_good_one(
     tmp_path: Path, isolated_runtime_directory: Path, launch_node
 ):
