@@ -6,7 +6,8 @@
 //! rights on macOS.
 //!
 //! This crate is the single shared home for both wires. It is deliberately
-//! tiny — `libc` + `serde_json`, plus `mach2` on macOS — so the polyglot
+//! tiny — `libc` + `serde_json`, plus `mach2` and the objc2 Foundation and Metal
+//! bindings on macOS — so the polyglot
 //! cdylibs (the wheel's helper-process surface client) can depend on it
 //! without dragging the runtime's transitive closure (vulkanalia, tokio,
 //! winit, …) into their dep graphs. The runtime-internal service consumes
@@ -48,4 +49,12 @@ pub use macos::{
     SurfaceShareMachSenderAuditIdentity, SurfaceShareMachServiceConnection,
     check_in_surface_share_mach_service, receive_surface_share_mach_traffic,
     request_dead_name_notification, send_surface_share_mach_message,
+};
+
+#[cfg(target_os = "macos")]
+mod metal_shared_event_mach_port;
+
+#[cfg(target_os = "macos")]
+pub use metal_shared_event_mach_port::{
+    mach_send_right_of_metal_shared_event_handle, metal_shared_event_handle_of_mach_send_right,
 };

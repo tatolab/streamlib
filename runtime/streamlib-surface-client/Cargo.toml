@@ -23,6 +23,10 @@ libc.workspace = true
 serde_json.workspace = true
 # The Mach message, port and bootstrap bindings the macOS arm rides on.
 mach2 = "0.7"
+# The shared-event handle's NSXPCCoder encoding: a Metal timeline's Mach send right.
+objc2 = { workspace = true, features = ["exception"] }
+objc2-foundation.workspace = true
+objc2-metal.workspace = true
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 # Each test socket gets a directory of its own: the kernel answers uniqueness,
