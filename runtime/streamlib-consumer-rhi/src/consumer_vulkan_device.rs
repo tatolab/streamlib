@@ -573,6 +573,32 @@ impl ConsumerVulkanDevice {
         byte_len: vk::DeviceSize,
         memory_type_bits: u32,
     ) -> Result<vk::DeviceMemory> {
+        use vulkanalia::vk::ExtExternalMemoryHostExtensionDeviceCommands as _;
+
+        // The memory type must suit the host range as well as the buffer
+        // (VUID-VkMemoryAllocateInfo-memoryTypeIndex-01744).
+        let mut host_pointer_properties = vk::MemoryHostPointerPropertiesEXT::default();
+        // SAFETY: `host_ptr` is the caller's live range; the properties struct
+        // outlives the call.
+        unsafe {
+            self.device.get_memory_host_pointer_properties_ext(
+                vk::ExternalMemoryHandleTypeFlags::HOST_ALLOCATION_EXT,
+                host_ptr.cast_const().cast(),
+                &mut host_pointer_properties,
+            )
+        }
+        .map_err(|e| {
+            ConsumerRhiError::Gpu(format!(
+                "ConsumerVulkanDevice: the driver cannot describe the host range {host_ptr:p}: {e}"
+            ))
+        })?;
+        let memory_type_bits = memory_type_bits & host_pointer_properties.memory_type_bits;
+        if memory_type_bits == 0 {
+            return Err(ConsumerRhiError::Gpu(format!(
+                "ConsumerVulkanDevice: no memory type suits both the buffer and the host range \
+                 {host_ptr:p}"
+            )));
+        }
         let host_visible =
             vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT;
         let memory_type_index = self
