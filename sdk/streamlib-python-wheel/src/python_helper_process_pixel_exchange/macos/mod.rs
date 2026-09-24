@@ -175,6 +175,23 @@ impl HelperCheckedOutPixelSurface {
     fn iosurface_lock_error(&self, refused: IOSurfaceLockRefused) -> PyErr {
         PyRuntimeError::new_err(format!("{refused} on surface {:?}", self.surface_id))
     }
+
+    /// A no-copy `MTLBuffer` over the pool slot's IOSurface pages.
+    pub(crate) fn metal_buffer_over_the_iosurface_pages(
+        &self,
+    ) -> PyResult<
+        objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLBuffer>>,
+    > {
+        self.iosurface_pool_slot_import
+            .consumer_buffer
+            .exported_metal_buffer()
+            .map_err(|export_failure| {
+                PyRuntimeError::new_err(format!(
+                    "surface {:?} has no Metal buffer over its IOSurface: {export_failure}",
+                    self.surface_id
+                ))
+            })
+    }
 }
 
 impl Drop for HelperCheckedOutPixelSurface {

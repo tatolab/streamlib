@@ -3,12 +3,13 @@
 
 """The device half of the pixel exchange: graph frames as GPU tensors.
 
-A frame published into the graph reaches CUDA through one engine-side blit into
-an exportable staging buffer — zero CPU copies, and CUDA never allocates. The
-consumer writes ordinary user code: resolve the frame, `torch.from_dlpack`,
-work on a CUDA tensor.
+On Linux a frame published into the graph reaches CUDA through one engine-side
+blit into an exportable staging buffer — zero CPU copies, and CUDA never
+allocates; on macOS it reaches Metal as a no-copy buffer over the frame's own
+IOSurface. The consumer writes ordinary user code: resolve the frame,
+`torch.from_dlpack`, work on a device tensor.
 
-Every processor runs in its own helper process, so the staging lives one
+Every processor runs in its own helper process. On Linux the staging lives one
 process away: the child imports it over the surface-share check-out and waits
 on the staging's refill timeline for each copy the parent runs. What is worth
 breaking a build over is that the tensor really is device-resident, that its
@@ -20,19 +21,22 @@ Every probe runs in its own helper process and reports one
 `MARKER:PROBE_RESULT` JSON line; the tests drive the app out of process and
 assert on that line.
 
-These need an NVIDIA driver as well as a GPU; a rig without one skips, because
-the CPU fallback is itself under test.
+The device is the platform's own — CUDA on Linux, where these need an NVIDIA
+driver as well as a GPU, and Metal on macOS, where torch reaches it as `mps`.
+A rig without the device skips, because the CPU fallback is itself under test.
 """
 
 import json
 import re
+import sys
 from pathlib import Path
 
 import pytest
 
 from device_exchange_probes import (
-    DLPACK_DEVICE_CUDA,
     FILL_CONSTANT_RGBA,
+    NATURAL_DLPACK_DEVICE,
+    NATURAL_TORCH_DEVICE_TYPE,
     SURFACE_HEIGHT,
     SURFACE_WIDTH,
 )
@@ -60,18 +64,18 @@ def run_probe(start_app_under_test, scenario: str) -> dict:
     return observation
 
 
-def skip_without_cuda(observation: dict) -> None:
-    reason = observation.get("cuda_unavailable")
+def skip_without_the_device(observation: dict) -> None:
+    reason = observation.get("device_unavailable")
     if reason:
-        pytest.skip(f"no usable CUDA runtime on this rig: {reason}")
+        pytest.skip(f"no usable {NATURAL_TORCH_DEVICE_TYPE} device on this rig: {reason}")
 
 
 # ---------------------------------------------------------------------------
-# The headline: a graph frame is a CUDA tensor
+# The headline: a graph frame is a device tensor
 # ---------------------------------------------------------------------------
 
 
-def test_a_graph_frame_reaches_torch_as_a_cuda_tensor(start_app_under_test):
+def test_a_graph_frame_reaches_torch_as_a_device_tensor(start_app_under_test):
     """The ticket's headline, in the user's own spelling.
 
     `torch.from_dlpack(resolved_frame)` yields a GPU-resident tensor whose
@@ -80,13 +84,13 @@ def test_a_graph_frame_reaches_torch_as_a_cuda_tensor(start_app_under_test):
     the engine's address space.
     """
     observation = run_probe(start_app_under_test, "GraphFrameToTorchProbe")
-    skip_without_cuda(observation)
-    assert observation["reported_device"][0] == DLPACK_DEVICE_CUDA
-    assert observation["tensor_device"].startswith("cuda")
+    skip_without_the_device(observation)
+    assert observation["reported_device"][0] == NATURAL_DLPACK_DEVICE
+    assert observation["tensor_device"].startswith(NATURAL_TORCH_DEVICE_TYPE)
     assert observation["tensor_shape"] == [SURFACE_HEIGHT, SURFACE_WIDTH, 4]
     assert observation["tensor_dtype"] == "torch.uint8"
     assert observation["pixels_match_host"], (
-        "the CUDA tensor's pixels differ from the frame's — the blit exported the wrong memory"
+        "the device tensor's pixels differ from the frame's — the export aliased the wrong memory"
     )
 
 
@@ -106,7 +110,7 @@ def test_a_device_side_edit_publishes_back_to_the_surface_at_unlock(
     original pattern.
     """
     observation = run_probe(start_app_under_test, "DeviceEditProbe")
-    skip_without_cuda(observation)
+    skip_without_the_device(observation)
     assert observation["pixel_after_publish"] == [17, 34, 51, 68]
     assert observation["cleared_pixel"] == [0, 0, 0, 0]
 
@@ -118,7 +122,7 @@ def test_a_device_edit_survives_the_with_block_spelling(start_app_under_test):
     silently discarded there is data loss in the API's own idiomatic spelling.
     """
     observation = run_probe(start_app_under_test, "WithBlockEditProbe")
-    skip_without_cuda(observation)
+    skip_without_the_device(observation)
     assert observation["pixel_after_with_block"] == [99, 88, 77, 66]
 
 
@@ -130,10 +134,9 @@ def test_a_device_edit_survives_the_with_block_spelling(start_app_under_test):
 def test_a_device_tensor_outliving_its_handle_keeps_a_live_mapping(
     start_app_under_test,
 ):
-    """Use-after-free across the engine allocation, the staging and the CUDA
-    import — closing the handle frees none of them while a tensor lives."""
+    """Use-after-free across the engine allocation and the device import — closing the handle frees none of them while a tensor lives."""
     observation = run_probe(start_app_under_test, "TensorOutlivesHandleProbe")
-    skip_without_cuda(observation)
+    skip_without_the_device(observation)
     assert observation["checksum_after"] == observation["checksum_before"]
 
 
@@ -182,7 +185,7 @@ def test_camera_device_pixels_match_host_across_ring_cycles(start_app_under_test
     if not Path("/dev/video0").exists():
         pytest.skip("no camera on this rig")
     observation = run_probe(start_app_under_test, "camera")
-    skip_without_cuda(observation)
+    skip_without_the_device(observation)
 
     # A later frame can recycle before this slow consumer reads it, which is
     # the lifetime contract rather than a fault — those are skipped, not failed.
@@ -338,7 +341,6 @@ def test_a_texture_handle_round_trips_across_the_process_boundary(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.awaiting_macos_parity(issue=2404)
 def test_the_privileged_capability_works_from_a_helper_process(start_app_under_test):
     """`ctx.gpu_full_access` is reachable from a `setup` hook running in a
     child: each method is its own escalate round trip to the parent, which runs
@@ -368,7 +370,6 @@ def test_the_privileged_capability_works_from_a_helper_process(start_app_under_t
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.awaiting_macos_parity(issue=2404)
 def test_a_kernel_output_doubles_in_place_through_the_device_tensor_scope(
     start_app_under_test,
 ):
@@ -383,67 +384,79 @@ def test_a_kernel_output_doubles_in_place_through_the_device_tensor_scope(
     observation = run_probe(
         start_app_under_test, "DeviceTensorScopeDoublesAKernelOutputProbe"
     )
-    skip_without_cuda(observation)
+    skip_without_the_device(observation)
     assert observation["tensor_dtype"] == "torch.float16"
     assert observation["tensor_shape"] == [SURFACE_HEIGHT, SURFACE_WIDTH, 4]
-    assert observation["tensor_device"].startswith("cuda")
+    assert observation["tensor_device"].startswith(NATURAL_TORCH_DEVICE_TYPE)
     assert observation["filled_pixel"] == [0.25, 0.5, 1.5, 2.0]
     assert observation["doubled_pixel"] == [0.5, 1.0, 3.0, 4.0], (
         "the in-place edit must survive the scope's blit-back into the texture"
     )
 
 
-@pytest.mark.awaiting_macos_parity(issue=2404)
-def test_a_raise_inside_the_device_tensor_scope_discards_the_write(
+def test_a_raise_inside_the_device_tensor_scope_follows_its_floors_publication_rule(
     start_app_under_test,
 ):
-    """Owner decision 2026-08-07: leaving the scope by a propagating exception
-    discards the write — the engine's texture keeps the kernel output it
-    already held, the exception is not suppressed, and the surface (and the
-    kernel writing it) keep working on the next frame.
+    """Owner decision 2026-08-07, per floor. On Linux the scope edits a
+    staging, so leaving by a propagating exception discards the write and the
+    engine's texture keeps the kernel output it already held. On macOS the
+    tensor is the IOSurface itself and publishes per store, so the stores that
+    landed before the raise are the frame. On both the exception is not
+    suppressed, and the surface — and the kernel writing it — keep working on
+    the next frame.
     """
     observation = run_probe(start_app_under_test, "DeviceTensorScopeDiscardsOnRaiseProbe")
-    skip_without_cuda(observation)
+    skip_without_the_device(observation)
     assert observation["exception_propagated"] == "deliberate mid-scope failure"
-    assert observation["pixel_after_raise"] == FILL_CONSTANT_RGBA, (
-        f"a raise mid-scope must leave the pre-scope pixels in place: "
-        f"{observation['pixel_after_raise']!r}"
-    )
+    if sys.platform == "darwin":
+        assert observation["pixel_after_raise"] == [0, 0, 0, 0], (
+            f"the direct door publishes per store, so the zeros stored before the "
+            f"raise are the frame: {observation['pixel_after_raise']!r}"
+        )
+    else:
+        assert observation["pixel_after_raise"] == FILL_CONSTANT_RGBA, (
+            f"a raise mid-scope must leave the pre-scope pixels in place: "
+            f"{observation['pixel_after_raise']!r}"
+        )
     assert observation["pixel_after_redispatch"] == FILL_CONSTANT_RGBA
 
 
-def test_a_raise_inside_the_pixel_buffer_scope_discards_the_write(
+def test_a_raise_inside_the_pixel_buffer_scope_follows_its_floors_publication_rule(
     start_app_under_test,
 ):
-    """One rule for both scopes (owner, 2026-08-07): the CPU pixel-buffer
-    scope stops publishing a pending device write when the block is left by
-    a raise. This deliberately changes shipped behaviour — two scopes with
-    two behaviours is not shippable.
+    """One rule for both scopes (owner, 2026-08-07), per floor: on Linux the
+    handle stops publishing a pending device write when the block is left by a
+    raise; on macOS the device tensor is the IOSurface itself, so the stores
+    that landed before the raise are the frame.
     """
     observation = run_probe(start_app_under_test, "PixelBufferScopeDiscardsOnRaiseProbe")
-    skip_without_cuda(observation)
+    skip_without_the_device(observation)
     assert observation["exception_propagated"] == "deliberate mid-scope failure"
-    assert observation["pixel_after"] == observation["pixel_before"], (
-        "a raise inside the with-block must leave the frame's pixels untouched"
-    )
+    if sys.platform == "darwin":
+        assert observation["pixel_after"] == [0, 0, 0, 0], (
+            "the direct door publishes per store, so the zeros stored before the "
+            f"raise are the frame: {observation['pixel_after']!r}"
+        )
+    else:
+        assert observation["pixel_after"] == observation["pixel_before"], (
+            "a raise inside the with-block must leave the frame's pixels untouched"
+        )
 
 
-@pytest.mark.awaiting_macos_parity(issue=2404)
 def test_a_pooled_texture_exports_a_device_tensor(start_app_under_test):
     """Resurrected from #1737 (removed by #1754, carried by #1757): the
     texture-first blit arm serves an acquired pooled texture through the
     handle itself — registration at acquire keys the export, and the tensor
     is device memory of the texture's extent."""
     observation = run_probe(start_app_under_test, "PooledTextureExportProbe")
-    skip_without_cuda(observation)
+    skip_without_the_device(observation)
     assert observation["texture_surface_id"]
-    if observation["texture_device"][0] != DLPACK_DEVICE_CUDA:
-        pytest.skip(f"no usable CUDA runtime: {observation['texture_device']}")
+    if observation["texture_device"][0] != NATURAL_DLPACK_DEVICE:
+        pytest.skip(f"no usable device runtime: {observation['texture_device']}")
     assert observation["texture_tensor_shape"] == [SURFACE_HEIGHT, SURFACE_WIDTH, 4]
-    assert observation["texture_tensor_device"].startswith("cuda")
+    assert observation["texture_tensor_device"].startswith(NATURAL_TORCH_DEVICE_TYPE)
 
 
-@pytest.mark.awaiting_macos_parity(issue=2404)
 def test_no_acquire_texture_usage_can_close_the_device_tensor_scope(
     start_app_under_test,
 ):
@@ -458,7 +471,7 @@ def test_no_acquire_texture_usage_can_close_the_device_tensor_scope(
     observation = run_probe(
         start_app_under_test, "DeviceTensorScopeTakesEveryAcquiredTextureProbe"
     )
-    skip_without_cuda(observation)
+    skip_without_the_device(observation)
     assert observation["scope_over_one_token"] == "entered", (
         f"one usage token is enough — the copy bits ride every acquire: "
         f"{observation['scope_over_one_token']!r}"

@@ -44,9 +44,12 @@ camera pair now guards.
 import json
 import os
 import re
+import sys
 from pathlib import Path
 
 import pytest
+
+from device_exchange_probes import NATURAL_DLPACK_DEVICE, NATURAL_TORCH_DEVICE_TYPE
 
 pytestmark = pytest.mark.requires_gpu
 
@@ -158,10 +161,10 @@ def _assert_the_bare_view_is_this_frames_pixels(observation: dict) -> None:
         "the view rides the claim, so a frame that took none has no stable "
         "pixels to export"
     )
-    assert observation["device_the_object_advertised"][0] == 2, (
-        "the bare read path is GPU-resident: the object must advertise kDLCUDA "
-        "(2), and a host answer here means the device export silently "
-        "downgraded"
+    assert observation["device_the_object_advertised"][0] == NATURAL_DLPACK_DEVICE, (
+        "the bare read path is GPU-resident: the object must advertise the "
+        f"platform's device ({NATURAL_DLPACK_DEVICE}), and a host answer here "
+        "means the device export silently downgraded"
     )
     assert observation["pixels_are_not_all_zero"], (
         "an all-zero surface would make the comparison below vacuous"
@@ -176,7 +179,6 @@ def _assert_the_bare_view_is_this_frames_pixels(observation: dict) -> None:
     )
 
 
-@pytest.mark.awaiting_macos_parity(issue=2404)
 def test_a_user_authored_cast_type_reaches_its_pixels_with_no_ceremony(
     start_app_under_test,
 ):
@@ -196,7 +198,6 @@ def test_a_user_authored_cast_type_reaches_its_pixels_with_no_ceremony(
     _assert_the_bare_view_is_this_frames_pixels(observation)
 
 
-@pytest.mark.awaiting_macos_parity(issue=2404)
 def test_the_shipped_video_frame_reaches_its_pixels_the_same_way(
     start_app_under_test,
 ):
@@ -212,12 +213,12 @@ def test_the_shipped_video_frame_reaches_its_pixels_the_same_way(
     _assert_the_bare_view_is_this_frames_pixels(observation)
 
 
-# ---- the device half: a CUDA package eating the bare capsule ---------------
+# ---- the device half: a GPU package eating the bare capsule ----------------
 
 
-def _assert_the_bare_cuda_tensor_is_this_frames_pixels(observation: dict) -> None:
+def _assert_the_bare_device_tensor_is_this_frames_pixels(observation: dict) -> None:
     assert observation["claim_taken"] is True
-    assert observation["tensor_device"].startswith("cuda"), (
+    assert observation["tensor_device"].startswith(NATURAL_TORCH_DEVICE_TYPE), (
         "`torch.from_dlpack(frame)` must land on the GPU — a host tensor here "
         "means the device export silently downgraded"
     )
@@ -231,39 +232,39 @@ def _assert_the_bare_cuda_tensor_is_this_frames_pixels(observation: dict) -> Non
     )
 
 
-def _require_a_cuda_consumer() -> None:
-    """These need a CUDA-built consumer in the venv, which the CPU wheel CI
-    installs and a rig does not necessarily. Skipped rather than failed: what
-    is missing is the consumer, not the capability under test."""
+def _require_a_device_consumer() -> None:
+    """These need a torch built for the platform's device in the venv, which a
+    rig does not necessarily have. Skipped rather than failed: what is missing
+    is the consumer, not the capability under test."""
     torch = pytest.importorskip("torch")
-    if not torch.cuda.is_available():
-        pytest.skip("torch in this venv is not CUDA-built, so it cannot eat a "
-                    "kDLCUDA capsule")
+    if not torch.accelerator.is_available():
+        pytest.skip(f"torch in this venv has no {NATURAL_TORCH_DEVICE_TYPE} "
+                    "backend, so it cannot eat the device capsule")
 
 
-def test_a_user_authored_cast_type_reaches_torch_as_a_cuda_tensor(
+def test_a_user_authored_cast_type_reaches_torch_as_a_device_tensor(
     start_app_under_test,
 ):
     """`torch.from_dlpack(frame)` off a live camera frame, in a real helper
     placement — the shortest spelling is the fast path, and it is GPU-resident.
     """
-    _require_a_cuda_consumer()
+    _require_a_device_consumer()
     observation = run_claim_probe(
-        start_app_under_test, "AUserAuthoredCastReachesItsPixelsAsACudaTensorProbe"
+        start_app_under_test, "AUserAuthoredCastReachesItsPixelsAsADeviceTensorProbe"
     )
 
-    _assert_the_bare_cuda_tensor_is_this_frames_pixels(observation)
+    _assert_the_bare_device_tensor_is_this_frames_pixels(observation)
 
 
-def test_the_shipped_video_frame_reaches_torch_as_a_cuda_tensor(
+def test_the_shipped_video_frame_reaches_torch_as_a_device_tensor(
     start_app_under_test,
 ):
-    _require_a_cuda_consumer()
+    _require_a_device_consumer()
     observation = run_claim_probe(
-        start_app_under_test, "TheShippedVideoFrameReachesItsPixelsAsACudaTensorProbe"
+        start_app_under_test, "TheShippedVideoFrameReachesItsPixelsAsADeviceTensorProbe"
     )
 
-    _assert_the_bare_cuda_tensor_is_this_frames_pixels(observation)
+    _assert_the_bare_device_tensor_is_this_frames_pixels(observation)
 
 
 # ---- the write doors: an edit through the object, seen on the surface -------
@@ -289,13 +290,13 @@ def test_a_gpu_edit_through_the_write_door_is_on_the_surface_after_the_block(
     start_app_under_test,
 ):
     """`with frame.writable() as t:` over a live frame, in a real helper placement:
-    a CUDA package edits in place and the surface carries the edit once the
+    a GPU package edits in place and the surface carries the edit once the
     block ends, which is what every other holder observes.
 
     Sourced from the native test pattern rather than the camera deliberately —
     see the refusal test below, which is why a camera frame cannot take this
     door at all."""
-    _require_a_cuda_consumer()
+    _require_a_device_consumer()
     observation = run_claim_probe(
         start_app_under_test,
         "TheGpuWriteDoorEditsTheFrameProbe",
@@ -305,14 +306,16 @@ def test_a_gpu_edit_through_the_write_door_is_on_the_surface_after_the_block(
     _assert_the_edit_reached_the_surface(observation)
 
 
-def test_a_raise_inside_the_gpu_write_door_leaves_the_frame_the_engine_held(
+def test_a_raise_inside_the_gpu_write_door_follows_its_floors_publication_rule(
     start_app_under_test,
 ):
-    """The other half of the one write rule. A half-written view blitted back
-    would publish a torn frame that surfaces as corruption somewhere downstream
-    rather than at the `raise`, so the write is dropped — and the exception
-    still reaches the caller."""
-    _require_a_cuda_consumer()
+    """The other half of the one write rule, per floor. On Linux a half-written
+    view blitted back would publish a torn frame that surfaces as corruption
+    somewhere downstream rather than at the `raise`, so the write is dropped.
+    On macOS the device tensor is the IOSurface itself and publishes per store,
+    so the stores that landed before the raise are the frame and nothing else
+    changed. On both the exception still reaches the caller."""
+    _require_a_device_consumer()
     observation = run_claim_probe(
         start_app_under_test,
         "ARaiseInsideTheGpuWriteDoorDiscardsTheEditProbe",
@@ -323,7 +326,10 @@ def test_a_raise_inside_the_gpu_write_door_leaves_the_frame_the_engine_held(
     assert observation["the_exception_propagated"], (
         "the scope suppressed the raise, which no write scope may do"
     )
-    assert observation["the_surface_still_holds_the_frame_the_producer_sent"]
+    if sys.platform == "darwin":
+        _assert_the_edit_reached_the_surface(observation)
+    else:
+        assert observation["the_surface_still_holds_the_frame_the_producer_sent"]
 
 
 def test_a_cpu_edit_through_the_write_door_is_on_the_surface_after_the_block(
@@ -376,7 +382,7 @@ def test_a_gpu_edit_of_a_camera_frame_is_on_the_surface_after_the_block(
     producer that leaked an internal texture under the published id would
     make this refuse while the test-pattern case kept passing.
     """
-    _require_a_cuda_consumer()
+    _require_a_device_consumer()
     observation = run_claim_probe(
         start_app_under_test, "TheGpuWriteDoorEditsTheFrameProbe"
     )

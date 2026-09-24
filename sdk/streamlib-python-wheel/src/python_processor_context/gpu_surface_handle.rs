@@ -6,7 +6,6 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 use pyo3::exceptions::{PyBufferError, PyNotImplementedError, PyRuntimeError, PyTypeError};
 use pyo3::prelude::*;
-#[cfg(target_os = "linux")]
 use streamlib_adapter_cuda::dlpack::DeviceType;
 
 #[cfg(target_os = "linux")]
@@ -21,13 +20,16 @@ use crate::python_gpu_surface_pixel_exchange::{
     StagedWriteBackSource, device_dlpack_capsule, imported_device_for, prepare_device_export,
     read_the_frame_into_its_cpu_staging,
 };
+#[cfg(target_os = "macos")]
+use crate::python_gpu_surface_pixel_exchange::{METAL_DLPACK_DEVICE, metal_dlpack_capsule};
+#[cfg(target_os = "macos")]
+use crate::python_metal_framework_queue_synchronization::synchronize_the_imported_metal_frameworks;
 #[cfg(target_os = "linux")]
 use crate::python_helper_process_pixel_exchange::HelperAcquiredTexture;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::python_helper_process_pixel_exchange::HelperCheckedOutSurface;
 
 use super::gpu_surface_device_tensor_scope::PythonGpuSurfaceDeviceTensorScope;
-#[cfg(target_os = "linux")]
 use super::left_by_a_propagating_exception;
 
 /// An owned GPU surface as seen from Python.
@@ -54,10 +56,19 @@ pub(crate) struct PythonGpuSurfaceHandle {
     /// coherent mapping has nothing to read in.
     #[cfg(target_os = "linux")]
     cpu_staging_holds_this_locks_frame: std::sync::atomic::AtomicBool,
+    /// Whether this lock scope took the IOSurface's CPU lock — taken by the
+    /// first host-side accessor, never by a Metal capsule, which reaches the
+    /// pages through the GPU.
+    #[cfg(target_os = "macos")]
+    iosurface_cpu_lock_is_held_for_this_lock: std::sync::atomic::AtomicBool,
+    /// Whether this lock scope handed out a writable Metal capsule, whose
+    /// stores the framework's queue must retire before the unlock returns.
+    #[cfg(target_os = "macos")]
+    a_writable_metal_capsule_went_out_this_lock: std::sync::atomic::AtomicBool,
     /// Which DLPack side this handle serves when the consumer expresses
     /// no preference — decided once, so `__dlpack_device__` and
     /// `__dlpack__` cannot disagree across calls.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     natural_dlpack_side_is_device: std::sync::OnceLock<bool>,
 }
 
@@ -78,7 +89,11 @@ impl PythonGpuSurfaceHandle {
             cpu_access: CpuAccessGate::new_unlocked(),
             #[cfg(target_os = "linux")]
             cpu_staging_holds_this_locks_frame: std::sync::atomic::AtomicBool::new(false),
-            #[cfg(target_os = "linux")]
+            #[cfg(target_os = "macos")]
+            iosurface_cpu_lock_is_held_for_this_lock: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(target_os = "macos")]
+            a_writable_metal_capsule_went_out_this_lock: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             natural_dlpack_side_is_device: std::sync::OnceLock::new(),
         }
     }
@@ -96,7 +111,7 @@ impl PythonGpuSurfaceHandle {
     /// into a host staging nobody asked for would cost the device path a
     /// copy per frame.
     #[cfg(target_os = "linux")]
-    fn open_the_staged_cpu_door_over_this_frame(
+    fn open_the_cpu_door_over_this_frame(
         &self,
         python: Python<'_>,
         owned_memory: &Arc<GpuSurfaceOwnedMemory>,
@@ -153,6 +168,54 @@ impl PythonGpuSurfaceHandle {
                 .store(false, std::sync::atomic::Ordering::SeqCst);
         }
         opened
+    }
+
+    /// Open the CPU door over this frame, once per lock scope: take the
+    /// IOSurface's lock with the intent `lock()` declared — what keeps the
+    /// host view coherent on a discrete-GPU Mac.
+    ///
+    /// Taken here rather than in `lock()`, so a scope that reaches the pixels
+    /// only through a Metal capsule never holds a CPU lock over GPU work.
+    #[cfg(target_os = "macos")]
+    fn open_the_cpu_door_over_this_frame(
+        &self,
+        _python: Python<'_>,
+        owned_memory: &Arc<GpuSurfaceOwnedMemory>,
+    ) -> PyResult<()> {
+        if self
+            .iosurface_cpu_lock_is_held_for_this_lock
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            return Ok(());
+        }
+        owned_memory
+            .lock_the_iosurface_for_cpu_access(self.cpu_access.is_read_only())
+            .inspect_err(|_| {
+                self.iosurface_cpu_lock_is_held_for_this_lock
+                    .store(false, std::sync::atomic::Ordering::SeqCst)
+            })
+    }
+
+    /// Close this lock scope's macOS doors: retire the framework writes a
+    /// writable Metal capsule took, then let the IOSurface's CPU lock go.
+    /// Both run whatever the other answered; the first failure is returned.
+    #[cfg(target_os = "macos")]
+    fn close_the_doors_this_lock_opened(&self, python: Python<'_>) -> PyResult<()> {
+        let metal_writes_retired = if self
+            .a_writable_metal_capsule_went_out_this_lock
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            synchronize_the_imported_metal_frameworks(python)
+        } else {
+            Ok(())
+        };
+        self.iosurface_cpu_lock_is_held_for_this_lock
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        let iosurface_cpu_lock_released = match self.owned_memory.lock().clone() {
+            Some(owned_memory) => owned_memory.unlock_the_iosurface_after_cpu_access(),
+            None => Ok(()),
+        };
+        metal_writes_retired.and(iosurface_cpu_lock_released)
     }
 
     /// The id and pixel extent a window's `show()` names this surface by.
@@ -222,16 +285,6 @@ impl PythonGpuSurfaceHandle {
         drop(released_share);
     }
 
-    /// Release the IOSurface lock this handle's CPU access holds; a closed
-    /// handle holds none.
-    #[cfg(target_os = "macos")]
-    fn unlock_the_iosurface_after_cpu_access(&self) -> PyResult<()> {
-        match self.owned_memory.lock().clone() {
-            Some(owned_memory) => owned_memory.unlock_the_iosurface_after_cpu_access(),
-            None => Ok(()),
-        }
-    }
-
     /// Borrow the shared memory anchor, or fail if the handle is closed.
     pub(super) fn owned_memory(&self) -> PyResult<Arc<GpuSurfaceOwnedMemory>> {
         self.owned_memory.lock().clone().ok_or_else(|| {
@@ -255,6 +308,30 @@ impl PythonGpuSurfaceHandle {
             device_export_available(owned_memory)
                 && imported_device_for(python, owned_memory).is_ok()
         })
+    }
+
+    /// Decide — once per handle — whether the no-preference DLPack side is
+    /// Metal: it is wherever the helper's device exports a no-copy
+    /// `MTLBuffer` over the surface's IOSurface.
+    #[cfg(target_os = "macos")]
+    fn natural_side_is_device(
+        &self,
+        _python: Python<'_>,
+        owned_memory: &Arc<GpuSurfaceOwnedMemory>,
+    ) -> bool {
+        *self
+            .natural_dlpack_side_is_device
+            .get_or_init(|| owned_memory.metal_buffer_over_the_iosurface_pages().is_ok())
+    }
+
+    /// No surface exchange exists here, so every handle serves its host side.
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    fn natural_side_is_device(
+        &self,
+        _python: Python<'_>,
+        _owned_memory: &Arc<GpuSurfaceOwnedMemory>,
+    ) -> bool {
+        false
     }
 
     /// Publish a pending staged write, once, through whichever staging
@@ -337,8 +414,8 @@ impl PythonGpuSurfaceHandle {
             return Ok(None);
         }
         let owned_memory = self.owned_memory()?;
-        #[cfg(target_os = "linux")]
-        self.open_the_staged_cpu_door_over_this_frame(python, &owned_memory)?;
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        self.open_the_cpu_door_over_this_frame(python, &owned_memory)?;
         python.detach(|| {
             Ok(Some(
                 owned_memory.host_visible_pixel_plane()?.base_address as usize,
@@ -360,7 +437,7 @@ impl PythonGpuSurfaceHandle {
         #[cfg(target_os = "linux")]
         let publish_outcome = self.publish_pending_staged_write(python);
         #[cfg(target_os = "macos")]
-        let publish_outcome = self.unlock_the_iosurface_after_cpu_access();
+        let publish_outcome = self.close_the_doors_this_lock_opened(python);
         python.detach(|| {
             self.cpu_access.unlock();
             self.release_owned_engine_value();
@@ -375,9 +452,12 @@ impl PythonGpuSurfaceHandle {
     }
 
     /// Leaving normally publishes any pending device write via `close`;
-    /// leaving by a propagating exception discards it first — the write
-    /// did not finish, and the surface keeps the frame it already held.
-    /// The scope still closes, and `False` never suppresses the raise.
+    /// leaving by a propagating exception discards a staged one first — the
+    /// write did not finish, and the surface keeps the frame it already held.
+    /// A write that lands in the surface itself (a macOS Metal capsule) has
+    /// nothing to discard, so its queued stores still retire before the
+    /// scope closes. `False` never suppresses the raise, and a close that
+    /// fails under a raise is logged rather than replacing it.
     #[pyo3(signature = (exception_type = None, exception = None, traceback = None))]
     fn __exit__(
         &self,
@@ -393,9 +473,17 @@ impl PythonGpuSurfaceHandle {
         {
             owned_memory.pending_staged_write_back().discard();
         }
-        #[cfg(not(target_os = "linux"))]
-        let _ = exception_type;
-        self.close(python)?;
+        let closed = self.close(python);
+        if left_by_a_propagating_exception(exception_type) {
+            if let Err(close_failure) = closed {
+                tracing::warn!(
+                    "closing surface {:?} under a propagating exception failed: {close_failure}",
+                    self.minted_surface_id
+                );
+            }
+            return Ok(false);
+        }
+        closed?;
         Ok(false)
     }
 
@@ -408,6 +496,10 @@ impl PythonGpuSurfaceHandle {
     #[pyo3(signature = (read_only = true))]
     fn lock(&self, python: Python<'_>, read_only: bool) -> PyResult<()> {
         let owned_memory = self.owned_memory()?;
+        // A lock over a lock closes the first scope's doors: its Metal writes
+        // retire and its IOSurface lock goes, so this scope opens its own.
+        #[cfg(target_os = "macos")]
+        self.close_the_doors_this_lock_opened(python)?;
         python.detach(|| -> PyResult<()> {
             // The gate serves both sides, and neither is refused here for
             // want of a host mapping: a surface the CPU cannot address
@@ -422,16 +514,14 @@ impl PythonGpuSurfaceHandle {
             #[cfg(target_os = "linux")]
             self.cpu_staging_holds_this_locks_frame
                 .store(false, std::sync::atomic::Ordering::SeqCst);
-            #[cfg(target_os = "macos")]
-            owned_memory.lock_the_iosurface_for_cpu_access(read_only)?;
             self.cpu_access.lock_for(read_only);
             Ok(())
         })
     }
 
-    /// Close CPU access, publishing any pending staged write back into the
-    /// surface first — through whichever staging holds the edit.
-    /// Idempotent.
+    /// Close CPU access, publishing any pending write first — through
+    /// whichever staging holds the edit on Linux, by retiring the Metal
+    /// frameworks' queues on macOS. Idempotent.
     fn unlock(&self, python: Python<'_>) -> PyResult<()> {
         // The gate opens whether or not the publish succeeded — a
         // surface left locked after a failed publish would refuse
@@ -440,7 +530,7 @@ impl PythonGpuSurfaceHandle {
         #[cfg(target_os = "linux")]
         let publish_outcome = self.publish_pending_staged_write(python);
         #[cfg(target_os = "macos")]
-        let publish_outcome = self.unlock_the_iosurface_after_cpu_access();
+        let publish_outcome = self.close_the_doors_this_lock_opened(python);
         python.detach(|| self.cpu_access.unlock());
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         publish_outcome?;
@@ -449,23 +539,30 @@ impl PythonGpuSurfaceHandle {
 
     /// The DLPack device this surface's tensors live on.
     ///
-    /// A device-exchange surface answers with the CUDA device its memory is
-    /// imported onto, performing the import if it has not happened yet — the
-    /// driver's classification of the pointer is what distinguishes true
-    /// device memory from a downgrade to pinned host memory, and guessing
-    /// here would contradict the capsule `__dlpack__` goes on to hand back.
+    /// On Linux a device-exchange surface answers with the CUDA device its
+    /// memory is imported onto, performing the import if it has not happened
+    /// yet — the driver's classification of the pointer is what distinguishes
+    /// true device memory from a downgrade to pinned host memory, and
+    /// guessing here would contradict the capsule `__dlpack__` goes on to
+    /// hand back. On macOS it answers `kDLMetal` wherever the surface's
+    /// IOSurface exports a no-copy `MTLBuffer`.
     fn __dlpack_device__(&self, python: Python<'_>) -> PyResult<(i32, i32)> {
         let owned_memory = self.owned_memory()?;
         // Routed through the same once-per-handle decision `__dlpack__`
         // serves, so a probe failure here (answered CPU) cannot be
         // followed by a successful device capsule there.
-        #[cfg(target_os = "linux")]
         if self.natural_side_is_device(python, &owned_memory) {
-            let device = imported_device_for(python, &owned_memory)?;
-            return Ok((device.device_type as i32, device.device_id));
+            #[cfg(target_os = "linux")]
+            {
+                let device = imported_device_for(python, &owned_memory)?;
+                return Ok((device.device_type as i32, device.device_id));
+            }
+            #[cfg(target_os = "macos")]
+            return Ok((
+                METAL_DLPACK_DEVICE.device_type as i32,
+                METAL_DLPACK_DEVICE.device_id,
+            ));
         }
-        #[cfg(not(target_os = "linux"))]
-        let _ = python;
         Ok((
             HOST_VISIBLE_DLPACK_DEVICE.device_type as i32,
             HOST_VISIBLE_DLPACK_DEVICE.device_id,
@@ -509,22 +606,18 @@ impl PythonGpuSurfaceHandle {
         // surface that has two. Absent means "wherever you naturally
         // live" — the side `__dlpack_device__` already advertised, decided
         // once per handle. A device-side failure after that raises: a
-        // consumer told kDLCUDA must never be handed a host capsule.
+        // consumer told the device must never be handed a host capsule.
+        let wants_host = match dl_device {
+            Some((device_type, _)) => device_type == DeviceType::Cpu as i32,
+            None => !self.natural_side_is_device(python, &owned_memory),
+        };
+        if wants_host {
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            self.open_the_cpu_door_over_this_frame(python, &owned_memory)?;
+            return host_visible_dlpack_capsule(python, &owned_memory, exchange_shape, read_only);
+        }
         #[cfg(target_os = "linux")]
         {
-            let wants_host = match dl_device {
-                Some((device_type, _)) => device_type == DeviceType::Cpu as i32,
-                None => !self.natural_side_is_device(python, &owned_memory),
-            };
-            if wants_host {
-                self.open_the_staged_cpu_door_over_this_frame(python, &owned_memory)?;
-                return host_visible_dlpack_capsule(
-                    python,
-                    &owned_memory,
-                    exchange_shape,
-                    read_only,
-                );
-            }
             // The refill is a GPU submit plus a bounded wait, and on the
             // first call the staging allocation and CUDA import too. It
             // detaches around the blocking work itself — a helper's arm
@@ -543,11 +636,19 @@ impl PythonGpuSurfaceHandle {
                 device_dlpack_capsule(python, &owned_memory, prepared, exchange_shape, read_only)?;
             Ok(capsule)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "macos")]
         {
-            let _ = dl_device;
-            host_visible_dlpack_capsule(python, &owned_memory, exchange_shape, read_only)
+            // A write lands in the surface itself once the framework's queue
+            // retires it, so a writable capsule is what obliges the unlock
+            // to drain that queue.
+            if !read_only {
+                self.a_writable_metal_capsule_went_out_this_lock
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            metal_dlpack_capsule(python, &owned_memory, exchange_shape, read_only)
         }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        host_visible_dlpack_capsule(python, &owned_memory, exchange_shape, read_only)
     }
 
     /// The scoped device-tensor view over this surface's pixels.

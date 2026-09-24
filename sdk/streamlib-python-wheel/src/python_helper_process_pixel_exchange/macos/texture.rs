@@ -7,8 +7,8 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use streamlib_consumer_rhi::{
-    ConsumerVulkanDevice, ConsumerVulkanTexture, ConsumerVulkanTimelineSemaphore, TextureFormat,
-    VulkanImageUsage, VulkanLayout,
+    ConsumerVulkanBuffer, ConsumerVulkanDevice, ConsumerVulkanTexture,
+    ConsumerVulkanTimelineSemaphore, TextureFormat, VulkanImageUsage, VulkanLayout,
 };
 
 use super::super::{
@@ -31,6 +31,10 @@ pub(crate) struct HelperCheckedOutTextureSurface {
     pub(crate) consumer_texture: ConsumerVulkanTexture,
     /// The surface the image is created over — the CPU door's memory.
     iosurface: RetainedIOSurfaceSharedAcrossThreads,
+    /// The surface's pages imported as a buffer, on the first device-tensor
+    /// reach: an image's own memory maps a private copy, so the no-copy
+    /// `MTLBuffer` a Metal capsule points at comes from here.
+    iosurface_pages_import: std::sync::OnceLock<ConsumerVulkanBuffer>,
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) format: TextureFormat,
@@ -100,6 +104,39 @@ impl HelperCheckedOutTextureSurface {
 
     fn iosurface_lock_error(&self, refused: IOSurfaceLockRefused) -> PyErr {
         PyRuntimeError::new_err(format!("{refused} on texture {:?}", self.surface_id))
+    }
+
+    /// A no-copy `MTLBuffer` over the texture's IOSurface rows, importing the
+    /// pages on first ask.
+    pub(crate) fn metal_buffer_over_the_iosurface_pages(
+        &self,
+    ) -> PyResult<
+        objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLBuffer>>,
+    > {
+        let iosurface_pages_import = match self.iosurface_pages_import.get() {
+            Some(already_imported) => already_imported,
+            None => {
+                let vulkan_device = self.exchange_client.consumer_vulkan_device()?;
+                let imported =
+                    ConsumerVulkanBuffer::from_iosurface_pages(&vulkan_device, &self.iosurface)
+                        .map_err(|import_failure| {
+                            PyRuntimeError::new_err(format!(
+                                "texture {:?}'s IOSurface pages would not import as a buffer, \
+                                 so no Metal buffer can alias them: {import_failure}",
+                                self.surface_id
+                            ))
+                        })?;
+                self.iosurface_pages_import.get_or_init(|| imported)
+            }
+        };
+        iosurface_pages_import
+            .exported_metal_buffer()
+            .map_err(|export_failure| {
+                PyRuntimeError::new_err(format!(
+                    "texture {:?} has no Metal buffer over its IOSurface: {export_failure}",
+                    self.surface_id
+                ))
+            })
     }
 }
 
@@ -330,6 +367,7 @@ impl HelperProcessGpuExchangeClient {
             surface_id: surface_id.to_string(),
             consumer_texture,
             iosurface: RetainedIOSurfaceSharedAcrossThreads::new(iosurface),
+            iosurface_pages_import: std::sync::OnceLock::new(),
             width,
             height,
             format,

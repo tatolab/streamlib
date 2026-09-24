@@ -4,20 +4,23 @@
 """Probes that exercise the device half of the pixel exchange from where it
 really runs.
 
-Each probe runs in its own helper process, reaches the frame's pixels as CUDA
-memory there, and reports what it observed as one `MARKER:PROBE_RESULT` JSON
-line — the same child→parent log forwarding every processor's records ride.
+Each probe runs in its own helper process, reaches the frame's pixels as device
+memory there — CUDA on Linux, Metal on macOS — and reports what it observed as
+one `MARKER:PROBE_RESULT` JSON line, the same child→parent log forwarding every
+processor's records ride.
 
-The device path crosses the process boundary twice per surface: the parent
-allocates and publishes the export staging, the child imports it, and every
-refill is a round trip whose answer is the timeline value to wait for. What is
-worth breaking a build over is that the tensor really is device-resident, that
-its pixels are the frame's pixels, and that an edit published from the child is
-visible to a second, independent resolve.
+On Linux the device path crosses the process boundary twice per surface: the
+parent allocates and publishes the export staging, the child imports it, and
+every refill is a round trip whose answer is the timeline value to wait for. On
+macOS the device view is a no-copy Metal buffer over the frame's own IOSurface.
+What is worth breaking a build over on both is that the tensor really is
+device-resident, that its pixels are the frame's pixels, and that an edit
+published from the child is visible to a second, independent resolve.
 """
 
 import json
 import os
+import sys
 import traceback
 
 import numpy
@@ -39,6 +42,11 @@ RESULT_MARKER = "MARKER:PROBE_RESULT "
 # DLPack device-type discriminants, part of the wire ABI.
 DLPACK_DEVICE_CPU = 1
 DLPACK_DEVICE_CUDA = 2
+DLPACK_DEVICE_METAL = 8
+
+# The device a frame's natural DLPack side lives on, and torch's name for it.
+NATURAL_DLPACK_DEVICE = DLPACK_DEVICE_METAL if sys.platform == "darwin" else DLPACK_DEVICE_CUDA
+NATURAL_TORCH_DEVICE_TYPE = "mps" if sys.platform == "darwin" else "cuda"
 
 
 def _report(probe_body) -> None:
@@ -79,9 +87,9 @@ class GraphFrameToTorchProbe(_FrameProbeBase):
         with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
             surface.lock()
             reported_device = surface.__dlpack_device__()
-            if reported_device[0] != DLPACK_DEVICE_CUDA:
+            if reported_device[0] != NATURAL_DLPACK_DEVICE:
                 surface.unlock()
-                return {"cuda_unavailable": f"__dlpack_device__ reported {reported_device}"}
+                return {"device_unavailable": f"__dlpack_device__ reported {reported_device}"}
             tensor = torch.from_dlpack(surface)
             host_view = numpy.from_dlpack(surface, device="cpu")
             observation = {
@@ -107,15 +115,15 @@ class DeviceEditProbe(_FrameProbeBase):
         gpu = ctx.gpu_limited_access
         with gpu.resolve_surface(frame.surface_id) as surface:
             surface.lock(read_only=False)
-            if surface.__dlpack_device__()[0] != DLPACK_DEVICE_CUDA:
+            if surface.__dlpack_device__()[0] != NATURAL_DLPACK_DEVICE:
                 surface.unlock()
-                return {"cuda_unavailable": "device side not reachable"}
+                return {"device_unavailable": "device side not reachable"}
             tensor = torch.from_dlpack(surface)
             tensor[:, :, :] = 0
             tensor[9, 11] = torch.tensor(
                 [17, 34, 51, 68], dtype=torch.uint8, device=tensor.device
             )
-            # No torch.cuda.synchronize(): the publish itself orders the
+            # No torch.accelerator.synchronize(): the publish itself orders the
             # consumer's stream before the engine's copy, and this probe
             # is part of what proves it. unlock is the publication point.
             surface.unlock()
@@ -141,8 +149,8 @@ class WithBlockEditProbe(_FrameProbeBase):
         # close is the publication point.
         with gpu.resolve_surface(frame.surface_id) as surface:
             surface.lock(read_only=False)
-            if surface.__dlpack_device__()[0] != DLPACK_DEVICE_CUDA:
-                return {"cuda_unavailable": "device side not reachable"}
+            if surface.__dlpack_device__()[0] != NATURAL_DLPACK_DEVICE:
+                return {"device_unavailable": "device side not reachable"}
             tensor = torch.from_dlpack(surface)
             tensor[5, 5] = torch.tensor(
                 [99, 88, 77, 66], dtype=torch.uint8, device=tensor.device
@@ -167,9 +175,9 @@ class TensorOutlivesHandleProbe(_FrameProbeBase):
 
         surface = ctx.gpu_limited_access.resolve_surface(frame.surface_id)
         surface.lock()
-        if surface.__dlpack_device__()[0] != DLPACK_DEVICE_CUDA:
+        if surface.__dlpack_device__()[0] != NATURAL_DLPACK_DEVICE:
             surface.unlock()
-            return {"cuda_unavailable": "device side not reachable"}
+            return {"device_unavailable": "device side not reachable"}
         tensor = torch.from_dlpack(surface)
         checksum_before = int(tensor.to(torch.int64).sum().item())
         surface.unlock()
@@ -178,7 +186,7 @@ class TensorOutlivesHandleProbe(_FrameProbeBase):
 
         # The handle is gone; the tensor must still address live memory —
         # its capsule holds the surface, the staging, and the CUDA import.
-        torch.cuda.synchronize()
+        torch.accelerator.synchronize()
         return {
             "checksum_before": checksum_before,
             "checksum_after": int(tensor.to(torch.int64).sum().item()),
@@ -261,11 +269,11 @@ class LaggedConsumerHoldsItsFrameProbe:
         if self.view_of_the_delivered_frame is None:
             surface = ctx.gpu_limited_access.resolve_surface(frame.surface_id)
             surface.lock()
-            if surface.__dlpack_device__()[0] != DLPACK_DEVICE_CUDA:
+            if surface.__dlpack_device__()[0] != NATURAL_DLPACK_DEVICE:
                 surface.unlock()
                 surface.close()
                 self.reported = True
-                _report(lambda: {"cuda_unavailable": "device side not reachable"})
+                _report(lambda: {"device_unavailable": "device side not reachable"})
                 return
             view = numpy.from_dlpack(surface, device="cpu")
             # Copied, because this is the ground truth the view is compared
@@ -671,10 +679,10 @@ class DeviceTensorScopeDoublesAKernelOutputProbe:
                 bindings={"output_image": kernel_output},
                 group_count=(SURFACE_WIDTH // 8, SURFACE_HEIGHT // 8, 1),
             )
-            if kernel_output.__dlpack_device__()[0] != DLPACK_DEVICE_CUDA:
-                return {"cuda_unavailable": "device side not reachable"}
+            if kernel_output.__dlpack_device__()[0] != NATURAL_DLPACK_DEVICE:
+                return {"device_unavailable": "device side not reachable"}
             observation: dict = {"surface_id": kernel_output.surface_id}
-            # Deliberately no torch.cuda.synchronize(): the scope's exit
+            # Deliberately no torch.accelerator.synchronize(): the scope's exit
             # runs a device-wide synchronize before the engine's copy
             # reads the staging, and this probe is what proves it.
             with kernel_output.as_device_tensor() as tensor:
@@ -720,8 +728,8 @@ class DeviceTensorScopeDiscardsOnRaiseProbe:
                 bindings={"output_image": kernel_output},
                 group_count=(SURFACE_WIDTH // 8, SURFACE_HEIGHT // 8, 1),
             )
-            if kernel_output.__dlpack_device__()[0] != DLPACK_DEVICE_CUDA:
-                return {"cuda_unavailable": "device side not reachable"}
+            if kernel_output.__dlpack_device__()[0] != NATURAL_DLPACK_DEVICE:
+                return {"device_unavailable": "device side not reachable"}
             observation = {}
             exception_seen = None
             try:
@@ -731,7 +739,7 @@ class DeviceTensorScopeDiscardsOnRaiseProbe:
                     # Not publish ordering — the discard needs the garbage
                     # write to have LANDED in the staging, or leaving it
                     # unpublished would prove nothing.
-                    torch.cuda.synchronize()
+                    torch.accelerator.synchronize()
                     raise ValueError("deliberate mid-scope failure")
             except ValueError as propagated:
                 exception_seen = str(propagated)
@@ -777,13 +785,13 @@ class PixelBufferScopeDiscardsOnRaiseProbe(_FrameProbeBase):
         try:
             with gpu.resolve_surface(frame.surface_id) as surface:
                 surface.lock(read_only=False)
-                if surface.__dlpack_device__()[0] != DLPACK_DEVICE_CUDA:
-                    return {"cuda_unavailable": "device side not reachable"}
+                if surface.__dlpack_device__()[0] != NATURAL_DLPACK_DEVICE:
+                    return {"device_unavailable": "device side not reachable"}
                 tensor = torch.from_dlpack(surface)
                 tensor[:, :, :] = 0
                 # Not publish ordering — the discard needs the garbage
                 # write to have LANDED in the staging.
-                torch.cuda.synchronize()
+                torch.accelerator.synchronize()
                 raise ValueError("deliberate mid-scope failure")
         except ValueError as propagated:
             exception_seen = str(propagated)
@@ -825,7 +833,7 @@ class PooledTextureExportProbe:
             outcomes["texture_surface_id"] = texture_handle.surface_id
             device = texture_handle.__dlpack_device__()
             outcomes["texture_device"] = list(device)
-            if device[0] == DLPACK_DEVICE_CUDA:
+            if device[0] == NATURAL_DLPACK_DEVICE:
                 texture_handle.lock()
                 tensor = torch.from_dlpack(texture_handle)
                 outcomes["texture_tensor_shape"] = list(tensor.shape)
@@ -855,11 +863,11 @@ class DeviceTensorScopeTakesEveryAcquiredTextureProbe:
         observation = {}
         with ctx.gpu_full_access.acquire_texture(
             SURFACE_WIDTH, SURFACE_HEIGHT, "rgba8_unorm", OPAQUE_FD_FLAVOUR_USAGE
-        ) as cuda_gate:
-            if cuda_gate.__dlpack_device__()[0] != DLPACK_DEVICE_CUDA:
-                return {"cuda_unavailable": "device side not reachable"}
+        ) as device_gate:
+            if device_gate.__dlpack_device__()[0] != NATURAL_DLPACK_DEVICE:
+                return {"device_unavailable": "device side not reachable"}
 
-        # bgra8 is not CUDA-mappable, so these acquires land on the
+        # On Linux bgra8 is not CUDA-mappable, so these acquires land on the
         # NotImportable allocation flavour, whose image carries exactly the
         # usage the request derived — which is the point: even there the
         # implied copy bits ride, so neither spelling is short of them.

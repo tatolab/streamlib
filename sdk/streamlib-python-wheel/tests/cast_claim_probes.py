@@ -24,7 +24,8 @@ frame's pixels through the object itself and consume the capsule with plain
 numpy, so every part of the seam is real — the resolved handle, the read-only
 lock, the engine-minted capsule — while the consumer needs no CUDA build.
 
-The device-side bare-protocol probes need a camera and a CUDA-built consumer.
+The device-side bare-protocol probes need a camera and a torch built for the
+platform's device.
 They are the ones that prove `torch.from_dlpack(frame)` lands on the GPU, and
 they keep the camera deliberately: a capture surface is an imported V4L2
 DMA-BUF where a test pattern is engine-allocated, so it is the harder subject
@@ -347,12 +348,12 @@ class _BareProtocolProbe:
 
 
 class _BareProtocolHostSideProbe(_BareProtocolProbe):
-    """The protocol against a real surface, with no CUDA consumer needed.
+    """The protocol against a real surface, with no GPU consumer needed.
 
     `numpy.from_dlpack(frame, device="cpu")` asks the object for the host side
     of the very same surface, so every part of the seam is real — the resolved
     handle, the read-only lock, the capsule — while the consumer is plain
-    numpy. What that leaves unproven is only whether a CUDA package can eat the
+    numpy. What that leaves unproven is only whether a GPU package can eat the
     device capsule, which is what the torch probes below are for.
     """
 
@@ -378,7 +379,7 @@ class _BareProtocolHostSideProbe(_BareProtocolProbe):
 
 
 class _BareProtocolDeviceSideProbe(_BareProtocolProbe):
-    """The device half: a real CUDA package consuming the bare capsule."""
+    """The device half: a real GPU package consuming the bare capsule."""
 
     def _observe_the_pixels(self, ctx: RuntimeContextLimitedAccess, frame) -> dict:
         import torch
@@ -431,17 +432,17 @@ class TheShippedVideoFrameReachesItsPixelsBareProbe(_BareProtocolHostSideProbe):
 
 
 @processor
-class AUserAuthoredCastReachesItsPixelsAsACudaTensorProbe(
+class AUserAuthoredCastReachesItsPixelsAsADeviceTensorProbe(
     _BareProtocolDeviceSideProbe
 ):
-    """The no-privilege half with a real CUDA package taking the capsule."""
+    """The no-privilege half with a real GPU package taking the capsule."""
 
     def _read(self, ctx: RuntimeContextLimitedAccess):
         return ctx.inputs.read("video_from_upstream", into=UserAuthoredVideoFrameCast)
 
 
 @processor
-class TheShippedVideoFrameReachesItsPixelsAsACudaTensorProbe(
+class TheShippedVideoFrameReachesItsPixelsAsADeviceTensorProbe(
     _BareProtocolDeviceSideProbe
 ):
     """The parity half on the device side."""
@@ -517,9 +518,10 @@ class TheGpuWriteDoorEditsTheFrameProbe(_WriteDoorProbe):
 
 @processor
 class ARaiseInsideTheGpuWriteDoorDiscardsTheEditProbe(_WriteDoorProbe):
-    """The other half of the one write rule: the edit did not finish, so the
-    engine keeps the complete frame it already held — and the raise is never
-    suppressed on the way out."""
+    """The other half of the one write rule: the raise is never suppressed on
+    the way out, and the surface follows its floor's publication rule — the
+    complete frame the engine already held on Linux, the stores that landed
+    before the raise on macOS."""
 
     def _read(self, ctx: RuntimeContextLimitedAccess):
         return ctx.inputs.read("video_from_upstream", into=VideoFrame)
@@ -538,10 +540,21 @@ class ARaiseInsideTheGpuWriteDoorDiscardsTheEditProbe(_WriteDoorProbe):
         except _TheEditWentWrong:
             the_exception_propagated = True
         after = self._surface_pixels_now(ctx, frame.surface_id)
+        edited_rows = slice(0, self.ROWS_TO_EDIT)
+        the_rest = slice(self.ROWS_TO_EDIT, None)
         return {
             "the_exception_propagated": the_exception_propagated,
             "the_surface_still_holds_the_frame_the_producer_sent": bool(
                 (after == before).all()
+            ),
+            "the_frame_did_not_already_carry_the_edit": bool(
+                (before[edited_rows] != self.EDIT_VALUE).any()
+            ),
+            "the_edited_rows_carry_the_edit": bool(
+                (after[edited_rows] == self.EDIT_VALUE).all()
+            ),
+            "the_rest_of_the_frame_is_untouched": bool(
+                (after[the_rest] == before[the_rest]).all()
             ),
         }
 
