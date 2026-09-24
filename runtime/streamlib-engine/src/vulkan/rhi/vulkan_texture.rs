@@ -1538,13 +1538,9 @@ impl HostVulkanTexture {
         {
             return Err(Error::NotSupported(format!("{OPERATION}: {refusal}")));
         }
-        let usage_flags = usage.as_vk().ok_or_else(|| {
-            Error::NotSupported(format!(
-                "{OPERATION}: the registered usage {:#x} carries bits no VkImageUsageFlagBits \
-                 names; an image without them would not be the registrant's",
-                usage.0
-            ))
-        })?;
+        let usage_flags = usage
+            .as_vk_or_refusal()
+            .map_err(|refusal| Error::NotSupported(format!("{OPERATION}: {refusal}")))?;
         Self::created_over_iosurface(vulkan_device, format, usage_flags, iosurface)
     }
 

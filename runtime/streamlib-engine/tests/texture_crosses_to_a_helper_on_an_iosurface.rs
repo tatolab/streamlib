@@ -301,3 +301,72 @@ fn without_the_engines_write_the_helper_does_not_read_the_pattern() {
     };
     assert_ne!(read, "READ mismatches=0");
 }
+
+/// A texture crosses only with both timeline edges, so a pair that will not
+/// export is refused at registration, by name, and leaves nothing behind — no
+/// registration a helper could check out, and no pair the engine would order.
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — needs MoltenVK on a GPU; set --features hardware-tests"
+)]
+#[test]
+fn a_texture_whose_timeline_pair_will_not_export_is_refused_and_registers_nothing() {
+    let gpu = match GpuContext::init_for_platform() {
+        Ok(gpu) => gpu,
+        Err(unavailable) => {
+            tracing::warn!("skipping — no GPU: {unavailable}");
+            return;
+        }
+    };
+    let device = Arc::clone(gpu.device().vulkan_device());
+    let texture = gpu
+        .device()
+        .create_texture_iosurface_backed(&TextureDescriptor::new(64, 32, TextureFormat::Rgba8Unorm))
+        .expect("an IOSurface-backed texture");
+    let local_timeline =
+        || Arc::new(HostVulkanTimelineSemaphore::new(device.device(), 0).expect("a timeline"));
+    let pair_that_will_not_export = Arc::new(CrossProcessTimelinePair::new(
+        local_timeline(),
+        local_timeline(),
+    ));
+
+    let state = IOSurfaceShareState::new();
+    let mut service = MachSurfaceShareService::new(
+        state.clone(),
+        format!(
+            "com.tatolab.streamlib.iosurface-texture-test.unexported.{}",
+            std::process::id()
+        ),
+    );
+    service.start().expect("the service starts");
+    let store = SurfaceStore::new_sharing_the_mach_services_tables(
+        service.service_name().to_string(),
+        "R-engine".to_string(),
+        Arc::clone(state.check_out_leases()),
+        Arc::clone(state.cross_process_timeline_pairs()),
+    );
+    store
+        .connect()
+        .expect("the store connects to its own service");
+
+    let refused = store
+        .register_texture_with_timeline_pair(
+            "texture-unexported",
+            &texture,
+            &pair_that_will_not_export,
+            VulkanLayout::UNDEFINED,
+        )
+        .expect_err("a pair that will not export");
+    assert!(refused.to_string().contains("will not export"), "{refused}");
+    assert!(state.registration_of("texture-unexported").is_none());
+    assert!(
+        state
+            .cross_process_timeline_pairs()
+            .pair_of("texture-unexported")
+            .is_none()
+    );
+    assert!(
+        !pair_that_will_not_export.orders_host_side(),
+        "a refused registration fell the pair back as if it had crossed"
+    );
+}

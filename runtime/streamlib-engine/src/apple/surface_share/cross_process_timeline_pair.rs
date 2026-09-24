@@ -115,21 +115,26 @@ impl CrossProcessTimelinePair {
     fn exported_mach_send_rights_or_host_side_fallback(
         &self,
     ) -> Option<(OwnedMachSendRight, OwnedMachSendRight)> {
-        let exported = self
-            .produce_done
-            .export_metal_shared_event_mach_send_right()
-            .and_then(|produce_done| {
-                self.consume_done
-                    .export_metal_shared_event_mach_send_right()
-                    .map(|consume_done| (produce_done, consume_done))
-            });
-        match exported {
+        match self.exported_mach_send_rights() {
             Ok(send_rights) => Some(send_rights),
             Err(refusal) => {
                 self.fall_back_to_host_side_ordering(&refusal.to_string());
                 None
             }
         }
+    }
+
+    /// Send rights to `produce_done`'s and `consume_done`'s shared events, or
+    /// the reason either will not export — with no fallback, for a registrant
+    /// that cannot cross without the pair.
+    pub fn exported_mach_send_rights(&self) -> Result<(OwnedMachSendRight, OwnedMachSendRight)> {
+        self.produce_done
+            .export_metal_shared_event_mach_send_right()
+            .and_then(|produce_done| {
+                self.consume_done
+                    .export_metal_shared_event_mach_send_right()
+                    .map(|consume_done| (produce_done, consume_done))
+            })
     }
 
     /// Call before handing a helper the frame whose GPU work signals

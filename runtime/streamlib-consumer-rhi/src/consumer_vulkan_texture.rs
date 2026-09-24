@@ -490,13 +490,9 @@ impl ConsumerVulkanTexture {
         {
             return Err(ConsumerRhiError::Gpu(format!("{OPERATION}: {refusal}")));
         }
-        let usage_flags = usage.as_vk().ok_or_else(|| {
-            ConsumerRhiError::Gpu(format!(
-                "{OPERATION}: the registered usage {:#x} carries bits no VkImageUsageFlagBits \
-                 names; an image without them would not be the registrant's",
-                usage.0
-            ))
-        })?;
+        let usage_flags = usage
+            .as_vk_or_refusal()
+            .map_err(|refusal| ConsumerRhiError::Gpu(format!("{OPERATION}: {refusal}")))?;
 
         let device = vulkan_device.device();
         // SAFETY: the extension is enabled (checked above) and the surface is

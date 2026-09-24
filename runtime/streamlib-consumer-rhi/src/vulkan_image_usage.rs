@@ -20,6 +20,18 @@ impl VulkanImageUsage {
         vk::ImageUsageFlags::from_bits(self.0)
     }
 
+    /// The flags, or a refusal naming the bits no `VkImageUsageFlagBits`
+    /// names, for an importer to wrap in its own error.
+    pub fn as_vk_or_refusal(self) -> Result<vk::ImageUsageFlags, String> {
+        self.as_vk().ok_or_else(|| {
+            format!(
+                "the registered usage {:#x} carries bits no VkImageUsageFlagBits names; an image \
+                 without them would not be the registrant's",
+                self.0
+            )
+        })
+    }
+
     /// Wrap `flags`.
     pub fn from_vk(flags: vk::ImageUsageFlags) -> Self {
         Self(flags.bits())

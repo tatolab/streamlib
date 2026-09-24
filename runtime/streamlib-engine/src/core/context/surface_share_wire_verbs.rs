@@ -43,8 +43,8 @@ pub(crate) fn requested_surface_id(request: &Value) -> Option<&str> {
         reason = "the Unix-socket arm parses the layout in its own handlers"
     )
 )]
-pub(crate) fn requested_image_layout(request: &Value) -> Option<i32> {
-    request
+pub(crate) fn stated_current_image_layout(wire_fields: &Value) -> Option<i32> {
+    wire_fields
         .get("current_image_layout")
         .and_then(Value::as_i64)
         .and_then(|layout| i32::try_from(layout).ok())

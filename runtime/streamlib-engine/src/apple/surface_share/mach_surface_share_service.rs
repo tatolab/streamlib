@@ -37,8 +37,8 @@ use crate::core::context::surface_share_wire_verbs::{
     SURFACE_RESOURCE_TYPE_PIXEL_BUFFER, SURFACE_RESOURCE_TYPE_TEXTURE, answer_release_check_out,
     answer_unregister, latch_the_first_named_runtime_id, parse_vk_image_create_info_fields,
     record_check_out_lease_or_refusal, refusal_of_a_retired_frame_id,
-    release_what_a_closed_connection_held, requested_image_layout, requested_runtime_id,
-    requested_surface_id,
+    release_what_a_closed_connection_held, requested_runtime_id, requested_surface_id,
+    stated_current_image_layout,
 };
 
 use super::state::{
@@ -814,7 +814,7 @@ fn registration_of_request(
     let texture_image = (resource_type == SURFACE_RESOURCE_TYPE_TEXTURE).then(|| {
         Arc::new(RegisteredTextureImage::new(
             parse_vk_image_create_info_fields(request),
-            requested_image_layout(request).unwrap_or(0),
+            stated_current_image_layout(request).unwrap_or(0),
         ))
     });
     Ok(IOSurfaceShareRegistration {
@@ -967,7 +967,7 @@ fn handle_update_layout(
     let Some(surface_id) = requested_surface_id(request) else {
         return serde_json::json!({"error": "missing surface_id"});
     };
-    let Some(layout) = requested_image_layout(request) else {
+    let Some(layout) = stated_current_image_layout(request) else {
         return serde_json::json!({"error": "missing current_image_layout"});
     };
     serde_json::json!({"success": state.update_image_layout(surface_id, layout)})

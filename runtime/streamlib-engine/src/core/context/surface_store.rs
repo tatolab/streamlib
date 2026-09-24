@@ -1448,11 +1448,11 @@ impl SurfaceStoreInner {
         timeline_pair: Option<&crate::apple::surface_share::CrossProcessTimelinePair>,
     ) -> Result<()> {
         let mut ports = vec![exported_iosurface_port(pixel_buffer)?];
-        let carries_timeline_pair = timeline_pair
-            .is_some_and(|timeline_pair| timeline_pair.append_exported_send_rights_to(&mut ports));
+        if let Some(timeline_pair) = timeline_pair {
+            timeline_pair.append_exported_send_rights_to(&mut ports);
+        }
         self.send_iosurface_registration(
             ports,
-            carries_timeline_pair,
             serde_json::json!({
                 "surface_id": surface_id,
                 "width": pixel_buffer.width,
@@ -1508,34 +1508,41 @@ impl SurfaceStoreInner {
         }
         // Recorded only once the service accepted the id: a refused duplicate
         // must not displace the live registration's pair.
-        let mut ports = vec![image.export_iosurface_mach_send_right()?];
-        if !timeline_pair.append_exported_send_rights_to(&mut ports) {
-            return Err(Error::NotSupported(format!(
-                "register_texture_with_timeline_pair('{surface_id}'): the texture's timeline \
-                 pair will not export as shared events, and a helper imports a texture only \
-                 with both edges"
-            )));
-        }
-        self.send_iosurface_registration(ports, true, registration)?;
+        let (produce_done_port, consume_done_port) = timeline_pair
+            .exported_mach_send_rights()
+            .map_err(|refusal| {
+                Error::NotSupported(format!(
+                    "register_texture_with_timeline_pair('{surface_id}'): the texture's timeline \
+                     pair will not export as shared events ({refusal}), and a helper imports a \
+                     texture only with both edges"
+                ))
+            })?;
+        self.send_iosurface_registration(
+            vec![
+                image.export_iosurface_mach_send_right()?,
+                produce_done_port,
+                consume_done_port,
+            ],
+            registration,
+        )?;
         cross_process_timeline_pairs.insert(surface_id, Arc::clone(timeline_pair));
         tracing::debug!(
-            "SurfaceStore: Registered texture '{}' with its timeline pair (host-side ordering: {})",
-            surface_id,
-            timeline_pair.orders_host_side()
+            "SurfaceStore: Registered texture '{}' with its timeline pair",
+            surface_id
         );
         Ok(())
     }
 
     /// Send one `register` of `registration`'s fields with `ports` — the
-    /// IOSurface's first, then the timeline pair's shared events when
-    /// `carries_timeline_pair`.
+    /// IOSurface's first, then, when the registration carries its timeline
+    /// pair, the pair's two shared events.
     #[cfg(target_os = "macos")]
     fn send_iosurface_registration(
         &self,
         ports: Vec<streamlib_surface_client::OwnedMachSendRight>,
-        carries_timeline_pair: bool,
         mut registration: serde_json::Value,
     ) -> Result<()> {
+        let carries_timeline_pair = ports.len() > 1;
         if let Some(registration_fields) = registration.as_object_mut() {
             registration_fields.insert("op".into(), "register".into());
             registration_fields.insert("runtime_id".into(), self.runtime_id.clone().into());
@@ -1614,9 +1621,10 @@ impl SurfaceStoreInner {
             format,
             streamlib_consumer_rhi::VulkanImageUsage(recipe.vk_image_usage),
         )?;
-        let current_image_layout = super::surface_share_wire_verbs::requested_image_layout(&answer)
-            .map(streamlib_consumer_rhi::VulkanLayout)
-            .unwrap_or(streamlib_consumer_rhi::VulkanLayout::UNDEFINED);
+        let current_image_layout =
+            super::surface_share_wire_verbs::stated_current_image_layout(&answer)
+                .map(streamlib_consumer_rhi::VulkanLayout)
+                .unwrap_or(streamlib_consumer_rhi::VulkanLayout::UNDEFINED);
         Ok((
             crate::core::rhi::Texture::from_vulkan(vulkan_texture),
             current_image_layout,
