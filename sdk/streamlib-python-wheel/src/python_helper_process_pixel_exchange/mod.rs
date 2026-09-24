@@ -65,7 +65,7 @@ pub(crate) use linux::{
     OpaqueFdTextureExportDescription,
 };
 #[cfg(target_os = "macos")]
-pub(crate) use macos::HelperCheckedOutTextureSurface;
+pub(crate) use macos::{HelperCheckedOutTextureSurface, IOSurfaceMachPortExportDescription};
 #[cfg(target_os = "macos")]
 use macos::{
     HelperIOSurfaceCpuLock, HelperIOSurfaceImportsByPoolSlot, HelperIOSurfacePoolSlotImport,
@@ -144,6 +144,86 @@ fn required_positive_u32_check_out_metadata_field(
                 "check_out of {surface_id:?} carried no usable {field}"
             ))
         })
+}
+
+/// Absent-defaults for the `vk_image_*` recipe fields, mirroring the
+/// surface-share service's documented defaults
+/// (`linux/surface_share/state.rs`) — `new_opaque_fd_export`'s hardcoded
+/// shape.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(super) const VK_IMAGE_TILING_DEFAULT: i32 = 0; // VK_IMAGE_TILING_OPTIMAL
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(super) const VK_IMAGE_MIP_LEVELS_DEFAULT: u32 = 1;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(super) const VK_IMAGE_ARRAY_LAYERS_DEFAULT: u32 = 1;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(super) const VK_IMAGE_SAMPLES_DEFAULT: i32 = 1; // VK_SAMPLE_COUNT_1_BIT
+/// `TRANSFER_SRC (0x01) | TRANSFER_DST (0x02) | SAMPLED (0x04) | STORAGE (0x08)`.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(super) const VK_IMAGE_USAGE_DEFAULT: u32 = 0x0F;
+
+/// One `i32` recipe field of a checkout's registration metadata,
+/// absent-or-unrepresentable defaulting to the service's documented value.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn defaulted_i32_check_out_metadata_field(
+    response: &serde_json::Value,
+    field: &str,
+    default: i32,
+) -> i32 {
+    response
+        .get(field)
+        .and_then(|value| value.as_i64())
+        .and_then(|value| i32::try_from(value).ok())
+        .unwrap_or(default)
+}
+
+/// The `u32` twin of [`defaulted_i32_check_out_metadata_field`].
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn defaulted_u32_check_out_metadata_field(
+    response: &serde_json::Value,
+    field: &str,
+    default: u32,
+) -> u32 {
+    response
+        .get(field)
+        .and_then(|value| value.as_u64())
+        .and_then(|value| u32::try_from(value).ok())
+        .unwrap_or(default)
+}
+
+/// The `VkImageCreateInfo` recipe a texture checkout's registration carries,
+/// each field absent-defaulting to the service's documented value.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn vk_image_creation_recipe_of_check_out(
+    response: &serde_json::Value,
+) -> crate::python_processor_context::ExportedVkImageCreationRecipe {
+    crate::python_processor_context::ExportedVkImageCreationRecipe {
+        vk_image_tiling: defaulted_i32_check_out_metadata_field(
+            response,
+            "vk_image_tiling",
+            VK_IMAGE_TILING_DEFAULT,
+        ),
+        vk_image_usage_flags: defaulted_u32_check_out_metadata_field(
+            response,
+            "vk_image_usage",
+            VK_IMAGE_USAGE_DEFAULT,
+        ),
+        vk_image_mip_levels: defaulted_u32_check_out_metadata_field(
+            response,
+            "vk_image_mip_levels",
+            VK_IMAGE_MIP_LEVELS_DEFAULT,
+        ),
+        vk_image_array_layers: defaulted_u32_check_out_metadata_field(
+            response,
+            "vk_image_array_layers",
+            VK_IMAGE_ARRAY_LAYERS_DEFAULT,
+        ),
+        vk_image_samples: defaulted_i32_check_out_metadata_field(
+            response,
+            "vk_image_samples",
+            VK_IMAGE_SAMPLES_DEFAULT,
+        ),
+    }
 }
 
 /// Raise the service's own refusal of a checkout, if it refused one.

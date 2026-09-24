@@ -30,12 +30,12 @@ pub(crate) use format_vocabulary::parse_pixel_format_name;
 pub(crate) use gpu_context::{
     PythonGpuContextFullAccess, PythonGpuContextLimitedAccess, gpu_operation_error,
 };
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) use gpu_surface_check_out_lease::ExportedVkImageCreationRecipe;
 #[cfg(target_os = "linux")]
+pub(crate) use gpu_surface_check_out_lease::OpaqueFdExportContract;
 pub(crate) use gpu_surface_check_out_lease::{
-    ExportedVkImageCreationRecipe, OpaqueFdExportContract,
-};
-pub(crate) use gpu_surface_check_out_lease::{
-    PythonGpuSurfaceCheckOutLease, PythonOpaqueFdTextureExport,
+    PythonGpuSurfaceCheckOutLease, PythonIOSurfaceMachPortExport, PythonOpaqueFdTextureExport,
 };
 pub(crate) use gpu_surface_device_tensor_scope::PythonGpuSurfaceDeviceTensorScope;
 pub(crate) use gpu_surface_handle::PythonGpuSurfaceHandle;
@@ -82,6 +82,17 @@ fn fd_shaped_raw_handle_is_linux_only_error(method_name: &str) -> PyErr {
         "{method_name} is Linux-only: DMA-BUF and OPAQUE_FD are Linux file-descriptor handles, \
          and a surface on this platform is an IOSurface: its raw handle is `export_iosurface`"
     ))
+}
+
+/// The refusal `export_iosurface` gives on a platform whose surfaces are
+/// file-descriptor allocations, not IOSurfaces.
+#[cfg(not(target_os = "macos"))]
+fn iosurface_raw_handle_is_macos_only_error() -> PyErr {
+    PyRuntimeError::new_err(
+        "export_iosurface is macOS-only: an IOSurface Mach port is a macOS handle, and a \
+         surface on this platform is a file-descriptor allocation: its raw handle is \
+         `export_dma_buf` for the DMA-BUF flavour or `export_opaque_fd` for OPAQUE_FD",
+    )
 }
 
 /// The variable the parent names its surface-share channel to a helper in:

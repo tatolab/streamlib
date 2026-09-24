@@ -267,7 +267,9 @@ available through the cuda adapter, and lifetimes are engine-owned — a tensor 
 
 For the handle itself, `ctx.gpu_full_access.export_dma_buf(surface)` hands native code a DMA-BUF
 fd, and `ctx.gpu_full_access.export_opaque_fd(surface)` the OPAQUE_FD flavour (HDR kernel
-outputs) with the metadata a foreign Vulkan/CUDA import needs. A raw handle names the allocation,
+outputs) with the metadata a foreign Vulkan/CUDA import needs — both on Linux. On macOS
+`ctx.gpu_full_access.export_iosurface(surface)` hands over a Mach send right to the surface's
+IOSurface instead, and each flavour refuses by name on the other platform. A raw handle names the allocation,
 never the frame: take it once at setup on a surface you own — per-frame reach stays with surface
 ids and the tensor doors above.
 

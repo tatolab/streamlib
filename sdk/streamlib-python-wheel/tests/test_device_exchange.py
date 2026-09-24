@@ -480,6 +480,99 @@ def test_a_texture_handle_round_trips_across_the_process_boundary(
 
 
 # ---------------------------------------------------------------------------
+# IOSurface — the macOS raw handle
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="an IOSurface Mach port is a macOS handle")
+@pytest.mark.parametrize("backing", ["pixel_buffer", "texture"])
+def test_an_iosurface_port_is_looked_up_and_read_by_native_code_in_the_helper(
+    start_app_under_test, backing
+):
+    """The macOS raw handle, as a C consumer spells it: the helper exports a
+    send right to the surface's IOSurface, a ctypes shim in the same helper
+    looks the surface up from the port and reads the very pixels the CPU door
+    stored — on a texture whose rows pad, at the surface's own pitch."""
+    observation = run_probe(start_app_under_test, "IOSurfaceExportProbe")[backing]
+    export = observation["export"]
+    assert observation["ports_are_real"]
+    assert observation["looked_up"], "the exported port named no IOSurface"
+    assert observation["pixels_match"], (
+        f"native code reading the {backing}'s IOSurface did not find the pixels the "
+        f"CPU door stored: {observation}"
+    )
+    assert (observation["width"], observation["height"]) == (export["width"], export["height"])
+    assert observation["bytes_per_row"] == export["bytes_per_row"]
+    assert export["allocation_byte_size"] >= export["bytes_per_row"] * export["height"]
+    recipe = [
+        export[field]
+        for field in (
+            "vk_image_tiling",
+            "vk_image_usage_flags",
+            "vk_image_mip_levels",
+            "vk_image_array_layers",
+            "vk_image_samples",
+        )
+    ]
+    if backing == "pixel_buffer":
+        assert export["format"] == "bgra32"
+        assert recipe == [None] * 5, "a pixel buffer backs no image"
+    else:
+        assert export["format"] == "rgba8_unorm"
+        assert export["bytes_per_row"] > export["width"] * 4, (
+            f"the texture's IOSurface did not pad its rows, so the pitch is unproven: {export}"
+        )
+        # OPTIMAL, TRANSFER_SRC | TRANSFER_DST | SAMPLED | STORAGE, one mip,
+        # one layer, one sample — what `acquire_texture` asked the engine for.
+        assert recipe == [0, 0x0F, 1, 1, 1], recipe
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="an IOSurface Mach port is a macOS handle")
+def test_each_iosurface_export_is_a_fresh_send_right_the_caller_owns_and_gives_back(
+    start_app_under_test,
+):
+    """Every export mints its own send right, and each names the same
+    surface. The caller's `mach_port_deallocate` of each succeeds and leaves
+    the task holding nothing under that name — the right was the caller's
+    alone, with no reference the engine keeps or expects back."""
+    observations = run_probe(start_app_under_test, "IOSurfaceExportProbe")
+    for backing in ("pixel_buffer", "texture"):
+        observation = observations[backing]
+        assert observation["ports_are_real"], (backing, observation)
+        assert observation["each_export_is_its_own_right"], (backing, observation)
+        assert observation["second_port_reads_the_same_pixels"], (backing, observation)
+        assert all(held >= 1 for held in observation["references_while_held"]), (
+            backing,
+            observation,
+        )
+        assert observation["deallocations"] == [0, 0], (
+            f"KERN_SUCCESS for each right the caller owns: {backing} {observation}"
+        )
+        assert observation["references_after_given_back"] == [0, 0], (
+            f"the {backing}'s rights were the caller's alone, so giving them back leaves "
+            f"nothing under their names: {observation}"
+        )
+
+
+def test_each_raw_handle_flavour_refuses_by_name_off_its_platform(start_app_under_test):
+    """All three raw-handle methods exist on both binaries. Off its platform
+    each refuses, naming the flavour this platform does mint instead of
+    leaving the caller an `AttributeError`."""
+    observation = run_probe(start_app_under_test, "RawHandleOffItsPlatformRefusesProbe")
+    if sys.platform == "darwin":
+        for fd_flavour in ("export_dma_buf", "export_opaque_fd"):
+            refusal = observation[fd_flavour]
+            assert refusal is not None, f"{fd_flavour} exported on macOS"
+            assert f"{fd_flavour} is Linux-only" in refusal, refusal
+            assert "export_iosurface" in refusal, refusal
+    else:
+        refusal = observation["export_iosurface"]
+        assert refusal is not None, "export_iosurface exported off macOS"
+        assert "export_iosurface is macOS-only" in refusal, refusal
+        assert "export_dma_buf" in refusal and "export_opaque_fd" in refusal, refusal
+
+
+# ---------------------------------------------------------------------------
 # The privileged capability, from a helper process
 # ---------------------------------------------------------------------------
 

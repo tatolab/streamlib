@@ -43,6 +43,72 @@ impl HelperIOSurfacePoolSlotImport {
     }
 }
 
+/// A freshly minted send right to a surface's IOSurface plus the
+/// allocation-stable shape native code needs to address it.
+pub(crate) struct IOSurfaceMachPortExportDescription {
+    pub(crate) iosurface_send_right: streamlib_surface_client::OwnedMachSendRight,
+    pub(crate) allocation_byte_size: u64,
+    pub(crate) bytes_per_row: u64,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) format_wire_name: &'static str,
+    /// Present when the surface backs a texture.
+    pub(crate) vk_image_creation_recipe:
+        Option<crate::python_processor_context::ExportedVkImageCreationRecipe>,
+}
+
+impl IOSurfaceMachPortExportDescription {
+    /// Mint a send right to `iosurface` and describe it as `surface_id`'s
+    /// allocation.
+    fn minted_from(
+        iosurface: &objc2_io_surface::IOSurfaceRef,
+        surface_id: &str,
+        width: u32,
+        height: u32,
+        format_wire_name: &'static str,
+        vk_image_creation_recipe: Option<
+            crate::python_processor_context::ExportedVkImageCreationRecipe,
+        >,
+    ) -> PyResult<Self> {
+        let iosurface_send_right =
+            streamlib::sdk::engine::apple_surface_share::create_iosurface_mach_send_right(
+                iosurface,
+            )
+            .map_err(|mint_failure| {
+                PyRuntimeError::new_err(format!(
+                    "surface {surface_id:?} minted no IOSurface port: {mint_failure}"
+                ))
+            })?;
+        Ok(Self {
+            iosurface_send_right,
+            allocation_byte_size: iosurface.alloc_size() as u64,
+            bytes_per_row: iosurface.bytes_per_row() as u64,
+            width,
+            height,
+            format_wire_name,
+            vk_image_creation_recipe,
+        })
+    }
+}
+
+impl HelperCheckedOutSurface {
+    /// A fresh send right to the surface's IOSurface plus its
+    /// allocation-stable shape, whichever backing answers.
+    pub(crate) fn export_iosurface(&self) -> PyResult<IOSurfaceMachPortExportDescription> {
+        match self {
+            Self::PixelBuffer(pixel_surface) => IOSurfaceMachPortExportDescription::minted_from(
+                pixel_surface.iosurface_pool_slot_import.iosurface(),
+                &pixel_surface.surface_id,
+                pixel_surface.width,
+                pixel_surface.height,
+                pixel_surface.format.wire_name(),
+                None,
+            ),
+            Self::Texture(texture_surface) => texture_surface.export_iosurface(),
+        }
+    }
+}
+
 /// The per-slot cache, shared with the thread that empties it when the
 /// parent's service goes away.
 pub(super) type HelperIOSurfaceImportsByPoolSlot =

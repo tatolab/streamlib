@@ -33,6 +33,7 @@ from ._engine import GpuContextLimitedAccess as GpuContextLimitedAccess
 from ._engine import GpuSurfaceCheckOutLease as GpuSurfaceCheckOutLease
 from ._engine import GpuSurfaceDeviceTensorScope as GpuSurfaceDeviceTensorScope
 from ._engine import GpuSurfaceHandle as GpuSurfaceHandle
+from ._engine import IOSurfaceMachPortExport as IOSurfaceMachPortExport
 from ._engine import LinkInputDataReader as LinkInputDataReader
 from ._engine import LinkOutputDataWriter as LinkOutputDataWriter
 from ._engine import MonotonicTimer as MonotonicTimer
@@ -119,6 +120,7 @@ __all__ = [
     "H264Encoder",
     "H265Decoder",
     "H265Encoder",
+    "IOSurfaceMachPortExport",
     "LinkInputDataReader",
     "LinkOutputDataWriter",
     "MasteringDisplay",
