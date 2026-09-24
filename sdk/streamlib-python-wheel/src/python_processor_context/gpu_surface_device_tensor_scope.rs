@@ -14,16 +14,18 @@ use pyo3::prelude::*;
 use streamlib_adapter_cuda::dlpack::DeviceType;
 
 use crate::python_gpu_surface_pixel_exchange::GpuSurfaceOwnedMemory;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-use crate::python_gpu_surface_pixel_exchange::exchange_shape_for_max_version;
 #[cfg(target_os = "macos")]
 use crate::python_gpu_surface_pixel_exchange::{METAL_DLPACK_DEVICE, metal_dlpack_capsule};
 #[cfg(target_os = "linux")]
 use crate::python_gpu_surface_pixel_exchange::{
     PreparedDeviceExport, StagedWriteBackSource, device_dlpack_capsule, prepare_device_export,
 };
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use crate::python_gpu_surface_pixel_exchange::{
+    dlpack_device_as_python_pair, exchange_shape_for_max_version,
+};
 #[cfg(target_os = "macos")]
-use crate::python_metal_framework_queue_synchronization::synchronize_the_imported_metal_frameworks;
+use crate::python_metal_framework_queue_synchronization::drain_torch_mps_queue_if_imported;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::left_by_a_propagating_exception;
@@ -53,7 +55,7 @@ pub(crate) struct PythonGpuSurfaceDeviceTensorScope {
     prepared_device_export: Mutex<Option<PreparedDeviceExport>>,
     /// Whether the scope is entered — the structural guard on every capsule.
     #[cfg(target_os = "macos")]
-    entered: std::sync::atomic::AtomicBool,
+    device_tensor_scope_is_entered: std::sync::atomic::AtomicBool,
 }
 
 impl PythonGpuSurfaceDeviceTensorScope {
@@ -63,14 +65,17 @@ impl PythonGpuSurfaceDeviceTensorScope {
             #[cfg(target_os = "linux")]
             prepared_device_export: Mutex::new(None),
             #[cfg(target_os = "macos")]
-            entered: std::sync::atomic::AtomicBool::new(false),
+            device_tensor_scope_is_entered: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
     /// The refusal unless this scope is entered.
     #[cfg(target_os = "macos")]
-    fn require_entered(&self) -> PyResult<()> {
-        if self.entered.load(std::sync::atomic::Ordering::SeqCst) {
+    fn require_this_device_tensor_scope_entered(&self) -> PyResult<()> {
+        if self
+            .device_tensor_scope_is_entered
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
             Ok(())
         } else {
             Err(device_tensor_scope_not_entered_error())
@@ -134,21 +139,24 @@ impl PythonGpuSurfaceDeviceTensorScope {
         // refuse is a device that cannot alias the pages from Metal.
         #[cfg(target_os = "macos")]
         {
-            python_self
-                .owned_memory
-                .metal_buffer_over_the_iosurface_pages()
-                .map_err(|no_metal_buffer| {
-                    PyRuntimeError::new_err(format!(
-                        "this surface has no Metal view, so no device tensor can write it in \
-                         place: {no_metal_buffer}. Its pixels stay reachable on the host — \
-                         lock(), then as_numpy or __dlpack__"
-                    ))
-                })?;
             if python_self
-                .entered
+                .device_tensor_scope_is_entered
                 .swap(true, std::sync::atomic::Ordering::SeqCst)
             {
                 return Err(device_tensor_scope_already_entered_error());
+            }
+            if let Err(no_metal_buffer) = python_self
+                .owned_memory
+                .metal_buffer_over_the_iosurface_pages()
+            {
+                python_self
+                    .device_tensor_scope_is_entered
+                    .store(false, std::sync::atomic::Ordering::SeqCst);
+                return Err(PyRuntimeError::new_err(format!(
+                    "this surface has no Metal view, so no device tensor can write it in \
+                     place: {no_metal_buffer}. Its pixels stay reachable on the host — \
+                     lock(), then as_numpy or __dlpack__"
+                )));
             }
             Ok(python_self)
         }
@@ -189,12 +197,12 @@ impl PythonGpuSurfaceDeviceTensorScope {
         #[cfg(target_os = "macos")]
         {
             if !self
-                .entered
+                .device_tensor_scope_is_entered
                 .swap(false, std::sync::atomic::Ordering::SeqCst)
             {
                 return Ok(false);
             }
-            let metal_writes_retired = synchronize_the_imported_metal_frameworks(python);
+            let metal_writes_retired = drain_torch_mps_queue_if_imported(python);
             if left_by_a_propagating_exception(exception_type) {
                 if let Err(retire_failure) = metal_writes_retired {
                     tracing::warn!(
@@ -225,15 +233,12 @@ impl PythonGpuSurfaceDeviceTensorScope {
                 .as_ref()
                 .map(|prepared| prepared.export.imported_dlpack_device())
                 .ok_or_else(device_tensor_scope_not_entered_error)?;
-            Ok((device.device_type as i32, device.device_id))
+            Ok(dlpack_device_as_python_pair(device))
         }
         #[cfg(target_os = "macos")]
         {
-            self.require_entered()?;
-            Ok((
-                METAL_DLPACK_DEVICE.device_type as i32,
-                METAL_DLPACK_DEVICE.device_id,
-            ))
+            self.require_this_device_tensor_scope_entered()?;
+            Ok(dlpack_device_as_python_pair(METAL_DLPACK_DEVICE))
         }
         #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         Err(PyNotImplementedError::new_err(
@@ -253,10 +258,11 @@ impl PythonGpuSurfaceDeviceTensorScope {
         dl_device: Option<(i32, i32)>,
         copy: Option<bool>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        // No stream to order against here: the blit-out retired before
+        // No stream to order against. On Linux the blit-out retired before
         // `__enter__` returned, and the blit-back at `__exit__` runs a
-        // device-wide CUDA synchronize before the engine's copy reads
-        // the staging.
+        // device-wide CUDA synchronize before the engine's copy reads the
+        // staging. On macOS torch and MLX pass no stream for `kDLMetal`;
+        // the exit's drain and the MLX `mx.eval` contract order the write.
         let _ = stream;
         if copy == Some(true) {
             return Err(PyBufferError::new_err(
@@ -296,7 +302,7 @@ impl PythonGpuSurfaceDeviceTensorScope {
         }
         #[cfg(target_os = "macos")]
         {
-            self.require_entered()?;
+            self.require_this_device_tensor_scope_entered()?;
             let no_read_only_lock_applies = false;
             metal_dlpack_capsule(
                 python,

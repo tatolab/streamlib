@@ -113,16 +113,16 @@ impl GpuSurfaceOwnedMemory {
     }
 
     /// Bracket CPU access with the surface's IOSurface lock, read-only or
-    /// read-write — what keeps the host view coherent on a discrete-GPU
-    /// Mac, and ~0.6 µs on unified memory.
+    /// read-write, unless it is already held — what keeps the host view
+    /// coherent on a discrete-GPU Mac, and ~0.6 µs on unified memory.
     #[cfg(target_os = "macos")]
-    pub(crate) fn lock_the_iosurface_for_cpu_access(&self, read_only: bool) -> PyResult<()> {
+    pub(crate) fn lock_the_iosurface_for_cpu_access_once(&self, read_only: bool) -> PyResult<()> {
         match &self.checked_out_surface {
             HelperCheckedOutSurface::PixelBuffer(pixel_surface) => {
-                pixel_surface.lock_the_iosurface_for_cpu_access(read_only)
+                pixel_surface.lock_the_iosurface_for_cpu_access_once(read_only)
             }
             HelperCheckedOutSurface::Texture(texture_surface) => {
-                texture_surface.lock_the_iosurface_for_cpu_access(read_only)
+                texture_surface.lock_the_iosurface_for_cpu_access_once(read_only)
             }
         }
     }
@@ -467,6 +467,12 @@ pub(crate) const HOST_VISIBLE_DLPACK_DEVICE: Device = Device {
     device_id: 0,
 };
 
+/// `device` as the `(device_type, device_id)` pair `__dlpack_device__`
+/// answers.
+pub(crate) fn dlpack_device_as_python_pair(device: Device) -> (i32, i32) {
+    (device.device_type as i32, device.device_id)
+}
+
 /// Run the versioned managed tensor's deleter when a capsule is
 /// collected without a consumer having taken it. Same rename contract as
 /// the unversioned destructor, against `dltensor_versioned`.
@@ -686,9 +692,10 @@ pub(crate) fn metal_dlpack_capsule<'py>(
         ));
     }
     let metal_buffer_address = objc2::rc::Retained::as_ptr(&metal_buffer) as u64;
+    // The buffer aliases the pages the surface share keeps, so it drops first.
     let owner: dlpack::CapsuleOwner = Box::new((
-        Arc::clone(owned_memory),
         MetalBufferHeldByACapsule(metal_buffer),
+        Arc::clone(owned_memory),
     ));
     dlpack_capsule_over(
         python,

@@ -86,7 +86,7 @@ fn a_checked_out_texture_reads_its_iosurface_rows_and_releases_on_its_shared_eve
     assert_eq!(share.outstanding_claims_on("texture-slot"), 1);
 
     texture_surface
-        .lock_the_iosurface_for_cpu_access(true)
+        .lock_the_iosurface_for_cpu_access_once(true)
         .expect("the CPU door's lock");
     let view = texture_surface
         .host_visible_pixel_plane_view()

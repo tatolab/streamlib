@@ -127,6 +127,19 @@ impl HelperIOSurfaceCpuLock {
         Ok(())
     }
 
+    /// Take `iosurface`'s lock read-only or read-write unless a lock is
+    /// already held — the lock a CPU door takes once per lock scope.
+    fn lock_unless_held(
+        &self,
+        iosurface: &objc2_io_surface::IOSurfaceRef,
+        read_only: bool,
+    ) -> Result<(), IOSurfaceLockRefused> {
+        if self.held_lock_options.lock().is_some() {
+            return Ok(());
+        }
+        self.lock(iosurface, read_only)
+    }
+
     /// Release the held lock, if any; a refused unlock leaves it recorded
     /// as held.
     fn release(
@@ -158,10 +171,11 @@ impl HelperIOSurfaceCpuLock {
 }
 
 impl HelperCheckedOutPixelSurface {
-    /// Take the IOSurface lock for CPU access, read-only or read-write.
-    pub(crate) fn lock_the_iosurface_for_cpu_access(&self, read_only: bool) -> PyResult<()> {
+    /// Take the IOSurface lock for CPU access, read-only or read-write,
+    /// unless this surface already holds it.
+    pub(crate) fn lock_the_iosurface_for_cpu_access_once(&self, read_only: bool) -> PyResult<()> {
         self.iosurface_cpu_lock
-            .lock(self.iosurface_pool_slot_import.iosurface(), read_only)
+            .lock_unless_held(self.iosurface_pool_slot_import.iosurface(), read_only)
             .map_err(|refused| self.iosurface_lock_error(refused))
     }
 
