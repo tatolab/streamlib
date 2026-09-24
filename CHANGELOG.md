@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.22](https://github.com/tatolab/streamlib/compare/v0.26.21...v0.26.22) (2026-09-24)
+
+
+### Features
+
+* **python:** export_iosurface — the macOS raw handle beside the two fd flavours ([#2462](https://github.com/tatolab/streamlib/issues/2462)) ([76e6b3a](https://github.com/tatolab/streamlib/commit/76e6b3ab6c23e5ed2b67ffc7b6a394f01f790a98))
+
 ## [0.26.21](https://github.com/tatolab/streamlib/compare/v0.26.20...v0.26.21) (2026-09-24)
 
 
