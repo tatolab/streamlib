@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use super::*;
-use crate::python_helper_process_pixel_exchange::{
+use crate::python_helper_process_pixel_exchange::vk_image_creation_recipe_wire_parse::{
     VK_IMAGE_ARRAY_LAYERS_DEFAULT, VK_IMAGE_MIP_LEVELS_DEFAULT, VK_IMAGE_SAMPLES_DEFAULT,
     VK_IMAGE_TILING_DEFAULT, VK_IMAGE_USAGE_DEFAULT,
 };
