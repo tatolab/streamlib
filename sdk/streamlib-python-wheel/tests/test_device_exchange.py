@@ -33,6 +33,7 @@ from pathlib import Path
 
 import pytest
 
+from camera_under_test import reason_this_rig_has_no_camera
 from device_exchange_probes import (
     FILL_CONSTANT_RGBA,
     NATURAL_DLPACK_DEVICE,
@@ -175,15 +176,29 @@ def test_a_copy_request_is_refused_at_both_doors(start_app_under_test):
 
 
 def test_the_device_tensor_strides_follow_the_surfaces_row_pitch(start_app_under_test):
-    """A width whose rows pad: the tensor's row stride is the surface's pitch
-    in elements, so the last pixel of a row lands where the host finds it."""
+    """A width whose GPU-image rows pad, over both backings: the last pixel of
+    a row lands where the host finds it and never shears into the next row.
+
+    On macOS the tensor is the IOSurface itself, so its row stride must be the
+    surface's pitch — and the texture's rows must really pad, or the test
+    proves nothing about padding. On Linux the device view is a staging whose
+    pitch is its own, so only the landing is asserted there.
+    """
     observation = run_probe(start_app_under_test, "DeviceTensorStridesFollowTheRowPitchProbe")
     skip_without_the_device(observation)
-    assert observation["tensor_strides"] == [observation["bytes_per_row"], 4, 1]
-    assert observation["last_pixel_through_the_host"] == [11, 22, 33, 44]
-    assert observation["first_pixel_of_the_last_row"] == [0, 0, 0, 0], (
-        "the store sheared into the next row's start"
-    )
+    for backing in ("pixel_buffer", "texture"):
+        stored = observation[backing]
+        assert stored["row_end_through_the_host"] == [11, 22, 33, 44], (backing, stored)
+        assert stored["next_row_start_through_the_host"] == [0, 0, 0, 0], (
+            f"the {backing} store sheared into the next row's start: {stored}"
+        )
+        if sys.platform == "darwin":
+            assert stored["tensor_strides"] == [stored["bytes_per_row"], 4, 1], (backing, stored)
+    if sys.platform == "darwin":
+        assert observation["texture"]["bytes_per_row"] > 1000 * 4, (
+            "the texture's IOSurface did not pad its rows, so nothing here proves the "
+            f"stride follows a padded pitch: {observation['texture']}"
+        )
 
 
 def skip_without_mlx(observation: dict) -> None:
@@ -233,6 +248,36 @@ def test_an_evaluated_mlx_write_through_the_write_door_reaches_the_frame(
     assert observation["the_rest_of_the_frame_is_untouched"]
 
 
+def test_torch_and_mlx_scopes_alternate_in_one_helper_without_wedging_it(
+    start_app_under_test,
+):
+    """The shape that deadlocked when the scope's exit called
+    `mx.synchronize()`: many scopes in one helper, MLX's arrays freed as they
+    go. Every scope completes and every write lands."""
+    observation = run_probe(start_app_under_test, "TorchAndMlxScopesAlternateInOneHelperProbe")
+    skip_without_mlx(observation)
+    skip_without_the_device(observation)
+    assert observation["scopes_completed"] == 12, observation
+    assert observation["every_write_landed"], observation["pixels_that_landed"]
+
+
+@pytest.mark.parametrize(
+    "probe", ["TorchTensorOutlivesTextureHandleProbe", "MlxArrayOutlivesTextureHandleProbe"]
+)
+def test_a_device_array_outliving_its_texture_handle_keeps_a_live_mapping(
+    start_app_under_test, probe
+):
+    """Closing a texture's handle frees nothing a device array still
+    addresses, and dropping the array later releases the texture from the
+    capsule's deleter without wedging the helper."""
+    observation = run_probe(start_app_under_test, probe)
+    skip_without_mlx(observation)
+    skip_without_the_device(observation)
+    assert observation["checksum_before"] == observation["expected_checksum"], observation
+    assert observation["checksum_after"] == observation["checksum_before"], observation
+    assert observation["helper_still_answers"]
+
+
 def test_an_mlx_whole_array_assignment_misses_the_frame(start_app_under_test):
     """The partial-slice rule the stub states: MLX makes `a[:] = ...` a new
     array, so the frame keeps its pixels while the array shows the edit."""
@@ -256,6 +301,12 @@ def test_an_mlx_write_with_a_view_alive_misses_the_frame(start_app_under_test):
 # ---------------------------------------------------------------------------
 
 
+# On macOS the thread runner has no reactive wakeup yet — it polls every
+# 100 ms — so this deliberately slow consumer reads frames 1-4 pool generations
+# stale and nearly all are refused as recycled before a comparison can run
+# (measured on the FaceTime camera: 14 of 16). The comparisons that do run
+# agree. #2409 brings the kqueue wakeup.
+@pytest.mark.awaiting_macos_parity(issue=2409)
 def test_camera_device_pixels_match_host_across_ring_cycles(start_app_under_test):
     """Regression lock on the stale-blit-source bug, and on the frame itself.
 
@@ -279,8 +330,9 @@ def test_camera_device_pixels_match_host_across_ring_cycles(start_app_under_test
     depth — so those are skipped rather than failed, and the count guard below
     keeps that tolerance from emptying the comparison.
     """
-    if not Path("/dev/video0").exists():
-        pytest.skip("no camera on this rig")
+    no_camera = reason_this_rig_has_no_camera()
+    if no_camera:
+        pytest.skip(no_camera)
     observation = run_probe(start_app_under_test, "camera")
     skip_without_the_device(observation)
 

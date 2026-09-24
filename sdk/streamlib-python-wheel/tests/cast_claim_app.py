@@ -12,22 +12,17 @@ test pattern serves the probes that only need a real surface published by a
 real producer, so they run on any GPU rather than only on a rig with a camera.
 """
 
-import os
 import sys
 
 import streamlib
 
 import cast_claim_probes
+from camera_under_test import camera_source_config
 
 
 def _source(runtime: "streamlib.Runtime", source_name: str):
     if source_name == "camera":
-        return runtime.add(
-            streamlib.CameraSource,
-            config={
-                "device_id": os.environ.get("STREAMLIB_CAMERA_DEVICE", "/dev/video0")
-            },
-        )
+        return runtime.add(streamlib.CameraSource, config=camera_source_config())
     if source_name == "test_pattern":
         return runtime.add(
             streamlib.TestPatternSource, config={"width": 640, "height": 480}

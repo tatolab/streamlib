@@ -12,8 +12,8 @@ strictness dial optional rather than compulsory.
 
 Proving it needs all the real parts at once — a producer whose pool actually
 cycles, a consumer one process away, and the surface-share service between
-them — so these drive `cast_claim_app.py` out of process against `/dev/video0`
-and assert on the probe's own report. The A/B is the whole design: the two
+them — so these drive `cast_claim_app.py` out of process against the rig's
+camera (`camera_under_test`) and assert on the probe's own report. The A/B is the whole design: the two
 probes differ in one line, `into=VideoFrame` versus nothing, and must reach
 opposite outcomes. Either one passing alone proves little.
 
@@ -42,22 +42,19 @@ camera pair now guards.
 """
 
 import json
-import os
 import re
 import sys
 from pathlib import Path
 
 import pytest
 
+from camera_under_test import reason_this_rig_has_no_camera
 from device_exchange_probes import NATURAL_DLPACK_DEVICE, NATURAL_TORCH_DEVICE_TYPE
 
 pytestmark = pytest.mark.requires_gpu
 
 APP = Path(__file__).parent / "cast_claim_app.py"
 
-# The same default `cast_claim_app.py` opens, read from the same place: a rig
-# pointing the app at another node must not be gated on /dev/video0.
-CAMERA_DEVICE = os.environ.get("STREAMLIB_CAMERA_DEVICE", "/dev/video0")
 
 PROBE_RESULT = re.compile(r"MARKER:PROBE_RESULT (\{.*\})")
 
@@ -67,8 +64,10 @@ def run_claim_probe(
 ) -> dict:
     """One probe, one observation dict — or a failure carrying the probe's own
     traceback, which names the cause better than a missing marker."""
-    if source == "camera" and not Path(CAMERA_DEVICE).exists():
-        pytest.skip(f"no camera at {CAMERA_DEVICE} on this rig")
+    if source == "camera":
+        no_camera = reason_this_rig_has_no_camera()
+        if no_camera:
+            pytest.skip(no_camera)
     app = start_app_under_test(APP, probe_class_name, source)
     app.await_output_containing("MARKER:PROBE_RESULT", f"{probe_class_name}'s result")
     app.interrupt()

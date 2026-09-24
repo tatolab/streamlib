@@ -998,50 +998,88 @@ class CopyRequestRefusedAtBothDoorsProbe(_FrameProbeBase):
         return observation
 
 
-# Wide enough that its row pitch pads past `width * 4` on an IOSurface.
+# Wide enough that a GPU image's IOSurface pads its rows past `width * 4`;
+# a pool pixel buffer's rows are packed, so it is the unpadded control.
 PADDED_SURFACE_WIDTH = 1000
 PADDED_SURFACE_HEIGHT = 8
+ROW_END_PIXEL_RGBA = [11, 22, 33, 44]
+
+
+def _store_at_the_end_of_a_row_and_read_it_back(tensor_scope_or_handle, host_reader) -> dict:
+    """Store one pixel at the last column of a row through torch, then read
+    that row's end and the next row's start through the host."""
+    import torch
+
+    last_row = PADDED_SURFACE_HEIGHT - 2
+    observation = {}
+    with tensor_scope_or_handle as device_view:
+        tensor = torch.from_dlpack(device_view)
+        observation["tensor_strides"] = list(tensor.stride())
+        tensor[last_row, PADDED_SURFACE_WIDTH - 1] = torch.tensor(
+            ROW_END_PIXEL_RGBA, dtype=torch.uint8, device=tensor.device
+        )
+        del tensor
+    host_view, bytes_per_row = host_reader()
+    observation["bytes_per_row"] = bytes_per_row
+    observation["row_end_through_the_host"] = host_view[
+        last_row, PADDED_SURFACE_WIDTH - 1
+    ].tolist()
+    observation["next_row_start_through_the_host"] = host_view[last_row + 1, 0].tolist()
+    return observation
 
 
 @processor(execution="manual")
 class DeviceTensorStridesFollowTheRowPitchProbe:
-    """A width whose rows pad: the device tensor's row stride is the surface's
-    own pitch, so a store at the last pixel of a row lands where the host view
-    finds it rather than shearing into the next row."""
+    """Both backings at a width whose GPU-image rows pad: the device tensor's
+    row stride is the surface's own pitch, so a store at the last pixel of a
+    row lands where the host view finds it rather than shearing into the next
+    row."""
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         _report(lambda: self._probe(ctx))
 
     def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
-        import torch
-
-        last_row = PADDED_SURFACE_HEIGHT - 1
-        last_column = PADDED_SURFACE_WIDTH - 1
+        observation = {}
         with ctx.gpu_limited_access.acquire_pixel_buffer(
             PADDED_SURFACE_WIDTH, PADDED_SURFACE_HEIGHT
-        ) as surface:
-            surface.lock(read_only=False)
-            if surface.__dlpack_device__()[0] != NATURAL_DLPACK_DEVICE:
-                surface.unlock()
+        ) as pixel_buffer:
+            if pixel_buffer.__dlpack_device__()[0] != NATURAL_DLPACK_DEVICE:
                 return {"device_unavailable": "device side not reachable"}
-            surface.as_numpy()[:, :, :] = 0
-            tensor = torch.from_dlpack(surface)
-            observation = {
-                "bytes_per_row": surface.bytes_per_row,
-                "tensor_strides": list(tensor.stride()),
-            }
-            tensor[last_row, last_column] = torch.tensor(
-                [11, 22, 33, 44], dtype=torch.uint8, device=tensor.device
+            pixel_buffer.lock(read_only=False)
+            pixel_buffer.as_numpy()[:, :, :] = 0
+            pixel_buffer.unlock()
+
+            def pixel_buffer_host_view():
+                pixel_buffer.lock()
+                host_view = pixel_buffer.as_numpy().copy()
+                pitch = pixel_buffer.bytes_per_row
+                pixel_buffer.unlock()
+                return host_view, pitch
+
+            observation["pixel_buffer"] = _store_at_the_end_of_a_row_and_read_it_back(
+                pixel_buffer.as_device_tensor(), pixel_buffer_host_view
             )
-            del tensor
-            surface.unlock()
-            surface.lock()
-            host_view = surface.as_numpy()
-            observation["last_pixel_through_the_host"] = host_view[
-                last_row, last_column
-            ].tolist()
-            observation["first_pixel_of_the_last_row"] = host_view[last_row, 0].tolist()
-            surface.unlock()
+
+        with ctx.gpu_full_access.acquire_texture(
+            PADDED_SURFACE_WIDTH,
+            PADDED_SURFACE_HEIGHT,
+            "rgba8_unorm",
+            ["texture_binding", "storage_binding", "copy_src", "copy_dst"],
+        ) as texture:
+            texture.lock(read_only=False)
+            texture.as_numpy()[:, :, :] = 0
+            texture.unlock()
+
+            def texture_host_view():
+                texture.lock()
+                host_view = texture.as_numpy().copy()
+                pitch = texture.bytes_per_row
+                texture.unlock()
+                return host_view, pitch
+
+            observation["texture"] = _store_at_the_end_of_a_row_and_read_it_back(
+                texture.as_device_tensor(), texture_host_view
+            )
         return observation
 
 
@@ -1278,3 +1316,138 @@ class MlxWholeArrayAssignmentMissesTheFrameProbe(_TypedFrameProbeBase):
             "the_array_carries_the_edit": the_array_carries_the_edit,
             "the_frame_is_unchanged": bool((after == before).all()),
         }
+
+
+SCOPES_IN_ONE_HELPER = 12
+
+
+@processor(execution="manual")
+class TorchAndMlxScopesAlternateInOneHelperProbe:
+    """Many device-tensor scopes in one helper, torch and MLX alternating, each
+    over a fresh texture whose arrays are dropped as soon as the scope ends.
+
+    This is the shape that deadlocked when the scope's exit called
+    `mx.synchronize()`: MLX's completion handler freeing a DLPack-imported
+    array waits for the GIL that call holds. A regression hangs here, and the
+    harness's wait for the result turns the hang into a failure.
+    """
+
+    def setup(self, ctx: RuntimeContextFullAccess) -> None:
+        _report(lambda: self._probe(ctx))
+
+    def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
+        import torch
+
+        mx = _mlx_or_none()
+        if mx is None:
+            return {"mlx_unavailable": "mlx is not installed in this venv"}
+        usage = ["texture_binding", "storage_binding", "copy_src", "copy_dst"]
+        pixels_that_landed = []
+        for scope_index in range(SCOPES_IN_ONE_HELPER):
+            value = 10 + scope_index
+            with ctx.gpu_full_access.acquire_texture(
+                SURFACE_WIDTH, SURFACE_HEIGHT, "rgba8_unorm", usage
+            ) as texture:
+                if texture.__dlpack_device__()[0] != NATURAL_DLPACK_DEVICE:
+                    return {"device_unavailable": "device side not reachable"}
+                with texture.as_device_tensor() as device_tensor:
+                    if scope_index % 2 == 0:
+                        tensor = torch.from_dlpack(device_tensor)
+                        tensor[:4] = value
+                        del tensor
+                    else:
+                        array = mx.from_dlpack(device_tensor)
+                        array[:4] = value
+                        mx.eval(array)
+                        del array
+                texture.lock()
+                pixels_that_landed.append(texture.as_numpy()[1, 1].tolist())
+                texture.unlock()
+        return {
+            "scopes_completed": len(pixels_that_landed),
+            "every_write_landed": all(
+                pixel == [10 + index] * 4 for index, pixel in enumerate(pixels_that_landed)
+            ),
+            "pixels_that_landed": pixels_that_landed,
+        }
+
+
+TEXTURE_FILL_RGBA = [5, 6, 7, 8]
+
+
+class _DeviceArrayOutlivesTextureHandleProbe:
+    """A device array over an acquired texture outlives the handle: closing
+    the handle frees nothing the array addresses, and dropping the array
+    afterwards releases the texture — from the capsule's deleter — without
+    wedging the helper."""
+
+    def setup(self, ctx: RuntimeContextFullAccess) -> None:
+        _report(lambda: self._probe(ctx))
+
+    def _import(self, handle):
+        raise NotImplementedError
+
+    def _checksum(self, array) -> int:
+        raise NotImplementedError
+
+    def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
+        usage = ["texture_binding", "storage_binding", "copy_src", "copy_dst"]
+        texture = ctx.gpu_limited_access.acquire_texture(
+            SURFACE_WIDTH, SURFACE_HEIGHT, "rgba8_unorm", usage
+        )
+        if texture.__dlpack_device__()[0] != NATURAL_DLPACK_DEVICE:
+            texture.close()
+            return {"device_unavailable": "device side not reachable"}
+        texture.lock(read_only=False)
+        texture.as_numpy()[:, :] = TEXTURE_FILL_RGBA
+        texture.unlock()
+        texture.lock()
+        array = self._import(texture)
+        checksum_before = self._checksum(array)
+        texture.unlock()
+        texture.close()
+        del texture
+        checksum_after = self._checksum(array)
+        del array
+        # The helper still answers after the deleter released the texture.
+        with ctx.gpu_limited_access.acquire_texture(
+            SURFACE_WIDTH, SURFACE_HEIGHT, "rgba8_unorm", usage
+        ) as another_texture:
+            another_texture_id = another_texture.surface_id
+        return {
+            "checksum_before": checksum_before,
+            "checksum_after": checksum_after,
+            "expected_checksum": SURFACE_WIDTH * SURFACE_HEIGHT * sum(TEXTURE_FILL_RGBA),
+            "helper_still_answers": bool(another_texture_id),
+        }
+
+
+@processor(execution="manual")
+class TorchTensorOutlivesTextureHandleProbe(_DeviceArrayOutlivesTextureHandleProbe):
+    def _import(self, handle):
+        import torch
+
+        return torch.from_dlpack(handle)
+
+    def _checksum(self, array) -> int:
+        import torch
+
+        return int(array.to(torch.int64).sum().item())
+
+
+@processor(execution="manual")
+class MlxArrayOutlivesTextureHandleProbe(_DeviceArrayOutlivesTextureHandleProbe):
+    def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
+        if _mlx_or_none() is None:
+            return {"mlx_unavailable": "mlx is not installed in this venv"}
+        return super()._probe(ctx)
+
+    def _import(self, handle):
+        import mlx.core as mx
+
+        return mx.from_dlpack(handle)
+
+    def _checksum(self, array) -> int:
+        import mlx.core as mx
+
+        return int(mx.sum(array.astype(mx.int64)).item())
