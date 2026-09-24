@@ -5,8 +5,6 @@ use uuid::Uuid;
 
 use super::super::handle_lifecycle::EscalateHandleRegistry;
 use crate::core::context::{GpuContextLimitedAccess, PooledTextureHandle, TexturePoolDescriptor};
-#[cfg(test)]
-use crate::core::error::Result;
 use crate::core::rhi::{TextureFormat, TextureUsages};
 
 /// Acquire one texture from the pool and register it for a helper, answering

@@ -46,7 +46,7 @@ fn assert_no_collapsed_whitespace(message: &str) {
     assert!(
         !message.contains("  "),
         "the refusal carries a run of literal spaces, so a line continuation was lost \
-         when it was wrapped: {message:?}"
+                 when it was wrapped: {message:?}"
     );
 }
 
@@ -91,7 +91,7 @@ fn only_the_setup_hook_may_mint_a_processor_owned_window() {
         assert!(
             !registry.the_last_lifecycle_command_sent_to_the_helper_process_was_setup(),
             "{command_outside_the_setup_hook} is not the setup hook, so a window minted \
-             from it would be minted mid-pipeline"
+                     from it would be minted mid-pipeline"
         );
     }
 }
@@ -134,7 +134,7 @@ fn drain_and_close_refuse_a_window_this_processor_does_not_own_by_name() {
         assert!(
             !message.contains("display"),
             "{op_wire_name}: an unowned window is not a missing display server, got: \
-             {message}"
+                     {message}"
         );
         assert_no_collapsed_whitespace(&message);
     }

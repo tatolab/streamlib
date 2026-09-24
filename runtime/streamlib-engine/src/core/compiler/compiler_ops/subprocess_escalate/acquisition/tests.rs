@@ -57,7 +57,7 @@ fn parse_texture_usages_combines_tokens_and_implies_both_copy_bits() {
     assert!(
         usage.contains(TextureUsages::COPY_SRC | TextureUsages::COPY_DST),
         "one spelled token is enough: the CPU doors copy both ways, so a texture an author \
-         acquired can always take them"
+             acquired can always take them"
     );
     assert!(!usage.contains(TextureUsages::STORAGE_BINDING));
 

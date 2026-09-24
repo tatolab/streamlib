@@ -83,7 +83,7 @@ fn an_unresolvable_surface_is_refused_by_name_and_never_by_a_missing_bridge() {
                 assert!(
                     !err.message.contains("Bridge"),
                     "{expected_request_id}: the capability is always present, so no \
-                     refusal may cite a bridge; got: {}",
+                             refusal may cite a bridge; got: {}",
                     err.message
                 );
             }

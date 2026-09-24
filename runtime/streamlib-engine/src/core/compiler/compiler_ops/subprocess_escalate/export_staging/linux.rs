@@ -2,7 +2,11 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse;
-use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::EscalateRequestRunCpuReadbackCopyDirection;
+use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
+    EscalateRequestCopyDeviceExportStagingBackToSurface, EscalateRequestOpenCpuReadbackStaging,
+    EscalateRequestOpenDeviceExportStaging, EscalateRequestRefillDeviceExportStaging,
+    EscalateRequestRunCpuReadbackCopy, EscalateRequestRunCpuReadbackCopyDirection,
+};
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_response::{
     EscalateResponseErr, EscalateResponseOk,
 };
@@ -80,12 +84,12 @@ pub(super) fn escalate_open_op_name(residency: SurfaceExportStagingResidency) ->
 pub(in super::super) fn handle_open_device_export_staging(
     sandbox: &GpuContextLimitedAccess,
     request_id: String,
-    surface_id: &str,
+    request: EscalateRequestOpenDeviceExportStaging,
 ) -> EscalateResponse {
     handle_open_surface_export_staging(
         sandbox,
         request_id,
-        surface_id,
+        &request.surface_id,
         SurfaceExportStagingResidency::DeviceLocal,
     )
 }
@@ -193,12 +197,12 @@ pub(super) fn handle_surface_export_staging_copy(
 pub(in super::super) fn handle_open_cpu_readback_staging(
     sandbox: &GpuContextLimitedAccess,
     request_id: String,
-    surface_id: &str,
+    request: EscalateRequestOpenCpuReadbackStaging,
 ) -> EscalateResponse {
     handle_open_surface_export_staging(
         sandbox,
         request_id,
-        surface_id,
+        &request.surface_id,
         SurfaceExportStagingResidency::HostVisible,
     )
 }
@@ -207,13 +211,17 @@ pub(in super::super) fn handle_open_cpu_readback_staging(
 pub(in super::super) fn handle_run_cpu_readback_copy(
     sandbox: &GpuContextLimitedAccess,
     request_id: String,
-    surface_id: &str,
-    direction: EscalateRequestRunCpuReadbackCopyDirection,
+    request: EscalateRequestRunCpuReadbackCopy,
 ) -> EscalateResponse {
+    let EscalateRequestRunCpuReadbackCopy {
+        request_id: _,
+        surface_id,
+        direction,
+    } = request;
     handle_surface_export_staging_copy(
         sandbox,
         request_id,
-        surface_id,
+        &surface_id,
         SurfaceExportStagingCopyOp::RunCpuReadbackCopy(match direction {
             EscalateRequestRunCpuReadbackCopyDirection::ImageToBuffer => {
                 SurfaceExportStagingCopyDirection::SurfaceIntoStaging
@@ -229,12 +237,12 @@ pub(in super::super) fn handle_run_cpu_readback_copy(
 pub(in super::super) fn handle_refill_device_export_staging(
     sandbox: &GpuContextLimitedAccess,
     request_id: String,
-    surface_id: &str,
+    request: EscalateRequestRefillDeviceExportStaging,
 ) -> EscalateResponse {
     handle_surface_export_staging_copy(
         sandbox,
         request_id,
-        surface_id,
+        &request.surface_id,
         SurfaceExportStagingCopyOp::RefillDeviceExportStaging,
     )
 }
@@ -243,12 +251,12 @@ pub(in super::super) fn handle_refill_device_export_staging(
 pub(in super::super) fn handle_copy_device_export_staging_back_to_surface(
     sandbox: &GpuContextLimitedAccess,
     request_id: String,
-    surface_id: &str,
+    request: EscalateRequestCopyDeviceExportStagingBackToSurface,
 ) -> EscalateResponse {
     handle_surface_export_staging_copy(
         sandbox,
         request_id,
-        surface_id,
+        &request.surface_id,
         SurfaceExportStagingCopyOp::CopyDeviceExportStagingBackToSurface,
     )
 }

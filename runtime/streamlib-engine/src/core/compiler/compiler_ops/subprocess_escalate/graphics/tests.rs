@@ -1406,7 +1406,7 @@ fn a_draw_reads_the_surface_its_binding_names_and_publishes_the_targets_layout()
         assert_eq!(
             pixel, INVERTED_RGBA,
             "pixel {pixel_index} must be the inverted seed — the draw read \
-             `source_image`, by name, and painted the target it was given"
+                     `source_image`, by name, and painted the target it was given"
         );
     }
 
@@ -1423,7 +1423,7 @@ fn a_draw_reads_the_surface_its_binding_names_and_publishes_the_targets_layout()
         source_layout,
         streamlib_consumer_rhi::VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
         "a sampled binding is barriered out of GENERAL into the layout its descriptor \
-         requires"
+                 requires"
     );
     drop(held);
 }
@@ -1541,8 +1541,8 @@ fn the_pixels_a_draw_does_not_cover_read_transparent_black() {
             assert_eq!(
                 pixel, TRANSPARENT_BLACK_RGBA,
                 "pixel {pixel_index} is outside the scissor, so nothing painted it — the \
-                 pass must have cleared it rather than loaded contents its own transition \
-                 from UNDEFINED had already discarded"
+                         pass must have cleared it rather than loaded contents its own transition \
+                         from UNDEFINED had already discarded"
             );
         }
     }

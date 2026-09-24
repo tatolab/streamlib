@@ -359,7 +359,7 @@ fn cross_language_source_seq_monotonic_within_source() {
         assert!(
             pair[1].host_ts >= pair[0].host_ts,
             "host_ts must be monotonic across merged stream: \
-             {} ({:?}) precedes {} ({:?})",
+                     {} ({:?}) precedes {} ({:?})",
             pair[0].message,
             pair[0].host_ts,
             pair[1].message,
@@ -604,7 +604,7 @@ log.shutdown()
 
         let body = r#"
 for i in range(20):
-log.info("burst", index=i)
+    log.info("burst", index=i)
 log.shutdown()
 "#;
         let snippet = format!("{HELPER_PREAMBLE}{body}");

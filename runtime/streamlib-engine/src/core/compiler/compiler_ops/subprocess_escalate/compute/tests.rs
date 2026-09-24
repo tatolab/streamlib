@@ -478,7 +478,7 @@ fn registration_answers_with_the_shaders_binding_names_and_kinds() {
             ("output_image", "storage_image"),
         ],
         "the two bindings differ in name and in kind, so binding by slot order \
-         rather than by name would swap them"
+                 rather than by name would swap them"
     );
 }
 
@@ -628,7 +628,7 @@ fn a_dispatch_reads_one_surface_and_writes_another() {
         assert_eq!(
             pixel, INVERTED_RGBA,
             "pixel {pixel_index} must be the inverted seed — the kernel read \
-             `source_image` and wrote `output_image`, by name"
+                     `source_image` and wrote `output_image`, by name"
         );
     }
     drop(held);
@@ -758,7 +758,7 @@ fn binding_a_buffer_backed_surface_is_refused_by_name() {
     assert_eq!(
         canvas_before, canvas_after,
         "the refused dispatch must not evict the slot's cached canvas — a fresh \
-         texture here means the zero-extent guard fired after the eviction, not before"
+                 texture here means the zero-extent guard fired after the eviction, not before"
     );
     drop(registration_before);
     drop(held_buffer);
@@ -1017,7 +1017,7 @@ fn a_later_pass_in_a_batch_reads_what_an_earlier_pass_wrote() {
         ),
         CHAIN_DOUBLED_RGBA,
         "the chain's output — pass 2 must have read pass 1's writes, not the \
-         seed and not an undefined intermediate",
+                 seed and not an undefined intermediate",
     );
     assert_every_pixel_is(
         &read_back_rgba8(
@@ -1041,7 +1041,7 @@ fn a_later_pass_in_a_batch_reads_what_an_earlier_pass_wrote() {
         tracked_layout_of_surface(&sandbox, "chain-brightened"),
         streamlib_consumer_rhi::VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
         "the intermediate was written as a storage image and then read as a sampled \
-         texture, so it ends in the layout its last use required"
+                 texture, so it ends in the layout its last use required"
     );
     assert_eq!(
         tracked_layout_of_surface(&sandbox, "chain-doubled"),
@@ -1117,7 +1117,7 @@ fn a_batch_costs_one_submission_and_one_stall_where_separate_dispatches_cost_n()
     assert_eq!(
         batched_stalls, 1,
         "and cost the caller exactly one fence wait — a second would mean the \
-         recorder waits again at the next begin() on a fence it already drained"
+                 recorder waits again at the next begin() on a fence it already drained"
     );
 
     let submissions_before = sandbox.host_inner().queue_submission_count();
@@ -1150,14 +1150,14 @@ fn a_batch_costs_one_submission_and_one_stall_where_separate_dispatches_cost_n()
         separate_submissions,
         dispatches.len(),
         "a single dispatch rides the batch machinery as a recording of one, so N \
-         separate ops cost exactly N submissions — and if this is zero the counter \
-         is not counting and the batched assertion above proves nothing"
+                 separate ops cost exactly N submissions — and if this is zero the counter \
+                 is not counting and the batched assertion above proves nothing"
     );
     assert_eq!(
         separate_stalls,
         dispatches.len(),
         "and exactly N fence waits, one per op — paying this once instead of N \
-         times is the batch's whole advantage: {separate_stalls} vs {batched_stalls}"
+                 times is the batch's whole advantage: {separate_stalls} vs {batched_stalls}"
     );
     drop(held);
 }
@@ -1221,12 +1221,12 @@ fn a_single_dispatch_costs_one_submission_and_one_stall_and_rests_its_layouts() 
     assert_eq!(
         submissions, 1,
         "the barriers and the dispatch must go out as one command buffer — a \
-         second submission means a separate transition recording is back"
+                 second submission means a separate transition recording is back"
     );
     assert_eq!(
         stalls, 1,
         "and cost the caller exactly one fence wait — more means the kernel's \
-         own fence or a transition recorder's wait is back in the path"
+                 own fence or a transition recorder's wait is back in the path"
     );
 
     assert_eq!(
@@ -1375,7 +1375,7 @@ fn every_registration_cell_naming_one_image_learns_the_landed_layout() {
                 cell_b.current_layout(),
                 streamlib_consumer_rhi::VulkanLayout::GENERAL,
                 "and so does the second cell over the same image, which was never \
-                 a barrier's source"
+                         a barrier's source"
             );
             drop(held);
             Ok(())
@@ -1505,7 +1505,7 @@ fn a_refused_batch_submits_nothing_and_leaves_the_recorder_usable() {
         sandbox.host_inner().queue_submission_count(),
         submissions_before,
         "a refused batch submits nothing — not even the dispatches ahead of the \
-         one that was refused"
+                 one that was refused"
     );
     assert_every_pixel_is(
         &read_back_rgba8(
@@ -1762,7 +1762,7 @@ fn one_surface_bound_as_two_kinds_in_one_dispatch_is_refused() {
     assert!(
         message.contains("both-seed\"") && message.contains("both-seed#3"),
         "the refusal must name both spellings, since neither is wrong on its own: \
-         {message}"
+                 {message}"
     );
     drop(held);
 }

@@ -73,18 +73,18 @@ layout(location = 0) rayPayloadEXT vec3 traced_colour;
 void main() {
     vec2 pixel_centre = vec2(gl_LaunchIDEXT.xy) + vec2(0.5);
     vec2 normalized_device_coordinate =
-pixel_centre / vec2(gl_LaunchSizeEXT.xy) * 2.0 - 1.0;
+        pixel_centre / vec2(gl_LaunchSizeEXT.xy) * 2.0 - 1.0;
     traced_colour = vec3(0.0);
     traceRayEXT(
-scene_geometry,
-gl_RayFlagsOpaqueEXT,
-0xff,
-0, 0, 0,
-vec3(normalized_device_coordinate.x, -normalized_device_coordinate.y, 1.0),
-0.001,
-vec3(0.0, 0.0, -1.0),
-100.0,
-0
+        scene_geometry,
+        gl_RayFlagsOpaqueEXT,
+        0xff,
+        0, 0, 0,
+        vec3(normalized_device_coordinate.x, -normalized_device_coordinate.y, 1.0),
+        0.001,
+        vec3(0.0, 0.0, -1.0),
+        100.0,
+        0
     );
     imageStore(traced_output, ivec2(gl_LaunchIDEXT.xy), vec4(traced_colour, 1.0));
 }
@@ -102,23 +102,23 @@ layout(location = 0) rayPayloadEXT vec3 traced_colour;
 void main() {
     vec2 pixel_centre = vec2(gl_LaunchIDEXT.xy) + vec2(0.5);
     vec2 normalized_device_coordinate =
-pixel_centre / vec2(gl_LaunchSizeEXT.xy) * 2.0 - 1.0;
+        pixel_centre / vec2(gl_LaunchSizeEXT.xy) * 2.0 - 1.0;
     traced_colour = vec3(0.0);
     traceRayEXT(
-scene_geometry,
-gl_RayFlagsOpaqueEXT,
-0xff,
-0, 0, 0,
-vec3(normalized_device_coordinate.x, -normalized_device_coordinate.y, 1.0),
-0.001,
-vec3(0.0, 0.0, -1.0),
-100.0,
-0
+        scene_geometry,
+        gl_RayFlagsOpaqueEXT,
+        0xff,
+        0, 0, 0,
+        vec3(normalized_device_coordinate.x, -normalized_device_coordinate.y, 1.0),
+        0.001,
+        vec3(0.0, 0.0, -1.0),
+        100.0,
+        0
     );
     imageStore(
-traced_output,
-ivec2(gl_LaunchIDEXT.xy),
-vec4(vec3(1.0) - traced_colour, 1.0)
+        traced_output,
+        ivec2(gl_LaunchIDEXT.xy),
+        vec4(vec3(1.0) - traced_colour, 1.0)
     );
 }
 ";
@@ -1290,7 +1290,7 @@ fn a_trace_resolves_its_bindings_by_name_and_writes_the_storage_image() {
         } else {
             panic!(
                 "pixel {pixel_index} is {pixel:?}, which no stage of this kernel writes — \
-                 the trace left the seeded sentinel, so `traced_output` was never written"
+                         the trace left the seeded sentinel, so `traced_output` was never written"
             );
         }
     }
@@ -1301,6 +1301,6 @@ fn a_trace_resolves_its_bindings_by_name_and_writes_the_storage_image() {
     assert!(
         missed_pixels > 0,
         "every pixel hit, so the launch grid never left the triangle and the miss stage \
-         proved nothing"
+                 proved nothing"
     );
 }

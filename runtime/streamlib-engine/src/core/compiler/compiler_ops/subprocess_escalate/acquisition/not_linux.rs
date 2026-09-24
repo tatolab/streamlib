@@ -10,11 +10,11 @@ use crate::core::context::GpuContextLimitedAccess;
 pub(in super::super) fn handle_acquire_image(
     _sandbox: &GpuContextLimitedAccess,
     _registry: &EscalateHandleRegistry,
-    rid: String,
+    request_id: String,
     _request: EscalateRequestAcquireImage,
 ) -> EscalateResponse {
     EscalateResponse::Err(EscalateResponseErr {
-        request_id: rid,
+        request_id,
         message: "acquire_image is only available on Linux (DMA-BUF render-target path)"
             .to_string(),
     })

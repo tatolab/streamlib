@@ -215,7 +215,9 @@ dispatch.
 ## Removals
 
 - REMOVED: surface-backed kinds are storage_image and sampled_texture
-  The dispatch planners' refusal of `storage_buffer` (`subprocess_escalate.rs:2137`, `:2600`).
+  The dispatch planners' refusal of `storage_buffer` (`plan_supplied_compute_bindings` in
+  `subprocess_escalate/compute/linux.rs`, `plan_supplied_surface_bound_kernel_bindings` in
+  `subprocess_escalate/surface_bound_kernel_binding.rs`).
   Replaced by a refusal that names uniform buffers only.
 
 ---

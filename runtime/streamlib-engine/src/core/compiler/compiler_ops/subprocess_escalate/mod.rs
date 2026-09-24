@@ -17,10 +17,12 @@
 
 mod acquisition;
 mod compute;
+mod device_idle;
 mod export_staging;
 mod graphics;
 pub(super) mod handle_lifecycle;
 mod helper_log_record;
+#[cfg(any(test, target_os = "linux"))]
 mod hex_encoded_wire_bytes;
 mod inbound_link_stamp_clock_identity;
 #[cfg(target_os = "linux")]
@@ -34,15 +36,10 @@ mod tests;
 
 use self::handle_lifecycle::EscalateHandleRegistry;
 use super::subprocess_escalate_wire_types::escalate_request::{
-    EscalateRequestCloseProcessorOwnedWindow, EscalateRequestCopyDeviceExportStagingBackToSurface,
-    EscalateRequestDrainProcessorOwnedWindowEvents, EscalateRequestInboundLinkStampClockIdentity,
-    EscalateRequestOpenCpuReadbackStaging, EscalateRequestOpenDeviceExportStaging,
-    EscalateRequestRefillDeviceExportStaging, EscalateRequestRunCpuReadbackCopy,
-    EscalateRequestWaitDeviceIdle,
+    EscalateRequestCloseProcessorOwnedWindow, EscalateRequestDrainProcessorOwnedWindowEvents,
+    EscalateRequestInboundLinkStampClockIdentity,
 };
-use super::subprocess_escalate_wire_types::escalate_response::{
-    EscalateResponseErr, EscalateResponseOk,
-};
+use super::subprocess_escalate_wire_types::escalate_response::EscalateResponseErr;
 use super::subprocess_escalate_wire_types::{EscalateRequest, EscalateResponse};
 use crate::core::context::GpuContextLimitedAccess;
 #[cfg(test)]
@@ -125,16 +122,9 @@ pub(crate) fn handle_escalate_op(
         EscalateRequest::AcquireImage(req) => Some(acquisition::handle_acquire_image(
             sandbox, registry, rid, req,
         )),
-        EscalateRequest::RunCpuReadbackCopy(EscalateRequestRunCpuReadbackCopy {
-            request_id: _,
-            surface_id,
-            direction,
-        }) => Some(export_staging::handle_run_cpu_readback_copy(
-            sandbox,
-            rid,
-            &surface_id,
-            direction,
-        )),
+        EscalateRequest::RunCpuReadbackCopy(req) => Some(
+            export_staging::handle_run_cpu_readback_copy(sandbox, rid, req),
+        ),
         EscalateRequest::InboundLinkStampClockIdentity(
             EscalateRequestInboundLinkStampClockIdentity {
                 request_id: _,
@@ -147,54 +137,20 @@ pub(crate) fn handle_escalate_op(
                 &inbound_link_name,
             ),
         ),
-        EscalateRequest::WaitDeviceIdle(EscalateRequestWaitDeviceIdle { request_id: _ }) => {
-            Some(match sandbox.escalate(|full| full.wait_device_idle()) {
-                Ok(()) => EscalateResponse::Ok(EscalateResponseOk {
-                    request_id: rid,
-                    handle_id: String::new(),
-                    ..Default::default()
-                }),
-                Err(failure) => EscalateResponse::Err(EscalateResponseErr {
-                    request_id: rid,
-                    message: format!("wait_device_idle failed: {failure}"),
-                }),
-            })
+        EscalateRequest::WaitDeviceIdle(req) => {
+            Some(device_idle::handle_wait_device_idle(sandbox, rid, req))
         }
-        EscalateRequest::OpenCpuReadbackStaging(EscalateRequestOpenCpuReadbackStaging {
-            request_id: _,
-            surface_id,
-        }) => Some(export_staging::handle_open_cpu_readback_staging(
-            sandbox,
-            rid,
-            &surface_id,
-        )),
-        EscalateRequest::OpenDeviceExportStaging(EscalateRequestOpenDeviceExportStaging {
-            request_id: _,
-            surface_id,
-        }) => Some(export_staging::handle_open_device_export_staging(
-            sandbox,
-            rid,
-            &surface_id,
-        )),
-        EscalateRequest::RefillDeviceExportStaging(EscalateRequestRefillDeviceExportStaging {
-            request_id: _,
-            surface_id,
-        }) => Some(export_staging::handle_refill_device_export_staging(
-            sandbox,
-            rid,
-            &surface_id,
-        )),
-        EscalateRequest::CopyDeviceExportStagingBackToSurface(
-            EscalateRequestCopyDeviceExportStagingBackToSurface {
-                request_id: _,
-                surface_id,
-            },
-        ) => Some(
-            export_staging::handle_copy_device_export_staging_back_to_surface(
-                sandbox,
-                rid,
-                &surface_id,
-            ),
+        EscalateRequest::OpenCpuReadbackStaging(req) => Some(
+            export_staging::handle_open_cpu_readback_staging(sandbox, rid, req),
+        ),
+        EscalateRequest::OpenDeviceExportStaging(req) => Some(
+            export_staging::handle_open_device_export_staging(sandbox, rid, req),
+        ),
+        EscalateRequest::RefillDeviceExportStaging(req) => Some(
+            export_staging::handle_refill_device_export_staging(sandbox, rid, req),
+        ),
+        EscalateRequest::CopyDeviceExportStagingBackToSurface(req) => Some(
+            export_staging::handle_copy_device_export_staging_back_to_surface(sandbox, rid, req),
         ),
         EscalateRequest::RegisterComputeKernel(req) => {
             Some(compute::handle_register_compute_kernel(sandbox, rid, req))
