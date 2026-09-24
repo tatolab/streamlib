@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.21](https://github.com/tatolab/streamlib/compare/v0.26.20...v0.26.21) (2026-09-24)
+
+
+### Features
+
+* **python:** device tensors on macOS — torch-MPS and MLX over the frame's own IOSurface ([#2460](https://github.com/tatolab/streamlib/issues/2460)) ([0735fd6](https://github.com/tatolab/streamlib/commit/0735fd633571cfe23104a17cacdb865d12c2affc))
+
 ## [0.26.20](https://github.com/tatolab/streamlib/compare/v0.26.19...v0.26.20) (2026-09-24)
 
 
