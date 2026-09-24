@@ -292,7 +292,6 @@ def test_hooks_still_running_hold_off_a_second_thread_rather_than_re_running(
 # =============================================================================
 
 
-@pytest.mark.awaiting_macos_parity(issue=2408)
 @pytest.mark.requires_gpu
 def test_a_helper_runs_every_hook_before_it_imports_the_processor(
     capability_extension_app,

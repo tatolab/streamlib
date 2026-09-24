@@ -17,9 +17,9 @@ import dataclasses
 import json
 import os
 import threading
-import time
 import traceback
 
+from engine_media_clock import engine_media_clock_now_ns
 from streamlib import (
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
@@ -121,9 +121,9 @@ class ConfigProbe:
 class TimeProbe:
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         def observe() -> dict:
-            before = time.clock_gettime_ns(time.CLOCK_MONOTONIC)
+            before = engine_media_clock_now_ns()
             context_time = ctx.time
-            after = time.clock_gettime_ns(time.CLOCK_MONOTONIC)
+            after = engine_media_clock_now_ns()
             return {"before": before, "context_time": context_time, "after": after}
 
         _report(observe)

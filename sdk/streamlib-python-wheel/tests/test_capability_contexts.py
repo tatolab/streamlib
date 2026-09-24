@@ -17,7 +17,6 @@ as their names, because the observation crosses a process boundary.
 
 import json
 import re
-import time
 from pathlib import Path
 
 import pytest
@@ -27,6 +26,7 @@ from capability_context_probes import (
     SURFACE_HEIGHT,
     SURFACE_WIDTH,
 )
+from engine_media_clock import engine_media_clock_now_ns
 
 pytestmark = pytest.mark.requires_gpu
 
@@ -65,7 +65,6 @@ def test_setup_receives_the_full_access_context_with_gpu_full_access(
     assert observation["gpu_limited_access_type"] == "GpuContextLimitedAccess"
 
 
-@pytest.mark.awaiting_macos_parity(issue=2408)
 def test_process_receives_the_limited_context_without_gpu_full_access(
     start_app_under_test,
 ):
@@ -96,9 +95,9 @@ def test_ctx_config_is_an_empty_dict_when_nothing_was_passed(start_app_under_tes
     assert observation["config"] == {}
 
 
-def test_ctx_time_is_kernel_monotonic_nanoseconds(start_app_under_test):
-    """Two kernel reads bracket `ctx.time`, so the value is provably the raw
-    `CLOCK_MONOTONIC` domain.
+def test_ctx_time_is_the_engine_media_clock_in_nanoseconds(start_app_under_test):
+    """Two kernel reads bracket `ctx.time`, so the value is provably the
+    engine's media-clock domain.
 
     The bracket is taken inside the helper process, which is the point: the
     clock has to be the machine's, comparable across processes, not each
@@ -113,7 +112,6 @@ def test_ctx_time_is_kernel_monotonic_nanoseconds(start_app_under_test):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.awaiting_macos_parity(issue=2408)
 def test_an_explicit_write_timestamp_reaches_the_reader_unchanged(
     start_app_under_test,
 ):
@@ -121,13 +119,12 @@ def test_an_explicit_write_timestamp_reaches_the_reader_unchanged(
     assert observation["timestamp_ns"] == EXPLICIT_TIMESTAMP_NS
 
 
-@pytest.mark.awaiting_macos_parity(issue=2408)
-def test_a_default_write_timestamp_is_kernel_monotonic(start_app_under_test):
-    """The stamp a writer defaults to is the machine's monotonic clock, so it
+def test_a_default_write_timestamp_is_the_engine_media_clock(start_app_under_test):
+    """The stamp a writer defaults to is the machine's media clock, so it
     is comparable against one a reader takes in a different process."""
-    before_run = time.clock_gettime_ns(time.CLOCK_MONOTONIC)
+    before_run = engine_media_clock_now_ns()
     observation = run_probe(start_app_under_test, "default_timestamp")
-    after_run = time.clock_gettime_ns(time.CLOCK_MONOTONIC)
+    after_run = engine_media_clock_now_ns()
     assert before_run <= observation["timestamp_ns"] <= after_run
 
 
@@ -174,7 +171,6 @@ def test_outputs_captured_in_setup_still_write_from_a_worker_thread(
 ZERO_ARGUMENT_PROCESS_APP = Path(__file__).parent / "zero_argument_process_app.py"
 
 
-@pytest.mark.awaiting_macos_parity(issue=2408)
 def test_a_zero_argument_process_hook_fails_loudly_with_a_type_error(
     start_app_under_test,
 ):

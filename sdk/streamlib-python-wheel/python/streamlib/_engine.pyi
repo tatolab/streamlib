@@ -1818,10 +1818,11 @@ class KernelDispatchBatch:
 
 @final
 class MonotonicTimer:
-    """Drift-free periodic timer backed by `timerfd_create(CLOCK_MONOTONIC)`.
+    """Drift-free periodic timer on the clock `monotonic_now_ns` reads.
 
-    The first absolute deadline is `now + interval`, then `TFD_TIMER_ABSTIME`
-    repeats, so ticks never accumulate drift.
+    A `timerfd` on Linux, a kqueue timer on macOS. The first deadline is
+    `now + interval` and every one after it is absolute, so ticks never
+    accumulate drift.
     """
 
     def __new__(cls, interval_ns: int) -> MonotonicTimer: ...
@@ -2011,7 +2012,11 @@ def _observe_the_runtime_mesh(
     """
 
 def monotonic_now_ns() -> int:
-    """Current monotonic time in nanoseconds via `clock_gettime(CLOCK_MONOTONIC)`."""
+    """Current monotonic time in nanoseconds, on the engine's media clock.
+
+    `CLOCK_MONOTONIC` on Linux; `mach_absolute_time` on macOS, which is
+    `time.CLOCK_UPTIME_RAW` and stops while the machine sleeps.
+    """
 
 def this_machines_stamp_clock_identity() -> str | None:
     """Which machine's monotonic clock `monotonic_now_ns` reads.

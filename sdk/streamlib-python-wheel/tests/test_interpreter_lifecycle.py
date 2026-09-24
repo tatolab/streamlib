@@ -368,7 +368,6 @@ def matched_pid(pattern: "re.Pattern[str]", app: AppUnderTest) -> int:
     return int(match.group(1))
 
 
-@pytest.mark.awaiting_macos_parity(issue=2408)
 @pytest.mark.requires_gpu
 def test_ctrl_c_with_a_processor_asleep_in_its_callback_exits_in_about_two_seconds(
     app_under_test,
@@ -389,7 +388,6 @@ def test_ctrl_c_with_a_processor_asleep_in_its_callback_exits_in_about_two_secon
     )
 
 
-@pytest.mark.awaiting_macos_parity(issue=2408)
 @pytest.mark.requires_gpu
 def test_three_helpers_slow_to_stop_cost_about_one_ladder(app_under_test):
     """Every helper walks its ladder at the same time.
@@ -416,7 +414,6 @@ def test_three_helpers_slow_to_stop_cost_about_one_ladder(app_under_test):
     )
 
 
-@pytest.mark.awaiting_macos_parity(issue=2408)
 @pytest.mark.requires_gpu
 def test_a_second_ctrl_c_forces_the_shutdown_past_a_long_teardown(app_under_test):
     """The second interrupt terminates a helper still inside its `teardown()`,
@@ -441,7 +438,6 @@ def test_a_second_ctrl_c_forces_the_shutdown_past_a_long_teardown(app_under_test
     )
 
 
-@pytest.mark.awaiting_macos_parity(issue=2408)
 @pytest.mark.requires_gpu
 def test_a_third_ctrl_c_kills_every_helper_process_group_and_exits_130(app_under_test):
     """The third interrupt exits at once, taking the helper's group with it.
@@ -473,7 +469,6 @@ def test_a_third_ctrl_c_kills_every_helper_process_group_and_exits_130(app_under
     )
 
 
-@pytest.mark.awaiting_macos_parity(issue=2408)
 @pytest.mark.requires_gpu
 def test_sighup_tears_the_graph_down_gracefully(app_under_test):
     """A closed terminal is a graceful shutdown, `teardown()` included."""
