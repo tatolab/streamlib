@@ -189,11 +189,8 @@ impl VulkanAccelerationStructureInner {
         vertices: &[f32],
         indices: &[u32],
     ) -> Result<Arc<Self>> {
-        if !vulkan_device.supports_ray_tracing_pipeline() {
-            return Err(Error::GpuError(format!(
-                "Acceleration structure '{label}': ray-tracing extensions not supported by device"
-            )));
-        }
+        vulkan_device
+            .refuse_without_the_ray_tracing_tier(&format!("Acceleration structure '{label}'"))?;
         if vertices.is_empty() || indices.is_empty() {
             return Err(Error::GpuError(format!(
                 "Acceleration structure '{label}': empty geometry (vertices={}, indices={})",
@@ -342,11 +339,8 @@ impl VulkanAccelerationStructureInner {
         label: &str,
         instances: &[TlasInstanceDesc],
     ) -> Result<Arc<Self>> {
-        if !vulkan_device.supports_ray_tracing_pipeline() {
-            return Err(Error::GpuError(format!(
-                "Acceleration structure '{label}': ray-tracing extensions not supported by device"
-            )));
-        }
+        vulkan_device
+            .refuse_without_the_ray_tracing_tier(&format!("Acceleration structure '{label}'"))?;
         if instances.is_empty() {
             return Err(Error::GpuError(format!(
                 "Acceleration structure '{label}': TLAS must have at least one instance"

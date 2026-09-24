@@ -190,6 +190,11 @@ impl VulkanComputeKernelInner {
         // Created in a strict order; on failure earlier objects are torn down by the
         // staged-cleanup helpers so we never leak on the error path.
 
+        vulkan_device.refuse_a_shader_the_driver_cannot_serve(
+            &format!("Compute kernel '{}'", descriptor.label),
+            vk::ShaderStageFlags::COMPUTE,
+            &spirv,
+        )?;
         let shader_module = create_shader_module(device, &spirv, descriptor.label)?;
 
         let descriptor_set_layout =
@@ -1716,6 +1721,61 @@ mod tests {
     fn vulkan_device_for_dispatch_tests() -> Arc<HostVulkanDevice> {
         HostVulkanDevice::new()
             .expect("the rig must produce a Vulkan device for the dispatch tests")
+    }
+
+    const CLUSTERED_SUBGROUP_REDUCTION_GLSL: &str = r#"#version 450
+#extension GL_KHR_shader_subgroup_clustered : require
+layout(local_size_x = 64) in;
+layout(std430, set = 0, binding = 0) buffer ReducedValues { uint values[]; } reduced_values;
+void main() {
+    uint lane = gl_GlobalInvocationID.x;
+    reduced_values.values[lane] = subgroupClusteredAdd(reduced_values.values[lane], 4);
+}
+"#;
+
+    #[test]
+    fn a_subgroup_operation_is_built_where_the_driver_serves_it_and_refused_by_name_where_not() {
+        let device = vulkan_device_for_dispatch_tests();
+        let spv = crate::core::rhi::GlslShaderSourceToSpirvCompiler::new()
+            .compile_or_reuse(
+                CLUSTERED_SUBGROUP_REDUCTION_GLSL,
+                crate::core::rhi::GlslCompilationTargetStage::Compute,
+                "main",
+                "clustered-subgroup-reduction",
+            )
+            .expect("the clustered reduction compiles");
+        let (bindings, push_constant_size) =
+            crate::core::rhi::derive_bindings_from_spirv(&spv).expect("the blob reflects");
+        let built = VulkanComputeKernel::new(
+            &device,
+            &ComputeKernelDescriptor {
+                label: "clustered-subgroup-reduction",
+                spv: &spv,
+                entry_point: "main",
+                bindings: &bindings,
+                push_constant_size,
+            },
+        );
+        let support = device.subgroup_operation_support();
+        if support
+            .supported_stages
+            .contains(vk::ShaderStageFlags::COMPUTE)
+            && support
+                .supported_operations
+                .contains(vk::SubgroupFeatureFlags::BASIC | vk::SubgroupFeatureFlags::CLUSTERED)
+        {
+            built.expect("a driver serving clustered operations builds the kernel");
+        } else {
+            let refusal = built
+                .err()
+                .expect("a driver not serving clustered operations refuses at construction")
+                .to_string();
+            assert!(refusal.contains(&support.driver_name), "{refusal}");
+            assert!(
+                refusal.contains("clustered-subgroup-reduction"),
+                "{refusal}"
+            );
+        }
     }
 
     /// Allocate a HOST_VISIBLE storage buffer of `element_count * 4` bytes

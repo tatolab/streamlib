@@ -112,12 +112,10 @@ impl VulkanRayTracingKernelInner {
         vulkan_device: &Arc<HostVulkanDevice>,
         descriptor: &RayTracingKernelDescriptor<'_>,
     ) -> Result<Self> {
-        if !vulkan_device.supports_ray_tracing_pipeline() {
-            return Err(Error::GpuError(format!(
-                "Ray-tracing kernel '{}': ray-tracing extensions not supported by device",
-                descriptor.label
-            )));
-        }
+        vulkan_device.refuse_without_the_ray_tracing_tier(&format!(
+            "Ray-tracing kernel '{}'",
+            descriptor.label
+        ))?;
         let rt_props = vulkan_device.ray_tracing_pipeline_properties().ok_or_else(|| {
             Error::GpuError(format!(
                 "Ray-tracing kernel '{}': device reports RT supported but properties unavailable",
@@ -147,6 +145,16 @@ impl VulkanRayTracingKernelInner {
                 .chunks_exact(4)
                 .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                 .collect();
+            if let Err(refusal) = vulkan_device.refuse_a_shader_the_driver_cannot_serve(
+                &format!("Ray-tracing kernel '{}'", descriptor.label),
+                stage_to_vk(stage.stage),
+                &spirv,
+            ) {
+                for m in shader_modules.drain(..) {
+                    unsafe { device.destroy_shader_module(m, None) };
+                }
+                return Err(refusal);
+            }
             let info = vk::ShaderModuleCreateInfo::builder().code(&spirv).build();
             match unsafe { device.create_shader_module(&info, None) } {
                 Ok(m) => shader_modules.push(m),

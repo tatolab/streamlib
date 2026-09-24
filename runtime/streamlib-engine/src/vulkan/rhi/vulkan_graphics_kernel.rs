@@ -224,7 +224,7 @@ impl VulkanGraphicsKernelInner {
         // ---- Vulkan objects -----------------------------------------------------
         // Strict creation order with staged cleanup on each error edge so we
         // never leak partial state.
-        let shader_modules = create_shader_modules(device, descriptor)?;
+        let shader_modules = create_shader_modules(vulkan_device, descriptor)?;
 
         let descriptor_set_layout = match create_descriptor_set_layout(device, descriptor.bindings)
         {
@@ -1811,9 +1811,10 @@ fn index_type_to_vk(t: IndexType) -> vk::IndexType {
 }
 
 fn create_shader_modules(
-    device: &vulkanalia::Device,
+    vulkan_device: &HostVulkanDevice,
     descriptor: &GraphicsKernelDescriptor<'_>,
 ) -> Result<Vec<(GraphicsShaderStage, vk::ShaderModule)>> {
+    let device = vulkan_device.device();
     let mut out: Vec<(GraphicsShaderStage, vk::ShaderModule)> =
         Vec::with_capacity(descriptor.stages.len());
     for stage in descriptor.stages {
@@ -1822,6 +1823,14 @@ fn create_shader_modules(
             .chunks_exact(4)
             .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect();
+        if let Err(refusal) = vulkan_device.refuse_a_shader_the_driver_cannot_serve(
+            &format!("Graphics kernel '{}'", descriptor.label),
+            graphics_stage_to_vk(stage.stage),
+            &spirv,
+        ) {
+            destroy_shader_modules(device, &out);
+            return Err(refusal);
+        }
         let info = vk::ShaderModuleCreateInfo::builder().code(&spirv).build();
         match unsafe { device.create_shader_module(&info, None) } {
             Ok(m) => out.push((stage.stage, m)),
@@ -2391,6 +2400,63 @@ mod tests {
             },
             pipeline_state: pipeline_state.clone(),
             descriptor_sets_in_flight: 2,
+        }
+    }
+
+    const SUBGROUP_ELECTING_VERTEX_GLSL: &str = r#"#version 450
+#extension GL_KHR_shader_subgroup_basic : require
+layout(location = 0) out vec2 uv;
+void main() {
+    uv = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2);
+    float elected_lane_depth = subgroupElect() ? 0.0 : 0.5;
+    gl_Position = vec4(uv * 2.0 - 1.0, elected_lane_depth, 1.0);
+}
+"#;
+
+    #[test]
+    fn a_vertex_stage_subgroup_operation_is_built_where_the_driver_serves_it_and_refused_by_name_where_not()
+     {
+        let Some(device) = try_vulkan_device() else {
+            return;
+        };
+        let vertex_spv = crate::core::rhi::GlslShaderSourceToSpirvCompiler::new()
+            .compile_or_reuse(
+                SUBGROUP_ELECTING_VERTEX_GLSL,
+                crate::core::rhi::GlslCompilationTargetStage::Vertex,
+                "main",
+                "subgroup-electing-vertex",
+            )
+            .expect("the subgroup-electing vertex stage compiles");
+        let stages = [
+            GraphicsStage::vertex(&vertex_spv),
+            GraphicsStage::fragment(frag_spv()),
+        ];
+        let (bindings, _) =
+            derive_bindings_from_spirv_multistage(&stages).expect("derive bindings");
+        let pipeline_state = default_pipeline_state();
+        let built = VulkanGraphicsKernel::new(
+            &device,
+            &display_blit_descriptor(&stages, &bindings, &pipeline_state),
+        );
+        let support = device.subgroup_operation_support();
+        if support
+            .supported_stages
+            .contains(vk::ShaderStageFlags::VERTEX)
+            && support
+                .supported_operations
+                .contains(vk::SubgroupFeatureFlags::BASIC)
+        {
+            built.expect("a driver serving vertex-stage subgroup operations builds the kernel");
+        } else {
+            let refusal = built
+                .err()
+                .expect(
+                    "a driver not serving vertex-stage subgroup operations refuses at construction",
+                )
+                .to_string();
+            assert!(refusal.contains(&support.driver_name), "{refusal}");
+            assert!(refusal.contains("VERTEX"), "{refusal}");
+            assert!(refusal.contains("display-blit"), "{refusal}");
         }
     }
 
