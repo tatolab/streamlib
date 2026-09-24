@@ -45,18 +45,24 @@ use streamlib_consumer_rhi::ConsumerVulkanDevice;
 
 use streamlib::sdk::rhi::PixelFormat;
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod gpu_kernels;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) use gpu_kernels::{
+    HelperProcessGraphicsDraw, HelperProcessGraphicsKernelRegistration,
+    HelperProcessRayTracingKernelRegistration, compute_dispatch_wire_entry,
+};
+
 #[cfg(target_os = "linux")]
 pub(crate) use linux::{
     CpuReadbackCopyDirection, HelperAcquiredTexture, HelperCheckedOutTextureSurface,
     HelperCpuReadbackExport, HelperDeviceExport, HelperForeignSurfaceUnregisterDebt,
-    HelperProcessGraphicsDraw, HelperProcessGraphicsKernelRegistration,
-    HelperProcessRayTracingKernelRegistration, OpaqueFdTextureExportDescription,
-    compute_dispatch_wire_entry,
+    OpaqueFdTextureExportDescription,
 };
 #[cfg(target_os = "macos")]
 pub(crate) use macos::HelperCheckedOutTextureSurface;
@@ -65,6 +71,17 @@ use macos::{
     HelperIOSurfaceCpuLock, HelperIOSurfaceImportsByPoolSlot, HelperIOSurfacePoolSlotImport,
     HelperIOSurfaceUseCountClaim,
 };
+
+/// One field of an escalate response, named in the failure so a parent
+/// that answered a shape this child does not understand says which part.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn response_field<'py>(response: &Bound<'py, PyAny>, field: &str) -> PyResult<Bound<'py, PyAny>> {
+    response.get_item(field).map_err(|_| {
+        crate::python_processor_context::gpu_operation_error(format!(
+            "the parent's response carried no {field}"
+        ))
+    })
+}
 
 /// One escalate round trip to the parent, called with the GIL attached.
 ///

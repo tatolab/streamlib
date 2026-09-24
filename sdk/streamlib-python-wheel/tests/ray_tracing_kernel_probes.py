@@ -477,3 +477,44 @@ class AccelerationStructureHandleRefusalProbe(_RayTracingKernelProbeBase):
             "indices_that_are_not_triangles": indices_that_are_not_triangles,
             "an_index_past_the_last_vertex": an_index_past_the_last_vertex,
         }
+
+
+# What every ray-tracing constructor says on a device without the tier.
+RAY_TRACING_TIER_ABSENT = "the ray-tracing tier is absent"
+
+
+@processor(
+    execution="manual",
+    description="Ray-tracing constructors refuse at setup() naming the absent tier",
+)
+class RayTracingTierAbsentRefusalProbe:
+    """Each ray-tracing constructor called from `setup()`, answered or refused.
+
+    Reports `tier_present` when the device builds both, so the asserting test
+    can say the device is out of its scope rather than pass on it.
+    """
+
+    def setup(self, ctx: RuntimeContextFullAccess) -> None:
+        def observe() -> dict:
+            gpu = ctx.gpu_full_access
+            refusals: dict[str, str] = {}
+            try:
+                gpu.build_triangles_blas(
+                    vertices=TRIANGLE_VERTICES,
+                    indices=TRIANGLE_INDICES,
+                    label="python-triangle-blas",
+                )
+            except Exception as refusal:  # noqa: BLE001 — the refusal is the subject
+                refusals["build_triangles_blas"] = str(refusal)
+            try:
+                _traced_triangle_kernel(gpu, DECLARED_BINDINGS)
+            except Exception as refusal:  # noqa: BLE001 — the refusal is the subject
+                refusals["create_ray_tracing_kernel"] = str(refusal)
+            if not refusals:
+                return {"tier_present": True}
+            return {"refusals": refusals}
+
+        _report(observe)
+
+    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+        pass

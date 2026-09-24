@@ -11,7 +11,7 @@ use pyo3::types::PyDict;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::python_helper_process_pixel_exchange::HelperCheckedOutSurface;
 use crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::python_helper_process_pixel_exchange::{
     HelperProcessGraphicsKernelRegistration, HelperProcessRayTracingKernelRegistration,
 };
@@ -24,7 +24,7 @@ use super::gpu_surface_check_out_lease::{
     PythonGpuSurfaceCheckOutLease, PythonOpaqueFdTextureExport,
 };
 use super::gpu_surface_handle::PythonGpuSurfaceHandle;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::kernel_wire_encoding::{
     GRAPHICS_BINDING_KIND_WIRE_NAMES, GRAPHICS_SHADER_STAGE_WIRE_BITS,
     GraphicsPipelineStateArguments, RAY_TRACING_BINDING_KIND_WIRE_NAMES,
@@ -340,7 +340,7 @@ impl PythonGpuContextFullAccess {
         bindings: Option<&Bound<'_, PyDict>>,
         entry_point: &str,
     ) -> PyResult<PythonComputeKernel> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         if let Some(exchange_client) = &self.helper_process_exchange_client {
             let declared = declared_compute_bindings_to_wire(python, bindings)?;
             // Neither and both are refused engine-side, in the one place the
@@ -430,7 +430,7 @@ impl PythonGpuContextFullAccess {
         color_blend: Option<&Bound<'_, PyDict>>,
         dynamic_state: &str,
     ) -> PyResult<PythonGraphicsKernel> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         if let Some(exchange_client) = &self.helper_process_exchange_client {
             let declared = declared_staged_kernel_bindings_to_wire(
                 python,
@@ -535,7 +535,7 @@ impl PythonGpuContextFullAccess {
         bindings: Option<&Bound<'_, PyDict>>,
         label: &str,
     ) -> PyResult<PythonRayTracingKernel> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         if let Some(exchange_client) = &self.helper_process_exchange_client {
             let wire_stages = ray_tracing_stages_to_wire(python, stages)?;
             let wire_groups = ray_tracing_shader_groups_to_wire(python, groups, wire_stages.len())?;
@@ -603,7 +603,7 @@ impl PythonGpuContextFullAccess {
                 indices.len()
             )));
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         if let Some(exchange_client) = &self.helper_process_exchange_client {
             let acceleration_structure_id = exchange_client.register_acceleration_structure_blas(
                 python,
@@ -636,7 +636,7 @@ impl PythonGpuContextFullAccess {
         instances: &Bound<'_, PyAny>,
         label: &str,
     ) -> PyResult<PythonAccelerationStructureHandle> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         if let Some(exchange_client) = &self.helper_process_exchange_client {
             let wire_instances = tlas_instances_to_wire(python, instances)?;
             let acceleration_structure_id = exchange_client.register_acceleration_structure_tlas(
