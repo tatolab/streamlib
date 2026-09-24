@@ -1410,8 +1410,11 @@ class GpuSurfaceHandle:
         """
 
     def unlock(self) -> None:
-        """Close CPU access, publishing any pending staged write back into the
-        surface first — through whichever staging holds the edit. Idempotent.
+        """Close CPU access, publishing any pending write first. Idempotent.
+
+        On Linux the edit publishes from whichever staging holds it. On macOS
+        a writable Metal capsule's stores are already in the surface, so the
+        unlock drains torch's MPS queue before it returns.
         """
 
     def as_numpy(self) -> Any:
@@ -1423,13 +1426,9 @@ class GpuSurfaceHandle:
         """
 
     def as_device_tensor(self) -> GpuSurfaceDeviceTensorScope:
-        """The scoped device-tensor view over this surface's pixels.
-
-        Entering blits the surface to a linear DLPack view a third-party
-        GPU package writes in place; leaving normally blits the write
-        back, ordered by the engine ahead of its next read; leaving by a
-        propagating exception discards it, and the surface keeps the
-        frame it already held.
+        """The scoped device-tensor view over this surface's pixels, which a
+        third-party GPU package writes in place. `GpuSurfaceDeviceTensorScope`
+        states each floor's write rule.
         """
 
     def __dlpack_device__(self) -> tuple[int, int]: ...
@@ -1442,12 +1441,16 @@ class GpuSurfaceHandle:
     ) -> Any:
         """A DLPack capsule over the pixels. Requires a lock.
 
-        A graph frame's natural side is the device: with a usable CUDA
-        runtime the tensor is GPU-resident (one engine-side blit into an
-        exportable staging buffer — zero CPU copies, never claimed
-        copy-free); otherwise, or with `dl_device=(1, 0)`, it is the host
-        mapping. A writable device tensor's edits publish back to the
-        surface at `unlock()`.
+        A graph frame's natural side is the device. On Linux, with a usable
+        CUDA runtime, it is a `kDLCUDA` tensor over one engine-side blit into
+        an exportable staging buffer — zero CPU copies, never claimed
+        copy-free. On macOS it is a `kDLMetal` tensor over a no-copy Metal
+        buffer on the frame's own IOSurface, which torch ≥ 2.10 (measured on
+        2.14) imports as `mps` and MLX ≥ 0.32 as an array. Without a device
+        side, or with `dl_device=(1, 0)`, it is the host mapping — on macOS
+        the same IOSurface pages. `copy=True` is refused: the export is in
+        place. A writable device tensor's edits publish at `unlock()`. The
+        CUDA Array Interface is not offered on macOS.
 
         The tensor may outlive this handle: it holds its own share of the
         surface, so the pool slot is not reused until the tensor is released.
@@ -1457,16 +1460,32 @@ class GpuSurfaceHandle:
 class GpuSurfaceDeviceTensorScope:
     """A scope handing a surface's pixels to a third-party GPU package.
 
-    Entering blits the surface to a linear DLPack view; leaving normally
-    blits any write back, ordered ahead of the engine's next read; leaving
-    by a propagating exception discards the write and the surface keeps
-    the frame it already held. The engine owns the ordering — no fence or
-    timeline vocabulary appears here, and no `torch.cuda.synchronize()` is
-    owed before leaving.
+    On Linux, entering blits the surface to a linear CUDA view; leaving
+    normally blits any write back, ordered ahead of the engine's next read;
+    leaving by a propagating exception discards the write and the surface
+    keeps the frame it already held. No `torch.cuda.synchronize()` is owed.
+
+    On macOS the view is a `kDLMetal` tensor over the surface's own IOSurface
+    pages (torch ≥ 2.10, measured on 2.14; MLX ≥ 0.32), so a write lands in
+    the surface itself, and publication is per store: a raise leaves the
+    stores that already landed. Leaving either way drains torch's MPS queue,
+    so no `torch.mps.synchronize()` is owed. MLX's queue is not drained,
+    because `mx.synchronize()` holds the GIL while an MLX completion handler
+    may need it. An MLX write therefore reaches the frame only when all of
+    these hold:
+
+    - it is `mx.eval`ed inside the scope;
+    - it stores through a partial slice — MLX turns `a[:] = ...` and
+      `a[...] = ...` into a new array, and the frame never sees it;
+    - no other array derived from the imported one is alive at the store,
+      since MLX then writes a buffer of its own.
+
+    A GPU package other than torch and MLX must finish its own queue before
+    the scope ends.
 
     Independent of `lock()` by design: entering the scope is the write
-    declaration. A surface whose export cannot take a write-back — a pool
-    member its producer still owns, or a texture acquired without
+    declaration. A surface whose export cannot take a write-back — on Linux,
+    a pool member its producer still owns, or a texture acquired without
     `copy_dst` usage — refuses at `__enter__` rather than discarding edits
     silently.
     """
@@ -1486,10 +1505,10 @@ class GpuSurfaceDeviceTensorScope:
         dl_device: tuple[int, int] | None = ...,
         copy: bool | None = ...,
     ) -> Any:
-        """A DLPack capsule over the blitted view — what `torch.from_dlpack`
-        consumes. Always writable — a read-only export was refused at
-        `__enter__` — and minting one arms the blit-back on leaving the
-        scope normally.
+        """A DLPack capsule over the scope's device view — what
+        `torch.from_dlpack` and `mx.from_dlpack` consume. Always writable: a
+        read-only export was refused at `__enter__`. `copy=True` and a host
+        `dl_device` are refused; the host side is the handle's own.
         """
 
 @final

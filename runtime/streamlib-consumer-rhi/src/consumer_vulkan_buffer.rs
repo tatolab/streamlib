@@ -320,6 +320,52 @@ impl ConsumerVulkanBuffer {
     pub fn backing_iosurface(&self) -> Option<&objc2_io_surface::IOSurfaceRef> {
         self.backing_iosurface.as_deref()
     }
+
+    /// The `MTLBuffer` MoltenVK backs plane 0's memory with, retained for the
+    /// caller — for an IOSurface import, a no-copy buffer over the surface's
+    /// own pages.
+    ///
+    /// The buffer addresses memory this import pins, so it must not outlive
+    /// `self`. Refused when the device lacks `VK_EXT_metal_objects` or
+    /// MoltenVK hands back no buffer.
+    pub fn exported_metal_buffer(
+        &self,
+    ) -> Result<objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLBuffer>>>
+    {
+        use vulkanalia::vk::ExtMetalObjectsExtensionDeviceCommands;
+
+        if !self.vulkan_device.supports_metal_objects_interop() {
+            return Err(ConsumerRhiError::Gpu(
+                "ConsumerVulkanBuffer::exported_metal_buffer: VK_EXT_metal_objects is not \
+                 enabled on this device, so no MTLBuffer can be exported"
+                    .into(),
+            ));
+        }
+        let mut buffer_info = vk::ExportMetalBufferInfoEXT::builder()
+            .memory(self.imported_memory)
+            .build();
+        let mut objects_info = vk::ExportMetalObjectsInfoEXT::builder().build();
+        objects_info.next = (&mut buffer_info as *mut _) as *const std::ffi::c_void;
+        // SAFETY: the extension is enabled (checked above) and the chain names
+        // this import's own memory; MoltenVK writes the buffer pointer back.
+        unsafe {
+            self.vulkan_device
+                .device()
+                .export_metal_objects_ext(&mut objects_info)
+        };
+        let metal_buffer_pointer = buffer_info.mtl_buffer
+            as *mut objc2::runtime::ProtocolObject<dyn objc2_metal::MTLBuffer>;
+        // SAFETY: MoltenVK returns the memory's own `MTLBuffer`, alive for the
+        // memory's lifetime and not retained for the caller; retaining here
+        // gives the caller its own reference.
+        unsafe { objc2::rc::Retained::retain(metal_buffer_pointer) }.ok_or_else(|| {
+            ConsumerRhiError::Gpu(
+                "ConsumerVulkanBuffer::exported_metal_buffer: vkExportMetalObjectsEXT returned \
+                 no MTLBuffer for the imported memory"
+                    .into(),
+            )
+        })
+    }
 }
 
 impl ConsumerVulkanBuffer {
@@ -718,6 +764,55 @@ mod iosurface_import_tests {
         };
         unsafe { iosurface.unlock(IOSurfaceLockOptions::empty(), std::ptr::null_mut()) };
         assert_eq!(read_through_the_surface, 0xA5);
+    }
+
+    /// The exported `MTLBuffer` is the surface's own pages with no copy: its
+    /// contents pointer is the surface's base address, and a store through
+    /// it reads back through the surface.
+    #[test]
+    fn an_iosurface_import_exports_a_metal_buffer_over_the_surfaces_own_pages() {
+        use objc2_metal::MTLBuffer as _;
+
+        let Some(device) = try_create_device() else {
+            return;
+        };
+        // A device without the extension has no MTLBuffer to export; the
+        // refusal path is the import path's own.
+        if !device.supports_metal_objects_interop() {
+            return;
+        }
+        let iosurface = a_private_bgra_iosurface(1000, 8);
+        let buffer = ConsumerVulkanBuffer::from_iosurface_pages(&device, &iosurface)
+            .expect("an IOSurface imports as host memory");
+
+        let metal_buffer = buffer
+            .exported_metal_buffer()
+            .expect("the import's memory exports its MTLBuffer");
+
+        assert_eq!(
+            metal_buffer.contents().as_ptr().cast::<u8>(),
+            iosurface.base_address().as_ptr().cast::<u8>(),
+            "the MTLBuffer must alias the surface's pages, never a private copy"
+        );
+        assert!(metal_buffer.length() as u64 >= iosurface.alloc_size() as u64);
+        // SAFETY: the buffer spans the surface's allocation.
+        unsafe {
+            metal_buffer
+                .contents()
+                .as_ptr()
+                .cast::<u8>()
+                .add(29)
+                .write(0x5A)
+        };
+        let read_through_the_surface = unsafe {
+            iosurface
+                .base_address()
+                .as_ptr()
+                .cast::<u8>()
+                .add(29)
+                .read()
+        };
+        assert_eq!(read_through_the_surface, 0x5A);
     }
 
     /// Importing takes a retain on the surface, never a use count, so a

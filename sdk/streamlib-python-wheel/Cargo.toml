@@ -94,20 +94,18 @@ cudarc = { workspace = true }
 streamlib-surface-client = { path = "../../runtime/streamlib-surface-client", version = "0.26.20" }
 streamlib-consumer-rhi = { path = "../../runtime/streamlib-consumer-rhi", version = "0.26.20" }
 
-# The IOSurface a macOS helper looks up from the port a check-out carries.
+# The IOSurface a macOS helper looks up from the port a check-out carries, and
+# the no-copy MTLBuffer a Metal DLPack capsule points at.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-io-surface.workspace = true
 objc2-core-foundation.workspace = true
+objc2-metal.workspace = true
+objc2.workspace = true
 
 [dev-dependencies]
 # Unit tests open helper data planes over a node in the test process's own
 # iceoryx2 domain.
 streamlib = { path = "../streamlib-sdk", version = "0.26.20", features = ["test-support"] }
-
-# The Metal shared events a texture registration's timeline pair crosses as.
-[target.'cfg(target_os = "macos")'.dev-dependencies]
-objc2-metal.workspace = true
-objc2.workspace = true
 
 [lints]
 workspace = true

@@ -4,20 +4,23 @@
 """Probes that exercise the device half of the pixel exchange from where it
 really runs.
 
-Each probe runs in its own helper process, reaches the frame's pixels as CUDA
-memory there, and reports what it observed as one `MARKER:PROBE_RESULT` JSON
-line — the same child→parent log forwarding every processor's records ride.
+Each probe runs in its own helper process, reaches the frame's pixels as device
+memory there — CUDA on Linux, Metal on macOS — and reports what it observed as
+one `MARKER:PROBE_RESULT` JSON line, the same child→parent log forwarding every
+processor's records ride.
 
-The device path crosses the process boundary twice per surface: the parent
-allocates and publishes the export staging, the child imports it, and every
-refill is a round trip whose answer is the timeline value to wait for. What is
-worth breaking a build over is that the tensor really is device-resident, that
-its pixels are the frame's pixels, and that an edit published from the child is
-visible to a second, independent resolve.
+On Linux the device path crosses the process boundary twice per surface: the
+parent allocates and publishes the export staging, the child imports it, and
+every refill is a round trip whose answer is the timeline value to wait for. On
+macOS the device view is a no-copy Metal buffer over the frame's own IOSurface.
+What is worth breaking a build over on both is that the tensor really is
+device-resident, that its pixels are the frame's pixels, and that an edit
+published from the child is visible to a second, independent resolve.
 """
 
 import json
 import os
+import sys
 import traceback
 
 import numpy
@@ -39,6 +42,11 @@ RESULT_MARKER = "MARKER:PROBE_RESULT "
 # DLPack device-type discriminants, part of the wire ABI.
 DLPACK_DEVICE_CPU = 1
 DLPACK_DEVICE_CUDA = 2
+DLPACK_DEVICE_METAL = 8
+
+# The device a frame's natural DLPack side lives on, and torch's name for it.
+NATURAL_DLPACK_DEVICE = DLPACK_DEVICE_METAL if sys.platform == "darwin" else DLPACK_DEVICE_CUDA
+NATURAL_TORCH_DEVICE_TYPE = "mps" if sys.platform == "darwin" else "cuda"
 
 
 def _report(probe_body) -> None:
@@ -79,9 +87,9 @@ class GraphFrameToTorchProbe(_FrameProbeBase):
         with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
             surface.lock()
             reported_device = surface.__dlpack_device__()
-            if reported_device[0] != DLPACK_DEVICE_CUDA:
+            if reported_device[0] != NATURAL_DLPACK_DEVICE:
                 surface.unlock()
-                return {"cuda_unavailable": f"__dlpack_device__ reported {reported_device}"}
+                return {"device_unavailable": f"__dlpack_device__ reported {reported_device}"}
             tensor = torch.from_dlpack(surface)
             host_view = numpy.from_dlpack(surface, device="cpu")
             observation = {
@@ -107,15 +115,15 @@ class DeviceEditProbe(_FrameProbeBase):
         gpu = ctx.gpu_limited_access
         with gpu.resolve_surface(frame.surface_id) as surface:
             surface.lock(read_only=False)
-            if surface.__dlpack_device__()[0] != DLPACK_DEVICE_CUDA:
+            if surface.__dlpack_device__()[0] != NATURAL_DLPACK_DEVICE:
                 surface.unlock()
-                return {"cuda_unavailable": "device side not reachable"}
+                return {"device_unavailable": "device side not reachable"}
             tensor = torch.from_dlpack(surface)
             tensor[:, :, :] = 0
             tensor[9, 11] = torch.tensor(
                 [17, 34, 51, 68], dtype=torch.uint8, device=tensor.device
             )
-            # No torch.cuda.synchronize(): the publish itself orders the
+            # No torch.accelerator.synchronize(): the publish itself orders the
             # consumer's stream before the engine's copy, and this probe
             # is part of what proves it. unlock is the publication point.
             surface.unlock()
@@ -141,8 +149,8 @@ class WithBlockEditProbe(_FrameProbeBase):
         # close is the publication point.
         with gpu.resolve_surface(frame.surface_id) as surface:
             surface.lock(read_only=False)
-            if surface.__dlpack_device__()[0] != DLPACK_DEVICE_CUDA:
-                return {"cuda_unavailable": "device side not reachable"}
+            if surface.__dlpack_device__()[0] != NATURAL_DLPACK_DEVICE:
+                return {"device_unavailable": "device side not reachable"}
             tensor = torch.from_dlpack(surface)
             tensor[5, 5] = torch.tensor(
                 [99, 88, 77, 66], dtype=torch.uint8, device=tensor.device
@@ -167,9 +175,9 @@ class TensorOutlivesHandleProbe(_FrameProbeBase):
 
         surface = ctx.gpu_limited_access.resolve_surface(frame.surface_id)
         surface.lock()
-        if surface.__dlpack_device__()[0] != DLPACK_DEVICE_CUDA:
+        if surface.__dlpack_device__()[0] != NATURAL_DLPACK_DEVICE:
             surface.unlock()
-            return {"cuda_unavailable": "device side not reachable"}
+            return {"device_unavailable": "device side not reachable"}
         tensor = torch.from_dlpack(surface)
         checksum_before = int(tensor.to(torch.int64).sum().item())
         surface.unlock()
@@ -178,7 +186,7 @@ class TensorOutlivesHandleProbe(_FrameProbeBase):
 
         # The handle is gone; the tensor must still address live memory —
         # its capsule holds the surface, the staging, and the CUDA import.
-        torch.cuda.synchronize()
+        torch.accelerator.synchronize()
         return {
             "checksum_before": checksum_before,
             "checksum_after": int(tensor.to(torch.int64).sum().item()),
@@ -190,12 +198,16 @@ class HostSideProbe(_FrameProbeBase):
     def _probe(self, ctx, frame) -> dict:
         with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
             surface.lock()
+            natural_device = surface.__dlpack_device__()
             host_view = numpy.from_dlpack(surface, device="cpu")
             via_as_numpy = surface.as_numpy()
             observation = {
+                "natural_device": list(natural_device),
                 "host_shape": list(host_view.shape),
                 "as_numpy_shape": list(via_as_numpy.shape),
-                "same_pixels": bool((host_view[2, 2] == via_as_numpy[2, 2]).all()),
+                "same_pixels": bool((host_view == via_as_numpy).all()),
+                # One mapping, not two copies that happen to agree.
+                "same_host_memory": host_view.ctypes.data == via_as_numpy.ctypes.data,
             }
             surface.unlock()
             return observation
@@ -261,11 +273,11 @@ class LaggedConsumerHoldsItsFrameProbe:
         if self.view_of_the_delivered_frame is None:
             surface = ctx.gpu_limited_access.resolve_surface(frame.surface_id)
             surface.lock()
-            if surface.__dlpack_device__()[0] != DLPACK_DEVICE_CUDA:
+            if surface.__dlpack_device__()[0] != NATURAL_DLPACK_DEVICE:
                 surface.unlock()
                 surface.close()
                 self.reported = True
-                _report(lambda: {"cuda_unavailable": "device side not reachable"})
+                _report(lambda: {"device_unavailable": "device side not reachable"})
                 return
             view = numpy.from_dlpack(surface, device="cpu")
             # Copied, because this is the ground truth the view is compared
@@ -671,10 +683,10 @@ class DeviceTensorScopeDoublesAKernelOutputProbe:
                 bindings={"output_image": kernel_output},
                 group_count=(SURFACE_WIDTH // 8, SURFACE_HEIGHT // 8, 1),
             )
-            if kernel_output.__dlpack_device__()[0] != DLPACK_DEVICE_CUDA:
-                return {"cuda_unavailable": "device side not reachable"}
+            if kernel_output.__dlpack_device__()[0] != NATURAL_DLPACK_DEVICE:
+                return {"device_unavailable": "device side not reachable"}
             observation: dict = {"surface_id": kernel_output.surface_id}
-            # Deliberately no torch.cuda.synchronize(): the scope's exit
+            # Deliberately no torch.accelerator.synchronize(): the scope's exit
             # runs a device-wide synchronize before the engine's copy
             # reads the staging, and this probe is what proves it.
             with kernel_output.as_device_tensor() as tensor:
@@ -720,8 +732,8 @@ class DeviceTensorScopeDiscardsOnRaiseProbe:
                 bindings={"output_image": kernel_output},
                 group_count=(SURFACE_WIDTH // 8, SURFACE_HEIGHT // 8, 1),
             )
-            if kernel_output.__dlpack_device__()[0] != DLPACK_DEVICE_CUDA:
-                return {"cuda_unavailable": "device side not reachable"}
+            if kernel_output.__dlpack_device__()[0] != NATURAL_DLPACK_DEVICE:
+                return {"device_unavailable": "device side not reachable"}
             observation = {}
             exception_seen = None
             try:
@@ -731,7 +743,7 @@ class DeviceTensorScopeDiscardsOnRaiseProbe:
                     # Not publish ordering — the discard needs the garbage
                     # write to have LANDED in the staging, or leaving it
                     # unpublished would prove nothing.
-                    torch.cuda.synchronize()
+                    torch.accelerator.synchronize()
                     raise ValueError("deliberate mid-scope failure")
             except ValueError as propagated:
                 exception_seen = str(propagated)
@@ -777,13 +789,13 @@ class PixelBufferScopeDiscardsOnRaiseProbe(_FrameProbeBase):
         try:
             with gpu.resolve_surface(frame.surface_id) as surface:
                 surface.lock(read_only=False)
-                if surface.__dlpack_device__()[0] != DLPACK_DEVICE_CUDA:
-                    return {"cuda_unavailable": "device side not reachable"}
+                if surface.__dlpack_device__()[0] != NATURAL_DLPACK_DEVICE:
+                    return {"device_unavailable": "device side not reachable"}
                 tensor = torch.from_dlpack(surface)
                 tensor[:, :, :] = 0
                 # Not publish ordering — the discard needs the garbage
                 # write to have LANDED in the staging.
-                torch.cuda.synchronize()
+                torch.accelerator.synchronize()
                 raise ValueError("deliberate mid-scope failure")
         except ValueError as propagated:
             exception_seen = str(propagated)
@@ -825,7 +837,7 @@ class PooledTextureExportProbe:
             outcomes["texture_surface_id"] = texture_handle.surface_id
             device = texture_handle.__dlpack_device__()
             outcomes["texture_device"] = list(device)
-            if device[0] == DLPACK_DEVICE_CUDA:
+            if device[0] == NATURAL_DLPACK_DEVICE:
                 texture_handle.lock()
                 tensor = torch.from_dlpack(texture_handle)
                 outcomes["texture_tensor_shape"] = list(tensor.shape)
@@ -855,11 +867,11 @@ class DeviceTensorScopeTakesEveryAcquiredTextureProbe:
         observation = {}
         with ctx.gpu_full_access.acquire_texture(
             SURFACE_WIDTH, SURFACE_HEIGHT, "rgba8_unorm", OPAQUE_FD_FLAVOUR_USAGE
-        ) as cuda_gate:
-            if cuda_gate.__dlpack_device__()[0] != DLPACK_DEVICE_CUDA:
-                return {"cuda_unavailable": "device side not reachable"}
+        ) as device_gate:
+            if device_gate.__dlpack_device__()[0] != NATURAL_DLPACK_DEVICE:
+                return {"device_unavailable": "device side not reachable"}
 
-        # bgra8 is not CUDA-mappable, so these acquires land on the
+        # On Linux bgra8 is not CUDA-mappable, so these acquires land on the
         # NotImportable allocation flavour, whose image carries exactly the
         # usage the request derived — which is the point: even there the
         # implied copy bits ride, so neither spelling is short of them.
@@ -949,3 +961,491 @@ class OpaqueFdExportHandoffProbe:
                 observation["fd_closes_cleanly"] = os.close(export.fd) is None
         return observation
 
+
+
+# ---------------------------------------------------------------------------
+# Every door, both floors: the host request, `copy=True`, the row pitch, and
+# the ordering of a device write ahead of the engine's own GPU read
+# ---------------------------------------------------------------------------
+
+
+@processor
+class CopyRequestRefusedAtBothDoorsProbe(_FrameProbeBase):
+    """`copy=True` asks for memory the consumer owns; both doors export in
+    place, so both refuse by name rather than hand back an alias."""
+
+    def _probe(self, ctx, frame) -> dict:
+        observation = {}
+        with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
+            surface.lock()
+            try:
+                surface.__dlpack__(copy=True)
+                observation["handle_refusal"] = "no refusal"
+            except BufferError as refusal:
+                observation["handle_refusal"] = str(refusal)
+            surface.unlock()
+            # The scope's refusal needs the scope entered, which needs the
+            # device side; the handle's refusal above needs neither.
+            if surface.__dlpack_device__()[0] != NATURAL_DLPACK_DEVICE:
+                observation["scope_device_unavailable"] = "device side not reachable"
+                return observation
+            with surface.as_device_tensor() as device_tensor:
+                try:
+                    device_tensor.__dlpack__(copy=True)
+                    observation["scope_refusal"] = "no refusal"
+                except BufferError as refusal:
+                    observation["scope_refusal"] = str(refusal)
+        return observation
+
+
+# Wide enough that a GPU image's IOSurface pads its rows past `width * 4`;
+# a pool pixel buffer's rows are packed, so it is the unpadded control.
+PADDED_SURFACE_WIDTH = 1000
+PADDED_SURFACE_HEIGHT = 8
+ROW_END_PIXEL_RGBA = [11, 22, 33, 44]
+
+
+def _store_at_the_end_of_a_row_and_read_it_back(tensor_scope_or_handle, host_reader) -> dict:
+    """Store one pixel at the last column of a row through torch, then read
+    that row's end and the next row's start through the host."""
+    import torch
+
+    last_row = PADDED_SURFACE_HEIGHT - 2
+    observation = {}
+    with tensor_scope_or_handle as device_view:
+        tensor = torch.from_dlpack(device_view)
+        observation["tensor_strides"] = list(tensor.stride())
+        tensor[last_row, PADDED_SURFACE_WIDTH - 1] = torch.tensor(
+            ROW_END_PIXEL_RGBA, dtype=torch.uint8, device=tensor.device
+        )
+        del tensor
+    host_view, bytes_per_row = host_reader()
+    observation["bytes_per_row"] = bytes_per_row
+    observation["row_end_through_the_host"] = host_view[
+        last_row, PADDED_SURFACE_WIDTH - 1
+    ].tolist()
+    observation["next_row_start_through_the_host"] = host_view[last_row + 1, 0].tolist()
+    return observation
+
+
+@processor(execution="manual")
+class DeviceTensorStridesFollowTheRowPitchProbe:
+    """Both backings at a width whose GPU-image rows pad: the device tensor's
+    row stride is the surface's own pitch, so a store at the last pixel of a
+    row lands where the host view finds it rather than shearing into the next
+    row."""
+
+    def setup(self, ctx: RuntimeContextFullAccess) -> None:
+        _report(lambda: self._probe(ctx))
+
+    def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
+        observation = {}
+        with ctx.gpu_limited_access.acquire_pixel_buffer(
+            PADDED_SURFACE_WIDTH, PADDED_SURFACE_HEIGHT
+        ) as pixel_buffer:
+            if pixel_buffer.__dlpack_device__()[0] != NATURAL_DLPACK_DEVICE:
+                return {"device_unavailable": "device side not reachable"}
+            pixel_buffer.lock(read_only=False)
+            pixel_buffer.as_numpy()[:, :, :] = 0
+            pixel_buffer.unlock()
+
+            def pixel_buffer_host_view():
+                pixel_buffer.lock()
+                host_view = pixel_buffer.as_numpy().copy()
+                pitch = pixel_buffer.bytes_per_row
+                pixel_buffer.unlock()
+                return host_view, pitch
+
+            observation["pixel_buffer"] = _store_at_the_end_of_a_row_and_read_it_back(
+                pixel_buffer.as_device_tensor(), pixel_buffer_host_view
+            )
+
+        with ctx.gpu_full_access.acquire_texture(
+            PADDED_SURFACE_WIDTH,
+            PADDED_SURFACE_HEIGHT,
+            "rgba8_unorm",
+            ["texture_binding", "storage_binding", "copy_src", "copy_dst"],
+        ) as texture:
+            texture.lock(read_only=False)
+            texture.as_numpy()[:, :, :] = 0
+            texture.unlock()
+
+            def texture_host_view():
+                texture.lock()
+                host_view = texture.as_numpy().copy()
+                pitch = texture.bytes_per_row
+                texture.unlock()
+                return host_view, pitch
+
+            observation["texture"] = _store_at_the_end_of_a_row_and_read_it_back(
+                texture.as_device_tensor(), texture_host_view
+            )
+        return observation
+
+
+# Reads its source texel for texel, so the output is exactly what the engine's
+# own GPU read of the source saw.
+COPY_TEXEL_FOR_TEXEL_GLSL = """\
+#version 450
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D source_image;
+layout(set = 0, binding = 1, rgba8) uniform writeonly image2D output_image;
+void main() {
+    ivec2 at = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 extent = imageSize(output_image);
+    if (at.x >= extent.x || at.y >= extent.y) { return; }
+    imageStore(output_image, at, texelFetch(source_image, at, 0));
+}
+"""
+
+DEVICE_WRITE_RGBA = [23, 67, 131, 255]
+
+
+class _DeviceWriteThenEngineGpuReadProbe:
+    """A framework writes a texture through the device-tensor scope with no
+    synchronize of its own; the engine's next GPU read — a kernel dispatched
+    right after the scope leaves — must see the write.
+
+    For torch nothing but the scope's exit orders its queue ahead of the
+    dispatch, so an exit that did not drain it reads the texture's old
+    contents. For MLX the `mx.eval` its write contract puts in the scope is
+    what orders it, so that variant proves the contract.
+    """
+
+    def setup(self, ctx: RuntimeContextFullAccess) -> None:
+        _report(lambda: self._probe(ctx))
+
+    def _write_the_whole_tensor_in_the_scope(self, device_tensor) -> None:
+        raise NotImplementedError
+
+    def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
+        usage = ["texture_binding", "storage_binding", "copy_src", "copy_dst"]
+        copy_kernel = ctx.gpu_full_access.create_compute_kernel(
+            source=COPY_TEXEL_FOR_TEXEL_GLSL,
+            bindings={"source_image": "sampled_texture", "output_image": "storage_image"},
+        )
+        with ctx.gpu_full_access.acquire_texture(
+            SURFACE_WIDTH, SURFACE_HEIGHT, "rgba8_unorm", usage
+        ) as source, ctx.gpu_full_access.acquire_texture(
+            SURFACE_WIDTH, SURFACE_HEIGHT, "rgba8_unorm", usage
+        ) as output:
+            if source.__dlpack_device__()[0] != NATURAL_DLPACK_DEVICE:
+                return {"device_unavailable": "device side not reachable"}
+            with source.as_device_tensor() as device_tensor:
+                self._write_the_whole_tensor_in_the_scope(device_tensor)
+            copy_kernel.dispatch(
+                bindings={"source_image": source, "output_image": output},
+                group_count=(SURFACE_WIDTH // 8, SURFACE_HEIGHT // 8, 1),
+            )
+            output.lock()
+            engine_read = output.as_numpy()
+            observation = {
+                "engine_read_pixel": engine_read[SURFACE_HEIGHT - 1, SURFACE_WIDTH - 1].tolist(),
+                "every_pixel_the_engine_read_is_the_write": bool(
+                    (engine_read == DEVICE_WRITE_RGBA).all()
+                ),
+            }
+            output.unlock()
+            return observation
+
+
+@processor(execution="manual")
+class TorchDeviceWriteThenEngineGpuReadProbe(_DeviceWriteThenEngineGpuReadProbe):
+    def _write_the_whole_tensor_in_the_scope(self, device_tensor) -> None:
+        import torch
+
+        tensor = torch.from_dlpack(device_tensor)
+        tensor[:, :] = torch.tensor(DEVICE_WRITE_RGBA, dtype=torch.uint8, device=tensor.device)
+
+
+def _mlx_or_none():
+    try:
+        import mlx.core  # pyright: ignore[reportMissingImports]
+
+        return mlx.core
+    except ImportError:
+        return None
+
+
+@processor(execution="manual")
+class MlxDeviceWriteThenEngineGpuReadProbe(_DeviceWriteThenEngineGpuReadProbe):
+    def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
+        if _mlx_or_none() is None:
+            return {"mlx_unavailable": "mlx is not installed in this venv"}
+        return super()._probe(ctx)
+
+    def _write_the_whole_tensor_in_the_scope(self, device_tensor) -> None:
+        import mlx.core as mx  # pyright: ignore[reportMissingImports]
+
+        array = mx.from_dlpack(device_tensor)
+        written = mx.array(DEVICE_WRITE_RGBA, dtype=mx.uint8)
+        # Two partial slices, not `array[:] = ...`: MLX turns a whole-array
+        # assignment into a new array rather than a store into this one.
+        array[: SURFACE_HEIGHT // 2] = written
+        array[SURFACE_HEIGHT // 2 :] = written
+        # The MLX write contract: evaluated inside the scope. `mx.eval` blocks
+        # until the stores have landed; nothing at the scope's exit can
+        # evaluate a lazy graph the author never asked for.
+        mx.eval(array)
+
+
+class _TypedFrameProbeBase(_FrameProbeBase):
+    """Reads its one frame `into=VideoFrame`, the read that takes the claim the
+    frame object's own doors — the bare capsule, `writable()` — ride."""
+
+    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+        if self.frames_seen >= 1:
+            return
+        frame = ctx.inputs.read("video_from_upstream", into=VideoFrame)
+        if frame is None:
+            return
+        self.frames_seen += 1
+        _report(lambda: self._probe(ctx, frame))
+
+
+@processor
+class MlxReadsTheFrameProbe(_TypedFrameProbeBase):
+    """`mx.from_dlpack(frame)` over a graph frame is an MLX array over the
+    frame's own bytes."""
+
+    def _probe(self, ctx, frame) -> dict:
+        mx = _mlx_or_none()
+        if mx is None:
+            return {"mlx_unavailable": "mlx is not installed in this venv"}
+        array = mx.from_dlpack(frame)
+        through_the_device = numpy.array(array)
+        with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
+            surface.lock()
+            through_the_host = numpy.from_dlpack(surface, device="cpu").copy()
+            surface.unlock()
+        return {
+            "array_shape": list(array.shape),
+            "array_dtype": str(array.dtype),
+            "same_pixels_as_the_host_view": bool((through_the_device == through_the_host).all()),
+            "pixels_are_not_all_zero": bool(through_the_host.any()),
+        }
+
+
+MLX_EDIT_VALUE = 7
+MLX_ROWS_TO_EDIT = 4
+
+
+def _frame_pixels_now(ctx, surface_id: str):
+    with ctx.gpu_limited_access.resolve_surface(surface_id) as surface:
+        surface.lock()
+        pixels = numpy.from_dlpack(surface, device="cpu").copy()
+        surface.unlock()
+    return pixels
+
+
+@processor
+class MlxWritesTheFrameThroughTheWriteDoorProbe(_TypedFrameProbeBase):
+    """`with frame.writable() as t:` with MLX as the package: an in-place,
+    evaluated write reaches every other holder once the block ends."""
+
+    def _probe(self, ctx, frame) -> dict:
+        mx = _mlx_or_none()
+        if mx is None:
+            return {"mlx_unavailable": "mlx is not installed in this venv"}
+        before = _frame_pixels_now(ctx, frame.surface_id)
+        with frame.writable() as device_tensor:
+            array = mx.from_dlpack(device_tensor)
+            array[:MLX_ROWS_TO_EDIT] = MLX_EDIT_VALUE
+            mx.eval(array)
+        after = _frame_pixels_now(ctx, frame.surface_id)
+        return {
+            "the_frame_did_not_already_carry_the_edit": bool(
+                (before[:MLX_ROWS_TO_EDIT] != MLX_EDIT_VALUE).any()
+            ),
+            "the_edited_rows_carry_the_edit": bool(
+                (after[:MLX_ROWS_TO_EDIT] == MLX_EDIT_VALUE).all()
+            ),
+            "the_rest_of_the_frame_is_untouched": bool(
+                (after[MLX_ROWS_TO_EDIT:] == before[MLX_ROWS_TO_EDIT:]).all()
+            ),
+        }
+
+
+@processor
+class MlxWriteWithAViewAliveMissesTheFrameProbe(_TypedFrameProbeBase):
+    """The negative control the MLX write contract rests on: with a view of the
+    array alive at the write, MLX cannot donate the buffer, so the scatter lands
+    in a buffer of MLX's own and the frame never sees it — whatever the scope
+    does at its exit."""
+
+    def _probe(self, ctx, frame) -> dict:
+        mx = _mlx_or_none()
+        if mx is None:
+            return {"mlx_unavailable": "mlx is not installed in this venv"}
+        before = _frame_pixels_now(ctx, frame.surface_id)
+        with frame.writable() as device_tensor:
+            array = mx.from_dlpack(device_tensor)
+            view_kept_alive = array[1:3]
+            array[:MLX_ROWS_TO_EDIT] = MLX_EDIT_VALUE
+            mx.eval(array)
+            the_array_carries_the_edit = bool(
+                (numpy.array(array[:MLX_ROWS_TO_EDIT]) == MLX_EDIT_VALUE).all()
+            )
+            del view_kept_alive
+        after = _frame_pixels_now(ctx, frame.surface_id)
+        return {
+            "the_array_carries_the_edit": the_array_carries_the_edit,
+            "the_frame_is_unchanged": bool((after == before).all()),
+        }
+
+
+
+@processor
+class MlxWholeArrayAssignmentMissesTheFrameProbe(_TypedFrameProbeBase):
+    """The partial-slice half of the MLX write contract: `a[:] = ...` is a new
+    array to MLX, not a store into this one, so the frame never sees it even
+    evaluated inside the scope."""
+
+    def _probe(self, ctx, frame) -> dict:
+        mx = _mlx_or_none()
+        if mx is None:
+            return {"mlx_unavailable": "mlx is not installed in this venv"}
+        before = _frame_pixels_now(ctx, frame.surface_id)
+        with frame.writable() as device_tensor:
+            array = mx.from_dlpack(device_tensor)
+            array[:] = MLX_EDIT_VALUE
+            mx.eval(array)
+            the_array_carries_the_edit = bool((numpy.array(array) == MLX_EDIT_VALUE).all())
+        after = _frame_pixels_now(ctx, frame.surface_id)
+        return {
+            "the_array_carries_the_edit": the_array_carries_the_edit,
+            "the_frame_is_unchanged": bool((after == before).all()),
+        }
+
+
+SCOPES_IN_ONE_HELPER = 12
+
+
+@processor(execution="manual")
+class TorchAndMlxScopesAlternateInOneHelperProbe:
+    """Many device-tensor scopes in one helper, torch and MLX alternating, each
+    over a fresh texture whose arrays are dropped as soon as the scope ends.
+
+    This is the shape that deadlocked when the scope's exit called
+    `mx.synchronize()`: MLX's completion handler freeing a DLPack-imported
+    array waits for the GIL that call holds. A regression hangs here, and the
+    harness's wait for the result turns the hang into a failure.
+    """
+
+    def setup(self, ctx: RuntimeContextFullAccess) -> None:
+        _report(lambda: self._probe(ctx))
+
+    def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
+        import torch
+
+        mx = _mlx_or_none()
+        if mx is None:
+            return {"mlx_unavailable": "mlx is not installed in this venv"}
+        usage = ["texture_binding", "storage_binding", "copy_src", "copy_dst"]
+        pixels_that_landed = []
+        for scope_index in range(SCOPES_IN_ONE_HELPER):
+            value = 10 + scope_index
+            with ctx.gpu_full_access.acquire_texture(
+                SURFACE_WIDTH, SURFACE_HEIGHT, "rgba8_unorm", usage
+            ) as texture:
+                if texture.__dlpack_device__()[0] != NATURAL_DLPACK_DEVICE:
+                    return {"device_unavailable": "device side not reachable"}
+                with texture.as_device_tensor() as device_tensor:
+                    if scope_index % 2 == 0:
+                        tensor = torch.from_dlpack(device_tensor)
+                        tensor[:4] = value
+                        del tensor
+                    else:
+                        array = mx.from_dlpack(device_tensor)
+                        array[:4] = value
+                        mx.eval(array)
+                        del array
+                texture.lock()
+                pixels_that_landed.append(texture.as_numpy()[1, 1].tolist())
+                texture.unlock()
+        return {
+            "scopes_completed": len(pixels_that_landed),
+            "every_write_landed": all(
+                pixel == [10 + index] * 4 for index, pixel in enumerate(pixels_that_landed)
+            ),
+            "pixels_that_landed": pixels_that_landed,
+        }
+
+
+TEXTURE_FILL_RGBA = [5, 6, 7, 8]
+
+
+class _DeviceArrayOutlivesTextureHandleProbe:
+    """A device array over an acquired texture outlives the handle: closing
+    the handle frees nothing the array addresses, and dropping the array
+    afterwards releases the texture — from the capsule's deleter — without
+    wedging the helper."""
+
+    def setup(self, ctx: RuntimeContextFullAccess) -> None:
+        _report(lambda: self._probe(ctx))
+
+    def _import(self, handle):
+        raise NotImplementedError
+
+    def _checksum(self, array) -> int:
+        raise NotImplementedError
+
+    def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
+        usage = ["texture_binding", "storage_binding", "copy_src", "copy_dst"]
+        texture = ctx.gpu_limited_access.acquire_texture(
+            SURFACE_WIDTH, SURFACE_HEIGHT, "rgba8_unorm", usage
+        )
+        if texture.__dlpack_device__()[0] != NATURAL_DLPACK_DEVICE:
+            texture.close()
+            return {"device_unavailable": "device side not reachable"}
+        texture.lock(read_only=False)
+        texture.as_numpy()[:, :] = TEXTURE_FILL_RGBA
+        texture.unlock()
+        texture.lock()
+        array = self._import(texture)
+        checksum_before = self._checksum(array)
+        texture.unlock()
+        texture.close()
+        del texture
+        checksum_after = self._checksum(array)
+        del array
+        # The helper still answers after the deleter released the texture.
+        with ctx.gpu_limited_access.acquire_texture(
+            SURFACE_WIDTH, SURFACE_HEIGHT, "rgba8_unorm", usage
+        ) as another_texture:
+            another_texture_id = another_texture.surface_id
+        return {
+            "checksum_before": checksum_before,
+            "checksum_after": checksum_after,
+            "expected_checksum": SURFACE_WIDTH * SURFACE_HEIGHT * sum(TEXTURE_FILL_RGBA),
+            "helper_still_answers": bool(another_texture_id),
+        }
+
+
+@processor(execution="manual")
+class TorchTensorOutlivesTextureHandleProbe(_DeviceArrayOutlivesTextureHandleProbe):
+    def _import(self, handle):
+        import torch
+
+        return torch.from_dlpack(handle)
+
+    def _checksum(self, array) -> int:
+        import torch
+
+        return int(array.to(torch.int64).sum().item())
+
+
+@processor(execution="manual")
+class MlxArrayOutlivesTextureHandleProbe(_DeviceArrayOutlivesTextureHandleProbe):
+    def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
+        if _mlx_or_none() is None:
+            return {"mlx_unavailable": "mlx is not installed in this venv"}
+        return super()._probe(ctx)
+
+    def _import(self, handle):
+        import mlx.core as mx  # pyright: ignore[reportMissingImports]
+
+        return mx.from_dlpack(handle)
+
+    def _checksum(self, array) -> int:
+        return int(numpy.array(array, dtype=numpy.int64).sum())

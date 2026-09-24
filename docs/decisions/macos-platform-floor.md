@@ -148,7 +148,11 @@ trigger: *"streamlib on osx requires the full capabilities and feature set"* —
 
 > **Unified memory removes the staging, not the ordering.** An IOSurface-backed texture is
 > linear and host-visible, so on macOS the CPU door and the device tensor over a texture are
-> the surface itself, ordered on its shared-event timeline. The device tensor is a `kDLMetal`
+> the surface itself, ~~ordered on its shared-event timeline~~ ordered ahead of the engine's
+> next read (superseded 2026-09-24 by #2404: the door retires the write before it closes — the
+> device tensor's exit drains torch's MPS queue, an MLX write is `mx.eval`ed in the scope — so
+> it is complete before the id can be published; no helper-signalled value exists to wait on,
+> and a pooled frame has no timeline on macOS). The device tensor is a `kDLMetal`
 > capsule over a no-copy `MTLBuffer` on the frame's own IOSurface — measured on torch 2.14 MPS
 > and MLX 0.32.2 with write-through — so the CUDA peer on macOS is zero copies where Linux is
 > one blit. What this narrows is stated in the change: the texture door publishes per store, as

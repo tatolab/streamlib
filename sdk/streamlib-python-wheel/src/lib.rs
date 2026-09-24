@@ -19,6 +19,8 @@ mod python_gpu_surface_pixel_exchange;
 mod python_helper_process_pixel_exchange;
 mod python_helper_process_spawn_host;
 mod python_logging;
+#[cfg(target_os = "macos")]
+mod python_metal_framework_queue_synchronization;
 mod python_monotonic_timer;
 mod python_native_builtin_blocks;
 mod python_processor_context;

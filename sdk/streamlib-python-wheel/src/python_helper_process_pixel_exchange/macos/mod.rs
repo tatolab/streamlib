@@ -104,8 +104,32 @@ impl HelperIOSurfaceCpuLock {
         iosurface: &objc2_io_surface::IOSurfaceRef,
         read_only: bool,
     ) -> Result<(), IOSurfaceLockRefused> {
-        use objc2_io_surface::IOSurfaceLockOptions;
         let mut held_lock_options = self.held_lock_options.lock();
+        Self::lock_replacing_held(&mut held_lock_options, iosurface, read_only)
+    }
+
+    /// Take `iosurface`'s lock read-only or read-write unless a lock is
+    /// already held — the lock a CPU door takes once per lock scope.
+    fn lock_unless_held(
+        &self,
+        iosurface: &objc2_io_surface::IOSurfaceRef,
+        read_only: bool,
+    ) -> Result<(), IOSurfaceLockRefused> {
+        let mut held_lock_options = self.held_lock_options.lock();
+        if held_lock_options.is_some() {
+            return Ok(());
+        }
+        Self::lock_replacing_held(&mut held_lock_options, iosurface, read_only)
+    }
+
+    /// Take `iosurface`'s lock under the caller's guard on the held options,
+    /// unlocking whatever lock those options record first.
+    fn lock_replacing_held(
+        held_lock_options: &mut Option<objc2_io_surface::IOSurfaceLockOptions>,
+        iosurface: &objc2_io_surface::IOSurfaceRef,
+        read_only: bool,
+    ) -> Result<(), IOSurfaceLockRefused> {
+        use objc2_io_surface::IOSurfaceLockOptions;
         if let Some(held_options) = *held_lock_options {
             Self::unlock_with(iosurface, held_options)?;
             *held_lock_options = None;
@@ -158,10 +182,11 @@ impl HelperIOSurfaceCpuLock {
 }
 
 impl HelperCheckedOutPixelSurface {
-    /// Take the IOSurface lock for CPU access, read-only or read-write.
-    pub(crate) fn lock_the_iosurface_for_cpu_access(&self, read_only: bool) -> PyResult<()> {
+    /// Take the IOSurface lock for CPU access, read-only or read-write,
+    /// unless this surface already holds it.
+    pub(crate) fn lock_the_iosurface_for_cpu_access_once(&self, read_only: bool) -> PyResult<()> {
         self.iosurface_cpu_lock
-            .lock(self.iosurface_pool_slot_import.iosurface(), read_only)
+            .lock_unless_held(self.iosurface_pool_slot_import.iosurface(), read_only)
             .map_err(|refused| self.iosurface_lock_error(refused))
     }
 
@@ -174,6 +199,22 @@ impl HelperCheckedOutPixelSurface {
 
     fn iosurface_lock_error(&self, refused: IOSurfaceLockRefused) -> PyErr {
         PyRuntimeError::new_err(format!("{refused} on surface {:?}", self.surface_id))
+    }
+
+    /// A no-copy `MTLBuffer` over the pool slot's IOSurface pages.
+    pub(crate) fn metal_buffer_over_the_iosurface_pages(
+        &self,
+    ) -> PyResult<objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLBuffer>>>
+    {
+        self.iosurface_pool_slot_import
+            .consumer_buffer
+            .exported_metal_buffer()
+            .map_err(|export_failure| {
+                PyRuntimeError::new_err(format!(
+                    "surface {:?} has no Metal buffer over its IOSurface: {export_failure}",
+                    self.surface_id
+                ))
+            })
     }
 }
 

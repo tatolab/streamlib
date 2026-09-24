@@ -7,8 +7,8 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use streamlib_consumer_rhi::{
-    ConsumerVulkanDevice, ConsumerVulkanTexture, ConsumerVulkanTimelineSemaphore, TextureFormat,
-    VulkanImageUsage, VulkanLayout,
+    ConsumerVulkanBuffer, ConsumerVulkanDevice, ConsumerVulkanTexture,
+    ConsumerVulkanTimelineSemaphore, TextureFormat, VulkanImageUsage, VulkanLayout,
 };
 
 use super::super::{
@@ -31,6 +31,10 @@ pub(crate) struct HelperCheckedOutTextureSurface {
     pub(crate) consumer_texture: ConsumerVulkanTexture,
     /// The surface the image is created over — the CPU door's memory.
     iosurface: RetainedIOSurfaceSharedAcrossThreads,
+    /// The surface's pages imported as a buffer, on the first device-tensor
+    /// reach: an image's own memory maps a private copy, so the no-copy
+    /// `MTLBuffer` a Metal capsule points at comes from here.
+    iosurface_pages_import: parking_lot::Mutex<Option<ConsumerVulkanBuffer>>,
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) format: TextureFormat,
@@ -84,10 +88,11 @@ impl HelperCheckedOutTextureSurface {
         )
     }
 
-    /// Take the IOSurface lock for CPU access, read-only or read-write.
-    pub(crate) fn lock_the_iosurface_for_cpu_access(&self, read_only: bool) -> PyResult<()> {
+    /// Take the IOSurface lock for CPU access, read-only or read-write,
+    /// unless this texture already holds it.
+    pub(crate) fn lock_the_iosurface_for_cpu_access_once(&self, read_only: bool) -> PyResult<()> {
         self.iosurface_cpu_lock
-            .lock(&self.iosurface, read_only)
+            .lock_unless_held(&self.iosurface, read_only)
             .map_err(|refused| self.iosurface_lock_error(refused))
     }
 
@@ -100,6 +105,38 @@ impl HelperCheckedOutTextureSurface {
 
     fn iosurface_lock_error(&self, refused: IOSurfaceLockRefused) -> PyErr {
         PyRuntimeError::new_err(format!("{refused} on texture {:?}", self.surface_id))
+    }
+
+    /// A no-copy `MTLBuffer` over the texture's IOSurface rows, importing the
+    /// pages on first ask.
+    pub(crate) fn metal_buffer_over_the_iosurface_pages(
+        &self,
+    ) -> PyResult<objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLBuffer>>>
+    {
+        let mut iosurface_pages_import = self.iosurface_pages_import.lock();
+        if iosurface_pages_import.is_none() {
+            let vulkan_device = self.exchange_client.consumer_vulkan_device()?;
+            let imported =
+                ConsumerVulkanBuffer::from_iosurface_pages(&vulkan_device, &self.iosurface)
+                    .map_err(|import_failure| {
+                        PyRuntimeError::new_err(format!(
+                            "texture {:?}'s IOSurface pages would not import as a buffer, so no \
+                         Metal buffer can alias them: {import_failure}",
+                            self.surface_id
+                        ))
+                    })?;
+            *iosurface_pages_import = Some(imported);
+        }
+        iosurface_pages_import
+            .as_ref()
+            .expect("the import was stored above")
+            .exported_metal_buffer()
+            .map_err(|export_failure| {
+                PyRuntimeError::new_err(format!(
+                    "texture {:?} has no Metal buffer over its IOSurface: {export_failure}",
+                    self.surface_id
+                ))
+            })
     }
 }
 
@@ -330,6 +367,7 @@ impl HelperProcessGpuExchangeClient {
             surface_id: surface_id.to_string(),
             consumer_texture,
             iosurface: RetainedIOSurfaceSharedAcrossThreads::new(iosurface),
+            iosurface_pages_import: parking_lot::Mutex::new(None),
             width,
             height,
             format,

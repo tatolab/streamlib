@@ -113,16 +113,16 @@ impl GpuSurfaceOwnedMemory {
     }
 
     /// Bracket CPU access with the surface's IOSurface lock, read-only or
-    /// read-write — what keeps the host view coherent on a discrete-GPU
-    /// Mac, and ~0.6 µs on unified memory.
+    /// read-write, unless it is already held — what keeps the host view
+    /// coherent on a discrete-GPU Mac, and ~0.6 µs on unified memory.
     #[cfg(target_os = "macos")]
-    pub(crate) fn lock_the_iosurface_for_cpu_access(&self, read_only: bool) -> PyResult<()> {
+    pub(crate) fn lock_the_iosurface_for_cpu_access_once(&self, read_only: bool) -> PyResult<()> {
         match &self.checked_out_surface {
             HelperCheckedOutSurface::PixelBuffer(pixel_surface) => {
-                pixel_surface.lock_the_iosurface_for_cpu_access(read_only)
+                pixel_surface.lock_the_iosurface_for_cpu_access_once(read_only)
             }
             HelperCheckedOutSurface::Texture(texture_surface) => {
-                texture_surface.lock_the_iosurface_for_cpu_access(read_only)
+                texture_surface.lock_the_iosurface_for_cpu_access_once(read_only)
             }
         }
     }
@@ -251,6 +251,24 @@ impl GpuSurfaceOwnedMemory {
             }
             HelperCheckedOutSurface::Texture(texture_surface) => {
                 texture_surface.host_visible_pixel_plane_view()
+            }
+        }
+    }
+
+    /// A no-copy `MTLBuffer` over the surface's IOSurface pages — the same
+    /// bytes [`Self::host_visible_pixel_plane`] maps, as the GPU addresses
+    /// them.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn metal_buffer_over_the_iosurface_pages(
+        &self,
+    ) -> PyResult<objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLBuffer>>>
+    {
+        match &self.checked_out_surface {
+            HelperCheckedOutSurface::PixelBuffer(pixel_surface) => {
+                pixel_surface.metal_buffer_over_the_iosurface_pages()
+            }
+            HelperCheckedOutSurface::Texture(texture_surface) => {
+                texture_surface.metal_buffer_over_the_iosurface_pages()
             }
         }
     }
@@ -449,6 +467,12 @@ pub(crate) const HOST_VISIBLE_DLPACK_DEVICE: Device = Device {
     device_id: 0,
 };
 
+/// `device` as the `(device_type, device_id)` pair `__dlpack_device__`
+/// answers.
+pub(crate) fn dlpack_device_as_python_pair(device: Device) -> (i32, i32) {
+    (device.device_type as i32, device.device_id)
+}
+
 /// Run the versioned managed tensor's deleter when a capsule is
 /// collected without a consumer having taken it. Same rename contract as
 /// the unversioned destructor, against `dltensor_versioned`.
@@ -603,6 +627,85 @@ fn dlpack_capsule_over<'py>(
             ),
         ),
     }
+}
+
+// =============================================================================
+// Metal export — the surface's own pages, as the GPU addresses them
+// =============================================================================
+
+/// The DLPack device a Metal capsule reports: `kDLMetal`, device 0 — the one
+/// GPU an Apple Silicon Mac has.
+#[cfg(target_os = "macos")]
+pub(crate) const METAL_DLPACK_DEVICE: Device = Device {
+    device_type: DeviceType::Metal,
+    device_id: 0,
+};
+
+/// A retained `MTLBuffer` a capsule's owner keeps alive until its consumer
+/// lets the tensor go.
+#[cfg(target_os = "macos")]
+struct MetalBufferHeldByACapsule(
+    #[expect(
+        dead_code,
+        reason = "held for its retain; the capsule's data pointer is this buffer"
+    )]
+    objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLBuffer>>,
+);
+
+// SAFETY: an `MTLBuffer` is a thread-safe Metal resource, and the capsule
+// owner only retains and releases it — which Objective-C's retain count
+// makes safe from any thread.
+#[cfg(target_os = "macos")]
+unsafe impl Send for MetalBufferHeldByACapsule {}
+
+/// Build a `kDLMetal` capsule over the surface's IOSurface — torch-MPS's and
+/// MLX's zero-copy door.
+///
+/// DLPack's Metal `data` is the `id<MTLBuffer>` itself, never a host address;
+/// the buffer is a no-copy view of the pages the host mapping reaches, so the
+/// strides are the surface's own row pitch, padding included. The capsule
+/// owns the surface share and a retain on the buffer, and the buffer is
+/// MoltenVK's, so no consumer's allocator is ever handed memory to free.
+#[cfg(target_os = "macos")]
+pub(crate) fn metal_dlpack_capsule<'py>(
+    python: Python<'py>,
+    owned_memory: &Arc<GpuSurfaceOwnedMemory>,
+    exchange_shape: DlpackExchangeShape,
+    read_only: bool,
+) -> PyResult<Bound<'py, PyAny>> {
+    use objc2_metal::MTLBuffer as _;
+
+    let plane_view = owned_memory.host_visible_pixel_plane()?;
+    let layout = PixelExchangeTensorLayout::for_pixel_format(
+        plane_view.format,
+        plane_view.width,
+        plane_view.height,
+        plane_view.bytes_per_row,
+    )?;
+    let metal_buffer = owned_memory.metal_buffer_over_the_iosurface_pages()?;
+    // The layout's strides are counted from the host mapping's base, so the
+    // buffer must start exactly there; anything else would shift every pixel.
+    if metal_buffer.contents().as_ptr().cast::<u8>() != plane_view.base_address {
+        return Err(PyRuntimeError::new_err(
+            "the surface's Metal buffer does not start at its IOSurface's base address, so a \
+             Metal tensor over it would not address the frame's pixels",
+        ));
+    }
+    let metal_buffer_address = objc2::rc::Retained::as_ptr(&metal_buffer) as u64;
+    // The buffer aliases the pages the surface share keeps, so it drops first.
+    let owner: dlpack::CapsuleOwner = Box::new((
+        MetalBufferHeldByACapsule(metal_buffer),
+        Arc::clone(owned_memory),
+    ));
+    dlpack_capsule_over(
+        python,
+        metal_buffer_address,
+        layout,
+        METAL_DLPACK_DEVICE,
+        exchange_shape,
+        read_only,
+        owner,
+    )
 }
 
 // =============================================================================
@@ -877,12 +980,6 @@ pub(crate) fn imported_device_for(
 #[cfg(target_os = "linux")]
 pub(crate) fn device_export_available(owned_memory: &Arc<GpuSurfaceOwnedMemory>) -> bool {
     owned_memory.minted_surface_id.is_some()
-}
-
-/// Off Linux there is no device export; every surface serves its host side.
-#[cfg(not(target_os = "linux"))]
-pub(crate) fn device_export_available(_owned_memory: &Arc<GpuSurfaceOwnedMemory>) -> bool {
-    false
 }
 
 // =============================================================================

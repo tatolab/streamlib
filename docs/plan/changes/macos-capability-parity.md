@@ -88,8 +88,9 @@ was measured on the M1 Max in three probes left under `/tmp/iosurf-nocopy/` and
   a no-copy `MTLBuffer` on the frame's own IOSurface on macOS** — zero copies and no staging,
   because unified memory makes the surface's bytes the device's bytes. `torch.from_dlpack`
   yields `cuda` there and `mps` here; `mx.from_dlpack` consumes the same capsule. Floors stated
-  where the capsule is minted: torch ≥ 2.12, MLX ≥ 0.32. The CUDA Array Interface is Linux by
-  nature and is not offered on macOS.
+  where the capsule is minted: ~~torch ≥ 2.12~~ torch ≥ 2.10 by source, measured on 2.14 *(the
+  2.12 had no measurement behind it; `portable-gpu-interop`)*, MLX ≥ 0.32. The CUDA
+  Array Interface is Linux by nature and is not offered on macOS.
 - MODIFIED: raw-handle export gains the IOSurface flavour. `export_iosurface` on the Full
   surface returns a typed object carrying a Mach send right to the allocation's IOSurface plus
   the same allocation-stable shape `export_opaque_fd` carries; it is gated, owned, and bounded
@@ -143,9 +144,13 @@ was measured on the M1 Max in three probes left under `/tmp/iosurf-nocopy/` and
   `OPTIMAL`, but its storage is the IOSurface's own linear rows — an IOSurface-backed Metal
   texture is linear by construction, and MoltenVK treats the tiling as metadata. `cpu()` reaches
   those rows through the surface's host mapping and the device tensor through a no-copy
-  `MTLBuffer` over the same pages, so both read and write the surface itself, ordered on the
-  surface's shared-event timeline — the engine's next read waits, bounded,
-  on the helper's write-done value — with no export staging and no readback copy. The six
+  `MTLBuffer` over the same pages, so both read and write the surface itself, ~~ordered on the
+  surface's shared-event timeline — the engine's next read waits, bounded, on the helper's
+  write-done value~~ ordered ahead of the engine's next read *(superseded 2026-09-24 by #2404,
+  owner decision A: the door retires the write before it closes — the device tensor's exit
+  drains torch's MPS queue; an MLX write is `mx.eval`ed inside the scope — so it is complete
+  before the id can be published; a pooled frame has no timeline on macOS and no helper-signalled
+  write-done value exists)* — with no export staging and no readback copy. The six
   staging escalate ops are not needed on macOS and refuse by name saying so. Owner, 2026-09-22,
   over a Linux-identical staging: what this narrows is stated — the texture door's edit is
   published per store, as the pixel-buffer door's already is everywhere; the engine never reads a
@@ -183,8 +188,9 @@ was measured on the M1 Max in three probes left under `/tmp/iosurf-nocopy/` and
 ## §Networking — transport, runtime mesh
 
 - MODIFIED: the copy-out door is no longer Linux-only. A frame's pixels read out for the mesh
-  on macOS through the surface's IOSurface, ordered on its timeline, so a non-Linux sender no
-  longer says its surface bags do not cross.
+  on macOS through the surface's IOSurface, ~~ordered on its timeline~~ ordered ahead of the
+  read by publication *(superseded 2026-09-24 by #2404: no helper-signalled value exists to wait
+  on)*, so a non-Linux sender no longer says its surface bags do not cross.
 
 ## §Control plane & observability
 
@@ -232,8 +238,9 @@ exported handles. B: a Metal-direct IOSurface shim in the wheel, no Vulkan devic
 saving the per-helper device bring-up. **RESOLVED — A.** B is a parallel system beside the one
 that exists; the bring-up cost is measured and inside the budget the plan tests.
 
-**2 — The texture door on macOS.** A: direct — read and write the IOSurface in place, ordered on
-the shared-event timeline, no staging. B: Linux-identical — an export staging plus one GPU copy
+**2 — The texture door on macOS.** A: direct — read and write the IOSurface in place, ~~ordered on
+the shared-event timeline~~ ordered ahead of the engine's next read *(superseded 2026-09-24 by
+#2404; see §Graphics)*, no staging. B: Linux-identical — an export staging plus one GPU copy
 per write, keeping "no torn frame at the block edge" for every holder. **RESOLVED — A.** What
 it narrows is recorded in §Graphics.
 

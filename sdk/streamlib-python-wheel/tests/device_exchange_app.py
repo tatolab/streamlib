@@ -4,7 +4,7 @@
 """Scenarios that run one device-exchange probe in its real placement.
 
 Run as a real `python app.py`: the probe executes in a helper process, reaches
-the frame's pixels as CUDA memory from there, and its observation reaches this
+the frame's pixels as device memory from there, and its observation reaches this
 app — and the test driving it — over the child→parent log forwarding.
 """
 
@@ -13,6 +13,7 @@ import sys
 import streamlib
 
 import device_exchange_probes
+from camera_under_test import camera_source_config
 
 
 def scenario_frame_probe(probe_class_name: str) -> None:
@@ -37,7 +38,7 @@ def scenario_camera_probe() -> None:
     every frame, and its pool recycles a slot every few frames — the two ways
     the pixels under a published id used to change underneath a reader."""
     runtime = streamlib.Runtime()
-    camera = runtime.add(streamlib.CameraSource, config={"device_id": "/dev/video0"})
+    camera = runtime.add(streamlib.CameraSource, config=camera_source_config())
     probe = runtime.add(device_exchange_probes.LaggedConsumerHoldsItsFrameProbe)
     runtime.connect(camera.output("video"), probe.input("video_from_upstream"))
     runtime.run()
@@ -65,6 +66,12 @@ if __name__ == "__main__":
         "DeviceTensorScopeDiscardsOnRaiseProbe",
         "PooledTextureExportProbe",
         "DeviceTensorScopeTakesEveryAcquiredTextureProbe",
+        "DeviceTensorStridesFollowTheRowPitchProbe",
+        "TorchDeviceWriteThenEngineGpuReadProbe",
+        "MlxDeviceWriteThenEngineGpuReadProbe",
+        "TorchAndMlxScopesAlternateInOneHelperProbe",
+        "TorchTensorOutlivesTextureHandleProbe",
+        "MlxArrayOutlivesTextureHandleProbe",
     ):
         scenario_standalone_probe(scenario)
     else:

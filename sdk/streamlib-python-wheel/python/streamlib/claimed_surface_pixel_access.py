@@ -289,11 +289,14 @@ class PixelAccessToOneClaimedSurface:
     def writable(self) -> GpuSurfaceDeviceTensorScope:
         """The GPU write door: a scope over a device tensor of these pixels.
 
-        `with frame.writable() as t:` — entering blits the surface out to a
-        linear device view, leaving normally blits the edit back ordered ahead
-        of the engine's next read, and leaving by a propagating exception
-        discards it without suppressing the raise. `torch.from_dlpack(t)`
-        inside the block is what a third-party GPU package edits in place.
+        `with frame.writable() as t:` — `torch.from_dlpack(t)` inside the
+        block is what a third-party GPU package edits in place, and the edit
+        is ordered ahead of the engine's next read. On Linux the view is a
+        blitted staging: leaving normally blits the edit back, and a
+        propagating exception discards it. On macOS the view is the frame's
+        own IOSurface, publishing per store. `GpuSurfaceDeviceTensorScope`
+        states each floor's rule and the MLX write contract. A raise is never
+        suppressed.
 
         It takes no CPU lock: entering the scope *is* the write declaration,
         and a read-only lock underneath a write would declare the opposite.

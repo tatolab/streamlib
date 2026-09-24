@@ -178,7 +178,7 @@ fn helper_process_that_holds_a_frame_until_it_is_killed() {
     });
     let frame = check_out_pixel_surface(&exchange_client, "pool-slot-killed#1");
     frame
-        .lock_the_iosurface_for_cpu_access(false)
+        .lock_the_iosurface_for_cpu_access_once(false)
         .expect("the write lock");
     let mut standard_output = std::io::stdout();
     writeln!(standard_output, "{HELPER_HOLDS_THE_FRAME_MARKER}").expect("write the marker");
@@ -278,7 +278,7 @@ fn cpu_access_locks_the_iosurface_and_a_dropped_frame_unlocks_it() {
 
     let frame = check_out_pixel_surface(&exchange_client, "pool-slot-locked#1");
     frame
-        .lock_the_iosurface_for_cpu_access(false)
+        .lock_the_iosurface_for_cpu_access_once(false)
         .expect("the write lock");
     // SAFETY: the mapping spans the 32x32 BGRA surface.
     unsafe { frame.host_mapped_base_address().add(8).write(0x5A) };
@@ -286,7 +286,7 @@ fn cpu_access_locks_the_iosurface_and_a_dropped_frame_unlocks_it() {
         .unlock_the_iosurface_after_cpu_access()
         .expect("the unlock");
     frame
-        .lock_the_iosurface_for_cpu_access(true)
+        .lock_the_iosurface_for_cpu_access_once(true)
         .expect("the read lock");
     drop(frame);
 
