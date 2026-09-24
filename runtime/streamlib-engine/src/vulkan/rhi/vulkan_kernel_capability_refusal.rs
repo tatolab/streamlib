@@ -6,7 +6,7 @@
 
 use rspirv_reflect::rspirv;
 use rspirv_reflect::rspirv::dr::Operand;
-use rspirv_reflect::spirv::Capability;
+use rspirv_reflect::spirv::{Capability, Op};
 use vulkanalia::vk;
 
 use crate::core::{Error, Result};
@@ -78,11 +78,12 @@ pub(crate) fn ray_tracing_tier_absent_refusal(
 }
 
 /// The subgroup operation categories a SPIR-V module declares through its
-/// `OpCapability` instructions.
+/// `OpCapability` instructions, plus `ROTATE_CLUSTERED` when a rotate carries
+/// the optional `ClusterSize` operand — the capability alone does not say so.
 fn subgroup_operations_a_spirv_module_declares(
     shader_module: &rspirv::dr::Module,
 ) -> vk::SubgroupFeatureFlags {
-    shader_module
+    let declared = shader_module
         .capabilities
         .iter()
         .flat_map(|instruction| &instruction.operands)
@@ -94,7 +95,27 @@ fn subgroup_operations_a_spirv_module_declares(
                 }
                 _ => declared,
             },
-        )
+        );
+    if a_spirv_module_rotates_within_clusters(shader_module) {
+        declared | vk::SubgroupFeatureFlags::ROTATE_CLUSTERED
+    } else {
+        declared
+    }
+}
+
+/// Whether any `OpGroupNonUniformRotateKHR` carries its fourth operand,
+/// `ClusterSize` (after `Execution`, `Value` and `Delta`).
+fn a_spirv_module_rotates_within_clusters(shader_module: &rspirv::dr::Module) -> bool {
+    const ROTATE_OPERAND_INDEX_OF_CLUSTER_SIZE: usize = 3;
+    shader_module
+        .functions
+        .iter()
+        .flat_map(|function| &function.blocks)
+        .flat_map(|block| &block.instructions)
+        .any(|instruction| {
+            instruction.class.opcode == Op::GroupNonUniformRotateKHR
+                && instruction.operands.len() > ROTATE_OPERAND_INDEX_OF_CLUSTER_SIZE
+        })
 }
 
 /// The subgroup operation category a SPIR-V capability enables, empty for
@@ -109,6 +130,8 @@ fn subgroup_operation_of_a_spirv_capability(capability: Capability) -> vk::Subgr
         Capability::GroupNonUniformShuffleRelative => vk::SubgroupFeatureFlags::SHUFFLE_RELATIVE,
         Capability::GroupNonUniformClustered => vk::SubgroupFeatureFlags::CLUSTERED,
         Capability::GroupNonUniformQuad => vk::SubgroupFeatureFlags::QUAD,
+        Capability::GroupNonUniformRotateKHR => vk::SubgroupFeatureFlags::ROTATE,
+        Capability::GroupNonUniformPartitionedNV => vk::SubgroupFeatureFlags::PARTITIONED_EXT,
         _ => vk::SubgroupFeatureFlags::empty(),
     }
 }
@@ -147,6 +170,63 @@ mod tests {
             declared,
             vk::SubgroupFeatureFlags::BASIC | vk::SubgroupFeatureFlags::CLUSTERED
         );
+    }
+
+    fn a_module_rotating(cluster_size: Option<rspirv::spirv::Word>) -> rspirv::dr::Module {
+        let mut shader_module = a_module_declaring(&[Capability::GroupNonUniformRotateKHR]);
+        let mut operands = vec![Operand::IdRef(10), Operand::IdRef(11), Operand::IdRef(12)];
+        operands.extend(cluster_size.map(Operand::IdRef));
+        let mut block = rspirv::dr::Block::new();
+        block.instructions.push(rspirv::dr::Instruction::new(
+            Op::GroupNonUniformRotateKHR,
+            Some(1),
+            Some(2),
+            operands,
+        ));
+        let mut function = rspirv::dr::Function::new();
+        function.blocks.push(block);
+        shader_module.functions.push(function);
+        shader_module
+    }
+
+    #[test]
+    fn rotate_and_partitioned_capabilities_declare_their_operations() {
+        assert_eq!(
+            subgroup_operations_a_spirv_module_declares(&a_module_declaring(&[
+                Capability::GroupNonUniformRotateKHR,
+                Capability::GroupNonUniformPartitionedNV,
+            ])),
+            vk::SubgroupFeatureFlags::ROTATE | vk::SubgroupFeatureFlags::PARTITIONED_EXT
+        );
+    }
+
+    #[test]
+    fn a_rotate_within_clusters_declares_clustered_rotation_and_a_plain_one_does_not() {
+        assert_eq!(
+            subgroup_operations_a_spirv_module_declares(&a_module_rotating(None)),
+            vk::SubgroupFeatureFlags::ROTATE
+        );
+        assert_eq!(
+            subgroup_operations_a_spirv_module_declares(&a_module_rotating(Some(13))),
+            vk::SubgroupFeatureFlags::ROTATE | vk::SubgroupFeatureFlags::ROTATE_CLUSTERED
+        );
+    }
+
+    #[test]
+    fn a_clustered_rotate_on_a_driver_serving_only_plain_rotation_is_refused() {
+        let driver = a_driver_serving(
+            vk::ShaderStageFlags::COMPUTE,
+            vk::SubgroupFeatureFlags::BASIC | vk::SubgroupFeatureFlags::ROTATE,
+        );
+        let refusal = driver
+            .refuse_a_shader_the_driver_cannot_serve(
+                "Compute kernel 'clustered-rotate'",
+                vk::ShaderStageFlags::COMPUTE,
+                &a_module_rotating(Some(13)),
+            )
+            .expect_err("clustered rotation the driver does not serve must be refused")
+            .to_string();
+        assert!(refusal.contains("ROTATE_CLUSTERED"), "{refusal}");
     }
 
     #[test]
