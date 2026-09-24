@@ -580,7 +580,8 @@ mod tests {
         // deadline's lead, the same deadline read on the continuous epoch is
         // already past, so the check above tells the two epochs apart here.
         // SAFETY: `mach_continuous_time` takes no arguments and cannot fail.
-        let continuous_lead_ticks = unsafe { mach_continuous_time() } - MediaClock::raw_timestamp();
+        let continuous_lead_ticks =
+            unsafe { mach_continuous_time() }.saturating_sub(MediaClock::raw_timestamp());
         if continuous_lead_ticks > 2 * deadline_ahead_ticks {
             let control_armed_at_ns = monotonic_clock_now_ns();
             let continuous_epoch_arm_change = libc::kevent {
@@ -649,7 +650,7 @@ mod tests {
             expirations_seen += expiration_count as u64;
             let latest_deadline_ns =
                 kqueue_schedule.first_deadline_ns + (expirations_seen - 1) * INTERVAL_NS;
-            wake_lateness_ns.push(woke_at_ns - latest_deadline_ns);
+            wake_lateness_ns.push(woke_at_ns.saturating_sub(latest_deadline_ns));
             std::thread::sleep(PER_TICK_WORK);
         }
         drop(kqueue_schedule);
