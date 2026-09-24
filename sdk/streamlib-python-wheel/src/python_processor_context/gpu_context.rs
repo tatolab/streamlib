@@ -19,13 +19,13 @@ use crate::python_processor_owned_window::PythonProcessorOwnedWindow;
 
 #[cfg(not(target_os = "linux"))]
 use super::fd_shaped_raw_handle_is_linux_only_error;
-#[cfg(not(target_os = "macos"))]
-use super::iosurface_raw_handle_is_macos_only_error;
 use super::format_vocabulary::{parse_pixel_format_name, parse_texture_format_name};
 use super::gpu_surface_check_out_lease::{
     PythonGpuSurfaceCheckOutLease, PythonIOSurfaceMachPortExport, PythonOpaqueFdTextureExport,
 };
 use super::gpu_surface_handle::PythonGpuSurfaceHandle;
+#[cfg(not(target_os = "macos"))]
+use super::iosurface_raw_handle_is_macos_only_error;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::kernel_wire_encoding::{
     GRAPHICS_BINDING_KIND_WIRE_NAMES, GRAPHICS_SHADER_STAGE_WIRE_BITS,
