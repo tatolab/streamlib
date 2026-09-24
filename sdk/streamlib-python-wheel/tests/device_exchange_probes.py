@@ -1131,7 +1131,8 @@ class MlxDeviceWriteThenEngineGpuReadProbe(_DeviceWriteThenEngineGpuReadProbe):
         return super()._probe(ctx)
 
     def _write_the_whole_tensor_in_the_scope(self, device_tensor) -> None:
-        mx = _mlx_or_none()
+        import mlx.core as mx
+
         array = mx.from_dlpack(device_tensor)
         written = mx.array(DEVICE_WRITE_RGBA, dtype=mx.uint8)
         # Two partial slices, not `array[:] = ...`: MLX turns a whole-array
