@@ -99,7 +99,7 @@ const PERMITTED_WALL_CLOCK_SURFACES: &[PermittedWallClockSurface] = &[
         reason: "stamps host receipt, the authoritative sort key across a merged log stream",
     },
     PermittedWallClockSurface {
-        path: "runtime/streamlib-engine/src/core/compiler/compiler_ops/subprocess_escalate.rs",
+        path: "runtime/streamlib-engine/src/core/compiler/compiler_ops/subprocess_escalate/helper_log_record/mod.rs",
         surface: ObservabilitySurface::LogRecordHostTimestamp,
         reason: "stamps host receipt for records relayed from a helper process",
     },

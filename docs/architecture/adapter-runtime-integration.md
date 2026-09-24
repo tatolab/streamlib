@@ -74,7 +74,8 @@ read / `unlock` / `close`.
 
 ### Seam 2 — escalate IPC
 
-`runtime/streamlib-engine/src/core/compiler/compiler_ops/subprocess_escalate.rs`,
+`runtime/streamlib-engine/src/core/compiler/compiler_ops/subprocess_escalate/` — a router in
+`mod.rs` and one directory per op family —
 typed by the hand-written serde structs in
 `subprocess_escalate_wire_types/`.
 Length-prefixed JSON request/response over a dedicated `UnixStream`
@@ -404,7 +405,7 @@ that don't match registration](texture-registration.md#anti-patterns).
 
 The reference in-tree producer is the escalate path that hands a helper
 process a pooled texture — `assign_texture_handle_id` in
-`runtime/streamlib-engine/src/core/compiler/compiler_ops/subprocess_escalate.rs`
+`runtime/streamlib-engine/src/core/compiler/compiler_ops/subprocess_escalate/acquisition/linux.rs`
 calls `store.register_texture(...)` at `VulkanLayout::UNDEFINED`, and its
 caller registers the same texture in-process with
 `full.register_texture(...)`, whose layout is `UNDEFINED` too, so the parent

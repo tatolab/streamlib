@@ -65,10 +65,13 @@ dispatch.
   - The wire already spells `storage_buffer` (`escalate_request.rs:455-479`, `:563`, `:1207`), and
     so does the helper (`python_processor_context/kernel_wire_encoding.rs:69-95`).
   - Python dispatch refuses it twice. The planner rejects it by name
-    (`subprocess_escalate.rs:2133-2139`, and graphics at `:2600`). The engine binding value is
+    (`plan_supplied_compute_bindings` in `subprocess_escalate/compute/linux.rs`, and graphics
+    through `plan_supplied_surface_bound_kernel_bindings` in
+    `subprocess_escalate/surface_bound_kernel_binding.rs`). The engine binding value is
     texture-only (`BatchedComputeKernelDispatchBinding`, `gpu_context.rs:752-781`), and the batch
     recorder tracks image barriers only (`:3311+`).
-  - Escalate handles are per-helper (`subprocess_escalate.rs:207-218`), so a downstream helper
+  - Escalate handles are per-helper (`EscalateHandleRegistry`,
+    `subprocess_escalate/handle_lifecycle/mod.rs`), so a downstream helper
     cannot bind a producer helper's id without a parent-wide map. The sibling is `texture_cache`
     (`gpu_context.rs:821`).
 - **The surface-share service is nearly shape-agnostic.** `resource_type` is a free string
@@ -111,7 +114,8 @@ dispatch.
   - **Reply:** `EscalateResponseOk` gains optional `shape` and `dtype` (`deny_unknown_fields`
     requires it).
   - **Handles:** a `RegisteredHandle::StorageBuffer` variant, released through the existing
-    release path (`subprocess_escalate.rs:4369`).
+    release path (`release_surface_share_and_texture_cache_for_handle`,
+    `subprocess_escalate/handle_lifecycle/mod.rs`).
   - **Tests:** wire vectors.
 - ADDED: a parent-wide surface id → `StorageBuffer` map beside `texture_cache`, so any helper binds
   any helper's tensor surface by id. The retired-generation gate (`refuse_a_retired_frame_id`)
@@ -211,7 +215,9 @@ dispatch.
 ## Removals
 
 - REMOVED: surface-backed kinds are storage_image and sampled_texture
-  The dispatch planners' refusal of `storage_buffer` (`subprocess_escalate.rs:2137`, `:2600`).
+  The dispatch planners' refusal of `storage_buffer` (`plan_supplied_compute_bindings` in
+  `subprocess_escalate/compute/linux.rs`, `plan_supplied_surface_bound_kernel_bindings` in
+  `subprocess_escalate/surface_bound_kernel_binding.rs`).
   Replaced by a refusal that names uniform buffers only.
 
 ---
