@@ -301,12 +301,6 @@ def test_an_mlx_write_with_a_view_alive_misses_the_frame(start_app_under_test):
 # ---------------------------------------------------------------------------
 
 
-# On macOS the thread runner has no reactive wakeup yet — it polls every
-# 100 ms — so this deliberately slow consumer reads frames 1-4 pool generations
-# stale and nearly all are refused as recycled before a comparison can run
-# (measured on the FaceTime camera: 14 of 16). The comparisons that do run
-# agree. #2409 brings the kqueue wakeup.
-@pytest.mark.awaiting_macos_parity(issue=2409)
 def test_camera_device_pixels_match_host_across_ring_cycles(start_app_under_test):
     """Regression lock on the stale-blit-source bug, and on the frame itself.
 
