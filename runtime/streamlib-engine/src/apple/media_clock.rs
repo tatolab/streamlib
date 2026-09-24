@@ -34,15 +34,16 @@ impl MediaClock {
     /// or after `nanos` — the tick a deadline must be armed at to never fire early.
     #[inline]
     pub fn raw_timestamp_at_or_after_nanos(nanos: Duration) -> u64 {
-        let info = Self::mach_timebase();
-        let raw_host_ticks = (nanos.as_nanos() * info.denom as u128).div_ceil(info.numer as u128);
+        let mach_timebase_ratio = Self::mach_timebase();
+        let raw_host_ticks = (nanos.as_nanos() * mach_timebase_ratio.denom as u128)
+            .div_ceil(mach_timebase_ratio.numer as u128);
         raw_host_ticks.min(u64::MAX as u128) as u64
     }
 
     #[inline]
     fn host_time_to_nanos(host_time: u64) -> u64 {
-        let info = Self::mach_timebase();
-        host_time * info.numer as u64 / info.denom as u64
+        let mach_timebase_ratio = Self::mach_timebase();
+        host_time * mach_timebase_ratio.numer as u64 / mach_timebase_ratio.denom as u64
     }
 
     #[inline]
