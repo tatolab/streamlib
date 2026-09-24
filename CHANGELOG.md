@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.18](https://github.com/tatolab/streamlib/compare/v0.26.17...v0.26.18) (2026-09-24)
+
+
+### Features
+
+* **engine:** a texture crosses to a helper process on macOS, on an IOSurface ([#2452](https://github.com/tatolab/streamlib/issues/2452)) ([ea2f20c](https://github.com/tatolab/streamlib/commit/ea2f20cd63f6813cdad83c8b330e87d0a8fcb2b1))
+
 ## [0.26.17](https://github.com/tatolab/streamlib/compare/v0.26.16...v0.26.17) (2026-09-23)
 
 
