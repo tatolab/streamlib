@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.19](https://github.com/tatolab/streamlib/compare/v0.26.18...v0.26.19) (2026-09-24)
+
+
+### Features
+
+* **wheel:** MonotonicTimer paces on macOS, and the wheel's clock is the engine's MediaClock ([#2454](https://github.com/tatolab/streamlib/issues/2454)) ([6cffc70](https://github.com/tatolab/streamlib/commit/6cffc703b971034e7814e658607a29df945c2b00))
+
 ## [0.26.18](https://github.com/tatolab/streamlib/compare/v0.26.17...v0.26.18) (2026-09-24)
 
 
