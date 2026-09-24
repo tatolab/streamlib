@@ -180,14 +180,15 @@ def test_a_texture_backed_surfaces_pixels_reach_the_cpu_with_numpy_alone(
     )
 
 
-def test_a_raise_inside_the_staged_cpu_door_discards_the_edit(start_app_under_test):
+def test_a_raise_inside_the_texture_cpu_door_propagates_and_follows_its_floors_publication_rule(
+    start_app_under_test,
+):
     """Over a texture backing on Linux the door is a staging published at the
     block edge, so a propagating raise leaves the frame the engine already
     held. On macOS the door is the IOSurface itself and publishes per store,
     as the pixel-buffer door does everywhere, so the stores made before the
-    raise are the frame (docs/plan/changes/macos-capability-parity.md,
-    §Graphics). On both, the raise is never suppressed."""
-    observed = run_probe(start_app_under_test, "StagedCpuDoorDiscardsOnRaiseProbe")
+    raise are the frame. On both, the raise is never suppressed."""
+    observed = run_probe(start_app_under_test, "TextureCpuDoorRaiseProbe")
 
     assert observed["raised"] == "the edit does not finish", (
         f"leaving the door must never suppress the exception: {observed['raised']!r}"

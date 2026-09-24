@@ -310,3 +310,78 @@ fn handle_escalate_op_end_to_end() {
         EscalateResponse::Ok(_) => panic!("unknown handle should not succeed"),
     }
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn every_staging_op_and_acquire_image_refuse_on_macos_naming_the_reason() {
+    use crate::core::context::{GpuContext, GpuContextLimitedAccess};
+
+    let Ok(gpu) = GpuContext::init_for_platform_sync() else {
+        println!("staging refusals on macOS: no GPU device — skipping");
+        return;
+    };
+    let sandbox = GpuContextLimitedAccess::new(gpu);
+    let registry = EscalateHandleRegistry::new();
+    let surface_op = |op_name: &str| {
+        serde_json::json!({
+            "rpc": "escalate_request",
+            "op": op_name,
+            "request_id": op_name,
+            "surface_id": "surface-7",
+        })
+    };
+    let frames = [
+        surface_op("open_device_export_staging"),
+        surface_op("open_cpu_readback_staging"),
+        surface_op("refill_device_export_staging"),
+        surface_op("copy_device_export_staging_back_to_surface"),
+        serde_json::json!({
+            "rpc": "escalate_request",
+            "op": "run_cpu_readback_copy",
+            "request_id": "run_cpu_readback_copy",
+            "surface_id": "surface-7",
+            "direction": "image_to_buffer",
+        }),
+        serde_json::json!({
+            "rpc": "escalate_request",
+            "op": "acquire_image",
+            "request_id": "acquire_image",
+            "width": 64,
+            "height": 64,
+            "format": "bgra8_unorm",
+        }),
+    ];
+    for frame in frames {
+        let op_name = frame["op"].as_str().unwrap_or_default().to_string();
+        let op = parse_op_for_tests(&frame)
+            .unwrap_or_else(|failure| panic!("{op_name} decodes: {failure}"));
+        let response = handle_escalate_op(
+            &sandbox,
+            &registry,
+            &a_mesh_link_ingress_table_carrying_nothing(),
+            op,
+        )
+        .unwrap_or_else(|| panic!("{op_name} is request/response"));
+        let EscalateResponse::Err(refusal) = response else {
+            panic!("{op_name} must refuse on macOS, got {response:?}");
+        };
+        assert_eq!(refusal.request_id, op_name);
+        assert!(
+            refusal.message.starts_with(&op_name),
+            "{op_name}: the refusal names the op: {}",
+            refusal.message
+        );
+        assert!(
+            refusal.message.contains("not needed on macOS")
+                && refusal.message.contains("IOSurface"),
+            "{op_name}: the refusal names the reason: {}",
+            refusal.message
+        );
+        assert!(
+            !refusal.message.contains("only available on Linux"),
+            "{op_name}: the refusal names the reason, not the platform: {}",
+            refusal.message
+        );
+    }
+    assert_eq!(registry.handle_count(), 0);
+}

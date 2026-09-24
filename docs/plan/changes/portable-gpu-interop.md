@@ -37,7 +37,7 @@ beside this delta, and its macOS arms are prerequisites here, never duplicated.
 - A new escalate op touches `escalate_request.rs` (variant + `deny_unknown_fields` struct),
   `escalate_wire_encoding_tests.rs`, `subprocess_escalate/mod.rs` (a `request_id` arm and a
   router arm), the op family's directory under `subprocess_escalate/` (the handler in its
-  platform file, its `not_linux.rs` refusal twin, and a test in the family's `tests.rs`), the
+  platform file, its refusal twin for the platforms that lack it, and a test in the family's `tests.rs`), the
   helper client (`python_helper_process_pixel_exchange/`), the two `#[pymethods]` blocks
   (`python_processor_context/gpu_context.rs:69`, `:226`), and `_engine.pyi` (`:1050`, `:1097`). The
   closest model is `run_cpu_readback_copy` (`escalate_request.rs:1538`, handler
@@ -45,7 +45,7 @@ beside this delta, and its macOS arms are prerequisites here, never duplicated.
   needs no new type: `EscalateResponseOk` already carries `handle_id` and `timeline_value`.
 - Ordering today: every escalate GPU op records, submits and waits on the host before it
   replies (kernels `dispatch_compute_recording_and_publish_bound_surface_layouts` in
-  `subprocess_escalate/compute/linux.rs`; write-backs `submit_staging_copy_and_wait`,
+  `subprocess_escalate/compute/linux_and_macos.rs`; write-backs `submit_staging_copy_and_wait`,
   `surface_export_staging.rs:682-727`). A pooled frame on Linux has no per-surface destination
   timeline. Acquired textures carry a `produce_done` / `consume_done` pair that escalate
   consumers do not drive (`assign_texture_handle_id` in
