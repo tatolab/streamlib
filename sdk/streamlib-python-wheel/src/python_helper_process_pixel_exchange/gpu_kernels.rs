@@ -5,13 +5,11 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use pyo3::types::PyList;
 
-use crate::python_helper_process_pixel_exchange::{
+use super::{
     HelperProcessGpuExchangeClient, escalate_round_trip_to_parent,
-    hand_a_release_handle_to_the_release_worker,
+    hand_a_release_handle_to_the_release_worker, response_field,
 };
 use crate::python_processor_context::ReflectedKernelBinding;
-
-use super::response_field;
 
 /// The binding shape a `register_*_kernel` response carries, in slot order.
 ///

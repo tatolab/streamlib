@@ -1163,6 +1163,9 @@ class GpuContextFullAccess:
         `bindings` optionally asserts `{name: kind}` against reflection; each
         kind is one of `sampled_image`, `sampled_texture`, `storage_buffer`,
         `storage_image`, `uniform_buffer`.
+
+        A shader using subgroup operations the device's driver does not serve
+        raises here, naming the driver.
         """
 
     def create_graphics_kernel(
@@ -1209,6 +1212,10 @@ class GpuContextFullAccess:
         `src_color_factor`, `dst_color_factor`, `color_op`,
         `src_alpha_factor`, `dst_alpha_factor`, `alpha_op` — the rest default
         to source-alpha-over.
+
+        A stage using subgroup operations the device's driver does not serve
+        in that stage raises here, naming the driver — MoltenVK serves none in
+        the vertex stage.
         """
 
     def create_ray_tracing_kernel(
@@ -1235,6 +1242,10 @@ class GpuContextFullAccess:
 
         `bindings` takes the same shape `create_graphics_kernel` does, plus the
         `acceleration_structure` kind.
+
+        Ray tracing is a tier a device has or lacks. Without it — every macOS
+        device, since MoltenVK exposes no `VK_KHR_ray_tracing_pipeline` — this,
+        `build_triangles_blas` and `build_tlas` raise naming the absent tier.
         """
 
     def build_triangles_blas(

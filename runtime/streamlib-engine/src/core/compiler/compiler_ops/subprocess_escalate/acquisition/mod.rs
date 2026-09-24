@@ -10,8 +10,6 @@ mod linux;
 mod macos;
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 mod neither_linux_nor_macos;
-#[cfg(not(target_os = "linux"))]
-mod not_linux;
 #[cfg(test)]
 mod tests;
 
@@ -23,10 +21,12 @@ use linux::acquire_texture_for_helper;
 pub(super) use linux::handle_acquire_image;
 #[cfg(target_os = "macos")]
 use macos::acquire_texture_for_helper;
+#[cfg(target_os = "macos")]
+pub(super) use macos::handle_acquire_image;
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 use neither_linux_nor_macos::acquire_texture_for_helper;
-#[cfg(not(target_os = "linux"))]
-pub(super) use not_linux::handle_acquire_image;
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub(super) use neither_linux_nor_macos::handle_acquire_image;
 
 use super::handle_lifecycle::EscalateHandleRegistry;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse;

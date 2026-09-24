@@ -20,7 +20,7 @@ mod gpu_context;
 mod gpu_surface_check_out_lease;
 mod gpu_surface_device_tensor_scope;
 mod gpu_surface_handle;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod kernel_wire_encoding;
 mod kernels;
 mod link_data_access;
@@ -39,7 +39,7 @@ pub(crate) use gpu_surface_check_out_lease::{
 };
 pub(crate) use gpu_surface_device_tensor_scope::PythonGpuSurfaceDeviceTensorScope;
 pub(crate) use gpu_surface_handle::PythonGpuSurfaceHandle;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) use kernels::ReflectedKernelBinding;
 pub(crate) use kernels::{
     PythonAccelerationStructureHandle, PythonComputeKernel, PythonGraphicsKernel,

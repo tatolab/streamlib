@@ -3,14 +3,16 @@
 
 //! Graphics kernels a helper process registers and draws with.
 
-#[cfg(target_os = "linux")]
-mod linux;
-#[cfg(not(target_os = "linux"))]
-mod not_linux;
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod linux_and_macos;
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+mod neither_linux_nor_macos;
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod tests;
 
-#[cfg(target_os = "linux")]
-pub(super) use linux::{handle_register_graphics_kernel, handle_run_graphics_draw};
-#[cfg(not(target_os = "linux"))]
-pub(super) use not_linux::{handle_register_graphics_kernel, handle_run_graphics_draw};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(super) use linux_and_macos::{handle_register_graphics_kernel, handle_run_graphics_draw};
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub(super) use neither_linux_nor_macos::{
+    handle_register_graphics_kernel, handle_run_graphics_draw,
+};

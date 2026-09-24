@@ -37,6 +37,7 @@ use crate::core::{Error, Result};
 pub const PIPELINE_CACHE_DIR_ENV: &str = "STREAMLIB_PIPELINE_CACHE_DIR";
 
 use super::HostVulkanDevice;
+use super::vulkan_kernel_capability_refusal::VulkanSubgroupOperationSupport;
 use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
 
 /// One compute kernel: shader pipeline + descriptor set + per-dispatch primitives.
@@ -178,7 +179,8 @@ impl VulkanComputeKernelInner {
         let queue_family_index = vulkan_device.queue_family_index();
         let device = vulkan_device.device();
 
-        let reconciled_bindings = validate_against_spirv(descriptor)?;
+        let reconciled_bindings =
+            validate_against_spirv(descriptor, vulkan_device.subgroup_operation_support())?;
 
         let spirv: Vec<u32> = descriptor
             .spv
@@ -1235,6 +1237,7 @@ mod layout_tests {
 /// shader's own binding names adopted onto them.
 fn validate_against_spirv(
     descriptor: &ComputeKernelDescriptor<'_>,
+    subgroup_operation_support: &VulkanSubgroupOperationSupport,
 ) -> Result<Vec<ComputeBindingSpec>> {
     let reflection = Reflection::new_from_spirv(descriptor.spv).map_err(|e| {
         Error::GpuError(format!(
@@ -1242,6 +1245,11 @@ fn validate_against_spirv(
             descriptor.label
         ))
     })?;
+    subgroup_operation_support.refuse_a_shader_the_driver_cannot_serve(
+        &format!("Compute kernel '{}'", descriptor.label),
+        vk::ShaderStageFlags::COMPUTE,
+        &reflection.0,
+    )?;
 
     let sets = reflection.get_descriptor_sets().map_err(|e| {
         Error::GpuError(format!(
@@ -1718,6 +1726,65 @@ mod tests {
             .expect("the rig must produce a Vulkan device for the dispatch tests")
     }
 
+    const CLUSTERED_SUBGROUP_REDUCTION_GLSL: &str = r#"#version 450
+#extension GL_KHR_shader_subgroup_clustered : require
+layout(local_size_x = 64) in;
+layout(std430, set = 0, binding = 0) buffer ReducedValues { uint values[]; } reduced_values;
+void main() {
+    uint lane = gl_GlobalInvocationID.x;
+    reduced_values.values[lane] = subgroupClusteredAdd(reduced_values.values[lane], 4);
+}
+"#;
+
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn a_subgroup_operation_is_built_where_the_driver_serves_it_and_refused_by_name_where_not() {
+        let device = vulkan_device_for_dispatch_tests();
+        let spv = crate::core::rhi::GlslShaderSourceToSpirvCompiler::new()
+            .compile_or_reuse(
+                CLUSTERED_SUBGROUP_REDUCTION_GLSL,
+                crate::core::rhi::GlslCompilationTargetStage::Compute,
+                "main",
+                "clustered-subgroup-reduction",
+            )
+            .expect("the clustered reduction compiles");
+        let (bindings, push_constant_size) =
+            crate::core::rhi::derive_bindings_from_spirv(&spv).expect("the blob reflects");
+        let built = VulkanComputeKernel::new(
+            &device,
+            &ComputeKernelDescriptor {
+                label: "clustered-subgroup-reduction",
+                spv: &spv,
+                entry_point: "main",
+                bindings: &bindings,
+                push_constant_size,
+            },
+        );
+        let support = device.subgroup_operation_support();
+        if support
+            .supported_stages
+            .contains(vk::ShaderStageFlags::COMPUTE)
+            && support
+                .supported_operations
+                .contains(vk::SubgroupFeatureFlags::BASIC | vk::SubgroupFeatureFlags::CLUSTERED)
+        {
+            built.expect("a driver serving clustered operations builds the kernel");
+        } else {
+            let refusal = built
+                .err()
+                .expect("a driver not serving clustered operations refuses at construction")
+                .to_string();
+            assert!(refusal.contains(&support.driver_name), "{refusal}");
+            assert!(
+                refusal.contains("clustered-subgroup-reduction"),
+                "{refusal}"
+            );
+        }
+    }
+
     /// Allocate a HOST_VISIBLE storage buffer of `element_count * 4` bytes
     /// usable as both an input and output of the test_blend kernel.
     fn make_storage_buffer(device: &Arc<HostVulkanDevice>, element_count: u32) -> PixelBuffer {
@@ -1779,9 +1846,12 @@ mod tests {
             bindings: &bindings,
             push_constant_size: 0,
         };
-        let refusal = validate_against_spirv(&descriptor)
-            .err()
-            .expect("a binding outside set 0 cannot be bound, so it cannot be dropped in silence");
+        let refusal = validate_against_spirv(
+            &descriptor,
+            &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
+        )
+        .err()
+        .expect("a binding outside set 0 cannot be bound, so it cannot be dropped in silence");
         let message = refusal.to_string();
         assert!(
             message.contains("only descriptor set 0 is supported") && message.contains('1'),

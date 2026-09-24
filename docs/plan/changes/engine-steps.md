@@ -65,7 +65,7 @@ dispatch.
   - The wire already spells `storage_buffer` (`escalate_request.rs:455-479`, `:563`, `:1207`), and
     so does the helper (`python_processor_context/kernel_wire_encoding.rs:69-95`).
   - Python dispatch refuses it twice. The planner rejects it by name
-    (`plan_supplied_compute_bindings` in `subprocess_escalate/compute/linux.rs`, and graphics
+    (`plan_supplied_compute_bindings` in `subprocess_escalate/compute/linux_and_macos.rs`, and graphics
     through `plan_supplied_surface_bound_kernel_bindings` in
     `subprocess_escalate/surface_bound_kernel_binding.rs`). The engine binding value is
     texture-only (`BatchedComputeKernelDispatchBinding`, `gpu_context.rs:752-781`), and the batch
@@ -216,7 +216,7 @@ dispatch.
 
 - REMOVED: surface-backed kinds are storage_image and sampled_texture
   The dispatch planners' refusal of `storage_buffer` (`plan_supplied_compute_bindings` in
-  `subprocess_escalate/compute/linux.rs`, `plan_supplied_surface_bound_kernel_bindings` in
+  `subprocess_escalate/compute/linux_and_macos.rs`, `plan_supplied_surface_bound_kernel_bindings` in
   `subprocess_escalate/surface_bound_kernel_binding.rs`).
   Replaced by a refusal that names uniform buffers only.
 

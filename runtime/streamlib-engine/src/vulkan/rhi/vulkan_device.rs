@@ -25,6 +25,9 @@ use streamlib_consumer_rhi::{
 use super::VulkanTextureLike;
 #[cfg(target_os = "linux")]
 use super::drm_modifier_probe::{self, DrmModifierTable};
+use super::vulkan_kernel_capability_refusal::{
+    VulkanSubgroupOperationSupport, ray_tracing_tier_absent_refusal,
+};
 use super::vulkan_validation_messenger::{
     VulkanValidationConfiguration, VulkanValidationInstanceSetup, VulkanValidationMessenger,
 };
@@ -207,6 +210,9 @@ pub struct HostVulkanDevice {
     /// kernel needs at every dispatch — caching on the device avoids
     /// a re-query per kernel.
     ray_tracing_properties: Option<RayTracingPipelineProperties>,
+    /// The subgroup operations and stages the driver serves, checked against
+    /// each kernel's shaders at construction.
+    subgroup_operation_support: VulkanSubgroupOperationSupport,
     supports_video_encode: bool,
     supports_video_decode: bool,
     video_encode_queue_family_index: Option<u32>,
@@ -682,10 +688,29 @@ impl HostVulkanDevice {
         //     prosumer workstations) using a mismatched device fails
         //     silently when CUDA imports the OPAQUE_FD memory.
         let mut id_props = vk::PhysicalDeviceIDProperties::default();
+        let mut subgroup_props = vk::PhysicalDeviceSubgroupProperties::default();
+        let mut driver_props = vk::PhysicalDeviceDriverProperties::default();
         let mut props2 = vk::PhysicalDeviceProperties2::builder()
             .push_next(&mut id_props)
+            .push_next(&mut subgroup_props)
+            .push_next(&mut driver_props)
             .build();
         unsafe { instance.get_physical_device_properties2(physical_device, &mut props2) };
+        let subgroup_operation_support = VulkanSubgroupOperationSupport {
+            driver_name: driver_props
+                .driver_name
+                .as_cstr()
+                .to_string_lossy()
+                .into_owned(),
+            supported_stages: subgroup_props.supported_stages,
+            supported_operations: subgroup_props.supported_operations,
+        };
+        tracing::info!(
+            driver = %subgroup_operation_support.driver_name,
+            supported_stages = ?subgroup_operation_support.supported_stages,
+            supported_operations = ?subgroup_operation_support.supported_operations,
+            "Vulkan subgroup operation support"
+        );
         // `id_props.device_uuid` is `ByteArray<16>` (a transparent newtype
         // around `[u8; 16]`); use the upstream `From<ByteArray<N>> for [u8; N]`
         // impl to land in plain-array shape.
@@ -1562,6 +1587,7 @@ impl HostVulkanDevice {
             has_hdr_metadata,
             has_ray_tracing_pipeline,
             ray_tracing_properties,
+            subgroup_operation_support,
             supports_video_encode,
             supports_video_decode,
             video_encode_queue_family_index,
@@ -3340,7 +3366,7 @@ impl HostVulkanDevice {
     ///
     /// Used by [`crate::core::context::TextureRing`]'s per-slot upload
     /// path — see `docs/architecture/texture-ring.md`.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub unsafe fn upload_buffer_to_image_amortized(
         &self,
         cb: vk::CommandBuffer,
@@ -3560,6 +3586,27 @@ impl HostVulkanDevice {
     /// [`Self::supports_ray_tracing_pipeline`] is true.
     pub fn ray_tracing_pipeline_properties(&self) -> Option<RayTracingPipelineProperties> {
         self.ray_tracing_properties
+    }
+
+    /// Refuse a ray-tracing constructor on a device without the ray-tracing
+    /// tier, naming the tier.
+    pub(crate) fn refuse_without_the_ray_tracing_tier(
+        &self,
+        constructor_description: &str,
+    ) -> crate::core::Result<()> {
+        if self.has_ray_tracing_pipeline {
+            return Ok(());
+        }
+        Err(ray_tracing_tier_absent_refusal(
+            constructor_description,
+            &self.device_name,
+        ))
+    }
+
+    /// The subgroup operations and stages this device's driver serves,
+    /// checked against each kernel stage before anything is built.
+    pub(crate) fn subgroup_operation_support(&self) -> &VulkanSubgroupOperationSupport {
+        &self.subgroup_operation_support
     }
 
     /// Producer-side QFOT release barrier — declares the surface's

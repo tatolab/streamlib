@@ -12,12 +12,12 @@ use super::{
     HelperCheckedOutPixelSurface, HelperCheckedOutSurface, HelperProcessGpuExchangeClient,
     HelperSurfaceCheckOutLeaseDebt, SURFACE_SHARE_RESPONSE_TIMEOUT,
     refuse_check_out_the_service_declined, required_positive_u32_check_out_metadata_field,
+    response_field,
 };
 use texture::an_acquired_device_texture_carries_no_exportable_fd_error;
 
 mod export_staging;
 mod foreign_dma_buf;
-mod gpu_kernels;
 mod processor_owned_window;
 mod texture;
 
@@ -25,23 +25,9 @@ pub(crate) use export_staging::{
     CpuReadbackCopyDirection, HelperCpuReadbackExport, HelperDeviceExport,
 };
 pub(crate) use foreign_dma_buf::HelperForeignSurfaceUnregisterDebt;
-pub(crate) use gpu_kernels::{
-    HelperProcessGraphicsDraw, HelperProcessGraphicsKernelRegistration,
-    HelperProcessRayTracingKernelRegistration, compute_dispatch_wire_entry,
-};
 pub(crate) use texture::{
     HelperAcquiredTexture, HelperCheckedOutTextureSurface, OpaqueFdTextureExportDescription,
 };
-
-/// One field of an escalate response, named in the failure so a parent
-/// that answered a shape this child does not understand says which part.
-fn response_field<'py>(response: &Bound<'py, PyAny>, field: &str) -> PyResult<Bound<'py, PyAny>> {
-    response.get_item(field).map_err(|_| {
-        crate::python_processor_context::gpu_operation_error(format!(
-            "the parent's response carried no {field}"
-        ))
-    })
-}
 
 /// A u64 the wire carries as a decimal string, because JSON has no 64-bit
 /// integer. Host-side counterpart: `EscalateResponseOk::staging_byte_size`.

@@ -36,7 +36,7 @@ pub use color_converter::{
 };
 pub use command_buffer::CommandBuffer;
 pub use command_queue::RhiCommandQueue;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) use compute_kernel::reconcile_compute_binding_declarations;
 pub use compute_kernel::{
     ComputeBindingDeclaration, ComputeBindingKind, ComputeBindingSpec, ComputeKernelDescriptor,
@@ -48,7 +48,7 @@ pub use external_handle::{RhiExternalHandle, RhiPixelBufferExport, RhiPixelBuffe
 pub use glsl_shader_source_compiler::{
     DEFAULT_SHADER_ENTRY_POINT, GlslCompilationTargetStage, GlslShaderSourceToSpirvCompiler,
 };
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) use graphics_kernel::reconcile_graphics_binding_declarations;
 pub use graphics_kernel::{
     AttachmentFormats, BlendFactor, BlendOp, ColorBlendAttachment, ColorBlendState, ColorWriteMask,
@@ -64,7 +64,7 @@ pub use graphics_kernel::{
 pub use host_timeline_semaphore::HostTimelineSemaphore;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use index_buffer::IndexBuffer;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) use kernel_binding_names::{
     KernelShaderStageMask, quote_declared_shader_binding_names, quote_shader_stage_names,
 };
@@ -81,7 +81,7 @@ pub use pixel_buffer_pool::{
 };
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) use ray_tracing_kernel::ray_tracing_spirv_type_to_kind;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) use ray_tracing_kernel::reconcile_ray_tracing_binding_declarations;
 pub use ray_tracing_kernel::{
     RayTracingBindingDeclaration, RayTracingBindingKind, RayTracingBindingSpec,

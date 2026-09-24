@@ -265,11 +265,12 @@ class TextureBackedPixelsReachTheCpuProbe(_ComputeKernelProbeBase):
 
 @processor(
     execution="manual",
-    description="A raise inside the staged CPU door discards the edit",
+    description="A raise inside the CPU door over a texture propagates",
 )
-class StagedCpuDoorDiscardsOnRaiseProbe(_ComputeKernelProbeBase):
-    """Over a staging the door publishes at the block edge, so a raise has
-    something to discard — and the frame keeps the pixels it already held."""
+class TextureCpuDoorRaiseProbe(_ComputeKernelProbeBase):
+    """A raise inside the CPU door over a texture, and the pixel the frame
+    holds afterwards — the staged door's own on Linux, the stores made before
+    the raise on macOS, where the door is the IOSurface itself."""
 
     def observe(self, kernel, source, output) -> dict:
         del kernel, output

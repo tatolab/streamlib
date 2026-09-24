@@ -278,13 +278,8 @@ pub(super) fn refuse_a_device_without_ray_tracing(
     full: &crate::core::context::GpuContextFullAccess,
     op: &str,
 ) -> crate::core::error::Result<()> {
-    if full.supports_ray_tracing_pipeline() {
-        return Ok(());
-    }
-    Err(crate::core::error::Error::GpuError(format!(
-        "{op}: this device does not expose the VK_KHR_ray_tracing_pipeline extension chain, so \
-         it can build neither acceleration structures nor ray-tracing pipelines"
-    )))
+    full.host_vulkan_device_arc()?
+        .refuse_without_the_ray_tracing_tier(op)
 }
 
 /// The compiler's name for a ray-tracing wire stage.

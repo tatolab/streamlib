@@ -15,7 +15,7 @@ use super::super::surface_bound_kernel_binding::{
     DeclaredKernelBindingUnderPlanning, SuppliedKernelBindingUnderPlanning,
     plan_supplied_surface_bound_kernel_bindings,
 };
-use super::linux::{
+use super::linux_and_macos::{
     graphics_binding_kind_to_wire, graphics_pipeline_state_from_wire,
     surface_bound_graphics_binding_kind,
 };

@@ -74,9 +74,10 @@ pub use crate::vulkan::rhi::{
 pub use crate::vulkan::rhi::drm_modifier_probe;
 
 #[cfg(target_os = "linux")]
-pub use crate::vulkan::rhi::{
-    HostMappingTier, HostMappingWrittenByGpu, PixelBufferUploadFinalTextureLayout,
-};
+pub use crate::vulkan::rhi::{HostMappingTier, HostMappingWrittenByGpu};
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub use crate::vulkan::rhi::PixelBufferUploadFinalTextureLayout;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use crate::vulkan::rhi::{

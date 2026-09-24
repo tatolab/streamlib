@@ -4,20 +4,20 @@
 use std::sync::Arc;
 
 use parking_lot::Mutex;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use pyo3::exceptions::{PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use pyo3::types::PyList;
 
 use crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::python_helper_process_pixel_exchange::HelperProcessGraphicsDraw;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::gpu_surface_handle::PythonGpuSurfaceHandle;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::kernel_wire_encoding::{
     encode_lowercase_hex, require_declared_push_constant_size, supplied_kernel_bindings_to_wire,
 };
@@ -30,7 +30,7 @@ use super::{gpu_unreachable_from_a_helper_process_error, left_by_a_propagating_e
 /// the same two fields whichever op asked for it.
 pub(crate) struct ReflectedKernelBinding {
     pub(crate) name: String,
-    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
+    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
     pub(crate) kind: String,
 }
 
@@ -53,14 +53,14 @@ pub(super) fn reflected_binding_names(reflected: &[ReflectedKernelBinding]) -> V
 /// before reaching it.
 #[pyclass(name = "ComputeKernel", module = "streamlib", frozen)]
 pub(crate) struct PythonComputeKernel {
-    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
+    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
     pub(super) kernel_id: String,
-    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
+    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
     pub(super) push_constant_size: u32,
     /// The caller supplies surfaces by name; which kind each name is, is the
     /// shader's to say, so it is carried rather than guessed per dispatch.
     pub(super) reflected_binding_kinds: Vec<ReflectedKernelBinding>,
-    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
+    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
     pub(super) helper_process_exchange_client: Arc<HelperProcessGpuExchangeClient>,
 }
 
@@ -87,7 +87,7 @@ impl PythonComputeKernel {
         group_count: (u32, u32, u32),
         push_constants: Option<&[u8]>,
     ) -> PyResult<()> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             let (wire_bindings, push_constants_hex) =
                 self.validated_wire_dispatch(python, bindings, push_constants)?;
@@ -99,7 +99,7 @@ impl PythonComputeKernel {
                 group_count,
             )
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
             let _ = (python, bindings, group_count, push_constants);
             Err(gpu_unreachable_from_a_helper_process_error())
@@ -114,7 +114,7 @@ impl PythonComputeKernel {
     /// Shared by the two entry points a dispatch has — on its own, and inside
     /// a batch — so a mistake is refused identically either way, in the
     /// caller's own stack rather than a round trip later.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn validated_wire_dispatch<'py>(
         &self,
         python: Python<'py>,
@@ -137,9 +137,9 @@ impl PythonComputeKernel {
 struct RecordedKernelDispatch {
     /// Kept beside the entry rather than read back out of it, so refusing a
     /// repeated kernel cannot drift from the entry it refuses against.
-    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
+    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
     kernel_id: String,
-    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
+    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
     wire_entry: Py<PyDict>,
 }
 
@@ -172,7 +172,7 @@ pub(super) struct KernelDispatchBatchRecording {
 #[pyclass(name = "KernelDispatchBatch", module = "streamlib", frozen)]
 pub(crate) struct PythonKernelDispatchBatch {
     /// `None` means this helper was started without its GPU channels.
-    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
+    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
     pub(super) helper_process_exchange_client: Option<Arc<HelperProcessGpuExchangeClient>>,
     pub(super) recording: Mutex<KernelDispatchBatchRecording>,
 }
@@ -229,7 +229,7 @@ impl PythonKernelDispatchBatch {
         group_count: (u32, u32, u32),
         push_constants: Option<&[u8]>,
     ) -> PyResult<()> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             // Scope state first, and the lock dropped before validation: a
             // batch nobody entered or already ran collects nothing, so a
@@ -293,7 +293,7 @@ impl PythonKernelDispatchBatch {
             });
             Ok(())
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
             let _ = (python, kernel, bindings, group_count, push_constants);
             Err(gpu_unreachable_from_a_helper_process_error())
@@ -304,7 +304,7 @@ impl PythonKernelDispatchBatch {
 impl PythonKernelDispatchBatch {
     /// Send everything recorded as one op.
     fn run(&self, python: Python<'_>, recorded: Vec<RecordedKernelDispatch>) -> PyResult<()> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         if let Some(exchange_client) = &self.helper_process_exchange_client {
             let dispatches = PyList::new(
                 python,
@@ -328,14 +328,14 @@ impl PythonKernelDispatchBatch {
 /// reaching it.
 #[pyclass(name = "GraphicsKernel", module = "streamlib", frozen)]
 pub(crate) struct PythonGraphicsKernel {
-    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
+    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
     pub(super) kernel_id: String,
-    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
+    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
     pub(super) push_constant_size: u32,
     /// The caller supplies surfaces by name; which kind each name is, is the
     /// shaders' to say, so it is carried rather than guessed per draw.
     pub(super) reflected_binding_kinds: Vec<ReflectedKernelBinding>,
-    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
+    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
     pub(super) helper_process_exchange_client: Arc<HelperProcessGpuExchangeClient>,
 }
 
@@ -380,7 +380,7 @@ impl PythonGraphicsKernel {
         first_instance: u32,
         push_constants: Option<&[u8]>,
     ) -> PyResult<()> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             let push_constants = push_constants.unwrap_or_default();
             require_declared_push_constant_size(self.push_constant_size, push_constants)?;
@@ -420,7 +420,7 @@ impl PythonGraphicsKernel {
                 },
             )
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
             let _ = (
                 python,
@@ -449,15 +449,15 @@ impl PythonGraphicsKernel {
 /// before reaching it.
 #[pyclass(name = "RayTracingKernel", module = "streamlib", frozen)]
 pub(crate) struct PythonRayTracingKernel {
-    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
+    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
     pub(super) kernel_id: String,
-    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
+    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
     pub(super) push_constant_size: u32,
     /// The caller supplies targets by name; which kind each name is, is the
     /// shaders' to say, and it is also what decides whether a name takes a
     /// surface or an acceleration structure.
     pub(super) reflected_binding_kinds: Vec<ReflectedKernelBinding>,
-    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
+    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
     pub(super) helper_process_exchange_client: Arc<HelperProcessGpuExchangeClient>,
 }
 
@@ -484,7 +484,7 @@ impl PythonRayTracingKernel {
         grid: (u32, u32, u32),
         push_constants: Option<&[u8]>,
     ) -> PyResult<()> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             let push_constants = push_constants.unwrap_or_default();
             require_declared_push_constant_size(self.push_constant_size, push_constants)?;
@@ -502,7 +502,7 @@ impl PythonRayTracingKernel {
                 grid,
             )
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
             let _ = (python, bindings, grid, push_constants);
             Err(gpu_unreachable_from_a_helper_process_error())
@@ -522,21 +522,21 @@ impl PythonRayTracingKernel {
 /// it.
 #[pyclass(name = "AccelerationStructureHandle", module = "streamlib", frozen)]
 pub(crate) struct PythonAccelerationStructureHandle {
-    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
+    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
     pub(super) acceleration_structure_id: String,
     /// Which of the two builders minted this, so binding a bottom-level
     /// structure at a trace — or instancing a top-level one — refuses in the
     /// caller's own stack.
-    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
+    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
     pub(super) is_top_level: bool,
     pub(super) structure_label: String,
     /// The release this handle owes the engine, paid on drop. `None` only in
     /// tests, which mint a handle without a parent to hand anything back to.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(super) helper_process_exchange_client: Option<Arc<HelperProcessGpuExchangeClient>>,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl Drop for PythonAccelerationStructureHandle {
     /// The engine holds a structure's device memory for as long as the handle
     /// naming it lives, which is the lifetime a Rust caller's
@@ -563,7 +563,7 @@ impl PythonAccelerationStructureHandle {
 }
 
 /// The surface id a value bound at `name` names.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(super) fn bound_surface_id(name: &str, bound_to: &Bound<'_, PyAny>) -> PyResult<String> {
     if let Ok(handle) = bound_to.extract::<PyRef<'_, PythonGpuSurfaceHandle>>() {
         return handle.surface_id();

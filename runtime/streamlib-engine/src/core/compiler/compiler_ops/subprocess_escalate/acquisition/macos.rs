@@ -7,6 +7,9 @@ use uuid::Uuid;
 
 use super::super::handle_lifecycle::EscalateHandleRegistry;
 use super::new_exportable_timeline_edge;
+use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse;
+use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::EscalateRequestAcquireImage;
+use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_response::EscalateResponseErr;
 use crate::core::context::{
     GpuContextLimitedAccess, PooledTextureHandle, TextureCrossProcessImportability,
     TexturePoolDescriptor,
@@ -97,4 +100,19 @@ pub(super) fn derive_texture_cross_process_importability(
     } else {
         TextureCrossProcessImportability::NotImportable
     }
+}
+
+pub(in super::super) fn handle_acquire_image(
+    _sandbox: &GpuContextLimitedAccess,
+    _registry: &EscalateHandleRegistry,
+    request_id: String,
+    _request: EscalateRequestAcquireImage,
+) -> EscalateResponse {
+    EscalateResponse::Err(EscalateResponseErr {
+        request_id,
+        message:
+            "acquire_image is not needed on macOS: it hands out a DMA-BUF render-target image, and \
+                  on macOS acquire_texture's IOSurface-backed texture is the render target"
+                .to_string(),
+    })
 }

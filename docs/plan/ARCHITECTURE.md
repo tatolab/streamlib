@@ -335,7 +335,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_claimed_surface_pixel_access.py::test_a_two_surface_type_is_refused_every_bare_door_naming_the_surfaces -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_claimed_surface_pixel_access.py::test_a_frame_that_cannot_take_a_write_back_arrives_read_only -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_video_frame_claim.py -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_compute_kernel.py::test_a_raise_inside_the_staged_cpu_door_discards_the_edit -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_compute_kernel.py::test_a_raise_inside_the_texture_cpu_door_propagates_and_follows_its_floors_publication_rule -->
 - **DECIDED** — The portable path for GPU math in a Python processor is torch over the
   frame's own DLPack capsule: `torch.from_dlpack(frame)` on every floor, the device taken
   from that tensor or from `torch.accelerator`, and never spelled by name. Any DLPack

@@ -26,11 +26,13 @@ import json
 import os
 import re
 import shutil
+import sys
 from pathlib import Path
 
 import pytest
 
 from compute_kernel_probes import (
+    DISCARDED_SOURCE_RGBA,
     FILLED_SOURCE_RGBA,
     OUTPUT_BINDING,
     SOURCE_BINDING,
@@ -61,7 +63,6 @@ def run_probe(start_app_under_test, probe_class_name: str) -> dict:
     return observation
 
 
-@pytest.mark.awaiting_macos_parity(issue=2403)
 def test_a_python_processor_reads_one_surface_and_writes_another(start_app_under_test):
     """The whole point: one dispatch, two distinct surfaces, bound by name."""
     observed = run_probe(start_app_under_test, "ReadOneWriteAnotherProbe")
@@ -77,14 +78,12 @@ def test_a_python_processor_reads_one_surface_and_writes_another(start_app_under
     )
 
 
-@pytest.mark.awaiting_macos_parity(issue=2403)
 def test_the_kernel_takes_its_binding_names_from_the_shader(start_app_under_test):
     """Nothing declares these names but the shader itself."""
     observed = run_probe(start_app_under_test, "ReadOneWriteAnotherProbe")
     assert observed["binding_names"] == [SOURCE_BINDING, OUTPUT_BINDING]
 
 
-@pytest.mark.awaiting_macos_parity(issue=2403)
 def test_an_unsupplied_binding_is_refused_naming_the_shaders_bindings(
     start_app_under_test,
 ):
@@ -100,7 +99,6 @@ def test_an_unsupplied_binding_is_refused_naming_the_shaders_bindings(
     )
 
 
-@pytest.mark.awaiting_macos_parity(issue=2403)
 def test_a_binding_the_shader_does_not_declare_is_refused(start_app_under_test):
     observed = run_probe(start_app_under_test, "BindingRefusalProbe")
 
@@ -111,7 +109,6 @@ def test_a_binding_the_shader_does_not_declare_is_refused(start_app_under_test):
     )
 
 
-@pytest.mark.awaiting_macos_parity(issue=2403)
 def test_a_declaration_disagreeing_with_reflection_is_refused_at_construction(
     start_app_under_test,
 ):
@@ -126,7 +123,6 @@ def test_a_declaration_disagreeing_with_reflection_is_refused_at_construction(
     )
 
 
-@pytest.mark.awaiting_macos_parity(issue=2403)
 def test_a_push_constant_payload_of_the_wrong_size_is_refused(start_app_under_test):
     observed = run_probe(start_app_under_test, "BindingRefusalProbe")
 
@@ -137,7 +133,6 @@ def test_a_push_constant_payload_of_the_wrong_size_is_refused(start_app_under_te
     )
 
 
-@pytest.mark.awaiting_macos_parity(issue=2403)
 def test_a_binding_naming_an_unknown_surface_is_refused(start_app_under_test):
     observed = run_probe(start_app_under_test, "BindingRefusalProbe")
 
@@ -150,7 +145,6 @@ def test_a_binding_naming_an_unknown_surface_is_refused(start_app_under_test):
     )
 
 
-@pytest.mark.awaiting_macos_parity(issue=2403)
 def test_a_texture_backed_surfaces_pixels_reach_the_cpu_with_numpy_alone(
     start_app_under_test,
 ):
@@ -186,22 +180,31 @@ def test_a_texture_backed_surfaces_pixels_reach_the_cpu_with_numpy_alone(
     )
 
 
-@pytest.mark.awaiting_macos_parity(issue=2403)
-def test_a_raise_inside_the_staged_cpu_door_discards_the_edit(start_app_under_test):
-    """Over a texture backing the door publishes at the block edge, so a
-    propagating raise leaves the frame the engine already held."""
-    observed = run_probe(start_app_under_test, "StagedCpuDoorDiscardsOnRaiseProbe")
+def test_a_raise_inside_the_texture_cpu_door_propagates_and_follows_its_floors_publication_rule(
+    start_app_under_test,
+):
+    """Over a texture backing on Linux the door is a staging published at the
+    block edge, so a propagating raise leaves the frame the engine already
+    held. On macOS the door is the IOSurface itself and publishes per store,
+    as the pixel-buffer door does everywhere, so the stores made before the
+    raise are the frame. On both, the raise is never suppressed."""
+    observed = run_probe(start_app_under_test, "TextureCpuDoorRaiseProbe")
 
     assert observed["raised"] == "the edit does not finish", (
-        f"discarding must never suppress the exception: {observed['raised']!r}"
+        f"leaving the door must never suppress the exception: {observed['raised']!r}"
     )
-    assert observed["pixel_after_the_raise"] == list(FILLED_SOURCE_RGBA), (
-        "the discarded edit must not reach the surface; the frame keeps the "
-        f"pixels it already held: {observed['pixel_after_the_raise']!r}"
-    )
+    if sys.platform == "darwin":
+        assert observed["pixel_after_the_raise"] == list(DISCARDED_SOURCE_RGBA), (
+            "the direct door publishes per store, so the stores made before the "
+            f"raise are the frame: {observed['pixel_after_the_raise']!r}"
+        )
+    else:
+        assert observed["pixel_after_the_raise"] == list(FILLED_SOURCE_RGBA), (
+            "the discarded edit must not reach the surface; the frame keeps the "
+            f"pixels it already held: {observed['pixel_after_the_raise']!r}"
+        )
 
 
-@pytest.mark.awaiting_macos_parity(issue=2403)
 def test_an_acquired_texture_takes_a_write_back_with_no_copy_usage_spelled(
     start_app_under_test,
 ):
@@ -221,7 +224,6 @@ def test_an_acquired_texture_takes_a_write_back_with_no_copy_usage_spelled(
     )
 
 
-@pytest.mark.awaiting_macos_parity(issue=2403)
 def test_a_kernel_is_built_with_no_shader_toolchain_on_path(
     start_app_under_test, tmp_path, monkeypatch
 ):
@@ -252,7 +254,6 @@ def test_a_kernel_is_built_with_no_shader_toolchain_on_path(
     assert sorted(observed["binding_names"]) == sorted([SOURCE_BINDING, OUTPUT_BINDING])
 
 
-@pytest.mark.awaiting_macos_parity(issue=2403)
 def test_a_kernel_built_from_neither_source_nor_spirv_is_refused_naming_both(
     start_app_under_test,
 ):
@@ -261,7 +262,6 @@ def test_a_kernel_built_from_neither_source_nor_spirv_is_refused_naming_both(
     assert "spv_hex" in observed["neither"]
 
 
-@pytest.mark.awaiting_macos_parity(issue=2403)
 def test_a_kernel_built_from_both_source_and_spirv_is_refused_naming_both(
     start_app_under_test,
 ):
@@ -271,7 +271,6 @@ def test_a_kernel_built_from_both_source_and_spirv_is_refused_naming_both(
     assert "spv_hex" in observed["both"]
 
 
-@pytest.mark.awaiting_macos_parity(issue=2403)
 def test_a_shader_that_does_not_compile_reports_the_compilers_own_diagnostic(
     start_app_under_test,
 ):
@@ -282,7 +281,6 @@ def test_a_shader_that_does_not_compile_reports_the_compilers_own_diagnostic(
     assert ":2" in observed["does_not_compile"]
 
 
-@pytest.mark.awaiting_macos_parity(issue=2403)
 def test_a_glsl_entry_point_other_than_main_is_refused(start_app_under_test):
     """glslang will not rename a GLSL entry point, so accepting one would build
     a pipeline against a function the module does not contain."""

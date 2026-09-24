@@ -12,7 +12,7 @@
 use super::super::handle_escalate_op;
 use super::super::handle_lifecycle::EscalateHandleRegistry;
 use super::super::kernel_shader_stage_source::SPIRV_MAGIC_LE;
-use super::linux::prepare_ray_tracing_kernel_registration;
+use super::linux_and_macos::prepare_ray_tracing_kernel_registration;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
     EscalateRayTracingBindingKind, EscalateRequestRegisterAccelerationStructureBlas,
     EscalateRequestRegisterAccelerationStructureTlas,

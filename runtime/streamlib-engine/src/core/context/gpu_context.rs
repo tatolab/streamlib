@@ -3,7 +3,7 @@
 
 use crate::core::context::TextureRegistration;
 use crate::core::media_clock::MediaClock;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::core::rhi::KernelShaderStageMask;
 use crate::core::rhi::{
     CommandBuffer, GpuDevice, PixelBuffer, PixelBufferDescriptor, PixelBufferPoolSlotId,
@@ -204,7 +204,7 @@ impl PoolSlotReuse<'_> {
 /// bytes plus the declared push-constant size are the whole key. A GLSL source
 /// contract keys on the compiler's version too, because then the engine is what
 /// turns source into bytes.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn compute_kernel_cache_key(spv: &[u8], push_constant_size: u32, entry_point: &str) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
@@ -223,7 +223,7 @@ fn compute_kernel_cache_key(spv: &[u8], push_constant_size: u32, entry_point: &s
 ///
 /// The length prefix is what keeps two different splits of the same
 /// concatenated bytes from hashing the same.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn digest_length_prefixed(hasher: &mut sha2::Sha256, bytes: &[u8]) {
     use sha2::Digest as _;
     hasher.update((bytes.len() as u64).to_le_bytes());
@@ -238,7 +238,7 @@ fn digest_length_prefixed(hasher: &mut sha2::Sha256, bytes: &[u8]) {
 /// anyone remembering to add it, which a hand-enumerated digest cannot promise.
 /// The key never leaves this process, so its stability across builds buys
 /// nothing that would justify the alternative.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn graphics_kernel_cache_key(
     stages: &[crate::core::rhi::GraphicsStage<'_>],
     push_constants: crate::core::rhi::GraphicsPushConstants,
@@ -265,7 +265,7 @@ fn graphics_kernel_cache_key(
 /// Same shape as the graphics key; the shader-group layout and the recursion
 /// depth take the place of the fixed-function state, since those are what the
 /// driver builds the pipeline and its binding table from.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn ray_tracing_kernel_cache_key(
     stages: &[crate::core::rhi::RayTracingStage<'_>],
     groups: &[crate::core::rhi::RayTracingShaderGroup],
@@ -299,7 +299,7 @@ fn ray_tracing_kernel_cache_key(
 /// reason the shared binding reconciliation is: graphics and ray tracing differ
 /// only in which unrelated `u32` newtype they name, and
 /// [`KernelShaderStageMask`] is the seam that already spans both.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn reconciled_push_constant_stages<Stages: KernelShaderStageMask>(
     kernel_kind_label: &str,
     declared_size: u32,
@@ -701,7 +701,7 @@ impl PixelBufferPoolManager {
 /// [`GpuContextFullAccess::gpu_capabilities`].
 ///
 /// Plain owned data, populated directly from the host-side getters.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[derive(Debug, Clone)]
 pub struct GpuCapabilitiesSnapshot {
     /// UTF-8 device name (vendor + model).
@@ -727,7 +727,7 @@ pub struct GpuCapabilitiesSnapshot {
 /// `Arc` handles whose clone is a refcount bump, and a cloned registration
 /// shares the very layout cell `update_layout` writes — so owning them costs a
 /// few increments and spares the caller a second set of vectors to borrow from.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub struct BatchedComputeKernelDispatch {
     /// The kernel to bind and dispatch. No kernel may appear twice in one
     /// batch — see [`GpuContext::dispatch_compute_kernel_batch`].
@@ -748,7 +748,7 @@ pub struct BatchedComputeKernelDispatch {
 }
 
 /// One resolved binding of a [`BatchedComputeKernelDispatch`].
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub struct BatchedComputeKernelDispatchBinding {
     /// Descriptor binding number the kernel declares this resource at.
     pub binding: u32,
@@ -760,7 +760,7 @@ pub struct BatchedComputeKernelDispatchBinding {
     pub registration: TextureRegistration,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl BatchedComputeKernelDispatchBinding {
     /// Stage this binding on `kernel`, as the kind the shader declares it.
     ///
@@ -788,7 +788,7 @@ impl BatchedComputeKernelDispatchBinding {
 /// A recording of one dispatch is the single-dispatch escalate op riding the
 /// batch machinery; its caller wrote no batch, so the location names the
 /// binding alone rather than a "dispatch 0" that exists only host-side.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn binding_location_in_this_recording(
     recording: &[BatchedComputeKernelDispatch],
     dispatch_index: usize,
@@ -847,7 +847,7 @@ pub struct GpuContext {
     /// converter handles every variation of source color description.
     /// Construction is rare; conversion is hot — RwLock with double-check
     /// on miss matches that read/write skew.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     color_converter_cache: Arc<
         RwLock<HashMap<(PixelFormat, PixelFormat), Arc<crate::core::rhi::RhiColorConverterInner>>>,
     >,
@@ -884,7 +884,7 @@ pub struct GpuContext {
     ///
     /// Entries live for this context's lifetime: bounded by distinct SPIR-V
     /// blobs, never evicted, so a kernel survives its registering helper.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     compute_kernel_cache: Arc<Mutex<HashMap<String, Arc<crate::vulkan::rhi::VulkanComputeKernel>>>>,
     /// The engine's GLSL compiler and the SPIR-V it has already produced.
     ///
@@ -892,7 +892,7 @@ pub struct GpuContext {
     /// kernel construction rather than in a build step the author has to own.
     /// Sits in front of `compute_kernel_cache`: this one spares the
     /// compilation, that one spares the pipeline.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     glsl_shader_source_compiler: Arc<crate::core::rhi::GlslShaderSourceToSpirvCompiler>,
     /// The recorder every compute dispatch — batched or a recording of one —
     /// records into, built on first use and kept for this context's lifetime.
@@ -903,19 +903,19 @@ pub struct GpuContext {
     /// exists to save. Serial use is what the recorder requires and what it
     /// gets — both dispatch ops run inside the escalate gate, which
     /// serializes runtime-wide.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     batched_compute_dispatch_recorder:
         Arc<parking_lot::Mutex<Option<crate::vulkan::rhi::RhiCommandRecorder>>>,
     /// Graphics kernels built for the `register_graphics_kernel` escalate op,
     /// keyed the same way `compute_kernel_cache` is and with the same
     /// lifetime.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     graphics_kernel_cache:
         Arc<Mutex<HashMap<String, Arc<crate::vulkan::rhi::VulkanGraphicsKernel>>>>,
     /// Ray-tracing kernels built for the `register_ray_tracing_kernel`
     /// escalate op, keyed the same way `compute_kernel_cache` is and with the
     /// same lifetime.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     ray_tracing_kernel_cache:
         Arc<Mutex<HashMap<String, Arc<crate::vulkan::rhi::VulkanRayTracingKernel>>>>,
     /// Acceleration structures built for the
@@ -925,7 +925,7 @@ pub struct GpuContext {
     /// structures under two ids, because an acceleration structure holds
     /// device memory proportional to its mesh and deduplicating them by
     /// content would retain every mesh any helper ever built.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     acceleration_structure_registry:
         Arc<Mutex<HashMap<String, Arc<crate::vulkan::rhi::VulkanAccelerationStructure>>>>,
 }
@@ -946,24 +946,24 @@ impl GpuContext {
             #[cfg(target_os = "linux")]
             surface_export_stagings: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             buffer_texture_cache: Arc::new(Mutex::new(HashMap::new())),
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             color_converter_cache: Arc::new(RwLock::new(HashMap::new())),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             present_compositor_cache: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             escalate_gate: Arc::new(super::escalate_gate::EscalateGate::new()),
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             compute_kernel_cache: Arc::new(Mutex::new(HashMap::new())),
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             glsl_shader_source_compiler: Arc::new(
                 crate::core::rhi::GlslShaderSourceToSpirvCompiler::new(),
             ),
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             batched_compute_dispatch_recorder: Arc::new(parking_lot::Mutex::new(None)),
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             graphics_kernel_cache: Arc::new(Mutex::new(HashMap::new())),
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             ray_tracing_kernel_cache: Arc::new(Mutex::new(HashMap::new())),
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             acceleration_structure_registry: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -983,24 +983,24 @@ impl GpuContext {
             #[cfg(target_os = "linux")]
             surface_export_stagings: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             buffer_texture_cache: Arc::new(Mutex::new(HashMap::new())),
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             color_converter_cache: Arc::new(RwLock::new(HashMap::new())),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             present_compositor_cache: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             escalate_gate: Arc::new(super::escalate_gate::EscalateGate::new()),
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             compute_kernel_cache: Arc::new(Mutex::new(HashMap::new())),
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             glsl_shader_source_compiler: Arc::new(
                 crate::core::rhi::GlslShaderSourceToSpirvCompiler::new(),
             ),
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             batched_compute_dispatch_recorder: Arc::new(parking_lot::Mutex::new(None)),
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             graphics_kernel_cache: Arc::new(Mutex::new(HashMap::new())),
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             ray_tracing_kernel_cache: Arc::new(Mutex::new(HashMap::new())),
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             acceleration_structure_registry: Arc::new(Mutex::new(HashMap::new())),
         }
     }
@@ -1207,7 +1207,7 @@ impl GpuContext {
     /// barrier source layout is correct), or adapter setup hooks that
     /// pre-allocate a render target the adapter writes to without
     /// transitioning the Vulkan layout (declare `UNDEFINED`).
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn register_texture_with_layout(
         &self,
         id: &str,
@@ -1283,7 +1283,7 @@ impl GpuContext {
     /// Used by producers after a layout transition (e.g.
     /// [`TextureRing`](crate::core::context::TextureRing)'s per-frame
     /// copy ends in `SHADER_READ_ONLY_OPTIMAL`).
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn update_texture_registration_layout(&self, id: &str, layout: VulkanLayout) {
         if let Some(reg) = self
             .texture_cache
@@ -1542,7 +1542,7 @@ impl GpuContext {
     /// Copies the host-visible pixel buffer data to a device-local texture via
     /// vkCmdCopyBufferToImage, then registers the texture so display/encoder
     /// consumers can resolve it by surface_id.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn upload_pixel_buffer_as_texture(
         &self,
         surface_id: &str,
@@ -1626,7 +1626,7 @@ impl GpuContext {
     /// the registration's `current_layout` is refreshed to that same
     /// terminal layout, so a consumer barriers out of the layout the
     /// image is actually in.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn copy_pixel_buffer_to_texture(
         &self,
         pixel_buffer: &crate::core::rhi::PixelBuffer,
@@ -1806,7 +1806,7 @@ impl GpuContext {
     /// Returns a [`crate::core::rhi::UniformBuffer`] — the type system
     /// enforces that this buffer can only be bound to a kernel's
     /// `set_uniform_buffer` slot (not storage / vertex / index).
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn acquire_uniform_buffer(
         &self,
         byte_size: u64,
@@ -1824,7 +1824,7 @@ impl GpuContext {
     ///
     /// Returns a [`crate::core::rhi::VertexBuffer`] — only bindable to
     /// `set_vertex_buffer` slots.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn acquire_vertex_buffer(&self, byte_size: u64) -> Result<crate::core::rhi::VertexBuffer> {
         tracing::debug!(
             rhi_op = "acquire_vertex_buffer",
@@ -1839,7 +1839,7 @@ impl GpuContext {
     ///
     /// Returns a [`crate::core::rhi::IndexBuffer`] — only bindable to
     /// `set_index_buffer` slots.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn acquire_index_buffer(&self, byte_size: u64) -> Result<crate::core::rhi::IndexBuffer> {
         tracing::debug!(
             rhi_op = "acquire_index_buffer",
@@ -1863,7 +1863,7 @@ impl GpuContext {
     /// holder of the handle, so two processors driving the same format pair
     /// from their own threads race it. A processor that records the
     /// dispatch itself takes [`Self::create_color_converter`] instead.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn color_converter(&self, src: PixelFormat, dst: PixelFormat) -> Result<RhiColorConverter> {
         // Fast path: read lock; cache stores Arc<Inner> so we can build
         // a fresh handle via from_arc_into_raw per request.
@@ -1922,7 +1922,7 @@ impl GpuContext {
     /// Returned kernel is held and dispatched via its own `set_*` / `dispatch`
     /// methods — one kernel handle per processor pipeline stage is the expected
     /// usage.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn create_compute_kernel(
         &self,
         descriptor: &crate::core::rhi::ComputeKernelDescriptor<'_>,
@@ -2205,7 +2205,7 @@ impl GpuContext {
     /// [`GpuContextFullAccess::create_query_pool`]. Generic over
     /// `VkQueryType` — services timestamp, occlusion, pipeline-statistics,
     /// and video-encode-feedback queries through one primitive.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn create_query_pool(
         &self,
         descriptor: &crate::vulkan::rhi::QueryPoolDescriptor<'_>,
@@ -2222,7 +2222,7 @@ impl GpuContext {
     /// the declared bindings + push constants + stage visibility match the
     /// shaders; mismatches surface as a clear error rather than at first
     /// draw.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn create_graphics_kernel(
         &self,
         descriptor: &crate::core::rhi::GraphicsKernelDescriptor<'_>,
@@ -2250,7 +2250,7 @@ impl GpuContext {
     /// shader-group handles, lays out the shader-binding table, and
     /// returns a kernel ready for `set_*` + `trace_rays` dispatch.
     /// Returns a clean error when the device lacks RT support.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn create_ray_tracing_kernel(
         &self,
         descriptor: &crate::core::rhi::RayTracingKernelDescriptor<'_>,
@@ -2274,7 +2274,7 @@ impl GpuContext {
     /// Mirror of [`GpuContextFullAccess::create_texture_ring`] at the
     /// inner-`GpuContext` level — the FullAccess wrapper delegates here
     /// after enforcing the privileged-scope invariants.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn create_texture_ring(
         &self,
         width: u32,
@@ -2334,7 +2334,7 @@ impl GpuContext {
     /// from CPU-side vertex + index data. Backs [`Self::create_ray_tracing_kernel`]
     /// — every TLAS instance references one of these BLAS handles.
     /// Returns a clean error when the device lacks RT support.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn build_triangles_blas(
         &self,
         label: &str,
@@ -2361,7 +2361,7 @@ impl GpuContext {
     /// instances. Each instance references a BLAS the TLAS keeps alive
     /// for its lifetime. Returns a clean error when the device lacks
     /// RT support.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn build_tlas(
         &self,
         label: &str,
@@ -2382,7 +2382,7 @@ impl GpuContext {
     /// consumers should check this before calling
     /// [`Self::create_ray_tracing_kernel`] /
     /// [`Self::build_triangles_blas`] / [`Self::build_tlas`].
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn supports_ray_tracing_pipeline(&self) -> bool {
         self.device.inner.supports_ray_tracing_pipeline()
     }
@@ -2392,7 +2392,7 @@ impl GpuContext {
     /// callers (camera processor, adapters) can decide
     /// vendor-specific branching + DMA-BUF / external-memory paths
     /// at setup time.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn gpu_capabilities(&self) -> GpuCapabilitiesSnapshot {
         let dev = &self.device.inner;
         GpuCapabilitiesSnapshot {
@@ -2649,7 +2649,7 @@ impl GpuContext {
     /// every submit. Single-in-flight per handle (mirroring
     /// [`crate::vulkan::rhi::VulkanComputeKernel`]); for parallel
     /// readbacks, hold N handles.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn create_texture_readback(
         &self,
         descriptor: &crate::core::rhi::TextureReadbackDescriptor<'_>,
@@ -2807,7 +2807,7 @@ impl GpuContext {
     ///
     /// `label` is what the compiler's diagnostics name the source as, so it is
     /// the prefix an author sees on a syntax error.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn compile_glsl_shader_source_to_spirv(
         &self,
         source: &str,
@@ -2824,7 +2824,7 @@ impl GpuContext {
     /// What a cache-hit assertion counts; elapsed time cannot stand in for it,
     /// since re-creating a kernel is free of compilation while still
     /// allocating handles.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[must_use]
     pub fn glsl_shader_compiler_invocation_count(&self) -> u64 {
         self.glsl_shader_source_compiler.invocation_count()
@@ -2836,7 +2836,7 @@ impl GpuContext {
     /// a batch is faster than N dispatches for reasons a loaded machine can
     /// hide, while the submission count says outright whether the work went
     /// out as one command buffer or N.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[must_use]
     pub fn queue_submission_count(&self) -> usize {
         self.device.inner.queue_submission_count()
@@ -2849,7 +2849,7 @@ impl GpuContext {
     /// drain recorders too, so a reading is only about a batch when nothing
     /// else on this device is recording. See [`Self::queue_submission_count`]
     /// on why this is counted, not timed.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     #[must_use]
     pub fn recorder_and_compute_kernel_fence_wait_count(&self) -> usize {
         self.device
@@ -2868,7 +2868,7 @@ impl GpuContext {
     ///
     /// Returns the cache key as the kernel id: a caller re-registering the same
     /// kernel gets the same id back, and pays no compilation for it.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn create_or_reuse_compute_kernel(
         &self,
         spv: &[u8],
@@ -2935,7 +2935,7 @@ impl GpuContext {
 
     /// Look up a compute kernel a prior `create_or_reuse_compute_kernel`
     /// returned.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn compute_kernel_by_id(
         &self,
         kernel_id: &str,
@@ -2960,7 +2960,7 @@ impl GpuContext {
     /// and is deliberately outside the cache key — two registrations differing
     /// only in label are one pipeline, and the first one's label is the one the
     /// driver keeps.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn create_or_reuse_graphics_kernel(
         &self,
         label: &str,
@@ -3048,7 +3048,7 @@ impl GpuContext {
 
     /// Look up a graphics kernel a prior `create_or_reuse_graphics_kernel`
     /// returned.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn graphics_kernel_by_id(
         &self,
         kernel_id: &str,
@@ -3073,7 +3073,7 @@ impl GpuContext {
     /// and is deliberately outside the cache key — two registrations differing
     /// only in label are one pipeline, and the first one's label is the one the
     /// driver keeps.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn create_or_reuse_ray_tracing_kernel(
         &self,
         label: &str,
@@ -3154,7 +3154,7 @@ impl GpuContext {
 
     /// Look up a ray-tracing kernel a prior
     /// `create_or_reuse_ray_tracing_kernel` returned.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn ray_tracing_kernel_by_id(
         &self,
         kernel_id: &str,
@@ -3172,7 +3172,7 @@ impl GpuContext {
     /// Every call mints a fresh id: an acceleration structure holds device
     /// memory proportional to its mesh, so unlike a kernel it is registered
     /// rather than deduplicated by content.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn register_acceleration_structure(
         &self,
         acceleration_structure: crate::vulkan::rhi::VulkanAccelerationStructure,
@@ -3187,7 +3187,7 @@ impl GpuContext {
 
     /// Look up an acceleration structure a prior
     /// `register_acceleration_structure` returned the id of.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn acceleration_structure_by_id(
         &self,
         acceleration_structure_id: &str,
@@ -3206,7 +3206,7 @@ impl GpuContext {
     /// scope does. The device memory returns once the last reference does — a
     /// TLAS holds its own reference to every BLAS it instances, so releasing a
     /// BLAS a scene still uses frees nothing until the scene goes too.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn release_acceleration_structure(&self, acceleration_structure_id: &str) -> bool {
         self.acceleration_structure_registry
             .lock()
@@ -3236,7 +3236,7 @@ impl GpuContext {
     /// so a second bind would retarget the dispatch already recorded against it
     /// — silently, since nothing has executed yet. Refused by name rather than
     /// dispatched wrong.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn dispatch_compute_kernel_batch(
         &self,
         batch: &[BatchedComputeKernelDispatch],
@@ -3312,7 +3312,7 @@ impl GpuContext {
     ///
     /// Returns the layout each bound texture ends the recording in, for the
     /// caller to publish once the submission has retired.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn record_compute_kernel_batch(
         recorder: &mut crate::vulkan::rhi::RhiCommandRecorder,
         batch: &[BatchedComputeKernelDispatch],
@@ -3793,7 +3793,7 @@ impl GpuContextLimitedAccess {
 
     /// Acquire a HOST_VISIBLE storage buffer for CPU→GPU SSBO upload.
     /// See [`GpuContext::acquire_storage_buffer`].
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn acquire_storage_buffer(
         &self,
         byte_size: u64,
@@ -3803,7 +3803,7 @@ impl GpuContextLimitedAccess {
 
     /// Acquire a HOST_VISIBLE uniform buffer.
     /// See [`GpuContext::acquire_uniform_buffer`].
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn acquire_uniform_buffer(
         &self,
         byte_size: u64,
@@ -3813,14 +3813,14 @@ impl GpuContextLimitedAccess {
 
     /// Acquire a HOST_VISIBLE vertex buffer.
     /// See [`GpuContext::acquire_vertex_buffer`].
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn acquire_vertex_buffer(&self, byte_size: u64) -> Result<crate::core::rhi::VertexBuffer> {
         self.host_inner().acquire_vertex_buffer(byte_size)
     }
 
     /// Acquire a HOST_VISIBLE index buffer.
     /// See [`GpuContext::acquire_index_buffer`].
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn acquire_index_buffer(&self, byte_size: u64) -> Result<crate::core::rhi::IndexBuffer> {
         self.host_inner().acquire_index_buffer(byte_size)
     }
@@ -3848,7 +3848,7 @@ impl GpuContextLimitedAccess {
 
     /// Register a texture with a declared initial Vulkan image layout.
     /// See [`GpuContext::register_texture_with_layout`].
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn register_texture_with_layout(
         &self,
         id: &str,
@@ -3861,7 +3861,7 @@ impl GpuContextLimitedAccess {
 
     /// Update a registered texture's tracked layout after a transition.
     /// See [`GpuContext::update_texture_registration_layout`].
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn update_texture_registration_layout(&self, id: &str, layout: VulkanLayout) {
         self.host_inner()
             .update_texture_registration_layout(id, layout)
@@ -3914,7 +3914,7 @@ impl GpuContextLimitedAccess {
     /// just a `vkCmdCopyBufferToImage` queue submit on the shared queue.
     /// See [`GpuContext::copy_pixel_buffer_to_texture`] for the full
     /// contract.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn copy_pixel_buffer_to_texture(
         &self,
         pixel_buffer: &PixelBuffer,
@@ -4084,7 +4084,7 @@ impl GpuContextFullAccess {
     }
 
     /// Acquire a HOST_VISIBLE uniform buffer.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn acquire_uniform_buffer(
         &self,
         byte_size: u64,
@@ -4093,13 +4093,13 @@ impl GpuContextFullAccess {
     }
 
     /// Acquire a HOST_VISIBLE vertex buffer.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn acquire_vertex_buffer(&self, byte_size: u64) -> Result<crate::core::rhi::VertexBuffer> {
         self.host_inner().acquire_vertex_buffer(byte_size)
     }
 
     /// Acquire a HOST_VISIBLE index buffer.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn acquire_index_buffer(&self, byte_size: u64) -> Result<crate::core::rhi::IndexBuffer> {
         self.host_inner().acquire_index_buffer(byte_size)
     }
@@ -4155,7 +4155,7 @@ impl GpuContextFullAccess {
 
     /// Register a texture with a declared initial Vulkan image layout.
     /// See [`GpuContext::register_texture_with_layout`].
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn register_texture_with_layout(
         &self,
         id: &str,
@@ -4168,7 +4168,7 @@ impl GpuContextFullAccess {
 
     /// Update a registered texture's tracked layout after a transition.
     /// See [`GpuContext::update_texture_registration_layout`].
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn update_texture_registration_layout(&self, id: &str, layout: VulkanLayout) {
         self.host_inner()
             .update_texture_registration_layout(id, layout)
@@ -4210,7 +4210,7 @@ impl GpuContextFullAccess {
     }
 
     /// Upload a pixel buffer's contents to a GPU texture and register it.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn upload_pixel_buffer_as_texture(
         &self,
         surface_id: &str,
@@ -4230,7 +4230,7 @@ impl GpuContextFullAccess {
     /// [`GpuContextLimitedAccess`] for hot-path callers that already
     /// hold a texture (e.g. from a [`TextureRing`](crate::core::context::TextureRing)
     /// slot).
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn copy_pixel_buffer_to_texture(
         &self,
         pixel_buffer: &PixelBuffer,
@@ -4263,7 +4263,7 @@ impl GpuContextFullAccess {
     /// `MAX_FRAMES_IN_FLIGHT = 2`
     /// (`docs/learnings/vulkan-frames-in-flight.md`) is the standard
     /// for hot-path decoders.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn create_texture_ring(
         &self,
         width: u32,
@@ -4283,7 +4283,7 @@ impl GpuContextFullAccess {
     /// once at construction and reused across every submit; for parallel
     /// readbacks, hold N handles. Planar `Nv12` is rejected (the readback
     /// staging model assumes a flat interleaved plane).
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn create_texture_readback(
         &self,
         label: &str,
@@ -4382,7 +4382,7 @@ impl GpuContextFullAccess {
     /// Acquire a cached `(src, dst)`-keyed color converter. See
     /// [`GpuContext::color_converter`](crate::core::context::GpuContext::color_converter)
     /// on the inner context for usage.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn color_converter(&self, src: PixelFormat, dst: PixelFormat) -> Result<RhiColorConverter> {
         self.host_inner().color_converter(src, dst)
     }
@@ -4403,7 +4403,7 @@ impl GpuContextFullAccess {
     /// Runs the host's [`GpuContext::create_compute_kernel`], which
     /// returns the kernel as `Arc::into_raw`; this wrapper reconstructs
     /// it via `Arc::from_raw`.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn create_compute_kernel(
         &self,
         descriptor: &crate::core::rhi::ComputeKernelDescriptor<'_>,
@@ -4474,7 +4474,7 @@ impl GpuContextFullAccess {
     /// helper processes do not construct query pools — they consume
     /// codec results (when applicable) through the surface-share /
     /// escalate IPC channels, not by reaching into pool primitives.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn create_query_pool(
         &self,
         descriptor: &crate::vulkan::rhi::QueryPoolDescriptor<'_>,
@@ -4539,7 +4539,7 @@ impl GpuContextFullAccess {
     /// Create a graphics kernel from a multi-stage SPIR-V set, binding
     /// declaration, and fixed-function pipeline state.
     ///
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn create_graphics_kernel(
         &self,
         descriptor: &crate::core::rhi::GraphicsKernelDescriptor<'_>,
@@ -4550,7 +4550,7 @@ impl GpuContextFullAccess {
     /// Create a ray-tracing kernel from shader stages, shader-group
     /// layout, binding declaration, and push-constant range.
     ///
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn create_ray_tracing_kernel(
         &self,
         descriptor: &crate::core::rhi::RayTracingKernelDescriptor<'_>,
@@ -4560,7 +4560,7 @@ impl GpuContextFullAccess {
 
     /// Build a triangle-geometry bottom-level acceleration structure
     /// from CPU-side vertex + index data.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn build_triangles_blas(
         &self,
         label: &str,
@@ -4572,7 +4572,7 @@ impl GpuContextFullAccess {
     }
 
     /// Build a top-level acceleration structure from BLAS instances.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn build_tlas(
         &self,
         label: &str,
@@ -4583,7 +4583,7 @@ impl GpuContextFullAccess {
 
     /// Whether the underlying GPU exposes the
     /// `VK_KHR_ray_tracing_pipeline` extension chain.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn supports_ray_tracing_pipeline(&self) -> bool {
         self.host_inner().supports_ray_tracing_pipeline()
     }
@@ -4684,7 +4684,7 @@ impl GpuContextFullAccess {
     /// Read-once GPU capability snapshot. Backs the camera processor's
     /// vendor-name / external-memory / cross-device-DMA-BUF-probe
     /// branching without exposing host-internal `HostVulkanDevice`.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn gpu_capabilities(&self) -> Result<GpuCapabilitiesSnapshot> {
         Ok(self.host_inner().gpu_capabilities())
     }
@@ -4719,7 +4719,7 @@ impl GpuContextFullAccess {
     /// Build a compute kernel, reusing an identical one this context already
     /// built. Reachable only inside `escalate(|full| ...)` since it requires
     /// `FullAccess`.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn create_or_reuse_compute_kernel(
         &self,
         spv: &[u8],
@@ -4737,7 +4737,7 @@ impl GpuContextFullAccess {
 
     /// Look up a compute kernel a prior `create_or_reuse_compute_kernel`
     /// returned.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn compute_kernel_by_id(
         &self,
         kernel_id: &str,
@@ -4747,7 +4747,7 @@ impl GpuContextFullAccess {
 
     /// [`GpuContext::dispatch_compute_kernel_batch`] — N dispatches, one
     /// submission, one fence wait.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn dispatch_compute_kernel_batch(
         &self,
         batch: &[BatchedComputeKernelDispatch],
@@ -4756,7 +4756,7 @@ impl GpuContextFullAccess {
     }
 
     /// Runs the host's [`GpuContext::create_or_reuse_graphics_kernel`].
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn create_or_reuse_graphics_kernel(
         &self,
         label: &str,
@@ -4778,7 +4778,7 @@ impl GpuContextFullAccess {
 
     /// Look up a graphics kernel a prior `create_or_reuse_graphics_kernel`
     /// returned.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn graphics_kernel_by_id(
         &self,
         kernel_id: &str,
@@ -4787,7 +4787,7 @@ impl GpuContextFullAccess {
     }
 
     /// Runs the host's [`GpuContext::create_or_reuse_ray_tracing_kernel`].
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn create_or_reuse_ray_tracing_kernel(
         &self,
         label: &str,
@@ -4809,7 +4809,7 @@ impl GpuContextFullAccess {
 
     /// Look up a ray-tracing kernel a prior
     /// `create_or_reuse_ray_tracing_kernel` returned.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn ray_tracing_kernel_by_id(
         &self,
         kernel_id: &str,
@@ -4818,7 +4818,7 @@ impl GpuContextFullAccess {
     }
 
     /// Runs the host's [`GpuContext::register_acceleration_structure`].
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn register_acceleration_structure(
         &self,
         acceleration_structure: crate::vulkan::rhi::VulkanAccelerationStructure,
@@ -4829,7 +4829,7 @@ impl GpuContextFullAccess {
 
     /// Look up an acceleration structure a prior
     /// `register_acceleration_structure` returned the id of.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn acceleration_structure_by_id(
         &self,
         acceleration_structure_id: &str,
@@ -4839,7 +4839,7 @@ impl GpuContextFullAccess {
     }
 
     /// Runs the host's [`GpuContext::release_acceleration_structure`].
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn release_acceleration_structure(&self, acceleration_structure_id: &str) -> bool {
         self.host_inner()
             .release_acceleration_structure(acceleration_structure_id)
