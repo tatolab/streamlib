@@ -333,7 +333,7 @@ pub(super) fn plan_supplied_compute_bindings<'a>(
 /// One resolved compute binding carried with the surface id it named, so
 /// the transition and the layout publish pair by construction rather than
 /// by a shared index — the desynchronisation rule
-/// [`ResolvedSurfaceBoundKernelBinding`] documents.
+/// [`ResolvedSurfaceBoundKernelBinding`](crate::core::compiler::compiler_ops::subprocess_escalate::surface_bound_kernel_binding::ResolvedSurfaceBoundKernelBinding) documents.
 pub(super) struct ResolvedComputeKernelDispatchBindingWithSurfaceId {
     surface_id: String,
     dispatch_binding: BatchedComputeKernelDispatchBinding,

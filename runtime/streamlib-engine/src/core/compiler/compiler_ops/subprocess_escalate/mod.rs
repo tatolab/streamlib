@@ -102,7 +102,7 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
 /// with the original request_id preserved so the subprocess can correlate.
 ///
 /// On Linux, acquisition handlers additionally check the freshly-allocated
-/// resource in with the surface-share service's [`SurfaceStore`] so the polyglot subprocess
+/// resource in with the surface-share service's [`SurfaceStore`](crate::core::context::SurfaceStore) so the polyglot subprocess
 /// can `check_out` the DMA-BUF FD by the same handle_id. The `handle_id`
 /// returned to the subprocess is the surface-share service-assigned `surface_id`.
 pub(crate) fn handle_escalate_op(

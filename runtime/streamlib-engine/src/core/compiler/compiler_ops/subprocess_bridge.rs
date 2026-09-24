@@ -27,7 +27,7 @@
 //! answer lands on that link's own cell, a lifecycle reply is forwarded to the
 //! main thread over an mpsc channel, and an escalate request that waits on an
 //! answer is queued for the helper's one escalate worker (`br-esc-…`), which
-//! dispatches through [`subprocess_escalate::process_bridge_message`] in
+//! dispatches through [`subprocess_escalate::process_bridge_message`](super::subprocess_escalate::process_bridge_message) in
 //! arrival order. Nothing the reader does waits on GPU work, so one slow
 //! escalate never delays the helper's log records or its lifecycle replies,
 //! and the helper's writes never back up behind it. The third role has its own

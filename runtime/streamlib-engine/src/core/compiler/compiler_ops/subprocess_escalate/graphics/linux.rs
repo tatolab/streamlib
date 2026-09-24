@@ -95,7 +95,7 @@ pub(super) struct PreparedGraphicsKernelRegistration {
 ///
 /// Compilation is CPU work, and the escalate gate it would otherwise be holding
 /// serializes every processor's device work — the same reason
-/// [`RegisteredShaderStageSource::spirv`] takes the sandbox rather than a
+/// [`RegisteredShaderStageSource::spirv`](crate::core::compiler::compiler_ops::subprocess_escalate::kernel_shader_stage_source::RegisteredShaderStageSource::spirv) takes the sandbox rather than a
 /// `GpuContextFullAccess`.
 pub(super) fn prepare_graphics_kernel_registration(
     sandbox: &GpuContextLimitedAccess,
@@ -166,7 +166,7 @@ pub(super) fn prepare_graphics_kernel_registration(
 
 /// Build a graphics kernel for a subprocess customer, against `GpuContext`.
 ///
-/// The graphics twin of [`handle_register_compute_kernel`]: reflection over
+/// The graphics twin of [`handle_register_compute_kernel`](crate::core::compiler::compiler_ops::subprocess_escalate::compute::handle_register_compute_kernel): reflection over
 /// both stages derives the binding shape and its names, the request's own
 /// declaration is checked against it rather than replacing it, and
 /// re-registering an identical kernel is a cache hit that answers with the same

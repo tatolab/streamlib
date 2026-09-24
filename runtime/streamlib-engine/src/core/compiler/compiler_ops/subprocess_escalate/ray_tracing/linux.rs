@@ -425,7 +425,7 @@ pub(super) fn prepare_ray_tracing_kernel_registration(
 
 /// Build a ray-tracing kernel for a subprocess customer, against `GpuContext`.
 ///
-/// The ray-tracing twin of [`handle_register_compute_kernel`], over N stages
+/// The ray-tracing twin of [`handle_register_compute_kernel`](crate::core::compiler::compiler_ops::subprocess_escalate::compute::handle_register_compute_kernel), over N stages
 /// rather than one: reflection across every stage derives the binding shape and
 /// its names, the request's own declaration is checked against it, and
 /// re-registering an identical kernel is a cache hit that answers with the same
