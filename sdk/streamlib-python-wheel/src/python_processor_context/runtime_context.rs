@@ -146,7 +146,7 @@ impl PythonRuntimeContextFullAccess {
         configuration_as_python_dict(python, &self.configuration)
     }
 
-    /// Current monotonic time in nanoseconds (raw `CLOCK_MONOTONIC`).
+    /// Current monotonic time in nanoseconds, on the engine's `MediaClock`.
     #[getter]
     fn time(&self) -> u64 {
         monotonic_clock_now_ns()
@@ -217,7 +217,7 @@ impl PythonRuntimeContextLimitedAccess {
         configuration_as_python_dict(python, &self.configuration)
     }
 
-    /// Current monotonic time in nanoseconds (raw `CLOCK_MONOTONIC`).
+    /// Current monotonic time in nanoseconds, on the engine's `MediaClock`.
     #[getter]
     fn time(&self) -> u64 {
         monotonic_clock_now_ns()
