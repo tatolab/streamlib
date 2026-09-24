@@ -57,6 +57,7 @@ use crate::core::rhi::{
 use crate::core::{Error, Result};
 
 use super::HostVulkanDevice;
+use super::vulkan_kernel_capability_refusal::VulkanSubgroupOperationSupport;
 use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
 
 /// Env var that overrides the default pipeline-cache directory. Shared with
@@ -215,7 +216,8 @@ impl VulkanGraphicsKernelInner {
             )));
         }
 
-        let reconciled_bindings = validate_against_spirv(descriptor)?;
+        let reconciled_bindings =
+            validate_against_spirv(descriptor, vulkan_device.subgroup_operation_support())?;
 
         let device = vulkan_device.device();
         let queue = vulkan_device.queue();
@@ -224,7 +226,7 @@ impl VulkanGraphicsKernelInner {
         // ---- Vulkan objects -----------------------------------------------------
         // Strict creation order with staged cleanup on each error edge so we
         // never leak partial state.
-        let shader_modules = create_shader_modules(vulkan_device, descriptor)?;
+        let shader_modules = create_shader_modules(device, descriptor)?;
 
         let descriptor_set_layout = match create_descriptor_set_layout(device, descriptor.bindings)
         {
@@ -1458,6 +1460,7 @@ impl std::fmt::Debug for VulkanGraphicsKernel {
 /// shader's own binding names adopted onto them.
 fn validate_against_spirv(
     descriptor: &GraphicsKernelDescriptor<'_>,
+    subgroup_operation_support: &VulkanSubgroupOperationSupport,
 ) -> Result<Vec<GraphicsBindingSpec>> {
     use std::collections::BTreeMap;
 
@@ -1475,6 +1478,11 @@ fn validate_against_spirv(
                 descriptor.label, stage.stage
             ))
         })?;
+        subgroup_operation_support.refuse_a_shader_the_driver_cannot_serve(
+            &kernel_kind_label,
+            graphics_stage_to_vk(stage.stage),
+            &reflection.0,
+        )?;
         let sets = reflection.get_descriptor_sets().map_err(|e| {
             Error::GpuError(format!(
                 "Graphics kernel '{}': failed to extract descriptor sets for {:?} stage: {e:?}",
@@ -1811,10 +1819,9 @@ fn index_type_to_vk(t: IndexType) -> vk::IndexType {
 }
 
 fn create_shader_modules(
-    vulkan_device: &HostVulkanDevice,
+    device: &vulkanalia::Device,
     descriptor: &GraphicsKernelDescriptor<'_>,
 ) -> Result<Vec<(GraphicsShaderStage, vk::ShaderModule)>> {
-    let device = vulkan_device.device();
     let mut out: Vec<(GraphicsShaderStage, vk::ShaderModule)> =
         Vec::with_capacity(descriptor.stages.len());
     for stage in descriptor.stages {
@@ -1823,14 +1830,6 @@ fn create_shader_modules(
             .chunks_exact(4)
             .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect();
-        if let Err(refusal) = vulkan_device.refuse_a_shader_the_driver_cannot_serve(
-            &format!("Graphics kernel '{}'", descriptor.label),
-            graphics_stage_to_vk(stage.stage),
-            &spirv,
-        ) {
-            destroy_shader_modules(device, &out);
-            return Err(refusal);
-        }
         let info = vk::ShaderModuleCreateInfo::builder().code(&spirv).build();
         match unsafe { device.create_shader_module(&info, None) } {
             Ok(m) => out.push((stage.stage, m)),
@@ -2507,9 +2506,12 @@ void main() {
         ];
         let pipeline_state = default_pipeline_state();
         let descriptor = display_blit_descriptor(&stages, &bindings, &pipeline_state);
-        let err = validate_against_spirv(&descriptor)
-            .err()
-            .expect("one slot cannot carry two names");
+        let err = validate_against_spirv(
+            &descriptor,
+            &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
+        )
+        .err()
+        .expect("one slot cannot carry two names");
         let msg = format!("{err}");
         assert!(
             msg.contains("binding 0 is named `cam`")
@@ -2533,9 +2535,12 @@ void main() {
         ];
         let pipeline_state = default_pipeline_state();
         let descriptor = display_blit_descriptor(&stages, &bindings, &pipeline_state);
-        let refusal = validate_against_spirv(&descriptor)
-            .err()
-            .expect("a binding outside set 0 cannot be bound, so it cannot be dropped in silence");
+        let refusal = validate_against_spirv(
+            &descriptor,
+            &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
+        )
+        .err()
+        .expect("a binding outside set 0 cannot be bound, so it cannot be dropped in silence");
         let message = format!("{refusal}");
         assert!(
             message.contains("only descriptor set 0 is supported") && message.contains('1'),
@@ -2556,9 +2561,12 @@ void main() {
         ];
         let pipeline_state = default_pipeline_state();
         let descriptor = display_blit_descriptor(&stages, &bindings, &pipeline_state);
-        let err = validate_against_spirv(&descriptor)
-            .err()
-            .expect("a name-stripped blob cannot be bound by name");
+        let err = validate_against_spirv(
+            &descriptor,
+            &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
+        )
+        .err()
+        .expect("a name-stripped blob cannot be bound by name");
         let msg = format!("{err}");
         assert!(
             msg.contains("carries no name") && msg.contains("glslc -g"),
@@ -2579,9 +2587,12 @@ void main() {
         ];
         let pipeline_state = default_pipeline_state();
         let descriptor = display_blit_descriptor(&stages, &bindings, &pipeline_state);
-        let err = validate_against_spirv(&descriptor)
-            .err()
-            .expect("one name cannot identify two slots");
+        let err = validate_against_spirv(
+            &descriptor,
+            &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
+        )
+        .err()
+        .expect("one name cannot identify two slots");
         let msg = format!("{err}");
         assert!(
             msg.contains("bindings 0 and 1 are both named `cameraTexture`")
@@ -2603,9 +2614,12 @@ void main() {
         ];
         let pipeline_state = default_pipeline_state();
         let descriptor = display_blit_descriptor(&stages, &bindings, &pipeline_state);
-        let err = validate_against_spirv(&descriptor)
-            .err()
-            .expect("a declared name the shader does not use must be refused");
+        let err = validate_against_spirv(
+            &descriptor,
+            &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
+        )
+        .err()
+        .expect("a declared name the shader does not use must be refused");
         let msg = format!("{err}");
         assert!(
             msg.contains("declared name `sourceTexture`")
@@ -2627,9 +2641,12 @@ void main() {
         ];
         let pipeline_state = default_pipeline_state();
         let descriptor = display_blit_descriptor(&stages, &bindings, &pipeline_state);
-        let err = validate_against_spirv(&descriptor)
-            .err()
-            .expect("expected validation failure");
+        let err = validate_against_spirv(
+            &descriptor,
+            &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
+        )
+        .err()
+        .expect("expected validation failure");
         let msg = format!("{err}");
         assert!(
             msg.contains("binding 0")
@@ -2651,9 +2668,12 @@ void main() {
         ];
         let pipeline_state = default_pipeline_state();
         let descriptor = display_blit_descriptor(&stages, &bindings, &pipeline_state);
-        let err = validate_against_spirv(&descriptor)
-            .err()
-            .expect("expected validation failure");
+        let err = validate_against_spirv(
+            &descriptor,
+            &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
+        )
+        .err()
+        .expect("expected validation failure");
         let msg = format!("{err}");
         assert!(
             msg.contains("binding 1"),
@@ -2671,9 +2691,12 @@ void main() {
         ];
         let pipeline_state = default_pipeline_state();
         let descriptor = display_blit_descriptor(&stages, &bindings, &pipeline_state);
-        let err = validate_against_spirv(&descriptor)
-            .err()
-            .expect("expected validation failure");
+        let err = validate_against_spirv(
+            &descriptor,
+            &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
+        )
+        .err()
+        .expect("expected validation failure");
         let msg = format!("{err}");
         assert!(
             msg.contains("binding 0") && msg.contains("missing"),
@@ -2697,9 +2720,12 @@ void main() {
             size: 64, // SPIR-V declares 16
             stages: GraphicsShaderStageFlags::FRAGMENT,
         };
-        let err = validate_against_spirv(&descriptor)
-            .err()
-            .expect("expected validation failure");
+        let err = validate_against_spirv(
+            &descriptor,
+            &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
+        )
+        .err()
+        .expect("expected validation failure");
         let msg = format!("{err}");
         assert!(
             msg.contains("push-constant size mismatch"),
@@ -2720,9 +2746,12 @@ void main() {
         ];
         let pipeline_state = default_pipeline_state();
         let descriptor = display_blit_descriptor(&stages, &bindings, &pipeline_state);
-        let err = validate_against_spirv(&descriptor)
-            .err()
-            .expect("expected validation failure");
+        let err = validate_against_spirv(
+            &descriptor,
+            &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
+        )
+        .err()
+        .expect("expected validation failure");
         let msg = format!("{err}");
         assert!(
             msg.contains("binding 0") && msg.contains("stage visibility"),

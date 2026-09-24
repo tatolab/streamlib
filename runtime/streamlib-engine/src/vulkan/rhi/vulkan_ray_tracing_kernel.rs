@@ -40,6 +40,7 @@ use crate::core::rhi::{
 };
 use crate::core::{Error, Result};
 
+use super::vulkan_kernel_capability_refusal::VulkanSubgroupOperationSupport;
 use super::{HostVulkanDevice, VulkanAccelerationStructure};
 
 /// Rich data backing a [`VulkanRayTracingKernel`], reached through the
@@ -130,7 +131,10 @@ impl VulkanRayTracingKernelInner {
         }
 
         validate_shader_groups(descriptor.label, descriptor.stages, descriptor.groups)?;
-        let reconciled_bindings = validate_bindings_against_spirv(descriptor)?;
+        let reconciled_bindings = validate_bindings_against_spirv(
+            descriptor,
+            vulkan_device.subgroup_operation_support(),
+        )?;
         validate_push_constants_against_spirv(descriptor)?;
 
         let device = vulkan_device.device();
@@ -145,16 +149,6 @@ impl VulkanRayTracingKernelInner {
                 .chunks_exact(4)
                 .map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]))
                 .collect();
-            if let Err(refusal) = vulkan_device.refuse_a_shader_the_driver_cannot_serve(
-                &format!("Ray-tracing kernel '{}'", descriptor.label),
-                stage_to_vk(stage.stage),
-                &spirv,
-            ) {
-                for m in shader_modules.drain(..) {
-                    unsafe { device.destroy_shader_module(m, None) };
-                }
-                return Err(refusal);
-            }
             let info = vk::ShaderModuleCreateInfo::builder().code(&spirv).build();
             match unsafe { device.create_shader_module(&info, None) } {
                 Ok(m) => shader_modules.push(m),
@@ -1090,6 +1084,7 @@ mod plugin_abi_object_layout_tests {
 /// shader's own binding names adopted onto them.
 fn validate_bindings_against_spirv(
     descriptor: &RayTracingKernelDescriptor<'_>,
+    subgroup_operation_support: &VulkanSubgroupOperationSupport,
 ) -> Result<Vec<RayTracingBindingSpec>> {
     use std::collections::BTreeMap;
 
@@ -1106,6 +1101,11 @@ fn validate_bindings_against_spirv(
                 descriptor.label, stage.stage
             ))
         })?;
+        subgroup_operation_support.refuse_a_shader_the_driver_cannot_serve(
+            &kernel_kind_label,
+            stage_to_vk(stage.stage),
+            &reflection.0,
+        )?;
         let sets = reflection.get_descriptor_sets().map_err(|e| {
             Error::GpuError(format!(
                 "Ray-tracing kernel '{}': failed to extract descriptor sets for stage {:?}: {e:?}",
@@ -1953,9 +1953,10 @@ mod tests {
             RayTracingBindingSpec::acceleration_structure(0, RayTracingShaderStageFlags::RAYGEN),
             RayTracingBindingSpec::storage_image(1, RayTracingShaderStageFlags::RAYGEN),
         ];
-        let err = validate_bindings_against_spirv(&binding_validation_descriptor(
-            &stages, &groups, &bindings,
-        ))
+        let err = validate_bindings_against_spirv(
+            &binding_validation_descriptor(&stages, &groups, &bindings),
+            &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
+        )
         .err()
         .expect("one slot cannot carry two names");
         let msg = format!("{err}");
@@ -1977,9 +1978,10 @@ mod tests {
             RayTracingBindingSpec::acceleration_structure(0, RayTracingShaderStageFlags::RAYGEN),
             RayTracingBindingSpec::storage_image(1, RayTracingShaderStageFlags::RAYGEN),
         ];
-        let refusal = validate_bindings_against_spirv(&binding_validation_descriptor(
-            &stages, &groups, &bindings,
-        ))
+        let refusal = validate_bindings_against_spirv(
+            &binding_validation_descriptor(&stages, &groups, &bindings),
+            &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
+        )
         .err()
         .expect("a binding outside set 0 cannot be bound, so it cannot be dropped in silence");
         let message = format!("{refusal}");
@@ -1998,9 +2000,10 @@ mod tests {
             RayTracingBindingSpec::acceleration_structure(0, RayTracingShaderStageFlags::RAYGEN),
             RayTracingBindingSpec::storage_image(1, RayTracingShaderStageFlags::RAYGEN),
         ];
-        let err = validate_bindings_against_spirv(&binding_validation_descriptor(
-            &stages, &groups, &bindings,
-        ))
+        let err = validate_bindings_against_spirv(
+            &binding_validation_descriptor(&stages, &groups, &bindings),
+            &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
+        )
         .err()
         .expect("a name-stripped blob cannot be bound by name");
         let msg = format!("{err}");
@@ -2020,9 +2023,10 @@ mod tests {
             RayTracingBindingSpec::acceleration_structure(0, RayTracingShaderStageFlags::RAYGEN),
             RayTracingBindingSpec::storage_image(1, RayTracingShaderStageFlags::RAYGEN),
         ];
-        let err = validate_bindings_against_spirv(&binding_validation_descriptor(
-            &stages, &groups, &bindings,
-        ))
+        let err = validate_bindings_against_spirv(
+            &binding_validation_descriptor(&stages, &groups, &bindings),
+            &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
+        )
         .err()
         .expect("one name cannot identify two slots");
         let msg = format!("{err}");
@@ -2042,9 +2046,10 @@ mod tests {
                 .with_name("sceneTlas"),
             RayTracingBindingSpec::storage_image(1, RayTracingShaderStageFlags::RAYGEN),
         ];
-        let err = validate_bindings_against_spirv(&binding_validation_descriptor(
-            &stages, &groups, &bindings,
-        ))
+        let err = validate_bindings_against_spirv(
+            &binding_validation_descriptor(&stages, &groups, &bindings),
+            &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
+        )
         .err()
         .expect("a declared name the shader does not use must be refused");
         let msg = format!("{err}");

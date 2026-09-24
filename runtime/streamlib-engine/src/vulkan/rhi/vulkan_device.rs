@@ -3603,22 +3603,10 @@ impl HostVulkanDevice {
         ))
     }
 
-    /// The subgroup operations and stages this device's driver serves.
-    #[cfg(test)]
+    /// The subgroup operations and stages this device's driver serves,
+    /// checked against each kernel stage before anything is built.
     pub(crate) fn subgroup_operation_support(&self) -> &VulkanSubgroupOperationSupport {
         &self.subgroup_operation_support
-    }
-
-    /// Refuse a kernel's shader stage whose subgroup operations this device's
-    /// driver does not serve, naming the driver.
-    pub(crate) fn refuse_a_shader_the_driver_cannot_serve(
-        &self,
-        kernel_description: &str,
-        stage: vk::ShaderStageFlags,
-        spirv_words: &[u32],
-    ) -> crate::core::Result<()> {
-        self.subgroup_operation_support
-            .refuse_a_shader_the_driver_cannot_serve(kernel_description, stage, spirv_words)
     }
 
     /// Producer-side QFOT release barrier — declares the surface's

@@ -37,6 +37,7 @@ use crate::core::{Error, Result};
 pub const PIPELINE_CACHE_DIR_ENV: &str = "STREAMLIB_PIPELINE_CACHE_DIR";
 
 use super::HostVulkanDevice;
+use super::vulkan_kernel_capability_refusal::VulkanSubgroupOperationSupport;
 use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
 
 /// One compute kernel: shader pipeline + descriptor set + per-dispatch primitives.
@@ -178,7 +179,8 @@ impl VulkanComputeKernelInner {
         let queue_family_index = vulkan_device.queue_family_index();
         let device = vulkan_device.device();
 
-        let reconciled_bindings = validate_against_spirv(descriptor)?;
+        let reconciled_bindings =
+            validate_against_spirv(descriptor, vulkan_device.subgroup_operation_support())?;
 
         let spirv: Vec<u32> = descriptor
             .spv
@@ -190,11 +192,6 @@ impl VulkanComputeKernelInner {
         // Created in a strict order; on failure earlier objects are torn down by the
         // staged-cleanup helpers so we never leak on the error path.
 
-        vulkan_device.refuse_a_shader_the_driver_cannot_serve(
-            &format!("Compute kernel '{}'", descriptor.label),
-            vk::ShaderStageFlags::COMPUTE,
-            &spirv,
-        )?;
         let shader_module = create_shader_module(device, &spirv, descriptor.label)?;
 
         let descriptor_set_layout =
@@ -1240,6 +1237,7 @@ mod layout_tests {
 /// shader's own binding names adopted onto them.
 fn validate_against_spirv(
     descriptor: &ComputeKernelDescriptor<'_>,
+    subgroup_operation_support: &VulkanSubgroupOperationSupport,
 ) -> Result<Vec<ComputeBindingSpec>> {
     let reflection = Reflection::new_from_spirv(descriptor.spv).map_err(|e| {
         Error::GpuError(format!(
@@ -1247,6 +1245,11 @@ fn validate_against_spirv(
             descriptor.label
         ))
     })?;
+    subgroup_operation_support.refuse_a_shader_the_driver_cannot_serve(
+        &format!("Compute kernel '{}'", descriptor.label),
+        vk::ShaderStageFlags::COMPUTE,
+        &reflection.0,
+    )?;
 
     let sets = reflection.get_descriptor_sets().map_err(|e| {
         Error::GpuError(format!(
@@ -1839,9 +1842,12 @@ void main() {
             bindings: &bindings,
             push_constant_size: 0,
         };
-        let refusal = validate_against_spirv(&descriptor)
-            .err()
-            .expect("a binding outside set 0 cannot be bound, so it cannot be dropped in silence");
+        let refusal = validate_against_spirv(
+            &descriptor,
+            &VulkanSubgroupOperationSupport::serving_every_operation_in_every_stage(),
+        )
+        .err()
+        .expect("a binding outside set 0 cannot be bound, so it cannot be dropped in silence");
         let message = refusal.to_string();
         assert!(
             message.contains("only descriptor set 0 is supported") && message.contains('1'),

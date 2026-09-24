@@ -12,7 +12,10 @@ use crate::core::context::GpuContextLimitedAccess;
 
 /// The refusal every export-staging op answers on macOS, where a helper reads
 /// and writes a texture's IOSurface in place and no staging exists to open.
-fn export_staging_not_needed_on_macos(request_id: String, op_name: &str) -> EscalateResponse {
+fn export_staging_op_not_needed_on_macos_refusal(
+    request_id: String,
+    op_name: &str,
+) -> EscalateResponse {
     EscalateResponse::Err(EscalateResponseErr {
         request_id,
         message: format!(
@@ -27,7 +30,7 @@ pub(in super::super) fn handle_run_cpu_readback_copy(
     request_id: String,
     _request: EscalateRequestRunCpuReadbackCopy,
 ) -> EscalateResponse {
-    export_staging_not_needed_on_macos(request_id, "run_cpu_readback_copy")
+    export_staging_op_not_needed_on_macos_refusal(request_id, "run_cpu_readback_copy")
 }
 
 pub(in super::super) fn handle_open_cpu_readback_staging(
@@ -35,7 +38,7 @@ pub(in super::super) fn handle_open_cpu_readback_staging(
     request_id: String,
     _request: EscalateRequestOpenCpuReadbackStaging,
 ) -> EscalateResponse {
-    export_staging_not_needed_on_macos(request_id, "open_cpu_readback_staging")
+    export_staging_op_not_needed_on_macos_refusal(request_id, "open_cpu_readback_staging")
 }
 
 pub(in super::super) fn handle_open_device_export_staging(
@@ -43,7 +46,7 @@ pub(in super::super) fn handle_open_device_export_staging(
     request_id: String,
     _request: EscalateRequestOpenDeviceExportStaging,
 ) -> EscalateResponse {
-    export_staging_not_needed_on_macos(request_id, "open_device_export_staging")
+    export_staging_op_not_needed_on_macos_refusal(request_id, "open_device_export_staging")
 }
 
 pub(in super::super) fn handle_refill_device_export_staging(
@@ -51,7 +54,7 @@ pub(in super::super) fn handle_refill_device_export_staging(
     request_id: String,
     _request: EscalateRequestRefillDeviceExportStaging,
 ) -> EscalateResponse {
-    export_staging_not_needed_on_macos(request_id, "refill_device_export_staging")
+    export_staging_op_not_needed_on_macos_refusal(request_id, "refill_device_export_staging")
 }
 
 pub(in super::super) fn handle_copy_device_export_staging_back_to_surface(
@@ -59,5 +62,8 @@ pub(in super::super) fn handle_copy_device_export_staging_back_to_surface(
     request_id: String,
     _request: EscalateRequestCopyDeviceExportStagingBackToSurface,
 ) -> EscalateResponse {
-    export_staging_not_needed_on_macos(request_id, "copy_device_export_staging_back_to_surface")
+    export_staging_op_not_needed_on_macos_refusal(
+        request_id,
+        "copy_device_export_staging_back_to_surface",
+    )
 }

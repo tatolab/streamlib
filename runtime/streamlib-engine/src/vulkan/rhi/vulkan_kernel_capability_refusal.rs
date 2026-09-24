@@ -4,6 +4,9 @@
 //! The refusals a kernel constructor raises for a capability the device's
 //! driver does not serve — the ray-tracing tier, and subgroup operations.
 
+use rspirv_reflect::rspirv;
+use rspirv_reflect::rspirv::dr::Operand;
+use rspirv_reflect::spirv::Capability;
 use vulkanalia::vk;
 
 use crate::core::{Error, Result};
@@ -23,17 +26,17 @@ impl VulkanSubgroupOperationSupport {
     /// driver and what is missing.
     pub(crate) fn refuse_a_shader_the_driver_cannot_serve(
         &self,
-        kernel_description: &str,
+        kernel_kind_label: &str,
         stage: vk::ShaderStageFlags,
-        spirv_words: &[u32],
+        shader_module: &rspirv::dr::Module,
     ) -> Result<()> {
-        let required = subgroup_operations_a_spirv_module_declares(spirv_words);
+        let required = subgroup_operations_a_spirv_module_declares(shader_module);
         if required.is_empty() {
             return Ok(());
         }
         if !self.supported_stages.contains(stage) {
             return Err(Error::GpuError(format!(
-                "{kernel_description}: its {stage:?} stage uses subgroup operations ({required:?}), \
+                "{kernel_kind_label}: its {stage:?} stage uses subgroup operations ({required:?}), \
                  and the {} driver serves subgroup operations only in {:?} stages",
                 self.driver_name, self.supported_stages
             )));
@@ -41,12 +44,23 @@ impl VulkanSubgroupOperationSupport {
         let unserved = required.difference(self.supported_operations);
         if !unserved.is_empty() {
             return Err(Error::GpuError(format!(
-                "{kernel_description}: its {stage:?} stage uses subgroup operations ({unserved:?}) \
+                "{kernel_kind_label}: its {stage:?} stage uses subgroup operations ({unserved:?}) \
                  the {} driver does not serve on this device",
                 self.driver_name
             )));
         }
         Ok(())
+    }
+
+    /// A driver serving every subgroup operation in every stage, for tests
+    /// that validate a kernel without a device.
+    #[cfg(test)]
+    pub(crate) fn serving_every_operation_in_every_stage() -> Self {
+        Self {
+            driver_name: "every-operation test driver".to_string(),
+            supported_stages: vk::ShaderStageFlags::ALL,
+            supported_operations: vk::SubgroupFeatureFlags::all(),
+        }
     }
 }
 
@@ -63,41 +77,38 @@ pub(crate) fn ray_tracing_tier_absent_refusal(
     ))
 }
 
-const SPIRV_HEADER_WORD_COUNT: usize = 5;
-const SPIRV_OP_CAPABILITY: u32 = 17;
-
 /// The subgroup operation categories a SPIR-V module declares through its
-/// `OpCapability` instructions. SPIR-V's logical layout puts every capability
-/// first, so the scan stops at the first instruction that is not one.
-fn subgroup_operations_a_spirv_module_declares(spirv_words: &[u32]) -> vk::SubgroupFeatureFlags {
-    let mut declared = vk::SubgroupFeatureFlags::empty();
-    let mut cursor = SPIRV_HEADER_WORD_COUNT;
-    while let Some(&first_word) = spirv_words.get(cursor) {
-        let word_count = (first_word >> 16) as usize;
-        let opcode = first_word & 0xffff;
-        if opcode != SPIRV_OP_CAPABILITY || word_count < 2 {
-            break;
-        }
-        if let Some(&capability) = spirv_words.get(cursor + 1) {
-            declared |= subgroup_operation_of_a_spirv_capability(capability);
-        }
-        cursor += word_count;
-    }
-    declared
+/// `OpCapability` instructions.
+fn subgroup_operations_a_spirv_module_declares(
+    shader_module: &rspirv::dr::Module,
+) -> vk::SubgroupFeatureFlags {
+    shader_module
+        .capabilities
+        .iter()
+        .flat_map(|instruction| &instruction.operands)
+        .fold(
+            vk::SubgroupFeatureFlags::empty(),
+            |declared, operand| match operand {
+                Operand::Capability(capability) => {
+                    declared | subgroup_operation_of_a_spirv_capability(*capability)
+                }
+                _ => declared,
+            },
+        )
 }
 
-/// The subgroup operation category a SPIR-V `Capability` enumerant enables,
-/// empty for every capability that is not a `GroupNonUniform*` one.
-fn subgroup_operation_of_a_spirv_capability(capability: u32) -> vk::SubgroupFeatureFlags {
+/// The subgroup operation category a SPIR-V capability enables, empty for
+/// every capability that is not a `GroupNonUniform*` one.
+fn subgroup_operation_of_a_spirv_capability(capability: Capability) -> vk::SubgroupFeatureFlags {
     match capability {
-        61 => vk::SubgroupFeatureFlags::BASIC,
-        62 => vk::SubgroupFeatureFlags::VOTE,
-        63 => vk::SubgroupFeatureFlags::ARITHMETIC,
-        64 => vk::SubgroupFeatureFlags::BALLOT,
-        65 => vk::SubgroupFeatureFlags::SHUFFLE,
-        66 => vk::SubgroupFeatureFlags::SHUFFLE_RELATIVE,
-        67 => vk::SubgroupFeatureFlags::CLUSTERED,
-        68 => vk::SubgroupFeatureFlags::QUAD,
+        Capability::GroupNonUniform => vk::SubgroupFeatureFlags::BASIC,
+        Capability::GroupNonUniformVote => vk::SubgroupFeatureFlags::VOTE,
+        Capability::GroupNonUniformArithmetic => vk::SubgroupFeatureFlags::ARITHMETIC,
+        Capability::GroupNonUniformBallot => vk::SubgroupFeatureFlags::BALLOT,
+        Capability::GroupNonUniformShuffle => vk::SubgroupFeatureFlags::SHUFFLE,
+        Capability::GroupNonUniformShuffleRelative => vk::SubgroupFeatureFlags::SHUFFLE_RELATIVE,
+        Capability::GroupNonUniformClustered => vk::SubgroupFeatureFlags::CLUSTERED,
+        Capability::GroupNonUniformQuad => vk::SubgroupFeatureFlags::QUAD,
         _ => vk::SubgroupFeatureFlags::empty(),
     }
 }
@@ -106,22 +117,12 @@ fn subgroup_operation_of_a_spirv_capability(capability: u32) -> vk::SubgroupFeat
 mod tests {
     use super::*;
 
-    const SPIRV_MAGIC: u32 = 0x0723_0203;
-    const CAPABILITY_SHADER: u32 = 1;
-    const CAPABILITY_GROUP_NON_UNIFORM: u32 = 61;
-    const CAPABILITY_GROUP_NON_UNIFORM_ARITHMETIC: u32 = 63;
-    const CAPABILITY_GROUP_NON_UNIFORM_CLUSTERED: u32 = 67;
-    const OP_MEMORY_MODEL: u32 = 14;
-
-    fn spirv_declaring(capabilities: &[u32]) -> Vec<u32> {
-        let mut words = vec![SPIRV_MAGIC, 0x0001_0300, 0, 16, 0];
+    fn a_module_declaring(capabilities: &[Capability]) -> rspirv::dr::Module {
+        let mut builder = rspirv::dr::Builder::new();
         for &capability in capabilities {
-            words.push((2 << 16) | SPIRV_OP_CAPABILITY);
-            words.push(capability);
+            builder.capability(capability);
         }
-        words.push((3 << 16) | OP_MEMORY_MODEL);
-        words.extend([0, 1]);
-        words
+        builder.module()
     }
 
     fn a_driver_serving(
@@ -137,32 +138,14 @@ mod tests {
 
     #[test]
     fn a_module_declares_only_the_subgroup_capabilities_it_names() {
-        let declared = subgroup_operations_a_spirv_module_declares(&spirv_declaring(&[
-            CAPABILITY_SHADER,
-            CAPABILITY_GROUP_NON_UNIFORM,
-            CAPABILITY_GROUP_NON_UNIFORM_CLUSTERED,
+        let declared = subgroup_operations_a_spirv_module_declares(&a_module_declaring(&[
+            Capability::Shader,
+            Capability::GroupNonUniform,
+            Capability::GroupNonUniformClustered,
         ]));
         assert_eq!(
             declared,
             vk::SubgroupFeatureFlags::BASIC | vk::SubgroupFeatureFlags::CLUSTERED
-        );
-    }
-
-    #[test]
-    fn a_capability_after_the_preamble_is_not_read_as_one() {
-        let mut words = spirv_declaring(&[CAPABILITY_SHADER]);
-        words.push((2 << 16) | SPIRV_OP_CAPABILITY);
-        words.push(CAPABILITY_GROUP_NON_UNIFORM_CLUSTERED);
-        assert!(subgroup_operations_a_spirv_module_declares(&words).is_empty());
-    }
-
-    #[test]
-    fn a_truncated_module_declares_what_it_carries_and_no_more() {
-        let words = spirv_declaring(&[CAPABILITY_GROUP_NON_UNIFORM]);
-        assert!(subgroup_operations_a_spirv_module_declares(&words[..3]).is_empty());
-        assert_eq!(
-            subgroup_operations_a_spirv_module_declares(&words[..7]),
-            vk::SubgroupFeatureFlags::BASIC
         );
     }
 
@@ -176,7 +159,7 @@ mod tests {
             .refuse_a_shader_the_driver_cannot_serve(
                 "Compute kernel 'plain'",
                 vk::ShaderStageFlags::COMPUTE,
-                &spirv_declaring(&[CAPABILITY_SHADER]),
+                &a_module_declaring(&[Capability::Shader]),
             )
             .expect("a shader declaring no subgroup capability needs nothing from the driver");
     }
@@ -191,9 +174,9 @@ mod tests {
             .refuse_a_shader_the_driver_cannot_serve(
                 "Compute kernel 'reduce'",
                 vk::ShaderStageFlags::COMPUTE,
-                &spirv_declaring(&[
-                    CAPABILITY_GROUP_NON_UNIFORM,
-                    CAPABILITY_GROUP_NON_UNIFORM_ARITHMETIC,
+                &a_module_declaring(&[
+                    Capability::GroupNonUniform,
+                    Capability::GroupNonUniformArithmetic,
                 ]),
             )
             .expect("every declared operation is served");
@@ -209,9 +192,9 @@ mod tests {
             .refuse_a_shader_the_driver_cannot_serve(
                 "Compute kernel 'clustered'",
                 vk::ShaderStageFlags::COMPUTE,
-                &spirv_declaring(&[
-                    CAPABILITY_GROUP_NON_UNIFORM,
-                    CAPABILITY_GROUP_NON_UNIFORM_CLUSTERED,
+                &a_module_declaring(&[
+                    Capability::GroupNonUniform,
+                    Capability::GroupNonUniformClustered,
                 ]),
             )
             .expect_err("a clustered operation the driver does not serve must be refused")
@@ -232,7 +215,7 @@ mod tests {
             .refuse_a_shader_the_driver_cannot_serve(
                 "Graphics kernel 'vertex-ballot'",
                 vk::ShaderStageFlags::VERTEX,
-                &spirv_declaring(&[CAPABILITY_GROUP_NON_UNIFORM]),
+                &a_module_declaring(&[Capability::GroupNonUniform]),
             )
             .expect_err("a subgroup operation in an unserved stage must be refused")
             .to_string();
