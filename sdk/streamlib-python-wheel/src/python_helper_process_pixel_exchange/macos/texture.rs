@@ -14,9 +14,10 @@ use streamlib_consumer_rhi::{
 use super::super::{
     HelperCheckedOutSurface, HelperProcessGpuExchangeClient, HelperSurfaceCheckOutLeaseDebt,
     HelperSurfaceReleaseDebt, SurfaceShareTransferredHandle, escalate_round_trip_to_parent,
-    required_positive_u32_check_out_metadata_field,
+    required_positive_u32_check_out_metadata_field, vk_image_creation_recipe_of_check_out,
 };
-use super::{HelperIOSurfaceCpuLock, IOSurfaceLockRefused};
+use super::{HelperIOSurfaceCpuLock, IOSurfaceLockRefused, IOSurfaceMachPortExportDescription};
+use crate::python_processor_context::ExportedVkImageCreationRecipe;
 use streamlib::sdk::engine::apple_surface_share::RetainedIOSurfaceSharedAcrossThreads;
 
 /// A texture-backed surface this helper imported: the engine's image rebuilt
@@ -38,6 +39,9 @@ pub(crate) struct HelperCheckedOutTextureSurface {
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) format: TextureFormat,
+    /// The engine image's creation recipe, as the registration carried it —
+    /// what a raw-handle importer rebuilds the image from.
+    vk_image_creation_recipe: ExportedVkImageCreationRecipe,
     iosurface_cpu_lock: HelperIOSurfaceCpuLock,
     /// The producer's edge of the pair. Nothing signals it today — the
     /// escalate dispatch retires its GPU work before any consumer can learn
@@ -105,6 +109,19 @@ impl HelperCheckedOutTextureSurface {
 
     fn iosurface_lock_error(&self, refused: IOSurfaceLockRefused) -> PyErr {
         PyRuntimeError::new_err(format!("{refused} on texture {:?}", self.surface_id))
+    }
+
+    /// A fresh send right to the texture's IOSurface plus the image recipe
+    /// it backs.
+    pub(crate) fn export_iosurface(&self) -> PyResult<IOSurfaceMachPortExportDescription> {
+        IOSurfaceMachPortExportDescription::minted_from(
+            &self.iosurface,
+            &self.surface_id,
+            self.width,
+            self.height,
+            self.format.wire_name(),
+            Some(self.vk_image_creation_recipe),
+        )
     }
 
     /// A no-copy `MTLBuffer` over the texture's IOSurface rows, importing the
@@ -371,6 +388,7 @@ impl HelperProcessGpuExchangeClient {
             width,
             height,
             format,
+            vk_image_creation_recipe: vk_image_creation_recipe_of_check_out(response),
             iosurface_cpu_lock: HelperIOSurfaceCpuLock::default(),
             produce_done_timeline,
             consume_done_timeline,

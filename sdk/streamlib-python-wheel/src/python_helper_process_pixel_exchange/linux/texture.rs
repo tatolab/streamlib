@@ -15,6 +15,7 @@ use streamlib_consumer_rhi::{
 use crate::python_helper_process_pixel_exchange::{
     HelperProcessGpuExchangeClient, HelperSurfaceCheckOutLeaseDebt, HelperSurfaceReleaseDebt,
     escalate_round_trip_to_parent, required_positive_u32_check_out_metadata_field,
+    vk_image_creation_recipe_of_check_out,
 };
 use crate::python_processor_context::{ExportedVkImageCreationRecipe, OpaqueFdExportContract};
 
@@ -33,44 +34,6 @@ pub(super) fn an_acquired_device_texture_carries_no_exportable_fd_error() -> PyE
          into this process, so there is no fd to export. Resolve its surface id to \
          check the texture handle out",
     )
-}
-
-/// Absent-defaults for the `vk_image_*` recipe fields, mirroring the
-/// surface-share service's documented defaults
-/// (`linux/surface_share/state.rs`) — `new_opaque_fd_export`'s hardcoded
-/// shape.
-const VK_IMAGE_TILING_DEFAULT: i32 = 0; // VK_IMAGE_TILING_OPTIMAL
-const VK_IMAGE_MIP_LEVELS_DEFAULT: u32 = 1;
-const VK_IMAGE_ARRAY_LAYERS_DEFAULT: u32 = 1;
-const VK_IMAGE_SAMPLES_DEFAULT: i32 = 1; // VK_SAMPLE_COUNT_1_BIT
-/// `TRANSFER_SRC (0x01) | TRANSFER_DST (0x02) | SAMPLED (0x04) | STORAGE (0x08)`.
-const VK_IMAGE_USAGE_DEFAULT: u32 = 0x0F;
-
-/// One `i32` recipe field of a checkout's registration metadata,
-/// absent-or-unrepresentable defaulting to the service's documented value.
-fn defaulted_i32_check_out_metadata_field(
-    response: &serde_json::Value,
-    field: &str,
-    default: i32,
-) -> i32 {
-    response
-        .get(field)
-        .and_then(|value| value.as_i64())
-        .and_then(|value| i32::try_from(value).ok())
-        .unwrap_or(default)
-}
-
-/// The `u32` twin of [`defaulted_i32_check_out_metadata_field`].
-fn defaulted_u32_check_out_metadata_field(
-    response: &serde_json::Value,
-    field: &str,
-    default: u32,
-) -> u32 {
-    response
-        .get(field)
-        .and_then(|value| value.as_u64())
-        .and_then(|value| u32::try_from(value).ok())
-        .unwrap_or(default)
 }
 
 /// Import one timeline edge of a texture checkout, or refuse the checkout
@@ -223,33 +186,7 @@ impl TextureCheckOutRegistrationMetadata {
             drm_format_modifier,
             plane_offsets: plane_u64_array_check_out_metadata_field(response, "plane_offsets"),
             plane_strides: plane_u64_array_check_out_metadata_field(response, "plane_strides"),
-            vk_image_creation_recipe: ExportedVkImageCreationRecipe {
-                vk_image_tiling: defaulted_i32_check_out_metadata_field(
-                    response,
-                    "vk_image_tiling",
-                    VK_IMAGE_TILING_DEFAULT,
-                ),
-                vk_image_usage_flags: defaulted_u32_check_out_metadata_field(
-                    response,
-                    "vk_image_usage",
-                    VK_IMAGE_USAGE_DEFAULT,
-                ),
-                vk_image_mip_levels: defaulted_u32_check_out_metadata_field(
-                    response,
-                    "vk_image_mip_levels",
-                    VK_IMAGE_MIP_LEVELS_DEFAULT,
-                ),
-                vk_image_array_layers: defaulted_u32_check_out_metadata_field(
-                    response,
-                    "vk_image_array_layers",
-                    VK_IMAGE_ARRAY_LAYERS_DEFAULT,
-                ),
-                vk_image_samples: defaulted_i32_check_out_metadata_field(
-                    response,
-                    "vk_image_samples",
-                    VK_IMAGE_SAMPLES_DEFAULT,
-                ),
-            },
+            vk_image_creation_recipe: vk_image_creation_recipe_of_check_out(response),
             opaque_fd_export_contract,
         })
     }

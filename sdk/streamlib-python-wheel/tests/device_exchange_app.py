@@ -72,6 +72,8 @@ if __name__ == "__main__":
         "TorchAndMlxScopesAlternateInOneHelperProbe",
         "TorchTensorOutlivesTextureHandleProbe",
         "MlxArrayOutlivesTextureHandleProbe",
+        "IOSurfaceExportProbe",
+        "RawHandleOffItsPlatformRefusesProbe",
     ):
         scenario_standalone_probe(scenario)
     else:

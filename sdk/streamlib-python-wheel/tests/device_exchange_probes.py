@@ -1449,3 +1449,209 @@ class MlxArrayOutlivesTextureHandleProbe(_DeviceArrayOutlivesTextureHandleProbe)
 
     def _checksum(self, array) -> int:
         return int(numpy.array(array, dtype=numpy.int64).sum())
+
+
+class _NativeIOSurfaceShim:
+    """The native side of an IOSurface raw handle, as a C consumer spells it:
+    look the surface up from the port, lock it, read its rows — and the Mach
+    calls a caller owning the send right makes."""
+
+    KERN_SUCCESS = 0
+    KERN_INVALID_NAME = 15
+    MACH_PORT_RIGHT_SEND = 0
+    IOSURFACE_LOCK_READ_ONLY = 1
+
+    def __init__(self) -> None:
+        import ctypes
+        import ctypes.util
+
+        self._ctypes = ctypes
+        iosurface = ctypes.CDLL(ctypes.util.find_library("IOSurface"))
+        core_foundation = ctypes.CDLL(ctypes.util.find_library("CoreFoundation"))
+        self._system = ctypes.CDLL(ctypes.util.find_library("System"))
+        iosurface.IOSurfaceLookupFromMachPort.restype = ctypes.c_void_p
+        iosurface.IOSurfaceLookupFromMachPort.argtypes = [ctypes.c_uint32]
+        iosurface.IOSurfaceLock.restype = ctypes.c_int32
+        iosurface.IOSurfaceLock.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p]
+        iosurface.IOSurfaceUnlock.restype = ctypes.c_int32
+        iosurface.IOSurfaceUnlock.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p]
+        iosurface.IOSurfaceGetBaseAddress.restype = ctypes.c_void_p
+        iosurface.IOSurfaceGetBaseAddress.argtypes = [ctypes.c_void_p]
+        for size_query in ("IOSurfaceGetBytesPerRow", "IOSurfaceGetWidth", "IOSurfaceGetHeight"):
+            getattr(iosurface, size_query).restype = ctypes.c_size_t
+            getattr(iosurface, size_query).argtypes = [ctypes.c_void_p]
+        core_foundation.CFRelease.argtypes = [ctypes.c_void_p]
+        self._system.mach_port_deallocate.restype = ctypes.c_int
+        self._system.mach_port_deallocate.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
+        self._system.mach_port_get_refs.restype = ctypes.c_int
+        self._system.mach_port_get_refs.argtypes = [
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.c_uint32,
+            ctypes.POINTER(ctypes.c_uint32),
+        ]
+        self._iosurface = iosurface
+        self._core_foundation = core_foundation
+        self._this_task = ctypes.c_uint32.in_dll(self._system, "mach_task_self_").value
+
+    def read_rows_through_the_port(self, port: int, width: int, height: int) -> dict:
+        """The surface the port names, looked up and read under a read-only
+        lock: its geometry and its first `width` pixels of every row."""
+        ctypes = self._ctypes
+        surface = self._iosurface.IOSurfaceLookupFromMachPort(port)
+        if not surface:
+            return {"looked_up": False}
+        try:
+            assert self._iosurface.IOSurfaceLock(surface, self.IOSURFACE_LOCK_READ_ONLY, None) == 0
+            try:
+                bytes_per_row = self._iosurface.IOSurfaceGetBytesPerRow(surface)
+                base_address = self._iosurface.IOSurfaceGetBaseAddress(surface)
+                rows = numpy.ctypeslib.as_array(
+                    ctypes.cast(base_address, ctypes.POINTER(ctypes.c_uint8)),
+                    shape=(height * bytes_per_row,),
+                ).reshape(height, bytes_per_row)[:, : width * 4].reshape(height, width, 4).copy()
+            finally:
+                self._iosurface.IOSurfaceUnlock(surface, self.IOSURFACE_LOCK_READ_ONLY, None)
+            return {
+                "looked_up": True,
+                "width": self._iosurface.IOSurfaceGetWidth(surface),
+                "height": self._iosurface.IOSurfaceGetHeight(surface),
+                "bytes_per_row": bytes_per_row,
+                "rows": rows,
+            }
+        finally:
+            self._core_foundation.CFRelease(surface)
+
+    def send_right_references(self, port: int) -> int:
+        """How many send-right references this task holds under `port` — zero
+        once the name is gone."""
+        references = self._ctypes.c_uint32(0)
+        kern_return = self._system.mach_port_get_refs(
+            self._this_task, port, self.MACH_PORT_RIGHT_SEND, self._ctypes.byref(references)
+        )
+        if kern_return == self.KERN_INVALID_NAME:
+            return 0
+        assert kern_return == self.KERN_SUCCESS, kern_return
+        return references.value
+
+    def deallocate(self, port: int) -> int:
+        return self._system.mach_port_deallocate(self._this_task, port)
+
+
+def _a_pattern_no_two_pixels_share(height: int, width: int) -> numpy.ndarray:
+    rows, columns = numpy.indices((height, width))
+    pattern = numpy.empty((height, width, 4), dtype=numpy.uint8)
+    pattern[:, :, 0] = rows * 7
+    pattern[:, :, 1] = columns
+    pattern[:, :, 2] = columns >> 8
+    pattern[:, :, 3] = 255
+    return pattern
+
+
+def _export_iosurface_and_read_it_natively(ctx, shim, surface) -> dict:
+    """Store a pattern through the CPU door, export the surface's IOSurface,
+    and read it back through the port as native code would; then show each
+    export is a fresh send right the caller owns and gives back."""
+    height, width = surface.height, surface.width
+    pattern = _a_pattern_no_two_pixels_share(height, width)
+    surface.lock(read_only=False)
+    surface.as_numpy()[:, :, :] = pattern
+    surface.unlock()
+
+    first_export = ctx.gpu_full_access.export_iosurface(surface)
+    second_export = ctx.gpu_full_access.export_iosurface(surface)
+    native_read = shim.read_rows_through_the_port(first_export.port, width, height)
+    second_native_read = shim.read_rows_through_the_port(second_export.port, width, height)
+    ports = [first_export.port, second_export.port]
+    references_while_held = [shim.send_right_references(port) for port in ports]
+    deallocations = [shim.deallocate(port) for port in ports]
+    references_after_given_back = [shim.send_right_references(port) for port in ports]
+
+    rows = native_read.pop("rows", None)
+    second_rows = second_native_read.get("rows")
+    return {
+        **native_read,
+        "pixels_match": rows is not None and bool(numpy.array_equal(rows, pattern)),
+        "second_port_reads_the_same_pixels": second_rows is not None
+        and bool(numpy.array_equal(second_rows, pattern)),
+        "ports_are_real": all(port != 0 for port in ports),
+        "each_export_is_its_own_right": ports[0] != ports[1],
+        "references_while_held": references_while_held,
+        "deallocations": deallocations,
+        "references_after_given_back": references_after_given_back,
+        "export": {
+            "width": first_export.width,
+            "height": first_export.height,
+            "format": first_export.format,
+            "bytes_per_row": first_export.bytes_per_row,
+            "allocation_byte_size": first_export.allocation_byte_size,
+            "vk_image_tiling": first_export.vk_image_tiling,
+            "vk_image_usage_flags": first_export.vk_image_usage_flags,
+            "vk_image_mip_levels": first_export.vk_image_mip_levels,
+            "vk_image_array_layers": first_export.vk_image_array_layers,
+            "vk_image_samples": first_export.vk_image_samples,
+        },
+    }
+
+
+@processor(execution="manual")
+class IOSurfaceExportProbe:
+    """A pixel buffer and a texture whose rows pad, each exported as an
+    IOSurface port and read back by native code in this same helper."""
+
+    def setup(self, ctx: RuntimeContextFullAccess) -> None:
+        _report(lambda: self._probe(ctx))
+
+    def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
+        shim = _NativeIOSurfaceShim()
+        observation = {}
+        with ctx.gpu_limited_access.acquire_pixel_buffer(
+            SURFACE_WIDTH, SURFACE_HEIGHT
+        ) as pixel_buffer:
+            observation["pixel_buffer"] = _export_iosurface_and_read_it_natively(
+                ctx, shim, pixel_buffer
+            )
+        with ctx.gpu_full_access.acquire_texture(
+            PADDED_SURFACE_WIDTH,
+            PADDED_SURFACE_HEIGHT,
+            "rgba8_unorm",
+            RENDER_TARGET_FLAVOUR_USAGE,
+        ) as texture:
+            observation["texture"] = _export_iosurface_and_read_it_natively(ctx, shim, texture)
+        return observation
+
+
+def _refusal_of(export_call) -> str | None:
+    try:
+        export_call()
+    except RuntimeError as refusal:
+        return str(refusal)
+    return None
+
+
+@processor(execution="manual")
+class RawHandleOffItsPlatformRefusesProbe:
+    """Every raw-handle flavour exists on both floors; off its own it refuses,
+    naming its peer."""
+
+    def setup(self, ctx: RuntimeContextFullAccess) -> None:
+        _report(lambda: self._probe(ctx))
+
+    def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
+        with ctx.gpu_limited_access.acquire_pixel_buffer(
+            SURFACE_WIDTH, SURFACE_HEIGHT
+        ) as pixel_buffer:
+            if sys.platform == "darwin":
+                return {
+                    "export_dma_buf": _refusal_of(
+                        lambda: ctx.gpu_full_access.export_dma_buf(pixel_buffer)
+                    ),
+                    "export_opaque_fd": _refusal_of(
+                        lambda: ctx.gpu_full_access.export_opaque_fd(pixel_buffer)
+                    ),
+                }
+            return {
+                "export_iosurface": _refusal_of(
+                    lambda: ctx.gpu_full_access.export_iosurface(pixel_buffer)
+                ),
+            }

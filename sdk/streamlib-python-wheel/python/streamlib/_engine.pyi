@@ -37,6 +37,7 @@ __all__ = [
     "GpuSurfaceCheckOutLease",
     "GpuSurfaceDeviceTensorScope",
     "GpuSurfaceHandle",
+    "IOSurfaceMachPortExport",
     "LinkInputDataReader",
     "LinkOutputDataWriter",
     "MonotonicTimer",
@@ -1292,6 +1293,9 @@ class GpuContextFullAccess:
     def export_dma_buf(self, surface: GpuSurfaceHandle) -> tuple[int, int]:
         """Export a DMA-BUF file descriptor for `surface`, as `(fd, byte_size)`.
 
+        Linux only. On macOS it refuses by name, pointing at
+        `export_iosurface` — a surface there is an IOSurface, not an fd.
+
         The caller owns the fd and must close it, or hand it to something that
         takes ownership. Answered without leaving this process: the fds arrived
         over SCM_RIGHTS when the surface was checked out, and they are the same
@@ -1308,6 +1312,9 @@ class GpuContextFullAccess:
         """Export the OPAQUE_FD texture handle for `surface`, for native code
         that runs its own Vulkan or CUDA external-memory import against the
         allocation.
+
+        Linux only. On macOS it refuses by name, pointing at
+        `export_iosurface` — a surface there is an IOSurface, not an fd.
 
         The caller owns the returned object's fd: a successful foreign import
         adopts it — never close it after one; always close it after a failed
@@ -1326,6 +1333,29 @@ class GpuContextFullAccess:
         `export_dma_buf`), for a pixel buffer, and for a pooled-texture
         handle whose memory was never checked out into this process (resolve
         the surface id first).
+        """
+
+    def export_iosurface(self, surface: GpuSurfaceHandle) -> IOSurfaceMachPortExport:
+        """Export a Mach send right to `surface`'s IOSurface, for native code
+        that looks the surface up itself — `IOSurfaceLookupFromMachPort`, then
+        Metal, CoreVideo, or a Vulkan `VkImportMetalIOSurfaceInfoEXT` import.
+
+        macOS only. On Linux it refuses by name, pointing at `export_dma_buf`
+        and `export_opaque_fd` — a surface there is a file-descriptor
+        allocation.
+
+        The caller owns the returned object's send right and deallocates it
+        with `mach_port_deallocate`. While the right is held the surface
+        reads as in use (`IOSurfaceIsInUse`), which pins its pool slot
+        exactly as a held fd pins a DMA-BUF on Linux — that is the contract.
+        Pixel buffers and textures both export; a texture's carries the image
+        recipe the engine created it with.
+
+        A raw handle names the allocation, never the frame: the surface-id
+        lifetime guarantees end at export, and per-frame reach stays with
+        surface ids and `as_device_tensor()`. Answered without leaving this
+        process: the helper already holds the IOSurface from the surface's
+        checkout and mints the right itself.
         """
 
     def import_dma_buf(
@@ -1603,6 +1633,78 @@ class OpaqueFdTextureExport:
         16 bytes. An OPAQUE_FD is device-bound: importing on the wrong GPU of
         a multi-GPU rig corrupts silently, so match this against the
         importer's own device UUID first.
+        """
+
+@final
+class IOSurfaceMachPortExport:
+    """A raw IOSurface handle: a Mach send right to the allocation's
+    IOSurface plus the allocation-stable shape native code needs to address
+    it.
+
+    Deliberately outside the `GpuSurface*` family prefix: the object names an
+    allocation, never a frame-bearing surface — the surface-id lifetime
+    guarantees end at export.
+    """
+
+    @property
+    def port(self) -> int:
+        """The Mach port name of the send right. The caller owns it and
+        deallocates it with `mach_port_deallocate`; a held right keeps the
+        surface reading as in use.
+        """
+
+    @property
+    def allocation_byte_size(self) -> int:
+        """Byte size of the whole IOSurface allocation."""
+
+    @property
+    def bytes_per_row(self) -> int:
+        """The IOSurface's row pitch in bytes — at least `width` pixels wide,
+        often padded past it.
+        """
+
+    @property
+    def width(self) -> int:
+        """Surface width in pixels."""
+
+    @property
+    def height(self) -> int:
+        """Surface height in pixels."""
+
+    @property
+    def format(self) -> str:
+        """The engine's format name for the surface, e.g. `"bgra32"` or
+        `"rgba8_unorm"`.
+        """
+
+    @property
+    def vk_image_tiling(self) -> int | None:
+        """Raw `VkImageTiling` the engine created the image with; `None` when
+        the surface is a pixel buffer.
+        """
+
+    @property
+    def vk_image_usage_flags(self) -> int | None:
+        """Raw `VkImageUsageFlags` the engine created the image with; `None`
+        when the surface is a pixel buffer.
+        """
+
+    @property
+    def vk_image_mip_levels(self) -> int | None:
+        """`VkImageCreateInfo.mipLevels` of the engine's image; `None` when
+        the surface is a pixel buffer.
+        """
+
+    @property
+    def vk_image_array_layers(self) -> int | None:
+        """`VkImageCreateInfo.arrayLayers` of the engine's image; `None` when
+        the surface is a pixel buffer.
+        """
+
+    @property
+    def vk_image_samples(self) -> int | None:
+        """Raw `VkSampleCountFlagBits` of the engine's image; `None` when the
+        surface is a pixel buffer.
         """
 
 @final

@@ -161,6 +161,17 @@ impl GpuSurfaceOwnedMemory {
         self.checked_out_surface.export_opaque_fd()
     }
 
+    /// A fresh send right to this surface's IOSurface plus its
+    /// allocation-stable shape — the macOS raw handle, minted from the
+    /// surface this helper already holds.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn export_iosurface(
+        &self,
+    ) -> PyResult<crate::python_helper_process_pixel_exchange::IOSurfaceMachPortExportDescription>
+    {
+        self.checked_out_surface.export_iosurface()
+    }
+
     /// Whether the CPU reaches this surface's pixels through the engine's
     /// host-visible export staging rather than the surface's own
     /// allocation.

@@ -21,9 +21,11 @@ use crate::python_processor_owned_window::PythonProcessorOwnedWindow;
 use super::fd_shaped_raw_handle_is_linux_only_error;
 use super::format_vocabulary::{parse_pixel_format_name, parse_texture_format_name};
 use super::gpu_surface_check_out_lease::{
-    PythonGpuSurfaceCheckOutLease, PythonOpaqueFdTextureExport,
+    PythonGpuSurfaceCheckOutLease, PythonIOSurfaceMachPortExport, PythonOpaqueFdTextureExport,
 };
 use super::gpu_surface_handle::PythonGpuSurfaceHandle;
+#[cfg(not(target_os = "macos"))]
+use super::iosurface_raw_handle_is_macos_only_error;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::kernel_wire_encoding::{
     GRAPHICS_BINDING_KIND_WIRE_NAMES, GRAPHICS_SHADER_STAGE_WIRE_BITS,
@@ -774,6 +776,47 @@ impl PythonGpuContextFullAccess {
         surface: &PythonGpuSurfaceHandle,
     ) -> PyResult<PythonOpaqueFdTextureExport> {
         Err(fd_shaped_raw_handle_is_linux_only_error("export_opaque_fd"))
+    }
+
+    /// Export a Mach send right to `surface`'s IOSurface, for native code
+    /// that looks the surface up itself — Metal, CoreVideo, a Vulkan
+    /// IOSurface import.
+    ///
+    /// Returns a [`PythonIOSurfaceMachPortExport`]. **The caller owns the
+    /// send right** and deallocates it; while it is held the surface reads
+    /// as in use, which pins its pool slot as a held fd does on Linux.
+    ///
+    /// Answered without leaving this process: the helper already holds the
+    /// IOSurface from the surface's checkout and mints the right itself.
+    #[cfg(target_os = "macos")]
+    #[expect(
+        clippy::unused_self,
+        reason = "the surface carries the IOSurface; the capability is the door"
+    )]
+    fn export_iosurface(
+        &self,
+        python: Python<'_>,
+        surface: &PythonGpuSurfaceHandle,
+    ) -> PyResult<PythonIOSurfaceMachPortExport> {
+        let owned_memory = surface.owned_memory()?;
+        Ok(python.detach(|| owned_memory.export_iosurface())?.into())
+    }
+
+    /// Refuses by name: an IOSurface is a macOS handle.
+    #[cfg(not(target_os = "macos"))]
+    #[expect(
+        clippy::unused_self,
+        reason = "the refusal is this capability's whole answer off macOS"
+    )]
+    #[expect(
+        unused_variables,
+        reason = "the Python-visible parameter name is the API; stubtest compares it"
+    )]
+    fn export_iosurface(
+        &self,
+        surface: &PythonGpuSurfaceHandle,
+    ) -> PyResult<PythonIOSurfaceMachPortExport> {
+        Err(iosurface_raw_handle_is_macos_only_error())
     }
 
     /// Import a foreign DMA-BUF file descriptor as a surface this graph can

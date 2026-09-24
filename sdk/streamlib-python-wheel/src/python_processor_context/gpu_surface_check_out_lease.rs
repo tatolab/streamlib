@@ -185,3 +185,122 @@ impl PythonOpaqueFdTextureExport {
         PyBytes::new(python, &self.export_contract.exporting_device_uuid)
     }
 }
+
+/// A raw IOSurface handle: a Mach send right to the allocation's IOSurface
+/// plus the allocation-stable shape native code needs to address it.
+///
+/// Deliberately outside the `GpuSurface*` family prefix: the object names
+/// an allocation, never a frame-bearing surface — the surface-id lifetime
+/// guarantees end at export.
+#[pyclass(name = "IOSurfaceMachPortExport", module = "streamlib", frozen)]
+pub(crate) struct PythonIOSurfaceMachPortExport {
+    iosurface_mach_port_name: u32,
+    allocation_byte_size: u64,
+    bytes_per_row: u64,
+    width: u32,
+    height: u32,
+    format_wire_name: &'static str,
+    vk_image_creation_recipe: Option<ExportedVkImageCreationRecipe>,
+}
+
+#[cfg(target_os = "macos")]
+impl From<crate::python_helper_process_pixel_exchange::IOSurfaceMachPortExportDescription>
+    for PythonIOSurfaceMachPortExport
+{
+    fn from(
+        description: crate::python_helper_process_pixel_exchange::IOSurfaceMachPortExportDescription,
+    ) -> Self {
+        Self {
+            iosurface_mach_port_name: description.iosurface_send_right.into_raw_name(),
+            allocation_byte_size: description.allocation_byte_size,
+            bytes_per_row: description.bytes_per_row,
+            width: description.width,
+            height: description.height,
+            format_wire_name: description.format_wire_name,
+            vk_image_creation_recipe: description.vk_image_creation_recipe,
+        }
+    }
+}
+
+#[pymethods]
+impl PythonIOSurfaceMachPortExport {
+    /// The Mach port name of the send right. The caller owns it and
+    /// deallocates it with `mach_port_deallocate`; a held right keeps the
+    /// surface reading as in use.
+    #[getter]
+    fn port(&self) -> u32 {
+        self.iosurface_mach_port_name
+    }
+
+    /// Byte size of the whole IOSurface allocation.
+    #[getter]
+    fn allocation_byte_size(&self) -> u64 {
+        self.allocation_byte_size
+    }
+
+    /// The IOSurface's row pitch in bytes — at least `width` pixels wide,
+    /// often padded past it.
+    #[getter]
+    fn bytes_per_row(&self) -> u64 {
+        self.bytes_per_row
+    }
+
+    /// Surface width in pixels.
+    #[getter]
+    fn width(&self) -> u32 {
+        self.width
+    }
+
+    /// Surface height in pixels.
+    #[getter]
+    fn height(&self) -> u32 {
+        self.height
+    }
+
+    /// The engine's format name for the surface, e.g. `"bgra32"` or
+    /// `"rgba8_unorm"`.
+    #[getter]
+    fn format(&self) -> &'static str {
+        self.format_wire_name
+    }
+
+    /// Raw `VkImageTiling` the engine created the image with; `None` when
+    /// the surface is a pixel buffer.
+    #[getter]
+    fn vk_image_tiling(&self) -> Option<i32> {
+        self.vk_image_creation_recipe
+            .map(|recipe| recipe.vk_image_tiling)
+    }
+
+    /// Raw `VkImageUsageFlags` the engine created the image with; `None`
+    /// when the surface is a pixel buffer.
+    #[getter]
+    fn vk_image_usage_flags(&self) -> Option<u32> {
+        self.vk_image_creation_recipe
+            .map(|recipe| recipe.vk_image_usage_flags)
+    }
+
+    /// `VkImageCreateInfo::mipLevels` of the engine's image; `None` when the
+    /// surface is a pixel buffer.
+    #[getter]
+    fn vk_image_mip_levels(&self) -> Option<u32> {
+        self.vk_image_creation_recipe
+            .map(|recipe| recipe.vk_image_mip_levels)
+    }
+
+    /// `VkImageCreateInfo::arrayLayers` of the engine's image; `None` when
+    /// the surface is a pixel buffer.
+    #[getter]
+    fn vk_image_array_layers(&self) -> Option<u32> {
+        self.vk_image_creation_recipe
+            .map(|recipe| recipe.vk_image_array_layers)
+    }
+
+    /// Raw `VkSampleCountFlagBits` of the engine's image; `None` when the
+    /// surface is a pixel buffer.
+    #[getter]
+    fn vk_image_samples(&self) -> Option<i32> {
+        self.vk_image_creation_recipe
+            .map(|recipe| recipe.vk_image_samples)
+    }
+}
