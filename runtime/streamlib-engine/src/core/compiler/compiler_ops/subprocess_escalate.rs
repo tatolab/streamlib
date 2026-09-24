@@ -4450,14 +4450,15 @@ fn release_surface_share_surface(
     let registered_under_its_own_id =
         cfg!(target_os = "linux") || removed_handle.is_texture_backed();
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    if registered_under_its_own_id && let Some(store) = sandbox.surface_store() {
-        if let Err(e) = store.release(handle_id) {
-            tracing::debug!(
-                "[escalate] surface-share service release for '{}' returned error: {}",
-                handle_id,
-                e
-            );
-        }
+    if registered_under_its_own_id
+        && let Some(store) = sandbox.surface_store()
+        && let Err(e) = store.release(handle_id)
+    {
+        tracing::debug!(
+            "[escalate] surface-share service release for '{}' returned error: {}",
+            handle_id,
+            e
+        );
     }
 }
 

@@ -1447,8 +1447,12 @@ impl SurfaceStoreInner {
         pixel_buffer: &PixelBuffer,
         timeline_pair: Option<&crate::apple::surface_share::CrossProcessTimelinePair>,
     ) -> Result<()> {
+        let mut ports = vec![exported_iosurface_port(pixel_buffer)?];
+        let carries_timeline_pair = timeline_pair
+            .is_some_and(|timeline_pair| timeline_pair.append_exported_send_rights_to(&mut ports));
         self.send_iosurface_registration(
-            exported_iosurface_port(pixel_buffer)?,
+            ports,
+            carries_timeline_pair,
             serde_json::json!({
                 "surface_id": surface_id,
                 "width": pixel_buffer.width,
@@ -1456,14 +1460,13 @@ impl SurfaceStoreInner {
                 "format": pixel_buffer.format().wire_name(),
                 "resource_type": SURFACE_RESOURCE_TYPE_PIXEL_BUFFER,
             }),
-            timeline_pair,
         )
     }
 
     /// Register an IOSurface-backed texture under `surface_id` whole: its
     /// surface, its image recipe, the layout it is in, and its timeline pair.
-    /// When the pair will not export, the registration crosses without it and
-    /// the pair orders host-side.
+    /// Refused when the pair will not export: a helper imports a texture only
+    /// with both edges, since a reader outside the pair is unsynchronised.
     #[cfg(target_os = "macos")]
     pub fn register_texture_with_timeline_pair(
         &self,
@@ -1505,11 +1508,15 @@ impl SurfaceStoreInner {
         }
         // Recorded only once the service accepted the id: a refused duplicate
         // must not displace the live registration's pair.
-        self.send_iosurface_registration(
-            image.export_iosurface_mach_send_right()?,
-            registration,
-            Some(timeline_pair),
-        )?;
+        let mut ports = vec![image.export_iosurface_mach_send_right()?];
+        if !timeline_pair.append_exported_send_rights_to(&mut ports) {
+            return Err(Error::NotSupported(format!(
+                "register_texture_with_timeline_pair('{surface_id}'): the texture's timeline \
+                 pair will not export as shared events, and a helper imports a texture only \
+                 with both edges"
+            )));
+        }
+        self.send_iosurface_registration(ports, true, registration)?;
         cross_process_timeline_pairs.insert(surface_id, Arc::clone(timeline_pair));
         tracing::debug!(
             "SurfaceStore: Registered texture '{}' with its timeline pair (host-side ordering: {})",
@@ -1519,19 +1526,16 @@ impl SurfaceStoreInner {
         Ok(())
     }
 
-    /// Send one `register` of `registration`'s fields, with the IOSurface's
-    /// port first and the timeline pair's shared events after it when there
-    /// is a pair and it exports.
+    /// Send one `register` of `registration`'s fields with `ports` — the
+    /// IOSurface's first, then the timeline pair's shared events when
+    /// `carries_timeline_pair`.
     #[cfg(target_os = "macos")]
     fn send_iosurface_registration(
         &self,
-        iosurface_port: streamlib_surface_client::OwnedMachSendRight,
+        ports: Vec<streamlib_surface_client::OwnedMachSendRight>,
+        carries_timeline_pair: bool,
         mut registration: serde_json::Value,
-        timeline_pair: Option<&crate::apple::surface_share::CrossProcessTimelinePair>,
     ) -> Result<()> {
-        let mut ports = vec![iosurface_port];
-        let carries_timeline_pair = timeline_pair
-            .is_some_and(|timeline_pair| timeline_pair.append_exported_send_rights_to(&mut ports));
         if let Some(registration_fields) = registration.as_object_mut() {
             registration_fields.insert("op".into(), "register".into());
             registration_fields.insert("runtime_id".into(), self.runtime_id.clone().into());

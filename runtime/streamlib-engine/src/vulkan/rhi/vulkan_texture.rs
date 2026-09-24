@@ -1848,6 +1848,65 @@ mod tests {
         assert_eq!(packed_rows_of_the_backing_iosurface(&texture), pattern);
     }
 
+    /// MoltenVK checks an IOSurface's element size against the format's block
+    /// size, so the 8- and 16-byte float formats take a surface of their own
+    /// element size — and an upload lands in it as it does for 4 bytes.
+    #[cfg(target_os = "macos")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn every_single_plane_format_takes_an_iosurface_backed_image() {
+        let Ok(device) = HostVulkanDevice::new() else {
+            println!("Skipping - no Vulkan device available");
+            return;
+        };
+        let (width, height) = (19, 3);
+        for format in [
+            TextureFormat::Rgba8Unorm,
+            TextureFormat::Rgba8UnormSrgb,
+            TextureFormat::Bgra8Unorm,
+            TextureFormat::Bgra8UnormSrgb,
+            TextureFormat::Rgba16Float,
+            TextureFormat::Rgba32Float,
+        ] {
+            let texture = HostVulkanTexture::new_iosurface_backed(
+                &device,
+                &TextureDescriptor::new(width, height, format).with_usage(
+                    TextureUsages::COPY_SRC
+                        | TextureUsages::COPY_DST
+                        | TextureUsages::TEXTURE_BINDING
+                        | TextureUsages::STORAGE_BINDING,
+                ),
+            )
+            .unwrap_or_else(|refusal| panic!("{format:?} over an IOSurface: {refusal}"));
+            let pattern: Vec<u8> = (0..(width * height * format.bytes_per_pixel()) as usize)
+                .map(|index| (index.wrapping_mul(13).wrapping_add(5)) as u8)
+                .collect();
+            let staging = crate::vulkan::rhi::HostVulkanBuffer::new_storage_buffer_host_visible(
+                &device,
+                pattern.len() as u64,
+            )
+            .expect("a staging buffer");
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    pattern.as_ptr(),
+                    staging.mapped_ptr(),
+                    pattern.len(),
+                );
+                let _final_texture_layout = device
+                    .upload_buffer_to_image(staging.buffer(), &texture, width, height)
+                    .expect("the upload");
+            }
+            assert_eq!(
+                packed_rows_of_the_backing_iosurface(&texture),
+                pattern,
+                "{format:?}"
+            );
+        }
+    }
+
     #[cfg(target_os = "macos")]
     #[cfg_attr(
         not(feature = "hardware-tests"),

@@ -104,10 +104,10 @@ impl IOSurfaceShareState {
     pub fn register_surface(
         &self,
         registration: IOSurfaceShareRegistration,
-    ) -> Result<(), IOSurfaceShareRegistration> {
+    ) -> Result<(), Box<IOSurfaceShareRegistration>> {
         let mut surfaces = self.inner.surfaces.write();
         if surfaces.contains_key(&registration.surface_id) {
-            return Err(registration);
+            return Err(Box::new(registration));
         }
         surfaces.insert(registration.surface_id.clone(), registration);
         Ok(())
