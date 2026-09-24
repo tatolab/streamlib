@@ -169,7 +169,6 @@ def test_a_hop_below_the_window_rolls_at_the_hops_cadence_not_the_windows(
     )
 
 
-@pytest.mark.awaiting_macos_parity(issue=2408)
 @pytest.mark.requires_gpu
 def test_a_helper_placed_consumer_with_no_declared_count_reads_the_sources_own(
     start_app_under_test,

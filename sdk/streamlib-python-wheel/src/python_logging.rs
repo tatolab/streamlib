@@ -27,6 +27,7 @@ use streamlib::sdk::logging::{
     self as engine_logging, EngineLogRecordForTheParentProcess, HelperProcessEngineLogRecordRing,
     LogLevel, emit_app_process_python_log_record, log_dir,
 };
+use streamlib::sdk::media_clock::MediaClock;
 
 use crate::python_bag_conversion::{json_value_to_python_object, python_object_to_json_value};
 
@@ -116,13 +117,10 @@ fn engine_log_record_as_python_mapping<'py>(
     Ok(mapping)
 }
 
-/// Current monotonic time in nanoseconds via `clock_gettime(CLOCK_MONOTONIC)`.
+/// Current monotonic time in nanoseconds, on the engine's `MediaClock`.
 ///
-/// The kernel's `CLOCK_MONOTONIC` epoch, so values are comparable across
-/// processes on one machine — the same domain Python's
-/// `time.clock_gettime_ns(time.CLOCK_MONOTONIC)` reads. Matches the engine's
-/// bag stamps on Linux; on Apple the engine stamps with `mach_absolute_time`,
-/// which stops across system sleep.
+/// `CLOCK_MONOTONIC` on Linux and `mach_absolute_time` on macOS, so a value is
+/// comparable with every bag stamp the engine takes on this machine.
 #[pyfunction]
 pub(crate) fn monotonic_now_ns() -> u64 {
     monotonic_clock_now_ns()
@@ -155,20 +153,10 @@ pub(crate) fn runtime_log_directory() -> std::path::PathBuf {
     log_dir()
 }
 
-/// Raw `CLOCK_MONOTONIC` in nanoseconds, shared by the clock binding, the
-/// default output stamp, and `ctx.time`.
+/// [`MediaClock::now`] in nanoseconds, shared by the clock binding, the
+/// default output stamp, `ctx.time`, and `MonotonicTimer`'s deadlines.
 pub(crate) fn monotonic_clock_now_ns() -> u64 {
-    let mut timespec = libc::timespec {
-        tv_sec: 0,
-        tv_nsec: 0,
-    };
-    // SAFETY: `timespec` is a valid stack slot; CLOCK_MONOTONIC exists on
-    // every platform the wheel targets, so the call cannot fail with these
-    // arguments.
-    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut timespec) };
-    (timespec.tv_sec as u64)
-        .saturating_mul(1_000_000_000)
-        .saturating_add(timespec.tv_nsec as u64)
+    MediaClock::now().as_nanos() as u64
 }
 
 /// Emit one record on the engine's log pipeline, with structured attrs.
@@ -222,20 +210,54 @@ mod tests {
         assert!(second >= first, "clock went backwards: {first} -> {second}");
     }
 
-    /// The value domain is the kernel's CLOCK_MONOTONIC epoch — the same one
-    /// `time.clock_gettime_ns(time.CLOCK_MONOTONIC)` reads.
-    #[test]
-    fn monotonic_clock_shares_the_kernel_clock_monotonic_domain() {
+    /// The kernel clock the plan names for this platform, read without going
+    /// through [`MediaClock`] so the domain check cannot agree with itself.
+    fn platform_media_clock_read_directly_ns() -> u64 {
+        #[cfg(target_os = "macos")]
+        let clock_id = libc::CLOCK_UPTIME_RAW;
+        #[cfg(not(target_os = "macos"))]
+        let clock_id = libc::CLOCK_MONOTONIC;
         let mut timespec = libc::timespec {
             tv_sec: 0,
             tv_nsec: 0,
         };
-        unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut timespec) };
-        let direct = (timespec.tv_sec as u64) * 1_000_000_000 + timespec.tv_nsec as u64;
+        // SAFETY: `timespec` is a valid stack slot and the clock exists on
+        // the platform it is selected for.
+        unsafe { libc::clock_gettime(clock_id, &mut timespec) };
+        timespec.tv_sec as u64 * 1_000_000_000 + timespec.tv_nsec as u64
+    }
+
+    /// `CLOCK_MONOTONIC` on Linux; on macOS `CLOCK_UPTIME_RAW`, which is
+    /// `mach_absolute_time` in nanoseconds and stops across sleep.
+    #[test]
+    fn monotonic_clock_reads_the_kernel_clock_the_plan_names_for_this_platform() {
+        let before = platform_media_clock_read_directly_ns();
         let binding = monotonic_clock_now_ns();
+        let after = platform_media_clock_read_directly_ns();
+        // `mach_absolute_time` ticks are coarser than a nanosecond, and the
+        // kernel and `MediaClock` round a tick to nanoseconds separately.
+        const TICK_ROUNDING_SLACK_NS: u64 = 1_000;
         assert!(
-            binding.abs_diff(direct) < 1_000_000_000,
-            "readings a moment apart landed in different domains: {direct} vs {binding}"
+            before.saturating_sub(TICK_ROUNDING_SLACK_NS) <= binding
+                && binding <= after + TICK_ROUNDING_SLACK_NS,
+            "the wheel's clock ({binding}) fell outside the kernel bracket [{before}, {after}]"
+        );
+    }
+
+    /// A wheel stamp and an engine stamp taken back to back are one clock.
+    #[test]
+    fn a_wheel_stamp_and_an_engine_stamp_taken_back_to_back_differ_by_microseconds() {
+        let engine_before = MediaClock::now().as_nanos() as u64;
+        let wheel = monotonic_clock_now_ns();
+        let engine_after = MediaClock::now().as_nanos() as u64;
+        assert!(
+            engine_before <= wheel && wheel <= engine_after,
+            "wheel stamp {wheel} fell outside engine bracket [{engine_before}, {engine_after}]"
+        );
+        assert!(
+            engine_after - engine_before < 1_000_000,
+            "back-to-back reads spanned {}ns",
+            engine_after - engine_before
         );
     }
 }

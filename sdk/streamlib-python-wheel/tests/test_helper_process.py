@@ -1246,7 +1246,6 @@ def hooks_the_interrupt_probes_reached():
     HOOKS_THE_INTERRUPT_PROBES_REACHED.clear()
 
 
-@pytest.mark.awaiting_macos_parity(issue=2408)
 def test_an_interrupt_inside_a_callback_still_leaves_stop_and_teardown_to_run(
     stand_in_parent, hooks_the_interrupt_probes_reached
 ):
@@ -1749,7 +1748,6 @@ def run_the_pacing_probe(stand_in_parent, interval_ms: int, running_seconds: flo
     return run_sent_ns
 
 
-@pytest.mark.awaiting_macos_parity(issue=2408)
 def test_a_continuous_processor_runs_once_per_interval_longer_than_the_command_wait(
     stand_in_parent, when_the_pacing_probe_processed_ns
 ):
@@ -1768,7 +1766,6 @@ def test_a_continuous_processor_runs_once_per_interval_longer_than_the_command_w
     )
 
 
-@pytest.mark.awaiting_macos_parity(issue=2408)
 def test_a_continuous_processor_runs_at_the_start_rather_than_one_interval_in(
     stand_in_parent, when_the_pacing_probe_processed_ns
 ):
@@ -1787,7 +1784,6 @@ def test_a_continuous_processor_runs_at_the_start_rather_than_one_interval_in(
     )
 
 
-@pytest.mark.awaiting_macos_parity(issue=2408)
 def test_a_continuous_processor_with_no_interval_never_runs_faster_than_the_floor(
     stand_in_parent, when_the_pacing_probe_processed_ns
 ):

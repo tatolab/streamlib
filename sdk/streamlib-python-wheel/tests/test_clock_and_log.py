@@ -8,11 +8,10 @@
 needs a GPU.
 """
 
-import time
-
 import pytest
 
 import streamlib
+from engine_media_clock import engine_media_clock_now_ns
 from streamlib import MonotonicTimer, _engine, clock, log, monotonic_now_ns
 
 # Small enough to keep the suite fast, large enough that scheduler jitter
@@ -35,17 +34,24 @@ def test_monotonic_now_ns_is_non_decreasing_across_calls():
         assert current >= previous, f"clock went backwards: {current} < {previous}"
 
 
-def test_monotonic_now_ns_reads_the_kernel_monotonic_clock():
-    """Two streamlib reads bracket a `time` module read of the same clock.
+def test_monotonic_now_ns_reads_the_engine_media_clock():
+    """Two streamlib reads bracket a `time` module read of the engine's clock.
 
-    Pins the canonical-source contract: the value is
-    `clock_gettime(CLOCK_MONOTONIC)`, the same syscall Rust's `Instant::now()`
-    makes, so stamps are comparable across processes on this kernel.
+    Pins the canonical-source contract: the value is the clock every engine
+    stamp is taken on — `CLOCK_MONOTONIC` on Linux, `mach_absolute_time` on
+    macOS — so a helper's stamps are comparable with the engine's.
     """
     first_streamlib_read = monotonic_now_ns()
-    kernel_read = time.clock_gettime_ns(time.CLOCK_MONOTONIC)
+    kernel_read = engine_media_clock_now_ns()
     second_streamlib_read = monotonic_now_ns()
-    assert first_streamlib_read <= kernel_read <= second_streamlib_read
+    # `mach_absolute_time` ticks are coarser than a nanosecond, and the kernel
+    # and the engine round a tick to nanoseconds separately.
+    tick_rounding_slack_ns = 1_000
+    assert (
+        first_streamlib_read - tick_rounding_slack_ns
+        <= kernel_read
+        <= second_streamlib_read + tick_rounding_slack_ns
+    )
 
 
 def test_the_clock_module_re_exports_the_native_surface():
@@ -75,7 +81,6 @@ def test_python_exports_exactly_one_name_for_the_monotonic_clock():
         )
 
 
-@pytest.mark.awaiting_macos_parity(issue=2408)
 def test_a_timer_ticks_at_roughly_its_interval():
     with MonotonicTimer(TIMER_TEST_INTERVAL_NS) as timer:
         before_first_tick = monotonic_now_ns()
@@ -90,21 +95,18 @@ def test_a_timer_ticks_at_roughly_its_interval():
     )
 
 
-@pytest.mark.awaiting_macos_parity(issue=2408)
 def test_a_wait_that_times_out_returns_zero():
     one_hour_ns = 3_600_000_000_000
     with MonotonicTimer(one_hour_ns) as timer:
         assert timer.wait(timeout_ms=10) == 0
 
 
-@pytest.mark.awaiting_macos_parity(issue=2408)
 def test_waiting_on_a_closed_timer_returns_minus_one():
     timer = MonotonicTimer(TIMER_TEST_INTERVAL_NS)
     timer.close()
     assert timer.wait(timeout_ms=10) == -1
 
 
-@pytest.mark.awaiting_macos_parity(issue=2408)
 def test_the_context_manager_closes_the_timer():
     with MonotonicTimer(TIMER_TEST_INTERVAL_NS) as timer:
         assert timer.interval_ns == TIMER_TEST_INTERVAL_NS

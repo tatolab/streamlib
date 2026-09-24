@@ -272,7 +272,6 @@ impl Drop for CoreAudioClock {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::AtomicUsize;
     use std::time::Duration;
 
     #[test]
@@ -296,23 +295,32 @@ mod tests {
 
     #[test]
     fn test_core_audio_clock_callback() {
+        const EXPECTED_TICK_COUNT: usize = 5;
+        // Five ticks take ~53ms at 48kHz/512; the bound only stops a clock that
+        // never ticks from hanging the suite, so a loaded runner cannot flake it.
+        const TICK_WAIT_BOUND: Duration = Duration::from_secs(5);
         let clock = CoreAudioClock::with_defaults();
-        let tick_count = Arc::new(AtomicUsize::new(0));
-        let tick_count_clone = Arc::clone(&tick_count);
+        let (tick_sender, tick_receiver) = std::sync::mpsc::channel();
 
         clock.on_tick(Box::new(move |_ctx| {
-            tick_count_clone.fetch_add(1, Ordering::SeqCst);
+            let _ = tick_sender.send(());
         }));
 
         clock.start().expect("Failed to start clock");
-
-        // Wait for a few ticks (~50ms at 48kHz/512 samples = ~10.67ms per tick)
-        std::thread::sleep(Duration::from_millis(100));
-
+        let wait_deadline = std::time::Instant::now() + TICK_WAIT_BOUND;
+        let mut ticks_received = 0;
+        while ticks_received < EXPECTED_TICK_COUNT {
+            let remaining = wait_deadline.saturating_duration_since(std::time::Instant::now());
+            if tick_receiver.recv_timeout(remaining).is_err() {
+                break;
+            }
+            ticks_received += 1;
+        }
         clock.stop().expect("Failed to stop clock");
 
-        let ticks = tick_count.load(Ordering::SeqCst);
-        // Should have received several ticks
-        assert!(ticks >= 5, "Expected at least 5 ticks, got {}", ticks);
+        assert_eq!(
+            ticks_received, EXPECTED_TICK_COUNT,
+            "the clock ticked {ticks_received} times within {TICK_WAIT_BOUND:?}"
+        );
     }
 }

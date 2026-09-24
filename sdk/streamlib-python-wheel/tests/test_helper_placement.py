@@ -95,7 +95,6 @@ def test_adding_a_processor_loads_nothing_into_the_app(start_app_under_test):
     )
 
 
-@pytest.mark.awaiting_macos_parity(issue=2408)
 def test_a_bag_is_produced_in_a_process_that_is_not_the_apps(start_app_under_test):
     """The pid rides in the bag, so the claim is about where `process` ran —
     not about what the engine logged it was going to do."""
@@ -122,7 +121,6 @@ def test_a_bag_is_produced_in_a_process_that_is_not_the_apps(start_app_under_tes
     )
 
 
-@pytest.mark.awaiting_macos_parity(issue=2408)
 def test_two_instances_of_one_class_get_two_processes(start_app_under_test):
     """Registration is per class; placement is per instance."""
     # Awaited twice without naming a label: the two instances report in
@@ -234,7 +232,6 @@ def helper_process_is_still_alive(pid: int) -> bool:
         return False
 
 
-@pytest.mark.awaiting_macos_parity(issue=2408)
 def test_no_helper_survives_the_app(start_app_under_test):
     """`rt.run()` returning means every child was reaped.
 
@@ -290,7 +287,6 @@ def a_pid_is_gone_within(pid: int, budget_seconds: float) -> bool:
         time.sleep(0.05)
 
 
-@pytest.mark.awaiting_macos_parity(issue=2408)
 def test_a_processor_asleep_in_its_callback_still_runs_its_teardown(
     start_app_under_test,
 ):
@@ -365,7 +361,6 @@ def test_a_processor_interrupted_while_still_setting_up_still_tears_down(
     )
 
 
-@pytest.mark.awaiting_macos_parity(issue=2408)
 def test_a_worker_a_processor_forked_goes_down_with_the_apps_helper(
     start_app_under_test,
 ):
@@ -387,7 +382,6 @@ def test_a_worker_a_processor_forked_goes_down_with_the_apps_helper(
     )
 
 
-@pytest.mark.awaiting_macos_parity(issue=2408)
 def test_a_crashed_helper_is_surfaced_and_the_pipeline_keeps_running(
     start_app_under_test,
 ):

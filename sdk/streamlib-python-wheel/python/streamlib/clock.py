@@ -5,10 +5,12 @@
 
 Use [`monotonic_now_ns`] for any timestamp that needs to be compared across
 processes on one machine — frame stamps, log correlation tokens, anything that
-crosses a process boundary. It reads `clock_gettime(CLOCK_MONOTONIC)`, the same
-kernel syscall Rust's `Instant::now()` and Python's
-`time.clock_gettime_ns(time.CLOCK_MONOTONIC)` make, so every process on one
-machine reads the one clock that machine's boot started.
+crosses a process boundary. It reads the engine's media clock: on Linux
+`clock_gettime(CLOCK_MONOTONIC)`, what `time.clock_gettime_ns(time.CLOCK_MONOTONIC)`
+reads; on macOS `mach_absolute_time`, what
+`time.clock_gettime_ns(time.CLOCK_UPTIME_RAW)` reads, which stops while the
+machine sleeps. Every process on one machine, and every stamp the engine
+takes, reads the one clock that machine's boot started.
 
 That epoch is the machine's own boot, so a reading from another machine is a
 reading of an unrelated clock and subtracting the two means nothing. A bag
@@ -23,9 +25,9 @@ comparable across processes — they drift under NTP and reflect different
 epochs. Use them only when human-readable wall-clock time is genuinely
 required (e.g. ISO8601 log formatting).
 
-[`MonotonicTimer`] is a drift-free periodic timer backed by
-`timerfd_create(CLOCK_MONOTONIC)`: the first absolute deadline is
-`now + interval`, then `TFD_TIMER_ABSTIME` repeats, so ticks never accumulate
+[`MonotonicTimer`] is a drift-free periodic timer on that same clock — a
+`timerfd` on Linux, a kqueue timer on macOS. The first deadline is
+`now + interval` and every one after it is absolute, so ticks never accumulate
 drift. Use it as a context manager; `wait(timeout_ms=...)` bounds teardown
 latency.
 """
