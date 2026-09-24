@@ -1499,9 +1499,9 @@ impl SurfaceStoreInner {
                 vk_image_samples: wire::VK_IMAGE_SAMPLES_DEFAULT,
                 vk_image_tiling: image.vk_image_tiling().as_raw(),
                 vk_image_usage: image.vk_image_usage_flags().bits(),
-                vk_image_allocation_size: image.iosurface_backed_allocation_size(),
+                vk_image_allocation_size: image.vk_memory_size(),
             }
-            .insert_into_reply(registration_fields);
+            .insert_into_wire_fields(registration_fields);
         }
         // Recorded only once the service accepted the id: a refused duplicate
         // must not displace the live registration's pair.
@@ -1608,12 +1608,10 @@ impl SurfaceStoreInner {
             vulkan_device,
             iosurface,
             format,
-            recipe.vk_image_usage,
+            streamlib_consumer_rhi::VulkanImageUsage(recipe.vk_image_usage),
         )?;
-        let current_image_layout = answer
-            .get("current_image_layout")
-            .and_then(serde_json::Value::as_i64)
-            .map(|raw| streamlib_consumer_rhi::VulkanLayout(raw as i32))
+        let current_image_layout = super::surface_share_wire_verbs::requested_image_layout(&answer)
+            .map(streamlib_consumer_rhi::VulkanLayout)
             .unwrap_or(streamlib_consumer_rhi::VulkanLayout::UNDEFINED);
         Ok((
             crate::core::rhi::Texture::from_vulkan(vulkan_texture),

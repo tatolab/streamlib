@@ -1522,41 +1522,41 @@ impl HostVulkanTexture {
 
     /// An image over an IOSurface another process allocated — a registered
     /// texture's surface, resolved from its Mach port. Refused when the
-    /// surface's element size is not `format`'s, which is the one shape
-    /// check MoltenVK makes beside the extent.
+    /// surface's element size is not `format`'s, or `usage` carries a bit no
+    /// `VkImageUsageFlagBits` names.
     pub fn from_iosurface(
         vulkan_device: &Arc<HostVulkanDevice>,
         iosurface: objc2_core_foundation::CFRetained<objc2_io_surface::IOSurfaceRef>,
         format: TextureFormat,
-        vk_image_usage_bits: u32,
+        usage: streamlib_consumer_rhi::VulkanImageUsage,
     ) -> Result<Self> {
         const OPERATION: &str = "HostVulkanTexture::from_iosurface";
-        if format.plane_count() != 1
-            || iosurface.bytes_per_element() != format.bytes_per_pixel() as usize
+        if let Some(refusal) =
+            streamlib_consumer_rhi::refusal_of_an_iosurface_for_an_image_of_format(
+                &iosurface, format,
+            )
         {
-            return Err(Error::NotSupported(format!(
-                "{OPERATION}: the IOSurface's {}-byte elements are not {format:?}'s single \
-                 {}-byte plane",
-                iosurface.bytes_per_element(),
-                format.bytes_per_pixel()
-            )));
+            return Err(Error::NotSupported(format!("{OPERATION}: {refusal}")));
         }
-        Self::created_over_iosurface(
-            vulkan_device,
-            format,
-            vk::ImageUsageFlags::from_bits_truncate(vk_image_usage_bits),
-            iosurface,
-        )
+        let usage_flags = usage.as_vk().ok_or_else(|| {
+            Error::NotSupported(format!(
+                "{OPERATION}: the registered usage {:#x} carries bits no VkImageUsageFlagBits \
+                 names; an image without them would not be the registrant's",
+                usage.0
+            ))
+        })?;
+        Self::created_over_iosurface(vulkan_device, format, usage_flags, iosurface)
     }
 
-    /// The image over `iosurface`, taking its extent from the surface.
+    /// The image over `iosurface`, taking its extent from the surface; see
+    /// [`streamlib_consumer_rhi::create_image_over_iosurface`] for the
+    /// contract.
     fn created_over_iosurface(
         vulkan_device: &Arc<HostVulkanDevice>,
         format: TextureFormat,
         usage_flags: vk::ImageUsageFlags,
         iosurface: objc2_core_foundation::CFRetained<objc2_io_surface::IOSurfaceRef>,
     ) -> Result<Self> {
-        let (width, height) = (iosurface.width() as u32, iosurface.height() as u32);
         const OPERATION: &str = "HostVulkanTexture::created_over_iosurface";
         if !vulkan_device.supports_metal_objects_interop() {
             return Err(Error::NotSupported(format!(
@@ -1564,34 +1564,21 @@ impl HostVulkanTexture {
                  cannot be created over an IOSurface"
             )));
         }
+        let (width, height) = (iosurface.width() as u32, iosurface.height() as u32);
         let device = vulkan_device.device();
-        let mut import_iosurface_info = vk::ImportMetalIOSurfaceInfoEXT::builder()
-            .io_surface(
-                std::ptr::from_ref::<objc2_io_surface::IOSurfaceRef>(&iosurface)
-                    .cast_mut()
-                    .cast(),
-            )
-            .build();
-        let image_info = vk::ImageCreateInfo::builder()
-            .image_type(vk::ImageType::_2D)
-            .format(texture_format_to_vk(format))
-            .extent(vk::Extent3D {
+        // SAFETY: the extension is enabled (checked above) and `iosurface` is
+        // retained below for the image's whole life.
+        let image = unsafe {
+            streamlib_consumer_rhi::create_image_over_iosurface(
+                device,
+                &iosurface,
                 width,
                 height,
-                depth: 1,
-            })
-            .mip_levels(1)
-            .array_layers(1)
-            .samples(vk::SampleCountFlags::_1)
-            .tiling(vk::ImageTiling::OPTIMAL)
-            .usage(usage_flags)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE)
-            .initial_layout(vk::ImageLayout::UNDEFINED)
-            .push_next(&mut import_iosurface_info);
-
-        // SAFETY: the create info and its chained IOSurface import outlive the
-        // call; `iosurface` is retained below for the image's whole life.
-        let image = unsafe { device.create_image(&image_info, None) }.map_err(|e| {
+                texture_format_to_vk(format),
+                usage_flags,
+            )
+        }
+        .map_err(|e| {
             Error::GpuError(format!(
                 "{OPERATION}: the driver refused a {width}x{height} {format:?} image over an \
                  IOSurface: {e}"
@@ -1599,17 +1586,13 @@ impl HostVulkanTexture {
         })?;
         // SAFETY: `image` was just created on this device.
         let memory_requirements = unsafe { device.get_image_memory_requirements(image) };
-        let memory = match vulkan_device.allocate_device_local_memory_for_an_iosurface_backed_image(
-            memory_requirements.size,
-            memory_requirements.memory_type_bits,
-        ) {
-            Ok(memory) => memory,
-            Err(refusal) => {
-                // SAFETY: nothing else holds the image yet.
-                unsafe { device.destroy_image(image, None) };
-                return Err(refusal);
-            }
-        };
+        let memory = vulkan_device
+            .allocate_device_local_memory_for_an_iosurface_backed_image(
+                memory_requirements.size,
+                memory_requirements.memory_type_bits,
+            )
+            // SAFETY: nothing else holds the image yet.
+            .inspect_err(|_| unsafe { device.destroy_image(image, None) })?;
         // SAFETY: `memory` was allocated for this image's requirements.
         if let Err(e) = unsafe { device.bind_image_memory(image, memory, 0) } {
             // SAFETY: nothing else holds either handle yet.
@@ -1659,11 +1642,6 @@ impl HostVulkanTexture {
             )
         })?;
         crate::apple::iosurface::create_iosurface_mach_send_right(iosurface)
-    }
-
-    /// Bytes the image's memory binding spans.
-    pub fn iosurface_backed_allocation_size(&self) -> vk::DeviceSize {
-        self.imported_memory_size
     }
 }
 
@@ -1863,7 +1841,7 @@ mod tests {
         .expect("a staging buffer");
         unsafe {
             std::ptr::copy_nonoverlapping(pattern.as_ptr(), staging.mapped_ptr(), pattern.len());
-            device
+            let _final_texture_layout = device
                 .upload_buffer_to_image(staging.buffer(), &texture, width, height)
                 .expect("the upload");
         }

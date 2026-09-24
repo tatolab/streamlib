@@ -159,8 +159,8 @@ pub mod linux_surface_share {
 #[cfg(target_os = "macos")]
 pub mod apple_surface_share {
     pub use crate::apple::iosurface::{
-        create_iosurface_mach_send_right, create_private_iosurface_for_a_gpu_image,
-        create_private_iosurface_with_packed_rows,
+        RetainedIOSurfaceSharedAcrossThreads, create_iosurface_mach_send_right,
+        create_private_iosurface_for_a_gpu_image, create_private_iosurface_with_packed_rows,
     };
     pub use crate::apple::surface_share::{
         CROSS_PROCESS_TIMELINE_WAIT_BOUND, ConsumerReleaseOutcome, CrossProcessTimelinePair,

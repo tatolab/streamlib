@@ -31,7 +31,7 @@ use crate::core::context::surface_share_wire_verbs::{
 
 use super::state::{SurfaceRegistration, SurfaceShareState};
 #[cfg(test)]
-use super::state::{
+use crate::core::context::surface_share_wire_verbs::{
     VK_IMAGE_ALLOCATION_SIZE_DEFAULT, VK_IMAGE_ARRAY_LAYERS_DEFAULT, VK_IMAGE_MIP_LEVELS_DEFAULT,
     VK_IMAGE_SAMPLES_DEFAULT, VK_IMAGE_TILING_DEFAULT, VK_IMAGE_TYPE_DEFAULT,
     VK_IMAGE_USAGE_DEFAULT,
@@ -2286,7 +2286,7 @@ mod tests {
     /// `unwrap_or(...)` defaults in `parse_vk_image_create_info_fields`
     /// and this test fails on the corresponding assertion.
     ///
-    /// Default constants live in `super::state::VK_IMAGE_*_DEFAULT` —
+    /// Default constants live in `surface_share_wire_verbs::VK_IMAGE_*_DEFAULT` —
     /// the test mirrors their literal values so a default change
     /// surfaces here too.
     #[test]

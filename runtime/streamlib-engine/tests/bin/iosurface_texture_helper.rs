@@ -44,7 +44,8 @@ mod texture_helper {
     use crate::iosurface_texture_test_pattern::engine_pattern_byte;
     use objc2_io_surface::{IOSurfaceLockOptions, IOSurfaceRef};
     use streamlib_consumer_rhi::{
-        ConsumerVulkanDevice, ConsumerVulkanTexture, ConsumerVulkanTimelineSemaphore, TextureFormat,
+        ConsumerVulkanDevice, ConsumerVulkanTexture, ConsumerVulkanTimelineSemaphore,
+        TextureFormat, VulkanImageUsage,
     };
     use streamlib_surface_client::{
         SURFACE_SHARE_HAS_PRODUCE_DONE_PORT, SURFACE_SHARE_MACH_SERVICE_ENVIRONMENT_VARIABLE,
@@ -100,7 +101,7 @@ mod texture_helper {
             .as_str()
             .and_then(TextureFormat::from_wire_name)
             .unwrap_or_else(|| fail(&format!("NO_FORMAT {answer}")));
-        let usage = stated_u64(&answer, "vk_image_usage") as u32;
+        let usage = VulkanImageUsage(stated_u64(&answer, "vk_image_usage") as u32);
 
         let device = Arc::new(
             ConsumerVulkanDevice::new()

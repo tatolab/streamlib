@@ -62,8 +62,12 @@ mod consumer_vulkan_sync;
 mod consumer_vulkan_texture;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod device_capability;
+#[cfg(target_os = "macos")]
+mod iosurface_backed_image;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod vulkan_extension_names;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod vulkan_image_usage;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod vulkan_instance_api_version;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -95,8 +99,15 @@ pub use device_capability::{
     ConsumerMarker, DevicePrivilege, VulkanRhiBuffer, VulkanRhiDevice, VulkanTextureLike,
     VulkanTimelineSemaphoreLike, terminal_layout_for_shader_read_access_of_image_usage,
 };
+#[cfg(target_os = "macos")]
+pub use iosurface_backed_image::{
+    create_image_over_iosurface, device_local_memory_type_that_is_not_host_visible,
+    refusal_of_an_iosurface_for_an_image_of_format,
+};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use vulkan_extension_names::vulkan_extension_names_borrowed_from_properties;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub use vulkan_image_usage::VulkanImageUsage;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use vulkan_instance_api_version::REQUESTED_VULKAN_INSTANCE_API_VERSION;
 #[cfg(any(target_os = "linux", target_os = "macos"))]

@@ -508,7 +508,8 @@ pub(crate) fn handle_escalate_op(
                 // that cannot rebuild every flavour and re-interprets the
                 // ones it can.
                 full.register_texture(&handle_id, texture.texture_clone());
-                Ok((handle_id, texture, produce_done, consume_done))
+                registry.insert_texture(handle_id.clone(), texture, produce_done, consume_done);
+                Ok(handle_id)
             });
             #[cfg(target_os = "macos")]
             let acquired = sandbox.escalate(|full| {
@@ -524,7 +525,8 @@ pub(crate) fn handle_escalate_op(
                 let texture = full.acquire_texture(&desc)?;
                 let (handle_id, timeline_pair) = assign_texture_handle_id(full, &texture)?;
                 full.register_texture(&handle_id, texture.texture_clone());
-                Ok((handle_id, texture, timeline_pair))
+                registry.insert_texture(handle_id.clone(), texture, timeline_pair);
+                Ok(handle_id)
             });
             #[cfg(not(any(target_os = "linux", target_os = "macos")))]
             let acquired = sandbox.escalate(|full| {
@@ -533,48 +535,19 @@ pub(crate) fn handle_escalate_op(
                 let texture = full.acquire_texture(&desc)?;
                 let (handle_id,) = assign_texture_handle_id(full, &texture)?;
                 full.register_texture(&handle_id, texture.texture_clone());
-                Ok((handle_id, texture))
+                registry.insert_texture(handle_id.clone(), texture);
+                Ok(handle_id)
             });
             Some(match acquired {
-                #[cfg(target_os = "linux")]
-                Ok((handle_id, texture, produce_done, consume_done)) => {
-                    registry.insert_texture(handle_id.clone(), texture, produce_done, consume_done);
-                    EscalateResponse::Ok(EscalateResponseOk {
-                        request_id: rid,
-                        handle_id,
-                        width: Some(width),
-                        height: Some(height),
-                        format: Some(parsed_format.wire_name().to_string()),
-                        usage: Some(texture_usages_to_wire(parsed_usage)),
-                        ..Default::default()
-                    })
-                }
-                #[cfg(target_os = "macos")]
-                Ok((handle_id, texture, timeline_pair)) => {
-                    registry.insert_texture(handle_id.clone(), texture, timeline_pair);
-                    EscalateResponse::Ok(EscalateResponseOk {
-                        request_id: rid,
-                        handle_id,
-                        width: Some(width),
-                        height: Some(height),
-                        format: Some(parsed_format.wire_name().to_string()),
-                        usage: Some(texture_usages_to_wire(parsed_usage)),
-                        ..Default::default()
-                    })
-                }
-                #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-                Ok((handle_id, texture)) => {
-                    registry.insert_texture(handle_id.clone(), texture);
-                    EscalateResponse::Ok(EscalateResponseOk {
-                        request_id: rid,
-                        handle_id,
-                        width: Some(width),
-                        height: Some(height),
-                        format: Some(parsed_format.wire_name().to_string()),
-                        usage: Some(texture_usages_to_wire(parsed_usage)),
-                        ..Default::default()
-                    })
-                }
+                Ok(handle_id) => EscalateResponse::Ok(EscalateResponseOk {
+                    request_id: rid,
+                    handle_id,
+                    width: Some(width),
+                    height: Some(height),
+                    format: Some(parsed_format.wire_name().to_string()),
+                    usage: Some(texture_usages_to_wire(parsed_usage)),
+                    ..Default::default()
+                }),
                 Err(e) => EscalateResponse::Err(EscalateResponseErr {
                     request_id: rid,
                     message: format!("acquire_texture failed: {e}"),
@@ -1431,6 +1404,21 @@ fn assign_buffer_handle_id(
     Ok(published_frame_id.to_string())
 }
 
+/// A fresh exportable timeline for one edge of a cross-process pair, on the
+/// host device; `caller` and `edge` name it in a refusal.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn new_exportable_timeline_edge(
+    host_device: &crate::vulkan::rhi::HostVulkanDevice,
+    caller: &str,
+    edge: &str,
+) -> crate::core::error::Result<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>> {
+    crate::vulkan::rhi::HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
+        .map(Arc::new)
+        .map_err(|e| {
+            crate::core::error::Error::GpuError(format!("{caller}: new_exportable ({edge}): {e}"))
+        })
+}
+
 /// Resolve the `handle_id` returned to the subprocess for a pooled texture.
 ///
 /// On Linux, register the texture's DMA-BUF with the surface-share service under a fresh UUID
@@ -1461,28 +1449,10 @@ fn assign_texture_handle_id(
         // but the surface-share IPC delivers both FDs to the
         // cdylib so future consumers riding the dual-timeline
         // contract see them.
-        let produce_done = Arc::new(
-            crate::vulkan::rhi::HostVulkanTimelineSemaphore::new_exportable(
-                host_device.device(),
-                0,
-            )
-            .map_err(|e| {
-                crate::core::error::Error::GpuError(format!(
-                    "assign_texture_handle_id: new_exportable (produce_done): {e}"
-                ))
-            })?,
-        );
-        let consume_done = Arc::new(
-            crate::vulkan::rhi::HostVulkanTimelineSemaphore::new_exportable(
-                host_device.device(),
-                0,
-            )
-            .map_err(|e| {
-                crate::core::error::Error::GpuError(format!(
-                    "assign_texture_handle_id: new_exportable (consume_done): {e}"
-                ))
-            })?,
-        );
+        let produce_done =
+            new_exportable_timeline_edge(&host_device, "assign_texture_handle_id", "produce_done")?;
+        let consume_done =
+            new_exportable_timeline_edge(&host_device, "assign_texture_handle_id", "consume_done")?;
         // UNDEFINED at registration: pooled textures sit in the
         // texture pool unowned until the first acquire. The host
         // adapter or escalate-IPC bridge transitions to its
@@ -1533,18 +1503,9 @@ fn assign_texture_handle_id(
         return Ok((handle_id, None));
     }
     let host_device = full.host_vulkan_device_arc()?;
-    let exportable_timeline = |edge: &str| {
-        crate::vulkan::rhi::HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
-            .map(Arc::new)
-            .map_err(|e| {
-                crate::core::error::Error::GpuError(format!(
-                    "assign_texture_handle_id: new_exportable ({edge}): {e}"
-                ))
-            })
-    };
     let timeline_pair = Arc::new(crate::apple::surface_share::CrossProcessTimelinePair::new(
-        exportable_timeline("produce_done")?,
-        exportable_timeline("consume_done")?,
+        new_exportable_timeline_edge(&host_device, "assign_texture_handle_id", "produce_done")?,
+        new_exportable_timeline_edge(&host_device, "assign_texture_handle_id", "consume_done")?,
     ));
     store.host_register_texture_with_timeline_pair(
         &handle_id,
@@ -1584,22 +1545,10 @@ fn assign_image_handle_id(
 )> {
     let handle_id = Uuid::new_v4().to_string();
     let host_device = full.host_vulkan_device_arc()?;
-    let produce_done = Arc::new(
-        crate::vulkan::rhi::HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
-            .map_err(|e| {
-                crate::core::error::Error::GpuError(format!(
-                    "assign_image_handle_id: new_exportable (produce_done): {e}"
-                ))
-            })?,
-    );
-    let consume_done = Arc::new(
-        crate::vulkan::rhi::HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
-            .map_err(|e| {
-                crate::core::error::Error::GpuError(format!(
-                    "assign_image_handle_id: new_exportable (consume_done): {e}"
-                ))
-            })?,
-    );
+    let produce_done =
+        new_exportable_timeline_edge(&host_device, "assign_image_handle_id", "produce_done")?;
+    let consume_done =
+        new_exportable_timeline_edge(&host_device, "assign_image_handle_id", "consume_done")?;
     if let Some(store) = full.surface_store() {
         // Render-target images are freshly allocated and unwritten at
         // registration time — declare UNDEFINED and let the first

@@ -37,7 +37,8 @@ use crate::core::context::surface_share_wire_verbs::{
     SURFACE_RESOURCE_TYPE_PIXEL_BUFFER, SURFACE_RESOURCE_TYPE_TEXTURE, answer_release_check_out,
     answer_unregister, latch_the_first_named_runtime_id, parse_vk_image_create_info_fields,
     record_check_out_lease_or_refusal, refusal_of_a_retired_frame_id,
-    release_what_a_closed_connection_held, requested_runtime_id, requested_surface_id,
+    release_what_a_closed_connection_held, requested_image_layout, requested_runtime_id,
+    requested_surface_id,
 };
 
 use super::state::{
@@ -948,21 +949,13 @@ fn handle_lookup(
     if let (Some(texture_image), Some(reply_fields)) =
         (&registration.texture_image, reply.as_object_mut())
     {
-        texture_image.recipe.insert_into_reply(reply_fields);
+        texture_image.recipe.insert_into_wire_fields(reply_fields);
         reply_fields.insert(
             "current_image_layout".into(),
             texture_image.current_image_layout().into(),
         );
     }
     (reply, reply_ports)
-}
-
-/// The `VkImageLayout` a request names under `current_image_layout`.
-fn requested_image_layout(request: &serde_json::Value) -> Option<i32> {
-    request
-        .get("current_image_layout")
-        .and_then(serde_json::Value::as_i64)
-        .and_then(|layout| i32::try_from(layout).ok())
 }
 
 /// Publish the layout a helper left a texture in, for the next holder to

@@ -77,7 +77,7 @@ impl Drop for HelperIOSurfaceUseCountClaim {
 
 /// IOSurfaceLock or IOSurfaceUnlock refused, with the kernel's code.
 #[derive(Debug)]
-struct IOSurfaceLockRefused {
+pub(crate) struct IOSurfaceLockRefused {
     operation: &'static str,
     kern_return: i32,
 }

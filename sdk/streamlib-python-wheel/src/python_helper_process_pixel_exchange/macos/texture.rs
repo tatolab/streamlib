@@ -8,7 +8,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use streamlib_consumer_rhi::{
     ConsumerVulkanDevice, ConsumerVulkanTexture, ConsumerVulkanTimelineSemaphore, TextureFormat,
-    VulkanLayout,
+    VulkanImageUsage, VulkanLayout,
 };
 
 use super::super::{
@@ -16,7 +16,8 @@ use super::super::{
     HelperSurfaceReleaseDebt, SurfaceShareTransferredHandle, escalate_round_trip_to_parent,
     required_positive_u32_check_out_metadata_field,
 };
-use super::HelperIOSurfaceCpuLock;
+use super::{HelperIOSurfaceCpuLock, IOSurfaceLockRefused};
+use streamlib::sdk::engine::apple_surface_share::RetainedIOSurfaceSharedAcrossThreads;
 
 /// A texture-backed surface this helper imported: the engine's image rebuilt
 /// over its IOSurface on this process's own device, plus the timeline pair
@@ -28,6 +29,8 @@ use super::HelperIOSurfaceCpuLock;
 pub(crate) struct HelperCheckedOutTextureSurface {
     pub(crate) surface_id: String,
     pub(crate) consumer_texture: ConsumerVulkanTexture,
+    /// The surface the image is created over — the CPU door's memory.
+    iosurface: RetainedIOSurfaceSharedAcrossThreads,
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) format: TextureFormat,
@@ -58,12 +61,6 @@ pub(crate) struct HelperCheckedOutTextureSurface {
 }
 
 impl HelperCheckedOutTextureSurface {
-    fn iosurface(&self) -> &objc2_io_surface::IOSurfaceRef {
-        self.consumer_texture
-            .backing_iosurface()
-            .expect("an image imported from an IOSurface holds the surface it was built over")
-    }
-
     /// The host view of the texture's pixels: its IOSurface's own rows, at
     /// the surface's stride.
     pub(crate) fn host_visible_pixel_plane_view(
@@ -75,7 +72,7 @@ impl HelperCheckedOutTextureSurface {
                 self.surface_id, self.format
             ))
         })?;
-        let iosurface = self.iosurface();
+        let iosurface = &self.iosurface;
         Ok(
             crate::python_gpu_surface_pixel_exchange::HostVisiblePixelPlaneView {
                 base_address: iosurface.base_address().as_ptr().cast(),
@@ -90,19 +87,19 @@ impl HelperCheckedOutTextureSurface {
     /// Take the IOSurface lock for CPU access, read-only or read-write.
     pub(crate) fn lock_the_iosurface_for_cpu_access(&self, read_only: bool) -> PyResult<()> {
         self.iosurface_cpu_lock
-            .lock(self.iosurface(), read_only)
-            .map_err(|refused| {
-                PyRuntimeError::new_err(format!("{refused} on texture {:?}", self.surface_id))
-            })
+            .lock(&self.iosurface, read_only)
+            .map_err(|refused| self.iosurface_lock_error(refused))
     }
 
     /// Release the IOSurface lock this texture's CPU access holds, if any.
     pub(crate) fn unlock_the_iosurface_after_cpu_access(&self) -> PyResult<()> {
         self.iosurface_cpu_lock
-            .release(self.iosurface())
-            .map_err(|refused| {
-                PyRuntimeError::new_err(format!("{refused} on texture {:?}", self.surface_id))
-            })
+            .release(&self.iosurface)
+            .map_err(|refused| self.iosurface_lock_error(refused))
+    }
+
+    fn iosurface_lock_error(&self, refused: IOSurfaceLockRefused) -> PyErr {
+        PyRuntimeError::new_err(format!("{refused} on texture {:?}", self.surface_id))
     }
 }
 
@@ -118,7 +115,7 @@ impl Drop for HelperCheckedOutTextureSurface {
         Python::attach(|python| {
             let release_failures = python.detach(|| {
                 let mut release_failures: Vec<String> = Vec::new();
-                if let Err(refused) = self.iosurface_cpu_lock.release(self.iosurface()) {
+                if let Err(refused) = self.iosurface_cpu_lock.release(&self.iosurface) {
                     release_failures.push(refused.to_string());
                 }
                 let signalled = self
@@ -260,7 +257,7 @@ impl HelperProcessGpuExchangeClient {
                 "check_out of texture {surface_id:?} named an unknown format {format_name:?}"
             ))
         })?;
-        let vk_image_usage_bits = response
+        let usage = response
             .get("vk_image_usage")
             .and_then(|value| value.as_u64())
             .and_then(|value| u32::try_from(value).ok())
@@ -268,7 +265,8 @@ impl HelperProcessGpuExchangeClient {
                 PyRuntimeError::new_err(format!(
                     "check_out of texture {surface_id:?} carried no vk_image_usage"
                 ))
-            })?;
+            })
+            .map(VulkanImageUsage)?;
         let current_image_layout = VulkanLayout(
             response
                 .get("current_image_layout")
@@ -301,7 +299,7 @@ impl HelperProcessGpuExchangeClient {
             width,
             height,
             format,
-            vk_image_usage_bits,
+            usage,
         )
         .map_err(|import_failure| {
             PyRuntimeError::new_err(format!(
@@ -331,6 +329,7 @@ impl HelperProcessGpuExchangeClient {
         Ok(HelperCheckedOutTextureSurface {
             surface_id: surface_id.to_string(),
             consumer_texture,
+            iosurface: RetainedIOSurfaceSharedAcrossThreads::new(iosurface),
             width,
             height,
             format,

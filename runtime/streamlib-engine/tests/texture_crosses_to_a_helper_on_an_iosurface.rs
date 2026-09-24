@@ -58,7 +58,7 @@ struct EngineWithOneRegisteredTexture {
     staging: HostVulkanBuffer,
     recorder: RhiCommandRecorder,
     _store: SurfaceStore,
-    gpu: GpuContext,
+    _gpu: GpuContext,
 }
 
 impl EngineWithOneRegisteredTexture {
@@ -131,7 +131,7 @@ impl EngineWithOneRegisteredTexture {
             recorder: RhiCommandRecorder::new(&device, "iosurface-texture-test")
                 .expect("a recorder"),
             _store: store,
-            gpu,
+            _gpu: gpu,
         })
     }
 

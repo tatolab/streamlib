@@ -34,6 +34,22 @@ pub(crate) fn requested_surface_id(request: &Value) -> Option<&str> {
     request.get("surface_id").and_then(Value::as_str)
 }
 
+/// The `VkImageLayout` a request or an answer names under
+/// `current_image_layout`, or `None` when it names none that fits.
+#[cfg_attr(
+    target_os = "linux",
+    expect(
+        dead_code,
+        reason = "the Unix-socket arm parses the layout in its own handlers"
+    )
+)]
+pub(crate) fn requested_image_layout(request: &Value) -> Option<i32> {
+    request
+        .get("current_image_layout")
+        .and_then(Value::as_i64)
+        .and_then(|layout| i32::try_from(layout).ok())
+}
+
 /// The runtime a request charges its registration to.
 pub(crate) fn requested_runtime_id(request: &Value) -> &str {
     request
@@ -224,12 +240,16 @@ pub(crate) struct VkImageCreateInfoFields {
 }
 
 impl VkImageCreateInfoFields {
-    /// The fields under their wire keys, for a lookup's reply.
+    /// The fields under their wire keys, into a registration request or a
+    /// lookup's reply.
     #[cfg_attr(
         target_os = "linux",
-        expect(dead_code, reason = "the Unix-socket arm replies from its own table")
+        expect(
+            dead_code,
+            reason = "the Unix-socket arm writes these from its own table"
+        )
     )]
-    pub(crate) fn insert_into_reply(&self, reply: &mut serde_json::Map<String, Value>) {
+    pub(crate) fn insert_into_wire_fields(&self, reply: &mut serde_json::Map<String, Value>) {
         reply.insert("vk_image_type".into(), self.vk_image_type.into());
         reply.insert(
             "vk_image_mip_levels".into(),

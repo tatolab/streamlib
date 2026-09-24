@@ -454,16 +454,14 @@ impl ConsumerVulkanTexture {
     }
 
     /// Import an IOSurface another process allocated as an image on the
-    /// consumer device, through `VkImportMetalIOSurfaceInfoEXT`.
+    /// consumer device, per the contract in
+    /// [`crate::create_image_over_iosurface`]: `OPTIMAL` over the surface's own
+    /// rows, with the usage the registration stated, bound to device-local
+    /// memory that is not host-visible. The extent, the element size and the
+    /// usage bits are checked first and refused by name.
     ///
-    /// MoltenVK binds the surface when the image is created and checks only
-    /// its extent and element size against `format`, so both are checked
-    /// here first and refused by name. The image is `OPTIMAL` over the
-    /// surface's own rows, with the `VkImageUsageFlags` bits the registration
-    /// stated, bound
-    /// to device-local memory that is not host-visible. Reach the pixels on
-    /// the CPU through the surface, never by mapping the image's memory:
-    /// MoltenVK maps a private copy there.
+    /// Reach the pixels on the CPU through the surface, never by mapping the
+    /// image's memory: MoltenVK maps a private copy there.
     #[cfg(target_os = "macos")]
     pub fn from_iosurface(
         vulkan_device: &Arc<ConsumerVulkanDevice>,
@@ -471,10 +469,9 @@ impl ConsumerVulkanTexture {
         width: u32,
         height: u32,
         format: TextureFormat,
-        vk_image_usage_bits: u32,
+        usage: crate::VulkanImageUsage,
     ) -> Result<Self> {
         const OPERATION: &str = "ConsumerVulkanTexture::from_iosurface";
-        let usage_flags = vk::ImageUsageFlags::from_bits_truncate(vk_image_usage_bits);
         if !vulkan_device.supports_metal_objects_interop() {
             return Err(ConsumerRhiError::Gpu(format!(
                 "{OPERATION}: VK_EXT_metal_objects is not enabled on this device, so an \
@@ -488,40 +485,33 @@ impl ConsumerVulkanTexture {
                 iosurface.height()
             )));
         }
-        if format.plane_count() != 1
-            || iosurface.bytes_per_element() != format.bytes_per_pixel() as usize
+        if let Some(refusal) =
+            crate::refusal_of_an_iosurface_for_an_image_of_format(iosurface, format)
         {
-            return Err(ConsumerRhiError::Gpu(format!(
-                "{OPERATION}: the IOSurface's {}-byte elements are not {format:?}'s single \
-                 {}-byte plane",
-                iosurface.bytes_per_element(),
-                format.bytes_per_pixel()
-            )));
+            return Err(ConsumerRhiError::Gpu(format!("{OPERATION}: {refusal}")));
         }
+        let usage_flags = usage.as_vk().ok_or_else(|| {
+            ConsumerRhiError::Gpu(format!(
+                "{OPERATION}: the registered usage {:#x} carries bits no VkImageUsageFlagBits \
+                 names; an image without them would not be the registrant's",
+                usage.0
+            ))
+        })?;
 
         let device = vulkan_device.device();
-        let mut import_iosurface_info = vk::ImportMetalIOSurfaceInfoEXT::builder()
-            .io_surface(std::ptr::from_ref(iosurface).cast_mut().cast())
-            .build();
-        let image_info = vk::ImageCreateInfo::builder()
-            .image_type(vk::ImageType::_2D)
-            .format(texture_format_to_vk(format))
-            .extent(vk::Extent3D {
+        // SAFETY: the extension is enabled (checked above) and the surface is
+        // retained below for the image's whole life.
+        let image = unsafe {
+            crate::create_image_over_iosurface(
+                device,
+                iosurface,
                 width,
                 height,
-                depth: 1,
-            })
-            .mip_levels(1)
-            .array_layers(1)
-            .samples(vk::SampleCountFlags::_1)
-            .tiling(vk::ImageTiling::OPTIMAL)
-            .usage(usage_flags)
-            .sharing_mode(vk::SharingMode::EXCLUSIVE)
-            .initial_layout(vk::ImageLayout::UNDEFINED)
-            .push_next(&mut import_iosurface_info);
-        // SAFETY: the create info and its chained import outlive the call;
-        // the surface is retained below for the image's whole life.
-        let image = unsafe { device.create_image(&image_info, None) }.map_err(|e| {
+                texture_format_to_vk(format),
+                usage_flags,
+            )
+        }
+        .map_err(|e| {
             ConsumerRhiError::Gpu(format!(
                 "{OPERATION}: the driver refused a {width}x{height} {format:?} image over the \
                  IOSurface: {e}"
@@ -534,10 +524,12 @@ impl ConsumerVulkanTexture {
                 memory_requirements.size,
                 memory_requirements.memory_type_bits,
             )
+            // SAFETY: nothing else holds the image yet.
             .inspect_err(|_| unsafe { device.destroy_image(image, None) })?;
         // SAFETY: `memory` was allocated for this image's requirements.
         unsafe { device.bind_image_memory(image, memory, 0) }.map_err(|e| {
             vulkan_device.free_imported_memory(memory);
+            // SAFETY: nothing else holds the image yet.
             unsafe { device.destroy_image(image, None) };
             ConsumerRhiError::Gpu(format!("{OPERATION}: bind_image_memory failed: {e}"))
         })?;
@@ -565,7 +557,7 @@ impl ConsumerVulkanTexture {
         self.backing_iosurface.as_deref()
     }
 
-    /// Underlying `VkImage` handle.    /// Underlying `VkImage` handle.
+    /// Underlying `VkImage` handle.
     pub fn image(&self) -> vk::Image {
         self.image
     }
@@ -734,10 +726,12 @@ mod iosurface_import_tests {
         }
     }
 
-    const STORAGE_AND_TRANSFER: u32 = vk::ImageUsageFlags::TRANSFER_SRC.bits()
-        | vk::ImageUsageFlags::TRANSFER_DST.bits()
-        | vk::ImageUsageFlags::SAMPLED.bits()
-        | vk::ImageUsageFlags::STORAGE.bits();
+    const STORAGE_AND_TRANSFER: crate::VulkanImageUsage = crate::VulkanImageUsage(
+        vk::ImageUsageFlags::TRANSFER_SRC.bits()
+            | vk::ImageUsageFlags::TRANSFER_DST.bits()
+            | vk::ImageUsageFlags::SAMPLED.bits()
+            | vk::ImageUsageFlags::STORAGE.bits(),
+    );
 
     #[test]
     fn an_iosurface_imports_as_an_image_that_holds_its_surface() {
@@ -784,6 +778,27 @@ mod iosurface_import_tests {
         .err()
         .expect("a 4-byte element is not an 8-byte RGBA16F texel");
         assert!(refused.to_string().contains("4-byte elements"), "{refused}");
+    }
+
+    #[test]
+    fn a_usage_carrying_an_unknown_bit_is_refused_by_name() {
+        let Some(device) = try_create_device() else {
+            return;
+        };
+        let refused = ConsumerVulkanTexture::from_iosurface(
+            &device,
+            &a_private_iosurface(16, 16, 4),
+            16,
+            16,
+            TextureFormat::Rgba8Unorm,
+            crate::VulkanImageUsage(STORAGE_AND_TRANSFER.0 | 1 << 31),
+        )
+        .err()
+        .expect("an unknown usage bit");
+        assert!(
+            refused.to_string().contains("no VkImageUsageFlagBits"),
+            "{refused}"
+        );
     }
 
     #[test]
