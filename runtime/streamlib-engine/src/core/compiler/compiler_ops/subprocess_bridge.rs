@@ -55,9 +55,11 @@ use crate::core::processors::{
 };
 use crate::core::runtime::mesh::MeshLinkIngressTable;
 
+use super::subprocess_escalate::handle_lifecycle::{
+    EscalateHandleRegistry, release_surface_share_and_texture_cache_for_handle,
+};
 use super::subprocess_escalate::{
-    ESCALATE_OP_ANSWERED_BY_NOTHING, EscalateHandleRegistry, process_bridge_message,
-    refusal_of_an_escalate_request, release_surface_share_and_texture_cache_for_handle,
+    ESCALATE_OP_ANSWERED_BY_NOTHING, process_bridge_message, refusal_of_an_escalate_request,
 };
 
 /// Env var advertising the inherited child-end fd number of the escalate

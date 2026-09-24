@@ -492,7 +492,7 @@ When a new field lands on `TextureRegistration`:
   surface pre-registration went with it, and a Python processor now acquires
   its own textures.
 - **In-tree producer**: `assign_texture_handle_id` and its caller in
-  `runtime/streamlib-engine/src/core/compiler/compiler_ops/subprocess_escalate.rs`,
+  `runtime/streamlib-engine/src/core/compiler/compiler_ops/subprocess_escalate/acquisition/linux.rs`,
   the escalate path that hands a helper process a pooled texture.
 - **Adapter-scope sibling**: `SurfaceState` in
   `adapters/streamlib-adapter-vulkan/src/state.rs` (and the same-shape

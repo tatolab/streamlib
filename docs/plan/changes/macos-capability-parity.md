@@ -43,7 +43,7 @@ was measured on the M1 Max in three probes left under `/tmp/iosurf-nocopy/` and
   `create_compute_kernel` (`gpu_context.rs:1921`), `create_graphics_kernel` (`:2221`),
   `acquire_uniform_buffer` (`:1805`) and the rest of the 14-method list — while the Vulkan
   types beneath them already compile on macOS. The fifteen Linux-only escalate ops
-  (`subprocess_escalate.rs:542-870`) refuse only because of that.
+  (each family's `not_linux.rs` under `subprocess_escalate/`) refuse only because of that.
 - `ConsumerVulkanDevice::new` hard-requires the fd and DMA-BUF extensions unconditionally
   (`consumer_vulkan_device.rs:199-215`); the crate builds on macOS and fails at runtime.
 - An IOSurface-backed `VkImage` is an allocation flavour, bound at `vkCreateImage`
