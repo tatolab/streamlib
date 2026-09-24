@@ -1448,6 +1448,4 @@ class MlxArrayOutlivesTextureHandleProbe(_DeviceArrayOutlivesTextureHandleProbe)
         return mx.from_dlpack(handle)
 
     def _checksum(self, array) -> int:
-        import mlx.core as mx
-
         return int(numpy.array(array, dtype=numpy.int64).sum())
