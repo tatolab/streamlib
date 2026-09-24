@@ -1736,6 +1736,10 @@ void main() {
 }
 "#;
 
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     #[test]
     fn a_subgroup_operation_is_built_where_the_driver_serves_it_and_refused_by_name_where_not() {
         let device = vulkan_device_for_dispatch_tests();
