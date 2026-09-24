@@ -16,12 +16,12 @@ use streamlib_adapter_cuda::dlpack::DeviceType;
 use crate::python_gpu_surface_pixel_exchange::GpuSurfaceOwnedMemory;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::python_gpu_surface_pixel_exchange::exchange_shape_for_max_version;
+#[cfg(target_os = "macos")]
+use crate::python_gpu_surface_pixel_exchange::{METAL_DLPACK_DEVICE, metal_dlpack_capsule};
 #[cfg(target_os = "linux")]
 use crate::python_gpu_surface_pixel_exchange::{
     PreparedDeviceExport, StagedWriteBackSource, device_dlpack_capsule, prepare_device_export,
 };
-#[cfg(target_os = "macos")]
-use crate::python_gpu_surface_pixel_exchange::{METAL_DLPACK_DEVICE, metal_dlpack_capsule};
 #[cfg(target_os = "macos")]
 use crate::python_metal_framework_queue_synchronization::synchronize_the_imported_metal_frameworks;
 

@@ -147,11 +147,94 @@ def test_a_device_tensor_outliving_its_handle_keeps_a_live_mapping(
 
 def test_the_host_side_stays_reachable_on_explicit_request(start_app_under_test):
     """`dl_device=(1, 0)` — numpy's `device="cpu"` — still yields the host
-    mapping when a device side exists; `as_numpy` rides the same request."""
+    mapping when a device side exists, on both floors; `as_numpy` rides the
+    same request, so the two are one mapping, not two copies."""
     observation = run_probe(start_app_under_test, "HostSideProbe")
     assert observation["host_shape"] == [SURFACE_HEIGHT, SURFACE_WIDTH, 4]
     assert observation["as_numpy_shape"] == [SURFACE_HEIGHT, SURFACE_WIDTH, 4]
     assert observation["same_pixels"]
+    assert observation["same_host_memory"]
+
+
+def test_a_copy_request_is_refused_at_both_doors(start_app_under_test):
+    """Both doors export in place, so `copy=True` — a request for memory the
+    consumer owns — is refused by name rather than answered with an alias."""
+    observation = run_probe(start_app_under_test, "CopyRequestRefusedAtBothDoorsProbe")
+    assert "exports in place" in observation["handle_refusal"], observation
+    assert "exports in place" in observation["scope_refusal"], observation
+
+
+# ---------------------------------------------------------------------------
+# Row pitch, and a device write ordered ahead of the engine's own GPU read
+# ---------------------------------------------------------------------------
+
+
+def test_the_device_tensor_strides_follow_the_surfaces_row_pitch(start_app_under_test):
+    """A width whose rows pad: the tensor's row stride is the surface's pitch
+    in elements, so the last pixel of a row lands where the host finds it."""
+    observation = run_probe(start_app_under_test, "DeviceTensorStridesFollowTheRowPitchProbe")
+    skip_without_the_device(observation)
+    assert observation["tensor_strides"] == [observation["bytes_per_row"], 4, 1]
+    assert observation["last_pixel_through_the_host"] == [11, 22, 33, 44]
+    assert observation["first_pixel_of_the_last_row"] == [0, 0, 0, 0], (
+        "the store sheared into the next row's start"
+    )
+
+
+def skip_without_mlx(observation: dict) -> None:
+    reason = observation.get("mlx_unavailable")
+    if reason:
+        pytest.skip(reason)
+
+
+@pytest.mark.parametrize(
+    "probe", ["TorchDeviceWriteThenEngineGpuReadProbe", "MlxDeviceWriteThenEngineGpuReadProbe"]
+)
+def test_a_device_write_is_ordered_ahead_of_the_engines_next_gpu_read(
+    start_app_under_test, probe
+):
+    """A framework's write through the scope, with no synchronize in user
+    code, is what a kernel dispatched right after the scope reads — the scope's
+    exit drains the framework's queue before anything downstream can run."""
+    observation = run_probe(start_app_under_test, probe)
+    skip_without_mlx(observation)
+    skip_without_the_device(observation)
+    assert observation["every_pixel_the_engine_read_is_the_write"], (
+        f"the engine's GPU read saw {observation['engine_read_pixel']!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# MLX — the second consumer of the Metal capsule
+# ---------------------------------------------------------------------------
+
+
+def test_mlx_reads_a_graph_frame_over_its_own_bytes(start_app_under_test):
+    observation = run_probe(start_app_under_test, "MlxReadsTheFrameProbe")
+    skip_without_mlx(observation)
+    assert observation["array_shape"] == [SURFACE_HEIGHT, SURFACE_WIDTH, 4]
+    assert observation["array_dtype"] == "mlx.core.uint8"
+    assert observation["pixels_are_not_all_zero"]
+    assert observation["same_pixels_as_the_host_view"]
+
+
+def test_an_evaluated_mlx_write_through_the_write_door_reaches_the_frame(
+    start_app_under_test,
+):
+    observation = run_probe(start_app_under_test, "MlxWritesTheFrameThroughTheWriteDoorProbe")
+    skip_without_mlx(observation)
+    assert observation["the_frame_did_not_already_carry_the_edit"]
+    assert observation["the_edited_rows_carry_the_edit"]
+    assert observation["the_rest_of_the_frame_is_untouched"]
+
+
+def test_an_mlx_write_with_a_view_alive_misses_the_frame(start_app_under_test):
+    """The negative control the stub's MLX contract rests on: the array shows
+    the edit, the frame does not — MLX wrote a buffer of its own."""
+    observation = run_probe(start_app_under_test, "MlxWriteWithAViewAliveMissesTheFrameProbe")
+    skip_without_mlx(observation)
+    assert observation["the_array_carries_the_edit"]
+    assert observation["the_frame_is_unchanged"]
 
 
 # ---------------------------------------------------------------------------

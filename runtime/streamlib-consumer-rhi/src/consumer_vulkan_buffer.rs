@@ -330,9 +330,8 @@ impl ConsumerVulkanBuffer {
     /// MoltenVK hands back no buffer.
     pub fn exported_metal_buffer(
         &self,
-    ) -> Result<
-        objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLBuffer>>,
-    > {
+    ) -> Result<objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLBuffer>>>
+    {
         use vulkanalia::vk::ExtMetalObjectsExtensionDeviceCommands;
 
         if !self.vulkan_device.supports_metal_objects_interop() {
@@ -796,7 +795,14 @@ mod iosurface_import_tests {
         );
         assert!(metal_buffer.length() as u64 >= iosurface.alloc_size() as u64);
         // SAFETY: the buffer spans the surface's allocation.
-        unsafe { metal_buffer.contents().as_ptr().cast::<u8>().add(29).write(0x5A) };
+        unsafe {
+            metal_buffer
+                .contents()
+                .as_ptr()
+                .cast::<u8>()
+                .add(29)
+                .write(0x5A)
+        };
         let read_through_the_surface = unsafe {
             iosurface
                 .base_address()

@@ -4,7 +4,7 @@
 """Scenarios that run one device-exchange probe in its real placement.
 
 Run as a real `python app.py`: the probe executes in a helper process, reaches
-the frame's pixels as CUDA memory from there, and its observation reaches this
+the frame's pixels as device memory from there, and its observation reaches this
 app — and the test driving it — over the child→parent log forwarding.
 """
 
@@ -65,6 +65,9 @@ if __name__ == "__main__":
         "DeviceTensorScopeDiscardsOnRaiseProbe",
         "PooledTextureExportProbe",
         "DeviceTensorScopeTakesEveryAcquiredTextureProbe",
+        "DeviceTensorStridesFollowTheRowPitchProbe",
+        "TorchDeviceWriteThenEngineGpuReadProbe",
+        "MlxDeviceWriteThenEngineGpuReadProbe",
     ):
         scenario_standalone_probe(scenario)
     else:

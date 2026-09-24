@@ -110,9 +110,8 @@ impl HelperCheckedOutTextureSurface {
     /// pages on first ask.
     pub(crate) fn metal_buffer_over_the_iosurface_pages(
         &self,
-    ) -> PyResult<
-        objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLBuffer>>,
-    > {
+    ) -> PyResult<objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLBuffer>>>
+    {
         let iosurface_pages_import = match self.iosurface_pages_import.get() {
             Some(already_imported) => already_imported,
             None => {

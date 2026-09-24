@@ -179,9 +179,8 @@ impl HelperCheckedOutPixelSurface {
     /// A no-copy `MTLBuffer` over the pool slot's IOSurface pages.
     pub(crate) fn metal_buffer_over_the_iosurface_pages(
         &self,
-    ) -> PyResult<
-        objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLBuffer>>,
-    > {
+    ) -> PyResult<objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLBuffer>>>
+    {
         self.iosurface_pool_slot_import
             .consumer_buffer
             .exported_metal_buffer()

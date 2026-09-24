@@ -15,19 +15,19 @@ use crate::python_gpu_surface_pixel_exchange::{
     exchange_shape_for_max_version, host_visible_dlpack_capsule,
     map_the_cpu_staging_without_reading_a_frame_in,
 };
+#[cfg(target_os = "macos")]
+use crate::python_gpu_surface_pixel_exchange::{METAL_DLPACK_DEVICE, metal_dlpack_capsule};
 #[cfg(target_os = "linux")]
 use crate::python_gpu_surface_pixel_exchange::{
     StagedWriteBackSource, device_dlpack_capsule, imported_device_for, prepare_device_export,
     read_the_frame_into_its_cpu_staging,
 };
-#[cfg(target_os = "macos")]
-use crate::python_gpu_surface_pixel_exchange::{METAL_DLPACK_DEVICE, metal_dlpack_capsule};
-#[cfg(target_os = "macos")]
-use crate::python_metal_framework_queue_synchronization::synchronize_the_imported_metal_frameworks;
 #[cfg(target_os = "linux")]
 use crate::python_helper_process_pixel_exchange::HelperAcquiredTexture;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::python_helper_process_pixel_exchange::HelperCheckedOutSurface;
+#[cfg(target_os = "macos")]
+use crate::python_metal_framework_queue_synchronization::synchronize_the_imported_metal_frameworks;
 
 use super::gpu_surface_device_tensor_scope::PythonGpuSurfaceDeviceTensorScope;
 use super::left_by_a_propagating_exception;

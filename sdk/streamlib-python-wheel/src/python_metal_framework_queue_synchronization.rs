@@ -29,8 +29,5 @@ pub(crate) fn synchronize_the_imported_metal_frameworks(python: Python<'_>) -> P
     {
         torch.getattr("mps")?.call_method0("synchronize")?;
     }
-    if let Some(mlx_core) = imported_modules.get_item("mlx.core")? {
-        mlx_core.call_method0("synchronize")?;
-    }
     Ok(())
 }
