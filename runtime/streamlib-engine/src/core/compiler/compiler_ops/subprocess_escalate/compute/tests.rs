@@ -11,7 +11,7 @@
 //! array is the only place it can be tested at all.
 
 use super::super::kernel_shader_stage_source::registered_shader_stage_source;
-use super::linux::{
+use super::linux_and_macos::{
     handle_register_compute_kernel, handle_run_compute_kernel, handle_run_compute_kernel_batch,
     plan_supplied_compute_bindings,
 };

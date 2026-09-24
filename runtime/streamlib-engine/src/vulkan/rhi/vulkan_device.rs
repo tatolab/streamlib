@@ -3340,7 +3340,7 @@ impl HostVulkanDevice {
     ///
     /// Used by [`crate::core::context::TextureRing`]'s per-slot upload
     /// path — see `docs/architecture/texture-ring.md`.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub unsafe fn upload_buffer_to_image_amortized(
         &self,
         cb: vk::CommandBuffer,

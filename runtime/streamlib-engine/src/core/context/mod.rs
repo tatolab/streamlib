@@ -41,9 +41,9 @@ pub use device_backend_probe_chain::DeviceBackendArmUnavailableReason;
 pub use device_stream_liveness_report::{
     DeviceStreamFailureReason, DeviceStreamFailureRecorder, DeviceStreamLivenessReport,
 };
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use gpu_context::GpuCapabilitiesSnapshot;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use gpu_context::{BatchedComputeKernelDispatch, BatchedComputeKernelDispatchBinding};
 pub use gpu_context::{GpuContext, GpuContextFullAccess, GpuContextLimitedAccess};
 pub(crate) use isolation::FullAccessGrant;

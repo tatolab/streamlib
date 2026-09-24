@@ -19,14 +19,14 @@ mod vulkan_command_queue;
 mod vulkan_device;
 mod vulkan_sync;
 mod vulkan_texture;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod vulkan_upload_resources;
 
 pub use host_marker::HostMarker;
 pub use vulkan_command_buffer::VulkanCommandBuffer;
 pub use vulkan_command_queue::VulkanCommandQueue;
 pub(crate) use vulkan_device::CROSS_PROCESS_EXPORT_BY_FILE_DESCRIPTOR_EXISTS_ON_THIS_PLATFORM;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use vulkan_device::PixelBufferUploadFinalTextureLayout;
 pub use vulkan_device::{
     HostVulkanDevice, RayTracingPipelineProperties, ThirdPartyGpuCapabilities,
@@ -40,7 +40,7 @@ pub use vulkan_sync::{VulkanFence, VulkanSemaphore};
 pub use vulkan_texture::HostVulkanTexture;
 #[cfg(target_os = "linux")]
 pub use vulkan_texture::{VideoDpbDirection, VideoDpbTextureDescriptor};
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use vulkan_upload_resources::HostVulkanUploadResources;
 
 // Trait machinery + Consumer flavor — re-exported from the canonical
@@ -122,7 +122,7 @@ pub use vulkan_graphics_kernel::{OffscreenColorTarget, OffscreenDraw, VulkanGrap
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod vulkan_acceleration_structure;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use vulkan_acceleration_structure::geometry_instance_flags_from_raw_bitmask;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use vulkan_acceleration_structure::{
@@ -162,9 +162,9 @@ pub use vulkan_video_session::{
     VideoSessionParametersAddInfo, VideoSessionParametersDescriptor,
 };
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod vulkan_query_pool;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use vulkan_query_pool::{HostVulkanQueryPool, QueryPoolDescriptor};
 
 #[cfg(target_os = "linux")]

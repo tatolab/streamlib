@@ -17,11 +17,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use crate::core::context::GpuContext;
 use crate::core::rhi::{Texture, TextureFormat};
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::core::Error;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::core::Result;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::vulkan::rhi::HostVulkanUploadResources;
 
 /// Maximum inline `surface_id` length in bytes — fits any UUID
@@ -180,9 +180,8 @@ impl std::fmt::Debug for TextureRingSlot {
 pub struct TextureRingInner {
     slots: Vec<TextureRingSlot>,
     /// Per-slot pre-allocated upload resources (command pool + command
-    /// buffer + fence), parallel to `slots`. `None` on non-Linux
-    /// platforms; otherwise `Some(...)` always with `len == slots.len()`.
-    #[cfg(target_os = "linux")]
+    /// buffer + fence), parallel to `slots`, with `len == slots.len()`.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     upload_resources: Vec<HostVulkanUploadResources>,
     next_index: AtomicUsize,
     width: u32,
@@ -196,7 +195,7 @@ impl TextureRingInner {
     /// Construct a ring from pre-built slots. Crate-internal: public
     /// construction goes through
     /// [`crate::core::context::GpuContextFullAccess::create_texture_ring`].
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) fn from_slots(
         slots: Vec<TextureRingSlot>,
         upload_resources: Vec<HostVulkanUploadResources>,
@@ -221,9 +220,9 @@ impl TextureRingInner {
         })
     }
 
-    /// Construct a ring from pre-built slots (non-Linux: no
-    /// per-slot upload resources). Crate-internal.
-    #[cfg(not(target_os = "linux"))]
+    /// Construct a ring from pre-built slots, with no per-slot upload
+    /// resources. Crate-internal.
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     pub(crate) fn from_slots(
         slots: Vec<TextureRingSlot>,
         width: u32,
@@ -268,7 +267,7 @@ impl TextureRingInner {
     ///
     /// Updates the slot's registration `current_layout` to the terminal
     /// layout the upload reports leaving the slot's image in.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn copy_pixel_buffer_to_slot(
         &self,
         slot: &TextureRingSlot,
@@ -303,7 +302,7 @@ impl TextureRingInner {
     /// Copy a host-visible pixel buffer's contents into a ring slot's
     /// pre-allocated texture, identified by `(slot_index, surface_id)`
     /// rather than a [`TextureRingSlot`] reference.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) fn copy_pixel_buffer_to_slot_by_index(
         &self,
         slot_index: u32,
@@ -458,7 +457,7 @@ impl TextureRing {
 
     /// Copy a host-visible pixel buffer's contents into a ring slot.
     /// See [`TextureRingInner::copy_pixel_buffer_to_slot`] for details.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn copy_pixel_buffer_to_slot(
         &self,
         slot: &TextureRingSlot,
@@ -575,7 +574,7 @@ mod layout_tests {
 }
 
 #[cfg(test)]
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod tests {
     use super::*;
     use crate::core::context::GpuContextFullAccess;

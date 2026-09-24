@@ -22,14 +22,14 @@ mod export_staging;
 mod graphics;
 pub(super) mod handle_lifecycle;
 mod helper_log_record;
-#[cfg(any(test, target_os = "linux"))]
+#[cfg(any(test, target_os = "linux", target_os = "macos"))]
 mod hex_encoded_wire_bytes;
 mod inbound_link_stamp_clock_identity;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod kernel_shader_stage_source;
 mod processor_owned_window;
 mod ray_tracing;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod surface_bound_kernel_binding;
 #[cfg(test)]
 mod tests;
@@ -215,12 +215,12 @@ pub(crate) fn handle_escalate_op(
     }
 }
 
-/// The refusal an op only Linux implements answers with everywhere else.
-#[cfg(not(target_os = "linux"))]
-fn escalate_op_only_available_on_linux(request_id: String, op_name: &str) -> EscalateResponse {
+/// The refusal an op answers with on a platform that has no Vulkan floor.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn escalate_op_unavailable_on_this_platform(request_id: String, op_name: &str) -> EscalateResponse {
     EscalateResponse::Err(EscalateResponseErr {
         request_id,
-        message: format!("{op_name} is only available on Linux"),
+        message: format!("{op_name} is not available on this platform"),
     })
 }
 

@@ -4,6 +4,9 @@
 use uuid::Uuid;
 
 use super::super::handle_lifecycle::EscalateHandleRegistry;
+use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse;
+use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::EscalateRequestAcquireImage;
+use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_response::EscalateResponseErr;
 use crate::core::context::{GpuContextLimitedAccess, PooledTextureHandle, TexturePoolDescriptor};
 use crate::core::rhi::{TextureFormat, TextureUsages};
 
@@ -33,4 +36,16 @@ pub(super) fn assign_texture_handle_id(
     _texture: &PooledTextureHandle,
 ) -> crate::core::error::Result<(String,)> {
     Ok((Uuid::new_v4().to_string(),))
+}
+
+pub(in super::super) fn handle_acquire_image(
+    _sandbox: &GpuContextLimitedAccess,
+    _registry: &EscalateHandleRegistry,
+    request_id: String,
+    _request: EscalateRequestAcquireImage,
+) -> EscalateResponse {
+    EscalateResponse::Err(EscalateResponseErr {
+        request_id,
+        message: "acquire_image is not available on this platform".to_string(),
+    })
 }

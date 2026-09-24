@@ -115,7 +115,7 @@ pub(super) fn refuse_a_kernel_binding_name_supplied_twice<'a>(
 /// Match a draw's or a trace's supplied bindings against the kernel's declared
 /// ones.
 ///
-/// The graphics and ray-tracing twin of [`plan_supplied_compute_bindings`](crate::core::compiler::compiler_ops::subprocess_escalate::compute::linux::plan_supplied_compute_bindings),
+/// The graphics and ray-tracing twin of [`plan_supplied_compute_bindings`](crate::core::compiler::compiler_ops::subprocess_escalate::compute::linux_and_macos::plan_supplied_compute_bindings),
 /// with the same rules: every failure raises before any resource is bound and
 /// long before a submission, and every message names the kernel's own bindings.
 /// Bindings do not persist on a kernel, so one run supplies all of them or
