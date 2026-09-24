@@ -438,6 +438,7 @@ def test_a_second_ctrl_c_forces_the_shutdown_past_a_long_teardown(app_under_test
     )
 
 
+@pytest.mark.awaiting_macos_parity(issue=2410)
 @pytest.mark.requires_gpu
 def test_a_third_ctrl_c_kills_every_helper_process_group_and_exits_130(app_under_test):
     """The third interrupt exits at once, taking the helper's group with it.
@@ -469,6 +470,7 @@ def test_a_third_ctrl_c_kills_every_helper_process_group_and_exits_130(app_under
     )
 
 
+@pytest.mark.awaiting_macos_parity(issue=2410)
 @pytest.mark.requires_gpu
 def test_sighup_tears_the_graph_down_gracefully(app_under_test):
     """A closed terminal is a graceful shutdown, `teardown()` included."""
