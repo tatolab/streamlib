@@ -1160,7 +1160,7 @@ class TorchDeviceWriteThenEngineGpuReadProbe(_DeviceWriteThenEngineGpuReadProbe)
 
 def _mlx_or_none():
     try:
-        import mlx.core
+        import mlx.core  # pyright: ignore[reportMissingImports]
 
         return mlx.core
     except ImportError:
@@ -1175,7 +1175,7 @@ class MlxDeviceWriteThenEngineGpuReadProbe(_DeviceWriteThenEngineGpuReadProbe):
         return super()._probe(ctx)
 
     def _write_the_whole_tensor_in_the_scope(self, device_tensor) -> None:
-        import mlx.core as mx
+        import mlx.core as mx  # pyright: ignore[reportMissingImports]
 
         array = mx.from_dlpack(device_tensor)
         written = mx.array(DEVICE_WRITE_RGBA, dtype=mx.uint8)
@@ -1443,7 +1443,7 @@ class MlxArrayOutlivesTextureHandleProbe(_DeviceArrayOutlivesTextureHandleProbe)
         return super()._probe(ctx)
 
     def _import(self, handle):
-        import mlx.core as mx
+        import mlx.core as mx  # pyright: ignore[reportMissingImports]
 
         return mx.from_dlpack(handle)
 

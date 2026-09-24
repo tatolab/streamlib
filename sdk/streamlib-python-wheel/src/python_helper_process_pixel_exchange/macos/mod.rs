@@ -104,8 +104,32 @@ impl HelperIOSurfaceCpuLock {
         iosurface: &objc2_io_surface::IOSurfaceRef,
         read_only: bool,
     ) -> Result<(), IOSurfaceLockRefused> {
-        use objc2_io_surface::IOSurfaceLockOptions;
         let mut held_lock_options = self.held_lock_options.lock();
+        Self::lock_replacing_held(&mut held_lock_options, iosurface, read_only)
+    }
+
+    /// Take `iosurface`'s lock read-only or read-write unless a lock is
+    /// already held — the lock a CPU door takes once per lock scope.
+    fn lock_unless_held(
+        &self,
+        iosurface: &objc2_io_surface::IOSurfaceRef,
+        read_only: bool,
+    ) -> Result<(), IOSurfaceLockRefused> {
+        let mut held_lock_options = self.held_lock_options.lock();
+        if held_lock_options.is_some() {
+            return Ok(());
+        }
+        Self::lock_replacing_held(&mut held_lock_options, iosurface, read_only)
+    }
+
+    /// Take `iosurface`'s lock under the caller's guard on the held options,
+    /// unlocking whatever lock those options record first.
+    fn lock_replacing_held(
+        held_lock_options: &mut Option<objc2_io_surface::IOSurfaceLockOptions>,
+        iosurface: &objc2_io_surface::IOSurfaceRef,
+        read_only: bool,
+    ) -> Result<(), IOSurfaceLockRefused> {
+        use objc2_io_surface::IOSurfaceLockOptions;
         if let Some(held_options) = *held_lock_options {
             Self::unlock_with(iosurface, held_options)?;
             *held_lock_options = None;
@@ -125,19 +149,6 @@ impl HelperIOSurfaceCpuLock {
         }
         *held_lock_options = Some(lock_options);
         Ok(())
-    }
-
-    /// Take `iosurface`'s lock read-only or read-write unless a lock is
-    /// already held — the lock a CPU door takes once per lock scope.
-    fn lock_unless_held(
-        &self,
-        iosurface: &objc2_io_surface::IOSurfaceRef,
-        read_only: bool,
-    ) -> Result<(), IOSurfaceLockRefused> {
-        if self.held_lock_options.lock().is_some() {
-            return Ok(());
-        }
-        self.lock(iosurface, read_only)
     }
 
     /// Release the held lock, if any; a refused unlock leaves it recorded
