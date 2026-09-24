@@ -176,6 +176,8 @@ pub(crate) enum RegisteredHandle {
         produce_done: Option<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>>,
         #[cfg(target_os = "linux")]
         consume_done: Option<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>>,
+        #[cfg(target_os = "macos")]
+        timeline_pair: Option<Arc<crate::apple::surface_share::CrossProcessTimelinePair>>,
     },
     /// Render-target image handed out via `AcquireImage`. The texture
     /// itself returns to its pool when the variant drops; the
@@ -265,7 +267,24 @@ impl EscalateHandleRegistry {
         );
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    pub(crate) fn insert_texture(
+        &self,
+        handle_id: String,
+        texture: PooledTextureHandle,
+        timeline_pair: Option<Arc<crate::apple::surface_share::CrossProcessTimelinePair>>,
+    ) {
+        let mut map = self.handles.lock().expect("poisoned");
+        map.insert(
+            handle_id,
+            RegisteredHandle::Texture {
+                texture,
+                timeline_pair,
+            },
+        );
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     pub(crate) fn insert_texture(&self, handle_id: String, texture: PooledTextureHandle) {
         let mut map = self.handles.lock().expect("poisoned");
         map.insert(handle_id, RegisteredHandle::Texture { texture });
@@ -489,44 +508,46 @@ pub(crate) fn handle_escalate_op(
                 // that cannot rebuild every flavour and re-interprets the
                 // ones it can.
                 full.register_texture(&handle_id, texture.texture_clone());
-                Ok((handle_id, texture, produce_done, consume_done))
+                registry.insert_texture(handle_id.clone(), texture, produce_done, consume_done);
+                Ok(handle_id)
             });
-            #[cfg(not(target_os = "linux"))]
+            #[cfg(target_os = "macos")]
+            let acquired = sandbox.escalate(|full| {
+                let desc = TexturePoolDescriptor::new(width, height, parsed_format)
+                    .with_usage(parsed_usage)
+                    .with_cross_process_importability(match full.host_vulkan_device_arc() {
+                        Ok(device) => derive_texture_cross_process_importability(
+                            parsed_format,
+                            device.supports_metal_objects_interop(),
+                        ),
+                        Err(_) => TextureCrossProcessImportability::NotImportable,
+                    });
+                let texture = full.acquire_texture(&desc)?;
+                let (handle_id, timeline_pair) = assign_texture_handle_id(full, &texture)?;
+                full.register_texture(&handle_id, texture.texture_clone());
+                registry.insert_texture(handle_id.clone(), texture, timeline_pair);
+                Ok(handle_id)
+            });
+            #[cfg(not(any(target_os = "linux", target_os = "macos")))]
             let acquired = sandbox.escalate(|full| {
                 let desc = TexturePoolDescriptor::new(width, height, parsed_format)
                     .with_usage(parsed_usage);
                 let texture = full.acquire_texture(&desc)?;
                 let (handle_id,) = assign_texture_handle_id(full, &texture)?;
                 full.register_texture(&handle_id, texture.texture_clone());
-                Ok((handle_id, texture))
+                registry.insert_texture(handle_id.clone(), texture);
+                Ok(handle_id)
             });
             Some(match acquired {
-                #[cfg(target_os = "linux")]
-                Ok((handle_id, texture, produce_done, consume_done)) => {
-                    registry.insert_texture(handle_id.clone(), texture, produce_done, consume_done);
-                    EscalateResponse::Ok(EscalateResponseOk {
-                        request_id: rid,
-                        handle_id,
-                        width: Some(width),
-                        height: Some(height),
-                        format: Some(parsed_format.wire_name().to_string()),
-                        usage: Some(texture_usages_to_wire(parsed_usage)),
-                        ..Default::default()
-                    })
-                }
-                #[cfg(not(target_os = "linux"))]
-                Ok((handle_id, texture)) => {
-                    registry.insert_texture(handle_id.clone(), texture);
-                    EscalateResponse::Ok(EscalateResponseOk {
-                        request_id: rid,
-                        handle_id,
-                        width: Some(width),
-                        height: Some(height),
-                        format: Some(parsed_format.wire_name().to_string()),
-                        usage: Some(texture_usages_to_wire(parsed_usage)),
-                        ..Default::default()
-                    })
-                }
+                Ok(handle_id) => EscalateResponse::Ok(EscalateResponseOk {
+                    request_id: rid,
+                    handle_id,
+                    width: Some(width),
+                    height: Some(height),
+                    format: Some(parsed_format.wire_name().to_string()),
+                    usage: Some(texture_usages_to_wire(parsed_usage)),
+                    ..Default::default()
+                }),
                 Err(e) => EscalateResponse::Err(EscalateResponseErr {
                     request_id: rid,
                     message: format!("acquire_texture failed: {e}"),
@@ -1383,6 +1404,21 @@ fn assign_buffer_handle_id(
     Ok(published_frame_id.to_string())
 }
 
+/// A fresh exportable timeline for one edge of a cross-process pair, on the
+/// host device; `caller` and `edge` name it in a refusal.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn new_exportable_timeline_edge(
+    host_device: &crate::vulkan::rhi::HostVulkanDevice,
+    caller: &str,
+    edge: &str,
+) -> crate::core::error::Result<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>> {
+    crate::vulkan::rhi::HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
+        .map(Arc::new)
+        .map_err(|e| {
+            crate::core::error::Error::GpuError(format!("{caller}: new_exportable ({edge}): {e}"))
+        })
+}
+
 /// Resolve the `handle_id` returned to the subprocess for a pooled texture.
 ///
 /// On Linux, register the texture's DMA-BUF with the surface-share service under a fresh UUID
@@ -1413,28 +1449,10 @@ fn assign_texture_handle_id(
         // but the surface-share IPC delivers both FDs to the
         // cdylib so future consumers riding the dual-timeline
         // contract see them.
-        let produce_done = Arc::new(
-            crate::vulkan::rhi::HostVulkanTimelineSemaphore::new_exportable(
-                host_device.device(),
-                0,
-            )
-            .map_err(|e| {
-                crate::core::error::Error::GpuError(format!(
-                    "assign_texture_handle_id: new_exportable (produce_done): {e}"
-                ))
-            })?,
-        );
-        let consume_done = Arc::new(
-            crate::vulkan::rhi::HostVulkanTimelineSemaphore::new_exportable(
-                host_device.device(),
-                0,
-            )
-            .map_err(|e| {
-                crate::core::error::Error::GpuError(format!(
-                    "assign_texture_handle_id: new_exportable (consume_done): {e}"
-                ))
-            })?,
-        );
+        let produce_done =
+            new_exportable_timeline_edge(&host_device, "assign_texture_handle_id", "produce_done")?;
+        let consume_done =
+            new_exportable_timeline_edge(&host_device, "assign_texture_handle_id", "consume_done")?;
         // UNDEFINED at registration: pooled textures sit in the
         // texture pool unowned until the first acquire. The host
         // adapter or escalate-IPC bridge transitions to its
@@ -1454,7 +1472,51 @@ fn assign_texture_handle_id(
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+/// Resolve the `handle_id` returned to the subprocess for a pooled texture.
+///
+/// On macOS an IOSurface-backed texture is registered with the surface-share
+/// service whole — its surface, image recipe and layout — under a fresh UUID,
+/// with a timeline pair minted for it, so a helper can `check_out` it. A
+/// texture the device could not allocate over an IOSurface gets an id alone,
+/// and nothing a helper can resolve.
+#[cfg(target_os = "macos")]
+fn assign_texture_handle_id(
+    full: &crate::core::context::GpuContextFullAccess,
+    texture: &PooledTextureHandle,
+) -> crate::core::error::Result<(
+    String,
+    Option<Arc<crate::apple::surface_share::CrossProcessTimelinePair>>,
+)> {
+    let handle_id = Uuid::new_v4().to_string();
+    let Some(store) = full.surface_store() else {
+        return Ok((handle_id, None));
+    };
+    if crate::host_rhi::HostTextureExt::vulkan_inner(texture.texture())
+        .backing_iosurface()
+        .is_none()
+    {
+        tracing::debug!(
+            handle_id,
+            "assign_texture_handle_id: the texture is not IOSurface-backed, so no helper can \
+             resolve it"
+        );
+        return Ok((handle_id, None));
+    }
+    let host_device = full.host_vulkan_device_arc()?;
+    let timeline_pair = Arc::new(crate::apple::surface_share::CrossProcessTimelinePair::new(
+        new_exportable_timeline_edge(&host_device, "assign_texture_handle_id", "produce_done")?,
+        new_exportable_timeline_edge(&host_device, "assign_texture_handle_id", "consume_done")?,
+    ));
+    store.host_register_texture_with_timeline_pair(
+        &handle_id,
+        texture.texture(),
+        &timeline_pair,
+        streamlib_consumer_rhi::VulkanLayout::UNDEFINED,
+    )?;
+    Ok((handle_id, Some(timeline_pair)))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn assign_texture_handle_id(
     _full: &crate::core::context::GpuContextFullAccess,
     _texture: &PooledTextureHandle,
@@ -1483,22 +1545,10 @@ fn assign_image_handle_id(
 )> {
     let handle_id = Uuid::new_v4().to_string();
     let host_device = full.host_vulkan_device_arc()?;
-    let produce_done = Arc::new(
-        crate::vulkan::rhi::HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
-            .map_err(|e| {
-                crate::core::error::Error::GpuError(format!(
-                    "assign_image_handle_id: new_exportable (produce_done): {e}"
-                ))
-            })?,
-    );
-    let consume_done = Arc::new(
-        crate::vulkan::rhi::HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
-            .map_err(|e| {
-                crate::core::error::Error::GpuError(format!(
-                    "assign_image_handle_id: new_exportable (consume_done): {e}"
-                ))
-            })?,
-    );
+    let produce_done =
+        new_exportable_timeline_edge(&host_device, "assign_image_handle_id", "produce_done")?;
+    let consume_done =
+        new_exportable_timeline_edge(&host_device, "assign_image_handle_id", "consume_done")?;
     if let Some(store) = full.surface_store() {
         // Render-target images are freshly allocated and unwritten at
         // registration time — declare UNDEFINED and let the first
@@ -4371,10 +4421,7 @@ pub(crate) fn release_surface_share_and_texture_cache_for_handle(
     handle_id: &str,
     removed_handle: &RegisteredHandle,
 ) {
-    // Pixel-buffer / texture / image acquires were checked into the
-    // surface-share service under the returned handle_id; pair the
-    // registry eviction with the matching service release.
-    release_surface_share_surface(sandbox, handle_id);
+    release_surface_share_surface(sandbox, handle_id, removed_handle);
     // Texture and image acquires also entered the parent's same-process
     // texture cache; `unregister_texture` removes that entry and tears
     // down the surface's export stagings with it. Scoped to
@@ -4385,25 +4432,33 @@ pub(crate) fn release_surface_share_and_texture_cache_for_handle(
     }
 }
 
-/// Best-effort surface-share service release paired with registry eviction on Linux.
+/// Best-effort surface-share release paired with registry eviction, for the
+/// handles registered under their own id: every acquire on Linux, where each
+/// is checked in; a texture on macOS, where a pixel buffer's id names its
+/// pool slot's registration, which outlives the handle.
 ///
 /// The registry drop alone releases the host's strong refcount on the
-/// underlying resource, but the surface-share service still holds a dup of the DMA-BUF FD
-/// until we explicitly call `release`. Errors here are logged, not returned —
-/// the subprocess is not waiting on the surface-share service handshake at this point.
+/// underlying resource, but the surface-share service still holds the
+/// surface's handle until `release`. Errors are logged, not returned — the
+/// subprocess is not waiting on the service at this point.
 #[allow(unused_variables)]
-fn release_surface_share_surface(sandbox: &GpuContextLimitedAccess, handle_id: &str) {
-    #[cfg(target_os = "linux")]
+fn release_surface_share_surface(
+    sandbox: &GpuContextLimitedAccess,
+    handle_id: &str,
+    removed_handle: &RegisteredHandle,
+) {
+    let registered_under_its_own_id =
+        cfg!(target_os = "linux") || removed_handle.is_texture_backed();
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    if registered_under_its_own_id
+        && let Some(store) = sandbox.surface_store()
+        && let Err(e) = store.release(handle_id)
     {
-        if let Some(store) = sandbox.surface_store() {
-            if let Err(e) = store.release(handle_id) {
-                tracing::debug!(
-                    "[escalate] surface-share service release for '{}' returned error: {}",
-                    handle_id,
-                    e
-                );
-            }
-        }
+        tracing::debug!(
+            "[escalate] surface-share service release for '{}' returned error: {}",
+            handle_id,
+            e
+        );
     }
 }
 
@@ -4488,6 +4543,22 @@ fn derive_texture_cross_process_importability(
         return TextureCrossProcessImportability::OpaqueFd;
     }
     TextureCrossProcessImportability::NotImportable
+}
+
+/// The cross-process importability flavor an `acquire_texture` request can
+/// take on macOS — an image over a private IOSurface, for any single-plane
+/// format, when the device can create one. Everything else keeps the
+/// non-importable allocation, and a helper's later resolve refuses.
+#[cfg(target_os = "macos")]
+fn derive_texture_cross_process_importability(
+    format: TextureFormat,
+    device_supports_metal_objects_interop: bool,
+) -> TextureCrossProcessImportability {
+    if device_supports_metal_objects_interop && format.plane_count() == 1 {
+        TextureCrossProcessImportability::IOSurface
+    } else {
+        TextureCrossProcessImportability::NotImportable
+    }
 }
 
 /// Parse an array of usage tokens into a combined [`TextureUsages`] bitmask,
@@ -10594,6 +10665,134 @@ void main() {
                  proved nothing"
             );
         }
+    }
+
+    /// On macOS an escalate `acquire_texture` allocates over an IOSurface and
+    /// registers the texture whole with the surface-share service. While the
+    /// helper holds it the pool hands the slot to no one else; the teardown a
+    /// killed helper's bridge runs frees the slot and the registration both.
+    #[cfg(target_os = "macos")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn a_helpers_texture_crosses_on_an_iosurface_and_its_slot_is_held_until_teardown() {
+        use crate::apple::surface_share::{IOSurfaceShareState, MachSurfaceShareService};
+        use crate::core::context::{GpuContext, GpuContextLimitedAccess, SurfaceStore};
+
+        let Ok(gpu) = GpuContext::init_for_platform_sync() else {
+            println!("no GPU device — skipping");
+            return;
+        };
+        let state = IOSurfaceShareState::new();
+        let mut service = MachSurfaceShareService::new(
+            state.clone(),
+            format!(
+                "com.tatolab.streamlib.escalate-texture-test.{}.{}",
+                std::process::id(),
+                Uuid::new_v4().simple()
+            ),
+        );
+        service
+            .start()
+            .expect("the Mach surface-share service starts");
+        let store = SurfaceStore::new_sharing_the_mach_services_tables(
+            service.service_name().to_string(),
+            "R-escalate-texture".to_string(),
+            Arc::clone(state.check_out_leases()),
+            Arc::clone(state.cross_process_timeline_pairs()),
+        );
+        store.connect().expect("the store connects");
+        gpu.set_surface_store(store);
+        let sandbox = GpuContextLimitedAccess::new(gpu);
+        let registry = EscalateHandleRegistry::new();
+        let (width, height, format) = (64, 32, TextureFormat::Rgba8Unorm);
+        let usage = vec!["texture_binding".to_string(), "storage_binding".to_string()];
+
+        let response = handle_escalate_op(
+            &sandbox,
+            &registry,
+            &a_mesh_link_ingress_table_carrying_nothing(),
+            EscalateRequest::AcquireTexture(EscalateRequestAcquireTexture {
+                request_id: "req-iosurface".to_string(),
+                width,
+                height,
+                format: format.wire_name().to_string(),
+                usage: usage.clone(),
+            }),
+        );
+        let handle_id = match response {
+            Some(EscalateResponse::Ok(ok)) => ok.handle_id,
+            other => panic!("acquire_texture failed: {other:?}"),
+        };
+        let registration = state
+            .registration_of(&handle_id)
+            .expect("the texture is registered with the surface-share service");
+        assert_eq!(registration.resource_type, "texture");
+        assert!(registration.timeline_send_rights.is_some());
+        let texture_image = registration
+            .texture_image
+            .expect("a texture registration carries its image");
+        assert_eq!(texture_image.recipe.vk_image_tiling, 0, "OPTIMAL");
+        assert!(
+            state
+                .cross_process_timeline_pairs()
+                .pair_of(&handle_id)
+                .is_some()
+        );
+
+        let held_slot_id = {
+            let handles = registry.handles.lock().expect("poisoned");
+            match handles.get(&handle_id) {
+                Some(RegisteredHandle::Texture {
+                    texture,
+                    timeline_pair,
+                }) => {
+                    assert!(timeline_pair.is_some());
+                    texture.slot_id()
+                }
+                _ => panic!("the registry holds the texture"),
+            }
+        };
+        let same_bucket = TexturePoolDescriptor::new(width, height, format)
+            .with_usage(parse_texture_usages(&usage).expect("usage"))
+            .with_cross_process_importability(TextureCrossProcessImportability::IOSurface);
+        let while_held = sandbox
+            .acquire_texture(&same_bucket)
+            .expect("a second slot");
+        assert_ne!(
+            while_held.slot_id(),
+            held_slot_id,
+            "the pool rehanded a slot a helper still holds"
+        );
+        drop(while_held);
+
+        for (drained_handle_id, removed_handle) in registry.drain_handles() {
+            release_surface_share_and_texture_cache_for_handle(
+                &sandbox,
+                &drained_handle_id,
+                &removed_handle,
+            );
+        }
+        assert!(state.registration_of(&handle_id).is_none());
+        assert!(
+            state
+                .cross_process_timeline_pairs()
+                .pair_of(&handle_id)
+                .is_none()
+        );
+        let mut reacquired_slot_ids = Vec::new();
+        let mut reacquired = Vec::new();
+        for _ in 0..2 {
+            let texture = sandbox.acquire_texture(&same_bucket).expect("a slot");
+            reacquired_slot_ids.push(texture.slot_id());
+            reacquired.push(texture);
+        }
+        assert!(
+            reacquired_slot_ids.contains(&held_slot_id),
+            "the teardown did not return the helper's slot to the pool"
+        );
     }
 
     #[test]

@@ -135,6 +135,15 @@ impl GpuDevice {
         Ok(Texture::from_vulkan(vulkan_texture))
     }
 
+    /// Create a texture over a fresh private IOSurface a foreign process can
+    /// import from the surface's Mach port — see
+    /// [`crate::vulkan::rhi::HostVulkanTexture::new_iosurface_backed`].
+    #[cfg(target_os = "macos")]
+    pub fn create_texture_iosurface_backed(&self, desc: &TextureDescriptor) -> Result<Texture> {
+        let vulkan_texture = self.inner.create_texture_iosurface_backed(desc)?;
+        Ok(Texture::from_vulkan(vulkan_texture))
+    }
+
     /// Get the shared command queue.
     ///
     /// All processors should use this shared queue rather than creating their own.

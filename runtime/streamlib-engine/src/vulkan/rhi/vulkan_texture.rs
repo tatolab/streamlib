@@ -201,20 +201,22 @@ pub struct HostVulkanTexture {
     image: Option<vk::Image>,
     /// VMA allocation (always allocated with DMA-BUF export flags via HostVulkanDevice).
     allocation: Option<vma::Allocation>,
-    /// Imported device memory for DMA-BUF import path (VMA cannot import external memory).
-    #[cfg(target_os = "linux")]
+    /// Raw device memory for the paths VMA cannot serve — a DMA-BUF import, or
+    /// the binding an IOSurface-backed image takes.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     imported_memory: Option<vk::DeviceMemory>,
     /// Allocation size for the imported_memory path (the size we passed
     /// to `vkAllocateMemory` via `import_dma_buf_memory`). Tracked
     /// because `VulkanTextureLike::vk_memory_size` needs it for Skia's
     /// `GrVkAlloc.fSize`.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     imported_memory_size: vk::DeviceSize,
     /// Lazy-cached image view for this texture.
     cached_image_view: OnceLock<vk::ImageView>,
-    /// Whether this texture was imported from a DMA-BUF fd (uses imported_memory path).
-    #[cfg(target_os = "linux")]
-    imported_from_dma_buf: bool,
+    /// The private IOSurface this image's storage is, when it was allocated
+    /// to cross to a helper process.
+    #[cfg(target_os = "macos")]
+    backing_iosurface: Option<crate::apple::iosurface::RetainedIOSurfaceSharedAcrossThreads>,
     /// Whether this texture was allocated from the OPAQUE_FD image
     /// pool. Gates `export_opaque_fd_memory`: callers that
     /// allocated via [`Self::new`] / `_render_target_dma_buf` / `_device_local`
@@ -314,13 +316,13 @@ impl HostVulkanTexture {
             vulkan_device: Some(Arc::clone(vulkan_device)),
             image: Some(image),
             allocation: Some(allocation),
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             imported_memory: None,
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             imported_memory_size: 0,
             cached_image_view: OnceLock::new(),
-            #[cfg(target_os = "linux")]
-            imported_from_dma_buf: false,
+            #[cfg(target_os = "macos")]
+            backing_iosurface: None,
             #[cfg(target_os = "linux")]
             is_opaque_fd_export: false,
             #[cfg(target_os = "linux")]
@@ -376,13 +378,13 @@ impl HostVulkanTexture {
             vulkan_device: Some(Arc::clone(vulkan_device)),
             image: Some(image),
             allocation: Some(allocation),
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             imported_memory: None,
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             imported_memory_size: 0,
             cached_image_view: OnceLock::new(),
-            #[cfg(target_os = "linux")]
-            imported_from_dma_buf: false,
+            #[cfg(target_os = "macos")]
+            backing_iosurface: None,
             #[cfg(target_os = "linux")]
             is_opaque_fd_export: false,
             #[cfg(target_os = "linux")]
@@ -522,7 +524,6 @@ impl HostVulkanTexture {
             imported_memory: None,
             imported_memory_size: 0,
             cached_image_view: OnceLock::new(),
-            imported_from_dma_buf: false,
             is_opaque_fd_export: false,
             chosen_drm_format_modifier: chosen,
             width: desc.width,
@@ -671,7 +672,6 @@ impl HostVulkanTexture {
             imported_memory: None,
             imported_memory_size: 0,
             cached_image_view: OnceLock::new(),
-            imported_from_dma_buf: false,
             is_opaque_fd_export: true,
             chosen_drm_format_modifier: 0,
             width: desc.width,
@@ -778,7 +778,6 @@ impl HostVulkanTexture {
             imported_memory: None,
             imported_memory_size: 0,
             cached_image_view: OnceLock::new(),
-            imported_from_dma_buf: false,
             is_opaque_fd_export: false,
             chosen_drm_format_modifier: 0,
             width: descriptor.width,
@@ -1385,7 +1384,6 @@ impl HostVulkanTexture {
             imported_memory: Some(memory),
             imported_memory_size: alloc_size,
             cached_image_view: OnceLock::new(),
-            imported_from_dma_buf: true,
             is_opaque_fd_export: false,
             chosen_drm_format_modifier: drm_format_modifier,
             width,
@@ -1473,7 +1471,6 @@ impl HostVulkanTexture {
             imported_memory: Some(memory),
             imported_memory_size: alloc_size,
             cached_image_view: OnceLock::new(),
-            imported_from_dma_buf: true,
             is_opaque_fd_export: false,
             chosen_drm_format_modifier: 0,
             width,
@@ -1487,19 +1484,176 @@ impl HostVulkanTexture {
     }
 }
 
+#[cfg(target_os = "macos")]
+impl HostVulkanTexture {
+    /// An image whose storage is a fresh private IOSurface, so it can cross to
+    /// a helper process as a Mach port.
+    ///
+    /// MoltenVK binds the surface when the image is created — there is no
+    /// attach after the fact — and checks only its width, height and
+    /// bytes-per-element against the format's block size. The image stays
+    /// `OPTIMAL`; its rows are the surface's, at the surface's stride. The
+    /// binding takes a device-local memory type that is not host-visible:
+    /// MoltenVK backs a host-visible binding with a private `MTLBuffer` of its
+    /// own for every image.
+    pub fn new_iosurface_backed(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        desc: &TextureDescriptor,
+    ) -> Result<Self> {
+        const OPERATION: &str = "HostVulkanTexture::new_iosurface_backed";
+        if desc.format.plane_count() != 1 {
+            return Err(Error::NotSupported(format!(
+                "{OPERATION}: {:?} is planar; an IOSurface-backed image carries one plane",
+                desc.format
+            )));
+        }
+        let iosurface = crate::apple::iosurface::create_private_iosurface_for_a_gpu_image(
+            desc.width,
+            desc.height,
+            desc.format.bytes_per_pixel(),
+        )?;
+        Self::created_over_iosurface(
+            vulkan_device,
+            desc.format,
+            texture_usages_to_vk(desc.usage),
+            iosurface,
+        )
+    }
+
+    /// An image over an IOSurface another process allocated — a registered
+    /// texture's surface, resolved from its Mach port. Refused when the
+    /// surface's element size is not `format`'s, or `usage` carries a bit no
+    /// `VkImageUsageFlagBits` names.
+    pub fn from_iosurface(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        iosurface: objc2_core_foundation::CFRetained<objc2_io_surface::IOSurfaceRef>,
+        format: TextureFormat,
+        usage: streamlib_consumer_rhi::VulkanImageUsage,
+    ) -> Result<Self> {
+        const OPERATION: &str = "HostVulkanTexture::from_iosurface";
+        if let Some(refusal) =
+            streamlib_consumer_rhi::refusal_of_an_iosurface_for_an_image_of_format(
+                &iosurface, format,
+            )
+        {
+            return Err(Error::NotSupported(format!("{OPERATION}: {refusal}")));
+        }
+        let usage_flags = usage
+            .as_vk_or_refusal()
+            .map_err(|refusal| Error::NotSupported(format!("{OPERATION}: {refusal}")))?;
+        Self::created_over_iosurface(vulkan_device, format, usage_flags, iosurface)
+    }
+
+    /// The image over `iosurface`, taking its extent from the surface; see
+    /// [`streamlib_consumer_rhi::create_image_over_iosurface`] for the
+    /// contract.
+    fn created_over_iosurface(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        format: TextureFormat,
+        usage_flags: vk::ImageUsageFlags,
+        iosurface: objc2_core_foundation::CFRetained<objc2_io_surface::IOSurfaceRef>,
+    ) -> Result<Self> {
+        const OPERATION: &str = "HostVulkanTexture::created_over_iosurface";
+        if !vulkan_device.supports_metal_objects_interop() {
+            return Err(Error::NotSupported(format!(
+                "{OPERATION}: VK_EXT_metal_objects is not enabled on this device, so an image \
+                 cannot be created over an IOSurface"
+            )));
+        }
+        let (width, height) = (iosurface.width() as u32, iosurface.height() as u32);
+        let device = vulkan_device.device();
+        // SAFETY: the extension is enabled (checked above) and `iosurface` is
+        // retained below for the image's whole life.
+        let image = unsafe {
+            streamlib_consumer_rhi::create_image_over_iosurface(
+                device,
+                &iosurface,
+                width,
+                height,
+                texture_format_to_vk(format),
+                usage_flags,
+            )
+        }
+        .map_err(|e| {
+            Error::GpuError(format!(
+                "{OPERATION}: the driver refused a {width}x{height} {format:?} image over an \
+                 IOSurface: {e}"
+            ))
+        })?;
+        // SAFETY: `image` was just created on this device.
+        let memory_requirements = unsafe { device.get_image_memory_requirements(image) };
+        let memory = vulkan_device
+            .allocate_device_local_memory_for_an_iosurface_backed_image(
+                memory_requirements.size,
+                memory_requirements.memory_type_bits,
+            )
+            // SAFETY: nothing else holds the image yet.
+            .inspect_err(|_| unsafe { device.destroy_image(image, None) })?;
+        // SAFETY: `memory` was allocated for this image's requirements.
+        if let Err(e) = unsafe { device.bind_image_memory(image, memory, 0) } {
+            // SAFETY: nothing else holds either handle yet.
+            unsafe { device.destroy_image(image, None) };
+            vulkan_device.free_imported_memory(memory);
+            return Err(Error::GpuError(format!(
+                "{OPERATION}: binding the IOSurface-backed image's memory failed: {e}"
+            )));
+        }
+
+        Ok(Self {
+            vulkan_device: Some(Arc::clone(vulkan_device)),
+            image: Some(image),
+            allocation: None,
+            imported_memory: Some(memory),
+            imported_memory_size: memory_requirements.size,
+            cached_image_view: OnceLock::new(),
+            backing_iosurface: Some(
+                crate::apple::iosurface::RetainedIOSurfaceSharedAcrossThreads::new(iosurface),
+            ),
+            width,
+            height,
+            format,
+            vk_image_meta: HostVkImageMeta {
+                vk_image_tiling: vk::ImageTiling::OPTIMAL,
+                vk_image_usage_flags: usage_flags,
+            },
+        })
+    }
+
+    /// The IOSurface this image's storage is, when it was allocated to cross
+    /// to a helper process.
+    pub fn backing_iosurface(
+        &self,
+    ) -> Option<&crate::apple::iosurface::RetainedIOSurfaceSharedAcrossThreads> {
+        self.backing_iosurface.as_ref()
+    }
+
+    /// A fresh send right naming this image's IOSurface, for the surface-share
+    /// wire. Refused for an image that is not IOSurface-backed.
+    pub fn export_iosurface_mach_send_right(
+        &self,
+    ) -> Result<streamlib_surface_client::OwnedMachSendRight> {
+        let iosurface = self.backing_iosurface().ok_or_else(|| {
+            Error::NotSupported(
+                "export_iosurface_mach_send_right: this image's storage is not an IOSurface".into(),
+            )
+        })?;
+        crate::apple::iosurface::create_iosurface_mach_send_right(iosurface)
+    }
+}
+
 impl Clone for HostVulkanTexture {
     fn clone(&self) -> Self {
         Self {
             vulkan_device: None,
             image: None,
             allocation: None,
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             imported_memory: None,
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             imported_memory_size: 0,
             cached_image_view: OnceLock::new(),
-            #[cfg(target_os = "linux")]
-            imported_from_dma_buf: false,
+            #[cfg(target_os = "macos")]
+            backing_iosurface: None,
             #[cfg(target_os = "linux")]
             is_opaque_fd_export: false,
             #[cfg(target_os = "linux")]
@@ -1521,9 +1675,8 @@ impl Drop for HostVulkanTexture {
             }
         }
 
-        #[cfg(target_os = "linux")]
-        if self.imported_from_dma_buf {
-            // DMA-BUF import path: raw DeviceMemory, not VMA
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        if self.imported_memory.is_some() {
             if let Some(vk_dev) = &self.vulkan_device {
                 if let Some(image) = self.image {
                     unsafe { vk_dev.device().destroy_image(image, None) };
@@ -1560,12 +1713,10 @@ impl HostVulkanTexture {
             let info = vk_dev.allocator().get_allocation_info(*allocation);
             return (info.deviceMemory, info.offset, info.size);
         }
-        // DMA-BUF import path (Linux only).
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         if let Some(memory) = self.imported_memory {
             return (memory, 0, self.imported_memory_size);
         }
-        // Placeholder / IOSurface — no Vulkan memory binding.
         (vk::DeviceMemory::null(), 0, 0)
     }
 }
@@ -1617,6 +1768,160 @@ impl super::VulkanTextureLike for HostVulkanTexture {
 mod tests {
     use super::*;
     use crate::vulkan::rhi::HostVulkanDevice;
+
+    /// The bytes an IOSurface-backed image's surface holds, row by row at
+    /// the surface's own stride, trimmed to the image's width.
+    #[cfg(target_os = "macos")]
+    fn packed_rows_of_the_backing_iosurface(texture: &HostVulkanTexture) -> Vec<u8> {
+        use objc2_io_surface::IOSurfaceLockOptions;
+
+        let iosurface = texture
+            .backing_iosurface()
+            .expect("an IOSurface-backed image keeps its surface");
+        let row_byte_len = (texture.width() * texture.format().bytes_per_pixel()) as usize;
+        let locked =
+            unsafe { iosurface.lock(IOSurfaceLockOptions::ReadOnly, std::ptr::null_mut()) };
+        assert_eq!(locked, 0, "IOSurfaceLock");
+        let base = iosurface.base_address().as_ptr().cast::<u8>();
+        let mut packed_rows = Vec::with_capacity(row_byte_len * texture.height() as usize);
+        for row in 0..texture.height() as usize {
+            let row_bytes = unsafe {
+                std::slice::from_raw_parts(base.add(row * iosurface.bytes_per_row()), row_byte_len)
+            };
+            packed_rows.extend_from_slice(row_bytes);
+        }
+        unsafe { iosurface.unlock(IOSurfaceLockOptions::ReadOnly, std::ptr::null_mut()) };
+        packed_rows
+    }
+
+    #[cfg(target_os = "macos")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn an_upload_into_an_iosurface_backed_image_lands_in_the_surface_at_its_stride() {
+        let Ok(device) = HostVulkanDevice::new() else {
+            println!("Skipping - no Vulkan device available");
+            return;
+        };
+        // An odd width, so a surface that pads its rows reads wrong at the
+        // image's packed stride.
+        let (width, height) = (37, 5);
+        let texture = HostVulkanTexture::new_iosurface_backed(
+            &device,
+            &TextureDescriptor::new(width, height, TextureFormat::Rgba8Unorm).with_usage(
+                TextureUsages::COPY_SRC
+                    | TextureUsages::COPY_DST
+                    | TextureUsages::TEXTURE_BINDING
+                    | TextureUsages::STORAGE_BINDING,
+            ),
+        )
+        .expect("an IOSurface-backed image");
+        assert_eq!(texture.vk_image_tiling(), vk::ImageTiling::OPTIMAL);
+        assert_ne!(texture.vk_memory_binding().0, vk::DeviceMemory::null());
+
+        let pattern: Vec<u8> = (0..(width * height * 4) as usize)
+            .map(|index| (index.wrapping_mul(31).wrapping_add(7)) as u8)
+            .collect();
+        assert_ne!(
+            packed_rows_of_the_backing_iosurface(&texture),
+            pattern,
+            "the surface already held the pattern before the engine wrote it"
+        );
+
+        let staging = crate::vulkan::rhi::HostVulkanBuffer::new_storage_buffer_host_visible(
+            &device,
+            pattern.len() as u64,
+        )
+        .expect("a staging buffer");
+        unsafe {
+            std::ptr::copy_nonoverlapping(pattern.as_ptr(), staging.mapped_ptr(), pattern.len());
+            let _final_texture_layout = device
+                .upload_buffer_to_image(staging.buffer(), &texture, width, height)
+                .expect("the upload");
+        }
+        assert_eq!(packed_rows_of_the_backing_iosurface(&texture), pattern);
+    }
+
+    /// MoltenVK checks an IOSurface's element size against the format's block
+    /// size, so the 8- and 16-byte float formats take a surface of their own
+    /// element size — and an upload lands in it as it does for 4 bytes.
+    #[cfg(target_os = "macos")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn every_single_plane_format_takes_an_iosurface_backed_image() {
+        let Ok(device) = HostVulkanDevice::new() else {
+            println!("Skipping - no Vulkan device available");
+            return;
+        };
+        let (width, height) = (19, 3);
+        for format in [
+            TextureFormat::Rgba8Unorm,
+            TextureFormat::Rgba8UnormSrgb,
+            TextureFormat::Bgra8Unorm,
+            TextureFormat::Bgra8UnormSrgb,
+            TextureFormat::Rgba16Float,
+            TextureFormat::Rgba32Float,
+        ] {
+            let texture = HostVulkanTexture::new_iosurface_backed(
+                &device,
+                &TextureDescriptor::new(width, height, format).with_usage(
+                    TextureUsages::COPY_SRC
+                        | TextureUsages::COPY_DST
+                        | TextureUsages::TEXTURE_BINDING
+                        | TextureUsages::STORAGE_BINDING,
+                ),
+            )
+            .unwrap_or_else(|refusal| panic!("{format:?} over an IOSurface: {refusal}"));
+            let pattern: Vec<u8> = (0..(width * height * format.bytes_per_pixel()) as usize)
+                .map(|index| (index.wrapping_mul(13).wrapping_add(5)) as u8)
+                .collect();
+            let staging = crate::vulkan::rhi::HostVulkanBuffer::new_storage_buffer_host_visible(
+                &device,
+                pattern.len() as u64,
+            )
+            .expect("a staging buffer");
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    pattern.as_ptr(),
+                    staging.mapped_ptr(),
+                    pattern.len(),
+                );
+                let _final_texture_layout = device
+                    .upload_buffer_to_image(staging.buffer(), &texture, width, height)
+                    .expect("the upload");
+            }
+            assert_eq!(
+                packed_rows_of_the_backing_iosurface(&texture),
+                pattern,
+                "{format:?}"
+            );
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn a_planar_format_is_refused_an_iosurface_backed_image_by_name() {
+        let Ok(device) = HostVulkanDevice::new() else {
+            println!("Skipping - no Vulkan device available");
+            return;
+        };
+        let refused = HostVulkanTexture::new_iosurface_backed(
+            &device,
+            &TextureDescriptor::new(64, 64, TextureFormat::Nv12),
+        )
+        .err()
+        .expect("NV12 has two planes");
+        assert!(refused.to_string().contains("planar"), "{refused}");
+    }
 
     #[cfg(target_os = "linux")]
     fn inode_of(fd: std::os::unix::io::RawFd) -> Option<u64> {

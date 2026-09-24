@@ -116,28 +116,16 @@ impl std::fmt::Display for SurfaceExportStagingResidency {
     }
 }
 
-/// The pixel shape a texture-backed export presents to its consumer.
-/// Restricted to single-plane color: the tightly-packed copy region and
-/// the consumer-side layout both express one strided buffer. BGRA stays
-/// BGRA: relabeling those bytes RGBA would silently swap channels, and
-/// the float formats keep their float identity for the same reason —
-/// a kernel's HDR output reaches the consumer as float16/float32
-/// elements, never as bytes wearing an integer label.
-///
-/// Residency-neutral, because the constraint is: a staging is one
-/// buffer, and both residencies hand out exactly that one buffer.
+/// The pixel shape a texture-backed export presents to its consumer —
+/// [`TextureFormat::host_view_pixel_format`], residency-neutral because a
+/// staging is one buffer at either residency.
 fn export_pixel_shape_for_texture(format: TextureFormat) -> Result<PixelFormat> {
-    match format {
-        TextureFormat::Rgba8Unorm | TextureFormat::Rgba8UnormSrgb => Ok(PixelFormat::Rgba32),
-        TextureFormat::Bgra8Unorm | TextureFormat::Bgra8UnormSrgb => Ok(PixelFormat::Bgra32),
-        TextureFormat::Rgba16Float => Ok(PixelFormat::Rgba16Float),
-        TextureFormat::Rgba32Float => Ok(PixelFormat::Rgba32Float),
-        TextureFormat::Nv12 => Err(Error::GpuError(
-            "a surface export refuses NV12: it is two planes, and a one-buffer export would drop \
-             chroma"
-                .into(),
-        )),
-    }
+    format.host_view_pixel_format().ok_or_else(|| {
+        Error::GpuError(format!(
+            "a surface export refuses {format:?}: it is planar, and a one-buffer export would \
+             drop a plane"
+        ))
+    })
 }
 
 fn export_bytes_per_pixel_for_pixel_format(format: PixelFormat) -> Result<u32> {

@@ -15,6 +15,9 @@ use super::{
     required_positive_u32_check_out_metadata_field,
 };
 
+mod texture;
+pub(crate) use texture::HelperCheckedOutTextureSurface;
+
 /// A pool slot's IOSurface pages imported as host memory on this helper's
 /// consumer device; the import retains the surface.
 pub(crate) struct HelperIOSurfacePoolSlotImport {
@@ -74,7 +77,7 @@ impl Drop for HelperIOSurfaceUseCountClaim {
 
 /// IOSurfaceLock or IOSurfaceUnlock refused, with the kernel's code.
 #[derive(Debug)]
-struct IOSurfaceLockRefused {
+pub(crate) struct IOSurfaceLockRefused {
     operation: &'static str,
     kern_return: i32,
 }
@@ -85,17 +88,27 @@ impl std::fmt::Display for IOSurfaceLockRefused {
     }
 }
 
-impl HelperCheckedOutPixelSurface {
-    /// Take the IOSurface lock for CPU access, read-only or read-write,
-    /// replacing any lock this surface already holds. On a discrete-GPU Mac
-    /// the lock is what makes the host view coherent with the GPU's copy.
-    pub(crate) fn lock_the_iosurface_for_cpu_access(&self, read_only: bool) -> PyResult<()> {
+/// The IOSurface lock a surface's CPU access holds, if any, with the options
+/// it took — what its unlock must repeat.
+#[derive(Default)]
+pub(crate) struct HelperIOSurfaceCpuLock {
+    held_lock_options: Mutex<Option<objc2_io_surface::IOSurfaceLockOptions>>,
+}
+
+impl HelperIOSurfaceCpuLock {
+    /// Take `iosurface`'s lock read-only or read-write, replacing any lock
+    /// already held. On a discrete-GPU Mac the lock is what makes the host
+    /// view coherent with the GPU's copy.
+    fn lock(
+        &self,
+        iosurface: &objc2_io_surface::IOSurfaceRef,
+        read_only: bool,
+    ) -> Result<(), IOSurfaceLockRefused> {
         use objc2_io_surface::IOSurfaceLockOptions;
-        let mut held_lock = self.iosurface_cpu_lock.lock();
-        if let Some(held_options) = *held_lock {
-            self.unlock_the_iosurface_held_with(held_options)
-                .map_err(|refused| self.iosurface_lock_error(refused))?;
-            *held_lock = None;
+        let mut held_lock_options = self.held_lock_options.lock();
+        if let Some(held_options) = *held_lock_options {
+            Self::unlock_with(iosurface, held_options)?;
+            *held_lock_options = None;
         }
         let lock_options = if read_only {
             IOSurfaceLockOptions::ReadOnly
@@ -103,47 +116,37 @@ impl HelperCheckedOutPixelSurface {
             IOSurfaceLockOptions::empty()
         };
         // SAFETY: a null seed pointer is documented as "not wanted".
-        let kern_return = unsafe {
-            self.iosurface_pool_slot_import
-                .iosurface()
-                .lock(lock_options, std::ptr::null_mut())
-        };
+        let kern_return = unsafe { iosurface.lock(lock_options, std::ptr::null_mut()) };
         if kern_return != 0 {
-            return Err(self.iosurface_lock_error(IOSurfaceLockRefused {
+            return Err(IOSurfaceLockRefused {
                 operation: "IOSurfaceLock",
                 kern_return,
-            }));
+            });
         }
-        *held_lock = Some(lock_options);
+        *held_lock_options = Some(lock_options);
         Ok(())
     }
 
-    /// Release the IOSurface lock this surface's CPU access holds, if any.
-    pub(crate) fn unlock_the_iosurface_after_cpu_access(&self) -> PyResult<()> {
-        self.release_the_held_iosurface_lock()
-            .map_err(|refused| self.iosurface_lock_error(refused))
-    }
-
-    /// Release the held lock; a refused unlock leaves it recorded as held.
-    fn release_the_held_iosurface_lock(&self) -> Result<(), IOSurfaceLockRefused> {
-        let mut held_lock = self.iosurface_cpu_lock.lock();
-        if let Some(held_options) = *held_lock {
-            self.unlock_the_iosurface_held_with(held_options)?;
-            *held_lock = None;
-        }
-        Ok(())
-    }
-
-    fn unlock_the_iosurface_held_with(
+    /// Release the held lock, if any; a refused unlock leaves it recorded
+    /// as held.
+    fn release(
         &self,
+        iosurface: &objc2_io_surface::IOSurfaceRef,
+    ) -> Result<(), IOSurfaceLockRefused> {
+        let mut held_lock_options = self.held_lock_options.lock();
+        if let Some(held_options) = *held_lock_options {
+            Self::unlock_with(iosurface, held_options)?;
+            *held_lock_options = None;
+        }
+        Ok(())
+    }
+
+    fn unlock_with(
+        iosurface: &objc2_io_surface::IOSurfaceRef,
         held_options: objc2_io_surface::IOSurfaceLockOptions,
     ) -> Result<(), IOSurfaceLockRefused> {
         // SAFETY: unlocks with the options the matching lock took.
-        let kern_return = unsafe {
-            self.iosurface_pool_slot_import
-                .iosurface()
-                .unlock(held_options, std::ptr::null_mut())
-        };
+        let kern_return = unsafe { iosurface.unlock(held_options, std::ptr::null_mut()) };
         if kern_return != 0 {
             return Err(IOSurfaceLockRefused {
                 operation: "IOSurfaceUnlock",
@@ -151,6 +154,22 @@ impl HelperCheckedOutPixelSurface {
             });
         }
         Ok(())
+    }
+}
+
+impl HelperCheckedOutPixelSurface {
+    /// Take the IOSurface lock for CPU access, read-only or read-write.
+    pub(crate) fn lock_the_iosurface_for_cpu_access(&self, read_only: bool) -> PyResult<()> {
+        self.iosurface_cpu_lock
+            .lock(self.iosurface_pool_slot_import.iosurface(), read_only)
+            .map_err(|refused| self.iosurface_lock_error(refused))
+    }
+
+    /// Release the IOSurface lock this surface's CPU access holds, if any.
+    pub(crate) fn unlock_the_iosurface_after_cpu_access(&self) -> PyResult<()> {
+        self.iosurface_cpu_lock
+            .release(self.iosurface_pool_slot_import.iosurface())
+            .map_err(|refused| self.iosurface_lock_error(refused))
     }
 
     fn iosurface_lock_error(&self, refused: IOSurfaceLockRefused) -> PyErr {
@@ -162,7 +181,10 @@ impl Drop for HelperCheckedOutPixelSurface {
     /// A surface dropped mid-access lets its IOSurface lock go before its
     /// use-count claim does.
     fn drop(&mut self) {
-        if let Err(refused) = self.release_the_held_iosurface_lock() {
+        if let Err(refused) = self
+            .iosurface_cpu_lock
+            .release(self.iosurface_pool_slot_import.iosurface())
+        {
             tracing::warn!("{refused} on surface {:?}", self.surface_id);
         }
     }
@@ -250,12 +272,11 @@ impl HelperProcessGpuExchangeClient {
 
     /// Whether an edit written back into `surface_id` publishes at all.
     ///
-    /// On macOS a pooled pixel buffer's CPU view is its IOSurface's own
-    /// pages, which every other holder of the frame imports too, so the
-    /// pooled allocation is the frame's only backing and the edit reaches
-    /// every holder: a pixel buffer answers yes. Textures do not cross to a
-    /// macOS helper yet, so nothing else answers. One checkout per pool slot,
-    /// memoised on the same key the Linux door uses.
+    /// On macOS a surface's CPU view is its IOSurface's own pages — a pooled
+    /// pixel buffer's and a texture's alike — which every other holder
+    /// imports too, so the allocation is the surface's only backing and the
+    /// edit reaches every holder. One checkout per pool slot, memoised on the
+    /// same key the Linux door uses.
     pub(crate) fn surface_can_take_write_back(
         self: &Arc<Self>,
         python: Python<'_>,
@@ -283,8 +304,10 @@ impl HelperProcessGpuExchangeClient {
                 .unwrap_or(default)
                 .to_string()
         };
-        let can_take_write_back = registered_as("resource_type", "pixel_buffer") == "pixel_buffer"
-            && registered_as("handle_type", "iosurface") == "iosurface";
+        let can_take_write_back = matches!(
+            registered_as("resource_type", "pixel_buffer").as_str(),
+            "pixel_buffer" | "texture"
+        ) && registered_as("handle_type", "iosurface") == "iosurface";
         self.write_back_answers_by_pool_slot
             .lock()
             .insert(source_pool_slot_key.to_string(), can_take_write_back);
@@ -317,11 +340,22 @@ impl HelperProcessGpuExchangeClient {
             .get("handle_type")
             .and_then(|value| value.as_str())
             .unwrap_or("iosurface");
-        if resource_type != "pixel_buffer" || handle_type != "iosurface" {
+        if handle_type != "iosurface" || !matches!(resource_type, "pixel_buffer" | "texture") {
             return Err(PyRuntimeError::new_err(format!(
                 "surface {surface_id:?} is registered as a {resource_type:?} over a \
-                 {handle_type:?} handle; a macOS helper maps IOSurface-backed pixel buffers only"
+                 {handle_type:?} handle; a macOS helper imports IOSurface-backed pixel buffers \
+                 and textures only"
             )));
+        }
+        if resource_type == "texture" {
+            return self
+                .import_checked_out_texture(
+                    surface_id,
+                    response,
+                    received_ports,
+                    release_check_out_to_surface_share,
+                )
+                .map(HelperCheckedOutSurface::Texture);
         }
         let width = required_positive_u32_check_out_metadata_field(response, surface_id, "width")?;
         let height =
@@ -355,7 +389,7 @@ impl HelperProcessGpuExchangeClient {
                     &iosurface_pool_slot_import,
                 )),
                 iosurface_pool_slot_import,
-                iosurface_cpu_lock: Mutex::new(None),
+                iosurface_cpu_lock: HelperIOSurfaceCpuLock::default(),
                 width,
                 height,
                 format,

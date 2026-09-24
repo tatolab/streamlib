@@ -74,6 +74,20 @@ impl TextureFormat {
         }
     }
 
+    /// The pixel format a host view of this texture's bytes reads them as —
+    /// one strided buffer — or `None` for a planar format, which one buffer
+    /// cannot hold. BGRA stays BGRA and the float formats stay float, so no
+    /// view relabels the bytes it spans.
+    pub fn host_view_pixel_format(&self) -> Option<crate::PixelFormat> {
+        match self {
+            Self::Rgba8Unorm | Self::Rgba8UnormSrgb => Some(crate::PixelFormat::Rgba32),
+            Self::Bgra8Unorm | Self::Bgra8UnormSrgb => Some(crate::PixelFormat::Bgra32),
+            Self::Rgba16Float => Some(crate::PixelFormat::Rgba16Float),
+            Self::Rgba32Float => Some(crate::PixelFormat::Rgba32Float),
+            Self::Nv12 => None,
+        }
+    }
+
     /// The lowercase snake-case name the escalate wire and the Python
     /// surface spell this format as.
     pub fn wire_name(&self) -> &'static str {

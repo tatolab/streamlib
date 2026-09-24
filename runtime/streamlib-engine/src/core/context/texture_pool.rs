@@ -36,6 +36,9 @@ pub enum TextureCrossProcessImportability {
     /// reproduces the tiled image via
     /// `VkImageDrmFormatModifierExplicitCreateInfoEXT` or EGL.
     RenderTargetDmaBuf,
+    /// A private IOSurface the image is created over — a foreign process
+    /// rebuilds the image from the surface's Mach port. macOS.
+    IOSurface,
 }
 
 /// Request descriptor for acquiring a pooled texture. Constructed through
@@ -571,11 +574,15 @@ impl TexturePool {
                 .inner
                 .device
                 .create_texture_render_target_dma_buf(&texture_desc)?,
-            #[cfg(not(target_os = "linux"))]
+            #[cfg(target_os = "macos")]
+            TextureCrossProcessImportability::IOSurface => self
+                .inner
+                .device
+                .create_texture_iosurface_backed(&texture_desc)?,
             other => {
                 return Err(Error::TextureError(format!(
-                    "pooled texture importability {other:?} is a Linux capability; \
-                     this platform allocates only NotImportable pool textures"
+                    "pooled texture importability {other:?} is not a flavour this platform \
+                     allocates"
                 )));
             }
         };

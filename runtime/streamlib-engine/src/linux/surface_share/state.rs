@@ -184,21 +184,6 @@ impl Clone for SurfaceMetadata {
     }
 }
 
-/// Documented defaults for the `vk_image_*` fields when the wire
-/// payload omits them. Match
-/// [`crate::vulkan::rhi::HostVulkanTexture::new_opaque_fd_export`]'s
-/// hardcoded shape so a daemon serving these defaults produces a
-/// `VkImageCreateInfo` byte-equal to what the existing consumer-side
-/// `from_opaque_fd` constructor already builds.
-pub const VK_IMAGE_TYPE_DEFAULT: i32 = 1; // VK_IMAGE_TYPE_2D
-pub const VK_IMAGE_MIP_LEVELS_DEFAULT: u32 = 1;
-pub const VK_IMAGE_ARRAY_LAYERS_DEFAULT: u32 = 1;
-pub const VK_IMAGE_SAMPLES_DEFAULT: i32 = 1; // VK_SAMPLE_COUNT_1_BIT
-pub const VK_IMAGE_TILING_DEFAULT: i32 = 0; // VK_IMAGE_TILING_OPTIMAL
-/// `TRANSFER_SRC (0x01) | TRANSFER_DST (0x02) | SAMPLED (0x04) | STORAGE (0x08)`.
-pub const VK_IMAGE_USAGE_DEFAULT: u32 = 0x0F;
-pub const VK_IMAGE_ALLOCATION_SIZE_DEFAULT: u64 = 0;
-
 /// Thread-safe surface table for the runtime-internal surface-share service.
 #[derive(Clone, Default)]
 pub struct SurfaceShareState {
@@ -308,27 +293,27 @@ pub struct SurfaceRegistration<'a> {
     /// has declared a layout.
     pub current_image_layout: i32,
     /// `VkImageCreateInfo::imageType` (raw `i32`). See
-    /// [`SurfaceMetadata::vk_image_type`]. Pass [`VK_IMAGE_TYPE_DEFAULT`]
+    /// [`SurfaceMetadata::vk_image_type`]. Pass [`VK_IMAGE_TYPE_DEFAULT`](crate::core::context::surface_share_wire_verbs::VK_IMAGE_TYPE_DEFAULT)
     /// when the surface isn't an OPAQUE_FD `VkImage` or when the consumer
     /// can rely on the default `_2D` shape.
     pub vk_image_type: i32,
-    /// `VkImageCreateInfo::mipLevels`. Pass [`VK_IMAGE_MIP_LEVELS_DEFAULT`]
+    /// `VkImageCreateInfo::mipLevels`. Pass [`VK_IMAGE_MIP_LEVELS_DEFAULT`](crate::core::context::surface_share_wire_verbs::VK_IMAGE_MIP_LEVELS_DEFAULT)
     /// (= 1) for the back-compat shape.
     pub vk_image_mip_levels: u32,
     /// `VkImageCreateInfo::arrayLayers`. Pass
-    /// [`VK_IMAGE_ARRAY_LAYERS_DEFAULT`] (= 1) for the back-compat shape.
+    /// [`VK_IMAGE_ARRAY_LAYERS_DEFAULT`](crate::core::context::surface_share_wire_verbs::VK_IMAGE_ARRAY_LAYERS_DEFAULT) (= 1) for the back-compat shape.
     pub vk_image_array_layers: u32,
-    /// `VkSampleCountFlagBits` (raw `i32`). Pass [`VK_IMAGE_SAMPLES_DEFAULT`]
+    /// `VkSampleCountFlagBits` (raw `i32`). Pass [`VK_IMAGE_SAMPLES_DEFAULT`](crate::core::context::surface_share_wire_verbs::VK_IMAGE_SAMPLES_DEFAULT)
     /// (= 1) for the back-compat shape.
     pub vk_image_samples: i32,
-    /// `VkImageTiling` (raw `i32`). Pass [`VK_IMAGE_TILING_DEFAULT`]
+    /// `VkImageTiling` (raw `i32`). Pass [`VK_IMAGE_TILING_DEFAULT`](crate::core::context::surface_share_wire_verbs::VK_IMAGE_TILING_DEFAULT)
     /// (= `OPTIMAL`) for OPAQUE_FD images.
     pub vk_image_tiling: i32,
     /// `VkImageUsageFlags` (raw `u32` bitfield). Pass
-    /// [`VK_IMAGE_USAGE_DEFAULT`] for the back-compat OPAQUE_FD usage set.
+    /// [`VK_IMAGE_USAGE_DEFAULT`](crate::core::context::surface_share_wire_verbs::VK_IMAGE_USAGE_DEFAULT) for the back-compat OPAQUE_FD usage set.
     pub vk_image_usage: u32,
     /// Host-side `VkMemoryRequirements::size`. Pass
-    /// [`VK_IMAGE_ALLOCATION_SIZE_DEFAULT`] (= 0) when the consumer
+    /// [`VK_IMAGE_ALLOCATION_SIZE_DEFAULT`](crate::core::context::surface_share_wire_verbs::VK_IMAGE_ALLOCATION_SIZE_DEFAULT) (= 0) when the consumer
     /// derives the size from `width * height * bytes_per_pixel`.
     pub vk_image_allocation_size: u64,
     /// `vmaGetAllocationInfo().memoryType` of the exporting allocation.
@@ -513,6 +498,11 @@ impl crate::core::context::SurfaceShareRegistrationsByRuntime for SurfaceShareSt
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::context::surface_share_wire_verbs::{
+        VK_IMAGE_ALLOCATION_SIZE_DEFAULT, VK_IMAGE_ARRAY_LAYERS_DEFAULT,
+        VK_IMAGE_MIP_LEVELS_DEFAULT, VK_IMAGE_SAMPLES_DEFAULT, VK_IMAGE_TILING_DEFAULT,
+        VK_IMAGE_TYPE_DEFAULT, VK_IMAGE_USAGE_DEFAULT,
+    };
 
     fn reg<'a>(
         surface_id: &'a str,

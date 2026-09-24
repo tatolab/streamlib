@@ -117,15 +117,27 @@ impl GpuSurfaceOwnedMemory {
     /// Mac, and ~0.6 µs on unified memory.
     #[cfg(target_os = "macos")]
     pub(crate) fn lock_the_iosurface_for_cpu_access(&self, read_only: bool) -> PyResult<()> {
-        let HelperCheckedOutSurface::PixelBuffer(pixel_surface) = &self.checked_out_surface;
-        pixel_surface.lock_the_iosurface_for_cpu_access(read_only)
+        match &self.checked_out_surface {
+            HelperCheckedOutSurface::PixelBuffer(pixel_surface) => {
+                pixel_surface.lock_the_iosurface_for_cpu_access(read_only)
+            }
+            HelperCheckedOutSurface::Texture(texture_surface) => {
+                texture_surface.lock_the_iosurface_for_cpu_access(read_only)
+            }
+        }
     }
 
     /// Release the IOSurface lock CPU access took, if it holds one.
     #[cfg(target_os = "macos")]
     pub(crate) fn unlock_the_iosurface_after_cpu_access(&self) -> PyResult<()> {
-        let HelperCheckedOutSurface::PixelBuffer(pixel_surface) = &self.checked_out_surface;
-        pixel_surface.unlock_the_iosurface_after_cpu_access()
+        match &self.checked_out_surface {
+            HelperCheckedOutSurface::PixelBuffer(pixel_surface) => {
+                pixel_surface.unlock_the_iosurface_after_cpu_access()
+            }
+            HelperCheckedOutSurface::Texture(texture_surface) => {
+                texture_surface.unlock_the_iosurface_after_cpu_access()
+            }
+        }
     }
 
     /// A DMA-BUF fd for this surface's first plane, plus its byte size.
@@ -167,9 +179,9 @@ impl GpuSurfaceOwnedMemory {
         }
     }
 
-    /// Off Linux no export staging exists: a macOS pixel buffer is its
-    /// IOSurface's own mapping, and elsewhere `host_visible_pixel_plane`
-    /// refuses, naming the platform.
+    /// Off Linux no export staging exists: a macOS surface is its IOSurface's
+    /// own mapping, and elsewhere `host_visible_pixel_plane` refuses, naming
+    /// the platform.
     #[cfg(not(target_os = "linux"))]
     pub(crate) fn cpu_reach_goes_through_the_export_staging(&self) -> bool {
         false
@@ -228,12 +240,19 @@ impl GpuSurfaceOwnedMemory {
         })
     }
 
-    /// A macOS pixel buffer's view is its IOSurface's own pages, mapped by
-    /// the import.
+    /// On macOS every surface's view is its IOSurface's own pages — a pixel
+    /// buffer's through its import's mapping, a texture's through the
+    /// surface's host mapping.
     #[cfg(target_os = "macos")]
     pub(crate) fn host_visible_pixel_plane(&self) -> PyResult<HostVisiblePixelPlaneView> {
-        let HelperCheckedOutSurface::PixelBuffer(pixel_surface) = &self.checked_out_surface;
-        Ok(pixel_surface.host_visible_pixel_plane_view())
+        match &self.checked_out_surface {
+            HelperCheckedOutSurface::PixelBuffer(pixel_surface) => {
+                Ok(pixel_surface.host_visible_pixel_plane_view())
+            }
+            HelperCheckedOutSurface::Texture(texture_surface) => {
+                texture_surface.host_visible_pixel_plane_view()
+            }
+        }
     }
 
     /// No surface exchange exists here, so no handle reaches this.

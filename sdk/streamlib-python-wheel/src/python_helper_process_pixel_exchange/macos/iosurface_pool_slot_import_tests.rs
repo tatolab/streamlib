@@ -36,7 +36,10 @@ fn check_out_pixel_surface(
 ) -> HelperCheckedOutPixelSurface {
     let HelperCheckedOutSurface::PixelBuffer(pixel_surface) = exchange_client
         .check_out_and_import(surface_id)
-        .expect("the checkout and import");
+        .expect("the checkout and import")
+    else {
+        panic!("{surface_id:?} is registered as a pixel buffer");
+    };
     pixel_surface
 }
 

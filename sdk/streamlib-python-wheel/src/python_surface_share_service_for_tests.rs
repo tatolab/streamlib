@@ -207,6 +207,21 @@ pub(crate) struct SurfaceShareUnderTest {
     >,
 }
 
+/// A texture [`SurfaceShareUnderTest::register_an_iosurface_texture_as`]
+/// registered: its surface and the engine's side of its timeline pair.
+#[cfg(target_os = "macos")]
+pub(crate) struct RegisteredIOSurfaceTextureUnderTest {
+    pub(crate) iosurface: objc2_core_foundation::CFRetained<objc2_io_surface::IOSurfaceRef>,
+    #[expect(
+        dead_code,
+        reason = "held so the producer's edge the helper imports stays a live event"
+    )]
+    pub(crate) produce_done:
+        objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLSharedEvent>>,
+    pub(crate) consume_done:
+        objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2_metal::MTLSharedEvent>>,
+}
+
 #[cfg(target_os = "macos")]
 impl SurfaceShareUnderTest {
     /// Start a service under a bootstrap name of this test's own.
@@ -279,6 +294,69 @@ impl SurfaceShareUnderTest {
         self.published_iosurfaces_by_surface_id
             .lock()
             .insert(surface_id.to_string(), iosurface);
+    }
+
+    /// Register `surface_id` as a `width`x`height` RGBA8 texture over a fresh
+    /// IOSurface of GPU-aligned rows, with its timeline pair as two fresh
+    /// Metal shared events at zero. Answers the surface and the pair — `None`
+    /// where this machine has no Metal device to make the events on.
+    pub(crate) fn register_an_iosurface_texture_as(
+        &self,
+        surface_id: &str,
+        width: u32,
+        height: u32,
+    ) -> Option<RegisteredIOSurfaceTextureUnderTest> {
+        use objc2_metal::{MTLCreateSystemDefaultDevice, MTLDevice as _, MTLSharedEvent as _};
+        use streamlib::sdk::engine::apple_surface_share::{
+            create_iosurface_mach_send_right, create_private_iosurface_for_a_gpu_image,
+        };
+        let metal_device = MTLCreateSystemDefaultDevice()?;
+        let (produce_done, consume_done) = (
+            metal_device.newSharedEvent()?,
+            metal_device.newSharedEvent()?,
+        );
+        let send_right_of =
+            |shared_event: &objc2::runtime::ProtocolObject<dyn objc2_metal::MTLSharedEvent>| {
+                streamlib_surface_client::mach_send_right_of_metal_shared_event_handle(
+                    &shared_event.newSharedEventHandle(),
+                )
+                .expect("a shared event's send right")
+            };
+        let iosurface = create_private_iosurface_for_a_gpu_image(width, height, 4)
+            .expect("a private IOSurface");
+        let (response, _no_reply_ports) = self
+            .publisher_connection
+            .send_request_with_ports(
+                &serde_json::json!({
+                    "op": "register",
+                    "surface_id": surface_id,
+                    "runtime_id": "texture-check-out-test-runtime",
+                    "width": width,
+                    "height": height,
+                    "format": "rgba8_unorm",
+                    "resource_type": "texture",
+                    // TRANSFER_SRC | TRANSFER_DST | SAMPLED | STORAGE.
+                    "vk_image_usage": 0x0F,
+                    streamlib_surface_client::SURFACE_SHARE_HAS_PRODUCE_DONE_PORT: true,
+                    streamlib_surface_client::SURFACE_SHARE_HAS_CONSUME_DONE_PORT: true,
+                }),
+                vec![
+                    create_iosurface_mach_send_right(&iosurface).expect("a port to it"),
+                    send_right_of(&produce_done),
+                    send_right_of(&consume_done),
+                ],
+            )
+            .expect("register");
+        assert_eq!(
+            response.get("success").and_then(serde_json::Value::as_bool),
+            Some(true),
+            "the registration must succeed: {response:?}"
+        );
+        Some(RegisteredIOSurfaceTextureUnderTest {
+            iosurface,
+            produce_done,
+            consume_done,
+        })
     }
 
     /// Publish one surface and return the id it lives under.

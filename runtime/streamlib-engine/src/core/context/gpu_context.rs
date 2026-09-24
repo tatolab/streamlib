@@ -1315,7 +1315,11 @@ impl GpuContext {
     pub fn resolve_texture_registration_by_surface_id(
         &self,
         surface_id: &str,
-        #[cfg_attr(not(target_os = "linux"), allow(unused_variables))] texture_layout: Option<i32>,
+        #[cfg_attr(
+            not(any(target_os = "linux", target_os = "macos")),
+            allow(unused_variables)
+        )]
+        texture_layout: Option<i32>,
         #[cfg_attr(
             not(any(target_os = "linux", target_os = "macos")),
             allow(unused_variables)
@@ -1340,7 +1344,8 @@ impl GpuContext {
             }
         }
 
-        // Path 2: cross-process DMA-BUF VkImage import via surface-share service.
+        // Path 2: cross-process VkImage import via the surface-share service —
+        // a DMA-BUF on Linux, an IOSurface on macOS.
         // Synthesized registration is not cached — Path 2 reimports per-call by
         // design, and caching would defeat that.
         //
@@ -1369,7 +1374,7 @@ impl GpuContext {
         // subsequent consumer barriers (`oldLayout = resolved →
         // target`) are validation-clean per
         // VUID-VkImageMemoryBarrier-oldLayout-01197.
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             let surface_store = self.surface_store.lock().unwrap();
             if let Some(store) = surface_store.as_ref() {
@@ -4337,7 +4342,7 @@ impl GpuContextFullAccess {
     /// escalate handle assignment, the video encode/decode
     /// `from_full_access` constructors). Consumer GPU code builds
     /// through the FullAccess primitives, never the raw device.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn host_vulkan_device_arc(&self) -> Result<Arc<crate::vulkan::rhi::HostVulkanDevice>> {
         Ok(Arc::clone(
             crate::host_rhi::HostGpuDeviceExt::vulkan_device(self.host_inner().device().as_ref()),

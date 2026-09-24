@@ -56,7 +56,7 @@ def run_scenario(start_app_under_test, scenario: str, awaited_reports: int) -> d
     return reports_by_probe
 
 
-@pytest.mark.awaiting_macos_parity(issue=2402)
+@pytest.mark.awaiting_macos_parity(issue=2408)
 def test_a_python_source_publishes_frames_from_the_slots_its_ring_rotates(
     start_app_under_test,
 ):
@@ -83,7 +83,7 @@ def test_a_python_source_publishes_frames_from_the_slots_its_ring_rotates(
     )
 
 
-@pytest.mark.awaiting_macos_parity(issue=2402)
+@pytest.mark.awaiting_macos_parity(issue=2408)
 def test_the_pixels_a_python_source_writes_are_read_by_another_process(
     start_app_under_test,
 ):
@@ -117,7 +117,7 @@ def test_the_pixels_a_python_source_writes_are_read_by_another_process(
         )
 
 
-@pytest.mark.awaiting_macos_parity(issue=2402)
+@pytest.mark.awaiting_macos_parity(issue=2408)
 def test_the_producer_and_its_consumer_run_in_different_processes(
     start_app_under_test,
 ):
