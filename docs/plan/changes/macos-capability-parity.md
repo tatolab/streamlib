@@ -238,8 +238,9 @@ exported handles. B: a Metal-direct IOSurface shim in the wheel, no Vulkan devic
 saving the per-helper device bring-up. **RESOLVED — A.** B is a parallel system beside the one
 that exists; the bring-up cost is measured and inside the budget the plan tests.
 
-**2 — The texture door on macOS.** A: direct — read and write the IOSurface in place, ordered on
-the shared-event timeline, no staging. B: Linux-identical — an export staging plus one GPU copy
+**2 — The texture door on macOS.** A: direct — read and write the IOSurface in place, ~~ordered on
+the shared-event timeline~~ ordered ahead of the engine's next read *(superseded 2026-09-24 by
+#2404; see §Graphics)*, no staging. B: Linux-identical — an export staging plus one GPU copy
 per write, keeping "no torn frame at the block edge" for every holder. **RESOLVED — A.** What
 it narrows is recorded in §Graphics.
 

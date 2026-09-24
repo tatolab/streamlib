@@ -161,6 +161,11 @@ def test_a_copy_request_is_refused_at_both_doors(start_app_under_test):
     consumer owns — is refused by name rather than answered with an alias."""
     observation = run_probe(start_app_under_test, "CopyRequestRefusedAtBothDoorsProbe")
     assert "exports in place" in observation["handle_refusal"], observation
+    if observation.get("scope_device_unavailable"):
+        pytest.skip(
+            f"the handle refused; the scope needs a usable {NATURAL_TORCH_DEVICE_TYPE} device, "
+            "which this rig lacks"
+        )
     assert "exports in place" in observation["scope_refusal"], observation
 
 
@@ -226,6 +231,15 @@ def test_an_evaluated_mlx_write_through_the_write_door_reaches_the_frame(
     assert observation["the_frame_did_not_already_carry_the_edit"]
     assert observation["the_edited_rows_carry_the_edit"]
     assert observation["the_rest_of_the_frame_is_untouched"]
+
+
+def test_an_mlx_whole_array_assignment_misses_the_frame(start_app_under_test):
+    """The partial-slice rule the stub states: MLX makes `a[:] = ...` a new
+    array, so the frame keeps its pixels while the array shows the edit."""
+    observation = run_probe(start_app_under_test, "MlxWholeArrayAssignmentMissesTheFrameProbe")
+    skip_without_mlx(observation)
+    assert observation["the_array_carries_the_edit"]
+    assert observation["the_frame_is_unchanged"]
 
 
 def test_an_mlx_write_with_a_view_alive_misses_the_frame(start_app_under_test):

@@ -37,8 +37,8 @@ use super::left_by_a_propagating_exception;
 /// back ahead of the engine's next read; leaving by a propagating exception
 /// discards the write. On macOS the capsules are `kDLMetal` over the
 /// surface's own IOSurface pages, so a write lands in the surface itself:
-/// leaving — normally or by a raise — retires the Metal frameworks' queues
-/// before the scope closes, and a raise leaves whatever stores already
+/// leaving — normally or by a raise — drains torch's MPS queue before the
+/// scope closes, and a raise leaves whatever stores already
 /// landed. The engine owns the ordering — no fence or timeline vocabulary
 /// appears here.
 ///
@@ -170,9 +170,9 @@ impl PythonGpuSurfaceDeviceTensorScope {
     /// exception publishes nothing more. On Linux that is a blit back, or
     /// its discard — blitting a half-written view back would publish a torn
     /// frame. On macOS the stores already sit in the surface, so both ways
-    /// out retire the Metal frameworks' queues, and a raise leaves the stores
+    /// out drain torch's MPS queue, and a raise leaves the stores
     /// that landed. Always answers `False`: a raise is never suppressed, nor
-    /// replaced by a failure to retire the queues under it.
+    /// replaced by a failure to drain the queue under it.
     #[pyo3(signature = (exception_type = None, exception = None, traceback = None))]
     fn __exit__(
         &self,
@@ -206,7 +206,7 @@ impl PythonGpuSurfaceDeviceTensorScope {
             if left_by_a_propagating_exception(exception_type) {
                 if let Err(retire_failure) = metal_writes_retired {
                     tracing::warn!(
-                        "retiring the Metal frameworks' queues under a propagating exception \
+                        "draining torch's MPS queue under a propagating exception \
                          failed: {retire_failure}"
                     );
                 }

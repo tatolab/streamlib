@@ -984,6 +984,11 @@ class CopyRequestRefusedAtBothDoorsProbe(_FrameProbeBase):
             except BufferError as refusal:
                 observation["handle_refusal"] = str(refusal)
             surface.unlock()
+            # The scope's refusal needs the scope entered, which needs the
+            # device side; the handle's refusal above needs neither.
+            if surface.__dlpack_device__()[0] != NATURAL_DLPACK_DEVICE:
+                observation["scope_device_unavailable"] = "device side not reachable"
+                return observation
             with surface.as_device_tensor() as device_tensor:
                 try:
                     device_tensor.__dlpack__(copy=True)
@@ -1063,9 +1068,10 @@ class _DeviceWriteThenEngineGpuReadProbe:
     synchronize of its own; the engine's next GPU read — a kernel dispatched
     right after the scope leaves — must see the write.
 
-    Nothing but the scope's exit orders the framework's queue ahead of the
+    For torch nothing but the scope's exit orders its queue ahead of the
     dispatch, so an exit that did not drain it reads the texture's old
-    contents.
+    contents. For MLX the `mx.eval` its write contract puts in the scope is
+    what orders it, so that variant proves the contract.
     """
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
@@ -1249,3 +1255,26 @@ class MlxWriteWithAViewAliveMissesTheFrameProbe(_TypedFrameProbeBase):
             "the_frame_is_unchanged": bool((after == before).all()),
         }
 
+
+
+@processor
+class MlxWholeArrayAssignmentMissesTheFrameProbe(_TypedFrameProbeBase):
+    """The partial-slice half of the MLX write contract: `a[:] = ...` is a new
+    array to MLX, not a store into this one, so the frame never sees it even
+    evaluated inside the scope."""
+
+    def _probe(self, ctx, frame) -> dict:
+        mx = _mlx_or_none()
+        if mx is None:
+            return {"mlx_unavailable": "mlx is not installed in this venv"}
+        before = _frame_pixels_now(ctx, frame.surface_id)
+        with frame.writable() as device_tensor:
+            array = mx.from_dlpack(device_tensor)
+            array[:] = MLX_EDIT_VALUE
+            mx.eval(array)
+            the_array_carries_the_edit = bool((numpy.array(array) == MLX_EDIT_VALUE).all())
+        after = _frame_pixels_now(ctx, frame.surface_id)
+        return {
+            "the_array_carries_the_edit": the_array_carries_the_edit,
+            "the_frame_is_unchanged": bool((after == before).all()),
+        }

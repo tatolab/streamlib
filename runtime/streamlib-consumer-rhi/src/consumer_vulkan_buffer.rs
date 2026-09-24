@@ -776,8 +776,9 @@ mod iosurface_import_tests {
         let Some(device) = try_create_device() else {
             return;
         };
+        // A device without the extension has no MTLBuffer to export; the
+        // refusal path is the import path's own.
         if !device.supports_metal_objects_interop() {
-            println!("Skipping test — the device has no VK_EXT_metal_objects");
             return;
         }
         let iosurface = a_private_bgra_iosurface(1000, 8);
