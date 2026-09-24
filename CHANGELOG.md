@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.20](https://github.com/tatolab/streamlib/compare/v0.26.19...v0.26.20) (2026-09-24)
+
+
+### Features
+
+* **python:** compute and graphics kernels from Python run on macOS ([#2458](https://github.com/tatolab/streamlib/issues/2458)) ([299c1ba](https://github.com/tatolab/streamlib/commit/299c1ba67a554b1ba36a3071974a92116bd56a04))
+
 ## [0.26.19](https://github.com/tatolab/streamlib/compare/v0.26.18...v0.26.19) (2026-09-24)
 
 
