@@ -1506,8 +1506,6 @@ impl SurfaceStoreInner {
             }
             .insert_into_wire_fields(registration_fields);
         }
-        // Recorded only once the service accepted the id: a refused duplicate
-        // must not displace the live registration's pair.
         let (produce_done_port, consume_done_port) = timeline_pair
             .exported_mach_send_rights()
             .map_err(|refusal| {
@@ -1525,6 +1523,8 @@ impl SurfaceStoreInner {
             ],
             registration,
         )?;
+        // Recorded only once the service accepted the id: a refused duplicate
+        // must not displace the live registration's pair.
         cross_process_timeline_pairs.insert(surface_id, Arc::clone(timeline_pair));
         tracing::debug!(
             "SurfaceStore: Registered texture '{}' with its timeline pair",
