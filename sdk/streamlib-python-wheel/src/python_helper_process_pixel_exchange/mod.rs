@@ -59,8 +59,11 @@ pub(crate) use linux::{
     compute_dispatch_wire_entry,
 };
 #[cfg(target_os = "macos")]
+pub(crate) use macos::HelperCheckedOutTextureSurface;
+#[cfg(target_os = "macos")]
 use macos::{
-    HelperIOSurfaceImportsByPoolSlot, HelperIOSurfacePoolSlotImport, HelperIOSurfaceUseCountClaim,
+    HelperIOSurfaceCpuLock, HelperIOSurfaceImportsByPoolSlot, HelperIOSurfacePoolSlotImport,
+    HelperIOSurfaceUseCountClaim,
 };
 
 /// One escalate round trip to the parent, called with the GIL attached.
@@ -169,7 +172,7 @@ pub(crate) struct HelperCheckedOutPixelSurface {
     pub(crate) iosurface_use_count_claim: HelperIOSurfaceUseCountClaim,
     /// The IOSurface lock this surface's CPU access holds, if any.
     #[cfg(target_os = "macos")]
-    pub(crate) iosurface_cpu_lock: Mutex<Option<objc2_io_surface::IOSurfaceLockOptions>>,
+    pub(crate) iosurface_cpu_lock: HelperIOSurfaceCpuLock,
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) format: PixelFormat,
@@ -232,7 +235,6 @@ impl HelperCheckedOutPixelSurface {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) enum HelperCheckedOutSurface {
     PixelBuffer(HelperCheckedOutPixelSurface),
-    #[cfg(target_os = "linux")]
     Texture(HelperCheckedOutTextureSurface),
     #[cfg(target_os = "linux")]
     AcquiredDeviceTexture(HelperAcquiredTexture),
@@ -243,7 +245,6 @@ impl HelperCheckedOutSurface {
     pub(crate) fn surface_id(&self) -> &str {
         match self {
             Self::PixelBuffer(pixel_surface) => &pixel_surface.surface_id,
-            #[cfg(target_os = "linux")]
             Self::Texture(texture_surface) => &texture_surface.surface_id,
             #[cfg(target_os = "linux")]
             Self::AcquiredDeviceTexture(acquired_texture) => &acquired_texture.surface_id,
@@ -253,7 +254,6 @@ impl HelperCheckedOutSurface {
     pub(crate) fn width(&self) -> u32 {
         match self {
             Self::PixelBuffer(pixel_surface) => pixel_surface.width,
-            #[cfg(target_os = "linux")]
             Self::Texture(texture_surface) => texture_surface.width,
             #[cfg(target_os = "linux")]
             Self::AcquiredDeviceTexture(acquired_texture) => acquired_texture.width,
@@ -263,7 +263,6 @@ impl HelperCheckedOutSurface {
     pub(crate) fn height(&self) -> u32 {
         match self {
             Self::PixelBuffer(pixel_surface) => pixel_surface.height,
-            #[cfg(target_os = "linux")]
             Self::Texture(texture_surface) => texture_surface.height,
             #[cfg(target_os = "linux")]
             Self::AcquiredDeviceTexture(acquired_texture) => acquired_texture.height,
@@ -274,7 +273,6 @@ impl HelperCheckedOutSurface {
     pub(crate) fn format_wire_name(&self) -> &'static str {
         match self {
             Self::PixelBuffer(pixel_surface) => pixel_surface.format.wire_name(),
-            #[cfg(target_os = "linux")]
             Self::Texture(texture_surface) => texture_surface.format.wire_name(),
             #[cfg(target_os = "linux")]
             Self::AcquiredDeviceTexture(acquired_texture) => acquired_texture.format.wire_name(),
@@ -532,8 +530,6 @@ impl HelperProcessGpuExchangeClient {
             handle_id: handle_id.clone(),
         };
         let checked_out = python.detach(|| self.check_out_and_import(&handle_id))?;
-        // Irrefutable where pixel buffers are the only surface that crosses.
-        #[cfg_attr(target_os = "macos", expect(irrefutable_let_patterns))]
         let HelperCheckedOutSurface::PixelBuffer(mut checked_out_pixel_surface) = checked_out
         else {
             return Err(PyRuntimeError::new_err(format!(
@@ -622,6 +618,38 @@ impl HelperProcessGpuExchangeClient {
             "op": "release_check_out",
             "surface_id": surface_id,
         }))
+    }
+
+    /// Publish the layout this side left a texture in, so the next
+    /// consumer's acquire barrier names the right source layout.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn publish_image_layout_to_surface_share(
+        &self,
+        surface_id: &str,
+        current_image_layout_raw: i32,
+    ) -> PyResult<()> {
+        let (response, _no_handles) = self.surface_share_request(&serde_json::json!({
+            "op": "update_layout",
+            "surface_id": surface_id,
+            "current_image_layout": current_image_layout_raw,
+        }))?;
+        if let Some(publish_error) = response.get("error").and_then(|value| value.as_str()) {
+            return Err(PyRuntimeError::new_err(format!(
+                "the surface-share service refused the layout publish for {surface_id:?}: \
+                 {publish_error}"
+            )));
+        }
+        match response.get("success").and_then(|value| value.as_bool()) {
+            Some(true) => Ok(()),
+            Some(false) => Err(PyRuntimeError::new_err(format!(
+                "the surface-share service did not record the layout publish for \
+                 {surface_id:?} — it knows no such registration"
+            ))),
+            None => Err(PyRuntimeError::new_err(format!(
+                "the surface-share service's layout-publish answer for {surface_id:?} \
+                 carried no success field"
+            ))),
+        }
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]

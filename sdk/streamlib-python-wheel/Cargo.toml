@@ -104,5 +104,10 @@ objc2-core-foundation.workspace = true
 # iceoryx2 domain.
 streamlib = { path = "../streamlib-sdk", version = "0.26.17", features = ["test-support"] }
 
+# The Metal shared events a texture registration's timeline pair crosses as.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc2-metal.workspace = true
+objc2.workspace = true
+
 [lints]
 workspace = true

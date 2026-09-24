@@ -296,37 +296,6 @@ impl HelperProcessGpuExchangeClient {
         Ok((response, received_fds))
     }
 
-    /// Publish the layout this side left a texture in, so the next
-    /// consumer's acquire barrier names the right source layout.
-    fn publish_image_layout_to_surface_share(
-        &self,
-        surface_id: &str,
-        current_image_layout_raw: i32,
-    ) -> PyResult<()> {
-        let (response, _no_fds) = self.surface_share_request(&serde_json::json!({
-            "op": "update_layout",
-            "surface_id": surface_id,
-            "current_image_layout": current_image_layout_raw,
-        }))?;
-        if let Some(publish_error) = response.get("error").and_then(|value| value.as_str()) {
-            return Err(PyRuntimeError::new_err(format!(
-                "the surface-share service refused the layout publish for {surface_id:?}: \
-                 {publish_error}"
-            )));
-        }
-        match response.get("success").and_then(|value| value.as_bool()) {
-            Some(true) => Ok(()),
-            Some(false) => Err(PyRuntimeError::new_err(format!(
-                "the surface-share service did not record the layout publish for \
-                 {surface_id:?} — it knows no such registration"
-            ))),
-            None => Err(PyRuntimeError::new_err(format!(
-                "the surface-share service's layout-publish answer for {surface_id:?} \
-                 carried no success field"
-            ))),
-        }
-    }
-
     /// Validate the checkout metadata and turn the plane fds into this
     /// process's view of the surface — mapped memory for a pixel buffer, an
     /// imported `VkImage` for a texture. The fds are `OwnedFd`s, so every

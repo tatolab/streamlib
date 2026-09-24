@@ -103,8 +103,9 @@ impl PythonGpuContextLimitedAccess {
     ///
     /// The id is the whole handle: a kernel dispatch binds it, and a
     /// downstream processor resolves it. `copy_src` and `copy_dst` ride
-    /// every request, so the CPU doors reach the pixels over the surface's
-    /// host-visible staging with no transfer usage spelled here.
+    /// every request, so the CPU doors reach the pixels — over the surface's
+    /// host-visible staging on Linux, through its IOSurface on macOS — with
+    /// no transfer usage spelled here.
     fn acquire_texture(
         &self,
         python: Python<'_>,
@@ -120,6 +121,14 @@ impl PythonGpuContextLimitedAccess {
                 exchange_client.acquire_texture(python, width, height, texture_format, &usage)?;
             return Ok(PythonGpuSurfaceHandle::from_helper_acquired_texture(
                 acquired,
+            ));
+        }
+        #[cfg(target_os = "macos")]
+        if let Some(exchange_client) = &self.helper_process_exchange_client {
+            let acquired =
+                exchange_client.acquire_texture(python, width, height, texture_format, &usage)?;
+            return Ok(PythonGpuSurfaceHandle::from_helper_checked_out_surface(
+                HelperCheckedOutSurface::Texture(acquired),
             ));
         }
         let _ = (python, width, height, texture_format, usage);
@@ -267,6 +276,14 @@ impl PythonGpuContextFullAccess {
                 exchange_client.acquire_texture(python, width, height, texture_format, &usage)?;
             return Ok(PythonGpuSurfaceHandle::from_helper_acquired_texture(
                 acquired,
+            ));
+        }
+        #[cfg(target_os = "macos")]
+        if let Some(exchange_client) = &self.helper_process_exchange_client {
+            let acquired =
+                exchange_client.acquire_texture(python, width, height, texture_format, &usage)?;
+            return Ok(PythonGpuSurfaceHandle::from_helper_checked_out_surface(
+                HelperCheckedOutSurface::Texture(acquired),
             ));
         }
         let _ = (python, width, height, texture_format, usage);

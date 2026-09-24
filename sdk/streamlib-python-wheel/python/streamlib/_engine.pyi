@@ -1063,8 +1063,9 @@ class GpuContextLimitedAccess:
 
         The id is the whole handle: a kernel dispatch binds it, and a downstream
         processor resolves it. `copy_src` and `copy_dst` ride every request, so
-        the CPU doors reach the pixels over the surface's host-visible staging
-        without the caller spelling a transfer usage.
+        the CPU doors reach the pixels — over the surface's host-visible staging
+        on Linux, through its own IOSurface on macOS — without the caller
+        spelling a transfer usage.
         """
     def resolve_surface(self, surface_id: str) -> GpuSurfaceHandle: ...
     def claim_surface_against_producer_reuse(
@@ -1114,8 +1115,9 @@ class GpuContextFullAccess:
 
         The id is the whole handle: a kernel dispatch binds it, and a downstream
         processor resolves it. `copy_src` and `copy_dst` ride every request, so
-        the CPU doors reach the pixels over the surface's host-visible staging
-        without the caller spelling a transfer usage.
+        the CPU doors reach the pixels — over the surface's host-visible staging
+        on Linux, through its own IOSurface on macOS — without the caller
+        spelling a transfer usage.
         """
 
     def create_window(
