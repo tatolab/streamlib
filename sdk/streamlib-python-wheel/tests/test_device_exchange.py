@@ -522,9 +522,13 @@ def test_an_iosurface_port_is_looked_up_and_read_by_native_code_in_the_helper(
         assert export["bytes_per_row"] > export["width"] * 4, (
             f"the texture's IOSurface did not pad its rows, so the pitch is unproven: {export}"
         )
-        # OPTIMAL, TRANSFER_SRC | TRANSFER_DST | SAMPLED | STORAGE, one mip,
-        # one layer, one sample — what `acquire_texture` asked the engine for.
-        assert recipe == [0, 0x0F, 1, 1, 1], recipe
+        # OPTIMAL, one mip, one layer, one sample, and a usage holding every
+        # bit the probe asked for — TRANSFER_SRC | SAMPLED | STORAGE |
+        # COLOR_ATTACHMENT. COLOR_ATTACHMENT is absent from the wire's
+        # absent-default, so only a real parse of the registration reads it.
+        tiling, usage, mip_levels, array_layers, samples = recipe
+        assert (tiling, mip_levels, array_layers, samples) == (0, 1, 1, 1), recipe
+        assert usage & 0x1D == 0x1D, f"requested usage bits missing: {usage:#x}"
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="an IOSurface Mach port is a macOS handle")

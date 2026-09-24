@@ -1615,7 +1615,7 @@ class IOSurfaceExportProbe:
             PADDED_SURFACE_WIDTH,
             PADDED_SURFACE_HEIGHT,
             "rgba8_unorm",
-            OPAQUE_FD_FLAVOUR_USAGE,
+            RENDER_TARGET_FLAVOUR_USAGE,
         ) as texture:
             observation["texture"] = _export_iosurface_and_read_it_natively(ctx, shim, texture)
         return observation
