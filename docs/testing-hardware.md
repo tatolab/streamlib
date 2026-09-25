@@ -162,7 +162,13 @@ system-exclusive resource. Concretely, today:
   openable PCM for the ALSA arm, a Mac with a default device for the
   CoreAudio arm — and, for CoreAudio capture, microphone access already
   allowed for the terminal running it. Capture and playback are separate
-  endpoints, and a test naming one says which in its ignore reason.
+  endpoints, and a test naming one says which in its ignore reason. The
+  CoreAudio content test that hears its own playback through a muted process
+  tap also needs System Audio Recording allowed for that terminal (System
+  Settings › Privacy & Security › Screen & System Audio Recording › System
+  Audio Recording Only); without it the tap returns digital zeros and the test
+  fails naming the setting. The tap mutes the test process, so it makes no
+  sound.
 - Future: V4L2 camera capture, display swapchains, anything that holds a
   kernel-level exclusive lock.
 
