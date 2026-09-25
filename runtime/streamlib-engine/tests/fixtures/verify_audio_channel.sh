@@ -44,11 +44,17 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-OUTPUT_DIR="$(mktemp -d -t streamlib-audio-channel-XXXXXX)"
+# Spelled in full rather than `mktemp -t`, which BSD reads as a prefix to
+# suffix under $TMPDIR — so the directory is where the skill looks on both.
+TEMPORARY_DIRECTORY="${TMPDIR:-/tmp}"
+OUTPUT_DIR="$(mktemp -d "${TEMPORARY_DIRECTORY%/}/streamlib-audio-channel-XXXXXX")"
 
 # The channel name is the source's processor id lowercased, then its port —
 # copying the id out of `graph` verbatim gets "no tappable channel named".
-CHANNEL="$("$PYTHON" - "$CONTROL_URL" "$PROCESSOR" "$OUTPUT_PORT" <<'PY'
+# Read into a variable rather than fed to `$(...)` as a heredoc: macOS's bash
+# 3.2 parses a heredoc inside a command substitution for quotes, and the
+# apostrophes below end the script there.
+read -r -d '' CHANNEL_RESOLVING_PROGRAM <<'PY'
 import json, sys
 
 # The engine's own client rather than a hand-written URL, so this cannot drift
@@ -84,7 +90,8 @@ for node in graph["nodes"]:
 else:
     sys.exit(f"no processor named {wanted} in the running graph")
 PY
-)" || exit 1
+CHANNEL="$("$PYTHON" -c "$CHANNEL_RESOLVING_PROGRAM" \
+    "$CONTROL_URL" "$PROCESSOR" "$OUTPUT_PORT")" || exit 1
 
 echo "tapping $CHANNEL for $BAG_COUNT bags" >&2
 if ! "$PYTHON" -m streamlib.cli tap "$CHANNEL" --count "$BAG_COUNT" \

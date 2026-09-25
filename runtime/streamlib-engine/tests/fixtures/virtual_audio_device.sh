@@ -16,7 +16,51 @@
 # A null sink is used rather than a virtual source because its monitor is a
 # capture endpoint the session already routes: whatever is played into the sink
 # is readable from the monitor, which is the loopback the fixture needs.
+#
+# On macOS the device is a private Core Audio process tap of the node's own
+# output, under a private aggregate device (`coreaudio_process_tap.py`). Only
+# the node can create it — a private device is visible to its creator alone —
+# so `start` names the aggregate the node will create and creates nothing, and
+# `stop` has nothing to destroy: both objects die with the node.
 set -uo pipefail
+
+if [ "$(uname -s)" = Darwin ]; then
+    PYTHON="${PYTHON:-python3}"
+    case "${1:-}" in
+        check)
+            # Opens no device and raises no prompt: a version, and two imports.
+            IFS=. read -r MACOS_MAJOR MACOS_MINOR _ <<<"$(sw_vers -productVersion)"
+            if [ "${MACOS_MAJOR:-0}" -lt 14 ] \
+                || { [ "$MACOS_MAJOR" -eq 14 ] && [ "${MACOS_MINOR:-0}" -lt 2 ]; }; then
+                echo "UNAVAILABLE: macOS $MACOS_MAJOR.${MACOS_MINOR:-0} has no Core Audio process taps (14.2 brought them)"
+                exit 1
+            fi
+            if ! "$PYTHON" -c "import numpy" &>/dev/null; then
+                echo "UNAVAILABLE: $PYTHON cannot import numpy"
+                exit 1
+            fi
+            if ! "$PYTHON" -c "import streamlib" &>/dev/null; then
+                echo "UNAVAILABLE: $PYTHON cannot import streamlib — build the wheel with" \
+                    "maturin develop --release in sdk/streamlib-python-wheel"
+                exit 1
+            fi
+            echo "AVAILABLE: Core Audio process taps (macOS $MACOS_MAJOR.${MACOS_MINOR:-0}); the node creates its own"
+            exit 0
+            ;;
+        start)
+            echo "streamlib-fixture-process-tap-$$"
+            exit 0
+            ;;
+        stop)
+            echo "not running: a private process tap dies with the node that created it"
+            exit 0
+            ;;
+        *)
+            echo "Usage: $0 {check|start|stop}" >&2
+            exit 1
+            ;;
+    esac
+fi
 
 NODE_NAME="streamlib-fixture-audio-sink"
 

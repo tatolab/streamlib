@@ -4,12 +4,13 @@
 """Publishes the known signal as `AudioBlock` bags, for a speaker to play.
 
 The signal itself is `known_audio_signal.generate_signal()` — the same samples
-`e2e_audio_loopback.sh` plays through `pw-play`, so the two fixtures measure
-one reference and a difference between them is StreamLib's, not the signal's.
-Generated rather than read back from a WAV so no quantisation sits between the
-reference and what is played.
+`e2e_audio_loopback.sh` plays through `pw-play` or `afplay`, so the two
+fixtures measure one reference and a difference between them is StreamLib's,
+not the signal's. Generated rather than read back from a WAV so no
+quantisation sits between the reference and what is played.
 
-The format is the fixture sink's: 48 kHz stereo `f32`. It is stated rather than
+The format is the fixture sink's — PipeWire's null sink, or a Mac's built-in
+speakers: 48 kHz stereo `f32`. It is stated rather than
 discovered so the measurement stays about the transport: `SpeakerSink` now
 declares `audio_window = match_device`, so a mismatch would be resampled into
 the device's format instead of failing — and a comparison against the reference
@@ -34,8 +35,9 @@ import numpy
 import known_audio_signal
 from streamlib import RuntimeContextLimitedAccess, monotonic_now_ns, output, processor
 
-# The fixture sink is created with `audio.position=[FL FR]`, and the PipeWire
-# arm asks for `F32_LE`.
+# PipeWire's fixture sink is created with `audio.position=[FL FR]` and its arm
+# asks for `F32_LE`; a Mac's built-in speakers are two channels, and the
+# CoreAudio arm opens every device as interleaved `f32`.
 SAMPLE_RATE = known_audio_signal.SAMPLE_RATE
 CHANNELS = 2
 DTYPE = "f32"
@@ -62,6 +64,10 @@ TRAILING_SILENCE_SECONDS = 1.0
 # whenever its caller asks rather than when the signal starts.
 THE_SIGNAL_PLAYS_OVER_AND_OVER = os.environ.get("STREAMLIB_KNOWN_SIGNAL_REPEATS") == "1"
 
+# One of `known_audio_signal`'s injectable faults, published in place of the
+# clean signal, so a through-engine run can be seen going red.
+FAULT_INJECTED_INTO_THE_SIGNAL = os.environ.get("STREAMLIB_KNOWN_SIGNAL_INJECT") or None
+
 
 def _interleaved_stereo_f32_bytes(mono_samples):
     """The same mono signal in both channels, interleaved little-endian."""
@@ -78,6 +84,10 @@ class KnownAudioSignalSource:
 
     def __init__(self) -> None:
         signal = known_audio_signal.generate_signal()
+        if FAULT_INJECTED_INTO_THE_SIGNAL:
+            signal = known_audio_signal.signal_with_injected_fault(
+                signal, FAULT_INJECTED_INTO_THE_SIGNAL
+            )
         trailing_silence = numpy.zeros(
             int(TRAILING_SILENCE_SECONDS * SAMPLE_RATE), dtype="<f8"
         )
