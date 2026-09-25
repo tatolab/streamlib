@@ -93,11 +93,17 @@ fn arm_the_parent_process_exit_watch(parent_process_id: libc::pid_t) -> io::Resu
     Ok(())
 }
 
+/// launchd's pid, which adopts every orphan.
+const LAUNCHD_PROCESS_ID: libc::pid_t = 1;
+
 /// Arm on `parent_process_id`, reading a parent that is already gone — the
 /// helper reparented to launchd — as gone rather than watching launchd.
 fn arm_a_watch_for_the_exit_of_the_parent(
     parent_process_id: libc::pid_t,
 ) -> io::Result<ProcessExitWatchArmingOutcome> {
+    if parent_process_id == LAUNCHD_PROCESS_ID {
+        return Ok(ProcessExitWatchArmingOutcome::ProcessAlreadyGone);
+    }
     let armed = arm_a_watch_for_the_exit_of(parent_process_id)?;
     // SAFETY: a scalar syscall.
     if unsafe { libc::getppid() } != parent_process_id {

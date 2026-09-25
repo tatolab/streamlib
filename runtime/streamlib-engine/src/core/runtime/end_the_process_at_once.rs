@@ -20,9 +20,13 @@ static THE_PROCESS_IS_ENDING_AT_ONCE: AtomicBool = AtomicBool::new(false);
 /// loop that returned during the log's flush grace would let its caller exit the
 /// process first, with whatever status it reached.
 pub(crate) fn park_forever_if_the_process_is_ending_at_once() {
-    if !THE_PROCESS_IS_ENDING_AT_ONCE.load(Ordering::SeqCst) {
-        return;
+    if THE_PROCESS_IS_ENDING_AT_ONCE.load(Ordering::SeqCst) {
+        park_forever();
     }
+}
+
+/// Block this thread until the process ends.
+pub(crate) fn park_forever() -> ! {
     loop {
         std::thread::park();
     }

@@ -495,6 +495,16 @@ def test_sighup_tears_the_graph_down_gracefully(app_under_test):
 HELPER_OUTLIVING_A_KILLED_APP_BUDGET_SECONDS = 10.0
 
 
+def every_pid_still_alive_after(pids: "list[int]", budget_seconds: float) -> "list[int]":
+    """The pids of `pids` still alive once one shared budget has run out."""
+    deadline = time.monotonic() + budget_seconds
+    return [
+        pid
+        for pid in pids
+        if not a_pid_is_gone_within(pid, max(0.0, deadline - time.monotonic()))
+    ]
+
+
 def kill_an_app_holding_two_helpers_asleep_in_their_callbacks(
     app_under_test, teardown_record_directory: Path, monkeypatch
 ) -> "list[int]":
@@ -521,11 +531,9 @@ def test_no_helper_outlives_an_app_killed_outright(app_under_test, tmp_path, mon
         app_under_test, tmp_path, monkeypatch
     )
 
-    survivors = [
-        pid
-        for pid in helper_pids
-        if not a_pid_is_gone_within(pid, HELPER_OUTLIVING_A_KILLED_APP_BUDGET_SECONDS)
-    ]
+    survivors = every_pid_still_alive_after(
+        helper_pids, HELPER_OUTLIVING_A_KILLED_APP_BUDGET_SECONDS
+    )
     assert not survivors, (
         f"helper(s) {survivors} outlived the app by "
         f"{HELPER_OUTLIVING_A_KILLED_APP_BUDGET_SECONDS}s"
@@ -545,8 +553,10 @@ def test_a_helper_whose_app_was_killed_still_runs_its_teardown_on_macos(
     helper_pids = kill_an_app_holding_two_helpers_asleep_in_their_callbacks(
         app_under_test, tmp_path, monkeypatch
     )
-    for pid in helper_pids:
-        a_pid_is_gone_within(pid, HELPER_OUTLIVING_A_KILLED_APP_BUDGET_SECONDS)
+    survivors = every_pid_still_alive_after(
+        helper_pids, HELPER_OUTLIVING_A_KILLED_APP_BUDGET_SECONDS
+    )
+    assert not survivors, f"helper(s) {survivors} outlived the app"
 
     tore_down = sorted(int(record.name) for record in tmp_path.iterdir())
     assert tore_down == helper_pids, (
