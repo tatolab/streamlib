@@ -348,7 +348,9 @@ fn the_claimed_frame_read_into_a_mesh_message(
     // The backing's own shape, never the bag's — a video bag names no pixel
     // format at all, and a receiver guessing one would hand the wrong channel
     // order downstream and never say so.
-    let pixel_format = backing.one_plane_pixel_format().map_err(a_read_refusal)?;
+    let (pixel_format, bytes_per_pixel) = backing
+        .one_plane_pixel_format_and_bytes_per_pixel()
+        .map_err(a_read_refusal)?;
     let (width, height) = backing.pixel_extent(surface_id).map_err(a_read_refusal)?;
     let iosurface = backing.backing_iosurface().ok_or_else(|| {
         WhyAFramesPixelsCannotCrossTheMesh::ItsPixelsCannotBeReadOut(crate::core::Error::GpuError(
@@ -358,7 +360,7 @@ fn the_claimed_frame_read_into_a_mesh_message(
             ),
         ))
     })?;
-    let row_byte_len = width as usize * (pixel_format.bits_per_pixel() / 8) as usize;
+    let row_byte_len = width as usize * bytes_per_pixel as usize;
     let description = AFramesPixelDescriptionOnTheMesh {
         pixel_format,
         width,

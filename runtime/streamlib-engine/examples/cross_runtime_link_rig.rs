@@ -20,11 +20,12 @@
 //!
 //! `--video-source` runs a `TestPatternSource` and offers it; `--video-reader`
 //! links from `<source runtime name>/TestPatternSource/video` into an
-//! `H264Encoder` on Linux and a `DisplayWindow` on macOS. That arm is the frame-carrying one: a video bag names a
-//! surface, and a surface id means nothing on another machine, so the sending
-//! runtime copies the frame's pixels out and the reading one mints a local
-//! surface for them. `tests/fixtures/verify_cross_runtime_frame.sh` reads the
-//! two ids and exchanges each on its own node.
+//! `H264Encoder` on Linux and a `DisplayWindow` on macOS. That arm is the
+//! frame-carrying one: a video bag names a surface, and a surface id means
+//! nothing on another machine, so the sending runtime copies the frame's
+//! pixels out and the reading one mints a local surface for them.
+//! `tests/fixtures/verify_cross_runtime_frame.sh` reads the two ids and
+//! exchanges each on its own node.
 //!
 //! The audio arms need no hardware — under the null backend a microphone
 //! publishes silent blocks and the graph runs unchanged. The video arms need

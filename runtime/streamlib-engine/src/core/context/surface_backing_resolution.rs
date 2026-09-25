@@ -63,16 +63,19 @@ impl ResolvedSurfaceBacking {
         Ok((pixel_width, pixel_height))
     }
 
-    /// The one-plane pixel format a host read of this backing presents.
-    pub(crate) fn one_plane_pixel_format(&self) -> Result<PixelFormat> {
+    /// The one-plane pixel format a host read of this backing presents, and
+    /// its bytes per pixel.
+    pub(crate) fn one_plane_pixel_format_and_bytes_per_pixel(&self) -> Result<(PixelFormat, u32)> {
         let pixel_format = match self {
             Self::PixelBuffer(pixel_buffer) => pixel_buffer.format(),
             Self::RegisteredTexture(registration) => {
                 export_pixel_shape_for_texture(registration.texture().format())?
             }
         };
-        export_bytes_per_pixel_for_pixel_format(pixel_format)?;
-        Ok(pixel_format)
+        Ok((
+            pixel_format,
+            export_bytes_per_pixel_for_pixel_format(pixel_format)?,
+        ))
     }
 
     /// The IOSurface this backing's storage is, when it is one.

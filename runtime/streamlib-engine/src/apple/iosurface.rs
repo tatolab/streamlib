@@ -160,6 +160,8 @@ impl Drop for IOSurfaceLockedForReading<'_> {
 /// tests.
 #[cfg(test)]
 pub(crate) fn write_rows_at_the_iosurfaces_stride(iosurface: &IOSurfaceRef, rows: &[&[u8]]) {
+    assert!(rows.len() <= iosurface.height(), "the rows fit the surface");
+    // SAFETY: a null seed pointer is the documented "not wanted".
     let locked = unsafe { iosurface.lock(IOSurfaceLockOptions::empty(), std::ptr::null_mut()) };
     assert_eq!(locked, 0, "IOSurfaceLock");
     let base_address = iosurface.base_address().as_ptr().cast::<u8>();
@@ -168,8 +170,8 @@ pub(crate) fn write_rows_at_the_iosurfaces_stride(iosurface: &IOSurfaceRef, rows
             row.len() <= iosurface.bytes_per_row(),
             "a row fits its stride"
         );
-        // SAFETY: the surface is locked for writing and the row fits inside
-        // its own stride.
+        // SAFETY: the surface is locked for writing, the row index is inside
+        // its height and the row fits inside its own stride.
         unsafe {
             std::ptr::copy_nonoverlapping(
                 row.as_ptr(),
@@ -178,6 +180,7 @@ pub(crate) fn write_rows_at_the_iosurfaces_stride(iosurface: &IOSurfaceRef, rows
             )
         };
     }
+    // SAFETY: paired with the lock above.
     let unlocked = unsafe { iosurface.unlock(IOSurfaceLockOptions::empty(), std::ptr::null_mut()) };
     assert_eq!(unlocked, 0, "IOSurfaceUnlock");
 }
