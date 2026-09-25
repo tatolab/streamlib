@@ -8,11 +8,9 @@
 //! the cadence source, and a block's stamp is the device's `mHostTime` — the
 //! `mach_absolute_time` domain every other timestamp on Apple lives in.
 
-use std::cell::UnsafeCell;
 use std::ffi::c_void;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr::NonNull;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 
 use objc2_audio_toolbox::{
@@ -70,6 +68,8 @@ const AUHAL_INPUT_ELEMENT: u32 = 1;
 /// The AUHAL element that carries the device's output.
 const AUHAL_OUTPUT_ELEMENT: u32 = 0;
 
+const NO_AUHAL_OUTPUT_UNIT: &str = "CoreAudio offers no AUHAL output unit";
+
 /// Audio over CoreAudio, one AUHAL unit per stream.
 pub struct CoreAudioAudioDeviceBackend;
 
@@ -78,9 +78,7 @@ impl CoreAudioAudioDeviceBackend {
     /// direction, or say why this arm cannot serve so the chain can demote.
     pub fn find_a_device() -> std::result::Result<Self, DeviceBackendArmUnavailableReason> {
         if hal_output_component().is_none() {
-            return Err(DeviceBackendArmUnavailableReason::of(
-                "CoreAudio offers no AUHAL output unit",
-            ));
+            return Err(DeviceBackendArmUnavailableReason::of(NO_AUHAL_OUTPUT_UNIT));
         }
         let has_a_default_device = [
             CoreAudioStreamDirection::Capture,
@@ -160,7 +158,7 @@ impl CoreAudioStreamDirection {
         }
     }
 
-    fn noun(self) -> &'static str {
+    fn lowercase_direction_name(self) -> &'static str {
         match self {
             CoreAudioStreamDirection::Capture => "capture",
             CoreAudioStreamDirection::Playback => "playback",
@@ -175,6 +173,23 @@ struct CoreAudioDevice {
     /// The persistent identifier a caller names the device by.
     uid: String,
     name: String,
+}
+
+impl std::fmt::Display for CoreAudioDevice {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "'{}' ({})", self.uid, self.name)
+    }
+}
+
+impl CoreAudioDevice {
+    /// The error a CoreAudio call on this device failed with, naming the device,
+    /// what it would not do, and the status it answered.
+    fn refused_with_status(&self, what_the_device_would_not_do: &str, status: i32) -> Error {
+        Error::Configuration(format!(
+            "audio device {self} {what_the_device_would_not_do}: {}",
+            osstatus_text(status)
+        ))
+    }
 }
 
 fn property_address(
@@ -242,9 +257,7 @@ fn audio_object_property_words(
             0,
             std::ptr::null(),
             NonNull::from(&mut byte_count),
-            NonNull::new(words.as_mut_ptr())
-                .expect("a Vec's pointer is non-null")
-                .cast(),
+            NonNull::from(words.as_mut_slice()).cast(),
         )
     };
     (status == NO_ERR).then_some((words, byte_count as usize))
@@ -274,8 +287,11 @@ fn audio_object_string_property(
     object_id: AudioObjectID,
     selector: AudioObjectPropertySelector,
 ) -> Option<String> {
-    let raw = audio_object_property::<usize>(object_id, selector, kAudioObjectPropertyScopeGlobal)?;
-    let string = NonNull::new(raw as *mut CFString)?;
+    let string = audio_object_property::<Option<NonNull<CFString>>>(
+        object_id,
+        selector,
+        kAudioObjectPropertyScopeGlobal,
+    )??;
     // SAFETY: the property's contract is a +1 `CFStringRef` the caller releases.
     let string = unsafe { CFRetained::from_raw(string) };
     Some(string.to_string())
@@ -308,9 +324,9 @@ fn channel_count_of(object_id: AudioObjectID, direction: CoreAudioStreamDirectio
     unsafe {
         let buffer_count = (*buffer_list).mNumberBuffers as usize;
         let buffers = std::ptr::addr_of!((*buffer_list).mBuffers).cast::<AudioBuffer>();
-        let buffers_offset = buffers as usize - buffer_list as usize;
-        let buffers_that_fit =
-            (byte_count.saturating_sub(buffers_offset)) / std::mem::size_of::<AudioBuffer>();
+        let buffers_that_fit = byte_count
+            .saturating_sub(std::mem::offset_of!(AudioBufferList, mBuffers))
+            / std::mem::size_of::<AudioBuffer>();
         std::slice::from_raw_parts(buffers, buffer_count.min(buffers_that_fit))
             .iter()
             .map(|buffer| buffer.mNumberChannels)
@@ -353,7 +369,7 @@ fn resolve_requested_device(
                 Error::Configuration(format!(
                     "no default audio {} device is set on this Mac. Choose one in System \
                      Settings › Sound, or name one by device_id.",
-                    direction.noun()
+                    direction.lowercase_direction_name()
                 ))
             });
     };
@@ -374,7 +390,7 @@ fn refusal_for_a_named_audio_device_that_is_not_attached(
     direction: CoreAudioStreamDirection,
     attached: &[CoreAudioDevice],
 ) -> String {
-    let noun = direction.noun();
+    let noun = direction.lowercase_direction_name();
     if attached.is_empty() {
         return format!(
             "audio device '{device_id}' cannot be opened for {noun}: no device on this Mac \
@@ -403,10 +419,8 @@ fn stream_format_of(
     let channels = channel_count_of(device.object_id, direction);
     if channels == 0 {
         return Err(Error::Configuration(format!(
-            "audio device '{}' ({}) carries no {} channels.",
-            device.uid,
-            device.name,
-            direction.noun()
+            "audio device {device} carries no {} channels.",
+            direction.lowercase_direction_name()
         )));
     }
     let nominal_sample_rate = audio_object_property::<f64>(
@@ -416,10 +430,7 @@ fn stream_format_of(
     )
     .filter(|&rate| rate >= 1.0)
     .ok_or_else(|| {
-        Error::Configuration(format!(
-            "audio device '{}' ({}) reports no sample rate.",
-            device.uid, device.name
-        ))
+        Error::Configuration(format!("audio device {device} reports no sample rate."))
     })?;
     Ok(AudioStreamFormat {
         sample_rate: nominal_sample_rate.round() as u32,
@@ -464,6 +475,11 @@ fn capture_latency_in_frames_of(device: &CoreAudioDevice) -> u32 {
     device_latency.saturating_add(stream_latency)
 }
 
+/// Nanoseconds `frame_count` frames occupy at `sample_rate`.
+fn duration_of_frames_in_ns(frame_count: u32, sample_rate: u32) -> i64 {
+    i64::from(frame_count) * 1_000_000_000 / i64::from(sample_rate.max(1))
+}
+
 /// The monotonic instant of a captured block's first sample: its input
 /// cycle's host time, moved back by the frames the device took to deliver it.
 fn first_sample_timestamp_ns(
@@ -471,8 +487,7 @@ fn first_sample_timestamp_ns(
     capture_latency_in_frames: u32,
     sample_rate: u32,
 ) -> i64 {
-    input_cycle_host_time_ns
-        - i64::from(capture_latency_in_frames) * 1_000_000_000 / i64::from(sample_rate.max(1))
+    input_cycle_host_time_ns - duration_of_frames_in_ns(capture_latency_in_frames, sample_rate)
 }
 
 fn osstatus_text(status: i32) -> String {
@@ -509,7 +524,7 @@ struct CoreAudioHalOutputUnit {
 }
 
 // SAFETY: an AudioUnit handle may be driven from any thread; every call on it
-// here is made under the owning stream's lock.
+// here is made through `&mut self` or under the owning stream's lock.
 unsafe impl Send for CoreAudioHalOutputUnit {}
 
 impl CoreAudioHalOutputUnit {
@@ -519,29 +534,24 @@ impl CoreAudioHalOutputUnit {
         stream_format: AudioStreamFormat,
     ) -> Result<Self> {
         let component = hal_output_component()
-            .ok_or_else(|| Error::Configuration("CoreAudio offers no AUHAL output unit".into()))?;
+            .ok_or_else(|| Error::Configuration(NO_AUHAL_OUTPUT_UNIT.into()))?;
         let mut audio_unit: AudioUnit = std::ptr::null_mut();
         // SAFETY: `component` is a live component and `audio_unit` a writable slot.
         let status =
             unsafe { AudioComponentInstanceNew(component, NonNull::from(&mut audio_unit)) };
         if status != NO_ERR || audio_unit.is_null() {
-            return Err(Error::Configuration(format!(
-                "CoreAudio could not instantiate an AUHAL unit: {}",
-                osstatus_text(status)
-            )));
+            return Err(device.refused_with_status("could not get an AUHAL unit", status));
         }
         let unit = Self {
             audio_unit,
             is_running: false,
         };
-        let refused = |what: &str, status: i32| {
-            Error::Configuration(format!(
-                "audio device '{}' ({}) refused {what} for {}: {}",
-                device.uid,
-                device.name,
-                direction.noun(),
-                osstatus_text(status)
-            ))
+        let direction_name = direction.lowercase_direction_name();
+        let refused = |what_the_device_would_not_do: &str, status: i32| {
+            device.refused_with_status(
+                &format!("refused {what_the_device_would_not_do} for {direction_name}"),
+                status,
+            )
         };
 
         let enable_capture = u32::from(direction == CoreAudioStreamDirection::Capture);
@@ -619,35 +629,6 @@ impl CoreAudioHalOutputUnit {
         (status == NO_ERR).then_some(value)
     }
 
-    /// Install the device-thread callback and initialise the unit.
-    ///
-    /// # Safety
-    ///
-    /// `callback_context` must stay valid until the unit is dropped.
-    unsafe fn install_callback_and_initialize(
-        &self,
-        callback_property_id: u32,
-        callback: AURenderCallback,
-        callback_context: *mut c_void,
-    ) -> std::result::Result<(), i32> {
-        self.set_property(
-            callback_property_id,
-            kAudioUnitScope_Global,
-            AUHAL_OUTPUT_ELEMENT,
-            &AURenderCallbackStruct {
-                inputProc: callback,
-                inputProcRefCon: callback_context,
-            },
-        )?;
-        // SAFETY: a configured, uninitialised unit.
-        let status = unsafe { AudioUnitInitialize(self.audio_unit) };
-        if status == NO_ERR {
-            Ok(())
-        } else {
-            Err(status)
-        }
-    }
-
     fn start(&mut self) -> std::result::Result<(), i32> {
         if self.is_running {
             return Ok(());
@@ -679,7 +660,7 @@ impl CoreAudioHalOutputUnit {
 impl Drop for CoreAudioHalOutputUnit {
     fn drop(&mut self) {
         let _ = self.stop();
-        // SAFETY: the unit is stopped; uninitialising an unitialised unit and
+        // SAFETY: the unit is stopped; uninitialising an uninitialised unit and
         // disposing are both valid on a live instance, which this is until here.
         unsafe {
             AudioUnitUninitialize(self.audio_unit);
@@ -701,9 +682,6 @@ struct CoreAudioDeviceLivenessWatch {
     device_object_id: AudioObjectID,
     listener_context: Box<CoreAudioDeviceLivenessListenerContext>,
 }
-
-// SAFETY: the context is only read, and everything in it is `Sync`.
-unsafe impl Send for CoreAudioDeviceLivenessWatch {}
 
 impl CoreAudioDeviceLivenessWatch {
     fn watch(
@@ -734,7 +712,7 @@ impl CoreAudioDeviceLivenessWatch {
         };
         if status != NO_ERR {
             tracing::warn!(
-                device_uid = %device.uid,
+                device = %device,
                 status = %osstatus_text(status),
                 "CoreAudio audio arm: could not watch the device for removal; a device that \
                  disappears will go silent without being reported"
@@ -788,43 +766,170 @@ unsafe extern "C-unwind" fn device_liveness_changed(
             .record_the_failure_that_ended_the_stream(DeviceStreamFailureReason::of(format!(
                 "audio device '{}' went away during {}",
                 context.device_uid,
-                context.direction.noun()
+                context.direction.lowercase_direction_name()
             )));
     }
     NO_ERR
 }
 
-/// Records a hand-off that panicked, since unwinding into CoreAudio's I/O
-/// thread is undefined: the stream stops serving rather than crashing.
-fn a_hand_off_panicked(
-    failure_recorder: &DeviceStreamFailureRecorder,
-    direction: CoreAudioStreamDirection,
-) {
-    failure_recorder.record_the_failure_that_ended_the_stream(DeviceStreamFailureReason::of(
-        format!(
-            "the {} hand-off panicked on the device thread",
-            direction.noun()
-        ),
-    ));
+/// The per-direction state a device-thread callback works on under its lock.
+trait CoreAudioDeliveryHoldingAHandOff: Send {
+    type HandOff;
+
+    fn installed_hand_off(&mut self) -> &mut Option<Self::HandOff>;
 }
 
-/// What the capture callback reads on the device's I/O thread.
-struct CoreAudioCaptureCallbackContext {
+/// What a callback reads on the device's I/O thread.
+struct CoreAudioCallbackContext<Delivery> {
     audio_unit: AudioUnit,
+    direction: CoreAudioStreamDirection,
+    failure_recorder: DeviceStreamFailureRecorder,
+    /// Held by the callback across its whole call, so clearing the hand-off
+    /// under it guarantees no call is in flight or to come.
+    delivery: Mutex<Delivery>,
+}
+
+// SAFETY: the AudioUnit handle is only rendered through on the device's I/O
+// thread; everything else is `Send + Sync` given a `Send` delivery.
+unsafe impl<Delivery: Send> Send for CoreAudioCallbackContext<Delivery> {}
+unsafe impl<Delivery: Send> Sync for CoreAudioCallbackContext<Delivery> {}
+
+impl<Delivery> CoreAudioCallbackContext<Delivery> {
+    /// Called once a hand-off has panicked and been uninstalled, since
+    /// unwinding into CoreAudio's I/O thread is undefined: the stream stops
+    /// serving rather than crashing.
+    fn record_that_the_hand_off_panicked(&self) {
+        let reason = match self.direction {
+            CoreAudioStreamDirection::Capture => {
+                "the capture hand-off panicked on the device thread and was uninstalled"
+            }
+            CoreAudioStreamDirection::Playback => {
+                "the playback hand-off panicked on the device thread and was uninstalled"
+            }
+        };
+        self.failure_recorder
+            .record_the_failure_that_ended_the_stream(DeviceStreamFailureReason::of(reason));
+    }
+}
+
+/// An AUHAL unit bound to a device, the callback context it calls with, and
+/// the device it serves.
+struct CoreAudioStreamUnit<Delivery: CoreAudioDeliveryHoldingAHandOff> {
+    /// Declared before the context so it is dropped — and its callback
+    /// retired — before the context is freed.
+    hal_output_unit: CoreAudioHalOutputUnit,
+    callback_context: Box<CoreAudioCallbackContext<Delivery>>,
+    device: CoreAudioDevice,
+}
+
+impl<Delivery: CoreAudioDeliveryHoldingAHandOff> CoreAudioStreamUnit<Delivery> {
+    fn bound_to(
+        device: &CoreAudioDevice,
+        direction: CoreAudioStreamDirection,
+        stream_format: AudioStreamFormat,
+        delivery: Delivery,
+        failure_recorder: DeviceStreamFailureRecorder,
+        callback_property_id: u32,
+        callback: AURenderCallback,
+    ) -> Result<Self> {
+        let hal_output_unit =
+            CoreAudioHalOutputUnit::new_bound_to(device, direction, stream_format)?;
+        let callback_context = Box::new(CoreAudioCallbackContext {
+            audio_unit: hal_output_unit.audio_unit,
+            direction,
+            failure_recorder,
+            delivery: Mutex::new(delivery),
+        });
+        let callback_context_pointer = (callback_context.as_ref()
+            as *const CoreAudioCallbackContext<Delivery>)
+            .cast_mut()
+            .cast();
+        let initialised = hal_output_unit
+            .set_property(
+                callback_property_id,
+                kAudioUnitScope_Global,
+                AUHAL_OUTPUT_ELEMENT,
+                &AURenderCallbackStruct {
+                    inputProc: callback,
+                    inputProcRefCon: callback_context_pointer,
+                },
+            )
+            .and_then(|()| {
+                // SAFETY: a configured, uninitialised unit, whose callback
+                // context is boxed beside it and outlives it.
+                let status = unsafe { AudioUnitInitialize(hal_output_unit.audio_unit) };
+                if status == NO_ERR {
+                    Ok(())
+                } else {
+                    Err(status)
+                }
+            });
+        initialised.map_err(|status| {
+            device.refused_with_status(
+                &format!(
+                    "would not initialise for {}",
+                    direction.lowercase_direction_name()
+                ),
+                status,
+            )
+        })?;
+        Ok(Self {
+            hal_output_unit,
+            callback_context,
+            device: device.clone(),
+        })
+    }
+
+    fn start_handing_off_to(&mut self, hand_off: Delivery::HandOff) -> Result<()> {
+        *self.callback_context.delivery.lock().installed_hand_off() = Some(hand_off);
+        self.hal_output_unit.start().map_err(|status| {
+            *self.callback_context.delivery.lock().installed_hand_off() = None;
+            self.device.refused_with_status(
+                &format!(
+                    "would not start {}",
+                    self.callback_context.direction.lowercase_direction_name()
+                ),
+                status,
+            )
+        })
+    }
+
+    fn stop_handing_off(&mut self) -> Result<()> {
+        let stopped = self.hal_output_unit.stop();
+        // Cleared after the unit stops, and under the lock the callback holds
+        // across its call, so no hand-off runs once this returns.
+        *self.callback_context.delivery.lock().installed_hand_off() = None;
+        stopped.map_err(|status| {
+            self.device.refused_with_status(
+                &format!(
+                    "would not stop {}",
+                    self.callback_context.direction.lowercase_direction_name()
+                ),
+                status,
+            )
+        })
+    }
+}
+
+/// The capture callback's state: the hand-off, and the buffer each input
+/// cycle is rendered into before it is handed off.
+struct CoreAudioCaptureDelivery {
+    installed_hand_off: Option<CapturedAudioBlockHandOff>,
+    render_buffer: Vec<u8>,
     stream_format: AudioStreamFormat,
     capture_latency_in_frames: u32,
-    /// Written only on the device's single I/O thread, and only while the unit runs.
-    render_buffer: UnsafeCell<Vec<u8>>,
-    installed_hand_off: Mutex<Option<CapturedAudioBlockHandOff>>,
-    failure_recorder: DeviceStreamFailureRecorder,
-    has_reported_an_oversized_cycle: AtomicBool,
+    has_reported_an_oversized_cycle: bool,
 }
 
-// SAFETY: `render_buffer` is touched only by the device's one I/O thread;
-// everything else is `Sync` or an AudioUnit handle rendered through on that
-// same thread.
-unsafe impl Sync for CoreAudioCaptureCallbackContext {}
-unsafe impl Send for CoreAudioCaptureCallbackContext {}
+impl CoreAudioDeliveryHoldingAHandOff for CoreAudioCaptureDelivery {
+    type HandOff = CapturedAudioBlockHandOff;
+
+    fn installed_hand_off(&mut self) -> &mut Option<CapturedAudioBlockHandOff> {
+        &mut self.installed_hand_off
+    }
+}
+
+type CoreAudioCaptureUnit = CoreAudioStreamUnit<CoreAudioCaptureDelivery>;
 
 unsafe extern "C-unwind" fn captured_input_became_available(
     callback_context: NonNull<c_void>,
@@ -834,27 +939,28 @@ unsafe extern "C-unwind" fn captured_input_became_available(
     frame_count: u32,
     _unused_buffer_list: *mut AudioBufferList,
 ) -> i32 {
-    // SAFETY: registered with a `CoreAudioCaptureCallbackContext` that outlives
-    // the unit it was registered on.
+    // SAFETY: registered with this context type, which outlives the unit it
+    // was registered on.
     let context = unsafe {
         callback_context
-            .cast::<CoreAudioCaptureCallbackContext>()
+            .cast::<CoreAudioCallbackContext<CoreAudioCaptureDelivery>>()
             .as_ref()
     };
-    let installed_hand_off = context.installed_hand_off.lock();
+    let mut delivery = context.delivery.lock();
+    let CoreAudioCaptureDelivery {
+        installed_hand_off,
+        render_buffer,
+        stream_format,
+        capture_latency_in_frames,
+        has_reported_an_oversized_cycle,
+    } = &mut *delivery;
     let Some(hand_off) = installed_hand_off.as_ref() else {
         return NO_ERR;
     };
-    // SAFETY: only this, the device's one I/O thread, touches the buffer.
-    let render_buffer = unsafe { &mut *context.render_buffer.get() };
-    let byte_count = context
-        .stream_format
-        .interleaved_byte_count_for(frame_count);
+    let byte_count = stream_format.interleaved_byte_count_for(frame_count);
     if byte_count > render_buffer.len() {
-        if !context
-            .has_reported_an_oversized_cycle
-            .swap(true, Ordering::Relaxed)
-        {
+        if !*has_reported_an_oversized_cycle {
+            *has_reported_an_oversized_cycle = true;
             tracing::warn!(
                 frame_count,
                 capacity_in_bytes = render_buffer.len(),
@@ -867,7 +973,7 @@ unsafe extern "C-unwind" fn captured_input_became_available(
     let mut buffer_list = AudioBufferList {
         mNumberBuffers: 1,
         mBuffers: [AudioBuffer {
-            mNumberChannels: context.stream_format.channels,
+            mNumberChannels: stream_format.channels,
             mDataByteSize: byte_count as u32,
             mData: render_buffer.as_mut_ptr().cast(),
         }],
@@ -898,135 +1004,82 @@ unsafe extern "C-unwind" fn captured_input_became_available(
         // AUHAL always stamps its input cycles with host time; were one ever
         // not, the cycle ended now and began a block ago.
         MediaClock::now().as_nanos() as i64
-            - i64::from(frame_count) * 1_000_000_000
-                / i64::from(context.stream_format.sample_rate.max(1))
+            - duration_of_frames_in_ns(frame_count, stream_format.sample_rate)
     };
-    let rendered_byte_count = (buffer_list.mBuffers[0].mDataByteSize as usize).min(byte_count);
+    // Whole frames only, so a short render still carries `sample_count ×
+    // channels` scalars as the seam promises.
+    let bytes_per_frame = stream_format.interleaved_byte_count_for(1).max(1);
+    let rendered_frame_count =
+        (buffer_list.mBuffers[0].mDataByteSize as usize).min(byte_count) / bytes_per_frame;
+    let rendered_byte_count = rendered_frame_count * bytes_per_frame;
     let handed_off = catch_unwind(AssertUnwindSafe(|| {
         hand_off(CapturedAudioBlockFromDevice {
             interleaved_sample_bytes: &render_buffer[..rendered_byte_count],
-            sample_count: frame_count,
+            sample_count: rendered_frame_count as u32,
             first_sample_timestamp_ns: first_sample_timestamp_ns(
                 input_cycle_host_time_ns,
-                context.capture_latency_in_frames,
-                context.stream_format.sample_rate,
+                *capture_latency_in_frames,
+                stream_format.sample_rate,
             ),
         })
     }));
     if handed_off.is_err() {
-        a_hand_off_panicked(&context.failure_recorder, CoreAudioStreamDirection::Capture);
+        *installed_hand_off = None;
+        context.record_that_the_hand_off_panicked();
     }
     NO_ERR
 }
 
-/// An input-bound AUHAL unit and the context its callback reads.
+/// Bind an input unit to `device`, with its render buffer sized for the
+/// largest cycle the unit or the device will deliver.
 ///
-/// Built only once microphone access is granted: binding a unit with input
+/// Called only once microphone access is granted: binding a unit with input
 /// enabled asks `coreaudiod`, which blocks the binding call until the user has
 /// answered the privacy prompt.
-struct CoreAudioCaptureUnit {
-    /// Declared before the context so it is dropped — and its callback
-    /// retired — before the context is freed.
-    hal_output_unit: CoreAudioHalOutputUnit,
-    callback_context: Box<CoreAudioCaptureCallbackContext>,
-}
-
-impl CoreAudioCaptureUnit {
-    fn bound_to(
-        device: &CoreAudioDevice,
-        stream_format: AudioStreamFormat,
-        failure_recorder: DeviceStreamFailureRecorder,
-    ) -> Result<Self> {
-        let direction = CoreAudioStreamDirection::Capture;
-        let hal_output_unit =
-            CoreAudioHalOutputUnit::new_bound_to(device, direction, stream_format)?;
-        let callback_context = Box::new(CoreAudioCaptureCallbackContext {
-            audio_unit: hal_output_unit.audio_unit,
+fn bind_capture_unit(
+    device: &CoreAudioDevice,
+    stream_format: AudioStreamFormat,
+    failure_recorder: DeviceStreamFailureRecorder,
+) -> Result<CoreAudioCaptureUnit> {
+    let direction = CoreAudioStreamDirection::Capture;
+    let capture_unit = CoreAudioCaptureUnit::bound_to(
+        device,
+        direction,
+        stream_format,
+        CoreAudioCaptureDelivery {
+            installed_hand_off: None,
+            render_buffer: Vec::new(),
             stream_format,
             capture_latency_in_frames: capture_latency_in_frames_of(device),
-            render_buffer: UnsafeCell::new(Vec::new()),
-            installed_hand_off: Mutex::new(None),
-            failure_recorder,
-            has_reported_an_oversized_cycle: AtomicBool::new(false),
-        });
-        // SAFETY: the context is boxed and owned beside the unit, which this
-        // struct drops first.
-        unsafe {
-            hal_output_unit.install_callback_and_initialize(
-                kAudioOutputUnitProperty_SetInputCallback,
-                Some(captured_input_became_available),
-                (callback_context.as_ref() as *const CoreAudioCaptureCallbackContext)
-                    .cast_mut()
-                    .cast(),
+            has_reported_an_oversized_cycle: false,
+        },
+        failure_recorder,
+        kAudioOutputUnitProperty_SetInputCallback,
+        Some(captured_input_became_available),
+    )?;
+    let largest_cycle_in_frames = capture_unit
+        .hal_output_unit
+        .global_u32_property(kAudioUnitProperty_MaximumFramesPerSlice)
+        .unwrap_or(0)
+        .max(
+            audio_object_property::<u32>(
+                device.object_id,
+                kAudioDevicePropertyBufferFrameSize,
+                direction.device_property_scope(),
             )
-        }
-        .map_err(|status| {
-            Error::Configuration(format!(
-                "audio device '{}' ({}) would not initialise for capture: {}",
-                device.uid,
-                device.name,
-                osstatus_text(status)
-            ))
-        })?;
-        let largest_cycle_in_frames = hal_output_unit
-            .global_u32_property(kAudioUnitProperty_MaximumFramesPerSlice)
-            .unwrap_or(0)
-            .max(
-                audio_object_property::<u32>(
-                    device.object_id,
-                    kAudioDevicePropertyBufferFrameSize,
-                    direction.device_property_scope(),
-                )
-                .unwrap_or(0),
-            );
-        // SAFETY: the unit has not started, so no I/O thread touches the buffer.
-        unsafe {
-            *callback_context.render_buffer.get() =
-                vec![0u8; stream_format.interleaved_byte_count_for(largest_cycle_in_frames)]
-        };
-        tracing::debug!(
-            device_uid = %device.uid,
-            largest_cycle_in_frames,
-            capture_latency_in_frames = callback_context.capture_latency_in_frames,
-            "CoreAudio audio arm: capture unit bound"
+            .unwrap_or(0),
         );
-        Ok(Self {
-            hal_output_unit,
-            callback_context,
-        })
-    }
-
-    fn start_delivering_into(
-        &mut self,
-        device: &CoreAudioDevice,
-        hand_off: CapturedAudioBlockHandOff,
-    ) -> Result<()> {
-        *self.callback_context.installed_hand_off.lock() = Some(hand_off);
-        self.hal_output_unit.start().map_err(|status| {
-            *self.callback_context.installed_hand_off.lock() = None;
-            Error::Configuration(format!(
-                "audio device '{}' ({}) would not start capturing: {}",
-                device.uid,
-                device.name,
-                osstatus_text(status)
-            ))
-        })
-    }
-
-    fn stop_delivering(&mut self, device: &CoreAudioDevice) -> Result<()> {
-        let stopped = self.hal_output_unit.stop();
-        // Cleared after the unit stops, and under the lock the callback holds
-        // across its call, so no hand-off runs once this returns.
-        *self.callback_context.installed_hand_off.lock() = None;
-        stopped.map_err(|status| {
-            Error::Configuration(format!(
-                "audio device '{}' ({}) would not stop capturing: {}",
-                device.uid,
-                device.name,
-                osstatus_text(status)
-            ))
-        })
-    }
+    let mut delivery = capture_unit.callback_context.delivery.lock();
+    delivery.render_buffer =
+        vec![0u8; stream_format.interleaved_byte_count_for(largest_cycle_in_frames)];
+    tracing::debug!(
+        device = %device,
+        largest_cycle_in_frames,
+        capture_latency_in_frames = delivery.capture_latency_in_frames,
+        "CoreAudio audio arm: capture unit bound"
+    );
+    drop(delivery);
+    Ok(capture_unit)
 }
 
 /// Whether the user has let this process use the microphone, as far as one
@@ -1054,15 +1107,21 @@ struct CoreAudioCaptureControl {
 impl CoreAudioCaptureControl {
     fn stop_delivering(&mut self) -> Result<()> {
         match &mut self.microphone_access {
-            MicrophoneAccessForTheStream::Granted(capture_unit) => {
-                capture_unit.stop_delivering(&self.device)
-            }
+            MicrophoneAccessForTheStream::Granted(capture_unit) => capture_unit.stop_handing_off(),
             MicrophoneAccessForTheStream::AwaitingTheUsersAnswer { parked_hand_off } => {
                 *parked_hand_off = None;
                 Ok(())
             }
             MicrophoneAccessForTheStream::Refused(_) => Ok(()),
         }
+    }
+
+    fn record_the_failure_that_ended_the_stream(&self, failure: &Error) {
+        tracing::error!(device = %self.device, error = %failure, "CoreAudio capture ended");
+        self.failure_recorder
+            .record_the_failure_that_ended_the_stream(DeviceStreamFailureReason::of(
+                failure.to_string(),
+            ));
     }
 }
 
@@ -1085,8 +1144,7 @@ impl CoreAudioCaptureStream {
             DeviceStreamFailureRecorder::recording_into_a_new_report();
 
         tracing::info!(
-            device_uid = %device.uid,
-            device_name = %device.name,
+            device = %device,
             sample_rate = stream_format.sample_rate,
             channels = stream_format.channels,
             "CoreAudio audio arm: capture stream opened"
@@ -1113,7 +1171,7 @@ impl CoreAudioCaptureStream {
         )? {
             CaptureDeviceAuthorizationAtOpen::Granted => {
                 let mut control = capture_control.lock();
-                let capture_unit = CoreAudioCaptureUnit::bound_to(
+                let capture_unit = bind_capture_unit(
                     &control.device,
                     control.stream_format,
                     control.failure_recorder.clone(),
@@ -1141,54 +1199,42 @@ fn the_users_microphone_answer_arrived(
         return;
     };
     let mut control = capture_control.lock();
-    let parked_hand_off = match &mut control.microphone_access {
-        MicrophoneAccessForTheStream::AwaitingTheUsersAnswer { parked_hand_off } => {
-            parked_hand_off.take()
-        }
-        _ => return,
+    let MicrophoneAccessForTheStream::AwaitingTheUsersAnswer { parked_hand_off } =
+        &mut control.microphone_access
+    else {
+        return;
     };
+    let parked_hand_off = parked_hand_off.take();
     if !granted {
         let refusal = capture_device_refusal_for_the_user(
             PrivacyGatedCaptureDevice::Microphone,
             CaptureDeviceRefusal::DeniedByTheUser,
         );
-        tracing::error!(device_uid = %control.device.uid, "{refusal}");
-        control
-            .failure_recorder
-            .record_the_failure_that_ended_the_stream(DeviceStreamFailureReason::of(
-                refusal.clone(),
-            ));
+        let refusal_error = Error::Configuration(refusal.clone());
+        control.record_the_failure_that_ended_the_stream(&refusal_error);
         control.microphone_access = MicrophoneAccessForTheStream::Refused(refusal);
         return;
     }
-    tracing::info!(device_uid = %control.device.uid, "microphone access allowed");
-    let control = &mut *control;
-    let started = CoreAudioCaptureUnit::bound_to(
+    tracing::info!(device = %control.device, "microphone access allowed");
+    match bind_capture_unit(
         &control.device,
         control.stream_format,
         control.failure_recorder.clone(),
-    )
-    .and_then(|mut capture_unit| {
-        let started = match parked_hand_off {
-            Some(hand_off) => capture_unit.start_delivering_into(&control.device, hand_off),
-            None => Ok(()),
-        };
-        control.microphone_access = MicrophoneAccessForTheStream::Granted(capture_unit);
-        started
-    });
-    if let Err(start_failure) = started {
-        tracing::error!(device_uid = %control.device.uid, error = %start_failure, "microphone allowed, but capture could not start");
-        control
-            .failure_recorder
-            .record_the_failure_that_ended_the_stream(DeviceStreamFailureReason::of(
-                start_failure.to_string(),
-            ));
-        if !matches!(
-            control.microphone_access,
-            MicrophoneAccessForTheStream::Granted(_)
-        ) {
+    ) {
+        Err(bind_failure) => {
+            control.record_the_failure_that_ended_the_stream(&bind_failure);
             control.microphone_access =
-                MicrophoneAccessForTheStream::Refused(start_failure.to_string());
+                MicrophoneAccessForTheStream::Refused(bind_failure.to_string());
+        }
+        Ok(mut capture_unit) => {
+            let started = match parked_hand_off {
+                Some(hand_off) => capture_unit.start_handing_off_to(hand_off),
+                None => Ok(()),
+            };
+            control.microphone_access = MicrophoneAccessForTheStream::Granted(capture_unit);
+            if let Err(start_failure) = started {
+                control.record_the_failure_that_ended_the_stream(&start_failure);
+            }
         }
     }
 }
@@ -1205,10 +1251,9 @@ impl AudioCaptureStream for CoreAudioCaptureStream {
     fn start_delivering_to(&mut self, hand_off: CapturedAudioBlockHandOff) -> Result<()> {
         let mut control = self.capture_control.lock();
         control.stop_delivering()?;
-        let control = &mut *control;
         match &mut control.microphone_access {
             MicrophoneAccessForTheStream::Granted(capture_unit) => {
-                capture_unit.start_delivering_into(&control.device, hand_off)
+                capture_unit.start_handing_off_to(hand_off)
             }
             MicrophoneAccessForTheStream::AwaitingTheUsersAnswer { parked_hand_off } => {
                 *parked_hand_off = Some(hand_off);
@@ -1236,10 +1281,17 @@ impl Drop for CoreAudioCaptureStream {
     }
 }
 
-/// What the playback callback reads on the device's I/O thread.
-struct CoreAudioPlaybackCallbackContext {
-    installed_hand_off: Mutex<Option<AudioBlockForPlaybackHandOff>>,
-    failure_recorder: DeviceStreamFailureRecorder,
+/// The playback callback's state: the hand-off it asks for samples.
+struct CoreAudioPlaybackDelivery {
+    installed_hand_off: Option<AudioBlockForPlaybackHandOff>,
+}
+
+impl CoreAudioDeliveryHoldingAHandOff for CoreAudioPlaybackDelivery {
+    type HandOff = AudioBlockForPlaybackHandOff;
+
+    fn installed_hand_off(&mut self) -> &mut Option<AudioBlockForPlaybackHandOff> {
+        &mut self.installed_hand_off
+    }
 }
 
 unsafe extern "C-unwind" fn playback_samples_requested(
@@ -1250,11 +1302,11 @@ unsafe extern "C-unwind" fn playback_samples_requested(
     frame_count: u32,
     buffer_list: *mut AudioBufferList,
 ) -> i32 {
-    // SAFETY: registered with a `CoreAudioPlaybackCallbackContext` that
-    // outlives the unit it was registered on.
+    // SAFETY: registered with this context type, which outlives the unit it
+    // was registered on.
     let context = unsafe {
         callback_context
-            .cast::<CoreAudioPlaybackCallbackContext>()
+            .cast::<CoreAudioCallbackContext<CoreAudioPlaybackDelivery>>()
             .as_ref()
     };
     let Some(buffer_list) = NonNull::new(buffer_list) else {
@@ -1269,8 +1321,8 @@ unsafe extern "C-unwind" fn playback_samples_requested(
     // SAFETY: `mData` holds `mDataByteSize` writable bytes for this call.
     let interleaved_sample_bytes_to_fill =
         unsafe { std::slice::from_raw_parts_mut(data.as_ptr(), buffer.mDataByteSize as usize) };
-    let installed_hand_off = context.installed_hand_off.lock();
-    let Some(hand_off) = installed_hand_off.as_ref() else {
+    let mut delivery = context.delivery.lock();
+    let Some(hand_off) = delivery.installed_hand_off.as_ref() else {
         interleaved_sample_bytes_to_fill.fill(0);
         // SAFETY: the flags are this cycle's, writable for its length.
         unsafe {
@@ -1287,10 +1339,8 @@ unsafe extern "C-unwind" fn playback_samples_requested(
     }));
     if handed_off.is_err() {
         interleaved_sample_bytes_to_fill.fill(0);
-        a_hand_off_panicked(
-            &context.failure_recorder,
-            CoreAudioStreamDirection::Playback,
-        );
+        delivery.installed_hand_off = None;
+        context.record_that_the_hand_off_panicked();
     }
     NO_ERR
 }
@@ -1299,11 +1349,7 @@ unsafe extern "C-unwind" fn playback_samples_requested(
 pub struct CoreAudioPlaybackStream {
     stream_format: AudioStreamFormat,
     liveness_report: DeviceStreamLivenessReport,
-    device: CoreAudioDevice,
-    /// Declared before the context so it is dropped — and its callback
-    /// retired — before the context is freed.
-    hal_output_unit: CoreAudioHalOutputUnit,
-    callback_context: Box<CoreAudioPlaybackCallbackContext>,
+    playback_unit: CoreAudioStreamUnit<CoreAudioPlaybackDelivery>,
     _liveness_watch: CoreAudioDeviceLivenessWatch,
 }
 
@@ -1312,38 +1358,22 @@ impl CoreAudioPlaybackStream {
         let direction = CoreAudioStreamDirection::Playback;
         let device = resolve_requested_device(request, direction)?;
         let stream_format = stream_format_of(&device, direction)?;
-        let hal_output_unit =
-            CoreAudioHalOutputUnit::new_bound_to(&device, direction, stream_format)?;
-
         let (failure_recorder, liveness_report) =
             DeviceStreamFailureRecorder::recording_into_a_new_report();
-        let callback_context = Box::new(CoreAudioPlaybackCallbackContext {
-            installed_hand_off: Mutex::new(None),
-            failure_recorder: failure_recorder.clone(),
-        });
-        // SAFETY: the context is boxed and owned beside the unit, which this
-        // stream drops first.
-        unsafe {
-            hal_output_unit.install_callback_and_initialize(
-                kAudioUnitProperty_SetRenderCallback,
-                Some(playback_samples_requested),
-                (callback_context.as_ref() as *const CoreAudioPlaybackCallbackContext)
-                    .cast_mut()
-                    .cast(),
-            )
-        }
-        .map_err(|status| {
-            Error::Configuration(format!(
-                "audio device '{}' ({}) would not initialise for playback: {}",
-                device.uid,
-                device.name,
-                osstatus_text(status)
-            ))
-        })?;
+        let playback_unit = CoreAudioStreamUnit::bound_to(
+            &device,
+            direction,
+            stream_format,
+            CoreAudioPlaybackDelivery {
+                installed_hand_off: None,
+            },
+            failure_recorder.clone(),
+            kAudioUnitProperty_SetRenderCallback,
+            Some(playback_samples_requested),
+        )?;
 
         tracing::info!(
-            device_uid = %device.uid,
-            device_name = %device.name,
+            device = %device,
             sample_rate = stream_format.sample_rate,
             channels = stream_format.channels,
             "CoreAudio audio arm: playback stream opened"
@@ -1352,14 +1382,12 @@ impl CoreAudioPlaybackStream {
         Ok(Self {
             stream_format,
             liveness_report,
+            playback_unit,
             _liveness_watch: CoreAudioDeviceLivenessWatch::watch(
                 &device,
                 direction,
                 failure_recorder,
             ),
-            device,
-            hal_output_unit,
-            callback_context,
         })
     }
 }
@@ -1374,32 +1402,12 @@ impl AudioPlaybackStream for CoreAudioPlaybackStream {
     }
 
     fn start_requesting_from(&mut self, hand_off: AudioBlockForPlaybackHandOff) -> Result<()> {
-        self.stop_requesting()?;
-        *self.callback_context.installed_hand_off.lock() = Some(hand_off);
-        self.hal_output_unit.start().map_err(|status| {
-            *self.callback_context.installed_hand_off.lock() = None;
-            Error::Configuration(format!(
-                "audio device '{}' ({}) would not start playing: {}",
-                self.device.uid,
-                self.device.name,
-                osstatus_text(status)
-            ))
-        })
+        self.playback_unit.stop_handing_off()?;
+        self.playback_unit.start_handing_off_to(hand_off)
     }
 
     fn stop_requesting(&mut self) -> Result<()> {
-        let stopped = self.hal_output_unit.stop();
-        // Cleared after the unit stops, and under the lock the callback holds
-        // across its call, so no hand-off runs once this returns.
-        *self.callback_context.installed_hand_off.lock() = None;
-        stopped.map_err(|status| {
-            Error::Configuration(format!(
-                "audio device '{}' ({}) would not stop playing: {}",
-                self.device.uid,
-                self.device.name,
-                osstatus_text(status)
-            ))
-        })
+        self.playback_unit.stop_handing_off()
     }
 }
 
