@@ -973,6 +973,11 @@ impl AudioPlaybackStream for AlsaAudioPlaybackStream {
         self.playback_stream_format
     }
 
+    /// Not reported on this arm, so a caller keeps the period it assumes.
+    fn device_period_in_per_channel_samples(&self) -> Option<u32> {
+        None
+    }
+
     fn liveness_report(&self) -> DeviceStreamLivenessReport {
         self.liveness_report.clone()
     }

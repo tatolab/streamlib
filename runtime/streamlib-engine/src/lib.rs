@@ -191,6 +191,9 @@ pub mod linux_alsa_audio_device_backend {
 #[cfg(target_os = "macos")]
 #[doc(hidden)]
 pub mod apple_coreaudio_audio_tier {
+    pub use crate::apple::coreaudio_audio_device_backend::{
+        CoreAudioStreamDirection, built_in_audio_device_uid, default_audio_device_uid,
+    };
     pub use crate::apple::permissions::microphone_access_for_a_capture_hardware_test;
 }
 

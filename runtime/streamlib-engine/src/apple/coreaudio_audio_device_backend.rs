@@ -28,10 +28,11 @@ use objc2_core_audio::{
     AudioObjectAddPropertyListener, AudioObjectGetPropertyData, AudioObjectGetPropertyDataSize,
     AudioObjectID, AudioObjectPropertyAddress, AudioObjectPropertyScope,
     AudioObjectPropertySelector, AudioObjectRemovePropertyListener,
-    kAudioDevicePropertyBufferFrameSize, kAudioDevicePropertyDeviceIsAlive,
-    kAudioDevicePropertyDeviceUID, kAudioDevicePropertyLatency,
+    kAudioDevicePropertyBufferFrameSize, kAudioDevicePropertyBufferFrameSizeRange,
+    kAudioDevicePropertyDeviceIsAlive, kAudioDevicePropertyDeviceUID, kAudioDevicePropertyLatency,
     kAudioDevicePropertyNominalSampleRate, kAudioDevicePropertyStreamConfiguration,
-    kAudioDevicePropertyStreams, kAudioHardwarePropertyDefaultInputDevice,
+    kAudioDevicePropertyStreams, kAudioDevicePropertyTransportType,
+    kAudioDeviceTransportTypeBuiltIn, kAudioHardwarePropertyDefaultInputDevice,
     kAudioHardwarePropertyDefaultOutputDevice, kAudioHardwarePropertyDevices,
     kAudioObjectPropertyElementMain, kAudioObjectPropertyName, kAudioObjectPropertyScopeGlobal,
     kAudioObjectPropertyScopeInput, kAudioObjectPropertyScopeOutput, kAudioObjectSystemObject,
@@ -39,7 +40,7 @@ use objc2_core_audio::{
 };
 use objc2_core_audio_types::{
     AudioBuffer, AudioBufferList, AudioStreamBasicDescription, AudioTimeStamp, AudioTimeStampFlags,
-    kAudioFormatFlagIsFloat, kAudioFormatFlagIsPacked, kAudioFormatLinearPCM,
+    AudioValueRange, kAudioFormatFlagIsFloat, kAudioFormatFlagIsPacked, kAudioFormatLinearPCM,
 };
 use objc2_core_foundation::{CFRetained, CFString};
 use parking_lot::Mutex;
@@ -69,6 +70,10 @@ const AUHAL_INPUT_ELEMENT: u32 = 1;
 const AUHAL_OUTPUT_ELEMENT: u32 = 0;
 
 const NO_AUHAL_OUTPUT_UNIT: &str = "CoreAudio offers no AUHAL output unit";
+
+/// Input cycles in a row whose render may fail before the device is taken to
+/// have stopped delivering — the ALSA arm's patience with a silent device.
+const CONSECUTIVE_FAILED_INPUT_RENDERS_BEFORE_THE_STREAM_ENDS: u32 = 25;
 
 /// Audio over CoreAudio, one AUHAL unit per stream.
 pub struct CoreAudioAudioDeviceBackend;
@@ -121,8 +126,10 @@ impl AudioDeviceBackend for CoreAudioAudioDeviceBackend {
 /// Which way a stream moves samples, and every CoreAudio constant that follows
 /// from it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CoreAudioStreamDirection {
+pub enum CoreAudioStreamDirection {
+    /// Samples from an input device.
     Capture,
+    /// Samples to an output device.
     Playback,
 }
 
@@ -363,6 +370,30 @@ fn devices_carrying(direction: CoreAudioStreamDirection) -> Vec<CoreAudioDevice>
     .collect()
 }
 
+/// The UID of the system default device in `direction`, if one is set.
+pub fn default_audio_device_uid(direction: CoreAudioStreamDirection) -> Option<String> {
+    default_device_object_id(direction)
+        .map(describe_device)
+        .map(|device| device.uid)
+        .filter(|uid| !uid.is_empty())
+}
+
+/// The UID of this Mac's own built-in device in `direction` — transport
+/// `kAudioDeviceTransportTypeBuiltIn` — if one carries that direction.
+pub fn built_in_audio_device_uid(direction: CoreAudioStreamDirection) -> Option<String> {
+    devices_carrying(direction)
+        .into_iter()
+        .find(|device| {
+            audio_object_property::<u32>(
+                device.object_id,
+                kAudioDevicePropertyTransportType,
+                kAudioObjectPropertyScopeGlobal,
+            ) == Some(kAudioDeviceTransportTypeBuiltIn)
+        })
+        .map(|device| device.uid)
+        .filter(|uid| !uid.is_empty())
+}
+
 /// The device a request names, or the system default in `direction`. A named
 /// device that is not attached is refused naming it.
 fn resolve_requested_device(
@@ -480,6 +511,40 @@ fn capture_latency_in_frames_of(device: &CoreAudioDevice) -> u32 {
             })
             .unwrap_or(0);
     device_latency.saturating_add(stream_latency)
+}
+
+/// An `AudioValueRange` read as the `[minimum, maximum]` pair it is laid out
+/// as, since the generated struct has no `Default`.
+type AudioValueRangeAsMinimumAndMaximum = [f64; 2];
+
+const _: () = assert!(
+    std::mem::size_of::<AudioValueRange>()
+        == std::mem::size_of::<AudioValueRangeAsMinimumAndMaximum>()
+        && std::mem::align_of::<AudioValueRange>()
+            == std::mem::align_of::<AudioValueRangeAsMinimumAndMaximum>()
+);
+
+/// The most frames one I/O cycle of `device` can carry in `direction`: the top
+/// of its buffer-size range, or its current buffer size where the range is
+/// not reported.
+fn largest_io_cycle_in_frames_of(
+    device: &CoreAudioDevice,
+    direction: CoreAudioStreamDirection,
+) -> Option<u32> {
+    let scope = direction.device_property_scope();
+    let top_of_the_buffer_size_range = audio_object_property::<AudioValueRangeAsMinimumAndMaximum>(
+        device.object_id,
+        kAudioDevicePropertyBufferFrameSizeRange,
+        scope,
+    )
+    .map(|[_minimum, maximum]| maximum.ceil() as u32);
+    let current_buffer_size =
+        audio_object_property::<u32>(device.object_id, kAudioDevicePropertyBufferFrameSize, scope);
+    top_of_the_buffer_size_range
+        .into_iter()
+        .chain(current_buffer_size)
+        .max()
+        .filter(|&frames| frames > 0)
 }
 
 /// Nanoseconds `frame_count` frames occupy at `sample_rate`.
@@ -790,6 +855,10 @@ trait CoreAudioDeliveryHoldingAHandOff: Send + Sized {
     /// The AUHAL property the callback is installed through.
     const CALLBACK_PROPERTY_ID: u32;
 
+    /// The scope the callback is installed on, element 0: Global for the
+    /// input callback, Input for the render callback (TN2091).
+    const CALLBACK_SCOPE: u32;
+
     /// Reads its refcon as a `CoreAudioCallbackContext<Self>`.
     const CALLBACK: AURenderCallback;
 
@@ -811,20 +880,37 @@ unsafe impl<Delivery: Send> Send for CoreAudioCallbackContext<Delivery> {}
 unsafe impl<Delivery: Send> Sync for CoreAudioCallbackContext<Delivery> {}
 
 impl<Delivery: CoreAudioDeliveryHoldingAHandOff> CoreAudioCallbackContext<Delivery> {
-    /// Called once a hand-off has panicked and been uninstalled, since
-    /// unwinding into CoreAudio's I/O thread is undefined: the stream stops
-    /// serving rather than crashing.
-    fn record_that_the_hand_off_panicked(&self) {
-        let reason = match Delivery::DIRECTION {
-            CoreAudioStreamDirection::Capture => {
-                "the capture hand-off panicked on the device thread and was uninstalled"
-            }
-            CoreAudioStreamDirection::Playback => {
-                "the playback hand-off panicked on the device thread and was uninstalled"
-            }
-        };
+    /// Uninstall the hand-off and record why the stream stopped serving, on
+    /// the device thread that found out — a stream whose report names a
+    /// failure delivers nothing after it.
+    fn end_the_stream_because(
+        &self,
+        installed_hand_off: &mut Option<Delivery::HandOff>,
+        reason: String,
+    ) {
+        *installed_hand_off = None;
+        tracing::error!(
+            %reason,
+            "CoreAudio audio arm: the {} stream ended",
+            Delivery::DIRECTION.lowercase_direction_name()
+        );
         self.failure_recorder
             .record_the_failure_that_ended_the_stream(DeviceStreamFailureReason::of(reason));
+    }
+
+    /// Unwinding into CoreAudio's I/O thread is undefined, so a hand-off that
+    /// panicked ends the stream rather than crashing it.
+    fn end_the_stream_because_the_hand_off_panicked(
+        &self,
+        installed_hand_off: &mut Option<Delivery::HandOff>,
+    ) {
+        self.end_the_stream_because(
+            installed_hand_off,
+            format!(
+                "the {} hand-off panicked on the device thread and was uninstalled",
+                Delivery::DIRECTION.lowercase_direction_name()
+            ),
+        );
     }
 }
 
@@ -836,6 +922,8 @@ struct CoreAudioStreamUnit<Delivery: CoreAudioDeliveryHoldingAHandOff> {
     hal_output_unit: CoreAudioHalOutputUnit,
     callback_context: Box<CoreAudioCallbackContext<Delivery>>,
     device: CoreAudioDevice,
+    /// The unit's `MaximumFramesPerSlice`: no cycle it renders is longer.
+    largest_cycle_in_frames: u32,
 }
 
 impl<Delivery: CoreAudioDeliveryHoldingAHandOff> CoreAudioStreamUnit<Delivery> {
@@ -845,8 +933,37 @@ impl<Delivery: CoreAudioDeliveryHoldingAHandOff> CoreAudioStreamUnit<Delivery> {
         delivery: Delivery,
         failure_recorder: DeviceStreamFailureRecorder,
     ) -> Result<Self> {
+        let direction_name = Delivery::DIRECTION.lowercase_direction_name();
         let hal_output_unit =
             CoreAudioHalOutputUnit::new_bound_to(device, Delivery::DIRECTION, stream_format)?;
+        // Raised to the device's own ceiling before initialising, because a
+        // device whose buffer size another process raises past the unit's
+        // default would otherwise fail every render.
+        let largest_cycle_in_frames =
+            match largest_io_cycle_in_frames_of(device, Delivery::DIRECTION) {
+                Some(frames) => {
+                    hal_output_unit
+                        .set_property(
+                            kAudioUnitProperty_MaximumFramesPerSlice,
+                            kAudioUnitScope_Global,
+                            AUHAL_OUTPUT_ELEMENT,
+                            &frames,
+                        )
+                        .map_err(|status| {
+                            device.refused_with_status(
+                                &format!(
+                                    "refused a largest cycle of {frames} frames for \
+                                     {direction_name}"
+                                ),
+                                status,
+                            )
+                        })?;
+                    frames
+                }
+                None => hal_output_unit
+                    .global_u32_property(kAudioUnitProperty_MaximumFramesPerSlice)
+                    .unwrap_or(0),
+            };
         let callback_context = Box::new(CoreAudioCallbackContext {
             audio_unit: hal_output_unit.audio_unit,
             failure_recorder,
@@ -859,7 +976,7 @@ impl<Delivery: CoreAudioDeliveryHoldingAHandOff> CoreAudioStreamUnit<Delivery> {
         let initialised = hal_output_unit
             .set_property(
                 Delivery::CALLBACK_PROPERTY_ID,
-                kAudioUnitScope_Global,
+                Delivery::CALLBACK_SCOPE,
                 AUHAL_OUTPUT_ELEMENT,
                 &AURenderCallbackStruct {
                     inputProc: Delivery::CALLBACK,
@@ -878,10 +995,7 @@ impl<Delivery: CoreAudioDeliveryHoldingAHandOff> CoreAudioStreamUnit<Delivery> {
             });
         initialised.map_err(|status| {
             device.refused_with_status(
-                &format!(
-                    "would not initialise for {}",
-                    Delivery::DIRECTION.lowercase_direction_name()
-                ),
+                &format!("would not initialise for {direction_name}"),
                 status,
             )
         })?;
@@ -889,6 +1003,7 @@ impl<Delivery: CoreAudioDeliveryHoldingAHandOff> CoreAudioStreamUnit<Delivery> {
             hal_output_unit,
             callback_context,
             device: device.clone(),
+            largest_cycle_in_frames,
         })
     }
 
@@ -920,14 +1035,58 @@ impl<Delivery: CoreAudioDeliveryHoldingAHandOff> CoreAudioStreamUnit<Delivery> {
     }
 }
 
+/// What one input cycle's render status calls for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InputCycleRenderVerdict {
+    /// The render succeeded: hand the block off.
+    HandTheBlockOff,
+    /// The stream's first failed render: drop the cycle and say so, once.
+    DropTheCycleAndReportTheFirstFailure,
+    /// A failed render that adds nothing to what was already said.
+    DropTheCycleQuietly,
+    /// Renders failed for long enough that the device has stopped delivering.
+    EndTheStream { consecutive_failures: u32 },
+}
+
+/// A capture stream's record of failed input renders, which tells a device
+/// that stopped from one that dropped a cycle.
+#[derive(Debug, Default)]
+struct ConsecutiveInputCycleRenderFailures {
+    consecutive_failures: u32,
+    has_reported_a_failure: bool,
+}
+
+impl ConsecutiveInputCycleRenderFailures {
+    fn verdict_on(&mut self, render_status: i32) -> InputCycleRenderVerdict {
+        if render_status == NO_ERR {
+            self.consecutive_failures = 0;
+            return InputCycleRenderVerdict::HandTheBlockOff;
+        }
+        self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+        if self.consecutive_failures == CONSECUTIVE_FAILED_INPUT_RENDERS_BEFORE_THE_STREAM_ENDS {
+            return InputCycleRenderVerdict::EndTheStream {
+                consecutive_failures: self.consecutive_failures,
+            };
+        }
+        if !self.has_reported_a_failure {
+            self.has_reported_a_failure = true;
+            return InputCycleRenderVerdict::DropTheCycleAndReportTheFirstFailure;
+        }
+        InputCycleRenderVerdict::DropTheCycleQuietly
+    }
+}
+
 /// The capture callback's state: the hand-off, and the buffer each input
 /// cycle is rendered into before it is handed off.
 struct CoreAudioCaptureDelivery {
     installed_hand_off: Option<CapturedAudioBlockHandOff>,
+    /// Sized for the unit's largest cycle.
     render_buffer: Vec<u8>,
     stream_format: AudioStreamFormat,
     capture_latency_in_frames: u32,
-    has_reported_an_oversized_cycle: bool,
+    device: CoreAudioDevice,
+    render_failures: ConsecutiveInputCycleRenderFailures,
+    has_reported_a_cycle_without_host_time: bool,
 }
 
 impl CoreAudioDeliveryHoldingAHandOff for CoreAudioCaptureDelivery {
@@ -935,6 +1094,7 @@ impl CoreAudioDeliveryHoldingAHandOff for CoreAudioCaptureDelivery {
 
     const DIRECTION: CoreAudioStreamDirection = CoreAudioStreamDirection::Capture;
     const CALLBACK_PROPERTY_ID: u32 = kAudioOutputUnitProperty_SetInputCallback;
+    const CALLBACK_SCOPE: u32 = kAudioUnitScope_Global;
     const CALLBACK: AURenderCallback = Some(captured_input_became_available);
 
     fn installed_hand_off(&mut self) -> &mut Option<CapturedAudioBlockHandOff> {
@@ -965,22 +1125,24 @@ unsafe extern "C-unwind" fn captured_input_became_available(
         render_buffer,
         stream_format,
         capture_latency_in_frames,
-        has_reported_an_oversized_cycle,
+        device,
+        render_failures,
+        has_reported_a_cycle_without_host_time,
     } = &mut *delivery;
-    let Some(hand_off) = installed_hand_off.as_ref() else {
+    if installed_hand_off.is_none() {
         return NO_ERR;
-    };
+    }
     let byte_count = stream_format.interleaved_byte_count_for(frame_count);
     if byte_count > render_buffer.len() {
-        if !*has_reported_an_oversized_cycle {
-            *has_reported_an_oversized_cycle = true;
-            tracing::warn!(
-                frame_count,
-                capacity_in_bytes = render_buffer.len(),
-                "CoreAudio audio arm: an input cycle outgrew the unit's own frame limit; \
-                 dropping such cycles"
-            );
-        }
+        let largest_cycle_in_frames =
+            render_buffer.len() / stream_format.interleaved_byte_count_for(1).max(1);
+        context.end_the_stream_because(
+            installed_hand_off,
+            format!(
+                "audio device {device} delivered an input cycle of {frame_count} frames, longer \
+                 than the {largest_cycle_in_frames} frames its capture unit was sized for"
+            ),
+        );
         return NO_ERR;
     }
     let mut buffer_list = AudioBufferList {
@@ -1003,9 +1165,36 @@ unsafe extern "C-unwind" fn captured_input_became_available(
             NonNull::from(&mut buffer_list),
         )
     };
-    if status != NO_ERR {
-        return status;
+    match render_failures.verdict_on(status) {
+        InputCycleRenderVerdict::HandTheBlockOff => {}
+        InputCycleRenderVerdict::DropTheCycleAndReportTheFirstFailure => {
+            tracing::warn!(
+                device = %device,
+                status = %osstatus_text(status),
+                "CoreAudio audio arm: an input cycle failed to render and was dropped; the \
+                 stream ends if {CONSECUTIVE_FAILED_INPUT_RENDERS_BEFORE_THE_STREAM_ENDS} fail in \
+                 a row"
+            );
+            return status;
+        }
+        InputCycleRenderVerdict::DropTheCycleQuietly => return status,
+        InputCycleRenderVerdict::EndTheStream {
+            consecutive_failures,
+        } => {
+            context.end_the_stream_because(
+                installed_hand_off,
+                format!(
+                    "audio device {device} failed to render {consecutive_failures} input cycles \
+                     in a row, the last with {}",
+                    osstatus_text(status)
+                ),
+            );
+            return status;
+        }
     }
+    let Some(hand_off) = installed_hand_off.as_ref() else {
+        return NO_ERR;
+    };
     // SAFETY: CoreAudio passes a valid timestamp for the cycle.
     let time_stamp = unsafe { time_stamp.as_ref() };
     let input_cycle_host_time_ns = if time_stamp
@@ -1014,8 +1203,16 @@ unsafe extern "C-unwind" fn captured_input_became_available(
     {
         MediaClock::nanos_from_raw_timestamp(time_stamp.mHostTime).as_nanos() as i64
     } else {
-        // AUHAL always stamps its input cycles with host time; were one ever
-        // not, the cycle ended now and began a block ago.
+        if !*has_reported_a_cycle_without_host_time {
+            *has_reported_a_cycle_without_host_time = true;
+            tracing::warn!(
+                device = %device,
+                "CoreAudio audio arm: an input cycle carried no host time, so this stream's \
+                 blocks are stamped from when they were delivered rather than by the device"
+            );
+        }
+        // Were a cycle ever without host time, it ended now and began a
+        // block ago.
         MediaClock::now().as_nanos() as i64
             - duration_of_frames_in_ns(frame_count, stream_format.sample_rate)
     };
@@ -1037,14 +1234,13 @@ unsafe extern "C-unwind" fn captured_input_became_available(
         })
     }));
     if handed_off.is_err() {
-        *installed_hand_off = None;
-        context.record_that_the_hand_off_panicked();
+        context.end_the_stream_because_the_hand_off_panicked(installed_hand_off);
     }
     NO_ERR
 }
 
 /// Bind an input unit to `device`, with its render buffer sized for the
-/// largest cycle the unit or the device will deliver.
+/// largest cycle the unit will deliver.
 ///
 /// Called only once microphone access is granted: binding a unit with input
 /// enabled asks `coreaudiod`, which blocks the binding call until the user has
@@ -1054,7 +1250,6 @@ fn bind_capture_unit(
     stream_format: AudioStreamFormat,
     failure_recorder: DeviceStreamFailureRecorder,
 ) -> Result<CoreAudioCaptureUnit> {
-    let direction = CoreAudioStreamDirection::Capture;
     let capture_unit = CoreAudioCaptureUnit::bound_to(
         device,
         stream_format,
@@ -1063,22 +1258,13 @@ fn bind_capture_unit(
             render_buffer: Vec::new(),
             stream_format,
             capture_latency_in_frames: capture_latency_in_frames_of(device),
-            has_reported_an_oversized_cycle: false,
+            device: device.clone(),
+            render_failures: ConsecutiveInputCycleRenderFailures::default(),
+            has_reported_a_cycle_without_host_time: false,
         },
         failure_recorder,
     )?;
-    let largest_cycle_in_frames = capture_unit
-        .hal_output_unit
-        .global_u32_property(kAudioUnitProperty_MaximumFramesPerSlice)
-        .unwrap_or(0)
-        .max(
-            audio_object_property::<u32>(
-                device.object_id,
-                kAudioDevicePropertyBufferFrameSize,
-                direction.device_property_scope(),
-            )
-            .unwrap_or(0),
-        );
+    let largest_cycle_in_frames = capture_unit.largest_cycle_in_frames;
     let mut delivery = capture_unit.callback_context.delivery.lock();
     delivery.render_buffer =
         vec![0u8; stream_format.interleaved_byte_count_for(largest_cycle_in_frames)];
@@ -1301,6 +1487,7 @@ impl CoreAudioDeliveryHoldingAHandOff for CoreAudioPlaybackDelivery {
 
     const DIRECTION: CoreAudioStreamDirection = CoreAudioStreamDirection::Playback;
     const CALLBACK_PROPERTY_ID: u32 = kAudioUnitProperty_SetRenderCallback;
+    const CALLBACK_SCOPE: u32 = kAudioUnitScope_Input;
     const CALLBACK: AURenderCallback = Some(playback_samples_requested);
 
     fn installed_hand_off(&mut self) -> &mut Option<AudioBlockForPlaybackHandOff> {
@@ -1353,8 +1540,7 @@ unsafe extern "C-unwind" fn playback_samples_requested(
     }));
     if handed_off.is_err() {
         interleaved_sample_bytes_to_fill.fill(0);
-        delivery.installed_hand_off = None;
-        context.record_that_the_hand_off_panicked();
+        context.end_the_stream_because_the_hand_off_panicked(&mut delivery.installed_hand_off);
     }
     NO_ERR
 }
@@ -1362,6 +1548,8 @@ unsafe extern "C-unwind" fn playback_samples_requested(
 /// A playback stream on one CoreAudio output device.
 pub struct CoreAudioPlaybackStream {
     stream_format: AudioStreamFormat,
+    /// The device's `BufferFrameSize` in output scope when the stream opened.
+    device_period_in_per_channel_samples: Option<u32>,
     liveness_report: DeviceStreamLivenessReport,
     playback_unit: CoreAudioStreamUnit<CoreAudioPlaybackDelivery>,
     _liveness_watch: CoreAudioDeviceLivenessWatch,
@@ -1382,16 +1570,25 @@ impl CoreAudioPlaybackStream {
             },
             failure_recorder.clone(),
         )?;
+        let device_period_in_per_channel_samples = audio_object_property::<u32>(
+            device.object_id,
+            kAudioDevicePropertyBufferFrameSize,
+            direction.device_property_scope(),
+        )
+        .filter(|&frames| frames > 0);
 
         tracing::info!(
             device = %device,
             sample_rate = stream_format.sample_rate,
             channels = stream_format.channels,
+            device_period_in_per_channel_samples,
+            largest_cycle_in_frames = playback_unit.largest_cycle_in_frames,
             "CoreAudio audio arm: playback stream opened"
         );
 
         Ok(Self {
             stream_format,
+            device_period_in_per_channel_samples,
             liveness_report,
             playback_unit,
             _liveness_watch: CoreAudioDeviceLivenessWatch::watch(
@@ -1406,6 +1603,10 @@ impl CoreAudioPlaybackStream {
 impl AudioPlaybackStream for CoreAudioPlaybackStream {
     fn stream_format(&self) -> AudioStreamFormat {
         self.stream_format
+    }
+
+    fn device_period_in_per_channel_samples(&self) -> Option<u32> {
+        self.device_period_in_per_channel_samples
     }
 
     fn liveness_report(&self) -> DeviceStreamLivenessReport {
@@ -1492,6 +1693,106 @@ mod tests {
         assert!(
             refusal.contains("no device on this Mac carries playback"),
             "{refusal}"
+        );
+    }
+
+    const A_FAILED_RENDER: i32 = -10863;
+
+    #[test]
+    fn a_rendered_cycle_is_handed_off() {
+        let mut render_failures = ConsecutiveInputCycleRenderFailures::default();
+        assert_eq!(
+            render_failures.verdict_on(NO_ERR),
+            InputCycleRenderVerdict::HandTheBlockOff
+        );
+    }
+
+    /// The first failed render is the one worth a line; the ones behind it
+    /// until the bound would only repeat it at device cadence.
+    #[test]
+    fn the_first_failed_render_is_reported_and_the_rest_below_the_bound_are_not() {
+        let mut render_failures = ConsecutiveInputCycleRenderFailures::default();
+        assert_eq!(
+            render_failures.verdict_on(A_FAILED_RENDER),
+            InputCycleRenderVerdict::DropTheCycleAndReportTheFirstFailure
+        );
+        for _ in 2..CONSECUTIVE_FAILED_INPUT_RENDERS_BEFORE_THE_STREAM_ENDS {
+            assert_eq!(
+                render_failures.verdict_on(A_FAILED_RENDER),
+                InputCycleRenderVerdict::DropTheCycleQuietly
+            );
+        }
+    }
+
+    /// Mental revert: return the status and nothing else, as the arm did, and
+    /// a device that stopped rendering leaves its stream's report clear
+    /// forever.
+    #[test]
+    fn failed_renders_reaching_the_bound_in_a_row_end_the_stream_once() {
+        let mut render_failures = ConsecutiveInputCycleRenderFailures::default();
+        let verdicts: Vec<InputCycleRenderVerdict> = (0
+            ..CONSECUTIVE_FAILED_INPUT_RENDERS_BEFORE_THE_STREAM_ENDS + 5)
+            .map(|_| render_failures.verdict_on(A_FAILED_RENDER))
+            .collect();
+        let endings: Vec<usize> = verdicts
+            .iter()
+            .enumerate()
+            .filter(|(_, verdict)| matches!(verdict, InputCycleRenderVerdict::EndTheStream { .. }))
+            .map(|(cycle, _)| cycle)
+            .collect();
+        assert_eq!(
+            endings,
+            [CONSECUTIVE_FAILED_INPUT_RENDERS_BEFORE_THE_STREAM_ENDS as usize - 1],
+            "the stream ends on the bound-th failure in a row, and only then"
+        );
+        assert_eq!(
+            verdicts[endings[0]],
+            InputCycleRenderVerdict::EndTheStream {
+                consecutive_failures: CONSECUTIVE_FAILED_INPUT_RENDERS_BEFORE_THE_STREAM_ENDS
+            }
+        );
+    }
+
+    /// A device that drops the odd cycle is not a device that stopped.
+    #[test]
+    fn a_rendered_cycle_resets_the_run_so_scattered_failures_never_end_the_stream() {
+        let mut render_failures = ConsecutiveInputCycleRenderFailures::default();
+        for _ in 0..4 {
+            for _ in 1..CONSECUTIVE_FAILED_INPUT_RENDERS_BEFORE_THE_STREAM_ENDS {
+                assert!(!matches!(
+                    render_failures.verdict_on(A_FAILED_RENDER),
+                    InputCycleRenderVerdict::EndTheStream { .. }
+                ));
+            }
+            assert_eq!(
+                render_failures.verdict_on(NO_ERR),
+                InputCycleRenderVerdict::HandTheBlockOff
+            );
+        }
+    }
+
+    #[test]
+    fn a_later_run_of_failures_is_not_reported_again_before_it_ends_the_stream() {
+        let mut render_failures = ConsecutiveInputCycleRenderFailures::default();
+        render_failures.verdict_on(A_FAILED_RENDER);
+        render_failures.verdict_on(NO_ERR);
+        assert_eq!(
+            render_failures.verdict_on(A_FAILED_RENDER),
+            InputCycleRenderVerdict::DropTheCycleQuietly
+        );
+    }
+
+    /// TN2091: the render callback belongs on the output element's input
+    /// scope, the input callback on global scope.
+    #[test]
+    fn each_callback_is_installed_on_the_scope_its_property_documents() {
+        assert_eq!(
+            CoreAudioPlaybackDelivery::CALLBACK_SCOPE,
+            kAudioUnitScope_Input
+        );
+        assert_eq!(
+            CoreAudioCaptureDelivery::CALLBACK_SCOPE,
+            kAudioUnitScope_Global
         );
     }
 

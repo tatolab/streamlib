@@ -153,6 +153,10 @@ pub trait AudioPlaybackStream: Send {
     /// opened and a caller matches it.
     fn stream_format(&self) -> AudioStreamFormat;
 
+    /// Per-channel samples the device asks for in one cycle, or `None` where
+    /// the arm does not report its device's period.
+    fn device_period_in_per_channel_samples(&self) -> Option<u32>;
+
     /// Whether this stream is still playing, readable from whatever thread the
     /// owner does its work on — the capture seam's report, in the direction a
     /// sink cares about, under the same latching rule.
