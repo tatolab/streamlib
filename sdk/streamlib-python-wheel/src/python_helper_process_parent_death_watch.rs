@@ -14,7 +14,7 @@
 //! never returns cannot hold it past the bound.
 
 use std::io;
-use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, IntoRawFd, OwnedFd, RawFd};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -49,7 +49,7 @@ static CALLBACKS_RETURNED_AFTER_THE_PARENT_WENT_AWAY: AtomicBool = AtomicBool::n
 /// could outlive it.
 #[pyfunction]
 pub(crate) fn watch_for_this_helper_processes_parent_going_away(
-    parent_channel_fd: i32,
+    parent_channel_fd: RawFd,
 ) -> PyResult<()> {
     if PARENT_CHANNEL_FD_THE_WATCH_ENDS
         .set(parent_channel_fd)
@@ -79,8 +79,8 @@ pub(crate) fn note_this_helper_processes_callbacks_returned_after_its_parent_wen
 
 fn arm_the_parent_process_exit_watch(parent_process_id: libc::pid_t) -> io::Result<()> {
     let armed_watch = match arm_a_watch_for_the_exit_of_the_parent(parent_process_id)? {
-        ProcessExitWatchArmed::Armed(kqueue_fd) => kqueue_fd,
-        ProcessExitWatchArmed::ProcessAlreadyGone => {
+        ProcessExitWatchArmingOutcome::Armed(kqueue_fd) => kqueue_fd,
+        ProcessExitWatchArmingOutcome::ProcessAlreadyGone => {
             tear_this_helper_down_because_its_parent_went_away(
                 "its parent process exited before the watch was armed",
             );
@@ -97,11 +97,11 @@ fn arm_the_parent_process_exit_watch(parent_process_id: libc::pid_t) -> io::Resu
 /// helper reparented to launchd — as gone rather than watching launchd.
 fn arm_a_watch_for_the_exit_of_the_parent(
     parent_process_id: libc::pid_t,
-) -> io::Result<ProcessExitWatchArmed> {
+) -> io::Result<ProcessExitWatchArmingOutcome> {
     let armed = arm_a_watch_for_the_exit_of(parent_process_id)?;
     // SAFETY: a scalar syscall.
     if unsafe { libc::getppid() } != parent_process_id {
-        return Ok(ProcessExitWatchArmed::ProcessAlreadyGone);
+        return Ok(ProcessExitWatchArmingOutcome::ProcessAlreadyGone);
     }
     Ok(armed)
 }
@@ -111,7 +111,7 @@ fn watch_the_parent_process_until_it_exits(
     mut armed_watch: OwnedFd,
 ) {
     loop {
-        match wait_for_the_watched_process_to_exit(armed_watch.as_raw_fd(), parent_process_id) {
+        match wait_for_the_watched_process_to_exit(armed_watch.as_fd(), parent_process_id) {
             Ok(()) => {
                 return tear_this_helper_down_because_its_parent_went_away(
                     "its parent process exited",
@@ -123,8 +123,10 @@ fn watch_the_parent_process_until_it_exits(
                 // is let go without being closed.
                 let _ = armed_watch.into_raw_fd();
                 match arm_a_watch_for_the_exit_of_the_parent(parent_process_id) {
-                    Ok(ProcessExitWatchArmed::Armed(rearmed_watch)) => armed_watch = rearmed_watch,
-                    Ok(ProcessExitWatchArmed::ProcessAlreadyGone) => {
+                    Ok(ProcessExitWatchArmingOutcome::Armed(rearmed_watch)) => {
+                        armed_watch = rearmed_watch
+                    }
+                    Ok(ProcessExitWatchArmingOutcome::ProcessAlreadyGone) => {
                         return tear_this_helper_down_because_its_parent_went_away(
                             "its parent process exited while its watch was re-armed",
                         );
@@ -178,7 +180,10 @@ fn arm_the_surface_share_service_watch() {
                 Ok(true) => tear_this_helper_down_because_its_parent_went_away(
                     "the engine's surface-share service went away",
                 ),
-                Ok(false) => {}
+                Ok(false) => tracing::warn!(
+                    "the surface-share service watch ended without seeing the service go away; \
+                     this helper watches its parent's pid alone"
+                ),
                 Err(watch_failure) => tracing::warn!(
                     "could not watch the surface-share service for its going away \
                      ({watch_failure}); this helper watches its parent's pid alone"
@@ -220,11 +225,14 @@ fn tear_this_helper_down_because_its_parent_went_away(reason: &'static str) {
 fn walk_the_self_teardown_ladder_from(the_parent_went_away_at: Instant) -> ! {
     let mut callback_already_interrupted = false;
     loop {
-        match next_self_teardown_step(
-            the_parent_went_away_at.elapsed(),
-            CALLBACKS_RETURNED_AFTER_THE_PARENT_WENT_AWAY.load(Ordering::SeqCst),
-            callback_already_interrupted,
-        ) {
+        let callback = if CALLBACKS_RETURNED_AFTER_THE_PARENT_WENT_AWAY.load(Ordering::SeqCst) {
+            CallbackAfterTheParentWentAway::Returned
+        } else if callback_already_interrupted {
+            CallbackAfterTheParentWentAway::AlreadyInterrupted
+        } else {
+            CallbackAfterTheParentWentAway::StillRunning
+        };
+        match next_self_teardown_step(the_parent_went_away_at.elapsed(), callback) {
             SelfTeardownStep::WaitAtMost(remaining) => std::thread::sleep(remaining),
             SelfTeardownStep::InterruptTheCallbackStillRunning => {
                 callback_already_interrupted = true;
@@ -257,6 +265,15 @@ fn kill_this_helpers_whole_process_group() -> ! {
     }
 }
 
+/// Where the helper's callback stands once its parent has gone away.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CallbackAfterTheParentWentAway {
+    StillRunning,
+    AlreadyInterrupted,
+    /// The `stop` rung returned, so nothing is left to interrupt.
+    Returned,
+}
+
 /// What the self-teardown does next, `since_the_parent_went_away`.
 #[derive(Debug, PartialEq, Eq)]
 enum SelfTeardownStep {
@@ -265,35 +282,33 @@ enum SelfTeardownStep {
     KillTheWholeProcessGroup,
 }
 
-/// The engine's ladder, walked by the helper itself: a callback that has not
-/// returned within its budget is interrupted, and whatever is still alive once
-/// `teardown()` and the helper's own exit have had theirs is killed.
+/// How long after its parent goes away a helper can still be alive: the
+/// engine's ladder budgets, walked by the helper itself.
+const SELF_TEARDOWN_BOUND: Duration = CALLBACK_RETURN_BUDGET
+    .saturating_add(TEARDOWN_BUDGET)
+    .saturating_add(CHILD_SELF_EXIT_GRACE);
+
+/// A callback that has not returned within its budget is interrupted, and
+/// whatever is still alive at [`SELF_TEARDOWN_BOUND`] is killed.
 fn next_self_teardown_step(
     since_the_parent_went_away: Duration,
-    callbacks_returned: bool,
-    callback_already_interrupted: bool,
+    callback: CallbackAfterTheParentWentAway,
 ) -> SelfTeardownStep {
-    let kill_at = self_teardown_bound();
-    if since_the_parent_went_away >= kill_at {
+    if since_the_parent_went_away >= SELF_TEARDOWN_BOUND {
         return SelfTeardownStep::KillTheWholeProcessGroup;
     }
-    if !callbacks_returned && !callback_already_interrupted {
+    if callback == CallbackAfterTheParentWentAway::StillRunning {
         if since_the_parent_went_away >= CALLBACK_RETURN_BUDGET {
             return SelfTeardownStep::InterruptTheCallbackStillRunning;
         }
         return SelfTeardownStep::WaitAtMost(CALLBACK_RETURN_BUDGET - since_the_parent_went_away);
     }
-    SelfTeardownStep::WaitAtMost(kill_at - since_the_parent_went_away)
-}
-
-/// How long after its parent goes away a helper can still be alive.
-fn self_teardown_bound() -> Duration {
-    CALLBACK_RETURN_BUDGET + TEARDOWN_BUDGET + CHILD_SELF_EXIT_GRACE
+    SelfTeardownStep::WaitAtMost(SELF_TEARDOWN_BOUND - since_the_parent_went_away)
 }
 
 /// What arming a watch on a process's exit found.
 #[derive(Debug)]
-enum ProcessExitWatchArmed {
+enum ProcessExitWatchArmingOutcome {
     Armed(OwnedFd),
     ProcessAlreadyGone,
 }
@@ -309,19 +324,10 @@ enum ProcessExitWatchLost {
 
 /// A kqueue holding one `EVFILT_PROC` / `NOTE_EXIT` registration on
 /// `process_id`.
-fn arm_a_watch_for_the_exit_of(process_id: libc::pid_t) -> io::Result<ProcessExitWatchArmed> {
-    // SAFETY: kqueue returns -1 on failure; checked below.
-    let raw_kqueue_fd = unsafe { libc::kqueue() };
-    if raw_kqueue_fd < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // SAFETY: raw_kqueue_fd was just opened here and nothing else owns it.
-    let kqueue_fd = unsafe { OwnedFd::from_raw_fd(raw_kqueue_fd) };
-    // Darwin has no `kqueue1`, so close-on-exec is set before the fd is used.
-    // SAFETY: a scalar syscall on an fd this function owns.
-    if unsafe { libc::fcntl(kqueue_fd.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
-        return Err(io::Error::last_os_error());
-    }
+fn arm_a_watch_for_the_exit_of(
+    process_id: libc::pid_t,
+) -> io::Result<ProcessExitWatchArmingOutcome> {
+    let kqueue_fd = crate::darwin_close_on_exec_kqueue::open_a_close_on_exec_kqueue()?;
     let registration = libc::kevent {
         ident: process_id as libc::uintptr_t,
         filter: libc::EVFILT_PROC,
@@ -344,16 +350,16 @@ fn arm_a_watch_for_the_exit_of(process_id: libc::pid_t) -> io::Result<ProcessExi
     if registered < 0 {
         let registration_failure = io::Error::last_os_error();
         if registration_failure.raw_os_error() == Some(libc::ESRCH) {
-            return Ok(ProcessExitWatchArmed::ProcessAlreadyGone);
+            return Ok(ProcessExitWatchArmingOutcome::ProcessAlreadyGone);
         }
         return Err(registration_failure);
     }
-    Ok(ProcessExitWatchArmed::Armed(kqueue_fd))
+    Ok(ProcessExitWatchArmingOutcome::Armed(kqueue_fd))
 }
 
 /// Block until the process `kqueue_fd` watches exits.
 fn wait_for_the_watched_process_to_exit(
-    kqueue_fd: RawFd,
+    kqueue_fd: BorrowedFd<'_>,
     process_id: libc::pid_t,
 ) -> Result<(), ProcessExitWatchLost> {
     loop {
@@ -362,7 +368,7 @@ fn wait_for_the_watched_process_to_exit(
         // SAFETY: no changes, one out-slot this frame owns, no timeout.
         let delivered_count = unsafe {
             libc::kevent(
-                kqueue_fd,
+                kqueue_fd.as_raw_fd(),
                 std::ptr::null(),
                 0,
                 &mut delivered,
@@ -409,10 +415,12 @@ mod tests {
             .expect("spawn /bin/sleep")
     }
 
+    use CallbackAfterTheParentWentAway::{AlreadyInterrupted, Returned, StillRunning};
+
     #[test]
     fn a_callback_that_has_not_returned_is_given_its_budget_first() {
         assert_eq!(
-            next_self_teardown_step(Duration::from_millis(200), false, false),
+            next_self_teardown_step(Duration::from_millis(200), StillRunning),
             SelfTeardownStep::WaitAtMost(CALLBACK_RETURN_BUDGET - Duration::from_millis(200))
         );
     }
@@ -420,28 +428,28 @@ mod tests {
     #[test]
     fn a_callback_that_outran_its_budget_is_interrupted_once() {
         assert_eq!(
-            next_self_teardown_step(CALLBACK_RETURN_BUDGET, false, false),
+            next_self_teardown_step(CALLBACK_RETURN_BUDGET, StillRunning),
             SelfTeardownStep::InterruptTheCallbackStillRunning
         );
         assert_eq!(
-            next_self_teardown_step(CALLBACK_RETURN_BUDGET, false, true),
-            SelfTeardownStep::WaitAtMost(self_teardown_bound() - CALLBACK_RETURN_BUDGET)
+            next_self_teardown_step(CALLBACK_RETURN_BUDGET, AlreadyInterrupted),
+            SelfTeardownStep::WaitAtMost(SELF_TEARDOWN_BOUND - CALLBACK_RETURN_BUDGET)
         );
     }
 
     #[test]
     fn callbacks_that_returned_are_never_interrupted() {
         assert_eq!(
-            next_self_teardown_step(CALLBACK_RETURN_BUDGET * 2, true, false),
-            SelfTeardownStep::WaitAtMost(self_teardown_bound() - CALLBACK_RETURN_BUDGET * 2)
+            next_self_teardown_step(CALLBACK_RETURN_BUDGET * 2, Returned),
+            SelfTeardownStep::WaitAtMost(SELF_TEARDOWN_BOUND - CALLBACK_RETURN_BUDGET * 2)
         );
     }
 
     #[test]
     fn whatever_is_alive_at_the_bound_is_killed() {
-        for (callbacks_returned, interrupted) in [(false, false), (false, true), (true, false)] {
+        for callback in [StillRunning, AlreadyInterrupted, Returned] {
             assert_eq!(
-                next_self_teardown_step(self_teardown_bound(), callbacks_returned, interrupted),
+                next_self_teardown_step(SELF_TEARDOWN_BOUND, callback),
                 SelfTeardownStep::KillTheWholeProcessGroup
             );
         }
@@ -456,7 +464,7 @@ mod tests {
 
         assert!(matches!(
             arm_a_watch_for_the_exit_of(gone_process_id).expect("arm"),
-            ProcessExitWatchArmed::ProcessAlreadyGone
+            ProcessExitWatchArmingOutcome::ProcessAlreadyGone
         ));
     }
 
@@ -466,7 +474,7 @@ mod tests {
     fn the_watch_fires_when_the_watched_process_exits() {
         let mut watched = a_process_parked_until_killed();
         let watched_process_id = watched.id() as libc::pid_t;
-        let ProcessExitWatchArmed::Armed(kqueue_fd) =
+        let ProcessExitWatchArmingOutcome::Armed(kqueue_fd) =
             arm_a_watch_for_the_exit_of(watched_process_id).expect("arm")
         else {
             panic!("the parked process is alive");
@@ -474,7 +482,7 @@ mod tests {
         let (fired_sender, fired_receiver) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let waited =
-                wait_for_the_watched_process_to_exit(kqueue_fd.as_raw_fd(), watched_process_id);
+                wait_for_the_watched_process_to_exit(kqueue_fd.as_fd(), watched_process_id);
             let _ = fired_sender.send(waited.is_ok());
         });
 

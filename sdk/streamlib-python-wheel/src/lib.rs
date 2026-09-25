@@ -6,6 +6,8 @@
 
 use pyo3::prelude::*;
 
+#[cfg(target_os = "macos")]
+mod darwin_close_on_exec_kqueue;
 mod helper_process_shutdown_ladder;
 mod python_added_processor;
 mod python_bag_conversion;
