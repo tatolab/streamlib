@@ -34,9 +34,37 @@ struct MonotonicTimerFileDescriptors {
 #[cfg(target_os = "macos")]
 struct MonotonicTimerKqueueSchedule {
     kqueue_fd: OwnedFd,
+    absolute_deadline_grid: MonotonicTimerAbsoluteDeadlineGrid,
+}
+
+/// Deadlines at `first_deadline_ns + k * interval_ns`, and how many of them
+/// have already been reported as expirations.
+#[cfg(any(target_os = "macos", test))]
+#[derive(Clone, Copy, Debug)]
+struct MonotonicTimerAbsoluteDeadlineGrid {
     first_deadline_ns: u64,
     interval_ns: u64,
     deadlines_reported_count: u64,
+}
+
+#[cfg(any(target_os = "macos", test))]
+impl MonotonicTimerAbsoluteDeadlineGrid {
+    /// Report the deadlines passed by `now_ns` and not yet reported, and
+    /// answer the next unpassed deadline — always on the grid, never relative
+    /// to `now_ns`, so a late wake never moves a later deadline.
+    fn take_expirations_at(&mut self, now_ns: u64) -> (u64, u64) {
+        let deadlines_passed_count = match now_ns.checked_sub(self.first_deadline_ns) {
+            Some(since_first_deadline_ns) => since_first_deadline_ns / self.interval_ns + 1,
+            None => 0,
+        };
+        let expiration_count = deadlines_passed_count.saturating_sub(self.deadlines_reported_count);
+        self.deadlines_reported_count = self.deadlines_reported_count.max(deadlines_passed_count);
+        let next_deadline_ns = self.first_deadline_ns.saturating_add(
+            self.deadlines_reported_count
+                .saturating_mul(self.interval_ns),
+        );
+        (expiration_count, next_deadline_ns)
+    }
 }
 
 /// Periodic monotonic timer, used as `with MonotonicTimer(interval_ns) as t:`.
@@ -176,9 +204,6 @@ impl Drop for PythonMonotonicTimer {
 fn create_monotonic_timer_file_descriptors(
     interval_ns: u64,
 ) -> Option<MonotonicTimerFileDescriptors> {
-    let interval_sec = (interval_ns / 1_000_000_000) as libc::time_t;
-    let interval_nsec = (interval_ns % 1_000_000_000) as libc::c_long;
-
     // SAFETY: plain fd-creating syscalls; failures surface as negative
     // returns handled below.
     //
@@ -207,23 +232,7 @@ fn create_monotonic_timer_file_descriptors(
         return None;
     }
 
-    let mut first_deadline_sec = now.tv_sec + interval_sec;
-    let mut first_deadline_nsec = now.tv_nsec + interval_nsec;
-    if first_deadline_nsec >= 1_000_000_000 {
-        first_deadline_sec += 1;
-        first_deadline_nsec -= 1_000_000_000;
-    }
-
-    let timer_spec = libc::itimerspec {
-        it_interval: libc::timespec {
-            tv_sec: interval_sec,
-            tv_nsec: interval_nsec,
-        },
-        it_value: libc::timespec {
-            tv_sec: first_deadline_sec,
-            tv_nsec: first_deadline_nsec,
-        },
-    };
+    let timer_spec = absolute_timer_spec_one_interval_after(now, interval_ns);
     // SAFETY: timer_fd is a live timerfd; `timer_spec` is a valid stack slot.
     let arm_result = unsafe {
         libc::timerfd_settime(
@@ -269,6 +278,33 @@ fn create_monotonic_timer_file_descriptors(
     }
 
     Some(MonotonicTimerFileDescriptors { timer_fd, epoll_fd })
+}
+
+/// The `TFD_TIMER_ABSTIME` spec whose first deadline is `now + interval_ns`
+/// and which repeats every `interval_ns` after it.
+#[cfg(target_os = "linux")]
+fn absolute_timer_spec_one_interval_after(
+    now: libc::timespec,
+    interval_ns: u64,
+) -> libc::itimerspec {
+    let interval_sec = (interval_ns / 1_000_000_000) as libc::time_t;
+    let interval_nsec = (interval_ns % 1_000_000_000) as libc::c_long;
+    let mut first_deadline_sec = now.tv_sec + interval_sec;
+    let mut first_deadline_nsec = now.tv_nsec + interval_nsec;
+    if first_deadline_nsec >= 1_000_000_000 {
+        first_deadline_sec += 1;
+        first_deadline_nsec -= 1_000_000_000;
+    }
+    libc::itimerspec {
+        it_interval: libc::timespec {
+            tv_sec: interval_sec,
+            tv_nsec: interval_nsec,
+        },
+        it_value: libc::timespec {
+            tv_sec: first_deadline_sec,
+            tv_nsec: first_deadline_nsec,
+        },
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -343,17 +379,9 @@ enum KqueueTimerWaitOutcome {
 impl MonotonicTimerKqueueSchedule {
     /// Deadlines passed since the last report, with the next unpassed one armed.
     fn take_expirations_and_arm_the_next_deadline(&mut self) -> i64 {
-        let now_ns = monotonic_clock_now_ns();
-        let deadlines_passed_count = match now_ns.checked_sub(self.first_deadline_ns) {
-            Some(since_first_deadline_ns) => since_first_deadline_ns / self.interval_ns + 1,
-            None => 0,
-        };
-        let expiration_count = deadlines_passed_count.saturating_sub(self.deadlines_reported_count);
-        self.deadlines_reported_count = self.deadlines_reported_count.max(deadlines_passed_count);
-        let next_deadline_ns = self.first_deadline_ns.saturating_add(
-            self.deadlines_reported_count
-                .saturating_mul(self.interval_ns),
-        );
+        let (expiration_count, next_deadline_ns) = self
+            .absolute_deadline_grid
+            .take_expirations_at(monotonic_clock_now_ns());
         if !arm_kqueue_timer_at_absolute_deadline(self.kqueue_fd.as_raw_fd(), next_deadline_ns) {
             return -1;
         }
@@ -384,9 +412,11 @@ fn create_monotonic_timer_kqueue_schedule(
     }
     Some(MonotonicTimerKqueueSchedule {
         kqueue_fd,
-        first_deadline_ns,
-        interval_ns,
-        deadlines_reported_count: 0,
+        absolute_deadline_grid: MonotonicTimerAbsoluteDeadlineGrid {
+            first_deadline_ns,
+            interval_ns,
+            deadlines_reported_count: 0,
+        },
     })
 }
 
@@ -403,9 +433,11 @@ fn arm_kqueue_timer_at_absolute_deadline(kqueue_fd: i32, deadline_ns: u64) -> bo
     )
 }
 
+/// The one-shot timer change that fires at `raw_mach_deadline`, a
+/// `mach_absolute_time` tick count.
 #[cfg(target_os = "macos")]
-fn arm_kqueue_timer_at_raw_mach_deadline(kqueue_fd: i32, raw_mach_deadline: u64) -> bool {
-    let timer_arm_change = libc::kevent {
+fn kqueue_timer_arm_change_at_raw_mach_deadline(raw_mach_deadline: u64) -> libc::kevent {
+    libc::kevent {
         ident: MONOTONIC_TIMER_KEVENT_IDENT,
         filter: libc::EVFILT_TIMER,
         flags: libc::EV_ADD | libc::EV_ONESHOT,
@@ -414,7 +446,12 @@ fn arm_kqueue_timer_at_raw_mach_deadline(kqueue_fd: i32, raw_mach_deadline: u64)
         fflags: libc::NOTE_MACHTIME | libc::NOTE_ABSOLUTE | libc::NOTE_CRITICAL,
         data: raw_mach_deadline.min(isize::MAX as u64) as isize,
         udata: std::ptr::null_mut(),
-    };
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn arm_kqueue_timer_at_raw_mach_deadline(kqueue_fd: i32, raw_mach_deadline: u64) -> bool {
+    let timer_arm_change = kqueue_timer_arm_change_at_raw_mach_deadline(raw_mach_deadline);
     // SAFETY: kqueue_fd is a live kqueue; the change list is one valid stack
     // slot and no events are requested back.
     let register_result = unsafe {
@@ -471,25 +508,68 @@ fn wait_for_kqueue_timer_deadline(kqueue_fd: i32, timeout_ms: u64) -> KqueueTime
 mod tests {
     use super::*;
 
-    #[cfg(target_os = "linux")]
+    const INTERVAL_NS: u64 = 5_000_000;
+
+    fn a_grid_starting_at(first_deadline_ns: u64) -> MonotonicTimerAbsoluteDeadlineGrid {
+        MonotonicTimerAbsoluteDeadlineGrid {
+            first_deadline_ns,
+            interval_ns: INTERVAL_NS,
+            deadlines_reported_count: 0,
+        }
+    }
+
     #[test]
-    fn a_tick_fires_within_the_wait_window() {
-        let file_descriptors = create_monotonic_timer_file_descriptors(2_000_000).unwrap();
-        let expiration_count = wait_for_monotonic_timer_tick(file_descriptors, 1_000);
-        close_monotonic_timer_file_descriptors(file_descriptors);
-        assert!(
-            expiration_count >= 1,
-            "a 2ms timer produced no tick inside a 1s wait: {expiration_count}"
+    fn a_wake_before_the_first_deadline_reports_nothing_and_keeps_that_deadline() {
+        let mut grid = a_grid_starting_at(1_000_000_000);
+
+        assert_eq!(grid.take_expirations_at(999_000_000), (0, 1_000_000_000));
+    }
+
+    #[test]
+    fn a_wake_on_a_deadline_reports_it_and_arms_the_next_one() {
+        let mut grid = a_grid_starting_at(1_000_000_000);
+
+        assert_eq!(
+            grid.take_expirations_at(1_000_000_000),
+            (1, 1_000_000_000 + INTERVAL_NS)
         );
     }
 
-    #[cfg(target_os = "linux")]
+    /// Each wake lands late by more than the whole interval's slack a
+    /// relative re-arm would lose, and the deadlines still sit on the grid.
     #[test]
-    fn a_wait_shorter_than_the_interval_times_out_with_zero() {
-        let file_descriptors = create_monotonic_timer_file_descriptors(10_000_000_000).unwrap();
-        let expiration_count = wait_for_monotonic_timer_tick(file_descriptors, 10);
-        close_monotonic_timer_file_descriptors(file_descriptors);
-        assert_eq!(expiration_count, 0);
+    fn late_wakes_never_move_a_later_deadline_off_the_grid() {
+        const FIRST_DEADLINE_NS: u64 = 1_000_000_000;
+        const LATENESS_EVERY_WAKE_NS: u64 = 4_000_000;
+        let mut grid = a_grid_starting_at(FIRST_DEADLINE_NS);
+        let mut armed_deadline_ns = FIRST_DEADLINE_NS;
+
+        for period in 1..=400u64 {
+            let (expiration_count, next_deadline_ns) =
+                grid.take_expirations_at(armed_deadline_ns + LATENESS_EVERY_WAKE_NS);
+            assert_eq!(expiration_count, 1, "period {period}");
+            assert_eq!(
+                next_deadline_ns,
+                FIRST_DEADLINE_NS + period * INTERVAL_NS,
+                "period {period}: the next deadline left the absolute grid"
+            );
+            armed_deadline_ns = next_deadline_ns;
+        }
+    }
+
+    #[test]
+    fn a_wake_that_slept_through_deadlines_reports_each_of_them_once() {
+        let mut grid = a_grid_starting_at(1_000_000_000);
+
+        assert_eq!(
+            grid.take_expirations_at(1_000_000_000 + 3 * INTERVAL_NS + 1),
+            (4, 1_000_000_000 + 4 * INTERVAL_NS)
+        );
+        assert_eq!(
+            grid.take_expirations_at(1_000_000_000 + 3 * INTERVAL_NS + 2),
+            (0, 1_000_000_000 + 4 * INTERVAL_NS),
+            "a second wake inside the same period must report nothing new"
+        );
     }
 
     #[test]
@@ -498,7 +578,7 @@ mod tests {
         Python::attach(|python| {
             let timer = PythonMonotonicTimer::new(2_000_000).unwrap();
             timer.close();
-            assert_eq!(timer.wait(python, 10), -1);
+            assert_eq!(timer.wait(python, 0), -1);
         });
     }
 
@@ -508,32 +588,43 @@ mod tests {
         assert!(PythonMonotonicTimer::new(-5).is_err());
     }
 
-    #[cfg(target_os = "macos")]
-    unsafe extern "C" {
-        fn mach_continuous_time() -> u64;
-    }
-
-    #[cfg(target_os = "macos")]
+    #[cfg(target_os = "linux")]
     #[test]
-    fn a_kqueue_tick_fires_within_the_wait_window() {
-        let mut kqueue_schedule = create_monotonic_timer_kqueue_schedule(2_000_000).unwrap();
-        assert!(matches!(
-            wait_for_kqueue_timer_deadline(kqueue_schedule.kqueue_fd.as_raw_fd(), 1_000),
-            KqueueTimerWaitOutcome::DeadlineReached
-        ));
-        let expiration_count = kqueue_schedule.take_expirations_and_arm_the_next_deadline();
-        drop(kqueue_schedule);
-        assert!(
-            expiration_count >= 1,
-            "a 2ms timer's deadline fired but counted no expiration: {expiration_count}"
+    fn the_first_linux_deadline_carries_nanoseconds_into_seconds() {
+        let now = libc::timespec {
+            tv_sec: 10,
+            tv_nsec: 998_000_000,
+        };
+
+        let timer_spec = absolute_timer_spec_one_interval_after(now, 1_005_000_000);
+
+        assert_eq!(
+            (timer_spec.it_value.tv_sec, timer_spec.it_value.tv_nsec),
+            (12, 3_000_000)
+        );
+        assert_eq!(
+            (
+                timer_spec.it_interval.tv_sec,
+                timer_spec.it_interval.tv_nsec
+            ),
+            (1, 5_000_000)
         );
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_poll_before_the_first_deadline_reports_zero() {
+        let file_descriptors = create_monotonic_timer_file_descriptors(3_600_000_000_000).unwrap();
+        let expiration_count = wait_for_monotonic_timer_tick(file_descriptors, 0);
+        close_monotonic_timer_file_descriptors(file_descriptors);
+        assert_eq!(expiration_count, 0);
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
-    fn a_kqueue_wait_shorter_than_the_interval_times_out() {
-        let kqueue_schedule = create_monotonic_timer_kqueue_schedule(10_000_000_000).unwrap();
-        let outcome = wait_for_kqueue_timer_deadline(kqueue_schedule.kqueue_fd.as_raw_fd(), 10);
+    fn a_poll_before_the_first_deadline_times_out() {
+        let kqueue_schedule = create_monotonic_timer_kqueue_schedule(3_600_000_000_000).unwrap();
+        let outcome = wait_for_kqueue_timer_deadline(kqueue_schedule.kqueue_fd.as_raw_fd(), 0);
         drop(kqueue_schedule);
         assert!(matches!(outcome, KqueueTimerWaitOutcome::TimedOut));
     }
@@ -541,7 +632,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn the_kqueue_is_close_on_exec() {
-        let kqueue_schedule = create_monotonic_timer_kqueue_schedule(10_000_000_000).unwrap();
+        let kqueue_schedule = create_monotonic_timer_kqueue_schedule(3_600_000_000_000).unwrap();
         // SAFETY: querying descriptor flags on a live fd.
         let descriptor_flags =
             unsafe { libc::fcntl(kqueue_schedule.kqueue_fd.as_raw_fd(), libc::F_GETFD) };
@@ -553,117 +644,24 @@ mod tests {
     /// continuous one, which runs ahead of it by every sleep since boot.
     #[cfg(target_os = "macos")]
     #[test]
-    fn a_kqueue_deadline_is_armed_in_the_mach_absolute_time_epoch() {
-        const DEADLINE_AHEAD_NS: u64 = 300_000_000;
-        let deadline_ahead_ticks =
-            MediaClock::raw_timestamp_at_or_after_nanos(Duration::from_nanos(DEADLINE_AHEAD_NS));
-        // SAFETY: plain fd-creating syscall.
-        let raw_kqueue_fd = unsafe { libc::kqueue() };
-        assert!(raw_kqueue_fd >= 0);
-        // SAFETY: raw_kqueue_fd was just opened here and nothing else owns it.
-        let kqueue_fd = unsafe { OwnedFd::from_raw_fd(raw_kqueue_fd) };
-
-        let armed_at_ns = monotonic_clock_now_ns();
-        assert!(arm_kqueue_timer_at_raw_mach_deadline(
-            kqueue_fd.as_raw_fd(),
-            MediaClock::raw_timestamp() + deadline_ahead_ticks,
-        ));
-        let outcome = wait_for_kqueue_timer_deadline(kqueue_fd.as_raw_fd(), 2_000);
-        let fired_after_ns = monotonic_clock_now_ns() - armed_at_ns;
-        assert!(matches!(outcome, KqueueTimerWaitOutcome::DeadlineReached));
-        assert!(
-            fired_after_ns >= DEADLINE_AHEAD_NS,
-            "a deadline {DEADLINE_AHEAD_NS}ns ahead fired after {fired_after_ns}ns"
+    fn a_kqueue_deadline_is_armed_absolute_in_the_mach_absolute_time_epoch() {
+        let timer_arm_change = kqueue_timer_arm_change_at_raw_mach_deadline(123_456_789);
+        // `kevent` is packed on Darwin, so each field is copied out before it
+        // is compared.
+        let (armed_deadline, filter, flags, fflags) = (
+            { timer_arm_change.data },
+            { timer_arm_change.filter },
+            { timer_arm_change.flags },
+            { timer_arm_change.fflags },
         );
 
-        // The control: where this host has slept for longer than the
-        // deadline's lead, the same deadline read on the continuous epoch is
-        // already past, so the check above tells the two epochs apart here.
-        // SAFETY: `mach_continuous_time` takes no arguments and cannot fail.
-        let continuous_lead_ticks =
-            unsafe { mach_continuous_time() }.saturating_sub(MediaClock::raw_timestamp());
-        if continuous_lead_ticks > 2 * deadline_ahead_ticks {
-            let control_armed_at_ns = monotonic_clock_now_ns();
-            let continuous_epoch_arm_change = libc::kevent {
-                ident: MONOTONIC_TIMER_KEVENT_IDENT,
-                filter: libc::EVFILT_TIMER,
-                flags: libc::EV_ADD | libc::EV_ONESHOT,
-                fflags: libc::NOTE_MACHTIME
-                    | libc::NOTE_ABSOLUTE
-                    | libc::NOTE_CRITICAL
-                    | libc::NOTE_MACH_CONTINUOUS_TIME,
-                data: (MediaClock::raw_timestamp() + deadline_ahead_ticks) as isize,
-                udata: std::ptr::null_mut(),
-            };
-            // SAFETY: a live kqueue, one valid change slot, no events back.
-            let register_result = unsafe {
-                libc::kevent(
-                    kqueue_fd.as_raw_fd(),
-                    &continuous_epoch_arm_change,
-                    1,
-                    std::ptr::null_mut(),
-                    0,
-                    std::ptr::null(),
-                )
-            };
-            assert!(register_result >= 0);
-            let control_outcome = wait_for_kqueue_timer_deadline(kqueue_fd.as_raw_fd(), 2_000);
-            let control_fired_after_ns = monotonic_clock_now_ns() - control_armed_at_ns;
-            assert!(matches!(
-                control_outcome,
-                KqueueTimerWaitOutcome::DeadlineReached
-            ));
-            assert!(
-                control_fired_after_ns < DEADLINE_AHEAD_NS / 2,
-                "a continuous-epoch control fired after {control_fired_after_ns}ns, so this \
-                 check cannot tell the epochs apart"
-            );
-        }
-    }
-
-    /// Late wakes never push later deadlines out. Each wake is measured
-    /// against its own absolute deadline, so a schedule re-armed relative to
-    /// the wake shows up as lateness that grows period over period.
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn a_kqueue_timer_does_not_drift_across_many_periods() {
-        const INTERVAL_NS: u64 = 5_000_000;
-        const PERIOD_COUNT: u64 = 400;
-        const PER_TICK_WORK: Duration = Duration::from_millis(1);
-        const FINAL_WAKES_MEASURED: usize = 50;
-        const MEDIAN_FINAL_LATENESS_BOUND_NS: u64 = 1_000_000;
-        let mut kqueue_schedule = create_monotonic_timer_kqueue_schedule(INTERVAL_NS).unwrap();
-        let mut expirations_seen: u64 = 0;
-        let mut wake_lateness_ns = Vec::new();
-        while expirations_seen < PERIOD_COUNT {
-            match wait_for_kqueue_timer_deadline(kqueue_schedule.kqueue_fd.as_raw_fd(), 1_000) {
-                KqueueTimerWaitOutcome::DeadlineReached => {}
-                KqueueTimerWaitOutcome::TimedOut => panic!("no deadline inside a 1s wait"),
-                KqueueTimerWaitOutcome::Failed => panic!("the kqueue wait failed"),
-            }
-            let woke_at_ns = monotonic_clock_now_ns();
-            let expiration_count = kqueue_schedule.take_expirations_and_arm_the_next_deadline();
-            assert!(
-                expiration_count >= 1,
-                "a wake reported {expiration_count} expirations — it fired before its deadline"
-            );
-            expirations_seen += expiration_count as u64;
-            let latest_deadline_ns =
-                kqueue_schedule.first_deadline_ns + (expirations_seen - 1) * INTERVAL_NS;
-            wake_lateness_ns.push(woke_at_ns.saturating_sub(latest_deadline_ns));
-            std::thread::sleep(PER_TICK_WORK);
-        }
-        drop(kqueue_schedule);
-
-        let mut final_wake_lateness_ns = wake_lateness_ns
-            [wake_lateness_ns.len().saturating_sub(FINAL_WAKES_MEASURED)..]
-            .to_vec();
-        final_wake_lateness_ns.sort_unstable();
-        let median_final_lateness_ns = final_wake_lateness_ns[final_wake_lateness_ns.len() / 2];
-        assert!(
-            median_final_lateness_ns < MEDIAN_FINAL_LATENESS_BOUND_NS,
-            "after {PERIOD_COUNT} periods the median wake is {median_final_lateness_ns}ns past its \
-             absolute deadline — the schedule drifted"
+        assert_eq!(armed_deadline, 123_456_789);
+        assert_eq!(filter, libc::EVFILT_TIMER);
+        assert_eq!(flags, libc::EV_ADD | libc::EV_ONESHOT);
+        assert_eq!(
+            fflags,
+            libc::NOTE_MACHTIME | libc::NOTE_ABSOLUTE | libc::NOTE_CRITICAL
         );
+        assert_eq!(fflags & libc::NOTE_MACH_CONTINUOUS_TIME, 0);
     }
 }
