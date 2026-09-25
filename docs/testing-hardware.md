@@ -184,10 +184,11 @@ into a muted process tap of itself
 first plays a pilot at about −120 dBFS, below hearing on any output, and plays
 its 440 Hz tone at 0.5 only once the pilot has come back through the tap. A
 tap macOS does not let read, with System Audio Recording not allowed, so fails
-on the pilot with nothing audible played. That a reading tap keeps the tone
-off the output rests on Core Audio's documented muted-tap behaviour and has
-not yet been observed on a Mac, so run it attended, with the speakers
-audible, until someone has heard it stay silent:
+on the pilot with nothing audible played; if the arm's playback was asked for
+none of the pilot, the failure names the playback path instead. That a
+reading tap keeps the tone off the output rests on Core Audio's documented
+muted-tap behaviour and has not yet been observed on a Mac, so run it
+attended, with the speakers audible, until someone has heard it stay silent:
 
 ```bash
 cargo test -p streamlib-engine --features hardware-tests \

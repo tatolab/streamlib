@@ -21,6 +21,7 @@
 
 #![cfg(target_os = "macos")]
 
+use std::cell::Cell;
 use std::f64::consts::{PI, SQRT_2};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
@@ -140,6 +141,7 @@ struct PlaybackHandOffProgress {
     now_writing: SignalThePlaybackHandOffWrites,
     sub_audible_pilot: PhaseContinuousSineTone,
     tone: PhaseContinuousSineTone,
+    pilot_frames_written: u64,
     tone_frames_written: u64,
     /// Monotonic nanoseconds at the hand-off call that wrote the tone's first
     /// frame.
@@ -147,6 +149,21 @@ struct PlaybackHandOffProgress {
 }
 
 impl PlaybackHandOffProgress {
+    fn writing_digital_silence(sample_rate: u32) -> Self {
+        Self {
+            now_writing: SignalThePlaybackHandOffWrites::DigitalSilence,
+            sub_audible_pilot: PhaseContinuousSineTone::new(
+                TONE_FREQUENCY_HZ,
+                SUB_AUDIBLE_PILOT_AMPLITUDE,
+                sample_rate,
+            ),
+            tone: PhaseContinuousSineTone::new(TONE_FREQUENCY_HZ, TONE_AMPLITUDE, sample_rate),
+            pilot_frames_written: 0,
+            tone_frames_written: 0,
+            first_tone_frame_written_at_ns: None,
+        }
+    }
+
     fn fill_the_devices_request(
         &mut self,
         requested: AudioBlockRequestedByDevice<'_>,
@@ -161,6 +178,7 @@ impl PlaybackHandOffProgress {
                     requested.interleaved_sample_bytes_to_fill,
                     playback_channels,
                 );
+                self.pilot_frames_written += u64::from(requested.sample_count);
             }
             SignalThePlaybackHandOffWrites::Tone => {
                 if self.first_tone_frame_written_at_ns.is_none() {
@@ -216,6 +234,87 @@ fn first_frame_louder_than(
         .iter()
         .position(|&sample| sample.abs() > level)
         .map(|sample_index| sample_index / channels)
+}
+
+/// How the wait for the sub-audible pilot to come back through the tap ended.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum SubAudiblePilotThroughTheTap {
+    /// A captured block carried a non-zero sample, and the tone was armed
+    /// after it.
+    CameBack {
+        captured_frames_after_arming_the_pilot: usize,
+        peak_in_its_first_block: f32,
+    },
+    /// Every captured block was exact zeros until the budget ran out, and the
+    /// tone was never armed.
+    NeverCameBack {
+        captured_frames_after_arming_the_pilot: usize,
+    },
+}
+
+/// Arm the sub-audible pilot, then pull blocks from the tap until one carries
+/// a non-zero sample — arming the tone only then — or until
+/// `most_frames_before_the_pilot_is_back` frames of exact zeros have come
+/// back. Every block pulled is appended to `captured_blocks`.
+fn arm_the_tone_only_once_the_pilot_comes_back_through_the_tap(
+    mut next_block_from_the_tap: impl FnMut() -> CapturedTapBlock,
+    mut playback_hand_off_writes_next: impl FnMut(SignalThePlaybackHandOffWrites),
+    channels: usize,
+    most_frames_before_the_pilot_is_back: usize,
+    captured_blocks: &mut Vec<CapturedTapBlock>,
+) -> SubAudiblePilotThroughTheTap {
+    playback_hand_off_writes_next(SignalThePlaybackHandOffWrites::SubAudiblePilot);
+    let mut captured_frames_after_arming_the_pilot = 0;
+    while captured_frames_after_arming_the_pilot < most_frames_before_the_pilot_is_back {
+        let block = next_block_from_the_tap();
+        if let Some(pilot_frame_in_block) =
+            first_frame_louder_than(&block.interleaved_samples, channels, 0.0)
+        {
+            let peak_in_its_first_block = block
+                .interleaved_samples
+                .iter()
+                .fold(0.0f32, |peak, &sample| peak.max(sample.abs()));
+            captured_blocks.push(block);
+            playback_hand_off_writes_next(SignalThePlaybackHandOffWrites::Tone);
+            return SubAudiblePilotThroughTheTap::CameBack {
+                captured_frames_after_arming_the_pilot: captured_frames_after_arming_the_pilot
+                    + pilot_frame_in_block,
+                peak_in_its_first_block,
+            };
+        }
+        captured_frames_after_arming_the_pilot += block.interleaved_samples.len() / channels;
+        captured_blocks.push(block);
+    }
+    SubAudiblePilotThroughTheTap::NeverCameBack {
+        captured_frames_after_arming_the_pilot,
+    }
+}
+
+/// Why no tone was played once the pilot never came back, told apart by
+/// whether the playback hand-off was asked for any of the pilot.
+fn why_the_pilot_never_came_back_through_the_tap(
+    captured_frames_after_arming_the_pilot: usize,
+    pilot_frames_the_playback_hand_off_wrote: u64,
+    responsible_application_name: &str,
+) -> String {
+    if pilot_frames_the_playback_hand_off_wrote == 0 {
+        return format!(
+            "the default output asked the arm's playback for no frames of the \
+             {SUB_AUDIBLE_PILOT_AMPLITUDE:e} pilot while the tap delivered \
+             {captured_frames_after_arming_the_pilot} frames, so this process played nothing for \
+             the tap to hear and no tone was played. The arm's playback path is not being asked \
+             for frames while this process is tapped — a playback fault, not a missing grant."
+        );
+    }
+    format!(
+        "the tap returned exact digital zeros for {captured_frames_after_arming_the_pilot} frames \
+         while the arm's playback hand-off wrote {pilot_frames_the_playback_hand_off_wrote} \
+         frames of a {SUB_AUDIBLE_PILOT_AMPLITUDE:e} pilot, so no tone was played. macOS feeds a \
+         process tap silence, with no error, when System Audio Recording is not allowed: allow \
+         {responsible_application_name} in {SYSTEM_AUDIO_RECORDING_SETTING}, then run again. If \
+         it is allowed there already, the arm's render path turned the pilot its hand-off wrote \
+         into zeros."
+    )
 }
 
 /// In-place radix-2 FFT; both slices share one power-of-two length.
@@ -456,21 +555,9 @@ fn a_tone_played_to_the_default_output_comes_back_intact_through_a_muted_process
     assert_eq!(playback_format.sample_format, AudioSampleFormat::F32);
     print_for_the_evidence_record(format!("playback format: {playback_format:?}"));
 
-    let playback_progress = Arc::new(Mutex::new(PlaybackHandOffProgress {
-        now_writing: SignalThePlaybackHandOffWrites::DigitalSilence,
-        sub_audible_pilot: PhaseContinuousSineTone::new(
-            TONE_FREQUENCY_HZ,
-            SUB_AUDIBLE_PILOT_AMPLITUDE,
-            playback_format.sample_rate,
-        ),
-        tone: PhaseContinuousSineTone::new(
-            TONE_FREQUENCY_HZ,
-            TONE_AMPLITUDE,
-            playback_format.sample_rate,
-        ),
-        tone_frames_written: 0,
-        first_tone_frame_written_at_ns: None,
-    }));
+    let playback_progress = Arc::new(Mutex::new(
+        PlaybackHandOffProgress::writing_digital_silence(playback_format.sample_rate),
+    ));
     let playback_progress_for_hand_off = Arc::clone(&playback_progress);
     let playback_channels = playback_format.channels as usize;
     let write_next = |signal: SignalThePlaybackHandOffWrites| {
@@ -528,47 +615,46 @@ fn a_tone_played_to_the_default_output_comes_back_intact_through_a_muted_process
         capture_stream.as_ref(),
     )];
 
-    write_next(SignalThePlaybackHandOffWrites::SubAudiblePilot);
-    let most_frames_before_the_pilot_is_back =
-        duration_in_frames(PILOT_MUST_COME_BACK_WITHIN, capture_format.sample_rate);
-    let mut frames_captured_since_the_pilot = 0;
-    loop {
-        let block = the_next_block_from_the_taps_aggregate(
-            &captured_block_receiver,
-            capture_stream.as_ref(),
-        );
-        if let Some(pilot_frame_in_block) =
-            first_frame_louder_than(&block.interleaved_samples, channels, 0.0)
-        {
-            let block_peak = block
-                .interleaved_samples
-                .iter()
-                .fold(0.0f32, |peak, &sample| peak.max(sample.abs()));
-            print_for_the_evidence_record(format!(
-                "the tap reads: the {SUB_AUDIBLE_PILOT_AMPLITUDE:e} pilot came back \
-                 {} captured frames after it was armed, peaking at {block_peak:e} in its first \
-                 block",
-                frames_captured_since_the_pilot + pilot_frame_in_block
-            ));
-            captured_blocks.push(block);
-            break;
+    match arm_the_tone_only_once_the_pilot_comes_back_through_the_tap(
+        || {
+            the_next_block_from_the_taps_aggregate(
+                &captured_block_receiver,
+                capture_stream.as_ref(),
+            )
+        },
+        write_next,
+        channels,
+        duration_in_frames(PILOT_MUST_COME_BACK_WITHIN, capture_format.sample_rate),
+        &mut captured_blocks,
+    ) {
+        SubAudiblePilotThroughTheTap::CameBack {
+            captured_frames_after_arming_the_pilot,
+            peak_in_its_first_block,
+        } => print_for_the_evidence_record(format!(
+            "the tap reads: the {SUB_AUDIBLE_PILOT_AMPLITUDE:e} pilot came back \
+             {captured_frames_after_arming_the_pilot} captured frames after it was armed, \
+             peaking at {peak_in_its_first_block:e} in its first block"
+        )),
+        SubAudiblePilotThroughTheTap::NeverCameBack {
+            captured_frames_after_arming_the_pilot,
+        } => {
+            let pilot_frames_the_playback_hand_off_wrote = playback_progress
+                .lock()
+                .expect("unpoisoned")
+                .pilot_frames_written;
+            panic!(
+                "{}",
+                why_the_pilot_never_came_back_through_the_tap(
+                    captured_frames_after_arming_the_pilot,
+                    pilot_frames_the_playback_hand_off_wrote,
+                    &responsible_gui_application_name().unwrap_or_else(|| {
+                        "the terminal or application this test was launched from".to_owned()
+                    }),
+                )
+            );
         }
-        frames_captured_since_the_pilot += block.interleaved_samples.len() / channels;
-        captured_blocks.push(block);
-        assert!(
-            frames_captured_since_the_pilot < most_frames_before_the_pilot_is_back,
-            "the tap returned exact digital zeros for {frames_captured_since_the_pilot} frames \
-             of a {SUB_AUDIBLE_PILOT_AMPLITUDE:e} pilot this process played, so no tone was \
-             played. macOS feeds a process tap silence, with no error, when System Audio \
-             Recording is not allowed: allow {} in {SYSTEM_AUDIO_RECORDING_SETTING}, then run \
-             again.",
-            responsible_gui_application_name().unwrap_or_else(|| {
-                "the terminal or application this test was launched from".to_owned()
-            })
-        );
     }
 
-    write_next(SignalThePlaybackHandOffWrites::Tone);
     let frames_wanted =
         duration_in_frames(CAPTURE_AFTER_THE_TONE_IS_ARMED, capture_format.sample_rate);
     let mut frames_captured_since_arming = 0;
@@ -882,4 +968,141 @@ fn the_pilot_carries_sound_and_is_never_taken_for_the_tones_onset() {
         first_frame_louder_than(&pilot_then_tone, 1, TONE_ONSET_LEVEL),
         Some(pilot_frames)
     );
+}
+
+fn stereo_tap_block_of(mono_samples: impl IntoIterator<Item = f32>) -> CapturedTapBlock {
+    CapturedTapBlock {
+        first_sample_timestamp_ns: 0,
+        interleaved_samples: mono_samples
+            .into_iter()
+            .flat_map(|sample| [sample, sample])
+            .collect(),
+    }
+}
+
+#[test]
+fn a_tap_returning_only_digital_zeros_fails_the_pilot_gate_at_its_budget_and_never_arms_the_tone() {
+    let signal_the_playback_hand_off_writes =
+        Cell::new(SignalThePlaybackHandOffWrites::DigitalSilence);
+    let mut signals_armed_when_each_block_was_pulled = Vec::new();
+    let mut captured_blocks = Vec::new();
+    let pilot_through_the_tap = arm_the_tone_only_once_the_pilot_comes_back_through_the_tap(
+        || {
+            signals_armed_when_each_block_was_pulled
+                .push(signal_the_playback_hand_off_writes.get());
+            stereo_tap_block_of([0.0; 512])
+        },
+        |signal| signal_the_playback_hand_off_writes.set(signal),
+        2,
+        48_000,
+        &mut captured_blocks,
+    );
+    assert_eq!(
+        pilot_through_the_tap,
+        SubAudiblePilotThroughTheTap::NeverCameBack {
+            captured_frames_after_arming_the_pilot: 94 * 512,
+        }
+    );
+    assert_eq!(
+        signals_armed_when_each_block_was_pulled,
+        [SignalThePlaybackHandOffWrites::SubAudiblePilot; 94]
+    );
+    assert_eq!(
+        signal_the_playback_hand_off_writes.get(),
+        SignalThePlaybackHandOffWrites::SubAudiblePilot
+    );
+    assert_eq!(captured_blocks.len(), 94);
+}
+
+#[test]
+fn the_tone_is_armed_only_after_a_block_carrying_the_pilot_comes_back_through_the_tap() {
+    let signal_the_playback_hand_off_writes =
+        Cell::new(SignalThePlaybackHandOffWrites::DigitalSilence);
+    let mut signals_armed_when_each_block_was_pulled = Vec::new();
+    let mut pilot = PhaseContinuousSineTone::new(440.0, SUB_AUDIBLE_PILOT_AMPLITUDE, 48_000);
+    let mut captured_blocks = Vec::new();
+    let pilot_through_the_tap = arm_the_tone_only_once_the_pilot_comes_back_through_the_tap(
+        || {
+            signals_armed_when_each_block_was_pulled
+                .push(signal_the_playback_hand_off_writes.get());
+            if signals_armed_when_each_block_was_pulled.len() <= 3 {
+                stereo_tap_block_of([0.0; 512])
+            } else {
+                stereo_tap_block_of(
+                    [0.0; 100]
+                        .into_iter()
+                        .chain(samples_generated_in_device_requests(&mut pilot, [412])),
+                )
+            }
+        },
+        |signal| signal_the_playback_hand_off_writes.set(signal),
+        2,
+        48_000,
+        &mut captured_blocks,
+    );
+    let SubAudiblePilotThroughTheTap::CameBack {
+        captured_frames_after_arming_the_pilot,
+        peak_in_its_first_block,
+    } = pilot_through_the_tap
+    else {
+        panic!("a tap that returned the pilot failed the gate: {pilot_through_the_tap:?}");
+    };
+    assert_eq!(captured_frames_after_arming_the_pilot, 3 * 512 + 100);
+    assert!(
+        peak_in_its_first_block > 0.0 && peak_in_its_first_block <= SUB_AUDIBLE_PILOT_AMPLITUDE
+    );
+    assert_eq!(
+        signals_armed_when_each_block_was_pulled,
+        [SignalThePlaybackHandOffWrites::SubAudiblePilot; 4]
+    );
+    assert_eq!(
+        signal_the_playback_hand_off_writes.get(),
+        SignalThePlaybackHandOffWrites::Tone
+    );
+    assert_eq!(captured_blocks.len(), 4);
+}
+
+#[test]
+fn a_pilot_the_playback_was_never_asked_for_is_blamed_on_the_playback_path_not_on_system_audio_recording()
+ {
+    let why = why_the_pilot_never_came_back_through_the_tap(48_128, 0, "Terminal");
+    assert!(why.contains("playback path"), "{why}");
+    assert!(!why.contains(SYSTEM_AUDIO_RECORDING_SETTING), "{why}");
+    assert!(!why.contains("Terminal"), "{why}");
+}
+
+#[test]
+fn a_written_pilot_the_tap_returned_as_zeros_names_system_audio_recording_for_the_responsible_application()
+ {
+    let why = why_the_pilot_never_came_back_through_the_tap(48_128, 47_616, "Terminal");
+    assert!(
+        why.contains(&format!(
+            "allow Terminal in {SYSTEM_AUDIO_RECORDING_SETTING}"
+        )),
+        "{why}"
+    );
+    assert!(why.contains("wrote 47616 frames"), "{why}");
+}
+
+#[test]
+fn the_playback_hand_off_counts_the_pilot_frames_it_writes_apart_from_the_tones() {
+    let mut playback_progress = PlaybackHandOffProgress::writing_digital_silence(48_000);
+    let mut device_buffer = vec![0u8; 512 * 2 * 4];
+    for signal in [
+        SignalThePlaybackHandOffWrites::DigitalSilence,
+        SignalThePlaybackHandOffWrites::SubAudiblePilot,
+        SignalThePlaybackHandOffWrites::SubAudiblePilot,
+        SignalThePlaybackHandOffWrites::Tone,
+    ] {
+        playback_progress.now_writing = signal;
+        playback_progress.fill_the_devices_request(
+            AudioBlockRequestedByDevice {
+                interleaved_sample_bytes_to_fill: &mut device_buffer,
+                sample_count: 512,
+            },
+            2,
+        );
+    }
+    assert_eq!(playback_progress.pilot_frames_written, 1024);
+    assert_eq!(playback_progress.tone_frames_written, 512);
 }
