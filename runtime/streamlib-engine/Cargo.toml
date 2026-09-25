@@ -237,6 +237,12 @@ trybuild = "1.0.121"
 # does not re-export.
 zenoh-keyexpr = { version = "1.10.1", features = ["internal"] }
 
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+# `CATapDescription` and `AudioHardwareCreateProcessTap` for the muted process
+# tap the CoreAudio content test captures its own playback through. Tests only:
+# the engine's library code creates no taps.
+objc2-core-audio = { workspace = true, features = ["std", "AudioHardware", "objc2", "objc2-foundation", "objc2-core-audio-types"] }
+
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 # `testing::SubprocessCrashHarness` — drives a real subprocess crash against
 # the surface-share service. Tests only: the engine's library code carries no

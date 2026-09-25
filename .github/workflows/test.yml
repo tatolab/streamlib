@@ -818,7 +818,8 @@ jobs:
             --test coreaudio_arm_stamps_blocks_with_the_devices_own_timing \
             --test coreaudio_arm_plays_what_it_is_given \
             --test coreaudio_arm_hears_the_room_through_the_built_in_microphone \
-            --test coreaudio_arm_hears_what_it_plays --no-run
+            --test coreaudio_arm_hears_what_it_plays \
+            --test coreaudio_arm_hears_its_own_playback_through_a_muted_process_tap --no-run
 
       # The whole reason this job exists in the milestone's first ticket: the
       # source-walking gates now evaluate `cfg` for macOS as well as Linux, so

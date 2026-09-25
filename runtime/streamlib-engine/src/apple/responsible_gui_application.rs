@@ -14,7 +14,7 @@ const MOST_ANCESTORS_WALKED: usize = 64;
 
 /// The name to tell a user to look for in System Settings, or `None` when
 /// neither the process's ancestry nor its environment names a GUI host.
-pub(crate) fn responsible_gui_application_name() -> Option<String> {
+pub fn responsible_gui_application_name() -> Option<String> {
     let non_empty_environment_variable =
         |name: &str| std::env::var(name).ok().filter(|value| !value.is_empty());
     app_bundle_of_the_nearest_gui_ancestor()
