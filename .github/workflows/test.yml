@@ -804,13 +804,16 @@ jobs:
             --test cross_runtime_links_two_processes \
             --test cross_runtime_link_requests_two_processes --no-run
           # Compiled but not run: the AVFoundation arm against a real camera,
-          # and `CameraSource` → `DisplayWindow` on the window server, need a
-          # camera, camera access and a GPU no runner has. Building them here
-          # is what stops them rotting between rig runs.
+          # `CameraSource` → `DisplayWindow` on the window server, and the
+          # CoreAudio arm against real audio devices need a camera, a
+          # microphone, their access grants and a GPU no runner has. Building
+          # them here is what stops them rotting between rig runs.
           cargo test --locked -p streamlib-engine -p streamlib-media-builtins \
             --features streamlib-engine/hardware-tests,streamlib-media-builtins/hardware-tests \
             --test avfoundation_camera_captures_through_the_video_device_seam \
-            --test camera_to_display_window_on_the_macos_window_server --no-run
+            --test camera_to_display_window_on_the_macos_window_server \
+            --test coreaudio_arm_stamps_blocks_with_the_devices_own_timing \
+            --test coreaudio_arm_plays_what_it_is_given --no-run
 
       # The whole reason this job exists in the milestone's first ticket: the
       # source-walking gates now evaluate `cfg` for macOS as well as Linux, so
