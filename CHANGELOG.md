@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.27](https://github.com/tatolab/streamlib/compare/v0.26.26...v0.26.27) (2026-09-25)
+
+
+### Features
+
+* **engine:** CoreAudio behind the audio device seam ([#2477](https://github.com/tatolab/streamlib/issues/2477)) ([3bd3073](https://github.com/tatolab/streamlib/commit/3bd3073d8e5fb019b9240c39c8bf23df02e71760))
+
 ## [0.26.26](https://github.com/tatolab/streamlib/compare/v0.26.25...v0.26.26) (2026-09-25)
 
 
