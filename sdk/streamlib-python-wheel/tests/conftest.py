@@ -34,10 +34,29 @@ os.environ.setdefault(MESH_MULTICAST_DISCOVERY_ENVIRONMENT_VARIABLE, "0")
 #: macOS — what the ticket bringing them does to prove it.
 RUN_AWAITING_MACOS_PARITY_ENVIRONMENT_VARIABLE = "STREAMLIB_RUN_AWAITING_MACOS_PARITY"
 
+#: Set to 1, with someone listening, to run the tests an `audible_on_macos`
+#: mark would not run on macOS. The standing sweep there stays silent.
+RUN_ATTENDED_AUDIBLE_TESTS_ENVIRONMENT_VARIABLE = "STREAMLIB_RUN_ATTENDED_AUDIBLE_TESTS"
+
 
 def pytest_collection_modifyitems(config: pytest.Config, items: "list[pytest.Item]") -> None:
-    """Turns the two platform markers into a skip or a strict xfail."""
+    """Turns the platform markers and the audible marker into a skip or a strict xfail."""
     for item in items:
+        audible = item.get_closest_marker("audible_on_macos")
+        if audible is not None:
+            reason = audible.kwargs.get("reason")
+            if not reason:
+                raise pytest.UsageError(f"{item.nodeid}: audible_on_macos needs reason=")
+            if (
+                sys.platform == "darwin"
+                and os.environ.get(RUN_ATTENDED_AUDIBLE_TESTS_ENVIRONMENT_VARIABLE) != "1"
+            ):
+                item.add_marker(
+                    pytest.mark.skip(
+                        reason=f"audible on a Mac, so attended only ({reason}) — set "
+                        f"{RUN_ATTENDED_AUDIBLE_TESTS_ENVIRONMENT_VARIABLE}=1 with someone listening"
+                    )
+                )
         linux_only = item.get_closest_marker("linux_only_capability")
         if linux_only is not None:
             reason = linux_only.kwargs.get("reason")
