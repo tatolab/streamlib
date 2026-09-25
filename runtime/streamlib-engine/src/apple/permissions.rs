@@ -1,8 +1,16 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+
 use crate::apple::responsible_gui_application::responsible_gui_application_name;
 use crate::core::{Error, Result};
+
+/// How long a request may sit unanswered before the user is told where the
+/// prompt is and what else answers it.
+const UNANSWERED_REQUEST_REMINDER_DELAY: Duration = Duration::from_secs(10);
 
 /// A capture device macOS gates behind a privacy prompt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,6 +138,51 @@ impl CaptureDeviceAuthorizationAuthority for AvFoundationCaptureDeviceAuthorizat
     }
 }
 
+/// Runs a piece of work once, after a delay measured on a monotonic clock.
+pub(crate) trait OneShotReminderScheduler {
+    /// Run `reminder` once `delay` has passed, returning at once.
+    fn run_once_after(&self, delay: Duration, reminder: Box<dyn FnOnce() + Send + 'static>);
+}
+
+/// GCD's `dispatch_after` on a global utility queue, timed on the host's
+/// monotonic clock.
+struct GrandCentralDispatchOneShotReminderScheduler;
+
+impl OneShotReminderScheduler for GrandCentralDispatchOneShotReminderScheduler {
+    fn run_once_after(&self, delay: Duration, reminder: Box<dyn FnOnce() + Send + 'static>) {
+        use dispatch2::{DispatchQoS, DispatchQueue, DispatchTime, GlobalQueueIdentifier};
+
+        let Ok(when) = DispatchTime::try_from(delay) else {
+            tracing::warn!(?delay, "a reminder's delay does not fit a dispatch time");
+            return;
+        };
+        let queue = DispatchQueue::global_queue(GlobalQueueIdentifier::QualityOfService(
+            DispatchQoS::Utility,
+        ));
+        if let Err(scheduling_error) = queue.after(when, reminder) {
+            tracing::warn!(?scheduling_error, "a reminder could not be scheduled");
+        }
+    }
+}
+
+/// What a user who has not answered a capture-device request is told once
+/// [`UNANSWERED_REQUEST_REMINDER_DELAY`] has passed.
+fn unanswered_request_reminder_naming(
+    device: PrivacyGatedCaptureDevice,
+    responsible_application: &str,
+) -> String {
+    let setting = device.privacy_setting_name();
+    format!(
+        "{setting} access is still waiting on an answer: macOS asked {} s ago whether \
+         {responsible_application} may use the {} and nobody has answered. Answer the prompt — \
+         it can sit behind other windows — or turn on {responsible_application} in System \
+         Settings › Privacy & Security › {setting}. {} as soon as you allow it.",
+        UNANSWERED_REQUEST_REMINDER_DELAY.as_secs(),
+        device.lowercase_name(),
+        device.what_starts_once_allowed(),
+    )
+}
+
 /// Where access stands once a stream has made sure it was asked for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CaptureDeviceAuthorizationAtOpen {
@@ -145,11 +198,24 @@ pub(crate) enum CaptureDeviceAuthorizationAtOpen {
 ///
 /// A request that is still with the user never answers until they do — a
 /// caller that waited would look hung with no output — so this returns at
-/// once and `on_the_users_answer` runs whenever the answer arrives. A refusal
-/// already on record is refused here, naming the application macOS holds
-/// responsible and the setting to change.
+/// once and `on_the_users_answer` runs whenever the answer arrives. A request
+/// still unanswered after [`UNANSWERED_REQUEST_REMINDER_DELAY`] is warned
+/// about once. A refusal already on record is refused here, naming the
+/// application macOS holds responsible and the setting to change.
 pub(crate) fn authorize_the_capture_device_without_waiting_for_the_user(
     authority: &dyn CaptureDeviceAuthorizationAuthority,
+    on_the_users_answer: CaptureDeviceAuthorizationAnswer,
+) -> Result<CaptureDeviceAuthorizationAtOpen> {
+    authorize_the_capture_device_reminding_the_user_through(
+        authority,
+        &GrandCentralDispatchOneShotReminderScheduler,
+        on_the_users_answer,
+    )
+}
+
+fn authorize_the_capture_device_reminding_the_user_through(
+    authority: &dyn CaptureDeviceAuthorizationAuthority,
+    reminder_scheduler: &dyn OneShotReminderScheduler,
     on_the_users_answer: CaptureDeviceAuthorizationAnswer,
 ) -> Result<CaptureDeviceAuthorizationAtOpen> {
     let device = authority.gated_capture_device();
@@ -167,7 +233,27 @@ pub(crate) fn authorize_the_capture_device_without_waiting_for_the_user(
                 device.lowercase_name(),
                 device.what_starts_once_allowed(),
             );
-            authority.request_authorization(on_the_users_answer);
+            let the_user_has_answered = Arc::new(AtomicBool::new(false));
+            reminder_scheduler.run_once_after(
+                UNANSWERED_REQUEST_REMINDER_DELAY,
+                Box::new({
+                    let the_user_has_answered = Arc::clone(&the_user_has_answered);
+                    let reminder =
+                        unanswered_request_reminder_naming(device, &responsible_application);
+                    move || {
+                        if !the_user_has_answered.load(Ordering::Acquire) {
+                            tracing::warn!(
+                                responsible_application = %responsible_application,
+                                "{reminder}"
+                            );
+                        }
+                    }
+                }),
+            );
+            authority.request_authorization(Box::new(move |granted| {
+                the_user_has_answered.store(true, Ordering::Release);
+                on_the_users_answer(granted);
+            }));
             Ok(CaptureDeviceAuthorizationAtOpen::AwaitingTheUsersAnswer)
         }
         CaptureDeviceAuthorizationStatus::Denied => Err(Error::Configuration(
@@ -272,16 +358,56 @@ pub fn request_audio_permission() -> Result<bool> {
     request_capture_device_permission(PrivacyGatedCaptureDevice::Microphone)
 }
 
+/// Microphone access for a hardware test that captures: `Ok` once allowed,
+/// else what the person at the machine must do — asking macOS first when
+/// nobody has.
+pub fn microphone_access_for_a_capture_hardware_test() -> std::result::Result<(), String> {
+    let device = PrivacyGatedCaptureDevice::Microphone;
+    let authority = AvFoundationCaptureDeviceAuthorizationAuthority(device);
+    match authority.authorization_status() {
+        CaptureDeviceAuthorizationStatus::Authorized => Ok(()),
+        CaptureDeviceAuthorizationStatus::NotDetermined => {
+            authority.request_authorization(Box::new(|_granted| {}));
+            Err(asked_for_a_hardware_test_naming(
+                device,
+                &responsible_application_for_the_user(),
+            ))
+        }
+        CaptureDeviceAuthorizationStatus::Denied => Err(capture_device_refusal_for_the_user(
+            device,
+            CaptureDeviceRefusal::DeniedByTheUser,
+        )),
+        CaptureDeviceAuthorizationStatus::Restricted => Err(capture_device_refusal_for_the_user(
+            device,
+            CaptureDeviceRefusal::RestrictedOnThisMac,
+        )),
+    }
+}
+
+fn asked_for_a_hardware_test_naming(
+    device: PrivacyGatedCaptureDevice,
+    responsible_application: &str,
+) -> String {
+    format!(
+        "{} access had never been asked for, so macOS is asking now whether \
+         {responsible_application} may use the {}: allow {responsible_application} in the \
+         prompt, then re-run.",
+        device.privacy_setting_name(),
+        device.lowercase_name(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{Arc, Mutex, mpsc};
-    use std::time::Duration;
+    use crate::core::test_support::CapturedTracingWarnings;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::{Mutex, mpsc};
 
     /// A privacy gate whose user never answers: every request is kept and
     /// none is ever called back — what a prompt nobody has clicked looks like.
     struct AUserWhoNeverAnswers {
+        device: PrivacyGatedCaptureDevice,
         status: CaptureDeviceAuthorizationStatus,
         requests: AtomicUsize,
         unanswered: Mutex<Vec<CaptureDeviceAuthorizationAnswer>>,
@@ -289,17 +415,33 @@ mod tests {
 
     impl AUserWhoNeverAnswers {
         fn with_status(status: CaptureDeviceAuthorizationStatus) -> Self {
+            Self::of_the(PrivacyGatedCaptureDevice::Camera, status)
+        }
+
+        fn of_the(
+            device: PrivacyGatedCaptureDevice,
+            status: CaptureDeviceAuthorizationStatus,
+        ) -> Self {
             Self {
+                device,
                 status,
                 requests: AtomicUsize::new(0),
                 unanswered: Mutex::new(Vec::new()),
+            }
+        }
+
+        /// The user finally answers every request still open.
+        fn answer_every_request(&self, granted: bool) {
+            let unanswered = std::mem::take(&mut *self.unanswered.lock().expect("unpoisoned"));
+            for answer in unanswered {
+                answer(granted);
             }
         }
     }
 
     impl CaptureDeviceAuthorizationAuthority for AUserWhoNeverAnswers {
         fn gated_capture_device(&self) -> PrivacyGatedCaptureDevice {
-            PrivacyGatedCaptureDevice::Camera
+            self.device
         }
 
         fn authorization_status(&self) -> CaptureDeviceAuthorizationStatus {
@@ -310,6 +452,163 @@ mod tests {
             self.requests.fetch_add(1, Ordering::SeqCst);
             self.unanswered.lock().expect("unpoisoned").push(answer);
         }
+    }
+
+    type ScheduledReminder = (Duration, Box<dyn FnOnce() + Send + 'static>);
+
+    /// A scheduler whose reminders come due only when the test says so, so
+    /// what is under test is the decision rather than a timer.
+    #[derive(Default)]
+    struct RemindersTheTestBringsDue {
+        scheduled: Mutex<Vec<ScheduledReminder>>,
+    }
+
+    impl RemindersTheTestBringsDue {
+        fn delays_scheduled(&self) -> Vec<Duration> {
+            self.scheduled
+                .lock()
+                .expect("unpoisoned")
+                .iter()
+                .map(|(delay, _)| *delay)
+                .collect()
+        }
+
+        fn bring_every_reminder_due(&self) {
+            let scheduled = std::mem::take(&mut *self.scheduled.lock().expect("unpoisoned"));
+            for (_, reminder) in scheduled {
+                reminder();
+            }
+        }
+    }
+
+    impl OneShotReminderScheduler for RemindersTheTestBringsDue {
+        fn run_once_after(&self, delay: Duration, reminder: Box<dyn FnOnce() + Send + 'static>) {
+            self.scheduled
+                .lock()
+                .expect("unpoisoned")
+                .push((delay, reminder));
+        }
+    }
+
+    fn ask_the_microphone_user(
+        user: &AUserWhoNeverAnswers,
+        reminders: &RemindersTheTestBringsDue,
+        answers_received: &Arc<Mutex<Vec<bool>>>,
+    ) -> CaptureDeviceAuthorizationAtOpen {
+        let answers_received = Arc::clone(answers_received);
+        authorize_the_capture_device_reminding_the_user_through(
+            user,
+            reminders,
+            Box::new(move |granted| answers_received.lock().expect("unpoisoned").push(granted)),
+        )
+        .expect("a request nobody has answered is not a refusal")
+    }
+
+    #[test]
+    fn an_unanswered_request_schedules_one_reminder_at_the_deadline() {
+        let user = AUserWhoNeverAnswers::of_the(
+            PrivacyGatedCaptureDevice::Microphone,
+            CaptureDeviceAuthorizationStatus::NotDetermined,
+        );
+        let reminders = RemindersTheTestBringsDue::default();
+        let at_open = ask_the_microphone_user(&user, &reminders, &Arc::default());
+        assert_eq!(
+            at_open,
+            CaptureDeviceAuthorizationAtOpen::AwaitingTheUsersAnswer
+        );
+        assert_eq!(
+            reminders.delays_scheduled(),
+            [UNANSWERED_REQUEST_REMINDER_DELAY]
+        );
+    }
+
+    /// Mental revert: drop the scheduled reminder, as the gate had it, and a
+    /// prompt nobody sees leaves one INFO line and then a silent graph.
+    #[test]
+    fn a_reminder_due_before_any_answer_warns_once_naming_the_application_and_the_setting() {
+        let user = AUserWhoNeverAnswers::of_the(
+            PrivacyGatedCaptureDevice::Microphone,
+            CaptureDeviceAuthorizationStatus::NotDetermined,
+        );
+        let reminders = RemindersTheTestBringsDue::default();
+        ask_the_microphone_user(&user, &reminders, &Arc::default());
+
+        let ((), warnings) =
+            CapturedTracingWarnings::captured_while(|| reminders.bring_every_reminder_due());
+
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        let responsible_application = responsible_application_for_the_user();
+        assert!(
+            warnings[0].contains(&responsible_application),
+            "the reminder names {responsible_application}: {}",
+            warnings[0]
+        );
+        assert!(
+            warnings[0].contains("System Settings › Privacy & Security › Microphone"),
+            "{}",
+            warnings[0]
+        );
+    }
+
+    #[test]
+    fn an_answer_before_the_deadline_silences_the_reminder_and_still_reaches_the_stream() {
+        let user = AUserWhoNeverAnswers::of_the(
+            PrivacyGatedCaptureDevice::Microphone,
+            CaptureDeviceAuthorizationStatus::NotDetermined,
+        );
+        let reminders = RemindersTheTestBringsDue::default();
+        let answers_received = Arc::default();
+        ask_the_microphone_user(&user, &reminders, &answers_received);
+
+        user.answer_every_request(true);
+        let ((), warnings) =
+            CapturedTracingWarnings::captured_while(|| reminders.bring_every_reminder_due());
+
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert_eq!(*answers_received.lock().expect("unpoisoned"), [true]);
+    }
+
+    #[test]
+    fn a_status_already_decided_schedules_no_reminder() {
+        for status in [
+            CaptureDeviceAuthorizationStatus::Authorized,
+            CaptureDeviceAuthorizationStatus::Denied,
+            CaptureDeviceAuthorizationStatus::Restricted,
+        ] {
+            let user = AUserWhoNeverAnswers::of_the(PrivacyGatedCaptureDevice::Camera, status);
+            let reminders = RemindersTheTestBringsDue::default();
+            let _ = authorize_the_capture_device_reminding_the_user_through(
+                &user,
+                &reminders,
+                Box::new(|_| {}),
+            );
+            assert!(
+                reminders.delays_scheduled().is_empty(),
+                "{status:?} needs no answer, so nothing is owed a reminder"
+            );
+        }
+    }
+
+    #[test]
+    fn the_cameras_reminder_names_the_cameras_setting() {
+        let reminder =
+            unanswered_request_reminder_naming(PrivacyGatedCaptureDevice::Camera, "iTerm");
+        assert!(reminder.contains("iTerm"), "{reminder}");
+        assert!(
+            reminder.contains("System Settings › Privacy & Security › Camera"),
+            "{reminder}"
+        );
+        assert!(!reminder.contains("Microphone"), "{reminder}");
+    }
+
+    #[test]
+    fn a_hardware_test_that_asked_tells_the_person_to_allow_the_application_and_re_run() {
+        let instruction =
+            asked_for_a_hardware_test_naming(PrivacyGatedCaptureDevice::Microphone, "Terminal");
+        assert!(
+            instruction.contains("allow Terminal in the prompt, then re-run"),
+            "{instruction}"
+        );
     }
 
     /// The measured hazard: a pending request never answers, so a caller that
