@@ -87,14 +87,6 @@ needs_a_window_server = pytest.mark.skipif(
     reason="display tier — this probe asks for a real window",
 )
 
-# The headless arm takes the window server away by unsetting the variables
-# winit reads it from. A macOS process in a console session has no such
-# variable to lose, so the arm cannot be staged there; the refusal it proves
-# is the pump's, which is the same code on both floors.
-headless_arm_is_stageable_only_off_macos = pytest.mark.skipif(
-    sys.platform == "darwin",
-    reason="a macOS process in a window-server session cannot be made to lose it",
-)
 
 
 def run_probe(
@@ -188,7 +180,7 @@ def test_a_closed_window_leaves_the_pipeline_running_and_every_show_a_no_op(
     # three more times — in all three argument shapes — without raising.
 
 
-@headless_arm_is_stageable_only_off_macos
+@pytest.mark.linux_only_capability(reason="DISPLAY and WAYLAND_DISPLAY are how Linux names a window server")
 def test_a_process_that_can_get_no_window_raises_at_setup(start_app_under_test):
     """The refusal an author wraps in `try/except` when the window is
     optional, carrying the pump's own account of why."""
@@ -216,7 +208,7 @@ def test_a_process_that_can_get_no_window_raises_at_setup(start_app_under_test):
     )
 
 
-@headless_arm_is_stageable_only_off_macos
+@pytest.mark.linux_only_capability(reason="DISPLAY and WAYLAND_DISPLAY are how Linux names a window server")
 def test_the_optional_window_pattern_leaves_the_processor_running(
     start_app_under_test,
 ):
@@ -314,6 +306,7 @@ def the_window_titled(title: str) -> str:
     return ids[-1]
 
 
+@pytest.mark.linux_only_capability(reason="the close gesture is an X11 client message")
 @needs_a_window_server
 def test_a_users_close_leaves_the_pipeline_running_and_the_owner_informed(
     start_app_under_test,
