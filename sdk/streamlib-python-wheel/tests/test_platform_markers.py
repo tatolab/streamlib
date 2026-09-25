@@ -25,6 +25,8 @@ LINUX_ONLY_CAPABILITY_CLOSED_LIST_REASONS = {
     "v4l2loopback and udev are Linux",
     "the boot session is a Linux kernel file",
     "only Linux resolves the runtime directory from XDG_RUNTIME_DIR",
+    "DISPLAY and WAYLAND_DISPLAY are how Linux names a window server",
+    "the close gesture is an X11 client message",
 }
 
 MARKER_USE = re.compile(r"pytest\.mark\.(linux_only_capability|awaiting_macos_parity)\(([^)]*)\)")

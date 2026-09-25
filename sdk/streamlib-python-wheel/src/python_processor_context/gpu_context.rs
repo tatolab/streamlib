@@ -311,7 +311,7 @@ impl PythonGpuContextFullAccess {
         width: u32,
         height: u32,
     ) -> PyResult<PythonProcessorOwnedWindow> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         if let Some(exchange_client) = &self.helper_process_exchange_client {
             let window_id =
                 exchange_client.create_processor_owned_window(python, title, width, height)?;
