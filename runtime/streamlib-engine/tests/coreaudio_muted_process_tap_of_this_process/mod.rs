@@ -77,9 +77,9 @@ impl MutedProcessTapOfThisProcessBehindAPrivateAggregateDevice {
     }
 }
 
-/// A private process tap of this process with mute behaviour `Muted`: from
-/// creation until it is destroyed, nothing this process plays reaches the
-/// audio hardware.
+/// A private process tap of this process with mute behaviour `Muted`, which
+/// Core Audio documents as keeping everything this process plays off the
+/// audio hardware from creation until the tap is destroyed.
 struct MutedPrivateProcessTapOfThisProcess {
     tap_object_id: AudioObjectID,
     tap_uuid: String,

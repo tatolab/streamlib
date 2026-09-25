@@ -1,34 +1,45 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The CoreAudio arm's samples, proven digitally and in silence: a tone the
-//! arm plays to the default output comes back, sample for sample, through a
-//! muted process tap of this process that the arm captures by device UID.
+//! The CoreAudio arm's samples, proven digitally: a tone the arm plays to the
+//! default output comes back, sample for sample, through a muted process tap
+//! of this process that the arm captures by device UID.
 //!
 //! The acoustic test hears a tone through the air; this one checks the
-//! samples themselves — frequency, level, and one unbroken sinusoid, which a
-//! block lost or repeated in either direction breaks — and makes no sound,
-//! because the tap mutes this process before its output reaches any device.
+//! samples themselves — frequency, level, and one unbroken sinusoid from the
+//! moment the tone settles to the end of the capture, which a block lost or
+//! repeated in either direction breaks.
+//!
+//! Meant to make no sound. The tone plays only once a pilot 120 dB below full
+//! scale has come back through the tap, so a tap macOS does not let read —
+//! System Audio Recording not allowed — fails on the pilot with nothing
+//! audible played, and a tap that reads mutes this process's output.
 //!
 //! Audio tier — needs a Mac with a default output device, with microphone
 //! access and System Audio Recording allowed for the terminal running it.
 //! The first run raises the System Audio Recording prompt.
 
 #![cfg(target_os = "macos")]
-// The measured numbers go to stdout: they are the evidence a run records.
-#![allow(clippy::disallowed_macros)]
 
 use std::f64::consts::{PI, SQRT_2};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
+use streamlib_engine::apple_coreaudio_audio_tier::{
+    CoreAudioStreamDirection, responsible_gui_application_name,
+};
 use streamlib_engine::core::context::{
-    AudioBlockRequestedByDevice, AudioClockConfig, AudioDeviceStreamRequest, AudioSampleFormat,
-    CapturedAudioBlockFromDevice, SharedAudioClock, SharedAudioDeviceBackend, SoftwareAudioClock,
-    probe_audio_device_backend,
+    AudioBlockRequestedByDevice, AudioCaptureStream, AudioClockConfig, AudioDeviceStreamRequest,
+    AudioSampleFormat, CapturedAudioBlockFromDevice, SharedAudioClock, SoftwareAudioClock,
 };
 use streamlib_engine::core::media_clock::MediaClock;
+
+#[path = "support/coreaudio_audio_tier.rs"]
+mod coreaudio_audio_tier;
+use coreaudio_audio_tier::{
+    print_for_the_evidence_record, the_coreaudio_arm_with_a_default_device_for,
+    the_microphone_must_be_allowed,
+};
 
 mod coreaudio_muted_process_tap_of_this_process;
 use coreaudio_muted_process_tap_of_this_process::MutedProcessTapOfThisProcessBehindAPrivateAggregateDevice;
@@ -38,6 +49,18 @@ const TONE_FREQUENCY_HZ: f64 = 440.0;
 /// The reference amplitude `known_audio_signal.py` plays.
 const TONE_AMPLITUDE: f32 = 0.5;
 
+/// About −120 dBFS: below hearing on any output at any volume, and far above
+/// the exact zeros a tap that may not read delivers.
+const SUB_AUDIBLE_PILOT_AMPLITUDE: f32 = 1e-6;
+
+/// Captured audio within which the pilot has to come back. The tap's round
+/// trip is tens of milliseconds.
+const PILOT_MUST_COME_BACK_WITHIN: Duration = Duration::from_secs(1);
+
+/// Far above the pilot, and below the tone's first sample, which is played
+/// from phase zero.
+const TONE_ONSET_LEVEL: f32 = 1e-3;
+
 /// Two seconds of tone, plus room for the tap's round trip.
 const CAPTURE_AFTER_THE_TONE_IS_ARMED: Duration = Duration::from_millis(2500);
 
@@ -45,7 +68,9 @@ const CAPTURE_AFTER_THE_TONE_IS_ARMED: Duration = Duration::from_millis(2500);
 /// is analysed.
 const SETTLE_AFTER_THE_TONE_ARRIVES: Duration = Duration::from_millis(100);
 
-const STEADY_TONE_ANALYSED: Duration = Duration::from_millis(1500);
+/// The least steady tone the analysis accepts. It analyses every captured
+/// frame from the settled tone to the end of the capture.
+const LEAST_STEADY_TONE_ANALYSED: Duration = Duration::from_millis(1500);
 
 const MAX_FREQUENCY_ERROR_HZ: f64 = 1.0;
 
@@ -58,8 +83,8 @@ const MAX_AMPLITUDE_ERROR: f64 = 0.05;
 
 /// A clean digital path fits one sinusoid to within float rounding, far below
 /// this. A block lost or repeated jumps the phase of everything after it: a
-/// 512-frame loss mid-span leaves about −6 dB, and one 1000 frames from the
-/// span's end still about −17 dB.
+/// 512-frame loss mid-span leaves about −6 dB, and one a single block before
+/// the end of 2.4 s of capture still about −19 dB.
 const MAX_SINE_FIT_RESIDUAL_DB: f64 = -40.0;
 
 /// A capture that has produced nothing in this long is a broken device, not a
@@ -69,22 +94,8 @@ const CAPTURE_DEADLINE: Duration = Duration::from_secs(10);
 const SYSTEM_AUDIO_RECORDING_SETTING: &str = "System Settings › Privacy & Security › Screen & \
      System Audio Recording › System Audio Recording Only";
 
-fn coreaudio_arm() -> Option<SharedAudioDeviceBackend> {
-    let backend = probe_audio_device_backend();
-    (backend.backend_name() == "coreaudio").then_some(backend)
-}
-
 fn an_unused_deviceless_pacing_clock() -> SharedAudioClock {
     Arc::new(SoftwareAudioClock::new(AudioClockConfig::new(48_000, 512)))
-}
-
-/// The application macOS asks on this process's behalf, as the environment
-/// the terminal handed down names it.
-fn the_application_macos_asks_for_this_process() -> String {
-    ["__CFBundleIdentifier", "TERM_PROGRAM"]
-        .into_iter()
-        .find_map(|name| std::env::var(name).ok().filter(|value| !value.is_empty()))
-        .unwrap_or_else(|| "the terminal or application this test was launched from".to_owned())
 }
 
 /// A sine whose phase carries from one device request to the next.
@@ -116,8 +127,18 @@ impl PhaseContinuousSineTone {
     }
 }
 
+/// What the playback hand-off writes on its next request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SignalThePlaybackHandOffWrites {
+    DigitalSilence,
+    SubAudiblePilot,
+    Tone,
+}
+
 /// What the playback hand-off shares with the test thread.
-struct TonePlaybackProgress {
+struct PlaybackHandOffProgress {
+    now_writing: SignalThePlaybackHandOffWrites,
+    sub_audible_pilot: PhaseContinuousSineTone,
     tone: PhaseContinuousSineTone,
     tone_frames_written: u64,
     /// Monotonic nanoseconds at the hand-off call that wrote the tone's first
@@ -125,10 +146,57 @@ struct TonePlaybackProgress {
     first_tone_frame_written_at_ns: Option<i64>,
 }
 
+impl PlaybackHandOffProgress {
+    fn fill_the_devices_request(
+        &mut self,
+        requested: AudioBlockRequestedByDevice<'_>,
+        playback_channels: usize,
+    ) {
+        match self.now_writing {
+            SignalThePlaybackHandOffWrites::DigitalSilence => {
+                requested.interleaved_sample_bytes_to_fill.fill(0);
+            }
+            SignalThePlaybackHandOffWrites::SubAudiblePilot => {
+                self.sub_audible_pilot.fill_interleaved_f32(
+                    requested.interleaved_sample_bytes_to_fill,
+                    playback_channels,
+                );
+            }
+            SignalThePlaybackHandOffWrites::Tone => {
+                if self.first_tone_frame_written_at_ns.is_none() {
+                    self.first_tone_frame_written_at_ns = Some(MediaClock::now().as_nanos() as i64);
+                }
+                self.tone.fill_interleaved_f32(
+                    requested.interleaved_sample_bytes_to_fill,
+                    playback_channels,
+                );
+                self.tone_frames_written += u64::from(requested.sample_count);
+            }
+        }
+    }
+}
+
 /// One block as the tap's aggregate delivered it, copied out of the hand-off.
 struct CapturedTapBlock {
     first_sample_timestamp_ns: i64,
     interleaved_samples: Vec<f32>,
+}
+
+fn the_next_block_from_the_taps_aggregate(
+    captured_block_receiver: &mpsc::Receiver<CapturedTapBlock>,
+    capture_stream: &dyn AudioCaptureStream,
+) -> CapturedTapBlock {
+    captured_block_receiver
+        .recv_timeout(CAPTURE_DEADLINE)
+        .unwrap_or_else(|_| {
+            panic!(
+                "the tap's private aggregate delivered nothing for {CAPTURE_DEADLINE:?} while \
+                 this process played. Liveness: {:?}",
+                capture_stream
+                    .liveness_report()
+                    .failure_that_ended_the_stream()
+            )
+        })
 }
 
 fn f32_samples_of(interleaved_little_endian_bytes: &[u8]) -> Vec<f32> {
@@ -138,11 +206,15 @@ fn f32_samples_of(interleaved_little_endian_bytes: &[u8]) -> Vec<f32> {
         .collect()
 }
 
-/// The first frame carrying any sample that is not exactly zero.
-fn first_frame_carrying_sound(interleaved_samples: &[f32], channels: usize) -> Option<usize> {
+/// The first frame carrying a sample whose magnitude exceeds `level`.
+fn first_frame_louder_than(
+    interleaved_samples: &[f32],
+    channels: usize,
+    level: f32,
+) -> Option<usize> {
     interleaved_samples
         .iter()
-        .position(|&sample| sample != 0.0)
+        .position(|&sample| sample.abs() > level)
         .map(|sample_index| sample_index / channels)
 }
 
@@ -364,12 +436,15 @@ fn duration_in_frames(duration: Duration, sample_rate: u32) -> usize {
 #[test]
 #[cfg_attr(
     not(feature = "hardware-tests"),
-    ignore = "audio tier — silent: plays a tone into a muted private process tap of this process and captures it back by the tap's aggregate UID. Needs a default output device, and microphone access and System Audio Recording allowed for the terminal running it. Run with --features streamlib/hardware-tests. See docs/testing-hardware.md"
+    ignore = "audio tier — plays a tone only into a muted private process tap of this process, once an inaudible pilot has come back through it, and captures it by the tap's aggregate UID. Needs a default output device, and microphone access and System Audio Recording allowed for the terminal running it. Run with --features streamlib/hardware-tests. See docs/testing-hardware.md"
 )]
 fn a_tone_played_to_the_default_output_comes_back_intact_through_a_muted_process_tap() {
-    let Some(backend) = coreaudio_arm() else {
+    let Some(backend) =
+        the_coreaudio_arm_with_a_default_device_for(CoreAudioStreamDirection::Playback)
+    else {
         return;
     };
+    the_microphone_must_be_allowed();
 
     let mut playback_stream_started_before_the_tap = backend
         .open_playback_stream(&AudioDeviceStreamRequest {
@@ -379,10 +454,15 @@ fn a_tone_played_to_the_default_output_comes_back_intact_through_a_muted_process
         .expect("the default output opens");
     let playback_format = playback_stream_started_before_the_tap.stream_format();
     assert_eq!(playback_format.sample_format, AudioSampleFormat::F32);
-    println!("playback format: {playback_format:?}");
+    print_for_the_evidence_record(format!("playback format: {playback_format:?}"));
 
-    let tone_is_armed = Arc::new(AtomicBool::new(false));
-    let playback_progress = Arc::new(Mutex::new(TonePlaybackProgress {
+    let playback_progress = Arc::new(Mutex::new(PlaybackHandOffProgress {
+        now_writing: SignalThePlaybackHandOffWrites::DigitalSilence,
+        sub_audible_pilot: PhaseContinuousSineTone::new(
+            TONE_FREQUENCY_HZ,
+            SUB_AUDIBLE_PILOT_AMPLITUDE,
+            playback_format.sample_rate,
+        ),
         tone: PhaseContinuousSineTone::new(
             TONE_FREQUENCY_HZ,
             TONE_AMPLITUDE,
@@ -391,9 +471,11 @@ fn a_tone_played_to_the_default_output_comes_back_intact_through_a_muted_process
         tone_frames_written: 0,
         first_tone_frame_written_at_ns: None,
     }));
-    let tone_is_armed_for_hand_off = Arc::clone(&tone_is_armed);
     let playback_progress_for_hand_off = Arc::clone(&playback_progress);
     let playback_channels = playback_format.channels as usize;
+    let write_next = |signal: SignalThePlaybackHandOffWrites| {
+        playback_progress.lock().expect("unpoisoned").now_writing = signal;
+    };
     // Silence plays before the tap exists, so the tap is made over a process
     // that is already an output client, and an aggregate that auto-starts on
     // its tap — which waits in its own start for the tapped process to play —
@@ -401,30 +483,20 @@ fn a_tone_played_to_the_default_output_comes_back_intact_through_a_muted_process
     playback_stream_started_before_the_tap
         .start_requesting_from(Box::new(
             move |requested: AudioBlockRequestedByDevice<'_>| {
-                if !tone_is_armed_for_hand_off.load(Ordering::Acquire) {
-                    requested.interleaved_sample_bytes_to_fill.fill(0);
-                    return;
-                }
-                let mut progress = playback_progress_for_hand_off.lock().expect("unpoisoned");
-                if progress.first_tone_frame_written_at_ns.is_none() {
-                    progress.first_tone_frame_written_at_ns =
-                        Some(MediaClock::now().as_nanos() as i64);
-                }
-                progress.tone.fill_interleaved_f32(
-                    requested.interleaved_sample_bytes_to_fill,
-                    playback_channels,
-                );
-                progress.tone_frames_written += u64::from(requested.sample_count);
+                playback_progress_for_hand_off
+                    .lock()
+                    .expect("unpoisoned")
+                    .fill_the_devices_request(requested, playback_channels);
             },
         ))
         .expect("playback starts");
 
     let muted_process_tap = MutedProcessTapOfThisProcessBehindAPrivateAggregateDevice::create();
-    println!(
+    print_for_the_evidence_record(format!(
         "tap aggregate: '{}', tap format {:?}",
         muted_process_tap.aggregate_device_uid(),
         muted_process_tap.tap_stream_format()
-    );
+    ));
     // Rebound after the tap so it is dropped before it on every path,
     // unwinding included: no playback outlives the tap, and with it this
     // process's mute.
@@ -438,7 +510,7 @@ fn a_tone_played_to_the_default_output_comes_back_intact_through_a_muted_process
         .expect("the tap's private aggregate opens as a named capture device");
     let capture_format = capture_stream.stream_format();
     assert_eq!(capture_format.sample_format, AudioSampleFormat::F32);
-    println!("capture format:  {capture_format:?}");
+    print_for_the_evidence_record(format!("capture format:  {capture_format:?}"));
 
     let (captured_block_sender, captured_block_receiver) = mpsc::channel();
     capture_stream
@@ -451,23 +523,64 @@ fn a_tone_played_to_the_default_output_comes_back_intact_through_a_muted_process
         .expect("capture from the tap's aggregate starts");
 
     let channels = capture_format.channels as usize;
-    let mut captured_blocks = vec![
-        captured_block_receiver
-            .recv_timeout(CAPTURE_DEADLINE)
-            .expect("the tap's aggregate delivers blocks while this process plays"),
-    ];
-    tone_is_armed.store(true, Ordering::Release);
+    let mut captured_blocks = vec![the_next_block_from_the_taps_aggregate(
+        &captured_block_receiver,
+        capture_stream.as_ref(),
+    )];
+
+    write_next(SignalThePlaybackHandOffWrites::SubAudiblePilot);
+    let most_frames_before_the_pilot_is_back =
+        duration_in_frames(PILOT_MUST_COME_BACK_WITHIN, capture_format.sample_rate);
+    let mut frames_captured_since_the_pilot = 0;
+    loop {
+        let block = the_next_block_from_the_taps_aggregate(
+            &captured_block_receiver,
+            capture_stream.as_ref(),
+        );
+        if let Some(pilot_frame_in_block) =
+            first_frame_louder_than(&block.interleaved_samples, channels, 0.0)
+        {
+            let block_peak = block
+                .interleaved_samples
+                .iter()
+                .fold(0.0f32, |peak, &sample| peak.max(sample.abs()));
+            print_for_the_evidence_record(format!(
+                "the tap reads: the {SUB_AUDIBLE_PILOT_AMPLITUDE:e} pilot came back \
+                 {} captured frames after it was armed, peaking at {block_peak:e} in its first \
+                 block",
+                frames_captured_since_the_pilot + pilot_frame_in_block
+            ));
+            captured_blocks.push(block);
+            break;
+        }
+        frames_captured_since_the_pilot += block.interleaved_samples.len() / channels;
+        captured_blocks.push(block);
+        assert!(
+            frames_captured_since_the_pilot < most_frames_before_the_pilot_is_back,
+            "the tap returned exact digital zeros for {frames_captured_since_the_pilot} frames \
+             of a {SUB_AUDIBLE_PILOT_AMPLITUDE:e} pilot this process played, so no tone was \
+             played. macOS feeds a process tap silence, with no error, when System Audio \
+             Recording is not allowed: allow {} in {SYSTEM_AUDIO_RECORDING_SETTING}, then run \
+             again.",
+            responsible_gui_application_name().unwrap_or_else(|| {
+                "the terminal or application this test was launched from".to_owned()
+            })
+        );
+    }
+
+    write_next(SignalThePlaybackHandOffWrites::Tone);
     let frames_wanted =
         duration_in_frames(CAPTURE_AFTER_THE_TONE_IS_ARMED, capture_format.sample_rate);
     let mut frames_captured_since_arming = 0;
     while frames_captured_since_arming < frames_wanted {
-        let block = captured_block_receiver
-            .recv_timeout(CAPTURE_DEADLINE)
-            .expect("the tap's aggregate keeps delivering blocks");
+        let block = the_next_block_from_the_taps_aggregate(
+            &captured_block_receiver,
+            capture_stream.as_ref(),
+        );
         frames_captured_since_arming += block.interleaved_samples.len() / channels;
         captured_blocks.push(block);
     }
-    tone_is_armed.store(false, Ordering::Release);
+    write_next(SignalThePlaybackHandOffWrites::DigitalSilence);
     playback_stream.stop_requesting().expect("playback stops");
     capture_stream.stop_delivering().expect("capture stops");
     drop(capture_stream);
@@ -507,19 +620,19 @@ fn a_tone_played_to_the_default_output_comes_back_intact_through_a_muted_process
         })
         .max()
         .unwrap_or(0);
-    println!(
+    print_for_the_evidence_record(format!(
         "captured {captured_frames} frames in {} blocks; largest stamp gap error {:.1} µs",
         captured_blocks.len(),
         largest_cadence_error_ns as f64 / 1_000.0
-    );
+    ));
 
-    let Some(tone_onset_frame) = first_frame_carrying_sound(&interleaved_samples, channels) else {
+    let Some(tone_onset_frame) =
+        first_frame_louder_than(&interleaved_samples, channels, TONE_ONSET_LEVEL)
+    else {
         panic!(
-            "the tap returned exact digital zeros for all {captured_frames} frames while the \
-             default output took {tone_frames_written} frames of a {TONE_AMPLITUDE} tone. macOS \
-             feeds a process tap silence, with no error, when System Audio Recording is not \
-             allowed: allow {} in {SYSTEM_AUDIO_RECORDING_SETTING}, then run again.",
-            the_application_macos_asks_for_this_process()
+            "the tap carried the pilot, but nothing louder than {TONE_ONSET_LEVEL} in all \
+             {captured_frames} frames while the default output took {tone_frames_written} \
+             frames of a {TONE_AMPLITUDE} tone"
         );
     };
 
@@ -529,39 +642,42 @@ fn a_tone_played_to_the_default_output_comes_back_intact_through_a_muted_process
         + (tone_onset_frame - block_first_frames[onset_block]) as i64 * 1_000_000_000
             / i64::from(capture_format.sample_rate);
     if let Some(written_at_ns) = first_tone_frame_written_at_ns {
-        println!(
+        print_for_the_evidence_record(format!(
             "tap round trip: {:+.2} ms from the playback hand-off writing the tone's first \
              sample to that sample's capture stamp",
             (tone_onset_stamp_ns - written_at_ns) as f64 / 1_000_000.0
-        );
+        ));
     }
 
     let steady_start_frame = tone_onset_frame
         + duration_in_frames(SETTLE_AFTER_THE_TONE_ARRIVES, capture_format.sample_rate);
-    let steady_frames = duration_in_frames(STEADY_TONE_ANALYSED, capture_format.sample_rate);
+    let steady_frames = captured_frames.saturating_sub(steady_start_frame);
+    let least_steady_frames =
+        duration_in_frames(LEAST_STEADY_TONE_ANALYSED, capture_format.sample_rate);
     assert!(
-        captured_frames >= steady_start_frame + steady_frames,
-        "the tap delivered {} frames of steady tone where {steady_frames} were needed",
-        captured_frames.saturating_sub(steady_start_frame)
+        steady_frames >= least_steady_frames,
+        "the tap delivered {steady_frames} frames of steady tone where at least \
+         {least_steady_frames} were needed"
     );
 
     for channel in 0..channels {
-        let steady_tone: Vec<f32> = (steady_start_frame..steady_start_frame + steady_frames)
+        let steady_tone: Vec<f32> = (steady_start_frame..captured_frames)
             .map(|frame| interleaved_samples[frame * channels + channel])
             .collect();
         let dominant_hz = dominant_frequency_hz(&steady_tone, capture_format.sample_rate);
         let fitted = fit_a_sinusoid(&steady_tone, capture_format.sample_rate, dominant_hz)
             .expect("a captured tone this long fits a sinusoid");
         let residual_db = fitted.residual_relative_to_the_tone_db();
-        println!(
-            "channel {channel}: dominant {dominant_hz:.3} Hz, fitted {:.4} Hz, amplitude {:.5} \
-             (gain {:+.3} dB against {TONE_AMPLITUDE}), dc {:+.2e}, sine-fit residual \
-             {residual_db:.1} dB",
+        print_for_the_evidence_record(format!(
+            "channel {channel} over {:.3} s of steady tone: dominant {dominant_hz:.3} Hz, fitted \
+             {:.4} Hz, amplitude {:.5} (gain {:+.3} dB against {TONE_AMPLITUDE}), dc {:+.2e}, \
+             sine-fit residual {residual_db:.1} dB",
+            steady_frames as f64 / f64::from(capture_format.sample_rate),
             fitted.frequency_hz,
             fitted.amplitude,
             20.0 * (fitted.amplitude / f64::from(TONE_AMPLITUDE)).log10(),
             fitted.dc_offset,
-        );
+        ));
         assert!(
             (dominant_hz - TONE_FREQUENCY_HZ).abs() <= MAX_FREQUENCY_ERROR_HZ,
             "channel {channel} of the tap is dominated by {dominant_hz:.3} Hz where \
@@ -596,15 +712,12 @@ fn deterministic_noise(sample_count: usize, amplitude: f32) -> Vec<f32> {
         .collect()
 }
 
-/// Mono tone samples generated the way the playback hand-off generates them,
-/// one device request at a time.
-fn tone_generated_in_device_requests(
-    frequency_hz: f64,
-    amplitude: f32,
-    sample_rate: u32,
+/// Mono samples of `tone`, generated the way the playback hand-off generates
+/// them, one device request at a time.
+fn samples_generated_in_device_requests(
+    tone: &mut PhaseContinuousSineTone,
     request_frame_counts: impl IntoIterator<Item = usize>,
 ) -> Vec<f32> {
-    let mut tone = PhaseContinuousSineTone::new(frequency_hz, amplitude, sample_rate);
     let mut samples = Vec::new();
     for frame_count in request_frame_counts {
         let mut request = vec![0u8; frame_count * 4 * 2];
@@ -616,6 +729,18 @@ fn tone_generated_in_device_requests(
         );
     }
     samples
+}
+
+fn tone_generated_in_device_requests(
+    frequency_hz: f64,
+    amplitude: f32,
+    sample_rate: u32,
+    request_frame_counts: impl IntoIterator<Item = usize>,
+) -> Vec<f32> {
+    samples_generated_in_device_requests(
+        &mut PhaseContinuousSineTone::new(frequency_hz, amplitude, sample_rate),
+        request_frame_counts,
+    )
 }
 
 fn one_and_a_half_seconds_of_440_hz_at_48_khz() -> Vec<f32> {
@@ -690,6 +815,22 @@ fn a_block_lost_near_the_end_of_the_span_still_lifts_the_residual_past_the_limit
     );
 }
 
+/// The live test fits everything from the settled tone to the end of about
+/// 2.4 s of capture, so a loss in its last full block has to show there too.
+#[test]
+fn a_block_lost_one_block_before_the_end_of_the_whole_capture_lifts_the_residual_past_the_limit() {
+    let mut samples = tone_generated_in_device_requests(440.0, 0.5, 48_000, [512; 225]);
+    let one_block_before_the_end = samples.len() - 2 * 512;
+    samples.drain(one_block_before_the_end..one_block_before_the_end + 512);
+    let fitted = fit_a_sinusoid(&samples, 48_000, dominant_frequency_hz(&samples, 48_000))
+        .expect("a tone with a hole still fits something");
+    assert!(
+        fitted.residual_relative_to_the_tone_db() > MAX_SINE_FIT_RESIDUAL_DB,
+        "a block lost one block before the end left only a {:.1} dB residual",
+        fitted.residual_relative_to_the_tone_db()
+    );
+}
+
 #[test]
 fn a_repeated_block_lifts_the_residual_past_the_limit() {
     let mut samples = one_and_a_half_seconds_of_440_hz_at_48_khz();
@@ -708,12 +849,37 @@ fn a_repeated_block_lifts_the_residual_past_the_limit() {
 fn digital_silence_fits_no_sinusoid_and_carries_no_sound() {
     let silence = vec![0.0f32; 72_000];
     assert!(fit_a_sinusoid(&silence, 48_000, 440.0).is_none());
-    assert_eq!(first_frame_carrying_sound(&silence, 2), None);
+    assert_eq!(first_frame_louder_than(&silence, 2, 0.0), None);
 }
 
 #[test]
-fn the_first_frame_carrying_sound_is_the_frame_not_the_sample() {
+fn the_first_frame_louder_than_a_level_is_the_frame_not_the_sample() {
     let mut interleaved_samples = vec![0.0f32; 20];
     interleaved_samples[13] = -1e-9;
-    assert_eq!(first_frame_carrying_sound(&interleaved_samples, 2), Some(6));
+    assert_eq!(
+        first_frame_louder_than(&interleaved_samples, 2, 0.0),
+        Some(6)
+    );
+}
+
+/// Every sample of the pilot is non-zero, for the tap to show it reads, and
+/// none reaches the tone's onset level, which the tone's first sample does.
+#[test]
+fn the_pilot_carries_sound_and_is_never_taken_for_the_tones_onset() {
+    let pilot_frames = 48_000;
+    let mut pilot_then_tone = samples_generated_in_device_requests(
+        &mut PhaseContinuousSineTone::new(440.0, SUB_AUDIBLE_PILOT_AMPLITUDE, 48_000),
+        [512; 93].into_iter().chain([pilot_frames - 512 * 93]),
+    );
+    assert!(pilot_then_tone.iter().all(|&sample| sample != 0.0));
+    pilot_then_tone.extend(tone_generated_in_device_requests(
+        440.0,
+        TONE_AMPLITUDE,
+        48_000,
+        [512; 4],
+    ));
+    assert_eq!(
+        first_frame_louder_than(&pilot_then_tone, 1, TONE_ONSET_LEVEL),
+        Some(pilot_frames)
+    );
 }

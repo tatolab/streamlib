@@ -167,8 +167,7 @@ system-exclusive resource. Concretely, today:
   tap also needs System Audio Recording allowed for that terminal (System
   Settings › Privacy & Security › Screen & System Audio Recording › System
   Audio Recording Only); without it the tap returns digital zeros and the test
-  fails naming the setting. The tap mutes the test process, so it makes no
-  sound.
+  fails naming the setting.
 - Future: V4L2 camera capture, display swapchains, anything that holds a
   kernel-level exclusive lock.
 
@@ -178,10 +177,26 @@ constructing a device) stay in tier 1.
 
 ### Audible tests are attended only
 
-The `hardware-tests` sweep stays silent: playback tests there write zeros, and
-capture tests only listen. A test that plays sound a person hears is gated on
-`audible-hardware-tests` instead (it implies `hardware-tests`), and is run by
-someone at the machine:
+The `hardware-tests` sweep stays silent: playback tests there write zeros,
+capture tests only listen, and one CoreAudio content test plays a tone only
+into a muted process tap of itself
+(`coreaudio_arm_hears_its_own_playback_through_a_muted_process_tap`). That test
+first plays a pilot at about −120 dBFS, below hearing on any output, and plays
+its 440 Hz tone at 0.5 only once the pilot has come back through the tap. A
+tap macOS does not let read, with System Audio Recording not allowed, so fails
+on the pilot with nothing audible played. That a reading tap keeps the tone
+off the output rests on Core Audio's documented muted-tap behaviour and has
+not yet been observed on a Mac, so run it attended, with the speakers
+audible, until someone has heard it stay silent:
+
+```bash
+cargo test -p streamlib-engine --features hardware-tests \
+  --test coreaudio_arm_hears_its_own_playback_through_a_muted_process_tap \
+  -- --test-threads=1 --nocapture
+```
+
+A test that plays sound a person hears is gated on `audible-hardware-tests`
+instead (it implies `hardware-tests`), and is run by someone at the machine:
 
 ```bash
 cargo test -p streamlib-engine --features audible-hardware-tests \
