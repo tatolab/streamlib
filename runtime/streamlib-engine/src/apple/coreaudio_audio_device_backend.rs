@@ -31,9 +31,9 @@ use objc2_audio_toolbox::{
     kAudioUnitType_Output, kConverterPrimeMethod_None,
 };
 use objc2_core_audio::{
-    AudioObjectAddPropertyListener, AudioObjectGetPropertyData, AudioObjectGetPropertyDataSize,
-    AudioObjectID, AudioObjectPropertyAddress, AudioObjectPropertyScope,
-    AudioObjectPropertySelector, AudioObjectRemovePropertyListener,
+    AudioObjectAddPropertyListenerBlock, AudioObjectGetPropertyData,
+    AudioObjectGetPropertyDataSize, AudioObjectID, AudioObjectPropertyAddress,
+    AudioObjectPropertyScope, AudioObjectPropertySelector, AudioObjectRemovePropertyListenerBlock,
     kAudioDevicePropertyBufferFrameSize, kAudioDevicePropertyBufferFrameSizeRange,
     kAudioDevicePropertyDeviceIsAlive, kAudioDevicePropertyDeviceUID, kAudioDevicePropertyLatency,
     kAudioDevicePropertyNominalSampleRate, kAudioDevicePropertyStreamConfiguration,
@@ -932,12 +932,31 @@ enum CoreAudioStreamDeviceChangeResponse {
     EndTheStreamBecauseNoDeviceIsTheDefault,
 }
 
+/// Whether a stream stays on the device it named or follows the system
+/// default as it moves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CoreAudioStreamDevicePolicy {
+    PinnedToTheNamedDevice,
+    FollowsTheSystemDefault,
+}
+
+impl CoreAudioStreamDevicePolicy {
+    /// A request naming a device pins the stream to it; one naming none follows
+    /// the default.
+    fn of(request: &AudioDeviceStreamRequest) -> Self {
+        match request.device_id {
+            Some(_) => Self::PinnedToTheNamedDevice,
+            None => Self::FollowsTheSystemDefault,
+        }
+    }
+}
+
 /// A named stream stays pinned to its device; one opened with no `device_id`
 /// follows the system default. Either rebinds when its device's own format
 /// changes.
 fn how_a_stream_responds_to_a_device_change(
     change: CoreAudioStreamDeviceChange,
-    follows_the_system_default: bool,
+    device_policy: CoreAudioStreamDevicePolicy,
     bound_device_object_id: AudioObjectID,
     facts: CoreAudioDeviceFactsAfterAChange,
 ) -> CoreAudioStreamDeviceChangeResponse {
@@ -953,14 +972,18 @@ fn how_a_stream_responds_to_a_device_change(
         Some(default_device) => Response::MoveToTheSystemDefault(default_device),
     };
     match change {
-        Change::SystemDefaultDeviceMoved if follows_the_system_default => {
+        Change::SystemDefaultDeviceMoved
+            if device_policy == CoreAudioStreamDevicePolicy::FollowsTheSystemDefault =>
+        {
             toward_the_system_default()
         }
         Change::SystemDefaultDeviceMoved => Response::StayOnTheBoundDevice,
         Change::BoundDeviceLivenessChanged if facts.the_bound_device_is_alive => {
             Response::StayOnTheBoundDevice
         }
-        Change::BoundDeviceLivenessChanged if follows_the_system_default => {
+        Change::BoundDeviceLivenessChanged
+            if device_policy == CoreAudioStreamDevicePolicy::FollowsTheSystemDefault =>
+        {
             toward_the_system_default()
         }
         Change::BoundDeviceLivenessChanged => Response::EndTheStreamBecauseTheNamedDeviceWentAway,
@@ -976,21 +999,27 @@ fn how_a_stream_responds_to_a_device_change(
 /// Runs a device change on the stream's control queue.
 type CoreAudioStreamDeviceChangeHandler = Arc<dyn Fn(CoreAudioStreamDeviceChange) + Send + Sync>;
 
-/// What a stream's property listener needs, at an address that outlives its
-/// registration.
-struct CoreAudioStreamDevicePropertyListenerContext {
-    change: CoreAudioStreamDeviceChange,
-    stream_control_queue: DispatchRetained<DispatchQueue>,
-    handle_the_change: CoreAudioStreamDeviceChangeHandler,
-}
+/// The block a stream's property listener runs, on the stream's control queue.
+type CoreAudioStreamDevicePropertyListenerBlock =
+    block2::RcBlock<dyn Fn(u32, NonNull<AudioObjectPropertyAddress>)>;
 
-/// One CoreAudio property listener that hands its change to the stream's
+/// One CoreAudio property listener whose block the HAL runs on the stream's
 /// control queue. Dropping it unregisters it.
+///
+/// A block rather than a function and a raw context: the HAL retains the block
+/// for every invocation it has queued, so an unregistration racing a change
+/// already in flight can never free what the invocation reads.
 struct CoreAudioStreamDevicePropertyListener {
     object_id: AudioObjectID,
     address: AudioObjectPropertyAddress,
-    listener_context: Box<CoreAudioStreamDevicePropertyListenerContext>,
+    stream_control_queue: DispatchRetained<DispatchQueue>,
+    listener_block: CoreAudioStreamDevicePropertyListenerBlock,
 }
+
+// SAFETY: the block's captures are a `Copy` change and an `Arc` of a
+// `Send + Sync` handler, and Objective-C block retain and release are
+// thread-safe, so the listener may be dropped from any thread.
+unsafe impl Send for CoreAudioStreamDevicePropertyListener {}
 
 impl CoreAudioStreamDevicePropertyListener {
     /// Listen for `address` on `object_id`, or warn — naming `device` — what
@@ -998,19 +1027,22 @@ impl CoreAudioStreamDevicePropertyListener {
     fn listen(
         object_id: AudioObjectID,
         address: AudioObjectPropertyAddress,
-        listener_context: CoreAudioStreamDevicePropertyListenerContext,
+        change: CoreAudioStreamDeviceChange,
+        stream_control_queue: DispatchRetained<DispatchQueue>,
+        handle_the_change: CoreAudioStreamDeviceChangeHandler,
         device: &CoreAudioDevice,
     ) -> Option<Self> {
-        let change = listener_context.change;
-        let listener_context = Box::new(listener_context);
-        // SAFETY: the context is boxed, moved into the returned listener, and
-        // unregistered in its `Drop` before it is freed.
+        let listener_block: CoreAudioStreamDevicePropertyListenerBlock =
+            block2::RcBlock::new(move |_address_count: u32, _addresses| handle_the_change(change));
+        // SAFETY: `address` is read for the call; the block is retained by the
+        // HAL and by the returned listener, which unregisters it in `Drop` with
+        // the same queue and block.
         let status = unsafe {
-            AudioObjectAddPropertyListener(
+            AudioObjectAddPropertyListenerBlock(
                 object_id,
                 NonNull::from(&address),
-                Some(a_property_the_stream_follows_changed),
-                listener_context_pointer(&listener_context),
+                Some(&stream_control_queue),
+                block2::RcBlock::as_ptr(&listener_block),
             )
         };
         if status != NO_ERR {
@@ -1025,51 +1057,24 @@ impl CoreAudioStreamDevicePropertyListener {
         Some(Self {
             object_id,
             address,
-            listener_context,
+            stream_control_queue,
+            listener_block,
         })
     }
 }
 
 impl Drop for CoreAudioStreamDevicePropertyListener {
     fn drop(&mut self) {
-        // SAFETY: the same listener and context `listen` registered.
+        // SAFETY: the same object, address, queue and block `listen` registered.
         unsafe {
-            AudioObjectRemovePropertyListener(
+            AudioObjectRemovePropertyListenerBlock(
                 self.object_id,
                 NonNull::from(&self.address),
-                Some(a_property_the_stream_follows_changed),
-                listener_context_pointer(&self.listener_context),
+                Some(&self.stream_control_queue),
+                block2::RcBlock::as_ptr(&self.listener_block),
             );
         }
     }
-}
-
-fn listener_context_pointer(
-    listener_context: &CoreAudioStreamDevicePropertyListenerContext,
-) -> *mut c_void {
-    (listener_context as *const CoreAudioStreamDevicePropertyListenerContext)
-        .cast_mut()
-        .cast()
-}
-
-unsafe extern "C-unwind" fn a_property_the_stream_follows_changed(
-    _object_id: AudioObjectID,
-    _address_count: u32,
-    _addresses: NonNull<AudioObjectPropertyAddress>,
-    listener_context: *mut c_void,
-) -> i32 {
-    // SAFETY: registered with a `CoreAudioStreamDevicePropertyListenerContext`
-    // that outlives the registration.
-    let context =
-        unsafe { &*listener_context.cast::<CoreAudioStreamDevicePropertyListenerContext>() };
-    let handle_the_change = Arc::clone(&context.handle_the_change);
-    let change = context.change;
-    // The HAL's notification thread must not stop a unit or replace these
-    // listeners, and a rebind does both.
-    context
-        .stream_control_queue
-        .exec_async(move || handle_the_change(change));
-    NO_ERR
 }
 
 /// The device a stream is bound to, whether it follows the system default,
@@ -1079,7 +1084,7 @@ struct CoreAudioStreamDeviceBinding {
     device: CoreAudioDevice,
     /// The device's own rate and channel count when the stream last bound to it.
     device_own_format: AudioStreamFormat,
-    follows_the_system_default: bool,
+    device_policy: CoreAudioStreamDevicePolicy,
     failure_recorder: DeviceStreamFailureRecorder,
     liveness_report: DeviceStreamLivenessReport,
     /// Serial and the stream's own, so changes are handled one at a time.
@@ -1093,12 +1098,11 @@ struct CoreAudioStreamDeviceBinding {
 }
 
 impl CoreAudioStreamDeviceBinding {
-    #[allow(clippy::too_many_arguments)]
     fn new(
         direction: CoreAudioStreamDirection,
         device: CoreAudioDevice,
         device_own_format: AudioStreamFormat,
-        follows_the_system_default: bool,
+        device_policy: CoreAudioStreamDevicePolicy,
         failure_recorder: DeviceStreamFailureRecorder,
         liveness_report: DeviceStreamLivenessReport,
         handle_a_device_change: CoreAudioStreamDeviceChangeHandler,
@@ -1107,7 +1111,7 @@ impl CoreAudioStreamDeviceBinding {
             direction,
             device,
             device_own_format,
-            follows_the_system_default,
+            device_policy,
             failure_recorder,
             liveness_report,
             stream_control_queue: DispatchQueue::new(
@@ -1125,7 +1129,7 @@ impl CoreAudioStreamDeviceBinding {
 
     /// Register every listener the stream follows its device by.
     fn start_listening(&mut self) {
-        if self.follows_the_system_default {
+        if self.device_policy == CoreAudioStreamDevicePolicy::FollowsTheSystemDefault {
             self.system_default_device_listener = self.listen(
                 kAudioObjectSystemObject as AudioObjectID,
                 property_address(
@@ -1179,11 +1183,9 @@ impl CoreAudioStreamDeviceBinding {
         CoreAudioStreamDevicePropertyListener::listen(
             object_id,
             address,
-            CoreAudioStreamDevicePropertyListenerContext {
-                change,
-                stream_control_queue: self.stream_control_queue.clone(),
-                handle_the_change: Arc::clone(&self.handle_a_device_change),
-            },
+            change,
+            self.stream_control_queue.clone(),
+            Arc::clone(&self.handle_a_device_change),
             &self.device,
         )
     }
@@ -1277,7 +1279,7 @@ fn the_streams_device_changed<Control: CoreAudioStreamControlThatFollowsItsDevic
     let direction_name = direction.lowercase_direction_name();
     match how_a_stream_responds_to_a_device_change(
         change,
-        binding.follows_the_system_default,
+        binding.device_policy,
         bound_device.object_id,
         facts,
     ) {
@@ -2336,7 +2338,7 @@ impl CoreAudioCaptureStream {
         Self::open_on(
             device,
             stream_format,
-            request.device_id.is_none(),
+            CoreAudioStreamDevicePolicy::of(request),
             microphone_authorization_authority,
         )
     }
@@ -2346,7 +2348,7 @@ impl CoreAudioCaptureStream {
     fn open_on(
         device: CoreAudioDevice,
         stream_format: AudioStreamFormat,
-        follows_the_system_default: bool,
+        device_policy: CoreAudioStreamDevicePolicy,
         microphone_authorization_authority: &dyn CaptureDeviceAuthorizationAuthority,
     ) -> Result<Self> {
         let direction = CoreAudioStreamDirection::Capture;
@@ -2358,7 +2360,7 @@ impl CoreAudioCaptureStream {
             device = %device,
             sample_rate = stream_format.sample_rate,
             channels = stream_format.channels,
-            follows_the_system_default,
+            ?device_policy,
             "CoreAudio audio arm: capture stream opened"
         );
 
@@ -2372,7 +2374,7 @@ impl CoreAudioCaptureStream {
                     direction,
                     device,
                     device_own_format,
-                    follows_the_system_default,
+                    device_policy,
                     failure_recorder,
                     liveness_report.clone(),
                     device_changes_reach(capture_control.clone()),
@@ -2625,7 +2627,11 @@ impl CoreAudioPlaybackStream {
         let direction = CoreAudioStreamDirection::Playback;
         let device = resolve_requested_device(request, direction)?;
         let stream_format = stream_format_of(&device, direction)?;
-        Self::open_on(device, stream_format, request.device_id.is_none())
+        Self::open_on(
+            device,
+            stream_format,
+            CoreAudioStreamDevicePolicy::of(request),
+        )
     }
 
     /// Open on `device`, carrying `stream_format` for the stream's lifetime
@@ -2633,7 +2639,7 @@ impl CoreAudioPlaybackStream {
     fn open_on(
         device: CoreAudioDevice,
         stream_format: AudioStreamFormat,
-        follows_the_system_default: bool,
+        device_policy: CoreAudioStreamDevicePolicy,
     ) -> Result<Self> {
         let direction = CoreAudioStreamDirection::Playback;
         let device_own_format = stream_format_of(&device, direction)?;
@@ -2660,7 +2666,7 @@ impl CoreAudioPlaybackStream {
             channels = stream_format.channels,
             device_period_in_per_channel_samples,
             largest_cycle_in_frames = playback_unit.largest_cycle_in_frames,
-            follows_the_system_default,
+            ?device_policy,
             conversion = %CoreAudioStreamFormatBridge::between(direction, stream_format, device_own_format),
             "CoreAudio audio arm: playback stream opened"
         );
@@ -2673,7 +2679,7 @@ impl CoreAudioPlaybackStream {
                     direction,
                     device,
                     device_own_format,
-                    follows_the_system_default,
+                    device_policy,
                     failure_recorder,
                     liveness_report.clone(),
                     device_changes_reach(playback_control.clone()),
@@ -3033,20 +3039,16 @@ mod tests {
     }
 
     fn response_of_a_stream(
-        follows_the_system_default: bool,
+        device_policy: CoreAudioStreamDevicePolicy,
         change: CoreAudioStreamDeviceChange,
         facts: CoreAudioDeviceFactsAfterAChange,
     ) -> CoreAudioStreamDeviceChangeResponse {
-        how_a_stream_responds_to_a_device_change(
-            change,
-            follows_the_system_default,
-            THE_BOUND_DEVICE,
-            facts,
-        )
+        how_a_stream_responds_to_a_device_change(change, device_policy, THE_BOUND_DEVICE, facts)
     }
 
-    const FOLLOWS_THE_DEFAULT: bool = true;
-    const NAMED: bool = false;
+    const FOLLOWS_THE_DEFAULT: CoreAudioStreamDevicePolicy =
+        CoreAudioStreamDevicePolicy::FollowsTheSystemDefault;
+    const NAMED: CoreAudioStreamDevicePolicy = CoreAudioStreamDevicePolicy::PinnedToTheNamedDevice;
 
     #[test]
     fn a_named_stream_whose_device_went_away_ends_rather_than_landing_elsewhere() {
@@ -3146,10 +3148,10 @@ mod tests {
 
     #[test]
     fn a_liveness_report_from_a_device_still_alive_changes_nothing() {
-        for follows_the_system_default in [NAMED, FOLLOWS_THE_DEFAULT] {
+        for device_policy in [NAMED, FOLLOWS_THE_DEFAULT] {
             assert_eq!(
                 response_of_a_stream(
-                    follows_the_system_default,
+                    device_policy,
                     CoreAudioStreamDeviceChange::BoundDeviceLivenessChanged,
                     device_facts(true, false, Some(ANOTHER_DEVICE)),
                 ),
@@ -3162,10 +3164,10 @@ mod tests {
     /// profile — keeps the stream's format by rebinding, named or not.
     #[test]
     fn a_bound_device_at_a_new_format_is_rebound_named_or_not() {
-        for follows_the_system_default in [NAMED, FOLLOWS_THE_DEFAULT] {
+        for device_policy in [NAMED, FOLLOWS_THE_DEFAULT] {
             assert_eq!(
                 response_of_a_stream(
-                    follows_the_system_default,
+                    device_policy,
                     CoreAudioStreamDeviceChange::BoundDeviceFormatChanged,
                     device_facts(true, true, Some(ANOTHER_DEVICE)),
                 ),
@@ -3968,11 +3970,8 @@ mod following_the_device_against_the_default_devices {
         )
         .expect("an unnamed capture stream opens on the default input");
         assert!(
-            stream
-                .capture_control
-                .lock()
-                .device_binding
-                .follows_the_system_default
+            stream.capture_control.lock().device_binding.device_policy
+                == CoreAudioStreamDevicePolicy::FollowsTheSystemDefault
         );
         let sample_rate = stream.stream_format().sample_rate;
         let block_receiver = start_recording_blocks(&mut stream);
@@ -4010,7 +4009,7 @@ mod following_the_device_against_the_default_devices {
         let mut stream = CoreAudioCaptureStream::open_on(
             default_input.clone(),
             stream_format,
-            true,
+            CoreAudioStreamDevicePolicy::FollowsTheSystemDefault,
             &AvFoundationCaptureDeviceAuthorizationAuthority(PrivacyGatedCaptureDevice::Microphone),
         )
         .expect("a capture stream opens at a format its device does not carry");
@@ -4171,8 +4170,12 @@ mod following_the_device_against_the_default_devices {
             return;
         };
         let stream_format = a_format_the_device_does_not_carry(device_own_format);
-        let mut stream = CoreAudioPlaybackStream::open_on(default_output, stream_format, false)
-            .expect("AUHAL takes a client format its device does not run at");
+        let mut stream = CoreAudioPlaybackStream::open_on(
+            default_output,
+            stream_format,
+            CoreAudioStreamDevicePolicy::PinnedToTheNamedDevice,
+        )
+        .expect("AUHAL takes a client format its device does not run at");
         let request_receiver = start_answering_with_silence(&mut stream);
         let requests = requests_covering(
             &request_receiver,
