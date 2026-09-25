@@ -36,7 +36,7 @@
 
 use crate::core::color::resolve_color_defaults;
 use crate::core::context::GpuContext;
-use crate::core::context::surface_export_staging::ResolvedBlitSource;
+use crate::core::context::surface_backing_resolution::ResolvedSurfaceBacking;
 use crate::core::error::{Error, Result};
 use crate::core::rhi::{
     PixelBuffer, PixelFormat, SourceLayoutInfo, Texture, TextureDescriptor, TextureFormat,
@@ -159,7 +159,7 @@ impl GpuContext {
             })?;
 
         let (source_surface_pixel_width, source_surface_pixel_height) =
-            claimed_frame_backing_extent(published_surface_id, &claimed_frame_backing)?;
+            claimed_frame_backing.pixel_extent(published_surface_id)?;
         let (image_pixel_width, image_pixel_height) = downscaled_image_extent_under_long_edge_cap(
             source_surface_pixel_width,
             source_surface_pixel_height,
@@ -199,12 +199,12 @@ impl GpuContext {
     fn normalize_claimed_frame_into_an_exchange_image_texture(
         &self,
         published_surface_id: &str,
-        claimed_frame_backing: &ResolvedBlitSource,
+        claimed_frame_backing: &ResolvedSurfaceBacking,
         (source_surface_pixel_width, source_surface_pixel_height): (u32, u32),
         (image_pixel_width, image_pixel_height): (u32, u32),
     ) -> Result<ExchangeImageTextureReadyForReadback> {
         match claimed_frame_backing {
-            ResolvedBlitSource::PixelBuffer(pixel_buffer) => {
+            ResolvedSurfaceBacking::PixelBuffer(pixel_buffer) => {
                 let at_source_extent = self.copy_pooled_frame_into_an_exchange_image_texture(
                     published_surface_id,
                     pixel_buffer,
@@ -223,7 +223,7 @@ impl GpuContext {
                     image_pixel_height,
                 )
             }
-            ResolvedBlitSource::RegisteredTexture(registration) => {
+            ResolvedSurfaceBacking::RegisteredTexture(registration) => {
                 // Always through the blit, never straight out of the
                 // producer's own texture — even when that texture is
                 // already this format, extent and transfer usage. Handing
@@ -472,32 +472,6 @@ impl GpuContext {
             .wait_and_read(ticket, EXCHANGE_READBACK_WAIT_TIMEOUT_NANOSECONDS)?
             .to_vec())
     }
-}
-
-/// The pixel extent the claimed backing carries.
-///
-/// A zero extent means the backing resolved through a path that carries no
-/// shape — a cross-process `lookup` import, which hands back planes and no
-/// geometry. Refused by name rather than encoded as a zero-pixel image.
-fn claimed_frame_backing_extent(
-    published_surface_id: &str,
-    claimed_frame_backing: &ResolvedBlitSource,
-) -> Result<(u32, u32)> {
-    let (pixel_width, pixel_height) = match claimed_frame_backing {
-        ResolvedBlitSource::PixelBuffer(pixel_buffer) => (pixel_buffer.width, pixel_buffer.height),
-        ResolvedBlitSource::RegisteredTexture(registration) => {
-            let texture = registration.texture();
-            (texture.width(), texture.height())
-        }
-    };
-    if pixel_width == 0 || pixel_height == 0 {
-        return Err(Error::NotSupported(format!(
-            "surface '{published_surface_id}' resolves to a backing this process holds no pixel \
-             extent for, so there is no image to hand back; exchange it from the runtime that \
-             owns its pool"
-        )));
-    }
-    Ok((pixel_width, pixel_height))
 }
 
 #[cfg(test)]

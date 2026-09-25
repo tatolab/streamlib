@@ -2627,7 +2627,7 @@ impl GpuContext {
     /// code that needs a one-shot layout transition stays inside the
     /// RHI boundary instead of pulling vulkanalia directly. Mirrors
     /// the existing `acquire_*` shape on `GpuContext`.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn transition_storage_image_to_general(
         &self,
         texture: &crate::core::rhi::Texture,

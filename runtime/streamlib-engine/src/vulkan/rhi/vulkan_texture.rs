@@ -887,7 +887,7 @@ impl HostVulkanTexture {
     /// before returning. The image must not have content the caller
     /// cares about; UNDEFINED-source transitions allow the driver to
     /// discard contents.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn transition_to_general(
         vulkan_device: &Arc<HostVulkanDevice>,
         image: vk::Image,
@@ -1773,25 +1773,16 @@ mod tests {
     /// the surface's own stride, trimmed to the image's width.
     #[cfg(target_os = "macos")]
     fn packed_rows_of_the_backing_iosurface(texture: &HostVulkanTexture) -> Vec<u8> {
-        use objc2_io_surface::IOSurfaceLockOptions;
-
         let iosurface = texture
             .backing_iosurface()
             .expect("an IOSurface-backed image keeps its surface");
-        let row_byte_len = (texture.width() * texture.format().bytes_per_pixel()) as usize;
-        let locked =
-            unsafe { iosurface.lock(IOSurfaceLockOptions::ReadOnly, std::ptr::null_mut()) };
-        assert_eq!(locked, 0, "IOSurfaceLock");
-        let base = iosurface.base_address().as_ptr().cast::<u8>();
-        let mut packed_rows = Vec::with_capacity(row_byte_len * texture.height() as usize);
-        for row in 0..texture.height() as usize {
-            let row_bytes = unsafe {
-                std::slice::from_raw_parts(base.add(row * iosurface.bytes_per_row()), row_byte_len)
-            };
-            packed_rows.extend_from_slice(row_bytes);
-        }
-        unsafe { iosurface.unlock(IOSurfaceLockOptions::ReadOnly, std::ptr::null_mut()) };
-        packed_rows
+        crate::apple::iosurface::with_iosurface_rows_tightly_packed_for_reading(
+            iosurface,
+            (texture.width() * texture.format().bytes_per_pixel()) as usize,
+            texture.height() as usize,
+            <[u8]>::to_vec,
+        )
+        .expect("the surface's rows read out")
     }
 
     #[cfg(target_os = "macos")]

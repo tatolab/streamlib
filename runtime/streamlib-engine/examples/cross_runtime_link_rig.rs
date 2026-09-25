@@ -20,11 +20,12 @@
 //!
 //! `--video-source` runs a `TestPatternSource` and offers it; `--video-reader`
 //! links from `<source runtime name>/TestPatternSource/video` into an
-//! `H264Encoder`. That arm is the frame-carrying one: a video bag names a
-//! surface, and a surface id means nothing on another machine, so the sending
-//! runtime copies the frame's pixels out and the reading one mints a local
-//! surface for them. `tests/fixtures/verify_cross_runtime_frame.sh` reads the
-//! two ids and exchanges each on its own node.
+//! `H264Encoder` on Linux and a `DisplayWindow` on macOS. That arm is the
+//! frame-carrying one: a video bag names a surface, and a surface id means
+//! nothing on another machine, so the sending runtime copies the frame's
+//! pixels out and the reading one mints a local surface for them.
+//! `tests/fixtures/verify_cross_runtime_frame.sh` reads the two ids and
+//! exchanges each on its own node.
 //!
 //! The audio arms need no hardware — under the null backend a microphone
 //! publishes silent blocks and the graph runs unchanged. The video arms need
@@ -223,15 +224,25 @@ mod rig {
         )
     }
 
-    /// See the Linux arm: the hardware encoders are Linux-only, and so is the
-    /// door a frame's pixels are copied out through, so no frame reaches this
-    /// platform to be read anyway. Refused by name rather than left to fail
-    /// as a missing processor class at `add`.
-    #[cfg(not(target_os = "linux"))]
+    /// A `DisplayWindow`, because macOS builds no hardware encoder yet — the
+    /// window resolves the crossed surface and draws it, which is the same
+    /// claim.
+    #[cfg(target_os = "macos")]
+    fn the_video_readers_consumer(app: &App) -> Result<AddedProcessor> {
+        app.add(
+            streamlib_media_builtins::DisplayWindow::Processor::processor_class_import_path(),
+            serde_json::json!({ "title": "cross_runtime_link_rig video reader" }),
+            Some("DisplayWindow"),
+        )
+    }
+
+    /// No consumer on this platform resolves a crossed surface. Refused by
+    /// name rather than left to fail as a missing processor class at `add`.
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     fn the_video_readers_consumer(_app: &App) -> Result<AddedProcessor> {
         Err(Error::Runtime(
-            "--video-reader needs a hardware video encoder, which this platform does not build; \
-             the mesh does not carry a frame's pixels off Linux either"
+            "--video-reader needs a consumer that resolves the crossed surface, which this \
+             platform does not build"
                 .into(),
         ))
     }

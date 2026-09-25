@@ -11,17 +11,22 @@
 //! pool slot — at cap the producer drops its own frame rather than waiting on
 //! a peer.
 //!
-//! The copy door is `SurfaceExportStaging` at host-visible residency, whose
-//! refill is a GPU copy into host-cached memory. Never a CPU memcpy out of a
-//! pooled allocation's own mapping: that memory is write-combined, and a
-//! 1080p RGBA read out of it cost 37 ms
+//! On Linux the copy door is `SurfaceExportStaging` at host-visible
+//! residency, whose refill is a GPU copy into host-cached memory. Never a CPU
+//! memcpy out of a pooled allocation's own mapping: that memory is
+//! write-combined, and a 1080p RGBA read out of it cost 37 ms
 //! (`docs/decisions/virtual-camera-sink.md`). Stagings are cached per pool
 //! slot by the context, never built per frame — per-call pool churn after a
 //! swapchain is a known driver failure.
 //!
-//! This whole door is Linux-only, because the staging is: a runtime on
-//! another platform says once per port that its surface bags do not cross,
-//! which is what every runtime said before the mesh carried a frame at all.
+//! On macOS the door is the frame's own IOSurface, read through its host
+//! mapping under `IOSurfaceLock` with no staging and no GPU copy: a pooled
+//! frame and a texture that crosses are both IOSurface-backed, and Apple
+//! Silicon's unified memory maps them cached. The read is ordered by
+//! publication, with no timeline value to wait on: a producer publishes an
+//! id only after its write has retired on the host. A producer that
+//! published while its GPU submission was still in flight would be read
+//! early here, where Linux's same-queue staging copy would have waited.
 
 use std::sync::Arc;
 
@@ -30,24 +35,16 @@ use crate::core::runtime::mesh::gpu_context_the_mesh_copies_frames_with::GpuCont
 
 /// Why one frame's pixels are not crossing, in the terms the port's log line
 /// and its once-per-reason bookkeeping both use.
-///
-/// On a platform with no copy-out door every reason but the platform's own is
-/// unreachable, which is the point of that arm rather than a gap in it.
 #[derive(Debug)]
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub(super) enum WhyAFramesPixelsCannotCrossTheMesh {
     /// The runtime has no GPU context — it has not started, or it has
     /// stopped. Nothing is resolvable either way.
     ThisRuntimeHasNoGpuContextYet,
-    /// The platform carries no export staging, so there is no door to copy a
-    /// frame out through.
-    #[cfg(not(target_os = "linux"))]
-    ThisPlatformCannotReadAFrameOut,
     /// The producer has recycled the slot this id named, so its bytes are
     /// somebody else's picture now.
     TheProducerHasRecycledTheFrame(crate::core::Error),
-    /// A format of more than one plane, which a one-buffer staging cannot
-    /// read without dropping a plane.
+    /// A format of more than one plane, which a one-buffer read cannot carry
+    /// without dropping a plane.
     ItsFormatHasMoreThanOnePlane(String),
     /// Everything else the read refused, said in the words it refused with.
     ItsPixelsCannotBeReadOut(crate::core::Error),
@@ -59,8 +56,6 @@ impl WhyAFramesPixelsCannotCrossTheMesh {
     pub(super) fn which_refusal_this_is(&self) -> &'static str {
         match self {
             Self::ThisRuntimeHasNoGpuContextYet => "no-gpu-context",
-            #[cfg(not(target_os = "linux"))]
-            Self::ThisPlatformCannotReadAFrameOut => "no-export-staging-on-this-platform",
             Self::TheProducerHasRecycledTheFrame(_) => "the-frame-was-recycled",
             Self::ItsFormatHasMoreThanOnePlane(_) => "more-than-one-plane",
             Self::ItsPixelsCannotBeReadOut(_) => "the-pixels-could-not-be-read",
@@ -73,11 +68,6 @@ impl std::fmt::Display for WhyAFramesPixelsCannotCrossTheMesh {
         match self {
             Self::ThisRuntimeHasNoGpuContextYet => formatter.write_str(
                 "this runtime has no GPU context, so it can resolve no surface of its own",
-            ),
-            #[cfg(not(target_os = "linux"))]
-            Self::ThisPlatformCannotReadAFrameOut => formatter.write_str(
-                "this platform carries no surface export staging, so there is no door to copy a \
-                 frame out through",
             ),
             Self::TheProducerHasRecycledTheFrame(refusal) => {
                 write!(formatter, "the producer has recycled the frame: {refusal}")
@@ -96,15 +86,11 @@ impl std::fmt::Display for WhyAFramesPixelsCannotCrossTheMesh {
 
 /// Reads one port's frames out for the mesh, on the egress's own thread.
 pub(super) struct ReadsAFramesPixelsOutForTheMesh {
-    /// Read on every frame where there is a door to copy one out through, and
-    /// on no platform where there is not.
-    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     gpu_context_the_mesh_copies_frames_with: Arc<GpuContextTheMeshCopiesFramesWith>,
     /// The identity every claim this reader takes is charged to, minted on
     /// the first frame it reads. One per reader rather than one per frame, so
     /// dropping it gives back every claim it still holds — the backstop for a
     /// read that never reached its release.
-    #[cfg(target_os = "linux")]
     claims_are_charged_to: Option<AFrameClaimHolderOnThisRuntime>,
 }
 
@@ -116,25 +102,18 @@ impl ReadsAFramesPixelsOutForTheMesh {
             gpu_context_the_mesh_copies_frames_with: Arc::clone(
                 gpu_context_the_mesh_copies_frames_with,
             ),
-            #[cfg(target_os = "linux")]
             claims_are_charged_to: None,
         }
     }
 
     /// The message `bag_bytes` crosses as, with `surface_id`'s pixels behind
     /// it — or why they are not crossing.
-    #[cfg(target_os = "linux")]
     pub(super) fn a_mesh_message_carrying_the_frame_this_bag_names(
         &mut self,
         surface_id: &str,
         bag_bytes: &[u8],
     ) -> std::result::Result<AMeshMessageCarryingAFramesPixels, WhyAFramesPixelsCannotCrossTheMesh>
     {
-        use crate::core::context::SurfaceExportStagingResidency;
-        use crate::core::runtime::mesh::a_frames_pixels_on_the_mesh::{
-            AFramesPixelDescriptionOnTheMesh, a_mesh_message_carrying_a_frames_pixels,
-        };
-
         let gpu_context = self
             .gpu_context_the_mesh_copies_frames_with
             .the_gpu_context_or_none()
@@ -146,58 +125,12 @@ impl ReadsAFramesPixelsOutForTheMesh {
             );
         }
 
-        // Before the staging, and held until the copy is in the message: the
+        // Before the read, and held until the copy is in the message: the
         // claim is what keeps the pool from rehanding this slot to its
         // producer while the copy reads it.
         let _claimed = self.claim_the_frame(&gpu_context, surface_id)?;
 
-        let staging = gpu_context
-            .surface_export_staging(surface_id, SurfaceExportStagingResidency::HostVisible)
-            .map_err(a_read_refusal)?;
-        gpu_context
-            .refill_surface_export_staging(&staging, surface_id)
-            .map_err(a_read_refusal)?;
-        let staged_pixels = staging.staged_pixels_on_the_host().ok_or_else(|| {
-            WhyAFramesPixelsCannotCrossTheMesh::ItsPixelsCannotBeReadOut(
-                crate::core::Error::GpuError(format!(
-                    "surface {surface_id}'s host-visible export staging is not mapped, so its \
-                     pixels cannot be read out for the mesh"
-                )),
-            )
-        })?;
-
-        // The backing's own shape, never the bag's — a video bag names no
-        // pixel format at all, and a receiver guessing one would hand the
-        // wrong channel order downstream and never say so.
-        let description = AFramesPixelDescriptionOnTheMesh {
-            pixel_format: staging.pixel_format().ok_or_else(|| {
-                WhyAFramesPixelsCannotCrossTheMesh::ItsPixelsCannotBeReadOut(
-                    crate::core::Error::GpuError(format!(
-                        "surface {surface_id}'s export staging carries no pixel shape, so a \
-                         reading runtime would have no format to rebuild it under"
-                    )),
-                )
-            })?,
-            width: staging.surface_width(),
-            height: staging.surface_height(),
-            pixel_byte_length: staging.staging_byte_size(),
-        };
-        Ok(a_mesh_message_carrying_a_frames_pixels(
-            description,
-            bag_bytes,
-            staged_pixels,
-        ))
-    }
-
-    /// See the Linux arm: no export staging, so no frame crosses from here.
-    #[cfg(not(target_os = "linux"))]
-    pub(super) fn a_mesh_message_carrying_the_frame_this_bag_names(
-        &mut self,
-        _surface_id: &str,
-        _bag_bytes: &[u8],
-    ) -> std::result::Result<AMeshMessageCarryingAFramesPixels, WhyAFramesPixelsCannotCrossTheMesh>
-    {
-        Err(WhyAFramesPixelsCannotCrossTheMesh::ThisPlatformCannotReadAFrameOut)
+        the_claimed_frame_read_into_a_mesh_message(&gpu_context, surface_id, bag_bytes)
     }
 
     /// Claim `surface_id` against the pool rehanding its slot, for as long as
@@ -205,9 +138,8 @@ impl ReadsAFramesPixelsOutForTheMesh {
     ///
     /// `None` where this runtime keeps no lease table — a runtime with no
     /// surface-share service has no cross-process consumer to arbitrate
-    /// against, and the refill's own recycled-frame refusal is then the whole
+    /// against, and the read's own recycled-frame refusal is then the whole
     /// guard.
-    #[cfg(target_os = "linux")]
     fn claim_the_frame(
         &mut self,
         gpu_context: &crate::core::context::GpuContext,
@@ -237,7 +169,6 @@ impl ReadsAFramesPixelsOutForTheMesh {
 
     /// The identity this reader charges every claim to, minted on first ask —
     /// or `None` where this runtime keeps no lease table at all.
-    #[cfg(target_os = "linux")]
     fn the_holder_every_claim_is_charged_to(
         &mut self,
         gpu_context: &crate::core::context::GpuContext,
@@ -258,13 +189,11 @@ impl ReadsAFramesPixelsOutForTheMesh {
 }
 
 /// Everything the mesh's claims on this runtime's frames are charged to.
-#[cfg(target_os = "linux")]
 struct AFrameClaimHolderOnThisRuntime {
     leases: Arc<crate::core::context::SurfaceCheckOutLeaseRegistry>,
     holder: crate::core::context::SurfaceCheckOutLeaseHolderId,
 }
 
-#[cfg(target_os = "linux")]
 impl Drop for AFrameClaimHolderOnThisRuntime {
     fn drop(&mut self) {
         // The backstop for a read that panicked past its own guard: a claim
@@ -287,16 +216,14 @@ impl Drop for AFrameClaimHolderOnThisRuntime {
 ///
 /// Owns what it gives back rather than borrowing the reader that minted the
 /// holder: a guard borrowing `&mut self` would hold the reader exclusively
-/// through the staging, the refill and the copy, and the next line to read a
-/// field of it would fail to compile for a reason that looks unrelated.
-#[cfg(target_os = "linux")]
+/// through the whole read, and the next line to read a field of it would fail
+/// to compile for a reason that looks unrelated.
 struct AFrameClaimedWhileItsPixelsAreRead {
     leases: Arc<crate::core::context::SurfaceCheckOutLeaseRegistry>,
     holder: crate::core::context::SurfaceCheckOutLeaseHolderId,
     surface_id: String,
 }
 
-#[cfg(target_os = "linux")]
 impl Drop for AFrameClaimedWhileItsPixelsAreRead {
     fn drop(&mut self) {
         if let Err(cannot_release) = self
@@ -314,18 +241,17 @@ impl Drop for AFrameClaimedWhileItsPixelsAreRead {
 
 /// The format of `surface_id`'s backing when it carries more than one plane,
 /// and `None` otherwise — including for an id neither in-process cache knows,
-/// whose refusal the staging below says in its own words.
+/// whose refusal the read below says in its own words.
 ///
-/// Read ahead of the staging only so that this refusal is named: the staging
+/// Read ahead of the read only so that this refusal is named: the read
 /// refuses a multi-plane source too, and a port that met one and then met a
 /// recycled frame would otherwise say only the first of the two.
 ///
 /// The two in-process caches and nothing else. The full resolve reaches the
 /// surface-share service on a miss, which is a blocking socket round trip —
-/// and the staging below pays that one already, so asking here too would cost
+/// and the read below pays that one already, so asking here too would cost
 /// a second per frame for every helper-published surface, to name a refusal.
-/// An id only the service knows falls through, and the staging names it.
-#[cfg(target_os = "linux")]
+/// An id only the service knows falls through, and the read names it.
 fn a_backing_of_more_than_one_plane(
     gpu_context: &crate::core::context::GpuContext,
     surface_id: &str,
@@ -340,7 +266,6 @@ fn a_backing_of_more_than_one_plane(
 }
 
 /// The refusal every read failure that is not one of the named ones takes.
-#[cfg(target_os = "linux")]
 fn a_read_refusal(refusal: crate::core::Error) -> WhyAFramesPixelsCannotCrossTheMesh {
     match refusal {
         recycled @ crate::core::Error::SurfaceFrameRecycled { .. } => {
@@ -350,7 +275,124 @@ fn a_read_refusal(refusal: crate::core::Error) -> WhyAFramesPixelsCannotCrossThe
     }
 }
 
-#[cfg(all(test, target_os = "linux"))]
+/// Read the claimed frame `surface_id` names through the host-visible export
+/// staging, and wrap its pixels around `bag_bytes`.
+#[cfg(target_os = "linux")]
+fn the_claimed_frame_read_into_a_mesh_message(
+    gpu_context: &crate::core::context::GpuContext,
+    surface_id: &str,
+    bag_bytes: &[u8],
+) -> std::result::Result<AMeshMessageCarryingAFramesPixels, WhyAFramesPixelsCannotCrossTheMesh> {
+    use crate::core::context::SurfaceExportStagingResidency;
+    use crate::core::runtime::mesh::a_frames_pixels_on_the_mesh::{
+        AFramesPixelDescriptionOnTheMesh, a_mesh_message_carrying_a_frames_pixels,
+    };
+
+    let staging = gpu_context
+        .surface_export_staging(surface_id, SurfaceExportStagingResidency::HostVisible)
+        .map_err(a_read_refusal)?;
+    gpu_context
+        .refill_surface_export_staging(&staging, surface_id)
+        .map_err(a_read_refusal)?;
+    let staged_pixels = staging.staged_pixels_on_the_host().ok_or_else(|| {
+        WhyAFramesPixelsCannotCrossTheMesh::ItsPixelsCannotBeReadOut(crate::core::Error::GpuError(
+            format!(
+                "surface {surface_id}'s host-visible export staging is not mapped, so its \
+                 pixels cannot be read out for the mesh"
+            ),
+        ))
+    })?;
+
+    // The backing's own shape, never the bag's — a video bag names no pixel
+    // format at all, and a receiver guessing one would hand the wrong channel
+    // order downstream and never say so.
+    let description = AFramesPixelDescriptionOnTheMesh {
+        pixel_format: staging.pixel_format().ok_or_else(|| {
+            WhyAFramesPixelsCannotCrossTheMesh::ItsPixelsCannotBeReadOut(
+                crate::core::Error::GpuError(format!(
+                    "surface {surface_id}'s export staging carries no pixel shape, so a reading \
+                     runtime would have no format to rebuild it under"
+                )),
+            )
+        })?,
+        width: staging.surface_width(),
+        height: staging.surface_height(),
+        pixel_byte_length: staging.staging_byte_size(),
+    };
+    Ok(a_mesh_message_carrying_a_frames_pixels(
+        description,
+        bag_bytes,
+        staged_pixels,
+    ))
+}
+
+/// Read the claimed frame `surface_id` names straight out of its IOSurface,
+/// rows packed, and wrap its pixels around `bag_bytes`.
+#[cfg(target_os = "macos")]
+fn the_claimed_frame_read_into_a_mesh_message(
+    gpu_context: &crate::core::context::GpuContext,
+    surface_id: &str,
+    bag_bytes: &[u8],
+) -> std::result::Result<AMeshMessageCarryingAFramesPixels, WhyAFramesPixelsCannotCrossTheMesh> {
+    use crate::core::runtime::mesh::a_frames_pixels_on_the_mesh::{
+        AFramesPixelDescriptionOnTheMesh, a_mesh_message_carrying_a_frames_pixels,
+    };
+
+    gpu_context
+        .refuse_a_retired_frame_id(surface_id)
+        .map_err(a_read_refusal)?;
+    let backing = gpu_context
+        .resolve_device_export_source(surface_id)
+        .map_err(a_read_refusal)?;
+
+    // The backing's own shape, never the bag's — a video bag names no pixel
+    // format at all, and a receiver guessing one would hand the wrong channel
+    // order downstream and never say so.
+    let (pixel_format, bytes_per_pixel) = backing
+        .one_plane_pixel_format_and_bytes_per_pixel()
+        .map_err(a_read_refusal)?;
+    let (width, height) = backing.pixel_extent(surface_id).map_err(a_read_refusal)?;
+    let iosurface = backing.backing_iosurface().ok_or_else(|| {
+        WhyAFramesPixelsCannotCrossTheMesh::ItsPixelsCannotBeReadOut(crate::core::Error::GpuError(
+            format!(
+                "surface {surface_id}'s backing is not an IOSurface, so there are no pages to \
+                 read its pixels out of"
+            ),
+        ))
+    })?;
+    let row_byte_len = width as usize * bytes_per_pixel as usize;
+    let description = AFramesPixelDescriptionOnTheMesh {
+        pixel_format,
+        width,
+        height,
+        pixel_byte_length: row_byte_len as u64 * u64::from(height),
+    };
+    crate::apple::iosurface::with_iosurface_rows_tightly_packed_for_reading(
+        iosurface,
+        row_byte_len,
+        height as usize,
+        |packed_rows| a_mesh_message_carrying_a_frames_pixels(description, bag_bytes, packed_rows),
+    )
+    .map_err(a_read_refusal)
+}
+
+/// No platform door to read a frame out through.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn the_claimed_frame_read_into_a_mesh_message(
+    _gpu_context: &crate::core::context::GpuContext,
+    surface_id: &str,
+    _bag_bytes: &[u8],
+) -> std::result::Result<AMeshMessageCarryingAFramesPixels, WhyAFramesPixelsCannotCrossTheMesh> {
+    Err(
+        WhyAFramesPixelsCannotCrossTheMesh::ItsPixelsCannotBeReadOut(
+            crate::core::Error::NotSupported(format!(
+                "surface {surface_id}: this platform has no door to read a frame's pixels out of"
+            )),
+        ),
+    )
+}
+
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod tests {
     use super::*;
 
@@ -363,6 +405,9 @@ mod tests {
     use crate::core::runtime::mesh::a_frames_pixels_written_into_a_local_surface::WritesAFramesPixelsIntoALocalSurface;
 
     /// The device, or nothing — CI has no GPU, and these arms run on the rig.
+    // A skip passes trivially, so it has to reach the person reading the run,
+    // and stdout is the only channel a test harness surfaces.
+    #[allow(clippy::disallowed_macros)]
     fn gpu_or_skip(test_name: &str) -> Option<GpuContext> {
         match GpuContext::init_for_platform_sync() {
             Ok(gpu_context) => Some(gpu_context),
@@ -527,6 +572,66 @@ mod tests {
         assert!(
             refused.to_string().contains("nv12"),
             "the refusal must name the format it refused: {refused}"
+        );
+    }
+
+    /// A texture whose IOSurface pads its rows crosses with the padding
+    /// stripped: the far side rebuilds a tightly packed surface, and a stride
+    /// carried across would shear every row after the first.
+    /// GPU-gated: skips with no device.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_texture_whose_iosurface_pads_its_rows_crosses_with_the_padding_stripped() {
+        use crate::core::rhi::{TextureDescriptor, TextureFormat, TextureUsages};
+        use crate::host_rhi::HostTextureExt as _;
+
+        const WIDTH: u32 = 1000;
+        const HEIGHT: u32 = 6;
+        let Some(gpu_context) = gpu_or_skip(
+            "a_texture_whose_iosurface_pads_its_rows_crosses_with_the_padding_stripped",
+        ) else {
+            return;
+        };
+        let cell = the_mesh_copying_frames_with(&gpu_context);
+        let texture = gpu_context
+            .device()
+            .create_texture_iosurface_backed(
+                &TextureDescriptor::new(WIDTH, HEIGHT, TextureFormat::Rgba8Unorm)
+                    .with_usage(TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST),
+            )
+            .expect("an IOSurface-backed texture");
+        let iosurface = texture
+            .vulkan_inner()
+            .backing_iosurface()
+            .expect("the texture keeps its surface");
+        let row_byte_len = WIDTH as usize * 4;
+        assert!(
+            iosurface.bytes_per_row() > row_byte_len,
+            "the fixture needs a stride that pads its rows"
+        );
+        let picture = a_picture_of(row_byte_len * HEIGHT as usize);
+        crate::apple::iosurface::write_rows_at_the_iosurfaces_stride(
+            iosurface,
+            &picture.chunks_exact(row_byte_len).collect::<Vec<_>>(),
+        );
+        let surface_id = uuid::Uuid::new_v4().to_string();
+        gpu_context.register_texture(&surface_id, texture.clone());
+        let bag = a_video_bag_naming(&surface_id, WIDTH, HEIGHT);
+
+        let message = ReadsAFramesPixelsOutForTheMesh::reading_through(&cell)
+            .a_mesh_message_carrying_the_frame_this_bag_names(&surface_id, &bag)
+            .unwrap_or_else(|why| panic!("the frame must be readable out: {why}"));
+        let arrived =
+            a_frames_pixels_off_the_mesh(&message.message_bytes, message.description_bytes)
+                .expect("the message this egress built reads back");
+
+        assert_eq!(arrived.description.pixel_format, PixelFormat::Rgba32);
+        assert_eq!(arrived.description.width, WIDTH);
+        assert_eq!(arrived.description.height, HEIGHT);
+        assert_eq!(arrived.bag_bytes, bag);
+        assert!(
+            arrived.pixel_bytes == picture,
+            "the rows must arrive packed, byte for byte"
         );
     }
 
