@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.24](https://github.com/tatolab/streamlib/compare/v0.26.23...v0.26.24) (2026-09-25)
+
+
+### Features
+
+* **python:** processor-owned windows from Python on macOS, with the HDR sidecar ([#2469](https://github.com/tatolab/streamlib/issues/2469)) ([21b368a](https://github.com/tatolab/streamlib/commit/21b368af33789b80eba090ccbdac7b356876dab6))
+
 ## [0.26.23](https://github.com/tatolab/streamlib/compare/v0.26.22...v0.26.23) (2026-09-25)
 
 
