@@ -3993,6 +3993,63 @@ mod following_the_device_against_the_default_devices {
         );
     }
 
+    /// The path a real change takes: every listener registers, and a change run
+    /// on the stream's control queue — where the HAL runs the listener blocks —
+    /// reaches the stream, which keeps delivering.
+    #[test]
+    fn an_unnamed_capture_streams_listeners_register_and_a_change_reaches_it_through_its_queue() {
+        let Some(_) = the_default_device(CoreAudioStreamDirection::Capture) else {
+            return;
+        };
+        the_microphone_must_be_allowed();
+        let mut stream = CoreAudioCaptureStream::open(
+            &a_request_for_the_default_device(),
+            &AvFoundationCaptureDeviceAuthorizationAuthority(PrivacyGatedCaptureDevice::Microphone),
+        )
+        .expect("an unnamed capture stream opens on the default input");
+        let sample_rate = stream.stream_format().sample_rate;
+        let block_receiver = start_recording_blocks(&mut stream);
+        blocks_covering(&block_receiver, u64::from(sample_rate) / 4);
+
+        let (handle_a_device_change, stream_control_queue) = {
+            let control = stream.capture_control.lock();
+            assert!(
+                control
+                    .device_binding
+                    .system_default_device_listener
+                    .is_some(),
+                "an unnamed stream listens for the system default moving"
+            );
+            assert_eq!(
+                control.device_binding.bound_device_listeners.len(),
+                3,
+                "liveness, nominal rate and stream configuration are all listened for"
+            );
+            (
+                Arc::clone(&control.device_binding.handle_a_device_change),
+                control.device_binding.stream_control_queue.clone(),
+            )
+        };
+        for change in [
+            CoreAudioStreamDeviceChange::SystemDefaultDeviceMoved,
+            CoreAudioStreamDeviceChange::BoundDeviceFormatChanged,
+            CoreAudioStreamDeviceChange::BoundDeviceLivenessChanged,
+        ] {
+            let handle_a_device_change = Arc::clone(&handle_a_device_change);
+            stream_control_queue.exec_async(move || handle_a_device_change(change));
+        }
+        stream_control_queue.exec_sync(|| {});
+
+        assert_eq!(
+            stream.liveness_report().failure_that_ended_the_stream(),
+            None,
+            "a change that left the default and the device as they were ends nothing"
+        );
+        let after_the_changes = blocks_covering(&block_receiver, u64::from(sample_rate) / 4);
+        assert!(!after_the_changes.is_empty(), "the stream keeps delivering");
+        stream.stop_delivering().expect("delivery stops");
+    }
+
     /// A stream whose device carries another rate and channel count — as
     /// AirPods' microphone does once the headset profile engages — is
     /// converted to the stream's format, with the room's signal intact and
