@@ -347,7 +347,6 @@ These do not exist yet:
 | **ROS** | No integration of any kind. |
 | **Jetson / aarch64** | No wheel published. x86_64 only today. |
 | **Control-plane auth** | Undesigned. A node binds all interfaces and does not authenticate callers. |
-| **Audio** | No backend ships. The clock primitive is settled; PipeWire-vs-ALSA is an open decision. |
 | **GPU kernels from Python** | Compute, graphics, ray tracing, and acceleration structures exist Rust-side. The Python kernel API is in flight, not shipped. |
 | **DMA-BUF import** | Export from Python works; importing a foreign fd into a graph does not yet. |
 

@@ -277,6 +277,15 @@ class MicrophoneSource:
     cannot open raises rather than landing on a different device.
 
     Blocks arrive on the `audio` output as bags `streamlib.AudioBlock` casts.
+
+    On macOS the backend is CoreAudio and `device_id` is a CoreAudio device
+    UID; naming one that is not attached is refused with the UIDs that are.
+    Without a `device_id` the stream follows the system default input as it
+    changes, keeping the format it opened with. The first run asks for
+    microphone access without waiting: the graph starts, and blocks begin once
+    the user allows it. macOS asks on behalf of the application that launched
+    the process — the terminal, not Python — so a refusal, or a prompt left
+    unanswered, names that application and the setting to change.
     """
 
 @final
@@ -411,6 +420,11 @@ class SpeakerSink:
     five-channel device, say) is refused by name rather than mixed. The device
     is never left waiting on the graph — a period the graph had no samples for
     is silence, and the count of it is reported.
+
+    On macOS the backend is CoreAudio, `device_id` is a CoreAudio device UID,
+    and the device period is the device's own buffer size. Without a
+    `device_id` playback follows the system default output as it changes —
+    plugging in headphones moves it there.
     """
 
 @final

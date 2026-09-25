@@ -19,7 +19,7 @@ terms are in [`LICENSE`](LICENSE) and are not reproduced below.
 
 ## Overview
 
-- **MIT License** — 578 crates
+- **MIT License** — 579 crates
 - **Apache License 2.0** — 56 crates
 - **BSD 3-Clause "New" or "Revised" License** — 25 crates
 - **ISC License** — 21 crates
@@ -9458,6 +9458,7 @@ Used by:
 - [objc-sys 0.3.5](https://github.com/madsmtm/objc2)
 - [objc2-app-kit 0.2.2](https://github.com/madsmtm/objc2)
 - [objc2-app-kit 0.3.2](https://github.com/madsmtm/objc2)
+- [objc2-audio-toolbox 0.3.2](https://github.com/madsmtm/objc2)
 - [objc2-av-foundation 0.3.2](https://github.com/madsmtm/objc2)
 - [objc2-avf-audio 0.3.2](https://github.com/madsmtm/objc2)
 - [objc2-cloud-kit 0.3.2](https://github.com/madsmtm/objc2)
