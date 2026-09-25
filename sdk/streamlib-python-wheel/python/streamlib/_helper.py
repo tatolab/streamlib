@@ -898,6 +898,7 @@ class HelperProcessLifecycle:
         self._link_data_access = link_data_access
         self._hosted: Optional[HostedProcessor] = None
         self._set_up_succeeded = False
+        self._setup_raised_on_its_own = False
         self._running = False
         self._torn_down = False
 
@@ -924,8 +925,9 @@ class HelperProcessLifecycle:
 
     def _tear_down_after_the_parent_went_away(self) -> None:
         """Run the `stop` and `teardown()` a parent that is gone can no longer
-        ask for, so a processor still releases what it holds."""
-        if self._hosted is None or self._torn_down:
+        ask for, so a processor still releases what it holds — unless its
+        `setup()` raised on its own, which the ladder never tears down."""
+        if self._hosted is None or self._torn_down or self._setup_raised_on_its_own:
             return
         self._stop()
         if sys.platform == "darwin":
@@ -1015,6 +1017,7 @@ class HelperProcessLifecycle:
             )
             return
         except Exception as setup_failure:
+            self._setup_raised_on_its_own = True
             self._bridge.send(
                 {
                     "rpc": "error",
