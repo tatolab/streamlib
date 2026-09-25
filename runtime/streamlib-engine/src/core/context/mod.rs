@@ -13,10 +13,11 @@ pub(crate) mod isolation;
 mod refusing_null_video_device_backend;
 mod runtime_context;
 pub(crate) mod silent_null_audio_device_backend;
+pub(crate) mod surface_backing_resolution;
 pub(crate) mod surface_check_out_lease_registry;
 #[cfg(target_os = "linux")]
 pub(crate) mod surface_export_staging;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) mod surface_pixel_exchange;
 pub(crate) mod surface_share_wire_verbs;
 pub(crate) mod surface_store;

@@ -887,7 +887,7 @@ impl HostVulkanTexture {
     /// before returning. The image must not have content the caller
     /// cares about; UNDEFINED-source transitions allow the driver to
     /// discard contents.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn transition_to_general(
         vulkan_device: &Arc<HostVulkanDevice>,
         image: vk::Image,

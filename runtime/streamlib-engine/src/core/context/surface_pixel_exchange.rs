@@ -36,7 +36,7 @@
 
 use crate::core::color::resolve_color_defaults;
 use crate::core::context::GpuContext;
-use crate::core::context::surface_export_staging::ResolvedBlitSource;
+use crate::core::context::surface_backing_resolution::ResolvedBlitSource;
 use crate::core::error::{Error, Result};
 use crate::core::rhi::{
     PixelBuffer, PixelFormat, SourceLayoutInfo, Texture, TextureDescriptor, TextureFormat,
