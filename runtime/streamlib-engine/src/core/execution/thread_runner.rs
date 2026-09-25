@@ -21,19 +21,18 @@ use crate::core::processors::{ProcessorInstance, ProcessorState};
 /// Duration to sleep when paused (avoids busy-waiting).
 const PAUSE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
 
-/// Sleep cadence for the no-fd-waiter fallback paths (non-Linux, or the
-/// rare case where epoll setup fails on Linux). Reactive mode on Linux
-/// with a working waiter blocks in `epoll_wait` up to `REACTIVE_WAIT_BOUND_MS`
-/// and never sleeps.
+/// Sleep cadence for the no-fd-waiter fallback paths (a platform with neither
+/// epoll nor kqueue, or the rare case where waiter setup fails). Reactive mode
+/// with a working waiter blocks in its wait up to its bound and never sleeps.
 const NO_WAITER_FALLBACK_SLEEP: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// Run the processor thread main loop based on execution mode.
-#[tracing::instrument(name = "processor.lifecycle", skip(processor, shutdown_rx, shutdown_eventfd, state, pause_gate, exec_config, runtime_ctx), fields(processor_id = %id, isolation_tier = isolation_tier.as_str()))]
+#[tracing::instrument(name = "processor.lifecycle", skip(processor, shutdown_rx, shutdown_wake_fd, state, pause_gate, exec_config, runtime_ctx), fields(processor_id = %id, isolation_tier = isolation_tier.as_str()))]
 pub fn run_processor_loop(
     id: ProcessorUniqueId,
     processor: Arc<Mutex<ProcessorInstance>>,
     shutdown_rx: crossbeam_channel::Receiver<()>,
-    #[cfg(unix)] shutdown_eventfd: Option<OwnedFd>,
+    #[cfg(unix)] shutdown_wake_fd: Option<OwnedFd>,
     state: Arc<ObservableProcessorState>,
     pause_gate: Arc<AtomicBool>,
     exec_config: ExecutionConfig,
@@ -63,7 +62,7 @@ pub fn run_processor_loop(
                 &processor,
                 &shutdown_rx,
                 #[cfg(unix)]
-                shutdown_eventfd,
+                shutdown_wake_fd,
                 &pause_gate,
                 &runtime_ctx,
             );
@@ -159,7 +158,7 @@ fn run_reactive_mode(
     id: &ProcessorUniqueId,
     processor: &Arc<Mutex<ProcessorInstance>>,
     shutdown_rx: &crossbeam_channel::Receiver<()>,
-    #[cfg(unix)] shutdown_eventfd: Option<OwnedFd>,
+    #[cfg(unix)] shutdown_wake_fd: Option<OwnedFd>,
     pause_gate: &Arc<AtomicBool>,
     runtime_ctx: &RuntimeContext,
 ) {
@@ -168,7 +167,7 @@ fn run_reactive_mode(
         processor,
         shutdown_rx,
         #[cfg(unix)]
-        shutdown_eventfd,
+        shutdown_wake_fd,
         pause_gate,
         |callback| match callback {
             ReactiveRunnerProcessorCallback::OnPause => {
@@ -198,15 +197,16 @@ fn run_reactive_scheduling_loop(
     id: &ProcessorUniqueId,
     processor: &Arc<Mutex<ProcessorInstance>>,
     shutdown_rx: &crossbeam_channel::Receiver<()>,
-    #[cfg(unix)] shutdown_eventfd: Option<OwnedFd>,
+    #[cfg(unix)] shutdown_wake_fd: Option<OwnedFd>,
     pause_gate: &AtomicBool,
     mut call_processor: impl FnMut(ReactiveRunnerProcessorCallback),
 ) {
-    // Reactive mode waits on two fds via epoll: the destination's iceoryx2
-    // Listener fd (any upstream Notifier::notify() wakes the loop) and the
-    // shutdown eventfd (compiler signals teardown). epoll_wait blocks until
-    // one of those fds fires or its bound elapses — idle CPU is a wake every
-    // REACTIVE_WAIT_BOUND_MS and nothing more.
+    // Reactive mode waits on two fds through epoll on Linux and kqueue on
+    // macOS: the destination's iceoryx2 Listener fd (any upstream
+    // Notifier::notify() wakes the loop) and the shutdown wake fd (compiler
+    // signals teardown). The wait blocks until one of those fds fires or its
+    // bound elapses — idle CPU is a wake every REACTIVE_WAIT_BOUND and nothing
+    // more.
     //
     // Processors with no Rust-side listener fd (subprocess host, audio-only,
     // etc.) fall through to the channel-poll sleep loop, waking at
@@ -220,17 +220,17 @@ fn run_reactive_scheduling_loop(
     // loop: a processor added to a running graph gets its first inbound link
     // — and with it the listener — only when a later connect wires it, and a
     // destination whose last link went away gets a new listener with the next.
-    #[cfg(target_os = "linux")]
-    let mut shutdown_eventfd = shutdown_eventfd;
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    let mut shutdown_wake_fd = shutdown_wake_fd;
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     let mut waiter: Option<ReactiveLoopFdWaiter> = None;
-    #[cfg(target_os = "linux")]
-    let mut epoll_setup_failed = false;
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    let mut waiter_setup_failed = false;
 
     let mut was_paused = false;
 
     loop {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             let (listener_fd, listener_generation) = {
                 let guard = processor.lock();
@@ -242,18 +242,18 @@ fn run_reactive_scheduling_loop(
             refresh_reactive_loop_waiter(
                 id,
                 &mut waiter,
-                &mut shutdown_eventfd,
-                &mut epoll_setup_failed,
+                &mut shutdown_wake_fd,
+                &mut waiter_setup_failed,
                 listener_fd,
                 listener_generation,
             );
         }
 
         // Channel-side shutdown check covers two paths:
-        //   1. The fallback sleep loop (no waiter — non-Linux or epoll setup
-        //      failure), which has no way to wake on shutdown otherwise.
+        //   1. The fallback sleep loop (no waiter, or waiter setup failure),
+        //      which has no way to wake on shutdown otherwise.
         //   2. A race where signal_shutdown() landed between the previous
-        //      epoll_wait return and reading the eventfd-side outcome.
+        //      wait's return and reading the wake-fd-side outcome.
         if shutdown_rx.try_recv().is_ok() {
             tracing::info!("[{}] Received shutdown signal", id);
             break;
@@ -275,7 +275,7 @@ fn run_reactive_scheduling_loop(
         // which iceoryx2 warns per frame for the rest of the run (#1764).
         if is_paused {
             // While paused we deliberately poll: the pause_gate is an
-            // AtomicBool with no fd, so on_resume can't fire from epoll.
+            // AtomicBool with no fd, so on_resume can't fire from the wait.
             std::thread::sleep(PAUSE_CHECK_INTERVAL);
             drain_input_listener(processor);
             continue;
@@ -292,13 +292,13 @@ fn run_reactive_scheduling_loop(
 
         if !a_read_is_already_waiting {
             // Block until an upstream notify, a shutdown signal, or (in the
-            // no-waiter and epoll-error fallbacks) the next channel-poll tick.
-            #[cfg(target_os = "linux")]
+            // no-waiter and wait-error fallbacks) the next channel-poll tick.
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             match waiter.as_ref() {
-                Some(w) => match w.wait() {
+                Some(w) => match w.wait(REACTIVE_WAIT_BOUND) {
                     ReactiveLoopWakeOutcome::Notified => drain_input_listener(processor),
                     ReactiveLoopWakeOutcome::Shutdown => {
-                        tracing::info!("[{}] Received shutdown via eventfd", id);
+                        tracing::info!("[{}] Received shutdown via the wake fd", id);
                         break;
                     }
                     ReactiveLoopWakeOutcome::Interrupted | ReactiveLoopWakeOutcome::TimedOut => {
@@ -314,7 +314,7 @@ fn run_reactive_scheduling_loop(
                     drain_input_listener(processor);
                 }
             }
-            #[cfg(not(target_os = "linux"))]
+            #[cfg(not(any(target_os = "linux", target_os = "macos")))]
             {
                 std::thread::sleep(NO_WAITER_FALLBACK_SLEEP);
                 drain_input_listener(processor);
@@ -338,7 +338,7 @@ fn run_reactive_scheduling_loop(
         // multiple notify()s on the same EventId into one fd-readable
         // transition (the underlying IdTracker is a bit-set, not a
         // counter). After `drain_listener` clears that bit, the
-        // listener fd is not-readable again, and the next `epoll_wait`
+        // listener fd is not-readable again, and the next wait
         // would block — even though the subscriber's shared-memory
         // ring and the per-port mailboxes may still hold unread
         // samples from the same burst. Call `process()` until every
@@ -408,30 +408,30 @@ fn drain_input_listener(processor: &Arc<Mutex<ProcessorInstance>>) {
 enum ReactiveLoopWakeOutcome {
     /// Listener fd became readable — at least one upstream notify arrived.
     Notified,
-    /// Shutdown eventfd became readable — runner should exit.
+    /// Shutdown wake fd became readable — runner should exit.
     Shutdown,
-    /// `epoll_wait` was interrupted by a signal (`EINTR`); caller should retry.
+    /// The wait was interrupted by a signal (`EINTR`); caller should retry.
     Interrupted,
     /// Nothing fired within the bounded wait; the caller comes round to check
     /// whether its listener is still the one the mailboxes hold.
     TimedOut,
-    /// `epoll_wait` returned an unrecoverable error.
+    /// The wait returned an unrecoverable error.
     Error,
 }
 
 /// Keep the waiter on the listener the mailboxes hold now.
 ///
 /// A listener goes with a destination's last inbound link and comes back with
-/// the next one, and an epoll set never learns of the new fd on its own — a
-/// closed fd simply leaves it. So a waiter built for an earlier generation, or
-/// for a listener that is gone, is released with its shutdown eventfd
+/// the next one, and a readiness queue never learns of the new fd on its own —
+/// a closed fd simply leaves it. So a waiter built for an earlier generation,
+/// or for a listener that is gone, is released with its shutdown wake fd
 /// recovered, and one is built for the current listener when there is one.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn refresh_reactive_loop_waiter(
     id: &ProcessorUniqueId,
     waiter: &mut Option<ReactiveLoopFdWaiter>,
-    shutdown_eventfd: &mut Option<OwnedFd>,
-    epoll_setup_failed: &mut bool,
+    shutdown_wake_fd: &mut Option<OwnedFd>,
+    waiter_setup_failed: &mut bool,
     listener_fd: Option<i32>,
     listener_generation: u64,
 ) {
@@ -439,160 +439,315 @@ fn refresh_reactive_loop_waiter(
         listener_fd.is_none() || registered.listener_generation != listener_generation
     });
     if registered_listener_is_gone {
-        *shutdown_eventfd = waiter
+        *shutdown_wake_fd = waiter
             .take()
-            .and_then(ReactiveLoopFdWaiter::into_shutdown_eventfd);
+            .and_then(ReactiveLoopFdWaiter::into_shutdown_wake_fd);
     }
-    if waiter.is_some() || *epoll_setup_failed {
+    if waiter.is_some() || *waiter_setup_failed {
         return;
     }
     let Some(fd) = listener_fd else {
         return;
     };
-    match ReactiveLoopFdWaiter::new(fd, listener_generation, shutdown_eventfd.take()) {
+    match ReactiveLoopFdWaiter::new(fd, listener_generation, shutdown_wake_fd.take()) {
         Ok(built) => *waiter = Some(built),
         Err(e) => {
             tracing::warn!(
-                "[{}] Reactive epoll setup failed, falling back to channel-poll loop: {}",
+                "[{}] Reactive waiter setup failed, falling back to channel-poll loop: {}",
                 id,
                 e
             );
-            *epoll_setup_failed = true;
+            *waiter_setup_failed = true;
         }
     }
 }
 
-/// Tag stored in `epoll_event.u64` for the shutdown eventfd; chosen so it
-/// can never collide with a listener-fd tag (which we set to 0).
-#[cfg(target_os = "linux")]
-const SHUTDOWN_EVENTFD_TAG: u64 = u64::MAX;
+/// Which of the waiter's two fds a readiness-queue registration watches.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReactiveLoopFdRegistration {
+    InputListener,
+    ShutdownWake,
+}
 
-/// Linux-only: epoll fd watching the iceoryx2 listener fd plus an optional
-/// shutdown eventfd, used by the reactive runner.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl ReactiveLoopFdRegistration {
+    /// The value carried in the kernel's per-registration user data.
+    fn user_data(self) -> u64 {
+        match self {
+            Self::InputListener => 0,
+            Self::ShutdownWake => 1,
+        }
+    }
+
+    fn from_user_data(user_data: u64) -> Self {
+        if user_data == Self::ShutdownWake.user_data() {
+            Self::ShutdownWake
+        } else {
+            Self::InputListener
+        }
+    }
+}
+
+/// Which registrations one wait found readable; neither means it timed out.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[derive(Debug, Default, Clone, Copy)]
+struct ReactiveLoopReadableRegistrations {
+    input_listener: bool,
+    shutdown_wake: bool,
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl ReactiveLoopReadableRegistrations {
+    fn mark_readable(&mut self, registration: ReactiveLoopFdRegistration) {
+        match registration {
+            ReactiveLoopFdRegistration::InputListener => self.input_listener = true,
+            ReactiveLoopFdRegistration::ShutdownWake => self.shutdown_wake = true,
+        }
+    }
+}
+
+/// The reactive runner's readiness queue — an epoll set on Linux, a kqueue on
+/// macOS. Level-triggered on both, so an undrained fd wakes every wait.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+struct ReactiveLoopReadinessQueue {
+    readiness_queue_fd: OwnedFd,
+}
+
+/// The waiter the reactive runner blocks in: its readiness queue watching the
+/// iceoryx2 listener fd plus an optional shutdown wake fd.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 struct ReactiveLoopFdWaiter {
-    epoll_fd: i32,
+    readiness_queue: ReactiveLoopReadinessQueue,
     /// Which of the destination's listeners this waiter registered, by the
     /// generation the mailboxes assigned it. A listener created after the last
-    /// inbound link went away is a new fd the epoll set never saw.
+    /// inbound link went away is a new fd the readiness queue never saw.
     listener_generation: u64,
-    /// Stored to keep the kernel-side eventfd alive for the lifetime of the
-    /// epoll registration. Closing the fd before the epoll fd would leave a
-    /// dangling registration that never fires.
-    shutdown_eventfd: Option<OwnedFd>,
+    /// Declared after the readiness queue so it closes after it: closing a
+    /// registered fd first would leave a registration that never fires.
+    shutdown_wake_fd: Option<OwnedFd>,
 }
 
 /// How long a reactive wait blocks before returning empty-handed, so a runner
 /// whose listener was replaced while it slept comes round to rebuild its
 /// waiter rather than sleeping on a dead fd until shutdown.
-#[cfg(target_os = "linux")]
-const REACTIVE_WAIT_BOUND_MS: i32 = 500;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+const REACTIVE_WAIT_BOUND: std::time::Duration = std::time::Duration::from_millis(500);
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl ReactiveLoopFdWaiter {
     fn new(
-        listener_fd: i32,
+        listener_fd: std::os::fd::RawFd,
         listener_generation: u64,
-        shutdown_eventfd: Option<OwnedFd>,
+        shutdown_wake_fd: Option<OwnedFd>,
     ) -> std::io::Result<Self> {
         use std::os::fd::AsRawFd;
 
-        // SAFETY: epoll_create1 returns -1 on failure; checked below.
-        let epoll_fd = unsafe { libc::epoll_create1(libc::EPOLL_CLOEXEC) };
-        if epoll_fd < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-
-        let register = |fd: i32, tag: u64| -> std::io::Result<()> {
-            let mut event = libc::epoll_event {
-                events: libc::EPOLLIN as u32,
-                u64: tag,
-            };
-            // SAFETY: epoll_ctl with EPOLL_CTL_ADD takes a pointer to a
-            // valid epoll_event for the duration of the call.
-            let r = unsafe { libc::epoll_ctl(epoll_fd, libc::EPOLL_CTL_ADD, fd, &mut event) };
-            if r < 0 {
-                Err(std::io::Error::last_os_error())
-            } else {
-                Ok(())
-            }
-        };
-
-        if let Err(e) = register(listener_fd, 0) {
-            // SAFETY: epoll_fd is owned and unused after this point.
-            unsafe { libc::close(epoll_fd) };
-            return Err(e);
-        }
-        if let Some(ref efd) = shutdown_eventfd {
-            if let Err(e) = register(efd.as_raw_fd(), SHUTDOWN_EVENTFD_TAG) {
-                unsafe { libc::close(epoll_fd) };
-                return Err(e);
-            }
+        let readiness_queue = ReactiveLoopReadinessQueue::create()?;
+        readiness_queue
+            .register_readable_fd(listener_fd, ReactiveLoopFdRegistration::InputListener)?;
+        if let Some(ref wake_fd) = shutdown_wake_fd {
+            readiness_queue.register_readable_fd(
+                wake_fd.as_raw_fd(),
+                ReactiveLoopFdRegistration::ShutdownWake,
+            )?;
         }
 
         Ok(Self {
-            epoll_fd,
+            readiness_queue,
             listener_generation,
-            shutdown_eventfd,
+            shutdown_wake_fd,
         })
     }
 
-    /// Release the epoll registration and hand back the shutdown eventfd, so
-    /// the next waiter can register it.
-    fn into_shutdown_eventfd(mut self) -> Option<OwnedFd> {
-        self.shutdown_eventfd.take()
+    /// Release the registration and hand back the shutdown wake fd, so the
+    /// next waiter can register it.
+    fn into_shutdown_wake_fd(mut self) -> Option<OwnedFd> {
+        self.shutdown_wake_fd.take()
     }
 
-    fn wait(&self) -> ReactiveLoopWakeOutcome {
-        let mut events = [libc::epoll_event { events: 0, u64: 0 }; 2];
-        // Wakes when one of the registered fds is readable, a signal interrupts
-        // the call, or the bound elapses with nothing to report.
-        // SAFETY: epoll_wait writes up to events.len() events into the buffer.
-        let n = unsafe {
-            libc::epoll_wait(
-                self.epoll_fd,
-                events.as_mut_ptr(),
-                2,
-                REACTIVE_WAIT_BOUND_MS,
-            )
-        };
-        if n < 0 {
-            let err = std::io::Error::last_os_error();
-            if err.kind() == std::io::ErrorKind::Interrupted {
-                return ReactiveLoopWakeOutcome::Interrupted;
+    /// Block until a registered fd is readable, a signal interrupts the call,
+    /// or `wait_bound` elapses with nothing to report.
+    fn wait(&self, wait_bound: std::time::Duration) -> ReactiveLoopWakeOutcome {
+        match self.readiness_queue.wait_for_readable(wait_bound) {
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
+                ReactiveLoopWakeOutcome::Interrupted
             }
-            tracing::warn!("epoll_wait failed in reactive runner: {}", err);
-            return ReactiveLoopWakeOutcome::Error;
-        }
-        if n == 0 {
-            return ReactiveLoopWakeOutcome::TimedOut;
-        }
-
-        // Shutdown takes priority over notify when both fired in the same
-        // wait — let the runner exit instead of draining one more frame.
-        let mut notified = false;
-        for ev in &events[..n as usize] {
-            if ev.u64 == SHUTDOWN_EVENTFD_TAG {
-                return ReactiveLoopWakeOutcome::Shutdown;
+            Err(e) => {
+                tracing::warn!("reactive runner wait failed: {}", e);
+                ReactiveLoopWakeOutcome::Error
             }
-            notified = true;
-        }
-        if notified {
-            ReactiveLoopWakeOutcome::Notified
-        } else {
-            // n > 0 but no events matched — shouldn't happen.
-            ReactiveLoopWakeOutcome::Error
+            // Shutdown takes priority over notify when both fired in the same
+            // wait — let the runner exit instead of draining one more frame.
+            Ok(readable) if readable.shutdown_wake => ReactiveLoopWakeOutcome::Shutdown,
+            Ok(readable) if readable.input_listener => ReactiveLoopWakeOutcome::Notified,
+            Ok(_) => ReactiveLoopWakeOutcome::TimedOut,
         }
     }
 }
 
 #[cfg(target_os = "linux")]
-impl Drop for ReactiveLoopFdWaiter {
-    fn drop(&mut self) {
-        // SAFETY: epoll_fd is owned by Self and closed at most once. The
-        // OwnedFd field drops after this; epoll_ctl(EPOLL_CTL_DEL) isn't
-        // required because closing the epoll fd releases its registrations.
-        unsafe { libc::close(self.epoll_fd) };
+impl ReactiveLoopReadinessQueue {
+    fn create() -> std::io::Result<Self> {
+        use std::os::fd::FromRawFd;
+        // SAFETY: epoll_create1 returns -1 on failure; checked below.
+        let raw_epoll_fd = unsafe { libc::epoll_create1(libc::EPOLL_CLOEXEC) };
+        if raw_epoll_fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: raw_epoll_fd was just opened here and nothing else owns it.
+        let readiness_queue_fd = unsafe { OwnedFd::from_raw_fd(raw_epoll_fd) };
+        Ok(Self { readiness_queue_fd })
+    }
+
+    fn register_readable_fd(
+        &self,
+        watched_fd: std::os::fd::RawFd,
+        registration: ReactiveLoopFdRegistration,
+    ) -> std::io::Result<()> {
+        use std::os::fd::AsRawFd;
+        let mut event = libc::epoll_event {
+            events: libc::EPOLLIN as u32,
+            u64: registration.user_data(),
+        };
+        // SAFETY: epoll_ctl with EPOLL_CTL_ADD takes a pointer to a valid
+        // epoll_event for the duration of the call.
+        let result = unsafe {
+            libc::epoll_ctl(
+                self.readiness_queue_fd.as_raw_fd(),
+                libc::EPOLL_CTL_ADD,
+                watched_fd,
+                &mut event,
+            )
+        };
+        if result < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    fn wait_for_readable(
+        &self,
+        wait_bound: std::time::Duration,
+    ) -> std::io::Result<ReactiveLoopReadableRegistrations> {
+        use std::os::fd::AsRawFd;
+        let mut events = [libc::epoll_event { events: 0, u64: 0 }; 2];
+        let timeout_ms = wait_bound.as_millis().min(i32::MAX as u128) as i32;
+        // SAFETY: epoll_wait writes up to events.len() events into the buffer.
+        let ready_count = unsafe {
+            libc::epoll_wait(
+                self.readiness_queue_fd.as_raw_fd(),
+                events.as_mut_ptr(),
+                events.len() as i32,
+                timeout_ms,
+            )
+        };
+        if ready_count < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let mut readable = ReactiveLoopReadableRegistrations::default();
+        for event in &events[..ready_count as usize] {
+            readable.mark_readable(ReactiveLoopFdRegistration::from_user_data(event.u64));
+        }
+        Ok(readable)
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl ReactiveLoopReadinessQueue {
+    fn create() -> std::io::Result<Self> {
+        use std::os::fd::{AsRawFd, FromRawFd};
+        // SAFETY: kqueue returns -1 on failure; checked below.
+        let raw_kqueue_fd = unsafe { libc::kqueue() };
+        if raw_kqueue_fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: raw_kqueue_fd was just opened here and nothing else owns it.
+        let readiness_queue_fd = unsafe { OwnedFd::from_raw_fd(raw_kqueue_fd) };
+        // Darwin has no `kqueue1`, so close-on-exec is set before the fd is used.
+        // SAFETY: fcntl on a live fd this function owns.
+        if unsafe {
+            libc::fcntl(
+                readiness_queue_fd.as_raw_fd(),
+                libc::F_SETFD,
+                libc::FD_CLOEXEC,
+            )
+        } < 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(Self { readiness_queue_fd })
+    }
+
+    /// No `EV_CLEAR`, which is what keeps the registration level-triggered.
+    fn register_readable_fd(
+        &self,
+        watched_fd: std::os::fd::RawFd,
+        registration: ReactiveLoopFdRegistration,
+    ) -> std::io::Result<()> {
+        use std::os::fd::AsRawFd;
+        let change = libc::kevent {
+            ident: watched_fd as libc::uintptr_t,
+            filter: libc::EVFILT_READ,
+            flags: libc::EV_ADD,
+            fflags: 0,
+            data: 0,
+            udata: std::ptr::without_provenance_mut(registration.user_data() as usize),
+        };
+        // SAFETY: one valid change in, no event slots out; a failed
+        // registration returns -1 when the event list is empty.
+        let result = unsafe {
+            libc::kevent(
+                self.readiness_queue_fd.as_raw_fd(),
+                &change,
+                1,
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null(),
+            )
+        };
+        if result < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    fn wait_for_readable(
+        &self,
+        wait_bound: std::time::Duration,
+    ) -> std::io::Result<ReactiveLoopReadableRegistrations> {
+        use std::os::fd::AsRawFd;
+        let timeout = libc::timespec {
+            tv_sec: wait_bound.as_secs().min(libc::time_t::MAX as u64) as libc::time_t,
+            tv_nsec: wait_bound.subsec_nanos() as libc::c_long,
+        };
+        // SAFETY: an all-zero `kevent` is a valid out-slot.
+        let mut events: [libc::kevent; 2] = unsafe { std::mem::zeroed() };
+        // SAFETY: kevent writes up to events.len() events into the buffer; the
+        // timeout is a valid stack slot.
+        let ready_count = unsafe {
+            libc::kevent(
+                self.readiness_queue_fd.as_raw_fd(),
+                std::ptr::null(),
+                0,
+                events.as_mut_ptr(),
+                events.len() as libc::c_int,
+                &timeout,
+            )
+        };
+        if ready_count < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let mut readable = ReactiveLoopReadableRegistrations::default();
+        for event in &events[..ready_count as usize] {
+            if event.flags & libc::EV_ERROR != 0 {
+                return Err(std::io::Error::from_raw_os_error(event.data as i32));
+            }
+            readable.mark_readable(ReactiveLoopFdRegistration::from_user_data(
+                event.udata.addr() as u64,
+            ));
+        }
+        Ok(readable)
     }
 }
 
@@ -752,12 +907,13 @@ fn dispatch_on_resume(
     }
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
 mod tests {
     use super::*;
+    use crate::core::graph::ShutdownChannelComponent;
     use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
     use iceoryx2::prelude::*;
-    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::fd::AsRawFd;
 
     fn unique_suffix(tag: &str) -> String {
         format!(
@@ -766,28 +922,19 @@ mod tests {
         )
     }
 
-    fn make_eventfd() -> OwnedFd {
-        // SAFETY: eventfd returns -1 on failure; checked below. Initial
-        // counter is 0; EFD_CLOEXEC matches production.
-        let raw = unsafe { libc::eventfd(0, libc::EFD_CLOEXEC) };
-        assert!(
-            raw >= 0,
-            "eventfd failed: {}",
-            std::io::Error::last_os_error()
-        );
-        // SAFETY: raw is a fresh, owned fd from a successful eventfd() call.
-        unsafe { OwnedFd::from_raw_fd(raw) }
+    /// A production shutdown channel and a duplicate of its wake fd, as the
+    /// spawn op hands one to a reactive runner.
+    fn shutdown_channel_and_its_wake_fd() -> (ShutdownChannelComponent, OwnedFd) {
+        let shutdown_channel = ShutdownChannelComponent::new();
+        let shutdown_wake_fd = shutdown_channel
+            .try_clone_shutdown_wake_fd()
+            .expect("the shutdown wake fd duplicates");
+        (shutdown_channel, shutdown_wake_fd)
     }
 
-    fn write_eventfd(fd: i32) {
-        let buf = 1u64.to_ne_bytes();
-        // SAFETY: fd is a valid eventfd; eventfd accepts 8-byte writes.
-        let n = unsafe { libc::write(fd, buf.as_ptr().cast(), buf.len()) };
-        assert!(
-            n == buf.len() as isize,
-            "eventfd write failed: n={n}, err={}",
-            std::io::Error::last_os_error()
-        );
+    fn listener_fd_of(listener: &iceoryx2::port::listener::Listener<ipc::Service>) -> i32 {
+        // SAFETY: every caller uses the fd only while `listener` is alive.
+        unsafe { listener.file_descriptor().native_handle() }
     }
 
     /// The rule the window contract turns on: a reactive processor is never
@@ -935,10 +1082,7 @@ mod tests {
     /// reading one bag off `in1`.
     struct ReactiveSchedulingLoopOnItsOwnThread {
         processor_callbacks: Arc<Mutex<Vec<ReactiveRunnerProcessorCallback>>>,
-        shutdown_sender: crossbeam_channel::Sender<()>,
-        /// A duplicate of the eventfd the loop owns, so a write never lands on
-        /// a number the loop already closed on its way out.
-        shutdown_eventfd_duplicate: OwnedFd,
+        shutdown_channel: ShutdownChannelComponent,
         pause_gate: Arc<AtomicBool>,
         loop_thread: std::thread::JoinHandle<()>,
     }
@@ -959,11 +1103,10 @@ mod tests {
         ) -> Self {
             let processor_callbacks: Arc<Mutex<Vec<ReactiveRunnerProcessorCallback>>> =
                 Arc::default();
-            let (shutdown_sender, shutdown_receiver) = crossbeam_channel::bounded(1);
-            let shutdown_eventfd = make_eventfd();
-            let shutdown_eventfd_duplicate = shutdown_eventfd
-                .try_clone()
-                .expect("the shutdown eventfd duplicates");
+            let (mut shutdown_channel, shutdown_wake_fd) = shutdown_channel_and_its_wake_fd();
+            let shutdown_receiver = shutdown_channel
+                .take_receiver()
+                .expect("a fresh shutdown channel holds its receiver");
             let pause_gate = Arc::new(AtomicBool::new(matches!(
                 pause_gate_at_loop_start,
                 PauseGateAtLoopStart::Closed
@@ -976,7 +1119,7 @@ mod tests {
                         &"Preactive-scheduling".into(),
                         &processor,
                         &shutdown_receiver,
-                        Some(shutdown_eventfd),
+                        Some(shutdown_wake_fd),
                         &pause_gate,
                         |callback| {
                             if callback == ReactiveRunnerProcessorCallback::Process {
@@ -990,8 +1133,7 @@ mod tests {
             });
             Self {
                 processor_callbacks,
-                shutdown_sender,
-                shutdown_eventfd_duplicate,
+                shutdown_channel,
                 pause_gate,
                 loop_thread,
             }
@@ -1023,8 +1165,7 @@ mod tests {
         }
 
         fn stop(self) {
-            write_eventfd(self.shutdown_eventfd_duplicate.as_raw_fd());
-            let _ = self.shutdown_sender.send(());
+            self.shutdown_channel.signal_shutdown();
             self.loop_thread
                 .join()
                 .expect("the scheduling loop must not panic");
@@ -1214,11 +1355,10 @@ mod tests {
     /// undeliverable notifications takes them again straight after.
     ///
     /// Fail-without-fix: drop the `drain_input_listener` call from the paused
-    /// branch, the no-waiter arm, or the epoll-error arm and that path is back
+    /// branch, the no-waiter arm, or the wait-error arm and that path is back
     /// to #1764 — an fd nobody clears, warned about once per frame. Those arms
-    /// are unreachable from the two waiter-backed tests in this module (the
-    /// no-waiter arm is every tick of every reactive processor off Linux), so
-    /// this is what covers them.
+    /// are unreachable from the waiter-backed tests in this module, so this is
+    /// what covers them.
     #[test]
     fn draining_a_saturated_listener_lets_it_be_notified_again() {
         use crate::core::test_support::MockInputOnlyProcessor;
@@ -1266,129 +1406,140 @@ mod tests {
         );
     }
 
-    /// The reactive runner's wake primitive: a notify() from another thread
-    /// must transition `ReactiveLoopFdWaiter::wait` to Notified well within
-    /// the runner's wake-latency budget. iceoryx2's `ipc::Service` Notifier
-    /// is `!Send` (Rc-backed SingleThreaded threadsafety policy), so the
-    /// test keeps notifier on the main thread and ships the waiter to the
-    /// waiter thread.
+    /// A waiter on a fresh listener, and the notifier that feeds it.
+    struct ListenerWaiterFixture {
+        _node: iceoryx2::node::Node<ipc::Service>,
+        notifier: iceoryx2::port::notifier::Notifier<ipc::Service>,
+        listener: iceoryx2::port::listener::Listener<ipc::Service>,
+        shutdown_channel: ShutdownChannelComponent,
+        waiter: ReactiveLoopFdWaiter,
+    }
+
+    impl ListenerWaiterFixture {
+        fn new(tag: &str) -> Self {
+            let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
+            let service = open_one_listener_event_service(&node, tag);
+            let notifier = service.notifier_builder().create().unwrap();
+            let listener = service.listener_builder().create().unwrap();
+            let (shutdown_channel, shutdown_wake_fd) = shutdown_channel_and_its_wake_fd();
+            let waiter =
+                ReactiveLoopFdWaiter::new(listener_fd_of(&listener), 1, Some(shutdown_wake_fd))
+                    .expect("the readiness queue registers both fds");
+            Self {
+                _node: node,
+                notifier,
+                listener,
+                shutdown_channel,
+                waiter,
+            }
+        }
+    }
+
+    /// The waiter reports the listener's readiness. Level-triggered, so the
+    /// notify lands first and the wait is a zero-bound poll.
     #[test]
-    fn reactive_loop_wakes_on_notify() {
-        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
-        let name = unique_suffix("wake");
-        let svc = node
-            .service_builder(&ServiceName::new(&name).unwrap())
-            .event()
-            .max_notifiers(2)
-            .max_listeners(1)
-            .open_or_create()
-            .unwrap();
-        let notifier = svc.notifier_builder().create().unwrap();
-        let listener = svc.listener_builder().create().unwrap();
+    fn a_delivered_notify_makes_the_wait_report_notified() {
+        let fixture = ListenerWaiterFixture::new("wait-notified");
+        fixture.notifier.notify().unwrap();
 
-        // SAFETY: same lifetime contract as production code — fd is used
-        // only while listener stays alive (listener outlives the waiter
-        // thread because we join it before this function returns).
-        let listener_fd = unsafe { listener.file_descriptor().native_handle() };
-        let waiter =
-            ReactiveLoopFdWaiter::new(listener_fd, 1, Some(make_eventfd())).expect("epoll setup");
-
-        // Move the waiter to a worker thread, then fire notify() from this
-        // thread. The worker reports the outcome and elapsed time back via
-        // a channel.
-        let (tx, rx) = std::sync::mpsc::channel();
-        let worker = std::thread::spawn(move || {
-            let started = std::time::Instant::now();
-            let outcome = waiter.wait();
-            tx.send((outcome, started.elapsed())).unwrap();
-            waiter
-        });
-
-        std::thread::sleep(std::time::Duration::from_millis(5));
-        notifier.notify().unwrap();
-
-        let (outcome, elapsed) = rx
-            .recv_timeout(std::time::Duration::from_millis(800))
-            .expect("worker did not respond — wait did not wake");
-        let _waiter = worker.join().expect("worker panicked");
+        let outcome = fixture.waiter.wait(std::time::Duration::ZERO);
 
         assert!(
             matches!(outcome, ReactiveLoopWakeOutcome::Notified),
-            "expected Notified, got {:?}",
-            outcome
+            "expected Notified, got {outcome:?}"
         );
-        assert!(
-            elapsed < std::time::Duration::from_millis(100),
-            "wake latency too high: {:?} (notify was scheduled 5 ms in)",
-            elapsed
-        );
-
-        // Drain so the next wait would block again — done implicitly by
-        // dropping references; not asserted because there's no second wait
-        // here (a second wait without re-notify would block until shutdown).
-        listener.try_wait_all(|_| {}).unwrap();
+        fixture.listener.try_wait_all(|_| {}).unwrap();
     }
 
-    /// Writing to the shutdown eventfd must transition `wait` to Shutdown
-    /// within milliseconds, even when no listener-fd activity occurs. This
-    /// is the runner's exit primitive — the runner breaks its loop the
-    /// moment `wait` returns Shutdown, so wake latency here is exit latency.
+    /// The production shutdown signal makes the waiter report shutdown, with
+    /// no listener activity at all.
     #[test]
-    fn reactive_loop_exits_on_shutdown_signal() {
-        // Build a real iceoryx2 listener fd so the waiter exercises the
-        // production two-fd shape (listener + shutdown eventfd). The
-        // listener never sees a notify in this test — only the shutdown
-        // eventfd should fire.
-        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
-        let name = unique_suffix("shutdown");
-        let svc = node
-            .service_builder(&ServiceName::new(&name).unwrap())
-            .event()
-            .max_notifiers(1)
-            .max_listeners(1)
-            .open_or_create()
-            .unwrap();
-        let listener = svc.listener_builder().create().unwrap();
-        // SAFETY: listener outlives the worker thread (joined below).
-        let listener_fd = unsafe { listener.file_descriptor().native_handle() };
+    fn a_signalled_shutdown_makes_the_wait_report_shutdown() {
+        let fixture = ListenerWaiterFixture::new("wait-shutdown");
+        fixture.shutdown_channel.signal_shutdown();
 
-        let shutdown_eventfd = make_eventfd();
-        let shutdown_raw = shutdown_eventfd.as_raw_fd();
-
-        let waiter =
-            ReactiveLoopFdWaiter::new(listener_fd, 1, Some(shutdown_eventfd)).expect("epoll setup");
-
-        let (tx, rx) = std::sync::mpsc::channel();
-        let worker = std::thread::spawn(move || {
-            let started = std::time::Instant::now();
-            let outcome = waiter.wait();
-            tx.send((outcome, started.elapsed())).unwrap();
-            waiter
-        });
-
-        // Give the worker a moment to enter epoll_wait, then fire shutdown.
-        std::thread::sleep(std::time::Duration::from_millis(5));
-        write_eventfd(shutdown_raw);
-
-        let (outcome, elapsed) = rx
-            .recv_timeout(std::time::Duration::from_millis(800))
-            .expect("worker did not respond — shutdown did not wake the waiter");
-        let _waiter = worker.join().expect("worker panicked");
+        let outcome = fixture.waiter.wait(std::time::Duration::ZERO);
 
         assert!(
             matches!(outcome, ReactiveLoopWakeOutcome::Shutdown),
-            "expected Shutdown, got {:?}",
-            outcome
+            "expected Shutdown, got {outcome:?}"
         );
+    }
+
+    /// A runner woken by both exits rather than draining one more frame.
+    #[test]
+    fn shutdown_outranks_a_notify_reported_by_the_same_wait() {
+        let fixture = ListenerWaiterFixture::new("wait-both");
+        fixture.notifier.notify().unwrap();
+        fixture.shutdown_channel.signal_shutdown();
+
+        let outcome = fixture.waiter.wait(std::time::Duration::ZERO);
+
         assert!(
-            elapsed < std::time::Duration::from_millis(50),
-            "shutdown wake latency too high: {:?} (eventfd write scheduled 5 ms in)",
-            elapsed
+            matches!(outcome, ReactiveLoopWakeOutcome::Shutdown),
+            "expected Shutdown, got {outcome:?}"
+        );
+        fixture.listener.try_wait_all(|_| {}).unwrap();
+    }
+
+    /// A wait with nothing to report returns on its own, which is what lets a
+    /// runner whose listener was replaced while it slept come round to rebuild
+    /// rather than sleeping on a dead fd until shutdown.
+    #[test]
+    fn a_wait_with_nothing_to_report_times_out() {
+        let fixture = ListenerWaiterFixture::new("wait-idle");
+
+        let outcome = fixture.waiter.wait(std::time::Duration::ZERO);
+
+        assert!(
+            matches!(outcome, ReactiveLoopWakeOutcome::TimedOut),
+            "an idle wait must time out rather than block; got {outcome:?}"
+        );
+    }
+
+    /// The one cross-thread check: a shutdown made visible only on the wake
+    /// fd ends a reactive loop blocked in its wait. The crossbeam half of the
+    /// shutdown is withheld, so the channel-poll fallback never exits here.
+    /// The deadline is generous and nothing is asserted about latency.
+    #[test]
+    fn a_shutdown_seen_only_on_the_wake_fd_ends_a_loop_blocked_in_its_wait() {
+        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
+        let service = open_one_listener_event_service(&node, "loop-wake-fd-shutdown");
+        let (processor, _mailboxes) = input_only_processor_with_plain_port(Some(
+            service.listener_builder().create().unwrap(),
+        ));
+        let (shutdown_channel, shutdown_wake_fd) = shutdown_channel_and_its_wake_fd();
+        let (withheld_shutdown_sender, withheld_shutdown_receiver) = crossbeam_channel::bounded(1);
+        let (loop_exited_sender, loop_exited_receiver) = crossbeam_channel::bounded(1);
+        let loop_thread = std::thread::spawn(move || {
+            run_reactive_scheduling_loop(
+                &"Preactive-wake-fd-shutdown".into(),
+                &processor,
+                &withheld_shutdown_receiver,
+                Some(shutdown_wake_fd),
+                &AtomicBool::new(false),
+                |_| {},
+            );
+            let _ = loop_exited_sender.send(());
+        });
+
+        shutdown_channel.signal_shutdown();
+        let exited_on_the_wake_fd = loop_exited_receiver
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .is_ok();
+        let _ = withheld_shutdown_sender.send(());
+        loop_thread
+            .join()
+            .expect("the scheduling loop must not panic");
+
+        assert!(
+            exited_on_the_wake_fd,
+            "the loop never saw the wake fd's shutdown, so it is not waiting on it"
         );
     }
 
     /// A destination that loses its last inbound link drops its listener, and
-    /// the next connect creates a new one the epoll set never saw. The runner
+    /// the next connect creates a new one the readiness queue never saw. The runner
     /// keeps its waiter on the listener the mailboxes hold now, so a frame on
     /// the reconnected link wakes it. Revert lock: register the listener once
     /// before the loop and the second notify below wakes nothing.
@@ -1405,41 +1556,45 @@ mod tests {
         };
         let id: ProcessorUniqueId = "Preactive".into();
         let mut waiter = None;
-        let mut shutdown_eventfd = Some(make_eventfd());
-        let mut epoll_setup_failed = false;
+        let (_shutdown_channel, shutdown_wake_fd) = shutdown_channel_and_its_wake_fd();
+        let mut shutdown_wake_fd = Some(shutdown_wake_fd);
+        let mut waiter_setup_failed = false;
 
         let first = open_event_service("replaced-first");
         let first_listener = first.listener_builder().create().unwrap();
-        // SAFETY: the fd is used only while `first_listener` is alive.
-        let first_fd = unsafe { first_listener.file_descriptor().native_handle() };
+        let first_fd = listener_fd_of(&first_listener);
         refresh_reactive_loop_waiter(
             &id,
             &mut waiter,
-            &mut shutdown_eventfd,
-            &mut epoll_setup_failed,
+            &mut shutdown_wake_fd,
+            &mut waiter_setup_failed,
             Some(first_fd),
             1,
         );
-        let first_epoll_fd = waiter
+        let first_readiness_queue_fd = waiter
             .as_ref()
             .expect("a waiter for the first listener")
-            .epoll_fd;
+            .readiness_queue
+            .readiness_queue_fd
+            .as_raw_fd();
         assert!(
-            shutdown_eventfd.is_none(),
-            "the waiter took the shutdown eventfd"
+            shutdown_wake_fd.is_none(),
+            "the waiter took the shutdown wake fd"
         );
 
         refresh_reactive_loop_waiter(
             &id,
             &mut waiter,
-            &mut shutdown_eventfd,
-            &mut epoll_setup_failed,
+            &mut shutdown_wake_fd,
+            &mut waiter_setup_failed,
             Some(first_fd),
             1,
         );
         assert_eq!(
-            waiter.as_ref().map(|registered| registered.epoll_fd),
-            Some(first_epoll_fd),
+            waiter
+                .as_ref()
+                .map(|registered| registered.readiness_queue.readiness_queue_fd.as_raw_fd()),
+            Some(first_readiness_queue_fd),
             "the same listener keeps the same waiter"
         );
 
@@ -1448,8 +1603,8 @@ mod tests {
         refresh_reactive_loop_waiter(
             &id,
             &mut waiter,
-            &mut shutdown_eventfd,
-            &mut epoll_setup_failed,
+            &mut shutdown_wake_fd,
+            &mut waiter_setup_failed,
             None,
             1,
         );
@@ -1458,77 +1613,31 @@ mod tests {
             "a waiter on a dropped listener is released"
         );
         assert!(
-            shutdown_eventfd.is_some(),
-            "the shutdown eventfd comes back for the next one"
+            shutdown_wake_fd.is_some(),
+            "the shutdown wake fd comes back for the next one"
         );
 
         // A reconnect creates a new listener, on a fresh notify service.
         let second = open_event_service("replaced-second");
         let second_listener = second.listener_builder().create().unwrap();
-        // SAFETY: the fd is used only while `second_listener` is alive; the
-        // worker below is joined before this function returns.
-        let second_fd = unsafe { second_listener.file_descriptor().native_handle() };
+        let second_fd = listener_fd_of(&second_listener);
         refresh_reactive_loop_waiter(
             &id,
             &mut waiter,
-            &mut shutdown_eventfd,
-            &mut epoll_setup_failed,
+            &mut shutdown_wake_fd,
+            &mut waiter_setup_failed,
             Some(second_fd),
             2,
         );
         let waiter = waiter.expect("a waiter for the new listener");
         let notifier = second.notifier_builder().create().unwrap();
 
-        let (tx, rx) = std::sync::mpsc::channel();
-        let worker = std::thread::spawn(move || {
-            let outcome = waiter.wait();
-            tx.send(outcome).unwrap();
-            waiter
-        });
-        std::thread::sleep(std::time::Duration::from_millis(5));
         notifier.notify().unwrap();
-        let outcome = rx
-            .recv_timeout(std::time::Duration::from_millis(800))
-            .expect("the worker did not respond — the new listener never woke the waiter");
-        let _waiter = worker.join().expect("worker panicked");
+        let outcome = waiter.wait(std::time::Duration::ZERO);
         assert!(
             matches!(outcome, ReactiveLoopWakeOutcome::Notified),
             "a notify on the reconnected link must wake the runner; got {outcome:?}"
         );
         second_listener.try_wait_all(|_| {}).unwrap();
-    }
-
-    /// A wait with nothing to report returns on its own, which is what lets a
-    /// runner whose listener was replaced while it slept come round to rebuild
-    /// rather than sleeping on a dead fd until shutdown.
-    #[test]
-    fn a_wait_with_nothing_to_report_returns_at_its_bound() {
-        let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
-        let svc = node
-            .service_builder(&ServiceName::new(&unique_suffix("bounded-wait")).unwrap())
-            .event()
-            .max_notifiers(1)
-            .max_listeners(1)
-            .open_or_create()
-            .unwrap();
-        let listener = svc.listener_builder().create().unwrap();
-        // SAFETY: the fd is used only while `listener` is alive.
-        let listener_fd = unsafe { listener.file_descriptor().native_handle() };
-        let waiter =
-            ReactiveLoopFdWaiter::new(listener_fd, 1, Some(make_eventfd())).expect("epoll setup");
-
-        let started = std::time::Instant::now();
-        let outcome = waiter.wait();
-        let elapsed = started.elapsed();
-
-        assert!(
-            matches!(outcome, ReactiveLoopWakeOutcome::TimedOut),
-            "an idle wait must time out rather than block; got {outcome:?}"
-        );
-        assert!(
-            elapsed >= std::time::Duration::from_millis(REACTIVE_WAIT_BOUND_MS as u64 - 50)
-                && elapsed < std::time::Duration::from_secs(3),
-            "the wait must return at its bound; took {elapsed:?}"
-        );
     }
 }

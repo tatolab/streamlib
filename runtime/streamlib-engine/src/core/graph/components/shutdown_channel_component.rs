@@ -4,8 +4,8 @@
 use crossbeam_channel::{Receiver, Sender};
 use serde_json::Value as JsonValue;
 
-#[cfg(target_os = "linux")]
-use std::os::fd::{AsRawFd, OwnedFd};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use std::os::fd::OwnedFd;
 
 use super::JsonSerializableComponent;
 
@@ -13,12 +13,13 @@ use super::JsonSerializableComponent;
 pub struct ShutdownChannelComponent {
     pub sender: Sender<()>,
     pub receiver: Option<Receiver<()>>,
-    /// Linux-only: eventfd that mirrors the shutdown signal. The reactive
-    /// thread runner registers this fd in its epoll set so it can wake on
-    /// shutdown without polling. Continuous and manual modes still use the
-    /// crossbeam channel via [`Self::sender`] / [`Self::receiver`].
-    #[cfg(target_os = "linux")]
-    shutdown_eventfd: OwnedFd,
+    /// Descriptor that turns readable on shutdown and stays so. The reactive
+    /// thread runner waits on it beside its listener; continuous and manual
+    /// modes use the crossbeam channel via [`Self::sender`] / [`Self::receiver`].
+    /// `None` when it could not be created, which leaves a reactive runner on
+    /// channel-only shutdown.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    shutdown_wake: Option<ShutdownWakeDescriptor>,
 }
 
 impl ShutdownChannelComponent {
@@ -27,8 +28,16 @@ impl ShutdownChannelComponent {
         Self {
             sender,
             receiver: Some(receiver),
-            #[cfg(target_os = "linux")]
-            shutdown_eventfd: create_shutdown_eventfd(),
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            shutdown_wake: ShutdownWakeDescriptor::create()
+                .inspect_err(|e| {
+                    tracing::warn!(
+                        "shutdown wake descriptor creation failed, reactive runners fall \
+                         back to channel-only shutdown: {}",
+                        e
+                    )
+                })
+                .ok(),
         }
     }
 
@@ -37,59 +46,111 @@ impl ShutdownChannelComponent {
         self.receiver.take()
     }
 
-    /// Signal shutdown to every waiting consumer: writes to the Linux
-    /// eventfd (wakes the reactive epoll-wait) and sends on the crossbeam
+    /// Signal shutdown to every waiting consumer: makes the shutdown wake
+    /// descriptor readable (ends a reactive wait) and sends on the crossbeam
     /// channel (poll-based continuous/manual modes).
     pub fn signal_shutdown(&self) {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        if let Some(shutdown_wake) = &self.shutdown_wake
+            && let Err(e) = shutdown_wake.make_readable()
         {
-            let buf = 1u64.to_ne_bytes();
-            // SAFETY: shutdown_eventfd is a valid eventfd owned by Self for
-            // the duration of this call. eventfd accepts an 8-byte write.
-            let n = unsafe {
-                libc::write(
-                    self.shutdown_eventfd.as_raw_fd(),
-                    buf.as_ptr().cast(),
-                    buf.len(),
-                )
-            };
-            if n < 0 {
-                tracing::warn!(
-                    "shutdown eventfd write failed: {}",
-                    std::io::Error::last_os_error()
-                );
-            }
+            tracing::warn!("shutdown wake descriptor write failed: {}", e);
         }
         let _ = self.sender.send(());
     }
 
-    /// Linux-only: duplicate the shutdown eventfd for a consumer that
-    /// wants to register it in its own epoll set. Returns an [`OwnedFd`]
-    /// the caller closes when done.
-    #[cfg(target_os = "linux")]
-    pub fn try_clone_shutdown_eventfd(&self) -> std::io::Result<OwnedFd> {
-        self.shutdown_eventfd.try_clone()
+    /// Duplicate the readable end of the shutdown wake descriptor for a
+    /// consumer that registers it in its own epoll set or kqueue.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn try_clone_shutdown_wake_fd(&self) -> std::io::Result<OwnedFd> {
+        match &self.shutdown_wake {
+            Some(shutdown_wake) => shutdown_wake.try_clone_readable_end(),
+            None => Err(std::io::Error::other(
+                "the shutdown wake descriptor was never created",
+            )),
+        }
     }
 }
 
+/// An eventfd on Linux: one descriptor both written and waited on.
 #[cfg(target_os = "linux")]
-fn create_shutdown_eventfd() -> OwnedFd {
-    use std::os::fd::FromRawFd;
-    // SAFETY: eventfd returns -1 on failure; checked below. Initial counter
-    // is 0; EFD_CLOEXEC prevents fork-inherited duplicates from leaking
-    // into subprocesses.
-    let raw = unsafe { libc::eventfd(0, libc::EFD_CLOEXEC) };
-    if raw < 0 {
-        // eventfd failure here is unrecoverable — the runtime can't shutdown
-        // reactive processors without it. Panicking surfaces the misconfig
-        // immediately instead of silently degrading to the old polling shape.
-        panic!(
-            "eventfd(EFD_CLOEXEC) failed: {}",
-            std::io::Error::last_os_error()
-        );
+struct ShutdownWakeDescriptor {
+    eventfd: OwnedFd,
+}
+
+#[cfg(target_os = "linux")]
+impl ShutdownWakeDescriptor {
+    fn create() -> std::io::Result<Self> {
+        use std::os::fd::FromRawFd;
+        // SAFETY: eventfd returns -1 on failure; checked below. Initial counter
+        // is 0; EFD_CLOEXEC prevents fork-inherited duplicates from leaking
+        // into subprocesses.
+        let raw = unsafe { libc::eventfd(0, libc::EFD_CLOEXEC) };
+        if raw < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: raw is a fresh, owned fd from a successful eventfd() call.
+        Ok(Self {
+            eventfd: unsafe { OwnedFd::from_raw_fd(raw) },
+        })
     }
-    // SAFETY: raw is a fresh, owned fd from a successful eventfd() call.
-    unsafe { OwnedFd::from_raw_fd(raw) }
+
+    fn make_readable(&self) -> std::io::Result<()> {
+        use std::os::fd::AsRawFd;
+        let buf = 1u64.to_ne_bytes();
+        // SAFETY: the eventfd is owned by Self for the duration of this call.
+        // eventfd accepts an 8-byte write.
+        let n = unsafe { libc::write(self.eventfd.as_raw_fd(), buf.as_ptr().cast(), buf.len()) };
+        if n < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    fn try_clone_readable_end(&self) -> std::io::Result<OwnedFd> {
+        self.eventfd.try_clone()
+    }
+}
+
+/// A close-on-exec pipe on macOS, which has no eventfd. Nothing reads it, so
+/// the one byte written leaves the read end readable for good.
+#[cfg(target_os = "macos")]
+struct ShutdownWakeDescriptor {
+    pipe_read_end: std::io::PipeReader,
+    pipe_write_end: std::io::PipeWriter,
+    already_signalled: std::sync::atomic::AtomicBool,
+}
+
+#[cfg(target_os = "macos")]
+impl ShutdownWakeDescriptor {
+    fn create() -> std::io::Result<Self> {
+        let (pipe_read_end, pipe_write_end) = std::io::pipe()?;
+        Ok(Self {
+            pipe_read_end,
+            pipe_write_end,
+            already_signalled: std::sync::atomic::AtomicBool::new(false),
+        })
+    }
+
+    /// Writes once however often it is called, so a repeated signal never
+    /// fills the pipe and blocks.
+    fn make_readable(&self) -> std::io::Result<()> {
+        use std::io::Write;
+        if self
+            .already_signalled
+            .swap(true, std::sync::atomic::Ordering::AcqRel)
+        {
+            return Ok(());
+        }
+        (&self.pipe_write_end).write_all(&[1]).inspect_err(|_| {
+            self.already_signalled
+                .store(false, std::sync::atomic::Ordering::Release)
+        })
+    }
+
+    fn try_clone_readable_end(&self) -> std::io::Result<OwnedFd> {
+        self.pipe_read_end.try_clone().map(OwnedFd::from)
+    }
 }
 
 impl Default for ShutdownChannelComponent {
