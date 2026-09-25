@@ -43,7 +43,9 @@ use coreaudio_audio_tier::{
 };
 
 mod coreaudio_muted_process_tap_of_this_process;
-use coreaudio_muted_process_tap_of_this_process::MutedProcessTapOfThisProcessBehindAPrivateAggregateDevice;
+use coreaudio_muted_process_tap_of_this_process::{
+    DefaultOutputDeviceVolumeControls, MutedProcessTapOfThisProcessBehindAPrivateAggregateDevice,
+};
 
 const TONE_FREQUENCY_HZ: f64 = 440.0;
 
@@ -75,11 +77,11 @@ const LEAST_STEADY_TONE_ANALYSED: Duration = Duration::from_millis(1500);
 
 const MAX_FREQUENCY_ERROR_HZ: f64 = 1.0;
 
-/// `known_audio_signal.py`'s loopback bound, about ±0.9 dB. The tap should
-/// return the tone at unity: a stereo mixdown of a stream that carries the
-/// same sample on every channel is that sample, the tap reads this process's
+/// `known_audio_signal.py`'s loopback bound, about ±0.9 dB. A stereo mixdown
+/// of a stream that carries the same sample on every channel is that sample,
+/// so the tap returns the tone at unity provided it reads this process's
 /// output before the device applies its volume, and drift compensation's
-/// resampler is unity gain at 440 Hz.
+/// resampler is unity gain at 440 Hz. Neither has yet been observed on a Mac.
 const MAX_AMPLITUDE_ERROR: f64 = 0.05;
 
 /// A clean digital path fits one sinusoid to within float rounding, far below
@@ -666,6 +668,7 @@ fn a_tone_played_to_the_default_output_comes_back_intact_through_a_muted_process
         frames_captured_since_arming += block.interleaved_samples.len() / channels;
         captured_blocks.push(block);
     }
+    let default_output_volume_while_the_tone_played = DefaultOutputDeviceVolumeControls::read();
     write_next(SignalThePlaybackHandOffWrites::DigitalSilence);
     playback_stream.stop_requesting().expect("playback stops");
     capture_stream.stop_delivering().expect("capture stops");
@@ -746,6 +749,10 @@ fn a_tone_played_to_the_default_output_comes_back_intact_through_a_muted_process
          {least_steady_frames} were needed"
     );
 
+    print_for_the_evidence_record(format!(
+        "default output volume while the tone played: \
+         {default_output_volume_while_the_tone_played}"
+    ));
     for channel in 0..channels {
         let steady_tone: Vec<f32> = (steady_start_frame..captured_frames)
             .map(|frame| interleaved_samples[frame * channels + channel])
@@ -771,9 +778,11 @@ fn a_tone_played_to_the_default_output_comes_back_intact_through_a_muted_process
         );
         assert!(
             (fitted.amplitude - f64::from(TONE_AMPLITUDE)).abs() <= MAX_AMPLITUDE_ERROR,
-            "channel {channel} of the tap carries the tone at {:.4} where {TONE_AMPLITUDE} was \
-             played — the tap is not unity gain, or it sits after the device's volume",
-            fitted.amplitude
+            "channel {channel} of the tap carries the tone at {:.4} ({:+.3} dB) where \
+             {TONE_AMPLITUDE} was played — the tap is not unity gain, or it sits after the \
+             device's volume, which was {default_output_volume_while_the_tone_played}",
+            fitted.amplitude,
+            20.0 * (fitted.amplitude / f64::from(TONE_AMPLITUDE)).log10(),
         );
         assert!(
             residual_db <= MAX_SINE_FIT_RESIDUAL_DB,

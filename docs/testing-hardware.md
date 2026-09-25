@@ -188,7 +188,10 @@ on the pilot with nothing audible played; if the arm's playback was asked for
 none of the pilot, the failure names the playback path instead. That a
 reading tap keeps the tone off the output rests on Core Audio's documented
 muted-tap behaviour and has not yet been observed on a Mac, so run it
-attended, with the speakers audible, until someone has heard it stay silent:
+attended, with the speakers audible, until someone has heard it stay silent.
+The run prints the default output's volume beside the tap's fitted gain. The
+amplitude gate assumes the tap reads before that volume, which is also not
+yet observed: a tone read back at 0.5 with the volume below full settles it.
 
 ```bash
 cargo test -p streamlib-engine --features hardware-tests \

@@ -10,6 +10,9 @@
 //! strands nothing. Reading the tap needs System Audio Recording allowed for
 //! the application macOS holds responsible for this process; without it the
 //! tap delivers exact digital zeros and no error.
+//!
+//! Beside them, a read of the default output device's volume, which decides
+//! whether a tap reading at unity gain sits before that volume or after it.
 
 use std::ffi::CStr;
 use std::ptr::NonNull;
@@ -19,15 +22,19 @@ use objc2::AnyThread;
 use objc2_core_audio::{
     AudioHardwareCreateAggregateDevice, AudioHardwareCreateProcessTap,
     AudioHardwareDestroyAggregateDevice, AudioHardwareDestroyProcessTap,
-    AudioObjectGetPropertyData, AudioObjectGetPropertyDataSize, AudioObjectID,
-    AudioObjectPropertyAddress, AudioObjectPropertyScope, AudioObjectPropertySelector,
-    CATapDescription, CATapMuteBehavior, kAudioAggregateDeviceIsPrivateKey,
-    kAudioAggregateDeviceNameKey, kAudioAggregateDeviceTapAutoStartKey,
-    kAudioAggregateDeviceTapListKey, kAudioAggregateDeviceUIDKey, kAudioDevicePropertyStreams,
+    AudioObjectGetPropertyData, AudioObjectGetPropertyDataSize, AudioObjectHasProperty,
+    AudioObjectID, AudioObjectPropertyAddress, AudioObjectPropertyElement,
+    AudioObjectPropertyScope, AudioObjectPropertySelector, CATapDescription, CATapMuteBehavior,
+    kAudioAggregateDeviceIsPrivateKey, kAudioAggregateDeviceNameKey,
+    kAudioAggregateDeviceTapAutoStartKey, kAudioAggregateDeviceTapListKey,
+    kAudioAggregateDeviceUIDKey, kAudioDevicePropertyPreferredChannelsForStereo,
+    kAudioDevicePropertyStreams, kAudioDevicePropertyVolumeDecibels,
+    kAudioDevicePropertyVolumeScalar, kAudioHardwarePropertyDefaultOutputDevice,
     kAudioHardwarePropertyDevices, kAudioHardwarePropertyTranslatePIDToProcessObject,
     kAudioObjectPropertyElementMain, kAudioObjectPropertyScopeGlobal,
-    kAudioObjectPropertyScopeInput, kAudioObjectSystemObject, kAudioObjectUnknown,
-    kAudioSubTapDriftCompensationKey, kAudioSubTapUIDKey, kAudioTapPropertyFormat,
+    kAudioObjectPropertyScopeInput, kAudioObjectPropertyScopeOutput, kAudioObjectSystemObject,
+    kAudioObjectUnknown, kAudioSubTapDriftCompensationKey, kAudioSubTapUIDKey,
+    kAudioTapPropertyFormat,
 };
 use objc2_core_audio_types::AudioStreamBasicDescription;
 use objc2_core_foundation::{CFArray, CFDictionary, CFNumber, CFRetained, CFString, CFType};
@@ -275,6 +282,150 @@ impl Drop for PrivateAggregateDeviceOverOneProcessTap {
             );
         }
     }
+}
+
+/// One volume control of the default output device, as the HAL reported it.
+struct OutputVolumeControlReading {
+    /// `kAudioObjectPropertyElementMain` for the device's main volume,
+    /// otherwise the channel it scales.
+    volume_control_element: AudioObjectPropertyElement,
+    volume_scalar: f32,
+    volume_decibels: Option<f32>,
+}
+
+/// The default output device's volume, read without changing it: the level a
+/// tap placed after the device's volume would carry this process's output at.
+pub struct DefaultOutputDeviceVolumeControls {
+    default_output_device_object_id: Option<AudioObjectID>,
+    /// The device's main control or, where it has none, those of the two
+    /// channels macOS plays stereo on. Empty on a device without a volume.
+    volume_control_readings: Vec<OutputVolumeControlReading>,
+}
+
+impl DefaultOutputDeviceVolumeControls {
+    /// Read the default output device's volume controls. A property query: it
+    /// raises no prompt and changes nothing.
+    pub fn read() -> Self {
+        let Some(default_output_device_object_id) = fixed_size_property::<AudioObjectID>(
+            kAudioObjectSystemObject as AudioObjectID,
+            property_address(
+                kAudioHardwarePropertyDefaultOutputDevice,
+                kAudioObjectPropertyScopeGlobal,
+            ),
+        )
+        .filter(|&object_id| object_id != kAudioObjectUnknown) else {
+            return Self {
+                default_output_device_object_id: None,
+                volume_control_readings: Vec::new(),
+            };
+        };
+        let main_volume_control_reading = output_volume_control_reading(
+            default_output_device_object_id,
+            kAudioObjectPropertyElementMain,
+        );
+        let volume_control_readings = match main_volume_control_reading {
+            Some(main_volume_control_reading) => vec![main_volume_control_reading],
+            None => fixed_size_property::<[u32; 2]>(
+                default_output_device_object_id,
+                property_address(
+                    kAudioDevicePropertyPreferredChannelsForStereo,
+                    kAudioObjectPropertyScopeOutput,
+                ),
+            )
+            .unwrap_or([1, 2])
+            .into_iter()
+            .filter_map(|channel| {
+                output_volume_control_reading(default_output_device_object_id, channel)
+            })
+            .collect(),
+        };
+        Self {
+            default_output_device_object_id: Some(default_output_device_object_id),
+            volume_control_readings,
+        }
+    }
+}
+
+impl std::fmt::Display for DefaultOutputDeviceVolumeControls {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Some(default_output_device_object_id) = self.default_output_device_object_id else {
+            return formatter.write_str("unreadable: CoreAudio names no default output device");
+        };
+        if self.volume_control_readings.is_empty() {
+            return write!(
+                formatter,
+                "none: output device {default_output_device_object_id} has no volume control"
+            );
+        }
+        for (index, reading) in self.volume_control_readings.iter().enumerate() {
+            if index > 0 {
+                formatter.write_str(", ")?;
+            }
+            if reading.volume_control_element == kAudioObjectPropertyElementMain {
+                formatter.write_str("main")?;
+            } else {
+                write!(formatter, "channel {}", reading.volume_control_element)?;
+            }
+            write!(formatter, " scalar {:.3}", reading.volume_scalar)?;
+            if let Some(volume_decibels) = reading.volume_decibels {
+                write!(formatter, " ({volume_decibels:+.2} dB)")?;
+            }
+        }
+        write!(
+            formatter,
+            " on output device {default_output_device_object_id}"
+        )
+    }
+}
+
+fn output_volume_control_reading(
+    output_device_object_id: AudioObjectID,
+    volume_control_element: AudioObjectPropertyElement,
+) -> Option<OutputVolumeControlReading> {
+    let volume_property_address = |selector| AudioObjectPropertyAddress {
+        mSelector: selector,
+        mScope: kAudioObjectPropertyScopeOutput,
+        mElement: volume_control_element,
+    };
+    let volume_scalar = fixed_size_property::<f32>(
+        output_device_object_id,
+        volume_property_address(kAudioDevicePropertyVolumeScalar),
+    )?;
+    Some(OutputVolumeControlReading {
+        volume_control_element,
+        volume_scalar,
+        volume_decibels: fixed_size_property::<f32>(
+            output_device_object_id,
+            volume_property_address(kAudioDevicePropertyVolumeDecibels),
+        ),
+    })
+}
+
+/// A property whose value is one `T` of integers or floats, for which every
+/// bit pattern the HAL writes is valid; `None` when the object lacks it.
+fn fixed_size_property<T: Default + Copy>(
+    object_id: AudioObjectID,
+    address: AudioObjectPropertyAddress,
+) -> Option<T> {
+    // SAFETY: `address` is a live property address.
+    if !unsafe { AudioObjectHasProperty(object_id, NonNull::from(&address)) } {
+        return None;
+    }
+    let mut value = T::default();
+    let mut byte_count = std::mem::size_of::<T>() as u32;
+    // SAFETY: the destination is a writable `T` of the size passed, and every
+    // bit pattern is a valid `T`.
+    let status = unsafe {
+        AudioObjectGetPropertyData(
+            object_id,
+            NonNull::from(&address),
+            0,
+            std::ptr::null(),
+            NonNull::from(&mut byte_count),
+            NonNull::from(&mut value).cast(),
+        )
+    };
+    (status == NO_ERR && byte_count as usize == std::mem::size_of::<T>()).then_some(value)
 }
 
 /// The audio object CoreAudio keeps for this process, which a tap names to
