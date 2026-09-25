@@ -76,6 +76,9 @@ markers = [
     # A capability a named open parity ticket brings to macOS. Strict xfail
     # there, so the ticket's own fix turns it red until the mark comes off.
     "awaiting_macos_parity(issue): red on macOS until the named parity ticket lands; not run there unless STREAMLIB_RUN_AWAITING_MACOS_PARITY=1",
+    # A test that makes sound through a Mac's real speakers. The standing sweep
+    # there stays silent, so it is skipped on macOS unless someone is listening.
+    "audible_on_macos(reason): plays through a Mac's speakers; skipped on macOS unless STREAMLIB_RUN_ATTENDED_AUDIBLE_TESTS=1",
 ]
 
 [tool.maturin]
