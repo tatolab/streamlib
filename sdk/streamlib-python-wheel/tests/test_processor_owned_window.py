@@ -88,7 +88,6 @@ needs_a_window_server = pytest.mark.skipif(
 )
 
 
-
 def run_probe(
     start_app_under_test,
     probe_class_name: str,
