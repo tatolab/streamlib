@@ -18,6 +18,7 @@ pub mod encode;
 pub mod nv12_to_rgb;
 pub mod rgb_to_nv12;
 pub mod video_context;
+pub(crate) mod vulkan_video_codec_backend;
 
 // Public codec types — re-exported at the engine `crate::vulkan::video::*`
 // surface and pulled through to `streamlib::sdk::engine::video::*`.

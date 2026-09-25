@@ -21,21 +21,15 @@ pub mod display_window;
 #[cfg(test)]
 mod emitted_log_line_test_support;
 pub mod encoded_audio_packet;
-#[cfg(target_os = "linux")]
 pub mod encoded_frame_to_published_surface_decoder;
 pub mod encoded_packet_to_audio_block_decoder;
 pub mod encoded_stream_ordering;
 pub mod encoded_video_frame;
-#[cfg(target_os = "linux")]
 pub mod h264_decoder;
-#[cfg(target_os = "linux")]
 pub mod h264_encoder;
-#[cfg(target_os = "linux")]
 pub mod h265_decoder;
-#[cfg(target_os = "linux")]
 pub mod h265_encoder;
 pub mod h273_color_vui_translation;
-#[cfg(target_os = "linux")]
 pub mod hardware_video_codec_processor_identity;
 pub mod microphone_source;
 // The MP4 muxer reads its parameter sets through the engine's Vulkan Video
@@ -55,7 +49,6 @@ pub mod opus_encoder;
 pub mod opus_stream_layout;
 pub mod pooled_rgba_frame_staging;
 pub(crate) mod processor_thread_join;
-#[cfg(target_os = "linux")]
 pub mod published_surface_to_encoded_frame_encoder;
 pub mod speaker_sink;
 pub mod test_pattern_source;
@@ -74,7 +67,6 @@ pub use encoded_audio_packet::{
     EncodedAudioCodec, EncodedAudioPacket, EncodedAudioPacketBagRefusal,
     read_encoded_audio_packet_bag,
 };
-#[cfg(target_os = "linux")]
 pub use encoded_frame_to_published_surface_decoder::HardwareVideoDecoderConfig;
 pub use encoded_stream_ordering::{
     ArrivingEncodedBagDisposition, EncodedStreamOrderingPair, EncodedStreamOrderingPairCounter,
@@ -83,13 +75,9 @@ pub use encoded_stream_ordering::{
 pub use encoded_video_frame::{
     EncodedVideoCodec, EncodedVideoFrame, EncodedVideoFrameBagRefusal, read_encoded_video_frame_bag,
 };
-#[cfg(target_os = "linux")]
 pub use h264_decoder::H264Decoder;
-#[cfg(target_os = "linux")]
 pub use h264_encoder::H264Encoder;
-#[cfg(target_os = "linux")]
 pub use h265_decoder::H265Decoder;
-#[cfg(target_os = "linux")]
 pub use h265_encoder::H265Encoder;
 pub use microphone_source::{MicrophoneSource, MicrophoneSourceConfig};
 #[cfg(target_os = "linux")]
@@ -97,7 +85,6 @@ pub use mp4_sink::Mp4Sink;
 pub use opus_decoder::OpusDecoder;
 pub use opus_encoder::OpusEncoder;
 pub use pooled_rgba_frame_staging::stage_tightly_packed_rgba_into_pooled_pixel_buffer;
-#[cfg(target_os = "linux")]
 pub use published_surface_to_encoded_frame_encoder::HardwareVideoEncoderConfig;
 pub use speaker_sink::{SpeakerSink, SpeakerSinkConfig};
 pub use test_pattern_source::{TestPatternSource, TestPatternSourceConfig};

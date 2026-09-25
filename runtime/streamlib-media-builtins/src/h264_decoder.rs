@@ -1,8 +1,6 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-#![cfg(target_os = "linux")]
-
 //! Built-in H.264 decoder: encoded-frame bags in, published video surfaces
 //! out.
 //!
@@ -10,8 +8,9 @@
 //! with the H.265 decoder. What lives here is the port surface, the
 //! registration name, and the codec identity.
 
-use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
-use streamlib::sdk::engine::video::Codec;
+use streamlib::sdk::context::{
+    RuntimeContextFullAccess, RuntimeContextLimitedAccess, VideoCodecElementaryStream,
+};
 use streamlib::sdk::error::Result;
 use streamlib::sdk::processors::ReactiveProcessor;
 
@@ -24,12 +23,13 @@ pub struct H264DecoderCodecIdentity;
 
 impl HardwareVideoCodecProcessorIdentity for H264DecoderCodecIdentity {
     const ENCODED_VIDEO_CODEC: EncodedVideoCodec = EncodedVideoCodec::H264;
-    const VIDEO_SESSION_CODEC: Codec = Codec::H264;
+    const VIDEO_CODEC_ELEMENTARY_STREAM: VideoCodecElementaryStream =
+        VideoCodecElementaryStream::H264;
     const PROCESSOR_NAME: &'static str = "H264Decoder";
 }
 
 #[streamlib::sdk::processor(
-    description = "Decodes H.264 Annex-B encoded-frame bags to published video surfaces via Vulkan Video hardware decode",
+    description = "Decodes H.264 Annex-B encoded-frame bags to published video surfaces via hardware decode",
     execution = reactive,
     scheduling = high,
     config = crate::encoded_frame_to_published_surface_decoder::HardwareVideoDecoderConfig,
@@ -57,8 +57,6 @@ impl ReactiveProcessor for H264Decoder::Processor {
         if !self.inputs.has_data("encoded_video") {
             return Ok(());
         }
-        let gpu_context = self.decode_body.gpu_context_for_this_tick()?;
-
         // One allocation for the whole tick, drained after every bag so the
         // pooled pixel buffers are released as soon as their frame is written
         // rather than held for the batch.
@@ -67,7 +65,6 @@ impl ReactiveProcessor for H264Decoder::Processor {
             self.inputs.read_raw("encoded_video")?
         {
             let decode_outcome = self.decode_body.decode_one_arriving_bag(
-                &gpu_context,
                 &bag_bytes,
                 frame_header_timestamp_ns,
                 &mut staged,

@@ -1,11 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-#![cfg(target_os = "linux")]
-
 //! The encode body both hardware video encoder built-ins are: published
-//! video surfaces in, encoded-frame bags out, via the engine's Vulkan Video
-//! session surface.
+//! video surfaces in, encoded-frame bags out, via the video codec seam.
 //!
 //! The session mints lazily inside a one-shot `escalate` window on the first
 //! frame, so its dimensions track upstream; config width/height are
@@ -21,8 +18,11 @@
 use std::marker::PhantomData;
 
 use serde::{Deserialize, Serialize};
-use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
-use streamlib::sdk::engine::video::{EncodePacket, Preset, SimpleEncoder, SimpleEncoderConfig};
+use streamlib::sdk::context::{
+    EncodedVideoAccessUnitFromSession, GpuContextLimitedAccess, RuntimeContextFullAccess,
+    VideoEncodeSession, VideoEncodeSessionRequest, VideoEncodeSourceSurface,
+    probe_video_codec_backend,
+};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::schemars::JsonSchema;
 
@@ -43,8 +43,8 @@ const ENCODE_PROGRESS_LOG_INTERVAL_FRAMES: u64 = 300;
 
 /// Configuration for the hardware video encoder built-ins. Everything is
 /// optional: dimensions and rate track the upstream frames, and the knobs
-/// below are the guardrail set the session surface accepts. Both codecs take
-/// exactly these, because the session surface takes exactly these.
+/// below are the guardrail set the codec seam accepts. Both codecs take
+/// exactly these, because the seam takes exactly these.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[schemars(crate = "streamlib::sdk::schemars")]
 pub struct HardwareVideoEncoderConfig {
@@ -65,8 +65,8 @@ pub struct HardwareVideoEncoderConfig {
     /// Seconds between IDR sync points. Absent: 2.
     #[serde(default)]
     pub keyframe_interval_seconds: Option<u32>,
-    /// Vulkan encoder-effort index (driver analysis budget, not a codec
-    /// quality knob). Absent: the codec's default.
+    /// Encoder-effort index (the hardware encoder's analysis budget, not a
+    /// codec quality knob). Absent: the codec's default.
     #[serde(default)]
     pub effort_level: Option<u32>,
 }
@@ -82,7 +82,7 @@ pub struct EncodedFrameAwaitingPublication {
 /// One minted encoder session plus the upstream facts it was minted from —
 /// what a later frame is checked against to notice a renegotiated upstream.
 struct EncodeSessionMintedFromUpstream {
-    session: SimpleEncoder,
+    session: Box<dyn VideoEncodeSession>,
     /// The source extent the session was minted for.
     minted_width: u32,
     minted_height: u32,
@@ -110,7 +110,7 @@ struct MintedSessionBagFields {
 pub struct PublishedSurfaceToEncodedFrameEncoder<Identity: HardwareVideoCodecProcessorIdentity> {
     encode_session: Option<EncodeSessionMintedFromUpstream>,
     /// Latched on the first failed mint: this machine will not grow a
-    /// Vulkan Video encode queue mid-run, and retrying would re-take the
+    /// hardware encoder mid-run, and retrying would re-take the
     /// escalate gate — and its device-idle drain — on every camera frame.
     session_mint_already_failed: bool,
     gpu_context: Option<GpuContextLimitedAccess>,
@@ -219,20 +219,15 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
             };
             minted.warn_once_on_color_change(Identity::PROCESSOR_NAME, frame.color_info.as_ref());
 
-            // Resolve the frame's published surface; the registration's
-            // tracked layout is what the submit checks against its sampling
-            // contract.
-            let source_registration = gpu_context.resolve_texture_registration_by_surface_id(
-                &frame.surface_id,
-                frame.texture_layout,
-                frame.width,
-                frame.height,
-            )?;
-            let packets = match minted.session.encode_source_texture(
-                source_registration.texture(),
-                source_registration.current_layout(),
-                Some(frame.timestamp_ns),
-            ) {
+            let packets = match minted
+                .session
+                .encode_published_surface(&VideoEncodeSourceSurface {
+                    surface_id: &frame.surface_id,
+                    texture_layout: frame.texture_layout,
+                    width: frame.width,
+                    height: frame.height,
+                    timestamp_ns: frame.timestamp_ns,
+                }) {
                 Ok(packets) => packets,
                 Err(encode_failure) => {
                     self.frames_that_failed_to_encode += 1;
@@ -270,18 +265,18 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
     fn encoded_frame_bag_for(
         &mut self,
         session_fields: &MintedSessionBagFields,
-        packet: EncodePacket,
+        packet: EncodedVideoAccessUnitFromSession,
         source_frame_timestamp_ns: i64,
     ) -> EncodedFrameAwaitingPublication {
         let ordering_pair = self
             .ordering_pair_counter
-            .account_published_bag(packet.is_keyframe);
+            .account_published_bag(packet.is_sync_point);
         EncodedFrameAwaitingPublication {
             timestamp_ns: packet.timestamp_ns.unwrap_or(source_frame_timestamp_ns),
             frame: EncodedVideoFrame {
                 codec: Identity::ENCODED_VIDEO_CODEC,
-                annex_b_access_unit_bytes: packet.data,
-                is_sync_point: packet.is_keyframe,
+                annex_b_access_unit_bytes: packet.annex_b_access_unit_bytes,
+                is_sync_point: packet.is_sync_point,
                 group_index: ordering_pair.group_index,
                 sequence_index: ordering_pair.sequence_index,
                 width: session_fields.coded_width,
@@ -386,31 +381,24 @@ fn mint_encode_session_from_first_frame<Identity: HardwareVideoCodecProcessorIde
         .map(color_info_to_h273_color_vui)
         .filter(|vui| vui.is_video_signal_type_block_needed());
 
-    let session_config = SimpleEncoderConfig {
+    let session_request = VideoEncodeSessionRequest {
+        elementary_stream: Identity::VIDEO_CODEC_ELEMENTARY_STREAM,
         width,
         height,
-        fps,
-        codec: Identity::VIDEO_SESSION_CODEC,
-        preset: Preset::Medium,
-        qp: None,
+        frames_per_second: fps,
         bitrate_bps: config.bitrate_bps,
-        // Streaming shape: no B-frames, periodic IDR, parameter sets
-        // prepended to every IDR for mid-stream join — what makes every
-        // `is_sync_point` bag a self-sufficient decode entry point.
-        streaming: true,
-        idr_interval_secs: config
+        keyframe_interval_seconds: config
             .keyframe_interval_seconds
             .unwrap_or(DEFAULT_IDR_INTERVAL_SECONDS),
-        prepend_header_to_idr: Some(true),
         effort_level: config.effort_level,
         color_vui,
     };
 
     // One-shot mint: the escalate scope-end drains the device, so this runs
-    // once per session, never per frame. `true` pre-allocates the RGB→NV12
-    // converter so the first submit skips its allocation latency.
+    // once per session, never per frame.
+    let backend = probe_video_codec_backend();
     let session = gpu_context
-        .escalate(|full| full.create_encoder_session(session_config, true))
+        .escalate(|full| backend.open_encode_session(full, &session_request))
         .map_err(|e| {
             Error::Runtime(format!(
                 "{}: failed to mint the encoder session: {e}",
@@ -418,8 +406,9 @@ fn mint_encode_session_from_first_frame<Identity: HardwareVideoCodecProcessorIde
             ))
         })?;
 
-    let (coded_width, coded_height) = session.aligned_extent();
+    let (coded_width, coded_height) = session.coded_extent();
     tracing::info!(
+        video_codec_backend = backend.backend_name(),
         width,
         height,
         fps,
@@ -444,7 +433,7 @@ mod tests {
     use super::*;
     use crate::h264_encoder::H264EncoderCodecIdentity;
     use crate::h265_encoder::H265EncoderCodecIdentity;
-    use streamlib::sdk::engine::video::Codec;
+    use streamlib::sdk::context::VideoCodecElementaryStream;
 
     #[test]
     fn frame_dimensions_win_over_config_guardrails() {
@@ -509,12 +498,18 @@ mod tests {
     /// would produce a bitstream whose bag lies about it.
     #[test]
     fn each_encoders_identity_names_one_codec_on_both_the_session_and_the_bag() {
-        assert_eq!(H264EncoderCodecIdentity::VIDEO_SESSION_CODEC, Codec::H264);
+        assert_eq!(
+            H264EncoderCodecIdentity::VIDEO_CODEC_ELEMENTARY_STREAM,
+            VideoCodecElementaryStream::H264
+        );
         assert_eq!(
             H264EncoderCodecIdentity::ENCODED_VIDEO_CODEC.as_wire_str(),
             "h264"
         );
-        assert_eq!(H265EncoderCodecIdentity::VIDEO_SESSION_CODEC, Codec::H265);
+        assert_eq!(
+            H265EncoderCodecIdentity::VIDEO_CODEC_ELEMENTARY_STREAM,
+            VideoCodecElementaryStream::H265
+        );
         assert_eq!(
             H265EncoderCodecIdentity::ENCODED_VIDEO_CODEC.as_wire_str(),
             "h265"

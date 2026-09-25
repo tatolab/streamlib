@@ -226,18 +226,9 @@ pub mod sdk {
         #[cfg(target_os = "linux")]
         pub use streamlib_engine::linux_v4l2_color;
 
-        /// Vulkan Video codec layer — engine-tier H.264/H.265
-        /// encode/decode primitives (`SimpleEncoder`, `SimpleDecoder`,
-        /// `Codec`, `Preset`, `EncodePacket`, codec configuration
-        /// types; their H.273 colour vocabulary is `sdk::color`'s
-        /// `H273ColorVui`). Sessions are minted through the
-        /// `GpuContext` session surface — `create_encoder_session` /
-        /// `create_decoder_session` — which wires the host RHI's queue
-        /// mutex, allocator, and per-queue families internally;
-        /// both are mirrored on `GpuContextFullAccess`, so a processor
-        /// mints in `setup()`, whose typestate is already Full, or from
-        /// `process()` via `escalate(|full| ...)`. The codec built-ins in
-        /// `streamlib-media-builtins` reach for the codec types here.
+        /// Vulkan Video codec layer — the video codec seam's Linux arm and
+        /// its bitstream parsers. A codec session is opened through
+        /// `sdk::context::probe_video_codec_backend`, never minted here.
         #[cfg(target_os = "linux")]
         pub use streamlib_engine::video;
     }

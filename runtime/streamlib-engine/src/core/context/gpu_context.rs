@@ -2687,7 +2687,7 @@ impl GpuContext {
     /// allocation latency.
     #[cfg(target_os = "linux")]
     #[tracing::instrument(skip(self, config), fields(rhi_op = "create_encoder_session"))]
-    pub fn create_encoder_session(
+    pub(crate) fn create_encoder_session(
         &self,
         config: crate::vulkan::video::encode::SimpleEncoderConfig,
         prepare_gpu_input: bool,
@@ -2721,7 +2721,7 @@ impl GpuContext {
     /// `0` request that auto-detection.
     #[cfg(target_os = "linux")]
     #[tracing::instrument(skip(self, config), fields(rhi_op = "create_decoder_session"))]
-    pub fn create_decoder_session(
+    pub(crate) fn create_decoder_session(
         &self,
         config: crate::vulkan::video::decode::SimpleDecoderConfig,
     ) -> Result<crate::vulkan::video::decode::SimpleDecoder> {
@@ -4030,11 +4030,11 @@ impl GpuContextFullAccess {
             .create_present_compositor(attachment_format)
     }
 
-    /// Mint a hardware video encoder session — the FullAccess mirror of
-    /// [`GpuContext::create_encoder_session`], reachable from a processor's
-    /// `process()` via `escalate(|full| ...)` for the one-shot lazy mint.
+    /// Mint a Vulkan Video encoder on the host device — the FullAccess mirror
+    /// of [`GpuContext::create_encoder_session`] the video codec seam's Vulkan
+    /// Video arm opens an encode session with.
     #[cfg(target_os = "linux")]
-    pub fn create_encoder_session(
+    pub(crate) fn create_encoder_session(
         &self,
         config: crate::vulkan::video::encode::SimpleEncoderConfig,
         prepare_gpu_input: bool,
@@ -4043,12 +4043,11 @@ impl GpuContextFullAccess {
             .create_encoder_session(config, prepare_gpu_input)
     }
 
-    /// Mint a hardware video decoder session — the FullAccess mirror of
-    /// [`GpuContext::create_decoder_session`], reachable from a processor's
-    /// `setup()`, whose typestate is already Full, and from `process()` via
-    /// `escalate(|full| ...)`.
+    /// Mint a Vulkan Video decoder on the host device — the FullAccess mirror
+    /// of [`GpuContext::create_decoder_session`] the video codec seam's Vulkan
+    /// Video arm opens a decode session with.
     #[cfg(target_os = "linux")]
-    pub fn create_decoder_session(
+    pub(crate) fn create_decoder_session(
         &self,
         config: crate::vulkan::video::decode::SimpleDecoderConfig,
     ) -> Result<crate::vulkan::video::decode::SimpleDecoder> {

@@ -1,19 +1,15 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-#![cfg(target_os = "linux")]
-
 //! The decode body both hardware video decoder built-ins are: encoded-frame
-//! bags in, published video surfaces out, via the engine's Vulkan Video
-//! session surface.
+//! bags in, published video surfaces out, via the video codec seam.
 //!
 //! The session mints in `setup()`, whose typestate is already Full, with its
 //! coded dimensions auto-detected from the stream's first SPS. Decoded
-//! pictures are read back as RGBA — already cropped to the stream's
-//! conformance window by the session, so the CTU padding an H.265 stream
-//! codes never reaches a consumer — and staged into pooled pixel buffers
-//! whose pool id is the published `surface_id`, the same CPU→GPU hand-off
-//! the camera uses.
+//! pictures arrive in pooled pixel buffers whose pool id is the published
+//! `surface_id`, already cropped to the stream's conformance window by the
+//! session, so the CTU padding an H.265 stream codes never reaches a
+//! consumer.
 //!
 //! One session serves one coded extent. A producer that renegotiates — the
 //! shipped encoders re-mint at a new extent and open the new stream at a
@@ -31,12 +27,12 @@ use std::marker::PhantomData;
 
 use serde::{Deserialize, Serialize};
 use streamlib::sdk::color::H273ColorVui;
-use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
-use streamlib::sdk::engine::video::decode::{
-    SimpleDecodedFrame, SimpleDecoder, SimpleDecoderConfig,
+use streamlib::sdk::context::{
+    DecodedVideoPictureInPooledPixelBuffer, RuntimeContextFullAccess, VideoDecodeSession,
+    VideoDecodeSessionRequest, probe_video_codec_backend,
 };
 use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::rhi::{PixelBuffer, PixelFormat};
+use streamlib::sdk::rhi::PixelBuffer;
 use streamlib::sdk::schemars::JsonSchema;
 
 use crate::cumulative_count_report_threshold::CumulativeCountReportThreshold;
@@ -46,7 +42,6 @@ use crate::encoded_video_frame::{
 };
 use crate::h273_color_vui_translation::h273_color_vui_to_color_info;
 use crate::hardware_video_codec_processor_identity::HardwareVideoCodecProcessorIdentity;
-use crate::pooled_rgba_frame_staging::stage_tightly_packed_rgba_into_pooled_pixel_buffer;
 use crate::video_frame::{ColorInfo, VideoFrame};
 
 /// Decode-progress log cadence, in frames.
@@ -61,7 +56,7 @@ const STREAM_RE_ENTRY_REPORT_INTERVAL: u64 = 20;
 /// extent the decoded picture buffer is allocated for, and both are optional:
 /// absent, the extent is auto-detected from the stream's first SPS, which is
 /// what a decoder fed by an unknown producer wants. The DPB's slot count is
-/// the session surface's own and is not configurable here.
+/// the codec seam's own and is not configurable here.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[schemars(crate = "streamlib::sdk::schemars")]
 pub struct HardwareVideoDecoderConfig {
@@ -85,8 +80,7 @@ pub struct DecodedFrameAwaitingPublication {
 /// The decode state machine, shared by every hardware video decoder built-in
 /// and specialised only by its [`HardwareVideoCodecProcessorIdentity`].
 pub struct EncodedFrameToPublishedSurfaceDecoder<Identity: HardwareVideoCodecProcessorIdentity> {
-    decode_session: Option<SimpleDecoder>,
-    gpu_context: Option<GpuContextLimitedAccess>,
+    decode_session: Option<Box<dyn VideoDecodeSession>>,
     sync_point_gate: EncodedStreamSyncPointGate,
     stream_re_entry_report_schedule: Option<CumulativeCountReportThreshold>,
     /// The coded extent the minted session's parameter sets describe, learned
@@ -113,7 +107,6 @@ impl<Identity: HardwareVideoCodecProcessorIdentity> Default
     fn default() -> Self {
         Self {
             decode_session: None,
-            gpu_context: None,
             sync_point_gate: EncodedStreamSyncPointGate::default(),
             stream_re_entry_report_schedule: None,
             session_coded_extent: None,
@@ -135,18 +128,16 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
     ) -> Result<()> {
         let (max_width, max_height) =
             resolve_decoded_picture_buffer_dimension_caps(Identity::PROCESSOR_NAME, config);
-        let session = ctx
-            .gpu_full_access()
-            .create_decoder_session(SimpleDecoderConfig {
-                codec: Identity::VIDEO_SESSION_CODEC,
-                max_width,
-                max_height,
-                // Decoded pictures come back RGBA via the engine's GPU
-                // NV12→RGBA compute stage, which is what the pooled
-                // `Rgba32` pixel buffer below is sized and formatted for.
-                rgba_output: true,
-                ..SimpleDecoderConfig::default()
-            })
+        let backend = probe_video_codec_backend();
+        let session = backend
+            .open_decode_session(
+                ctx.gpu_full_access(),
+                &VideoDecodeSessionRequest {
+                    elementary_stream: Identity::VIDEO_CODEC_ELEMENTARY_STREAM,
+                    max_width,
+                    max_height,
+                },
+            )
             .map_err(|mint_failure| {
                 Error::Runtime(format!(
                     "{}: failed to mint the decoder session: {mint_failure}",
@@ -158,8 +149,8 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
             CumulativeCountReportThreshold::reporting_every(STREAM_RE_ENTRY_REPORT_INTERVAL),
         );
         self.decode_session = Some(session);
-        self.gpu_context = Some(ctx.gpu_limited_access().clone());
         tracing::info!(
+            video_codec_backend = backend.backend_name(),
             max_width,
             max_height,
             "{}: session minted; entering the stream at its next sync point",
@@ -178,24 +169,9 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
             Identity::PROCESSOR_NAME
         );
         self.decode_session.take();
-        self.gpu_context.take();
         self.session_coded_extent = None;
         self.session_needs_full_reset = false;
         Ok(())
-    }
-
-    /// The context handle the per-bag decode needs. Taken once per tick that
-    /// carries work, not per frame: the decode below needs `&mut self` for
-    /// the session, the gate and the counters while it is live, and a handle
-    /// clone is cheaper than a signature that hands borrowck six disjoint
-    /// fields.
-    pub fn gpu_context_for_this_tick(&self) -> Result<GpuContextLimitedAccess> {
-        self.gpu_context.as_ref().cloned().ok_or_else(|| {
-            Error::Runtime(format!(
-                "{}: GPU context not initialized",
-                Identity::PROCESSOR_NAME
-            ))
-        })
     }
 
     /// Read one arriving bag through the convention's own reader, apply the
@@ -206,7 +182,6 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
     /// would lose frames the decoder had already reconstructed.
     pub fn decode_one_arriving_bag(
         &mut self,
-        gpu_context: &GpuContextLimitedAccess,
         bag_bytes: &[u8],
         frame_header_timestamp_ns: i64,
         staged: &mut Vec<DecodedFrameAwaitingPublication>,
@@ -230,38 +205,40 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
             ArrivingEncodedBagDisposition::DiscardUntilTheNextSyncPoint => return Ok(()),
         }
 
-        let (decoded_frames, published_color) = {
-            let session = self.decode_session.as_mut().ok_or_else(|| {
+        let session = self.decode_session.as_mut().ok_or_else(|| {
+            Error::Runtime(format!(
+                "{}: decoder session not initialized",
+                Identity::PROCESSOR_NAME
+            ))
+        })?;
+        let mut decoded_pictures = Vec::new();
+        let decode_outcome = session
+            .decode_annex_b_access_unit(
+                &encoded_frame.annex_b_access_unit_bytes,
+                &mut decoded_pictures,
+            )
+            .map_err(|decode_failure| {
                 Error::Runtime(format!(
-                    "{}: decoder session not initialized",
+                    "{}: decode failed: {decode_failure}",
                     Identity::PROCESSOR_NAME
                 ))
-            })?;
-            let decoded_frames = session
-                .feed(&encoded_frame.annex_b_access_unit_bytes)
-                .map_err(|decode_failure| {
-                    Error::Runtime(format!(
-                        "{}: decode failed: {decode_failure}",
-                        Identity::PROCESSOR_NAME
-                    ))
-                })?;
-            // The bitstream's own VUI outranks the producer's attestation:
-            // it survives a muxer round trip that re-spelled the bag field,
-            // and it is what the pictures were actually reconstructed under.
-            let published_color =
-                resolve_published_color(session.current_color_vui(), encoded_frame.color.as_ref());
-            (decoded_frames, published_color)
-        };
+            });
+        // The bitstream's own VUI outranks the producer's attestation: it
+        // survives a muxer round trip that re-spelled the bag field, and it is
+        // what the pictures were actually reconstructed under.
+        let published_color = resolve_published_color(
+            session.parsed_parameter_set_color_vui(),
+            encoded_frame.color.as_ref(),
+        );
 
-        for decoded_frame in decoded_frames {
-            staged.push(self.stage_decoded_frame(
-                gpu_context,
-                decoded_frame,
+        staged.extend(decoded_pictures.into_iter().map(|decoded_picture| {
+            self.decoded_frame_awaiting_publication(
+                decoded_picture,
                 published_color.clone(),
                 frame_header_timestamp_ns,
-            )?);
-        }
-        Ok(())
+            )
+        }));
+        decode_outcome
     }
 
     /// A producer that renegotiated its extent publishes new parameter sets
@@ -311,10 +288,10 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
             ))
         })?;
         if self.session_needs_full_reset {
-            session.reset();
+            session.reset_for_new_parameter_sets();
             self.session_needs_full_reset = false;
         } else {
-            session.feed_discontinuity();
+            session.discard_in_flight_state_after_a_gap();
         }
         self.session_coded_extent = Some((encoded_frame.width, encoded_frame.height));
 
@@ -338,41 +315,18 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
         Ok(())
     }
 
-    /// Stage one decoded picture into a pooled pixel buffer whose pool id
-    /// becomes the frame's surface id. The extent is the session's own —
-    /// already the stream's conformance window, so an H.265 stream's CTU
-    /// padding is gone before a surface id ever names these pixels.
-    fn stage_decoded_frame(
+    /// Wrap one decoded picture as the video-frame bag that publishes its
+    /// pooled pixel buffer.
+    fn decoded_frame_awaiting_publication(
         &mut self,
-        gpu_context: &GpuContextLimitedAccess,
-        decoded_frame: SimpleDecodedFrame,
+        decoded_picture: DecodedVideoPictureInPooledPixelBuffer,
         color_info: Option<ColorInfo>,
         frame_header_timestamp_ns: i64,
-    ) -> Result<DecodedFrameAwaitingPublication> {
-        if !decoded_frame.is_rgba {
-            return Err(Error::Runtime(format!(
-                "{}: the session handed back an NV12 picture though it was minted for RGBA \
-                 output — the pooled pixel buffer is sized and formatted for RGBA",
-                Identity::PROCESSOR_NAME
-            )));
-        }
-        let width = decoded_frame.width;
-        let height = decoded_frame.height;
-
-        let (published_frame_id, pixel_buffer) =
-            gpu_context.acquire_pixel_buffer(width, height, PixelFormat::Rgba32)?;
-        stage_tightly_packed_rgba_into_pooled_pixel_buffer(
-            &pixel_buffer,
-            &decoded_frame.data,
-            width,
-            height,
-        )
-        .map_err(|staging_failure| {
-            Error::Runtime(format!("{}: {staging_failure}", Identity::PROCESSOR_NAME))
-        })?;
-
+    ) -> DecodedFrameAwaitingPublication {
+        let width = decoded_picture.width;
+        let height = decoded_picture.height;
         let frame = VideoFrame {
-            surface_id: published_frame_id.to_string(),
+            surface_id: decoded_picture.published_pixel_buffer_frame_id.to_string(),
             width,
             height,
             timestamp_ns: frame_header_timestamp_ns,
@@ -406,15 +360,15 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
                 Identity::PROCESSOR_NAME
             );
         }
-        Ok(DecodedFrameAwaitingPublication {
+        DecodedFrameAwaitingPublication {
             frame,
-            _pooled_pixel_buffer_held_until_written: pixel_buffer,
-        })
+            _pooled_pixel_buffer_held_until_written: decoded_picture.pixel_buffer,
+        }
     }
 }
 
-/// Resolve the DPB allocation caps from config. `0` is the session
-/// surface's spelling of "auto-detect from the first SPS"; a half-specified
+/// Resolve the DPB allocation caps from config. `0` is the codec seam's
+/// spelling of "auto-detect from the first SPS"; a half-specified
 /// pair caps nothing a DPB can be sized from, so it warns and auto-detects
 /// rather than allocating against one axis.
 fn resolve_decoded_picture_buffer_dimension_caps(

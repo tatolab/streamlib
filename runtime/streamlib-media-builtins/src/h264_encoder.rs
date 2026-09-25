@@ -1,8 +1,6 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-#![cfg(target_os = "linux")]
-
 //! Built-in H.264 encoder: published video surfaces in, encoded-frame bags
 //! out.
 //!
@@ -11,8 +9,9 @@
 //! elementary stream they mint a session for. What lives here is the port
 //! surface, the registration name, and the codec identity.
 
-use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
-use streamlib::sdk::engine::video::Codec;
+use streamlib::sdk::context::{
+    RuntimeContextFullAccess, RuntimeContextLimitedAccess, VideoCodecElementaryStream,
+};
 use streamlib::sdk::error::Result;
 use streamlib::sdk::processors::ReactiveProcessor;
 
@@ -26,12 +25,13 @@ pub struct H264EncoderCodecIdentity;
 
 impl HardwareVideoCodecProcessorIdentity for H264EncoderCodecIdentity {
     const ENCODED_VIDEO_CODEC: EncodedVideoCodec = EncodedVideoCodec::H264;
-    const VIDEO_SESSION_CODEC: Codec = Codec::H264;
+    const VIDEO_CODEC_ELEMENTARY_STREAM: VideoCodecElementaryStream =
+        VideoCodecElementaryStream::H264;
     const PROCESSOR_NAME: &'static str = "H264Encoder";
 }
 
 #[streamlib::sdk::processor(
-    description = "Encodes published video surfaces to H.264 Annex-B encoded-frame bags via Vulkan Video hardware encode",
+    description = "Encodes published video surfaces to H.264 Annex-B encoded-frame bags via hardware encode",
     execution = reactive,
     scheduling = high,
     config = crate::published_surface_to_encoded_frame_encoder::HardwareVideoEncoderConfig,
