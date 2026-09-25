@@ -35,7 +35,8 @@ use objc2_core_audio::{
     AudioObjectGetPropertyDataSize, AudioObjectID, AudioObjectPropertyAddress,
     AudioObjectPropertyScope, AudioObjectPropertySelector, AudioObjectRemovePropertyListenerBlock,
     kAudioDevicePropertyBufferFrameSize, kAudioDevicePropertyBufferFrameSizeRange,
-    kAudioDevicePropertyDeviceIsAlive, kAudioDevicePropertyDeviceUID, kAudioDevicePropertyLatency,
+    kAudioDevicePropertyDataSource, kAudioDevicePropertyDeviceIsAlive,
+    kAudioDevicePropertyDeviceUID, kAudioDevicePropertyLatency,
     kAudioDevicePropertyNominalSampleRate, kAudioDevicePropertyStreamConfiguration,
     kAudioDevicePropertyStreams, kAudioDevicePropertyTransportType,
     kAudioDeviceTransportTypeBuiltIn, kAudioHardwarePropertyDefaultInputDevice,
@@ -401,9 +402,17 @@ pub fn default_audio_device_uid(direction: CoreAudioStreamDirection) -> Option<S
         .filter(|uid| !uid.is_empty())
 }
 
-/// The UID of this Mac's own built-in device in `direction` — transport
-/// `kAudioDeviceTransportTypeBuiltIn` — if one carries that direction.
+/// The UID of this Mac's own internal speaker or microphone in `direction` —
+/// transport `kAudioDeviceTransportTypeBuiltIn` with the internal data source —
+/// if one carries that direction.
+///
+/// The data source is what tells the internal speaker from a headphone jack,
+/// which is also a built-in-transport device.
 pub fn built_in_audio_device_uid(direction: CoreAudioStreamDirection) -> Option<String> {
+    let internal_data_source = match direction {
+        CoreAudioStreamDirection::Capture => u32::from_be_bytes(*b"imic"),
+        CoreAudioStreamDirection::Playback => u32::from_be_bytes(*b"ispk"),
+    };
     devices_carrying(direction)
         .into_iter()
         .find(|device| {
@@ -412,6 +421,11 @@ pub fn built_in_audio_device_uid(direction: CoreAudioStreamDirection) -> Option<
                 kAudioDevicePropertyTransportType,
                 kAudioObjectPropertyScopeGlobal,
             ) == Some(kAudioDeviceTransportTypeBuiltIn)
+                && audio_object_property::<u32>(
+                    device.object_id,
+                    kAudioDevicePropertyDataSource,
+                    direction.device_property_scope(),
+                ) == Some(internal_data_source)
         })
         .map(|device| device.uid)
         .filter(|uid| !uid.is_empty())
