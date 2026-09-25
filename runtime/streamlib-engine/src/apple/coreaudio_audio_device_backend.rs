@@ -3,26 +3,32 @@
 
 //! The audio backend chain's Apple arm: CoreAudio, through the AUHAL audio unit.
 //!
-//! Each stream owns one `kAudioUnitSubType_HALOutput` unit bound to one device,
-//! with I/O enabled in the stream's direction only. The device's I/O thread is
-//! the cadence source, and a block's stamp is the device's `mHostTime` — the
-//! `mach_absolute_time` domain every other timestamp on Apple lives in.
+//! Each stream owns one `kAudioUnitSubType_HALOutput` unit with I/O enabled in
+//! the stream's direction only. A stream opened with no `device_id` follows the
+//! system default device, keeping the format it opened with. The device's I/O
+//! thread is the cadence source, and a block's stamp is the device's
+//! `mHostTime` — the `mach_absolute_time` domain every other timestamp on Apple
+//! lives in.
 
 use std::ffi::c_void;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr::NonNull;
 use std::sync::{Arc, Weak};
 
+use dispatch2::{DispatchQueue, DispatchRetained};
 use objc2_audio_toolbox::{
     AURenderCallback, AURenderCallbackStruct, AudioComponentDescription, AudioComponentFindNext,
-    AudioComponentInstanceDispose, AudioComponentInstanceNew, AudioOutputUnitStart,
+    AudioComponentInstanceDispose, AudioComponentInstanceNew, AudioConverterDispose,
+    AudioConverterFillComplexBuffer, AudioConverterGetProperty, AudioConverterNew,
+    AudioConverterPrimeInfo, AudioConverterRef, AudioConverterSetProperty, AudioOutputUnitStart,
     AudioOutputUnitStop, AudioUnit, AudioUnitGetProperty, AudioUnitInitialize, AudioUnitRender,
     AudioUnitRenderActionFlags, AudioUnitSetProperty, AudioUnitUninitialize,
-    kAudioOutputUnitProperty_CurrentDevice, kAudioOutputUnitProperty_EnableIO,
-    kAudioOutputUnitProperty_SetInputCallback, kAudioUnitManufacturer_Apple,
-    kAudioUnitProperty_MaximumFramesPerSlice, kAudioUnitProperty_SetRenderCallback,
-    kAudioUnitProperty_StreamFormat, kAudioUnitScope_Global, kAudioUnitScope_Input,
-    kAudioUnitScope_Output, kAudioUnitSubType_HALOutput, kAudioUnitType_Output,
+    kAudioConverterPrimeInfo, kAudioConverterPrimeMethod, kAudioOutputUnitProperty_CurrentDevice,
+    kAudioOutputUnitProperty_EnableIO, kAudioOutputUnitProperty_SetInputCallback,
+    kAudioUnitManufacturer_Apple, kAudioUnitProperty_MaximumFramesPerSlice,
+    kAudioUnitProperty_SetRenderCallback, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Global,
+    kAudioUnitScope_Input, kAudioUnitScope_Output, kAudioUnitSubType_HALOutput,
+    kAudioUnitType_Output, kConverterPrimeMethod_None,
 };
 use objc2_core_audio::{
     AudioObjectAddPropertyListener, AudioObjectGetPropertyData, AudioObjectGetPropertyDataSize,
@@ -39,8 +45,9 @@ use objc2_core_audio::{
     kAudioObjectUnknown, kAudioStreamPropertyLatency,
 };
 use objc2_core_audio_types::{
-    AudioBuffer, AudioBufferList, AudioStreamBasicDescription, AudioTimeStamp, AudioTimeStampFlags,
-    AudioValueRange, kAudioFormatFlagIsFloat, kAudioFormatFlagIsPacked, kAudioFormatLinearPCM,
+    AudioBuffer, AudioBufferList, AudioStreamBasicDescription, AudioStreamPacketDescription,
+    AudioTimeStamp, AudioTimeStampFlags, AudioValueRange, kAudioFormatFlagIsFloat,
+    kAudioFormatFlagIsPacked, kAudioFormatLinearPCM,
 };
 use objc2_core_foundation::{CFRetained, CFString};
 use parking_lot::Mutex;
@@ -203,6 +210,22 @@ impl CoreAudioDevice {
             "audio device {self} {what_the_device_would_not_do}: {}",
             osstatus_text(status)
         ))
+    }
+
+    /// "refused binding the unit for capture", and the like, with the status.
+    fn refused_for(
+        &self,
+        direction: CoreAudioStreamDirection,
+        what_the_device_refused: &str,
+        status: i32,
+    ) -> Error {
+        self.refused_with_status(
+            &format!(
+                "refused {what_the_device_refused} for {}",
+                direction.lowercase_direction_name()
+            ),
+            status,
+        )
     }
 }
 
@@ -447,9 +470,9 @@ fn refusal_for_a_named_audio_device_that_is_not_attached(
     )
 }
 
-/// The format a stream opens at: the device's own rate and channel count, as
-/// interleaved 32-bit floats — so AUHAL never resamples, which it cannot do on
-/// input at all.
+/// A device's own format in `direction`: its nominal rate and channel count, as
+/// interleaved 32-bit floats. A stream opens at it, so on the device it opened
+/// on nothing converts.
 fn stream_format_of(
     device: &CoreAudioDevice,
     direction: CoreAudioStreamDirection,
@@ -574,6 +597,19 @@ fn osstatus_text(status: i32) -> String {
     }
 }
 
+fn osstatus_as_result(status: i32) -> std::result::Result<(), i32> {
+    if status == NO_ERR {
+        Ok(())
+    } else {
+        Err(status)
+    }
+}
+
+/// "48000 Hz, 2 ch" — a format as a refusal or a rebind line names it.
+fn rate_and_channels_of(format: AudioStreamFormat) -> String {
+    format!("{} Hz, {} ch", format.sample_rate, format.channels)
+}
+
 fn hal_output_component() -> Option<objc2_audio_toolbox::AudioComponent> {
     let description = AudioComponentDescription {
         componentType: kAudioUnitType_Output,
@@ -588,7 +624,7 @@ fn hal_output_component() -> Option<objc2_audio_toolbox::AudioComponent> {
     (!component.is_null()).then_some(component)
 }
 
-/// An AUHAL unit bound to one device in one direction. Dropping it stops,
+/// An AUHAL unit with I/O enabled in one direction. Dropping it stops,
 /// uninitialises and disposes the unit, after which no callback runs.
 struct CoreAudioHalOutputUnit {
     audio_unit: AudioUnit,
@@ -600,10 +636,11 @@ struct CoreAudioHalOutputUnit {
 unsafe impl Send for CoreAudioHalOutputUnit {}
 
 impl CoreAudioHalOutputUnit {
-    fn new_bound_to(
+    /// A new AUHAL instance with I/O enabled in `direction` only and no device
+    /// bound yet; `device` is the one a refusal names.
+    fn new_enabled_for(
         device: &CoreAudioDevice,
         direction: CoreAudioStreamDirection,
-        stream_format: AudioStreamFormat,
     ) -> Result<Self> {
         let component = hal_output_component()
             .ok_or_else(|| Error::Configuration(NO_AUHAL_OUTPUT_UNIT.into()))?;
@@ -618,14 +655,6 @@ impl CoreAudioHalOutputUnit {
             audio_unit,
             is_running: false,
         };
-        let direction_name = direction.lowercase_direction_name();
-        let refused = |what_the_device_would_not_do: &str, status: i32| {
-            device.refused_with_status(
-                &format!("refused {what_the_device_would_not_do} for {direction_name}"),
-                status,
-            )
-        };
-
         let enable_capture = u32::from(direction == CoreAudioStreamDirection::Capture);
         let enable_playback = u32::from(direction == CoreAudioStreamDirection::Playback);
         unit.set_property(
@@ -634,29 +663,81 @@ impl CoreAudioHalOutputUnit {
             AUHAL_INPUT_ELEMENT,
             &enable_capture,
         )
-        .map_err(|status| refused("enabling input", status))?;
+        .map_err(|status| device.refused_for(direction, "enabling input", status))?;
         unit.set_property(
             kAudioOutputUnitProperty_EnableIO,
             kAudioUnitScope_Output,
             AUHAL_OUTPUT_ELEMENT,
             &enable_playback,
         )
-        .map_err(|status| refused("enabling output", status))?;
-        unit.set_property(
+        .map_err(|status| device.refused_for(direction, "enabling output", status))?;
+        Ok(unit)
+    }
+
+    /// Point this uninitialised unit at `device` with its client side in
+    /// `unit_client_side_format`, and return the longest cycle, in frames, it
+    /// will run there.
+    fn bind_to(
+        &self,
+        device: &CoreAudioDevice,
+        direction: CoreAudioStreamDirection,
+        unit_client_side_format: AudioStreamFormat,
+    ) -> Result<u32> {
+        self.set_property(
             kAudioOutputUnitProperty_CurrentDevice,
             kAudioUnitScope_Global,
             AUHAL_OUTPUT_ELEMENT,
             &device.object_id,
         )
-        .map_err(|status| refused("binding the unit", status))?;
-        unit.set_property(
+        .map_err(|status| device.refused_for(direction, "binding the unit", status))?;
+        self.set_property(
             kAudioUnitProperty_StreamFormat,
             direction.auhal_client_side_scope(),
             direction.auhal_element(),
-            &interleaved_f32_description_of(stream_format),
+            &interleaved_f32_description_of(unit_client_side_format),
         )
-        .map_err(|status| refused("its own format as interleaved float", status))?;
-        Ok(unit)
+        .map_err(|status| {
+            device.refused_for(
+                direction,
+                &format!(
+                    "{} as interleaved float",
+                    rate_and_channels_of(unit_client_side_format)
+                ),
+                status,
+            )
+        })?;
+        // Raised to the device's own ceiling before initialising, because a
+        // device whose buffer size another process raises past the unit's
+        // default would otherwise fail every render.
+        let Some(largest_cycle_in_frames) = largest_io_cycle_in_frames_of(device, direction) else {
+            return Ok(self
+                .global_u32_property(kAudioUnitProperty_MaximumFramesPerSlice)
+                .unwrap_or(0));
+        };
+        self.set_property(
+            kAudioUnitProperty_MaximumFramesPerSlice,
+            kAudioUnitScope_Global,
+            AUHAL_OUTPUT_ELEMENT,
+            &largest_cycle_in_frames,
+        )
+        .map_err(|status| {
+            device.refused_for(
+                direction,
+                &format!("a largest cycle of {largest_cycle_in_frames} frames"),
+                status,
+            )
+        })?;
+        Ok(largest_cycle_in_frames)
+    }
+
+    fn initialise(&self) -> std::result::Result<(), i32> {
+        // SAFETY: a configured unit, whose callback context outlives it.
+        osstatus_as_result(unsafe { AudioUnitInitialize(self.audio_unit) })
+    }
+
+    fn uninitialise(&self) -> std::result::Result<(), i32> {
+        // SAFETY: a live, stopped unit.
+        osstatus_as_result(unsafe { AudioUnitUninitialize(self.audio_unit) })
     }
 
     fn set_property<T>(
@@ -741,107 +822,537 @@ impl Drop for CoreAudioHalOutputUnit {
     }
 }
 
-/// What a device-liveness listener needs, at an address that outlives it.
-struct CoreAudioDeviceLivenessListenerContext {
-    device_uid: String,
-    direction: CoreAudioStreamDirection,
-    failure_recorder: DeviceStreamFailureRecorder,
+/// How a stream's fixed format meets the format of the device it is bound to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CoreAudioStreamFormatBridge {
+    /// The device carries the stream's rate and channel count; nothing converts.
+    TheDeviceCarriesTheStreamFormat,
+    /// Playback on a device of another format: AUHAL's output side converts
+    /// the stream's format, which stays the unit's client format, to the
+    /// device's.
+    AuhalConvertsTheStreamFormatForTheDevice,
+    /// Capture on a device of another format: AUHAL input cannot resample, so
+    /// the unit renders the device's own format and an `AudioConverter` in the
+    /// input callback takes it to the stream's.
+    AnAudioConverterTakesTheDevicesFormatToTheStreams,
 }
 
-/// A `kAudioDevicePropertyDeviceIsAlive` listener that records the stream's
-/// ending failure when its device goes away. Dropping it unregisters it.
-struct CoreAudioDeviceLivenessWatch {
-    device_object_id: AudioObjectID,
-    listener_context: Box<CoreAudioDeviceLivenessListenerContext>,
-}
-
-impl CoreAudioDeviceLivenessWatch {
-    fn watch(
-        device: &CoreAudioDevice,
+impl CoreAudioStreamFormatBridge {
+    fn between(
         direction: CoreAudioStreamDirection,
-        failure_recorder: DeviceStreamFailureRecorder,
+        stream_format: AudioStreamFormat,
+        device_own_format: AudioStreamFormat,
     ) -> Self {
-        let watch = Self {
-            device_object_id: device.object_id,
-            listener_context: Box::new(CoreAudioDeviceLivenessListenerContext {
-                device_uid: device.uid.clone(),
-                direction,
-                failure_recorder,
-            }),
-        };
-        let address = property_address(
-            kAudioDevicePropertyDeviceIsAlive,
-            kAudioObjectPropertyScopeGlobal,
-        );
-        // SAFETY: the context is boxed and unregistered in `Drop` before it is freed.
+        let the_device_carries_the_stream_format = stream_format.sample_rate
+            == device_own_format.sample_rate
+            && stream_format.channels == device_own_format.channels;
+        match direction {
+            _ if the_device_carries_the_stream_format => Self::TheDeviceCarriesTheStreamFormat,
+            CoreAudioStreamDirection::Playback => Self::AuhalConvertsTheStreamFormatForTheDevice,
+            CoreAudioStreamDirection::Capture => {
+                Self::AnAudioConverterTakesTheDevicesFormatToTheStreams
+            }
+        }
+    }
+
+    /// The format the unit's client side is set to.
+    fn unit_client_side_format(
+        self,
+        stream_format: AudioStreamFormat,
+        device_own_format: AudioStreamFormat,
+    ) -> AudioStreamFormat {
+        match self {
+            Self::TheDeviceCarriesTheStreamFormat
+            | Self::AuhalConvertsTheStreamFormatForTheDevice => stream_format,
+            Self::AnAudioConverterTakesTheDevicesFormatToTheStreams => device_own_format,
+        }
+    }
+}
+
+impl std::fmt::Display for CoreAudioStreamFormatBridge {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::TheDeviceCarriesTheStreamFormat => "no conversion",
+            Self::AuhalConvertsTheStreamFormatForTheDevice => {
+                "converted by AUHAL's output converter"
+            }
+            Self::AnAudioConverterTakesTheDevicesFormatToTheStreams => {
+                "converted by an AudioConverter in the input callback"
+            }
+        })
+    }
+}
+
+/// A change CoreAudio reports about the device a stream is bound to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CoreAudioStreamDeviceChange {
+    /// The system default device in the stream's direction changed.
+    SystemDefaultDeviceMoved,
+    /// The bound device's `DeviceIsAlive` changed.
+    BoundDeviceLivenessChanged,
+    /// The bound device's nominal rate or stream configuration changed.
+    BoundDeviceFormatChanged,
+}
+
+impl CoreAudioStreamDeviceChange {
+    fn what_goes_unnoticed_without_its_listener(self) -> &'static str {
+        match self {
+            Self::SystemDefaultDeviceMoved => {
+                "the stream stays on this device when the system default changes"
+            }
+            Self::BoundDeviceLivenessChanged => {
+                "a device that disappears will go silent without being reported"
+            }
+            Self::BoundDeviceFormatChanged => {
+                "a change to the device's rate or channels will not be followed"
+            }
+        }
+    }
+}
+
+/// What CoreAudio reports once a change reaches the stream's control queue.
+#[derive(Debug, Clone, Copy)]
+struct CoreAudioDeviceFactsAfterAChange {
+    the_bound_device_is_alive: bool,
+    /// Its rate or channel count is no longer the one the stream bound at.
+    the_bound_devices_own_format_changed: bool,
+    system_default_device: Option<AudioObjectID>,
+}
+
+/// What a stream does about a change to its device.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CoreAudioStreamDeviceChangeResponse {
+    StayOnTheBoundDevice,
+    RebindToTheBoundDeviceAtItsNewFormat,
+    MoveToTheSystemDefault(AudioObjectID),
+    /// A named device went away: its stream ends rather than landing on
+    /// another.
+    EndTheStreamBecauseTheNamedDeviceWentAway,
+    /// A followed default went away and no device became the default.
+    EndTheStreamBecauseNoDeviceIsTheDefault,
+}
+
+/// A named stream stays pinned to its device; one opened with no `device_id`
+/// follows the system default. Either rebinds when its device's own format
+/// changes.
+fn how_a_stream_responds_to_a_device_change(
+    change: CoreAudioStreamDeviceChange,
+    follows_the_system_default: bool,
+    bound_device_object_id: AudioObjectID,
+    facts: CoreAudioDeviceFactsAfterAChange,
+) -> CoreAudioStreamDeviceChangeResponse {
+    use CoreAudioStreamDeviceChange as Change;
+    use CoreAudioStreamDeviceChangeResponse as Response;
+    let toward_the_system_default = || match facts.system_default_device {
+        None => Response::EndTheStreamBecauseNoDeviceIsTheDefault,
+        // Already there — or the default has yet to move off a device that went
+        // away, and that move arrives as its own change.
+        Some(default_device) if default_device == bound_device_object_id => {
+            Response::StayOnTheBoundDevice
+        }
+        Some(default_device) => Response::MoveToTheSystemDefault(default_device),
+    };
+    match change {
+        Change::SystemDefaultDeviceMoved if follows_the_system_default => {
+            toward_the_system_default()
+        }
+        Change::SystemDefaultDeviceMoved => Response::StayOnTheBoundDevice,
+        Change::BoundDeviceLivenessChanged if facts.the_bound_device_is_alive => {
+            Response::StayOnTheBoundDevice
+        }
+        Change::BoundDeviceLivenessChanged if follows_the_system_default => {
+            toward_the_system_default()
+        }
+        Change::BoundDeviceLivenessChanged => Response::EndTheStreamBecauseTheNamedDeviceWentAway,
+        Change::BoundDeviceFormatChanged
+            if facts.the_bound_device_is_alive && facts.the_bound_devices_own_format_changed =>
+        {
+            Response::RebindToTheBoundDeviceAtItsNewFormat
+        }
+        Change::BoundDeviceFormatChanged => Response::StayOnTheBoundDevice,
+    }
+}
+
+/// Runs a device change on the stream's control queue.
+type CoreAudioStreamDeviceChangeHandler = Arc<dyn Fn(CoreAudioStreamDeviceChange) + Send + Sync>;
+
+/// What a stream's property listener needs, at an address that outlives its
+/// registration.
+struct CoreAudioStreamDevicePropertyListenerContext {
+    change: CoreAudioStreamDeviceChange,
+    stream_control_queue: DispatchRetained<DispatchQueue>,
+    handle_the_change: CoreAudioStreamDeviceChangeHandler,
+}
+
+/// One CoreAudio property listener that hands its change to the stream's
+/// control queue. Dropping it unregisters it.
+struct CoreAudioStreamDevicePropertyListener {
+    object_id: AudioObjectID,
+    address: AudioObjectPropertyAddress,
+    listener_context: Box<CoreAudioStreamDevicePropertyListenerContext>,
+}
+
+impl CoreAudioStreamDevicePropertyListener {
+    /// Listen for `address` on `object_id`, or warn — naming `device` — what
+    /// goes unnoticed when CoreAudio refuses.
+    fn listen(
+        object_id: AudioObjectID,
+        address: AudioObjectPropertyAddress,
+        listener_context: CoreAudioStreamDevicePropertyListenerContext,
+        device: &CoreAudioDevice,
+    ) -> Option<Self> {
+        let change = listener_context.change;
+        let listener_context = Box::new(listener_context);
+        // SAFETY: the context is boxed, moved into the returned listener, and
+        // unregistered in its `Drop` before it is freed.
         let status = unsafe {
             AudioObjectAddPropertyListener(
-                watch.device_object_id,
+                object_id,
                 NonNull::from(&address),
-                Some(device_liveness_changed),
-                watch.listener_context_pointer(),
+                Some(a_property_the_stream_follows_changed),
+                listener_context_pointer(&listener_context),
             )
         };
         if status != NO_ERR {
             tracing::warn!(
                 device = %device,
                 status = %osstatus_text(status),
-                "CoreAudio audio arm: could not watch the device for removal; a device that \
-                 disappears will go silent without being reported"
+                "CoreAudio audio arm: could not listen for a device change; {}",
+                change.what_goes_unnoticed_without_its_listener()
             );
+            return None;
         }
-        watch
-    }
-
-    fn listener_context_pointer(&self) -> *mut c_void {
-        (self.listener_context.as_ref() as *const CoreAudioDeviceLivenessListenerContext)
-            .cast_mut()
-            .cast()
+        Some(Self {
+            object_id,
+            address,
+            listener_context,
+        })
     }
 }
 
-impl Drop for CoreAudioDeviceLivenessWatch {
+impl Drop for CoreAudioStreamDevicePropertyListener {
     fn drop(&mut self) {
-        let address = property_address(
-            kAudioDevicePropertyDeviceIsAlive,
-            kAudioObjectPropertyScopeGlobal,
-        );
-        // SAFETY: the same listener and context `watch` registered.
+        // SAFETY: the same listener and context `listen` registered.
         unsafe {
             AudioObjectRemovePropertyListener(
-                self.device_object_id,
-                NonNull::from(&address),
-                Some(device_liveness_changed),
-                self.listener_context_pointer(),
+                self.object_id,
+                NonNull::from(&self.address),
+                Some(a_property_the_stream_follows_changed),
+                listener_context_pointer(&self.listener_context),
             );
         }
     }
 }
 
-unsafe extern "C-unwind" fn device_liveness_changed(
-    device_object_id: AudioObjectID,
+fn listener_context_pointer(
+    listener_context: &CoreAudioStreamDevicePropertyListenerContext,
+) -> *mut c_void {
+    (listener_context as *const CoreAudioStreamDevicePropertyListenerContext)
+        .cast_mut()
+        .cast()
+}
+
+unsafe extern "C-unwind" fn a_property_the_stream_follows_changed(
+    _object_id: AudioObjectID,
     _address_count: u32,
     _addresses: NonNull<AudioObjectPropertyAddress>,
     listener_context: *mut c_void,
 ) -> i32 {
-    // SAFETY: registered with a `CoreAudioDeviceLivenessListenerContext` that
-    // outlives the registration.
-    let context = unsafe { &*listener_context.cast::<CoreAudioDeviceLivenessListenerContext>() };
-    let is_alive = audio_object_property::<u32>(
-        device_object_id,
+    // SAFETY: registered with a `CoreAudioStreamDevicePropertyListenerContext`
+    // that outlives the registration.
+    let context =
+        unsafe { &*listener_context.cast::<CoreAudioStreamDevicePropertyListenerContext>() };
+    let handle_the_change = Arc::clone(&context.handle_the_change);
+    let change = context.change;
+    // The HAL's notification thread must not stop a unit or replace these
+    // listeners, and a rebind does both.
+    context
+        .stream_control_queue
+        .exec_async(move || handle_the_change(change));
+    NO_ERR
+}
+
+/// The device a stream is bound to, whether it follows the system default,
+/// and the listeners that report a change to either.
+struct CoreAudioStreamDeviceBinding {
+    direction: CoreAudioStreamDirection,
+    device: CoreAudioDevice,
+    /// The device's own rate and channel count when the stream last bound to it.
+    device_own_format: AudioStreamFormat,
+    follows_the_system_default: bool,
+    failure_recorder: DeviceStreamFailureRecorder,
+    liveness_report: DeviceStreamLivenessReport,
+    /// Serial and the stream's own, so changes are handled one at a time.
+    stream_control_queue: DispatchRetained<DispatchQueue>,
+    handle_a_device_change: CoreAudioStreamDeviceChangeHandler,
+    /// `DeviceIsAlive`, nominal rate and stream configuration, on the bound
+    /// device.
+    bound_device_listeners: Vec<CoreAudioStreamDevicePropertyListener>,
+    /// On the system object, for a stream that follows the default.
+    system_default_device_listener: Option<CoreAudioStreamDevicePropertyListener>,
+}
+
+impl CoreAudioStreamDeviceBinding {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        direction: CoreAudioStreamDirection,
+        device: CoreAudioDevice,
+        device_own_format: AudioStreamFormat,
+        follows_the_system_default: bool,
+        failure_recorder: DeviceStreamFailureRecorder,
+        liveness_report: DeviceStreamLivenessReport,
+        handle_a_device_change: CoreAudioStreamDeviceChangeHandler,
+    ) -> Self {
+        Self {
+            direction,
+            device,
+            device_own_format,
+            follows_the_system_default,
+            failure_recorder,
+            liveness_report,
+            stream_control_queue: DispatchQueue::new(
+                &format!(
+                    "com.streamlib.coreaudio-{}-stream-control",
+                    direction.lowercase_direction_name()
+                ),
+                None,
+            ),
+            handle_a_device_change,
+            bound_device_listeners: Vec::new(),
+            system_default_device_listener: None,
+        }
+    }
+
+    /// Register every listener the stream follows its device by.
+    fn start_listening(&mut self) {
+        if self.follows_the_system_default {
+            self.system_default_device_listener = self.listen(
+                kAudioObjectSystemObject as AudioObjectID,
+                property_address(
+                    self.direction.default_device_selector(),
+                    kAudioObjectPropertyScopeGlobal,
+                ),
+                CoreAudioStreamDeviceChange::SystemDefaultDeviceMoved,
+            );
+        }
+        self.listen_to_the_bound_device();
+    }
+
+    fn listen_to_the_bound_device(&mut self) {
+        self.bound_device_listeners.clear();
+        let bound_device_object_id = self.device.object_id;
+        let bound_device_listeners = [
+            (
+                kAudioDevicePropertyDeviceIsAlive,
+                kAudioObjectPropertyScopeGlobal,
+                CoreAudioStreamDeviceChange::BoundDeviceLivenessChanged,
+            ),
+            (
+                kAudioDevicePropertyNominalSampleRate,
+                kAudioObjectPropertyScopeGlobal,
+                CoreAudioStreamDeviceChange::BoundDeviceFormatChanged,
+            ),
+            (
+                kAudioDevicePropertyStreamConfiguration,
+                self.direction.device_property_scope(),
+                CoreAudioStreamDeviceChange::BoundDeviceFormatChanged,
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(selector, scope, change)| {
+            self.listen(
+                bound_device_object_id,
+                property_address(selector, scope),
+                change,
+            )
+        })
+        .collect();
+        self.bound_device_listeners = bound_device_listeners;
+    }
+
+    fn listen(
+        &self,
+        object_id: AudioObjectID,
+        address: AudioObjectPropertyAddress,
+        change: CoreAudioStreamDeviceChange,
+    ) -> Option<CoreAudioStreamDevicePropertyListener> {
+        CoreAudioStreamDevicePropertyListener::listen(
+            object_id,
+            address,
+            CoreAudioStreamDevicePropertyListenerContext {
+                change,
+                stream_control_queue: self.stream_control_queue.clone(),
+                handle_the_change: Arc::clone(&self.handle_a_device_change),
+            },
+            &self.device,
+        )
+    }
+
+    /// Record that the stream is bound to `device`, moving the bound-device
+    /// listeners there if it is another device.
+    fn moved_to(&mut self, device: &CoreAudioDevice, device_own_format: AudioStreamFormat) {
+        let is_another_device = device.object_id != self.device.object_id;
+        self.device = device.clone();
+        self.device_own_format = device_own_format;
+        if is_another_device {
+            self.listen_to_the_bound_device();
+        }
+    }
+
+    fn has_ended(&self) -> bool {
+        self.liveness_report
+            .failure_that_ended_the_stream()
+            .is_some()
+    }
+
+    fn record_the_failure_that_ended_the_stream(&self, reason: String) {
+        tracing::error!(
+            device = %self.device,
+            %reason,
+            "CoreAudio audio arm: the {} stream ended",
+            self.direction.lowercase_direction_name()
+        );
+        self.failure_recorder
+            .record_the_failure_that_ended_the_stream(DeviceStreamFailureReason::of(reason));
+    }
+}
+
+/// A stream's control state as the device-following path drives it: on the
+/// stream's control queue, under the stream's lock.
+trait CoreAudioStreamControlThatFollowsItsDevice: Send + 'static {
+    fn stream_format(&self) -> AudioStreamFormat;
+
+    fn device_binding(&mut self) -> &mut CoreAudioStreamDeviceBinding;
+
+    /// Rebind the stream's unit, where one is bound yet, to `device`.
+    fn rebind_the_unit_to(
+        &mut self,
+        device: &CoreAudioDevice,
+        device_own_format: AudioStreamFormat,
+    ) -> Result<()>;
+
+    /// Let go of the unit a failed rebind left unusable; a later start
+    /// reports `failure`.
+    fn release_the_unit_after_a_failed_rebind(&mut self, failure: String);
+}
+
+/// The handler a stream's listeners run on its control queue, reaching the
+/// stream only while it exists.
+fn device_changes_reach<Control: CoreAudioStreamControlThatFollowsItsDevice>(
+    stream_control: Weak<Mutex<Control>>,
+) -> CoreAudioStreamDeviceChangeHandler {
+    Arc::new(move |change| {
+        if let Some(stream_control) = stream_control.upgrade() {
+            the_streams_device_changed(&mut *stream_control.lock(), change);
+        }
+    })
+}
+
+fn audio_device_is_alive(object_id: AudioObjectID) -> bool {
+    audio_object_property::<u32>(
+        object_id,
         kAudioDevicePropertyDeviceIsAlive,
         kAudioObjectPropertyScopeGlobal,
-    );
-    if is_alive != Some(1) {
-        context
-            .failure_recorder
-            .record_the_failure_that_ended_the_stream(DeviceStreamFailureReason::of(format!(
-                "audio device '{}' went away during {}",
-                context.device_uid,
-                context.direction.lowercase_direction_name()
-            )));
+    )
+    .is_some_and(|is_alive| is_alive != 0)
+}
+
+fn the_streams_device_changed<Control: CoreAudioStreamControlThatFollowsItsDevice>(
+    stream_control: &mut Control,
+    change: CoreAudioStreamDeviceChange,
+) {
+    let binding = stream_control.device_binding();
+    if binding.has_ended() {
+        return;
     }
-    NO_ERR
+    let direction = binding.direction;
+    let bound_device = binding.device.clone();
+    let bound_device_own_format_now = stream_format_of(&bound_device, direction).ok();
+    let facts = CoreAudioDeviceFactsAfterAChange {
+        the_bound_device_is_alive: audio_device_is_alive(bound_device.object_id),
+        the_bound_devices_own_format_changed: bound_device_own_format_now
+            .is_some_and(|format_now| format_now != binding.device_own_format),
+        system_default_device: default_device_object_id(direction),
+    };
+    let direction_name = direction.lowercase_direction_name();
+    match how_a_stream_responds_to_a_device_change(
+        change,
+        binding.follows_the_system_default,
+        bound_device.object_id,
+        facts,
+    ) {
+        CoreAudioStreamDeviceChangeResponse::StayOnTheBoundDevice => {}
+        CoreAudioStreamDeviceChangeResponse::RebindToTheBoundDeviceAtItsNewFormat => {
+            if let Some(device_own_format) = bound_device_own_format_now {
+                rebind_the_stream_to(stream_control, &bound_device, device_own_format);
+            }
+        }
+        CoreAudioStreamDeviceChangeResponse::MoveToTheSystemDefault(default_object_id) => {
+            let default_device = describe_device(default_object_id);
+            match stream_format_of(&default_device, direction) {
+                Ok(device_own_format) => {
+                    rebind_the_stream_to(stream_control, &default_device, device_own_format)
+                }
+                Err(unreadable_format) => {
+                    binding.record_the_failure_that_ended_the_stream(format!(
+                        "the {direction_name} stream could not follow the system default from \
+                         {bound_device} to {default_device}: {unreadable_format}"
+                    ))
+                }
+            }
+        }
+        CoreAudioStreamDeviceChangeResponse::EndTheStreamBecauseTheNamedDeviceWentAway => binding
+            .record_the_failure_that_ended_the_stream(format!(
+                "audio device '{}' went away during {direction_name}",
+                bound_device.uid
+            )),
+        CoreAudioStreamDeviceChangeResponse::EndTheStreamBecauseNoDeviceIsTheDefault => binding
+            .record_the_failure_that_ended_the_stream(format!(
+                "the default audio {direction_name} device {bound_device} went away and no \
+                 device replaced it as the default"
+            )),
+    }
+}
+
+/// Rebind the stream to `device` and move its listeners there, or end the
+/// stream naming the device and the status that refused.
+fn rebind_the_stream_to<Control: CoreAudioStreamControlThatFollowsItsDevice>(
+    stream_control: &mut Control,
+    device: &CoreAudioDevice,
+    device_own_format: AudioStreamFormat,
+) {
+    let stream_format = stream_control.stream_format();
+    let binding = stream_control.device_binding();
+    let direction = binding.direction;
+    let direction_name = direction.lowercase_direction_name();
+    let previous_device = binding.device.clone();
+    if let Err(rebind_failure) = stream_control.rebind_the_unit_to(device, device_own_format) {
+        let failure = format!(
+            "rebinding the {direction_name} stream from {previous_device} to {device} failed: \
+             {rebind_failure}"
+        );
+        stream_control
+            .device_binding()
+            .record_the_failure_that_ended_the_stream(failure.clone());
+        stream_control.release_the_unit_after_a_failed_rebind(failure);
+        return;
+    }
+    stream_control
+        .device_binding()
+        .moved_to(device, device_own_format);
+    let format_bridge =
+        CoreAudioStreamFormatBridge::between(direction, stream_format, device_own_format);
+    tracing::info!(
+        from_device = %previous_device,
+        to_device = %device,
+        device_sample_rate = device_own_format.sample_rate,
+        device_channels = device_own_format.channels,
+        stream_sample_rate = stream_format.sample_rate,
+        stream_channels = stream_format.channels,
+        conversion_active = format_bridge != CoreAudioStreamFormatBridge::TheDeviceCarriesTheStreamFormat,
+        "CoreAudio audio arm: the {direction_name} stream moved from {previous_device} to \
+         {device}, {format_bridge}"
+    );
 }
 
 /// The per-direction state a device-thread callback works on under its lock,
@@ -929,41 +1440,14 @@ struct CoreAudioStreamUnit<Delivery: CoreAudioDeliveryHoldingAHandOff> {
 impl<Delivery: CoreAudioDeliveryHoldingAHandOff> CoreAudioStreamUnit<Delivery> {
     fn bound_to(
         device: &CoreAudioDevice,
-        stream_format: AudioStreamFormat,
+        unit_client_side_format: AudioStreamFormat,
         delivery: Delivery,
         failure_recorder: DeviceStreamFailureRecorder,
     ) -> Result<Self> {
         let direction_name = Delivery::DIRECTION.lowercase_direction_name();
-        let hal_output_unit =
-            CoreAudioHalOutputUnit::new_bound_to(device, Delivery::DIRECTION, stream_format)?;
-        // Raised to the device's own ceiling before initialising, because a
-        // device whose buffer size another process raises past the unit's
-        // default would otherwise fail every render.
+        let hal_output_unit = CoreAudioHalOutputUnit::new_enabled_for(device, Delivery::DIRECTION)?;
         let largest_cycle_in_frames =
-            match largest_io_cycle_in_frames_of(device, Delivery::DIRECTION) {
-                Some(frames) => {
-                    hal_output_unit
-                        .set_property(
-                            kAudioUnitProperty_MaximumFramesPerSlice,
-                            kAudioUnitScope_Global,
-                            AUHAL_OUTPUT_ELEMENT,
-                            &frames,
-                        )
-                        .map_err(|status| {
-                            device.refused_with_status(
-                                &format!(
-                                    "refused a largest cycle of {frames} frames for \
-                                     {direction_name}"
-                                ),
-                                status,
-                            )
-                        })?;
-                    frames
-                }
-                None => hal_output_unit
-                    .global_u32_property(kAudioUnitProperty_MaximumFramesPerSlice)
-                    .unwrap_or(0),
-            };
+            hal_output_unit.bind_to(device, Delivery::DIRECTION, unit_client_side_format)?;
         let callback_context = Box::new(CoreAudioCallbackContext {
             audio_unit: hal_output_unit.audio_unit,
             failure_recorder,
@@ -973,7 +1457,7 @@ impl<Delivery: CoreAudioDeliveryHoldingAHandOff> CoreAudioStreamUnit<Delivery> {
             as *const CoreAudioCallbackContext<Delivery>)
             .cast_mut()
             .cast();
-        let initialised = hal_output_unit
+        hal_output_unit
             .set_property(
                 Delivery::CALLBACK_PROPERTY_ID,
                 Delivery::CALLBACK_SCOPE,
@@ -983,28 +1467,64 @@ impl<Delivery: CoreAudioDeliveryHoldingAHandOff> CoreAudioStreamUnit<Delivery> {
                     inputProcRefCon: callback_context_pointer,
                 },
             )
-            .and_then(|()| {
-                // SAFETY: a configured, uninitialised unit, whose callback
-                // context is boxed beside it and outlives it.
-                let status = unsafe { AudioUnitInitialize(hal_output_unit.audio_unit) };
-                if status == NO_ERR {
-                    Ok(())
-                } else {
-                    Err(status)
-                }
-            });
-        initialised.map_err(|status| {
-            device.refused_with_status(
-                &format!("would not initialise for {direction_name}"),
-                status,
-            )
-        })?;
+            .and_then(|()| hal_output_unit.initialise())
+            .map_err(|status| {
+                device.refused_with_status(
+                    &format!("would not initialise for {direction_name}"),
+                    status,
+                )
+            })?;
         Ok(Self {
             hal_output_unit,
             callback_context,
             device: device.clone(),
             largest_cycle_in_frames,
         })
+    }
+
+    /// Move the unit to `device`, or rebind it to the same one at a new
+    /// format: stopped, uninitialised, rebound and reinitialised, then
+    /// restarted if it was running, with the hand-off it already holds.
+    /// `prepare_the_delivery` readies the callback's state, given the new
+    /// longest cycle, while no cycle can run.
+    fn rebind_to(
+        &mut self,
+        device: &CoreAudioDevice,
+        unit_client_side_format: AudioStreamFormat,
+        prepare_the_delivery: impl FnOnce(&mut Delivery, u32) -> Result<()>,
+    ) -> Result<()> {
+        let direction_name = Delivery::DIRECTION.lowercase_direction_name();
+        let was_running = self.hal_output_unit.is_running;
+        self.hal_output_unit
+            .stop()
+            .map_err(|status| self.refused_for_this_direction("stop", status))?;
+        self.hal_output_unit.uninitialise().map_err(|status| {
+            self.device.refused_with_status(
+                &format!("would not uninitialise for {direction_name}"),
+                status,
+            )
+        })?;
+        let largest_cycle_in_frames =
+            self.hal_output_unit
+                .bind_to(device, Delivery::DIRECTION, unit_client_side_format)?;
+        prepare_the_delivery(
+            &mut self.callback_context.delivery.lock(),
+            largest_cycle_in_frames,
+        )?;
+        self.hal_output_unit.initialise().map_err(|status| {
+            device.refused_with_status(
+                &format!("would not initialise for {direction_name}"),
+                status,
+            )
+        })?;
+        self.device = device.clone();
+        self.largest_cycle_in_frames = largest_cycle_in_frames;
+        if was_running {
+            self.hal_output_unit
+                .start()
+                .map_err(|status| self.refused_for_this_direction("start", status))?;
+        }
+        Ok(())
     }
 
     fn start_handing_off_to(&mut self, hand_off: Delivery::HandOff) -> Result<()> {
@@ -1076,17 +1596,409 @@ impl ConsecutiveInputCycleRenderFailures {
     }
 }
 
+/// Nanoseconds `frame_count` frames occupy at `sample_rate`, for counts that
+/// run for the life of a stream.
+fn duration_of_many_frames_in_ns(frame_count: u64, sample_rate: u32) -> i128 {
+    i128::from(frame_count) * 1_000_000_000 / i128::from(sample_rate.max(1))
+}
+
+/// Where a converted capture stream's blocks sit on the host clock.
+///
+/// Counted from the binding's first cycle: the output frames produced at the
+/// stream's rate, less the converter's latency, say which lent input frame a
+/// block begins at. The cycle being converted, whose first sample the device
+/// timed, puts that frame on the host clock — so on a steady device the
+/// stamps are the first cycle's plus frames produced, a device clock that
+/// runs off nominal never pulls them off the host's, and a gap in the input
+/// is a gap in the stamps.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ConvertedCaptureBlockTimeline {
+    device_sample_rate: u32,
+    stream_sample_rate: u32,
+    converter_latency_in_device_frames: u32,
+    device_frames_lent: u64,
+    stream_frames_produced: u64,
+    current_cycle_first_input_sample_ns: i64,
+    current_cycle_first_device_frame: u64,
+}
+
+impl ConvertedCaptureBlockTimeline {
+    fn for_a_new_binding(
+        device_sample_rate: u32,
+        stream_sample_rate: u32,
+        converter_latency_in_device_frames: u32,
+    ) -> Self {
+        Self {
+            device_sample_rate,
+            stream_sample_rate,
+            converter_latency_in_device_frames,
+            device_frames_lent: 0,
+            stream_frames_produced: 0,
+            current_cycle_first_input_sample_ns: 0,
+            current_cycle_first_device_frame: 0,
+        }
+    }
+
+    /// A cycle of `device_frame_count` input frames, whose first sample the
+    /// device timed at `first_input_sample_ns`, is lent to the converter.
+    fn a_cycle_is_lent(&mut self, first_input_sample_ns: i64, device_frame_count: u32) {
+        self.current_cycle_first_input_sample_ns = first_input_sample_ns;
+        self.current_cycle_first_device_frame = self.device_frames_lent;
+        self.device_frames_lent += u64::from(device_frame_count);
+    }
+
+    /// The stamp of the next converted block's first sample; the timeline
+    /// then moves past its `converted_frame_count` frames.
+    fn stamp_the_next_block(&mut self, converted_frame_count: u32) -> i64 {
+        let produced_ns =
+            duration_of_many_frames_in_ns(self.stream_frames_produced, self.stream_sample_rate);
+        let current_cycle_start_less_the_latency_ns = duration_of_many_frames_in_ns(
+            self.current_cycle_first_device_frame
+                + u64::from(self.converter_latency_in_device_frames),
+            self.device_sample_rate,
+        );
+        self.stream_frames_produced += u64::from(converted_frame_count);
+        self.current_cycle_first_input_sample_ns
+            + (produced_ns - current_cycle_start_less_the_latency_ns) as i64
+    }
+}
+
+/// Input frames of room past the device's longest cycle that the converted
+/// buffer is sized for — more than a sample-rate converter holds back, so one
+/// pass takes the whole cycle.
+const CONVERTER_INPUT_HEADROOM_IN_FRAMES: u64 = 1024;
+
+/// The input proc's answer once it has lent the cycle: not end of stream,
+/// only nothing more until the device's next cycle.
+const THE_INPUT_CYCLE_WAS_ALREADY_LENT: i32 = i32::from_be_bytes(*b"lent");
+
+/// One rendered input cycle, lent to the converter's input proc for one pass.
+struct RenderedInputCycleLentToTheConverter {
+    interleaved_sample_bytes: *mut u8,
+    frame_count: u32,
+    channels: u32,
+    bytes_per_frame: u32,
+    has_been_lent: bool,
+    was_asked_for_more_after_it_was_lent: bool,
+}
+
+unsafe extern "C-unwind" fn the_converter_asks_for_the_rendered_cycle(
+    _audio_converter: AudioConverterRef,
+    packet_count: NonNull<u32>,
+    buffer_list: NonNull<AudioBufferList>,
+    _packet_descriptions: *mut *mut AudioStreamPacketDescription,
+    lent_cycle: *mut c_void,
+) -> i32 {
+    // SAFETY: `convert_the_cycle` passes its own `RenderedInputCycleLentToTheConverter`,
+    // alive for the whole `AudioConverterFillComplexBuffer` call.
+    let lent_cycle = unsafe { &mut *lent_cycle.cast::<RenderedInputCycleLentToTheConverter>() };
+    if lent_cycle.has_been_lent {
+        lent_cycle.was_asked_for_more_after_it_was_lent = true;
+        // SAFETY: the converter's own count, writable for this call.
+        unsafe { *packet_count.as_ptr() = 0 };
+        return THE_INPUT_CYCLE_WAS_ALREADY_LENT;
+    }
+    lent_cycle.has_been_lent = true;
+    // SAFETY: the converter's own buffer list and count, writable for this
+    // call; an interleaved input takes exactly one buffer, pointed at the
+    // rendered bytes, which stay untouched until the proc is asked again.
+    unsafe {
+        let buffer_list = &mut *buffer_list.as_ptr();
+        buffer_list.mNumberBuffers = 1;
+        buffer_list.mBuffers[0] = AudioBuffer {
+            mNumberChannels: lent_cycle.channels,
+            mDataByteSize: lent_cycle.frame_count * lent_cycle.bytes_per_frame,
+            mData: lent_cycle.interleaved_sample_bytes.cast(),
+        };
+        *packet_count.as_ptr() = lent_cycle.frame_count;
+    }
+    NO_ERR
+}
+
+/// What converting one input cycle came to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConvertedInputCycle {
+    HandedOff,
+    TheConverterFailed(i32),
+    TheHandOffPanicked,
+}
+
+/// An `AudioConverter` from a capture device's own format to its stream's,
+/// with every buffer it writes into allocated before the device thread runs
+/// it.
+struct CoreAudioCaptureFormatConverter {
+    audio_converter: AudioConverterRef,
+    converted_buffer: Vec<u8>,
+    converted_capacity_in_frames: u32,
+    device_own_format: AudioStreamFormat,
+    stream_format: AudioStreamFormat,
+    /// Starts with the binding the converter was made for.
+    converted_block_timeline: ConvertedCaptureBlockTimeline,
+}
+
+// SAFETY: the converter is driven only by the capture callback, under the
+// delivery lock, and disposed of once no callback can run.
+unsafe impl Send for CoreAudioCaptureFormatConverter {}
+
+impl CoreAudioCaptureFormatConverter {
+    fn new(
+        device: &CoreAudioDevice,
+        device_own_format: AudioStreamFormat,
+        stream_format: AudioStreamFormat,
+        largest_cycle_in_frames: u32,
+    ) -> Result<Self> {
+        let refused = |what_the_converter_would_not_do: &str, status: i32| {
+            device.refused_with_status(
+                &format!(
+                    "could not have its {} converted to the stream's {}: the AudioConverter {}",
+                    rate_and_channels_of(device_own_format),
+                    rate_and_channels_of(stream_format),
+                    what_the_converter_would_not_do
+                ),
+                status,
+            )
+        };
+        let mut audio_converter: AudioConverterRef = std::ptr::null_mut();
+        // SAFETY: two valid descriptions and a writable slot.
+        let status = unsafe {
+            AudioConverterNew(
+                NonNull::from(&interleaved_f32_description_of(device_own_format)),
+                NonNull::from(&interleaved_f32_description_of(stream_format)),
+                NonNull::from(&mut audio_converter),
+            )
+        };
+        if status != NO_ERR || audio_converter.is_null() {
+            return Err(refused("would not be created", status));
+        }
+        let converted_capacity_in_frames =
+            ((u64::from(largest_cycle_in_frames) + CONVERTER_INPUT_HEADROOM_IN_FRAMES)
+                * u64::from(stream_format.sample_rate))
+            .div_ceil(u64::from(device_own_format.sample_rate.max(1))) as u32;
+        let mut converter = Self {
+            audio_converter,
+            converted_buffer: vec![
+                0u8;
+                stream_format
+                    .interleaved_byte_count_for(converted_capacity_in_frames)
+            ],
+            converted_capacity_in_frames,
+            device_own_format,
+            stream_format,
+            converted_block_timeline: ConvertedCaptureBlockTimeline::for_a_new_binding(
+                device_own_format.sample_rate,
+                stream_format.sample_rate,
+                0,
+            ),
+        };
+        // Only a converter that resamples primes; one that only moves channels
+        // refuses the property ('prop') and adds no delay.
+        if device_own_format.sample_rate == stream_format.sample_rate {
+            return Ok(converter);
+        }
+        // Latency mode: live input has no earlier frames to pre-seek into, and
+        // the converter's first output then begins with its first input.
+        let prime_method = kConverterPrimeMethod_None;
+        // SAFETY: a live converter and a `u32` value, as the property takes.
+        let status = unsafe {
+            AudioConverterSetProperty(
+                converter.audio_converter,
+                kAudioConverterPrimeMethod,
+                std::mem::size_of::<u32>() as u32,
+                NonNull::from(&prime_method).cast(),
+            )
+        };
+        if status != NO_ERR {
+            return Err(refused("refused latency mode", status));
+        }
+        converter
+            .converted_block_timeline
+            .converter_latency_in_device_frames = converter
+            .latency_in_device_frames()
+            .map_err(|status| refused("reported no latency", status))?;
+        Ok(converter)
+    }
+
+    /// In latency mode a resampling converter delays its output by
+    /// `trailingFrames` at the input rate.
+    fn latency_in_device_frames(&self) -> std::result::Result<u32, i32> {
+        let mut prime_info = AudioConverterPrimeInfo {
+            leadingFrames: 0,
+            trailingFrames: 0,
+        };
+        let mut prime_info_byte_count = std::mem::size_of::<AudioConverterPrimeInfo>() as u32;
+        // SAFETY: a live converter and a writable `AudioConverterPrimeInfo`.
+        let status = unsafe {
+            AudioConverterGetProperty(
+                self.audio_converter,
+                kAudioConverterPrimeInfo,
+                NonNull::from(&mut prime_info_byte_count),
+                NonNull::from(&mut prime_info).cast(),
+            )
+        };
+        osstatus_as_result(status).map(|()| prime_info.trailingFrames)
+    }
+
+    /// Convert one rendered input cycle and hand off every block it yields,
+    /// stamped on the binding's timeline.
+    fn convert_the_cycle(
+        &mut self,
+        rendered_interleaved_sample_bytes: &mut [u8],
+        rendered_frame_count: u32,
+        first_input_sample_timestamp_ns: i64,
+        hand_off: &dyn Fn(CapturedAudioBlockFromDevice<'_>),
+    ) -> ConvertedInputCycle {
+        // A lent cycle of no frames would read as the end of the stream.
+        if rendered_frame_count == 0 {
+            return ConvertedInputCycle::HandedOff;
+        }
+        let Self {
+            audio_converter,
+            converted_buffer,
+            converted_capacity_in_frames,
+            device_own_format,
+            stream_format,
+            converted_block_timeline,
+        } = self;
+        converted_block_timeline
+            .a_cycle_is_lent(first_input_sample_timestamp_ns, rendered_frame_count);
+        let mut lent_cycle = RenderedInputCycleLentToTheConverter {
+            interleaved_sample_bytes: rendered_interleaved_sample_bytes.as_mut_ptr(),
+            frame_count: rendered_frame_count,
+            channels: device_own_format.channels,
+            bytes_per_frame: device_own_format.interleaved_byte_count_for(1) as u32,
+            has_been_lent: false,
+            was_asked_for_more_after_it_was_lent: false,
+        };
+        let bytes_per_converted_frame = stream_format.interleaved_byte_count_for(1);
+        loop {
+            let mut converted_frame_count = *converted_capacity_in_frames;
+            let mut converted_buffer_list = AudioBufferList {
+                mNumberBuffers: 1,
+                mBuffers: [AudioBuffer {
+                    mNumberChannels: stream_format.channels,
+                    mDataByteSize: converted_buffer.len() as u32,
+                    mData: converted_buffer.as_mut_ptr().cast(),
+                }],
+            };
+            // SAFETY: a live converter, an input proc reading the cycle lent
+            // here, and an output list over `converted_buffer`, which holds
+            // the capacity passed.
+            let status = unsafe {
+                AudioConverterFillComplexBuffer(
+                    *audio_converter,
+                    Some(the_converter_asks_for_the_rendered_cycle),
+                    (&mut lent_cycle as *mut RenderedInputCycleLentToTheConverter).cast(),
+                    NonNull::from(&mut converted_frame_count),
+                    NonNull::from(&mut converted_buffer_list),
+                    std::ptr::null_mut(),
+                )
+            };
+            if status != NO_ERR && status != THE_INPUT_CYCLE_WAS_ALREADY_LENT {
+                return ConvertedInputCycle::TheConverterFailed(status);
+            }
+            let converted_frame_count = converted_frame_count.min(*converted_capacity_in_frames);
+            if converted_frame_count > 0 {
+                let first_sample_timestamp_ns =
+                    converted_block_timeline.stamp_the_next_block(converted_frame_count);
+                let converted_byte_count =
+                    converted_frame_count as usize * bytes_per_converted_frame;
+                let handed_off = catch_unwind(AssertUnwindSafe(|| {
+                    hand_off(CapturedAudioBlockFromDevice {
+                        interleaved_sample_bytes: &converted_buffer[..converted_byte_count],
+                        sample_count: converted_frame_count,
+                        first_sample_timestamp_ns,
+                    })
+                }));
+                if handed_off.is_err() {
+                    return ConvertedInputCycle::TheHandOffPanicked;
+                }
+            }
+            // Asked again means the whole cycle was taken; only then may the
+            // next render overwrite it.
+            if lent_cycle.was_asked_for_more_after_it_was_lent || converted_frame_count == 0 {
+                return ConvertedInputCycle::HandedOff;
+            }
+        }
+    }
+}
+
+impl Drop for CoreAudioCaptureFormatConverter {
+    fn drop(&mut self) {
+        // SAFETY: a live converter no callback can reach any more.
+        unsafe { AudioConverterDispose(self.audio_converter) };
+    }
+}
+
 /// The capture callback's state: the hand-off, and the buffer each input
 /// cycle is rendered into before it is handed off.
 struct CoreAudioCaptureDelivery {
     installed_hand_off: Option<CapturedAudioBlockHandOff>,
-    /// Sized for the unit's largest cycle.
+    /// Sized for the unit's largest cycle, in the format the unit renders.
     render_buffer: Vec<u8>,
     stream_format: AudioStreamFormat,
+    /// The stream's format, or the device's own where a converter runs.
+    unit_render_format: AudioStreamFormat,
+    /// Present only while the device's own format is not the stream's.
+    format_converter: Option<CoreAudioCaptureFormatConverter>,
     capture_latency_in_frames: u32,
     device: CoreAudioDevice,
     render_failures: ConsecutiveInputCycleRenderFailures,
     has_reported_a_cycle_without_host_time: bool,
+}
+
+impl CoreAudioCaptureDelivery {
+    /// The callback's state before its unit is bound: nothing to render into,
+    /// nothing to hand off to.
+    fn before_its_first_binding(
+        stream_format: AudioStreamFormat,
+        device: &CoreAudioDevice,
+    ) -> Self {
+        Self {
+            installed_hand_off: None,
+            render_buffer: Vec::new(),
+            stream_format,
+            unit_render_format: stream_format,
+            format_converter: None,
+            capture_latency_in_frames: 0,
+            device: device.clone(),
+            render_failures: ConsecutiveInputCycleRenderFailures::default(),
+            has_reported_a_cycle_without_host_time: false,
+        }
+    }
+
+    /// Ready the callback for a unit bound to `device`, which carries
+    /// `device_own_format` in cycles of at most `largest_cycle_in_frames`.
+    /// Allocates, so it runs only while no cycle can.
+    fn prepare_for_a_binding(
+        &mut self,
+        device: &CoreAudioDevice,
+        format_bridge: CoreAudioStreamFormatBridge,
+        device_own_format: AudioStreamFormat,
+        largest_cycle_in_frames: u32,
+    ) -> Result<()> {
+        let unit_render_format =
+            format_bridge.unit_client_side_format(self.stream_format, device_own_format);
+        let format_converter = match format_bridge {
+            CoreAudioStreamFormatBridge::AnAudioConverterTakesTheDevicesFormatToTheStreams => {
+                Some(CoreAudioCaptureFormatConverter::new(
+                    device,
+                    device_own_format,
+                    self.stream_format,
+                    largest_cycle_in_frames,
+                )?)
+            }
+            CoreAudioStreamFormatBridge::TheDeviceCarriesTheStreamFormat
+            | CoreAudioStreamFormatBridge::AuhalConvertsTheStreamFormatForTheDevice => None,
+        };
+        self.render_buffer =
+            vec![0u8; unit_render_format.interleaved_byte_count_for(largest_cycle_in_frames)];
+        self.unit_render_format = unit_render_format;
+        self.format_converter = format_converter;
+        self.capture_latency_in_frames = capture_latency_in_frames_of(device);
+        self.device = device.clone();
+        self.render_failures = ConsecutiveInputCycleRenderFailures::default();
+        Ok(())
+    }
 }
 
 impl CoreAudioDeliveryHoldingAHandOff for CoreAudioCaptureDelivery {
@@ -1124,18 +2036,21 @@ unsafe extern "C-unwind" fn captured_input_became_available(
         installed_hand_off,
         render_buffer,
         stream_format,
+        unit_render_format,
+        format_converter,
         capture_latency_in_frames,
         device,
         render_failures,
         has_reported_a_cycle_without_host_time,
     } = &mut *delivery;
+    let unit_render_format = *unit_render_format;
     if installed_hand_off.is_none() {
         return NO_ERR;
     }
-    let byte_count = stream_format.interleaved_byte_count_for(frame_count);
+    let byte_count = unit_render_format.interleaved_byte_count_for(frame_count);
     if byte_count > render_buffer.len() {
         let largest_cycle_in_frames =
-            render_buffer.len() / stream_format.interleaved_byte_count_for(1).max(1);
+            render_buffer.len() / unit_render_format.interleaved_byte_count_for(1).max(1);
         context.end_the_stream_because(
             installed_hand_off,
             format!(
@@ -1148,7 +2063,7 @@ unsafe extern "C-unwind" fn captured_input_became_available(
     let mut buffer_list = AudioBufferList {
         mNumberBuffers: 1,
         mBuffers: [AudioBuffer {
-            mNumberChannels: stream_format.channels,
+            mNumberChannels: unit_render_format.channels,
             mDataByteSize: byte_count as u32,
             mData: render_buffer.as_mut_ptr().cast(),
         }],
@@ -1214,33 +2129,59 @@ unsafe extern "C-unwind" fn captured_input_became_available(
         // Were a cycle ever without host time, it ended now and began a
         // block ago.
         MediaClock::now().as_nanos() as i64
-            - duration_of_frames_in_ns(frame_count, stream_format.sample_rate)
+            - duration_of_frames_in_ns(frame_count, unit_render_format.sample_rate)
     };
     // Whole frames only, so a short render still carries `sample_count ×
     // channels` scalars as the seam promises.
-    let bytes_per_frame = stream_format.interleaved_byte_count_for(1).max(1);
+    let bytes_per_frame = unit_render_format.interleaved_byte_count_for(1).max(1);
     let rendered_frame_count =
         (buffer_list.mBuffers[0].mDataByteSize as usize).min(byte_count) / bytes_per_frame;
     let rendered_byte_count = rendered_frame_count * bytes_per_frame;
-    let handed_off = catch_unwind(AssertUnwindSafe(|| {
-        hand_off(CapturedAudioBlockFromDevice {
-            interleaved_sample_bytes: &render_buffer[..rendered_byte_count],
-            sample_count: rendered_frame_count as u32,
-            first_sample_timestamp_ns: first_sample_timestamp_ns(
-                input_cycle_host_time_ns,
-                *capture_latency_in_frames,
-                stream_format.sample_rate,
+    let first_input_sample_timestamp_ns = first_sample_timestamp_ns(
+        input_cycle_host_time_ns,
+        *capture_latency_in_frames,
+        unit_render_format.sample_rate,
+    );
+    let Some(format_converter) = format_converter.as_mut() else {
+        let handed_off = catch_unwind(AssertUnwindSafe(|| {
+            hand_off(CapturedAudioBlockFromDevice {
+                interleaved_sample_bytes: &render_buffer[..rendered_byte_count],
+                sample_count: rendered_frame_count as u32,
+                first_sample_timestamp_ns: first_input_sample_timestamp_ns,
+            })
+        }));
+        if handed_off.is_err() {
+            context.end_the_stream_because_the_hand_off_panicked(installed_hand_off);
+        }
+        return NO_ERR;
+    };
+    match format_converter.convert_the_cycle(
+        &mut render_buffer[..rendered_byte_count],
+        rendered_frame_count as u32,
+        first_input_sample_timestamp_ns,
+        &**hand_off,
+    ) {
+        ConvertedInputCycle::HandedOff => {}
+        ConvertedInputCycle::TheConverterFailed(status) => context.end_the_stream_because(
+            installed_hand_off,
+            format!(
+                "audio device {device}'s input could not be converted from {} to the stream's \
+                 {}: {}",
+                rate_and_channels_of(unit_render_format),
+                rate_and_channels_of(*stream_format),
+                osstatus_text(status)
             ),
-        })
-    }));
-    if handed_off.is_err() {
-        context.end_the_stream_because_the_hand_off_panicked(installed_hand_off);
+        ),
+        ConvertedInputCycle::TheHandOffPanicked => {
+            context.end_the_stream_because_the_hand_off_panicked(installed_hand_off)
+        }
     }
     NO_ERR
 }
 
-/// Bind an input unit to `device`, with its render buffer sized for the
-/// largest cycle the unit will deliver.
+/// Bind an input unit to `device`: rendering the stream's format where the
+/// device carries it, and the device's own through a converter where it does
+/// not.
 ///
 /// Called only once microphone access is granted: binding a unit with input
 /// enabled asks `coreaudiod`, which blocks the binding call until the user has
@@ -1248,34 +2189,64 @@ unsafe extern "C-unwind" fn captured_input_became_available(
 fn bind_capture_unit(
     device: &CoreAudioDevice,
     stream_format: AudioStreamFormat,
+    device_own_format: AudioStreamFormat,
     failure_recorder: DeviceStreamFailureRecorder,
 ) -> Result<CoreAudioCaptureUnit> {
+    let format_bridge = CoreAudioStreamFormatBridge::between(
+        CoreAudioStreamDirection::Capture,
+        stream_format,
+        device_own_format,
+    );
     let capture_unit = CoreAudioCaptureUnit::bound_to(
         device,
-        stream_format,
-        CoreAudioCaptureDelivery {
-            installed_hand_off: None,
-            render_buffer: Vec::new(),
-            stream_format,
-            capture_latency_in_frames: capture_latency_in_frames_of(device),
-            device: device.clone(),
-            render_failures: ConsecutiveInputCycleRenderFailures::default(),
-            has_reported_a_cycle_without_host_time: false,
-        },
+        format_bridge.unit_client_side_format(stream_format, device_own_format),
+        CoreAudioCaptureDelivery::before_its_first_binding(stream_format, device),
         failure_recorder,
     )?;
     let largest_cycle_in_frames = capture_unit.largest_cycle_in_frames;
     let mut delivery = capture_unit.callback_context.delivery.lock();
-    delivery.render_buffer =
-        vec![0u8; stream_format.interleaved_byte_count_for(largest_cycle_in_frames)];
+    delivery.prepare_for_a_binding(
+        device,
+        format_bridge,
+        device_own_format,
+        largest_cycle_in_frames,
+    )?;
     tracing::debug!(
         device = %device,
         largest_cycle_in_frames,
         capture_latency_in_frames = delivery.capture_latency_in_frames,
+        conversion = %format_bridge,
         "CoreAudio audio arm: capture unit bound"
     );
     drop(delivery);
     Ok(capture_unit)
+}
+
+/// Move a bound input unit to `device`, on the terms [`bind_capture_unit`]
+/// binds one.
+fn rebind_capture_unit(
+    capture_unit: &mut CoreAudioCaptureUnit,
+    device: &CoreAudioDevice,
+    stream_format: AudioStreamFormat,
+    device_own_format: AudioStreamFormat,
+) -> Result<()> {
+    let format_bridge = CoreAudioStreamFormatBridge::between(
+        CoreAudioStreamDirection::Capture,
+        stream_format,
+        device_own_format,
+    );
+    capture_unit.rebind_to(
+        device,
+        format_bridge.unit_client_side_format(stream_format, device_own_format),
+        |delivery, largest_cycle_in_frames| {
+            delivery.prepare_for_a_binding(
+                device,
+                format_bridge,
+                device_own_format,
+                largest_cycle_in_frames,
+            )
+        },
+    )
 }
 
 /// Whether the user has let this process use the microphone, as far as one
@@ -1286,18 +2257,18 @@ enum MicrophoneAccessForTheStream {
     AwaitingTheUsersAnswer {
         parked_hand_off: Option<CapturedAudioBlockHandOff>,
     },
+    /// The user refused, or a device refused a unit; the text says which.
     Refused(String),
 }
 
-/// Everything that starts and stops a capture stream, behind one lock: the
-/// processor's start and stop and the user's permission answer all reach it,
-/// from different threads. The device's I/O thread never takes it.
+/// Everything that starts, stops and rebinds a capture stream, behind one
+/// lock: the processor's start and stop, the user's permission answer and
+/// the stream's device changes all reach it, from different threads. The
+/// device's I/O thread never takes it.
 struct CoreAudioCaptureControl {
     microphone_access: MicrophoneAccessForTheStream,
-    device: CoreAudioDevice,
     stream_format: AudioStreamFormat,
-    failure_recorder: DeviceStreamFailureRecorder,
-    _liveness_watch: CoreAudioDeviceLivenessWatch,
+    device_binding: CoreAudioStreamDeviceBinding,
 }
 
 impl CoreAudioCaptureControl {
@@ -1311,17 +2282,39 @@ impl CoreAudioCaptureControl {
             MicrophoneAccessForTheStream::Refused(_) => Ok(()),
         }
     }
+}
 
-    fn record_the_failure_that_ended_the_stream(&self, failure: &Error) {
-        tracing::error!(device = %self.device, error = %failure, "CoreAudio capture ended");
-        self.failure_recorder
-            .record_the_failure_that_ended_the_stream(DeviceStreamFailureReason::of(
-                failure.to_string(),
-            ));
+impl CoreAudioStreamControlThatFollowsItsDevice for CoreAudioCaptureControl {
+    fn stream_format(&self) -> AudioStreamFormat {
+        self.stream_format
+    }
+
+    fn device_binding(&mut self) -> &mut CoreAudioStreamDeviceBinding {
+        &mut self.device_binding
+    }
+
+    fn rebind_the_unit_to(
+        &mut self,
+        device: &CoreAudioDevice,
+        device_own_format: AudioStreamFormat,
+    ) -> Result<()> {
+        match &mut self.microphone_access {
+            MicrophoneAccessForTheStream::Granted(capture_unit) => {
+                rebind_capture_unit(capture_unit, device, self.stream_format, device_own_format)
+            }
+            // No unit yet: the user's answer binds wherever the binding points
+            // by then.
+            MicrophoneAccessForTheStream::AwaitingTheUsersAnswer { .. }
+            | MicrophoneAccessForTheStream::Refused(_) => Ok(()),
+        }
+    }
+
+    fn release_the_unit_after_a_failed_rebind(&mut self, failure: String) {
+        self.microphone_access = MicrophoneAccessForTheStream::Refused(failure);
     }
 }
 
-/// A capture stream on one CoreAudio input device.
+/// A capture stream on one CoreAudio input device at a time.
 pub struct CoreAudioCaptureStream {
     stream_format: AudioStreamFormat,
     liveness_report: DeviceStreamLivenessReport,
@@ -1336,6 +2329,24 @@ impl CoreAudioCaptureStream {
         let direction = CoreAudioStreamDirection::Capture;
         let device = resolve_requested_device(request, direction)?;
         let stream_format = stream_format_of(&device, direction)?;
+        Self::open_on(
+            device,
+            stream_format,
+            request.device_id.is_none(),
+            microphone_authorization_authority,
+        )
+    }
+
+    /// Open on `device`, carrying `stream_format` for the stream's lifetime
+    /// whatever the device — or a later default — carries.
+    fn open_on(
+        device: CoreAudioDevice,
+        stream_format: AudioStreamFormat,
+        follows_the_system_default: bool,
+        microphone_authorization_authority: &dyn CaptureDeviceAuthorizationAuthority,
+    ) -> Result<Self> {
+        let direction = CoreAudioStreamDirection::Capture;
+        let device_own_format = stream_format_of(&device, direction)?;
         let (failure_recorder, liveness_report) =
             DeviceStreamFailureRecorder::recording_into_a_new_report();
 
@@ -1343,22 +2354,28 @@ impl CoreAudioCaptureStream {
             device = %device,
             sample_rate = stream_format.sample_rate,
             channels = stream_format.channels,
+            follows_the_system_default,
             "CoreAudio audio arm: capture stream opened"
         );
 
-        let capture_control = Arc::new(Mutex::new(CoreAudioCaptureControl {
-            microphone_access: MicrophoneAccessForTheStream::AwaitingTheUsersAnswer {
-                parked_hand_off: None,
-            },
-            _liveness_watch: CoreAudioDeviceLivenessWatch::watch(
-                &device,
-                direction,
-                failure_recorder.clone(),
-            ),
-            device,
-            stream_format,
-            failure_recorder,
-        }));
+        let capture_control = Arc::new_cyclic(|capture_control| {
+            Mutex::new(CoreAudioCaptureControl {
+                microphone_access: MicrophoneAccessForTheStream::AwaitingTheUsersAnswer {
+                    parked_hand_off: None,
+                },
+                stream_format,
+                device_binding: CoreAudioStreamDeviceBinding::new(
+                    direction,
+                    device,
+                    device_own_format,
+                    follows_the_system_default,
+                    failure_recorder,
+                    liveness_report.clone(),
+                    device_changes_reach(capture_control.clone()),
+                ),
+            })
+        });
+        capture_control.lock().device_binding.start_listening();
 
         let answer_reaches = Arc::downgrade(&capture_control);
         match authorize_the_capture_device_without_waiting_for_the_user(
@@ -1368,9 +2385,10 @@ impl CoreAudioCaptureStream {
             CaptureDeviceAuthorizationAtOpen::Granted => {
                 let mut control = capture_control.lock();
                 let capture_unit = bind_capture_unit(
-                    &control.device,
+                    &control.device_binding.device,
                     control.stream_format,
-                    control.failure_recorder.clone(),
+                    control.device_binding.device_own_format,
+                    control.device_binding.failure_recorder.clone(),
                 )?;
                 control.microphone_access = MicrophoneAccessForTheStream::Granted(capture_unit);
             }
@@ -1406,19 +2424,23 @@ fn the_users_microphone_answer_arrived(
             PrivacyGatedCaptureDevice::Microphone,
             CaptureDeviceRefusal::DeniedByTheUser,
         );
-        let refusal_error = Error::Configuration(refusal.clone());
-        control.record_the_failure_that_ended_the_stream(&refusal_error);
+        control
+            .device_binding
+            .record_the_failure_that_ended_the_stream(refusal.clone());
         control.microphone_access = MicrophoneAccessForTheStream::Refused(refusal);
         return;
     }
-    tracing::info!(device = %control.device, "microphone access allowed");
+    tracing::info!(device = %control.device_binding.device, "microphone access allowed");
     match bind_capture_unit(
-        &control.device,
+        &control.device_binding.device,
         control.stream_format,
-        control.failure_recorder.clone(),
+        control.device_binding.device_own_format,
+        control.device_binding.failure_recorder.clone(),
     ) {
         Err(bind_failure) => {
-            control.record_the_failure_that_ended_the_stream(&bind_failure);
+            control
+                .device_binding
+                .record_the_failure_that_ended_the_stream(bind_failure.to_string());
             control.microphone_access =
                 MicrophoneAccessForTheStream::Refused(bind_failure.to_string());
         }
@@ -1429,7 +2451,9 @@ fn the_users_microphone_answer_arrived(
             };
             control.microphone_access = MicrophoneAccessForTheStream::Granted(capture_unit);
             if let Err(start_failure) = started {
-                control.record_the_failure_that_ended_the_stream(&start_failure);
+                control
+                    .device_binding
+                    .record_the_failure_that_ended_the_stream(start_failure.to_string());
             }
         }
     }
@@ -1495,6 +2519,8 @@ impl CoreAudioDeliveryHoldingAHandOff for CoreAudioPlaybackDelivery {
     }
 }
 
+type CoreAudioPlaybackUnit = CoreAudioStreamUnit<CoreAudioPlaybackDelivery>;
+
 unsafe extern "C-unwind" fn playback_samples_requested(
     callback_context: NonNull<c_void>,
     action_flags: NonNull<AudioUnitRenderActionFlags>,
@@ -1545,14 +2571,49 @@ unsafe extern "C-unwind" fn playback_samples_requested(
     NO_ERR
 }
 
-/// A playback stream on one CoreAudio output device.
+/// Everything that starts, stops and rebinds a playback stream, behind one
+/// lock the device's I/O thread never takes.
+struct CoreAudioPlaybackControl {
+    /// `None` once a failed rebind has ended the stream.
+    playback_unit: Option<CoreAudioPlaybackUnit>,
+    stream_format: AudioStreamFormat,
+    device_binding: CoreAudioStreamDeviceBinding,
+}
+
+impl CoreAudioStreamControlThatFollowsItsDevice for CoreAudioPlaybackControl {
+    fn stream_format(&self) -> AudioStreamFormat {
+        self.stream_format
+    }
+
+    fn device_binding(&mut self) -> &mut CoreAudioStreamDeviceBinding {
+        &mut self.device_binding
+    }
+
+    fn rebind_the_unit_to(
+        &mut self,
+        device: &CoreAudioDevice,
+        _device_own_format: AudioStreamFormat,
+    ) -> Result<()> {
+        let Some(playback_unit) = self.playback_unit.as_mut() else {
+            return Ok(());
+        };
+        playback_unit.rebind_to(device, self.stream_format, |_delivery, _largest_cycle| {
+            Ok(())
+        })
+    }
+
+    fn release_the_unit_after_a_failed_rebind(&mut self, _failure: String) {
+        self.playback_unit = None;
+    }
+}
+
+/// A playback stream on one CoreAudio output device at a time.
 pub struct CoreAudioPlaybackStream {
     stream_format: AudioStreamFormat,
     /// The device's `BufferFrameSize` in output scope when the stream opened.
     device_period_in_per_channel_samples: Option<u32>,
     liveness_report: DeviceStreamLivenessReport,
-    playback_unit: CoreAudioStreamUnit<CoreAudioPlaybackDelivery>,
-    _liveness_watch: CoreAudioDeviceLivenessWatch,
+    playback_control: Arc<Mutex<CoreAudioPlaybackControl>>,
 }
 
 impl CoreAudioPlaybackStream {
@@ -1560,9 +2621,21 @@ impl CoreAudioPlaybackStream {
         let direction = CoreAudioStreamDirection::Playback;
         let device = resolve_requested_device(request, direction)?;
         let stream_format = stream_format_of(&device, direction)?;
+        Self::open_on(device, stream_format, request.device_id.is_none())
+    }
+
+    /// Open on `device`, carrying `stream_format` for the stream's lifetime
+    /// whatever the device — or a later default — carries.
+    fn open_on(
+        device: CoreAudioDevice,
+        stream_format: AudioStreamFormat,
+        follows_the_system_default: bool,
+    ) -> Result<Self> {
+        let direction = CoreAudioStreamDirection::Playback;
+        let device_own_format = stream_format_of(&device, direction)?;
         let (failure_recorder, liveness_report) =
             DeviceStreamFailureRecorder::recording_into_a_new_report();
-        let playback_unit = CoreAudioStreamUnit::bound_to(
+        let playback_unit = CoreAudioPlaybackUnit::bound_to(
             &device,
             stream_format,
             CoreAudioPlaybackDelivery {
@@ -1583,20 +2656,44 @@ impl CoreAudioPlaybackStream {
             channels = stream_format.channels,
             device_period_in_per_channel_samples,
             largest_cycle_in_frames = playback_unit.largest_cycle_in_frames,
+            follows_the_system_default,
+            conversion = %CoreAudioStreamFormatBridge::between(direction, stream_format, device_own_format),
             "CoreAudio audio arm: playback stream opened"
         );
+
+        let playback_control = Arc::new_cyclic(|playback_control| {
+            Mutex::new(CoreAudioPlaybackControl {
+                playback_unit: Some(playback_unit),
+                stream_format,
+                device_binding: CoreAudioStreamDeviceBinding::new(
+                    direction,
+                    device,
+                    device_own_format,
+                    follows_the_system_default,
+                    failure_recorder,
+                    liveness_report.clone(),
+                    device_changes_reach(playback_control.clone()),
+                ),
+            })
+        });
+        playback_control.lock().device_binding.start_listening();
 
         Ok(Self {
             stream_format,
             device_period_in_per_channel_samples,
             liveness_report,
-            playback_unit,
-            _liveness_watch: CoreAudioDeviceLivenessWatch::watch(
-                &device,
-                direction,
-                failure_recorder,
-            ),
+            playback_control,
         })
+    }
+
+    /// Why a stream whose rebind failed cannot play again.
+    fn ended_by_a_failed_rebind(&self) -> Error {
+        Error::Configuration(
+            self.liveness_report
+                .failure_that_ended_the_stream()
+                .map(|failure| failure.to_string())
+                .unwrap_or_else(|| "the CoreAudio playback stream has ended".to_owned()),
+        )
     }
 }
 
@@ -1614,12 +2711,19 @@ impl AudioPlaybackStream for CoreAudioPlaybackStream {
     }
 
     fn start_requesting_from(&mut self, hand_off: AudioBlockForPlaybackHandOff) -> Result<()> {
-        self.playback_unit.stop_handing_off()?;
-        self.playback_unit.start_handing_off_to(hand_off)
+        let mut control = self.playback_control.lock();
+        let Some(playback_unit) = control.playback_unit.as_mut() else {
+            return Err(self.ended_by_a_failed_rebind());
+        };
+        playback_unit.stop_handing_off()?;
+        playback_unit.start_handing_off_to(hand_off)
     }
 
     fn stop_requesting(&mut self) -> Result<()> {
-        self.playback_unit.stop_handing_off()
+        match self.playback_control.lock().playback_unit.as_mut() {
+            Some(playback_unit) => playback_unit.stop_handing_off(),
+            None => Ok(()),
+        }
     }
 }
 
@@ -1805,8 +2909,8 @@ mod tests {
         assert_eq!(osstatus_text(-10863), "OSStatus -10863");
     }
 
-    /// The client side of the unit is exactly the format the stream reports,
-    /// which is what lets a caller match it without conversion in the arm.
+    /// Whatever rate and channel count the unit's client side carries, it is
+    /// described as the seam's interleaved float.
     #[test]
     fn the_units_client_format_is_the_streams_interleaved_float_format() {
         let description = interleaved_f32_description_of(AudioStreamFormat {
@@ -1823,6 +2927,562 @@ mod tests {
             0,
             "the seam carries interleaved payloads"
         );
+    }
+
+    fn interleaved_float(sample_rate: u32, channels: u32) -> AudioStreamFormat {
+        AudioStreamFormat {
+            sample_rate,
+            channels,
+            sample_format: AudioSampleFormat::F32,
+        }
+    }
+
+    #[test]
+    fn a_capture_device_carrying_the_streams_format_renders_it_with_no_converter() {
+        let stream_format = interleaved_float(48_000, 1);
+        let format_bridge = CoreAudioStreamFormatBridge::between(
+            CoreAudioStreamDirection::Capture,
+            stream_format,
+            interleaved_float(48_000, 1),
+        );
+        assert_eq!(
+            format_bridge,
+            CoreAudioStreamFormatBridge::TheDeviceCarriesTheStreamFormat
+        );
+        assert_eq!(
+            format_bridge.unit_client_side_format(stream_format, stream_format),
+            stream_format
+        );
+    }
+
+    /// AUHAL input cannot resample, so a capture unit on a device of another
+    /// format renders the device's own and the arm converts. Mental revert:
+    /// keep the stream's format on the unit, and the unit is asked for a rate
+    /// its device does not run at.
+    #[test]
+    fn a_capture_device_at_another_rate_or_channel_count_renders_its_own_format_for_a_converter() {
+        let stream_format = interleaved_float(48_000, 1);
+        for device_own_format in [
+            interleaved_float(24_000, 1),
+            interleaved_float(16_000, 1),
+            interleaved_float(48_000, 2),
+            interleaved_float(96_000, 2),
+        ] {
+            let format_bridge = CoreAudioStreamFormatBridge::between(
+                CoreAudioStreamDirection::Capture,
+                stream_format,
+                device_own_format,
+            );
+            assert_eq!(
+                format_bridge,
+                CoreAudioStreamFormatBridge::AnAudioConverterTakesTheDevicesFormatToTheStreams,
+                "{device_own_format:?}"
+            );
+            assert_eq!(
+                format_bridge.unit_client_side_format(stream_format, device_own_format),
+                device_own_format
+            );
+        }
+    }
+
+    #[test]
+    fn a_playback_device_of_another_format_is_left_to_auhal_and_the_client_keeps_the_streams() {
+        let stream_format = interleaved_float(48_000, 2);
+        let device_own_format = interleaved_float(24_000, 1);
+        let format_bridge = CoreAudioStreamFormatBridge::between(
+            CoreAudioStreamDirection::Playback,
+            stream_format,
+            device_own_format,
+        );
+        assert_eq!(
+            format_bridge,
+            CoreAudioStreamFormatBridge::AuhalConvertsTheStreamFormatForTheDevice
+        );
+        assert_eq!(
+            format_bridge.unit_client_side_format(stream_format, device_own_format),
+            stream_format,
+            "the stream's format is fixed for its lifetime"
+        );
+        assert_eq!(
+            CoreAudioStreamFormatBridge::between(
+                CoreAudioStreamDirection::Playback,
+                stream_format,
+                stream_format
+            ),
+            CoreAudioStreamFormatBridge::TheDeviceCarriesTheStreamFormat
+        );
+    }
+
+    const THE_BOUND_DEVICE: AudioObjectID = 71;
+    const ANOTHER_DEVICE: AudioObjectID = 93;
+
+    fn device_facts(
+        the_bound_device_is_alive: bool,
+        the_bound_devices_own_format_changed: bool,
+        system_default_device: Option<AudioObjectID>,
+    ) -> CoreAudioDeviceFactsAfterAChange {
+        CoreAudioDeviceFactsAfterAChange {
+            the_bound_device_is_alive,
+            the_bound_devices_own_format_changed,
+            system_default_device,
+        }
+    }
+
+    fn response_of_a_stream(
+        follows_the_system_default: bool,
+        change: CoreAudioStreamDeviceChange,
+        facts: CoreAudioDeviceFactsAfterAChange,
+    ) -> CoreAudioStreamDeviceChangeResponse {
+        how_a_stream_responds_to_a_device_change(
+            change,
+            follows_the_system_default,
+            THE_BOUND_DEVICE,
+            facts,
+        )
+    }
+
+    const FOLLOWS_THE_DEFAULT: bool = true;
+    const NAMED: bool = false;
+
+    #[test]
+    fn a_named_stream_whose_device_went_away_ends_rather_than_landing_elsewhere() {
+        assert_eq!(
+            response_of_a_stream(
+                NAMED,
+                CoreAudioStreamDeviceChange::BoundDeviceLivenessChanged,
+                device_facts(false, false, Some(ANOTHER_DEVICE)),
+            ),
+            CoreAudioStreamDeviceChangeResponse::EndTheStreamBecauseTheNamedDeviceWentAway
+        );
+    }
+
+    #[test]
+    fn a_named_stream_stays_on_its_device_when_the_default_moves() {
+        assert_eq!(
+            response_of_a_stream(
+                NAMED,
+                CoreAudioStreamDeviceChange::SystemDefaultDeviceMoved,
+                device_facts(true, false, Some(ANOTHER_DEVICE)),
+            ),
+            CoreAudioStreamDeviceChangeResponse::StayOnTheBoundDevice
+        );
+    }
+
+    /// Plugging in headphones or connecting AirPods moves the default; an
+    /// unnamed stream goes with it, as a macOS app does.
+    #[test]
+    fn an_unnamed_stream_moves_to_a_default_that_moved() {
+        assert_eq!(
+            response_of_a_stream(
+                FOLLOWS_THE_DEFAULT,
+                CoreAudioStreamDeviceChange::SystemDefaultDeviceMoved,
+                device_facts(true, false, Some(ANOTHER_DEVICE)),
+            ),
+            CoreAudioStreamDeviceChangeResponse::MoveToTheSystemDefault(ANOTHER_DEVICE)
+        );
+    }
+
+    /// Unplugging the headphones takes the device away and moves the default
+    /// back; whichever of the two reports arrives first, the stream follows.
+    #[test]
+    fn an_unnamed_stream_whose_device_went_away_moves_to_the_new_default() {
+        assert_eq!(
+            response_of_a_stream(
+                FOLLOWS_THE_DEFAULT,
+                CoreAudioStreamDeviceChange::BoundDeviceLivenessChanged,
+                device_facts(false, false, Some(ANOTHER_DEVICE)),
+            ),
+            CoreAudioStreamDeviceChangeResponse::MoveToTheSystemDefault(ANOTHER_DEVICE)
+        );
+    }
+
+    /// A device can go away a moment before the default moves off it; the
+    /// move is its own report, so ending the stream here would end it early.
+    #[test]
+    fn an_unnamed_stream_waits_for_the_default_to_move_off_a_device_that_went_away() {
+        assert_eq!(
+            response_of_a_stream(
+                FOLLOWS_THE_DEFAULT,
+                CoreAudioStreamDeviceChange::BoundDeviceLivenessChanged,
+                device_facts(false, false, Some(THE_BOUND_DEVICE)),
+            ),
+            CoreAudioStreamDeviceChangeResponse::StayOnTheBoundDevice
+        );
+    }
+
+    #[test]
+    fn an_unnamed_stream_whose_default_went_away_with_no_replacement_ends() {
+        for change in [
+            CoreAudioStreamDeviceChange::BoundDeviceLivenessChanged,
+            CoreAudioStreamDeviceChange::SystemDefaultDeviceMoved,
+        ] {
+            assert_eq!(
+                response_of_a_stream(
+                    FOLLOWS_THE_DEFAULT,
+                    change,
+                    device_facts(false, false, None)
+                ),
+                CoreAudioStreamDeviceChangeResponse::EndTheStreamBecauseNoDeviceIsTheDefault,
+                "{change:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_default_that_lands_on_the_bound_device_changes_nothing() {
+        assert_eq!(
+            response_of_a_stream(
+                FOLLOWS_THE_DEFAULT,
+                CoreAudioStreamDeviceChange::SystemDefaultDeviceMoved,
+                device_facts(true, false, Some(THE_BOUND_DEVICE)),
+            ),
+            CoreAudioStreamDeviceChangeResponse::StayOnTheBoundDevice
+        );
+    }
+
+    #[test]
+    fn a_liveness_report_from_a_device_still_alive_changes_nothing() {
+        for follows_the_system_default in [NAMED, FOLLOWS_THE_DEFAULT] {
+            assert_eq!(
+                response_of_a_stream(
+                    follows_the_system_default,
+                    CoreAudioStreamDeviceChange::BoundDeviceLivenessChanged,
+                    device_facts(true, false, Some(ANOTHER_DEVICE)),
+                ),
+                CoreAudioStreamDeviceChangeResponse::StayOnTheBoundDevice
+            );
+        }
+    }
+
+    /// A 48 kHz input switched to 24 kHz — AirPods going to the headset
+    /// profile — keeps the stream's format by rebinding, named or not.
+    #[test]
+    fn a_bound_device_at_a_new_format_is_rebound_named_or_not() {
+        for follows_the_system_default in [NAMED, FOLLOWS_THE_DEFAULT] {
+            assert_eq!(
+                response_of_a_stream(
+                    follows_the_system_default,
+                    CoreAudioStreamDeviceChange::BoundDeviceFormatChanged,
+                    device_facts(true, true, Some(ANOTHER_DEVICE)),
+                ),
+                CoreAudioStreamDeviceChangeResponse::RebindToTheBoundDeviceAtItsNewFormat
+            );
+        }
+    }
+
+    #[test]
+    fn a_format_report_that_changed_nothing_the_stream_bound_at_rebinds_nothing() {
+        assert_eq!(
+            response_of_a_stream(
+                NAMED,
+                CoreAudioStreamDeviceChange::BoundDeviceFormatChanged,
+                device_facts(true, false, Some(THE_BOUND_DEVICE)),
+            ),
+            CoreAudioStreamDeviceChangeResponse::StayOnTheBoundDevice
+        );
+    }
+
+    const FIRST_INPUT_SAMPLE_NS: i64 = 1_000_000_000_000;
+
+    /// The blocks a converted stream stamps from a device whose frames each
+    /// take `host_ns_per_device_frame` on the host clock, with the converter
+    /// keeping pace with its input as latency mode does. Each block is its
+    /// stamp, its frames, and the stream frames produced before it.
+    fn blocks_stamped_from_a_device(
+        timeline: &mut ConvertedCaptureBlockTimeline,
+        cycle_frames: u32,
+        cycle_count: u64,
+        host_ns_at_device_frame: impl Fn(u64) -> i64,
+    ) -> Vec<(i64, u32, u64)> {
+        let mut stream_frames_produced = 0u64;
+        (0..cycle_count)
+            .map(|cycle| {
+                let first_device_frame = cycle * u64::from(cycle_frames);
+                timeline.a_cycle_is_lent(host_ns_at_device_frame(first_device_frame), cycle_frames);
+                let stream_frames_producible = (first_device_frame + u64::from(cycle_frames))
+                    * u64::from(timeline.stream_sample_rate)
+                    / u64::from(timeline.device_sample_rate);
+                let converted_frame_count =
+                    (stream_frames_producible - stream_frames_produced) as u32;
+                let produced_before = stream_frames_produced;
+                stream_frames_produced = stream_frames_producible;
+                (
+                    timeline.stamp_the_next_block(converted_frame_count),
+                    converted_frame_count,
+                    produced_before,
+                )
+            })
+            .collect()
+    }
+
+    fn a_steady_device_at(device_sample_rate: u32) -> impl Fn(u64) -> i64 {
+        move |device_frame| {
+            FIRST_INPUT_SAMPLE_NS
+                + duration_of_many_frames_in_ns(device_frame, device_sample_rate) as i64
+        }
+    }
+
+    #[test]
+    fn a_converted_streams_first_block_is_stamped_at_its_first_input_sample_less_the_latency() {
+        let mut timeline = ConvertedCaptureBlockTimeline::for_a_new_binding(44_100, 48_000, 16);
+        timeline.a_cycle_is_lent(FIRST_INPUT_SAMPLE_NS, 512);
+        assert_eq!(
+            timeline.stamp_the_next_block(557),
+            FIRST_INPUT_SAMPLE_NS - 362_811,
+            "16 frames at 44.1 kHz is 362.8 µs"
+        );
+    }
+
+    /// On a steady device the stamps are exactly the first cycle's, advanced
+    /// by the stream frames produced, less the converter's latency — and so
+    /// back to back.
+    #[test]
+    fn a_steady_devices_converted_blocks_are_stamped_back_to_back_from_the_first_cycle() {
+        let mut timeline = ConvertedCaptureBlockTimeline::for_a_new_binding(44_100, 48_000, 16);
+        let blocks =
+            blocks_stamped_from_a_device(&mut timeline, 512, 2_000, a_steady_device_at(44_100));
+        let latency_ns = duration_of_frames_in_ns(16, 44_100);
+        for &(stamp_ns, _, produced_before) in &blocks {
+            let from_the_first_cycle_ns = FIRST_INPUT_SAMPLE_NS
+                + duration_of_many_frames_in_ns(produced_before, 48_000) as i64
+                - latency_ns;
+            assert!(
+                (stamp_ns - from_the_first_cycle_ns).abs() <= 2,
+                "{stamp_ns} vs {from_the_first_cycle_ns}"
+            );
+        }
+        for pair in blocks.windows(2) {
+            let (earlier_stamp_ns, earlier_frames, _) = pair[0];
+            let (later_stamp_ns, _, _) = pair[1];
+            let gap_ns = later_stamp_ns
+                - (earlier_stamp_ns + duration_of_frames_in_ns(earlier_frames, 48_000));
+            assert!(gap_ns.abs() <= 3, "blocks overlap or part by {gap_ns} ns");
+        }
+    }
+
+    /// Mental revert: anchor once and advance at the nominal rate, and after
+    /// ten minutes on a device 100 ppm fast the stamps sit 60 ms off the host
+    /// clock.
+    #[test]
+    fn a_device_clock_off_nominal_never_pulls_the_stamps_off_the_host_clock() {
+        let host_ns_per_device_frame = 1e9 / 44_100.0 * (1.0 - 100e-6);
+        let host_ns_at_device_frame = move |device_frame: u64| {
+            FIRST_INPUT_SAMPLE_NS + (device_frame as f64 * host_ns_per_device_frame).round() as i64
+        };
+        let mut timeline = ConvertedCaptureBlockTimeline::for_a_new_binding(44_100, 48_000, 16);
+        let ten_minutes_of_cycles = 600 * 44_100 / 512;
+        let blocks = blocks_stamped_from_a_device(
+            &mut timeline,
+            512,
+            ten_minutes_of_cycles,
+            host_ns_at_device_frame,
+        );
+        let &(last_stamp_ns, _, produced_before) = blocks.last().expect("blocks were stamped");
+        let input_frame_the_block_begins_at = produced_before as f64 * 44_100.0 / 48_000.0 - 16.0;
+        let where_that_frame_is_on_the_host_clock_ns = FIRST_INPUT_SAMPLE_NS
+            + (input_frame_the_block_begins_at * host_ns_per_device_frame).round() as i64;
+        assert!(
+            (last_stamp_ns - where_that_frame_is_on_the_host_clock_ns).abs() < 1_000,
+            "stamped {last_stamp_ns}, captured at {where_that_frame_is_on_the_host_clock_ns}"
+        );
+    }
+
+    /// A stop and restart, or cycles the device dropped, leave a real gap in
+    /// the input; the stamps show it rather than running on as if none
+    /// happened.
+    #[test]
+    fn a_gap_in_the_input_is_the_same_gap_in_the_stamps() {
+        const GAP_NS: i64 = 250_000_000;
+        let steady = a_steady_device_at(48_000);
+        let after_a_gap_at_frame = 100 * 512;
+        let mut timeline = ConvertedCaptureBlockTimeline::for_a_new_binding(48_000, 16_000, 18);
+        let blocks = blocks_stamped_from_a_device(&mut timeline, 512, 200, move |device_frame| {
+            steady(device_frame)
+                + if device_frame >= after_a_gap_at_frame {
+                    GAP_NS
+                } else {
+                    0
+                }
+        });
+        let gaps_ns: Vec<i64> = blocks
+            .windows(2)
+            .map(|pair| pair[1].0 - (pair[0].0 + duration_of_frames_in_ns(pair[0].1, 16_000)))
+            .collect();
+        assert!((gaps_ns[99] - GAP_NS).abs() <= 3, "{}", gaps_ns[99]);
+        assert!(
+            gaps_ns
+                .iter()
+                .enumerate()
+                .all(|(index, gap_ns)| index == 99 || gap_ns.abs() <= 3)
+        );
+    }
+
+    /// Mental revert: count in `i64` nanoseconds, and a month of 192 kHz
+    /// frames overflows it.
+    #[test]
+    fn a_month_long_converted_stream_still_stamps_exactly() {
+        let a_month_of_device_frames = 30 * 24 * 3_600 * 192_000u64;
+        let mut timeline = ConvertedCaptureBlockTimeline::for_a_new_binding(192_000, 48_000, 16);
+        timeline.device_frames_lent = a_month_of_device_frames;
+        timeline.stream_frames_produced = a_month_of_device_frames / 4;
+        timeline.a_cycle_is_lent(FIRST_INPUT_SAMPLE_NS, 4_096);
+        assert_eq!(
+            timeline.stamp_the_next_block(1_024),
+            FIRST_INPUT_SAMPLE_NS - duration_of_frames_in_ns(16, 192_000)
+        );
+    }
+
+    fn no_device() -> CoreAudioDevice {
+        CoreAudioDevice {
+            object_id: kAudioObjectUnknown,
+            uid: "NoDeviceAConverterTestNeeds".into(),
+            name: "no device".into(),
+        }
+    }
+
+    fn interleaved_f32_bytes_of(samples: &[f32]) -> Vec<u8> {
+        samples
+            .iter()
+            .flat_map(|sample| sample.to_le_bytes())
+            .collect()
+    }
+
+    fn interleaved_f32_samples_of(bytes: &[u8]) -> Vec<f32> {
+        bytes
+            .chunks_exact(4)
+            .map(|scalar| f32::from_le_bytes([scalar[0], scalar[1], scalar[2], scalar[3]]))
+            .collect()
+    }
+
+    /// Each converted block's stamp and its interleaved samples, from cycles
+    /// of `cycle_frames` lent on a steady device, carrying one full-scale
+    /// impulse at `impulse_at_input_frame` in every channel.
+    fn blocks_converted_from_an_impulse(
+        device_own_format: AudioStreamFormat,
+        stream_format: AudioStreamFormat,
+        cycle_frames: u32,
+        cycle_count: u32,
+        impulse_at_input_frame: usize,
+    ) -> Vec<(i64, Vec<f32>)> {
+        let mut converter = CoreAudioCaptureFormatConverter::new(
+            &no_device(),
+            device_own_format,
+            stream_format,
+            cycle_frames,
+        )
+        .expect("AudioToolbox converts between two linear PCM float formats");
+        let device_channels = device_own_format.channels as usize;
+        let mut input = vec![0.0f32; (cycle_frames * cycle_count) as usize * device_channels];
+        input[impulse_at_input_frame * device_channels..][..device_channels].fill(1.0);
+        let blocks = std::cell::RefCell::new(Vec::new());
+        for cycle in 0..cycle_count {
+            let first_device_frame = u64::from(cycle * cycle_frames);
+            let mut cycle_bytes = interleaved_f32_bytes_of(
+                &input[first_device_frame as usize * device_channels..]
+                    [..cycle_frames as usize * device_channels],
+            );
+            let outcome = converter.convert_the_cycle(
+                &mut cycle_bytes,
+                cycle_frames,
+                a_steady_device_at(device_own_format.sample_rate)(first_device_frame),
+                &|block: CapturedAudioBlockFromDevice<'_>| {
+                    assert_eq!(
+                        block.interleaved_sample_bytes.len(),
+                        stream_format.interleaved_byte_count_for(block.sample_count)
+                    );
+                    blocks.borrow_mut().push((
+                        block.first_sample_timestamp_ns,
+                        interleaved_f32_samples_of(block.interleaved_sample_bytes),
+                    ));
+                },
+            );
+            assert_eq!(outcome, ConvertedInputCycle::HandedOff);
+        }
+        blocks.into_inner()
+    }
+
+    /// The loudest output frame's stamp, and every channel's value there.
+    fn where_the_impulse_came_out(
+        blocks: &[(i64, Vec<f32>)],
+        stream_format: AudioStreamFormat,
+    ) -> (i64, Vec<f32>) {
+        let channels = stream_format.channels as usize;
+        blocks
+            .iter()
+            .flat_map(|(stamp_ns, samples)| {
+                samples
+                    .chunks_exact(channels)
+                    .enumerate()
+                    .map(move |(frame, frame_samples)| {
+                        (
+                            stamp_ns
+                                + duration_of_frames_in_ns(frame as u32, stream_format.sample_rate),
+                            frame_samples.to_vec(),
+                        )
+                    })
+            })
+            .max_by(|(_, left), (_, right)| left[0].abs().total_cmp(&right[0].abs()))
+            .expect("the converter produced frames")
+    }
+
+    /// The whole converter path without a device: an impulse lent at a known
+    /// instant comes out stamped at that instant, to within one output frame.
+    /// Mental revert: subtract no latency, and the 44.1 → 48 kHz impulse is
+    /// stamped 16 input frames — 363 µs — late.
+    #[test]
+    fn an_impulse_through_the_capture_converter_is_stamped_where_it_was_captured() {
+        const IMPULSE_AT_INPUT_FRAME: usize = 3_000;
+        for (device_own_format, stream_format) in [
+            (interleaved_float(44_100, 1), interleaved_float(48_000, 2)),
+            (interleaved_float(48_000, 2), interleaved_float(16_000, 1)),
+            (interleaved_float(16_000, 1), interleaved_float(48_000, 1)),
+            (interleaved_float(96_000, 2), interleaved_float(48_000, 2)),
+        ] {
+            let blocks = blocks_converted_from_an_impulse(
+                device_own_format,
+                stream_format,
+                512,
+                12,
+                IMPULSE_AT_INPUT_FRAME,
+            );
+            let (impulse_stamp_ns, impulse_frame) =
+                where_the_impulse_came_out(&blocks, stream_format);
+            let impulse_captured_at_ns = FIRST_INPUT_SAMPLE_NS
+                + duration_of_frames_in_ns(
+                    IMPULSE_AT_INPUT_FRAME as u32,
+                    device_own_format.sample_rate,
+                );
+            let one_output_frame_ns = duration_of_frames_in_ns(1, stream_format.sample_rate);
+            assert!(
+                (impulse_stamp_ns - impulse_captured_at_ns).abs() <= one_output_frame_ns,
+                "{device_own_format:?} → {stream_format:?}: stamped {impulse_stamp_ns}, captured \
+                 at {impulse_captured_at_ns}"
+            );
+            assert!(
+                impulse_frame.iter().all(|&sample| sample > 0.2),
+                "every channel carries the impulse: {impulse_frame:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_converter_that_only_moves_channels_adds_no_latency_and_copies_mono_to_both() {
+        let stream_format = interleaved_float(48_000, 2);
+        let blocks = blocks_converted_from_an_impulse(
+            interleaved_float(48_000, 1),
+            stream_format,
+            512,
+            4,
+            700,
+        );
+        assert_eq!(blocks[0].0, FIRST_INPUT_SAMPLE_NS);
+        let (impulse_stamp_ns, impulse_frame) = where_the_impulse_came_out(&blocks, stream_format);
+        let impulse_captured_at_ns = FIRST_INPUT_SAMPLE_NS + duration_of_frames_in_ns(700, 48_000);
+        assert!(
+            (impulse_stamp_ns - impulse_captured_at_ns).abs() <= 1,
+            "stamped {impulse_stamp_ns}, captured at {impulse_captured_at_ns}"
+        );
+        assert_eq!(impulse_frame, [1.0, 1.0]);
     }
 }
 

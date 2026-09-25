@@ -159,7 +159,7 @@ block2 = "0.6"
 # The CoreAudio arm of the audio device seam: device properties, and AUHAL.
 objc2-core-audio = { workspace = true, features = ["std", "AudioHardware", "objc2-core-audio-types"] }
 objc2-core-audio-types = { workspace = true, features = ["std", "CoreAudioBaseTypes"] }
-objc2-audio-toolbox = { workspace = true, features = ["std", "AUComponent", "AudioComponent", "AudioOutputUnit", "AudioUnitProperties", "objc2-core-audio-types"] }
+objc2-audio-toolbox = { workspace = true, features = ["std", "AUComponent", "AudioComponent", "AudioConverter", "AudioOutputUnit", "AudioUnitProperties", "objc2-core-audio-types"] }
 objc2-app-kit.workspace = true
 objc2-quartz-core.workspace = true
 objc2-core-text.workspace = true
