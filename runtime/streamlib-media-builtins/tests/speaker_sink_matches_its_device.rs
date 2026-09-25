@@ -18,12 +18,17 @@
 //!
 //! Deliberately arm-agnostic. The backend chain is probed once per process with
 //! no configuration dial and no environment override by design, so a test
-//! cannot force the null arm — it takes PipeWire or ALSA on a workstation and
-//! the null arm in a container. Every assertion below holds on all three: none
-//! names a rate or a channel count, because the settled values are the
-//! machine's and that is the whole point of resolving them from the device.
-//! What *is* fixed is the source's format — 16 kHz mono, which no audio device
-//! opens at — so the stage has a real rate conversion to do on every arm.
+//! cannot force the null arm — it takes PipeWire or ALSA on a Linux
+//! workstation, CoreAudio on a Mac, and the null arm in a container. Every
+//! assertion below holds on all four: none names a rate or a channel count,
+//! because the settled values are the machine's and that is the whole point of
+//! resolving them from the device. What *is* fixed is the source's format —
+//! 16 kHz mono, which no audio device opens at — so the stage has a real rate
+//! conversion to do on every arm.
+//!
+//! On a Mac the first scenario is audible: CoreAudio plays the source's
+//! full-scale ramp through the default output, so there it runs only under
+//! `audible-hardware-tests`.
 
 use std::sync::Once;
 use std::time::{Duration, Instant};
@@ -136,6 +141,10 @@ fn node_named<'a>(graph: &'a Value, display_name: &str) -> &'a Value {
 /// refuses it, the sink never reaches Running, and the readiness wait below
 /// fails — before the rendering assertion is ever reached.
 #[test]
+#[cfg_attr(
+    all(target_os = "macos", not(feature = "audible-hardware-tests")),
+    ignore = "audible on macOS, attended only — plays a full-scale 100 Hz ramp through the default output for 2 s. Run with --features streamlib-media-builtins/audible-hardware-tests. See docs/testing-hardware.md"
+)]
 fn a_sixteen_kilohertz_source_reaches_whatever_this_machines_speaker_opened_at() {
     ensure_every_processor_type_is_registered();
 

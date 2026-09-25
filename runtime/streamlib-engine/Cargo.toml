@@ -25,6 +25,12 @@ strip_debug_logging = ["tracing/release_max_level_info"]
 #   cargo test --features streamlib/hardware-tests --workspace -- --test-threads=1
 # See `docs/testing-hardware.md`.
 hardware-tests = []
+# Tier 2, audible: hardware tests that play sound a person hears. Attended
+# only, so the standing `hardware-tests` sweep stays silent; it implies
+# `hardware-tests` because every audible test needs the hardware too.
+#   cargo test -p streamlib-engine --features audible-hardware-tests \
+#     --test coreaudio_arm_hears_what_it_plays -- --test-threads=1 --nocapture
+audible-hardware-tests = ["hardware-tests"]
 # Multi-process mesh end-to-end tests: real runtimes in separate processes,
 # talking over Zenoh on loopback. A local validation, never a merge gate —
 # process start-up and network discovery are not deterministic. To run them:
@@ -150,6 +156,10 @@ objc2-core-media.workspace = true
 objc2-core-video = { workspace = true, features = ["objc2-io-surface"] }
 # The completion handler camera authorization answers through.
 block2 = "0.6"
+# The CoreAudio arm of the audio device seam: device properties, and AUHAL.
+objc2-core-audio = { workspace = true, features = ["std", "AudioHardware", "block2", "dispatch2", "objc2-core-audio-types"] }
+objc2-core-audio-types = { workspace = true, features = ["std", "CoreAudioBaseTypes"] }
+objc2-audio-toolbox = { workspace = true, features = ["std", "AUComponent", "AudioComponent", "AudioConverter", "AudioOutputUnit", "AudioUnitProperties", "objc2-core-audio-types"] }
 objc2-app-kit.workspace = true
 objc2-quartz-core.workspace = true
 objc2-core-text.workspace = true
@@ -226,6 +236,12 @@ trybuild = "1.0.121"
 # grammar test wants `keyexpr`'s `internal` chunk inspection, which the facade
 # does not re-export.
 zenoh-keyexpr = { version = "1.10.1", features = ["internal"] }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+# `CATapDescription` and `AudioHardwareCreateProcessTap` for the muted process
+# tap the CoreAudio content test captures its own playback through. Tests only:
+# the engine's library code creates no taps.
+objc2-core-audio = { workspace = true, features = ["std", "AudioHardware", "objc2", "objc2-foundation", "objc2-core-audio-types"] }
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 # `testing::SubprocessCrashHarness` — drives a real subprocess crash against

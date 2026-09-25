@@ -159,14 +159,68 @@ system-exclusive resource. Concretely, today:
 - Audio device probes: anything opening a stream through the audio
   device seam against a real backend, which needs an audio device rather
   than a GPU — a reachable session for the PipeWire arm, `/dev/snd` and an
-  openable PCM for the ALSA arm. Capture and playback are separate
-  endpoints, and a test naming one says which in its ignore reason.
+  openable PCM for the ALSA arm, a Mac with a default device for the
+  CoreAudio arm — and, for CoreAudio capture, microphone access already
+  allowed for the terminal running it. Capture and playback are separate
+  endpoints, and a test naming one says which in its ignore reason. The
+  CoreAudio content test that hears its own playback through a muted process
+  tap also needs System Audio Recording allowed for that terminal (System
+  Settings › Privacy & Security › Screen & System Audio Recording › System
+  Audio Recording Only); without it the tap returns digital zeros and the test
+  fails naming the setting.
 - Future: V4L2 camera capture, display swapchains, anything that holds a
   kernel-level exclusive lock.
 
 Pure-logic tests in the same file (e.g. cache-path string formatting,
 SPIR-V reflection validators that operate on byte arrays without ever
 constructing a device) stay in tier 1.
+
+### Audible tests are attended only
+
+The `hardware-tests` sweep stays silent: playback tests there write zeros,
+capture tests only listen, and one CoreAudio content test plays a tone only
+into a muted process tap of itself
+(`coreaudio_arm_hears_its_own_playback_through_a_muted_process_tap`). That test
+first plays a pilot at about −120 dBFS, below hearing on any output, and plays
+its 440 Hz tone at 0.5 only once the pilot has come back through the tap. A
+tap macOS does not let read, with System Audio Recording not allowed, so fails
+on the pilot with nothing audible played; if the arm's playback was asked for
+none of the pilot, the failure names the playback path instead. That a
+reading tap keeps the tone off the output rests on Core Audio's documented
+muted-tap behaviour and has not yet been observed on a Mac, so run it
+attended, with the speakers audible, until someone has heard it stay silent.
+The run prints the default output's volume beside the tap's fitted gain. The
+amplitude gate assumes the tap reads before that volume, which is also not
+yet observed: a tone read back at 0.5 with the volume below full settles it.
+
+```bash
+cargo test -p streamlib-engine --features hardware-tests \
+  --test coreaudio_arm_hears_its_own_playback_through_a_muted_process_tap \
+  -- --test-threads=1 --nocapture
+```
+
+A test that plays sound a person hears is gated on `audible-hardware-tests`
+instead (it implies `hardware-tests`), and is run by someone at the machine:
+
+```bash
+cargo test -p streamlib-engine --features audible-hardware-tests \
+  --test coreaudio_arm_hears_what_it_plays -- --test-threads=1 --nocapture
+cargo test -p streamlib-media-builtins --features audible-hardware-tests \
+  --test speaker_sink_matches_its_device -- --test-threads=1
+```
+
+The second is gated on a Mac only, where the CoreAudio arm plays it through the
+default output; on Linux it is not gated.
+
+### Microphone access for the CoreAudio capture tests
+
+macOS asks on behalf of the application that launched the test — the terminal,
+not `cargo`. A CoreAudio capture test checks access before it measures:
+
+- Never asked: it asks, and fails with "allow <terminal> in the prompt, then
+  re-run". Click Allow and run it again.
+- Refused: it fails naming System Settings › Privacy & Security › Microphone.
+  Turn the terminal on there and run it again.
 
 ## Adding a new hardware test
 

@@ -13,7 +13,7 @@ arm needs no audio library at all, so this still runs in a container. What is
 *not* asserted here is that the timestamps are the device's own rather than the
 moment of publication; that needs a real device to be provable at all, and it
 lives in `runtime/streamlib-engine/tests/`
-`pipewire_arm_stamps_blocks_with_the_devices_own_timing.rs`.
+`pipewire_arm_stamps_blocks_with_the_devices_own_timing.rs` and its CoreAudio sibling.
 """
 
 import math

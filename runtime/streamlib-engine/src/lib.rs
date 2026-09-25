@@ -184,6 +184,21 @@ pub mod linux_alsa_audio_device_backend {
     pub use crate::linux::alsa_audio_device_backend::AlsaAudioDeviceBackend;
 }
 
+/// The CoreAudio arm's device lookups, the microphone gate's preflight and the
+/// application macOS asks on this process's behalf, for the audio tier only: a
+/// test pins the devices it measures and names the setting a person must
+/// change, and for which application, rather than timing out. `doc(hidden)`
+/// for the same reason as the ALSA arm's entry point.
+#[cfg(target_os = "macos")]
+#[doc(hidden)]
+pub mod apple_coreaudio_audio_tier {
+    pub use crate::apple::coreaudio_audio_device_backend::{
+        CoreAudioStreamDirection, built_in_audio_device_uid, default_audio_device_uid,
+    };
+    pub use crate::apple::permissions::microphone_access_for_a_capture_hardware_test;
+    pub use crate::apple::responsible_gui_application::responsible_gui_application_name;
+}
+
 /// The resolved colour → V4L2 direction of the engine's V4L2 colour map, for
 /// the virtual camera's loopback door, which signals a V4L2 output device at
 /// `S_FMT` with it.

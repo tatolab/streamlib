@@ -72,9 +72,10 @@ const ROOM_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// first line already says what the next thousand would.
 const FAILED_READS_BETWEEN_REPORTS: u64 = 300;
 
-/// Ten-millisecond periods of silence between underrun warnings — roughly
-/// three seconds. A graph that is not keeping up underruns at device cadence,
-/// and saying so once per period would bury the reason under the symptom.
+/// Device periods of silence between underrun warnings — roughly three
+/// seconds at a ten-millisecond period. A graph that is not keeping up
+/// underruns at device cadence, and saying so once per period would bury the
+/// reason under the symptom.
 const SILENT_PERIODS_BETWEEN_UNDERRUN_WARNINGS: u64 = 300;
 
 /// The one port a block to play arrives on.
@@ -128,12 +129,16 @@ impl ManualProcessor for SpeakerSink::Processor {
             deviceless_pacing_clock: Arc::clone(ctx.audio_clock()),
         })?;
         let stream_format = playback_stream.stream_format();
+        let sizing = SpeakerSinkSizingFromTheDevicePeriod::of(playback_stream.as_ref());
         tracing::info!(
             audio_backend = backend.backend_name(),
             device_id = self.config.device_id.as_deref().unwrap_or("<default>"),
             sample_rate = stream_format.sample_rate,
             channels = stream_format.channels,
             sample_format = ?stream_format.sample_format,
+            device_period_in_per_channel_samples = sizing.device_period_in_per_channel_samples,
+            device_period_reported_by_the_device =
+                playback_stream.device_period_in_per_channel_samples().is_some(),
             "SpeakerSink: playback stream opened"
         );
         // The port declared `audio_window = match_device`, and this is the
@@ -143,15 +148,14 @@ impl ManualProcessor for SpeakerSink::Processor {
         // speaker with nothing between them. Window and hop are one device
         // period because the sink wants format conversion, not framing — under
         // an all-or-nothing contract that is how a converter is spelled.
-        let one_device_period = a_device_periods_worth_of_per_channel_samples(stream_format);
         self.inputs
             .settle_a_ports_device_matched_audio_window_contract(
                 ctx,
                 AUDIO_INPUT_PORT,
                 &AudioWindowContractMatchingADeviceStream {
                     device_stream_format: stream_format,
-                    window_size_in_per_channel_samples: one_device_period,
-                    hop_in_per_channel_samples: one_device_period,
+                    window_size_in_per_channel_samples: sizing.device_period_in_per_channel_samples,
+                    hop_in_per_channel_samples: sizing.device_period_in_per_channel_samples,
                 },
             )?;
 
@@ -166,7 +170,7 @@ impl ManualProcessor for SpeakerSink::Processor {
                 "SpeakerSink: no playback stream is open. setup() must run first.".into(),
             ));
         };
-        let stream_format = playback_stream.stream_format();
+        let sizing = SpeakerSinkSizingFromTheDevicePeriod::of(playback_stream.as_ref());
         // The one `setup` stored, not a second one off the stream: on every arm
         // these are the same report, and depending on that is how it stays
         // true.
@@ -177,10 +181,9 @@ impl ManualProcessor for SpeakerSink::Processor {
             ));
         };
 
-        let samples_awaiting_playback =
-            Arc::new(AudioSamplesAwaitingPlaybackRing::with_byte_capacity(
-                ring_byte_capacity_for(stream_format),
-            ));
+        let samples_awaiting_playback = Arc::new(
+            AudioSamplesAwaitingPlaybackRing::with_byte_capacity(sizing.ring_byte_capacity),
+        );
         playback_stream.start_requesting_from(device_callback_filling_from(Arc::clone(
             &samples_awaiting_playback,
         )))?;
@@ -200,7 +203,7 @@ impl ManualProcessor for SpeakerSink::Processor {
                         &is_draining,
                         &playback_stream_liveness_report,
                         &played_block_counter,
-                        stream_format,
+                        sizing,
                     );
                 }
             })
@@ -270,28 +273,48 @@ impl SpeakerSink::Processor {
     }
 }
 
-/// Ten milliseconds of this format in per-channel samples — the device period
-/// this assumes where it has not yet been told one.
-///
-/// Written once because three callers depend on it moving together: the ring's
-/// size, the interval between underrun reports, and the window the port's
-/// `match_device` contract settles to are all stated in periods. Floored at one
-/// sample so a stream reporting an absurd rate still settles a contract the
-/// stage can honour rather than one refused for a zero window.
-fn a_device_periods_worth_of_per_channel_samples(stream_format: AudioStreamFormat) -> u32 {
-    (stream_format.sample_rate / 100).max(1)
+/// The window this sink settles, the ring it queues into and the silence
+/// between its underrun warnings, all stated in one device period so the
+/// three move together.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SpeakerSinkSizingFromTheDevicePeriod {
+    /// Window and hop of the port's `match_device` contract.
+    device_period_in_per_channel_samples: u32,
+    /// Bytes of queued samples between the graph and the device.
+    ring_byte_capacity: usize,
+    silence_bytes_between_underrun_warnings: u64,
 }
 
-/// One device period of this format, in bytes.
-fn a_device_periods_worth_of_bytes(stream_format: AudioStreamFormat) -> usize {
-    stream_format
-        .interleaved_byte_count_for(a_device_periods_worth_of_per_channel_samples(stream_format))
-}
+impl SpeakerSinkSizingFromTheDevicePeriod {
+    fn of(playback_stream: &dyn AudioPlaybackStream) -> Self {
+        Self::for_format_and_reported_period(
+            playback_stream.stream_format(),
+            playback_stream.device_period_in_per_channel_samples(),
+        )
+    }
 
-/// How many bytes of queued samples sit between the graph and the device.
-fn ring_byte_capacity_for(stream_format: AudioStreamFormat) -> usize {
-    (a_device_periods_worth_of_bytes(stream_format) * DEVICE_PERIODS_THE_RING_HOLDS)
-        .max(SMALLEST_USABLE_RING_BYTES)
+    /// The period the stream reports, else ten milliseconds of its format.
+    /// Floored at one sample so a stream reporting an absurd rate still
+    /// settles a contract the stage can honour rather than one refused for a
+    /// zero window.
+    fn for_format_and_reported_period(
+        stream_format: AudioStreamFormat,
+        reported_device_period_in_per_channel_samples: Option<u32>,
+    ) -> Self {
+        let device_period_in_per_channel_samples = reported_device_period_in_per_channel_samples
+            .filter(|&period| period > 0)
+            .unwrap_or(stream_format.sample_rate / 100)
+            .max(1);
+        let device_period_in_bytes =
+            stream_format.interleaved_byte_count_for(device_period_in_per_channel_samples);
+        Self {
+            device_period_in_per_channel_samples,
+            ring_byte_capacity: (device_period_in_bytes * DEVICE_PERIODS_THE_RING_HOLDS)
+                .max(SMALLEST_USABLE_RING_BYTES),
+            silence_bytes_between_underrun_warnings: device_period_in_bytes.max(1) as u64
+                * SILENT_PERIODS_BETWEEN_UNDERRUN_WARNINGS,
+        }
+    }
 }
 
 /// The callback the playback stream asks for samples through.
@@ -315,13 +338,12 @@ fn drain_blocks_into_playback(
     is_draining: &AtomicBool,
     playback_stream_liveness_report: &DeviceStreamLivenessReport,
     played_block_counter: &AtomicU64,
-    stream_format: AudioStreamFormat,
+    sizing: SpeakerSinkSizingFromTheDevicePeriod,
 ) {
     let mut read_failures =
         ConsecutiveFailureReportSchedule::reporting_every(FAILED_READS_BETWEEN_REPORTS);
     let mut underrun_reports = CumulativeCountReportThreshold::reporting_every(
-        a_device_periods_worth_of_bytes(stream_format).max(1) as u64
-            * SILENT_PERIODS_BETWEEN_UNDERRUN_WARNINGS,
+        sizing.silence_bytes_between_underrun_warnings,
     );
 
     while is_draining.load(Ordering::Acquire) {
@@ -523,7 +545,8 @@ mod tests {
 
         let samples_awaiting_playback =
             Arc::new(AudioSamplesAwaitingPlaybackRing::with_byte_capacity(
-                ring_byte_capacity_for(stream_format),
+                SpeakerSinkSizingFromTheDevicePeriod::of(playback_stream.as_ref())
+                    .ring_byte_capacity,
             ));
         playback_stream
             .start_requesting_from(device_callback_filling_from(Arc::clone(
@@ -578,7 +601,8 @@ mod tests {
 
         let samples_awaiting_playback =
             Arc::new(AudioSamplesAwaitingPlaybackRing::with_byte_capacity(
-                ring_byte_capacity_for(stream_format),
+                SpeakerSinkSizingFromTheDevicePeriod::of(playback_stream.as_ref())
+                    .ring_byte_capacity,
             ));
         playback_stream
             .start_requesting_from(device_callback_filling_from(Arc::clone(
@@ -635,24 +659,96 @@ mod tests {
         );
     }
 
-    /// Window and hop are one device period, so the stage converts format
-    /// without also re-framing: a sink wants what its device can play, at the
-    /// cadence its device asks for it.
+    /// A playback stream that reports whatever device period the test gives
+    /// it, and plays nothing.
+    struct PlaybackStreamReportingADevicePeriod {
+        stream_format: AudioStreamFormat,
+        device_period_in_per_channel_samples: Option<u32>,
+    }
+
+    impl AudioPlaybackStream for PlaybackStreamReportingADevicePeriod {
+        fn stream_format(&self) -> AudioStreamFormat {
+            self.stream_format
+        }
+
+        fn device_period_in_per_channel_samples(&self) -> Option<u32> {
+            self.device_period_in_per_channel_samples
+        }
+
+        fn liveness_report(&self) -> DeviceStreamLivenessReport {
+            DeviceStreamLivenessReport::of_a_stream_that_cannot_fail()
+        }
+
+        fn start_requesting_from(&mut self, _hand_off: AudioBlockForPlaybackHandOff) -> Result<()> {
+            Ok(())
+        }
+
+        fn stop_requesting(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    /// The ticket's clause: `match_device` is honoured from the device's own
+    /// buffer size. Window, hop, ring and underrun cadence all follow the
+    /// period the stream reports.
+    ///
+    /// Mental revert: size from ten milliseconds whatever the stream says, as
+    /// the sink did, and a 512-frame CoreAudio device is framed in 480s.
     #[test]
-    fn the_window_this_sink_settles_is_one_device_period_at_the_devices_own_rate() {
+    fn a_stream_reporting_its_device_period_sizes_everything_from_that_period() {
+        let stream = PlaybackStreamReportingADevicePeriod {
+            stream_format: a_stream_format(48_000, 2),
+            device_period_in_per_channel_samples: Some(512),
+        };
+        let one_period_in_bytes = 512 * 2 * 4;
         assert_eq!(
-            a_device_periods_worth_of_per_channel_samples(a_stream_format(48_000, 2)),
-            480,
-            "ten milliseconds at 48 kHz"
+            SpeakerSinkSizingFromTheDevicePeriod::of(&stream),
+            SpeakerSinkSizingFromTheDevicePeriod {
+                device_period_in_per_channel_samples: 512,
+                ring_byte_capacity: one_period_in_bytes * DEVICE_PERIODS_THE_RING_HOLDS,
+                silence_bytes_between_underrun_warnings: one_period_in_bytes as u64
+                    * SILENT_PERIODS_BETWEEN_UNDERRUN_WARNINGS,
+            }
+        );
+    }
+
+    /// Window and hop are one device period, so the stage converts format
+    /// without also re-framing; an arm that reports no period keeps the
+    /// ten milliseconds the sink has always assumed.
+    #[test]
+    fn a_stream_reporting_no_device_period_is_sized_from_ten_milliseconds() {
+        let stream = PlaybackStreamReportingADevicePeriod {
+            stream_format: a_stream_format(48_000, 2),
+            device_period_in_per_channel_samples: None,
+        };
+        let one_period_in_bytes = 480 * 2 * 4;
+        assert_eq!(
+            SpeakerSinkSizingFromTheDevicePeriod::of(&stream),
+            SpeakerSinkSizingFromTheDevicePeriod {
+                device_period_in_per_channel_samples: 480,
+                ring_byte_capacity: one_period_in_bytes * DEVICE_PERIODS_THE_RING_HOLDS,
+                silence_bytes_between_underrun_warnings: one_period_in_bytes as u64
+                    * SILENT_PERIODS_BETWEEN_UNDERRUN_WARNINGS,
+            }
+        );
+    }
+
+    #[test]
+    fn a_reported_period_of_zero_is_no_period_and_a_tiny_rate_still_settles_one_sample() {
+        assert_eq!(
+            SpeakerSinkSizingFromTheDevicePeriod::for_format_and_reported_period(
+                a_stream_format(48_000, 2),
+                Some(0)
+            )
+            .device_period_in_per_channel_samples,
+            480
         );
         assert_eq!(
-            a_device_periods_worth_of_bytes(a_stream_format(48_000, 2)),
-            480 * 2 * 4,
-            "the two must move together — the ring is sized in the periods the contract \
-             frames in"
-        );
-        assert_eq!(
-            a_device_periods_worth_of_per_channel_samples(a_stream_format(1, 1)),
+            SpeakerSinkSizingFromTheDevicePeriod::for_format_and_reported_period(
+                a_stream_format(1, 1),
+                None
+            )
+            .device_period_in_per_channel_samples,
             1,
             "a rate no period divides still settles a contract the stage can honour"
         );
@@ -675,7 +771,12 @@ mod tests {
         let stream_format = a_stream_format(48_000, 2);
         let one_period = stream_format.interleaved_byte_count_for(480);
         assert!(
-            ring_byte_capacity_for(stream_format) >= one_period * DEVICE_PERIODS_THE_RING_HOLDS,
+            SpeakerSinkSizingFromTheDevicePeriod::for_format_and_reported_period(
+                stream_format,
+                None
+            )
+            .ring_byte_capacity
+                >= one_period * DEVICE_PERIODS_THE_RING_HOLDS,
             "a ring of one period makes every hand-off wait for the device"
         );
     }
@@ -686,7 +787,11 @@ mod tests {
     #[test]
     fn a_stream_reporting_a_tiny_rate_still_gets_a_usable_ring() {
         assert_eq!(
-            ring_byte_capacity_for(a_stream_format(1, 1)),
+            SpeakerSinkSizingFromTheDevicePeriod::for_format_and_reported_period(
+                a_stream_format(1, 1),
+                None
+            )
+            .ring_byte_capacity,
             SMALLEST_USABLE_RING_BYTES,
             "a rate no period derives from falls back to the floor"
         );
@@ -697,12 +802,19 @@ mod tests {
     /// fallback nobody expects to reach.
     #[test]
     fn at_a_real_format_the_ring_is_sized_by_the_device_period_not_the_floor() {
-        let stream_format = a_stream_format(48_000, 2);
-        assert_eq!(
-            ring_byte_capacity_for(stream_format),
-            a_device_periods_worth_of_bytes(stream_format) * DEVICE_PERIODS_THE_RING_HOLDS
-        );
-        assert!(ring_byte_capacity_for(stream_format) > SMALLEST_USABLE_RING_BYTES);
+        for reported_period in [None, Some(512)] {
+            let sizing = SpeakerSinkSizingFromTheDevicePeriod::for_format_and_reported_period(
+                a_stream_format(48_000, 2),
+                reported_period,
+            );
+            assert_eq!(
+                sizing.ring_byte_capacity,
+                a_stream_format(48_000, 2)
+                    .interleaved_byte_count_for(sizing.device_period_in_per_channel_samples)
+                    * DEVICE_PERIODS_THE_RING_HOLDS
+            );
+            assert!(sizing.ring_byte_capacity > SMALLEST_USABLE_RING_BYTES);
+        }
     }
 
     /// The sink's half of the seam's point: a drain thread comes back from a
@@ -742,7 +854,10 @@ mod tests {
                         &is_draining,
                         &liveness_report,
                         &played_block_counter,
-                        a_stream_format(48_000, 2),
+                        SpeakerSinkSizingFromTheDevicePeriod::for_format_and_reported_period(
+                            a_stream_format(48_000, 2),
+                            None,
+                        ),
                     );
                 });
             }
@@ -797,7 +912,10 @@ mod tests {
                     &is_draining,
                     &liveness_report,
                     &played_block_counter,
-                    a_stream_format(48_000, 2),
+                    SpeakerSinkSizingFromTheDevicePeriod::for_format_and_reported_period(
+                        a_stream_format(48_000, 2),
+                        None,
+                    ),
                 );
             }
         });

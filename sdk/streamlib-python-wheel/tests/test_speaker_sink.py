@@ -75,6 +75,9 @@ def test_the_speaker_declares_the_input_a_microphone_can_be_wired_to():
 
 
 @pytest.mark.requires_gpu
+@pytest.mark.audible_on_macos(
+    reason="the default microphone wired straight to the default speaker feeds back without headphones"
+)
 def test_a_microphone_wired_to_a_speaker_runs_and_plays_what_it_captured(
     start_app_under_test,
 ):

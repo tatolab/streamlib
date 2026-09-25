@@ -45,9 +45,9 @@ use parking_lot::Mutex;
 
 use crate::apple::core_video_pixel_buffer_color::core_video_pixel_buffer_color_to_h273_color_vui;
 use crate::apple::permissions::{
-    AvFoundationCameraAuthorizationAuthority, CameraAuthorizationAtOpen,
-    CameraAuthorizationAuthority, CameraRefusal, authorize_the_camera_without_waiting_for_the_user,
-    camera_refusal_for_the_user,
+    AvFoundationCaptureDeviceAuthorizationAuthority, CaptureDeviceAuthorizationAtOpen,
+    CaptureDeviceAuthorizationAuthority, CaptureDeviceRefusal, PrivacyGatedCaptureDevice,
+    authorize_the_capture_device_without_waiting_for_the_user, capture_device_refusal_for_the_user,
 };
 use crate::core::color::{ColorSpaceKind, H273ColorVui};
 use crate::core::context::captured_video_frame_to_pooled_rgba_conversion_stage::{
@@ -100,7 +100,7 @@ impl VideoDeviceBackend for AvFoundationVideoDeviceBackend {
     ) -> Result<Box<dyn VideoCaptureStream>> {
         Ok(Box::new(AvFoundationVideoCaptureStream::open(
             request,
-            &AvFoundationCameraAuthorizationAuthority,
+            &AvFoundationCaptureDeviceAuthorizationAuthority(PrivacyGatedCaptureDevice::Camera),
         )?))
     }
 }
@@ -351,7 +351,7 @@ struct AvFoundationCaptureSessionControl {
 impl AvFoundationVideoCaptureStream {
     fn open(
         request: &VideoDeviceStreamRequest,
-        camera_authorization_authority: &dyn CameraAuthorizationAuthority,
+        camera_authorization_authority: &dyn CaptureDeviceAuthorizationAuthority,
     ) -> Result<Self> {
         let device = open_requested_avfoundation_device(request.device_id.as_deref())?;
         let opened_device = video_capture_device_describing(&device);
@@ -429,14 +429,14 @@ impl AvFoundationVideoCaptureStream {
         }));
 
         let answer_reaches = Arc::downgrade(&capture_session_control);
-        match authorize_the_camera_without_waiting_for_the_user(
+        match authorize_the_capture_device_without_waiting_for_the_user(
             camera_authorization_authority,
             Box::new(move |granted| the_users_camera_answer_arrived(&answer_reaches, granted)),
         )? {
-            CameraAuthorizationAtOpen::Granted => {
+            CaptureDeviceAuthorizationAtOpen::Granted => {
                 capture_session_control.lock().camera_access = CameraAccessForTheStream::Granted;
             }
-            CameraAuthorizationAtOpen::AwaitingTheUsersAnswer => {}
+            CaptureDeviceAuthorizationAtOpen::AwaitingTheUsersAnswer => {}
         }
 
         Ok(Self {
@@ -473,7 +473,10 @@ fn the_users_camera_answer_arrived(
         }
         return;
     }
-    let refusal = camera_refusal_for_the_user(CameraRefusal::DeniedByTheUser);
+    let refusal = capture_device_refusal_for_the_user(
+        PrivacyGatedCaptureDevice::Camera,
+        CaptureDeviceRefusal::DeniedByTheUser,
+    );
     tracing::error!(camera = %control.opened_device.name, "{refusal}");
     control
         .failure_recorder

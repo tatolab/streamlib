@@ -153,6 +153,10 @@ pub trait AudioPlaybackStream: Send {
     /// opened and a caller matches it.
     fn stream_format(&self) -> AudioStreamFormat;
 
+    /// Per-channel samples the device asks for in one cycle, or `None` where
+    /// the arm does not report its device's period.
+    fn device_period_in_per_channel_samples(&self) -> Option<u32>;
+
     /// Whether this stream is still playing, readable from whatever thread the
     /// owner does its work on — the capture seam's report, in the direction a
     /// sink cares about, under the same latching rule.
@@ -265,9 +269,21 @@ fn platform_audio_device_backend_arms() -> Vec<AudioDeviceBackendArm> {
     ]
 }
 
-/// The platform floor is Linux; every other target lands on the null backend,
-/// which needs no audio library and captures silence.
-#[cfg(not(target_os = "linux"))]
+/// The chain's one real arm on macOS: CoreAudio, else — once it has declined
+/// for want of any device — the null backend the walk falls through to.
+#[cfg(target_os = "macos")]
+fn platform_audio_device_backend_arms() -> Vec<AudioDeviceBackendArm> {
+    use crate::apple::coreaudio_audio_device_backend::CoreAudioAudioDeviceBackend;
+
+    vec![AudioDeviceBackendArm::named("coreaudio", || {
+        CoreAudioAudioDeviceBackend::find_a_device()
+            .map(|backend| Arc::new(backend) as SharedAudioDeviceBackend)
+    })]
+}
+
+/// A target with no arm of its own falls through to the null backend, which
+/// needs no audio library and captures silence.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn platform_audio_device_backend_arms() -> Vec<AudioDeviceBackendArm> {
     Vec::new()
 }
@@ -332,7 +348,7 @@ mod tests {
     fn the_chain_always_lands_on_an_arm_however_little_audio_the_machine_has() {
         let backend = probe_audio_device_backend();
         assert!(
-            ["pipewire", "alsa", "silent-null"].contains(&backend.backend_name()),
+            ["pipewire", "alsa", "coreaudio", "silent-null"].contains(&backend.backend_name()),
             "the chain resolved to an arm nothing declares: {}",
             backend.backend_name()
         );
@@ -353,6 +369,16 @@ mod tests {
             "the plan decides PipeWire, else ALSA, else null — and the null arm is the \
              fall-through the walk takes when this list is exhausted, never an entry in it"
         );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_macos_chain_offers_coreaudio_before_falling_through_to_null() {
+        let arm_names: Vec<&str> = platform_audio_device_backend_arms()
+            .iter()
+            .map(|arm| arm.backend_name)
+            .collect();
+        assert_eq!(arm_names, ["coreaudio"]);
     }
 
     #[test]

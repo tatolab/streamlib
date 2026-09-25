@@ -301,6 +301,11 @@ impl AudioPlaybackStream for SilentNullAudioPlaybackStream {
         self.playback_stream_format
     }
 
+    /// Not reported on this arm, so a caller keeps the period it assumes.
+    fn device_period_in_per_channel_samples(&self) -> Option<u32> {
+        None
+    }
+
     /// A stream paced by a timer against no device has nothing that can stop
     /// serving it, so this answers "still live" for the whole of its life.
     /// That is the arm's part of the seam's contract rather than an omission:
