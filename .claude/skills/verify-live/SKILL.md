@@ -55,6 +55,9 @@ The other spellings, when they fit:
 ### Staleness is a retry, never wrong pixels
 A surface id is per-frame (`<slot>#<generation>`). Resolving a retired one is refused by name (`410 Gone`) before any bytes move — it never answers with the slot's newer pixels. So sample-and-exchange **as you go**; batching ids to resolve later cannot work. The refusal states both generations ("this id published generation 105, the slot is on generation 163"), and that gap measures how far behind the sample fell. The channel form already retries against newer bags and reports on stderr what it retried, how many bags it examined, and over how many tap rounds.
 
+### On macOS
+`exchange` answers on a macOS node exactly as on Linux: the same verb, the same PNGs, the same RHI conversion under MoltenVK. The pixel audit and PSNR scoring apply unchanged. What doesn't carry over is the capture rig: there is no V4L2, vivid or v4l2loopback on macOS, the camera is AVFoundation, and the `/dev/videoN` probes and V4L2 fixtures are Linux-only. Drive a macOS run with an app under `examples/` and read pixels with `streamlib exchange`.
+
 ### The one surviving env var
 `STREAMLIB_CAMERA_DEVICE` overrides which capture node an example opens. It is read by the example app's own `app.py`, **not** by the engine — so it works for the apps under `examples/` and nowhere else.
 
