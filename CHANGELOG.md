@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.25](https://github.com/tatolab/streamlib/compare/v0.26.24...v0.26.25) (2026-09-25)
+
+
+### Features
+
+* **engine:** reactive wakeups on macOS pace like Linux — a kqueue arm of the thread runner ([#2471](https://github.com/tatolab/streamlib/issues/2471)) ([3bea144](https://github.com/tatolab/streamlib/commit/3bea144aef316987ddb4095787bd2e4abf07fc60))
+
 ## [0.26.24](https://github.com/tatolab/streamlib/compare/v0.26.23...v0.26.24) (2026-09-25)
 
 
