@@ -27,6 +27,14 @@ between that body and the silence beside it, so a one-quantum hole placed
 exactly on a boundary can destroy about half a quantum of real audio and still
 pass — bounded below by the noise a real capture path shows against this same
 reference.
+
+Two capture paths, one analysis. `digital` is a path with no air in it — a
+PipeWire null sink's monitor, a Core Audio process tap — and is held to every
+bound below. `acoustic` is a speaker heard by a microphone: the level is the
+volume knob's, the room adds noise and reverberation and the drivers colour
+the spectrum, so the capture is normalised first and held to what survives
+that — the tone's frequency, the symbols, their spacing, and any exact digital
+zeros, which the air never delivers and only a capture-side hole leaves.
 """
 
 import json
@@ -34,6 +42,7 @@ import struct
 import sys
 import wave
 import zlib
+from typing import NamedTuple, Optional
 
 import numpy
 
@@ -97,6 +106,105 @@ SOUND_THRESHOLD = 0.02
 # the first digit is guarded like every span between digits. Named because the
 # report uses it to say where a loss happened.
 REFERENCE_TONE_LANDMARK = "tone"
+
+# The acoustic path's parameter set. A capture is scaled so its loudest
+# sustained sound sits at the reference tone's RMS, and every threshold is then
+# relative to that.
+REFERENCE_TONE_RMS = REFERENCE_AMPLITUDE / numpy.sqrt(2.0)
+# A percentile rather than the peak, so a click cannot set the scale. The
+# signal is loud for 1.7 s, far more than the top 2% of any capture here.
+LOUDEST_SOUND_PERCENTILE = 98.0
+# The room, from the quietest tenth of the capture rather than from before the
+# onset, so a room loud enough to hide the onset is still measured. Every
+# capture here is mostly silence around a 2.8 s signal.
+ROOM_NOISE_PERCENTILE = 10.0
+# Under every body by a margin — the DTMF digits sit 3 dB under the tone, and
+# a laptop speaker moves each a few dB more — and over the reverberation a
+# room leaves in each 80 ms gap: a laptop's microphone sits well inside the
+# critical distance of its own speakers, so the reverberant field starts about
+# 12 dB under the direct sound and has to fall only a little further.
+ACOUSTIC_SOUND_THRESHOLD_BELOW_THE_LOUDEST_DB = 14.0
+ACOUSTIC_SOUND_THRESHOLD = REFERENCE_TONE_RMS * 10.0 ** (
+    -ACOUSTIC_SOUND_THRESHOLD_BELOW_THE_LOUDEST_DB / 20.0
+)
+# The room carries each symbol into the gap after it, so less of the gap is
+# quiet than on a digital path.
+ACOUSTIC_QUIET_BEFORE_A_SYMBOL_SECONDS = 0.020
+# One bin of the tone's 0.6 s analysis window is 1.67 Hz.
+ACOUSTIC_MAX_FUNDAMENTAL_ERROR_HZ = 2.0
+# The onset threshold sits 14 dB under the loudest sound, and the room has to
+# sit 6 dB under that for its silence to read as silence.
+ACOUSTIC_MIN_TONE_TO_NOISE_DB = 20.0
+# Provisional, not measured: the digital bounds, until attended runs calibrate
+# them to twice the worst observed. If that lands above one device quantum
+# (10.7 ms), the acoustic path cannot claim to catch a dropped block.
+ACOUSTIC_MAX_SYMBOL_INTERVAL_ERROR_MS = MAX_SYMBOL_INTERVAL_ERROR_MS
+ACOUSTIC_MAX_CUMULATIVE_INTERVAL_ERROR_MS = MAX_CUMULATIVE_INTERVAL_ERROR_MS
+
+
+class CapturePath(NamedTuple):
+    """What a capture is held to, by the kind of path it travelled.
+
+    A bound of None is reported and never judged.
+    """
+
+    name: str
+    normalises_gain: bool
+    sound_threshold: float
+    quiet_before_a_symbol_seconds: float
+    max_fundamental_error_hz: float
+    max_amplitude_error: Optional[float]
+    max_thd_percent: Optional[float]
+    max_silent_stretch_ms: Optional[float]
+    max_missing_loud_audio_ms: Optional[float]
+    max_symbol_interval_error_ms: float
+    max_cumulative_interval_error_ms: float
+    max_exact_zero_stretch_ms: Optional[float]
+    min_tone_to_noise_db: Optional[float]
+    thresholds_to_calibrate_from_attended_runs: "tuple[str, ...]"
+
+
+DIGITAL_CAPTURE_PATH = CapturePath(
+    name="digital",
+    normalises_gain=False,
+    sound_threshold=SOUND_THRESHOLD,
+    quiet_before_a_symbol_seconds=QUIET_BEFORE_A_SYMBOL_SECONDS,
+    max_fundamental_error_hz=MAX_FUNDAMENTAL_ERROR_HZ,
+    max_amplitude_error=MAX_AMPLITUDE_ERROR,
+    max_thd_percent=MAX_THD_PERCENT,
+    max_silent_stretch_ms=MAX_SILENT_STRETCH_MS,
+    max_missing_loud_audio_ms=MAX_MISSING_LOUD_AUDIO_MS,
+    max_symbol_interval_error_ms=MAX_SYMBOL_INTERVAL_ERROR_MS,
+    max_cumulative_interval_error_ms=MAX_CUMULATIVE_INTERVAL_ERROR_MS,
+    max_exact_zero_stretch_ms=None,
+    min_tone_to_noise_db=None,
+    thresholds_to_calibrate_from_attended_runs=(),
+)
+
+# Amplitude is the volume knob's, THD is the laptop speaker's own, and the
+# room refills a playback-side hole with its reverberation — so those are
+# reported only. A capture-side hole still shows, as exact zeros.
+ACOUSTIC_CAPTURE_PATH = CapturePath(
+    name="acoustic",
+    normalises_gain=True,
+    sound_threshold=ACOUSTIC_SOUND_THRESHOLD,
+    quiet_before_a_symbol_seconds=ACOUSTIC_QUIET_BEFORE_A_SYMBOL_SECONDS,
+    max_fundamental_error_hz=ACOUSTIC_MAX_FUNDAMENTAL_ERROR_HZ,
+    max_amplitude_error=None,
+    max_thd_percent=None,
+    max_silent_stretch_ms=None,
+    max_missing_loud_audio_ms=None,
+    max_symbol_interval_error_ms=ACOUSTIC_MAX_SYMBOL_INTERVAL_ERROR_MS,
+    max_cumulative_interval_error_ms=ACOUSTIC_MAX_CUMULATIVE_INTERVAL_ERROR_MS,
+    max_exact_zero_stretch_ms=MAX_SILENT_STRETCH_MS,
+    min_tone_to_noise_db=ACOUSTIC_MIN_TONE_TO_NOISE_DB,
+    thresholds_to_calibrate_from_attended_runs=(
+        "symbol_interval_error_ms",
+        "cumulative_interval_error_ms",
+    ),
+)
+
+CAPTURE_PATHS = {path.name: path for path in (DIGITAL_CAPTURE_PATH, ACOUSTIC_CAPTURE_PATH)}
 
 
 # Long enough to kill the click at a segment edge, short enough that the tone's
@@ -286,7 +394,12 @@ def classify_dtmf(window, rate):
     return DTMF_KEYPAD[int(numpy.argmax(rows))][int(numpy.argmax(columns))]
 
 
-def decode_dtmf(samples, rate):
+def decode_dtmf(
+    samples,
+    rate,
+    sound_threshold=SOUND_THRESHOLD,
+    quiet_before_a_symbol_seconds=QUIET_BEFORE_A_SYMBOL_SECONDS,
+):
     """Every digit in the signal, each with the instant it started.
 
     The edge is found first and the digit classified afterwards, rather than
@@ -295,8 +408,8 @@ def decode_dtmf(samples, rate):
     quanta instead of below one.
     """
     energy, hop = short_time_rms(samples, rate)
-    loud = energy > SOUND_THRESHOLD
-    quiet_frames = max(1, int(QUIET_BEFORE_A_SYMBOL_SECONDS / ONSET_SEARCH_HOP_SECONDS))
+    loud = energy > sound_threshold
+    quiet_frames = max(1, int(quiet_before_a_symbol_seconds / ONSET_SEARCH_HOP_SECONDS))
     classify_length = int(SYMBOL_CLASSIFY_WINDOW_SECONDS * rate)
 
     decoded = []
@@ -314,7 +427,9 @@ def decode_dtmf(samples, rate):
     return decoded
 
 
-def longest_silence_where_the_signal_is_loud(samples, rate, decoded):
+def longest_silence_where_the_signal_is_loud(
+    samples, rate, decoded, threshold=SOUND_THRESHOLD
+):
     """The longest quiet run inside a region the signal says carries sound.
 
     This is the axis an underrun trips. A device that xruns fills the hole with
@@ -337,7 +452,7 @@ def longest_silence_where_the_signal_is_loud(samples, rate, decoded):
     longest_run = 0
     for body_start, body_end in bodies:
         body = numpy.abs(samples[int(body_start * rate) : int(body_end * rate)])
-        quiet = numpy.concatenate(([False], body <= SOUND_THRESHOLD, [False]))
+        quiet = numpy.concatenate(([False], body <= threshold, [False]))
         edges = numpy.flatnonzero(quiet[1:] != quiet[:-1])
         if edges.size:
             longest_run = max(longest_run, int((edges[1::2] - edges[::2]).max()))
@@ -351,7 +466,7 @@ def known_loud_bodies(decoded):
     ]
 
 
-def loud_seconds_in_each_body(samples, rate, bodies):
+def loud_seconds_in_each_body(samples, rate, bodies, threshold=SOUND_THRESHOLD):
     """How much sound each body actually carries.
 
     Counted sample by sample rather than as a contiguous run, and with no
@@ -362,8 +477,7 @@ def loud_seconds_in_each_body(samples, rate, bodies):
     return [
         float(
             numpy.count_nonzero(
-                numpy.abs(samples[int(start * rate) : int(end * rate)])
-                > SOUND_THRESHOLD
+                numpy.abs(samples[int(start * rate) : int(end * rate)]) > threshold
             )
         )
         / rate
@@ -371,7 +485,7 @@ def loud_seconds_in_each_body(samples, rate, bodies):
     ]
 
 
-def missing_loud_audio(samples, rate, decoded, amplitude):
+def missing_loud_audio(samples, rate, decoded, amplitude, threshold=SOUND_THRESHOLD):
     """The body furthest short of the sound it should carry, in milliseconds.
 
     The reference is measured from a freshly generated signal rather than
@@ -382,14 +496,12 @@ def missing_loud_audio(samples, rate, decoded, amplitude):
     read as missing audio it did not miss.
     """
     bodies = known_loud_bodies(decoded)
-    reference = generate_signal() * (
-        max(amplitude, SOUND_THRESHOLD) / REFERENCE_AMPLITUDE
-    )
-    reference_onset = first_sound_at(reference, SAMPLE_RATE)
+    reference = generate_signal() * (max(amplitude, threshold) / REFERENCE_AMPLITUDE)
+    reference_onset = first_sound_at(reference, SAMPLE_RATE, threshold)
     expected = loud_seconds_in_each_body(
-        reference[reference_onset:], SAMPLE_RATE, known_loud_bodies(decoded)
+        reference[reference_onset:], SAMPLE_RATE, known_loud_bodies(decoded), threshold
     )
-    actual = loud_seconds_in_each_body(samples, rate, bodies)
+    actual = loud_seconds_in_each_body(samples, rate, bodies, threshold)
     deficits = [
         (round(1000.0 * (want - got), 1), index)
         for index, (want, got) in enumerate(zip(expected, actual))
@@ -480,22 +592,75 @@ def worst_landmark_interval(decoded):
     )
 
 
-def analyse(captured_path, spectrogram_path):
-    samples, rate = read_wav(captured_path)
-    onset = first_sound_at(samples, rate)
+def gain_that_brings_the_loudest_sound_to_the_reference(samples, rate):
+    """The gain putting a capture's loudest sustained sound at the reference tone's RMS."""
+    energy, _ = short_time_rms(samples, rate)
+    if not len(energy):
+        return None
+    loudest = float(numpy.percentile(energy, LOUDEST_SOUND_PERCENTILE))
+    return REFERENCE_TONE_RMS / loudest if loudest > 0.0 else None
+
+
+def is_exact_digital_silence(samples):
+    """Every sample exactly zero — what a Core Audio tap delivers with no grant."""
+    return not numpy.any(samples)
+
+
+def _root_mean_square(samples):
+    return float(numpy.sqrt(numpy.mean(samples**2))) if len(samples) else 0.0
+
+
+def _decibels(ratio):
+    return round(20.0 * float(numpy.log10(ratio)), 1) if ratio > 0.0 else None
+
+
+def acoustic_levels(captured, rate, onset, gain):
+    """The raw level the room delivered and how far the tone stood over it."""
+    tone_rms = _root_mean_square(captured[onset + int(0.2 * rate) : onset + int(0.8 * rate)])
+    energy, _ = short_time_rms(captured, rate)
+    room_rms = float(numpy.percentile(energy, ROOM_NOISE_PERCENTILE)) if len(energy) else 0.0
+    return {
+        "applied_gain_db": _decibels(gain),
+        "raw_tone_rms_dbfs": _decibels(tone_rms),
+        "room_noise_rms_dbfs": _decibels(room_rms),
+        "tone_to_noise_db": _decibels(tone_rms / room_rms) if room_rms > 0.0 else None,
+    }
+
+
+def analyse(captured_path, spectrogram_path, capture_path=DIGITAL_CAPTURE_PATH):
+    captured, rate = read_wav(captured_path)
+    gain = 1.0
+    samples = captured
+    if capture_path.normalises_gain:
+        gain = gain_that_brings_the_loudest_sound_to_the_reference(captured, rate)
+        if gain is None:
+            return {"verdict": "FAIL", "reason": "the capture is silent end to end"}
+        samples = captured * gain
+    onset = first_sound_at(samples, rate, capture_path.sound_threshold)
     if onset is None:
         return {"verdict": "FAIL", "reason": "the capture is silent end to end"}
 
     aligned = samples[onset:]
-    tone_metrics = measure_reference_tone(aligned, rate)
-    decoded = decode_dtmf(aligned, rate)
+    # From what was captured rather than what was normalised, so the amplitude
+    # reported is the one the path delivered.
+    tone_metrics = measure_reference_tone(captured[onset:], rate)
+    decoded = decode_dtmf(
+        aligned,
+        rate,
+        capture_path.sound_threshold,
+        capture_path.quiet_before_a_symbol_seconds,
+    )
     write_spectrogram_png(spectrogram_path, aligned, rate)
 
     timing_error_ms, worst_interval, cumulative_error_ms = worst_landmark_interval(
         decoded
     )
     missing_loud, emptiest_region = missing_loud_audio(
-        aligned, rate, decoded, tone_metrics["amplitude"]
+        aligned,
+        rate,
+        decoded,
+        tone_metrics["amplitude"] * gain,
+        capture_path.sound_threshold,
     )
     report = {
         **tone_metrics,
@@ -505,23 +670,56 @@ def analyse(captured_path, spectrogram_path):
         "worst_symbol_interval": worst_interval,
         "cumulative_interval_error_ms": cumulative_error_ms,
         "silent_stretch_ms": longest_silence_where_the_signal_is_loud(
-            aligned, rate, decoded
+            aligned, rate, decoded, capture_path.sound_threshold
         ),
         "missing_loud_audio_ms": missing_loud,
         "emptiest_region": emptiest_region,
         "captured_after_onset_seconds": round(len(aligned) / rate, 3),
-        "sound_ends_at_seconds": round((last_sound_at(aligned, rate) or 0) / rate, 3),
+        "sound_ends_at_seconds": round(
+            (last_sound_at(aligned, rate, capture_path.sound_threshold) or 0) / rate, 3
+        ),
         "signal_expected_seconds": round(seconds_the_signal_occupies_after_its_onset(), 3),
-        "captured_seconds": round(len(samples) / rate, 3),
+        "captured_seconds": round(len(captured) / rate, 3),
         "captured_sample_rate": rate,
         "onset_seconds": round(onset / rate, 3),
     }
+    if capture_path is not DIGITAL_CAPTURE_PATH:
+        report["capture_path"] = capture_path.name
+        report.update(acoustic_levels(captured, rate, onset, gain))
+        # Threshold zero: the air never delivers exact zeros, so a run of them
+        # inside a body is a hole the capture side left.
+        report["exact_zero_stretch_ms"] = longest_silence_where_the_signal_is_loud(
+            aligned, rate, decoded, threshold=0.0
+        )
+        report["reported_only"] = [
+            name
+            for name, bound in (
+                ("amplitude", capture_path.max_amplitude_error),
+                ("thd_percent", capture_path.max_thd_percent),
+                ("silent_stretch_ms", capture_path.max_silent_stretch_ms),
+                ("missing_loud_audio_ms", capture_path.max_missing_loud_audio_ms),
+            )
+            if bound is None
+        ]
+        report["thresholds_to_calibrate_from_attended_runs"] = list(
+            capture_path.thresholds_to_calibrate_from_attended_runs
+        )
+
     failures = []
-    if abs(report["fundamental_hz"] - REFERENCE_TONE_HZ) >= MAX_FUNDAMENTAL_ERROR_HZ:
+    if (
+        abs(report["fundamental_hz"] - REFERENCE_TONE_HZ)
+        >= capture_path.max_fundamental_error_hz
+    ):
         failures.append("fundamental_hz")
-    if abs(report["amplitude"] - REFERENCE_AMPLITUDE) >= MAX_AMPLITUDE_ERROR:
+    if (
+        capture_path.max_amplitude_error is not None
+        and abs(report["amplitude"] - REFERENCE_AMPLITUDE) >= capture_path.max_amplitude_error
+    ):
         failures.append("amplitude")
-    if report["thd_percent"] >= MAX_THD_PERCENT:
+    if (
+        capture_path.max_thd_percent is not None
+        and report["thd_percent"] >= capture_path.max_thd_percent
+    ):
         failures.append("thd_percent")
     if report["symbols"] != DTMF_DIGITS:
         failures.append("symbols")
@@ -530,25 +728,53 @@ def analyse(captured_path, spectrogram_path):
         # that genuinely resampled cancels out of every other measurement and
         # an 8 kHz capture of this signal reads as perfectly healthy.
         failures.append("captured_sample_rate")
-    if report["silent_stretch_ms"] > MAX_SILENT_STRETCH_MS:
+    if (
+        capture_path.max_silent_stretch_ms is not None
+        and report["silent_stretch_ms"] > capture_path.max_silent_stretch_ms
+    ):
         failures.append("silent_stretch_ms")
-    if report["missing_loud_audio_ms"] > MAX_MISSING_LOUD_AUDIO_MS:
+    if (
+        capture_path.max_missing_loud_audio_ms is not None
+        and report["missing_loud_audio_ms"] > capture_path.max_missing_loud_audio_ms
+    ):
         failures.append("missing_loud_audio_ms")
     if (
         report["sound_ends_at_seconds"]
         < report["signal_expected_seconds"] - MAX_SIGNAL_END_SHORTFALL_MS / 1000.0
     ):
         failures.append("signal_ended_early")
-    if timing_error_ms is None or abs(timing_error_ms) > MAX_SYMBOL_INTERVAL_ERROR_MS:
+    if (
+        timing_error_ms is None
+        or abs(timing_error_ms) > capture_path.max_symbol_interval_error_ms
+    ):
         failures.append("symbol_interval_error_ms")
     if (
         cumulative_error_ms is None
-        or abs(cumulative_error_ms) > MAX_CUMULATIVE_INTERVAL_ERROR_MS
+        or abs(cumulative_error_ms) > capture_path.max_cumulative_interval_error_ms
     ):
         failures.append("cumulative_interval_error_ms")
+    if (
+        capture_path.max_exact_zero_stretch_ms is not None
+        and report["exact_zero_stretch_ms"] > capture_path.max_exact_zero_stretch_ms
+    ):
+        failures.append("exact_zero_stretch_ms")
+    if (
+        capture_path.min_tone_to_noise_db is not None
+        and report["tone_to_noise_db"] is not None
+        and report["tone_to_noise_db"] < capture_path.min_tone_to_noise_db
+    ):
+        failures.append("tone_to_noise_db")
     report["failed"] = failures
     report["verdict"] = "PASS" if not failures else "FAIL"
     return report
+
+
+USAGE = (
+    "Usage: known_audio_signal.py generate <signal.wav> [--inject silence|drop|gain]\n"
+    "       known_audio_signal.py analyse <captured.wav> <spectrogram.png> "
+    "[--path digital|acoustic]\n"
+    "       known_audio_signal.py exact-digital-silence <captured.wav>"
+)
 
 
 def main(argv):
@@ -559,17 +785,21 @@ def main(argv):
         write_wav(argv[2], signal)
         return 0
     if len(argv) >= 4 and argv[1] == "analyse":
-        report = analyse(argv[2], argv[3])
+        capture_path = DIGITAL_CAPTURE_PATH
+        if len(argv) >= 5:
+            if len(argv) != 6 or argv[4] != "--path" or argv[5] not in CAPTURE_PATHS:
+                print(USAGE, file=sys.stderr)
+                return 2
+            capture_path = CAPTURE_PATHS[argv[5]]
+        report = analyse(argv[2], argv[3], capture_path)
         print(json.dumps(report, indent=2))
         # The exit status IS the verdict, so a caller gates on it without
         # parsing anything.
         return 0 if report["verdict"] == "PASS" else 1
-    print(
-        "Usage: known_audio_signal.py generate <signal.wav> "
-        "[--inject silence|drop|gain]\n"
-        "       known_audio_signal.py analyse <captured.wav> <spectrogram.png>",
-        file=sys.stderr,
-    )
+    if len(argv) == 3 and argv[1] == "exact-digital-silence":
+        samples, _ = read_wav(argv[2])
+        return 0 if is_exact_digital_silence(samples) else 1
+    print(USAGE, file=sys.stderr)
     return 2
 
 

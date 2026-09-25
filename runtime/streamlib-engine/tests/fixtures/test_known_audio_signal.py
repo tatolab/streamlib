@@ -12,6 +12,9 @@ engine — which is what lets the measurement half be checked everywhere the
 loopback itself cannot run.
 """
 
+import contextlib
+import io
+import json
 import subprocess
 import sys
 import tempfile
@@ -268,6 +271,229 @@ class KnownAudioSignalAnalysis(unittest.TestCase):
         self.report_for(self.clean)
         self.assertEqual(spectrogram.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
         self.assertGreater(spectrogram.stat().st_size, 1024)
+
+    def test_the_digital_report_carries_nothing_of_the_acoustic_path(self):
+        report = self.report_for(self.clean)
+        for acoustic_only in ("capture_path", "tone_to_noise_db", "exact_zero_stretch_ms"):
+            self.assertNotIn(acoustic_only, report)
+
+
+def heard_through_a_room(
+    played,
+    gain_db=-30.0,
+    room_noise_dbfs=-75.0,
+    reverberation_time_seconds=0.3,
+    direct_to_reverberant_db=10.0,
+    speaker_corner_hz=600.0,
+    latency_seconds=0.025,
+):
+    """What a laptop's microphone hears when its speaker plays `played`.
+
+    Every way the air differs from a wire, each stated: the volume knob's gain,
+    a small driver's bass roll-off, a reverberant tail, the trip's latency and
+    the room's own noise. Seeded, so a run is repeatable.
+    """
+    noise = numpy.random.default_rng(2411)
+    rate = fixture.SAMPLE_RATE
+    frequencies = numpy.fft.rfftfreq(len(played), 1.0 / rate)
+    speaker_response = frequencies / numpy.sqrt(frequencies**2 + speaker_corner_hz**2)
+    coloured = numpy.fft.irfft(numpy.fft.rfft(played) * speaker_response, n=len(played))
+
+    tail_length = int(reverberation_time_seconds * rate)
+    tail_time = numpy.arange(tail_length) / rate
+    # 60 dB down at the reverberation time.
+    tail = noise.normal(0.0, 1.0, tail_length) * numpy.exp(
+        -6.908 * tail_time / reverberation_time_seconds
+    )
+    tail *= 10.0 ** (-direct_to_reverberant_db / 20.0) / numpy.sqrt(numpy.sum(tail**2))
+    room_response = numpy.concatenate([[1.0], tail])
+    length = len(coloured) + len(room_response)
+    reverberant = numpy.fft.irfft(
+        numpy.fft.rfft(coloured, length) * numpy.fft.rfft(room_response, length), length
+    )[: len(coloured) + tail_length]
+
+    heard = numpy.concatenate(
+        [numpy.zeros(int(latency_seconds * rate)), reverberant, numpy.zeros(rate // 2)]
+    ) * 10.0 ** (gain_db / 20.0)
+    return heard + noise.normal(0.0, 10.0 ** (room_noise_dbfs / 20.0), len(heard))
+
+
+class KnownAudioSignalThroughTheAir(unittest.TestCase):
+    """The acoustic path: normalised first, then held to what the air leaves.
+
+    Each control passes the signal through a synthetic room, so what is proven
+    is that the relaxed parameter set still goes red on the losses it claims to
+    see — and says plainly which ones it no longer can.
+    """
+
+    def setUp(self):
+        self.workspace = tempfile.TemporaryDirectory()
+        self.addCleanup(self.workspace.cleanup)
+        self.clean = fixture.generate_signal()
+        self.heard = heard_through_a_room(self.clean)
+
+    def report_for(self, samples, capture_path=fixture.ACOUSTIC_CAPTURE_PATH):
+        captured = Path(self.workspace.name) / "captured.wav"
+        fixture.write_wav(str(captured), samples)
+        return fixture.analyse(
+            str(captured), str(Path(self.workspace.name) / "spectrogram.png"), capture_path
+        )
+
+    def heard_with_a_capture_hole(self, milliseconds, at_seconds):
+        """A capture-side underrun: the recorder places blocks by their stamps,
+        so audio the capture never delivered is exact zeros."""
+        holed = self.heard.copy()
+        at = int(at_seconds * fixture.SAMPLE_RATE)
+        holed[at : at + int(milliseconds / 1000.0 * fixture.SAMPLE_RATE)] = 0.0
+        return holed
+
+    def test_a_capture_through_the_air_passes(self):
+        report = self.report_for(self.heard)
+        self.assertEqual(report["verdict"], "PASS", report)
+        self.assertEqual(report["symbols"], fixture.DTMF_DIGITS)
+        self.assertEqual(report["capture_path"], "acoustic")
+
+    def test_a_capture_the_acoustic_path_passes_fails_the_digital_path(self):
+        """Why the acoustic path exists: the level is the volume knob's, so
+        even a loud trip through the air misses the digital amplitude bound."""
+        heard_loudly = heard_through_a_room(self.clean, gain_db=-6.0)
+        self.assertEqual(self.report_for(heard_loudly)["verdict"], "PASS")
+        report = self.report_for(heard_loudly, fixture.DIGITAL_CAPTURE_PATH)
+        self.assertEqual(report["verdict"], "FAIL", report)
+        self.assertIn("amplitude", report["failed"])
+
+    def test_a_reverberant_room_still_decodes(self):
+        for room in (
+            {"reverberation_time_seconds": 0.6},
+            {"direct_to_reverberant_db": 3.0},
+        ):
+            with self.subTest(**room):
+                report = self.report_for(heard_through_a_room(self.clean, **room))
+                self.assertEqual(report["verdict"], "PASS", report)
+
+    def test_a_capture_hole_is_still_caught(self):
+        """The air never delivers exact zeros, so a hole the capture side left
+        stays visible however much the room colours everything else."""
+        tone_body = fixture.LEAD_IN_SILENCE_SECONDS + 0.025 + 0.7
+        digit_body = (
+            fixture.LEAD_IN_SILENCE_SECONDS
+            + 0.025
+            + fixture.REFERENCE_TONE_SECONDS
+            + fixture.DTMF_GAP_SECONDS
+            + fixture.DTMF_DIGIT_SECONDS
+            + fixture.DTMF_GAP_SECONDS
+            + 0.05
+        )
+        for at_seconds, region in ((tone_body, "the tone"), (digit_body, "a digit")):
+            with self.subTest(region=region):
+                report = self.report_for(
+                    self.heard_with_a_capture_hole(A_DEVICE_QUANTUM_MS, at_seconds)
+                )
+                self.assertEqual(report["failed"], ["exact_zero_stretch_ms"], report)
+                self.assertAlmostEqual(
+                    report["exact_zero_stretch_ms"], A_DEVICE_QUANTUM_MS, delta=1.0
+                )
+
+    def test_a_dropped_capture_block_moves_the_spacing_and_names_the_span(self):
+        cut = int(1.9 * fixture.SAMPLE_RATE)
+        lost = int(A_DEVICE_QUANTUM_MS / 1000.0 * fixture.SAMPLE_RATE)
+        report = self.report_for(
+            numpy.concatenate([self.heard[:cut], self.heard[cut + lost :]])
+        )
+        self.assertIn("symbol_interval_error_ms", report["failed"], report)
+        self.assertEqual(report["worst_symbol_interval"], "2->9")
+
+    def test_a_block_dropped_before_the_speaker_moves_the_spacing_too(self):
+        """The injected `drop` fault, played and heard: the one playback-side
+        loss the room cannot refill, because it shortens the signal."""
+        report = self.report_for(
+            heard_through_a_room(fixture.signal_with_injected_fault(self.clean, "drop"))
+        )
+        self.assertIn("symbol_interval_error_ms", report["failed"], report)
+
+    def test_a_room_too_loud_for_the_tone_fails_by_name(self):
+        report = self.report_for(heard_through_a_room(self.clean, room_noise_dbfs=-60.0))
+        self.assertEqual(report["failed"], ["tone_to_noise_db"], report)
+        self.assertLess(report["tone_to_noise_db"], fixture.ACOUSTIC_MIN_TONE_TO_NOISE_DB)
+
+    def test_a_sample_rate_mismatch_fails_on_frequency_and_symbols(self):
+        misread = numpy.interp(
+            numpy.arange(0, len(self.heard), 44_100 / 48_000),
+            numpy.arange(len(self.heard)),
+            self.heard,
+        )
+        report = self.report_for(misread)
+        self.assertIn("fundamental_hz", report["failed"], report)
+        self.assertIn("symbols", report["failed"])
+
+    def test_a_played_gain_error_is_the_volume_knobs_and_passes(self):
+        """The acoustic path cannot see the injected `gain` fault, and says so
+        rather than pretending: amplitude is reported, never judged."""
+        report = self.report_for(
+            heard_through_a_room(fixture.signal_with_injected_fault(self.clean, "gain"))
+        )
+        self.assertEqual(report["verdict"], "PASS", report)
+        self.assertIn("amplitude", report["reported_only"])
+
+    def test_the_report_names_what_it_only_reports_and_what_is_uncalibrated(self):
+        report = self.report_for(self.heard)
+        self.assertEqual(
+            report["reported_only"],
+            ["amplitude", "thd_percent", "silent_stretch_ms", "missing_loud_audio_ms"],
+        )
+        self.assertEqual(
+            report["thresholds_to_calibrate_from_attended_runs"],
+            ["symbol_interval_error_ms", "cumulative_interval_error_ms"],
+        )
+        # The raw numbers a reader calibrates from: what the room delivered.
+        self.assertAlmostEqual(report["room_noise_rms_dbfs"], -75.0, delta=1.5)
+        self.assertLess(report["raw_tone_rms_dbfs"], -30.0)
+        self.assertGreater(report["tone_to_noise_db"], fixture.ACOUSTIC_MIN_TONE_TO_NOISE_DB)
+
+    def test_silence_is_refused_rather_than_measured(self):
+        report = self.report_for(numpy.zeros_like(self.heard))
+        self.assertEqual(report["verdict"], "FAIL", report)
+        self.assertIn("silent", report["reason"])
+
+
+class KnownAudioSignalCommandLine(unittest.TestCase):
+    def setUp(self):
+        workspace = tempfile.TemporaryDirectory()
+        self.addCleanup(workspace.cleanup)
+        self.workspace = Path(workspace.name)
+
+    def wav_of(self, samples):
+        path = self.workspace / "captured.wav"
+        fixture.write_wav(str(path), samples)
+        return str(path)
+
+    def test_analyse_takes_the_acoustic_path_by_name(self):
+        heard = self.wav_of(heard_through_a_room(fixture.generate_signal()))
+        spectrogram = str(self.workspace / "spectrogram.png")
+        with contextlib.redirect_stdout(io.StringIO()) as printed:
+            status = fixture.main(["", "analyse", heard, spectrogram, "--path", "acoustic"])
+        self.assertEqual(status, 0, printed.getvalue())
+        self.assertEqual(json.loads(printed.getvalue())["capture_path"], "acoustic")
+
+    def test_an_unknown_path_is_a_usage_error(self):
+        heard = self.wav_of(fixture.generate_signal())
+        with contextlib.redirect_stderr(io.StringIO()):
+            status = fixture.main(
+                ["", "analyse", heard, str(self.workspace / "s.png"), "--path", "wired"]
+            )
+        self.assertEqual(status, 2)
+
+    def test_exact_digital_silence_is_told_from_anything_else(self):
+        """What a Core Audio tap delivers without its grant, told from a capture
+        that is merely quiet."""
+        self.assertEqual(
+            fixture.main(["", "exact-digital-silence", self.wav_of(numpy.zeros(4800))]), 0
+        )
+        barely_audible = numpy.zeros(4800)
+        barely_audible[100] = 2.0 / 32768.0
+        self.assertEqual(
+            fixture.main(["", "exact-digital-silence", self.wav_of(barely_audible)]), 1
+        )
 
 
 if __name__ == "__main__":
