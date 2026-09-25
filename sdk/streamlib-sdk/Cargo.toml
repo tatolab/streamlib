@@ -22,6 +22,7 @@ crate-type = ["rlib"]
 # the engine dep.
 strip_debug_logging = ["streamlib-engine/strip_debug_logging"]
 hardware-tests = ["streamlib-engine/hardware-tests"]
+audible-hardware-tests = ["streamlib-engine/audible-hardware-tests"]
 test-support = ["streamlib-engine/test-support"]
 
 [dependencies]

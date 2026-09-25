@@ -25,6 +25,12 @@ strip_debug_logging = ["tracing/release_max_level_info"]
 #   cargo test --features streamlib/hardware-tests --workspace -- --test-threads=1
 # See `docs/testing-hardware.md`.
 hardware-tests = []
+# Tier 2, audible: hardware tests that play sound a person hears. Attended
+# only, so the standing `hardware-tests` sweep stays silent; it implies
+# `hardware-tests` because every audible test needs the hardware too.
+#   cargo test -p streamlib-engine --features audible-hardware-tests \
+#     --test coreaudio_arm_hears_what_it_plays -- --test-threads=1 --nocapture
+audible-hardware-tests = ["hardware-tests"]
 # Multi-process mesh end-to-end tests: real runtimes in separate processes,
 # talking over Zenoh on loopback. A local validation, never a merge gate —
 # process start-up and network discovery are not deterministic. To run them:

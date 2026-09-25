@@ -37,6 +37,8 @@ libc = { workspace = true }
 # Forwarded so a display-tier test in this crate gates the same way the engine's
 # do: `cargo test -p streamlib-media-builtins --features hardware-tests`.
 hardware-tests = ["streamlib/hardware-tests"]
+# The attended, audible tier, forwarded the same way.
+audible-hardware-tests = ["hardware-tests", "streamlib/audible-hardware-tests"]
 
 [dev-dependencies]
 # An independent ISOBMFF parser, used only as a conformance oracle. The writer

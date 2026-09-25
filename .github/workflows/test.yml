@@ -805,15 +805,19 @@ jobs:
             --test cross_runtime_link_requests_two_processes --no-run
           # Compiled but not run: the AVFoundation arm against a real camera,
           # `CameraSource` → `DisplayWindow` on the window server, and the
-          # CoreAudio arm against real audio devices need a camera, a
-          # microphone, their access grants and a GPU no runner has. Building
-          # them here is what stops them rotting between rig runs.
+          # CoreAudio arm against real audio devices — including its
+          # permission-flow tests in the engine's own unit tests — need a
+          # camera, a microphone, their access grants and a GPU no runner has.
+          # Building them here is what stops them rotting between rig runs.
           cargo test --locked -p streamlib-engine -p streamlib-media-builtins \
             --features streamlib-engine/hardware-tests,streamlib-media-builtins/hardware-tests \
+            --lib \
             --test avfoundation_camera_captures_through_the_video_device_seam \
             --test camera_to_display_window_on_the_macos_window_server \
             --test coreaudio_arm_stamps_blocks_with_the_devices_own_timing \
-            --test coreaudio_arm_plays_what_it_is_given --no-run
+            --test coreaudio_arm_plays_what_it_is_given \
+            --test coreaudio_arm_hears_the_room_through_the_built_in_microphone \
+            --test coreaudio_arm_hears_what_it_plays --no-run
 
       # The whole reason this job exists in the milestone's first ticket: the
       # source-walking gates now evaluate `cfg` for macOS as well as Linux, so

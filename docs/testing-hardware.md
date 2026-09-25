@@ -170,6 +170,33 @@ Pure-logic tests in the same file (e.g. cache-path string formatting,
 SPIR-V reflection validators that operate on byte arrays without ever
 constructing a device) stay in tier 1.
 
+### Audible tests are attended only
+
+The `hardware-tests` sweep stays silent: playback tests there write zeros, and
+capture tests only listen. A test that plays sound a person hears is gated on
+`audible-hardware-tests` instead (it implies `hardware-tests`), and is run by
+someone at the machine:
+
+```bash
+cargo test -p streamlib-engine --features audible-hardware-tests \
+  --test coreaudio_arm_hears_what_it_plays -- --test-threads=1 --nocapture
+cargo test -p streamlib-media-builtins --features audible-hardware-tests \
+  --test speaker_sink_matches_its_device -- --test-threads=1
+```
+
+The second is gated on a Mac only, where the CoreAudio arm plays it through the
+default output; on Linux it is not gated.
+
+### Microphone access for the CoreAudio capture tests
+
+macOS asks on behalf of the application that launched the test — the terminal,
+not `cargo`. A CoreAudio capture test checks access before it measures:
+
+- Never asked: it asks, and fails with "allow <terminal> in the prompt, then
+  re-run". Click Allow and run it again.
+- Refused: it fails naming System Settings › Privacy & Security › Microphone.
+  Turn the terminal on there and run it again.
+
 ## Adding a new hardware test
 
 1. Place the test next to its production code (`vulkan/rhi/foo.rs::tests`).

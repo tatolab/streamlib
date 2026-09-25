@@ -4,11 +4,12 @@
 //! The CoreAudio arm against a real output device: the device asks for
 //! samples, takes them, and stops asking when told.
 //!
-//! Audio tier — needs a Mac with an output device.
+//! Audio tier — needs a Mac with a default output device. Silent: every
+//! hand-off writes zeros.
 
 #![cfg(target_os = "macos")]
 
-use streamlib_engine::core::context::{SharedAudioDeviceBackend, probe_audio_device_backend};
+use streamlib_engine::apple_coreaudio_audio_tier::CoreAudioStreamDirection;
 
 mod audio_arm_playback_contract;
 use audio_arm_playback_contract::{
@@ -17,15 +18,9 @@ use audio_arm_playback_contract::{
     assert_the_device_asks_for_whole_periods_of_its_own_format,
 };
 
-/// The arm, or `None` when the chain demoted past it.
-///
-/// `None` rather than a panic, so the tier stays well-behaved when the feature
-/// is on but the runner has no audio device — the same shape
-/// `try_vulkan_device()` gives the GPU tier (`docs/testing-hardware.md`).
-fn coreaudio_arm() -> Option<SharedAudioDeviceBackend> {
-    let backend = probe_audio_device_backend();
-    (backend.backend_name() == "coreaudio").then_some(backend)
-}
+#[path = "support/coreaudio_audio_tier.rs"]
+mod coreaudio_audio_tier;
+use coreaudio_audio_tier::the_coreaudio_arm_with_a_default_device_for;
 
 #[test]
 #[cfg_attr(
@@ -33,7 +28,9 @@ fn coreaudio_arm() -> Option<SharedAudioDeviceBackend> {
     ignore = "audio tier — needs a Mac with an output device. Run with --features streamlib/hardware-tests. See docs/testing-hardware.md"
 )]
 fn a_real_device_asks_for_whole_periods_of_the_format_it_negotiated() {
-    let Some(backend) = coreaudio_arm() else {
+    let Some(backend) =
+        the_coreaudio_arm_with_a_default_device_for(CoreAudioStreamDirection::Playback)
+    else {
         return;
     };
     assert_the_device_asks_for_whole_periods_of_its_own_format(backend.as_ref(), None);
@@ -45,7 +42,9 @@ fn a_real_device_asks_for_whole_periods_of_the_format_it_negotiated() {
     ignore = "audio tier — needs a Mac with an output device. Run with --features streamlib/hardware-tests. See docs/testing-hardware.md"
 )]
 fn a_stopped_stream_asks_nothing_and_a_restart_replaces_the_hand_off() {
-    let Some(backend) = coreaudio_arm() else {
+    let Some(backend) =
+        the_coreaudio_arm_with_a_default_device_for(CoreAudioStreamDirection::Playback)
+    else {
         return;
     };
     assert_a_stopped_stream_asks_nothing_and_a_restart_replaces_the_hand_off(
@@ -62,7 +61,9 @@ fn a_stopped_stream_asks_nothing_and_a_restart_replaces_the_hand_off() {
     ignore = "audio tier — needs a Mac with an output device. Run with --features streamlib/hardware-tests. See docs/testing-hardware.md"
 )]
 fn a_live_playback_stream_reports_no_failure_and_neither_does_a_stopped_one() {
-    let Some(backend) = coreaudio_arm() else {
+    let Some(backend) =
+        the_coreaudio_arm_with_a_default_device_for(CoreAudioStreamDirection::Playback)
+    else {
         return;
     };
     assert_a_live_playback_stream_reports_no_failure_and_neither_does_a_stopped_one(

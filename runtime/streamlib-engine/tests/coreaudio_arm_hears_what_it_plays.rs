@@ -1,28 +1,39 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The CoreAudio arm through the air: a tone played through the default output
-//! reaches the default input, both opened through the seam.
+//! The CoreAudio arm through the air: a tone played through the built-in
+//! speaker reaches the built-in microphone, both opened through the seam by
+//! their CoreAudio UIDs.
 //!
 //! The contract suites prove cadence and stop semantics over silence; this is
 //! the one test that proves the samples themselves — a known tone leaves the
 //! speaker and the microphone hears it, at the frequency played, well above
 //! the room's own level at that frequency.
 //!
-//! Audio tier — needs a Mac whose default output is audible to its default
-//! input (built-in speakers and microphone), microphone access already allowed
-//! for the terminal running it, and a room quiet enough for a tone at about −8 dBFS
-//! to stand out. It is audible by design.
+//! Both devices are pinned by transport type rather than taken as defaults,
+//! so a virtual device, a camera's microphone or a phone's can never be what
+//! is measured. A Mac without a built-in speaker and microphone cannot run it.
+//!
+//! Audible, so attended only: it runs under `audible-hardware-tests`, never in
+//! the silent `hardware-tests` sweep. It needs microphone access allowed and a
+//! room quiet enough for a tone at about −8 dBFS to stand out.
 
 #![cfg(target_os = "macos")]
 
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use streamlib_engine::apple_coreaudio_audio_tier::CoreAudioStreamDirection;
 use streamlib_engine::core::context::{
     AudioBlockRequestedByDevice, AudioClockConfig, AudioDeviceStreamRequest, AudioSampleFormat,
-    AudioStreamFormat, CapturedAudioBlockFromDevice, SharedAudioClock, SharedAudioDeviceBackend,
-    SoftwareAudioClock, probe_audio_device_backend,
+    AudioStreamFormat, CapturedAudioBlockFromDevice, SharedAudioClock, SoftwareAudioClock,
+};
+
+#[path = "support/coreaudio_audio_tier.rs"]
+mod coreaudio_audio_tier;
+use coreaudio_audio_tier::{
+    print_for_the_evidence_record, rms_dbfs, the_built_in_device_uid_for, the_coreaudio_arm,
+    the_microphone_must_be_allowed,
 };
 
 /// The two tones played, in order, each for [`TONE_DURATION`].
@@ -51,11 +62,6 @@ const TONE_OVER_OTHER_TONE_MINIMUM_DB: f64 = 12.0;
 /// Captured audio skipped at the start of each tone window, covering the
 /// output and input latency plus the speaker's ramp.
 const SETTLE_AT_EACH_WINDOW_START: Duration = Duration::from_millis(300);
-
-fn coreaudio_arm() -> Option<SharedAudioDeviceBackend> {
-    let backend = probe_audio_device_backend();
-    (backend.backend_name() == "coreaudio").then_some(backend)
-}
 
 fn an_unused_deviceless_pacing_clock() -> SharedAudioClock {
     Arc::new(SoftwareAudioClock::new(AudioClockConfig::new(48_000, 512)))
@@ -99,33 +105,41 @@ struct TonePlayback {
 
 #[test]
 #[cfg_attr(
-    not(feature = "hardware-tests"),
-    ignore = "audio tier — audible: plays two tones through the default output and needs the default input to hear them, with microphone access allowed. Run with --features streamlib/hardware-tests. See docs/testing-hardware.md"
+    not(feature = "audible-hardware-tests"),
+    ignore = "audible, attended only — plays two tones through the built-in speaker for the built-in microphone to hear, with microphone access allowed. Run with --features streamlib-engine/audible-hardware-tests. See docs/testing-hardware.md"
 )]
-fn a_tone_played_through_the_default_output_is_heard_by_the_default_input() {
-    let Some(backend) = coreaudio_arm() else {
+fn a_tone_played_through_the_built_in_speaker_is_heard_by_the_built_in_microphone() {
+    let (Some(speaker_uid), Some(microphone_uid)) = (
+        the_built_in_device_uid_for(CoreAudioStreamDirection::Playback),
+        the_built_in_device_uid_for(CoreAudioStreamDirection::Capture),
+    ) else {
         return;
     };
-    let request = AudioDeviceStreamRequest {
-        device_id: None,
-        deviceless_pacing_clock: an_unused_deviceless_pacing_clock(),
-    };
+    let backend = the_coreaudio_arm();
+    the_microphone_must_be_allowed();
     let mut playback_stream = backend
-        .open_playback_stream(&request)
-        .expect("the default output opens");
+        .open_playback_stream(&AudioDeviceStreamRequest {
+            device_id: Some(speaker_uid),
+            deviceless_pacing_clock: an_unused_deviceless_pacing_clock(),
+        })
+        .expect("the built-in speaker opens by its UID");
     let mut capture_stream = backend
-        .open_capture_stream(&request)
-        .expect("the default input opens");
+        .open_capture_stream(&AudioDeviceStreamRequest {
+            device_id: Some(microphone_uid),
+            deviceless_pacing_clock: an_unused_deviceless_pacing_clock(),
+        })
+        .expect("the built-in microphone opens by its UID");
     let playback_format = playback_stream.stream_format();
     let capture_format = capture_stream.stream_format();
-    println!("playback format: {playback_format:?}");
-    println!("capture format:  {capture_format:?}");
+    print_for_the_evidence_record(format!("playback format: {playback_format:?}"));
+    print_for_the_evidence_record(format!("capture format:  {capture_format:?}"));
 
     let captured: Arc<Mutex<Vec<f32>>> = Arc::default();
     let captured_by_hand_off = Arc::clone(&captured);
     capture_stream
         .start_delivering_to(Box::new(move |block: CapturedAudioBlockFromDevice<'_>| {
-            let samples = read_f32_frame_first_channel(block.interleaved_sample_bytes, capture_format);
+            let samples =
+                read_f32_frame_first_channel(block.interleaved_sample_bytes, capture_format);
             captured_by_hand_off
                 .lock()
                 .expect("unpoisoned")
@@ -141,24 +155,26 @@ fn a_tone_played_through_the_default_output_is_heard_by_the_default_input() {
     let playback_rate = f64::from(playback_format.sample_rate);
     let playback_channels = playback_format.channels as usize;
     playback_stream
-        .start_requesting_from(Box::new(move |requested: AudioBlockRequestedByDevice<'_>| {
-            let mut tone = tone_for_hand_off.lock().expect("unpoisoned");
-            for frame in requested
-                .interleaved_sample_bytes_to_fill
-                .chunks_exact_mut(4 * playback_channels)
-            {
-                let sample = match tone.frequency_hz {
-                    Some(frequency_hz) => {
-                        tone.phase = (tone.phase + frequency_hz / playback_rate).fract();
-                        TONE_AMPLITUDE * (2.0 * std::f64::consts::PI * tone.phase).sin() as f32
+        .start_requesting_from(Box::new(
+            move |requested: AudioBlockRequestedByDevice<'_>| {
+                let mut tone = tone_for_hand_off.lock().expect("unpoisoned");
+                for frame in requested
+                    .interleaved_sample_bytes_to_fill
+                    .chunks_exact_mut(4 * playback_channels)
+                {
+                    let sample = match tone.frequency_hz {
+                        Some(frequency_hz) => {
+                            tone.phase = (tone.phase + frequency_hz / playback_rate).fract();
+                            TONE_AMPLITUDE * (2.0 * std::f64::consts::PI * tone.phase).sin() as f32
+                        }
+                        None => 0.0,
+                    };
+                    for channel in frame.chunks_exact_mut(4) {
+                        channel.copy_from_slice(&sample.to_le_bytes());
                     }
-                    None => 0.0,
-                };
-                for channel in frame.chunks_exact_mut(4) {
-                    channel.copy_from_slice(&sample.to_le_bytes());
                 }
-            }
-        }))
+            },
+        ))
         .expect("playback starts");
 
     // Each window is marked by where the capture stood when it began, so the
@@ -181,8 +197,8 @@ fn a_tone_played_through_the_default_output_is_heard_by_the_default_input() {
     capture_stream.stop_delivering().expect("capture stops");
 
     let captured = captured.lock().expect("unpoisoned").clone();
-    let settle = (capture_format.sample_rate as f64 * SETTLE_AT_EACH_WINDOW_START.as_secs_f64())
-        as usize;
+    let settle =
+        (capture_format.sample_rate as f64 * SETTLE_AT_EACH_WINDOW_START.as_secs_f64()) as usize;
     let window_samples = |start: usize, end: usize| -> &[f32] {
         let start = (start + settle).min(end);
         &captured[start..end]
@@ -191,17 +207,16 @@ fn a_tone_played_through_the_default_output_is_heard_by_the_default_input() {
     let room = window_samples(room_start, room_end);
     assert!(
         !room.is_empty(),
-        "the microphone delivered nothing in the room window — is microphone access allowed?"
+        "the microphone delivered nothing in the room window. Liveness: {:?}",
+        capture_stream
+            .liveness_report()
+            .failure_that_ended_the_stream()
     );
-    let rms = |samples: &[f32]| {
-        (samples.iter().map(|&s| f64::from(s).powi(2)).sum::<f64>() / samples.len().max(1) as f64)
-            .sqrt()
-    };
-    println!(
+    print_for_the_evidence_record(format!(
         "room: {} samples, rms {:.1} dBFS",
         room.len(),
-        20.0 * rms(room).max(1e-15).log10()
-    );
+        rms_dbfs(room)
+    ));
 
     for &(frequency_hz, start, end) in &windows[1..] {
         let frequency_hz = frequency_hz.expect("tone windows carry their frequency");
@@ -215,12 +230,12 @@ fn a_tone_played_through_the_default_output_is_heard_by_the_default_input() {
         let other_power = goertzel_power(heard, capture_format.sample_rate, other_hz);
         let tone_over_room_db = decibels(tone_power / room_power);
         let tone_over_other_db = decibels(tone_power / other_power);
-        println!(
-            "{frequency_hz} Hz: {} samples, rms {:.1} dBFS, tone over room {tone_over_room_db:.1} dB, \
-             tone over {other_hz} Hz {tone_over_other_db:.1} dB",
+        print_for_the_evidence_record(format!(
+            "{frequency_hz} Hz: {} samples, rms {:.1} dBFS, tone over room \
+             {tone_over_room_db:.1} dB, tone over {other_hz} Hz {tone_over_other_db:.1} dB",
             heard.len(),
-            20.0 * rms(heard).max(1e-15).log10()
-        );
+            rms_dbfs(heard)
+        ));
         assert!(
             tone_over_room_db >= TONE_OVER_ROOM_MINIMUM_DB,
             "the microphone heard {frequency_hz} Hz only {tone_over_room_db:.1} dB above the room \
