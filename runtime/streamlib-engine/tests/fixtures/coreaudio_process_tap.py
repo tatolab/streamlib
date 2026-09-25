@@ -4,7 +4,7 @@
 
 """Core Audio for the audio fixtures on macOS, through ctypes and nothing else.
 
-Two jobs, both engine-free and neither needing pyobjc:
+Engine-free, and none of it needs pyobjc:
 
 - Name the Mac's built-in speaker and microphone by UID, so an acoustic run
   pins them and can never measure Camo, Wave Link or a Continuity iPhone.
@@ -15,11 +15,14 @@ Two jobs, both engine-free and neither needing pyobjc:
   run in the app process and a private device is visible only to the process
   that created it — which also means it dies with that process and, unlike the
   null sink, can never be stranded in the user's session.
+- Run an IOProc on a device, which is how the rig peer plays and records
+  through that same tap with no StreamLib in the path.
 
 A tap needs System Audio Recording for the app that launched this, and Core
 Audio reports no error without it: the tap delivers exact zeros. The grant can
 be preflighted through TCC without prompting, which is how a fixture tells a
-missing grant from an engine that played nothing.
+missing grant from an engine that played nothing — and how it decides, before
+anything is made, whether a tap may be made at all.
 
 Only the device queries and the preflight are safe to run unattended. Creating
 a tap raises the System Audio Recording prompt the first time it is read.
@@ -44,6 +47,15 @@ TCC_PRIVATE_FRAMEWORK = "/System/Library/PrivateFrameworks/TCC.framework/Version
 # Recording Only". TCCAccessPreflight answers 0 for granted and 1 for denied.
 SYSTEM_AUDIO_RECORDING_TCC_SERVICE = "kTCCServiceAudioCapture"
 TCC_PREFLIGHT_ANSWERS = {0: "authorized", 1: "denied"}
+
+# Set to 1 by whoever is at the machine and listening; nothing else sets it.
+ATTENDED_RUN_ENVIRONMENT_VARIABLE = "STREAMLIB_RUN_ATTENDED_AUDIBLE_TESTS"
+
+GRANT_SYSTEM_AUDIO_RECORDING_IN_SYSTEM_SETTINGS = (
+    "Grant it in System Settings › Privacy & Security › Screen & System Audio "
+    "Recording › System Audio Recording Only (add Terminal, or whichever app "
+    "launched this), then run again."
+)
 
 CF_STRING_ENCODING_UTF8 = 0x08000100
 CF_NUMBER_SINT32_TYPE = 3
@@ -78,7 +90,13 @@ DEVICE_PROPERTY_TRANSPORT_TYPE = four_char_code("tran")
 DEVICE_PROPERTY_STREAM_CONFIGURATION = four_char_code("slay")
 DEVICE_PROPERTY_DATA_SOURCE = four_char_code("ssrc")
 DEVICE_PROPERTY_NOMINAL_SAMPLE_RATE = four_char_code("nsrt")
+DEVICE_PROPERTY_STREAMS = four_char_code("stm#")
+STREAM_PROPERTY_VIRTUAL_FORMAT = four_char_code("sfmt")
 TAP_PROPERTY_FORMAT = four_char_code("tfmt")
+
+AUDIO_FORMAT_LINEAR_PCM = "lpcm"
+AUDIO_FORMAT_FLAG_IS_FLOAT = 1 << 0
+AUDIO_TIME_STAMP_SAMPLE_TIME_VALID = 1 << 0
 
 TRANSPORT_TYPE_BUILT_IN = "bltn"
 # The data source a built-in device is routed through. Headphones on the jack
@@ -122,12 +140,82 @@ class CoreAudioDevice(NamedTuple):
     nominal_sample_rate: float
 
 
+class AudioStreamFormat(NamedTuple):
+    """The fields of one stream's AudioStreamBasicDescription a fixture checks."""
+
+    sample_rate: float
+    format_id: str
+    format_flags: int
+    bits_per_channel: int
+    channels_per_frame: int
+
+    @property
+    def is_32_bit_float(self) -> bool:
+        return (
+            self.format_id == AUDIO_FORMAT_LINEAR_PCM
+            and bool(self.format_flags & AUDIO_FORMAT_FLAG_IS_FLOAT)
+            and self.bits_per_channel == 32
+        )
+
+
 class _AudioObjectPropertyAddress(ctypes.Structure):
     _fields_ = [
         ("selector", ctypes.c_uint32),
         ("scope", ctypes.c_uint32),
         ("element", ctypes.c_uint32),
     ]
+
+
+class AudioBuffer(ctypes.Structure):
+    """CoreAudioTypes.h's AudioBuffer: 16 bytes on a 64-bit Mac."""
+
+    _fields_ = [
+        ("number_of_channels", ctypes.c_uint32),
+        ("data_byte_size", ctypes.c_uint32),
+        ("data", ctypes.c_void_p),
+    ]
+
+
+# AudioBufferList is a UInt32 count, padded to the 8-byte alignment of the
+# AudioBuffers that follow it.
+AUDIO_BUFFER_LIST_FIRST_BUFFER_OFFSET = 8
+# AudioTimeStamp: mSampleTime is the Float64 at 0, mFlags the UInt32 at 56.
+AUDIO_TIME_STAMP_FLAGS_OFFSET = 56
+
+# AudioHardware.h's AudioDeviceIOProc: the device, now, the input buffers and
+# their time, the output buffers and their time, and the client data.
+AUDIO_DEVICE_IO_PROC = ctypes.CFUNCTYPE(
+    ctypes.c_int32,
+    ctypes.c_uint32,
+    ctypes.c_void_p,
+    ctypes.c_void_p,
+    ctypes.c_void_p,
+    ctypes.c_void_p,
+    ctypes.c_void_p,
+    ctypes.c_void_p,
+)
+
+
+def audio_buffers_at(audio_buffer_list_address) -> "ctypes.Array[AudioBuffer]":
+    """The AudioBuffers an AudioBufferList holds, read in place; none for a null list."""
+    if not audio_buffer_list_address:
+        return (AudioBuffer * 0)()
+    count = ctypes.c_uint32.from_address(audio_buffer_list_address).value
+    return (AudioBuffer * count).from_address(
+        audio_buffer_list_address + AUDIO_BUFFER_LIST_FIRST_BUFFER_OFFSET
+    )
+
+
+def sample_time_at(audio_time_stamp_address) -> Optional[float]:
+    """An AudioTimeStamp's sample time, or None when it carries none."""
+    if not audio_time_stamp_address:
+        return None
+    flags = ctypes.c_uint32.from_address(
+        audio_time_stamp_address + AUDIO_TIME_STAMP_FLAGS_OFFSET
+    ).value
+    if not flags & AUDIO_TIME_STAMP_SAMPLE_TIME_VALID:
+        return None
+    return ctypes.c_double.from_address(audio_time_stamp_address).value
 
 
 class _MacFrameworks:
@@ -178,6 +266,23 @@ class _MacFrameworks:
         core_audio.AudioHardwareCreateAggregateDevice.restype = ctypes.c_int32
         core_audio.AudioHardwareDestroyAggregateDevice.argtypes = [ctypes.c_uint32]
         core_audio.AudioHardwareDestroyAggregateDevice.restype = ctypes.c_int32
+        core_audio.AudioDeviceCreateIOProcID.argtypes = [
+            ctypes.c_uint32,
+            AUDIO_DEVICE_IO_PROC,
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        core_audio.AudioDeviceCreateIOProcID.restype = ctypes.c_int32
+        for call_taking_a_device_and_an_io_proc_id in (
+            core_audio.AudioDeviceDestroyIOProcID,
+            core_audio.AudioDeviceStart,
+            core_audio.AudioDeviceStop,
+        ):
+            call_taking_a_device_and_an_io_proc_id.argtypes = [
+                ctypes.c_uint32,
+                ctypes.c_void_p,
+            ]
+            call_taking_a_device_and_an_io_proc_id.restype = ctypes.c_int32
 
     def _declare_core_foundation_prototypes(self) -> None:
         core_foundation = self.core_foundation
@@ -338,19 +443,49 @@ def _string_property(object_id, selector, scope=PROPERTY_SCOPE_GLOBAL):
         _mac_frameworks().core_foundation.CFRelease(cf_string)
 
 
-def _channel_count(object_id, scope):
-    """Channels summed over a device's streams in one direction, from its AudioBufferList."""
+def channels_in_each_buffer(object_id, scope) -> "list[int]":
+    """The channel count of each buffer an IOProc on this device sees in one direction."""
     value = _property_bytes(object_id, DEVICE_PROPERTY_STREAM_CONFIGURATION, scope)
     if not value or len(value) < 4:
-        return 0
+        return []
     buffer_count = struct.unpack_from("<I", value)[0]
-    # AudioBufferList: a UInt32 count, padded to 8, then 16-byte AudioBuffers
-    # whose first field is mNumberChannels.
-    return sum(
-        struct.unpack_from("<I", value, 8 + 16 * index)[0]
+    buffer_size = ctypes.sizeof(AudioBuffer)
+    return [
+        struct.unpack_from(
+            "<I", value, AUDIO_BUFFER_LIST_FIRST_BUFFER_OFFSET + buffer_size * index
+        )[0]
         for index in range(buffer_count)
-        if 8 + 16 * index + 4 <= len(value)
-    )
+        if AUDIO_BUFFER_LIST_FIRST_BUFFER_OFFSET + buffer_size * index + 4 <= len(value)
+    ]
+
+
+def _channel_count(object_id, scope):
+    return sum(channels_in_each_buffer(object_id, scope))
+
+
+def stream_virtual_formats(object_id, scope) -> "list[AudioStreamFormat]":
+    """The format an IOProc sees on each of a device's streams in one direction."""
+    value = _property_bytes(object_id, DEVICE_PROPERTY_STREAMS, scope) or b""
+    stream_ids = struct.unpack(f"<{len(value) // 4}I", value[: len(value) // 4 * 4])
+    formats = []
+    for stream_id in stream_ids:
+        # AudioStreamBasicDescription: mSampleRate, mFormatID and mFormatFlags
+        # lead; mChannelsPerFrame and mBitsPerChannel sit at 28 and 32.
+        description = _property_bytes(stream_id, STREAM_PROPERTY_VIRTUAL_FORMAT)
+        if not description or len(description) < 36:
+            continue
+        sample_rate, format_id, format_flags = struct.unpack_from("<dII", description, 0)
+        channels_per_frame, bits_per_channel = struct.unpack_from("<II", description, 28)
+        formats.append(
+            AudioStreamFormat(
+                sample_rate=sample_rate,
+                format_id=four_char_code_text(format_id),
+                format_flags=format_flags,
+                bits_per_channel=bits_per_channel,
+                channels_per_frame=channels_per_frame,
+            )
+        )
+    return formats
 
 
 def _data_source(object_id, scope):
@@ -379,6 +514,13 @@ def attached_devices() -> "list[CoreAudioDevice]":
     value = _property_bytes(AUDIO_SYSTEM_OBJECT_ID, HARDWARE_PROPERTY_DEVICES) or b""
     object_ids = struct.unpack(f"<{len(value) // 4}I", value[: len(value) // 4 * 4])
     return [describe_device(object_id) for object_id in object_ids]
+
+
+def device_with_uid(uid: str) -> Optional[CoreAudioDevice]:
+    for device in attached_devices():
+        if device.uid == uid:
+            return device
+    return None
 
 
 def default_output_device() -> Optional[CoreAudioDevice]:
@@ -443,6 +585,75 @@ def system_audio_recording_authorization() -> str:
         return TCC_PREFLIGHT_ANSWERS.get(preflight(service, None), "not-determined")
     finally:
         core_foundation.CFRelease(service)
+
+
+def this_run_is_attended() -> bool:
+    return os.environ.get(ATTENDED_RUN_ENVIRONMENT_VARIABLE) == "1"
+
+
+def refusal_to_create_a_tap(authorization: str, attended: bool) -> Optional[str]:
+    """Why no tap may be made now, or None when one may.
+
+    Fails closed. Making a tap without a grant raises the prompt, and whether
+    a muted tap mutes before the prompt is answered is unknown, so unattended
+    only a grant TCC has confirmed lets one be made. A denial refuses even
+    attended: that tap could deliver nothing but zeros.
+    """
+    if authorization == "authorized":
+        return None
+    if authorization == "denied":
+        return (
+            "TCC says System Audio Recording is denied for the app that launched "
+            "this, so a process tap could deliver nothing but zeros. "
+            + GRANT_SYSTEM_AUDIO_RECORDING_IN_SYSTEM_SETTINGS
+        )
+    if attended:
+        return None
+    if authorization == "not-determined":
+        why = "System Audio Recording has never been answered for the app that launched this"
+    elif authorization == "unknown":
+        why = "TCC would not say whether System Audio Recording is granted"
+    else:
+        why = f"TCC answered {authorization!r} about System Audio Recording"
+    return (
+        f"{why}, and creating a tap would ask — a prompt, and possibly sound until "
+        f"it is answered. Run this once attended, with {ATTENDED_RUN_ENVIRONMENT_VARIABLE}=1, "
+        "and click Allow. Otherwise: "
+        + GRANT_SYSTEM_AUDIO_RECORDING_IN_SYSTEM_SETTINGS
+    )
+
+
+def why_a_tap_delivered_exact_zeros(
+    authorization_before_the_run: str, authorization_now: str
+) -> "tuple[int, str]":
+    """The exit status and reason for a tap capture in which every sample is zero.
+
+    1 only when the grant held from before the run to after it, because only
+    then are the zeros what was played. Otherwise a missing grant explains
+    them, or TCC cannot say whether one does, and the run is 77.
+    """
+    if authorization_now == "authorized" and authorization_before_the_run == "authorized":
+        return 1, (
+            "ERROR: the tap heard exact zeros with System Audio Recording authorized "
+            "throughout — nothing this process played reached the tap"
+        )
+    if authorization_now == "authorized":
+        return 77, (
+            "SKIP: the process tap delivered exact zeros, and System Audio Recording was "
+            f"granted during this run ({authorization_before_the_run} when it started) — "
+            "run again now that it is authorized."
+        )
+    if authorization_now == "unknown":
+        return 77, (
+            "SKIP: the process tap delivered exact zeros, and TCC would not say whether "
+            "System Audio Recording is granted, so a missing grant cannot be told from "
+            "a player that played nothing."
+        )
+    return 77, (
+        "SKIP: the process tap delivered exact zeros, and TCC says System Audio "
+        f"Recording is {authorization_now} for the app that launched this. "
+        + GRANT_SYSTEM_AUDIO_RECORDING_IN_SYSTEM_SETTINGS
+    )
 
 
 def aggregate_device_description(aggregate_device_uid, tap_uid, clock_device_uid):
@@ -729,6 +940,64 @@ class PrivateCaptureDeviceTappingThisProcessesOutput:
         )
 
 
+class RunningAudioDeviceIOProc:
+    """An IOProc on one device, started on entry and stopped and destroyed on exit.
+
+    `on_io_cycle(input_buffer_list, input_time_stamp, output_buffer_list)` is
+    called with raw addresses on the HAL's IO thread. An exception there has
+    nowhere to go, so the first is kept, every one is counted, and the cycle
+    still reports success to the HAL.
+    """
+
+    def __init__(self, device_object_id: int, on_io_cycle) -> None:
+        self.device_object_id = device_object_id
+        self._on_io_cycle = on_io_cycle
+        self._io_proc = AUDIO_DEVICE_IO_PROC(self._io_cycle)
+        self._io_proc_id = ctypes.c_void_p()
+        self.first_exception_on_the_io_thread: Optional[str] = None
+        self.exceptions_on_the_io_thread = 0
+
+    def _io_cycle(
+        self, _device, _now, input_data, input_time, output_data, _output_time, _client
+    ) -> int:
+        try:
+            self._on_io_cycle(input_data, input_time, output_data)
+        except BaseException as exception:
+            self.exceptions_on_the_io_thread += 1
+            if self.first_exception_on_the_io_thread is None:
+                self.first_exception_on_the_io_thread = repr(exception)
+        return 0
+
+    def __enter__(self) -> "RunningAudioDeviceIOProc":
+        core_audio = _mac_frameworks().core_audio
+        _raise_on_failure(
+            "AudioDeviceCreateIOProcID",
+            core_audio.AudioDeviceCreateIOProcID(
+                self.device_object_id, self._io_proc, None, ctypes.byref(self._io_proc_id)
+            ),
+        )
+        try:
+            _raise_on_failure(
+                "AudioDeviceStart",
+                core_audio.AudioDeviceStart(self.device_object_id, self._io_proc_id),
+            )
+        except BaseException:
+            core_audio.AudioDeviceDestroyIOProcID(self.device_object_id, self._io_proc_id)
+            self._io_proc_id = ctypes.c_void_p()
+            raise
+        return self
+
+    def __exit__(self, *_exception) -> None:
+        if not self._io_proc_id:
+            return
+        core_audio = _mac_frameworks().core_audio
+        # Called off the IO thread, AudioDeviceStop returns only once the
+        # IOProc will not be called again, so destroying it next is safe.
+        core_audio.AudioDeviceStop(self.device_object_id, self._io_proc_id)
+        core_audio.AudioDeviceDestroyIOProcID(self.device_object_id, self._io_proc_id)
+        self._io_proc_id = ctypes.c_void_p()
+
+
 def _print_the_uid_of(device: Optional[CoreAudioDevice], what: str) -> int:
     if device is None:
         print(f"no {what} on this Mac", file=sys.stderr)
@@ -766,10 +1035,26 @@ def main(argv) -> int:
     if command == "system-audio-recording-authorization":
         print(system_audio_recording_authorization())
         return 0
+    if command == "authorize-a-tap":
+        # TCC's answer on stdout, for the caller to judge the run by later.
+        authorization = system_audio_recording_authorization()
+        print(authorization)
+        refusal = refusal_to_create_a_tap(authorization, this_run_is_attended())
+        if refusal is not None:
+            print(f"SKIP: {refusal}", file=sys.stderr)
+            return 77
+        return 0
+    if command == "explain-exact-zeros" and len(argv) == 3:
+        status, reason = why_a_tap_delivered_exact_zeros(
+            argv[2], system_audio_recording_authorization()
+        )
+        print(reason, file=sys.stderr)
+        return status
     print(
         "Usage: coreaudio_process_tap.py devices | built-in-speaker-uid | "
         "built-in-microphone-uid | built-in-microphone-name | default-output-uid | "
-        "system-audio-recording-authorization",
+        "system-audio-recording-authorization | authorize-a-tap | "
+        "explain-exact-zeros <authorization-before-the-run>",
         file=sys.stderr,
     )
     return 2

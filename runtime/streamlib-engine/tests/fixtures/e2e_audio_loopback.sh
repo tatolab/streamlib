@@ -19,14 +19,27 @@
 # build, this still answers "is the rig sound", which is the question a
 # verification tool that lives inside the runtime can never answer.
 #
-# On macOS there is no null sink to play into, so the loop runs through the
-# air: `afplay` out of the built-in speakers and `ffmpeg` in off the built-in
-# microphone, pinned by name, scored with the analyser's acoustic parameter
-# set. That is audible, so it runs attended only: it refuses with 77 unless
-# STREAMLIB_RUN_ATTENDED_AUDIBLE_TESTS=1 says someone is listening.
+# macOS has no null sink, so `--path` picks what closes the loop there, and
+# each is the rig peer of `verify_audio_loopback.sh` on the same path:
+#
+#   tap-muted    (default) an IOProc plays into the built-in speakers and a
+#                private, muted Core Audio process tap of this fixture's own
+#                process carries it back through a private aggregate device —
+#                the tap the engine loopback reads, made the same way
+#                (`process_tap_loopback_without_the_engine.py`). Digital and
+#                silent, and scored as strictly as the null sink.
+#   tap-audible  the same tap unmuted, so the signal also plays out loud.
+#   acoustic     `afplay` out of the built-in speakers and `ffmpeg` in off the
+#                built-in microphone, pinned by name, through the air, scored
+#                with the analyser's acoustic parameter set.
+#
+# The two audible paths run attended only: they refuse with 77 unless
+# STREAMLIB_RUN_ATTENDED_AUDIBLE_TESTS=1 says someone is listening. The tap
+# paths ask TCC for System Audio Recording before making a tap and fail closed,
+# as `verify_audio_loopback.sh` does.
 #
 # Usage:
-#   ./e2e_audio_loopback.sh [output_dir]
+#   ./e2e_audio_loopback.sh [--path tap-muted|tap-audible|acoustic] [output_dir]
 #
 # Exit status is the verdict, and stdout is the report JSON and nothing else,
 # so a caller can pipe it. Progress goes to stderr. Artifacts land in
@@ -38,16 +51,38 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTHON="${PYTHON:-python3}"
 PLATFORM="$(uname -s)"
 
-if [ "$PLATFORM" = Darwin ] && [ "${STREAMLIB_RUN_ATTENDED_AUDIBLE_TESTS:-}" != 1 ]; then
-    echo "SKIP: on macOS the rig-only loop runs through the air and plays out loud, so it" >&2
-    echo "      runs attended only — set STREAMLIB_RUN_ATTENDED_AUDIBLE_TESTS=1 with someone listening" >&2
+LOOPBACK_PATH=""
+OUTPUT_DIR_ARGUMENT=""
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --path) LOOPBACK_PATH="$2"; shift 2 ;;
+        -*) echo "unknown argument: $1" >&2; exit 2 ;;
+        *) OUTPUT_DIR_ARGUMENT="$1"; shift ;;
+    esac
+done
+
+if [ "$PLATFORM" = Darwin ]; then
+    LOOPBACK_PATH="${LOOPBACK_PATH:-tap-muted}"
+    case "$LOOPBACK_PATH" in
+        tap-muted|tap-audible|acoustic) ;;
+        *) echo "unknown --path: $LOOPBACK_PATH (tap-muted, tap-audible or acoustic)" >&2; exit 2 ;;
+    esac
+elif [ -n "$LOOPBACK_PATH" ]; then
+    echo "--path picks a macOS loopback; on $PLATFORM the loop is the null sink's monitor" >&2
+    exit 2
+fi
+
+if [ "$PLATFORM" = Darwin ] && [ "$LOOPBACK_PATH" != tap-muted ] \
+    && [ "${STREAMLIB_RUN_ATTENDED_AUDIBLE_TESTS:-}" != 1 ]; then
+    echo "SKIP: --path $LOOPBACK_PATH plays out loud, so it runs attended only —" >&2
+    echo "      set STREAMLIB_RUN_ATTENDED_AUDIBLE_TESTS=1 with someone listening" >&2
     exit 77
 fi
 
 # Spelled in full rather than `mktemp -t`, which BSD reads as a prefix to
 # suffix under $TMPDIR — so the directory is where the skill looks on both.
 TEMPORARY_DIRECTORY="${TMPDIR:-/tmp}"
-OUTPUT_DIR="${1:-$(mktemp -d "${TEMPORARY_DIRECTORY%/}/streamlib-audio-loopback-XXXXXX")}"
+OUTPUT_DIR="${OUTPUT_DIR_ARGUMENT:-$(mktemp -d "${TEMPORARY_DIRECTORY%/}/streamlib-audio-loopback-XXXXXX")}"
 
 # Recording starts first and runs long, because a capture that opens after the
 # signal begins loses the lead-in the analysis aligns on.
@@ -57,16 +92,105 @@ CAPTURE_SECONDS=8
 mkdir -p "$OUTPUT_DIR"
 
 if [ "$PLATFORM" = Darwin ]; then
+    # Without this the shell survives its interrupted children and runs on to
+    # the analysis, which can report PASS for a run the user aborted.
+    trap 'exit 130' INT TERM
+    if ! "$PYTHON" -c "import numpy" &>/dev/null; then
+        echo "SKIP: $PYTHON cannot import numpy" >&2
+        exit 77
+    fi
+
+    INJECT_BUG="${INJECT_BUG:-}"
+    if [ -n "$INJECT_BUG" ]; then
+        echo "INJECTING FAULT: $INJECT_BUG — this run is expected to FAIL" >&2
+        "$PYTHON" "$HERE/known_audio_signal.py" generate \
+            "$OUTPUT_DIR/known_signal.wav" --inject "$INJECT_BUG" || exit 1
+    else
+        "$PYTHON" "$HERE/known_audio_signal.py" generate \
+            "$OUTPUT_DIR/known_signal.wav" || exit 1
+    fi
+fi
+
+if [ "$PLATFORM" = Darwin ] && [ "$LOOPBACK_PATH" != acoustic ]; then
+    # TCC is asked before any tap exists, and the answer fails closed: a
+    # preflight that could not be asked is an error, and unattended only
+    # `authorized` makes a tap. Re-checked here rather than trusted to the
+    # helper's verdict.
+    AUTHORIZATION_BEFORE_THE_RUN="$("$PYTHON" "$HERE/coreaudio_process_tap.py" authorize-a-tap)"
+    AUTHORIZE_A_TAP_STATUS=$?
+    [ "$AUTHORIZE_A_TAP_STATUS" -eq 77 ] && exit 77
+    if [ "$AUTHORIZE_A_TAP_STATUS" -ne 0 ] || [ -z "$AUTHORIZATION_BEFORE_THE_RUN" ]; then
+        echo "ERROR: could not ask TCC whether System Audio Recording is granted (the" >&2
+        echo "       preflight exited $AUTHORIZE_A_TAP_STATUS and answered" \
+            "'$AUTHORIZATION_BEFORE_THE_RUN'), so no tap is made" >&2
+        exit 1
+    fi
+    if [ "$AUTHORIZATION_BEFORE_THE_RUN" != authorized ] \
+        && [ "${STREAMLIB_RUN_ATTENDED_AUDIBLE_TESTS:-}" != 1 ]; then
+        echo "ERROR: TCC answered '$AUTHORIZATION_BEFORE_THE_RUN' and this run is unattended," \
+            "when only 'authorized' may make a tap unattended — no tap is made" >&2
+        exit 1
+    fi
+
+    # The built-in speakers where there are any, as the engine loopback pins
+    # them; headphones on the jack leave the default output.
+    SPEAKER_UID="$("$PYTHON" "$HERE/coreaudio_process_tap.py" built-in-speaker-uid 2>/dev/null)"
+    if [ -z "$SPEAKER_UID" ]; then
+        SPEAKER_UID="$("$PYTHON" "$HERE/coreaudio_process_tap.py" default-output-uid 2>/dev/null)"
+    fi
+    if [ -z "$SPEAKER_UID" ]; then
+        echo "SKIP: this Mac has no output device for the tap to hear" >&2
+        exit 77
+    fi
+    PROCESS_TAP_MUTE_BEHAVIOUR=muted
+    [ "$LOOPBACK_PATH" = tap-audible ] && PROCESS_TAP_MUTE_BEHAVIOUR=unmuted
+
+    echo "playing into a $PROCESS_TAP_MUTE_BEHAVIOUR process tap of $SPEAKER_UID, no StreamLib" >&2
+    "$PYTHON" "$HERE/process_tap_loopback_without_the_engine.py" \
+        "$OUTPUT_DIR/known_signal.wav" "$OUTPUT_DIR/captured.wav" \
+        "$SPEAKER_UID" "$PROCESS_TAP_MUTE_BEHAVIOUR" >"$OUTPUT_DIR/capture_device.txt"
+    PROCESS_TAP_LOOP_STATUS=$?
+    [ "$PROCESS_TAP_LOOP_STATUS" -eq 77 ] && exit 77
+    if [ "$PROCESS_TAP_LOOP_STATUS" -ne 0 ] || ! [ -s "$OUTPUT_DIR/captured.wav" ]; then
+        echo "ERROR: the process tap loop did not close (exit $PROCESS_TAP_LOOP_STATUS)" >&2
+        echo "artifacts: $OUTPUT_DIR" >&2
+        exit 1
+    fi
+
+    # A tap with no grant behind it reports no error: it delivers exact zeros.
+    if "$PYTHON" "$HERE/known_audio_signal.py" exact-digital-silence "$OUTPUT_DIR/captured.wav"; then
+        "$PYTHON" "$HERE/coreaudio_process_tap.py" explain-exact-zeros \
+            "$AUTHORIZATION_BEFORE_THE_RUN"
+        EXACT_ZEROS_STATUS=$?
+        echo "artifacts: $OUTPUT_DIR" >&2
+        [ "$EXACT_ZEROS_STATUS" -eq 77 ] && exit 77
+        exit 1
+    fi
+
+    "$PYTHON" "$HERE/known_audio_signal.py" analyse \
+        "$OUTPUT_DIR/captured.wav" "$OUTPUT_DIR/spectrogram.png" \
+        | tee "$OUTPUT_DIR/report.json"
+    VERDICT=${PIPESTATUS[0]}
+
+    echo "artifacts: $OUTPUT_DIR" >&2
+    # The prompt is answered while the signal plays, and the tap delivers zeros
+    # until it is, so a failing run that started without the grant has measured
+    # the prompt rather than the tap.
+    if [ "$VERDICT" -ne 0 ] && [ "$AUTHORIZATION_BEFORE_THE_RUN" != authorized ]; then
+        echo "SKIP: this run started with System Audio Recording $AUTHORIZATION_BEFORE_THE_RUN, so" >&2
+        echo "      the capture may have a hole until the prompt was answered — not scored. Run again." >&2
+        exit 77
+    fi
+    exit "$VERDICT"
+fi
+
+if [ "$PLATFORM" = Darwin ]; then
     for tool in afplay ffmpeg; do
         if ! command -v "$tool" &>/dev/null; then
             echo "SKIP: $tool not found" >&2
             exit 77
         fi
     done
-    if ! "$PYTHON" -c "import numpy" &>/dev/null; then
-        echo "SKIP: $PYTHON cannot import numpy" >&2
-        exit 77
-    fi
     # The microphone is pinned by name, so Camo, Wave Link or a Continuity
     # iPhone can never be what is measured. afplay takes no device, so the
     # speakers are pinned by requiring them to be the default output.
@@ -86,16 +210,6 @@ if [ "$PLATFORM" = Darwin ]; then
         exit 77
     fi
 
-    INJECT_BUG="${INJECT_BUG:-}"
-    if [ -n "$INJECT_BUG" ]; then
-        echo "INJECTING FAULT: $INJECT_BUG — this run is expected to FAIL" >&2
-        "$PYTHON" "$HERE/known_audio_signal.py" generate \
-            "$OUTPUT_DIR/known_signal.wav" --inject "$INJECT_BUG" || exit 1
-    else
-        "$PYTHON" "$HERE/known_audio_signal.py" generate \
-            "$OUTPUT_DIR/known_signal.wav" || exit 1
-    fi
-
     {
         echo "microphone: $MICROPHONE_NAME ($MICROPHONE_UID), recorded by ffmpeg avfoundation"
         echo "speaker: $SPEAKER_UID, the default output afplay plays to"
@@ -103,7 +217,6 @@ if [ "$PLATFORM" = Darwin ]; then
 
     RECORDER_PID=""
     trap 'kill "$RECORDER_PID" 2>/dev/null' EXIT
-    trap 'exit 130' INT TERM
     # `-t` bounds the recording itself, so nothing here needs `timeout`.
     ffmpeg -hide_banner -nostdin -f avfoundation -i ":$MICROPHONE_NAME" \
         -t "$CAPTURE_SECONDS" -ac 1 -ar 48000 -c:a pcm_s16le -y \

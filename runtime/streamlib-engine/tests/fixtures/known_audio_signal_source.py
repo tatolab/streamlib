@@ -4,7 +4,8 @@
 """Publishes the known signal as `AudioBlock` bags, for a speaker to play.
 
 The signal itself is `known_audio_signal.generate_signal()` — the same samples
-`e2e_audio_loopback.sh` plays through `pw-play` or `afplay`, so the two
+`e2e_audio_loopback.sh` plays through `pw-play`, `afplay` or a Core Audio
+IOProc, so the two
 fixtures measure one reference and a difference between them is StreamLib's,
 not the signal's. Generated rather than read back from a WAV so no
 quantisation sits between the reference and what is played.

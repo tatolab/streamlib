@@ -5,15 +5,21 @@
 
 Nothing here creates a tap or an aggregate device, because the first tap raises
 the System Audio Recording prompt and so belongs to an attended run. What is
-checked is everything before that call: which devices get pinned, the
-dictionary the aggregate is described by, and the Objective-C description the
-tap would be made from — which is where a wrong `objc_msgSend` prototype would
-show.
+checked is everything before that call: the TCC gate that decides whether one
+may be made at all, which devices get pinned, the dictionary the aggregate is
+described by, and the Objective-C description the tap would be made from —
+which is where a wrong `objc_msgSend` prototype would show.
 """
 
+import contextlib
+import ctypes
+import io
 import os
 import sys
 import unittest
+from unittest import mock
+
+import numpy
 
 import coreaudio_process_tap as helper
 
@@ -110,6 +116,154 @@ class FourCharacterCodes(unittest.TestCase):
         self.assertEqual(helper.four_char_code_text(-50), str(-50))
 
 
+EVERY_TCC_ANSWER_BUT_A_GRANT = ("denied", "not-determined", "unknown", "", "restricted")
+
+
+class TapCreationGate(unittest.TestCase):
+    """Fails closed: unattended, nothing but a confirmed grant makes a tap."""
+
+    def test_a_grant_makes_a_tap_attended_or_not(self):
+        for attended in (False, True):
+            with self.subTest(attended=attended):
+                self.assertIsNone(helper.refusal_to_create_a_tap("authorized", attended))
+
+    def test_unattended_every_other_answer_refuses(self):
+        for answer in EVERY_TCC_ANSWER_BUT_A_GRANT:
+            with self.subTest(answer=answer):
+                self.assertIsNotNone(helper.refusal_to_create_a_tap(answer, attended=False))
+
+    def test_a_tcc_framework_that_will_not_load_answers_unknown_and_is_refused(self):
+        with mock.patch.object(helper, "TCC_PRIVATE_FRAMEWORK", "/nonexistent/TCC"):
+            answer = helper.system_audio_recording_authorization()
+        self.assertEqual(answer, "unknown")
+        self.assertIsNotNone(helper.refusal_to_create_a_tap(answer, attended=False))
+
+    def test_a_tcc_that_will_not_answer_is_named_as_such(self):
+        refusal = helper.refusal_to_create_a_tap("unknown", attended=False)
+        self.assertIn("TCC would not say", refusal)
+        self.assertIn(helper.ATTENDED_RUN_ENVIRONMENT_VARIABLE, refusal)
+
+    def test_attended_only_a_denial_still_refuses(self):
+        self.assertIsNotNone(helper.refusal_to_create_a_tap("denied", attended=True))
+        for answer in ("not-determined", "unknown", "restricted"):
+            with self.subTest(answer=answer):
+                self.assertIsNone(helper.refusal_to_create_a_tap(answer, attended=True))
+
+
+class TapCreationGateOnTheCommandLine(unittest.TestCase):
+    def run_the_gate(self, answer, attended):
+        environment = {helper.ATTENDED_RUN_ENVIRONMENT_VARIABLE: "1" if attended else ""}
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with mock.patch.object(
+            helper, "system_audio_recording_authorization", return_value=answer
+        ), mock.patch.dict(os.environ, environment), contextlib.redirect_stdout(
+            stdout
+        ), contextlib.redirect_stderr(stderr):
+            status = helper.main(["coreaudio_process_tap.py", "authorize-a-tap"])
+        return status, stdout.getvalue().strip(), stderr.getvalue()
+
+    def test_an_unanswerable_tcc_is_77_unattended_with_the_answer_kept(self):
+        status, answer, reason = self.run_the_gate("unknown", attended=False)
+        self.assertEqual((status, answer), (77, "unknown"))
+        self.assertTrue(reason.startswith("SKIP: "))
+
+    def test_a_grant_proceeds_unattended(self):
+        self.assertEqual(self.run_the_gate("authorized", attended=False)[:2], (0, "authorized"))
+
+    def test_attended_an_unanswered_prompt_proceeds(self):
+        self.assertEqual(
+            self.run_the_gate("not-determined", attended=True)[:2], (0, "not-determined")
+        )
+
+
+class ExactZerosAttribution(unittest.TestCase):
+    def test_zeros_with_the_grant_held_throughout_are_red(self):
+        status, reason = helper.why_a_tap_delivered_exact_zeros("authorized", "authorized")
+        self.assertEqual(status, 1)
+        self.assertTrue(reason.startswith("ERROR: "))
+
+    def test_zeros_with_a_grant_given_during_the_run_are_77(self):
+        for before in ("not-determined", "unknown"):
+            with self.subTest(before=before):
+                self.assertEqual(
+                    helper.why_a_tap_delivered_exact_zeros(before, "authorized")[0], 77
+                )
+
+    def test_zeros_when_tcc_cannot_say_are_77_and_say_so(self):
+        status, reason = helper.why_a_tap_delivered_exact_zeros("authorized", "unknown")
+        self.assertEqual(status, 77)
+        self.assertIn("would not say", reason)
+
+    def test_zeros_with_no_grant_now_are_77(self):
+        for now in ("denied", "not-determined"):
+            with self.subTest(now=now):
+                self.assertEqual(
+                    helper.why_a_tap_delivered_exact_zeros("authorized", now)[0], 77
+                )
+
+
+def an_audio_buffer_list(channel_counts, frames):
+    """An AudioBufferList laid out as the HAL hands one to an IOProc, over numpy memory.
+
+    Returns the list and the arrays behind it; both must outlive every read.
+    """
+    arrays = [numpy.zeros(frames * channels, dtype="<f4") for channels in channel_counts]
+
+    class AudioBufferListOfThisMany(ctypes.Structure):
+        _fields_ = [
+            ("number_of_buffers", ctypes.c_uint32),
+            ("buffers", helper.AudioBuffer * len(channel_counts)),
+        ]
+
+    buffer_list = AudioBufferListOfThisMany()
+    buffer_list.number_of_buffers = len(channel_counts)
+    for index, (channels, array) in enumerate(zip(channel_counts, arrays)):
+        buffer_list.buffers[index] = helper.AudioBuffer(channels, array.nbytes, array.ctypes.data)
+    return buffer_list, arrays
+
+
+def an_audio_time_stamp(sample_time, sample_time_is_valid=True):
+    """An AudioTimeStamp's 64 bytes with only the sample time and its flag set."""
+    stamp = (ctypes.c_uint8 * 64)()
+    ctypes.c_double.from_buffer(stamp, 0).value = sample_time
+    ctypes.c_uint32.from_buffer(stamp, helper.AUDIO_TIME_STAMP_FLAGS_OFFSET).value = (
+        helper.AUDIO_TIME_STAMP_SAMPLE_TIME_VALID if sample_time_is_valid else 0
+    )
+    return stamp
+
+
+class AudioBufferListReading(unittest.TestCase):
+    def test_an_audio_buffer_is_the_sixteen_bytes_core_audio_lays_out(self):
+        self.assertEqual(ctypes.sizeof(helper.AudioBuffer), 16)
+        self.assertEqual(helper.AudioBuffer.data.offset, 8)
+
+    def test_every_buffer_is_read_in_place(self):
+        buffer_list, arrays = an_audio_buffer_list([2, 1], frames=4)
+        buffers = helper.audio_buffers_at(ctypes.addressof(buffer_list))
+        self.assertEqual([buffer.number_of_channels for buffer in buffers], [2, 1])
+        self.assertEqual([buffer.data_byte_size for buffer in buffers], [32, 16])
+        self.assertEqual(buffers[1].data, arrays[1].ctypes.data)
+
+    def test_a_null_list_holds_no_buffers(self):
+        self.assertEqual(len(helper.audio_buffers_at(None)), 0)
+
+    def test_a_sample_time_is_read_only_when_flagged_valid(self):
+        valid = an_audio_time_stamp(4096.0)
+        not_valid = an_audio_time_stamp(4096.0, sample_time_is_valid=False)
+        self.assertEqual(helper.sample_time_at(ctypes.addressof(valid)), 4096.0)
+        self.assertIsNone(helper.sample_time_at(ctypes.addressof(not_valid)))
+        self.assertIsNone(helper.sample_time_at(None))
+
+
+class StreamFormat(unittest.TestCase):
+    def test_only_32_bit_float_linear_pcm_is_copyable(self):
+        float32 = helper.AudioStreamFormat(48_000.0, "lpcm", 0b1001, 32, 2)
+        self.assertTrue(float32.is_32_bit_float)
+        self.assertFalse(float32._replace(bits_per_channel=16).is_32_bit_float)
+        self.assertFalse(float32._replace(format_flags=0b1100).is_32_bit_float)
+        self.assertFalse(float32._replace(format_id="aac ").is_32_bit_float)
+
+
 class MuteBehaviour(unittest.TestCase):
     def test_an_unknown_mute_behaviour_is_refused_before_core_audio_is_touched(self):
         with self.assertRaises(ValueError):
@@ -150,6 +304,18 @@ class CoreAudioShortOfATap(unittest.TestCase):
         self.assertIn(
             helper.system_audio_recording_authorization(),
             {"authorized", "denied", "not-determined", "unknown"},
+        )
+
+    def test_the_built_in_speakers_hand_an_io_proc_32_bit_float(self):
+        speaker = helper.built_in_speaker_among(helper.attached_devices())
+        if speaker is None:
+            self.skipTest("no built-in speakers, or headphones on the jack")
+        formats = helper.stream_virtual_formats(speaker.object_id, helper.PROPERTY_SCOPE_OUTPUT)
+        self.assertTrue(formats)
+        self.assertTrue(all(stream_format.is_32_bit_float for stream_format in formats))
+        self.assertEqual(
+            sum(helper.channels_in_each_buffer(speaker.object_id, helper.PROPERTY_SCOPE_OUTPUT)),
+            speaker.output_channels,
         )
 
 

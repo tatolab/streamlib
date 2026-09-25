@@ -12,7 +12,8 @@
 # StreamLib, so a failure here with the rig fixture green is the engine's.
 #
 # macOS has no null sink, so `--path` picks what closes the loop there. Both
-# ends stay StreamLib on every path:
+# ends stay StreamLib on every path, and `e2e_audio_loopback.sh` with the same
+# `--path` is its rig peer — the same loop with the engine taken out:
 #
 #   tap-muted    (default) a private, muted Core Audio process tap of the
 #                node's own output, which `MicrophoneSource` opens through a
@@ -27,8 +28,11 @@
 # STREAMLIB_RUN_ATTENDED_AUDIBLE_TESTS=1 says someone is listening.
 #
 # Both tap paths need System Audio Recording for the app that launched this,
-# asked of TCC before the node starts: denied is 77, and never-answered is 77
-# unless attended, because the run that answers it raises the prompt.
+# asked of TCC before the node starts, and they fail closed: unattended, only
+# `authorized` makes a tap. Denied is 77 even attended, since the tap could
+# hear only zeros. Never-answered, or a TCC that will not answer, is 77 unless
+# attended, because the run that makes the tap raises the prompt. A preflight
+# that cannot be asked at all is an error, before any node starts.
 #
 # Usage:
 #   ./verify_audio_loopback.sh [--count N] [--port PORT]
@@ -122,33 +126,26 @@ if [ "$PLATFORM" = Darwin ]; then
             ;;
         tap-muted | tap-audible)
             # The node creates its tap before SpeakerSink plays anything, so
-            # this is the last point at which a missing grant costs nothing: a
-            # denied one leaves the tap only zeros to deliver, an undecided one
-            # prompts, and whether the mute holds without it is unknown.
+            # this is the last point at which a missing grant costs nothing.
+            # Re-checked here rather than trusted to the helper's verdict.
             SYSTEM_AUDIO_RECORDING_AUTHORIZATION_BEFORE_THE_RUN="$(
-                "$PYTHON" "$HERE/coreaudio_process_tap.py" system-audio-recording-authorization
+                "$PYTHON" "$HERE/coreaudio_process_tap.py" authorize-a-tap
             )"
-            case "$SYSTEM_AUDIO_RECORDING_AUTHORIZATION_BEFORE_THE_RUN" in
-                denied)
-                    echo "SKIP: TCC says System Audio Recording is denied for the app that launched" >&2
-                    echo "      this, so a process tap could deliver nothing but zeros. Grant it in" >&2
-                    echo "      System Settings › Privacy & Security › Screen & System Audio Recording ›" >&2
-                    echo "      System Audio Recording Only (add Terminal, or whichever app launched" >&2
-                    echo "      this), then run again." >&2
-                    exit 77
-                    ;;
-                not-determined)
-                    if [ "${STREAMLIB_RUN_ATTENDED_AUDIBLE_TESTS:-}" != 1 ]; then
-                        echo "SKIP: System Audio Recording has never been answered for the app that" >&2
-                        echo "      launched this, and creating the tap asks it — a prompt, and possibly" >&2
-                        echo "      sound until it is answered. Run this once attended, with" >&2
-                        echo "      STREAMLIB_RUN_ATTENDED_AUDIBLE_TESTS=1, and click Allow; or grant it in" >&2
-                        echo "      System Settings › Privacy & Security › Screen & System Audio Recording ›" >&2
-                        echo "      System Audio Recording Only first." >&2
-                        exit 77
-                    fi
-                    ;;
-            esac
+            AUTHORIZE_A_TAP_STATUS=$?
+            [ "$AUTHORIZE_A_TAP_STATUS" -eq 77 ] && exit 77
+            if [ "$AUTHORIZE_A_TAP_STATUS" -ne 0 ] \
+                || [ -z "$SYSTEM_AUDIO_RECORDING_AUTHORIZATION_BEFORE_THE_RUN" ]; then
+                echo "ERROR: could not ask TCC whether System Audio Recording is granted (the" >&2
+                echo "       preflight exited $AUTHORIZE_A_TAP_STATUS and answered" \
+                    "'$SYSTEM_AUDIO_RECORDING_AUTHORIZATION_BEFORE_THE_RUN'), so no node is started" >&2
+                exit 1
+            fi
+            if [ "$SYSTEM_AUDIO_RECORDING_AUTHORIZATION_BEFORE_THE_RUN" != authorized ] \
+                && [ "${STREAMLIB_RUN_ATTENDED_AUDIBLE_TESTS:-}" != 1 ]; then
+                echo "ERROR: TCC answered '$SYSTEM_AUDIO_RECORDING_AUTHORIZATION_BEFORE_THE_RUN' and this run" \
+                    "is unattended, when only 'authorized' may make a tap unattended — no node is started" >&2
+                exit 1
+            fi
             CAPTURE_DEVICE_ID="$("$HERE/virtual_audio_device.sh" start)" || exit 1
             PROCESS_TAP_MUTE_BEHAVIOUR=muted
             [ "$LOOPBACK_PATH" = tap-audible ] && PROCESS_TAP_MUTE_BEHAVIOUR=unmuted
@@ -314,27 +311,12 @@ fi
 # by asking TCC, which answers without prompting.
 if [ "$PLATFORM" = Darwin ] && [ "$ANALYSIS_PATH" = digital ] \
     && "$PYTHON" "$HERE/known_audio_signal.py" exact-digital-silence "$CAPTURED_WAVEFORM"; then
-    AUTHORIZATION="$("$PYTHON" "$HERE/coreaudio_process_tap.py" system-audio-recording-authorization)"
-    if [ "$AUTHORIZATION" = authorized ] \
-        && [ "$SYSTEM_AUDIO_RECORDING_AUTHORIZATION_BEFORE_THE_RUN" = authorized ]; then
-        echo "ERROR: the tap heard exact zeros with System Audio Recording authorized —" >&2
-        echo "       SpeakerSink played nothing the tap could hear" >&2
-        echo "artifacts: $OUTPUT_DIR" >&2
-        exit 1
-    fi
-    if [ "$AUTHORIZATION" = authorized ]; then
-        echo "SKIP: the process tap delivered exact zeros, and System Audio Recording was" >&2
-        echo "      granted during this run ($SYSTEM_AUDIO_RECORDING_AUTHORIZATION_BEFORE_THE_RUN when it" >&2
-        echo "      started) — run again now that it is authorized." >&2
-        echo "artifacts: $OUTPUT_DIR" >&2
-        exit 77
-    fi
-    echo "SKIP: the process tap delivered exact zeros, and TCC says System Audio Recording is" >&2
-    echo "      $AUTHORIZATION for the app that launched this. Grant it in System Settings ›" >&2
-    echo "      Privacy & Security › Screen & System Audio Recording › System Audio Recording" >&2
-    echo "      Only (add Terminal, or whichever app launched this), then run again." >&2
+    "$PYTHON" "$HERE/coreaudio_process_tap.py" explain-exact-zeros \
+        "$SYSTEM_AUDIO_RECORDING_AUTHORIZATION_BEFORE_THE_RUN"
+    EXACT_ZEROS_STATUS=$?
     echo "artifacts: $OUTPUT_DIR" >&2
-    exit 77
+    [ "$EXACT_ZEROS_STATUS" -eq 77 ] && exit 77
+    exit 1
 fi
 
 "$PYTHON" "$HERE/known_audio_signal.py" analyse \
@@ -345,10 +327,11 @@ echo "artifacts: $OUTPUT_DIR" >&2
 # The prompt is answered while the signal plays, and the tap delivers zeros
 # until it is, so a failing run that started without the grant has measured
 # the prompt rather than the engine.
-if [ "$VERDICT" -ne 0 ] \
-    && [ "$SYSTEM_AUDIO_RECORDING_AUTHORIZATION_BEFORE_THE_RUN" = not-determined ]; then
-    echo "SKIP: this run started before System Audio Recording was answered, so the capture" >&2
-    echo "      has a hole until the prompt was — not scored against the engine. Run again." >&2
+if [ "$VERDICT" -ne 0 ] && [ -n "$SYSTEM_AUDIO_RECORDING_AUTHORIZATION_BEFORE_THE_RUN" ] \
+    && [ "$SYSTEM_AUDIO_RECORDING_AUTHORIZATION_BEFORE_THE_RUN" != authorized ]; then
+    echo "SKIP: this run started with System Audio Recording" >&2
+    echo "      $SYSTEM_AUDIO_RECORDING_AUTHORIZATION_BEFORE_THE_RUN, so the capture may have a hole" >&2
+    echo "      until the prompt was answered — not scored against the engine. Run again." >&2
     exit 77
 fi
 exit "$VERDICT"
