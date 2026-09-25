@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Private IOSurface allocation.
+//! Private IOSurface allocation, and the host read of one.
 //!
 //! Never `kIOSurfaceIsGlobal`: a global surface's id resolves from any
 //! process on the machine. A private one reaches another process only
@@ -9,8 +9,8 @@
 
 use objc2_core_foundation::{CFDictionary, CFNumber, CFRetained, CFString, CFType};
 use objc2_io_surface::{
-    IOSurfaceRef, kIOSurfaceBytesPerElement, kIOSurfaceBytesPerRow, kIOSurfaceHeight,
-    kIOSurfacePixelFormat, kIOSurfaceWidth,
+    IOSurfaceLockOptions, IOSurfaceRef, kIOSurfaceBytesPerElement, kIOSurfaceBytesPerRow,
+    kIOSurfaceHeight, kIOSurfacePixelFormat, kIOSurfaceWidth,
 };
 
 use crate::core::rhi::PixelFormat;
@@ -59,6 +59,86 @@ pub fn create_iosurface_mach_send_right(
         // SAFETY: `IOSurfaceCreateMachPort` hands this task a fresh send
         // right that nothing else holds.
         port => Ok(unsafe { streamlib_surface_client::OwnedMachSendRight::from_raw_name(port) }),
+    }
+}
+
+/// Hand `read_rows` the first `row_count` rows of `iosurface`, each
+/// `row_byte_len` bytes and back to back, while the surface is locked for
+/// reading.
+///
+/// A surface whose stride equals `row_byte_len` is handed over in place; one
+/// whose stride pads its rows is copied row by row into packed storage first.
+pub fn with_iosurface_rows_tightly_packed_for_reading<R>(
+    iosurface: &IOSurfaceRef,
+    row_byte_len: usize,
+    row_count: usize,
+    read_rows: impl FnOnce(&[u8]) -> R,
+) -> Result<R> {
+    let bytes_per_row = iosurface.bytes_per_row();
+    if row_byte_len == 0 || bytes_per_row < row_byte_len || iosurface.height() < row_count {
+        return Err(Error::GpuError(format!(
+            "IOSurface {} is {} rows at {bytes_per_row} bytes per row, which cannot hold \
+             {row_count} rows of {row_byte_len} bytes",
+            iosurface.id(),
+            iosurface.height()
+        )));
+    }
+    let locked_for_reading = IOSurfaceLockedForReading::lock(iosurface)?;
+    let base_address = locked_for_reading
+        .iosurface
+        .base_address()
+        .as_ptr()
+        .cast::<u8>();
+    if bytes_per_row == row_byte_len {
+        // SAFETY: the surface is locked and at least `row_count` rows of
+        // `bytes_per_row` bytes long, checked above.
+        let rows = unsafe { std::slice::from_raw_parts(base_address, row_byte_len * row_count) };
+        return Ok(read_rows(rows));
+    }
+    let mut packed_rows = Vec::with_capacity(row_byte_len * row_count);
+    for row in 0..row_count {
+        // SAFETY: as above; each row's first `row_byte_len` bytes lie inside
+        // its `bytes_per_row`-byte stride.
+        packed_rows.extend_from_slice(unsafe {
+            std::slice::from_raw_parts(base_address.add(row * bytes_per_row), row_byte_len)
+        });
+    }
+    Ok(read_rows(&packed_rows))
+}
+
+/// An IOSurface locked read-only, unlocked when this drops.
+struct IOSurfaceLockedForReading<'a> {
+    iosurface: &'a IOSurfaceRef,
+}
+
+impl<'a> IOSurfaceLockedForReading<'a> {
+    fn lock(iosurface: &'a IOSurfaceRef) -> Result<Self> {
+        // SAFETY: a null seed pointer is the documented "not wanted".
+        let locked =
+            unsafe { iosurface.lock(IOSurfaceLockOptions::ReadOnly, std::ptr::null_mut()) };
+        if locked != 0 {
+            return Err(Error::GpuError(format!(
+                "IOSurfaceLock refused IOSurface {} for reading ({locked})",
+                iosurface.id()
+            )));
+        }
+        Ok(Self { iosurface })
+    }
+}
+
+impl Drop for IOSurfaceLockedForReading<'_> {
+    fn drop(&mut self) {
+        // SAFETY: paired with the read-only lock this value was made by.
+        let unlocked = unsafe {
+            self.iosurface
+                .unlock(IOSurfaceLockOptions::ReadOnly, std::ptr::null_mut())
+        };
+        if unlocked != 0 {
+            tracing::warn!(
+                "IOSurfaceUnlock refused IOSurface {} after a read ({unlocked})",
+                self.iosurface.id()
+            );
+        }
     }
 }
 
@@ -227,5 +307,84 @@ mod tests {
         let refused =
             create_private_iosurface_with_packed_rows(0, 64, 4, PixelFormat::Bgra32).unwrap_err();
         assert!(refused.to_string().contains("describes no memory"));
+    }
+
+    /// Write `rows` into `iosurface`, one per stride, the producer's side.
+    fn write_rows_at_the_surfaces_stride(iosurface: &IOSurfaceRef, rows: &[Vec<u8>]) {
+        let locked = unsafe { iosurface.lock(IOSurfaceLockOptions::empty(), std::ptr::null_mut()) };
+        assert_eq!(locked, 0, "IOSurfaceLock");
+        let base_address = iosurface.base_address().as_ptr().cast::<u8>();
+        for (row_index, row) in rows.iter().enumerate() {
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    row.as_ptr(),
+                    base_address.add(row_index * iosurface.bytes_per_row()),
+                    row.len(),
+                )
+            };
+        }
+        unsafe { iosurface.unlock(IOSurfaceLockOptions::empty(), std::ptr::null_mut()) };
+    }
+
+    /// Rows no misaligned read passes for: every byte differs from its
+    /// neighbours and from the same byte of the next row.
+    fn distinct_rows(row_byte_len: usize, row_count: usize) -> Vec<Vec<u8>> {
+        (0..row_count)
+            .map(|row| {
+                (0..row_byte_len)
+                    .map(|at| ((row * row_byte_len + at) % 251) as u8)
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_padded_surface_reads_out_with_its_padding_stripped() {
+        let iosurface =
+            create_private_iosurface_for_a_gpu_image(1000, 5, 4).expect("a private IOSurface");
+        assert!(
+            iosurface.bytes_per_row() > 1000 * 4,
+            "the fixture needs a stride that pads its rows"
+        );
+        let rows = distinct_rows(1000 * 4, 5);
+        write_rows_at_the_surfaces_stride(&iosurface, &rows);
+
+        let read_out =
+            with_iosurface_rows_tightly_packed_for_reading(&iosurface, 1000 * 4, 5, <[u8]>::to_vec)
+                .expect("the rows read out");
+
+        assert_eq!(read_out, rows.concat());
+    }
+
+    #[test]
+    fn a_packed_surface_reads_out_in_place() {
+        let iosurface = create_private_iosurface_with_packed_rows(641, 3, 4, PixelFormat::Bgra32)
+            .expect("a private IOSurface");
+        let rows = distinct_rows(641 * 4, 3);
+        write_rows_at_the_surfaces_stride(&iosurface, &rows);
+
+        let read_in_place_from =
+            with_iosurface_rows_tightly_packed_for_reading(&iosurface, 641 * 4, 3, |packed_rows| {
+                (packed_rows.as_ptr(), packed_rows.to_vec())
+            })
+            .expect("the rows read out");
+
+        assert_eq!(
+            read_in_place_from.0,
+            iosurface.base_address().as_ptr().cast::<u8>().cast_const()
+        );
+        assert_eq!(read_in_place_from.1, rows.concat());
+    }
+
+    #[test]
+    fn rows_wider_than_the_surfaces_stride_are_refused_before_the_lock() {
+        let iosurface = create_private_iosurface_with_packed_rows(64, 4, 4, PixelFormat::Rgba32)
+            .expect("a private IOSurface");
+
+        let refused =
+            with_iosurface_rows_tightly_packed_for_reading(&iosurface, 64 * 4 + 1, 4, |_| ())
+                .unwrap_err();
+
+        assert!(refused.to_string().contains("cannot hold"), "{refused}");
     }
 }

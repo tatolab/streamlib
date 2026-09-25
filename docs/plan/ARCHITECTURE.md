@@ -2798,15 +2798,16 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   mechanism replaces in a later release.
   As built: the message is `[pixel description][bag][pixel bytes]`, and the attachment carries
   the description's length — zero for a bag naming no surface, which therefore still crosses
-  verbatim. The sender's copy door is `SurfaceExportStaging` at host-visible residency, held
-  under a check-out claim that spans the copy alone, so a slow network never pins the
-  producer's pool slot. The description's format, extent and byte length are read from the
+  verbatim. The sender's copy door is `SurfaceExportStaging` at host-visible residency on
+  Linux and the frame's own IOSurface, read through its host mapping under `IOSurfaceLock`
+  with rows packed, on macOS — held under a check-out claim that spans the copy alone, so a
+  slow network never pins the producer's pool slot. The description's format, extent and byte length are read from the
   backing, never from the bag, which names no format at all. Each refusal is counted and said
   once per port or per source by its own name: a recycled frame, a multi-plane format, a pool
   at its cap, and a source offering more than the four format-and-extent pairs one may mint
-  pools of (pools are never freed). The copy-out door is Linux-only, because
-  `SurfaceExportStaging` is; a non-Linux sender says once per port that its surface bags do
-  not cross.
+  pools of (pools are never freed). On macOS a texture backing with no IOSurface behind it —
+  one allocated never to cross — is refused by name. *(Corrected 2026-09-24 by #2406: the
+  copy-out door is no longer Linux-only.)*
   Where it bites, stated rather than discovered. A texture-backed frame — a kernel output —
   lands buffer-backed on the far side, inheriting the camera's existing gap: a bare-id kernel
   dispatch refuses it, and the display's buffer fallback draws only RGBA correctly. An sRGB
@@ -3337,9 +3338,11 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   outside the RHI and no second converter is built. The operation reaches the engine
   through `RuntimeOperations` and nothing else — the api-server's HTTP task deliberately
   holds only `Arc<dyn RuntimeOperations>`, the trait gains one operation, and `Runner`
-  implements it over the shipped doors: the surface store's checkout for a pooled
+  implements it over ~~the shipped doors: the surface store's checkout for a pooled
   pixel-buffer backing, the host-visible export staging for a texture backing, the same
-  doors the cast object's `cpu()` rides. No new surface-resolution path exists, and the
+  doors the cast object's `cpu()` rides~~ the pool's own claim and the RHI's color
+  converter, blit and texture readback, on Linux and macOS alike *(corrected 2026-09-24:
+  the exchange as built never rode the export staging; #2406 opened it on macOS)*. No new surface-resolution path exists, and the
   caller needs no Vulkan device, no surface socket and no runtime link.
   [control-plane-surface-pixel-exchange — SHIPPED #1972]
   <!-- verify: cargo test -p streamlib-engine --lib a_pooled_rgba_frame_exchanges_for_the_pixels_the_bag_published -->
