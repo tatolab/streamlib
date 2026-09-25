@@ -158,6 +158,13 @@ impl CoreAudioStreamDirection {
         }
     }
 
+    fn present_participle(self) -> &'static str {
+        match self {
+            CoreAudioStreamDirection::Capture => "capturing",
+            CoreAudioStreamDirection::Playback => "playing",
+        }
+    }
+
     fn lowercase_direction_name(self) -> &'static str {
         match self {
             CoreAudioStreamDirection::Capture => "capture",
@@ -772,9 +779,19 @@ unsafe extern "C-unwind" fn device_liveness_changed(
     NO_ERR
 }
 
-/// The per-direction state a device-thread callback works on under its lock.
-trait CoreAudioDeliveryHoldingAHandOff: Send {
+/// The per-direction state a device-thread callback works on under its lock,
+/// paired with the one callback that reads it — so a unit cannot be bound
+/// with a callback that would cast its context to the wrong type.
+trait CoreAudioDeliveryHoldingAHandOff: Send + Sized {
     type HandOff;
+
+    const DIRECTION: CoreAudioStreamDirection;
+
+    /// The AUHAL property the callback is installed through.
+    const CALLBACK_PROPERTY_ID: u32;
+
+    /// Reads its refcon as a `CoreAudioCallbackContext<Self>`.
+    const CALLBACK: AURenderCallback;
 
     fn installed_hand_off(&mut self) -> &mut Option<Self::HandOff>;
 }
@@ -782,7 +799,6 @@ trait CoreAudioDeliveryHoldingAHandOff: Send {
 /// What a callback reads on the device's I/O thread.
 struct CoreAudioCallbackContext<Delivery> {
     audio_unit: AudioUnit,
-    direction: CoreAudioStreamDirection,
     failure_recorder: DeviceStreamFailureRecorder,
     /// Held by the callback across its whole call, so clearing the hand-off
     /// under it guarantees no call is in flight or to come.
@@ -794,12 +810,12 @@ struct CoreAudioCallbackContext<Delivery> {
 unsafe impl<Delivery: Send> Send for CoreAudioCallbackContext<Delivery> {}
 unsafe impl<Delivery: Send> Sync for CoreAudioCallbackContext<Delivery> {}
 
-impl<Delivery> CoreAudioCallbackContext<Delivery> {
+impl<Delivery: CoreAudioDeliveryHoldingAHandOff> CoreAudioCallbackContext<Delivery> {
     /// Called once a hand-off has panicked and been uninstalled, since
     /// unwinding into CoreAudio's I/O thread is undefined: the stream stops
     /// serving rather than crashing.
     fn record_that_the_hand_off_panicked(&self) {
-        let reason = match self.direction {
+        let reason = match Delivery::DIRECTION {
             CoreAudioStreamDirection::Capture => {
                 "the capture hand-off panicked on the device thread and was uninstalled"
             }
@@ -825,18 +841,14 @@ struct CoreAudioStreamUnit<Delivery: CoreAudioDeliveryHoldingAHandOff> {
 impl<Delivery: CoreAudioDeliveryHoldingAHandOff> CoreAudioStreamUnit<Delivery> {
     fn bound_to(
         device: &CoreAudioDevice,
-        direction: CoreAudioStreamDirection,
         stream_format: AudioStreamFormat,
         delivery: Delivery,
         failure_recorder: DeviceStreamFailureRecorder,
-        callback_property_id: u32,
-        callback: AURenderCallback,
     ) -> Result<Self> {
         let hal_output_unit =
-            CoreAudioHalOutputUnit::new_bound_to(device, direction, stream_format)?;
+            CoreAudioHalOutputUnit::new_bound_to(device, Delivery::DIRECTION, stream_format)?;
         let callback_context = Box::new(CoreAudioCallbackContext {
             audio_unit: hal_output_unit.audio_unit,
-            direction,
             failure_recorder,
             delivery: Mutex::new(delivery),
         });
@@ -846,11 +858,11 @@ impl<Delivery: CoreAudioDeliveryHoldingAHandOff> CoreAudioStreamUnit<Delivery> {
             .cast();
         let initialised = hal_output_unit
             .set_property(
-                callback_property_id,
+                Delivery::CALLBACK_PROPERTY_ID,
                 kAudioUnitScope_Global,
                 AUHAL_OUTPUT_ELEMENT,
                 &AURenderCallbackStruct {
-                    inputProc: callback,
+                    inputProc: Delivery::CALLBACK,
                     inputProcRefCon: callback_context_pointer,
                 },
             )
@@ -868,7 +880,7 @@ impl<Delivery: CoreAudioDeliveryHoldingAHandOff> CoreAudioStreamUnit<Delivery> {
             device.refused_with_status(
                 &format!(
                     "would not initialise for {}",
-                    direction.lowercase_direction_name()
+                    Delivery::DIRECTION.lowercase_direction_name()
                 ),
                 status,
             )
@@ -884,13 +896,7 @@ impl<Delivery: CoreAudioDeliveryHoldingAHandOff> CoreAudioStreamUnit<Delivery> {
         *self.callback_context.delivery.lock().installed_hand_off() = Some(hand_off);
         self.hal_output_unit.start().map_err(|status| {
             *self.callback_context.delivery.lock().installed_hand_off() = None;
-            self.device.refused_with_status(
-                &format!(
-                    "would not start {}",
-                    self.callback_context.direction.lowercase_direction_name()
-                ),
-                status,
-            )
+            self.refused_for_this_direction("start", status)
         })
     }
 
@@ -899,15 +905,18 @@ impl<Delivery: CoreAudioDeliveryHoldingAHandOff> CoreAudioStreamUnit<Delivery> {
         // Cleared after the unit stops, and under the lock the callback holds
         // across its call, so no hand-off runs once this returns.
         *self.callback_context.delivery.lock().installed_hand_off() = None;
-        stopped.map_err(|status| {
-            self.device.refused_with_status(
-                &format!(
-                    "would not stop {}",
-                    self.callback_context.direction.lowercase_direction_name()
-                ),
-                status,
-            )
-        })
+        stopped.map_err(|status| self.refused_for_this_direction("stop", status))
+    }
+
+    /// "would not start capturing", "would not stop playing", and so on.
+    fn refused_for_this_direction(&self, verb: &str, status: i32) -> Error {
+        self.device.refused_with_status(
+            &format!(
+                "would not {verb} {}",
+                Delivery::DIRECTION.present_participle()
+            ),
+            status,
+        )
     }
 }
 
@@ -923,6 +932,10 @@ struct CoreAudioCaptureDelivery {
 
 impl CoreAudioDeliveryHoldingAHandOff for CoreAudioCaptureDelivery {
     type HandOff = CapturedAudioBlockHandOff;
+
+    const DIRECTION: CoreAudioStreamDirection = CoreAudioStreamDirection::Capture;
+    const CALLBACK_PROPERTY_ID: u32 = kAudioOutputUnitProperty_SetInputCallback;
+    const CALLBACK: AURenderCallback = Some(captured_input_became_available);
 
     fn installed_hand_off(&mut self) -> &mut Option<CapturedAudioBlockHandOff> {
         &mut self.installed_hand_off
@@ -1044,7 +1057,6 @@ fn bind_capture_unit(
     let direction = CoreAudioStreamDirection::Capture;
     let capture_unit = CoreAudioCaptureUnit::bound_to(
         device,
-        direction,
         stream_format,
         CoreAudioCaptureDelivery {
             installed_hand_off: None,
@@ -1054,8 +1066,6 @@ fn bind_capture_unit(
             has_reported_an_oversized_cycle: false,
         },
         failure_recorder,
-        kAudioOutputUnitProperty_SetInputCallback,
-        Some(captured_input_became_available),
     )?;
     let largest_cycle_in_frames = capture_unit
         .hal_output_unit
@@ -1289,6 +1299,10 @@ struct CoreAudioPlaybackDelivery {
 impl CoreAudioDeliveryHoldingAHandOff for CoreAudioPlaybackDelivery {
     type HandOff = AudioBlockForPlaybackHandOff;
 
+    const DIRECTION: CoreAudioStreamDirection = CoreAudioStreamDirection::Playback;
+    const CALLBACK_PROPERTY_ID: u32 = kAudioUnitProperty_SetRenderCallback;
+    const CALLBACK: AURenderCallback = Some(playback_samples_requested);
+
     fn installed_hand_off(&mut self) -> &mut Option<AudioBlockForPlaybackHandOff> {
         &mut self.installed_hand_off
     }
@@ -1362,14 +1376,11 @@ impl CoreAudioPlaybackStream {
             DeviceStreamFailureRecorder::recording_into_a_new_report();
         let playback_unit = CoreAudioStreamUnit::bound_to(
             &device,
-            direction,
             stream_format,
             CoreAudioPlaybackDelivery {
                 installed_hand_off: None,
             },
             failure_recorder.clone(),
-            kAudioUnitProperty_SetRenderCallback,
-            Some(playback_samples_requested),
         )?;
 
         tracing::info!(
