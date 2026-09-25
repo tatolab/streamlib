@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.26](https://github.com/tatolab/streamlib/compare/v0.26.25...v0.26.26) (2026-09-25)
+
+
+### Features
+
+* **wheel:** a helper never outlives its engine on macOS ([#2473](https://github.com/tatolab/streamlib/issues/2473)) ([69817f5](https://github.com/tatolab/streamlib/commit/69817f5b58802ee9b492dd796b65c33d4ad00f15))
+
 ## [0.26.25](https://github.com/tatolab/streamlib/compare/v0.26.24...v0.26.25) (2026-09-25)
 
 
