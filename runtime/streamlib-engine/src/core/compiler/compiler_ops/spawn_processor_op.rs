@@ -281,7 +281,7 @@ fn spawn_dedicated_thread(
             let (
                 state_arc,
                 shutdown_rx,
-                shutdown_eventfd,
+                shutdown_wake_fd,
                 pause_gate_inner,
                 exec_config,
                 processor_display_name,
@@ -304,7 +304,7 @@ fn spawn_dedicated_thread(
                     }
                 };
 
-                let (shutdown_rx, shutdown_eventfd) =
+                let (shutdown_rx, shutdown_wake_fd) =
                     match node.get_mut::<ShutdownChannelComponent>() {
                         Some(channel) => {
                             let rx = match channel.take_receiver() {
@@ -317,8 +317,8 @@ fn spawn_dedicated_thread(
                                     return;
                                 }
                             };
-                            let eventfd = clone_shutdown_eventfd(channel, &proc_id_clone);
-                            (rx, eventfd)
+                            let shutdown_wake_fd = clone_shutdown_wake_fd(channel, &proc_id_clone);
+                            (rx, shutdown_wake_fd)
                         }
                         None => {
                             tracing::error!("[{}] No ShutdownChannelComponent", proc_id_clone);
@@ -339,7 +339,7 @@ fn spawn_dedicated_thread(
                 (
                     state,
                     shutdown_rx,
-                    shutdown_eventfd,
+                    shutdown_wake_fd,
                     pause_gate_inner,
                     exec_config,
                     processor_display_name,
@@ -418,7 +418,7 @@ fn spawn_dedicated_thread(
                 proc_id_clone,
                 processor_arc_clone,
                 shutdown_rx,
-                shutdown_eventfd,
+                shutdown_wake_fd,
                 state_arc,
                 pause_gate_inner,
                 exec_config,
@@ -523,17 +523,17 @@ where
     }
 }
 
-#[cfg(target_os = "linux")]
-fn clone_shutdown_eventfd(
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn clone_shutdown_wake_fd(
     channel: &ShutdownChannelComponent,
     proc_id: &ProcessorUniqueId,
 ) -> Option<OwnedFd> {
-    match channel.try_clone_shutdown_eventfd() {
+    match channel.try_clone_shutdown_wake_fd() {
         Ok(fd) => Some(fd),
         Err(e) => {
             tracing::warn!(
-                "[{}] Failed to clone shutdown eventfd, reactive runner will fall back \
-                 to channel-only shutdown: {}",
+                "[{}] Failed to clone the shutdown wake descriptor, reactive runner will \
+                 fall back to channel-only shutdown: {}",
                 proc_id,
                 e
             );
@@ -542,8 +542,8 @@ fn clone_shutdown_eventfd(
     }
 }
 
-#[cfg(all(unix, not(target_os = "linux")))]
-fn clone_shutdown_eventfd(
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+fn clone_shutdown_wake_fd(
     _channel: &ShutdownChannelComponent,
     _proc_id: &ProcessorUniqueId,
 ) -> Option<OwnedFd> {
