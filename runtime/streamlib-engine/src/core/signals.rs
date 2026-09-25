@@ -466,7 +466,7 @@ fn drain_pending_bytes(read_end: std::os::fd::RawFd) -> std::io::Result<()> {
 }
 
 /// Read a signal's current disposition without changing it.
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(all(unix, any(not(target_os = "macos"), test)))]
 fn current_disposition_of(signal: libc::c_int) -> libc::sigaction {
     // SAFETY: a NULL `act` is POSIX's read-only query. `previous` is a fully
     // owned, zeroed `sigaction` the kernel writes into.
@@ -577,7 +577,7 @@ mod tests {
 
     /// Raise `signal` and wait for the forwarding thread to escalate the
     /// shutdown to `awaited`. Panics rather than hanging if it never does.
-    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(unix)]
     fn raise_and_await_escalation_to(
         signal: libc::c_int,
         awaited: crate::core::runtime::RuntimeShutdownEscalation,
@@ -612,7 +612,7 @@ mod tests {
     /// request the run loop polls.
     #[test]
     #[serial]
-    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(unix)]
     fn a_delivered_sigint_becomes_a_runtime_shutdown_request() {
         let _escalation_cleared_even_on_unwind =
             crate::core::RuntimeShutdownEscalationClearedOnDrop::clear_now_and_on_drop();
@@ -653,7 +653,7 @@ mod tests {
     /// escalation never reaches `Forced`.
     #[test]
     #[serial]
-    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(unix)]
     fn repeated_interrupts_escalate_one_run_and_the_next_run_starts_graceful() {
         use crate::core::runtime::{RuntimeShutdownEscalation, take_runtime_shutdown_escalation};
         use signal_hook::consts::signal::{SIGINT, SIGTERM};
@@ -695,7 +695,7 @@ mod tests {
     /// the disposition asserts above and fails here on the second iteration.
     #[test]
     #[serial]
-    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(unix)]
     fn every_retaken_ownership_still_catches_sigint() {
         for ownership_generation in 1..=3 {
             let _escalation_cleared_even_on_unwind =
@@ -746,15 +746,58 @@ mod tests {
         );
     }
 
+    /// macOS installs its handlers once for the process's life, so a run that
+    /// ends hands nothing back and the next one still catches SIGINT.
+    #[test]
+    #[serial]
+    #[cfg(target_os = "macos")]
+    fn dropping_ownership_on_macos_leaves_the_process_lifetime_handlers_installed() {
+        let _escalation_cleared_even_on_unwind =
+            crate::core::RuntimeShutdownEscalationClearedOnDrop::clear_now_and_on_drop();
+
+        drop(
+            ScopedShutdownSignalOwnership::take_until_dropped()
+                .expect("no other run loop owns the shutdown signals"),
+        );
+        for signal in [libc::SIGINT, libc::SIGTERM] {
+            let after_the_run = current_disposition_of(signal).sa_sigaction;
+            assert!(
+                after_the_run != libc::SIG_DFL && after_the_run != libc::SIG_IGN,
+                "signal {signal}'s handler must stay installed once its run ends",
+            );
+        }
+    }
+
+    /// SIGHUP is not owned on macOS: taking the shutdown signals leaves its
+    /// disposition exactly as it found it, ignored or not.
+    ///
+    /// Fail-without-fix: a handler installed for SIGHUP displaces the default,
+    /// and a supervisor's `nohup` loses its ignored disposition.
+    #[test]
+    #[serial]
+    #[cfg(target_os = "macos")]
+    fn sighup_is_not_owned_on_macos() {
+        for hangup_disposition in [libc::SIG_DFL, libc::SIG_IGN] {
+            let _hangup_set = SignalDispositionSetForOneTest::set(libc::SIGHUP, hangup_disposition);
+            let _owned = ScopedShutdownSignalOwnership::take_until_dropped()
+                .expect("no other run loop owns the shutdown signals");
+            assert_eq!(
+                current_disposition_of(libc::SIGHUP).sa_sigaction,
+                hangup_disposition,
+                "taking the shutdown signals must leave SIGHUP alone",
+            );
+        }
+    }
+
     /// Sets one signal's disposition for the length of a test and puts back what
     /// was there — so a suite run under `nohup` does not read as a failure.
-    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(unix)]
     struct SignalDispositionSetForOneTest {
         signal: libc::c_int,
         previous: libc::sigaction,
     }
 
-    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(unix)]
     impl SignalDispositionSetForOneTest {
         fn set(signal: libc::c_int, handler: libc::sighandler_t) -> Self {
             let previous = current_disposition_of(signal);
@@ -770,7 +813,7 @@ mod tests {
         }
     }
 
-    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(unix)]
     impl Drop for SignalDispositionSetForOneTest {
         fn drop(&mut self) {
             // SAFETY: restores the disposition this value captured.
@@ -813,7 +856,7 @@ mod tests {
 
     /// Set in the child process the third-interrupt test re-runs itself in,
     /// naming the file it records its stand-in helper's process group in.
-    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(unix)]
     const THIRD_INTERRUPT_CHILD_RECORD_PATH_ENVIRONMENT_VARIABLE: &str =
         "STREAMLIB_TEST_THIRD_INTERRUPT_CHILD_RECORD_PATH";
 
@@ -824,7 +867,7 @@ mod tests {
     /// Run in a child process, because passing is exiting.
     #[test]
     #[serial]
-    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(unix)]
     fn a_third_interrupt_kills_every_helper_process_group_and_exits_with_130() {
         if let Some(record_path) =
             std::env::var_os(THIRD_INTERRUPT_CHILD_RECORD_PATH_ENVIRONMENT_VARIABLE)
@@ -865,7 +908,7 @@ mod tests {
 
     /// The child's half: a stand-in helper in a group of its own, registered,
     /// and three SIGINTs. Never returns — the third one exits the process.
-    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(unix)]
     fn interrupt_this_process_three_times_holding_a_helper_process_group(
         record_path: std::path::PathBuf,
     ) -> ! {
