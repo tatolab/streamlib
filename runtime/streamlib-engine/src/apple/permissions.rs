@@ -404,16 +404,17 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
     use std::sync::{Mutex, mpsc};
 
-    /// A privacy gate whose user never answers: every request is kept and
-    /// none is ever called back — what a prompt nobody has clicked looks like.
-    struct AUserWhoNeverAnswers {
+    /// A privacy gate whose user answers only when the test says so: every
+    /// request is kept, and until then none is called back — what a prompt
+    /// nobody has clicked looks like.
+    struct AUserWhoAnswersOnlyWhenTold {
         device: PrivacyGatedCaptureDevice,
         status: CaptureDeviceAuthorizationStatus,
         requests: AtomicUsize,
         unanswered: Mutex<Vec<CaptureDeviceAuthorizationAnswer>>,
     }
 
-    impl AUserWhoNeverAnswers {
+    impl AUserWhoAnswersOnlyWhenTold {
         fn with_status(status: CaptureDeviceAuthorizationStatus) -> Self {
             Self::of_the(PrivacyGatedCaptureDevice::Camera, status)
         }
@@ -439,7 +440,7 @@ mod tests {
         }
     }
 
-    impl CaptureDeviceAuthorizationAuthority for AUserWhoNeverAnswers {
+    impl CaptureDeviceAuthorizationAuthority for AUserWhoAnswersOnlyWhenTold {
         fn gated_capture_device(&self) -> PrivacyGatedCaptureDevice {
             self.device
         }
@@ -491,7 +492,7 @@ mod tests {
     }
 
     fn ask_the_microphone_user(
-        user: &AUserWhoNeverAnswers,
+        user: &AUserWhoAnswersOnlyWhenTold,
         reminders: &RemindersTheTestBringsDue,
         answers_received: &Arc<Mutex<Vec<bool>>>,
     ) -> CaptureDeviceAuthorizationAtOpen {
@@ -506,7 +507,7 @@ mod tests {
 
     #[test]
     fn an_unanswered_request_schedules_one_reminder_at_the_deadline() {
-        let user = AUserWhoNeverAnswers::of_the(
+        let user = AUserWhoAnswersOnlyWhenTold::of_the(
             PrivacyGatedCaptureDevice::Microphone,
             CaptureDeviceAuthorizationStatus::NotDetermined,
         );
@@ -526,7 +527,7 @@ mod tests {
     /// prompt nobody sees leaves one INFO line and then a silent graph.
     #[test]
     fn a_reminder_due_before_any_answer_warns_once_naming_the_application_and_the_setting() {
-        let user = AUserWhoNeverAnswers::of_the(
+        let user = AUserWhoAnswersOnlyWhenTold::of_the(
             PrivacyGatedCaptureDevice::Microphone,
             CaptureDeviceAuthorizationStatus::NotDetermined,
         );
@@ -552,7 +553,7 @@ mod tests {
 
     #[test]
     fn an_answer_before_the_deadline_silences_the_reminder_and_still_reaches_the_stream() {
-        let user = AUserWhoNeverAnswers::of_the(
+        let user = AUserWhoAnswersOnlyWhenTold::of_the(
             PrivacyGatedCaptureDevice::Microphone,
             CaptureDeviceAuthorizationStatus::NotDetermined,
         );
@@ -575,7 +576,8 @@ mod tests {
             CaptureDeviceAuthorizationStatus::Denied,
             CaptureDeviceAuthorizationStatus::Restricted,
         ] {
-            let user = AUserWhoNeverAnswers::of_the(PrivacyGatedCaptureDevice::Camera, status);
+            let user =
+                AUserWhoAnswersOnlyWhenTold::of_the(PrivacyGatedCaptureDevice::Camera, status);
             let reminders = RemindersTheTestBringsDue::default();
             let _ = authorize_the_capture_device_reminding_the_user_through(
                 &user,
@@ -616,7 +618,7 @@ mod tests {
     /// bound, so waiting fails the test rather than hanging it.
     #[test]
     fn a_pending_request_is_made_once_and_never_waited_on() {
-        let authority = Arc::new(AUserWhoNeverAnswers::with_status(
+        let authority = Arc::new(AUserWhoAnswersOnlyWhenTold::with_status(
             CaptureDeviceAuthorizationStatus::NotDetermined,
         ));
         let (returned, returned_with) = mpsc::channel();
@@ -641,7 +643,7 @@ mod tests {
     #[test]
     fn an_authorized_camera_is_opened_without_asking_again() {
         let authority =
-            AUserWhoNeverAnswers::with_status(CaptureDeviceAuthorizationStatus::Authorized);
+            AUserWhoAnswersOnlyWhenTold::with_status(CaptureDeviceAuthorizationStatus::Authorized);
         assert_eq!(
             authorize_the_capture_device_without_waiting_for_the_user(&authority, Box::new(|_| {}))
                 .map_err(|e| e.to_string()),
@@ -652,7 +654,8 @@ mod tests {
 
     #[test]
     fn a_denied_camera_is_refused_without_asking_again() {
-        let authority = AUserWhoNeverAnswers::with_status(CaptureDeviceAuthorizationStatus::Denied);
+        let authority =
+            AUserWhoAnswersOnlyWhenTold::with_status(CaptureDeviceAuthorizationStatus::Denied);
         assert!(
             authorize_the_capture_device_without_waiting_for_the_user(&authority, Box::new(|_| {}))
                 .is_err()
