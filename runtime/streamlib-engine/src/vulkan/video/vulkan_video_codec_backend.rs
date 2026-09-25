@@ -115,14 +115,11 @@ impl VideoEncodeSession for VulkanVideoEncodeSession {
                 source.width,
                 source.height,
             )?;
-        let packets = self
-            .encoder
-            .encode_source_texture(
-                source_registration.texture(),
-                source_registration.current_layout(),
-                Some(source.timestamp_ns),
-            )
-            .map_err(|encode_failure| Error::GpuError(encode_failure.to_string()))?;
+        let packets = self.encoder.encode_source_texture(
+            source_registration.texture(),
+            source_registration.current_layout(),
+            Some(source.timestamp_ns),
+        )?;
         Ok(packets
             .into_iter()
             .map(|packet| EncodedVideoAccessUnitFromSession {
@@ -144,17 +141,13 @@ impl VideoDecodeSession for VulkanVideoDecodeSession {
     fn decode_annex_b_access_unit(
         &mut self,
         annex_b_access_unit_bytes: &[u8],
-        decoded: &mut Vec<DecodedVideoPictureInPooledPixelBuffer>,
+        decoded_pictures_in_completion_order: &mut Vec<DecodedVideoPictureInPooledPixelBuffer>,
     ) -> Result<()> {
-        let decoded_frames = self
-            .decoder
-            .feed(annex_b_access_unit_bytes)
-            .map_err(|decode_failure| Error::GpuError(decode_failure.to_string()))?;
+        let decoded_frames = self.decoder.feed(annex_b_access_unit_bytes)?;
         for decoded_frame in decoded_frames {
-            decoded.push(stage_decoded_frame_into_pooled_pixel_buffer(
-                &self.gpu_context,
-                decoded_frame,
-            )?);
+            decoded_pictures_in_completion_order.push(
+                stage_decoded_frame_into_pooled_pixel_buffer(&self.gpu_context, decoded_frame)?,
+            );
         }
         Ok(())
     }

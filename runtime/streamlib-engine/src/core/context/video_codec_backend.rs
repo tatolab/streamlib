@@ -128,12 +128,12 @@ pub struct DecodedVideoPictureInPooledPixelBuffer {
 /// A decode session a backend opened.
 pub trait VideoDecodeSession: Send {
     /// Decode one Annex-B access unit, pushing each picture it completed onto
-    /// `decoded` as it completes, so a failure part way through leaves the
-    /// caller holding every picture before it.
+    /// `decoded_pictures_in_completion_order` as it completes, so a failure
+    /// part way through leaves the caller holding every picture before it.
     fn decode_annex_b_access_unit(
         &mut self,
         annex_b_access_unit_bytes: &[u8],
-        decoded: &mut Vec<DecodedVideoPictureInPooledPixelBuffer>,
+        decoded_pictures_in_completion_order: &mut Vec<DecodedVideoPictureInPooledPixelBuffer>,
     ) -> Result<()>;
 
     /// The colour the stream's parsed parameter sets signal, once any have

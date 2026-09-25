@@ -2672,13 +2672,8 @@ impl GpuContext {
     }
 
     /// Mint a hardware video [`SimpleEncoder`](crate::vulkan::video::encode::SimpleEncoder)
-    /// on this context's host device — the modern encoder
-    /// construction path. Builds directly from the host-owned
-    /// `Arc<HostVulkanDevice>` (`self.device.inner`), NOT through the
-    /// retiring `host_vulkan_device_arc` transit that
-    /// `SimpleEncoder::from_full_access` uses. Backs
-    /// `create_encoder_session` (M32 #1259 fill-in,
-    /// #1376).
+    /// on this context's host device, built directly from the host-owned
+    /// `Arc<HostVulkanDevice>` (`self.device.inner`).
     ///
     /// When `prepare_gpu_input` is `true` (the descriptor's
     /// `disable_gpu_input_prealloc == 0`), eagerly runs
@@ -2707,13 +2702,8 @@ impl GpuContext {
     }
 
     /// Mint a hardware video [`SimpleDecoder`](crate::vulkan::video::decode::SimpleDecoder)
-    /// on this context's host device — the modern decoder
-    /// construction path. Builds directly from the host-owned
-    /// `Arc<HostVulkanDevice>` (`self.device.inner`), NOT through the
-    /// retiring `host_vulkan_device_arc` transit that
-    /// `SimpleDecoder::from_full_access` uses. Backs
-    /// `create_decoder_session` (M32 #1259 fill-in,
-    /// #1377).
+    /// on this context's host device, built directly from the host-owned
+    /// `Arc<HostVulkanDevice>` (`self.device.inner`).
     ///
     /// Coded dimensions are auto-detected from the first SPS (query via
     /// [`SimpleDecoder::dimensions`](crate::vulkan::video::decode::SimpleDecoder::dimensions)
@@ -4338,8 +4328,7 @@ impl GpuContextFullAccess {
 
     /// Clone the host's `Arc<HostVulkanDevice>`. Engine-internal
     /// accessor for in-process RHI helpers (subprocess
-    /// escalate handle assignment, the video encode/decode
-    /// `from_full_access` constructors). Consumer GPU code builds
+    /// escalate handle assignment). Consumer GPU code builds
     /// through the FullAccess primitives, never the raw device.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn host_vulkan_device_arc(&self) -> Result<Arc<crate::vulkan::rhi::HostVulkanDevice>> {

@@ -118,6 +118,12 @@ impl From<crate::core::Error> for VideoError {
     }
 }
 
+impl From<VideoError> for crate::core::Error {
+    fn from(e: VideoError) -> Self {
+        Self::GpuError(e.to_string())
+    }
+}
+
 pub type VideoResult<T> = Result<T, VideoError>;
 
 impl VideoContext {

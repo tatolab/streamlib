@@ -81,6 +81,9 @@ pub struct DecodedFrameAwaitingPublication {
 /// and specialised only by its [`HardwareVideoCodecProcessorIdentity`].
 pub struct EncodedFrameToPublishedSurfaceDecoder<Identity: HardwareVideoCodecProcessorIdentity> {
     decode_session: Option<Box<dyn VideoDecodeSession>>,
+    /// Where the session pushes the pictures one bag completes; kept across
+    /// bags so the hot path reuses its capacity.
+    decoded_pictures_from_session: Vec<DecodedVideoPictureInPooledPixelBuffer>,
     sync_point_gate: EncodedStreamSyncPointGate,
     stream_re_entry_report_schedule: Option<CumulativeCountReportThreshold>,
     /// The coded extent the minted session's parameter sets describe, learned
@@ -107,6 +110,7 @@ impl<Identity: HardwareVideoCodecProcessorIdentity> Default
     fn default() -> Self {
         Self {
             decode_session: None,
+            decoded_pictures_from_session: Vec::new(),
             sync_point_gate: EncodedStreamSyncPointGate::default(),
             stream_re_entry_report_schedule: None,
             session_coded_extent: None,
@@ -211,11 +215,10 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
                 Identity::PROCESSOR_NAME
             ))
         })?;
-        let mut decoded_pictures = Vec::new();
         let decode_outcome = session
             .decode_annex_b_access_unit(
                 &encoded_frame.annex_b_access_unit_bytes,
-                &mut decoded_pictures,
+                &mut self.decoded_pictures_from_session,
             )
             .map_err(|decode_failure| {
                 Error::Runtime(format!(
@@ -231,13 +234,15 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
             encoded_frame.color.as_ref(),
         );
 
-        staged.extend(decoded_pictures.into_iter().map(|decoded_picture| {
+        let mut decoded_pictures = std::mem::take(&mut self.decoded_pictures_from_session);
+        staged.extend(decoded_pictures.drain(..).map(|decoded_picture| {
             self.decoded_frame_awaiting_publication(
                 decoded_picture,
                 published_color.clone(),
                 frame_header_timestamp_ns,
             )
         }));
+        self.decoded_pictures_from_session = decoded_pictures;
         decode_outcome
     }
 

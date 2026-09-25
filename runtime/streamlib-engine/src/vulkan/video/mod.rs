@@ -7,10 +7,8 @@
 //! not raw Vulkan device / queue / allocator handles.
 //!
 //! Origin: ported from NVIDIA nvpro-samples
-//! (<https://github.com/nvpro-samples/vk_video_samples>). The standalone
-//! `SimpleEncoder::new` / `SimpleDecoder::new` self-owned-device paths
-//! that originated with the port are scheduled for removal in favor of
-//! the engine RHI-integrated `from_full_access` constructors.
+//! (<https://github.com/nvpro-samples/vk_video_samples>). Sessions are
+//! minted on the host device only, behind the video codec seam.
 
 // --- Public API ---
 pub mod decode;
