@@ -462,20 +462,63 @@ fn refresh_reactive_loop_waiter(
     }
 }
 
-/// Tag the listener fd's registration carries.
+/// Which of the waiter's two fds a readiness-queue registration watches.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-const LISTENER_FD_TAG: u64 = 0;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReactiveLoopFdRegistration {
+    InputListener,
+    ShutdownWake,
+}
 
-/// Tag the shutdown wake fd's registration carries; never equal to
-/// [`LISTENER_FD_TAG`].
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-const SHUTDOWN_WAKE_FD_TAG: u64 = u64::MAX;
+impl ReactiveLoopFdRegistration {
+    /// The value carried in the kernel's per-registration user data.
+    fn user_data(self) -> u64 {
+        match self {
+            Self::InputListener => 0,
+            Self::ShutdownWake => 1,
+        }
+    }
+
+    fn from_user_data(user_data: u64) -> Self {
+        if user_data == Self::ShutdownWake.user_data() {
+            Self::ShutdownWake
+        } else {
+            Self::InputListener
+        }
+    }
+}
+
+/// Which registrations one wait found readable; neither means it timed out.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[derive(Debug, Default, Clone, Copy)]
+struct ReactiveLoopReadableRegistrations {
+    input_listener: bool,
+    shutdown_wake: bool,
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl ReactiveLoopReadableRegistrations {
+    fn mark_readable(&mut self, registration: ReactiveLoopFdRegistration) {
+        match registration {
+            ReactiveLoopFdRegistration::InputListener => self.input_listener = true,
+            ReactiveLoopFdRegistration::ShutdownWake => self.shutdown_wake = true,
+        }
+    }
+}
 
 /// The reactive runner's readiness queue — an epoll set on Linux, a kqueue on
-/// macOS — watching the iceoryx2 listener fd plus an optional shutdown wake fd.
+/// macOS. Level-triggered on both, so an undrained fd wakes every wait.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+struct ReactiveLoopReadinessQueue {
+    readiness_queue_fd: OwnedFd,
+}
+
+/// The waiter the reactive runner blocks in: its readiness queue watching the
+/// iceoryx2 listener fd plus an optional shutdown wake fd.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 struct ReactiveLoopFdWaiter {
-    readiness_queue_fd: OwnedFd,
+    readiness_queue: ReactiveLoopReadinessQueue,
     /// Which of the destination's listeners this waiter registered, by the
     /// generation the mailboxes assigned it. A listener created after the last
     /// inbound link went away is a new fd the readiness queue never saw.
@@ -494,24 +537,24 @@ const REACTIVE_WAIT_BOUND: std::time::Duration = std::time::Duration::from_milli
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 impl ReactiveLoopFdWaiter {
     fn new(
-        listener_fd: i32,
+        listener_fd: std::os::fd::RawFd,
         listener_generation: u64,
         shutdown_wake_fd: Option<OwnedFd>,
     ) -> std::io::Result<Self> {
         use std::os::fd::AsRawFd;
 
-        let readiness_queue_fd = create_readiness_queue()?;
-        register_readable_fd(readiness_queue_fd.as_raw_fd(), listener_fd, LISTENER_FD_TAG)?;
+        let readiness_queue = ReactiveLoopReadinessQueue::create()?;
+        readiness_queue
+            .register_readable_fd(listener_fd, ReactiveLoopFdRegistration::InputListener)?;
         if let Some(ref wake_fd) = shutdown_wake_fd {
-            register_readable_fd(
-                readiness_queue_fd.as_raw_fd(),
+            readiness_queue.register_readable_fd(
                 wake_fd.as_raw_fd(),
-                SHUTDOWN_WAKE_FD_TAG,
+                ReactiveLoopFdRegistration::ShutdownWake,
             )?;
         }
 
         Ok(Self {
-            readiness_queue_fd,
+            readiness_queue,
             listener_generation,
             shutdown_wake_fd,
         })
@@ -526,14 +569,7 @@ impl ReactiveLoopFdWaiter {
     /// Block until a registered fd is readable, a signal interrupts the call,
     /// or `wait_bound` elapses with nothing to report.
     fn wait(&self, wait_bound: std::time::Duration) -> ReactiveLoopWakeOutcome {
-        use std::os::fd::AsRawFd;
-
-        let mut ready_tags = [LISTENER_FD_TAG; 2];
-        match wait_for_readable_fd_tags(
-            self.readiness_queue_fd.as_raw_fd(),
-            &mut ready_tags,
-            wait_bound,
-        ) {
+        match self.readiness_queue.wait_for_readable(wait_bound) {
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {
                 ReactiveLoopWakeOutcome::Interrupted
             }
@@ -541,156 +577,178 @@ impl ReactiveLoopFdWaiter {
                 tracing::warn!("reactive runner wait failed: {}", e);
                 ReactiveLoopWakeOutcome::Error
             }
-            Ok(0) => ReactiveLoopWakeOutcome::TimedOut,
             // Shutdown takes priority over notify when both fired in the same
             // wait — let the runner exit instead of draining one more frame.
-            Ok(ready_count) if ready_tags[..ready_count].contains(&SHUTDOWN_WAKE_FD_TAG) => {
-                ReactiveLoopWakeOutcome::Shutdown
+            Ok(readable) if readable.shutdown_wake => ReactiveLoopWakeOutcome::Shutdown,
+            Ok(readable) if readable.input_listener => ReactiveLoopWakeOutcome::Notified,
+            Ok(_) => ReactiveLoopWakeOutcome::TimedOut,
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl ReactiveLoopReadinessQueue {
+    fn create() -> std::io::Result<Self> {
+        use std::os::fd::FromRawFd;
+        // SAFETY: epoll_create1 returns -1 on failure; checked below.
+        let raw_epoll_fd = unsafe { libc::epoll_create1(libc::EPOLL_CLOEXEC) };
+        if raw_epoll_fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: raw_epoll_fd was just opened here and nothing else owns it.
+        let readiness_queue_fd = unsafe { OwnedFd::from_raw_fd(raw_epoll_fd) };
+        Ok(Self { readiness_queue_fd })
+    }
+
+    fn register_readable_fd(
+        &self,
+        watched_fd: std::os::fd::RawFd,
+        registration: ReactiveLoopFdRegistration,
+    ) -> std::io::Result<()> {
+        use std::os::fd::AsRawFd;
+        let mut event = libc::epoll_event {
+            events: libc::EPOLLIN as u32,
+            u64: registration.user_data(),
+        };
+        // SAFETY: epoll_ctl with EPOLL_CTL_ADD takes a pointer to a valid
+        // epoll_event for the duration of the call.
+        let result = unsafe {
+            libc::epoll_ctl(
+                self.readiness_queue_fd.as_raw_fd(),
+                libc::EPOLL_CTL_ADD,
+                watched_fd,
+                &mut event,
+            )
+        };
+        if result < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    fn wait_for_readable(
+        &self,
+        wait_bound: std::time::Duration,
+    ) -> std::io::Result<ReactiveLoopReadableRegistrations> {
+        use std::os::fd::AsRawFd;
+        let mut events = [libc::epoll_event { events: 0, u64: 0 }; 2];
+        let timeout_ms = wait_bound.as_millis().min(i32::MAX as u128) as i32;
+        // SAFETY: epoll_wait writes up to events.len() events into the buffer.
+        let ready_count = unsafe {
+            libc::epoll_wait(
+                self.readiness_queue_fd.as_raw_fd(),
+                events.as_mut_ptr(),
+                events.len() as i32,
+                timeout_ms,
+            )
+        };
+        if ready_count < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let mut readable = ReactiveLoopReadableRegistrations::default();
+        for event in &events[..ready_count as usize] {
+            readable.mark_readable(ReactiveLoopFdRegistration::from_user_data(event.u64));
+        }
+        Ok(readable)
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl ReactiveLoopReadinessQueue {
+    fn create() -> std::io::Result<Self> {
+        use std::os::fd::{AsRawFd, FromRawFd};
+        // SAFETY: kqueue returns -1 on failure; checked below.
+        let raw_kqueue_fd = unsafe { libc::kqueue() };
+        if raw_kqueue_fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // SAFETY: raw_kqueue_fd was just opened here and nothing else owns it.
+        let readiness_queue_fd = unsafe { OwnedFd::from_raw_fd(raw_kqueue_fd) };
+        // Darwin has no `kqueue1`, so close-on-exec is set before the fd is used.
+        // SAFETY: fcntl on a live fd this function owns.
+        if unsafe {
+            libc::fcntl(
+                readiness_queue_fd.as_raw_fd(),
+                libc::F_SETFD,
+                libc::FD_CLOEXEC,
+            )
+        } < 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(Self { readiness_queue_fd })
+    }
+
+    /// No `EV_CLEAR`, which is what keeps the registration level-triggered.
+    fn register_readable_fd(
+        &self,
+        watched_fd: std::os::fd::RawFd,
+        registration: ReactiveLoopFdRegistration,
+    ) -> std::io::Result<()> {
+        use std::os::fd::AsRawFd;
+        let change = libc::kevent {
+            ident: watched_fd as libc::uintptr_t,
+            filter: libc::EVFILT_READ,
+            flags: libc::EV_ADD,
+            fflags: 0,
+            data: 0,
+            udata: std::ptr::without_provenance_mut(registration.user_data() as usize),
+        };
+        // SAFETY: one valid change in, no event slots out; a failed
+        // registration returns -1 when the event list is empty.
+        let result = unsafe {
+            libc::kevent(
+                self.readiness_queue_fd.as_raw_fd(),
+                &change,
+                1,
+                std::ptr::null_mut(),
+                0,
+                std::ptr::null(),
+            )
+        };
+        if result < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    fn wait_for_readable(
+        &self,
+        wait_bound: std::time::Duration,
+    ) -> std::io::Result<ReactiveLoopReadableRegistrations> {
+        use std::os::fd::AsRawFd;
+        let timeout = libc::timespec {
+            tv_sec: wait_bound.as_secs().min(libc::time_t::MAX as u64) as libc::time_t,
+            tv_nsec: wait_bound.subsec_nanos() as libc::c_long,
+        };
+        // SAFETY: an all-zero `kevent` is a valid out-slot.
+        let mut events: [libc::kevent; 2] = unsafe { std::mem::zeroed() };
+        // SAFETY: kevent writes up to events.len() events into the buffer; the
+        // timeout is a valid stack slot.
+        let ready_count = unsafe {
+            libc::kevent(
+                self.readiness_queue_fd.as_raw_fd(),
+                std::ptr::null(),
+                0,
+                events.as_mut_ptr(),
+                events.len() as libc::c_int,
+                &timeout,
+            )
+        };
+        if ready_count < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let mut readable = ReactiveLoopReadableRegistrations::default();
+        for event in &events[..ready_count as usize] {
+            if event.flags & libc::EV_ERROR != 0 {
+                return Err(std::io::Error::from_raw_os_error(event.data as i32));
             }
-            Ok(_) => ReactiveLoopWakeOutcome::Notified,
+            readable.mark_readable(ReactiveLoopFdRegistration::from_user_data(
+                event.udata.addr() as u64,
+            ));
         }
+        Ok(readable)
     }
-}
-
-#[cfg(target_os = "linux")]
-fn create_readiness_queue() -> std::io::Result<OwnedFd> {
-    use std::os::fd::FromRawFd;
-    // SAFETY: epoll_create1 returns -1 on failure; checked below.
-    let raw_epoll_fd = unsafe { libc::epoll_create1(libc::EPOLL_CLOEXEC) };
-    if raw_epoll_fd < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    // SAFETY: raw_epoll_fd was just opened here and nothing else owns it.
-    Ok(unsafe { OwnedFd::from_raw_fd(raw_epoll_fd) })
-}
-
-/// Level-triggered, like the kqueue arm, so an undrained fd wakes every wait.
-#[cfg(target_os = "linux")]
-fn register_readable_fd(epoll_fd: i32, fd: i32, tag: u64) -> std::io::Result<()> {
-    let mut event = libc::epoll_event {
-        events: libc::EPOLLIN as u32,
-        u64: tag,
-    };
-    // SAFETY: epoll_ctl with EPOLL_CTL_ADD takes a pointer to a valid
-    // epoll_event for the duration of the call.
-    if unsafe { libc::epoll_ctl(epoll_fd, libc::EPOLL_CTL_ADD, fd, &mut event) } < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(())
-}
-
-/// Writes the tag of each readable fd into `ready_tags` and returns how many.
-#[cfg(target_os = "linux")]
-fn wait_for_readable_fd_tags(
-    epoll_fd: i32,
-    ready_tags: &mut [u64; 2],
-    wait_bound: std::time::Duration,
-) -> std::io::Result<usize> {
-    let mut events = [libc::epoll_event { events: 0, u64: 0 }; 2];
-    let timeout_ms = wait_bound.as_millis().min(i32::MAX as u128) as i32;
-    // SAFETY: epoll_wait writes up to events.len() events into the buffer.
-    let ready_count = unsafe {
-        libc::epoll_wait(
-            epoll_fd,
-            events.as_mut_ptr(),
-            events.len() as i32,
-            timeout_ms,
-        )
-    };
-    if ready_count < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    let ready_count = ready_count as usize;
-    for (ready_tag, event) in ready_tags.iter_mut().zip(&events[..ready_count]) {
-        *ready_tag = event.u64;
-    }
-    Ok(ready_count)
-}
-
-#[cfg(target_os = "macos")]
-fn create_readiness_queue() -> std::io::Result<OwnedFd> {
-    use std::os::fd::{AsRawFd, FromRawFd};
-    // SAFETY: kqueue returns -1 on failure; checked below.
-    let raw_kqueue_fd = unsafe { libc::kqueue() };
-    if raw_kqueue_fd < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    // SAFETY: raw_kqueue_fd was just opened here and nothing else owns it.
-    let kqueue_fd = unsafe { OwnedFd::from_raw_fd(raw_kqueue_fd) };
-    // Darwin has no `kqueue1`, so close-on-exec is set before the fd is used.
-    // SAFETY: fcntl on a live fd this function owns.
-    if unsafe { libc::fcntl(kqueue_fd.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(kqueue_fd)
-}
-
-/// No `EV_CLEAR`: level-triggered, like the epoll arm, so an undrained fd
-/// wakes every wait.
-#[cfg(target_os = "macos")]
-fn register_readable_fd(kqueue_fd: i32, fd: i32, tag: u64) -> std::io::Result<()> {
-    let change = libc::kevent {
-        ident: fd as libc::uintptr_t,
-        filter: libc::EVFILT_READ,
-        flags: libc::EV_ADD,
-        fflags: 0,
-        data: 0,
-        udata: tag as usize as *mut libc::c_void,
-    };
-    // SAFETY: one valid change in, no event slots out; a failed registration
-    // returns -1 when the event list is empty.
-    let result = unsafe {
-        libc::kevent(
-            kqueue_fd,
-            &change,
-            1,
-            std::ptr::null_mut(),
-            0,
-            std::ptr::null(),
-        )
-    };
-    if result < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(())
-}
-
-/// Writes the tag of each readable fd into `ready_tags` and returns how many.
-#[cfg(target_os = "macos")]
-fn wait_for_readable_fd_tags(
-    kqueue_fd: i32,
-    ready_tags: &mut [u64; 2],
-    wait_bound: std::time::Duration,
-) -> std::io::Result<usize> {
-    let timeout = libc::timespec {
-        tv_sec: wait_bound.as_secs().min(libc::time_t::MAX as u64) as libc::time_t,
-        tv_nsec: wait_bound.subsec_nanos() as libc::c_long,
-    };
-    // SAFETY: an all-zero `kevent` is a valid out-slot.
-    let mut events: [libc::kevent; 2] = unsafe { std::mem::zeroed() };
-    // SAFETY: kevent writes up to events.len() events into the buffer; the
-    // timeout is a valid stack slot.
-    let ready_count = unsafe {
-        libc::kevent(
-            kqueue_fd,
-            std::ptr::null(),
-            0,
-            events.as_mut_ptr(),
-            events.len() as libc::c_int,
-            &timeout,
-        )
-    };
-    if ready_count < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    let ready_count = ready_count as usize;
-    for (ready_tag, event) in ready_tags.iter_mut().zip(&events[..ready_count]) {
-        if event.flags & libc::EV_ERROR != 0 {
-            return Err(std::io::Error::from_raw_os_error(event.data as i32));
-        }
-        *ready_tag = event.udata as usize as u64;
-    }
-    Ok(ready_count)
 }
 
 fn run_manual_mode(
@@ -1517,6 +1575,7 @@ mod tests {
         let first_readiness_queue_fd = waiter
             .as_ref()
             .expect("a waiter for the first listener")
+            .readiness_queue
             .readiness_queue_fd
             .as_raw_fd();
         assert!(
@@ -1535,7 +1594,7 @@ mod tests {
         assert_eq!(
             waiter
                 .as_ref()
-                .map(|registered| registered.readiness_queue_fd.as_raw_fd()),
+                .map(|registered| registered.readiness_queue.readiness_queue_fd.as_raw_fd()),
             Some(first_readiness_queue_fd),
             "the same listener keeps the same waiter"
         );
