@@ -806,7 +806,8 @@ jobs:
           # Compiled but not run: the AVFoundation arm against a real camera,
           # `CameraSource` → `DisplayWindow` on the window server, and the
           # CoreAudio arm against real audio devices — including its
-          # permission-flow tests in the engine's own unit tests — need a
+          # permission-flow and device-following tests in the engine's own
+          # unit tests — need a
           # camera, a microphone, their access grants and a GPU no runner has.
           # Building them here is what stops them rotting between rig runs.
           cargo test --locked -p streamlib-engine -p streamlib-media-builtins \
