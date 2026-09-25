@@ -142,8 +142,10 @@ pub fn is_runtime_shutdown_forced() -> bool {
 ///
 /// Only whoever owns a run loop may call it, once its run has ended, so the
 /// requests it observed neither end nor escalate the next run in the same
-/// process.
+/// process. Never returns while a third interrupt or the teardown watchdog is
+/// ending the process, so the status that ends it is theirs.
 pub fn take_runtime_shutdown_escalation() -> RuntimeShutdownEscalation {
+    crate::core::runtime::park_forever_if_the_process_is_ending_at_once();
     RuntimeShutdownEscalation::from_stored(RUNTIME_SHUTDOWN_ESCALATION.swap(
         RuntimeShutdownEscalation::NotRequested as u8,
         Ordering::SeqCst,

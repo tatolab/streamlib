@@ -31,7 +31,10 @@ pub use crate::core::compiler::{
 };
 pub use crate::core::signals::ScopedShutdownSignalOwnership;
 pub use capability_extensions::{LoadedCapabilityExtension, LoadedCapabilityExtensionRegistry};
-pub(crate) use end_the_process_at_once::kill_every_helper_process_group_and_end_the_process_at_once;
+pub(crate) use end_the_process_at_once::{
+    kill_every_helper_process_group_and_end_the_process_at_once,
+    park_forever_if_the_process_is_ending_at_once,
+};
 pub use engine_teardown_watchdog::{
     ArmedEngineTeardownWatchdog, EXIT_STATUS_OF_A_TEARDOWN_THE_WATCHDOG_ENDED,
     note_what_the_engine_teardown_is_waiting_on,
