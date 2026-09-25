@@ -18,7 +18,6 @@ use texture::an_acquired_device_texture_carries_no_exportable_fd_error;
 
 mod export_staging;
 mod foreign_dma_buf;
-mod processor_owned_window;
 mod texture;
 
 pub(crate) use export_staging::{

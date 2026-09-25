@@ -51,6 +51,8 @@ mod gpu_kernels;
 mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod processor_owned_window;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) use gpu_kernels::{

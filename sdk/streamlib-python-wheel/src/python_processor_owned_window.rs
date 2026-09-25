@@ -111,12 +111,12 @@ impl PythonProcessorOwnedWindowEvents {
 /// named frames per frame in `process()`. No window handle, swapchain or
 /// present thread reaches Python — the object is the handle.
 ///
-/// Defined on every platform so the stub's surface is honest everywhere; off
-/// Linux it is unconstructible, because `create_window` refuses before
-/// reaching it.
+/// Defined on every platform so the stub's surface is honest everywhere; where
+/// the engine has no present loop it is unconstructible, because
+/// `create_window` refuses before reaching it.
 #[pyclass(name = "ProcessorOwnedWindow", module = "streamlib", frozen)]
 pub(crate) struct PythonProcessorOwnedWindow {
-    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
+    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
     window_id: String,
     window_title: String,
     /// The engine's closed state as the last answered op reported it. Sticky,
@@ -128,7 +128,7 @@ pub(crate) struct PythonProcessorOwnedWindow {
     /// ordering would imply a happens-before a reader would look for and not
     /// find.
     window_is_closed: AtomicBool,
-    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
+    #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
     helper_process_exchange_client: Arc<HelperProcessGpuExchangeClient>,
 }
 
@@ -175,7 +175,7 @@ impl PythonProcessorOwnedWindow {
         python: Python<'_>,
         frame_or_surface_to_show: &Bound<'_, PyAny>,
     ) -> PyResult<()> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             // Built before the closed window is answered, and deliberately:
             // the no-op belongs to the user's gesture, not to an argument that
@@ -192,7 +192,7 @@ impl PythonProcessorOwnedWindow {
                 .store(window_is_closed, Ordering::Relaxed);
             Ok(())
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
             let _ = (python, frame_or_surface_to_show);
             Err(window_unreachable_from_a_helper_process_error())
@@ -205,7 +205,7 @@ impl PythonProcessorOwnedWindow {
     /// Polling is optional — an owner that never drains still presents; it
     /// only learns of a resize or a close from the next `show()`.
     fn drain_events(&self, python: Python<'_>) -> PyResult<PythonProcessorOwnedWindowEvents> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             let drained = self
                 .helper_process_exchange_client
@@ -214,7 +214,7 @@ impl PythonProcessorOwnedWindow {
                 .store(drained.window_is_closed, Ordering::Relaxed);
             Ok(drained)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
             let _ = python;
             Err(window_unreachable_from_a_helper_process_error())
@@ -226,7 +226,7 @@ impl PythonProcessorOwnedWindow {
     /// Never an error for a window already closed, and never required: the
     /// engine closes what a processor still owns at teardown.
     fn close(&self, python: Python<'_>) -> PyResult<()> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             let window_is_closed = self
                 .helper_process_exchange_client
@@ -235,7 +235,7 @@ impl PythonProcessorOwnedWindow {
                 .store(window_is_closed, Ordering::Relaxed);
             Ok(())
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         {
             let _ = python;
             Err(window_unreachable_from_a_helper_process_error())
@@ -253,7 +253,7 @@ impl PythonProcessorOwnedWindow {
 
 impl PythonProcessorOwnedWindow {
     /// The object handed back to a `setup()` hook whose request was granted.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) fn over_the_minted_window(
         window_id: String,
         window_title: String,
@@ -285,11 +285,10 @@ impl PythonProcessorOwnedWindowEvents {
     }
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn window_unreachable_from_a_helper_process_error() -> PyErr {
     pyo3::exceptions::PyRuntimeError::new_err(
-        "a processor-owned window is not reachable from this platform: the engine's window \
-         event pump and its present loop are Linux-only.",
+        "a processor-owned window has no present loop on this platform",
     )
 }
 
