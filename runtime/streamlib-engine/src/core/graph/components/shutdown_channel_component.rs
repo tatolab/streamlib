@@ -142,7 +142,10 @@ impl ShutdownWakeDescriptor {
         {
             return Ok(());
         }
-        (&self.pipe_write_end).write_all(&[1])
+        (&self.pipe_write_end).write_all(&[1]).inspect_err(|_| {
+            self.already_signalled
+                .store(false, std::sync::atomic::Ordering::Release)
+        })
     }
 
     fn try_clone_readable_end(&self) -> std::io::Result<OwnedFd> {

@@ -1499,8 +1499,7 @@ mod tests {
 
     /// The one cross-thread check: a shutdown made visible only on the wake
     /// fd ends a reactive loop blocked in its wait. The crossbeam half of the
-    /// shutdown is withheld, so the channel-poll fallback — the loop every
-    /// macOS reactive processor ran before its kqueue arm — never exits here.
+    /// shutdown is withheld, so the channel-poll fallback never exits here.
     /// The deadline is generous and nothing is asserted about latency.
     #[test]
     fn a_shutdown_seen_only_on_the_wake_fd_ends_a_loop_blocked_in_its_wait() {

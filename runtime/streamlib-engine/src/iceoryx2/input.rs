@@ -940,7 +940,7 @@ impl InputMailboxesInner {
     ///
     /// The fd is owned by the [`Listener`] — callers must NOT `close()` it and
     /// MUST stop using it before [`InputMailboxesInner`] is dropped. Suitable
-    /// for registering with `epoll_ctl(EPOLL_CTL_ADD)` or `poll` from the
+    /// for registering with an epoll set, a kqueue, or `poll` from the
     /// processor's execution thread — never `select`, which refuses a
     /// descriptor of 1024 or above.
     pub fn listener_fd(&self) -> Option<i32> {
