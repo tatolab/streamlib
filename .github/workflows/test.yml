@@ -677,40 +677,15 @@ jobs:
           # surface and its fds. GPU-free — the surface is a memfd.
           cargo test --locked -p streamlib-engine \
             --test surface_share_subprocess_crash
-          # The mesh's own proof, and the only thing in CI that runs two
-          # runtimes at once: two OS processes under one test mesh name find
-          # each other by pinned multicast and by explicit QUIC and TCP peers,
-          # a peer that leaves is gone from `graph`, two mesh names see nothing
-          # of each other, and a taken listen endpoint gives a local-only
-          # runtime that is still constructed. GPU-free — every arm constructs
-          # a `Runner` and never starts it.
+          # The multi-process mesh end-to-end suites, compiled but not run: real
+          # runtimes in separate processes over Zenoh on loopback are a local
+          # validation, never a merge gate (docs/testing-hardware.md). Building
+          # them here is what stops them rotting between local runs.
           cargo test --locked -p streamlib-engine \
-            --test runtime_mesh_two_processes
-          # The cross-runtime-link proof, and the other CI test that runs two
-          # runtimes at once: one runtime pulls a port of another over the
-          # mesh, bags cross byte-equal under the stamp their producer wrote, a
-          # source holds no egress until somebody reads its port and loses it
-          # when the last reader leaves, a source whose egress cannot take a
-          # destination slot settles to rendering none rather than to one it is
-          # not sending and its reader's link names that refusal in the source's
-          # own words while staying non-final, a source that offers a port it
-          # cannot read tells its reader that too, a link named before its runtime
-          # exists waits and then wires, and a killed source returns the link
-          # to waiting until it comes back. GPU-free — neither peer builds a
-          # `Runner`, because `start()` needs a GPU.
-          cargo test --locked -p streamlib-engine \
-            --test cross_runtime_links_two_processes
-          # The link-request proof, and the only thing in CI that runs *three*
-          # runtimes at once: one runtime pushes its own output into another's
-          # input, a third wires two it is not part of, a request naming a
-          # processor the answering runtime lacks comes back refused by name, a
-          # runtime that is present and silent leaves the request unanswered
-          # rather than refused, an absent one's request is sent when it
-          # appears, a cancelled one never is, and a third runtime's disconnect
-          # reaches the link. GPU-free — every peer builds a `Runner` and never
-          # starts it, because a request is applied against a graph.
-          cargo test --locked -p streamlib-engine \
-            --test cross_runtime_link_requests_two_processes
+            --features multi-process-mesh-e2e-tests \
+            --test runtime_mesh_two_processes \
+            --test cross_runtime_links_two_processes \
+            --test cross_runtime_link_requests_two_processes --no-run
           # streamlib-consumer-rhi was reached by no cargo invocation here for
           # the same reason the built-ins were: the clippy step builds default
           # targets and never its test target. Its unit tests are the no-GPU
@@ -819,15 +794,15 @@ jobs:
           # death seen by the other. IOSurface and Mach need no GPU.
           cargo test --locked -p streamlib-surface-client
           cargo test --locked -p streamlib-engine --test surface_share_over_raw_mach
-          # The mesh on macOS, the same three proofs the Linux job runs: two and
-          # three runtimes in separate processes find each other by pinned
-          # loopback multicast and by explicit peers, a dead runtime's name is
-          # reclaimed on this boot session and a live one's is refused, and bags
-          # cross byte-equal. GPU-free — no peer starts a `Runner`.
+          # The multi-process mesh end-to-end suites, compiled but not run: real
+          # runtimes in separate processes over Zenoh on loopback are a local
+          # validation, never a merge gate (docs/testing-hardware.md). Building
+          # them here is what stops them rotting between local runs.
           cargo test --locked -p streamlib-engine \
+            --features multi-process-mesh-e2e-tests \
             --test runtime_mesh_two_processes \
             --test cross_runtime_links_two_processes \
-            --test cross_runtime_link_requests_two_processes
+            --test cross_runtime_link_requests_two_processes --no-run
           # Compiled but not run: the AVFoundation arm against a real camera,
           # and `CameraSource` → `DisplayWindow` on the window server, need a
           # camera, camera access and a GPU no runner has. Building them here

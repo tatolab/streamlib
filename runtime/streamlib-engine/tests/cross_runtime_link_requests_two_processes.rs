@@ -10,8 +10,8 @@
 //! because "a runtime that is neither end wired them" cannot be checked with
 //! two.
 //!
-//! GPU-free: every peer builds a `Runner` and never starts it. `start()` needs
-//! a GPU and CI has none, and a link request is applied against a graph rather
+//! GPU-free: every peer builds a `Runner` and never starts it, and a link
+//! request is applied against a graph rather
 //! than against running processors — which is exactly why `connect` applying it
 //! is provable here at all.
 //!
@@ -19,6 +19,9 @@
 //! loopback port and its own iceoryx2 domain. The arms at once would put a
 //! dozen runtimes with real network endpoints on one loopback interface, which
 //! tests the harness rather than the engine.
+//!
+//! A local end-to-end validation behind `multi-process-mesh-e2e-tests`, never a
+//! merge gate — process start-up and discovery are not deterministic.
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};

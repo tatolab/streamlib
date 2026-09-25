@@ -16,7 +16,9 @@
 //! tests the harness rather than the engine.
 //!
 //! GPU-free: neither peer builds a `Runner`, because `Runner::start()` needs a
-//! GPU and CI has none. Each stands up the mesh half a runtime stands up, over
+//! GPU. A local end-to-end validation behind `multi-process-mesh-e2e-tests`,
+//! never a merge gate — process start-up and discovery are not deterministic.
+//! Each stands up the mesh half a runtime stands up, over
 //! a real iceoryx2 channel and a real Zenoh session. Each arm takes its own mesh
 //! name, so arms never see each other even while the transport connects them,
 //! and multicast is pinned to `127.0.0.1` so a test never joins whatever network
@@ -817,14 +819,14 @@ const HOW_MANY_REPORTS_A_SOURCES_RENDER_IS_READ_OVER: usize = 10;
 ///
 /// The refusal is the ticket's own repro and the readiest one to stage: a
 /// channel's destination slots are fixed when it is created, so a source holding
-/// every one of them leaves none for the egress. Nothing else in CI drives an
+/// every one of them leaves none for the egress. Nothing else drives an
 /// egress that fails at all — the unit tests feed the table's two maps directly,
 /// which is what let this survive the surface it shipped on.
 ///
 /// The reader's half is #2379: until it, the only account of the refusal was in
 /// the *sending* runtime's log, and the reading runtime's link said the source
 /// offered the port and was not sending it — true, and indistinguishable from a
-/// source still coming up. Nothing else in CI carries a reason across the mesh
+/// source still coming up. Nothing else carries a reason across the mesh
 /// for a port a runtime does offer.
 ///
 /// Mental-revert: stop the egress thread saying it ended, and the source renders

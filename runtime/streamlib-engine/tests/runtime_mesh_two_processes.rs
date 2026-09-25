@@ -4,8 +4,9 @@
 //! Two runtimes, two OS processes, one mesh — the proof the mesh exists at all,
 //! and that two of them never share one name while both are live.
 //!
-//! GPU-free: every arm constructs a `Runner` and never starts it, so this runs
-//! in CI. Each arm takes its own mesh name, so arms never see each other even
+//! GPU-free: every arm constructs a `Runner` and never starts it. A local
+//! end-to-end validation behind `multi-process-mesh-e2e-tests`, never a merge
+//! gate — process start-up and discovery are not deterministic. Each arm takes its own mesh name, so arms never see each other even
 //! while the transport connects them, and multicast is pinned to `127.0.0.1`
 //! so a test never joins whatever network the machine is on.
 

@@ -2695,7 +2695,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::resolved_runtime_mesh_configuration::tests::the_zenoh_configuration_carries_peer_mode_and_exactly_these_endpoints -->
   <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::capability_extension_and_mesh_rendering_tests::a_local_only_runtime_renders_the_reason_its_session_did_not_open -->
   <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::capability_extension_and_mesh_rendering_tests::an_isolated_runtime_renders_an_open_session_with_no_peers_and_no_reason -->
-  <!-- verify: cargo test -p streamlib-engine --test runtime_mesh_two_processes -->
+  <!-- verify: cargo test -p streamlib-engine --features multi-process-mesh-e2e-tests --test runtime_mesh_two_processes -->
 - **DECIDED** — A runtime's name and mesh come from its constructor, its environment or the
   CLI, and nowhere else. Five optional values configure it — the runtime name, the mesh name,
   peer endpoints, listen endpoints and whether multicast discovery runs — reachable four ways:
@@ -2738,7 +2738,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   fixture runs a multicast arm beside its explicit-peer arms, with scouting pinned to
   loopback.
   [runtime-mesh — SHIPPED #2283]
-  <!-- verify: cargo test -p streamlib-engine --test runtime_mesh_two_processes two_runtimes_discovering_by_multicast_each_list_the_other -->
+  <!-- verify: cargo test -p streamlib-engine --features multi-process-mesh-e2e-tests --test runtime_mesh_two_processes two_runtimes_discovering_by_multicast_each_list_the_other -->
   <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::capability_extension_and_mesh_rendering_tests::a_peer_that_has_not_answered_still_deserializes_beside_one_that_has -->
 - **DECIDED** — Everything a runtime puts on the mesh lives under a mesh name, `default`
   unless the runtime names another, so runtimes join everything reachable out of the box and
@@ -2751,7 +2751,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   `rmw_zenoh`, say — may connect the same way. Separation is of what is announced and read,
   never of what dials whom. [runtime-mesh — SHIPPED #2283]
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::runtime_mesh_name -->
-  <!-- verify: cargo test -p streamlib-engine --test runtime_mesh_two_processes -->
+  <!-- verify: cargo test -p streamlib-engine --features multi-process-mesh-e2e-tests --test runtime_mesh_two_processes -->
 - **DECIDED** — A port on the mesh is addressed `<runtime name>/<display name>/<port>`. The
   runtime name belongs to the runtime rather than to its control plane; defaults to
   `<hostname>-<app directory name>-<id>`, the id hashed from the directory's full path so two
@@ -2789,7 +2789,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   [runtime-mesh — SHIPPED #2282, #2284; the residual settled by cross-runtime-links #2292]
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::runtime_name -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::duplicate_runtime_name_on_the_mesh -->
-  <!-- verify: cargo test -p streamlib-engine --test runtime_mesh_two_processes -->
+  <!-- verify: cargo test -p streamlib-engine --features multi-process-mesh-e2e-tests --test runtime_mesh_two_processes -->
 - **DECIDED** — A bag's top-level `surface_id` crosses the mesh transparently, for now: the
   sending runtime resolves it locally and sends the frame's pixels with what the receiver
   needs to rebuild them, and the receiving runtime writes the pixels into a freshly minted
@@ -2893,7 +2893,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   record — it is idempotent by what it asks for. Every link renders `created_by_runtime_name`,
   its own runtime's name for a local link.
   [runtime-mesh; cross-runtime-links — SHIPPED #2289]
-  <!-- verify: cargo test -p streamlib-engine --test cross_runtime_link_requests_two_processes -->
+  <!-- verify: cargo test -p streamlib-engine --features multi-process-mesh-e2e-tests --test cross_runtime_link_requests_two_processes -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::link_requests_applied_into_this_runtimes_graph -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::link_requests_this_runtime_has_sent -->
 - **DECIDED** — A remote link naming a runtime that is not on the mesh waits and wires when
@@ -2955,7 +2955,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   [runtime-mesh; cross-runtime-links — SHIPPED #2292, #2287; the offer's split #2345, the
   Python-authored source #2344, the forgotten egress #2346, and the stopped-sending reason
   #2379]
-  <!-- verify: cargo test -p streamlib-engine --test cross_runtime_links_two_processes -->
+  <!-- verify: cargo test -p streamlib-engine --features multi-process-mesh-e2e-tests --test cross_runtime_links_two_processes -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::output_ports_offered_on_the_mesh -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::mesh_port_egress -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::mesh_link_ingress -->
@@ -3037,7 +3037,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::mesh_data_message_attachment -->
   <!-- verify: cargo test -p streamlib-engine --lib core::graph::components::processor_metrics::tests::a_processors_metrics_render_mesh_hop_loss_beside_its_ports_own_and_never_inside_it -->
   <!-- verify: cargo test -p streamlib-engine --lib core::graph::components::processor_metrics::tests::a_processor_with_no_remote_link_renders_no_mesh_hop_key_rather_than_an_empty_one -->
-  <!-- verify: cargo test -p streamlib-engine --test cross_runtime_links_two_processes -->
+  <!-- verify: cargo test -p streamlib-engine --features multi-process-mesh-e2e-tests --test cross_runtime_links_two_processes -->
 - **DECIDED** — `graph` carries the runtime's mesh peers, and `streamlib nodes` lists mesh
   peers beside the nodes in the local registry. A runtime that hosts no control plane still
   joins the mesh and carries remote links; it is not drivable remotely.
