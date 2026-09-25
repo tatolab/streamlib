@@ -20,6 +20,7 @@ import streamlib
 from interpreter_lifecycle_processors import (
     AsleepInItsCallbackAndSlowToTearDownProbe,
     AsleepInItsCallbackProbe,
+    AsleepInItsCallbackRecordingItsTeardownProbe,
     ThirtySecondImportProbe,
     WorkerKeepingTeardownGoingProbe,
 )
@@ -277,6 +278,15 @@ def scenario_a_processor_asleep_in_its_callback_with_hangups_not_ignored() -> No
     scenario_a_processor_asleep_in_its_callback()
 
 
+def scenario_two_processors_asleep_in_their_callbacks_recording_their_teardown() -> None:
+    """Two helpers asleep in `process()`, for a driver that kills the app."""
+    runtime = streamlib.Runtime()
+    for _ in range(2):
+        runtime.add(AsleepInItsCallbackRecordingItsTeardownProbe)
+    runtime.run()
+    marker("RUN_RETURNED")
+
+
 def scenario_three_processors_slow_to_tear_down() -> None:
     """Three helpers, each asleep in its callback and three seconds over its
     teardown, so stopping them one after another is plainly slower than at once."""
@@ -332,6 +342,9 @@ SCENARIOS = {
     "two_pipelines_in_one_process": scenario_two_pipelines_in_one_process,
     "shutdown_spun_across_the_run_loop_exit": scenario_shutdown_spun_across_the_run_loop_exit,
     "a_processor_asleep_in_its_callback": scenario_a_processor_asleep_in_its_callback,
+    "two_processors_asleep_in_their_callbacks_recording_their_teardown": (
+        scenario_two_processors_asleep_in_their_callbacks_recording_their_teardown
+    ),
     "a_processor_asleep_in_its_callback_with_hangups_not_ignored": (
         scenario_a_processor_asleep_in_its_callback_with_hangups_not_ignored
     ),

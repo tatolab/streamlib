@@ -16,6 +16,8 @@ mod python_control_plane_hosting;
 #[cfg(target_os = "linux")]
 mod python_cuda_pixel_exchange;
 mod python_gpu_surface_pixel_exchange;
+#[cfg(target_os = "macos")]
+mod python_helper_process_parent_death_watch;
 mod python_helper_process_pixel_exchange;
 mod python_helper_process_spawn_host;
 mod python_logging;
@@ -143,6 +145,17 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
         python_logging::runtime_log_directory,
         module
     )?)?;
+    #[cfg(target_os = "macos")]
+    {
+        module.add_function(wrap_pyfunction!(
+            python_helper_process_parent_death_watch::watch_for_this_helper_processes_parent_going_away,
+            module
+        )?)?;
+        module.add_function(wrap_pyfunction!(
+            python_helper_process_parent_death_watch::note_this_helper_processes_callbacks_returned_after_its_parent_went_away,
+            module
+        )?)?;
+    }
     module.add_function(wrap_pyfunction!(
         python_test_harness_endpoints::open_test_harness_channel,
         module

@@ -28,10 +28,10 @@ use streamlib::sdk::helper_process_transport::HelperProcessShutdownCommand;
 ///
 /// Engine-chosen and not authorable: the plan makes every budget here the
 /// engine's, so none is reachable from a processor's configuration.
-const CALLBACK_RETURN_BUDGET: Duration = Duration::from_secs(1);
+pub(crate) const CALLBACK_RETURN_BUDGET: Duration = Duration::from_secs(1);
 
 /// How long `teardown()` has once the helper has been asked for it.
-const TEARDOWN_BUDGET: Duration = Duration::from_secs(5);
+pub(crate) const TEARDOWN_BUDGET: Duration = Duration::from_secs(5);
 
 /// How long the child has to leave on its own once its hooks have returned.
 ///
@@ -44,7 +44,7 @@ const TEARDOWN_BUDGET: Duration = Duration::from_secs(5);
 /// 15.3–31.4 ms for one holding a 16 MiB array, over three runs each. The
 /// budget is set well above that rather than at it, because what it covers is
 /// an interpreter finalizing whatever a processor imported.
-const CHILD_SELF_EXIT_GRACE: Duration = Duration::from_millis(500);
+pub(crate) const CHILD_SELF_EXIT_GRACE: Duration = Duration::from_millis(500);
 
 /// How long the helper's process group has to leave on `SIGTERM` before it is
 /// killed.
