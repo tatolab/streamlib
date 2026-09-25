@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.23](https://github.com/tatolab/streamlib/compare/v0.26.22...v0.26.23) (2026-09-25)
+
+
+### Features
+
+* **engine:** a published frame's pixels read out on macOS — tap and the mesh copy-out door ([#2464](https://github.com/tatolab/streamlib/issues/2464)) ([45131f4](https://github.com/tatolab/streamlib/commit/45131f42c556b633876a25ea46e97d8f96fc2f7c))
+
 ## [0.26.22](https://github.com/tatolab/streamlib/compare/v0.26.21...v0.26.22) (2026-09-24)
 
 
