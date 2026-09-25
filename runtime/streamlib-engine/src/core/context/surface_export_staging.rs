@@ -63,7 +63,7 @@ use parking_lot::Mutex;
 
 use crate::core::context::GpuContext;
 use crate::core::context::surface_backing_resolution::{
-    ResolvedBlitSource, export_bytes_per_pixel_for_pixel_format, export_pixel_shape_for_texture,
+    ResolvedSurfaceBacking, export_bytes_per_pixel_for_pixel_format, export_pixel_shape_for_texture,
 };
 use crate::core::error::{Error, Result};
 use crate::host_rhi::{HostGpuDeviceExt as _, VulkanAccess, VulkanStage};
@@ -381,7 +381,7 @@ impl GpuContext {
         }
 
         let shape = match self.resolve_device_export_source(surface_id)? {
-            ResolvedBlitSource::RegisteredTexture(registration) => {
+            ResolvedSurfaceBacking::RegisteredTexture(registration) => {
                 let texture = registration.texture();
                 let pixel_format = export_pixel_shape_for_texture(texture.format())?;
                 let export_bytes_per_pixel = export_bytes_per_pixel_for_pixel_format(pixel_format)?;
@@ -409,7 +409,7 @@ impl GpuContext {
                         },
                 }
             }
-            ResolvedBlitSource::PixelBuffer(pixel_buffer) => {
+            ResolvedSurfaceBacking::PixelBuffer(pixel_buffer) => {
                 let pixel_format = pixel_buffer.format();
                 export_bytes_per_pixel_for_pixel_format(pixel_format)?;
                 let staging_byte_size = pixel_buffer.plane_size(0);
@@ -776,7 +776,7 @@ impl GpuContext {
         &self,
         staging: &SurfaceExportStaging,
         surface_id: &str,
-    ) -> Result<ResolvedBlitSource> {
+    ) -> Result<ResolvedSurfaceBacking> {
         Self::refuse_a_surface_this_staging_does_not_export(staging, surface_id)?;
         self.refuse_a_retired_frame_id(surface_id)?;
         self.resolve_device_export_source(surface_id)
@@ -788,11 +788,11 @@ impl GpuContext {
     /// the copy from a shape the staging no longer has.
     fn record_refill(
         staging: &SurfaceExportStaging,
-        source: &ResolvedBlitSource,
+        source: &ResolvedSurfaceBacking,
         recorder: &mut RhiCommandRecorder,
     ) -> Result<Option<TextureLayoutSettledByThisCopy>> {
         match source {
-            ResolvedBlitSource::RegisteredTexture(registration) => {
+            ResolvedSurfaceBacking::RegisteredTexture(registration) => {
                 let texture = registration.texture();
                 Self::refuse_a_texture_this_staging_cannot_copy_with(
                     staging,
@@ -831,7 +831,7 @@ impl GpuContext {
                     settled_layout: restore_layout,
                 }))
             }
-            ResolvedBlitSource::PixelBuffer(pixel_buffer) => {
+            ResolvedSurfaceBacking::PixelBuffer(pixel_buffer) => {
                 if pixel_buffer.plane_size(0) != staging.staging_byte_size {
                     return Err(Error::GpuError(format!(
                         "surface {} now resolves to a {}-byte buffer; the cached staging is \
@@ -952,7 +952,7 @@ impl GpuContext {
                     )));
                 }
                 Self::refuse_a_write_of_a_frame_this_staging_does_not_hold(staging, surface_id)?;
-                let ResolvedBlitSource::PixelBuffer(pixel_buffer) =
+                let ResolvedSurfaceBacking::PixelBuffer(pixel_buffer) =
                     self.resolve_device_export_source(surface_id)?
                 else {
                     return Err(Error::GpuError(format!(
@@ -981,7 +981,7 @@ impl GpuContext {
                     )));
                 }
                 Self::refuse_a_write_of_a_frame_this_staging_does_not_hold(staging, surface_id)?;
-                let ResolvedBlitSource::RegisteredTexture(registration) =
+                let ResolvedSurfaceBacking::RegisteredTexture(registration) =
                     self.resolve_device_export_source(surface_id)?
                 else {
                     return Err(Error::GpuError(format!(

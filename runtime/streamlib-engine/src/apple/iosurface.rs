@@ -75,30 +75,35 @@ pub fn with_iosurface_rows_tightly_packed_for_reading<R>(
     read_rows: impl FnOnce(&[u8]) -> R,
 ) -> Result<R> {
     let bytes_per_row = iosurface.bytes_per_row();
-    if row_byte_len == 0 || bytes_per_row < row_byte_len || iosurface.height() < row_count {
+    let byte_span_read = row_count
+        .checked_sub(1)
+        .and_then(|rows_before_the_last| rows_before_the_last.checked_mul(bytes_per_row))
+        .and_then(|bytes_before_the_last_row| bytes_before_the_last_row.checked_add(row_byte_len));
+    let readable = row_byte_len > 0
+        && bytes_per_row >= row_byte_len
+        && iosurface.height() >= row_count
+        && byte_span_read.is_some_and(|byte_span| byte_span <= iosurface.alloc_size());
+    if !readable {
         return Err(Error::GpuError(format!(
-            "IOSurface {} is {} rows at {bytes_per_row} bytes per row, which cannot hold \
-             {row_count} rows of {row_byte_len} bytes",
+            "IOSurface {} is {} rows at {bytes_per_row} bytes per row in {} bytes, which cannot \
+             hold {row_count} rows of {row_byte_len} bytes",
             iosurface.id(),
-            iosurface.height()
+            iosurface.height(),
+            iosurface.alloc_size()
         )));
     }
     let locked_for_reading = IOSurfaceLockedForReading::lock(iosurface)?;
-    let base_address = locked_for_reading
-        .iosurface
-        .base_address()
-        .as_ptr()
-        .cast::<u8>();
+    let base_address = locked_for_reading.base_address();
     if bytes_per_row == row_byte_len {
-        // SAFETY: the surface is locked and at least `row_count` rows of
-        // `bytes_per_row` bytes long, checked above.
+        // SAFETY: the surface is locked, and `row_byte_len * row_count` is the
+        // byte span checked above to lie inside its allocation.
         let rows = unsafe { std::slice::from_raw_parts(base_address, row_byte_len * row_count) };
         return Ok(read_rows(rows));
     }
     let mut packed_rows = Vec::with_capacity(row_byte_len * row_count);
     for row in 0..row_count {
-        // SAFETY: as above; each row's first `row_byte_len` bytes lie inside
-        // its `bytes_per_row`-byte stride.
+        // SAFETY: as above; the last row's `row_byte_len` bytes end at the
+        // checked byte span, and every earlier row ends before it.
         packed_rows.extend_from_slice(unsafe {
             std::slice::from_raw_parts(base_address.add(row * bytes_per_row), row_byte_len)
         });
@@ -124,6 +129,15 @@ impl<'a> IOSurfaceLockedForReading<'a> {
         }
         Ok(Self { iosurface })
     }
+
+    /// The surface's mapped pages, valid for as long as this lock is held.
+    fn base_address(&self) -> *const u8 {
+        self.iosurface
+            .base_address()
+            .as_ptr()
+            .cast::<u8>()
+            .cast_const()
+    }
 }
 
 impl Drop for IOSurfaceLockedForReading<'_> {
@@ -140,6 +154,32 @@ impl Drop for IOSurfaceLockedForReading<'_> {
             );
         }
     }
+}
+
+/// Write `rows` into `iosurface`, one per stride — a producer's side, for
+/// tests.
+#[cfg(test)]
+pub(crate) fn write_rows_at_the_iosurfaces_stride(iosurface: &IOSurfaceRef, rows: &[&[u8]]) {
+    let locked = unsafe { iosurface.lock(IOSurfaceLockOptions::empty(), std::ptr::null_mut()) };
+    assert_eq!(locked, 0, "IOSurfaceLock");
+    let base_address = iosurface.base_address().as_ptr().cast::<u8>();
+    for (row_index, row) in rows.iter().enumerate() {
+        assert!(
+            row.len() <= iosurface.bytes_per_row(),
+            "a row fits its stride"
+        );
+        // SAFETY: the surface is locked for writing and the row fits inside
+        // its own stride.
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                row.as_ptr(),
+                base_address.add(row_index * iosurface.bytes_per_row()),
+                row.len(),
+            )
+        };
+    }
+    let unlocked = unsafe { iosurface.unlock(IOSurfaceLockOptions::empty(), std::ptr::null_mut()) };
+    assert_eq!(unlocked, 0, "IOSurfaceUnlock");
 }
 
 /// A private IOSurface of `height` rows of `width` elements, each
@@ -309,23 +349,6 @@ mod tests {
         assert!(refused.to_string().contains("describes no memory"));
     }
 
-    /// Write `rows` into `iosurface`, one per stride, the producer's side.
-    fn write_rows_at_the_surfaces_stride(iosurface: &IOSurfaceRef, rows: &[Vec<u8>]) {
-        let locked = unsafe { iosurface.lock(IOSurfaceLockOptions::empty(), std::ptr::null_mut()) };
-        assert_eq!(locked, 0, "IOSurfaceLock");
-        let base_address = iosurface.base_address().as_ptr().cast::<u8>();
-        for (row_index, row) in rows.iter().enumerate() {
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    row.as_ptr(),
-                    base_address.add(row_index * iosurface.bytes_per_row()),
-                    row.len(),
-                )
-            };
-        }
-        unsafe { iosurface.unlock(IOSurfaceLockOptions::empty(), std::ptr::null_mut()) };
-    }
-
     /// Rows no misaligned read passes for: every byte differs from its
     /// neighbours and from the same byte of the next row.
     fn distinct_rows(row_byte_len: usize, row_count: usize) -> Vec<Vec<u8>> {
@@ -347,7 +370,10 @@ mod tests {
             "the fixture needs a stride that pads its rows"
         );
         let rows = distinct_rows(1000 * 4, 5);
-        write_rows_at_the_surfaces_stride(&iosurface, &rows);
+        write_rows_at_the_iosurfaces_stride(
+            &iosurface,
+            &rows.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+        );
 
         let read_out =
             with_iosurface_rows_tightly_packed_for_reading(&iosurface, 1000 * 4, 5, <[u8]>::to_vec)
@@ -361,7 +387,10 @@ mod tests {
         let iosurface = create_private_iosurface_with_packed_rows(641, 3, 4, PixelFormat::Bgra32)
             .expect("a private IOSurface");
         let rows = distinct_rows(641 * 4, 3);
-        write_rows_at_the_surfaces_stride(&iosurface, &rows);
+        write_rows_at_the_iosurfaces_stride(
+            &iosurface,
+            &rows.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+        );
 
         let read_in_place_from =
             with_iosurface_rows_tightly_packed_for_reading(&iosurface, 641 * 4, 3, |packed_rows| {
@@ -384,6 +413,17 @@ mod tests {
         let refused =
             with_iosurface_rows_tightly_packed_for_reading(&iosurface, 64 * 4 + 1, 4, |_| ())
                 .unwrap_err();
+
+        assert!(refused.to_string().contains("cannot hold"), "{refused}");
+    }
+
+    #[test]
+    fn a_read_of_no_rows_is_refused_rather_than_handed_an_empty_frame() {
+        let iosurface = create_private_iosurface_with_packed_rows(64, 4, 4, PixelFormat::Rgba32)
+            .expect("a private IOSurface");
+
+        let refused = with_iosurface_rows_tightly_packed_for_reading(&iosurface, 64 * 4, 0, |_| ())
+            .unwrap_err();
 
         assert!(refused.to_string().contains("cannot hold"), "{refused}");
     }

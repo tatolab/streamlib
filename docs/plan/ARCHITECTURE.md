@@ -2799,15 +2799,17 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   As built: the message is `[pixel description][bag][pixel bytes]`, and the attachment carries
   the description's length — zero for a bag naming no surface, which therefore still crosses
   verbatim. The sender's copy door is `SurfaceExportStaging` at host-visible residency on
-  Linux and the frame's own IOSurface, read through its host mapping under `IOSurfaceLock`
-  with rows packed, on macOS — held under a check-out claim that spans the copy alone, so a
-  slow network never pins the producer's pool slot. The description's format, extent and byte length are read from the
+  Linux, and on macOS the frame's own IOSurface, read through its host mapping under
+  `IOSurfaceLock` with rows packed. Either way it is held under a check-out claim that spans
+  the copy alone, so a slow network never pins the producer's pool slot. The description's format, extent and byte length are read from the
   backing, never from the bag, which names no format at all. Each refusal is counted and said
   once per port or per source by its own name: a recycled frame, a multi-plane format, a pool
   at its cap, and a source offering more than the four format-and-extent pairs one may mint
-  pools of (pools are never freed). On macOS a texture backing with no IOSurface behind it —
-  one allocated never to cross — is refused by name. *(Corrected 2026-09-24 by #2406: the
-  copy-out door is no longer Linux-only.)*
+  pools of (pools are never freed). ~~The copy-out door is Linux-only, because
+  `SurfaceExportStaging` is; a non-Linux sender says once per port that its surface bags do
+  not cross.~~ *(Corrected 2026-09-24 by #2406: the door reads the IOSurface on macOS.)* On
+  macOS a texture backing with no IOSurface behind it is refused by name — today that is
+  `GpuContext::acquire_output_texture`, which macOS allocates non-importable.
   Where it bites, stated rather than discovered. A texture-backed frame — a kernel output —
   lands buffer-backed on the far side, inheriting the camera's existing gap: a bare-id kernel
   dispatch refuses it, and the display's buffer fallback draws only RGBA correctly. An sRGB

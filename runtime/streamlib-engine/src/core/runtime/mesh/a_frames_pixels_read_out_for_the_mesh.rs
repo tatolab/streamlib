@@ -23,8 +23,10 @@
 //! mapping under `IOSurfaceLock` with no staging and no GPU copy: a pooled
 //! frame and a texture that crosses are both IOSurface-backed, and Apple
 //! Silicon's unified memory maps them cached. The read is ordered by
-//! publication — a producer's write is complete before its id can be
-//! published, so there is no timeline value to wait on.
+//! publication, with no timeline value to wait on: a producer publishes an
+//! id only after its write has retired on the host. A producer that
+//! published while its GPU submission was still in flight would be read
+//! early here, where Linux's same-queue staging copy would have waited.
 
 use std::sync::Arc;
 
@@ -214,8 +216,8 @@ impl Drop for AFrameClaimHolderOnThisRuntime {
 ///
 /// Owns what it gives back rather than borrowing the reader that minted the
 /// holder: a guard borrowing `&mut self` would hold the reader exclusively
-/// through the whole read, and the next line to read a
-/// field of it would fail to compile for a reason that looks unrelated.
+/// through the whole read, and the next line to read a field of it would fail
+/// to compile for a reason that looks unrelated.
 struct AFrameClaimedWhileItsPixelsAreRead {
     leases: Arc<crate::core::context::SurfaceCheckOutLeaseRegistry>,
     holder: crate::core::context::SurfaceCheckOutLeaseHolderId,
@@ -332,13 +334,9 @@ fn the_claimed_frame_read_into_a_mesh_message(
     surface_id: &str,
     bag_bytes: &[u8],
 ) -> std::result::Result<AMeshMessageCarryingAFramesPixels, WhyAFramesPixelsCannotCrossTheMesh> {
-    use crate::core::context::surface_backing_resolution::{
-        ResolvedBlitSource, export_bytes_per_pixel_for_pixel_format, export_pixel_shape_for_texture,
-    };
     use crate::core::runtime::mesh::a_frames_pixels_on_the_mesh::{
         AFramesPixelDescriptionOnTheMesh, a_mesh_message_carrying_a_frames_pixels,
     };
-    use crate::host_rhi::HostTextureExt as _;
 
     gpu_context
         .refuse_a_retired_frame_id(surface_id)
@@ -350,27 +348,9 @@ fn the_claimed_frame_read_into_a_mesh_message(
     // The backing's own shape, never the bag's — a video bag names no pixel
     // format at all, and a receiver guessing one would hand the wrong channel
     // order downstream and never say so.
-    let (pixel_format, width, height, iosurface) = match &backing {
-        ResolvedBlitSource::PixelBuffer(pixel_buffer) => (
-            pixel_buffer.format(),
-            pixel_buffer.width,
-            pixel_buffer.height,
-            pixel_buffer.buffer_ref().inner.backing_iosurface(),
-        ),
-        ResolvedBlitSource::RegisteredTexture(registration) => {
-            let texture = registration.texture();
-            (
-                export_pixel_shape_for_texture(texture.format()).map_err(a_read_refusal)?,
-                texture.width(),
-                texture.height(),
-                texture
-                    .vulkan_inner()
-                    .backing_iosurface()
-                    .map(|iosurface| &**iosurface),
-            )
-        }
-    };
-    let iosurface = iosurface.ok_or_else(|| {
+    let pixel_format = backing.one_plane_pixel_format().map_err(a_read_refusal)?;
+    let (width, height) = backing.pixel_extent(surface_id).map_err(a_read_refusal)?;
+    let iosurface = backing.backing_iosurface().ok_or_else(|| {
         WhyAFramesPixelsCannotCrossTheMesh::ItsPixelsCannotBeReadOut(crate::core::Error::GpuError(
             format!(
                 "surface {surface_id}'s backing is not an IOSurface, so there are no pages to \
@@ -378,13 +358,12 @@ fn the_claimed_frame_read_into_a_mesh_message(
             ),
         ))
     })?;
-    let row_byte_len = width as usize
-        * export_bytes_per_pixel_for_pixel_format(pixel_format).map_err(a_read_refusal)? as usize;
+    let row_byte_len = width as usize * (pixel_format.bits_per_pixel() / 8) as usize;
     let description = AFramesPixelDescriptionOnTheMesh {
         pixel_format,
         width,
         height,
-        pixel_byte_length: (row_byte_len * height as usize) as u64,
+        pixel_byte_length: row_byte_len as u64 * u64::from(height),
     };
     crate::apple::iosurface::with_iosurface_rows_tightly_packed_for_reading(
         iosurface,
@@ -424,6 +403,9 @@ mod tests {
     use crate::core::runtime::mesh::a_frames_pixels_written_into_a_local_surface::WritesAFramesPixelsIntoALocalSurface;
 
     /// The device, or nothing — CI has no GPU, and these arms run on the rig.
+    // A skip passes trivially, so it has to reach the person reading the run,
+    // and stdout is the only channel a test harness surfaces.
+    #[allow(clippy::disallowed_macros)]
     fn gpu_or_skip(test_name: &str) -> Option<GpuContext> {
         match GpuContext::init_for_platform_sync() {
             Ok(gpu_context) => Some(gpu_context),
@@ -600,7 +582,6 @@ mod tests {
     fn a_texture_whose_iosurface_pads_its_rows_crosses_with_the_padding_stripped() {
         use crate::core::rhi::{TextureDescriptor, TextureFormat, TextureUsages};
         use crate::host_rhi::HostTextureExt as _;
-        use objc2_io_surface::IOSurfaceLockOptions;
 
         const WIDTH: u32 = 1000;
         const HEIGHT: u32 = 6;
@@ -627,23 +608,10 @@ mod tests {
             "the fixture needs a stride that pads its rows"
         );
         let picture = a_picture_of(row_byte_len * HEIGHT as usize);
-        // SAFETY: the surface is locked for writing, and each row lands inside
-        // its own stride.
-        unsafe {
-            assert_eq!(
-                iosurface.lock(IOSurfaceLockOptions::empty(), std::ptr::null_mut()),
-                0
-            );
-            let base_address = iosurface.base_address().as_ptr().cast::<u8>();
-            for (row_index, row) in picture.chunks_exact(row_byte_len).enumerate() {
-                std::ptr::copy_nonoverlapping(
-                    row.as_ptr(),
-                    base_address.add(row_index * iosurface.bytes_per_row()),
-                    row_byte_len,
-                );
-            }
-            iosurface.unlock(IOSurfaceLockOptions::empty(), std::ptr::null_mut());
-        }
+        crate::apple::iosurface::write_rows_at_the_iosurfaces_stride(
+            iosurface,
+            &picture.chunks_exact(row_byte_len).collect::<Vec<_>>(),
+        );
         let surface_id = uuid::Uuid::new_v4().to_string();
         gpu_context.register_texture(&surface_id, texture.clone());
         let bag = a_video_bag_naming(&surface_id, WIDTH, HEIGHT);

@@ -24,18 +24,71 @@ pub(crate) fn export_pixel_shape_for_texture(format: TextureFormat) -> Result<Pi
 pub(crate) fn export_bytes_per_pixel_for_pixel_format(format: PixelFormat) -> Result<u32> {
     if format.plane_count() > 1 || format == PixelFormat::Unknown {
         return Err(Error::GpuError(format!(
-            "a surface export refuses {format:?}: a staging is one buffer, and exporting only \
-             the first plane would hand out part of the image"
+            "a surface export refuses {format:?}: a one-buffer read carries one plane, and \
+             reading only the first would hand out part of the image"
         )));
     }
     Ok(format.bits_per_pixel() / 8)
 }
 
-/// What a refill resolved this frame — looked up fresh on every copy so
-/// a rotating producer's re-registration is honoured, never a snapshot.
-pub(crate) enum ResolvedBlitSource {
+/// The backing a published surface id resolved to for one read — looked up
+/// fresh on every read so a rotating producer's re-registration is honoured,
+/// never a snapshot.
+pub(crate) enum ResolvedSurfaceBacking {
     RegisteredTexture(crate::core::context::TextureRegistration),
     PixelBuffer(crate::core::rhi::PixelBuffer),
+}
+
+impl ResolvedSurfaceBacking {
+    /// The pixel extent this backing carries, refusing a zero one by name.
+    ///
+    /// A zero extent means the backing resolved through a path that carries
+    /// no shape — a cross-process `lookup` import, which hands back planes and
+    /// no geometry.
+    pub(crate) fn pixel_extent(&self, surface_id: &str) -> Result<(u32, u32)> {
+        let (pixel_width, pixel_height) = match self {
+            Self::PixelBuffer(pixel_buffer) => (pixel_buffer.width, pixel_buffer.height),
+            Self::RegisteredTexture(registration) => {
+                let texture = registration.texture();
+                (texture.width(), texture.height())
+            }
+        };
+        if pixel_width == 0 || pixel_height == 0 {
+            return Err(Error::NotSupported(format!(
+                "surface '{surface_id}' resolves to a backing this process holds no pixel extent \
+                 for, so there are no pixels to read out of it here; read it from the runtime \
+                 that owns its pool"
+            )));
+        }
+        Ok((pixel_width, pixel_height))
+    }
+
+    /// The one-plane pixel format a host read of this backing presents.
+    pub(crate) fn one_plane_pixel_format(&self) -> Result<PixelFormat> {
+        let pixel_format = match self {
+            Self::PixelBuffer(pixel_buffer) => pixel_buffer.format(),
+            Self::RegisteredTexture(registration) => {
+                export_pixel_shape_for_texture(registration.texture().format())?
+            }
+        };
+        export_bytes_per_pixel_for_pixel_format(pixel_format)?;
+        Ok(pixel_format)
+    }
+
+    /// The IOSurface this backing's storage is, when it is one.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn backing_iosurface(&self) -> Option<&objc2_io_surface::IOSurfaceRef> {
+        use crate::host_rhi::HostTextureExt as _;
+
+        match self {
+            Self::PixelBuffer(pixel_buffer) => pixel_buffer.buffer_ref().inner.backing_iosurface(),
+            Self::RegisteredTexture(registration) => registration
+                .texture()
+                .vulkan_inner()
+                .backing_iosurface()
+                .map(|iosurface| &**iosurface),
+        }
+    }
 }
 
 impl GpuContext {
@@ -59,18 +112,18 @@ impl GpuContext {
     pub(crate) fn resolve_device_export_source(
         &self,
         surface_id: &str,
-    ) -> Result<ResolvedBlitSource> {
+    ) -> Result<ResolvedSurfaceBacking> {
         if let Some(pixel_buffer) = self.pooled_backing_held_in_this_process(surface_id) {
-            return Ok(ResolvedBlitSource::PixelBuffer(pixel_buffer));
+            return Ok(ResolvedSurfaceBacking::PixelBuffer(pixel_buffer));
         }
         if let Some(registration) = self.producer_registered_texture_for_surface_id(surface_id) {
-            return Ok(ResolvedBlitSource::RegisteredTexture(registration));
+            return Ok(ResolvedSurfaceBacking::RegisteredTexture(registration));
         }
         match self.resolve_pixel_buffer_by_surface_id(surface_id) {
-            Ok(pixel_buffer) => Ok(ResolvedBlitSource::PixelBuffer(pixel_buffer)),
+            Ok(pixel_buffer) => Ok(ResolvedSurfaceBacking::PixelBuffer(pixel_buffer)),
             Err(buffer_miss) => {
                 match self.resolve_texture_registration_by_surface_id(surface_id, None, 0, 0) {
-                    Ok(registration) => Ok(ResolvedBlitSource::RegisteredTexture(registration)),
+                    Ok(registration) => Ok(ResolvedSurfaceBacking::RegisteredTexture(registration)),
                     Err(texture_miss) => Err(Error::GpuError(format!(
                         "surface {surface_id} resolves to neither a pixel buffer \
                          ({buffer_miss}) nor a registered texture ({texture_miss})"
