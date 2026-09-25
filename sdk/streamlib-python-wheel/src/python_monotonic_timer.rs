@@ -14,7 +14,7 @@ use parking_lot::Mutex;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 #[cfg(target_os = "macos")]
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, OwnedFd};
 #[cfg(target_os = "macos")]
 use std::time::Duration;
 #[cfg(target_os = "macos")]
@@ -393,19 +393,7 @@ impl MonotonicTimerKqueueSchedule {
 fn create_monotonic_timer_kqueue_schedule(
     interval_ns: u64,
 ) -> Option<MonotonicTimerKqueueSchedule> {
-    // SAFETY: plain fd-creating syscall; failure surfaces as a negative return.
-    let raw_kqueue_fd = unsafe { libc::kqueue() };
-    if raw_kqueue_fd < 0 {
-        return None;
-    }
-    // SAFETY: raw_kqueue_fd was just opened by this function and nothing else
-    // owns it.
-    let kqueue_fd = unsafe { OwnedFd::from_raw_fd(raw_kqueue_fd) };
-    // Darwin has no `kqueue1`, so close-on-exec is set before the fd is used.
-    // SAFETY: fcntl on a live fd this function owns.
-    if unsafe { libc::fcntl(kqueue_fd.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
-        return None;
-    }
+    let kqueue_fd = crate::darwin_close_on_exec_kqueue::open_a_close_on_exec_kqueue().ok()?;
     let first_deadline_ns = monotonic_clock_now_ns().saturating_add(interval_ns);
     if !arm_kqueue_timer_at_absolute_deadline(kqueue_fd.as_raw_fd(), first_deadline_ns) {
         return None;

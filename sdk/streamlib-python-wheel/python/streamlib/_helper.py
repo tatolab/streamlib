@@ -48,6 +48,12 @@ from ._engine import (
 )
 from ._processor_hosting import apply_configuration, construct_processor_instance
 
+if sys.platform == "darwin":
+    from ._engine import (
+        note_this_helper_processes_callbacks_returned_after_its_parent_went_away,
+        watch_for_this_helper_processes_parent_going_away,
+    )
+
 ENTRYPOINT_ENV = "STREAMLIB_ENTRYPOINT"
 PROCESSOR_ID_ENV = "STREAMLIB_PROCESSOR_ID"
 RUNTIME_ID_ENV = "STREAMLIB_RUNTIME_ID"
@@ -204,6 +210,11 @@ class ParentProcessBridge:
         # would inherit the channel every privileged operation rides.
         os.set_inheritable(inherited_fd, False)
         return cls(socket.socket(fileno=inherited_fd))
+
+    def parent_channel_fd(self) -> int:
+        """The socket to the parent, for the watch that ends it when the parent
+        goes away."""
+        return self._socket.fileno()
 
     def start_reading(self) -> None:
         """Start the reader and the release worker."""
@@ -887,6 +898,7 @@ class HelperProcessLifecycle:
         self._link_data_access = link_data_access
         self._hosted: Optional[HostedProcessor] = None
         self._set_up_succeeded = False
+        self._setup_raised_on_its_own = False
         self._running = False
         self._torn_down = False
 
@@ -896,6 +908,7 @@ class HelperProcessLifecycle:
                 command = self._bridge.next_lifecycle_command()
                 if command is None:
                     log.info("the parent closed the channel; shutting down")
+                    self._tear_down_after_the_parent_went_away()
                     return
                 self._dispatch(command)
             except KeyboardInterrupt:
@@ -909,6 +922,17 @@ class HelperProcessLifecycle:
                     "the engine's shutdown ladder interrupted this processor; "
                     "the bag in flight is lost"
                 )
+
+    def _tear_down_after_the_parent_went_away(self) -> None:
+        """Run the `stop` and `teardown()` a parent that is gone can no longer
+        ask for, so a processor still releases what it holds — unless its
+        `setup()` raised on its own, which the ladder never tears down."""
+        if self._hosted is None or self._torn_down or self._setup_raised_on_its_own:
+            return
+        self._stop()
+        if sys.platform == "darwin":
+            note_this_helper_processes_callbacks_returned_after_its_parent_went_away()
+        self._teardown()
 
     def _dispatch(self, command: "dict[str, Any]") -> None:
         verb = command.get("cmd", "")
@@ -993,6 +1017,7 @@ class HelperProcessLifecycle:
             )
             return
         except Exception as setup_failure:
+            self._setup_raised_on_its_own = True
             self._bridge.send(
                 {
                     "rpc": "error",
@@ -1296,6 +1321,19 @@ def main() -> None:
     # helper that never gets further.
     engine_log_forwarder = CapturedEngineLogRecordForwarder(log_sink)
     engine_log_forwarder.capture_and_start()
+
+    # Before anything a processor brings runs, and on macOS only: Linux binds
+    # the helper to its parent with `PR_SET_PDEATHSIG` at spawn.
+    if sys.platform == "darwin":
+        try:
+            watch_for_this_helper_processes_parent_going_away(bridge.parent_channel_fd())
+        except RuntimeError as watch_failure:
+            engine_log_forwarder.stop_after_forwarding_what_is_left()
+            log.error(
+                "the helper could not watch its parent, so it could outlive it",
+                error=str(watch_failure),
+            )
+            sys.exit(1)
 
     # Before the processor's own module is imported: its class may reach for a
     # stack an extension in the same wheel brings up, and a hook that fails

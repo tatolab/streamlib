@@ -13,6 +13,7 @@ import contextlib
 import os
 import re
 import signal
+import sys
 import threading
 import time
 from pathlib import Path
@@ -24,6 +25,7 @@ from app_under_test import (
     ENGINE_STOPPED_LOG_LINE,
     AppUnderTest,
 )
+from interpreter_lifecycle_processors import TEARDOWN_RECORD_DIRECTORY_ENVIRONMENT_VARIABLE
 
 APP_UNDER_TEST = Path(__file__).parent / "interpreter_lifecycle_app.py"
 
@@ -122,6 +124,7 @@ def test_the_gil_is_released_while_run_blocks(app_under_test):
     )
 
 
+@pytest.mark.linux_only_capability(reason="only Linux hands SIGINT back when a run ends")
 @pytest.mark.requires_gpu
 def test_sigint_is_handed_back_to_cpython(app_under_test):
     """After `run()` returns, Ctrl-C must raise KeyboardInterrupt again.
@@ -341,6 +344,7 @@ def test_shutdown_from_another_thread_ends_a_blocking_run(app_under_test):
 ASLEEP_HELPER_EXIT_BUDGET_SECONDS = 3.0
 
 HELPER_STARTED_MARKER = re.compile(r"helper process started: pid=(\d+)")
+ASLEEP_HELPER_PID_MARKER = re.compile(r"MARKER:ASLEEP_IN_PROCESS (\d+)")
 TEARDOWN_WORKER_PID_MARKER = re.compile(r"MARKER:TEARDOWN_WORKER_PID (\d+)")
 SURVIVOR_PID_MARKER = re.compile(r"MARKER:SURVIVOR_PID=(\d+)")
 
@@ -438,7 +442,6 @@ def test_a_second_ctrl_c_forces_the_shutdown_past_a_long_teardown(app_under_test
     )
 
 
-@pytest.mark.awaiting_macos_parity(issue=2410)
 @pytest.mark.requires_gpu
 def test_a_third_ctrl_c_kills_every_helper_process_group_and_exits_130(app_under_test):
     """The third interrupt exits at once, taking the helper's group with it.
@@ -470,7 +473,7 @@ def test_a_third_ctrl_c_kills_every_helper_process_group_and_exits_130(app_under
     )
 
 
-@pytest.mark.awaiting_macos_parity(issue=2410)
+@pytest.mark.linux_only_capability(reason="only Linux owns SIGHUP")
 @pytest.mark.requires_gpu
 def test_sighup_tears_the_graph_down_gracefully(app_under_test):
     """A closed terminal is a graceful shutdown, `teardown()` included."""
@@ -482,6 +485,82 @@ def test_sighup_tears_the_graph_down_gracefully(app_under_test):
     assert "RUN_RETURNED" in app.markers(), f"`run()` did not return:\n{app.output}"
     assert "MARKER:ASLEEP_PROBE_TORE_DOWN" in app.output, (
         f"`teardown()` did not run after SIGHUP:\n{app.output}"
+    )
+
+
+#: How long a helper may outlive an app killed outright. Linux's parent-death
+#: signal ends it at once; a macOS helper walks the engine's ladder itself — a
+#: second for its callback, five for `teardown()`, half a second to leave — and
+#: the rest is room for a loaded rig.
+HELPER_OUTLIVING_A_KILLED_APP_BUDGET_SECONDS = 10.0
+
+
+def every_pid_still_alive_after(pids: "list[int]", budget_seconds: float) -> "list[int]":
+    """The pids of `pids` still alive once one shared budget has run out."""
+    deadline = time.monotonic() + budget_seconds
+    return [
+        pid
+        for pid in pids
+        if not a_pid_is_gone_within(pid, max(0.0, deadline - time.monotonic()))
+    ]
+
+
+def kill_an_app_holding_two_helpers_asleep_in_their_callbacks(
+    app_under_test, teardown_record_directory: Path, monkeypatch
+) -> "list[int]":
+    """SIGKILL the app, never its helpers, and name the helpers that were alive."""
+    monkeypatch.setenv(
+        TEARDOWN_RECORD_DIRECTORY_ENVIRONMENT_VARIABLE, str(teardown_record_directory)
+    )
+    app = app_under_test("two_processors_asleep_in_their_callbacks_recording_their_teardown")
+    for _ in range(2):
+        app.await_output_containing("MARKER:ASLEEP_IN_PROCESS", "each helper to park")
+    helper_pids = sorted(
+        {int(pid) for pid in ASLEEP_HELPER_PID_MARKER.findall(app.output)}
+    )
+    assert len(helper_pids) == 2, f"expected two helpers asleep:\n{app.output}"
+    app.process.send_signal(signal.SIGKILL)
+    app.process.wait()
+    return helper_pids
+
+
+@pytest.mark.requires_gpu
+def test_no_helper_outlives_an_app_killed_outright(app_under_test, tmp_path, monkeypatch):
+    """A `SIGKILL`ed app runs no teardown, and still leaves no helper behind."""
+    helper_pids = kill_an_app_holding_two_helpers_asleep_in_their_callbacks(
+        app_under_test, tmp_path, monkeypatch
+    )
+
+    survivors = every_pid_still_alive_after(
+        helper_pids, HELPER_OUTLIVING_A_KILLED_APP_BUDGET_SECONDS
+    )
+    assert not survivors, (
+        f"helper(s) {survivors} outlived the app by "
+        f"{HELPER_OUTLIVING_A_KILLED_APP_BUDGET_SECONDS}s"
+    )
+
+
+@pytest.mark.skipif(
+    sys.platform != "darwin",
+    reason="Linux's parent-death signal is SIGKILL, which runs no teardown()",
+)
+@pytest.mark.requires_gpu
+def test_a_helper_whose_app_was_killed_still_runs_its_teardown_on_macos(
+    app_under_test, tmp_path, monkeypatch
+):
+    """The macOS watch ends the channel, so the helper runs the `teardown()` the
+    engine can no longer ask for — its callback interrupted first."""
+    helper_pids = kill_an_app_holding_two_helpers_asleep_in_their_callbacks(
+        app_under_test, tmp_path, monkeypatch
+    )
+    survivors = every_pid_still_alive_after(
+        helper_pids, HELPER_OUTLIVING_A_KILLED_APP_BUDGET_SECONDS
+    )
+    assert not survivors, f"helper(s) {survivors} outlived the app"
+
+    tore_down = sorted(int(record.name) for record in tmp_path.iterdir())
+    assert tore_down == helper_pids, (
+        f"helpers {helper_pids} were asleep; only {tore_down} ran `teardown()`"
     )
 
 

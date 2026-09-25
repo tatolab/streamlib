@@ -135,6 +135,24 @@ class InterruptedInSetupProbe:
         HOOKS_THE_INTERRUPT_PROBES_REACHED.append("teardown")
 
 
+@processor(execution="manual")
+class RaisesInSetupProbe:
+    """A `setup()` that raises on its own, which keeps the no-teardown rule."""
+
+    @output()
+    def frames_to_downstream(self) -> None: ...
+
+    def setup(self, ctx) -> None:
+        HOOKS_THE_INTERRUPT_PROBES_REACHED.append("setup-raised")
+        raise RuntimeError("this probe refuses to set up")
+
+    def stop(self, ctx) -> None:
+        HOOKS_THE_INTERRUPT_PROBES_REACHED.append("stop")
+
+    def teardown(self, ctx) -> None:
+        HOOKS_THE_INTERRUPT_PROBES_REACHED.append("teardown")
+
+
 # When the pacing probe's `process()` ran, in monotonic nanoseconds. A test
 # reads it to measure how often a continuous loop called the processor.
 WHEN_THE_PACING_PROBE_PROCESSED_NS: list[int] = []

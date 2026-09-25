@@ -13,6 +13,7 @@ catch that: it scores annotation completeness, so a stub describing a method the
 binary no longer exports still reads as complete.
 """
 
+import sys
 from pathlib import Path
 from types import TracebackType
 from collections.abc import Callable, Mapping, Sequence
@@ -2205,4 +2206,28 @@ def drain_the_engine_log_records_this_helper_captured(
     `processor_id`, `rhi_op`, `attrs` and
     `emitted_at_wall_clock_nanoseconds`. The wait releases the GIL.
     """
+
+if sys.platform == "darwin":
+    __all__ += [
+        "note_this_helper_processes_callbacks_returned_after_its_parent_went_away",
+        "watch_for_this_helper_processes_parent_going_away",
+    ]
+
+    def watch_for_this_helper_processes_parent_going_away(parent_channel_fd: int) -> None:
+        """Arm this helper's watch on its parent: kqueue `NOTE_EXIT` on the
+        parent's pid, and the surface-share service's dead-name notification.
+
+        macOS only — Linux binds a helper to its parent with
+        `PR_SET_PDEATHSIG`. Either signal shuts `parent_channel_fd` down, so
+        the helper reads the end of its channel and runs `stop` and
+        `teardown()`; whatever is still alive about six and a half seconds
+        later has its process group killed. Called by `streamlib._helper`
+        before any processor code runs, and by nothing else. Raises on a
+        second call and when the pid watch cannot be armed.
+        """
+
+    def note_this_helper_processes_callbacks_returned_after_its_parent_went_away() -> None:
+        """Say the helper's `stop` rung returned after its parent went away,
+        which spares its callback the interrupt."""
+
 

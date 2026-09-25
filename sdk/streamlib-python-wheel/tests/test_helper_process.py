@@ -1309,6 +1309,50 @@ def test_an_interrupted_setup_is_answered_and_still_gets_its_teardown(
     assert hooks_the_interrupt_probes_reached == ["setup-interrupted", "teardown"]
 
 
+def test_a_parent_gone_after_an_interrupted_setup_still_leaves_its_teardown_run(
+    stand_in_parent, hooks_the_interrupt_probes_reached
+):
+    """A parent that goes away can no longer send the `teardown` an interrupted
+    `setup()` is owed, so the helper runs it on reading the end of the channel."""
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    lifecycle_thread = drive_lifecycle_on_a_thread(
+        bridge, load_processor_class(f"{PROBE_MODULE}:InterruptedInSetupProbe")
+    )
+
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    assert stand_in_parent.receive()["rpc"] == "error"
+    stand_in_parent.parent_end.close()
+
+    lifecycle_thread.join(timeout=5.0)
+    assert not lifecycle_thread.is_alive()
+    assert hooks_the_interrupt_probes_reached == ["setup-interrupted", "teardown"]
+
+
+def test_a_parent_gone_after_a_setup_that_raised_leaves_no_teardown_run(
+    stand_in_parent, hooks_the_interrupt_probes_reached
+):
+    """A `setup()` that raised on its own keeps its no-teardown rule when the
+    parent goes away before sending anything else.
+
+    Fail-without-fix: the end of the channel ran `stop()` and `teardown()` on a
+    processor that never set up.
+    """
+    bridge = ParentProcessBridge(stand_in_parent.child_end)
+    bridge.start_reading()
+    lifecycle_thread = drive_lifecycle_on_a_thread(
+        bridge, load_processor_class(f"{PROBE_MODULE}:RaisesInSetupProbe")
+    )
+
+    stand_in_parent.send({"cmd": "setup", "capability": "full", "config": {}, "ports": {}})
+    assert stand_in_parent.receive()["rpc"] == "error"
+    stand_in_parent.parent_end.close()
+
+    lifecycle_thread.join(timeout=5.0)
+    assert not lifecycle_thread.is_alive()
+    assert hooks_the_interrupt_probes_reached == ["setup-raised"]
+
+
 def test_a_closed_channel_answers_every_later_read_rather_than_the_first(
     stand_in_parent,
 ):

@@ -27,6 +27,8 @@ LINUX_ONLY_CAPABILITY_CLOSED_LIST_REASONS = {
     "only Linux resolves the runtime directory from XDG_RUNTIME_DIR",
     "DISPLAY and WAYLAND_DISPLAY are how Linux names a window server",
     "the close gesture is an X11 client message",
+    "only Linux owns SIGHUP",
+    "only Linux hands SIGINT back when a run ends",
 }
 
 MARKER_USE = re.compile(r"pytest\.mark\.(linux_only_capability|awaiting_macos_parity)\(([^)]*)\)")

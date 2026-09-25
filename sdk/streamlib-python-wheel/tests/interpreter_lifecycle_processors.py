@@ -33,6 +33,29 @@ class AsleepInItsCallbackProbe:
         log.info("MARKER:ASLEEP_PROBE_TORE_DOWN")
 
 
+#: Names the directory `AsleepInItsCallbackRecordingItsTeardownProbe` records
+#: its `teardown()` in, one file per helper pid — the one witness left once the
+#: app it would log to is dead.
+TEARDOWN_RECORD_DIRECTORY_ENVIRONMENT_VARIABLE = "STREAMLIB_TEST_TEARDOWN_RECORD_DIRECTORY"
+
+
+@processor(execution="continuous", interval_ms=10)
+class AsleepInItsCallbackRecordingItsTeardownProbe:
+    """Parks in `process()`, and records its `teardown()` in a file."""
+
+    @output()
+    def frames_to_downstream(self) -> None: ...
+
+    def process(self, ctx) -> None:
+        log.info(f"MARKER:ASLEEP_IN_PROCESS {os.getpid()}")
+        time.sleep(30)
+
+    def teardown(self, ctx) -> None:
+        record_directory = os.environ[TEARDOWN_RECORD_DIRECTORY_ENVIRONMENT_VARIABLE]
+        with open(os.path.join(record_directory, str(os.getpid())), "w"):
+            pass
+
+
 @processor(execution="continuous", interval_ms=10)
 class AsleepInItsCallbackAndSlowToTearDownProbe:
     """Parks in `process()`, then takes three seconds over `teardown()`.

@@ -142,8 +142,20 @@ pub fn is_runtime_shutdown_forced() -> bool {
 ///
 /// Only whoever owns a run loop may call it, once its run has ended, so the
 /// requests it observed neither end nor escalate the next run in the same
-/// process.
+/// process. Never returns while a third interrupt or the teardown watchdog is
+/// ending the process, so the status that ends it is theirs.
 pub fn take_runtime_shutdown_escalation() -> RuntimeShutdownEscalation {
+    crate::core::runtime::park_forever_if_the_process_is_ending_at_once();
+    let taken = swap_the_runtime_shutdown_escalation_clear();
+    // A third interrupt that escalated before the swap is on its way to
+    // `_exit`, whether or not it has raised the ending-at-once flag yet.
+    if taken == RuntimeShutdownEscalation::ExitAtOnce {
+        crate::core::runtime::park_forever();
+    }
+    taken
+}
+
+fn swap_the_runtime_shutdown_escalation_clear() -> RuntimeShutdownEscalation {
     RuntimeShutdownEscalation::from_stored(RUNTIME_SHUTDOWN_ESCALATION.swap(
         RuntimeShutdownEscalation::NotRequested as u8,
         Ordering::SeqCst,
@@ -159,7 +171,7 @@ pub(crate) struct RuntimeShutdownEscalationClearedOnDrop;
 #[cfg(test)]
 impl RuntimeShutdownEscalationClearedOnDrop {
     pub(crate) fn clear_now_and_on_drop() -> Self {
-        take_runtime_shutdown_escalation();
+        swap_the_runtime_shutdown_escalation_clear();
         Self
     }
 }
@@ -167,7 +179,7 @@ impl RuntimeShutdownEscalationClearedOnDrop {
 #[cfg(test)]
 impl Drop for RuntimeShutdownEscalationClearedOnDrop {
     fn drop(&mut self) {
-        take_runtime_shutdown_escalation();
+        swap_the_runtime_shutdown_escalation_clear();
     }
 }
 
