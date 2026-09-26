@@ -54,15 +54,19 @@ pub(crate) const VIDEO_ENCODE_CODEC_OPERATIONS: vk::VideoCodecOperationFlagsKHR 
 
 /// Whether a Vulkan Video codec operation decodes or encodes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VideoCodecOperationDirection {
+pub(crate) enum VideoCodecOperationDirection {
+    /// A `VK_KHR_video_decode_queue` operation.
     Decode,
+    /// A `VK_KHR_video_encode_queue` operation.
     Encode,
 }
 
 impl VideoCodecOperationDirection {
     /// Direction of `codec_operation`; `None` when it names no known
     /// operation or mixes decode and encode bits.
-    pub fn of_codec_operation(codec_operation: vk::VideoCodecOperationFlagsKHR) -> Option<Self> {
+    pub(crate) fn of_codec_operation(
+        codec_operation: vk::VideoCodecOperationFlagsKHR,
+    ) -> Option<Self> {
         let decodes = codec_operation.intersects(VIDEO_DECODE_CODEC_OPERATIONS);
         let encodes = codec_operation.intersects(VIDEO_ENCODE_CODEC_OPERATIONS);
         match (decodes, encodes) {
@@ -71,13 +75,21 @@ impl VideoCodecOperationDirection {
             _ => None,
         }
     }
+
+    /// Lower-case direction name, as error messages spell it.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Decode => "decode",
+            Self::Encode => "encode",
+        }
+    }
 }
 
 /// The Vulkan Video directions a device enabled at bring-up.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct DeviceVideoCodingSupport {
-    pub(crate) decode: bool,
-    pub(crate) encode: bool,
+struct DeviceVideoCodingSupport {
+    decode: bool,
+    encode: bool,
 }
 
 impl DeviceVideoCodingSupport {
@@ -85,6 +97,13 @@ impl DeviceVideoCodingSupport {
         Self {
             decode: vulkan_device.supports_video_decode(),
             encode: vulkan_device.supports_video_encode(),
+        }
+    }
+
+    fn supports(self, direction: VideoCodecOperationDirection) -> bool {
+        match direction {
+            VideoCodecOperationDirection::Decode => self.decode,
+            VideoCodecOperationDirection::Encode => self.encode,
         }
     }
 }
@@ -103,16 +122,13 @@ fn require_device_video_coding_support(
                  Vulkan Video operation",
             ))
         })?;
-    let (supported, direction_name) = match direction {
-        VideoCodecOperationDirection::Decode => (device_support.decode, "decode"),
-        VideoCodecOperationDirection::Encode => (device_support.encode, "encode"),
-    };
-    if supported {
+    if device_support.supports(direction) {
         Ok(direction)
     } else {
         Err(Error::GpuError(format!(
-            "video session: device does not support Vulkan Video {direction_name} \
+            "video session: device does not support Vulkan Video {} \
              (codec_operation {codec_operation:?})",
+            direction.name(),
         )))
     }
 }
