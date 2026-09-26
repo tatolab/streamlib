@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.33](https://github.com/tatolab/streamlib/compare/v0.26.32...v0.26.33) (2026-09-26)
+
+
+### Bug Fixes
+
+* **engine:** a Vulkan Video session refuses an absent tier instead of aborting the process ([#2493](https://github.com/tatolab/streamlib/issues/2493)) ([dfc7ff7](https://github.com/tatolab/streamlib/commit/dfc7ff7425f9f67b7696774bbb2154e933529e09))
+
 ## [0.26.32](https://github.com/tatolab/streamlib/compare/v0.26.31...v0.26.32) (2026-09-26)
 
 
