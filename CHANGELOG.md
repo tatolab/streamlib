@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.32](https://github.com/tatolab/streamlib/compare/v0.26.31...v0.26.32) (2026-09-26)
+
+
+### Features
+
+* **engine:** Python copies one surface into another through the engine ([#2491](https://github.com/tatolab/streamlib/issues/2491)) ([e6f59ed](https://github.com/tatolab/streamlib/commit/e6f59edc654c86021b9374373fdb0dc2323dcfe2))
+
 ## [0.26.31](https://github.com/tatolab/streamlib/compare/v0.26.30...v0.26.31) (2026-09-26)
 
 
