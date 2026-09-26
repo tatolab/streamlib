@@ -1232,9 +1232,23 @@ mod tests {
         } else {
             annex_b(&[coded_slice])
         };
+        video_bag(
+            EncodedVideoCodec::H264,
+            access_unit,
+            sequence_index,
+            is_sync_point,
+        )
+    }
+
+    fn video_bag(
+        codec: EncodedVideoCodec,
+        annex_b_access_unit_bytes: Vec<u8>,
+        sequence_index: u64,
+        is_sync_point: bool,
+    ) -> Vec<u8> {
         rmp_serde::to_vec_named(&EncodedVideoFrame {
-            codec: EncodedVideoCodec::H264,
-            annex_b_access_unit_bytes: access_unit,
+            codec,
+            annex_b_access_unit_bytes,
             is_sync_point,
             group_index: 0,
             sequence_index,
@@ -2786,21 +2800,16 @@ mod tests {
         } else {
             annex_b(&[&[0x02, 0x01, 0xD0, 0x11, 0x37]])
         };
-        rmp_serde::to_vec_named(&EncodedVideoFrame {
-            codec: EncodedVideoCodec::H265,
-            annex_b_access_unit_bytes: access_unit,
-            is_sync_point,
-            group_index: 0,
+        video_bag(
+            EncodedVideoCodec::H265,
+            access_unit,
             sequence_index,
-            width: 320,
-            height: 240,
-            color: None,
-        })
-        .expect("msgpack serialize")
+            is_sync_point,
+        )
     }
 
-    /// Pins the H.265 and Opus recording to bytes produced before the
-    /// parameter-set reader left the Vulkan Video tree. Regenerate with
+    /// Pins an H.265 and Opus recording to a checked-in golden file.
+    /// Regenerate with
     /// `STREAMLIB_WRITE_MP4_H265_GOLDEN_RECORDING=1 cargo test -p
     /// streamlib-media-builtins --lib an_h265_and_opus_recording`.
     #[test]

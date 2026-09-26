@@ -9,16 +9,8 @@
 // Emulation prevention byte removal (RBSP extraction)
 // ---------------------------------------------------------------------------
 
-/// Remove emulation prevention bytes (`0x00 0x00 0x03`) from a raw NAL unit
-/// payload, producing the Raw Byte Sequence Payload (RBSP).
-///
-/// In H.264/H.265 Annex-B byte streams, the byte sequence `0x00 0x00 0x03`
-/// inside a NAL unit is an *emulation prevention* mechanism: the `0x03` byte
-/// is not part of the coded data and must be stripped before further parsing.
-///
-/// This is not a direct port of a single C++ function (the C++ code handles
-/// this inline inside the bit-reader), but encapsulates the same logic for
-/// convenience and testability.
+/// Strips the emulation-prevention `0x03` from every `0x00 0x00 0x03` in a
+/// NAL unit payload, yielding its RBSP.
 pub fn remove_emulation_prevention_bytes(nalu: &[u8]) -> Vec<u8> {
     let mut rbsp = Vec::with_capacity(nalu.len());
     let mut i = 0;
@@ -36,13 +28,10 @@ pub fn remove_emulation_prevention_bytes(nalu: &[u8]) -> Vec<u8> {
 }
 
 // ---------------------------------------------------------------------------
-// RbspBitstreamReader — minimal bitstream reading abstraction
+// RBSP bit reader
 // ---------------------------------------------------------------------------
 
-/// Minimal bitstream reader for parsing NAL unit data.
-///
-/// Divergence from C++: The C++ code uses methods inherited from VulkanVideoDecoder
-/// (`u()`, `ue()`, `se()`, etc.). We provide an equivalent standalone struct.
+/// MSB-first bit reader over an RBSP: `u(n)`, `ue(v)`, `se(v)` and `f(n)`.
 pub struct RbspBitstreamReader<'a> {
     data: &'a [u8],
     bit_offset: usize,

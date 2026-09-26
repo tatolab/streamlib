@@ -426,7 +426,7 @@ impl Default for HevcSeqParam {
 }
 
 // ---------------------------------------------------------------------------
-// Parsing — ported from the C++ `VulkanH265Decoder` members
+// Parsing — ported from `VulkanH265Parser.cpp`
 // ---------------------------------------------------------------------------
 
 // -----------------------------------------------------------------------
@@ -438,7 +438,7 @@ impl Default for HevcSeqParam {
 ///
 /// `reader` provides the bitstream reading methods (u, ue, se).
 /// Returns `None` on parse error.
-pub fn parse_h265_short_term_ref_pic_set(
+pub(crate) fn parse_h265_short_term_ref_pic_set(
     reader: &mut RbspBitstreamReader,
     std_strps: &mut StdShortTermRefPicSet,
     strps: &mut ShortTermRefPicSet,
@@ -682,7 +682,7 @@ pub fn parse_h265_short_term_ref_pic_set(
 // -----------------------------------------------------------------------
 
 /// Parse scaling_list_data. Corresponds to C++ `scaling_list_data`.
-pub fn parse_h265_scaling_list_data(
+pub(crate) fn parse_h265_scaling_list_data(
     reader: &mut RbspBitstreamReader,
     scl: &mut ScalingList,
 ) -> Option<()> {
@@ -941,7 +941,7 @@ pub fn parse_h265_sequence_parameter_set(reader: &mut RbspBitstreamReader) -> Op
 
 /// Parse profile_tier_level() from the bitstream.
 /// Returns a simplified ProfileTierLevel with profile_idc and level_idc.
-pub fn parse_h265_profile_tier_level(
+pub(crate) fn parse_h265_profile_tier_level(
     reader: &mut RbspBitstreamReader,
     max_sub_layers_minus1: u8,
 ) -> Option<ProfileTierLevel> {
