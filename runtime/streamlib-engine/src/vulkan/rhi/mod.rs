@@ -163,6 +163,10 @@ pub use vulkan_video_session::{
     HostVulkanVideoSession, HostVulkanVideoSessionParameters, VideoSessionDescriptor,
     VideoSessionParametersAddInfo, VideoSessionParametersDescriptor,
 };
+#[cfg(target_os = "linux")]
+pub(crate) use vulkan_video_session::{
+    VIDEO_DECODE_CODEC_OPERATIONS, VIDEO_ENCODE_CODEC_OPERATIONS, VideoCodecOperationDirection,
+};
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod vulkan_query_pool;

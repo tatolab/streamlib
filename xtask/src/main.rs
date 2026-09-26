@@ -402,6 +402,8 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "streamlib-engine",
                 "--lib",
                 "--",
+                "vulkan::rhi::vulkan_video_session::tests",
+                "vulkan::video::codec_utils::vk_video_core_profile::tests",
                 "core::processor_owned_window",
                 "core::compiler::compiler_ops::subprocess_escalate::processor_owned_window::tests",
                 "escalate_wire_encoding_tests",
