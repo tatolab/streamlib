@@ -2766,6 +2766,83 @@ mod tests {
         );
     }
 
+    /// A 320x240 Main-profile level-3.1 SPS carrying emulation-prevention
+    /// bytes, so the `hvcC` it yields passes through the RBSP walk.
+    const H265_SEQUENCE_PARAMETER_SET: &[u8] = &[
+        0x42, 0x01, 0x01, 0x01, 0x40, 0x00, 0x00, 0x03, 0x00, 0x90, 0x00, 0x00, 0x03, 0x00, 0x00,
+        0x03, 0x00, 0x5D, 0xA0, 0x0A, 0x08, 0x0F, 0x16, 0x59, 0x3B, 0x93, 0x04, 0x10,
+    ];
+    const H265_VIDEO_PARAMETER_SET: &[u8] = &[0x40, 0x01, 0x0C, 0x01, 0xFF, 0xFF];
+    const H265_PICTURE_PARAMETER_SET: &[u8] = &[0x44, 0x01, 0xC0, 0x73];
+
+    fn h265_bag(sequence_index: u64, is_sync_point: bool) -> Vec<u8> {
+        let access_unit = if is_sync_point {
+            annex_b(&[
+                H265_VIDEO_PARAMETER_SET,
+                H265_SEQUENCE_PARAMETER_SET,
+                H265_PICTURE_PARAMETER_SET,
+                &[0x26, 0x01, 0xAF, 0x08, 0x42],
+            ])
+        } else {
+            annex_b(&[&[0x02, 0x01, 0xD0, 0x11, 0x37]])
+        };
+        rmp_serde::to_vec_named(&EncodedVideoFrame {
+            codec: EncodedVideoCodec::H265,
+            annex_b_access_unit_bytes: access_unit,
+            is_sync_point,
+            group_index: 0,
+            sequence_index,
+            width: 320,
+            height: 240,
+            color: None,
+        })
+        .expect("msgpack serialize")
+    }
+
+    /// Pins the H.265 and Opus recording to bytes produced before the
+    /// parameter-set reader left the Vulkan Video tree. Regenerate with
+    /// `STREAMLIB_WRITE_MP4_H265_GOLDEN_RECORDING=1 cargo test -p
+    /// streamlib-media-builtins --lib an_h265_and_opus_recording`.
+    #[test]
+    fn an_h265_and_opus_recording_is_byte_identical_to_the_golden_file() {
+        let mut file = Vec::new();
+        let mut writer = Mp4FragmentedFileWriter::new(
+            &mut file,
+            &["camera/video".to_string(), "microphone/audio".to_string()],
+        );
+        for index in 0..12 {
+            writer
+                .accept_bag(
+                    "camera/video",
+                    &h265_bag(index as u64, index % 4 == 0),
+                    index as i64 * ONE_VIDEO_FRAME_NS,
+                    None,
+                )
+                .expect("accepted");
+            writer
+                .accept_bag(
+                    "microphone/audio",
+                    &opus_bag(index as u64, 2),
+                    index as i64 * ONE_OPUS_PACKET_NS,
+                    None,
+                )
+                .expect("accepted");
+        }
+        writer.finish().expect("closes");
+
+        let golden_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/h265_and_opus_recording.mp4");
+        if std::env::var_os("STREAMLIB_WRITE_MP4_H265_GOLDEN_RECORDING").is_some() {
+            std::fs::write(&golden_path, &file).expect("the golden file is writable");
+            return;
+        }
+        let golden = std::fs::read(&golden_path).expect("the golden file is checked in");
+        assert_eq!(
+            file, golden,
+            "the H.265 recording moved away from its golden file"
+        );
+    }
+
     #[test]
     fn a_run_ending_on_a_sync_point_still_gives_its_last_frame_a_duration() {
         let mut file = Vec::new();
