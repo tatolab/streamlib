@@ -56,15 +56,15 @@ clear_bitstream_buffers_on_create = []
 
 [dependencies]
 # Processor schema types (shared with macros for code generation)
-streamlib-processor-schema = { path = "../../sdk/streamlib-processor-schema", version = "0.26.33", features = ["utoipa"] }
+streamlib-processor-schema = { path = "../../sdk/streamlib-processor-schema", version = "0.26.34", features = ["utoipa"] }
 
 # Canonical Error / Result / PortDirection, shared with the plugin-SDK so
 # plugin cdylibs author against them without linking the engine. The engine
 # re-exports them at `core::error`.
-streamlib-error = { path = "../../sdk/streamlib-error", version = "0.26.33" }
+streamlib-error = { path = "../../sdk/streamlib-error", version = "0.26.34" }
 
 # Procedural macros
-streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.26.33" }
+streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.26.34" }
 
 # Plugin ABI wire-protocol header. Dep direction reversed in #877:
 # streamlib-plugin-abi no longer depends on streamlib (the SDK), so the
@@ -73,7 +73,7 @@ streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.26.33" }
 # `STREAMLIB_ABI_VERSION` from this crate directly.
 
 # Shared iceoryx2 payload types (for cross-process IPC)
-streamlib-ipc-types = { path = "../streamlib-ipc-types", version = "0.26.33" }
+streamlib-ipc-types = { path = "../streamlib-ipc-types", version = "0.26.34" }
 
 # Consumer-side carve-out — owns the format primitives
 # (TextureFormat / TextureUsages / PixelFormat), the trait machinery
@@ -81,7 +81,7 @@ streamlib-ipc-types = { path = "../streamlib-ipc-types", version = "0.26.33" }
 # Consumer* RHI types (Linux), and a slim ConsumerRhiError. streamlib
 # re-exports the primitives so existing in-tree call sites (e.g.
 # `crate::core::rhi::TextureFormat`) keep working unchanged.
-streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.26.33" }
+streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.26.34" }
 
 # Core dependencies (always included)
 thiserror.workspace = true
@@ -173,7 +173,7 @@ dispatch2 = "0.3"  # GCD dispatch queues
 mach2 = "0.7"  # Mach kernel API: thread priorities, timing, and the surface-share channel
 # Wire-format helpers for the per-runtime surface-share service's raw Mach
 # channel, shared with the helper-process clients that talk to it.
-streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.26.33" }
+streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.26.34" }
 
 # The one RHI and everything that compiles with it. Not workspace-wide: a
 # workspace-wide entry would make a Windows or wasm target build a GPU stack
@@ -191,7 +191,7 @@ raw-window-handle = "0.6"  # Raw window handle types for Vulkan surface creation
 # host side. streamlib re-exports for in-tree consumers; subprocess
 # cdylibs depend on it directly so the FullAccess capability boundary
 # is enforced by the type system.
-streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.26.33" }
+streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.26.34" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 libc.workspace = true
@@ -202,7 +202,7 @@ libc.workspace = true
 # privileged syscall on the requesting thread's behalf.
 zbus = "5"
 # Wire-format helpers for the per-runtime surface-sharing socket.
-streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.26.33" }
+streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.26.34" }
 # The video device seam's V4L2 arm: device enumeration, format negotiation and
 # the mmap capture stream. A kernel ABI binding — no user-space library is
 # linked, so the wheel's `DT_NEEDED` set does not grow.
@@ -249,7 +249,7 @@ objc2-core-audio = { workspace = true, features = ["std", "AudioHardware", "objc
 # `testing::SubprocessCrashHarness` — drives a real subprocess crash against
 # the surface-share service. Tests only: the engine's library code carries no
 # surface-adapter types.
-streamlib-surface-adapter = { path = "../../adapters/streamlib-surface-adapter", version = "0.26.33" }
+streamlib-surface-adapter = { path = "../../adapters/streamlib-surface-adapter", version = "0.26.34" }
 
 [[bench]]
 name = "logging"
