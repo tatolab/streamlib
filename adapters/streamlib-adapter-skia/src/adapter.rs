@@ -103,11 +103,12 @@ fn build_direct_context<D: VulkanRhiDevice>(
     let queue = device.queue();
     let queue_family_index = device.queue_family_index() as usize;
 
-    let vulkan_loader_library = open_the_first_vulkan_loader_library_that_opens().map_err(
-        |refusal_per_candidate| SkiaAdapterError::DirectContextBuildFailed {
-            reason: format!("no Vulkan loader library opened:\n{refusal_per_candidate}"),
-        },
-    )?;
+    let vulkan_loader_library =
+        open_the_first_vulkan_loader_library_that_opens().map_err(|refusal_per_candidate| {
+            SkiaAdapterError::DirectContextBuildFailed {
+                reason: format!("no Vulkan loader library opened:\n{refusal_per_candidate}"),
+            }
+        })?;
     let get_instance_proc_addr_untyped = unsafe {
         vulkan_loader_library.load(b"vkGetInstanceProcAddr\0")
     }

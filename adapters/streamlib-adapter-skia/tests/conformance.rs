@@ -3,7 +3,7 @@
 
 //! `streamlib_adapter_skia::tests::conformance` — runs the public
 //! `run_conformance` suite from `streamlib-surface-adapter` against a real
-//! Skia adapter wired to a host-allocated DMA-BUF render-target image
+//! Skia adapter wired to a host-allocated render-target image
 //! and an exportable timeline semaphore.
 //!
 //! The Skia adapter composes on `streamlib-adapter-vulkan`, so a green
@@ -13,7 +13,7 @@
 //! `Surface` / `Image` propagate the `Send + Sync` invariant the
 //! conformance suite's parallel-readers test demands.
 
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 use std::sync::Arc;
 use streamlib::sdk::engine::HostGpuDeviceExt;

@@ -3,7 +3,7 @@
 
 [package]
 name = "streamlib-adapter-skia"
-description = "Skia surface adapter (Linux). Customer sees skia::Surface directly — never GrVkImageInfo, GrBackendTexture, or VkImageLayout. Composes on streamlib-adapter-vulkan via the VulkanWritable / VulkanImageInfoExt capability traits from streamlib-surface-adapter."
+description = "Skia surface adapter (Linux and macOS; the GL arm is Linux). Customer sees skia::Surface directly — never GrVkImageInfo, GrBackendTexture, or VkImageLayout. Composes on streamlib-adapter-vulkan via the VulkanWritable / VulkanImageInfoExt capability traits from streamlib-surface-adapter."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

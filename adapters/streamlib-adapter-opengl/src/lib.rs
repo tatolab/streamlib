@@ -24,6 +24,13 @@
 //! See `docs/architecture/surface-adapter.md` for the architecture brief
 //! and `docs/architecture/adapter-authoring.md` for the 3rd-party
 //! authoring guide.
+//!
+//! **Absent on macOS.** The seam is EGL and DMA-BUF, and OpenGL is
+//! deprecated there; a native macOS consumer takes
+//! `streamlib-adapter-vulkan`. Any GL on macOS, Zink included, would
+//! still need an IOSurface interop arm — the Vulkan adapter behind a
+//! translation layer — so the tier is absent, not deferred. Off Linux
+//! the crate compiles to nothing.
 
 #![cfg(target_os = "linux")]
 

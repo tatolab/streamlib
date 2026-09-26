@@ -116,7 +116,8 @@ jobs:
       # this repo is `-p`-scoped, so this clippy step is the first `--workspace`
       # anything. Making CI build Skia is a real cost and its own decision; the
       # exclusion keeps the existing coverage boundary rather than moving it
-      # silently. Consequence worth knowing: that adapter is linted by nothing.
+      # silently. Consequence worth knowing: on Linux that adapter is linted by
+      # nothing; the macOS lane, where its prebuilt exists, lints its Vulkan arm.
       - name: cargo clippy (workspace, default targets)
         run: cargo clippy --locked --workspace --exclude streamlib-adapter-skia --no-deps
 
@@ -713,10 +714,11 @@ jobs:
   # and the runner image is what decides the SDK the Apple frameworks are linked
   # against. arm64, and free for public repositories.
   #
-  # No GPU work runs here. A Vulkan device on MoltenVK is #2356 and a window is
-  # #2357; this job's whole claim is that the tree compiles, that the tests
-  # needing no device pass, and that the wheel's stub and Python suite hold on
-  # this binary as on the Linux one.
+  # GPU work is last and narrow: the runner exposes a paravirtual Metal device,
+  # and the in-process adapters' tests run on it through MoltenVK. Everything
+  # before that claims the tree compiles, that the tests needing no device
+  # pass, and that the wheel's stub and Python suite hold on this binary as on
+  # the Linux one.
   rust-build-macos:
     name: Rust Build (macOS)
     runs-on: macos-15
@@ -756,23 +758,19 @@ jobs:
         with:
           python-version: "3.12"
 
-      # One exclusion, the one Linux carries too: `streamlib-adapter-skia`
-      # (skia-bindings 404s on its prebuilt download). Every other workspace
-      # member compiles here, the wheel included, and so do the Linux-only
-      # adapters, whose `tests/bin` fixtures carry an empty `main` off Linux
-      # so the crate keeps building and cannot rot unseen.
+      # Every workspace member compiles here, the wheel included, and so do the
+      # Linux-only adapters, whose `tests/bin` fixtures carry an empty `main`
+      # off Linux so the crate keeps building and cannot rot unseen. Skia is in
+      # too: without its Linux-only `gl` feature, rust-skia publishes the
+      # prebuilt this target's feature set names.
       - name: cargo clippy (workspace, default targets)
-        run: |
-          cargo clippy --locked --workspace --no-deps \
-            --exclude streamlib-adapter-skia
+        run: cargo clippy --locked --workspace --no-deps
 
       # `--all-targets` where the Linux job's clippy takes default targets: the
       # tests, benches and example targets are exactly where a macOS-only
       # compile break would otherwise hide, and none of them is expensive here.
       - name: cargo check (workspace, all targets)
-        run: |
-          cargo check --locked --workspace --all-targets \
-            --exclude streamlib-adapter-skia
+        run: cargo check --locked --workspace --all-targets
 
       - name: Run unit tests
         run: |
@@ -866,12 +864,20 @@ jobs:
         working-directory: sdk/streamlib-python-wheel
         run: .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"
 
-      # Record-only: whether MoltenVK finds a Metal device on this runner,
-      # which decides whether the `requires_gpu` half can ever run in CI here.
-      # Last, so the suite above runs without MoltenVK installed.
-      - name: Probe for a Metal device under MoltenVK
-        continue-on-error: true
+      # After the Python suite, so it runs without MoltenVK installed. No
+      # `continue-on-error`: the adapter tests below skip when no Vulkan device
+      # comes up, so a runner without one fails here rather than passing them
+      # hollow.
+      - name: Install MoltenVK and find the Metal device under it
         run: |
           system_profiler SPDisplaysDataType
           brew install molten-vk vulkan-loader vulkan-tools
           vulkaninfo --summary
+
+      # The in-process adapters on MoltenVK, each wrapping an engine image over
+      # a private IOSurface. Their fd-based cross-process tests compile to
+      # nothing here and stay on Linux. OpenGL and CUDA are absent on macOS.
+      - name: In-process adapter tests
+        run: |
+          cargo test --locked -p streamlib-adapter-vulkan \
+            -p streamlib-adapter-cpu-readback -p streamlib-adapter-skia

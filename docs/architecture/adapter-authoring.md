@@ -724,8 +724,9 @@ conversation belongs in an issue, not in code.
 
 > A "Hypothetical walkthrough — Metal on macOS via MoltenVK" section was
 > removed here: 70 lines applying the checklist to `streamlib-adapter-
-> metal`, an adapter its own text calls "not yet shipped". Apple support is
-> post-MVP and undesigned, and architecture docs carry no proposed work.
+> metal`, an adapter its own text calls "not yet shipped". On macOS the
+> Vulkan, CPU-readback and Skia adapters build on MoltenVK; OpenGL and CUDA
+> are absent there, each saying so at its crate root.
 
 ## Reference adapters
 

@@ -45,12 +45,11 @@
 //! `cudaPointerGetAttributes`-driven `kDLCUDA` vs `kDLCUDAHost`
 //! decision (#588 Stage 8 ships the assertion; the result calibrates
 //! the cdylib default), and the polyglot E2E.
-
-// The adapter proper is Linux-only (Vulkan↔CUDA), but `dlpack` is the
-// workspace's home for the DLPack `#[repr(C)]` spec mirrors, which are
-// platform-agnostic by definition — consumers building host-side DLPack
-// capsules off Linux (the wheel's CPU path) depend on exactly that
-// module and nothing else here.
+//!
+//! **Absent on macOS.** CUDA does not exist there, so the adapter is
+//! Linux-only. [`dlpack`] is the exception: the workspace's one home for
+//! the DLPack `#[repr(C)]` ABI, it builds on both floors, and consumers
+//! building DLPack capsules off Linux depend on exactly that module.
 
 #[cfg(target_os = "linux")]
 mod adapter;
