@@ -6,9 +6,11 @@
 use tracing::{debug, warn};
 use vulkanalia::vk;
 
+use crate::core::h265_sequence_parameter_set::{MAX_NUM_SPS, parse_h265_sequence_parameter_set};
+use crate::core::nal_unit_raw_byte_sequence_payload::RbspBitstreamReader;
 use crate::vulkan::video::nv_video_parser::vulkan_h265_decoder::{
-    self as h265dec, BitstreamReader as H265BitstreamReader, HEVC_DPB_SIZE, MAX_NUM_PPS,
-    MAX_NUM_SPS, MAX_NUM_VPS, NalUnitType as H265NalUnitType, VulkanH265Decoder,
+    self as h265dec, HEVC_DPB_SIZE, MAX_NUM_PPS, MAX_NUM_VPS, NalUnitType as H265NalUnitType,
+    VulkanH265Decoder,
 };
 use crate::vulkan::video::video_context::VideoError;
 
@@ -32,7 +34,7 @@ impl SimpleDecoder {
 
         // Parse VPS from RBSP data (after EPB removal, skip 2-byte NAL header)
         let rbsp = Self::remove_emulation_prevention_bytes(&vps_nalu[2..]);
-        let mut reader = H265BitstreamReader::new(&rbsp);
+        let mut reader = RbspBitstreamReader::new(&rbsp);
         if let Some(vps) = VulkanH265Decoder::parse_vps(&mut reader) {
             let vps_id = vps.vps_video_parameter_set_id as usize;
             debug!(
@@ -65,10 +67,10 @@ impl SimpleDecoder {
 
         // Remove emulation prevention bytes and skip 2-byte NAL header
         let rbsp = Self::remove_emulation_prevention_bytes(&sps_nalu[2..]);
-        let mut reader = H265BitstreamReader::new(&rbsp);
+        let mut reader = RbspBitstreamReader::new(&rbsp);
 
         // Full SPS parse
-        let sps = VulkanH265Decoder::parse_sps(&mut reader)
+        let sps = parse_h265_sequence_parameter_set(&mut reader)
             .ok_or_else(|| VideoError::BitstreamError("Failed to parse H.265 SPS".into()))?;
 
         let width = sps.pic_width_in_luma_samples;
@@ -133,7 +135,7 @@ impl SimpleDecoder {
         }
 
         let rbsp = Self::remove_emulation_prevention_bytes(&pps_nalu[2..]);
-        let mut reader = H265BitstreamReader::new(&rbsp);
+        let mut reader = RbspBitstreamReader::new(&rbsp);
 
         let parser = self.h265_parser.as_mut().unwrap();
         let pps = VulkanH265Decoder::parse_pps(&mut reader, &parser.spss)
@@ -200,7 +202,7 @@ impl SimpleDecoder {
 
         // Parse slice header from RBSP data (after EPB removal, skip 2-byte NAL header)
         let rbsp = Self::remove_emulation_prevention_bytes(&nal[2..]);
-        let mut reader = H265BitstreamReader::new(&rbsp);
+        let mut reader = RbspBitstreamReader::new(&rbsp);
         let slh = VulkanH265Decoder::parse_slice_header(
             &mut reader,
             nal_type,
@@ -644,8 +646,6 @@ impl SimpleDecoder {
     ///   pic_height_in_luma_samples: ue(v)
     #[allow(dead_code)] // Utility for external callers
     pub(crate) fn parse_h265_sps_dimensions(sps_nalu: &[u8]) -> (u32, u32) {
-        use crate::vulkan::video::nv_video_parser::vulkan_h265_decoder::BitstreamReader;
-
         // Skip 2-byte NAL header
         if sps_nalu.len() < 6 {
             return (0, 0);
@@ -655,7 +655,7 @@ impl SimpleDecoder {
         // The profile_tier_level section has many zero bytes (44 reserved
         // bits) that trigger EPB insertion (00 00 03 sequences).
         let rbsp = Self::remove_emulation_prevention_bytes(&sps_nalu[2..]);
-        let mut r = BitstreamReader::new(&rbsp);
+        let mut r = RbspBitstreamReader::new(&rbsp);
 
         let _vps_id = r.u(4);
         let max_sub_layers_minus1 = match r.u(3) {
@@ -758,13 +758,11 @@ impl SimpleDecoder {
     /// encoder capability (32 or 64 on NVIDIA GPUs). Default 2 (CTB=32).
     #[allow(dead_code)] // Utility for external callers
     pub(crate) fn parse_h265_sps_ctb_log2_diff(sps_nalu: &[u8]) -> u8 {
-        use crate::vulkan::video::nv_video_parser::vulkan_h265_decoder::BitstreamReader;
-
         if sps_nalu.len() < 6 {
             return 2;
         }
         let rbsp = Self::remove_emulation_prevention_bytes(&sps_nalu[2..]);
-        let mut r = BitstreamReader::new(&rbsp);
+        let mut r = RbspBitstreamReader::new(&rbsp);
 
         // Same parsing as parse_h265_sps_dimensions up to width/height
         let _ = r.u(4); // vps_id

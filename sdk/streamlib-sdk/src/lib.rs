@@ -85,9 +85,11 @@ pub mod sdk {
     pub use streamlib_engine::core::execution;
     pub use streamlib_engine::core::graph;
     pub use streamlib_engine::core::graph_snapshot;
+    pub use streamlib_engine::core::h265_sequence_parameter_set;
     pub use streamlib_engine::core::helper_process_transport;
     pub use streamlib_engine::core::json_schema;
     pub use streamlib_engine::core::media_clock;
+    pub use streamlib_engine::core::nal_unit_raw_byte_sequence_payload;
     pub use streamlib_engine::core::prelude;
     pub use streamlib_engine::core::pubsub;
     pub use streamlib_engine::core::rhi;

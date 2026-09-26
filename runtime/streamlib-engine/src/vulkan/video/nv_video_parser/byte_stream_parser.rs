@@ -309,90 +309,12 @@ impl ByteStreamParser {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Emulation prevention byte removal (RBSP extraction)
-// ---------------------------------------------------------------------------
-
-/// Remove emulation prevention bytes (`0x00 0x00 0x03`) from a raw NAL unit
-/// payload, producing the Raw Byte Sequence Payload (RBSP).
-///
-/// In H.264/H.265 Annex-B byte streams, the byte sequence `0x00 0x00 0x03`
-/// inside a NAL unit is an *emulation prevention* mechanism: the `0x03` byte
-/// is not part of the coded data and must be stripped before further parsing.
-///
-/// This is not a direct port of a single C++ function (the C++ code handles
-/// this inline inside the bit-reader), but encapsulates the same logic for
-/// convenience and testability.
-pub fn remove_emulation_prevention_bytes(nalu: &[u8]) -> Vec<u8> {
-    let mut rbsp = Vec::with_capacity(nalu.len());
-    let mut i = 0;
-    while i < nalu.len() {
-        if i + 2 < nalu.len() && nalu[i] == 0x00 && nalu[i + 1] == 0x00 && nalu[i + 2] == 0x03 {
-            rbsp.push(0x00);
-            rbsp.push(0x00);
-            i += 3; // skip the 0x03 emulation prevention byte
-        } else {
-            rbsp.push(nalu[i]);
-            i += 1;
-        }
-    }
-    rbsp
-}
-
 // ===========================================================================
 // Unit tests
 // ===========================================================================
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // -----------------------------------------------------------------------
-    // Emulation prevention byte removal
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn epb_removal_basic() {
-        // 00 00 03 should strip the 03
-        let input = [0x00, 0x00, 0x03, 0x01];
-        let rbsp = remove_emulation_prevention_bytes(&input);
-        assert_eq!(rbsp, vec![0x00, 0x00, 0x01]);
-    }
-
-    #[test]
-    fn epb_removal_multiple() {
-        let input = [0xAA, 0x00, 0x00, 0x03, 0x00, 0x00, 0x03, 0xBB];
-        let rbsp = remove_emulation_prevention_bytes(&input);
-        assert_eq!(rbsp, vec![0xAA, 0x00, 0x00, 0x00, 0x00, 0xBB]);
-    }
-
-    #[test]
-    fn epb_removal_none_needed() {
-        let input = [0xAA, 0xBB, 0xCC];
-        let rbsp = remove_emulation_prevention_bytes(&input);
-        assert_eq!(rbsp, input.to_vec());
-    }
-
-    #[test]
-    fn epb_removal_empty() {
-        let rbsp = remove_emulation_prevention_bytes(&[]);
-        assert!(rbsp.is_empty());
-    }
-
-    #[test]
-    fn epb_at_end() {
-        // Trailing 00 00 03 with nothing after — still stripped.
-        let input = [0xFF, 0x00, 0x00, 0x03];
-        let rbsp = remove_emulation_prevention_bytes(&input);
-        assert_eq!(rbsp, vec![0xFF, 0x00, 0x00]);
-    }
-
-    #[test]
-    fn epb_not_confused_by_00_00_04() {
-        // 00 00 04 is NOT an emulation prevention sequence.
-        let input = [0x00, 0x00, 0x04];
-        let rbsp = remove_emulation_prevention_bytes(&input);
-        assert_eq!(rbsp, input.to_vec());
-    }
 
     // -----------------------------------------------------------------------
     // ByteStreamParser — integration-level tests
