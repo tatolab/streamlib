@@ -311,12 +311,17 @@ jobs:
           # description resolves through. The Vulkan Video session's refusal
           # of a direction the device never enabled, and the one classifier
           # that answers a codec operation's direction.
+          # The lease-aware slot ring every pool hands frames out of, and the
+          # processor output pool on it: which slot is next, a held one
+          # skipped, growth to the cap and the refusal there — no device.
           cargo test --locked -p streamlib-engine --lib -- \
             vulkan::rhi::vulkan_video_session::tests \
             vulkan::video::codec_utils::vk_video_core_profile::tests \
             core::processor_owned_window \
             core::compiler::compiler_ops::subprocess_escalate::processor_owned_window::tests \
             escalate_wire_encoding_tests \
+            core::context::lease_aware_pool_slot_ring \
+            core::context::processor_output_surface_pool \
             core::compiler::compiler_ops::subprocess_escalate::acquisition::tests::parse_texture_usages \
             core::compiler::compiler_ops::subprocess_escalate::acquisition::tests::the_implied_copy_bits \
             core::context::audio_device_backend \

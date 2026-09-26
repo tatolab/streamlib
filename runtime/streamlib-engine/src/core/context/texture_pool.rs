@@ -720,9 +720,7 @@ mod acquire_without_waiting_tests {
             TexturePoolConfig {
                 initial_pool_size_per_bucket: 1,
                 max_pool_size_per_bucket: 1,
-                exhaustion_policy: TexturePoolExhaustionPolicy::Block {
-                    timeout_ms: 60_000,
-                },
+                exhaustion_policy: TexturePoolExhaustionPolicy::Block { timeout_ms: 60_000 },
             },
         );
         let desc = TexturePoolDescriptor::new(16, 16, TextureFormat::Rgba8Unorm)
