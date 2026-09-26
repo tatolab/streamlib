@@ -88,10 +88,10 @@ impl<D: VulkanRhiDevice + 'static> SkiaSurfaceAdapter<D> {
 ///
 /// `vkGetInstanceProcAddr` is the bottom of the Vulkan loader chain;
 /// vulkanalia keeps it on a private `StaticCommands` field, so we
-/// load it from the same loader library the device was opened from. Skia copies
-/// every resolved proc into its own command tables when
-/// `direct_contexts::make_vulkan` constructs the DirectContext, so
-/// the captured fn pointer only needs to live across this function;
+/// load it from the loader library the device's own search list opens.
+/// Skia copies every resolved proc into its own command tables when
+/// `direct_contexts::make_vulkan` constructs the DirectContext, so the
+/// captured fn pointer only needs to live across this function;
 /// dropping the loader handle after `make_vulkan` is safe — the loader
 /// stays loaded for the process lifetime via vulkanalia's own entry.
 fn build_direct_context<D: VulkanRhiDevice>(
@@ -103,12 +103,13 @@ fn build_direct_context<D: VulkanRhiDevice>(
     let queue = device.queue();
     let queue_family_index = device.queue_family_index() as usize;
 
-    let vulkan_loader_library =
-        open_the_first_vulkan_loader_library_that_opens().map_err(|refusal_per_candidate| {
-            SkiaAdapterError::DirectContextBuildFailed {
-                reason: format!("no Vulkan loader library opened:\n{refusal_per_candidate}"),
-            }
-        })?;
+    let vulkan_loader_library = open_the_first_vulkan_loader_library_that_opens().map_err(
+        |vulkan_loader_library_not_found| SkiaAdapterError::DirectContextBuildFailed {
+            reason: format!("no Vulkan loader library opened:\n{vulkan_loader_library_not_found}"),
+        },
+    )?;
+    // SAFETY: a lookup by name only; calling the symbol is the transmute's
+    // contract below.
     let get_instance_proc_addr_untyped = unsafe {
         vulkan_loader_library.load(b"vkGetInstanceProcAddr\0")
     }
@@ -130,7 +131,7 @@ fn build_direct_context<D: VulkanRhiDevice>(
     // accepting the skia-provided pointer (which may be `null` during
     // bootstrap) is the correct shape. The handles' raw bits round-trip
     // through skia's pointer-shaped typedefs back to vulkanalia's
-    // `Handle::from_raw` cleanly on every Linux target.
+    // `Handle::from_raw` cleanly on every supported target.
     let get_proc = move |of: GetProcOf| -> *const c_void {
         match of {
             GetProcOf::Instance(skia_instance, name) => unsafe {
