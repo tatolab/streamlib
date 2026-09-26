@@ -910,7 +910,7 @@ pub struct GpuContext {
     /// `batched_compute_dispatch_recorder` is one recorder; its lock is what
     /// serializes two copies.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pub(crate) surface_to_surface_copy_recorder:
+    pub(super) surface_to_surface_copy_recorder:
         Arc<parking_lot::Mutex<Option<crate::vulkan::rhi::RhiCommandRecorder>>>,
     /// Graphics kernels built for the `register_graphics_kernel` escalate op,
     /// keyed the same way `compute_kernel_cache` is and with the same

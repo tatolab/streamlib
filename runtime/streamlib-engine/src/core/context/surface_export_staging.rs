@@ -65,12 +65,13 @@ use crate::core::context::GpuContext;
 use crate::core::context::surface_backing_resolution::{
     ResolvedSurfaceBacking, export_bytes_per_pixel_for_pixel_format, export_pixel_shape_for_texture,
 };
+use crate::core::context::texture_registration::TextureLayoutSettledByThisCopy;
 use crate::core::error::{Error, Result};
-use crate::host_rhi::{HostGpuDeviceExt as _, VulkanAccess, VulkanStage};
+use crate::host_rhi::HostGpuDeviceExt as _;
 use crate::vulkan::rhi::{
     HostVulkanBuffer, HostVulkanTimelineSemaphore, ImageCopyRegion, RhiCommandRecorder,
 };
-use streamlib_consumer_rhi::{PixelFormat, TextureFormat, VulkanLayout};
+use streamlib_consumer_rhi::{PixelFormat, VulkanLayout};
 
 /// Bound on the host wait for a staging refill. The copy is a GPU copy
 /// of one frame (tens of microseconds); a wait that reaches this bound
@@ -129,18 +130,6 @@ enum FrameThisStagingHoldsAfterTheCopy<'a> {
     /// A write-back: the copy reads the staging, so what it holds is
     /// whatever the refill before it put there.
     WhateverItAlreadyHeld,
-}
-
-/// A registration-layout update the copy being submitted makes true.
-///
-/// Returned by the record step and applied only after the submission
-/// succeeds: the barriers that settle the layout execute only then, so
-/// recording it earlier would let a failed submit leave the cell naming
-/// a layout the image never reached — and the next copy's barrier would
-/// name a wrong source.
-struct TextureLayoutSettledByThisCopy {
-    registration: crate::core::context::TextureRegistration,
-    settled_layout: VulkanLayout,
 }
 
 /// The recorder plus the next timeline value, under one lock: the
@@ -715,23 +704,6 @@ impl GpuContext {
         Ok(())
     }
 
-    /// The layouts a registered texture's staged copy transitions
-    /// between: its last-known resting layout, and where it comes back
-    /// to rest. UNDEFINED (a texture nothing has written yet) cannot be
-    /// a restore target, so such a texture comes to rest in GENERAL and
-    /// the caller records that on the registration.
-    fn resting_and_restore_layouts_of(
-        registration: &crate::core::context::TextureRegistration,
-    ) -> (VulkanLayout, VulkanLayout) {
-        let resting_layout = registration.current_layout();
-        let restore_layout = if resting_layout == VulkanLayout::UNDEFINED {
-            VulkanLayout::GENERAL
-        } else {
-            resting_layout
-        };
-        (resting_layout, restore_layout)
-    }
-
     /// Copy `surface_id`'s current pixels into the staging buffer.
     /// Resolves the source fresh — a rotating producer's latest
     /// registration, not a snapshot — and refuses an id whose frame the
@@ -785,35 +757,21 @@ impl GpuContext {
                     texture,
                     SurfaceExportStagingTextureCopyDirection::RefillIntoStaging,
                 )?;
-                let (resting_layout, restore_layout) =
-                    Self::resting_and_restore_layouts_of(registration);
-                recorder.record_image_barrier(
+                let settled_layout = recorder.record_image_read_as_transfer_source(
                     texture,
-                    resting_layout,
-                    VulkanLayout::TRANSFER_SRC_OPTIMAL,
-                    VulkanStage::ALL_COMMANDS,
-                    VulkanStage::ALL_TRANSFER,
-                    VulkanAccess::MEMORY_WRITE,
-                    VulkanAccess::TRANSFER_READ,
-                )?;
-                recorder.record_copy_image_to_buffer(
-                    texture,
-                    VulkanLayout::TRANSFER_SRC_OPTIMAL,
-                    staging.staging_buffer.as_ref(),
-                    ImageCopyRegion::tightly_packed(texture.width(), texture.height()),
-                )?;
-                recorder.record_image_barrier(
-                    texture,
-                    VulkanLayout::TRANSFER_SRC_OPTIMAL,
-                    restore_layout,
-                    VulkanStage::ALL_TRANSFER,
-                    VulkanStage::ALL_COMMANDS,
-                    VulkanAccess::TRANSFER_READ,
-                    VulkanAccess::MEMORY_READ,
+                    registration.current_layout(),
+                    |recorder| {
+                        recorder.record_copy_image_to_buffer(
+                            texture,
+                            VulkanLayout::TRANSFER_SRC_OPTIMAL,
+                            staging.staging_buffer.as_ref(),
+                            ImageCopyRegion::tightly_packed(texture.width(), texture.height()),
+                        )
+                    },
                 )?;
                 Ok(Some(TextureLayoutSettledByThisCopy {
                     registration: registration.clone(),
-                    settled_layout: restore_layout,
+                    settled_layout,
                 }))
             }
             ResolvedSurfaceBacking::PixelBuffer(pixel_buffer) => {
@@ -826,16 +784,7 @@ impl GpuContext {
                         staging.staging_byte_size,
                     )));
                 }
-                // Visibility for a prior producer's GPU writes: submission
-                // order alone doesn't make an earlier submission's buffer
-                // writes visible to this TRANSFER_READ.
-                recorder.record_buffer_barrier(
-                    pixel_buffer,
-                    VulkanStage::ALL_COMMANDS,
-                    VulkanStage::ALL_TRANSFER,
-                    VulkanAccess::MEMORY_WRITE,
-                    VulkanAccess::TRANSFER_READ,
-                )?;
+                recorder.record_buffer_barrier_before_a_transfer_read(pixel_buffer)?;
                 recorder.record_copy_buffer_to_buffer(
                     pixel_buffer,
                     staging.staging_buffer.as_ref(),
@@ -1003,51 +952,26 @@ impl GpuContext {
                     pixel_buffer,
                     staging.staging_byte_size,
                 )?;
-                // The published edit must be visible to whoever reads next —
-                // downstream GPU consumers and, via the coherent mapping the
-                // host wait covers, CPU readers.
-                recorder.record_buffer_barrier(
-                    pixel_buffer,
-                    VulkanStage::ALL_TRANSFER,
-                    VulkanStage::ALL_COMMANDS,
-                    VulkanAccess::TRANSFER_WRITE,
-                    VulkanAccess::MEMORY_READ,
-                )?;
+                recorder.record_buffer_barrier_publishing_a_transfer_write(pixel_buffer)?;
                 Ok(None)
             }
             ResolvedWriteBackDestination::RegisteredTexture(registration) => {
                 let texture = registration.texture();
-                // The refill's layout dance with the transfer arrow
-                // reversed.
-                let (resting_layout, restore_layout) =
-                    Self::resting_and_restore_layouts_of(registration);
-                recorder.record_image_barrier(
+                let settled_layout = recorder.record_image_write_as_transfer_destination(
                     texture,
-                    resting_layout,
-                    VulkanLayout::TRANSFER_DST_OPTIMAL,
-                    VulkanStage::ALL_COMMANDS,
-                    VulkanStage::ALL_TRANSFER,
-                    VulkanAccess::MEMORY_WRITE,
-                    VulkanAccess::TRANSFER_WRITE,
-                )?;
-                recorder.record_copy_buffer_to_image(
-                    staging.staging_buffer.as_ref(),
-                    texture,
-                    VulkanLayout::TRANSFER_DST_OPTIMAL,
-                    ImageCopyRegion::tightly_packed(texture.width(), texture.height()),
-                )?;
-                recorder.record_image_barrier(
-                    texture,
-                    VulkanLayout::TRANSFER_DST_OPTIMAL,
-                    restore_layout,
-                    VulkanStage::ALL_TRANSFER,
-                    VulkanStage::ALL_COMMANDS,
-                    VulkanAccess::TRANSFER_WRITE,
-                    VulkanAccess::MEMORY_READ,
+                    registration.current_layout(),
+                    |recorder| {
+                        recorder.record_copy_buffer_to_image(
+                            staging.staging_buffer.as_ref(),
+                            texture,
+                            VulkanLayout::TRANSFER_DST_OPTIMAL,
+                            ImageCopyRegion::tightly_packed(texture.width(), texture.height()),
+                        )
+                    },
                 )?;
                 Ok(Some(TextureLayoutSettledByThisCopy {
                     registration: registration.clone(),
-                    settled_layout: restore_layout,
+                    settled_layout,
                 }))
             }
         }
@@ -1129,6 +1053,8 @@ impl crate::core::context::GpuContextLimitedAccess {
 mod tests {
     use super::*;
     use crate::core::rhi::{PixelBuffer, Texture, TextureDescriptor, TextureUsages};
+    use crate::host_rhi::{VulkanAccess, VulkanStage};
+    use streamlib_consumer_rhi::TextureFormat;
 
     const SURFACE_WIDTH: u32 = 64;
     const SURFACE_HEIGHT: u32 = 64;

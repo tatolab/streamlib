@@ -231,3 +231,16 @@ mod tests {
         );
     }
 }
+
+/// A registration-layout update the copy being submitted makes true.
+///
+/// Returned by the record step and applied only after the submission
+/// succeeds: the barriers that settle the layout execute only then, so
+/// recording it earlier would let a failed submit leave the cell naming
+/// a layout the image never reached — and the next copy's barrier would
+/// name a wrong source.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) struct TextureLayoutSettledByThisCopy {
+    pub(crate) registration: TextureRegistration,
+    pub(crate) settled_layout: VulkanLayout,
+}
