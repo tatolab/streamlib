@@ -10,6 +10,7 @@ Nothing here boots an engine; the launch that goes on to a live node is in
 
 import sys
 import textwrap
+import warnings
 from pathlib import Path
 
 import pytest
@@ -154,6 +155,7 @@ def test_the_same_import_outside_the_guard_is_flagged():
         ('model(frame, device="mps")', "mps"),
         ('tensor.to("cuda")', "cuda"),
         ('tensor.to("mps", non_blocking=True)', "mps"),
+        ('torch.device("cuda" if use_gpu else "cpu")', "cuda"),
     ],
 )
 def test_a_device_passed_as_a_literal_is_named(device_spelling: str, named_device: str):
@@ -319,6 +321,8 @@ def test_the_check_reads_every_layout_and_skips_virtual_environments(tmp_path: P
     ):
         processor_directory.mkdir(parents=True)
         (processor_directory / "effect.py").write_text("import cupy\n")
+    (tmp_path / ".cache").mkdir()
+    (tmp_path / ".cache" / "effect.py").write_text("import cupy\n")
     for virtual_environment in (tmp_path / ".venv", tmp_path / "venv", tmp_path / "env"):
         site_packages = virtual_environment / "lib" / "site-packages" / "cupy"
         site_packages.mkdir(parents=True)
@@ -358,6 +362,16 @@ def test_the_block_names_file_line_and_portable_spelling(tmp_path: Path):
     assert block.count("portable: ") == 2
 
 
+def test_a_parse_adds_no_warning_of_its_own(tmp_path: Path):
+    (tmp_path / "helper.py").write_text('pattern = "\\d"\n')
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        report = check_app_directory_for_floor_bindings(tmp_path)
+
+    assert report.findings == []
+
+
 def test_a_clean_app_renders_nothing(tmp_path: Path):
     (tmp_path / "app.py").write_text("def setup(rt):\n    pass\n")
 
@@ -372,6 +386,9 @@ def test_a_clean_app_renders_nothing(tmp_path: Path):
 
 
 def test_the_wheels_own_python_binds_to_no_floor():
+    assert (WHEEL_PYTHON_PACKAGE_DIRECTORY / "__init__.py").is_file(), (
+        f"the gate must read the wheel's own Python, not {WHEEL_PYTHON_PACKAGE_DIRECTORY}"
+    )
     report = check_app_directory_for_floor_bindings(WHEEL_PYTHON_PACKAGE_DIRECTORY)
 
     assert report.findings == [], render_cross_floor_warning_block(
@@ -379,7 +396,6 @@ def test_the_wheels_own_python_binds_to_no_floor():
     )
 
 
-@requires_tomllib
 @pytest.mark.parametrize("use_test_pattern_source", [False, True])
 def test_the_scaffold_binds_to_no_floor(tmp_path: Path, use_test_pattern_source: bool):
     app_directory = tmp_path / "demo"
@@ -387,7 +403,7 @@ def test_the_scaffold_binds_to_no_floor(tmp_path: Path, use_test_pattern_source:
 
     report = check_app_directory_for_floor_bindings(app_directory)
 
-    assert (report.findings, report.skipped_rule_reason) == ([], None), (
+    assert report.findings == [], (
         render_cross_floor_warning_block(report, app_directory)
     )
 

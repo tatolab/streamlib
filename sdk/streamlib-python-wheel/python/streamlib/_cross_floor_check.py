@@ -16,6 +16,7 @@ import ast
 import os
 import re
 import sys
+import warnings
 from pathlib import Path
 from typing import NamedTuple, Optional
 
@@ -122,6 +123,8 @@ def _is_platform_guard(condition: ast.expr) -> bool:
 
 
 def _device_named_by_literal(node: ast.expr) -> Optional[str]:
+    if isinstance(node, ast.IfExp) and not _is_platform_guard(node.test):
+        return _device_named_by_literal(node.body) or _device_named_by_literal(node.orelse)
     if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
         return None
     for device_name in DEVICE_LITERAL_NAMES:
@@ -249,7 +252,11 @@ class _FloorBindingSourceVisitor(ast.NodeVisitor):
 def find_floor_bindings_in_python_source(source: str, file: Path) -> "list[CrossFloorFinding]":
     """Every floor binding in one Python source; raises `SyntaxError` on source that does not parse."""
     visitor = _FloorBindingSourceVisitor(file)
-    visitor.visit(ast.parse(source, filename=str(file)))
+    # A parse emits the file's own SyntaxWarnings; running the app reports those.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        parsed_module = ast.parse(source, filename=str(file))
+    visitor.visit(parsed_module)
     return visitor.findings
 
 
