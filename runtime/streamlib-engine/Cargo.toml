@@ -322,10 +322,6 @@ name = "processor_owned_window_on_the_first_thread"
 path = "tests/processor_owned_window_on_the_first_thread.rs"
 harness = false
 required-features = ["hardware-tests"]
-# The AVFoundation arm capturing from a real camera through the video device
-# seam. Rig tier — a camera, the GPU, and camera access allowed for the
-# terminal running it — so it builds only under `hardware-tests`. Empty off
-# Apple.
 # The VideoToolbox codec arm round-trips the PSNR references on Apple's
 # hardware encoder and decoder. Rig tier — a virtual machine exposes neither —
 # so it builds only under `hardware-tests`. Empty off Apple.
@@ -334,6 +330,10 @@ name = "videotoolbox_arm_round_trips_the_psnr_references"
 path = "tests/videotoolbox_arm_round_trips_the_psnr_references.rs"
 required-features = ["hardware-tests"]
 
+# The AVFoundation arm capturing from a real camera through the video device
+# seam. Rig tier — a camera, the GPU, and camera access allowed for the
+# terminal running it — so it builds only under `hardware-tests`. Empty off
+# Apple.
 [[test]]
 name = "avfoundation_camera_captures_through_the_video_device_seam"
 path = "tests/avfoundation_camera_captures_through_the_video_device_seam.rs"

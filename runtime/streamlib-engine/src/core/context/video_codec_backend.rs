@@ -105,12 +105,15 @@ pub trait VideoEncodeSession: Send {
     ) -> Result<Vec<EncodedVideoAccessUnitFromSession>>;
 }
 
-/// The largest coded extent a decode session allocates its picture buffer for.
+/// The largest stream a decode session takes: held against the coded extent
+/// where the arm can read it — Vulkan Video sizes its picture buffer by it —
+/// and against the conformance-window picture where only that is reported —
+/// VideoToolbox, which refuses a larger stream by name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VideoDecodeMaximumCodedExtent {
-    /// Upper bound on the coded width in pixels.
+    /// Upper bound on the stream's width in pixels.
     pub max_coded_width: u32,
-    /// Upper bound on the coded height in pixels.
+    /// Upper bound on the stream's height in pixels.
     pub max_coded_height: u32,
 }
 
@@ -119,8 +122,8 @@ pub struct VideoDecodeMaximumCodedExtent {
 pub struct VideoDecodeSessionRequest {
     /// The elementary stream the session consumes.
     pub elementary_stream: VideoCodecElementaryStream,
-    /// The extent the picture buffer is capped at. `None`: sized from the
-    /// stream's first parameter sets.
+    /// The cap on the stream's extent. `None`: whatever the stream's first
+    /// parameter sets state.
     pub maximum_coded_extent: Option<VideoDecodeMaximumCodedExtent>,
 }
 

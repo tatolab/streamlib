@@ -6,12 +6,11 @@
 //! them.
 
 use std::collections::HashMap;
-use std::collections::hash_map::Entry;
 
 use objc2_io_surface::{IOSurfaceID, IOSurfaceRef};
 
-use crate::core::Result;
 use crate::core::context::GpuContextLimitedAccess;
+use crate::core::{Error, Result};
 use crate::vulkan::rhi::ImportedIOSurfaceStorageBuffer;
 
 /// How many distinct IOSurfaces one stream keeps imported. A producer recycles
@@ -39,7 +38,7 @@ impl ImportedIOSurfaceStorageBuffersKeptForRecycling {
     /// The storage buffer over `iosurface`, imported on the first frame it
     /// carries. A refused import is the error, and leaves the set as it was.
     ///
-    /// A new surface past the bound starts the set over, releasing every other
+    /// A new import past the bound starts the set over, releasing every other
     /// import — so the caller must have retired any GPU work still reading one
     /// before asking for a surface it does not [`Self::holds`].
     pub(crate) fn imported_for(
@@ -47,14 +46,22 @@ impl ImportedIOSurfaceStorageBuffersKeptForRecycling {
         gpu_context: &GpuContextLimitedAccess,
         iosurface: &IOSurfaceRef,
     ) -> Result<&ImportedIOSurfaceStorageBuffer> {
-        if !self.holds(iosurface) && self.count() >= MOST_IMPORTED_IOSURFACES_KEPT {
-            self.imported_by_iosurface_id.clear();
+        if !self.holds(iosurface) {
+            let imported =
+                gpu_context.escalate(|full| full.import_iosurface_as_storage_buffer(iosurface))?;
+            if self.count() >= MOST_IMPORTED_IOSURFACES_KEPT {
+                self.imported_by_iosurface_id.clear();
+            }
+            self.imported_by_iosurface_id
+                .insert(iosurface.id(), imported);
         }
-        match self.imported_by_iosurface_id.entry(iosurface.id()) {
-            Entry::Occupied(imported) => Ok(imported.into_mut()),
-            Entry::Vacant(slot) => Ok(slot.insert(
-                gpu_context.escalate(|full| full.import_iosurface_as_storage_buffer(iosurface))?,
-            )),
-        }
+        self.imported_by_iosurface_id
+            .get(&iosurface.id())
+            .ok_or_else(|| {
+                Error::Runtime(format!(
+                    "IOSurface {} is missing from the imported set it was just added to",
+                    iosurface.id()
+                ))
+            })
     }
 }

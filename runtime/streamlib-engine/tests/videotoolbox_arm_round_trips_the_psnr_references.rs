@@ -169,6 +169,76 @@ fn regenerate_the_cross_floor_clips() {
     }
 }
 
+/// Upstream stamps are the publisher's business: a Python processor may
+/// repeat one or step back. The session times frames on its own clock, so
+/// every frame still encodes, and each access unit carries the stamp of the
+/// frame it came from, whatever that stamp was.
+#[test]
+#[cfg_attr(not(feature = "hardware-tests"), ignore)]
+fn repeated_and_backwards_source_stamps_each_encode_carrying_their_own_stamp() {
+    const SOURCE_STAMPS_REPEATING_THEN_STEPPING_BACK: [i64; 5] = [
+        5_000_000_000,
+        5_000_000_000,
+        4_000_000_000,
+        4_000_000_000,
+        9_000_000_000,
+    ];
+    let backend = probe_video_codec_backend();
+    let gpu = gpu_context().limited_access();
+    let reference = cross_floor_clip_reference_picture();
+    let mut encode_session = gpu
+        .escalate(|full| {
+            backend.open_encode_session(
+                full,
+                &VideoEncodeSessionRequest {
+                    elementary_stream: VideoCodecElementaryStream::H264,
+                    width: CROSS_FLOOR_CLIP_WIDTH,
+                    height: CROSS_FLOOR_CLIP_HEIGHT,
+                    frames_per_second: CROSS_FLOOR_CLIP_FRAMES_PER_SECOND,
+                    knobs: VideoEncodeKnobs {
+                        bitrate_bps: None,
+                        keyframe_interval_seconds: 1,
+                        effort_level: None,
+                    },
+                    color_vui: Some(test_pattern_color_vui()),
+                },
+            )
+        })
+        .expect("a hardware encode session");
+    for source_timestamp_ns in SOURCE_STAMPS_REPEATING_THEN_STEPPING_BACK {
+        let (surface_id, source_pixel_buffer) = gpu
+            .acquire_pixel_buffer(
+                CROSS_FLOOR_CLIP_WIDTH,
+                CROSS_FLOOR_CLIP_HEIGHT,
+                PixelFormat::Rgba32,
+            )
+            .expect("a pooled source frame");
+        source_pixel_buffer
+            .write_this_plane_from(0, &reference.rgba)
+            .expect("the reference staged into the source frame");
+        let access_units = encode_session
+            .encode_published_surface(&VideoEncodeSourceSurface {
+                surface_id: &surface_id.to_string(),
+                texture_layout: None,
+                width: CROSS_FLOOR_CLIP_WIDTH,
+                height: CROSS_FLOOR_CLIP_HEIGHT,
+                timestamp_ns: source_timestamp_ns,
+            })
+            .unwrap_or_else(|refusal| {
+                panic!("a frame stamped {source_timestamp_ns} must still encode: {refusal}")
+            });
+        let carried_stamps: Vec<Option<i64>> = access_units
+            .iter()
+            .map(|access_unit| access_unit.timestamp_ns)
+            .collect();
+        assert_eq!(
+            carried_stamps,
+            [Some(source_timestamp_ns)],
+            "the frame stamped {source_timestamp_ns} yields one access unit carrying that stamp"
+        );
+    }
+}
+
 /// What `TestPatternSource` stamps its RGBA frames with.
 fn test_pattern_color_vui() -> H273ColorVui {
     H273ColorVui {
