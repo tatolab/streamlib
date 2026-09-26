@@ -47,16 +47,20 @@ impl Rgba8Picture {
         let rgba = match frame.color_type {
             png::ColorType::Rgba => pixels.to_vec(),
             png::ColorType::Rgb => pixels
-                .chunks_exact(3)
-                .flat_map(|rgb| [rgb[0], rgb[1], rgb[2], 255])
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .flat_map(|&[red, green, blue]| [red, green, blue, 255])
                 .collect(),
             png::ColorType::Grayscale => pixels
                 .iter()
                 .flat_map(|&gray| [gray, gray, gray, 255])
                 .collect(),
             png::ColorType::GrayscaleAlpha => pixels
-                .chunks_exact(2)
-                .flat_map(|gray_alpha| [gray_alpha[0], gray_alpha[0], gray_alpha[0], gray_alpha[1]])
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .flat_map(|&[gray, alpha]| [gray, gray, gray, alpha])
                 .collect(),
             png::ColorType::Indexed => unreachable!("EXPAND resolves the palette"),
         };
@@ -205,8 +209,14 @@ fn bt709_full_range_yuv420_planes(rgba: &[u8], width: u32, height: u32) -> [Vec<
         vec![0f64; width * height],
         vec![0f64; width * height],
     );
-    for (index, pixel) in rgba.chunks_exact(4).take(width * height).enumerate() {
-        let [red, green, blue] = [pixel[0], pixel[1], pixel[2]].map(f64::from);
+    for (index, &[red, green, blue, _alpha]) in rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .take(width * height)
+        .enumerate()
+    {
+        let [red, green, blue] = [red, green, blue].map(f64::from);
         let y = 0.2126 * red + 0.7152 * green + 0.0722 * blue;
         luma[index] = y;
         blue_difference[index] = (blue - y) / 1.8556 + 128.0;
