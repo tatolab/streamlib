@@ -1130,8 +1130,11 @@ class GpuContextLimitedAccess:
         format; two textures must match exactly (`rgba8_unorm` is not
         `rgba8_unorm_srgb`). Returns once the destination's next reader would
         see the copied pixels. A format or extent mismatch, a retired frame,
-        and a destination that cannot take a write-back each raise naming the
-        reason.
+        a destination that cannot take a write-back, and a source and
+        destination that are one allocation each raise naming the reason.
+        The copy reads the source as it is when the copy runs: hold
+        `claim_surface_against_producer_reuse` on a frame whose producer may
+        recycle it, so the pixels copied are the ones its id named.
         """
 
     def escalate(self, privileged_callback: Callable[[GpuContextFullAccess], _EscalateResult]) -> _EscalateResult:
@@ -1328,8 +1331,11 @@ class GpuContextFullAccess:
         format; two textures must match exactly (`rgba8_unorm` is not
         `rgba8_unorm_srgb`). Returns once the destination's next reader would
         see the copied pixels. A format or extent mismatch, a retired frame,
-        and a destination that cannot take a write-back each raise naming the
-        reason.
+        a destination that cannot take a write-back, and a source and
+        destination that are one allocation each raise naming the reason.
+        The copy reads the source as it is when the copy runs: hold
+        `claim_surface_against_producer_reuse` on a frame whose producer may
+        recycle it, so the pixels copied are the ones its id named.
         """
 
     def kernel_dispatch_batch(self) -> KernelDispatchBatch:

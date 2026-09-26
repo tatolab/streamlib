@@ -78,6 +78,43 @@ impl<'a> SurfaceToSurfaceCopyEndpoint<'a> {
     }
 }
 
+/// Refuse a pair that resolves to one allocation — a frame id and its pool
+/// slot are two spellings of one buffer, and a copy onto itself overlaps
+/// its own source.
+fn refuse_a_pair_that_is_one_allocation(
+    source: &SurfaceToSurfaceCopyEndpoint<'_>,
+    destination: &SurfaceToSurfaceCopyEndpoint<'_>,
+) -> Result<()> {
+    use crate::host_rhi::HostTextureExt as _;
+
+    let one_allocation = match (&source.backing, &destination.backing) {
+        (
+            ResolvedSurfaceBacking::PixelBuffer(source_buffer),
+            ResolvedSurfaceBacking::PixelBuffer(destination_buffer),
+        ) => std::sync::Arc::ptr_eq(
+            &source_buffer.buffer_ref().inner,
+            &destination_buffer.buffer_ref().inner,
+        ),
+        (
+            ResolvedSurfaceBacking::RegisteredTexture(source_registration),
+            ResolvedSurfaceBacking::RegisteredTexture(destination_registration),
+        ) => {
+            let source_image = source_registration.texture().vulkan_inner().image();
+            source_image.is_some()
+                && source_image == destination_registration.texture().vulkan_inner().image()
+        }
+        _ => false,
+    };
+    if one_allocation {
+        return Err(Error::GpuError(format!(
+            "surfaces {} and {} are one allocation; a copy onto itself would read the pixels \
+             it is overwriting",
+            source.surface_id, destination.surface_id
+        )));
+    }
+    Ok(())
+}
+
 /// Refuse a pair whose pixels differ in format or extent — the copy
 /// converts and scales nothing.
 ///
@@ -244,6 +281,7 @@ impl GpuContext {
         let source = SurfaceToSurfaceCopyEndpoint::resolve_source(self, source_surface_id)?;
         let destination =
             SurfaceToSurfaceCopyEndpoint::resolve_destination(self, destination_surface_id)?;
+        refuse_a_pair_that_is_one_allocation(&source, &destination)?;
         refuse_a_pair_whose_pixels_differ(&source, &destination)?;
 
         let mut surface_to_surface_copy_recorder_slot =

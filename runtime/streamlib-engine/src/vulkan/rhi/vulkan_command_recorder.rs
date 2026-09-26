@@ -485,6 +485,13 @@ impl RhiCommandRecorderInner {
         byte_size: u64,
     ) -> Result<()> {
         self.expect_recording("record_copy_buffer_to_buffer")?;
+        if src.vk_buffer() == dst.vk_buffer() {
+            return Err(Error::GpuError(format!(
+                "RhiCommandRecorder '{}': record_copy_buffer_to_buffer: source and destination \
+                 are one buffer, and a whole-range copy onto itself overlaps",
+                self.label
+            )));
+        }
         if byte_size > src.vk_buffer_size() || byte_size > dst.vk_buffer_size() {
             return Err(Error::GpuError(format!(
                 "RhiCommandRecorder '{}': record_copy_buffer_to_buffer: copy of {} bytes exceeds \

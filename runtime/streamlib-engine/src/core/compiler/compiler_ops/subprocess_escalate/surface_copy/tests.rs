@@ -520,3 +520,21 @@ fn a_texture_nothing_has_written_is_refused_as_a_source() {
         &source_id,
     );
 }
+
+/// A copy onto its own source would overlap it, so it is refused rather
+/// than recorded.
+#[test]
+fn a_frame_copied_onto_itself_is_refused_as_one_allocation() {
+    let Some(gpu) = gpu_or_skip("a_frame_copied_onto_itself_is_refused_as_one_allocation") else {
+        return;
+    };
+    let frame_pixels = a_distinct_byte_pattern(1);
+    let (frame_id, frame) = a_pool_frame_holding(&gpu, PixelFormat::Rgba32, &frame_pixels);
+
+    assert_refused_saying(
+        copy_through_the_escalate_op(&gpu, &frame_id, &frame_id),
+        "one allocation",
+        &frame_id,
+    );
+    assert_eq!(read_pool_frame(&frame), frame_pixels);
+}
