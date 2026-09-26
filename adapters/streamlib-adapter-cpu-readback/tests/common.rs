@@ -12,8 +12,11 @@
 //! sees the imported staging buffers natively as
 //! `Arc<HostVulkanBuffer>` through `HostSurfaceRegistration<HostMarker>`.
 
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 #![allow(dead_code)] // each test file uses a different subset
+
+#[path = "support/render_target_texture.rs"]
+pub mod render_target_texture;
 
 use std::sync::{Arc, OnceLock};
 use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
@@ -149,9 +152,10 @@ impl HostFixture {
     }
 
     /// Fallible variant — returns `Err(Error)` when the host
-    /// can't allocate a render-target DMA-BUF in `texture_format` on
+    /// can't allocate a render-target image in `texture_format` on
     /// this driver (typically NV12 RT modifier missing on the EGL
-    /// probe). Multi-plane tests use this to skip cleanly.
+    /// probe; on macOS the IOSurface-backed image is single-plane).
+    /// Multi-plane tests use this to skip cleanly.
     pub fn try_register_surface_with_format(
         &self,
         surface_id: SurfaceId,
@@ -160,9 +164,12 @@ impl HostFixture {
         surface_format: SurfaceFormat,
         texture_format: TextureFormat,
     ) -> Result<StreamlibSurface, Error> {
-        let stream_texture =
-            self.gpu
-                .acquire_render_target_dma_buf_image(width, height, texture_format)?;
+        let stream_texture = render_target_texture::acquire_render_target_texture(
+            &self.gpu,
+            width,
+            height,
+            texture_format,
+        )?;
         let texture_arc = Arc::clone(stream_texture.vulkan_inner());
 
         // Allocate one HOST_VISIBLE staging buffer per logical plane.

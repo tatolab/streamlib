@@ -19,7 +19,6 @@
 use std::ffi::c_void;
 use std::sync::{Arc, Mutex};
 
-use libloading::Library;
 use skia_safe::gpu::vk::{
     Alloc, AllocFlag, BackendContext, GetProcOf, ImageInfo as SkiaVkImageInfo,
 };
@@ -29,12 +28,12 @@ use skia_safe::gpu::{
 };
 use skia_safe::{AlphaType, ColorSpace, ColorType};
 use streamlib_adapter_vulkan::VulkanSurfaceAdapter;
-use streamlib_consumer_rhi::VulkanRhiDevice;
+use streamlib_consumer_rhi::{VulkanRhiDevice, open_the_first_vulkan_loader_library_that_opens};
 use streamlib_surface_adapter::{
     AdapterError, ReadGuard, StreamlibSurface, SurfaceAdapter, SurfaceId, VulkanImageInfoExt,
     WriteGuard,
 };
-use vulkanalia::loader::LIBRARY;
+use vulkanalia::loader::Loader as _;
 use vulkanalia::vk::{self, DeviceV1_0, Handle as _, InstanceV1_0};
 
 use crate::error::SkiaAdapterError;
@@ -89,12 +88,12 @@ impl<D: VulkanRhiDevice + 'static> SkiaSurfaceAdapter<D> {
 ///
 /// `vkGetInstanceProcAddr` is the bottom of the Vulkan loader chain;
 /// vulkanalia keeps it on a private `StaticCommands` field, so we
-/// load it directly from `libvulkan.so` via `libloading`. Skia copies
+/// load it from the same loader library the device was opened from. Skia copies
 /// every resolved proc into its own command tables when
 /// `direct_contexts::make_vulkan` constructs the DirectContext, so
 /// the captured fn pointer only needs to live across this function;
-/// dropping the `Library` after `make_vulkan` is safe — `libvulkan`
-/// stays loaded for the process lifetime via vulkanalia's own loader.
+/// dropping the loader handle after `make_vulkan` is safe — the loader
+/// stays loaded for the process lifetime via vulkanalia's own entry.
 fn build_direct_context<D: VulkanRhiDevice>(
     device: &Arc<D>,
 ) -> Result<DirectContext, SkiaAdapterError> {
@@ -104,18 +103,24 @@ fn build_direct_context<D: VulkanRhiDevice>(
     let queue = device.queue();
     let queue_family_index = device.queue_family_index() as usize;
 
-    let library = unsafe { Library::new(LIBRARY) }.map_err(|e| {
-        SkiaAdapterError::DirectContextBuildFailed {
-            reason: format!("dlopen {LIBRARY}: {e}"),
-        }
-    })?;
-    let get_instance_proc_addr_sym: libloading::Symbol<vk::PFN_vkGetInstanceProcAddr> = unsafe {
-        library.get(b"vkGetInstanceProcAddr\0")
+    let vulkan_loader_library = open_the_first_vulkan_loader_library_that_opens().map_err(
+        |refusal_per_candidate| SkiaAdapterError::DirectContextBuildFailed {
+            reason: format!("no Vulkan loader library opened:\n{refusal_per_candidate}"),
+        },
+    )?;
+    let get_instance_proc_addr_untyped = unsafe {
+        vulkan_loader_library.load(b"vkGetInstanceProcAddr\0")
     }
     .map_err(|e| SkiaAdapterError::DirectContextBuildFailed {
         reason: format!("dlsym vkGetInstanceProcAddr: {e}"),
     })?;
-    let entry_get_instance_proc_addr: vk::PFN_vkGetInstanceProcAddr = *get_instance_proc_addr_sym;
+    // SAFETY: the loader exports `vkGetInstanceProcAddr` with exactly this
+    // signature; the untyped pointer is only its storage shape.
+    let entry_get_instance_proc_addr: vk::PFN_vkGetInstanceProcAddr = unsafe {
+        std::mem::transmute::<extern "system" fn(), vk::PFN_vkGetInstanceProcAddr>(
+            get_instance_proc_addr_untyped,
+        )
+    };
     let device_get_device_proc_addr = instance.commands().get_device_proc_addr;
 
     // Skia hands us its own typed handles inside GetProcOf and we use

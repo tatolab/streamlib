@@ -10,7 +10,10 @@
 //! regression that surfaces clearly in CI logs when contention semantics
 //! drift.
 
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
+
+#[path = "support/render_target_texture.rs"]
+mod render_target_texture;
 
 use std::sync::Arc;
 use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
@@ -50,9 +53,13 @@ fn live_write_guard_blocks_acquire_read_until_dropped() {
     let ctx = VulkanContext::new(Arc::clone(&adapter));
 
     let surface_id: SurfaceId = 7;
-    let stream_tex = gpu
-        .acquire_render_target_dma_buf_image(64, 64, TextureFormat::Bgra8Unorm)
-        .expect("acquire_render_target_dma_buf_image");
+    let stream_tex = render_target_texture::acquire_render_target_texture(
+        &gpu,
+        64,
+        64,
+        TextureFormat::Bgra8Unorm,
+    )
+    .expect("acquire_render_target_texture");
     let texture = stream_tex.vulkan_inner().clone();
     // Single-writer-per-edge per
     // `docs/architecture/adapter-timeline-single-writer.md`.

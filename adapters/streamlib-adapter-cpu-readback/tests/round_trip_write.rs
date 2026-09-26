@@ -5,7 +5,7 @@
 //! acquires WRITE, modifies bytes, releases. Host then re-acquires READ
 //! and asserts the modifications landed in the host `VkImage`.
 
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 #[path = "common.rs"]
 mod common;

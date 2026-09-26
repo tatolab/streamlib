@@ -18,23 +18,36 @@
 //!   per-surface state survives a SIGKILL on a subprocess that holds
 //!   live Skia + EGL state.
 
-#![cfg(target_os = "linux")]
+// The GL-backed Skia adapter this fixture drives imports a DMA-BUF through
+// EGL, so it exists on Linux alone. Off it the binary is an empty `main` so the
+// target still compiles.
+#[cfg(not(target_os = "linux"))]
+fn main() {}
 
+#[cfg(target_os = "linux")]
 use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+#[cfg(target_os = "linux")]
 use std::os::unix::net::UnixStream;
+#[cfg(target_os = "linux")]
 use std::process::ExitCode;
+#[cfg(target_os = "linux")]
 use std::sync::Arc;
 
+#[cfg(target_os = "linux")]
 use streamlib_adapter_opengl::{
     EglRuntime, HostSurfaceRegistration, OpenGlContext, OpenGlSurfaceAdapter,
 };
+#[cfg(target_os = "linux")]
 use streamlib_adapter_skia::SkiaGlContext;
+#[cfg(target_os = "linux")]
 use streamlib_surface_adapter::{
     StreamlibSurface, SurfaceFormat, SurfaceSyncState, SurfaceTransportHandle, SurfaceUsage,
 };
 
+#[cfg(target_os = "linux")]
 const HELPER_SURFACE_ID: u64 = 0xfeed_face;
 
+#[cfg(target_os = "linux")]
 #[derive(Debug, serde::Deserialize)]
 struct HelperRequest {
     width: u32,
@@ -45,6 +58,7 @@ struct HelperRequest {
     plane_stride: u64,
 }
 
+#[cfg(target_os = "linux")]
 #[derive(Debug, serde::Serialize)]
 struct HelperResponse {
     ok: bool,
@@ -57,6 +71,7 @@ struct HelperResponse {
 // file by its `tests/` path; the allow is what makes clippy agree, now that
 // clippy runs in CI. Scoped to the two functions that write, so a `println!`
 // added anywhere else here is still caught.
+#[cfg(target_os = "linux")]
 #[allow(
     clippy::disallowed_macros,
     reason = "no subscriber exists in a spawned test helper; stderr is what the harness reads"
@@ -74,6 +89,7 @@ fn die(socket: Option<&UnixStream>, msg: String) -> ExitCode {
     ExitCode::from(1)
 }
 
+#[cfg(target_os = "linux")]
 fn run() -> ExitCode {
     let role = std::env::args()
         .nth(1)
@@ -184,6 +200,7 @@ fn run() -> ExitCode {
 // file by its `tests/` path; the allow is what makes clippy agree, now that
 // clippy runs in CI. Scoped to the two functions that write, so a `println!`
 // added anywhere else here is still caught.
+#[cfg(target_os = "linux")]
 #[allow(
     clippy::disallowed_macros,
     reason = "no subscriber exists in a spawned test helper; stderr is what the harness reads"
@@ -225,6 +242,7 @@ fn crash_mid_skia_write(skia_ctx: &SkiaGlContext, width: u32, height: u32) -> Ex
     std::process::abort();
 }
 
+#[cfg(target_os = "linux")]
 fn main() -> ExitCode {
     run()
 }

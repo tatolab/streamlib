@@ -13,7 +13,7 @@
 //! the host-flavor adapter — the same code path runs on the consumer
 //! side with `ConsumerVulkanDevice`.
 
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 #[path = "common.rs"]
 mod common;

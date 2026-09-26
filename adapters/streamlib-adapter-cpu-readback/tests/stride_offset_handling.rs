@@ -10,7 +10,7 @@
 //!
 //! These tests document and lock that invariant.
 
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 #[path = "common.rs"]
 mod common;

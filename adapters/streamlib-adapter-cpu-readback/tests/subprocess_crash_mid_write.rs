@@ -17,7 +17,7 @@
 //! the per-surface state releases and the next `acquire_*` succeeds —
 //! the same RAII coverage the Vulkan host-side crash test gives.
 
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 #[path = "common.rs"]
 mod common;

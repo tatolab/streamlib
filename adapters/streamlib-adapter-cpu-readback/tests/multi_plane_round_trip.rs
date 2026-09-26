@@ -20,9 +20,10 @@
 //! which only succeeds when the EGL probe advertised an NV12 modifier
 //! that's render-target-capable. Drivers without that modifier (e.g.
 //! pre-570 NVIDIA, llvmpipe-only) skip the test cleanly via the
-//! fallible registration path.
+//! fallible registration path, as does macOS, whose IOSurface-backed
+//! image carries one plane.
 
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 #[path = "common.rs"]
 mod common;
@@ -58,7 +59,7 @@ fn register_nv12_or_skip(
         Err(e) => {
             println!(
                 "{test_name}: skipping — host can't allocate NV12 \
-                 render-target DMA-BUF on this driver ({e})"
+                 render-target image on this driver ({e})"
             );
             None
         }

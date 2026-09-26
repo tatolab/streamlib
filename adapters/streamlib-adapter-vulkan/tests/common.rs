@@ -4,12 +4,19 @@
 //! Shared scaffolding for the round-trip / crash subprocess tests.
 //! Pulled in via `#[path = "common.rs"] mod common;` in each test file.
 
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 #![allow(dead_code)] // Each test file uses a different subset.
 
+#[path = "support/render_target_texture.rs"]
+pub mod render_target_texture;
+
+#[cfg(target_os = "linux")]
 use std::os::fd::{AsRawFd, IntoRawFd, RawFd};
+#[cfg(target_os = "linux")]
 use std::os::unix::net::UnixStream;
+#[cfg(target_os = "linux")]
 use std::path::PathBuf;
+#[cfg(target_os = "linux")]
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
@@ -17,6 +24,7 @@ use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
 /// The in-crate `vulkan_adapter_subprocess_helper` `[[bin]]` target,
 /// surfaced by Cargo as `CARGO_BIN_EXE_<name>` because it lives in
 /// this crate.
+#[cfg(target_os = "linux")]
 pub fn vulkan_adapter_subprocess_helper_path() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_vulkan_adapter_subprocess_helper"))
 }
@@ -62,10 +70,13 @@ impl HostFixture {
         width: u32,
         height: u32,
     ) -> RegisteredSurface {
-        let texture = self
-            .gpu
-            .acquire_render_target_dma_buf_image(width, height, TextureFormat::Bgra8Unorm)
-            .expect("acquire_render_target_dma_buf_image");
+        let texture = render_target_texture::acquire_render_target_texture(
+            &self.gpu,
+            width,
+            height,
+            TextureFormat::Bgra8Unorm,
+        )
+        .expect("acquire_render_target_texture");
         // Single-writer-per-edge: each timeline has exactly one writer
         // process. produce_done is signaled by the producer side
         // (end_write_access); consume_done is signaled by the consumer
@@ -126,6 +137,7 @@ pub struct RegisteredSurface {
 /// Spawn a subprocess running the test helper binary with role `role`.
 /// Returns the child handle and the parent end of the socketpair the
 /// helper reads its descriptor + fds from.
+#[cfg(target_os = "linux")]
 pub fn spawn_helper(role: &str) -> (Child, UnixStream) {
     let (parent, child) = UnixStream::pair().expect("socketpair");
     // Move the child end's fd into the helper's fd table without
@@ -157,6 +169,7 @@ pub fn spawn_helper(role: &str) -> (Child, UnixStream) {
 /// `docs/architecture/adapter-timeline-single-writer.md`: the helper
 /// imports both timelines; whether it signals produce_done or
 /// consume_done depends on its role.
+#[cfg(target_os = "linux")]
 pub fn send_helper_request(
     parent: &UnixStream,
     descriptor: &serde_json::Value,
@@ -175,6 +188,7 @@ pub fn send_helper_request(
 }
 
 /// Read the helper's response (length-prefixed JSON, no fds).
+#[cfg(target_os = "linux")]
 pub fn recv_helper_response(parent: &UnixStream) -> serde_json::Value {
     let mut len_buf = [0u8; 4];
     let mut total = 0;
@@ -204,6 +218,7 @@ pub fn recv_helper_response(parent: &UnixStream) -> serde_json::Value {
 
 /// Build the request descriptor the helper expects, using the
 /// metadata stored on a registered surface.
+#[cfg(target_os = "linux")]
 pub fn helper_descriptor(
     role: &str,
     surface: &RegisteredSurface,

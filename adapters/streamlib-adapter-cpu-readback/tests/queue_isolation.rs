@@ -28,7 +28,7 @@
 //! graphics/compute queues), which is out of scope here. See issue
 //! #532's `Tests / validation` section for the full caveat.
 
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 #[path = "common.rs"]
 mod common;

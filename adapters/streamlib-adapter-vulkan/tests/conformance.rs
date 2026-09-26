@@ -3,7 +3,7 @@
 
 //! `streamlib_adapter_vulkan::tests::conformance` — runs the public
 //! `run_conformance` suite from `streamlib-surface-adapter` against a real
-//! Vulkan adapter wired to a host-allocated DMA-BUF render-target image
+//! Vulkan adapter wired to a host-allocated render-target image
 //! and an exportable timeline semaphore.
 //!
 //! Exercises the same eight contracts MockAdapter passes (acquire/drop
@@ -12,7 +12,10 @@
 //! the trait shape is honored — it does NOT prove cross-process
 //! correctness; that's the round-trip and crash tests.
 
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
+
+#[path = "support/render_target_texture.rs"]
+mod render_target_texture;
 
 use std::sync::Arc;
 use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
@@ -40,9 +43,13 @@ fn register_one(
     gpu: &GpuContext,
     id: SurfaceId,
 ) -> StreamlibSurface {
-    let stream_tex = gpu
-        .acquire_render_target_dma_buf_image(64, 64, TextureFormat::Bgra8Unorm)
-        .expect("acquire_render_target_dma_buf_image");
+    let stream_tex = render_target_texture::acquire_render_target_texture(
+        gpu,
+        64,
+        64,
+        TextureFormat::Bgra8Unorm,
+    )
+    .expect("acquire_render_target_texture");
     let texture = stream_tex.vulkan_inner().clone();
     // Single-writer-per-edge per
     // `docs/architecture/adapter-timeline-single-writer.md`: two
@@ -130,9 +137,13 @@ fn duplicate_registration_returns_surface_already_registered() {
     let id: SurfaceId = 0xfeed_face;
     let _first = register_one(&adapter, &gpu, id);
 
-    let stream_tex = gpu
-        .acquire_render_target_dma_buf_image(64, 64, TextureFormat::Bgra8Unorm)
-        .expect("acquire_render_target_dma_buf_image");
+    let stream_tex = render_target_texture::acquire_render_target_texture(
+        &gpu,
+        64,
+        64,
+        TextureFormat::Bgra8Unorm,
+    )
+    .expect("acquire_render_target_texture");
     let texture = stream_tex.vulkan_inner().clone();
     let produce_done = Arc::new(
         HostVulkanTimelineSemaphore::new(adapter.device().device(), 0)

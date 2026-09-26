@@ -52,7 +52,6 @@ impl<D: VulkanRhiDevice + 'static> CpuReadbackContext<D> {
     }
 }
 
-#[cfg(target_os = "linux")]
 impl<D: VulkanRhiDevice + 'static> CpuReadbackContext<D> {
     /// Blocking read acquire.
     pub fn acquire_read<'a>(

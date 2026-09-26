@@ -16,7 +16,7 @@ members = [
     "adapters/streamlib-adapter-opengl", # OpenGL/EGL surface adapter — canonical implementor of GlWritable; DMA-BUF + DRM modifier import (Linux)
     "adapters/streamlib-adapter-cpu-readback", # Explicit GPU→CPU surface adapter — sole implementor of CpuReadable / CpuWritable (Linux)
     "adapters/streamlib-adapter-cuda", # CUDA surface adapter — Vulkan↔CUDA OPAQUE_FD interop foundation for GPU-resident AI inference (Linux, #587)
-    "adapters/streamlib-adapter-skia", # Skia surface adapter — composes on streamlib-adapter-vulkan; customer sees skia::Surface directly, never GrVkImageInfo / VkImageLayout (Linux)
+    "adapters/streamlib-adapter-skia", # Skia surface adapter — composes on streamlib-adapter-vulkan; customer sees skia::Surface directly, never GrVkImageInfo / VkImageLayout (Linux and macOS; GL arm Linux)
     "sdk/streamlib-python-wheel", # The importable Python wheel — the app's CPython imports the engine and authors pipelines; every `@processor` runs in its own helper process
     "runtime/streamlib-ipc-types",  # Shared iceoryx2 payload types for cross-process IPC
     "runtime/streamlib-api-server", # The one control plane — HTTP + WebSocket + MCP. crate-type rlib, statically linked into the wheel and the streamlib crate
@@ -184,7 +184,10 @@ cudarc = { version = "0.19", default-features = false, features = ["driver", "ru
 # test from the v1 issue body moves to the polyglot Skia follow-up
 # along with the rest of the wrapper layer; the Rust adapter doesn't
 # render text.
-skia-safe = { version = "0.86", features = ["vulkan", "gl"] }
+# - `gl` is added by the adapter's Linux target table alone: its GL arm is
+#   EGL and DMA-BUF, and the feature set is the prebuilt tarball's key —
+#   rust-skia publishes `aarch64-apple-darwin-pdf-vulkan`, no `gl` variant.
+skia-safe = { version = "0.86", features = ["vulkan"] }
 
 # Shader compilation
 # TODO: Add when implementing HLSL shader compilation:

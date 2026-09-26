@@ -7,7 +7,7 @@
 //! multi-plane surfaces (NV12) and observe single-plane semantics on
 //! BGRA/RGBA via the trait's defaults.
 
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 #[path = "common.rs"]
 mod common;
@@ -38,7 +38,7 @@ fn register_nv12_or_skip(
         Err(e) => {
             println!(
                 "{test_name}: skipping — host can't allocate NV12 \
-                 render-target DMA-BUF on this driver ({e})"
+                 render-target image on this driver ({e})"
             );
             None
         }

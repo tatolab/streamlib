@@ -26,7 +26,7 @@
 //! See `docs/architecture/surface-adapter.md` for the architecture
 //! brief.
 
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 mod adapter;
 mod context;

@@ -5465,7 +5465,6 @@ name = "streamlib-adapter-skia"
 version = "0.26.30"
 dependencies = [
  "libc",
- "libloading 0.8.9",
  "png",
  "serde",
  "serde_json",
