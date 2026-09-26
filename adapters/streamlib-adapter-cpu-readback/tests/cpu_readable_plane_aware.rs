@@ -91,6 +91,10 @@ fn cpu_readable_default_plane_count_is_one() {
 }
 
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "the IOSurface-backed render-target image is single-plane"
+)]
 fn cpu_readable_walks_all_planes_for_nv12() {
     let fixture = match HostFixture::try_new() {
         Some(f) => f,
