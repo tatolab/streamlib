@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.34](https://github.com/tatolab/streamlib/compare/v0.26.33...v0.26.34) (2026-09-26)
+
+
+### Features
+
+* **wheel:** the cross-floor check warns at dev and run, and gates the wheel and the scaffold ([#2495](https://github.com/tatolab/streamlib/issues/2495)) ([bbd324d](https://github.com/tatolab/streamlib/commit/bbd324d6024c617745e1d4131d38494322a7482f))
+
 ## [0.26.33](https://github.com/tatolab/streamlib/compare/v0.26.32...v0.26.33) (2026-09-26)
 
 
