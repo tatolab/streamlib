@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.35](https://github.com/tatolab/streamlib/compare/v0.26.34...v0.26.35) (2026-09-26)
+
+
+### Features
+
+* **engine:** every processor output ring hands out slots from the engine's lease-aware pool ([#2500](https://github.com/tatolab/streamlib/issues/2500)) ([e4003d7](https://github.com/tatolab/streamlib/commit/e4003d7611f113bca2c0caebb625aad5417e09d5))
+
 ## [0.26.34](https://github.com/tatolab/streamlib/compare/v0.26.33...v0.26.34) (2026-09-26)
 
 
