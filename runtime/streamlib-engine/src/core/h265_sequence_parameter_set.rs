@@ -15,6 +15,11 @@ pub const MAX_NUM_LTRP: usize = 32;
 pub const MAX_NUM_STRPS_ENTRIES: usize = 16;
 /// Sublayers list size (mirrors `STD_VIDEO_H265_SUBLAYERS_LIST_SIZE`).
 pub const STD_VIDEO_H265_SUBLAYERS_LIST_SIZE: usize = 7;
+/// `sps_max_dec_pic_buffering_minus1` is at most `MaxDpbSize - 1`, and
+/// `MaxDpbSize` never exceeds 16 (ITU-T H.265 §7.4.3.2.1, §A.4.2).
+const H265_HIGHEST_MAX_DEC_PIC_BUFFERING_MINUS1: u32 = 15;
+/// `abs_delta_rps_minus1` is in `0..=2^15 - 1` (ITU-T H.265 §7.4.8).
+const H265_HIGHEST_ABS_DELTA_RPS_MINUS1: u32 = (1 << 15) - 1;
 
 // ---------------------------------------------------------------------------
 // H.265 Level IDC mapping
@@ -472,8 +477,13 @@ pub(crate) fn parse_h265_short_term_ref_pic_set(
 
         let delta_rps_sign = reader.u(1)?;
         std_strps.flags.delta_rps_sign = delta_rps_sign != 0;
-        let abs_delta_rps_minus1 = reader.ue()? as i32;
-        std_strps.abs_delta_rps_minus1 = abs_delta_rps_minus1 as u32;
+        let abs_delta_rps_minus1 = reader.ue()?;
+        if abs_delta_rps_minus1 > H265_HIGHEST_ABS_DELTA_RPS_MINUS1 {
+            tracing::warn!("Invalid abs_delta_rps_minus1 ({})", abs_delta_rps_minus1);
+            return None;
+        }
+        std_strps.abs_delta_rps_minus1 = abs_delta_rps_minus1;
+        let abs_delta_rps_minus1 = abs_delta_rps_minus1 as i32;
 
         let delta_rps = (1 - 2 * delta_rps_sign as i32) * (abs_delta_rps_minus1 + 1);
         let r_idx = idx as i32 - (delta_idx_minus1 as i32 + 1);
@@ -809,7 +819,15 @@ pub fn parse_h265_sequence_parameter_set(reader: &mut RbspBitstreamReader) -> Op
         sps.sps_max_sub_layers_minus1 as usize
     };
     for i in start..=sps.sps_max_sub_layers_minus1 as usize {
-        sps.dec_pic_buf_mgr.max_dec_pic_buffering_minus1[i] = reader.ue()? as u8;
+        let max_dec_pic_buffering_minus1 = reader.ue()?;
+        if max_dec_pic_buffering_minus1 > H265_HIGHEST_MAX_DEC_PIC_BUFFERING_MINUS1 {
+            tracing::warn!(
+                "Invalid sps_max_dec_pic_buffering_minus1: {}",
+                max_dec_pic_buffering_minus1
+            );
+            return None;
+        }
+        sps.dec_pic_buf_mgr.max_dec_pic_buffering_minus1[i] = max_dec_pic_buffering_minus1 as u8;
         sps.dec_pic_buf_mgr.max_num_reorder_pics[i] = reader.ue()? as u8;
         sps.dec_pic_buf_mgr.max_latency_increase_plus1[i] = reader.ue()? as u8;
         if sps.dec_pic_buf_mgr.max_dec_pic_buffering_minus1[i] + 1 > sps.max_dec_pic_buffering {
@@ -995,6 +1013,91 @@ pub(crate) fn parse_h265_profile_tier_level(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Packs `u(n)` and `ue(v)` syntax elements MSB-first, zero-padded to the byte.
+    #[derive(Default)]
+    struct RbspSyntaxBitWriter {
+        bits: Vec<bool>,
+    }
+
+    impl RbspSyntaxBitWriter {
+        fn unsigned(&mut self, value: u64, bit_count: u32) -> &mut Self {
+            for shift in (0..bit_count).rev() {
+                self.bits.push((value >> shift) & 1 == 1);
+            }
+            self
+        }
+
+        fn exp_golomb(&mut self, value: u64) -> &mut Self {
+            let code = value + 1;
+            let significant_bits = 64 - code.leading_zeros();
+            self.unsigned(0, significant_bits - 1);
+            self.unsigned(code, significant_bits)
+        }
+
+        fn bytes(&self) -> Vec<u8> {
+            self.bits
+                .chunks(8)
+                .map(|chunk| {
+                    (0..8).fold(0u8, |packed, index| {
+                        (packed << 1) | u8::from(chunk.get(index).copied().unwrap_or(false))
+                    })
+                })
+                .collect()
+        }
+    }
+
+    #[test]
+    fn an_sps_whose_dpb_size_exceeds_the_spec_is_refused_rather_than_overflowing() {
+        let mut writer = RbspSyntaxBitWriter::default();
+        writer
+            .unsigned(0, 4) // sps_video_parameter_set_id
+            .unsigned(0, 3) // sps_max_sub_layers_minus1
+            .unsigned(1, 1) // sps_temporal_id_nesting_flag
+            .unsigned(0, 8) // profile space, tier, profile_idc
+            .unsigned(0, 32) // compatibility flags
+            .unsigned(0, 48) // source flags and reserved bits
+            .unsigned(93, 8) // general_level_idc
+            .exp_golomb(0) // sps_seq_parameter_set_id
+            .exp_golomb(1) // chroma_format_idc
+            .exp_golomb(320) // pic_width_in_luma_samples
+            .exp_golomb(240) // pic_height_in_luma_samples
+            .unsigned(0, 1) // conformance_window_flag
+            .exp_golomb(0) // bit_depth_luma_minus8
+            .exp_golomb(0) // bit_depth_chroma_minus8
+            .exp_golomb(4) // log2_max_pic_order_cnt_lsb_minus4
+            .unsigned(1, 1) // sps_sub_layer_ordering_info_present_flag
+            .exp_golomb(255) // sps_max_dec_pic_buffering_minus1[0]
+            .exp_golomb(0) // sps_max_num_reorder_pics[0]
+            .exp_golomb(0); // sps_max_latency_increase_plus1[0]
+        let rbsp = writer.bytes();
+
+        let mut reader = RbspBitstreamReader::new(&rbsp);
+        assert!(parse_h265_sequence_parameter_set(&mut reader).is_none());
+    }
+
+    #[test]
+    fn a_predicted_ref_pic_set_whose_delta_exceeds_the_spec_is_refused_rather_than_overflowing() {
+        let mut writer = RbspSyntaxBitWriter::default();
+        writer
+            .unsigned(1, 1) // inter_ref_pic_set_prediction_flag
+            .unsigned(0, 1) // delta_rps_sign
+            .exp_golomb(u64::from(i32::MAX as u32)) // abs_delta_rps_minus1
+            .unsigned(1, 1); // used_by_curr_pic_flag[0]
+        let rbsp = writer.bytes();
+        let earlier_sets = [ShortTermRefPicSet::default()];
+
+        let mut reader = RbspBitstreamReader::new(&rbsp);
+        let parsed = parse_h265_short_term_ref_pic_set(
+            &mut reader,
+            &mut StdShortTermRefPicSet::default(),
+            &mut ShortTermRefPicSet::default(),
+            &earlier_sets,
+            1,
+            2,
+        );
+        assert!(parsed.is_none());
+    }
 
     #[test]
     fn test_general_level_idc_to_vulkan_raw_spec_bytes() {
