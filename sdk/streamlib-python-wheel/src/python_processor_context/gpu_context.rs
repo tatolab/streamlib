@@ -215,6 +215,31 @@ impl PythonGpuContextLimitedAccess {
         let _ = (python, surface_id);
         Err(gpu_unreachable_from_a_helper_process_error())
     }
+
+    /// Copy `source_surface_id`'s pixels into `destination_surface`, same
+    /// format and extent, returning once the destination's next reader would
+    /// see them.
+    ///
+    /// The engine picks the copy the two backings need and converts nothing:
+    /// a format or extent mismatch, a retired frame, and a destination that
+    /// cannot take a write-back each raise naming the reason.
+    fn copy_surface_to_surface(
+        &self,
+        python: Python<'_>,
+        source_surface_id: &str,
+        destination_surface: &PythonGpuSurfaceHandle,
+    ) -> PyResult<()> {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        if let Some(exchange_client) = &self.helper_process_exchange_client {
+            return exchange_client.copy_surface_to_surface(
+                python,
+                source_surface_id,
+                &destination_surface.surface_id()?,
+            );
+        }
+        let _ = (python, source_surface_id, destination_surface);
+        Err(gpu_unreachable_from_a_helper_process_error())
+    }
 }
 
 /// The privileged GPU capability a `setup` / `teardown` hook receives.
@@ -654,6 +679,31 @@ impl PythonGpuContextFullAccess {
             });
         }
         let _ = (python, instances, label);
+        Err(gpu_unreachable_from_a_helper_process_error())
+    }
+
+    /// Copy `source_surface_id`'s pixels into `destination_surface`, same
+    /// format and extent, returning once the destination's next reader would
+    /// see them.
+    ///
+    /// The engine picks the copy the two backings need and converts nothing:
+    /// a format or extent mismatch, a retired frame, and a destination that
+    /// cannot take a write-back each raise naming the reason.
+    fn copy_surface_to_surface(
+        &self,
+        python: Python<'_>,
+        source_surface_id: &str,
+        destination_surface: &PythonGpuSurfaceHandle,
+    ) -> PyResult<()> {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        if let Some(exchange_client) = &self.helper_process_exchange_client {
+            return exchange_client.copy_surface_to_surface(
+                python,
+                source_surface_id,
+                &destination_surface.surface_id()?,
+            );
+        }
+        let _ = (python, source_surface_id, destination_surface);
         Err(gpu_unreachable_from_a_helper_process_error())
     }
 

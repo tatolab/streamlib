@@ -1120,6 +1120,20 @@ class GpuContextLimitedAccess:
         read-only on it.
         """
 
+    def copy_surface_to_surface(
+        self, source_surface_id: str, destination_surface: GpuSurfaceHandle
+    ) -> None:
+        """Copy one surface's pixels into another, same format and extent.
+
+        Any backing pair: the engine picks the copy the two need and converts
+        nothing. A pixel buffer's `rgba` and a texture's `rgba8_unorm` are one
+        format; two textures must match exactly (`rgba8_unorm` is not
+        `rgba8_unorm_srgb`). Returns once the destination's next reader would
+        see the copied pixels. A format or extent mismatch, a retired frame,
+        and a destination that cannot take a write-back each raise naming the
+        reason.
+        """
+
     def escalate(self, privileged_callback: Callable[[GpuContextFullAccess], _EscalateResult]) -> _EscalateResult:
         """Refuses: the callback's one atomic privileged scope cannot span a
         process boundary. The operations it wrapped are methods on this
@@ -1302,6 +1316,20 @@ class GpuContextFullAccess:
         `triangle_flip_facing`, `force_opaque`, `force_no_opaque`.
 
         The structure keeps every bottom-level one it references alive.
+        """
+
+    def copy_surface_to_surface(
+        self, source_surface_id: str, destination_surface: GpuSurfaceHandle
+    ) -> None:
+        """Copy one surface's pixels into another, same format and extent.
+
+        Any backing pair: the engine picks the copy the two need and converts
+        nothing. A pixel buffer's `rgba` and a texture's `rgba8_unorm` are one
+        format; two textures must match exactly (`rgba8_unorm` is not
+        `rgba8_unorm_srgb`). Returns once the destination's next reader would
+        see the copied pixels. A format or extent mismatch, a retired frame,
+        and a destination that cannot take a write-back each raise naming the
+        reason.
         """
 
     def kernel_dispatch_batch(self) -> KernelDispatchBatch:
