@@ -307,6 +307,27 @@ impl Clone for Texture {
     }
 }
 
+impl Texture {
+    /// Number of `Texture` handles sharing this texture's host `Arc`.
+    /// Engine-internal — a lease-aware pool reads it to tell whether a holder
+    /// in this process still has the slot.
+    pub(crate) fn strong_count(&self) -> usize {
+        if self.handle.is_null() {
+            return 0;
+        }
+        // SAFETY: `handle` is `Arc::into_raw(Arc<TextureInner>)` (see
+        // `from_arc_into_raw`). The Arc is reconstructed to read the count and
+        // immediately re-leaked, so the strong count returns to its pre-call
+        // value.
+        unsafe {
+            let arc = Arc::from_raw(self.handle as *const TextureInner);
+            let count = Arc::strong_count(&arc);
+            let _ = Arc::into_raw(arc);
+            count
+        }
+    }
+}
+
 impl Drop for Texture {
     fn drop(&mut self) {
         if !self.handle.is_null() {

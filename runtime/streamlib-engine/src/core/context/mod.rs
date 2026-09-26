@@ -10,6 +10,8 @@ mod device_stream_liveness_report;
 pub(crate) mod escalate_gate;
 mod gpu_context;
 pub(crate) mod isolation;
+pub(crate) mod lease_aware_pool_slot_ring;
+pub(crate) mod processor_output_surface_pool;
 mod refusing_null_video_codec_backend;
 mod refusing_null_video_device_backend;
 mod runtime_context;

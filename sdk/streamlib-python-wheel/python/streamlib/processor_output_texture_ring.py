@@ -1,33 +1,28 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""A processor's output textures, allocated once and rotated per frame.
+"""A processor's output textures, one engine-pooled slot per frame.
 
 The cross-process sibling of the engine's `TextureRing` (which is
 same-process-only by design — its slots are non-exportable and Path-1-only, so
-no helper can resolve them). This ring composes `acquire_texture`, whose slots
-the engine allocates cross-process-importable and registers with the
-surface-share service — which is exactly what a helper-placed producer's
-published ids need.
+no helper can resolve them). This ring names a processor output pool the engine
+owns: each frame asks it for the next slot, and the answer is a fresh
+`<slot>#<generation>` id, registered with the surface-share service so a
+consumer in another process can resolve it.
 
-Two facts make the ring the right shape rather than acquiring a texture inside
-`process()`:
-
-- An acquired texture's registration *is* its handle. A producer that lets the
-  handle go at the end of `process()` unregisters the surface id a consumer in
-  another process was handed a moment earlier, and that consumer's resolve is
-  refused by name. A ring never lets go, so the question does not arise.
-- A per-frame acquire pays an escalate round trip, pool work and a
-  surface-share registration on every frame; a ring pays them once per slot.
-
-What depth bounds is how far behind a consumer may fall, not how fast anything
-runs: a slot is redrawn when its turn comes around again, so a consumer still
-sampling a frame `depth` publishes old reads the producer's newer pixels. The
-engine's own ring runs two slots, and so does this one by default.
+The engine, not this class, decides which slot is next: one a consumer still
+holds — claimed by a typed cast, or resolved — is skipped and never rewritten,
+so a downstream processor holding an earlier output keeps seeing its pixels.
+The pool rotates through `depth` slots while nobody holds anything, grows while
+consumers hold frames, and at its cap refuses by name: the producer drops its
+own frame, and never waits on a consumer. A frame nobody claimed stays
+resolvable for `depth` publishes; after that its id is refused as recycled,
+never answered with newer pixels.
 """
 
 from __future__ import annotations
 
+import uuid
 from typing import Union
 
 from ._engine import (
@@ -67,13 +62,11 @@ class ProcessorOutputTextureRing:
         self._texture_format = texture_format
         self._texture_usage = texture_usage
         self._depth = depth
-        self._slots: "list[GpuSurfaceHandle]" = []
-        self._extent_the_slots_were_allocated_for: "tuple[int, int] | None" = None
-        self._next_slot_index = 0
+        self._processor_output_pool_key = f"processor-output-texture-ring-{uuid.uuid4().hex}"
 
     @property
     def depth(self) -> int:
-        """How many published frames stay resolvable behind the newest one."""
+        """How many published frames nobody claimed stay resolvable behind the newest one."""
         return self._depth
 
     def next_texture_for_this_frame(
@@ -82,27 +75,21 @@ class ProcessorOutputTextureRing:
         width: int,
         height: int,
     ) -> GpuSurfaceHandle:
-        """The slot this frame publishes into, allocating the ring on first use.
+        """The slot this frame publishes into, from the engine's pool.
 
-        Allocated here rather than at construction because the extent is
-        usually the upstream producer's answer — whatever a camera negotiated
-        arrives with its first frame. An extent change releases the old slots
-        and allocates fresh ones, rather than publishing frames into slots the
-        wrong size.
+        The extent is asked per frame because it is usually the upstream
+        producer's answer — whatever a camera negotiated arrives with its first
+        frame. An extent change replaces the pool's slots with ones the new
+        size, rather than publishing frames into slots the wrong size.
+
+        Raises when every slot the pool may grow to is held by a consumer: the
+        frame is dropped, and the next one asks again.
         """
-        if self._extent_the_slots_were_allocated_for != (width, height):
-            # Emptied first, so the old slots' releases reach the engine before
-            # the new acquires ask the pool to hold both extents at once.
-            self._slots = []
-            self._slots = [
-                gpu_context.acquire_texture(
-                    width, height, self._texture_format, self._texture_usage
-                )
-                for _ in range(self._depth)
-            ]
-            self._extent_the_slots_were_allocated_for = (width, height)
-            self._next_slot_index = 0
-
-        slot_for_this_frame = self._slots[self._next_slot_index]
-        self._next_slot_index = (self._next_slot_index + 1) % self._depth
-        return slot_for_this_frame
+        return gpu_context.acquire_texture_from_processor_output_pool(
+            self._processor_output_pool_key,
+            self._depth,
+            width,
+            height,
+            self._texture_format,
+            self._texture_usage,
+        )

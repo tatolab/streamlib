@@ -5,43 +5,48 @@ use std::sync::Arc;
 
 use uuid::Uuid;
 
-use super::super::handle_lifecycle::EscalateHandleRegistry;
+use super::super::handle_lifecycle::{EscalateHandleRegistry, RegisteredHandle};
+use super::TexturePoolWaitWhenExhausted;
 use super::new_exportable_timeline_edge;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::EscalateRequestAcquireImage;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_response::EscalateResponseErr;
 use crate::core::context::{
-    GpuContextLimitedAccess, PooledTextureHandle, TextureCrossProcessImportability,
-    TexturePoolDescriptor,
+    GpuContextFullAccess, GpuContextLimitedAccess, PooledTextureHandle,
+    TextureCrossProcessImportability, TexturePoolDescriptor,
 };
 use crate::core::rhi::{TextureFormat, TextureUsages};
 
-/// Acquire one texture from the pool and register it for a helper, answering
-/// the handle id the helper names it by.
-pub(super) fn acquire_texture_for_helper(
-    sandbox: &GpuContextLimitedAccess,
-    registry: &EscalateHandleRegistry,
+/// Allocate one texture and register it for a helper — with the
+/// surface-share service and the parent's texture cache — answering the id it
+/// is registered under and what holds it alive.
+pub(super) fn allocate_registered_texture_for_helper(
+    full: &GpuContextFullAccess,
     width: u32,
     height: u32,
     parsed_format: TextureFormat,
     parsed_usage: TextureUsages,
-) -> crate::core::error::Result<String> {
-    sandbox.escalate(|full| {
-        let desc = TexturePoolDescriptor::new(width, height, parsed_format)
-            .with_usage(parsed_usage)
-            .with_cross_process_importability(match full.host_vulkan_device_arc() {
-                Ok(device) => derive_texture_cross_process_importability(
-                    parsed_format,
-                    device.supports_metal_objects_interop(),
-                ),
-                Err(_) => TextureCrossProcessImportability::NotImportable,
-            });
-        let texture = full.acquire_texture(&desc)?;
-        let (handle_id, timeline_pair) = assign_texture_handle_id(full, &texture)?;
-        full.register_texture(&handle_id, texture.texture_clone());
-        registry.insert_texture(handle_id.clone(), texture, timeline_pair);
-        Ok(handle_id)
-    })
+    texture_pool_wait: TexturePoolWaitWhenExhausted,
+) -> crate::core::error::Result<(String, RegisteredHandle)> {
+    let desc = TexturePoolDescriptor::new(width, height, parsed_format)
+        .with_usage(parsed_usage)
+        .with_cross_process_importability(match full.host_vulkan_device_arc() {
+            Ok(device) => derive_texture_cross_process_importability(
+                parsed_format,
+                device.supports_metal_objects_interop(),
+            ),
+            Err(_) => TextureCrossProcessImportability::NotImportable,
+        });
+    let texture = texture_pool_wait.acquire_texture(full, &desc)?;
+    let (handle_id, timeline_pair) = assign_texture_handle_id(full, &texture)?;
+    full.register_texture(&handle_id, texture.texture_clone());
+    Ok((
+        handle_id,
+        RegisteredHandle::Texture {
+            texture,
+            timeline_pair,
+        },
+    ))
 }
 
 /// Resolve the `handle_id` returned to the subprocess for a pooled texture.

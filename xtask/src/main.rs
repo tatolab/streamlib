@@ -407,6 +407,8 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "core::processor_owned_window",
                 "core::compiler::compiler_ops::subprocess_escalate::processor_owned_window::tests",
                 "escalate_wire_encoding_tests",
+                "core::context::lease_aware_pool_slot_ring",
+                "core::context::processor_output_surface_pool",
                 "core::compiler::compiler_ops::subprocess_escalate::acquisition::tests::parse_texture_usages",
                 "core::compiler::compiler_ops::subprocess_escalate::acquisition::tests::the_implied_copy_bits",
                 "core::context::audio_device_backend",

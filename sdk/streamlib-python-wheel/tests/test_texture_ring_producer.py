@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 
 from texture_ring_producer_probes import (
+    FRAMES_PUBLISHED_WHILE_THE_FIRST_IS_HELD,
     FRAME_HEIGHT,
     FRAME_WIDTH,
     RING_DEPTH,
@@ -56,14 +57,20 @@ def run_scenario(start_app_under_test, scenario: str, awaited_reports: int) -> d
     return reports_by_probe
 
 
+def slot_of(surface_id: str) -> str:
+    """The pool slot a published `<slot>#<generation>` id names."""
+    return surface_id.rsplit("#", 1)[0]
+
+
 def test_a_python_source_publishes_frames_from_the_slots_its_ring_rotates(
     start_app_under_test,
 ):
-    """Depth-many distinct slots, and the frame past the end reuses the first.
+    """Depth-many distinct slots, and the frame past the end reuses the first
+    slot under a new frame id.
 
     Against a live engine rather than a stand-in, which is what makes the
     reuse meaningful: a pool that minted a fresh texture per acquire would
-    pass the unit test's bookkeeping and fail here with three distinct ids.
+    publish from three distinct slots here.
     """
     # The sink reports once per frame it reads; the producer once at its quota.
     reports = run_scenario(start_app_under_test, "ring_rotation", (RING_DEPTH + 1) + 1)
@@ -72,14 +79,75 @@ def test_a_python_source_publishes_frames_from_the_slots_its_ring_rotates(
     ]
 
     assert len(published) == RING_DEPTH + 1
-    assert len(set(published)) == RING_DEPTH, (
-        f"a ring {RING_DEPTH} deep published {len(set(published))} distinct "
-        f"surfaces: {published}"
+    assert len(set(published)) == RING_DEPTH + 1, (
+        f"every publish names its own frame: {published}"
     )
-    assert published[RING_DEPTH] == published[0], (
+    slots = [slot_of(surface_id) for surface_id in published]
+    assert len(set(slots)) == RING_DEPTH, (
+        f"a ring {RING_DEPTH} deep published from {len(set(slots))} distinct "
+        f"slots: {published}"
+    )
+    assert slots[RING_DEPTH] == slots[0], (
         f"the frame past the ring's depth published from {published[RING_DEPTH]!r} "
-        f"rather than wrapping onto {published[0]!r}"
+        f"rather than wrapping onto {published[0]!r}'s slot"
     )
+
+
+def test_a_frame_a_consumer_holds_keeps_its_pixels_while_the_producer_produces(
+    start_app_under_test,
+):
+    """The consumer claims the first frame with a typed read and re-reads it as
+    the producer publishes several ring depths past it: the pixels are still
+    frame 0's, and the held slot is never published from again."""
+    later_frames = FRAMES_PUBLISHED_WHILE_THE_FIRST_IS_HELD
+    reports = run_scenario(
+        start_app_under_test,
+        "a_claimed_frame_holds_still",
+        later_frames + 1,  # one report per later frame, plus the producer's
+    )
+    published = reports["TextureRingPublishingVideoSource"][0][
+        "surface_ids_published"
+    ]
+    rereads = reports["ClaimedFrameHoldingSink"]
+
+    assert len(rereads) == later_frames
+    for reread in rereads:
+        assert reread["held_surface_id"] == published[0]
+        assert reread["held_top_left_pixel"] == [pixel_value_of_frame(0)] * 4, (
+            f"after {reread['later_frames_seen']} later frames the held frame read "
+            f"{reread['held_top_left_pixel']} rather than frame 0's pixels"
+        )
+    assert all(
+        slot_of(surface_id) != slot_of(published[0]) for surface_id in published[1:]
+    ), f"the held frame's slot was published from again: {published}"
+
+
+def test_the_same_schedule_with_no_claim_recycles_the_first_frame(
+    start_app_under_test,
+):
+    """The negative control: nothing holds the first frame, so the producer
+    republishes its slot, and the old id is refused as recycled — never read
+    back as a newer frame's pixels."""
+    later_frames = FRAMES_PUBLISHED_WHILE_THE_FIRST_IS_HELD
+    reports = run_scenario(
+        start_app_under_test,
+        "an_unclaimed_frame_is_recycled",
+        later_frames + 1,
+    )
+    published = reports["TextureRingPublishingVideoSource"][0][
+        "surface_ids_published"
+    ]
+    attempts = reports["UnclaimedFrameHoldingSink"]
+
+    assert any(
+        slot_of(surface_id) == slot_of(published[0]) for surface_id in published[1:]
+    ), f"with no claim the first frame's slot was never republished: {published}"
+    refusals = [attempt["refusal"] for attempt in attempts if "refusal" in attempt]
+    assert refusals, f"the recycled first frame still resolved: {attempts}"
+    assert all("recycl" in refusal for refusal in refusals), refusals
+    for attempt in attempts:
+        if "held_top_left_pixel" in attempt:
+            assert attempt["held_top_left_pixel"] == [pixel_value_of_frame(0)] * 4
 
 
 def test_the_pixels_a_python_source_writes_are_read_by_another_process(

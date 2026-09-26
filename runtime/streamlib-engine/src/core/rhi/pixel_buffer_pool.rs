@@ -94,8 +94,17 @@ impl PublishedPixelBufferFrameId {
 
 impl std::fmt::Display for PublishedPixelBufferFrameId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}#{}", self.pool_slot_id, self.frame_generation)
+        f.write_str(&published_frame_id_of_pool_slot(
+            self.pool_slot_id.as_str(),
+            self.frame_generation,
+        ))
     }
+}
+
+/// The building half of the grammar: the surface id `frame_generation`
+/// publishes over `pool_slot`.
+pub fn published_frame_id_of_pool_slot(pool_slot: &str, frame_generation: u64) -> String {
+    format!("{pool_slot}#{frame_generation}")
 }
 
 /// The borrowing half of the grammar: the slot and generation of a published

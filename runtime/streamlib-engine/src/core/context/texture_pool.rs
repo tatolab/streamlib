@@ -461,24 +461,11 @@ impl TexturePool {
 
     /// Acquire a texture from the pool.
     pub fn acquire(&self, desc: &TexturePoolDescriptor) -> Result<PooledTextureHandle> {
+        if let Some(handle) = self.acquire_without_waiting(desc)? {
+            return Ok(handle);
+        }
         let key = TexturePoolKey::from_descriptor(desc);
-
-        // Try to find an available slot
-        if let Some(slot) = self.inner.find_available_slot(&key) {
-            return Ok(self.create_handle_from_slot(&slot));
-        }
-
-        // No available slot - check if we can grow
         let current_size = self.inner.bucket_size(&key);
-        let can_grow = current_size < self.inner.config.max_pool_size_per_bucket;
-
-        if can_grow {
-            // Allocate a new texture
-            let slot = self.allocate_slot(desc)?;
-            slot.try_acquire(); // Mark as in use
-            self.inner.add_slot(Arc::clone(&slot));
-            return Ok(self.create_handle_from_slot(&slot));
-        }
 
         // Pool exhausted - apply policy
         match &self.inner.config.exhaustion_policy {
@@ -501,6 +488,35 @@ impl TexturePool {
                 "Texture pool exhausted (no available slots)".into(),
             )),
         }
+    }
+
+    /// Acquire a texture if a free slot exists or the bucket can still grow;
+    /// `None` when the bucket is at its cap, without applying the exhaustion
+    /// policy — for callers that must never wait on another holder.
+    pub fn acquire_without_waiting(
+        &self,
+        desc: &TexturePoolDescriptor,
+    ) -> Result<Option<PooledTextureHandle>> {
+        let key = TexturePoolKey::from_descriptor(desc);
+
+        // Try to find an available slot
+        if let Some(slot) = self.inner.find_available_slot(&key) {
+            return Ok(Some(self.create_handle_from_slot(&slot)));
+        }
+
+        // No available slot - check if we can grow
+        if self.inner.bucket_size(&key) < self.inner.config.max_pool_size_per_bucket {
+            let slot = self.allocate_slot(desc)?;
+            slot.try_acquire(); // Mark as in use
+            self.inner.add_slot(Arc::clone(&slot));
+            return Ok(Some(self.create_handle_from_slot(&slot)));
+        }
+        Ok(None)
+    }
+
+    /// The most textures one descriptor's bucket holds.
+    pub fn max_pool_size_per_bucket(&self) -> usize {
+        self.inner.config.max_pool_size_per_bucket
     }
 
     fn acquire_blocking(
@@ -679,5 +695,51 @@ mod layout_tests {
         // `compile_fail` doctest above. We keep this as a regular
         // `#[test]` so the test name shows up in `cargo test`
         // output as a discoverable assertion.
+    }
+}
+
+#[cfg(test)]
+mod acquire_without_waiting_tests {
+    use super::*;
+    use crate::core::rhi::{TextureFormat, TextureUsages};
+
+    /// At the bucket's cap the non-waiting acquire answers `None` at once,
+    /// where `acquire` would sit out the pool's blocking policy.
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn a_full_bucket_refuses_at_once_instead_of_waiting() {
+        let Ok(device) = GpuDevice::new() else {
+            println!("no GPU device — skipping");
+            return;
+        };
+        let pool = TexturePool::with_config(
+            Arc::new(device),
+            TexturePoolConfig {
+                initial_pool_size_per_bucket: 1,
+                max_pool_size_per_bucket: 1,
+                exhaustion_policy: TexturePoolExhaustionPolicy::Block { timeout_ms: 60_000 },
+            },
+        );
+        let desc = TexturePoolDescriptor::new(16, 16, TextureFormat::Rgba8Unorm)
+            .with_usage(TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST);
+        let held = pool
+            .acquire_without_waiting(&desc)
+            .expect("the first texture allocates")
+            .expect("an empty bucket can grow");
+        assert!(
+            pool.acquire_without_waiting(&desc)
+                .expect("a full bucket is not an error")
+                .is_none(),
+            "the bucket is at its cap of one"
+        );
+        drop(held);
+        assert!(
+            pool.acquire_without_waiting(&desc)
+                .expect("the released texture is free again")
+                .is_some()
+        );
     }
 }

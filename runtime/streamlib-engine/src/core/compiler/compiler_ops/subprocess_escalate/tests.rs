@@ -215,6 +215,7 @@ fn handle_escalate_op_end_to_end() {
         width: 256,
         height: 128,
         format: "rgba8_unorm".to_string(),
+        processor_output_pool: None,
         usage: vec!["texture_binding".to_string(), "copy_src".to_string()],
     });
     let response = handle_escalate_op(

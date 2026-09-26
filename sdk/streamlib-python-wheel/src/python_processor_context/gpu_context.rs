@@ -10,7 +10,9 @@ use pyo3::types::PyDict;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::python_helper_process_pixel_exchange::HelperCheckedOutSurface;
-use crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient;
+use crate::python_helper_process_pixel_exchange::{
+    HelperProcessGpuExchangeClient, ProcessorOutputTexturePoolRequest,
+};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::python_helper_process_pixel_exchange::{
     HelperProcessGraphicsKernelRegistration, HelperProcessRayTracingKernelRegistration,
@@ -46,6 +48,54 @@ use super::{
 
 pub(crate) fn gpu_operation_error(failure: impl std::fmt::Display) -> PyErr {
     PyRuntimeError::new_err(failure.to_string())
+}
+
+/// Acquire a texture through a helper's exchange with its parent — a one-off,
+/// or the next frame of `processor_output_pool`.
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "macos")),
+    allow(unused_variables)
+)]
+fn acquire_texture_through_the_helper_process_exchange(
+    helper_process_exchange_client: Option<&Arc<HelperProcessGpuExchangeClient>>,
+    python: Python<'_>,
+    width: u32,
+    height: u32,
+    format: &str,
+    usage: &[String],
+    processor_output_pool: Option<ProcessorOutputTexturePoolRequest<'_>>,
+) -> PyResult<PythonGpuSurfaceHandle> {
+    let texture_format = parse_texture_format_name(format)?;
+    #[cfg(target_os = "linux")]
+    if let Some(exchange_client) = helper_process_exchange_client {
+        let acquired = exchange_client.acquire_texture(
+            python,
+            width,
+            height,
+            texture_format,
+            usage,
+            processor_output_pool,
+        )?;
+        return Ok(PythonGpuSurfaceHandle::from_helper_acquired_texture(
+            acquired,
+        ));
+    }
+    #[cfg(target_os = "macos")]
+    if let Some(exchange_client) = helper_process_exchange_client {
+        let acquired = exchange_client.acquire_texture(
+            python,
+            width,
+            height,
+            texture_format,
+            usage,
+            processor_output_pool,
+        )?;
+        return Ok(PythonGpuSurfaceHandle::from_helper_checked_out_surface(
+            HelperCheckedOutSurface::Texture(acquired),
+        ));
+    }
+    let _ = texture_format;
+    Err(gpu_unreachable_from_a_helper_process_error())
 }
 
 /// Non-allocating GPU capability, valid for the whole processor life.
@@ -116,25 +166,47 @@ impl PythonGpuContextLimitedAccess {
         format: &str,
         usage: Vec<String>,
     ) -> PyResult<PythonGpuSurfaceHandle> {
-        let texture_format = parse_texture_format_name(format)?;
-        #[cfg(target_os = "linux")]
-        if let Some(exchange_client) = &self.helper_process_exchange_client {
-            let acquired =
-                exchange_client.acquire_texture(python, width, height, texture_format, &usage)?;
-            return Ok(PythonGpuSurfaceHandle::from_helper_acquired_texture(
-                acquired,
-            ));
-        }
-        #[cfg(target_os = "macos")]
-        if let Some(exchange_client) = &self.helper_process_exchange_client {
-            let acquired =
-                exchange_client.acquire_texture(python, width, height, texture_format, &usage)?;
-            return Ok(PythonGpuSurfaceHandle::from_helper_checked_out_surface(
-                HelperCheckedOutSurface::Texture(acquired),
-            ));
-        }
-        let _ = (python, width, height, texture_format, usage);
-        Err(gpu_unreachable_from_a_helper_process_error())
+        acquire_texture_through_the_helper_process_exchange(
+            self.helper_process_exchange_client.as_ref(),
+            python,
+            width,
+            height,
+            format,
+            &usage,
+            None,
+        )
+    }
+
+    /// The texture this frame publishes into, from the processor output pool
+    /// named `pool_key`: a fresh `<slot>#<generation>` per call, never a slot a
+    /// consumer still holds.
+    ///
+    /// The pool rotates through `rotation_depth` slots, grows while consumers
+    /// hold frames, and at its cap refuses by name — the producer drops its
+    /// own frame rather than wait.
+    #[allow(clippy::too_many_arguments)]
+    fn acquire_texture_from_processor_output_pool(
+        &self,
+        python: Python<'_>,
+        pool_key: &str,
+        rotation_depth: u32,
+        width: u32,
+        height: u32,
+        format: &str,
+        usage: Vec<String>,
+    ) -> PyResult<PythonGpuSurfaceHandle> {
+        acquire_texture_through_the_helper_process_exchange(
+            self.helper_process_exchange_client.as_ref(),
+            python,
+            width,
+            height,
+            format,
+            &usage,
+            Some(ProcessorOutputTexturePoolRequest {
+                pool_key,
+                rotation_depth,
+            }),
+        )
     }
 
     /// Run `privileged_callback` with a temporary full-access GPU capability.
@@ -296,25 +368,47 @@ impl PythonGpuContextFullAccess {
         format: &str,
         usage: Vec<String>,
     ) -> PyResult<PythonGpuSurfaceHandle> {
-        let texture_format = parse_texture_format_name(format)?;
-        #[cfg(target_os = "linux")]
-        if let Some(exchange_client) = &self.helper_process_exchange_client {
-            let acquired =
-                exchange_client.acquire_texture(python, width, height, texture_format, &usage)?;
-            return Ok(PythonGpuSurfaceHandle::from_helper_acquired_texture(
-                acquired,
-            ));
-        }
-        #[cfg(target_os = "macos")]
-        if let Some(exchange_client) = &self.helper_process_exchange_client {
-            let acquired =
-                exchange_client.acquire_texture(python, width, height, texture_format, &usage)?;
-            return Ok(PythonGpuSurfaceHandle::from_helper_checked_out_surface(
-                HelperCheckedOutSurface::Texture(acquired),
-            ));
-        }
-        let _ = (python, width, height, texture_format, usage);
-        Err(gpu_unreachable_from_a_helper_process_error())
+        acquire_texture_through_the_helper_process_exchange(
+            self.helper_process_exchange_client.as_ref(),
+            python,
+            width,
+            height,
+            format,
+            &usage,
+            None,
+        )
+    }
+
+    /// The texture this frame publishes into, from the processor output pool
+    /// named `pool_key`: a fresh `<slot>#<generation>` per call, never a slot a
+    /// consumer still holds.
+    ///
+    /// The pool rotates through `rotation_depth` slots, grows while consumers
+    /// hold frames, and at its cap refuses by name — the producer drops its
+    /// own frame rather than wait.
+    #[allow(clippy::too_many_arguments)]
+    fn acquire_texture_from_processor_output_pool(
+        &self,
+        python: Python<'_>,
+        pool_key: &str,
+        rotation_depth: u32,
+        width: u32,
+        height: u32,
+        format: &str,
+        usage: Vec<String>,
+    ) -> PyResult<PythonGpuSurfaceHandle> {
+        acquire_texture_through_the_helper_process_exchange(
+            self.helper_process_exchange_client.as_ref(),
+            python,
+            width,
+            height,
+            format,
+            &usage,
+            Some(ProcessorOutputTexturePoolRequest {
+                pool_key,
+                rotation_depth,
+            }),
+        )
     }
 
     /// Request a window this processor owns, presented by the engine.
