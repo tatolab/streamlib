@@ -44,7 +44,7 @@ Entering the scope hands the engine's texture out as a linear DLPack view, so
 GPU-resident. That same tensor is the write door: the boxes drawn into it are
 blitted back into the texture when the scope closes, ordered by the engine
 ahead of its own next read of that texture. No fence, no timeline, no
-`torch.cuda.synchronize()` — none of that vocabulary reaches Python, and the
+device synchronize — none of that vocabulary reaches Python, and the
 pixels do not travel through the host to get read or to get written.
 
 Leaving the scope by a raise is the other half of the contract: the write is
@@ -79,13 +79,14 @@ camera publishes a **buffer-backed** frame, and a dispatch binds
 lens owns first:
 
 ```python
-with camera_frame_landing_texture.as_device_tensor() as writable_texture:
-    torch.from_dlpack(writable_texture)[...] = torch.from_dlpack(frame)
+ctx.gpu_limited_access.copy_surface_to_surface(
+    frame.surface_id, camera_frame_landing_texture
+)
 ```
 
-Same device-to-device door as above, used for a copy rather than an edit.
-`examples/camera-compute-kernel` is the short example built around that one
-step if you want it on its own.
+The engine does that copy device-to-device, so the lens needs no array library
+at all. `examples/camera-compute-kernel` is the short example built around that
+one step if you want it on its own.
 
 ### One output, two destinations
 
@@ -219,12 +220,19 @@ maturin develop --manifest-path ../../sdk/streamlib-python-wheel/Cargo.toml
 ```
 
 This app needs real hardware and says so rather than pretending: the kernels
-run on the engine's own Vulkan device and the detector wants a CUDA runtime, so
-a machine with neither fails while the graph is starting. It is also a heavy
-install — `ultralytics` brings a detector and `torch` brings CUDA, several
-gigabytes between them.
+run on the engine's own GPU, and the detector runs on whichever accelerator
+`torch.accelerator` reports — CUDA on Linux, MPS on Apple Silicon. A torch
+build with no accelerator stops the detector in `setup()` and says why. It is
+also a heavy install: `ultralytics` brings a detector and `torch` brings its GPU
+runtime, several gigabytes between them on Linux.
 
-One environment note, because the error names nothing useful. On a machine
+It runs on both floors. On an Apple M1 Max (macOS 26.3, torch 2.14,
+ultralytics 8.4) the whole chain ran from the built-in camera: the lens, the
+rectifier, YOLOv8n on MPS, and the boxes drawn back into the frame. On the
+reference image, YOLOv8n on MPS finds the same objects at the same confidences
+as on the CPU, at about 11 ms a frame.
+
+One Linux environment note, because the error names nothing useful. On a machine
 that also has a **system** cuDNN on the loader's default path — anything with
 NVIDIA's apt repo enabled, which puts `/usr/local/cuda*/targets/*/lib` in
 `/etc/ld.so.conf.d` — pip's cuDNN loads its main library from the venv and
@@ -246,8 +254,8 @@ startup on the machine that runs the app. There is no `glslc` to install, no
 `.spv` to build and no build step between editing a shader and re-running —
 re-running `streamlib run` is the edit loop. It costs a couple of seconds here
 rather than the sub-second restart the lighter examples get, and the shader
-compile is not why: each helper imports torch, and the detector's also loads a
-network onto the GPU.
+compile is not why: the detector's helper imports torch and loads a network
+onto the GPU.
 
 Three edits worth making on purpose, because each teaches something the code
 alone does not:
