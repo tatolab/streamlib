@@ -26,7 +26,7 @@ libc.workspace = true
 # Mach send right a Metal shared event crosses as on macOS.
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies.streamlib-surface-client]
 path = "../streamlib-surface-client"
-version = "0.26.30"
+version = "0.26.31"
 
 # The IOSurface a macOS helper imports; its pages map as host memory. The
 # Metal shared event behind an imported timeline.
