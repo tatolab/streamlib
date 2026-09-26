@@ -226,8 +226,8 @@ build with no accelerator stops the detector in `setup()` and says why. It is
 also a heavy install: `ultralytics` brings a detector and `torch` brings its GPU
 runtime, several gigabytes between them on Linux.
 
-It runs on both floors. On an Apple M1 Max (macOS 26.3, torch 2.14,
-ultralytics 8.4) the whole chain ran from the built-in camera: the lens, the
+On macOS it was measured on an Apple M1 Max (macOS 26.3, torch 2.14,
+ultralytics 8.4). The whole chain ran from the built-in camera — the lens, the
 rectifier, YOLOv8n on MPS, and the boxes drawn back into the frame. On the
 reference image, YOLOv8n on MPS finds the same objects at the same confidences
 as on the CPU, at about 11 ms a frame.
