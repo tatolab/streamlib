@@ -8,6 +8,7 @@ Nothing here boots an engine; the launch that goes on to a live node is in
 `test_cli_launch.py`.
 """
 
+import os
 import sys
 import textwrap
 import warnings
@@ -138,6 +139,31 @@ def test_the_same_import_outside_the_guard_is_flagged():
     )
 
     assert [line for line, _, _ in findings] == [5]
+
+
+@pytest.mark.parametrize(
+    "guard",
+    [
+        'sys.platform == "darwin" and enabled',
+        'sys.platform.startswith("darwin")',
+        'not sys.platform == "linux"',
+        'sys.platform == "darwin" or sys.platform == "ios"',
+    ],
+)
+def test_a_condition_gated_on_the_platform_on_every_path_is_a_guard(guard: str):
+    assert findings_in(f"import sys\nif {guard}:\n    import mlx\n") == []
+
+
+@pytest.mark.parametrize(
+    "not_a_guard",
+    [
+        'sys.platform == "linux" or enabled',
+        'enabled or sys.platform == "linux"',
+        'print(sys.platform)',
+    ],
+)
+def test_a_condition_that_can_be_true_off_the_platform_is_no_guard(not_a_guard: str):
+    assert [line for line, _, _ in findings_in(f"import sys\nif {not_a_guard}:\n    import cupy\n")] == [3]
 
 
 # ---------------------------------------------------------------------------
@@ -276,6 +302,29 @@ def test_a_floor_bound_dependency_without_a_marker_is_named_with_its_line():
 
 
 @requires_tomllib
+def test_a_dependency_is_placed_on_its_own_line_in_its_own_array():
+    findings = manifest_findings_in(
+        """\
+        # mlx is the macOS array library
+        [project]
+        name = "mlx"
+        dependencies = [
+            "mlx-lm",
+            "mlx",
+        ]
+
+        [project.optional-dependencies]
+        extra = ["numpy"]
+        apple = [
+            "mlx",  # "mlx"
+        ]
+        """
+    )
+
+    assert [line for line, _, _ in findings] == [5, 6, 12]
+
+
+@requires_tomllib
 def test_a_marked_floor_bound_dependency_is_not_flagged():
     assert manifest_findings_in(
         """\
@@ -334,6 +383,21 @@ def test_the_check_reads_every_layout_and_skips_virtual_environments(tmp_path: P
     assert sorted(
         finding.file.relative_to(tmp_path).as_posix() for finding in report.findings
     ) == ["processors/effect.py", "src/demo/processors/effect.py"]
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads through any permission")
+def test_an_unreadable_directory_is_passed_over(tmp_path: Path):
+    unreadable = tmp_path / "unreadable"
+    unreadable.mkdir()
+    (unreadable / "effect.py").write_text("import cupy\n")
+    (tmp_path / "effect.py").write_text("import cupy\n")
+    unreadable.chmod(0)
+    try:
+        report = check_app_directory_for_floor_bindings(tmp_path)
+    finally:
+        unreadable.chmod(0o755)
+
+    assert [finding.file for finding in report.findings] == [tmp_path / "effect.py"]
 
 
 def test_a_file_that_does_not_parse_is_passed_over(tmp_path: Path):
@@ -462,6 +526,26 @@ def test_the_launch_prints_the_block_before_the_app_runs_and_still_runs_it(
     assert stdout.index("cross-floor check") < stdout.index("the entry file ran"), (
         "the block is printed between resolving the entry file and executing it"
     )
+
+
+@pytest.mark.usefixtures("restore_the_launchers_import_path")
+def test_a_check_that_fails_is_reported_and_the_app_still_runs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+):
+    def failing_check(app_directory: Path) -> None:
+        raise RuntimeError("a defect in the check")
+
+    monkeypatch.setattr(cli, "check_app_directory_for_floor_bindings", failing_check)
+    ran = tmp_path / "entry-ran.txt"
+    (tmp_path / "app.py").write_text(
+        f"open({str(ran)!r}, 'w').write('ran')\n"
+        "raise RuntimeError('stop before the engine')\n"
+    )
+
+    launch_until_the_entry_stops_it(tmp_path)
+
+    assert ran.read_text() == "ran", "a failing check must never keep the app from running"
+    assert "cross-floor check could not run" in capsys.readouterr().out
 
 
 @pytest.mark.usefixtures("restore_the_launchers_import_path")

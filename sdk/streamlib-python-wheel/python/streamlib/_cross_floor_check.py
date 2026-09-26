@@ -112,14 +112,29 @@ class CrossFloorCheckReport(NamedTuple):
     skipped_rule_reason: Optional[str]
 
 
-def _is_platform_guard(condition: ast.expr) -> bool:
-    return any(
+def _is_sys_platform(node: ast.expr) -> bool:
+    return (
         isinstance(node, ast.Attribute)
         and node.attr == "platform"
         and isinstance(node.value, ast.Name)
         and node.value.id == "sys"
-        for node in ast.walk(condition)
     )
+
+
+def _is_platform_guard(condition: ast.expr) -> bool:
+    """True when every path through `condition` that can be true depends on `sys.platform`."""
+    if isinstance(condition, ast.Compare):
+        return any(_is_sys_platform(side) for side in (condition.left, *condition.comparators))
+    if isinstance(condition, ast.Call):
+        return isinstance(condition.func, ast.Attribute) and _is_sys_platform(
+            condition.func.value
+        )
+    if isinstance(condition, ast.UnaryOp) and isinstance(condition.op, ast.Not):
+        return _is_platform_guard(condition.operand)
+    if isinstance(condition, ast.BoolOp):
+        operand_guards = [_is_platform_guard(operand) for operand in condition.values]
+        return any(operand_guards) if isinstance(condition.op, ast.And) else all(operand_guards)
+    return False
 
 
 def _device_named_by_literal(node: ast.expr) -> Optional[str]:
@@ -260,31 +275,66 @@ def find_floor_bindings_in_python_source(source: str, file: Path) -> "list[Cross
     return visitor.findings
 
 
-def _declared_requirements(project_manifest: "dict[str, object]") -> "list[str]":
+class _DeclaredRequirement(NamedTuple):
+    table_name: str
+    array_key: str
+    requirement: str
+
+
+def _declared_requirements(project_manifest: "dict[str, object]") -> "list[_DeclaredRequirement]":
+    requirement_arrays: "list[tuple[str, str, object]]" = []
     project_table = project_manifest.get("project")
-    requirement_lists: "list[object]" = []
     if isinstance(project_table, dict):
-        requirement_lists.append(project_table.get("dependencies"))
+        requirement_arrays.append(("project", "dependencies", project_table.get("dependencies")))
         optional_dependencies = project_table.get("optional-dependencies")
         if isinstance(optional_dependencies, dict):
-            requirement_lists.extend(optional_dependencies.values())
+            requirement_arrays.extend(
+                ("project.optional-dependencies", key, array)
+                for key, array in optional_dependencies.items()
+            )
     dependency_groups = project_manifest.get("dependency-groups")
     if isinstance(dependency_groups, dict):
-        requirement_lists.extend(dependency_groups.values())
+        requirement_arrays.extend(
+            ("dependency-groups", key, array) for key, array in dependency_groups.items()
+        )
     return [
-        requirement
-        for requirement_list in requirement_lists
-        if isinstance(requirement_list, list)
-        for requirement in requirement_list
+        _DeclaredRequirement(table_name, array_key, requirement)
+        for table_name, array_key, requirement_array in requirement_arrays
+        if isinstance(requirement_array, list)
+        for requirement in requirement_array
         if isinstance(requirement, str)
     ]
 
 
-def _line_declaring(manifest_text: str, requirement: str) -> int:
-    for line_number, line in enumerate(manifest_text.splitlines(), start=1):
-        if requirement in line:
-            return line_number
-    return 1
+def _line_declaring(manifest_text: str, declared: _DeclaredRequirement) -> int:
+    """The line of `declared`'s quoted value inside its own array, or of the array's key."""
+    table_header = re.compile(rf"^\s*\[\s*{re.escape(declared.table_name)}\s*\]")
+    array_key = re.compile(rf"""^\s*["']?{re.escape(declared.array_key)}["']?\s*=""")
+    quoted_requirement = re.compile(
+        rf"""(["']){re.escape(declared.requirement)}\1"""
+    )
+    lines = manifest_text.splitlines()
+    table_start = next(
+        (index for index, line in enumerate(lines) if table_header.match(line)), None
+    )
+    if table_start is None:
+        return 1
+    key_line = next(
+        (
+            index
+            for index in range(table_start + 1, len(lines))
+            if array_key.match(lines[index])
+        ),
+        None,
+    )
+    if key_line is None:
+        return table_start + 1
+    for index in range(key_line, len(lines)):
+        if index > key_line and lines[index].lstrip().startswith("["):
+            break
+        if quoted_requirement.search(lines[index].split("#", 1)[0]):
+            return index + 1
+    return key_line + 1
 
 
 def find_floor_bindings_in_project_manifest(
@@ -294,7 +344,8 @@ def find_floor_bindings_in_project_manifest(
     if tomllib is None:
         raise RuntimeError(DEPENDENCY_RULE_SKIPPED_WITHOUT_TOMLLIB)
     findings = []
-    for requirement in _declared_requirements(tomllib.loads(manifest_text)):
+    for declared in _declared_requirements(tomllib.loads(manifest_text)):
+        requirement = declared.requirement
         distribution_match = REQUIREMENT_DISTRIBUTION_NAME.match(requirement)
         if distribution_match is None:
             continue
@@ -309,7 +360,7 @@ def find_floor_bindings_in_project_manifest(
                 findings.append(
                     CrossFloorFinding(
                         file,
-                        _line_declaring(manifest_text, requirement),
+                        _line_declaring(manifest_text, declared),
                         f"depends on `{distribution_name}` with no platform marker, "
                         f"and it is {floor}",
                         f'mark it: `{requirement.strip()}; sys_platform == "{platform}"`',
@@ -326,7 +377,11 @@ def _python_files_under(app_directory: Path) -> "list[Path]":
             for name in subdirectory_names
             if not name.startswith(".")
             and name not in VIRTUAL_ENVIRONMENT_DIRECTORY_NAMES
-            and not (Path(directory) / name / VIRTUAL_ENVIRONMENT_MARKER_FILE_NAME).is_file()
+            # `os.path.isfile`, not `Path.is_file`: an unreadable directory is
+            # False here rather than a PermissionError that stops the launch.
+            and not os.path.isfile(
+                os.path.join(directory, name, VIRTUAL_ENVIRONMENT_MARKER_FILE_NAME)
+            )
         )
         python_files.extend(
             Path(directory) / name for name in sorted(file_names) if name.endswith(".py")
@@ -361,6 +416,7 @@ def check_app_directory_for_floor_bindings(app_directory: Path) -> CrossFloorChe
                     )
                 )
             except (OSError, ValueError):
+                # An unreadable or malformed manifest is the installer's to report.
                 pass
     return CrossFloorCheckReport(findings, skipped_rule_reason)
 

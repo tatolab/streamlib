@@ -236,14 +236,17 @@ def launch_app_node(
     # label — keys on the app, not on the shell it was launched from.
     os.environ[APP_DIRECTORY_ENVIRONMENT_VARIABLE] = str(anchor_directory)
 
-    # Stdout, not a log: an agent driving `dev` reads it there.
-    print(
-        render_cross_floor_warning_block(
+    # Stdout, not a log: an agent driving `dev` reads it there. Advisory, so a
+    # defect in the check itself is reported and never stops the start.
+    try:
+        cross_floor_warning_block = render_cross_floor_warning_block(
             check_app_directory_for_floor_bindings(anchor_directory), anchor_directory
-        ),
-        end="",
-        flush=True,
-    )
+        )
+    except Exception as cross_floor_check_failure:  # noqa: BLE001 — advisory only
+        cross_floor_warning_block = (
+            f"streamlib: the cross-floor check could not run: {cross_floor_check_failure!r}\n"
+        )
+    print(cross_floor_warning_block, end="", flush=True)
 
     try:
         entry_namespace = execute_app_entry_file(entry_file)
