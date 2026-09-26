@@ -13,8 +13,9 @@ use streamlib_consumer_rhi::{
 
 use super::super::{
     HelperCheckedOutSurface, HelperProcessGpuExchangeClient, HelperSurfaceCheckOutLeaseDebt,
-    HelperSurfaceReleaseDebt, SurfaceShareTransferredHandle, escalate_round_trip_to_parent,
-    required_positive_u32_check_out_metadata_field, vk_image_creation_recipe_of_check_out,
+    HelperSurfaceReleaseDebt, ProcessorOutputTexturePoolRequest, SurfaceShareTransferredHandle,
+    escalate_round_trip_to_parent, required_positive_u32_check_out_metadata_field,
+    vk_image_creation_recipe_of_check_out,
 };
 use super::{HelperIOSurfaceCpuLock, IOSurfaceLockRefused, IOSurfaceMachPortExportDescription};
 use crate::python_processor_context::ExportedVkImageCreationRecipe;
@@ -232,8 +233,9 @@ fn import_timeline_edge_for_texture_check_out(
 }
 
 impl HelperProcessGpuExchangeClient {
-    /// Acquire a pooled texture over an IOSurface, then check it out and
-    /// import it, so the CPU and this process's device both reach it.
+    /// Acquire a texture over an IOSurface — a one-off this helper owes a
+    /// release, or the next frame of a processor output pool — then check it
+    /// out and import it, so the CPU and this process's device both reach it.
     ///
     /// Called attached; the escalate wait releases the GIL, and the checkout
     /// and imports run detached.
@@ -244,6 +246,7 @@ impl HelperProcessGpuExchangeClient {
         height: u32,
         wire_format_name: &str,
         usage: &[String],
+        processor_output_pool: Option<ProcessorOutputTexturePoolRequest<'_>>,
     ) -> PyResult<HelperCheckedOutTextureSurface> {
         let op = PyDict::new(python);
         op.set_item("op", "acquire_texture")?;
@@ -251,6 +254,12 @@ impl HelperProcessGpuExchangeClient {
         op.set_item("height", height)?;
         op.set_item("format", wire_format_name)?;
         op.set_item("usage", usage)?;
+        if let Some(processor_output_pool) = processor_output_pool {
+            op.set_item(
+                "processor_output_pool",
+                processor_output_pool.to_escalate_field(python)?,
+            )?;
+        }
         let response =
             escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
         let handle_id: String = response
@@ -262,13 +271,16 @@ impl HelperProcessGpuExchangeClient {
             })?
             .extract()?;
         // The debt exists from the moment the parent allocated, so a refused
-        // checkout or import below still hands the pool slot back.
-        let release_to_parent = HelperSurfaceReleaseDebt {
-            release_to_parent_without_waiting: self
-                .release_to_parent_without_waiting
-                .clone_ref(python),
-            handle_id: handle_id.clone(),
-        };
+        // checkout or import below still hands the pool slot back. A processor
+        // output pool's frame owes none: the pool owns the slot.
+        let release_to_parent = processor_output_pool
+            .is_none()
+            .then(|| HelperSurfaceReleaseDebt {
+                release_to_parent_without_waiting: self
+                    .release_to_parent_without_waiting
+                    .clone_ref(python),
+                handle_id: handle_id.clone(),
+            });
         let checked_out = python
             .detach(|| self.check_out_and_import(&handle_id))
             .map_err(|check_out_failure| {
@@ -285,7 +297,7 @@ impl HelperProcessGpuExchangeClient {
                  registration; a pool cannot answer a texture acquire with a buffer"
             )));
         };
-        checked_out_texture.release_to_parent = Some(release_to_parent);
+        checked_out_texture.release_to_parent = release_to_parent;
         Ok(checked_out_texture)
     }
 

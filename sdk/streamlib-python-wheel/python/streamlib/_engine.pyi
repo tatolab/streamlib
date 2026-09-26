@@ -1095,6 +1095,24 @@ class GpuContextLimitedAccess:
         on Linux, through its own IOSurface on macOS — without the caller
         spelling a transfer usage.
         """
+    def acquire_texture_from_processor_output_pool(
+        self,
+        pool_key: str,
+        rotation_depth: int,
+        width: int,
+        height: int,
+        format: str,
+        usage: list[str],
+    ) -> GpuSurfaceHandle:
+        """The texture this frame publishes into, from the processor output pool `pool_key`.
+
+        Every call names a new frame, `<slot>#<generation>`, in a slot the pool
+        owns; a slot any consumer still holds is skipped, never rewritten. The
+        pool rotates through `rotation_depth` slots, grows while consumers hold
+        frames, and at its cap raises naming the pool — the producer drops its
+        own frame rather than wait. `ProcessorOutputTextureRing` is the
+        spelling a processor reaches for.
+        """
     def resolve_surface(self, surface_id: str) -> GpuSurfaceHandle: ...
     def claim_surface_against_producer_reuse(
         self, surface_id: str
@@ -1163,6 +1181,24 @@ class GpuContextFullAccess:
         the CPU doors reach the pixels — over the surface's host-visible staging
         on Linux, through its own IOSurface on macOS — without the caller
         spelling a transfer usage.
+        """
+    def acquire_texture_from_processor_output_pool(
+        self,
+        pool_key: str,
+        rotation_depth: int,
+        width: int,
+        height: int,
+        format: str,
+        usage: list[str],
+    ) -> GpuSurfaceHandle:
+        """The texture this frame publishes into, from the processor output pool `pool_key`.
+
+        Every call names a new frame, `<slot>#<generation>`, in a slot the pool
+        owns; a slot any consumer still holds is skipped, never rewritten. The
+        pool rotates through `rotation_depth` slots, grows while consumers hold
+        frames, and at its cap raises naming the pool — the producer drops its
+        own frame rather than wait. `ProcessorOutputTextureRing` is the
+        spelling a processor reaches for.
         """
 
     def create_window(

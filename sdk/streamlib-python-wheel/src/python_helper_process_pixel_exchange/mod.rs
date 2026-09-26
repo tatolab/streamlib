@@ -108,6 +108,27 @@ fn escalate_round_trip_to_parent<'py>(
         })
 }
 
+/// Which processor output pool a texture acquire hands its slot out of.
+#[derive(Clone, Copy)]
+pub(crate) struct ProcessorOutputTexturePoolRequest<'pool_key> {
+    pub(crate) pool_key: &'pool_key str,
+    pub(crate) rotation_depth: u32,
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl ProcessorOutputTexturePoolRequest<'_> {
+    /// The request's wire field, as the escalate op spells it.
+    fn to_escalate_field<'python>(
+        self,
+        python: Python<'python>,
+    ) -> PyResult<Bound<'python, PyDict>> {
+        let field = PyDict::new(python);
+        field.set_item("pool_key", self.pool_key)?;
+        field.set_item("rotation_depth", self.rotation_depth)?;
+        Ok(field)
+    }
+}
+
 /// Hand the parent's `release_handle` for `handle_id` to the bridge's release
 /// worker and return without waiting on its answer.
 ///

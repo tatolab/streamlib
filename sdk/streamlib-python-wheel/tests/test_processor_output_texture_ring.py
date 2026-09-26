@@ -1,13 +1,13 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The output ring's slot discipline, with the capability stood in for.
+"""The output ring's request discipline, with the capability stood in for.
 
-The real capability needs a running engine; what these tests own is the pure
-contract the class adds over it — allocate once, rotate in order, hold every
-slot alive, and reallocate on an extent change with the releases ordered ahead
-of the new acquires. That ordering is the part a GPU run cannot assert: it
-shows up there only as pool pressure.
+The real capability needs a running engine, and the engine is what decides
+which slot is next (`test_texture_ring_producer.py` proves that against one).
+What these tests own is what the class adds over the capability: every frame
+asks the engine, under one pool key the ring owns alone, with its depth, format,
+usage and the frame's extent.
 """
 
 from __future__ import annotations
@@ -23,36 +23,29 @@ RING_USAGE = ["render_attachment", "texture_binding"]
 
 
 class SurfaceHandleStandIn:
-    """Records its own release, which CPython's refcounting makes immediate."""
-
-    def __init__(self, surface_id: str, events: "list[tuple[str, ...]]") -> None:
+    def __init__(self, surface_id: str) -> None:
         self.surface_id = surface_id
-        self._events = events
-
-    def __del__(self) -> None:
-        self._events.append(("released", self.surface_id))
 
 
 class GpuContextStandIn:
-    """Hands out numbered stand-in handles and records every acquire."""
+    """Records every processor output pool acquire and answers a numbered frame."""
 
     def __init__(self) -> None:
-        self.events: "list[tuple[str, ...]]" = []
-        self._minted = 0
+        self.acquires: "list[tuple[object, ...]]" = []
 
-    def acquire_texture(
-        self, width: int, height: int, texture_format: str, usage: "list[str]"
+    def acquire_texture_from_processor_output_pool(
+        self,
+        pool_key: str,
+        rotation_depth: int,
+        width: int,
+        height: int,
+        texture_format: str,
+        usage: "list[str]",
     ) -> SurfaceHandleStandIn:
-        self._minted += 1
-        surface_id = f"stand-in-{self._minted}"
-        self.events.append(
-            ("acquired", surface_id, f"{width}x{height}", texture_format, *usage)
+        self.acquires.append(
+            (pool_key, rotation_depth, f"{width}x{height}", texture_format, *usage)
         )
-        return SurfaceHandleStandIn(surface_id, self.events)
-
-
-def acquires_in(events: "list[tuple[str, ...]]") -> "list[tuple[str, ...]]":
-    return [event for event in events if event[0] == "acquired"]
+        return SurfaceHandleStandIn(f"stand-in#{len(self.acquires)}")
 
 
 def capability(stand_in: GpuContextStandIn) -> GpuContextLimitedAccess:
@@ -60,66 +53,39 @@ def capability(stand_in: GpuContextStandIn) -> GpuContextLimitedAccess:
     return cast(GpuContextLimitedAccess, stand_in)
 
 
-def test_the_ring_rotates_through_its_slots_in_order_and_wraps() -> None:
+def test_every_frame_asks_the_engine_for_its_slot() -> None:
+    """The engine decides reuse; a ring that rotated on its own would publish
+    into a slot a consumer still holds."""
     gpu = GpuContextStandIn()
     ring = ProcessorOutputTextureRing(RING_FORMAT, RING_USAGE, depth=3)
     published = [
         ring.next_texture_for_this_frame(capability(gpu), 640, 360).surface_id
-        for _ in range(7)
+        for _ in range(5)
     ]
-    assert published == [
-        "stand-in-1", "stand-in-2", "stand-in-3",
-        "stand-in-1", "stand-in-2", "stand-in-3",
-        "stand-in-1",
-    ]
+    assert published == [f"stand-in#{frame}" for frame in range(1, 6)]
+    assert len(gpu.acquires) == 5
 
 
-def test_a_stable_extent_allocates_exactly_once() -> None:
+def test_one_ring_asks_under_one_pool_key_and_two_rings_never_share_one() -> None:
     gpu = GpuContextStandIn()
-    ring = ProcessorOutputTextureRing(RING_FORMAT, RING_USAGE)
-    for _ in range(20):
-        ring.next_texture_for_this_frame(capability(gpu), 1920, 1080)
-    assert len(acquires_in(gpu.events)) == ring.depth
+    first_ring = ProcessorOutputTextureRing(RING_FORMAT, RING_USAGE)
+    second_ring = ProcessorOutputTextureRing(RING_FORMAT, RING_USAGE)
+    for _ in range(3):
+        first_ring.next_texture_for_this_frame(capability(gpu), 64, 64)
+    second_ring.next_texture_for_this_frame(capability(gpu), 64, 64)
+    pool_keys = [acquire[0] for acquire in gpu.acquires]
+    assert len(set(pool_keys[:3])) == 1
+    assert pool_keys[3] != pool_keys[0]
 
 
-def test_the_format_and_usage_reach_every_acquire_as_given() -> None:
+def test_the_depth_format_usage_and_extent_reach_every_acquire_as_given() -> None:
     gpu = GpuContextStandIn()
-    ring = ProcessorOutputTextureRing("bgra8_unorm", ["texture_binding"])
-    ring.next_texture_for_this_frame(capability(gpu), 64, 64)
-    assert acquires_in(gpu.events) == [
-        ("acquired", "stand-in-1", "64x64", "bgra8_unorm", "texture_binding"),
-        ("acquired", "stand-in-2", "64x64", "bgra8_unorm", "texture_binding"),
-    ]
-
-
-def test_a_slots_surface_id_is_stable_across_rotations() -> None:
-    """The stability is what lets a consumer's resolve outlive one frame."""
-    gpu = GpuContextStandIn()
-    ring = ProcessorOutputTextureRing(RING_FORMAT, RING_USAGE, depth=2)
-    first_pass = ring.next_texture_for_this_frame(capability(gpu), 320, 240)
-    ring.next_texture_for_this_frame(capability(gpu), 320, 240)
-    same_slot_again = ring.next_texture_for_this_frame(capability(gpu), 320, 240)
-    assert same_slot_again is first_pass
-
-
-def test_an_extent_change_releases_the_old_slots_before_acquiring_new_ones() -> None:
-    """The pool must never be asked to hold both extents at once."""
-    gpu = GpuContextStandIn()
-    ring = ProcessorOutputTextureRing(RING_FORMAT, RING_USAGE, depth=2)
-    ring.next_texture_for_this_frame(capability(gpu), 1280, 720)
+    ring = ProcessorOutputTextureRing("bgra8_unorm", ["texture_binding"], depth=3)
+    ring.next_texture_for_this_frame(capability(gpu), 64, 32)
     ring.next_texture_for_this_frame(capability(gpu), 1920, 1080)
-
-    # The order among the two releases is interpreter detail; what the pool
-    # needs is that both land before either new acquire.
-    event_kinds = [event[0] for event in gpu.events]
-    assert event_kinds == [
-        "acquired", "acquired", "released", "released", "acquired", "acquired",
-    ]
-    assert {event[1] for event in gpu.events if event[0] == "released"} == {
-        "stand-in-1", "stand-in-2",
-    }
-    assert [event[2] for event in acquires_in(gpu.events)] == [
-        "1280x720", "1280x720", "1920x1080", "1920x1080",
+    assert [acquire[1:] for acquire in gpu.acquires] == [
+        (3, "64x32", "bgra8_unorm", "texture_binding"),
+        (3, "1920x1080", "bgra8_unorm", "texture_binding"),
     ]
 
 
@@ -129,7 +95,7 @@ def test_a_depthless_ring_is_refused_naming_the_depth() -> None:
 
 
 def test_a_fractional_or_boolean_depth_is_refused_at_construction() -> None:
-    """`range(1.5)` would raise a bare TypeError at the first frame instead,
+    """A fractional depth names no whole number of slots to rotate through,
     and `True` would silently become a one-deep ring."""
     with pytest.raises(ValueError, match="whole"):
         ProcessorOutputTextureRing(RING_FORMAT, RING_USAGE, depth=1.5)  # type: ignore[arg-type]
