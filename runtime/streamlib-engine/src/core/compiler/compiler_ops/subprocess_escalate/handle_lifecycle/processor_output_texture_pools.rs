@@ -8,7 +8,10 @@ use std::collections::HashMap;
 
 use super::RegisteredHandle;
 use crate::core::context::GpuContextFullAccess;
-use crate::core::context::lease_aware_pool_slot_ring::LeaseAwarePoolSlotResource;
+use crate::core::context::SurfaceCheckOutLeaseRegistry;
+use crate::core::context::lease_aware_pool_slot_ring::{
+    LeaseAwarePoolMintedFrameGenerations, LeaseAwarePoolSlot, LeaseAwarePoolSlotResource,
+};
 use crate::core::context::processor_output_surface_pool::ProcessorOutputSurfacePool;
 use crate::core::rhi::{TextureFormat, TextureUsages};
 use crate::core::{Error, Result};
@@ -53,6 +56,10 @@ type ProcessorOutputTexturePool = ProcessorOutputSurfacePool<ProcessorOutputText
 #[derive(Default)]
 pub(crate) struct ProcessorOutputTexturePoolsOfOneHelper {
     pools_by_key: HashMap<String, (ProcessorOutputTextureDescriptor, ProcessorOutputTexturePool)>,
+    /// Slots of pools a descriptor change replaced, kept until nothing holds
+    /// them: releasing a held slot would hand its texture back to the texture
+    /// pool, and another acquire could rewrite it under its reader.
+    retiring_slots: Vec<LeaseAwarePoolSlot<ProcessorOutputTextureSlot>>,
 }
 
 /// A slot this helper's pools no longer hold, owed the release every
@@ -79,13 +86,21 @@ impl ProcessorOutputTexturePoolsOfOneHelper {
         descriptor: ProcessorOutputTextureDescriptor,
         allocate_fresh_slot: impl FnOnce() -> Result<(String, RegisteredHandle)>,
     ) -> Result<(String, Vec<ReleasedProcessorOutputTextureSlot>)> {
-        let mut released_slots = Vec::new();
+        let host = full.host_inner();
+        let surface_store = host.surface_store();
+        let check_out_leases = surface_store
+            .as_ref()
+            .and_then(|store| store.check_out_leases())
+            .map(|leases| leases.as_ref());
+        let minted_frame_generations = host.lease_aware_pool_minted_frame_generations();
         if let Some((existing_descriptor, _)) = self.pools_by_key.get(pool_key)
             && *existing_descriptor != descriptor
             && let Some((_, replaced_pool)) = self.pools_by_key.remove(pool_key)
         {
-            released_slots.extend(released_slots_of(replaced_pool));
+            self.retiring_slots.extend(replaced_pool.into_slots());
         }
+        let released_slots =
+            self.release_retiring_slots_nobody_holds(check_out_leases, minted_frame_generations);
         let (_, pool) = self
             .pools_by_key
             .entry(pool_key.to_string())
@@ -95,16 +110,11 @@ impl ProcessorOutputTexturePoolsOfOneHelper {
                     ProcessorOutputSurfacePool::new(pool_key.to_string()),
                 )
             });
-        let host = full.host_inner();
-        let surface_store = host.surface_store();
         let published = pool
             .hand_off_next_frame(
                 rotation_depth,
-                surface_store
-                    .as_ref()
-                    .and_then(|store| store.check_out_leases())
-                    .map(|leases| leases.as_ref()),
-                host.lease_aware_pool_minted_frame_generations(),
+                check_out_leases,
+                minted_frame_generations,
                 || {
                     let (pool_slot_key, registered_texture) = allocate_fresh_slot()?;
                     let Some(texture_strong_count_with_no_holder) =
@@ -128,21 +138,67 @@ impl ProcessorOutputTexturePoolsOfOneHelper {
         Ok((published, released_slots))
     }
 
-    /// Every slot of every pool, for teardown.
+    /// Every retiring slot nobody holds any longer, with every frame it
+    /// published retired first — under the lease hand-off guard, so a checkout
+    /// of one of its ids lands strictly before the test (and keeps the slot) or
+    /// strictly after the retire (and is refused as recycled).
+    fn release_retiring_slots_nobody_holds(
+        &mut self,
+        check_out_leases: Option<&SurfaceCheckOutLeaseRegistry>,
+        minted_frame_generations: &LeaseAwarePoolMintedFrameGenerations,
+    ) -> Vec<ReleasedProcessorOutputTextureSlot> {
+        if self.retiring_slots.is_empty() {
+            return Vec::new();
+        }
+        let mut lease_hand_off =
+            match check_out_leases.map(|leases| leases.hold_for_pool_slot_hand_off()) {
+                None => None,
+                Some(Some(hand_off)) => Some(hand_off),
+                // An unreadable lease table proves no slot free; keep them all.
+                Some(None) => return Vec::new(),
+            };
+        let (unheld_slots, still_held_slots): (Vec<_>, Vec<_>) =
+            std::mem::take(&mut self.retiring_slots)
+                .into_iter()
+                .partition(|slot| {
+                    !slot.resource().is_held_in_this_process()
+                        && lease_hand_off.as_ref().is_none_or(|hand_off| {
+                            !hand_off.is_checked_out_by_any_holder(slot.pool_slot_key())
+                        })
+                });
+        self.retiring_slots = still_held_slots;
+        for slot in &unheld_slots {
+            let generation_past_every_published_frame = slot.published_frame_generation() + 1;
+            if let Some(hand_off) = lease_hand_off.as_mut() {
+                hand_off.publish_frame_generation(
+                    slot.pool_slot_key(),
+                    generation_past_every_published_frame,
+                );
+            }
+            minted_frame_generations.retire_every_published_frame_of_slot(
+                slot.pool_slot_key(),
+                generation_past_every_published_frame,
+            );
+        }
+        unheld_slots.into_iter().map(released_slot).collect()
+    }
+
+    /// Every slot of every pool, retiring ones included, for teardown.
     pub(crate) fn drain_slots(&mut self) -> Vec<ReleasedProcessorOutputTextureSlot> {
         self.pools_by_key
             .drain()
-            .flat_map(|(_, (_, pool))| released_slots_of(pool))
+            .flat_map(|(_, (_, pool))| pool.into_slots())
+            .chain(std::mem::take(&mut self.retiring_slots))
+            .map(released_slot)
             .collect()
     }
 }
 
-fn released_slots_of(
-    pool: ProcessorOutputTexturePool,
-) -> impl Iterator<Item = ReleasedProcessorOutputTextureSlot> {
-    pool.into_slots()
-        .map(|slot| ReleasedProcessorOutputTextureSlot {
-            pool_slot_key: slot.pool_slot_key().to_string(),
-            registered_texture: slot.into_resource().registered_texture,
-        })
+fn released_slot(
+    slot: LeaseAwarePoolSlot<ProcessorOutputTextureSlot>,
+) -> ReleasedProcessorOutputTextureSlot {
+    ReleasedProcessorOutputTextureSlot {
+        pool_slot_key: slot.pool_slot_key().to_string(),
+        registered_texture: slot.into_resource().registered_texture,
+    }
 }

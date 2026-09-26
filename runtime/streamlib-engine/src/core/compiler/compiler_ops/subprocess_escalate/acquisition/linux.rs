@@ -6,6 +6,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use super::super::handle_lifecycle::{EscalateHandleRegistry, RegisteredHandle};
+use super::TexturePoolWaitWhenExhausted;
 use super::{new_exportable_timeline_edge, parse_texture_format};
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::EscalateRequestAcquireImage;
@@ -28,6 +29,7 @@ pub(super) fn allocate_registered_texture_for_helper(
     height: u32,
     parsed_format: TextureFormat,
     parsed_usage: TextureUsages,
+    texture_pool_wait: TexturePoolWaitWhenExhausted,
 ) -> crate::core::error::Result<(String, RegisteredHandle)> {
     // The importability flavor is derived engine-side from the request —
     // there is no Python dial for it, and a flavor the request cannot take
@@ -44,7 +46,7 @@ pub(super) fn allocate_registered_texture_for_helper(
             ),
             Err(_) => TextureCrossProcessImportability::NotImportable,
         });
-    let texture = full.acquire_texture(&desc)?;
+    let texture = texture_pool_wait.acquire_texture(full, &desc)?;
     let (handle_id, produce_done, consume_done) = assign_texture_handle_id(full, &texture)?;
     // The parent answers its own binding resolutions from the texture cache —
     // without this entry it would re-import its own allocation through the

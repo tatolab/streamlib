@@ -219,7 +219,7 @@ fn a_processor_output_pool_never_rewrites_a_frame_a_consumer_holds() {
     let registry = EscalateHandleRegistry::new();
     let (width, height, format) = (64, 32, TextureFormat::Rgba8Unorm);
     let pool_key = format!("processor-output-pool-test-{}", Uuid::new_v4().simple());
-    let next_frame = || -> String {
+    let next_frame_of_extent = |width: u32, height: u32| -> String {
         let response = handle_escalate_op(
             &sandbox,
             &registry,
@@ -241,6 +241,7 @@ fn a_processor_output_pool_never_rewrites_a_frame_a_consumer_holds() {
             other => panic!("the pooled acquire_texture failed: {other:?}"),
         }
     };
+    let next_frame = || next_frame_of_extent(width, height);
 
     let unheld: Vec<String> = (0..4).map(|_| next_frame()).collect();
     let unheld_slots: std::collections::HashSet<_> = unheld
@@ -301,6 +302,36 @@ fn a_processor_output_pool_never_rewrites_a_frame_a_consumer_holds() {
         .check_out_leases()
         .release_one_check_out_lease(&held_frame, consumer)
         .unwrap();
+
+    // An extent change replaces the pool, but a slot a consumer still holds
+    // stays registered — and out of the texture pool — until it is released.
+    let held_across_the_extent_change = next_frame();
+    state
+        .check_out_leases()
+        .record_check_out_lease(&held_across_the_extent_change, consumer)
+        .expect("the current frame checks out");
+    let held_slot = pool_slot_key_of_surface_id(&held_across_the_extent_change).to_string();
+    next_frame_of_extent(width * 2, height * 2);
+    assert!(
+        state.registration_of(&held_slot).is_some(),
+        "an extent change released a slot a consumer still holds"
+    );
+    state
+        .check_out_leases()
+        .release_one_check_out_lease(&held_across_the_extent_change, consumer)
+        .unwrap();
+    next_frame_of_extent(width * 2, height * 2);
+    assert!(
+        state.registration_of(&held_slot).is_none(),
+        "the retired slot was not released once nothing held it"
+    );
+    assert!(
+        state
+            .check_out_leases()
+            .record_check_out_lease(&held_across_the_extent_change, consumer)
+            .is_err(),
+        "a released slot's last frame id still checks out"
+    );
     let slot_keys: Vec<String> = registry
         .processor_output_texture_pools()
         .drain_slots()

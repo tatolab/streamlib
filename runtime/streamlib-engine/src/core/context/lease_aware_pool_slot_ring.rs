@@ -113,6 +113,22 @@ impl LeaseAwarePoolMintedFrameGenerations {
             .copied()
     }
 
+    /// Retire every frame `pool_slot_key` has published by recording a
+    /// generation none of them carries — for a slot leaving its ring.
+    pub(crate) fn retire_every_published_frame_of_slot(
+        &self,
+        pool_slot_key: &str,
+        generation_past_every_published_frame: u64,
+    ) {
+        self.minted_frame_generation_by_pool_slot
+            .lock()
+            .unwrap()
+            .insert(
+                pool_slot_key.to_string(),
+                generation_past_every_published_frame,
+            );
+    }
+
     /// Drop a slot whose resource is gone, so the index stays bounded by the
     /// slots that exist.
     pub(crate) fn forget_slot(&self, pool_slot_key: &str) {

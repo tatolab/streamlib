@@ -42,6 +42,29 @@ use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalat
 use crate::core::context::GpuContextLimitedAccess;
 use crate::core::rhi::{PixelBuffer, PixelFormat, TextureFormat, TextureUsages};
 
+/// Whether a texture allocation may wait on the texture pool's exhaustion
+/// policy for another holder to let a texture go.
+#[derive(Clone, Copy)]
+pub(super) enum TexturePoolWaitWhenExhausted {
+    /// Whatever the pool is configured to do — a one-off acquire.
+    AsThePoolIsConfigured,
+    /// Refuse at once: a processor output pool's producer never waits.
+    RefuseAtOnce,
+}
+
+impl TexturePoolWaitWhenExhausted {
+    fn acquire_texture(
+        self,
+        full: &crate::core::context::GpuContextFullAccess,
+        desc: &crate::core::context::TexturePoolDescriptor,
+    ) -> crate::core::error::Result<crate::core::context::PooledTextureHandle> {
+        match self {
+            Self::AsThePoolIsConfigured => full.acquire_texture(desc),
+            Self::RefuseAtOnce => full.acquire_texture_without_waiting(desc),
+        }
+    }
+}
+
 /// Acquire a pixel buffer on behalf of a helper process, holding it in
 /// `registry` until the helper releases it.
 pub(super) fn handle_acquire_pixel_buffer(
@@ -132,6 +155,7 @@ pub(super) fn handle_acquire_texture(
                 height,
                 parsed_format,
                 parsed_usage,
+                TexturePoolWaitWhenExhausted::AsThePoolIsConfigured,
             )?;
             registry.insert_registered_handle(handle_id.clone(), registered_texture);
             Ok(handle_id)
@@ -186,6 +210,7 @@ fn hand_off_processor_output_texture_frame(
                     descriptor.height,
                     descriptor.format,
                     descriptor.usage,
+                    TexturePoolWaitWhenExhausted::RefuseAtOnce,
                 )
             })
     })?;

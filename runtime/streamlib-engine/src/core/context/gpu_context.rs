@@ -1569,6 +1569,33 @@ impl GpuContext {
         self.texture_pool.acquire(desc)
     }
 
+    /// Acquire a pooled texture, refusing at once — never waiting on another
+    /// holder — when the descriptor's bucket is at its cap.
+    pub fn acquire_texture_without_waiting(
+        &self,
+        desc: &TexturePoolDescriptor,
+    ) -> Result<PooledTextureHandle> {
+        tracing::debug!(
+            rhi_op = "acquire_texture_without_waiting",
+            width = desc.width,
+            height = desc.height,
+            format = ?desc.format,
+            "GpuContext::acquire_texture_without_waiting"
+        );
+        self.texture_pool
+            .acquire_without_waiting(desc)?
+            .ok_or_else(|| {
+                Error::TextureError(format!(
+                    "every one of the {} {}x{} {:?} textures this runtime's texture pool may hold \
+                 is in use, so the frame is dropped rather than waiting for one",
+                    self.texture_pool.max_pool_size_per_bucket(),
+                    desc.width,
+                    desc.height,
+                    desc.format
+                ))
+            })
+    }
+
     /// Get the shared command queue.
     ///
     /// All processors should use this shared queue rather than creating their own.
@@ -4252,6 +4279,14 @@ impl GpuContextFullAccess {
     /// [`Self::acquire_render_target_dma_buf_image`].
     pub fn acquire_texture(&self, desc: &TexturePoolDescriptor) -> Result<PooledTextureHandle> {
         self.host_inner().acquire_texture(desc)
+    }
+
+    /// See [`GpuContext::acquire_texture_without_waiting`].
+    pub fn acquire_texture_without_waiting(
+        &self,
+        desc: &TexturePoolDescriptor,
+    ) -> Result<PooledTextureHandle> {
+        self.host_inner().acquire_texture_without_waiting(desc)
     }
 
     /// Get the shared command queue.

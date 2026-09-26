@@ -4,6 +4,7 @@
 use uuid::Uuid;
 
 use super::super::handle_lifecycle::{EscalateHandleRegistry, RegisteredHandle};
+use super::TexturePoolWaitWhenExhausted;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::EscalateRequestAcquireImage;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_response::EscalateResponseErr;
@@ -20,9 +21,10 @@ pub(super) fn allocate_registered_texture_for_helper(
     height: u32,
     parsed_format: TextureFormat,
     parsed_usage: TextureUsages,
+    texture_pool_wait: TexturePoolWaitWhenExhausted,
 ) -> crate::core::error::Result<(String, RegisteredHandle)> {
     let desc = TexturePoolDescriptor::new(width, height, parsed_format).with_usage(parsed_usage);
-    let texture = full.acquire_texture(&desc)?;
+    let texture = texture_pool_wait.acquire_texture(full, &desc)?;
     let (handle_id,) = assign_texture_handle_id(full, &texture)?;
     full.register_texture(&handle_id, texture.texture_clone());
     Ok((handle_id, RegisteredHandle::Texture { texture }))
