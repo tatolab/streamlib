@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.30](https://github.com/tatolab/streamlib/compare/v0.26.29...v0.26.30) (2026-09-26)
+
+
+### Features
+
+* **engine:** Mp4Sink records on every platform ([#2485](https://github.com/tatolab/streamlib/issues/2485)) ([6e10abe](https://github.com/tatolab/streamlib/commit/6e10abedd08289e3cc26edeb81050231a518b846))
+
 ## [0.26.29](https://github.com/tatolab/streamlib/compare/v0.26.28...v0.26.29) (2026-09-26)
 
 
