@@ -342,7 +342,10 @@ pub(crate) fn release_surface_share_and_texture_cache_for_handle(
 /// generation index.
 pub(crate) fn release_processor_output_texture_slot(
     sandbox: &GpuContextLimitedAccess,
-    (pool_slot_key, registered_texture): ReleasedProcessorOutputTextureSlot,
+    ReleasedProcessorOutputTextureSlot {
+        pool_slot_key,
+        registered_texture,
+    }: ReleasedProcessorOutputTextureSlot,
 ) {
     release_surface_share_and_texture_cache_for_handle(
         sandbox,

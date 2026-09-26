@@ -77,7 +77,8 @@ pub(crate) use kernel_binding_names::{
 pub use pixel_buffer::PixelBuffer;
 pub use pixel_buffer_pool::{
     PixelBufferDescriptor, PixelBufferPoolSlotId, PublishedPixelBufferFrameId,
-    pool_slot_key_of_surface_id, split_pool_slot_and_frame_generation,
+    pool_slot_key_of_surface_id, published_frame_id_of_pool_slot,
+    split_pool_slot_and_frame_generation,
 };
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) use ray_tracing_kernel::ray_tracing_spirv_type_to_kind;

@@ -44,5 +44,6 @@ client down on its own schedule, not as part of the reap.
 
 ## Where this lives
 
-`PixelBufferRingEntry::is_in_use_per_the_kernel` gates the macOS pool;
+`PixelBufferPoolSlot`'s `is_in_use_per_the_platform`
+(`runtime/streamlib-engine/src/core/context/gpu_context.rs`) gates the macOS pool;
 `surface_share_over_raw_mach.rs` holds the multi-process tests.

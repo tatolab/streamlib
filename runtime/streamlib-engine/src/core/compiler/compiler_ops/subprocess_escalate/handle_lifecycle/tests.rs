@@ -306,7 +306,7 @@ fn a_processor_output_pool_never_rewrites_a_frame_a_consumer_holds() {
         .drain_slots()
         .into_iter()
         .map(|released_slot| {
-            let pool_slot_key = released_slot.0.clone();
+            let pool_slot_key = released_slot.pool_slot_key.clone();
             release_processor_output_texture_slot(&sandbox, released_slot);
             pool_slot_key
         })

@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use super::{SurfaceCheckOutLeaseHandOff, SurfaceCheckOutLeaseRegistry};
+use crate::core::rhi::published_frame_id_of_pool_slot;
 use crate::core::{Error, Result};
 
 /// What a lease-aware ring needs to know about one slot's resource.
@@ -61,15 +62,20 @@ impl<Resource> LeaseAwarePoolSlot<Resource> {
         self.published_frame_generation
     }
 
-    /// The generation the hand-off before the most recent one published, once
-    /// there has been one.
-    pub(crate) fn previously_published_frame_generation(&self) -> Option<u64> {
-        (self.published_frame_generation > 1).then(|| self.published_frame_generation - 1)
-    }
-
     /// The surface id the most recent hand-off published.
     pub(crate) fn currently_published_frame_id(&self) -> String {
-        format!("{}#{}", self.pool_slot_key, self.published_frame_generation)
+        published_frame_id_of_pool_slot(&self.pool_slot_key, self.published_frame_generation)
+    }
+
+    /// The surface id the hand-off before the most recent one published, once
+    /// there has been one.
+    pub(crate) fn previously_published_frame_id(&self) -> Option<String> {
+        (self.published_frame_generation > 1).then(|| {
+            published_frame_id_of_pool_slot(
+                &self.pool_slot_key,
+                self.published_frame_generation - 1,
+            )
+        })
     }
 
     fn mint_next_frame_generation(&mut self) -> u64 {
@@ -116,12 +122,16 @@ impl LeaseAwarePoolMintedFrameGenerations {
             .remove(pool_slot_key);
     }
 
-    /// Refuse `surface_id` when it names a generation older than the one
-    /// minted over its slot. `None` when no lease-aware ring owns the slot, so
-    /// the caller can ask elsewhere.
-    pub(crate) fn refusal_of_a_retired_frame_id(&self, surface_id: &str) -> Option<Result<()>> {
-        let (pool_slot, published_generation) =
-            crate::core::rhi::split_pool_slot_and_frame_generation(surface_id)?;
+    /// Refuse `surface_id` — published as `published_generation` over
+    /// `pool_slot` — when that generation is older than the one minted over
+    /// the slot. `None` when no lease-aware ring owns the slot, so the caller
+    /// can ask elsewhere.
+    pub(crate) fn refusal_of_a_retired_frame_id(
+        &self,
+        surface_id: &str,
+        pool_slot: &str,
+        published_generation: u64,
+    ) -> Option<Result<()>> {
         let minted = self.minted_frame_generation_of_slot(pool_slot)?;
         Some(if minted == published_generation {
             Ok(())
@@ -132,6 +142,20 @@ impl LeaseAwarePoolMintedFrameGenerations {
                 current_generation: minted,
             })
         })
+    }
+}
+
+#[cfg(test)]
+impl LeaseAwarePoolMintedFrameGenerations {
+    /// [`Self::refusal_of_a_retired_frame_id`] for an id the test has not
+    /// split; `None` for an id with no generation, too.
+    pub(crate) fn refusal_of_a_retired_frame_id_named(
+        &self,
+        surface_id: &str,
+    ) -> Option<Result<()>> {
+        let (pool_slot, published_generation) =
+            crate::core::rhi::split_pool_slot_and_frame_generation(surface_id)?;
+        self.refusal_of_a_retired_frame_id(surface_id, pool_slot, published_generation)
     }
 }
 

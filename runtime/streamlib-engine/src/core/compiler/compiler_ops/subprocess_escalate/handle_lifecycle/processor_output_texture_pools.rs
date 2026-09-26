@@ -31,19 +31,19 @@ pub(crate) struct ProcessorOutputTextureSlot {
     texture_strong_count_with_no_holder: usize,
 }
 
-impl ProcessorOutputTextureSlot {
-    fn texture_strong_count(registered_texture: &RegisteredHandle) -> usize {
-        match registered_texture {
-            RegisteredHandle::Texture { texture, .. } => texture.texture().strong_count(),
-            _ => 0,
-        }
+/// The handle count of a pooled texture's host `Arc`; `None` for any other
+/// kind of registered handle, which no processor output pool may hold.
+fn pooled_texture_strong_count(registered_texture: &RegisteredHandle) -> Option<usize> {
+    match registered_texture {
+        RegisteredHandle::Texture { texture, .. } => Some(texture.texture().strong_count()),
+        _ => None,
     }
 }
 
 impl LeaseAwarePoolSlotResource for ProcessorOutputTextureSlot {
     fn is_held_in_this_process(&self) -> bool {
-        Self::texture_strong_count(&self.registered_texture)
-            > self.texture_strong_count_with_no_holder
+        pooled_texture_strong_count(&self.registered_texture)
+            .is_some_and(|strong_count| strong_count > self.texture_strong_count_with_no_holder)
     }
 }
 
@@ -57,7 +57,11 @@ pub(crate) struct ProcessorOutputTexturePoolsOfOneHelper {
 
 /// A slot this helper's pools no longer hold, owed the release every
 /// registered texture is owed.
-pub(crate) type ReleasedProcessorOutputTextureSlot = (String, RegisteredHandle);
+pub(crate) struct ReleasedProcessorOutputTextureSlot {
+    /// The key the slot's texture is registered under — never a frame id.
+    pub(crate) pool_slot_key: String,
+    pub(crate) registered_texture: RegisteredHandle,
+}
 
 impl ProcessorOutputTexturePoolsOfOneHelper {
     /// Hand out the next frame of the pool under `pool_key`, answering its
@@ -103,14 +107,14 @@ impl ProcessorOutputTexturePoolsOfOneHelper {
                 host.lease_aware_pool_minted_frame_generations(),
                 || {
                     let (pool_slot_key, registered_texture) = allocate_fresh_slot()?;
-                    if !registered_texture.is_texture_backed() {
+                    let Some(texture_strong_count_with_no_holder) =
+                        pooled_texture_strong_count(&registered_texture)
+                    else {
                         return Err(Error::GpuError(format!(
                             "processor output pool '{pool_key}' was handed a slot that is not \
-                             a texture"
+                             a pooled texture"
                         )));
-                    }
-                    let texture_strong_count_with_no_holder =
-                        ProcessorOutputTextureSlot::texture_strong_count(&registered_texture);
+                    };
                     Ok((
                         pool_slot_key,
                         ProcessorOutputTextureSlot {
@@ -136,8 +140,9 @@ impl ProcessorOutputTexturePoolsOfOneHelper {
 fn released_slots_of(
     pool: ProcessorOutputTexturePool,
 ) -> impl Iterator<Item = ReleasedProcessorOutputTextureSlot> {
-    pool.into_slots().map(|slot| {
-        let pool_slot_key = slot.pool_slot_key().to_string();
-        (pool_slot_key, slot.into_resource().registered_texture)
-    })
+    pool.into_slots()
+        .map(|slot| ReleasedProcessorOutputTextureSlot {
+            pool_slot_key: slot.pool_slot_key().to_string(),
+            registered_texture: slot.into_resource().registered_texture,
+        })
 }

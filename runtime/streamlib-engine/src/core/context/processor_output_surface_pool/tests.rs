@@ -90,7 +90,7 @@ fn a_held_frames_slot_is_skipped_never_rewritten() {
     );
     assert_eq!(
         pool.minted
-            .refusal_of_a_retired_frame_id(&held_frame)
+            .refusal_of_a_retired_frame_id_named(&held_frame)
             .unwrap()
             .ok(),
         Some(()),
@@ -146,7 +146,7 @@ fn a_recycled_frames_id_is_refused_naming_the_recycling() {
     let first = pool.next_frame(1).unwrap();
     pool.next_frame(1).unwrap();
     assert!(matches!(
-        pool.minted.refusal_of_a_retired_frame_id(&first),
+        pool.minted.refusal_of_a_retired_frame_id_named(&first),
         Some(Err(Error::SurfaceFrameRecycled { .. }))
     ));
     assert!(matches!(

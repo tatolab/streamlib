@@ -752,8 +752,8 @@ mod tests {
 
     /// The claim is bounded to the copy. In one address space the pool's
     /// accounting *is* the `PixelBuffer` refcount — the count
-    /// `PixelBufferRingEntry::hand_off_if_unheld_in_process` reads before it
-    /// rehands a slot — so a claim the exchange forgot to drop shows up
+    /// `PixelBufferPoolSlot`'s `is_held_in_this_process` reads before the
+    /// ring rehands a slot — so a claim the exchange forgot to drop shows up
     /// here as a hold that never comes back.
     /// GPU-gated: skips when no device is present.
     #[test]

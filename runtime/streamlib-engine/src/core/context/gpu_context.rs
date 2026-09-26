@@ -487,9 +487,7 @@ impl PixelBufferPoolManager {
                 let slot_index = ring_pool.ring.slot_count() - newly_added;
                 ring_pool.ring.hand_off_fresh_slot(
                     slot_index,
-                    surface_store
-                        .and_then(SurfaceStore::check_out_leases)
-                        .map(Arc::as_ref),
+                    check_out_leases,
                     &self.minted_frame_generations,
                 );
                 let slot = ring_pool.ring.slot(slot_index);
@@ -524,17 +522,16 @@ impl PixelBufferPoolManager {
     /// Swap the slot's `buffer_cache` entry to the id just minted: the
     /// retired id stops resolving in-process — absence *is* the loud
     /// failure here — and the cache keeps exactly one share per slot, which
-    /// [`PixelBufferRingEntry::hand_off_if_unheld_in_process`]'s baseline
-    /// counts on. Call after the mint: the entry's current id is the one
-    /// this publishes.
+    /// [`PixelBufferPoolSlot`]'s in-process-hold baseline counts on. Call
+    /// after the mint: the slot's current id is the one this publishes.
     fn retire_previous_frame_in_cache(
         &self,
         slot: &LeaseAwarePoolSlot<PixelBufferPoolSlot>,
         buffer: &PixelBuffer,
     ) {
         let mut cache = self.buffer_cache.lock().unwrap();
-        if let Some(previous_generation) = slot.previously_published_frame_generation() {
-            cache.remove(&format!("{}#{}", slot.pool_slot_key(), previous_generation));
+        if let Some(previously_published_frame_id) = slot.previously_published_frame_id() {
+            cache.remove(&previously_published_frame_id);
         }
         cache.insert(slot.currently_published_frame_id(), buffer.clone());
     }
@@ -1048,12 +1045,14 @@ impl GpuContext {
     /// context no service was wired into. Anything else falls to the
     /// registry, which fails closed on slots nobody published.
     pub(crate) fn refuse_a_retired_frame_id(&self, surface_id: &str) -> Result<()> {
-        if crate::core::rhi::split_pool_slot_and_frame_generation(surface_id).is_none() {
+        let Some((pool_slot, published_generation)) =
+            crate::core::rhi::split_pool_slot_and_frame_generation(surface_id)
+        else {
             return Ok(());
-        }
+        };
         if let Some(answer) = self
             .lease_aware_pool_minted_frame_generations
-            .refusal_of_a_retired_frame_id(surface_id)
+            .refusal_of_a_retired_frame_id(surface_id, pool_slot, published_generation)
         {
             return answer;
         }

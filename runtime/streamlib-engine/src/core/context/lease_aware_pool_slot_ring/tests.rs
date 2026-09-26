@@ -142,7 +142,7 @@ fn recycling_a_slot_retires_its_previous_id_in_process_and_at_the_service() {
     let second = next_published_id(&mut ring, Some(&leases), &minted).unwrap();
 
     assert!(matches!(
-        minted.refusal_of_a_retired_frame_id(&first),
+        minted.refusal_of_a_retired_frame_id_named(&first),
         Some(Err(Error::SurfaceFrameRecycled {
             published_generation: 1,
             current_generation: 2,
@@ -150,7 +150,7 @@ fn recycling_a_slot_retires_its_previous_id_in_process_and_at_the_service() {
         }))
     ));
     assert!(matches!(
-        minted.refusal_of_a_retired_frame_id(&second),
+        minted.refusal_of_a_retired_frame_id_named(&second),
         Some(Ok(()))
     ));
     assert!(
@@ -161,7 +161,7 @@ fn recycling_a_slot_retires_its_previous_id_in_process_and_at_the_service() {
     );
     assert!(
         minted
-            .refusal_of_a_retired_frame_id("a-slot-no-ring-owns#1")
+            .refusal_of_a_retired_frame_id_named("a-slot-no-ring-owns#1")
             .is_none(),
         "a slot this index never minted is someone else's question"
     );
