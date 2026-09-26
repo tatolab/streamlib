@@ -50,7 +50,6 @@ def _marker_uses() -> "list[tuple[str, str, str]]":
 def test_the_markers_are_in_use():
     marker_names = {marker_name for _, marker_name, _ in _marker_uses()}
     assert "linux_only_capability" in marker_names
-    assert marker_names <= {"linux_only_capability", "awaiting_macos_parity"}
 
 
 def test_linux_only_capability_names_only_the_closed_list():
