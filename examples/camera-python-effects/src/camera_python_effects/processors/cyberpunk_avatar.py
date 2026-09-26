@@ -4,7 +4,7 @@
 """Drives the android from the camera: your dancing, its dancing.
 
 Three third-party worlds meet in this one helper process, none of them the
-engine's: cupy reads the camera frame as a GPU tensor and decimates it,
+engine's: numpy reads the camera frame's host side and decimates it,
 MediaPipe lifts a 3D pose out of the pixels on the CPU, and ModernGL renders
 the posed android on its own stage. The engine sees a frame in and a frame
 out — everything between is ordinary Python packages doing what they do.
@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import cupy
+import numpy
 
 from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
     ProcessorOutputTextureRing,
@@ -205,10 +205,9 @@ class CyberpunkAvatar:
         if self.pose_tracker is None:
             return None
         try:
-            camera_pixels = cupy.from_dlpack(frame)
-            decimated_rgb = cupy.asnumpy(
-                camera_pixels[::CAMERA_DECIMATION_STRIDE, ::CAMERA_DECIMATION_STRIDE, :3]
-            )
+            decimated_rgb = numpy.from_dlpack(frame, device="cpu")[
+                ::CAMERA_DECIMATION_STRIDE, ::CAMERA_DECIMATION_STRIDE, :3
+            ]
             return self.pose_tracker.world_joints(
                 decimated_rgb, frame.timestamp_ns // 1_000_000
             )

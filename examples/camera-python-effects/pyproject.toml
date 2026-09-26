@@ -7,18 +7,14 @@ dependencies = [
     # once the release that precedes this example lands.
     "streamlib>=0.18.6",
     "numpy>=2.1",
-    # The bridge processor's device-to-device copy. Any DLPack-speaking GPU
-    # array package would do; cupy is the smallest one that does nothing else.
-    # Its CUDA major version has to match the one torch brings below, or the
-    # two disagree about which cuDNN is on the loader path and inference fails
-    # with a sublibrary version mismatch.
-    "cupy-cuda13x>=14.2",
     # The overlay generator's 2D canvas. Not in the wheel's adapter closure —
     # it is an ordinary PyPI dependency of this app, like any other.
     "skia-python>=138",
     # Pose detection: 33 landmarks with real depth, model bundled in the
-    # wheel, CPU-fast — no torch, no CUDA stack to disagree with.
-    "mediapipe>=0.10.14",
+    # wheel, CPU-fast — no torch, no CUDA stack to disagree with. 1.0.1's
+    # macOS arm64 wheel aborts the process when the landmarker graph opens
+    # ("graph_service.h: Service is unavailable" from its Metal helper).
+    "mediapipe>=0.10.14,!=1.0.1",
     # The avatar's own GL world: offscreen render of the posed android.
     "moderngl>=5.10",
 ]
