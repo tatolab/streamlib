@@ -31,6 +31,92 @@ use super::HostVulkanDevice;
 /// below this on every Linux platform we exercise.
 const MAX_BOUND_MEMORY: usize = 40;
 
+/// Every Vulkan Video decode codec operation the engine knows.
+pub(crate) const VIDEO_DECODE_CODEC_OPERATIONS: vk::VideoCodecOperationFlagsKHR =
+    vk::VideoCodecOperationFlagsKHR::from_bits_truncate(
+        vk::VideoCodecOperationFlagsKHR::DECODE_H264.bits()
+            | vk::VideoCodecOperationFlagsKHR::DECODE_H265.bits()
+            | vk::VideoCodecOperationFlagsKHR::DECODE_AV1.bits()
+            | vk::VideoCodecOperationFlagsKHR::DECODE_VP9.bits(),
+    );
+
+/// Every Vulkan Video encode codec operation the engine knows.
+pub(crate) const VIDEO_ENCODE_CODEC_OPERATIONS: vk::VideoCodecOperationFlagsKHR =
+    vk::VideoCodecOperationFlagsKHR::from_bits_truncate(
+        vk::VideoCodecOperationFlagsKHR::ENCODE_H264.bits()
+            | vk::VideoCodecOperationFlagsKHR::ENCODE_H265.bits()
+            | vk::VideoCodecOperationFlagsKHR::ENCODE_AV1.bits(),
+    );
+
+// ----------------------------------------------------------------------------
+// Codec-operation direction
+// ----------------------------------------------------------------------------
+
+/// Whether a Vulkan Video codec operation decodes or encodes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VideoCodecOperationDirection {
+    Decode,
+    Encode,
+}
+
+impl VideoCodecOperationDirection {
+    /// Direction of `codec_operation`; `None` when it names no known
+    /// operation or mixes decode and encode bits.
+    pub fn of_codec_operation(codec_operation: vk::VideoCodecOperationFlagsKHR) -> Option<Self> {
+        let decodes = codec_operation.intersects(VIDEO_DECODE_CODEC_OPERATIONS);
+        let encodes = codec_operation.intersects(VIDEO_ENCODE_CODEC_OPERATIONS);
+        match (decodes, encodes) {
+            (true, false) => Some(Self::Decode),
+            (false, true) => Some(Self::Encode),
+            _ => None,
+        }
+    }
+}
+
+/// The Vulkan Video directions a device enabled at bring-up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DeviceVideoCodingSupport {
+    pub(crate) decode: bool,
+    pub(crate) encode: bool,
+}
+
+impl DeviceVideoCodingSupport {
+    fn of_device(vulkan_device: &HostVulkanDevice) -> Self {
+        Self {
+            decode: vulkan_device.supports_video_decode(),
+            encode: vulkan_device.supports_video_encode(),
+        }
+    }
+}
+
+/// Refuses a codec operation the device did not enable. An unenabled
+/// `VK_KHR_video_*` leaves its commands as vulkanalia's panicking
+/// stubs, so this must run before any video entry point is called.
+fn require_device_video_coding_support(
+    codec_operation: vk::VideoCodecOperationFlagsKHR,
+    device_support: DeviceVideoCodingSupport,
+) -> Result<VideoCodecOperationDirection> {
+    let direction =
+        VideoCodecOperationDirection::of_codec_operation(codec_operation).ok_or_else(|| {
+            Error::GpuError(format!(
+                "video session: codec_operation {codec_operation:?} is not a single-direction \
+                 Vulkan Video operation",
+            ))
+        })?;
+    let (supported, direction_name) = match direction {
+        VideoCodecOperationDirection::Decode => (device_support.decode, "decode"),
+        VideoCodecOperationDirection::Encode => (device_support.encode, "encode"),
+    };
+    if supported {
+        Ok(direction)
+    } else {
+        Err(Error::GpuError(format!(
+            "video session: device does not support Vulkan Video {direction_name} \
+             (codec_operation {codec_operation:?})",
+        )))
+    }
+}
+
 // ----------------------------------------------------------------------------
 // Descriptors
 // ----------------------------------------------------------------------------
@@ -177,6 +263,10 @@ impl HostVulkanVideoSession {
             "HostVulkanVideoSession::new"
         );
 
+        require_device_video_coding_support(
+            descriptor.codec_operation,
+            DeviceVideoCodingSupport::of_device(vulkan_device),
+        )?;
         let std_header_version = std_header_version_for_codec(descriptor.codec_operation)?;
         let profile_info = descriptor.video_profile;
 
@@ -718,6 +808,165 @@ mod tests {
             vk::VideoCodecOperationFlagsKHR::from_bits_truncate(0xDEAD),
         );
         assert!(result.is_err());
+    }
+
+    const EVERY_DECODE_CODEC_OPERATION: [vk::VideoCodecOperationFlagsKHR; 4] = [
+        vk::VideoCodecOperationFlagsKHR::DECODE_H264,
+        vk::VideoCodecOperationFlagsKHR::DECODE_H265,
+        vk::VideoCodecOperationFlagsKHR::DECODE_AV1,
+        vk::VideoCodecOperationFlagsKHR::DECODE_VP9,
+    ];
+
+    const EVERY_ENCODE_CODEC_OPERATION: [vk::VideoCodecOperationFlagsKHR; 3] = [
+        vk::VideoCodecOperationFlagsKHR::ENCODE_H264,
+        vk::VideoCodecOperationFlagsKHR::ENCODE_H265,
+        vk::VideoCodecOperationFlagsKHR::ENCODE_AV1,
+    ];
+
+    const NO_VIDEO: DeviceVideoCodingSupport = DeviceVideoCodingSupport {
+        decode: false,
+        encode: false,
+    };
+    const DECODE_ONLY: DeviceVideoCodingSupport = DeviceVideoCodingSupport {
+        decode: true,
+        encode: false,
+    };
+    const ENCODE_ONLY: DeviceVideoCodingSupport = DeviceVideoCodingSupport {
+        decode: false,
+        encode: true,
+    };
+    const DECODE_AND_ENCODE: DeviceVideoCodingSupport = DeviceVideoCodingSupport {
+        decode: true,
+        encode: true,
+    };
+
+    fn gpu_error_message(result: Result<VideoCodecOperationDirection>) -> String {
+        match result {
+            Err(Error::GpuError(message)) => message,
+            other => panic!("expected Error::GpuError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn every_known_codec_operation_is_classified_by_direction() {
+        for op in EVERY_DECODE_CODEC_OPERATION {
+            assert_eq!(
+                VideoCodecOperationDirection::of_codec_operation(op),
+                Some(VideoCodecOperationDirection::Decode),
+                "{op:?}",
+            );
+        }
+        for op in EVERY_ENCODE_CODEC_OPERATION {
+            assert_eq!(
+                VideoCodecOperationDirection::of_codec_operation(op),
+                Some(VideoCodecOperationDirection::Encode),
+                "{op:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn combined_same_direction_mask_keeps_its_direction() {
+        let decode_h264_and_h265 = vk::VideoCodecOperationFlagsKHR::DECODE_H264
+            | vk::VideoCodecOperationFlagsKHR::DECODE_H265;
+        assert_eq!(
+            VideoCodecOperationDirection::of_codec_operation(decode_h264_and_h265),
+            Some(VideoCodecOperationDirection::Decode),
+        );
+        let encode_h264_and_av1 = vk::VideoCodecOperationFlagsKHR::ENCODE_H264
+            | vk::VideoCodecOperationFlagsKHR::ENCODE_AV1;
+        assert_eq!(
+            VideoCodecOperationDirection::of_codec_operation(encode_h264_and_av1),
+            Some(VideoCodecOperationDirection::Encode),
+        );
+    }
+
+    #[test]
+    fn empty_or_mixed_direction_mask_has_no_direction() {
+        assert_eq!(
+            VideoCodecOperationDirection::of_codec_operation(vk::VideoCodecOperationFlagsKHR::NONE),
+            None,
+        );
+        let decode_and_encode = vk::VideoCodecOperationFlagsKHR::DECODE_H264
+            | vk::VideoCodecOperationFlagsKHR::ENCODE_H264;
+        assert_eq!(
+            VideoCodecOperationDirection::of_codec_operation(decode_and_encode),
+            None,
+        );
+    }
+
+    #[test]
+    fn device_without_video_refuses_every_codec_operation_naming_its_direction() {
+        for op in EVERY_DECODE_CODEC_OPERATION {
+            let message = gpu_error_message(require_device_video_coding_support(op, NO_VIDEO));
+            assert!(message.contains("Vulkan Video decode"), "{op:?}: {message}");
+        }
+        for op in EVERY_ENCODE_CODEC_OPERATION {
+            let message = gpu_error_message(require_device_video_coding_support(op, NO_VIDEO));
+            assert!(message.contains("Vulkan Video encode"), "{op:?}: {message}");
+        }
+    }
+
+    #[test]
+    fn decode_only_device_serves_decode_and_refuses_encode() {
+        for op in EVERY_DECODE_CODEC_OPERATION {
+            assert_eq!(
+                require_device_video_coding_support(op, DECODE_ONLY).ok(),
+                Some(VideoCodecOperationDirection::Decode),
+                "{op:?}",
+            );
+        }
+        for op in EVERY_ENCODE_CODEC_OPERATION {
+            let message = gpu_error_message(require_device_video_coding_support(op, DECODE_ONLY));
+            assert!(message.contains("Vulkan Video encode"), "{op:?}: {message}");
+        }
+    }
+
+    #[test]
+    fn encode_only_device_serves_encode_and_refuses_decode() {
+        for op in EVERY_ENCODE_CODEC_OPERATION {
+            assert_eq!(
+                require_device_video_coding_support(op, ENCODE_ONLY).ok(),
+                Some(VideoCodecOperationDirection::Encode),
+                "{op:?}",
+            );
+        }
+        for op in EVERY_DECODE_CODEC_OPERATION {
+            let message = gpu_error_message(require_device_video_coding_support(op, ENCODE_ONLY));
+            assert!(message.contains("Vulkan Video decode"), "{op:?}: {message}");
+        }
+    }
+
+    #[test]
+    fn device_serving_both_directions_admits_every_codec_operation() {
+        for op in EVERY_DECODE_CODEC_OPERATION
+            .into_iter()
+            .chain(EVERY_ENCODE_CODEC_OPERATION)
+        {
+            assert!(
+                require_device_video_coding_support(op, DECODE_AND_ENCODE).is_ok(),
+                "{op:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn combined_mask_is_refused_unless_its_direction_is_served() {
+        let decode_h264_and_h265 = vk::VideoCodecOperationFlagsKHR::DECODE_H264
+            | vk::VideoCodecOperationFlagsKHR::DECODE_H265;
+        let message = gpu_error_message(require_device_video_coding_support(
+            decode_h264_and_h265,
+            ENCODE_ONLY,
+        ));
+        assert!(message.contains("Vulkan Video decode"), "{message}");
+
+        let decode_and_encode = vk::VideoCodecOperationFlagsKHR::DECODE_H264
+            | vk::VideoCodecOperationFlagsKHR::ENCODE_H264;
+        let message = gpu_error_message(require_device_video_coding_support(
+            decode_and_encode,
+            DECODE_AND_ENCODE,
+        ));
+        assert!(message.contains("not a single-direction"), "{message}");
     }
 
     #[test]

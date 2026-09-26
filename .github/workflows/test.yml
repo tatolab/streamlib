@@ -308,8 +308,12 @@ jobs:
           # arm — its colour map in both directions, the clock a dequeued
           # buffer's stamp is on, and its refusal of a named device that does
           # not exist. Beside them, the one H.273 table every colour
-          # description resolves through.
+          # description resolves through. The Vulkan Video session's refusal
+          # of a direction the device never enabled, and the one classifier
+          # that answers a codec operation's direction.
           cargo test --locked -p streamlib-engine --lib -- \
+            vulkan::rhi::vulkan_video_session::tests \
+            vulkan::video::codec_utils::vk_video_core_profile::tests \
             core::processor_owned_window \
             core::compiler::compiler_ops::subprocess_escalate::processor_owned_window::tests \
             escalate_wire_encoding_tests \

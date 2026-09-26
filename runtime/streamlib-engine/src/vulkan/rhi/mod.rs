@@ -160,8 +160,12 @@ pub use vulkan_host_mapping_imported_as_buffer::{HostMappingTier, HostMappingWri
 mod vulkan_video_session;
 #[cfg(target_os = "linux")]
 pub use vulkan_video_session::{
-    HostVulkanVideoSession, HostVulkanVideoSessionParameters, VideoSessionDescriptor,
-    VideoSessionParametersAddInfo, VideoSessionParametersDescriptor,
+    HostVulkanVideoSession, HostVulkanVideoSessionParameters, VideoCodecOperationDirection,
+    VideoSessionDescriptor, VideoSessionParametersAddInfo, VideoSessionParametersDescriptor,
+};
+#[cfg(target_os = "linux")]
+pub(crate) use vulkan_video_session::{
+    VIDEO_DECODE_CODEC_OPERATIONS, VIDEO_ENCODE_CODEC_OPERATIONS,
 };
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]

@@ -20,6 +20,10 @@
 
 use vulkanalia::vk;
 
+use crate::vulkan::rhi::{
+    VIDEO_DECODE_CODEC_OPERATIONS, VIDEO_ENCODE_CODEC_OPERATIONS, VideoCodecOperationDirection,
+};
+
 // ---------------------------------------------------------------------------
 // StdChromaFormatIdc — mirrors the C++ enum of the same name
 // ---------------------------------------------------------------------------
@@ -311,15 +315,8 @@ impl VkVideoCoreProfile {
 
     /// Returns `true` if `video_codec_operations` contains at least one known codec bit.
     pub fn is_valid_codec(video_codec_operations: vk::VideoCodecOperationFlagsKHR) -> bool {
-        let known = vk::VideoCodecOperationFlagsKHR::DECODE_H264
-            | vk::VideoCodecOperationFlagsKHR::DECODE_H265
-            | vk::VideoCodecOperationFlagsKHR::DECODE_AV1
-            | CODEC_OP_DECODE_VP9
-            | vk::VideoCodecOperationFlagsKHR::ENCODE_H264
-            | vk::VideoCodecOperationFlagsKHR::ENCODE_H265
-            | CODEC_OP_ENCODE_AV1;
-
-        video_codec_operations & known != vk::VideoCodecOperationFlagsKHR::NONE
+        video_codec_operations
+            .intersects(VIDEO_DECODE_CODEC_OPERATIONS | VIDEO_ENCODE_CODEC_OPERATIONS)
     }
 
     // -- Profile population -------------------------------------------------
@@ -610,19 +607,14 @@ impl VkVideoCoreProfile {
 
     /// `true` if the codec operation is one of the encode types.
     pub fn is_encode_codec_type(&self) -> bool {
-        let op = self.profile.video_codec_operation;
-        op == vk::VideoCodecOperationFlagsKHR::ENCODE_H264
-            || op == vk::VideoCodecOperationFlagsKHR::ENCODE_H265
-            || op == CODEC_OP_ENCODE_AV1
+        VideoCodecOperationDirection::of_codec_operation(self.profile.video_codec_operation)
+            == Some(VideoCodecOperationDirection::Encode)
     }
 
     /// `true` if the codec operation is one of the decode types.
     pub fn is_decode_codec_type(&self) -> bool {
-        let op = self.profile.video_codec_operation;
-        op == vk::VideoCodecOperationFlagsKHR::DECODE_H264
-            || op == vk::VideoCodecOperationFlagsKHR::DECODE_H265
-            || op == vk::VideoCodecOperationFlagsKHR::DECODE_AV1
-            || op == CODEC_OP_DECODE_VP9
+        VideoCodecOperationDirection::of_codec_operation(self.profile.video_codec_operation)
+            == Some(VideoCodecOperationDirection::Decode)
     }
 
     /// `true` if the profile is in a valid state (mirrors C++ `operator bool`).
