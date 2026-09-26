@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.31](https://github.com/tatolab/streamlib/compare/v0.26.30...v0.26.31) (2026-09-26)
+
+
+### Features
+
+* **adapters:** the in-process adapters build on macOS, and two are named absent ([#2487](https://github.com/tatolab/streamlib/issues/2487)) ([0dd3fbb](https://github.com/tatolab/streamlib/commit/0dd3fbb6547999b76785a1e1f88c4109898a4df5))
+
 ## [0.26.30](https://github.com/tatolab/streamlib/compare/v0.26.29...v0.26.30) (2026-09-26)
 
 
