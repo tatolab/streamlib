@@ -65,6 +65,11 @@ const NANOSECONDS_TIMESCALE: i32 = 1_000_000_000;
 /// declares.
 const LAYOUT_THE_CONVERSION_SAMPLES_IN: VulkanLayout = VulkanLayout::SHADER_READ_ONLY_OPTIMAL;
 
+/// How many of the session pool's surfaces stay imported. The pool recycles
+/// a handful, so a session past this is churning surfaces and starts over
+/// rather than growing.
+const MOST_POOL_SURFACES_KEPT_IMPORTED: usize = 16;
+
 /// Pixels per conversion thread along each axis: the kernel writes 4×2 blocks.
 const CONVERSION_BLOCK_WIDTH: u32 = 4;
 const CONVERSION_BLOCK_HEIGHT: u32 = 2;
@@ -237,6 +242,13 @@ impl VideoToolboxEncodeSession {
             let imported = self
                 .gpu_context
                 .escalate(|full| full.import_iosurface_as_storage_buffer(&pool_iosurface))?;
+            // Every conversion is waited for before its frame is encoded, so
+            // no import is in flight when the set starts over.
+            if conversion.imported_pool_surfaces_by_iosurface_id.len()
+                >= MOST_POOL_SURFACES_KEPT_IMPORTED
+            {
+                conversion.imported_pool_surfaces_by_iosurface_id.clear();
+            }
             conversion
                 .imported_pool_surfaces_by_iosurface_id
                 .insert(pool_iosurface.id(), imported);

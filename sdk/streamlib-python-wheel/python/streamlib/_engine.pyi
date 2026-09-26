@@ -139,7 +139,8 @@ class DisplayWindow:
 @final
 class H264Decoder:
     """Native built-in block: H.264 encoded-frame bags to decoded video
-    frames via Vulkan Video hardware decode (Linux).
+    frames via hardware decode — Vulkan Video on Linux, VideoToolbox on
+    macOS.
 
     A marker type — pass the class itself to `Runtime.add`
     (`rt.add(H264Decoder)`); it is never instantiated and its per-frame path
@@ -157,21 +158,23 @@ class H264Decoder:
     copy, never by bare surface id — the camera's own gap, not a new one.
 
     Config keys, all optional (`rt.add(H264Decoder)` bare is legal):
-    `max_width` and `max_height` cap the decoded-picture-buffer allocation
-    together or not at all — a half-specified pair warns and auto-detects
-    both from the stream's first SPS, as an absent pair does.
+    `max_width` and `max_height` cap the stream's coded extent together or
+    not at all — a half-specified pair warns and auto-detects both from the
+    stream's first SPS, as an absent pair does. On Linux they size the
+    decoded-picture-buffer allocation; on macOS a stream coded past them is
+    refused by name.
 
-    The decode session is minted at `setup()`, sized by the caps above. On a
-    device with no Vulkan Video decode queue for the codec, setup refuses by
-    name: the processor never reaches Running, and
-    `Runtime.wait_until_every_processor_is_running` raises rather than the
-    graph running with an empty channel.
+    The decode session is minted at `setup()`. On a device with no hardware
+    decoder for the codec — no Vulkan Video decode queue, or no VideoToolbox
+    hardware decoder — setup refuses by name: the processor never reaches
+    Running, and `Runtime.wait_until_every_processor_is_running` raises
+    rather than the graph running with an empty channel.
     """
 
 @final
 class H264Encoder:
     """Native built-in block: video frames to H.264 encoded-frame bags via
-    Vulkan Video hardware encode (Linux).
+    hardware encode — Vulkan Video on Linux, VideoToolbox on macOS.
 
     A marker type — pass the class itself to `Runtime.add`
     (`rt.add(H264Encoder, config={"keyframe_interval_seconds": 2})`); it is
@@ -188,21 +191,24 @@ class H264Encoder:
     (`rt.add(H264Encoder)` bare is legal): `width` and `height` are
     guardrails, not a resize — a mismatching frame wins with a warning;
     `fps` is the fallback rate, resolved frame → config → 60; `bitrate_bps`
-    absent means constant-QP encoding at the medium preset;
-    `keyframe_interval_seconds` is the IDR cadence, defaulting to 2;
+    absent means constant-quality encoding at the platform's balanced
+    point; `keyframe_interval_seconds` is the IDR cadence, defaulting to 2;
     `effort_level` is the Vulkan encoder-effort index (driver analysis
-    budget, not a codec quality knob). The session mints from the first
-    frame's dimensions and re-mints when the upstream extent changes.
+    budget, not a codec quality knob). VideoToolbox has no effort index, so
+    on macOS `effort_level`, and a `keyframe_interval_seconds` of 0, are
+    refused by name at `setup()`. The session mints from the first frame's
+    dimensions and re-mints when the upstream extent changes.
 
-    On a device without Vulkan Video encode the session fails to mint: the
-    failure latches and every later frame is discarded with one error line —
-    no exception reaches Python.
+    On a device without a hardware encoder for the codec the session fails
+    to mint: the failure latches and every later frame is discarded with
+    one error line — no exception reaches Python.
     """
 
 @final
 class H265Decoder:
     """Native built-in block: H.265 encoded-frame bags to decoded video
-    frames via Vulkan Video hardware decode (Linux).
+    frames via hardware decode — Vulkan Video on Linux, VideoToolbox on
+    macOS.
 
     A marker type — pass the class itself to `Runtime.add`
     (`rt.add(H265Decoder)`); it is never instantiated and its per-frame path
@@ -220,21 +226,23 @@ class H265Decoder:
     copy, never by bare surface id — the camera's own gap, not a new one.
 
     Config keys, all optional (`rt.add(H265Decoder)` bare is legal):
-    `max_width` and `max_height` cap the decoded-picture-buffer allocation
-    together or not at all — a half-specified pair warns and auto-detects
-    both from the stream's first SPS, as an absent pair does.
+    `max_width` and `max_height` cap the stream's coded extent together or
+    not at all — a half-specified pair warns and auto-detects both from the
+    stream's first SPS, as an absent pair does. On Linux they size the
+    decoded-picture-buffer allocation; on macOS a stream coded past them is
+    refused by name.
 
-    The decode session is minted at `setup()`, sized by the caps above. On a
-    device with no Vulkan Video decode queue for the codec, setup refuses by
-    name: the processor never reaches Running, and
-    `Runtime.wait_until_every_processor_is_running` raises rather than the
-    graph running with an empty channel.
+    The decode session is minted at `setup()`. On a device with no hardware
+    decoder for the codec — no Vulkan Video decode queue, or no VideoToolbox
+    hardware decoder — setup refuses by name: the processor never reaches
+    Running, and `Runtime.wait_until_every_processor_is_running` raises
+    rather than the graph running with an empty channel.
     """
 
 @final
 class H265Encoder:
     """Native built-in block: video frames to H.265 encoded-frame bags via
-    Vulkan Video hardware encode (Linux).
+    hardware encode — Vulkan Video on Linux, VideoToolbox on macOS.
 
     A marker type — pass the class itself to `Runtime.add`
     (`rt.add(H265Encoder, config={"keyframe_interval_seconds": 2})`); it is
@@ -251,15 +259,17 @@ class H265Encoder:
     (`rt.add(H265Encoder)` bare is legal): `width` and `height` are
     guardrails, not a resize — a mismatching frame wins with a warning;
     `fps` is the fallback rate, resolved frame → config → 60; `bitrate_bps`
-    absent means constant-QP encoding at the medium preset;
-    `keyframe_interval_seconds` is the IDR cadence, defaulting to 2;
+    absent means constant-quality encoding at the platform's balanced
+    point; `keyframe_interval_seconds` is the IDR cadence, defaulting to 2;
     `effort_level` is the Vulkan encoder-effort index (driver analysis
-    budget, not a codec quality knob). The session mints from the first
-    frame's dimensions and re-mints when the upstream extent changes.
+    budget, not a codec quality knob). VideoToolbox has no effort index, so
+    on macOS `effort_level`, and a `keyframe_interval_seconds` of 0, are
+    refused by name at `setup()`. The session mints from the first frame's
+    dimensions and re-mints when the upstream extent changes.
 
-    On a device without Vulkan Video encode the session fails to mint: the
-    failure latches and every later frame is discarded with one error line —
-    no exception reaches Python.
+    On a device without a hardware encoder for the codec the session fails
+    to mint: the failure latches and every later frame is discarded with
+    one error line — no exception reaches Python.
     """
 
 @final

@@ -108,12 +108,8 @@ pub fn register_media_builtin_processor_types() {
     PROCESSOR_REGISTRY.register::<display_window::DisplayWindow::Processor>();
     #[cfg(target_os = "linux")]
     PROCESSOR_REGISTRY.register::<virtual_camera_sink::VirtualCameraSink::Processor>();
-    #[cfg(target_os = "linux")]
     PROCESSOR_REGISTRY.register::<h264_encoder::H264Encoder::Processor>();
-    #[cfg(target_os = "linux")]
     PROCESSOR_REGISTRY.register::<h264_decoder::H264Decoder::Processor>();
-    #[cfg(target_os = "linux")]
     PROCESSOR_REGISTRY.register::<h265_encoder::H265Encoder::Processor>();
-    #[cfg(target_os = "linux")]
     PROCESSOR_REGISTRY.register::<h265_decoder::H265Decoder::Processor>();
 }

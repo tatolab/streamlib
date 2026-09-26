@@ -16,6 +16,7 @@ mod videotoolbox_encode_session;
 
 use objc2_core_foundation::{CFBoolean, CFDictionary, CFRetained, CFString, CFType};
 use objc2_core_media::{CMVideoCodecType, kCMVideoCodecType_H264, kCMVideoCodecType_HEVC};
+use objc2_video_toolbox::VTIsHardwareDecodeSupported;
 
 use crate::core::context::{
     GpuContextFullAccess, VideoCodecBackend, VideoCodecElementaryStream, VideoDecodeSession,
@@ -65,6 +66,18 @@ impl VideoCodecBackend for VideoToolboxVideoCodecBackend {
         gpu_context: &GpuContextFullAccess,
         request: &VideoDecodeSessionRequest,
     ) -> Result<Box<dyn VideoDecodeSession>> {
+        // The VideoToolbox session itself opens at the stream's first
+        // parameter sets; a machine with no hardware decoder is refused here,
+        // at the block's `setup()`, rather than at the first sync point.
+        // SAFETY: a CoreMedia codec type.
+        if !unsafe {
+            VTIsHardwareDecodeSupported(core_media_codec_type_of(request.elementary_stream))
+        } {
+            return Err(Error::GpuError(format!(
+                "VideoToolbox has no hardware {:?} decoder on this machine",
+                request.elementary_stream
+            )));
+        }
         Ok(Box::new(VideoToolboxDecodeSession::open(
             gpu_context.host_inner().limited_access(),
             request,
