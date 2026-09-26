@@ -114,6 +114,16 @@ pub enum Error {
         pool_capacity: usize,
     },
 
+    #[error(
+        "every one of the {pool_capacity} slots in processor output pool '{pool_key}' is held \
+         by a consumer, so the producer drops this frame rather than overwriting one something \
+         is still reading"
+    )]
+    EverySlotInTheProcessorOutputPoolIsInUse {
+        pool_key: String,
+        pool_capacity: usize,
+    },
+
     #[error("Clock synchronization error: {0}")]
     ClockError(String),
 
