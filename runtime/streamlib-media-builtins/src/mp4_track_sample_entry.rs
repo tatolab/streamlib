@@ -19,10 +19,11 @@ use streamlib::sdk::engine::video::nv_video_parser::vulkan_h265_decoder::{
     BitstreamReader as ParameterSetRbspBitstreamReader, VulkanH265Decoder,
 };
 
-use crate::mp4_annex_b_access_unit::{
-    AnnexBNalHeaderGrammar, NAL_UNIT_LENGTH_PREFIX_BYTES, ParameterSetsFromAnnexBAccessUnit,
-};
 use crate::opus_stream_layout::OpusStreamLayoutForSourceChannelCount;
+use streamlib::sdk::annex_b_access_unit::{
+    NAL_UNIT_LENGTH_PREFIX_BYTES, ParameterSetsFromAnnexBAccessUnit,
+};
+use streamlib::sdk::context::VideoCodecElementaryStream;
 
 /// Opus's own clock, and the only rate an `OpusEncoder` bag carries.
 pub const OPUS_TRACK_TIMESCALE_HZ: u32 = 48_000;
@@ -252,7 +253,7 @@ pub fn build_avc1_sample_entry(
     coded_width: u32,
     coded_height: u32,
 ) -> Result<Avc1, Mp4SampleEntryRefusal> {
-    if !parameter_sets.is_complete_for(AnnexBNalHeaderGrammar::H264) {
+    if !parameter_sets.is_complete_for(VideoCodecElementaryStream::H264) {
         return Err(Mp4SampleEntryRefusal::ParameterSetsMissingFromSyncPoint {
             inbound_link_name: inbound_link_name.to_string(),
             codec: "h264",
@@ -320,7 +321,7 @@ pub fn build_hvc1_sample_entry(
     coded_width: u32,
     coded_height: u32,
 ) -> Result<Hvc1, Mp4SampleEntryRefusal> {
-    if !parameter_sets.is_complete_for(AnnexBNalHeaderGrammar::H265) {
+    if !parameter_sets.is_complete_for(VideoCodecElementaryStream::H265) {
         return Err(Mp4SampleEntryRefusal::ParameterSetsMissingFromSyncPoint {
             inbound_link_name: inbound_link_name.to_string(),
             codec: "h265",
@@ -510,7 +511,7 @@ fn read_h264_chroma_trailer_fields(
     sequence_parameter_set: &[u8],
 ) -> Result<SequenceParameterSetFieldsTheAvcChromaTrailerStates, Mp4SampleEntryRefusal> {
     let sequence_parameter_set_rbsp = remove_emulation_prevention_bytes(
-        &sequence_parameter_set[AnnexBNalHeaderGrammar::H264.nal_unit_header_bytes()..],
+        &sequence_parameter_set[VideoCodecElementaryStream::H264.nal_unit_header_bytes()..],
     );
     let mut reader = ParameterSetRbspBitstreamReader::new(&sequence_parameter_set_rbsp);
     let refused =
@@ -1158,7 +1159,7 @@ mod tests {
     fn a_parameter_set_that_is_only_a_nal_header_never_reaches_hvcc() {
         // `0x40` reads as `nal_unit_type` 32 from its first byte, so a truncated
         // VPS would be filed as one and written into `hvcC` verbatim.
-        let split = crate::mp4_annex_b_access_unit::length_prefix_annex_b_access_unit(
+        let split = streamlib::sdk::annex_b_access_unit::length_prefix_annex_b_access_unit(
             &[
                 &[0x00, 0x00, 0x00, 0x01][..],
                 &[0x40][..],
@@ -1166,7 +1167,7 @@ mod tests {
                 &[0x44][..],
             ]
             .concat(),
-            AnnexBNalHeaderGrammar::H265,
+            VideoCodecElementaryStream::H265,
         );
         assert!(
             split

@@ -26,13 +26,14 @@ use streamlib::sdk::runtime::mesh::MachineClockIdentity;
 
 use crate::encoded_audio_packet::{EncodedAudioCodec, read_encoded_audio_packet_bag};
 use crate::encoded_video_frame::{EncodedVideoCodec, read_encoded_video_frame_bag};
-use crate::mp4_annex_b_access_unit::{
-    AnnexBNalHeaderGrammar, ParameterSetsFromAnnexBAccessUnit, length_prefix_annex_b_access_unit,
-};
 use crate::mp4_track_sample_entry::{
     OPUS_TRACK_TIMESCALE_HZ, build_avc1_sample_entry, build_hvc1_sample_entry,
     build_opus_sample_entry,
 };
+use streamlib::sdk::annex_b_access_unit::{
+    ParameterSetsFromAnnexBAccessUnit, length_prefix_annex_b_access_unit,
+};
+use streamlib::sdk::context::VideoCodecElementaryStream;
 
 /// Nanoseconds, so a monotonic-nanosecond delta lands in the container
 /// exactly. A legal `u32`, which is what lets the subtraction stay integral.
@@ -96,13 +97,6 @@ impl Mp4TrackMedia {
         match self {
             Self::Video(_) => "vide",
             Self::Audio => "soun",
-        }
-    }
-
-    fn nal_header_grammar(self) -> Option<AnnexBNalHeaderGrammar> {
-        match self {
-            Self::Video(codec) => Some(codec.into()),
-            Self::Audio => None,
         }
     }
 }
@@ -434,12 +428,11 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
             return Ok(());
         }
 
-        let grammar = media
-            .nal_header_grammar()
-            .expect("a video track has a grammar");
-        let split = length_prefix_annex_b_access_unit(&frame.annex_b_access_unit_bytes, grammar);
+        let elementary_stream = VideoCodecElementaryStream::from(frame.codec);
+        let split =
+            length_prefix_annex_b_access_unit(&frame.annex_b_access_unit_bytes, elementary_stream);
 
-        if frame.is_sync_point && split.parameter_sets.is_complete_for(grammar) {
+        if frame.is_sync_point && split.parameter_sets.is_complete_for(elementary_stream) {
             match &self.tracks[track_index].committed_parameter_sets {
                 Some(committed) if committed != &split.parameter_sets => {
                     let refusal = format!(
@@ -452,15 +445,15 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
                 }
                 Some(_) => {}
                 None => {
-                    let entry = match grammar {
-                        AnnexBNalHeaderGrammar::H264 => build_avc1_sample_entry(
+                    let entry = match elementary_stream {
+                        VideoCodecElementaryStream::H264 => build_avc1_sample_entry(
                             &self.tracks[track_index].inbound_link_name,
                             &split.parameter_sets,
                             frame.width,
                             frame.height,
                         )
                         .map(Codec::Avc1),
-                        AnnexBNalHeaderGrammar::H265 => build_hvc1_sample_entry(
+                        VideoCodecElementaryStream::H265 => build_hvc1_sample_entry(
                             &self.tracks[track_index].inbound_link_name,
                             &split.parameter_sets,
                             frame.width,

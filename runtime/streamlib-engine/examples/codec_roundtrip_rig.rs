@@ -69,6 +69,10 @@ mod linux_rig {
     use mp4_atom::{Atom, Codec, Header, Moof, Moov, ReadAtom, ReadFrom};
     use serde::{Deserialize, Serialize};
     use streamlib::sdk::App;
+    use streamlib::sdk::annex_b_access_unit::{
+        NAL_UNIT_LENGTH_PREFIX_BYTES, NalUnitLengthPrefixWidth,
+        annex_b_access_unit_from_length_prefixed_sample,
+    };
     use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
     use streamlib::sdk::descriptors::ProcessorClassImportPath;
     use streamlib::sdk::error::{Error, Result};
@@ -76,9 +80,6 @@ mod linux_rig {
     use streamlib::sdk::processors::ContinuousProcessor;
     use streamlib::sdk::rhi::{PixelBuffer, PixelFormat, PublishedPixelBufferFrameId};
     use streamlib::sdk::schemars::JsonSchema;
-    use streamlib_media_builtins::mp4_annex_b_access_unit::{
-        NAL_UNIT_LENGTH_PREFIX_BYTES, annex_b_access_unit_from_length_prefixed_sample,
-    };
     use streamlib_media_builtins::video_frame::{
         ColorInfo, Primaries, Range, Transfer, VideoFrame,
     };
@@ -697,6 +698,7 @@ mod linux_rig {
                                 annex_b_access_unit_from_length_prefixed_sample(
                                     sample_bytes,
                                     parameter_sets_this_sample_needs,
+                                    NalUnitLengthPrefixWidth::WRITTEN_BY_LENGTH_PREFIXING,
                                 )
                                 .map_err(|refusal| {
                                     Error::Runtime(format!(

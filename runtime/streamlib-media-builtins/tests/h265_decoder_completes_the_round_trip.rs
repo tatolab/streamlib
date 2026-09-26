@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 //! The H.265 arm of the codec round trip, and the executable form of the CTU
 //! crop: a 1920x1080 pattern is coded at 1920x1088, and the harness's extent

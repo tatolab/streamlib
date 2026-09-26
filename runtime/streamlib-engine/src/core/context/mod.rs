@@ -76,7 +76,7 @@ pub(crate) use video_capture_instant_resolver::{
 pub use video_codec_backend::{
     DecodedVideoPictureInPooledPixelBuffer, EncodedVideoAccessUnitFromSession,
     SharedVideoCodecBackend, VideoCodecBackend, VideoCodecElementaryStream,
-    VideoDecodeMaximumCodedExtent, VideoDecodeSession, VideoDecodeSessionRequest,
+    VideoDecodeMaximumCodedExtent, VideoDecodeSession, VideoDecodeSessionRequest, VideoEncodeKnobs,
     VideoEncodeSession, VideoEncodeSessionRequest, VideoEncodeSourceSurface,
     probe_video_codec_backend,
 };

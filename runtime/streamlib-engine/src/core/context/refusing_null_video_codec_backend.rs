@@ -6,7 +6,7 @@
 use super::GpuContextFullAccess;
 use super::video_codec_backend::{
     VideoCodecBackend, VideoCodecElementaryStream, VideoDecodeSession, VideoDecodeSessionRequest,
-    VideoEncodeSession, VideoEncodeSessionRequest,
+    VideoEncodeKnobs, VideoEncodeSession, VideoEncodeSessionRequest,
 };
 use crate::core::{Error, Result};
 
@@ -19,6 +19,15 @@ pub(crate) struct RefusingNullVideoCodecBackend;
 impl VideoCodecBackend for RefusingNullVideoCodecBackend {
     fn backend_name(&self) -> &'static str {
         "refusing-null"
+    }
+
+    /// No knob is the problem here; the open that follows refuses by name.
+    fn refuse_encode_knobs_this_arm_does_not_honour(
+        &self,
+        _elementary_stream: VideoCodecElementaryStream,
+        _knobs: &VideoEncodeKnobs,
+    ) -> Result<()> {
+        Ok(())
     }
 
     fn open_encode_session(
@@ -66,7 +75,7 @@ fn refusal_for_a_platform_no_codec_arm_serves(
 ) -> Error {
     Error::Configuration(format!(
         "No hardware video codec backend serves {}: {elementary_stream:?} {direction} runs on \
-         Linux (Vulkan Video).",
+         Linux (Vulkan Video) and macOS (VideoToolbox).",
         crate::platform::name()
     ))
 }

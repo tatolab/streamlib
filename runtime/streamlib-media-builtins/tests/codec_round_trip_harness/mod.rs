@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 //! `TestPatternSource` → encoder → decoder in a real graph: every encoded
 //! frame the decoder is handed comes back out as a published video surface.
@@ -26,8 +26,9 @@
 //! CTU-crop contract, asserted rather than described.
 //!
 //! Rig-tier by construction, not by choice: `App::new()` brings up a real
-//! `GpuContext` and the sessions need Vulkan Video encode *and* decode
-//! queues — so CI compiles these binaries and the rig runs them. The source
+//! `GpuContext` and the sessions need a hardware encoder *and* decoder —
+//! Vulkan Video queues on Linux, VideoToolbox on macOS — so CI compiles these
+//! binaries and the rig runs them. The source
 //! is the test pattern rather than a camera on purpose: it needs no
 //! `/dev/video*` device, so what this asserts is the codec round trip and
 //! nothing else.

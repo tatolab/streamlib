@@ -44,7 +44,7 @@ pub struct H264Encoder {
 
 impl ReactiveProcessor for H264Encoder::Processor {
     fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        self.encode_body.setup(ctx)
+        self.encode_body.setup(ctx, &self.config)
     }
 
     fn teardown(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {

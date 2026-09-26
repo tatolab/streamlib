@@ -35,8 +35,6 @@ pub mod microphone_source;
 // The MP4 muxer reads its parameter sets through the engine's Vulkan Video
 // NAL parser, which MoltenVK cannot serve and which stays Linux-only.
 #[cfg(target_os = "linux")]
-pub mod mp4_annex_b_access_unit;
-#[cfg(target_os = "linux")]
 pub mod mp4_fragmented_file_writer;
 #[cfg(target_os = "linux")]
 pub mod mp4_sink;
@@ -108,12 +106,8 @@ pub fn register_media_builtin_processor_types() {
     PROCESSOR_REGISTRY.register::<display_window::DisplayWindow::Processor>();
     #[cfg(target_os = "linux")]
     PROCESSOR_REGISTRY.register::<virtual_camera_sink::VirtualCameraSink::Processor>();
-    #[cfg(target_os = "linux")]
     PROCESSOR_REGISTRY.register::<h264_encoder::H264Encoder::Processor>();
-    #[cfg(target_os = "linux")]
     PROCESSOR_REGISTRY.register::<h264_decoder::H264Decoder::Processor>();
-    #[cfg(target_os = "linux")]
     PROCESSOR_REGISTRY.register::<h265_encoder::H265Encoder::Processor>();
-    #[cfg(target_os = "linux")]
     PROCESSOR_REGISTRY.register::<h265_decoder::H265Decoder::Processor>();
 }

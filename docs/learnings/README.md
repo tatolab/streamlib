@@ -72,6 +72,10 @@ Avoid the two failure modes:
   collapses on detailed content along one axis only, with no error anywhere.
   The conformance crop belongs in the readback's copy region, never in the
   converter's size
+- [@docs/learnings/corevideo-wraps-no-rgba-iosurface-and-coremedia-reports-only-cropped-extents.md](corevideo-wraps-no-rgba-iosurface-and-coremedia-reports-only-cropped-extents.md) —
+  `kCVReturnInvalidArgument` (-6661) from `CVPixelBufferCreateWithIOSurface` on any `'RGBA'`
+  IOSurface; CoreMedia and VideoToolbox report only the conformance-cropped extent, never the
+  coded one; a compression session with reordering off accepts repeated or backwards stamps
 - [@docs/learnings/camera-display-e2e-validation.md](camera-display-e2e-validation.md) —
   Validate camera→display end-to-end via virtual camera + window capture; gate on
   contracts, never on engine tracing prose

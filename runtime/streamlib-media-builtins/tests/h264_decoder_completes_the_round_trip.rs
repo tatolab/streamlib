@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 //! The H.264 arm of the codec round trip. The graph, the readers and every
 //! assertion live in [`codec_round_trip_harness`], which the H.265 arm runs

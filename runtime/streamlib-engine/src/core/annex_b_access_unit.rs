@@ -1,34 +1,22 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Annex-B access units into the length-prefixed samples an `avc1`/`hvc1`
-//! track carries, and the parameter sets its sample entry is built from —
-//! and back again.
+//! Annex-B access units — the video codec seam's wire — into length-prefixed
+//! samples and the parameter sets that describe them, and back again.
 //!
-//! ISO/IEC 14496-15 forbids in-band parameter sets under `avc1` and `hvc1`
-//! — they belong in the sample entry's `avcC`/`hvcC` and nowhere else — so
-//! the walk below sorts each access unit's NAL units into the two piles the
-//! container wants them in: parameter sets out to the configuration record,
-//! everything else 4-byte length-prefixed into the sample.
+//! Neither of the places an access unit is held off the wire keeps parameter
+//! sets in band: ISO/IEC 14496-15 puts them in an `avc1`/`hvc1` sample entry's
+//! `avcC`/`hvcC` and nowhere else, and VideoToolbox keeps them in a
+//! `CMFormatDescription`. So the walk below sorts each access unit's NAL
+//! units into the two piles both want them in — parameter sets out,
+//! everything else length-prefixed into the sample.
 //!
 //! [`annex_b_access_unit_from_length_prefixed_sample`] is that walk run
-//! backwards, for a reader taking a recording apart. The two live together so
-//! a round-trip test can hold them to each other; splitting the pair across
-//! crates is what would cost that test.
-//!
-//! The start-code scan is the engine's own
-//! [`StartCodeFinder`], not a fourth splitter.
+//! backwards. The two live together so a round-trip test can hold them to
+//! each other.
 
-use streamlib::sdk::engine::video::nv_video_parser::byte_stream_parser::StartCodeFinder;
-
-/// Which elementary stream an access unit's NAL headers are read by.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AnnexBNalHeaderGrammar {
-    /// One-byte header; `nal_unit_type` is the low five bits.
-    H264,
-    /// Two-byte header; `nal_unit_type` is bits 1..7 of the first.
-    H265,
-}
+use crate::core::annex_b_start_code_finder::StartCodeFinder;
+use crate::core::context::VideoCodecElementaryStream;
 
 /// H.264 `nal_unit_type` for a sequence parameter set (ITU-T H.264 §7.4.1).
 const H264_NAL_UNIT_TYPE_SEQUENCE_PARAMETER_SET: u8 = 7;
@@ -41,10 +29,62 @@ const H265_NAL_UNIT_TYPE_SEQUENCE_PARAMETER_SET: u8 = 33;
 /// H.265 `nal_unit_type` for a picture parameter set.
 const H265_NAL_UNIT_TYPE_PICTURE_PARAMETER_SET: u8 = 34;
 
-/// How `avc1` and `hvc1` prefix each NAL unit inside a sample. Four bytes is
-/// what `avcC.length_size` / `hvcC.length_size_minus_one` below declare, and
-/// the two must agree or every sample mis-parses.
+/// How wide the big-endian length [`length_prefix_annex_b_access_unit`]
+/// writes in front of each NAL unit is. Whatever describes the samples —
+/// `avcC.length_size`, `hvcC.length_size_minus_one`, a VideoToolbox format
+/// description — must declare the same width, or every sample mis-parses.
 pub const NAL_UNIT_LENGTH_PREFIX_BYTES: u8 = 4;
+
+// The writer below emits each length as a `u32`.
+const _: () = assert!(NAL_UNIT_LENGTH_PREFIX_BYTES as usize == size_of::<u32>());
+
+/// The width of the big-endian length in front of each NAL unit of a
+/// length-prefixed sample: 1, 2 or 4 bytes, the only widths ISO/IEC 14496-15's
+/// `lengthSizeMinusOne` can state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NalUnitLengthPrefixWidth(u8);
+
+impl NalUnitLengthPrefixWidth {
+    /// The width [`length_prefix_annex_b_access_unit`] writes.
+    pub const WRITTEN_BY_LENGTH_PREFIXING: Self = Self(NAL_UNIT_LENGTH_PREFIX_BYTES);
+
+    /// The width in bytes.
+    pub fn byte_count(self) -> usize {
+        usize::from(self.0)
+    }
+}
+
+/// A declared length-prefix width no length-prefixed sample can carry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NalUnitLengthPrefixWidthIsNotOneTwoOrFourBytes {
+    /// The width that was declared.
+    pub declared_byte_count: i64,
+}
+
+impl std::error::Error for NalUnitLengthPrefixWidthIsNotOneTwoOrFourBytes {}
+
+impl std::fmt::Display for NalUnitLengthPrefixWidthIsNotOneTwoOrFourBytes {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "a {}-byte NAL unit length prefix is none ISO/IEC 14496-15 allows (1, 2 or 4)",
+            self.declared_byte_count
+        )
+    }
+}
+
+impl TryFrom<i64> for NalUnitLengthPrefixWidth {
+    type Error = NalUnitLengthPrefixWidthIsNotOneTwoOrFourBytes;
+
+    fn try_from(declared_byte_count: i64) -> Result<Self, Self::Error> {
+        match declared_byte_count {
+            1 | 2 | 4 => Ok(Self(declared_byte_count as u8)),
+            _ => Err(NalUnitLengthPrefixWidthIsNotOneTwoOrFourBytes {
+                declared_byte_count,
+            }),
+        }
+    }
+}
 
 /// The Annex-B start code each NAL unit carries outside a container. Three
 /// and four bytes are both legal and a decoder reads either (ITU-T H.264
@@ -52,23 +92,24 @@ pub const NAL_UNIT_LENGTH_PREFIX_BYTES: u8 = 4;
 /// the join below cannot disagree about it.
 pub const ANNEX_B_START_CODE: [u8; 4] = [0x00, 0x00, 0x00, 0x01];
 
-impl AnnexBNalHeaderGrammar {
-    /// How many bytes this grammar's NAL header occupies — one for H.264
+impl VideoCodecElementaryStream {
+    /// How many bytes this elementary stream's NAL header occupies — one for H.264
     /// (ITU-T H.264 §7.3.1), two for H.265 (§7.3.1.2).
-    pub(crate) fn nal_unit_header_bytes(self) -> usize {
+    pub fn nal_unit_header_bytes(self) -> usize {
         match self {
             Self::H264 => 1,
             Self::H265 => 2,
         }
     }
 
-    /// The `nal_unit_type` this grammar reads out of a NAL unit's header.
+    /// The `nal_unit_type` this elementary stream's grammar reads out of a
+    /// NAL unit's header.
     ///
     /// `None` for a unit shorter than the header itself: H.265 reads its type
     /// from the first byte but the header is two, so classifying a one-byte
     /// unit would file a truncated `0x40` as a video parameter set and let it
     /// reach `hvcC` as an unplayable configuration record.
-    fn nal_unit_type(self, nal_unit_bytes: &[u8]) -> Option<u8> {
+    pub fn nal_unit_type(self, nal_unit_bytes: &[u8]) -> Option<u8> {
         if nal_unit_bytes.len() < self.nal_unit_header_bytes() {
             return None;
         }
@@ -78,8 +119,8 @@ impl AnnexBNalHeaderGrammar {
         }
     }
 
-    /// Whether this NAL unit is a parameter set, which a sample must not
-    /// carry and a sample entry must.
+    /// Whether a `nal_unit_type` names a parameter set, which a sample must
+    /// not carry and a sample entry or format description must.
     fn is_parameter_set(self, nal_unit_type: u8) -> bool {
         match self {
             Self::H264 => matches!(
@@ -97,18 +138,9 @@ impl AnnexBNalHeaderGrammar {
     }
 }
 
-impl From<crate::encoded_video_frame::EncodedVideoCodec> for AnnexBNalHeaderGrammar {
-    fn from(codec: crate::encoded_video_frame::EncodedVideoCodec) -> Self {
-        match codec {
-            crate::encoded_video_frame::EncodedVideoCodec::H264 => Self::H264,
-            crate::encoded_video_frame::EncodedVideoCodec::H265 => Self::H265,
-        }
-    }
-}
-
-/// The parameter sets one access unit carried, in the piles `avcC` and
-/// `hvcC` keep them in. Empty for a non-sync-point access unit, which the
-/// engine's encoder prepends nothing to.
+/// The parameter sets one access unit carried, in the piles `avcC`, `hvcC`
+/// and a format description keep them in. Empty for a non-sync-point access
+/// unit, which the engine's encoders prepend nothing to.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ParameterSetsFromAnnexBAccessUnit {
     /// H.265 only; `avcC` has no video parameter set.
@@ -118,22 +150,31 @@ pub struct ParameterSetsFromAnnexBAccessUnit {
 }
 
 impl ParameterSetsFromAnnexBAccessUnit {
-    /// Whether this access unit carried the sets a sample entry needs. An
-    /// `hvcC` additionally wants a VPS, which [`Self::is_complete_for`]
-    /// checks per grammar.
-    pub fn is_complete_for(&self, grammar: AnnexBNalHeaderGrammar) -> bool {
+    /// Whether this access unit carried the sets a decoder needs: SPS and
+    /// PPS, and for H.265 a VPS as well.
+    pub fn is_complete_for(&self, elementary_stream: VideoCodecElementaryStream) -> bool {
         let has_sequence_and_picture_sets = !self.sequence_parameter_set_nal_units.is_empty()
             && !self.picture_parameter_set_nal_units.is_empty();
-        match grammar {
-            AnnexBNalHeaderGrammar::H264 => has_sequence_and_picture_sets,
-            AnnexBNalHeaderGrammar::H265 => {
+        match elementary_stream {
+            VideoCodecElementaryStream::H264 => has_sequence_and_picture_sets,
+            VideoCodecElementaryStream::H265 => {
                 has_sequence_and_picture_sets && !self.video_parameter_set_nal_units.is_empty()
             }
         }
     }
+
+    /// Every set, in the order a configuration record lists them and a
+    /// decoder takes them: VPS, then SPS, then PPS.
+    pub fn in_configuration_record_order(&self) -> impl Iterator<Item = &[u8]> {
+        self.video_parameter_set_nal_units
+            .iter()
+            .chain(&self.sequence_parameter_set_nal_units)
+            .chain(&self.picture_parameter_set_nal_units)
+            .map(Vec::as_slice)
+    }
 }
 
-/// One access unit split the way the container wants it.
+/// One access unit split the way a container or a codec API wants it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LengthPrefixedSampleFromAnnexBAccessUnit {
     /// Every non-parameter-set NAL unit, each preceded by its
@@ -192,29 +233,29 @@ fn split_annex_b_access_unit_into_nal_units(annex_b_access_unit_bytes: &[u8]) ->
 /// parameter sets it carried.
 pub fn length_prefix_annex_b_access_unit(
     annex_b_access_unit_bytes: &[u8],
-    grammar: AnnexBNalHeaderGrammar,
+    elementary_stream: VideoCodecElementaryStream,
 ) -> LengthPrefixedSampleFromAnnexBAccessUnit {
     let mut length_prefixed_sample_bytes = Vec::with_capacity(annex_b_access_unit_bytes.len());
     let mut parameter_sets = ParameterSetsFromAnnexBAccessUnit::default();
 
     for nal_unit in split_annex_b_access_unit_into_nal_units(annex_b_access_unit_bytes) {
-        let Some(nal_unit_type) = grammar.nal_unit_type(nal_unit) else {
+        let Some(nal_unit_type) = elementary_stream.nal_unit_type(nal_unit) else {
             continue;
         };
-        if grammar.is_parameter_set(nal_unit_type) {
-            if nal_unit.len() <= grammar.nal_unit_header_bytes() {
+        if elementary_stream.is_parameter_set(nal_unit_type) {
+            if nal_unit.len() <= elementary_stream.nal_unit_header_bytes() {
                 // A parameter set that is only a header configures nothing.
                 // Dropping it here leaves the pile incomplete, so the track is
                 // refused by name rather than described by a malformed record.
                 continue;
             }
-            let pile = match (grammar, nal_unit_type) {
-                (AnnexBNalHeaderGrammar::H264, H264_NAL_UNIT_TYPE_SEQUENCE_PARAMETER_SET)
-                | (AnnexBNalHeaderGrammar::H265, H265_NAL_UNIT_TYPE_SEQUENCE_PARAMETER_SET) => {
+            let pile = match (elementary_stream, nal_unit_type) {
+                (VideoCodecElementaryStream::H264, H264_NAL_UNIT_TYPE_SEQUENCE_PARAMETER_SET)
+                | (VideoCodecElementaryStream::H265, H265_NAL_UNIT_TYPE_SEQUENCE_PARAMETER_SET) => {
                     &mut parameter_sets.sequence_parameter_set_nal_units
                 }
-                (AnnexBNalHeaderGrammar::H264, H264_NAL_UNIT_TYPE_PICTURE_PARAMETER_SET)
-                | (AnnexBNalHeaderGrammar::H265, H265_NAL_UNIT_TYPE_PICTURE_PARAMETER_SET) => {
+                (VideoCodecElementaryStream::H264, H264_NAL_UNIT_TYPE_PICTURE_PARAMETER_SET)
+                | (VideoCodecElementaryStream::H265, H265_NAL_UNIT_TYPE_PICTURE_PARAMETER_SET) => {
                     &mut parameter_sets.picture_parameter_set_nal_units
                 }
                 _ => &mut parameter_sets.video_parameter_set_nal_units,
@@ -236,14 +277,16 @@ pub fn length_prefix_annex_b_access_unit(
     }
 }
 
-/// Why a sample's bytes are not the length-prefixed NAL units its sample
-/// entry says they are.
+/// Why a sample's bytes are not the length-prefixed NAL units whatever
+/// describes them says they are.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SampleIsNotLengthPrefixedNalUnits {
     /// Where the walk ran out of bytes.
     pub stopped_at_byte: usize,
     /// How many bytes the sample holds.
     pub sample_bytes: usize,
+    /// The length-prefix width the walk read the sample with.
+    pub length_prefix_bytes: usize,
 }
 
 impl std::error::Error for SampleIsNotLengthPrefixedNalUnits {}
@@ -252,10 +295,10 @@ impl std::fmt::Display for SampleIsNotLengthPrefixedNalUnits {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             formatter,
-            "the sample is {} bytes and does not partition into \
-             {NAL_UNIT_LENGTH_PREFIX_BYTES}-byte length-prefixed NAL units — the walk ran out \
-             at byte {}, so the track is not the shape its `avcC`/`hvcC` declares",
-            self.sample_bytes, self.stopped_at_byte,
+            "the sample is {} bytes and does not partition into {}-byte length-prefixed NAL \
+             units — the walk ran out at byte {}, so the sample is not the shape its \
+             description declares",
+            self.sample_bytes, self.length_prefix_bytes, self.stopped_at_byte,
         )
     }
 }
@@ -263,26 +306,29 @@ impl std::fmt::Display for SampleIsNotLengthPrefixedNalUnits {
 /// Convert one length-prefixed sample back into the Annex-B access unit it
 /// was made from, with `parameter_set_nal_units` back in front of it.
 ///
-/// The inverse of [`length_prefix_annex_b_access_unit`]. A sync sample on its
-/// own decodes nothing — 14496-15 kept its parameter sets out in the sample
-/// entry — so a reader passes the sets from `avcC`/`hvcC` here and a
-/// non-sync sample passes none, which is what the encoder emitted.
-pub fn annex_b_access_unit_from_length_prefixed_sample(
+/// The inverse of [`length_prefix_annex_b_access_unit`], reading each NAL
+/// unit behind a `length_prefix_width`-wide length. A sync sample on its own
+/// decodes nothing — its parameter sets were kept out in the sample entry or
+/// format description — so a reader passes those sets here and a non-sync
+/// sample passes none, which is what the encoder emitted.
+pub fn annex_b_access_unit_from_length_prefixed_sample<ParameterSet: AsRef<[u8]>>(
     length_prefixed_sample_bytes: &[u8],
-    parameter_set_nal_units: &[Vec<u8>],
+    parameter_set_nal_units: &[ParameterSet],
+    length_prefix_width: NalUnitLengthPrefixWidth,
 ) -> Result<Vec<u8>, SampleIsNotLengthPrefixedNalUnits> {
     let mut annex_b_access_unit_bytes = Vec::with_capacity(length_prefixed_sample_bytes.len());
     for parameter_set in parameter_set_nal_units {
         annex_b_access_unit_bytes.extend_from_slice(&ANNEX_B_START_CODE);
-        annex_b_access_unit_bytes.extend_from_slice(parameter_set);
+        annex_b_access_unit_bytes.extend_from_slice(parameter_set.as_ref());
     }
 
-    let prefix_bytes = usize::from(NAL_UNIT_LENGTH_PREFIX_BYTES);
+    let prefix_bytes = length_prefix_width.byte_count();
     let mut next_nal_unit_start_in_sample = 0usize;
     while next_nal_unit_start_in_sample < length_prefixed_sample_bytes.len() {
         let ran_out = || SampleIsNotLengthPrefixedNalUnits {
             stopped_at_byte: next_nal_unit_start_in_sample,
             sample_bytes: length_prefixed_sample_bytes.len(),
+            length_prefix_bytes: prefix_bytes,
         };
         let length_prefix = length_prefixed_sample_bytes
             .get(next_nal_unit_start_in_sample..next_nal_unit_start_in_sample + prefix_bytes)
@@ -324,7 +370,7 @@ mod tests {
 
         let split = length_prefix_annex_b_access_unit(
             &annex_b(&[sequence_parameter_set, picture_parameter_set, coded_slice]),
-            AnnexBNalHeaderGrammar::H264,
+            VideoCodecElementaryStream::H264,
         );
 
         assert_eq!(
@@ -366,7 +412,7 @@ mod tests {
                 picture_parameter_set,
                 coded_slice,
             ]),
-            AnnexBNalHeaderGrammar::H265,
+            VideoCodecElementaryStream::H265,
         );
 
         assert_eq!(
@@ -376,7 +422,7 @@ mod tests {
         assert!(
             split
                 .parameter_sets
-                .is_complete_for(AnnexBNalHeaderGrammar::H265)
+                .is_complete_for(VideoCodecElementaryStream::H265)
         );
         assert_eq!(
             &split.length_prefixed_sample_bytes[..4],
@@ -393,8 +439,10 @@ mod tests {
         three_byte_prefixed.extend_from_slice(&[0x00, 0x00, 0x01]);
         three_byte_prefixed.extend_from_slice(&[0x41, 0xCC, 0xDD]);
 
-        let split =
-            length_prefix_annex_b_access_unit(&three_byte_prefixed, AnnexBNalHeaderGrammar::H264);
+        let split = length_prefix_annex_b_access_unit(
+            &three_byte_prefixed,
+            VideoCodecElementaryStream::H264,
+        );
 
         let mut expected = Vec::new();
         expected.extend_from_slice(&3u32.to_be_bytes());
@@ -408,7 +456,7 @@ mod tests {
     fn a_non_sync_point_access_unit_carries_no_parameter_sets() {
         let split = length_prefix_annex_b_access_unit(
             &annex_b(&[&[0x41, 0x9A, 0x00]]),
-            AnnexBNalHeaderGrammar::H264,
+            VideoCodecElementaryStream::H264,
         );
         assert_eq!(
             split.parameter_sets,
@@ -417,7 +465,7 @@ mod tests {
         assert!(
             !split
                 .parameter_sets
-                .is_complete_for(AnnexBNalHeaderGrammar::H264),
+                .is_complete_for(VideoCodecElementaryStream::H264),
             "a sample entry cannot be built from an access unit with no sets"
         );
     }
@@ -428,7 +476,7 @@ mod tests {
         let long_nal: &[u8] = &[0x41; 300];
         let split = length_prefix_annex_b_access_unit(
             &annex_b(&[short_nal, long_nal]),
-            AnnexBNalHeaderGrammar::H264,
+            VideoCodecElementaryStream::H264,
         );
 
         let bytes = &split.length_prefixed_sample_bytes;
@@ -456,7 +504,7 @@ mod tests {
         let idr_slice: &[u8] = &[0x65, 0x88, 0x84, 0x00, 0x11, 0x22];
         let published = annex_b(&[sequence_parameter_set, picture_parameter_set, idr_slice]);
 
-        let split = length_prefix_annex_b_access_unit(&published, AnnexBNalHeaderGrammar::H264);
+        let split = length_prefix_annex_b_access_unit(&published, VideoCodecElementaryStream::H264);
         // The order a sample entry hands them back in: `avcC` states its
         // sequence sets before its picture sets.
         let parameter_sets: Vec<Vec<u8>> = split
@@ -470,6 +518,7 @@ mod tests {
         let rejoined = annex_b_access_unit_from_length_prefixed_sample(
             &split.length_prefixed_sample_bytes,
             &parameter_sets,
+            NalUnitLengthPrefixWidth::WRITTEN_BY_LENGTH_PREFIXING,
         )
         .expect("the sample the splitter just wrote is length-prefixed");
         assert_eq!(
@@ -493,7 +542,7 @@ mod tests {
             coded_slice,
         ]);
 
-        let split = length_prefix_annex_b_access_unit(&published, AnnexBNalHeaderGrammar::H265);
+        let split = length_prefix_annex_b_access_unit(&published, VideoCodecElementaryStream::H265);
         // `hvcC` orders its arrays by `nal_unit_type`, which is VPS 32, SPS
         // 33, PPS 34 — the order they were published in.
         let parameter_sets: Vec<Vec<u8>> = split
@@ -508,6 +557,7 @@ mod tests {
         let rejoined = annex_b_access_unit_from_length_prefixed_sample(
             &split.length_prefixed_sample_bytes,
             &parameter_sets,
+            NalUnitLengthPrefixWidth::WRITTEN_BY_LENGTH_PREFIXING,
         )
         .expect("the sample the splitter just wrote is length-prefixed");
         assert_eq!(rejoined, published);
@@ -519,16 +569,17 @@ mod tests {
         let second_slice: &[u8] = &[0x41, 0x9B, 0x01, 0x02];
         let published = annex_b(&[first_slice, second_slice]);
 
-        let split = length_prefix_annex_b_access_unit(&published, AnnexBNalHeaderGrammar::H264);
+        let split = length_prefix_annex_b_access_unit(&published, VideoCodecElementaryStream::H264);
         assert_eq!(
             split.parameter_sets,
             ParameterSetsFromAnnexBAccessUnit::default(),
             "a non-sync access unit carries no sets to strip"
         );
 
-        let rejoined = annex_b_access_unit_from_length_prefixed_sample(
+        let rejoined = annex_b_access_unit_from_length_prefixed_sample::<Vec<u8>>(
             &split.length_prefixed_sample_bytes,
             &[],
+            NalUnitLengthPrefixWidth::WRITTEN_BY_LENGTH_PREFIXING,
         )
         .expect("the sample the splitter just wrote is length-prefixed");
         assert_eq!(rejoined, published);
@@ -541,8 +592,12 @@ mod tests {
         // codec's.
         let malformed_sample = [0x00, 0x00, 0x10, 0x00, 0x65, 0x88];
 
-        let refusal = annex_b_access_unit_from_length_prefixed_sample(&malformed_sample, &[])
-            .expect_err("a prefix past the end of the sample describes no NAL unit");
+        let refusal = annex_b_access_unit_from_length_prefixed_sample::<Vec<u8>>(
+            &malformed_sample,
+            &[],
+            NalUnitLengthPrefixWidth::WRITTEN_BY_LENGTH_PREFIXING,
+        )
+        .expect_err("a prefix past the end of the sample describes no NAL unit");
         assert_eq!(refusal.sample_bytes, malformed_sample.len());
         assert_eq!(refusal.stopped_at_byte, 0);
     }
@@ -554,9 +609,48 @@ mod tests {
             0x00, 0x00, // a prefix cut short
         ];
 
-        let refusal =
-            annex_b_access_unit_from_length_prefixed_sample(&one_nal_unit_then_a_stub, &[])
-                .expect_err("a sample cannot end part way through a length prefix");
+        let refusal = annex_b_access_unit_from_length_prefixed_sample::<Vec<u8>>(
+            &one_nal_unit_then_a_stub,
+            &[],
+            NalUnitLengthPrefixWidth::WRITTEN_BY_LENGTH_PREFIXING,
+        )
+        .expect_err("a sample cannot end part way through a length prefix");
         assert_eq!(refusal.stopped_at_byte, 6);
+    }
+
+    #[test]
+    fn only_one_two_and_four_byte_length_prefixes_are_widths() {
+        for declared in [1, 2, 4] {
+            assert_eq!(
+                NalUnitLengthPrefixWidth::try_from(declared)
+                    .expect("a width 14496-15 allows")
+                    .byte_count(),
+                declared as usize
+            );
+        }
+        for declared in [-1, 0, 3, 5, 8] {
+            assert_eq!(
+                NalUnitLengthPrefixWidth::try_from(declared),
+                Err(NalUnitLengthPrefixWidthIsNotOneTwoOrFourBytes {
+                    declared_byte_count: declared
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn a_two_byte_length_prefix_reads_as_wide_as_it_is() {
+        let coded_slice: &[u8] = &[0x65, 0x88, 0x84];
+        let mut two_byte_prefixed = (coded_slice.len() as u16).to_be_bytes().to_vec();
+        two_byte_prefixed.extend_from_slice(coded_slice);
+        assert_eq!(
+            annex_b_access_unit_from_length_prefixed_sample::<Vec<u8>>(
+                &two_byte_prefixed,
+                &[],
+                NalUnitLengthPrefixWidth::try_from(2).expect("two bytes is a width"),
+            )
+            .expect("a two-byte-prefixed sample"),
+            annex_b(&[coded_slice])
+        );
     }
 }

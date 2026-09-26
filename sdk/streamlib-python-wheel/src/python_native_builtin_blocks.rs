@@ -54,22 +54,22 @@ pub(crate) struct PythonMicrophoneSourceBlock;
 pub(crate) struct PythonSpeakerSinkBlock;
 
 /// `streamlib.H264Encoder` — video frames to H.264 encoded-frame bags via
-/// Vulkan Video hardware encode (Linux).
+/// hardware encode, on the platform's video codec arm.
 #[pyclass(name = "H264Encoder", module = "streamlib", frozen)]
 pub(crate) struct PythonH264EncoderBlock;
 
 /// `streamlib.H264Decoder` — H.264 encoded-frame bags to decoded video
-/// frames via Vulkan Video hardware decode (Linux).
+/// frames via hardware decode, on the platform's video codec arm.
 #[pyclass(name = "H264Decoder", module = "streamlib", frozen)]
 pub(crate) struct PythonH264DecoderBlock;
 
 /// `streamlib.H265Encoder` — video frames to H.265 encoded-frame bags via
-/// Vulkan Video hardware encode (Linux).
+/// hardware encode, on the platform's video codec arm.
 #[pyclass(name = "H265Encoder", module = "streamlib", frozen)]
 pub(crate) struct PythonH265EncoderBlock;
 
 /// `streamlib.H265Decoder` — H.265 encoded-frame bags to decoded video
-/// frames via Vulkan Video hardware decode (Linux).
+/// frames via hardware decode, on the platform's video codec arm.
 #[pyclass(name = "H265Decoder", module = "streamlib", frozen)]
 pub(crate) struct PythonH265DecoderBlock;
 
@@ -138,47 +138,23 @@ pub(crate) fn native_builtin_class_import_path(
         ));
     }
     if processor_class.is(python.get_type::<PythonH264EncoderBlock>()) {
-        #[cfg(target_os = "linux")]
         return Ok(Some(
             streamlib_media_builtins::H264Encoder::Processor::processor_class_import_path(),
         ));
-        #[cfg(not(target_os = "linux"))]
-        return Err(PyRuntimeError::new_err(
-            "H264Encoder is Linux-only (Vulkan Video hardware encode); this platform is \
-             not supported by the streamlib wheel yet",
-        ));
     }
     if processor_class.is(python.get_type::<PythonH264DecoderBlock>()) {
-        #[cfg(target_os = "linux")]
         return Ok(Some(
             streamlib_media_builtins::H264Decoder::Processor::processor_class_import_path(),
         ));
-        #[cfg(not(target_os = "linux"))]
-        return Err(PyRuntimeError::new_err(
-            "H264Decoder is Linux-only (Vulkan Video hardware decode); this platform is \
-             not supported by the streamlib wheel yet",
-        ));
     }
     if processor_class.is(python.get_type::<PythonH265EncoderBlock>()) {
-        #[cfg(target_os = "linux")]
         return Ok(Some(
             streamlib_media_builtins::H265Encoder::Processor::processor_class_import_path(),
         ));
-        #[cfg(not(target_os = "linux"))]
-        return Err(PyRuntimeError::new_err(
-            "H265Encoder is Linux-only (Vulkan Video hardware encode); this platform is \
-             not supported by the streamlib wheel yet",
-        ));
     }
     if processor_class.is(python.get_type::<PythonH265DecoderBlock>()) {
-        #[cfg(target_os = "linux")]
         return Ok(Some(
             streamlib_media_builtins::H265Decoder::Processor::processor_class_import_path(),
-        ));
-        #[cfg(not(target_os = "linux"))]
-        return Err(PyRuntimeError::new_err(
-            "H265Decoder is Linux-only (Vulkan Video hardware decode); this platform is \
-             not supported by the streamlib wheel yet",
         ));
     }
     if processor_class.is(python.get_type::<PythonOpusEncoderBlock>()) {
