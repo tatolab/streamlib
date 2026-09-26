@@ -15,13 +15,13 @@ name = "streamlib_adapter_skia"
 path = "src/lib.rs"
 
 [dependencies]
-streamlib-surface-adapter = { path = "../streamlib-surface-adapter", version = "0.26.30" }
+streamlib-surface-adapter = { path = "../streamlib-surface-adapter", version = "0.26.31" }
 thiserror.workspace = true
 tracing.workspace = true
 
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
-streamlib-adapter-vulkan = { path = "../streamlib-adapter-vulkan", version = "0.26.30" }
-streamlib-consumer-rhi = { path = "../../runtime/streamlib-consumer-rhi", version = "0.26.30" }
+streamlib-adapter-vulkan = { path = "../streamlib-adapter-vulkan", version = "0.26.31" }
+streamlib-consumer-rhi = { path = "../../runtime/streamlib-consumer-rhi", version = "0.26.31" }
 vulkanalia.workspace = true
 skia-safe = { workspace = true }
 
@@ -34,8 +34,8 @@ skia-safe = { workspace = true }
 # `streamlib-adapter-opengl/Cargo.toml`.
 [target.'cfg(target_os = "linux")'.dependencies]
 skia-safe = { workspace = true, features = ["gl"] }
-streamlib-adapter-opengl = { path = "../streamlib-adapter-opengl", version = "0.26.30" }
-streamlib-surface-client = { path = "../../runtime/streamlib-surface-client", version = "0.26.30" }
+streamlib-adapter-opengl = { path = "../streamlib-adapter-opengl", version = "0.26.31" }
+streamlib-surface-client = { path = "../../runtime/streamlib-surface-client", version = "0.26.31" }
 serde = { workspace = true }
 serde_json.workspace = true
 libc.workspace = true
