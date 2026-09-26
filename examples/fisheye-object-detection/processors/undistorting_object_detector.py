@@ -218,12 +218,14 @@ class UndistortingObjectDetector:
         )
         # A frame's DLPack capsule imports onto the accelerator this torch build
         # drives, so the model and the box colours go there too.
-        detection_device = torch.accelerator.current_accelerator()
+        detection_device = torch.accelerator.current_accelerator(
+            check_available=True
+        )
         if detection_device is None:
             raise RuntimeError(
                 "torch.accelerator.current_accelerator() is None: this torch "
-                "build drives no GPU, and the detector reads the frame where "
-                "the engine left it, on the GPU"
+                "build sees no usable GPU, and the detector reads the frame "
+                "where the engine left it, on the GPU"
             )
         # Weights land beside the app on first run and are cached there after.
         # The model goes to the GPU here, in `setup()`, so the first frame pays

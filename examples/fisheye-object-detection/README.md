@@ -222,9 +222,9 @@ maturin develop --manifest-path ../../sdk/streamlib-python-wheel/Cargo.toml
 This app needs real hardware and says so rather than pretending: the kernels
 run on the engine's own GPU, and the detector runs on whichever accelerator
 `torch.accelerator` reports — CUDA on Linux, MPS on Apple Silicon. A torch
-build with no accelerator stops the detector in `setup()` and says why. It is
-also a heavy install: `ultralytics` brings a detector and `torch` brings its GPU
-runtime, several gigabytes between them on Linux.
+build that sees no usable accelerator stops the detector in `setup()` and says
+why. It is also a heavy install: `ultralytics` brings a detector and `torch`
+brings its GPU runtime, several gigabytes between them on Linux.
 
 On macOS it was measured on an Apple M1 Max (macOS 26.3, torch 2.14,
 ultralytics 8.4). The whole chain ran from the built-in camera — the lens, the
