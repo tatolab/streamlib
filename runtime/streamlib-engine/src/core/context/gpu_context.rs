@@ -2672,48 +2672,33 @@ impl GpuContext {
     }
 
     /// Mint a hardware video [`SimpleEncoder`](crate::vulkan::video::encode::SimpleEncoder)
-    /// on this context's host device — the modern encoder
-    /// construction path. Builds directly from the host-owned
-    /// `Arc<HostVulkanDevice>` (`self.device.inner`), NOT through the
-    /// retiring `host_vulkan_device_arc` transit that
-    /// `SimpleEncoder::from_full_access` uses. Backs
-    /// `create_encoder_session` (M32 #1259 fill-in,
-    /// #1376).
+    /// on this context's host device, built directly from the host-owned
+    /// `Arc<HostVulkanDevice>` (`self.device.inner`).
     ///
-    /// When `prepare_gpu_input` is `true` (the descriptor's
-    /// `disable_gpu_input_prealloc == 0`), eagerly runs
-    /// [`SimpleEncoder::prepare_gpu_encode_resources`] so the first
-    /// `submit_texture` frame doesn't pay the RGB→NV12 converter
-    /// allocation latency.
+    /// Eagerly runs [`SimpleEncoder::prepare_gpu_encode_resources`] so the
+    /// first submitted frame doesn't pay the RGB→NV12 converter allocation
+    /// latency.
     #[cfg(target_os = "linux")]
     #[tracing::instrument(skip(self, config), fields(rhi_op = "create_encoder_session"))]
-    pub fn create_encoder_session(
+    pub(crate) fn create_encoder_session(
         &self,
         config: crate::vulkan::video::encode::SimpleEncoderConfig,
-        prepare_gpu_input: bool,
     ) -> Result<crate::vulkan::video::encode::SimpleEncoder> {
         let host_device = Arc::clone(&self.device.inner);
         let mut encoder =
             crate::vulkan::video::encode::SimpleEncoder::from_host_device(host_device, config)
                 .map_err(|e| Error::GpuError(format!("create_encoder_session: {e}")))?;
-        if prepare_gpu_input {
-            encoder.prepare_gpu_encode_resources().map_err(|e| {
-                Error::GpuError(format!(
-                    "create_encoder_session: prepare GPU encode resources: {e}"
-                ))
-            })?;
-        }
+        encoder.prepare_gpu_encode_resources().map_err(|e| {
+            Error::GpuError(format!(
+                "create_encoder_session: prepare GPU encode resources: {e}"
+            ))
+        })?;
         Ok(encoder)
     }
 
     /// Mint a hardware video [`SimpleDecoder`](crate::vulkan::video::decode::SimpleDecoder)
-    /// on this context's host device — the modern decoder
-    /// construction path. Builds directly from the host-owned
-    /// `Arc<HostVulkanDevice>` (`self.device.inner`), NOT through the
-    /// retiring `host_vulkan_device_arc` transit that
-    /// `SimpleDecoder::from_full_access` uses. Backs
-    /// `create_decoder_session` (M32 #1259 fill-in,
-    /// #1377).
+    /// on this context's host device, built directly from the host-owned
+    /// `Arc<HostVulkanDevice>` (`self.device.inner`).
     ///
     /// Coded dimensions are auto-detected from the first SPS (query via
     /// [`SimpleDecoder::dimensions`](crate::vulkan::video::decode::SimpleDecoder::dimensions)
@@ -2721,7 +2706,7 @@ impl GpuContext {
     /// `0` request that auto-detection.
     #[cfg(target_os = "linux")]
     #[tracing::instrument(skip(self, config), fields(rhi_op = "create_decoder_session"))]
-    pub fn create_decoder_session(
+    pub(crate) fn create_decoder_session(
         &self,
         config: crate::vulkan::video::decode::SimpleDecoderConfig,
     ) -> Result<crate::vulkan::video::decode::SimpleDecoder> {
@@ -4030,25 +4015,22 @@ impl GpuContextFullAccess {
             .create_present_compositor(attachment_format)
     }
 
-    /// Mint a hardware video encoder session — the FullAccess mirror of
-    /// [`GpuContext::create_encoder_session`], reachable from a processor's
-    /// `process()` via `escalate(|full| ...)` for the one-shot lazy mint.
+    /// Mint a Vulkan Video encoder on the host device — the FullAccess mirror
+    /// of [`GpuContext::create_encoder_session`] the video codec seam's Vulkan
+    /// Video arm opens an encode session with.
     #[cfg(target_os = "linux")]
-    pub fn create_encoder_session(
+    pub(crate) fn create_encoder_session(
         &self,
         config: crate::vulkan::video::encode::SimpleEncoderConfig,
-        prepare_gpu_input: bool,
     ) -> Result<crate::vulkan::video::encode::SimpleEncoder> {
-        self.host_inner()
-            .create_encoder_session(config, prepare_gpu_input)
+        self.host_inner().create_encoder_session(config)
     }
 
-    /// Mint a hardware video decoder session — the FullAccess mirror of
-    /// [`GpuContext::create_decoder_session`], reachable from a processor's
-    /// `setup()`, whose typestate is already Full, and from `process()` via
-    /// `escalate(|full| ...)`.
+    /// Mint a Vulkan Video decoder on the host device — the FullAccess mirror
+    /// of [`GpuContext::create_decoder_session`] the video codec seam's Vulkan
+    /// Video arm opens a decode session with.
     #[cfg(target_os = "linux")]
-    pub fn create_decoder_session(
+    pub(crate) fn create_decoder_session(
         &self,
         config: crate::vulkan::video::decode::SimpleDecoderConfig,
     ) -> Result<crate::vulkan::video::decode::SimpleDecoder> {
@@ -4339,8 +4321,7 @@ impl GpuContextFullAccess {
 
     /// Clone the host's `Arc<HostVulkanDevice>`. Engine-internal
     /// accessor for in-process RHI helpers (subprocess
-    /// escalate handle assignment, the video encode/decode
-    /// `from_full_access` constructors). Consumer GPU code builds
+    /// escalate handle assignment). Consumer GPU code builds
     /// through the FullAccess primitives, never the raw device.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn host_vulkan_device_arc(&self) -> Result<Arc<crate::vulkan::rhi::HostVulkanDevice>> {

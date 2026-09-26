@@ -7,10 +7,8 @@
 //! not raw Vulkan device / queue / allocator handles.
 //!
 //! Origin: ported from NVIDIA nvpro-samples
-//! (<https://github.com/nvpro-samples/vk_video_samples>). The standalone
-//! `SimpleEncoder::new` / `SimpleDecoder::new` self-owned-device paths
-//! that originated with the port are scheduled for removal in favor of
-//! the engine RHI-integrated `from_full_access` constructors.
+//! (<https://github.com/nvpro-samples/vk_video_samples>). Sessions are
+//! minted on the host device only, behind the video codec seam.
 
 // --- Public API ---
 pub mod decode;
@@ -18,6 +16,7 @@ pub mod encode;
 pub mod nv12_to_rgb;
 pub mod rgb_to_nv12;
 pub mod video_context;
+pub(crate) mod vulkan_video_codec_backend;
 
 // Public codec types — re-exported at the engine `crate::vulkan::video::*`
 // surface and pulled through to `streamlib::sdk::engine::video::*`.

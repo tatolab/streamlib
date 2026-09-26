@@ -85,7 +85,6 @@ mod linux_rig {
     use streamlib_media_builtins::{
         CameraSource, DisplayWindow, EncodedVideoCodec, EncodedVideoFrame, H264Decoder,
         H264Encoder, H265Decoder, H265Encoder, register_media_builtin_processor_types,
-        stage_tightly_packed_rgba_into_pooled_pixel_buffer,
     };
 
     /// The fixture source's publish rate, and the twin of the
@@ -240,12 +239,7 @@ mod linux_rig {
                 let (published_frame_id, pixel_buffer) = ctx
                     .gpu_full_access()
                     .acquire_pixel_buffer(width, height, PixelFormat::Rgba32)?;
-                stage_tightly_packed_rgba_into_pooled_pixel_buffer(
-                    &pixel_buffer,
-                    &rgba_pixels,
-                    width,
-                    height,
-                )?;
+                pixel_buffer.write_this_plane_from(0, &rgba_pixels)?;
                 self.staged_references.push(StagedReferenceFixture {
                     file_name: reference_path
                         .file_name()

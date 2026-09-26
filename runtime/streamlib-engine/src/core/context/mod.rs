@@ -10,6 +10,7 @@ mod device_stream_liveness_report;
 pub(crate) mod escalate_gate;
 mod gpu_context;
 pub(crate) mod isolation;
+mod refusing_null_video_codec_backend;
 mod refusing_null_video_device_backend;
 mod runtime_context;
 pub(crate) mod silent_null_audio_device_backend;
@@ -26,6 +27,7 @@ pub(crate) mod texture_registration;
 mod texture_ring;
 mod time_context;
 mod video_capture_instant_resolver;
+mod video_codec_backend;
 mod video_device_backend;
 
 pub use audio_clock::{
@@ -70,6 +72,13 @@ pub use texture_ring::{
 pub use time_context::TimeContext;
 pub(crate) use video_capture_instant_resolver::{
     DeviceReportedCaptureStamp, VideoCaptureInstantResolver,
+};
+pub use video_codec_backend::{
+    DecodedVideoPictureInPooledPixelBuffer, EncodedVideoAccessUnitFromSession,
+    SharedVideoCodecBackend, VideoCodecBackend, VideoCodecElementaryStream,
+    VideoDecodeMaximumCodedExtent, VideoDecodeSession, VideoDecodeSessionRequest,
+    VideoEncodeSession, VideoEncodeSessionRequest, VideoEncodeSourceSurface,
+    probe_video_codec_backend,
 };
 pub(crate) use video_device_backend::refusal_for_a_named_camera_that_is_not_attached;
 pub use video_device_backend::{
