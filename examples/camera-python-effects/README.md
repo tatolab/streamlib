@@ -24,7 +24,8 @@ source .venv/bin/activate
 streamlib dev
 ```
 
-Needs Linux, an NVIDIA GPU, and a V4L2 camera. The first run downloads the pose
+Runs on Linux with an NVIDIA GPU and a V4L2 camera, and on macOS arm64
+(measured on an M1 Max with the built-in camera). The first run downloads the pose
 model (`yolov8n-pose.pt`, ~6 MB) and compiles nothing — the shaders are built by
 the engine at startup, and the GLSL compiler is in the wheel.
 
@@ -43,7 +44,7 @@ maturin develop --manifest-path ../../sdk/streamlib-python-wheel/Cargo.toml
 
 | Processor | What it does |
 | --- | --- |
-| `CameraFrameToTexture` | Copies the camera frame into a texture, device to device, with cupy |
+| `CameraFrameToTexture` | Copies the camera frame into a texture, device to device, with the engine's copy |
 | `CyberpunkGlitch` | Teal/magenta grade with intermittent glitch flashes |
 | `CrtFilmGrain` | Barrel curve, scanlines, aberration, vignette, 24 fps grain |
 | `CyberpunkAvatar` | MediaPipe 3D pose driving a procedural android on a neon stage |
@@ -58,8 +59,8 @@ Each processor's config is a dataclass beside it with ordinary Python defaults �
 `CrtFilmGrain` takes every CRT parameter that way; `CyberpunkAvatar` takes
 `scene_width`, `scene_height` and `detection_confidence`.
 
-The avatar is three third-party worlds in one helper process — cupy reads the
-camera frame as a GPU tensor, MediaPipe lifts a 3D pose out of it on the CPU,
+The avatar is three third-party worlds in one helper process — numpy reads the
+camera frame's host side, MediaPipe lifts a 3D pose out of it on the CPU,
 ModernGL renders the posed android on its own stage — and the engine sees only
 a frame in and a frame out. If tracking cannot run, the android holds its idle
 sway, the warning is logged once, and the other five layers carry on.
@@ -69,9 +70,9 @@ sway, the warning is logged once, and the other five layers carry on.
 **A camera frame is not a texture.** `CameraSource` publishes buffer-backed
 frames and a kernel binding resolves texture-backed surfaces only, so a draw
 handed a camera surface id is refused by name. That is what
-`CameraFrameToTexture` is for: it reads the frame as a GPU tensor and copies it
-into a texture this app owns, device to device. cupy does nothing but that
-copy; any DLPack-speaking GPU package would serve.
+`CameraFrameToTexture` is for: `ctx.gpu_limited_access.copy_surface_to_surface`
+copies the frame into a texture this app owns, device to device, with no GPU
+array package involved.
 
 It is also the *only* reason the chain opens that way. A camera frame is
 writable in place — `with frame.writable() as t:` hands a third-party GPU

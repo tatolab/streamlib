@@ -152,3 +152,56 @@ def test_a_second_session_resumes_the_dataset_instead_of_refusing(tmp_path) -> N
     )
     assert loaded.num_episodes == 2
     assert loaded.num_frames == 12
+
+
+class _HostSideOnlyFrame:
+    """A frame whose DLPack export answers only a host request, as a CPU floor's does."""
+
+    def __init__(self, pixels: numpy.ndarray) -> None:
+        self.pixels = pixels
+
+    def __dlpack_device__(self) -> "tuple[int, int]":
+        return self.pixels.__dlpack_device__()
+
+    def __dlpack__(self, *, dl_device=None, **negotiated):
+        assert dl_device == (1, 0), "the recorder must ask for the host side"
+        return self.pixels.__dlpack__(dl_device=dl_device, **negotiated)
+
+
+class _RecycledFrame:
+    def __dlpack_device__(self) -> "tuple[int, int]":
+        return (1, 0)
+
+    def __dlpack__(self, **negotiated):
+        raise RuntimeError("surface retired")
+
+
+def _recorder():
+    from camera_python_effects.processors.lerobot_recorder import (
+        LeRobotRecorder,
+        LeRobotRecorderConfig,
+    )
+
+    return LeRobotRecorder(LeRobotRecorderConfig(dataset_root="unused"))
+
+
+def test_recorded_pixels_are_a_decimated_rgb_copy_that_outlives_the_frame() -> None:
+    from camera_python_effects.processors.lerobot_recorder import (
+        RECORDING_DECIMATION_STRIDE,
+    )
+
+    rgba = numpy.arange(16 * 24 * 4, dtype=numpy.uint8).reshape(16, 24, 4)
+    pixels = _recorder()._frame_pixels(_HostSideOnlyFrame(rgba))
+
+    stride = RECORDING_DECIMATION_STRIDE
+    assert pixels.shape == (16 // stride, 24 // stride, 3)
+    assert pixels.flags.c_contiguous
+    assert not numpy.shares_memory(pixels, rgba)
+    assert numpy.array_equal(pixels, rgba[::stride, ::stride, :3])
+
+
+def test_an_unreadable_frame_is_counted_and_skipped() -> None:
+    recorder = _recorder()
+    recorder.frames_unreadable = 0  # setup() starts the count
+    assert recorder._frame_pixels(_RecycledFrame()) is None
+    assert recorder.frames_unreadable == 1

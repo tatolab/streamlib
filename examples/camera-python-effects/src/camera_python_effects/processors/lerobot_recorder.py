@@ -19,7 +19,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-import cupy
 import numpy
 
 from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
@@ -76,9 +75,9 @@ class LeRobotRecorder:
         self.task = task
         self.record_stylized = record_stylized
 
-    # `latest`, not `every_sample`, and not by preference: a channel's one
+    # `newest`, not `ordered`, and not by preference: a channel's one
     # publisher shares a single ring config across subscribers, and both of
-    # these channels already feed `latest` consumers (the effects chain, the
+    # these channels already feed `newest` consumers (the effects chain, the
     # window). At camera cadence the drain below still catches essentially
     # every frame; what a long episode-encode stall costs is dropped rows,
     # counted, never a wedged pipeline.
@@ -88,7 +87,7 @@ class LeRobotRecorder:
     @input(delivery_profile="newest")
     def stylized_from_compositor(self) -> VideoFrame: ...
 
-    @input(delivery_profile="every_sample")
+    @input(delivery_profile="ordered")
     def pose_from_avatar(self) -> None: ...
 
     @output(description="One bag per saved episode, for observability")
@@ -116,15 +115,15 @@ class LeRobotRecorder:
     def _frame_pixels(self, frame: VideoFrame) -> "numpy.ndarray | None":
         """The frame decimated to recording size, on the CPU, or None.
 
-        GPU-side decimation first, so the device-to-host hop carries a
-        twelfth of the bytes. A frame whose surface was recycled before this
+        Read from the frame's host side and copied out, because the rows
+        outlive the frame: a view would hold its pool slot until the episode
+        saves. A frame whose surface was recycled before this
         lagging consumer reached it is skipped and counted, never raised —
         recording must not be able to take the pipeline down.
         """
         try:
-            device_pixels = cupy.from_dlpack(frame)
-            return cupy.asnumpy(
-                device_pixels[
+            return numpy.ascontiguousarray(
+                numpy.from_dlpack(frame, device="cpu")[
                     ::RECORDING_DECIMATION_STRIDE, ::RECORDING_DECIMATION_STRIDE, :3
                 ]
             )

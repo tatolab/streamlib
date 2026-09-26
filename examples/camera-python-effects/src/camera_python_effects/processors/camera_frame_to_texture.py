@@ -5,16 +5,13 @@
 
 `CameraSource` publishes buffer-backed frames, and a kernel binding resolves
 texture-backed surfaces only — a draw handed a buffer-backed surface id is
-refused by name. So the chain starts here: read the frame as a GPU tensor,
-copy it device-to-device into a texture this processor acquired, and publish
-that. cupy is doing nothing but the copy; any DLPack-speaking GPU package
-would serve, which is the point — the frame reaches a third-party GPU stack
-with no CPU copy in the path.
+refused by name. So the chain starts here: the engine copies the frame
+device-to-device into a texture this processor acquired, and that is what is
+published. The pixels never touch the host and no GPU array package is
+involved.
 """
 
 from __future__ import annotations
-
-import cupy
 
 from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
     ProcessorOutputTextureRing,
@@ -53,16 +50,13 @@ class CameraFrameToTexture:
         if frame is None:
             return
 
-        # The frame is a DLPack producer in its own right: this is the whole
-        # read, GPU-resident, and the cast object's claim is what holds the
-        # pixels still for the length of the copy.
-        camera_pixels = cupy.from_dlpack(frame)
-
         texture = self.output_ring.next_texture_for_this_frame(
             ctx.gpu_limited_access, frame.width, frame.height
         )
-        with texture.as_device_tensor() as writable_texture:
-            cupy.from_dlpack(writable_texture)[...] = camera_pixels
+        # The cast object's claim is what holds the camera's pixels still for
+        # the length of the copy, which returns once the next reader of the
+        # texture would see them.
+        ctx.gpu_limited_access.copy_surface_to_surface(frame.surface_id, texture)
 
         ctx.outputs.write(
             "video_to_downstream",
