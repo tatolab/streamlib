@@ -75,9 +75,10 @@ pub(crate) use video_capture_instant_resolver::{
 };
 pub use video_codec_backend::{
     DecodedVideoPictureInPooledPixelBuffer, EncodedVideoAccessUnitFromSession,
-    SharedVideoCodecBackend, VideoCodecBackend, VideoCodecElementaryStream, VideoDecodeSession,
-    VideoDecodeSessionRequest, VideoEncodeSession, VideoEncodeSessionRequest,
-    VideoEncodeSourceSurface, probe_video_codec_backend,
+    SharedVideoCodecBackend, VideoCodecBackend, VideoCodecElementaryStream,
+    VideoDecodeMaximumCodedExtent, VideoDecodeSession, VideoDecodeSessionRequest,
+    VideoEncodeSession, VideoEncodeSessionRequest, VideoEncodeSourceSurface,
+    probe_video_codec_backend,
 };
 pub(crate) use video_device_backend::refusal_for_a_named_camera_that_is_not_attached;
 pub use video_device_backend::{

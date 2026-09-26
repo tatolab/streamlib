@@ -2675,29 +2675,24 @@ impl GpuContext {
     /// on this context's host device, built directly from the host-owned
     /// `Arc<HostVulkanDevice>` (`self.device.inner`).
     ///
-    /// When `prepare_gpu_input` is `true` (the descriptor's
-    /// `disable_gpu_input_prealloc == 0`), eagerly runs
-    /// [`SimpleEncoder::prepare_gpu_encode_resources`] so the first
-    /// `submit_texture` frame doesn't pay the RGB→NV12 converter
-    /// allocation latency.
+    /// Eagerly runs [`SimpleEncoder::prepare_gpu_encode_resources`] so the
+    /// first submitted frame doesn't pay the RGB→NV12 converter allocation
+    /// latency.
     #[cfg(target_os = "linux")]
     #[tracing::instrument(skip(self, config), fields(rhi_op = "create_encoder_session"))]
     pub(crate) fn create_encoder_session(
         &self,
         config: crate::vulkan::video::encode::SimpleEncoderConfig,
-        prepare_gpu_input: bool,
     ) -> Result<crate::vulkan::video::encode::SimpleEncoder> {
         let host_device = Arc::clone(&self.device.inner);
         let mut encoder =
             crate::vulkan::video::encode::SimpleEncoder::from_host_device(host_device, config)
                 .map_err(|e| Error::GpuError(format!("create_encoder_session: {e}")))?;
-        if prepare_gpu_input {
-            encoder.prepare_gpu_encode_resources().map_err(|e| {
-                Error::GpuError(format!(
-                    "create_encoder_session: prepare GPU encode resources: {e}"
-                ))
-            })?;
-        }
+        encoder.prepare_gpu_encode_resources().map_err(|e| {
+            Error::GpuError(format!(
+                "create_encoder_session: prepare GPU encode resources: {e}"
+            ))
+        })?;
         Ok(encoder)
     }
 
@@ -4027,10 +4022,8 @@ impl GpuContextFullAccess {
     pub(crate) fn create_encoder_session(
         &self,
         config: crate::vulkan::video::encode::SimpleEncoderConfig,
-        prepare_gpu_input: bool,
     ) -> Result<crate::vulkan::video::encode::SimpleEncoder> {
-        self.host_inner()
-            .create_encoder_session(config, prepare_gpu_input)
+        self.host_inner().create_encoder_session(config)
     }
 
     /// Mint a Vulkan Video decoder on the host device — the FullAccess mirror

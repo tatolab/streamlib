@@ -97,16 +97,23 @@ pub trait VideoEncodeSession: Send {
     ) -> Result<Vec<EncodedVideoAccessUnitFromSession>>;
 }
 
+/// The largest coded extent a decode session allocates its picture buffer for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VideoDecodeMaximumCodedExtent {
+    /// Upper bound on the coded width in pixels.
+    pub max_coded_width: u32,
+    /// Upper bound on the coded height in pixels.
+    pub max_coded_height: u32,
+}
+
 /// What a caller asks a backend to open a decode session for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VideoDecodeSessionRequest {
     /// The elementary stream the session consumes.
     pub elementary_stream: VideoCodecElementaryStream,
-    /// Upper bound on the coded width. `0`, paired with a `0` height:
-    /// detected from the stream's first parameter sets.
-    pub max_width: u32,
-    /// Upper bound on the coded height, paired with [`Self::max_width`].
-    pub max_height: u32,
+    /// The extent the picture buffer is capped at. `None`: sized from the
+    /// stream's first parameter sets.
+    pub maximum_coded_extent: Option<VideoDecodeMaximumCodedExtent>,
 }
 
 /// One picture a decode session reconstructed, already in a pooled `Rgba32`

@@ -31,10 +31,7 @@ impl VideoCodecBackend for VulkanVideoCodecBackend {
         gpu_context: &GpuContextFullAccess,
         request: &VideoEncodeSessionRequest,
     ) -> Result<Box<dyn VideoEncodeSession>> {
-        // `true` pre-allocates the RGB→NV12 converter so the first submit
-        // skips its allocation latency.
-        let encoder =
-            gpu_context.create_encoder_session(simple_encoder_config_for(request), true)?;
+        let encoder = gpu_context.create_encoder_session(simple_encoder_config_for(request))?;
         Ok(Box::new(VulkanVideoEncodeSession {
             encoder,
             gpu_context: gpu_context.host_inner().limited_access(),
@@ -46,10 +43,14 @@ impl VideoCodecBackend for VulkanVideoCodecBackend {
         gpu_context: &GpuContextFullAccess,
         request: &VideoDecodeSessionRequest,
     ) -> Result<Box<dyn VideoDecodeSession>> {
+        // `0` is the session's spelling of "size the DPB from the first SPS".
+        let (max_width, max_height) = request.maximum_coded_extent.map_or((0, 0), |extent| {
+            (extent.max_coded_width, extent.max_coded_height)
+        });
         let decoder = gpu_context.create_decoder_session(SimpleDecoderConfig {
             codec: session_codec_for(request.elementary_stream),
-            max_width: request.max_width,
-            max_height: request.max_height,
+            max_width,
+            max_height,
             // Decoded pictures come back RGBA via the GPU NV12→RGBA compute
             // stage, which is what the pooled `Rgba32` pixel buffers they are
             // staged into are sized and formatted for.
@@ -241,5 +242,6 @@ mod tests {
         assert_eq!(config.bitrate_bps, Some(4_000_000));
         assert_eq!(config.effort_level, Some(2));
         assert_eq!(config.qp, None);
+        assert_eq!(config.preset, Preset::Medium);
     }
 }

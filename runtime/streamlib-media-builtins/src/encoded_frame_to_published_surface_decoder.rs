@@ -28,8 +28,9 @@ use std::marker::PhantomData;
 use serde::{Deserialize, Serialize};
 use streamlib::sdk::color::H273ColorVui;
 use streamlib::sdk::context::{
-    DecodedVideoPictureInPooledPixelBuffer, RuntimeContextFullAccess, VideoDecodeSession,
-    VideoDecodeSessionRequest, probe_video_codec_backend,
+    DecodedVideoPictureInPooledPixelBuffer, RuntimeContextFullAccess,
+    VideoDecodeMaximumCodedExtent, VideoDecodeSession, VideoDecodeSessionRequest,
+    probe_video_codec_backend,
 };
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::rhi::PixelBuffer;
@@ -130,7 +131,7 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
         ctx: &RuntimeContextFullAccess<'_>,
         config: &HardwareVideoDecoderConfig,
     ) -> Result<()> {
-        let (max_width, max_height) =
+        let maximum_coded_extent =
             resolve_decoded_picture_buffer_dimension_caps(Identity::PROCESSOR_NAME, config);
         let backend = probe_video_codec_backend();
         let session = backend
@@ -138,8 +139,7 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
                 ctx.gpu_full_access(),
                 &VideoDecodeSessionRequest {
                     elementary_stream: Identity::VIDEO_CODEC_ELEMENTARY_STREAM,
-                    max_width,
-                    max_height,
+                    maximum_coded_extent,
                 },
             )
             .map_err(|mint_failure| {
@@ -155,8 +155,7 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
         self.decode_session = Some(session);
         tracing::info!(
             video_codec_backend = backend.backend_name(),
-            max_width,
-            max_height,
+            ?maximum_coded_extent,
             "{}: session minted; entering the stream at its next sync point",
             Identity::PROCESSOR_NAME
         );
@@ -372,17 +371,19 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
     }
 }
 
-/// Resolve the DPB allocation caps from config. `0` is the codec seam's
-/// spelling of "auto-detect from the first SPS"; a half-specified
-/// pair caps nothing a DPB can be sized from, so it warns and auto-detects
-/// rather than allocating against one axis.
+/// Resolve the DPB allocation caps from config, `None` meaning auto-detect
+/// from the first SPS. A half-specified pair caps nothing a DPB can be sized
+/// from, so it warns and auto-detects rather than allocating against one axis.
 fn resolve_decoded_picture_buffer_dimension_caps(
     processor_name: &'static str,
     config: &HardwareVideoDecoderConfig,
-) -> (u32, u32) {
+) -> Option<VideoDecodeMaximumCodedExtent> {
     match (config.max_width, config.max_height) {
-        (Some(max_width), Some(max_height)) => (max_width, max_height),
-        (None, None) => (0, 0),
+        (Some(max_coded_width), Some(max_coded_height)) => Some(VideoDecodeMaximumCodedExtent {
+            max_coded_width,
+            max_coded_height,
+        }),
+        (None, None) => None,
         (max_width, max_height) => {
             tracing::warn!(
                 ?max_width,
@@ -390,7 +391,7 @@ fn resolve_decoded_picture_buffer_dimension_caps(
                 "{processor_name}: max_width and max_height cap the DPB together or not at \
                  all; auto-detecting both from the first SPS"
             );
-            (0, 0)
+            None
         }
     }
 }
@@ -437,7 +438,7 @@ mod tests {
                 "H265Decoder",
                 &HardwareVideoDecoderConfig::default()
             ),
-            (0, 0)
+            None
         );
     }
 
@@ -449,7 +450,10 @@ mod tests {
         };
         assert_eq!(
             resolve_decoded_picture_buffer_dimension_caps("H265Decoder", &config),
-            (1920, 1080)
+            Some(VideoDecodeMaximumCodedExtent {
+                max_coded_width: 1920,
+                max_coded_height: 1080,
+            })
         );
     }
 
@@ -467,11 +471,11 @@ mod tests {
         };
         assert_eq!(
             resolve_decoded_picture_buffer_dimension_caps("H265Decoder", &width_only),
-            (0, 0)
+            None
         );
         assert_eq!(
             resolve_decoded_picture_buffer_dimension_caps("H265Decoder", &height_only),
-            (0, 0)
+            None
         );
     }
 
