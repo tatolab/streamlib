@@ -9,10 +9,10 @@ use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
 use super::SimpleDecoder;
+use crate::core::h265_sequence_parameter_set::H265LevelIdc;
 use crate::vulkan::video::nv_video_parser::vulkan_h264_decoder::{
     H264LevelIdc, H264PocType, PicParameterSet as H264Pps, SeqParameterSet as H264Sps,
 };
-use crate::vulkan::video::nv_video_parser::vulkan_h265_decoder as h265dec;
 use crate::vulkan::video::video_context::VideoError;
 use crate::vulkan::video::vk_video_decoder::vk_video_decoder::{
     VkParserDetectedVideoFormat, VkVideoDecoder,
@@ -593,19 +593,19 @@ impl SimpleDecoder {
             });
         let general_level_idc = parsed_sps.map_or(vk::video::STD_VIDEO_H265_LEVEL_IDC_4_1, |s| {
             match s.profile_tier_level.general_level_idc {
-                h265dec::H265LevelIdc::Level1_0 => vk::video::STD_VIDEO_H265_LEVEL_IDC_1_0,
-                h265dec::H265LevelIdc::Level2_0 => vk::video::STD_VIDEO_H265_LEVEL_IDC_2_0,
-                h265dec::H265LevelIdc::Level2_1 => vk::video::STD_VIDEO_H265_LEVEL_IDC_2_1,
-                h265dec::H265LevelIdc::Level3_0 => vk::video::STD_VIDEO_H265_LEVEL_IDC_3_0,
-                h265dec::H265LevelIdc::Level3_1 => vk::video::STD_VIDEO_H265_LEVEL_IDC_3_1,
-                h265dec::H265LevelIdc::Level4_0 => vk::video::STD_VIDEO_H265_LEVEL_IDC_4_0,
-                h265dec::H265LevelIdc::Level4_1 => vk::video::STD_VIDEO_H265_LEVEL_IDC_4_1,
-                h265dec::H265LevelIdc::Level5_0 => vk::video::STD_VIDEO_H265_LEVEL_IDC_5_0,
-                h265dec::H265LevelIdc::Level5_1 => vk::video::STD_VIDEO_H265_LEVEL_IDC_5_1,
-                h265dec::H265LevelIdc::Level5_2 => vk::video::STD_VIDEO_H265_LEVEL_IDC_5_2,
-                h265dec::H265LevelIdc::Level6_0 => vk::video::STD_VIDEO_H265_LEVEL_IDC_6_0,
-                h265dec::H265LevelIdc::Level6_1 => vk::video::STD_VIDEO_H265_LEVEL_IDC_6_1,
-                h265dec::H265LevelIdc::Level6_2 => vk::video::STD_VIDEO_H265_LEVEL_IDC_6_2,
+                H265LevelIdc::Level1_0 => vk::video::STD_VIDEO_H265_LEVEL_IDC_1_0,
+                H265LevelIdc::Level2_0 => vk::video::STD_VIDEO_H265_LEVEL_IDC_2_0,
+                H265LevelIdc::Level2_1 => vk::video::STD_VIDEO_H265_LEVEL_IDC_2_1,
+                H265LevelIdc::Level3_0 => vk::video::STD_VIDEO_H265_LEVEL_IDC_3_0,
+                H265LevelIdc::Level3_1 => vk::video::STD_VIDEO_H265_LEVEL_IDC_3_1,
+                H265LevelIdc::Level4_0 => vk::video::STD_VIDEO_H265_LEVEL_IDC_4_0,
+                H265LevelIdc::Level4_1 => vk::video::STD_VIDEO_H265_LEVEL_IDC_4_1,
+                H265LevelIdc::Level5_0 => vk::video::STD_VIDEO_H265_LEVEL_IDC_5_0,
+                H265LevelIdc::Level5_1 => vk::video::STD_VIDEO_H265_LEVEL_IDC_5_1,
+                H265LevelIdc::Level5_2 => vk::video::STD_VIDEO_H265_LEVEL_IDC_5_2,
+                H265LevelIdc::Level6_0 => vk::video::STD_VIDEO_H265_LEVEL_IDC_6_0,
+                H265LevelIdc::Level6_1 => vk::video::STD_VIDEO_H265_LEVEL_IDC_6_1,
+                H265LevelIdc::Level6_2 => vk::video::STD_VIDEO_H265_LEVEL_IDC_6_2,
                 _ => vk::video::STD_VIDEO_H265_LEVEL_IDC_4_1,
             }
         });

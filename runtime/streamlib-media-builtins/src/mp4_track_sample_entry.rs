@@ -11,12 +11,9 @@
 //! until every track has delivered a sync point.
 
 use mp4_atom::{Audio, Avc1, Avcc, AvccExt, Dops, FixedPoint, Hvc1, HvcCArray, Hvcc, Opus, Visual};
-use streamlib::sdk::engine::video::nv_video_parser::byte_stream_parser::remove_emulation_prevention_bytes;
-// The engine's own RBSP bit reader, which both walks below use: H.264 §9.1 and
-// H.265 §9.2 spell `u(n)` and `ue(v)` the same way, so the two differ only in
-// which syntax elements they name.
-use streamlib::sdk::engine::video::nv_video_parser::vulkan_h265_decoder::{
-    BitstreamReader as ParameterSetRbspBitstreamReader, VulkanH265Decoder,
+use streamlib::sdk::h265_sequence_parameter_set::parse_h265_sequence_parameter_set;
+use streamlib::sdk::nal_unit_raw_byte_sequence_payload::{
+    RbspBitstreamReader, remove_emulation_prevention_bytes,
 };
 
 use crate::opus_stream_layout::OpusStreamLayoutForSourceChannelCount;
@@ -353,9 +350,9 @@ pub fn build_hvc1_sample_entry(
     let profile_tier_level = &sequence_parameter_set_rbsp
         [H265_PROFILE_TIER_LEVEL_OFFSET_IN_SPS_RBSP..profile_tier_level_end];
 
-    let mut reader = ParameterSetRbspBitstreamReader::new(&sequence_parameter_set_rbsp);
+    let mut reader = RbspBitstreamReader::new(&sequence_parameter_set_rbsp);
     let parsed_sequence_parameter_set =
-        VulkanH265Decoder::parse_sps(&mut reader).ok_or_else(|| {
+        parse_h265_sequence_parameter_set(&mut reader).ok_or_else(|| {
             Mp4SampleEntryRefusal::SequenceParameterSetUnparsable {
                 inbound_link_name: inbound_link_name.to_string(),
             }
@@ -513,7 +510,7 @@ fn read_h264_chroma_trailer_fields(
     let sequence_parameter_set_rbsp = remove_emulation_prevention_bytes(
         &sequence_parameter_set[VideoCodecElementaryStream::H264.nal_unit_header_bytes()..],
     );
-    let mut reader = ParameterSetRbspBitstreamReader::new(&sequence_parameter_set_rbsp);
+    let mut reader = RbspBitstreamReader::new(&sequence_parameter_set_rbsp);
     let refused =
         |reason| Mp4SampleEntryRefusal::ChromaTrailerUnreadableFromTheSequenceParameterSet {
             inbound_link_name: inbound_link_name.to_string(),

@@ -280,7 +280,9 @@ which this delta does not touch.
   registers no `Mp4Sink` and records no MP4. The parser's Annex-B helpers are pure byte walking and
   nothing about them is Linux-bound; lifting them out from under the Vulkan Video tree would make
   the sink cross-platform again, and is backlog rather than milestone work. Recorded while
-  shipping #2355.
+  shipping #2355. *(superseded 2026-09-26 by #2414: the SPS reader, RBSP bit reader and
+  emulation-prevention removal live in the platform-free `core/h265_sequence_parameter_set.rs` and
+  `core/nal_unit_raw_byte_sequence_payload.rs`, and `Mp4Sink` registers and records on macOS.)*
 - REMOVED: tonic-build
   A macOS-only build dependency for a surface-share gRPC service that does not exist;
   `build.rs` names neither it nor protobuf.

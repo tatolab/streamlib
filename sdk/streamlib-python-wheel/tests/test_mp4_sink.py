@@ -118,7 +118,6 @@ def test_the_marker_class_cannot_be_instantiated():
         Mp4Sink()
 
 
-@pytest.mark.awaiting_macos_parity(issue=2414)
 def test_display_name_defaults_to_the_type_name(tmp_path):
     runtime = streamlib.Runtime()
     try:
@@ -130,7 +129,6 @@ def test_display_name_defaults_to_the_type_name(tmp_path):
         runtime.shutdown()
 
 
-@pytest.mark.awaiting_macos_parity(issue=2414)
 def test_two_encoders_wire_into_the_one_input_without_an_adapter(tmp_path):
     """Two producers into `tracks`, and no fan-in machinery between them.
 
@@ -155,7 +153,6 @@ def test_two_encoders_wire_into_the_one_input_without_an_adapter(tmp_path):
 # ---- a real recording (GPU) ------------------------------------------------
 
 
-@pytest.mark.awaiting_macos_parity(issue=2414)
 @pytest.mark.requires_gpu
 def test_two_sources_record_two_tracks_named_after_their_producers(
     start_app_under_test, mp4_inspect_binary, tmp_path
