@@ -2784,7 +2784,7 @@ mod tests {
     /// bytes, so the `hvcC` it yields passes through the RBSP walk.
     const H265_SEQUENCE_PARAMETER_SET: &[u8] = &[
         0x42, 0x01, 0x01, 0x01, 0x40, 0x00, 0x00, 0x03, 0x00, 0x90, 0x00, 0x00, 0x03, 0x00, 0x00,
-        0x03, 0x00, 0x5D, 0xA0, 0x0A, 0x08, 0x0F, 0x16, 0x59, 0x3B, 0x93, 0x04, 0x10,
+        0x03, 0x00, 0x5D, 0xA0, 0x0A, 0x08, 0x0F, 0x16, 0x59, 0x3B, 0x93, 0x08, 0x20,
     ];
     const H265_VIDEO_PARAMETER_SET: &[u8] = &[0x40, 0x01, 0x0C, 0x01, 0xFF, 0xFF];
     const H265_PICTURE_PARAMETER_SET: &[u8] = &[0x44, 0x01, 0xC0, 0x73];
@@ -2837,7 +2837,12 @@ mod tests {
                 )
                 .expect("accepted");
         }
+        assert_eq!(writer.why_a_track_stopped("camera/video"), None);
         writer.finish().expect("closes");
+        assert!(
+            file.windows(4).any(|window| window == b"hvcC"),
+            "the recording carries an H.265 track"
+        );
 
         let golden_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures/h265_and_opus_recording.mp4");
