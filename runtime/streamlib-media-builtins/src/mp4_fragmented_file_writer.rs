@@ -99,13 +99,6 @@ impl Mp4TrackMedia {
             Self::Audio => "soun",
         }
     }
-
-    fn video_codec_elementary_stream(self) -> Option<VideoCodecElementaryStream> {
-        match self {
-            Self::Video(codec) => Some(codec.into()),
-            Self::Audio => None,
-        }
-    }
 }
 
 /// One sample, already in the bytes the container carries.
@@ -435,9 +428,7 @@ impl<W: Write> Mp4FragmentedFileWriter<W> {
             return Ok(());
         }
 
-        let elementary_stream = media
-            .video_codec_elementary_stream()
-            .expect("a video track has an elementary stream");
+        let elementary_stream = VideoCodecElementaryStream::from(frame.codec);
         let split =
             length_prefix_annex_b_access_unit(&frame.annex_b_access_unit_bytes, elementary_stream);
 

@@ -45,7 +45,7 @@ const IMAGE_TO_NV12_BUFFER_PIXELS_PER_THREAD: (u32, u32) = (4, 2);
 
 /// The `(group_x, group_y)` a `width` × `height` image→NV12 dispatch
 /// covers the frame with.
-pub fn image_to_nv12_buffer_dispatch_group_counts(width: u32, height: u32) -> (u32, u32) {
+pub(crate) fn image_to_nv12_buffer_dispatch_group_counts(width: u32, height: u32) -> (u32, u32) {
     let (pixels_across, pixels_down) = IMAGE_TO_NV12_BUFFER_PIXELS_PER_THREAD;
     (
         width
@@ -243,7 +243,7 @@ impl VulkanColorConverter {
     /// Bind an RGBA texture source, an NV12 storage-buffer destination laid
     /// out as `dst_layout` describes, and the encoding push-constants on the
     /// image→NV12 kernel, and return it for the caller to dispatch over
-    /// [`image_to_nv12_buffer_dispatch_group_counts`] groups.
+    /// `image_to_nv12_buffer_dispatch_group_counts` groups.
     pub fn prepare_image_to_nv12_buffer(
         &self,
         src: &Texture,
@@ -410,17 +410,17 @@ fn refuse_an_nv12_destination_the_kernel_cannot_write(
              least {luma_row_bytes} for a {width}-wide frame"
         )));
     }
-    let needed = u64::from(plane0_offset_bytes)
+    let chroma_plane_end = u64::from(plane0_offset_bytes)
         + u64::from(plane1_offset_bytes)
         + u64::from(plane1_stride_bytes) * u64::from(height.div_ceil(2));
-    let luma_needed =
+    let luma_plane_end =
         u64::from(plane0_offset_bytes) + u64::from(plane0_stride_bytes) * u64::from(height);
-    if dst.byte_size() < needed.max(luma_needed) {
+    let needed = chroma_plane_end.max(luma_plane_end);
+    if dst.byte_size() < needed {
         return Err(Error::Configuration(format!(
             "color converter image→NV12: destination holds {} bytes but a {width}x{height} \
-             frame laid out as {dst_layout:?} needs {}",
+             frame laid out as {dst_layout:?} needs {needed}",
             dst.byte_size(),
-            needed.max(luma_needed)
         )));
     }
     Ok(())

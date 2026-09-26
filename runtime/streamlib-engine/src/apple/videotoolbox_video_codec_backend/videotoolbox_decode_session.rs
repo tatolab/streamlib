@@ -30,7 +30,9 @@ use objc2_video_toolbox::{
 };
 use parking_lot::Mutex;
 
-use super::{cf_dictionary_of_booleans, videotoolbox_call_failure};
+use super::{
+    adopt_created_core_foundation_object, cf_dictionary_of_booleans, videotoolbox_call_failure,
+};
 use crate::apple::biplanar_420_iosurface_to_pooled_rgba_conversion::Biplanar420IOSurfaceToPooledRgbaConversion;
 use crate::apple::core_video_pixel_buffer_color::core_video_pixel_buffer_color_to_h273_color_vui;
 use crate::apple::core_video_pixel_format_dictionary::ensure_core_video_pixel_format_dictionary_is_initialised;
@@ -46,26 +48,37 @@ use crate::core::context::{
 use crate::core::rhi::PixelFormat;
 use crate::core::{Error, Result};
 
+/// A decoded picture's pixel buffer, handed from the VideoToolbox thread
+/// that decoded it to the one that lands it in the pool.
+struct DecodedPixelBufferHandedAcrossThreads(CFRetained<CVPixelBuffer>);
+
+// SAFETY: CoreVideo's retain and release are thread-safe, and the buffer is
+// read only after the decode that wrote it has completed.
+unsafe impl Send for DecodedPixelBufferHandedAcrossThreads {}
+
 /// What the output callback hands the session: every image buffer decoded
 /// since the last collection, or the failure a frame answered.
 #[derive(Default)]
 struct DecodedImageBuffersAwaitingCollection {
-    decoded: Mutex<Vec<Result<CFRetained<CVPixelBuffer>>>>,
+    decoded: Mutex<Vec<Result<DecodedPixelBufferHandedAcrossThreads>>>,
 }
 
-/// A decompression session and the format description it was built from,
-/// driven from whichever thread holds them.
+/// A decompression session, driven from whichever thread holds it.
+struct VideoToolboxDecompressionSessionDrivenFromOneThreadAtATime(
+    CFRetained<VTDecompressionSession>,
+);
+
+// SAFETY: a decompression session may be driven from any thread, one call at
+// a time, which the `&mut` receiver of every decode call guarantees.
+unsafe impl Send for VideoToolboxDecompressionSessionDrivenFromOneThreadAtATime {}
+
+/// A decompression session and the format description it was built from.
 struct VideoToolboxDecompressionSessionForOneFormat {
-    decompression_session: CFRetained<VTDecompressionSession>,
+    decompression_session: VideoToolboxDecompressionSessionDrivenFromOneThreadAtATime,
     format_description: CFRetained<CMFormatDescription>,
     /// The callback's refcon, held until after the session is invalidated.
     awaiting_collection: Arc<DecodedImageBuffersAwaitingCollection>,
 }
-
-// SAFETY: a decompression session may be driven from any thread, one call at
-// a time, which the `&mut` receiver of every decode call guarantees; the
-// format description is immutable once created.
-unsafe impl Send for VideoToolboxDecompressionSessionForOneFormat {}
 
 impl Drop for VideoToolboxDecompressionSessionForOneFormat {
     fn drop(&mut self) {
@@ -73,8 +86,8 @@ impl Drop for VideoToolboxDecompressionSessionForOneFormat {
         // reach the callback; after the invalidate none runs, so the refcon
         // may drop with this struct.
         unsafe {
-            self.decompression_session.wait_for_asynchronous_frames();
-            self.decompression_session.invalidate();
+            self.decompression_session.0.wait_for_asynchronous_frames();
+            self.decompression_session.0.invalidate();
         }
     }
 }
@@ -91,8 +104,8 @@ struct PooledRgbaConversionForOneShape {
 pub(super) struct VideoToolboxDecodeSession {
     elementary_stream: VideoCodecElementaryStream,
     maximum_coded_extent: Option<VideoDecodeMaximumCodedExtent>,
-    /// The stream's parameter sets, each kind as the latest access unit that
-    /// carried it carried it.
+    /// The stream's parameter sets, each kind as the latest access unit to
+    /// carry that kind carried it.
     parameter_sets: ParameterSetsFromAnnexBAccessUnit,
     decompression_session_for_current_parameter_sets:
         Option<VideoToolboxDecompressionSessionForOneFormat>,
@@ -150,7 +163,7 @@ impl VideoToolboxDecodeSession {
 
     /// The session for the current parameter sets, opened if it is not yet;
     /// `None` until a complete set has arrived.
-    fn decompression_session_for_current_parameter_sets(
+    fn open_or_reuse_decompression_session_for_current_parameter_sets(
         &mut self,
     ) -> Result<Option<&VideoToolboxDecompressionSessionForOneFormat>> {
         if self
@@ -270,7 +283,9 @@ impl VideoDecodeSession for VideoToolboxDecodeSession {
         if split.length_prefixed_sample_bytes.is_empty() {
             return Ok(());
         }
-        let Some(session) = self.decompression_session_for_current_parameter_sets()? else {
+        let Some(session) =
+            self.open_or_reuse_decompression_session_for_current_parameter_sets()?
+        else {
             tracing::debug!(
                 elementary_stream = ?self.elementary_stream,
                 "an access unit arrived before the stream's parameter sets; skipping it"
@@ -286,7 +301,7 @@ impl VideoDecodeSession for VideoToolboxDecodeSession {
         // decompression flag the decode is synchronous, so the callback has
         // run for this frame by the wait below.
         let decode_os_status = unsafe {
-            session.decompression_session.decode_frame(
+            session.decompression_session.0.decode_frame(
                 &sample_buffer,
                 VTDecodeFrameFlags::empty(),
                 std::ptr::null_mut(),
@@ -294,7 +309,12 @@ impl VideoDecodeSession for VideoToolboxDecodeSession {
             )
         };
         // SAFETY: a live session.
-        unsafe { session.decompression_session.wait_for_asynchronous_frames() };
+        unsafe {
+            session
+                .decompression_session
+                .0
+                .wait_for_asynchronous_frames()
+        };
         let collected = std::mem::take(&mut *session.awaiting_collection.decoded.lock());
         if decode_os_status != 0 {
             return Err(videotoolbox_call_failure(
@@ -303,7 +323,7 @@ impl VideoDecodeSession for VideoToolboxDecodeSession {
             ));
         }
         for decoded_image_buffer in collected {
-            let decoded_image_buffer = decoded_image_buffer?;
+            let DecodedPixelBufferHandedAcrossThreads(decoded_image_buffer) = decoded_image_buffer?;
             decoded_pictures_in_completion_order
                 .push(self.land_in_the_pool(&decoded_image_buffer)?);
         }
@@ -331,30 +351,30 @@ fn format_description_from_parameter_sets(
     elementary_stream: VideoCodecElementaryStream,
     parameter_sets: &ParameterSetsFromAnnexBAccessUnit,
 ) -> Result<CFRetained<CMFormatDescription>> {
-    let in_order: Vec<&[u8]> = parameter_sets.in_configuration_record_order().collect();
-    let pointers: Vec<NonNull<u8>> = in_order
-        .iter()
-        .map(|parameter_set| NonNull::from(*parameter_set).cast::<u8>())
-        .collect();
-    let sizes: Vec<usize> = in_order
-        .iter()
-        .map(|parameter_set| parameter_set.len())
-        .collect();
+    let (pointers, sizes): (Vec<NonNull<u8>>, Vec<usize>) = parameter_sets
+        .in_configuration_record_order()
+        .map(|parameter_set| {
+            (
+                NonNull::from(parameter_set).cast::<u8>(),
+                parameter_set.len(),
+            )
+        })
+        .unzip();
     let nal_unit_header_length = c_int::from(NAL_UNIT_LENGTH_PREFIX_BYTES);
     let mut created_format_description: *const CMFormatDescription = std::ptr::null();
-    // SAFETY: `pointers` and `sizes` describe `in_order`, which outlives the
-    // call and holds at least the SPS and PPS a complete set carries, so
+    // SAFETY: `pointers` and `sizes` describe `parameter_sets`, which outlive
+    // the call and hold at least the SPS and PPS a complete set carries, so
     // neither vector is empty; the out-pointer is a stack slot.
     let create_os_status = unsafe {
-        let pointers = NonNull::new_unchecked(pointers.as_ptr().cast_mut());
-        let sizes = NonNull::new_unchecked(sizes.as_ptr().cast_mut());
+        let pointers_pointer = NonNull::new_unchecked(pointers.as_ptr().cast_mut());
+        let sizes_pointer = NonNull::new_unchecked(sizes.as_ptr().cast_mut());
         match elementary_stream {
             VideoCodecElementaryStream::H264 => {
                 CMVideoFormatDescriptionCreateFromH264ParameterSets(
                     None,
-                    in_order.len(),
-                    pointers,
-                    sizes,
+                    sizes.len(),
+                    pointers_pointer,
+                    sizes_pointer,
                     nal_unit_header_length,
                     NonNull::from(&mut created_format_description),
                 )
@@ -362,9 +382,9 @@ fn format_description_from_parameter_sets(
             VideoCodecElementaryStream::H265 => {
                 CMVideoFormatDescriptionCreateFromHEVCParameterSets(
                     None,
-                    in_order.len(),
-                    pointers,
-                    sizes,
+                    sizes.len(),
+                    pointers_pointer,
+                    sizes_pointer,
                     nal_unit_header_length,
                     None,
                     NonNull::from(&mut created_format_description),
@@ -372,13 +392,18 @@ fn format_description_from_parameter_sets(
             }
         }
     };
-    match NonNull::new(created_format_description.cast_mut()).filter(|_| create_os_status == 0) {
-        // SAFETY: a successful create hands back a +1 description.
-        Some(created) => Ok(unsafe { CFRetained::from_raw(created) }),
-        None => Err(Error::Configuration(format!(
-            "CoreMedia refused the {elementary_stream:?} stream's parameter sets (OSStatus \
-             {create_os_status})"
-        ))),
+    // SAFETY: what the create wrote, beside its status.
+    unsafe {
+        adopt_created_core_foundation_object(
+            created_format_description.cast_mut(),
+            create_os_status,
+            |create_os_status| {
+                Error::Configuration(format!(
+                    "CoreMedia refused the {elementary_stream:?} stream's parameter sets \
+                     (OSStatus {create_os_status})"
+                ))
+            },
+        )
     }
 }
 
@@ -420,17 +445,23 @@ fn open_decompression_session(
             NonNull::from(&mut created_decompression_session),
         )
     };
-    let Some(created_decompression_session) =
-        NonNull::new(created_decompression_session).filter(|_| create_os_status == 0)
-    else {
-        return Err(Error::GpuError(format!(
-            "VideoToolbox has no hardware {elementary_stream:?} decoder for this stream \
-             (VTDecompressionSessionCreate answered OSStatus {create_os_status})"
-        )));
+    // SAFETY: what `VTDecompressionSessionCreate` wrote, beside its status.
+    let decompression_session = unsafe {
+        adopt_created_core_foundation_object(
+            created_decompression_session,
+            create_os_status,
+            |create_os_status| {
+                Error::GpuError(format!(
+                    "VideoToolbox has no hardware {elementary_stream:?} decoder for this stream \
+                     (VTDecompressionSessionCreate answered OSStatus {create_os_status})"
+                ))
+            },
+        )?
     };
     Ok(VideoToolboxDecompressionSessionForOneFormat {
-        // SAFETY: a successful create hands back a +1 session.
-        decompression_session: unsafe { CFRetained::from_raw(created_decompression_session) },
+        decompression_session: VideoToolboxDecompressionSessionDrivenFromOneThreadAtATime(
+            decompression_session,
+        ),
         format_description,
         awaiting_collection,
     })
@@ -458,16 +489,13 @@ fn sample_buffer_of(
             NonNull::from(&mut created_block_buffer),
         )
     };
-    let Some(created_block_buffer) =
-        NonNull::new(created_block_buffer).filter(|_| allocate_os_status == 0)
-    else {
-        return Err(videotoolbox_call_failure(
-            "CMBlockBufferCreateWithMemoryBlock",
-            allocate_os_status,
-        ));
+    // SAFETY: what `CMBlockBufferCreateWithMemoryBlock` wrote, beside its
+    // status.
+    let block_buffer = unsafe {
+        adopt_created_core_foundation_object(created_block_buffer, allocate_os_status, |status| {
+            videotoolbox_call_failure("CMBlockBufferCreateWithMemoryBlock", status)
+        })?
     };
-    // SAFETY: a successful create hands back a +1 block buffer.
-    let block_buffer = unsafe { CFRetained::from_raw(created_block_buffer) };
     // SAFETY: the source is `byte_count` readable bytes, and the block buffer
     // was allocated `byte_count` bytes.
     let replace_os_status = unsafe {
@@ -500,13 +528,11 @@ fn sample_buffer_of(
             NonNull::from(&mut created_sample_buffer),
         )
     };
-    match NonNull::new(created_sample_buffer).filter(|_| create_os_status == 0) {
-        // SAFETY: a successful create hands back a +1 sample buffer.
-        Some(created) => Ok(unsafe { CFRetained::from_raw(created) }),
-        None => Err(videotoolbox_call_failure(
-            "CMSampleBufferCreateReady",
-            create_os_status,
-        )),
+    // SAFETY: what `CMSampleBufferCreateReady` wrote, beside its status.
+    unsafe {
+        adopt_created_core_foundation_object(created_sample_buffer, create_os_status, |status| {
+            videotoolbox_call_failure("CMSampleBufferCreateReady", status)
+        })
     }
 }
 
@@ -555,8 +581,11 @@ unsafe extern "C-unwind" fn decompression_output_callback(
         }
         // SAFETY: a live image buffer VideoToolbox handed the callback,
         // retained here to outlive it.
-        NonNull::new(image_buffer)
-            .map(|image_buffer| Ok(unsafe { CFRetained::retain(image_buffer) }))
+        NonNull::new(image_buffer).map(|image_buffer| {
+            Ok(DecodedPixelBufferHandedAcrossThreads(unsafe {
+                CFRetained::retain(image_buffer)
+            }))
+        })
     }))
     .unwrap_or_else(|_| {
         Some(Err(Error::GpuError(

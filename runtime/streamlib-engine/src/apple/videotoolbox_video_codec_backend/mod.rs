@@ -13,7 +13,9 @@
 mod videotoolbox_decode_session;
 mod videotoolbox_encode_session;
 
-use objc2_core_foundation::{CFBoolean, CFDictionary, CFRetained, CFString, CFType};
+use std::ptr::NonNull;
+
+use objc2_core_foundation::{CFBoolean, CFDictionary, CFRetained, CFString, CFType, Type};
 use objc2_core_media::{CMVideoCodecType, kCMVideoCodecType_H264, kCMVideoCodecType_HEVC};
 use objc2_video_toolbox::VTIsHardwareDecodeSupported;
 
@@ -107,6 +109,26 @@ fn core_media_codec_type_of(elementary_stream: VideoCodecElementaryStream) -> CM
 /// it answered.
 fn videotoolbox_call_failure(call: &str, os_status: i32) -> Error {
     Error::GpuError(format!("{call} failed with OSStatus {os_status}"))
+}
+
+/// Take ownership of the CoreFoundation object a create call wrote at +1, or
+/// answer the call's refusal when it reported a failing status or wrote none.
+/// `OSStatus` and `CVReturn` alike report success as 0.
+///
+/// # Safety
+///
+/// `created` is null or the +1 object written by the create call that
+/// answered `os_status`.
+unsafe fn adopt_created_core_foundation_object<CreatedObject: Type>(
+    created: *mut CreatedObject,
+    os_status: i32,
+    refusal: impl FnOnce(i32) -> Error,
+) -> Result<CFRetained<CreatedObject>> {
+    match NonNull::new(created).filter(|_| os_status == 0) {
+        // SAFETY: per the caller, the +1 object of a successful create.
+        Some(created) => Ok(unsafe { CFRetained::from_raw(created) }),
+        None => Err(refusal(os_status)),
+    }
 }
 
 /// A dictionary of `CFString` keys to boolean values, the shape the

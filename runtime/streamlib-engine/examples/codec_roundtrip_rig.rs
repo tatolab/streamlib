@@ -70,7 +70,8 @@ mod linux_rig {
     use serde::{Deserialize, Serialize};
     use streamlib::sdk::App;
     use streamlib::sdk::annex_b_access_unit::{
-        NAL_UNIT_LENGTH_PREFIX_BYTES, annex_b_access_unit_from_length_prefixed_sample,
+        NAL_UNIT_LENGTH_PREFIX_BYTES, NalUnitLengthPrefixWidth,
+        annex_b_access_unit_from_length_prefixed_sample,
     };
     use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
     use streamlib::sdk::descriptors::ProcessorClassImportPath;
@@ -697,7 +698,7 @@ mod linux_rig {
                                 annex_b_access_unit_from_length_prefixed_sample(
                                     sample_bytes,
                                     parameter_sets_this_sample_needs,
-                                    usize::from(NAL_UNIT_LENGTH_PREFIX_BYTES),
+                                    NalUnitLengthPrefixWidth::WRITTEN_BY_LENGTH_PREFIXING,
                                 )
                                 .map_err(|refusal| {
                                     Error::Runtime(format!(

@@ -22,7 +22,6 @@ use objc2_core_video::{
     CVPixelBufferPool, CVTransferFunctionGetStringForIntegerCodePoint,
     CVYCbCrMatrixGetStringForIntegerCodePoint, kCVPixelBufferHeightKey,
     kCVPixelBufferIOSurfacePropertiesKey, kCVPixelBufferPixelFormatTypeKey, kCVPixelBufferWidthKey,
-    kCVReturnSuccess,
 };
 use objc2_video_toolbox::{
     VTCompressionSession, VTEncodeInfoFlags, VTSessionSetProperty,
@@ -37,10 +36,15 @@ use objc2_video_toolbox::{
 };
 use parking_lot::Mutex;
 
-use super::{cf_dictionary_of_booleans, core_media_codec_type_of, videotoolbox_call_failure};
+use super::{
+    adopt_created_core_foundation_object, cf_dictionary_of_booleans, core_media_codec_type_of,
+    videotoolbox_call_failure,
+};
 use crate::apple::core_video_pixel_format_dictionary::ensure_core_video_pixel_format_dictionary_is_initialised;
 use crate::apple::imported_iosurface_storage_buffers_kept_for_recycling::ImportedIOSurfaceStorageBuffersKeptForRecycling;
-use crate::core::annex_b_access_unit::annex_b_access_unit_from_length_prefixed_sample;
+use crate::core::annex_b_access_unit::{
+    NalUnitLengthPrefixWidth, annex_b_access_unit_from_length_prefixed_sample,
+};
 use crate::core::color::{ColorSpaceKind, H273ColorVui, RangeId, ResolvedColorInfo};
 use crate::core::context::{
     EncodedVideoAccessUnitFromSession, GpuContextFullAccess, GpuContextLimitedAccess,
@@ -49,18 +53,12 @@ use crate::core::context::{
 };
 use crate::core::rhi::{PixelFormat, RhiColorConverter, VulkanLayout};
 use crate::core::{Error, Result};
-use crate::vulkan::rhi::{
-    RhiCommandRecorder, VulkanAccess, VulkanStage, image_to_nv12_buffer_dispatch_group_counts,
-};
+use crate::vulkan::rhi::{RhiCommandRecorder, VulkanAccess, VulkanStage};
 
 /// `kVTCompressionPropertyKey_Quality` when no bitrate is set, on
 /// VideoToolbox's `0.0`–`1.0` scale: the arm's balanced constant-quality
 /// point.
 const BALANCED_CONSTANT_QUALITY: f64 = 0.75;
-
-/// Nanoseconds per second: the timescale of every presentation stamp this arm
-/// hands VideoToolbox.
-const NANOSECONDS_TIMESCALE: i32 = 1_000_000_000;
 
 /// The layout a source texture is barriered into before the conversion
 /// samples it — the one every sampled descriptor the compute kernel binds
@@ -95,11 +93,11 @@ pub(super) struct VideoToolboxEncodeSession {
     coded_extent: (u32, u32),
     nv12_conversion: RgbaTextureToNv12PoolSurfaceConversion,
     /// The session's own frame clock: each frame's presentation stamp is its
-    /// index at the requested rate, so rate control sees a steady cadence
-    /// whatever stamps upstream publishes. The source's own stamp rides the
-    /// frame's refcon to the access unit.
+    /// index on a timescale of the requested rate, so rate control sees a
+    /// steady cadence whatever stamps upstream publishes. The source's own
+    /// stamp rides the frame's refcon to the access unit.
     frames_submitted: i64,
-    nanoseconds_per_frame: i64,
+    frames_per_second_timescale: i32,
     /// Resolves each source frame's surface id to the texture it names.
     gpu_context: GpuContextLimitedAccess,
 }
@@ -108,7 +106,7 @@ pub(super) struct VideoToolboxEncodeSession {
 /// surfaces.
 struct RgbaTextureToNv12PoolSurfaceConversion {
     color_converter: RhiColorConverter,
-    recorder: RhiCommandRecorder,
+    nv12_conversion_command_recorder: RhiCommandRecorder,
     /// The colour the pass converts into — what the parameter sets signal,
     /// with any axis they leave absent resolved the way a decoder resolves it.
     resolved_color: ResolvedColorInfo,
@@ -134,7 +132,8 @@ impl VideoToolboxEncodeSession {
         let nv12_conversion = RgbaTextureToNv12PoolSurfaceConversion {
             color_converter: gpu_context
                 .create_color_converter(PixelFormat::Rgba32, pool_pixel_format)?,
-            recorder: gpu_context.create_command_recorder("videotoolbox_encode_nv12_conversion")?,
+            nv12_conversion_command_recorder: gpu_context
+                .create_command_recorder("videotoolbox_encode_nv12_conversion")?,
             resolved_color,
             imported_pool_surfaces: ImportedIOSurfaceStorageBuffersKeptForRecycling::default(),
         };
@@ -147,6 +146,13 @@ impl VideoToolboxEncodeSession {
             unsafe { kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder },
             true,
         )]);
+        let frames_per_second_timescale =
+            i32::try_from(request.frames_per_second.max(1)).map_err(|_| {
+                Error::Configuration(format!(
+                    "{} frames per second is past any rate VideoToolbox times",
+                    request.frames_per_second
+                ))
+            })?;
         let (width, height) = (
             i32::try_from(request.width).map_err(|_| {
                 Error::Configuration(format!("{} is too wide to encode", request.width))
@@ -177,20 +183,24 @@ impl VideoToolboxEncodeSession {
                 NonNull::from(&mut created_compression_session),
             )
         };
-        let Some(created_compression_session) =
-            NonNull::new(created_compression_session).filter(|_| create_os_status == 0)
-        else {
-            return Err(Error::GpuError(format!(
-                "VideoToolbox has no hardware {:?} encoder for {}x{} (VTCompressionSessionCreate \
-                 answered OSStatus {create_os_status})",
-                request.elementary_stream, request.width, request.height
-            )));
+        // SAFETY: what `VTCompressionSessionCreate` wrote, beside its status.
+        let compression_session = unsafe {
+            adopt_created_core_foundation_object(
+                created_compression_session,
+                create_os_status,
+                |create_os_status| {
+                    Error::GpuError(format!(
+                        "VideoToolbox has no hardware {:?} encoder for {}x{} \
+                         (VTCompressionSessionCreate answered OSStatus {create_os_status})",
+                        request.elementary_stream, request.width, request.height
+                    ))
+                },
+            )?
         };
         let session = Self {
-            // SAFETY: a successful create hands back a +1 session.
-            compression_session: VideoToolboxCompressionSessionDrivenFromOneThreadAtATime(unsafe {
-                CFRetained::from_raw(created_compression_session)
-            }),
+            compression_session: VideoToolboxCompressionSessionDrivenFromOneThreadAtATime(
+                compression_session,
+            ),
             awaiting_collection,
             coded_extent: coded_extent_videotoolbox_codes(
                 request.elementary_stream,
@@ -199,8 +209,7 @@ impl VideoToolboxEncodeSession {
             ),
             nv12_conversion,
             frames_submitted: 0,
-            nanoseconds_per_frame: i64::from(NANOSECONDS_TIMESCALE)
-                / i64::from(request.frames_per_second.max(1)),
+            frames_per_second_timescale,
             gpu_context: gpu_context.host_inner().limited_access(),
         };
         session.set_the_streaming_shape_and_rate(request)?;
@@ -254,8 +263,11 @@ impl VideoToolboxEncodeSession {
             &conversion.resolved_color,
         )?;
         let (dispatch_group_x, dispatch_group_y) =
-            image_to_nv12_buffer_dispatch_group_counts(source.width, source.height);
-        let recorder = &mut conversion.recorder;
+            RhiColorConverter::image_to_nv12_buffer_dispatch_group_counts(
+                source.width,
+                source.height,
+            );
+        let recorder = &mut conversion.nv12_conversion_command_recorder;
         recorder.begin()?;
         // A failure between `begin()` and the submit leaves the recorder mid-
         // recording; abandoning it is what lets the next frame begin again.
@@ -401,23 +413,23 @@ impl VideoEncodeSession for VideoToolboxEncodeSession {
     ) -> Result<Vec<EncodedVideoAccessUnitFromSession>> {
         let pool_pixel_buffer = self.pool_surface_holding(source)?;
         let presentation_time_stamp = CMTime {
-            value: self.frames_submitted * self.nanoseconds_per_frame,
-            timescale: NANOSECONDS_TIMESCALE,
+            value: self.frames_submitted,
+            timescale: self.frames_per_second_timescale,
             flags: CMTimeFlags::Valid,
             epoch: 0,
         };
         self.frames_submitted += 1;
 
         // SAFETY: a live session and pool pixel buffer; no per-frame
-        // properties or info out-pointer. The frame refcon is the source's
-        // stamp as a pointer-sized integer, never dereferenced.
+        // properties or info out-pointer. The frame refcon carries the
+        // source's stamp and is never dereferenced.
         let encode_os_status = unsafe {
             self.compression_session.0.encode_frame(
                 &pool_pixel_buffer,
                 presentation_time_stamp,
                 kCMTimeInvalid,
                 None,
-                source.timestamp_ns as isize as *mut c_void,
+                frame_ref_con_carrying_source_timestamp(source.timestamp_ns),
                 std::ptr::null_mut(),
             )
         };
@@ -514,14 +526,35 @@ fn pixel_buffer_from_pool(pool: &CVPixelBufferPool) -> Result<CFRetained<CVPixel
     let create_cv_return = unsafe {
         CVPixelBufferPool::create_pixel_buffer(None, pool, NonNull::from(&mut created_pixel_buffer))
     };
-    match NonNull::new(created_pixel_buffer).filter(|_| create_cv_return == kCVReturnSuccess) {
-        // SAFETY: a successful create hands back a +1 buffer.
-        Some(created_pixel_buffer) => Ok(unsafe { CFRetained::from_raw(created_pixel_buffer) }),
-        None => Err(Error::GpuError(format!(
-            "the compression session's pool handed out no pixel buffer (CVReturn \
-             {create_cv_return})"
-        ))),
+    // SAFETY: what `CVPixelBufferPoolCreatePixelBuffer` wrote, beside its
+    // status.
+    unsafe {
+        adopt_created_core_foundation_object(
+            created_pixel_buffer,
+            create_cv_return,
+            |create_cv_return| {
+                Error::GpuError(format!(
+                    "the compression session's pool handed out no pixel buffer (CVReturn \
+                     {create_cv_return})"
+                ))
+            },
+        )
     }
+}
+
+// The frame refcon carries an `i64` stamp as a pointer-sized integer.
+const _: () = assert!(size_of::<*mut c_void>() >= size_of::<i64>());
+
+/// The frame refcon that carries `source_timestamp_ns` through a compression
+/// session to its access unit's callback; never dereferenced.
+fn frame_ref_con_carrying_source_timestamp(source_timestamp_ns: i64) -> *mut c_void {
+    std::ptr::without_provenance_mut(source_timestamp_ns as isize as usize)
+}
+
+/// The source stamp [`frame_ref_con_carrying_source_timestamp`] put in a frame
+/// refcon.
+fn source_timestamp_carried_by_frame_ref_con(frame_ref_con: *mut c_void) -> i64 {
+    frame_ref_con.addr() as isize as i64
 }
 
 /// Runs on a VideoToolbox thread, or on the caller's inside
@@ -539,7 +572,7 @@ unsafe extern "C-unwind" fn compression_output_callback(
     // session is invalidated, which happens before the session drops it.
     let awaiting_collection =
         unsafe { &*output_callback_ref_con.cast::<CompressedAccessUnitsAwaitingCollection>() };
-    let source_timestamp_ns = source_frame_ref_con as isize as i64;
+    let source_timestamp_ns = source_timestamp_carried_by_frame_ref_con(source_frame_ref_con);
     let completed_access_unit = catch_unwind(AssertUnwindSafe(|| {
         if os_status != 0 {
             return Some(Err(videotoolbox_call_failure(
@@ -603,7 +636,7 @@ fn annex_b_access_unit_from_compressed_sample(
     let annex_b_access_unit_bytes = annex_b_access_unit_from_length_prefixed_sample(
         &length_prefixed_sample,
         &parameter_sets_in_front,
-        parameter_sets_of_this_stream.length_prefix_bytes,
+        parameter_sets_of_this_stream.length_prefix_width,
     )
     .map_err(|refusal| Error::GpuError(format!("VideoToolbox's sample: {refusal}")))?;
     Ok(EncodedVideoAccessUnitFromSession {
@@ -617,11 +650,13 @@ fn bytes_of_block_buffer(block_buffer: &CMBlockBuffer) -> Result<Vec<u8>> {
     // SAFETY: a live block buffer.
     let byte_count = unsafe { block_buffer.data_length() };
     let mut bytes = vec![0u8; byte_count];
-    let Some(destination) = NonNull::new(bytes.as_mut_ptr()).filter(|_| byte_count > 0) else {
+    if byte_count == 0 {
         return Ok(bytes);
+    }
+    // SAFETY: the destination is `byte_count` writable bytes of a live Vec.
+    let copy_os_status = unsafe {
+        block_buffer.copy_data_bytes(0, byte_count, NonNull::from(bytes.as_mut_slice()).cast())
     };
-    // SAFETY: the destination is `byte_count` writable bytes.
-    let copy_os_status = unsafe { block_buffer.copy_data_bytes(0, byte_count, destination.cast()) };
     if copy_os_status != 0 {
         return Err(videotoolbox_call_failure(
             "CMBlockBufferCopyDataBytes",
@@ -637,7 +672,7 @@ struct ParameterSetsOfAFormatDescription<'a> {
     format_description: &'a CMFormatDescription,
     parameter_set_count: usize,
     /// The width of the length prefix the description's samples carry.
-    length_prefix_bytes: usize,
+    length_prefix_width: NalUnitLengthPrefixWidth,
 }
 
 impl<'a> ParameterSetsOfAFormatDescription<'a> {
@@ -647,19 +682,16 @@ impl<'a> ParameterSetsOfAFormatDescription<'a> {
         elementary_stream: VideoCodecElementaryStream,
         format_description: &'a CMFormatDescription,
     ) -> Result<Self> {
-        let mut described = Self {
+        let (mut parameter_set_count, mut nal_unit_header_length) = (0usize, 0 as c_int);
+        let count_os_status = read_format_description_parameter_set(
             elementary_stream,
             format_description,
-            parameter_set_count: 0,
-            length_prefix_bytes: 0,
-        };
-        let (mut parameter_set_count, mut nal_unit_header_length) = (0usize, 0 as c_int);
-        let count_os_status = described.parameter_set_at_index(
             0,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            &mut parameter_set_count,
-            &mut nal_unit_header_length,
+            FormatDescriptionParameterSetOutputs {
+                parameter_set_count: Some(&mut parameter_set_count),
+                nal_unit_header_length: Some(&mut nal_unit_header_length),
+                ..FormatDescriptionParameterSetOutputs::default()
+            },
         );
         if count_os_status != 0 {
             return Err(videotoolbox_call_failure(
@@ -667,13 +699,16 @@ impl<'a> ParameterSetsOfAFormatDescription<'a> {
                 count_os_status,
             ));
         }
-        described.parameter_set_count = parameter_set_count;
-        described.length_prefix_bytes = usize::try_from(nal_unit_header_length).map_err(|_| {
-            Error::GpuError(format!(
-                "the format description states a {nal_unit_header_length}-byte NAL length prefix"
-            ))
-        })?;
-        Ok(described)
+        let length_prefix_width =
+            NalUnitLengthPrefixWidth::try_from(i64::from(nal_unit_header_length)).map_err(
+                |refusal| Error::GpuError(format!("VideoToolbox's format description: {refusal}")),
+            )?;
+        Ok(Self {
+            elementary_stream,
+            format_description,
+            parameter_set_count,
+            length_prefix_width,
+        })
     }
 
     /// Every parameter set, in the description's order.
@@ -681,18 +716,27 @@ impl<'a> ParameterSetsOfAFormatDescription<'a> {
         (0..self.parameter_set_count)
             .map(|index| {
                 let (mut pointer, mut size) = (std::ptr::null::<u8>(), 0usize);
-                let read_os_status = self.parameter_set_at_index(
+                let read_os_status = read_format_description_parameter_set(
+                    self.elementary_stream,
+                    self.format_description,
                     index,
-                    &mut pointer,
-                    &mut size,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
+                    FormatDescriptionParameterSetOutputs {
+                        parameter_set_pointer: Some(&mut pointer),
+                        parameter_set_size: Some(&mut size),
+                        ..FormatDescriptionParameterSetOutputs::default()
+                    },
                 );
-                if read_os_status != 0 || pointer.is_null() {
+                if read_os_status != 0 {
                     return Err(videotoolbox_call_failure(
                         "reading one of the format description's parameter sets",
                         read_os_status,
                     ));
+                }
+                if pointer.is_null() {
+                    return Err(Error::GpuError(format!(
+                        "the format description's parameter set {index} of {} has no bytes",
+                        self.parameter_set_count
+                    )));
                 }
                 // SAFETY: `size` bytes of the format description's own
                 // storage, alive while the description is.
@@ -700,40 +744,55 @@ impl<'a> ParameterSetsOfAFormatDescription<'a> {
             })
             .collect()
     }
+}
 
-    fn parameter_set_at_index(
-        &self,
-        index: usize,
-        pointer_out: *mut *const u8,
-        size_out: *mut usize,
-        count_out: *mut usize,
-        header_length_out: *mut c_int,
-    ) -> i32 {
-        // SAFETY: a live format description; every out-pointer is a valid
-        // slot or null, which the call documents as "not wanted".
-        unsafe {
-            match self.elementary_stream {
-                VideoCodecElementaryStream::H264 => {
-                    CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
-                        self.format_description,
-                        index,
-                        pointer_out,
-                        size_out,
-                        count_out,
-                        header_length_out,
-                    )
-                }
-                VideoCodecElementaryStream::H265 => {
-                    CMVideoFormatDescriptionGetHEVCParameterSetAtIndex(
-                        self.format_description,
-                        index,
-                        pointer_out,
-                        size_out,
-                        count_out,
-                        header_length_out,
-                    )
-                }
-            }
+/// What one read of a format description's parameter sets writes back; an
+/// output left `None` is not asked for.
+#[derive(Default)]
+struct FormatDescriptionParameterSetOutputs<'a> {
+    parameter_set_pointer: Option<&'a mut *const u8>,
+    parameter_set_size: Option<&'a mut usize>,
+    parameter_set_count: Option<&'a mut usize>,
+    nal_unit_header_length: Option<&'a mut c_int>,
+}
+
+/// Read parameter set `index` of `format_description` into whichever of
+/// `outputs` are asked for, answering the call's `OSStatus`.
+fn read_format_description_parameter_set(
+    elementary_stream: VideoCodecElementaryStream,
+    format_description: &CMFormatDescription,
+    index: usize,
+    outputs: FormatDescriptionParameterSetOutputs<'_>,
+) -> i32 {
+    fn slot_or_null<Slot>(slot: Option<&mut Slot>) -> *mut Slot {
+        slot.map_or(std::ptr::null_mut(), std::ptr::from_mut)
+    }
+    let (pointer_out, size_out, count_out, header_length_out) = (
+        slot_or_null(outputs.parameter_set_pointer),
+        slot_or_null(outputs.parameter_set_size),
+        slot_or_null(outputs.parameter_set_count),
+        slot_or_null(outputs.nal_unit_header_length),
+    );
+    // SAFETY: a live format description; every out-pointer is a live
+    // exclusive borrow or null, which the call documents as "not wanted".
+    unsafe {
+        match elementary_stream {
+            VideoCodecElementaryStream::H264 => CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
+                format_description,
+                index,
+                pointer_out,
+                size_out,
+                count_out,
+                header_length_out,
+            ),
+            VideoCodecElementaryStream::H265 => CMVideoFormatDescriptionGetHEVCParameterSetAtIndex(
+                format_description,
+                index,
+                pointer_out,
+                size_out,
+                count_out,
+                header_length_out,
+            ),
         }
     }
 }
@@ -785,9 +844,14 @@ mod tests {
     }
 
     #[test]
-    fn a_negative_source_stamp_survives_the_frame_refcon() {
-        let source_timestamp_ns: i64 = -1_234_567_890_123;
-        let frame_ref_con = source_timestamp_ns as isize as *mut c_void;
-        assert_eq!(frame_ref_con as isize as i64, source_timestamp_ns);
+    fn every_source_stamp_comes_back_out_of_its_frame_refcon() {
+        for source_timestamp_ns in [0, 1, -1_234_567_890_123, i64::MIN, i64::MAX] {
+            assert_eq!(
+                source_timestamp_carried_by_frame_ref_con(frame_ref_con_carrying_source_timestamp(
+                    source_timestamp_ns
+                )),
+                source_timestamp_ns
+            );
+        }
     }
 }

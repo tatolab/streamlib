@@ -143,10 +143,8 @@ mod vulkan_texture_readback;
 pub use vulkan_texture_readback::VulkanTextureReadback;
 
 mod vulkan_color_converter;
-pub use vulkan_color_converter::{
-    COLOR_CONVERTER_WORKGROUP_SIZE, VulkanColorConverter,
-    image_to_nv12_buffer_dispatch_group_counts,
-};
+pub(crate) use vulkan_color_converter::image_to_nv12_buffer_dispatch_group_counts;
+pub use vulkan_color_converter::{COLOR_CONVERTER_WORKGROUP_SIZE, VulkanColorConverter};
 
 #[cfg(target_os = "macos")]
 mod vulkan_imported_iosurface_storage_buffer;

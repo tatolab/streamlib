@@ -542,13 +542,20 @@ impl RhiColorConverter {
             .prepare_image_to_yuyv_buffer(src, dst, dst_stride_bytes, info)
     }
 
+    /// The `(group_x, group_y)` a `width` × `height` dispatch of the kernel
+    /// [`Self::prepare_image_to_nv12_buffer`] returns covers the frame with.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn image_to_nv12_buffer_dispatch_group_counts(width: u32, height: u32) -> (u32, u32) {
+        crate::vulkan::rhi::image_to_nv12_buffer_dispatch_group_counts(width, height)
+    }
+
     /// The NV12 sibling of [`Self::prepare_image_to_yuyv_buffer`]: bind an
     /// RGBA texture source (`SHADER_READ_ONLY_OPTIMAL` when the dispatch
     /// runs), an NV12 storage-buffer destination laid out as `dst_layout`
     /// describes — both strides and the chroma offset multiples of 4, each
     /// luma row holding the width rounded up to 4 — and the encoding
-    /// push-constants. Dispatch it over `⌈width/4 / 16⌉ × ⌈height/2 / 16⌉`
-    /// groups — one thread per 4×2 block.
+    /// push-constants. Dispatch it over
+    /// [`Self::image_to_nv12_buffer_dispatch_group_counts`] groups.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn prepare_image_to_nv12_buffer(
         &self,

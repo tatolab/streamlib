@@ -5,9 +5,7 @@
 //! opens every NAL unit of an H.264 / H.265 byte stream.
 //!
 //! A port of the scalar fallback of NVIDIA's `NvVideoParser`
-//! (`NextStartCodeC.cpp`), kept platform-free so every walk of the seam's
-//! Annex-B wire shares it: the Vulkan Video parser, the VideoToolbox arm and
-//! the MP4 muxer.
+//! (`NextStartCodeC.cpp`).
 
 /// Result returned by [`StartCodeFinder::next_start_code`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

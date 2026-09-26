@@ -14,8 +14,6 @@
 //! [`annex_b_access_unit_from_length_prefixed_sample`] is that walk run
 //! backwards. The two live together so a round-trip test can hold them to
 //! each other.
-//!
-//! The start-code scan is the engine's own [`StartCodeFinder`].
 
 use crate::core::annex_b_start_code_finder::StartCodeFinder;
 use crate::core::context::VideoCodecElementaryStream;
@@ -36,6 +34,57 @@ const H265_NAL_UNIT_TYPE_PICTURE_PARAMETER_SET: u8 = 34;
 /// `avcC.length_size`, `hvcC.length_size_minus_one`, a VideoToolbox format
 /// description — must declare the same width, or every sample mis-parses.
 pub const NAL_UNIT_LENGTH_PREFIX_BYTES: u8 = 4;
+
+// The writer below emits each length as a `u32`.
+const _: () = assert!(NAL_UNIT_LENGTH_PREFIX_BYTES as usize == size_of::<u32>());
+
+/// The width of the big-endian length in front of each NAL unit of a
+/// length-prefixed sample: 1, 2 or 4 bytes, the only widths ISO/IEC 14496-15's
+/// `lengthSizeMinusOne` can state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NalUnitLengthPrefixWidth(u8);
+
+impl NalUnitLengthPrefixWidth {
+    /// The width [`length_prefix_annex_b_access_unit`] writes.
+    pub const WRITTEN_BY_LENGTH_PREFIXING: Self = Self(NAL_UNIT_LENGTH_PREFIX_BYTES);
+
+    /// The width in bytes.
+    pub fn byte_count(self) -> usize {
+        usize::from(self.0)
+    }
+}
+
+/// A declared length-prefix width no length-prefixed sample can carry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NalUnitLengthPrefixWidthIsNotOneTwoOrFourBytes {
+    /// The width that was declared.
+    pub declared_byte_count: i64,
+}
+
+impl std::error::Error for NalUnitLengthPrefixWidthIsNotOneTwoOrFourBytes {}
+
+impl std::fmt::Display for NalUnitLengthPrefixWidthIsNotOneTwoOrFourBytes {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "a {}-byte NAL unit length prefix is none ISO/IEC 14496-15 allows (1, 2 or 4)",
+            self.declared_byte_count
+        )
+    }
+}
+
+impl TryFrom<i64> for NalUnitLengthPrefixWidth {
+    type Error = NalUnitLengthPrefixWidthIsNotOneTwoOrFourBytes;
+
+    fn try_from(declared_byte_count: i64) -> Result<Self, Self::Error> {
+        match declared_byte_count {
+            1 | 2 | 4 => Ok(Self(declared_byte_count as u8)),
+            _ => Err(NalUnitLengthPrefixWidthIsNotOneTwoOrFourBytes {
+                declared_byte_count,
+            }),
+        }
+    }
+}
 
 /// The Annex-B start code each NAL unit carries outside a container. Three
 /// and four bytes are both legal and a decoder reads either (ITU-T H.264
@@ -113,9 +162,7 @@ impl ParameterSetsFromAnnexBAccessUnit {
             }
         }
     }
-}
 
-impl ParameterSetsFromAnnexBAccessUnit {
     /// Every set, in the order a configuration record lists them and a
     /// decoder takes them: VPS, then SPS, then PPS.
     pub fn in_configuration_record_order(&self) -> impl Iterator<Item = &[u8]> {
@@ -260,14 +307,14 @@ impl std::fmt::Display for SampleIsNotLengthPrefixedNalUnits {
 /// was made from, with `parameter_set_nal_units` back in front of it.
 ///
 /// The inverse of [`length_prefix_annex_b_access_unit`], reading each NAL
-/// unit behind a `length_prefix_bytes`-wide length. A sync sample on its own
+/// unit behind a `length_prefix_width`-wide length. A sync sample on its own
 /// decodes nothing — its parameter sets were kept out in the sample entry or
 /// format description — so a reader passes those sets here and a non-sync
 /// sample passes none, which is what the encoder emitted.
 pub fn annex_b_access_unit_from_length_prefixed_sample<ParameterSet: AsRef<[u8]>>(
     length_prefixed_sample_bytes: &[u8],
     parameter_set_nal_units: &[ParameterSet],
-    length_prefix_bytes: usize,
+    length_prefix_width: NalUnitLengthPrefixWidth,
 ) -> Result<Vec<u8>, SampleIsNotLengthPrefixedNalUnits> {
     let mut annex_b_access_unit_bytes = Vec::with_capacity(length_prefixed_sample_bytes.len());
     for parameter_set in parameter_set_nal_units {
@@ -275,13 +322,13 @@ pub fn annex_b_access_unit_from_length_prefixed_sample<ParameterSet: AsRef<[u8]>
         annex_b_access_unit_bytes.extend_from_slice(parameter_set.as_ref());
     }
 
-    let prefix_bytes = length_prefix_bytes;
+    let prefix_bytes = length_prefix_width.byte_count();
     let mut next_nal_unit_start_in_sample = 0usize;
     while next_nal_unit_start_in_sample < length_prefixed_sample_bytes.len() {
         let ran_out = || SampleIsNotLengthPrefixedNalUnits {
             stopped_at_byte: next_nal_unit_start_in_sample,
             sample_bytes: length_prefixed_sample_bytes.len(),
-            length_prefix_bytes,
+            length_prefix_bytes: prefix_bytes,
         };
         let length_prefix = length_prefixed_sample_bytes
             .get(next_nal_unit_start_in_sample..next_nal_unit_start_in_sample + prefix_bytes)
@@ -471,7 +518,7 @@ mod tests {
         let rejoined = annex_b_access_unit_from_length_prefixed_sample(
             &split.length_prefixed_sample_bytes,
             &parameter_sets,
-            usize::from(NAL_UNIT_LENGTH_PREFIX_BYTES),
+            NalUnitLengthPrefixWidth::WRITTEN_BY_LENGTH_PREFIXING,
         )
         .expect("the sample the splitter just wrote is length-prefixed");
         assert_eq!(
@@ -510,7 +557,7 @@ mod tests {
         let rejoined = annex_b_access_unit_from_length_prefixed_sample(
             &split.length_prefixed_sample_bytes,
             &parameter_sets,
-            usize::from(NAL_UNIT_LENGTH_PREFIX_BYTES),
+            NalUnitLengthPrefixWidth::WRITTEN_BY_LENGTH_PREFIXING,
         )
         .expect("the sample the splitter just wrote is length-prefixed");
         assert_eq!(rejoined, published);
@@ -532,7 +579,7 @@ mod tests {
         let rejoined = annex_b_access_unit_from_length_prefixed_sample::<Vec<u8>>(
             &split.length_prefixed_sample_bytes,
             &[],
-            usize::from(NAL_UNIT_LENGTH_PREFIX_BYTES),
+            NalUnitLengthPrefixWidth::WRITTEN_BY_LENGTH_PREFIXING,
         )
         .expect("the sample the splitter just wrote is length-prefixed");
         assert_eq!(rejoined, published);
@@ -545,9 +592,12 @@ mod tests {
         // codec's.
         let malformed_sample = [0x00, 0x00, 0x10, 0x00, 0x65, 0x88];
 
-        let refusal =
-            annex_b_access_unit_from_length_prefixed_sample::<Vec<u8>>(&malformed_sample, &[], 4)
-                .expect_err("a prefix past the end of the sample describes no NAL unit");
+        let refusal = annex_b_access_unit_from_length_prefixed_sample::<Vec<u8>>(
+            &malformed_sample,
+            &[],
+            NalUnitLengthPrefixWidth::WRITTEN_BY_LENGTH_PREFIXING,
+        )
+        .expect_err("a prefix past the end of the sample describes no NAL unit");
         assert_eq!(refusal.sample_bytes, malformed_sample.len());
         assert_eq!(refusal.stopped_at_byte, 0);
     }
@@ -562,9 +612,45 @@ mod tests {
         let refusal = annex_b_access_unit_from_length_prefixed_sample::<Vec<u8>>(
             &one_nal_unit_then_a_stub,
             &[],
-            4,
+            NalUnitLengthPrefixWidth::WRITTEN_BY_LENGTH_PREFIXING,
         )
         .expect_err("a sample cannot end part way through a length prefix");
         assert_eq!(refusal.stopped_at_byte, 6);
+    }
+
+    #[test]
+    fn only_one_two_and_four_byte_length_prefixes_are_widths() {
+        for declared in [1, 2, 4] {
+            assert_eq!(
+                NalUnitLengthPrefixWidth::try_from(declared)
+                    .expect("a width 14496-15 allows")
+                    .byte_count(),
+                declared as usize
+            );
+        }
+        for declared in [-1, 0, 3, 5, 8] {
+            assert_eq!(
+                NalUnitLengthPrefixWidth::try_from(declared),
+                Err(NalUnitLengthPrefixWidthIsNotOneTwoOrFourBytes {
+                    declared_byte_count: declared
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn a_two_byte_length_prefix_reads_as_wide_as_it_is() {
+        let coded_slice: &[u8] = &[0x65, 0x88, 0x84];
+        let mut two_byte_prefixed = (coded_slice.len() as u16).to_be_bytes().to_vec();
+        two_byte_prefixed.extend_from_slice(coded_slice);
+        assert_eq!(
+            annex_b_access_unit_from_length_prefixed_sample::<Vec<u8>>(
+                &two_byte_prefixed,
+                &[],
+                NalUnitLengthPrefixWidth::try_from(2).expect("two bytes is a width"),
+            )
+            .expect("a two-byte-prefixed sample"),
+            annex_b(&[coded_slice])
+        );
     }
 }
