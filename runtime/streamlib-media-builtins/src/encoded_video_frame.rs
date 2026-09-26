@@ -26,6 +26,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::video_frame::ColorInfo;
+use streamlib::sdk::context::VideoCodecElementaryStream;
 use streamlib::sdk::schemars::JsonSchema;
 
 /// Elementary-stream identity of an encoded frame's bitstream, spelled the
@@ -37,6 +38,15 @@ pub enum EncodedVideoCodec {
     H264,
     #[serde(rename = "h265")]
     H265,
+}
+
+impl From<EncodedVideoCodec> for VideoCodecElementaryStream {
+    fn from(codec: EncodedVideoCodec) -> Self {
+        match codec {
+            EncodedVideoCodec::H264 => Self::H264,
+            EncodedVideoCodec::H265 => Self::H265,
+        }
+    }
 }
 
 impl EncodedVideoCodec {

@@ -22,6 +22,8 @@ pub(crate) mod test_support;
 // Customer-facing modules. Module-path stays `pub` so consumers
 // can reach `streamlib::sdk::<name>` via the SDK's per-module
 // re-exports.
+pub mod annex_b_access_unit;
+pub mod annex_b_start_code_finder;
 pub mod app_directory;
 pub mod color;
 pub mod context;

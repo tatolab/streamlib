@@ -100,3 +100,31 @@ vec3 convert_color(
     }
     return rgb;
 }
+
+// Closed-form `rgb_normalized → ycbcr_byte` pipeline, the inverse of
+// `convert_color`:
+//   1. If `FLAG_APPLY_TRANSFER` is set, run the transfer-in EOTF then
+//      transfer-out OETF closed-form on each channel.
+//   2. Clamp to `[0, 1]` and scale to the byte domain.
+//   3. Multiply by the (row-major) RGB→YCbCr 3×3 matrix, add
+//      `range_offset`, and clamp to `[0, 255]`.
+vec3 convert_color_to_ycbcr_bytes(
+    vec3 rgb,
+    vec3 row0,
+    vec3 row1,
+    vec3 row2,
+    vec3 range_offset,
+    uint transfer_in,
+    uint transfer_out,
+    uint flags
+) {
+    if ((flags & FLAG_APPLY_TRANSFER) != 0u) {
+        rgb.r = transfer_from_linear(transfer_out, transfer_to_linear(transfer_in, rgb.r));
+        rgb.g = transfer_from_linear(transfer_out, transfer_to_linear(transfer_in, rgb.g));
+        rgb.b = transfer_from_linear(transfer_out, transfer_to_linear(transfer_in, rgb.b));
+    }
+    vec3 rgb_byte = clamp(rgb, 0.0, 1.0) * 255.0;
+    vec3 ycbcr = vec3(dot(row0, rgb_byte), dot(row1, rgb_byte), dot(row2, rgb_byte))
+        + range_offset;
+    return clamp(ycbcr, 0.0, 255.0);
+}

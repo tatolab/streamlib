@@ -48,18 +48,16 @@ layout(push_constant, std430) uniform PushConstants {
 
 // One pixel's byte-domain (Y, Cb, Cr) from its normalized RGB.
 vec3 ycbcr_bytes_of(vec3 rgb) {
-    if ((pc.flags & FLAG_APPLY_TRANSFER) != 0u) {
-        rgb.r = transfer_from_linear(pc.transfer_out, transfer_to_linear(pc.transfer_in, rgb.r));
-        rgb.g = transfer_from_linear(pc.transfer_out, transfer_to_linear(pc.transfer_in, rgb.g));
-        rgb.b = transfer_from_linear(pc.transfer_out, transfer_to_linear(pc.transfer_in, rgb.b));
-    }
-    vec3 rgb_byte = clamp(rgb, 0.0, 1.0) * 255.0;
-    vec3 ycbcr = vec3(
-        dot(pc.matrix_row0.xyz, rgb_byte),
-        dot(pc.matrix_row1.xyz, rgb_byte),
-        dot(pc.matrix_row2.xyz, rgb_byte)
-    ) + pc.range_offset.xyz;
-    return clamp(ycbcr, 0.0, 255.0);
+    return convert_color_to_ycbcr_bytes(
+        rgb,
+        pc.matrix_row0.xyz,
+        pc.matrix_row1.xyz,
+        pc.matrix_row2.xyz,
+        pc.range_offset.xyz,
+        pc.transfer_in,
+        pc.transfer_out,
+        pc.flags
+    );
 }
 
 void main() {

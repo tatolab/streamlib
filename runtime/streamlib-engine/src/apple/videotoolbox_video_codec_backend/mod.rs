@@ -10,7 +10,6 @@
 //! the pool through the camera's own conversion. The wire either side is
 //! Annex-B, converted at this arm's edge.
 
-mod annex_b_and_length_prefixed_nal_units;
 mod videotoolbox_decode_session;
 mod videotoolbox_encode_session;
 
@@ -40,8 +39,21 @@ impl VideoCodecBackend for VideoToolboxVideoCodecBackend {
         elementary_stream: VideoCodecElementaryStream,
         knobs: &VideoEncodeKnobs,
     ) -> Result<()> {
-        refusal_of_encode_knobs_videotoolbox_does_not_honour(elementary_stream, knobs)
-            .map_or(Ok(()), Err)
+        if let Some(effort_level) = knobs.effort_level {
+            return Err(Error::Configuration(format!(
+                "{elementary_stream:?} encode on VideoToolbox refuses effort_level = \
+                 {effort_level}: VideoToolbox exposes no encoder-effort index to map it onto. \
+                 Leave effort_level unset on macOS."
+            )));
+        }
+        if knobs.keyframe_interval_seconds == 0 {
+            return Err(Error::Configuration(format!(
+                "{elementary_stream:?} encode on VideoToolbox refuses keyframe_interval_seconds \
+                 = 0: the streaming shape puts a sync point on a cadence, so the interval must \
+                 be at least one second."
+            )));
+        }
+        Ok(())
     }
 
     fn open_encode_session(
@@ -49,12 +61,10 @@ impl VideoCodecBackend for VideoToolboxVideoCodecBackend {
         gpu_context: &GpuContextFullAccess,
         request: &VideoEncodeSessionRequest,
     ) -> Result<Box<dyn VideoEncodeSession>> {
-        if let Some(refusal) = refusal_of_encode_knobs_videotoolbox_does_not_honour(
+        self.refuse_encode_knobs_this_arm_does_not_honour(
             request.elementary_stream,
             &request.knobs,
-        ) {
-            return Err(refusal);
-        }
+        )?;
         Ok(Box::new(VideoToolboxEncodeSession::open(
             gpu_context,
             request,
@@ -81,30 +91,8 @@ impl VideoCodecBackend for VideoToolboxVideoCodecBackend {
         Ok(Box::new(VideoToolboxDecodeSession::open(
             gpu_context.host_inner().limited_access(),
             request,
-        )?))
+        )))
     }
-}
-
-/// The refusal of a knob VideoToolbox has no property for, naming it.
-fn refusal_of_encode_knobs_videotoolbox_does_not_honour(
-    elementary_stream: VideoCodecElementaryStream,
-    knobs: &VideoEncodeKnobs,
-) -> Option<Error> {
-    if let Some(effort_level) = knobs.effort_level {
-        return Some(Error::Configuration(format!(
-            "{elementary_stream:?} encode on VideoToolbox refuses effort_level = {effort_level}: \
-             VideoToolbox exposes no encoder-effort index to map it onto. Leave effort_level \
-             unset on macOS."
-        )));
-    }
-    if knobs.keyframe_interval_seconds == 0 {
-        return Some(Error::Configuration(format!(
-            "{elementary_stream:?} encode on VideoToolbox refuses keyframe_interval_seconds = 0: \
-             the streaming shape puts a sync point on a cadence, so the interval must be at \
-             least one second."
-        )));
-    }
-    None
 }
 
 /// The CoreMedia codec type an elementary stream is.

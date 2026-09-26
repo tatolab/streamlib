@@ -158,11 +158,12 @@ class H264Decoder:
     copy, never by bare surface id — the camera's own gap, not a new one.
 
     Config keys, all optional (`rt.add(H264Decoder)` bare is legal):
-    `max_width` and `max_height` cap the stream's coded extent together or
-    not at all — a half-specified pair warns and auto-detects both from the
+    `max_width` and `max_height` cap the stream's extent together or not at
+    all — a half-specified pair warns and auto-detects both from the
     stream's first SPS, as an absent pair does. On Linux they size the
-    decoded-picture-buffer allocation; on macOS a stream coded past them is
-    refused by name.
+    decoded-picture-buffer allocation for the coded extent; on macOS, where
+    CoreMedia reports only the cropped extent, a stream whose pictures pass
+    them is refused by name.
 
     The decode session is minted at `setup()`. On a device with no hardware
     decoder for the codec — no Vulkan Video decode queue, or no VideoToolbox
@@ -226,11 +227,12 @@ class H265Decoder:
     copy, never by bare surface id — the camera's own gap, not a new one.
 
     Config keys, all optional (`rt.add(H265Decoder)` bare is legal):
-    `max_width` and `max_height` cap the stream's coded extent together or
-    not at all — a half-specified pair warns and auto-detects both from the
+    `max_width` and `max_height` cap the stream's extent together or not at
+    all — a half-specified pair warns and auto-detects both from the
     stream's first SPS, as an absent pair does. On Linux they size the
-    decoded-picture-buffer allocation; on macOS a stream coded past them is
-    refused by name.
+    decoded-picture-buffer allocation for the coded extent; on macOS, where
+    CoreMedia reports only the cropped extent, a stream whose pictures pass
+    them is refused by name.
 
     The decode session is minted at `setup()`. On a device with no hardware
     decoder for the codec — no Vulkan Video decode queue, or no VideoToolbox

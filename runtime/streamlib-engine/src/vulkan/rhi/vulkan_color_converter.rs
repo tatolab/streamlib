@@ -34,15 +34,42 @@ const BUFFER_TO_IMAGE_BINDINGS: &[ComputeBindingSpec] = &[
     ComputeBindingSpec::storage_image(1),  // RGBA output
 ];
 
-const IMAGE_TO_YUYV_BUFFER_BINDINGS: &[ComputeBindingSpec] = &[
+const IMAGE_TO_BYTE_BUFFER_BINDINGS: &[ComputeBindingSpec] = &[
     ComputeBindingSpec::sampled_texture(0), // RGBA input, fetched by texel
-    ComputeBindingSpec::storage_buffer(1),  // YUYV byte output
+    ComputeBindingSpec::storage_buffer(1),  // YUYV or NV12 byte output
 ];
 
-const IMAGE_TO_NV12_BUFFER_BINDINGS: &[ComputeBindingSpec] = &[
-    ComputeBindingSpec::sampled_texture(0), // RGBA input, fetched by texel
-    ComputeBindingSpec::storage_buffer(1),  // NV12 byte output
-];
+/// Pixels one thread of the image→NV12 kernel writes, across and down:
+/// `color_convert_rgba_image_to_nv12_buffer.comp`'s 4×2 block.
+const IMAGE_TO_NV12_BUFFER_PIXELS_PER_THREAD: (u32, u32) = (4, 2);
+
+/// The `(group_x, group_y)` a `width` × `height` image→NV12 dispatch
+/// covers the frame with.
+pub fn image_to_nv12_buffer_dispatch_group_counts(width: u32, height: u32) -> (u32, u32) {
+    let (pixels_across, pixels_down) = IMAGE_TO_NV12_BUFFER_PIXELS_PER_THREAD;
+    (
+        width
+            .div_ceil(pixels_across)
+            .div_ceil(COLOR_CONVERTER_WORKGROUP_SIZE),
+        height
+            .div_ceil(pixels_down)
+            .div_ceil(COLOR_CONVERTER_WORKGROUP_SIZE),
+    )
+}
+
+/// The kernel in `slot`, built by `build` the first time it is asked for.
+fn kernel_built_once(
+    slot: &Mutex<Option<Arc<VulkanComputeKernel>>>,
+    build: impl FnOnce() -> Result<VulkanComputeKernel>,
+) -> Result<Arc<VulkanComputeKernel>> {
+    let mut built = slot.lock();
+    if let Some(kernel) = built.as_ref() {
+        return Ok(Arc::clone(kernel));
+    }
+    let kernel = Arc::new(build()?);
+    *built = Some(Arc::clone(&kernel));
+    Ok(kernel)
+}
 
 /// Vulkan implementation of [`crate::core::rhi::RhiColorConverter`].
 pub struct VulkanColorConverter {
@@ -191,7 +218,16 @@ impl VulkanColorConverter {
                 dst.byte_size()
             )));
         }
-        let kernel = self.get_or_build_image_to_yuyv_buffer_kernel()?;
+        let kernel = kernel_built_once(&self.image_to_yuyv_buffer_kernel, || {
+            self.build_image_to_byte_buffer_kernel(
+                &[PixelFormat::Yuyv422],
+                include_bytes!(concat!(
+                    env!("OUT_DIR"),
+                    "/color_convert_rgba_image_to_yuyv_buffer.spv"
+                )),
+                "rgba_image_to_yuyv_buffer",
+            )
+        })?;
         kernel.set_sampled_texture(0, src)?;
         kernel.set_storage_buffer_storage(1, dst)?;
         let push = ColorConverterPushConstants::from_resolved_for_rgb_to_ycbcr(
@@ -207,7 +243,7 @@ impl VulkanColorConverter {
     /// Bind an RGBA texture source, an NV12 storage-buffer destination laid
     /// out as `dst_layout` describes, and the encoding push-constants on the
     /// image→NV12 kernel, and return it for the caller to dispatch over
-    /// `⌈width/4 / 16⌉ × ⌈height/2 / 16⌉` groups.
+    /// [`image_to_nv12_buffer_dispatch_group_counts`] groups.
     pub fn prepare_image_to_nv12_buffer(
         &self,
         src: &Texture,
@@ -217,7 +253,16 @@ impl VulkanColorConverter {
     ) -> Result<Arc<VulkanComputeKernel>> {
         let (width, height) = (src.width(), src.height());
         refuse_an_nv12_destination_the_kernel_cannot_write(width, height, dst, dst_layout)?;
-        let kernel = self.get_or_build_image_to_nv12_buffer_kernel()?;
+        let kernel = kernel_built_once(&self.image_to_nv12_buffer_kernel, || {
+            self.build_image_to_byte_buffer_kernel(
+                &[PixelFormat::Nv12VideoRange, PixelFormat::Nv12FullRange],
+                include_bytes!(concat!(
+                    env!("OUT_DIR"),
+                    "/color_convert_rgba_image_to_nv12_buffer.spv"
+                )),
+                "rgba_image_to_nv12_buffer",
+            )
+        })?;
         kernel.set_sampled_texture(0, src)?;
         kernel.set_storage_buffer_storage_from_byte_offset(
             1,
@@ -231,32 +276,22 @@ impl VulkanColorConverter {
         Ok(kernel)
     }
 
-    fn get_or_build_image_to_nv12_buffer_kernel(&self) -> Result<Arc<VulkanComputeKernel>> {
-        let mut guard = self.image_to_nv12_buffer_kernel.lock();
-        if let Some(k) = guard.as_ref() {
-            return Ok(Arc::clone(k));
-        }
-        let kernel = Arc::new(self.build_image_to_nv12_buffer_kernel()?);
-        *guard = Some(Arc::clone(&kernel));
-        Ok(kernel)
-    }
-
-    fn build_image_to_nv12_buffer_kernel(&self) -> Result<VulkanComputeKernel> {
-        if !matches!(
-            self.dst_format,
-            PixelFormat::Nv12VideoRange | PixelFormat::Nv12FullRange
-        ) {
+    /// Build an RGBA-image-to-byte-buffer kernel, refused unless this
+    /// converter's destination is one of `kernel_dst_formats`.
+    fn build_image_to_byte_buffer_kernel(
+        &self,
+        kernel_dst_formats: &[PixelFormat],
+        spv: &[u8],
+        kernel_name: &str,
+    ) -> Result<VulkanComputeKernel> {
+        if !kernel_dst_formats.contains(&self.dst_format) {
             return Err(Error::NotSupported(format!(
-                "color converter image→NV12 path: destination {:?} is not NV12",
+                "color converter {kernel_name}: destination {:?} is none of {kernel_dst_formats:?}",
                 self.dst_format
             )));
         }
-        let spv: &[u8] = include_bytes!(concat!(
-            env!("OUT_DIR"),
-            "/color_convert_rgba_image_to_nv12_buffer.spv"
-        ));
         let label = format!(
-            "color_convert_image_to_buffer:{:?}_to_{:?}",
+            "color_convert_{kernel_name}:{:?}_to_{:?}",
             self.src_format, self.dst_format
         );
         VulkanComputeKernel::new(
@@ -265,44 +300,7 @@ impl VulkanColorConverter {
                 entry_point: "main",
                 label: label.as_str(),
                 spv,
-                bindings: IMAGE_TO_NV12_BUFFER_BINDINGS,
-                push_constant_size: COLOR_CONVERTER_PUSH_CONSTANT_SIZE,
-            },
-        )
-    }
-
-    fn get_or_build_image_to_yuyv_buffer_kernel(&self) -> Result<Arc<VulkanComputeKernel>> {
-        let mut guard = self.image_to_yuyv_buffer_kernel.lock();
-        if let Some(k) = guard.as_ref() {
-            return Ok(Arc::clone(k));
-        }
-        let kernel = Arc::new(self.build_image_to_yuyv_buffer_kernel()?);
-        *guard = Some(Arc::clone(&kernel));
-        Ok(kernel)
-    }
-
-    fn build_image_to_yuyv_buffer_kernel(&self) -> Result<VulkanComputeKernel> {
-        if self.dst_format != PixelFormat::Yuyv422 {
-            return Err(Error::NotSupported(format!(
-                "color converter image→buffer path: destination {:?} is not YUYV",
-                self.dst_format
-            )));
-        }
-        let spv: &[u8] = include_bytes!(concat!(
-            env!("OUT_DIR"),
-            "/color_convert_rgba_image_to_yuyv_buffer.spv"
-        ));
-        let label = format!(
-            "color_convert_image_to_buffer:{:?}_to_{:?}",
-            self.src_format, self.dst_format
-        );
-        VulkanComputeKernel::new(
-            &self.vulkan_device,
-            &ComputeKernelDescriptor {
-                entry_point: "main",
-                label: label.as_str(),
-                spv,
-                bindings: IMAGE_TO_YUYV_BUFFER_BINDINGS,
+                bindings: IMAGE_TO_BYTE_BUFFER_BINDINGS,
                 push_constant_size: COLOR_CONVERTER_PUSH_CONSTANT_SIZE,
             },
         )
@@ -337,13 +335,9 @@ impl VulkanColorConverter {
     }
 
     fn get_or_build_buffer_to_image_kernel(&self) -> Result<Arc<VulkanComputeKernel>> {
-        let mut guard = self.buffer_to_image_kernel.lock();
-        if let Some(k) = guard.as_ref() {
-            return Ok(Arc::clone(k));
-        }
-        let kernel = Arc::new(self.build_buffer_to_image_kernel()?);
-        *guard = Some(Arc::clone(&kernel));
-        Ok(kernel)
+        kernel_built_once(&self.buffer_to_image_kernel, || {
+            self.build_buffer_to_image_kernel()
+        })
     }
 
     fn build_buffer_to_image_kernel(&self) -> Result<VulkanComputeKernel> {
@@ -1524,8 +1518,8 @@ mod image_to_nv12_buffer_tests {
             recorder
                 .record_dispatch(
                     &kernel,
-                    width.div_ceil(4).div_ceil(COLOR_CONVERTER_WORKGROUP_SIZE),
-                    height.div_ceil(2).div_ceil(COLOR_CONVERTER_WORKGROUP_SIZE),
+                    image_to_nv12_buffer_dispatch_group_counts(width, height).0,
+                    image_to_nv12_buffer_dispatch_group_counts(width, height).1,
                     1,
                 )
                 .expect("dispatch");

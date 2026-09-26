@@ -13,21 +13,38 @@
 //! point and nowhere else, and a coded extent that is the one the stream's own
 //! SPS states.
 //!
+//! The same arm wrote the checked-in cross-floor clips the Linux rig decodes
+//! through Vulkan Video (`vulkan_video_decodes_what_videotoolbox_encoded`);
+//! this file decodes them too, and regenerates them on request.
+//!
 //! Rig tier — it needs Apple's hardware encoder and decoder, which a virtual
 //! machine does not expose, so Cargo builds it only under `hardware-tests`.
+//! `STREAMLIB_VIDEOTOOLBOX_ROUND_TRIP_PNG_DIR` names a directory each scored
+//! decode is written into, as `<codec>__<reference>.png`.
 
 #![cfg(target_os = "macos")]
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::OnceLock;
 
 use streamlib::sdk::color::H273ColorVui;
 use streamlib::sdk::context::{
     DecodedVideoPictureInPooledPixelBuffer, EncodedVideoAccessUnitFromSession, GpuContext,
-    VideoCodecElementaryStream, VideoDecodeSessionRequest, VideoEncodeKnobs,
-    VideoEncodeSessionRequest, VideoEncodeSourceSurface, probe_video_codec_backend,
+    VideoCodecElementaryStream, VideoDecodeMaximumCodedExtent, VideoDecodeSessionRequest,
+    VideoEncodeKnobs, VideoEncodeSessionRequest, VideoEncodeSourceSurface,
+    probe_video_codec_backend,
 };
 use streamlib::sdk::rhi::PixelFormat;
+
+#[path = "support/codec_round_trip_scoring.rs"]
+mod codec_round_trip_scoring;
+
+use codec_round_trip_scoring::{
+    CHROMA_PSNR_FAIL_FLOOR_DB, CROSS_FLOOR_CLIP_HEIGHT, CROSS_FLOOR_CLIP_WIDTH,
+    LUMA_PSNR_FAIL_FLOOR_DB, Rgba8Picture, Yuv420PlanePsnr, cross_floor_clip_reference_picture,
+    decode_the_checked_in_videotoolbox_clip_inside_the_bands, psnr_reference_paths,
+    videotoolbox_cross_floor_clip_path, write_access_unit_clip,
+};
 
 /// The references' extent. 1080 is a multiple of neither codec's block, so
 /// every stream carries a conformance crop the decoder must honour.
@@ -39,10 +56,6 @@ const REFERENCE_HEIGHT: u32 = 1080;
 const FRAMES_PER_SECOND: u32 = 10;
 const KEYFRAME_INTERVAL_SECONDS: u32 = 1;
 const FRAMES_PER_REFERENCE: u32 = FRAMES_PER_SECOND * KEYFRAME_INTERVAL_SECONDS;
-
-/// The bands `xtask psnr score` fails a decode below.
-const LUMA_PSNR_FAIL_FLOOR_DB: f64 = 30.0;
-const CHROMA_PSNR_FAIL_FLOOR_DB: f64 = 30.0;
 
 /// Nanoseconds between frames at [`FRAMES_PER_SECOND`].
 const FRAME_INTERVAL_NS: i64 = 1_000_000_000 / FRAMES_PER_SECOND as i64;
@@ -65,6 +78,188 @@ fn h265_round_trips_every_psnr_reference_inside_the_bands() {
     round_trip_every_psnr_reference(VideoCodecElementaryStream::H265);
 }
 
+/// The frames each cross-floor clip holds: a sync point, four frames that
+/// reference it, then a second sync point — so a decoder must both enter the
+/// stream and re-enter it.
+const CROSS_FLOOR_CLIP_FRAMES: u32 = 6;
+const CROSS_FLOOR_CLIP_FRAMES_PER_SECOND: u32 = 5;
+
+#[test]
+#[cfg_attr(not(feature = "hardware-tests"), ignore)]
+fn the_checked_in_h264_clip_decodes_inside_the_bands() {
+    decode_the_checked_in_videotoolbox_clip_inside_the_bands(
+        gpu_context(),
+        VideoCodecElementaryStream::H264,
+    );
+}
+
+#[test]
+#[cfg_attr(not(feature = "hardware-tests"), ignore)]
+fn the_checked_in_h265_clip_decodes_inside_the_bands() {
+    decode_the_checked_in_videotoolbox_clip_inside_the_bands(
+        gpu_context(),
+        VideoCodecElementaryStream::H265,
+    );
+}
+
+/// Rewrites the checked-in cross-floor clips from this machine's encoder.
+/// Run on purpose, never by a sweep:
+/// `cargo test -p streamlib-engine --features hardware-tests --test
+/// videotoolbox_arm_round_trips_the_psnr_references -- --ignored
+/// regenerate_the_cross_floor_clips`.
+#[test]
+#[ignore = "rewrites checked-in fixtures; run by name"]
+fn regenerate_the_cross_floor_clips() {
+    let backend = probe_video_codec_backend();
+    let gpu = gpu_context().limited_access();
+    let reference = cross_floor_clip_reference_picture();
+    for elementary_stream in [
+        VideoCodecElementaryStream::H264,
+        VideoCodecElementaryStream::H265,
+    ] {
+        let mut encode_session = gpu
+            .escalate(|full| {
+                backend.open_encode_session(
+                    full,
+                    &VideoEncodeSessionRequest {
+                        elementary_stream,
+                        width: CROSS_FLOOR_CLIP_WIDTH,
+                        height: CROSS_FLOOR_CLIP_HEIGHT,
+                        frames_per_second: CROSS_FLOOR_CLIP_FRAMES_PER_SECOND,
+                        knobs: VideoEncodeKnobs {
+                            bitrate_bps: None,
+                            keyframe_interval_seconds: 1,
+                            effort_level: None,
+                        },
+                        color_vui: Some(test_pattern_color_vui()),
+                    },
+                )
+            })
+            .expect("a hardware encode session");
+        let mut access_units = Vec::new();
+        for frame_index in 0..CROSS_FLOOR_CLIP_FRAMES {
+            let (surface_id, source_pixel_buffer) = gpu
+                .acquire_pixel_buffer(
+                    CROSS_FLOOR_CLIP_WIDTH,
+                    CROSS_FLOOR_CLIP_HEIGHT,
+                    PixelFormat::Rgba32,
+                )
+                .expect("a pooled source frame");
+            source_pixel_buffer
+                .write_this_plane_from(0, &reference.rgba)
+                .expect("the reference staged into the source frame");
+            access_units.extend(
+                encode_session
+                    .encode_published_surface(&VideoEncodeSourceSurface {
+                        surface_id: &surface_id.to_string(),
+                        texture_layout: None,
+                        width: CROSS_FLOOR_CLIP_WIDTH,
+                        height: CROSS_FLOOR_CLIP_HEIGHT,
+                        timestamp_ns: i64::from(frame_index + 1),
+                    })
+                    .expect("the frame encodes")
+                    .into_iter()
+                    .map(|access_unit| access_unit.annex_b_access_unit_bytes),
+            );
+        }
+        write_access_unit_clip(
+            &videotoolbox_cross_floor_clip_path(elementary_stream),
+            &access_units,
+        );
+    }
+}
+
+/// What `TestPatternSource` stamps its RGBA frames with.
+fn test_pattern_color_vui() -> H273ColorVui {
+    H273ColorVui {
+        primaries: Some(1),
+        transfer: Some(13),
+        matrix: None,
+        full_range: Some(true),
+    }
+}
+
+/// CoreMedia reports a decoded stream's extents already cropped, so this arm
+/// holds the decode request's cap against the picture: a 1080-line stream
+/// passes a 1080-line cap and is refused, by name, by a 1079-line one.
+#[test]
+#[cfg_attr(not(feature = "hardware-tests"), ignore)]
+fn a_decode_cap_below_the_picture_is_refused_and_one_at_it_is_not() {
+    let backend = probe_video_codec_backend();
+    let gpu = gpu_context().limited_access();
+    let reference = Rgba8Picture::read_png(&psnr_reference_paths()[0]);
+    let mut encode_session = gpu
+        .escalate(|full| {
+            backend.open_encode_session(
+                full,
+                &VideoEncodeSessionRequest {
+                    elementary_stream: VideoCodecElementaryStream::H264,
+                    width: REFERENCE_WIDTH,
+                    height: REFERENCE_HEIGHT,
+                    frames_per_second: FRAMES_PER_SECOND,
+                    knobs: VideoEncodeKnobs {
+                        bitrate_bps: None,
+                        keyframe_interval_seconds: KEYFRAME_INTERVAL_SECONDS,
+                        effort_level: None,
+                    },
+                    color_vui: None,
+                },
+            )
+        })
+        .expect("a hardware encode session");
+    let (surface_id, source_pixel_buffer) = gpu
+        .acquire_pixel_buffer(REFERENCE_WIDTH, REFERENCE_HEIGHT, PixelFormat::Rgba32)
+        .expect("a pooled source frame");
+    source_pixel_buffer
+        .write_this_plane_from(0, &reference.rgba)
+        .expect("the reference staged into the source frame");
+    let sync_point = encode_session
+        .encode_published_surface(&VideoEncodeSourceSurface {
+            surface_id: &surface_id.to_string(),
+            texture_layout: None,
+            width: REFERENCE_WIDTH,
+            height: REFERENCE_HEIGHT,
+            timestamp_ns: 1,
+        })
+        .expect("the frame encodes")
+        .remove(0);
+
+    let decode_under = |max_coded_height: u32| {
+        let mut decode_session = gpu
+            .escalate(|full| {
+                backend.open_decode_session(
+                    full,
+                    &VideoDecodeSessionRequest {
+                        elementary_stream: VideoCodecElementaryStream::H264,
+                        maximum_coded_extent: Some(VideoDecodeMaximumCodedExtent {
+                            max_coded_width: REFERENCE_WIDTH,
+                            max_coded_height,
+                        }),
+                    },
+                )
+            })
+            .expect("a decode session");
+        let mut decoded_pictures = Vec::new();
+        decode_session
+            .decode_annex_b_access_unit(
+                &sync_point.annex_b_access_unit_bytes,
+                &mut decoded_pictures,
+            )
+            .map(|()| decoded_pictures.len())
+    };
+
+    let refusal = decode_under(REFERENCE_HEIGHT - 1)
+        .expect_err("a 1079-line cap is below the stream's 1080-line pictures")
+        .to_string();
+    assert!(refusal.contains("1920x1080"), "{refusal}");
+    assert_eq!(
+        decode_under(REFERENCE_HEIGHT).expect("a cap at the picture's extent admits the stream"),
+        1
+    );
+}
+
+// The measured scores are the run's evidence, printed for whoever ran it.
+#[allow(clippy::disallowed_macros)]
 fn round_trip_every_psnr_reference(elementary_stream: VideoCodecElementaryStream) {
     let backend = probe_video_codec_backend();
     assert_eq!(backend.backend_name(), "videotoolbox");
@@ -84,13 +279,7 @@ fn round_trip_every_psnr_reference(elementary_stream: VideoCodecElementaryStream
                         keyframe_interval_seconds: KEYFRAME_INTERVAL_SECONDS,
                         effort_level: None,
                     },
-                    // What `TestPatternSource` stamps its RGBA frames with.
-                    color_vui: Some(H273ColorVui {
-                        primaries: Some(1),
-                        transfer: Some(13),
-                        matrix: None,
-                        full_range: Some(true),
-                    }),
+                    color_vui: Some(test_pattern_color_vui()),
                 },
             )
         })
@@ -116,7 +305,7 @@ fn round_trip_every_psnr_reference(elementary_stream: VideoCodecElementaryStream
             .unwrap()
             .to_string_lossy()
             .to_string();
-        let reference_rgba = rgba8_pixels_of_png(&reference_path);
+        let reference = Rgba8Picture::read_png(&reference_path);
         let mut last_picture_of_this_reference: Option<DecodedVideoPictureInPooledPixelBuffer> =
             None;
 
@@ -125,7 +314,7 @@ fn round_trip_every_psnr_reference(elementary_stream: VideoCodecElementaryStream
                 .acquire_pixel_buffer(REFERENCE_WIDTH, REFERENCE_HEIGHT, PixelFormat::Rgba32)
                 .expect("a pooled source frame");
             source_pixel_buffer
-                .write_this_plane_from(0, &reference_rgba)
+                .write_this_plane_from(0, &reference.rgba)
                 .expect("the reference staged into the source frame");
             let timestamp_ns = 1_000_000_000 + frame_index * FRAME_INTERVAL_NS;
             frame_index += 1;
@@ -138,7 +327,6 @@ fn round_trip_every_psnr_reference(elementary_stream: VideoCodecElementaryStream
                     timestamp_ns,
                 })
                 .expect("the frame encodes");
-            drop(source_pixel_buffer);
             assert_eq!(
                 access_units.len(),
                 1,
@@ -175,7 +363,17 @@ fn round_trip_every_psnr_reference(elementary_stream: VideoCodecElementaryStream
                 1,
                 "{reference_name}: every access unit decodes to one picture"
             );
-            last_picture_of_this_reference = decoded_pictures.pop();
+            let picture = decoded_pictures.pop().expect("one picture");
+            // The source frame is still held, so the pool cannot hand its slot
+            // to the decoder: a decode that wrote nothing would score whatever
+            // an earlier reference left in some other slot.
+            assert_ne!(
+                picture.published_pixel_buffer_frame_id.pool_slot_id(),
+                surface_id.pool_slot_id(),
+                "{reference_name}: the decoded picture lands in a pool slot of its own"
+            );
+            drop(source_pixel_buffer);
+            last_picture_of_this_reference = Some(picture);
         }
 
         let picture = last_picture_of_this_reference.expect("a decoded picture");
@@ -192,15 +390,23 @@ fn round_trip_every_psnr_reference(elementary_stream: VideoCodecElementaryStream
                 REFERENCE_WIDTH as usize * REFERENCE_HEIGHT as usize * 4,
             )
         };
-        let scored = Yuv420PlanePsnr::between(decoded_rgba, &reference_rgba);
+        if let Some(png_directory) = std::env::var_os("STREAMLIB_VIDEOTOOLBOX_ROUND_TRIP_PNG_DIR") {
+            Rgba8Picture {
+                width: REFERENCE_WIDTH,
+                height: REFERENCE_HEIGHT,
+                rgba: decoded_rgba.to_vec(),
+            }
+            .write_png(&Path::new(&png_directory).join(format!(
+                "{}__{reference_name}.png",
+                format!("{elementary_stream:?}").to_lowercase()
+            )));
+        }
+        let scored = Yuv420PlanePsnr::between(decoded_rgba, &reference);
         eprintln!(
             "{elementary_stream:?} {reference_name}: Y {:.2} dB, U {:.2} dB, V {:.2} dB",
             scored.luma_db, scored.blue_difference_db, scored.red_difference_db
         );
-        if scored.luma_db < LUMA_PSNR_FAIL_FLOOR_DB
-            || scored.blue_difference_db < CHROMA_PSNR_FAIL_FLOOR_DB
-            || scored.red_difference_db < CHROMA_PSNR_FAIL_FLOOR_DB
-        {
+        if scored.fails_the_bands() {
             failures.push(format!("{reference_name}: {scored:?}"));
         }
     }
@@ -419,122 +625,4 @@ impl RbspBitReader {
             -code / 2
         }) as i32
     }
-}
-
-fn psnr_reference_paths() -> Vec<PathBuf> {
-    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/psnr");
-    let mut paths: Vec<PathBuf> = std::fs::read_dir(&directory)
-        .expect("the checked-in references")
-        .map(|entry| entry.expect("a directory entry").path())
-        .filter(|path| path.extension().is_some_and(|extension| extension == "png"))
-        .collect();
-    paths.sort();
-    assert!(
-        !paths.is_empty(),
-        "no references in {}",
-        directory.display()
-    );
-    paths
-}
-
-/// A reference's pixels as tightly packed RGBA8, whatever its PNG colour type.
-fn rgba8_pixels_of_png(path: &Path) -> Vec<u8> {
-    let mut decoder = png::Decoder::new(std::fs::File::open(path).expect("the reference opens"));
-    decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
-    let mut reader = decoder.read_info().expect("a PNG header");
-    let mut buffer = vec![0u8; reader.output_buffer_size()];
-    let frame = reader.next_frame(&mut buffer).expect("a PNG frame");
-    assert_eq!(
-        (frame.width, frame.height),
-        (REFERENCE_WIDTH, REFERENCE_HEIGHT)
-    );
-    let pixels = &buffer[..frame.buffer_size()];
-    match frame.color_type {
-        png::ColorType::Rgba => pixels.to_vec(),
-        png::ColorType::Rgb => pixels
-            .chunks_exact(3)
-            .flat_map(|rgb| [rgb[0], rgb[1], rgb[2], 255])
-            .collect(),
-        png::ColorType::Grayscale => pixels
-            .iter()
-            .flat_map(|&gray| [gray, gray, gray, 255])
-            .collect(),
-        png::ColorType::GrayscaleAlpha => pixels
-            .chunks_exact(2)
-            .flat_map(|gray_alpha| [gray_alpha[0], gray_alpha[0], gray_alpha[0], gray_alpha[1]])
-            .collect(),
-        png::ColorType::Indexed => unreachable!("EXPAND resolves the palette"),
-    }
-}
-
-/// Per-plane PSNR between two RGBA8 images, over their BT.709 full-range
-/// 4:2:0 planes.
-#[derive(Debug)]
-struct Yuv420PlanePsnr {
-    luma_db: f64,
-    blue_difference_db: f64,
-    red_difference_db: f64,
-}
-
-impl Yuv420PlanePsnr {
-    fn between(decoded_rgba: &[u8], reference_rgba: &[u8]) -> Self {
-        let decoded = bt709_full_range_yuv420_planes(decoded_rgba);
-        let reference = bt709_full_range_yuv420_planes(reference_rgba);
-        Self {
-            luma_db: peak_signal_to_noise_ratio_db(&decoded[0], &reference[0]),
-            blue_difference_db: peak_signal_to_noise_ratio_db(&decoded[1], &reference[1]),
-            red_difference_db: peak_signal_to_noise_ratio_db(&decoded[2], &reference[2]),
-        }
-    }
-}
-
-/// Y at full resolution, then Cb and Cr box-averaged to half, each rounded to
-/// eight bits.
-fn bt709_full_range_yuv420_planes(rgba: &[u8]) -> [Vec<u8>; 3] {
-    let (width, height) = (REFERENCE_WIDTH as usize, REFERENCE_HEIGHT as usize);
-    let (mut luma, mut blue_difference, mut red_difference) = (
-        vec![0f64; width * height],
-        vec![0f64; width * height],
-        vec![0f64; width * height],
-    );
-    for (index, pixel) in rgba.chunks_exact(4).enumerate() {
-        let [red, green, blue] = [pixel[0], pixel[1], pixel[2]].map(f64::from);
-        let y = 0.2126 * red + 0.7152 * green + 0.0722 * blue;
-        luma[index] = y;
-        blue_difference[index] = (blue - y) / 1.8556 + 128.0;
-        red_difference[index] = (red - y) / 1.5748 + 128.0;
-    }
-    let half_resolution = |plane: &[f64]| -> Vec<u8> {
-        let mut halved = Vec::with_capacity(width * height / 4);
-        for row in (0..height).step_by(2) {
-            for column in (0..width).step_by(2) {
-                let sum = plane[row * width + column]
-                    + plane[row * width + column + 1]
-                    + plane[(row + 1) * width + column]
-                    + plane[(row + 1) * width + column + 1];
-                halved.push((sum / 4.0).round().clamp(0.0, 255.0) as u8);
-            }
-        }
-        halved
-    };
-    [
-        luma.iter()
-            .map(|y| y.round().clamp(0.0, 255.0) as u8)
-            .collect(),
-        half_resolution(&blue_difference),
-        half_resolution(&red_difference),
-    ]
-}
-
-fn peak_signal_to_noise_ratio_db(decoded: &[u8], reference: &[u8]) -> f64 {
-    let mean_squared_error = decoded
-        .iter()
-        .zip(reference)
-        .map(|(&decoded, &reference)| (f64::from(decoded) - f64::from(reference)).powi(2))
-        .sum::<f64>()
-        / decoded.len() as f64;
-    if mean_squared_error == 0.0 {
-        return f64::INFINITY;
-    }
-    10.0 * (255.0f64.powi(2) / mean_squared_error).log10()
 }

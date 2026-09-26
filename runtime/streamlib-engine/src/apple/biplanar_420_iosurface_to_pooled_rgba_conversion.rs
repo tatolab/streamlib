@@ -10,9 +10,9 @@
 //! import the driver refuses, the planes are copied into a staging buffer
 //! instead — no dial.
 
-use std::collections::HashMap;
+use objc2_io_surface::{IOSurfaceLockOptions, IOSurfaceRef};
 
-use objc2_io_surface::{IOSurfaceID, IOSurfaceLockOptions, IOSurfaceRef};
+use crate::apple::imported_iosurface_storage_buffers_kept_for_recycling::ImportedIOSurfaceStorageBuffersKeptForRecycling;
 
 use crate::core::color::ResolvedColorInfo;
 use crate::core::context::captured_video_frame_to_pooled_rgba_conversion_stage::{
@@ -23,19 +23,13 @@ use crate::core::rhi::{
     PixelBuffer, PixelFormat, PublishedPixelBufferFrameId, SourceLayoutInfo, StorageBuffer,
 };
 use crate::core::{Error, Result};
-use crate::vulkan::rhi::ImportedIOSurfaceStorageBuffer;
-
-/// How many distinct IOSurfaces one conversion keeps imported. A producer
-/// recycles a handful from its own pool, so one past this is churning
-/// surfaces and starts over rather than growing.
-const MOST_IMPORTED_IOSURFACES_KEPT: usize = 16;
 
 /// How a stream's IOSurfaces reach the GPU.
 enum Biplanar420IOSurfaceTransport {
     /// Each IOSurface's memory imported as a storage buffer, kept for the
     /// next time the producer recycles the surface.
     ImportedIOSurfaceStorageBuffers {
-        imported_by_iosurface_id: HashMap<IOSurfaceID, ImportedIOSurfaceStorageBuffer>,
+        imported_surfaces: ImportedIOSurfaceStorageBuffersKeptForRecycling,
     },
     /// Each frame's planes copied into one host-visible storage buffer.
     CopiedIntoAStorageBuffer {
@@ -75,7 +69,7 @@ impl Biplanar420IOSurfaceToPooledRgbaConversion {
         Ok(Self {
             conversion_stage,
             frame_transport: Biplanar420IOSurfaceTransport::ImportedIOSurfaceStorageBuffers {
-                imported_by_iosurface_id: HashMap::new(),
+                imported_surfaces: ImportedIOSurfaceStorageBuffersKeptForRecycling::default(),
             },
             source_description: source_description.to_string(),
         })
@@ -101,15 +95,11 @@ impl Biplanar420IOSurfaceToPooledRgbaConversion {
         color: &ResolvedColorInfo,
     ) -> Result<(PublishedPixelBufferFrameId, PixelBuffer)> {
         self.take_this_surface_into_the_transport(gpu_context, iosurface)?;
-        let device_bytes = match &self.frame_transport {
+        let device_bytes = match &mut self.frame_transport {
             Biplanar420IOSurfaceTransport::ImportedIOSurfaceStorageBuffers {
-                imported_by_iosurface_id,
+                imported_surfaces,
             } => {
-                let imported = imported_by_iosurface_id
-                    .get(&iosurface.id())
-                    .ok_or_else(|| {
-                        Error::Runtime("the frame's IOSurface was not imported".into())
-                    })?;
+                let imported = imported_surfaces.imported_for(gpu_context, iosurface)?;
                 CapturedVideoFrameBytesInAStorageBuffer {
                     storage_buffer: imported.storage_buffer(),
                     layout: imported.nv12_source_layout()?,
@@ -137,26 +127,23 @@ impl Biplanar420IOSurfaceToPooledRgbaConversion {
         gpu_context: &GpuContextLimitedAccess,
         iosurface: &IOSurfaceRef,
     ) -> Result<()> {
-        let Biplanar420IOSurfaceTransport::ImportedIOSurfaceStorageBuffers {
-            imported_by_iosurface_id,
-        } = &mut self.frame_transport
+        let Biplanar420IOSurfaceTransport::ImportedIOSurfaceStorageBuffers { imported_surfaces } =
+            &mut self.frame_transport
         else {
             return Ok(());
         };
-        if imported_by_iosurface_id.contains_key(&iosurface.id()) {
+        if imported_surfaces.holds(iosurface) {
             return Ok(());
         }
-        match gpu_context.escalate(|full| full.import_iosurface_as_storage_buffer(iosurface)) {
-            Ok(imported) => {
-                if imported_by_iosurface_id.len() >= MOST_IMPORTED_IOSURFACES_KEPT {
-                    self.conversion_stage.wait_for_the_previous_submission()?;
-                    imported_by_iosurface_id.clear();
-                }
-                imported_by_iosurface_id.insert(iosurface.id(), imported);
+        // A new import may start the set over, releasing the one the last
+        // frame's submission read.
+        self.conversion_stage.wait_for_the_previous_submission()?;
+        match imported_surfaces.imported_for(gpu_context, iosurface) {
+            Ok(_) => {
                 tracing::debug!(
                     source = %self.source_description,
                     iosurface_id = iosurface.id(),
-                    imported_iosurfaces = imported_by_iosurface_id.len(),
+                    imported_iosurfaces = imported_surfaces.count(),
                     "imported one more of the source's recycled IOSurfaces"
                 );
             }
@@ -167,7 +154,6 @@ impl Biplanar420IOSurfaceToPooledRgbaConversion {
                     "the GPU cannot import the source's IOSurfaces; copying each frame through \
                      the CPU instead"
                 );
-                self.conversion_stage.wait_for_the_previous_submission()?;
                 self.frame_transport = Biplanar420IOSurfaceTransport::CopiedIntoAStorageBuffer {
                     staging: gpu_context.escalate(|full| {
                         CpuUploadStagingStorageBuffer::shaped_for(full, iosurface)

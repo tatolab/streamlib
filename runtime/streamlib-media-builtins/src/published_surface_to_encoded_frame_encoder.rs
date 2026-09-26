@@ -150,14 +150,10 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
         ctx: &RuntimeContextFullAccess<'_>,
         config: &HardwareVideoEncoderConfig,
     ) -> Result<()> {
-        probe_video_codec_backend()
-            .refuse_encode_knobs_this_arm_does_not_honour(
-                Identity::VIDEO_CODEC_ELEMENTARY_STREAM,
-                &encode_knobs_from(config),
-            )
-            .map_err(|refusal| {
-                Error::Configuration(format!("{}: {refusal}", Identity::PROCESSOR_NAME))
-            })?;
+        probe_video_codec_backend().refuse_encode_knobs_this_arm_does_not_honour(
+            Identity::VIDEO_CODEC_ELEMENTARY_STREAM,
+            &encode_knobs_from(config),
+        )?;
         self.gpu_context = Some(ctx.gpu_limited_access().clone());
         Ok(())
     }
@@ -371,8 +367,6 @@ fn resolve_encode_dimensions_from_first_frame(
     (frame_width, frame_height, fps)
 }
 
-/// Mint the encoder session from the first frame inside a one-shot escalate
-/// window; per-frame submits ride the session's own methods afterwards.
 /// The knobs `config` sets, with the keyframe interval's default filled in.
 fn encode_knobs_from(config: &HardwareVideoEncoderConfig) -> VideoEncodeKnobs {
     VideoEncodeKnobs {
@@ -384,6 +378,8 @@ fn encode_knobs_from(config: &HardwareVideoEncoderConfig) -> VideoEncodeKnobs {
     }
 }
 
+/// Mint the encoder session from the first frame inside a one-shot escalate
+/// window; per-frame submits ride the session's own methods afterwards.
 fn mint_encode_session_from_first_frame<Identity: HardwareVideoCodecProcessorIdentity>(
     gpu_context: &GpuContextLimitedAccess,
     config: &HardwareVideoEncoderConfig,

@@ -35,8 +35,6 @@ pub mod microphone_source;
 // The MP4 muxer reads its parameter sets through the engine's Vulkan Video
 // NAL parser, which MoltenVK cannot serve and which stays Linux-only.
 #[cfg(target_os = "linux")]
-pub mod mp4_annex_b_access_unit;
-#[cfg(target_os = "linux")]
 pub mod mp4_fragmented_file_writer;
 #[cfg(target_os = "linux")]
 pub mod mp4_sink;
