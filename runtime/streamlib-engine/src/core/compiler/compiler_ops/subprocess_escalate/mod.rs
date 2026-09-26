@@ -31,6 +31,7 @@ mod processor_owned_window;
 mod ray_tracing;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod surface_bound_kernel_binding;
+mod surface_copy;
 #[cfg(test)]
 mod tests;
 
@@ -68,6 +69,7 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
         EscalateRequest::AcquireTexture(p) => Some(&p.request_id),
         EscalateRequest::AcquireImage(p) => Some(&p.request_id),
         EscalateRequest::RunCpuReadbackCopy(p) => Some(&p.request_id),
+        EscalateRequest::CopySurfaceToSurface(p) => Some(&p.request_id),
         EscalateRequest::WaitDeviceIdle(p) => Some(&p.request_id),
         EscalateRequest::InboundLinkStampClockIdentity(p) => Some(&p.request_id),
         EscalateRequest::OpenCpuReadbackStaging(p) => Some(&p.request_id),
@@ -124,6 +126,9 @@ pub(crate) fn handle_escalate_op(
         )),
         EscalateRequest::RunCpuReadbackCopy(req) => Some(
             export_staging::handle_run_cpu_readback_copy(sandbox, rid, req),
+        ),
+        EscalateRequest::CopySurfaceToSurface(req) => Some(
+            surface_copy::handle_copy_surface_to_surface(sandbox, rid, req),
         ),
         EscalateRequest::InboundLinkStampClockIdentity(
             EscalateRequestInboundLinkStampClockIdentity {

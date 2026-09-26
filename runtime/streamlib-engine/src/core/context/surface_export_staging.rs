@@ -380,7 +380,10 @@ impl GpuContext {
             return Ok(Arc::clone(existing));
         }
 
-        let shape = match self.resolve_device_export_source(surface_id)? {
+        let source = self.resolve_device_export_source(surface_id)?;
+        let source_takes_a_write_back =
+            self.resolved_backing_takes_a_write_back(surface_id, &source);
+        let shape = match source {
             ResolvedSurfaceBacking::RegisteredTexture(registration) => {
                 let texture = registration.texture();
                 let pixel_format = export_pixel_shape_for_texture(texture.format())?;
@@ -393,19 +396,9 @@ impl GpuContext {
                     surface_width,
                     surface_height,
                     pixel_format,
-                    // This arm answers only when no pooled member resolves
-                    // ahead of the registration — in-tree that means none
-                    // exists, because every producer that publishes a pool
-                    // frame acquires it in this process, and cross-process
-                    // registrations mint their own handle ids rather than
-                    // pool ids. The pool-member rule the buffer arm
-                    // computes below therefore has nothing to protect
-                    // here; what gates the write-back instead is whether
-                    // the image can legally take a recorded copy, which
-                    // its usage decided at allocation.
                     backing_kind_at_mint:
                         SurfaceExportStagingBackingKindAtMint::RegisteredTexture {
-                            texture_takes_a_recorded_copy_in: texture.supports_transfer_write(),
+                            texture_takes_a_recorded_copy_in: source_takes_a_write_back,
                         },
                 }
             }
@@ -418,14 +411,6 @@ impl GpuContext {
                         "surface {surface_id} resolves to a zero-byte plane; nothing to export"
                     )));
                 }
-                // The write-back protocol belongs to a surface whose
-                // only backing is its own pooled allocation. A pool
-                // member a producer also published as a registered
-                // texture is a frame that producer still owns, and an
-                // in-place device edit would land in a live pool slot.
-                let pooled_allocation_is_the_only_backing = self
-                    .producer_registered_texture_for_surface_id(surface_id)
-                    .is_none();
                 SurfaceExportStagingShape {
                     staging_byte_size,
                     surface_width: pixel_buffer.width,
@@ -434,7 +419,7 @@ impl GpuContext {
                     backing_kind_at_mint:
                         SurfaceExportStagingBackingKindAtMint::PooledPixelBuffer {
                             pooled_allocation_was_the_only_backing_at_mint:
-                                pooled_allocation_is_the_only_backing,
+                                source_takes_a_write_back,
                         },
                 }
             }

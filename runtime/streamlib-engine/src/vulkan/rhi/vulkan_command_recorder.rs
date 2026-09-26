@@ -500,6 +500,159 @@ impl RhiCommandRecorderInner {
         Ok(())
     }
 
+    /// Record a whole-image `vkCmdCopyImage` from `source` into
+    /// `destination`, with the layout transitions around it, answering the
+    /// layout `destination` comes to rest in.
+    ///
+    /// Each image is barriered from the layout the caller knows it to be in.
+    /// The source comes back to its known layout; the destination comes back
+    /// to its known layout too, or to GENERAL when it was UNDEFINED, since
+    /// UNDEFINED is never a barrier target.
+    #[tracing::instrument(level = "trace", skip(self, source, destination), fields(label = %self.label))]
+    pub fn record_copy_image_to_image(
+        &mut self,
+        source: &Texture,
+        source_known_layout: VulkanLayout,
+        destination: &Texture,
+        destination_known_layout: VulkanLayout,
+    ) -> Result<VulkanLayout> {
+        self.expect_recording("record_copy_image_to_image")?;
+
+        use crate::host_rhi::HostTextureExt;
+        let source_image = source.vulkan_inner().image().ok_or_else(|| {
+            Error::GpuError(format!(
+                "RhiCommandRecorder '{}': record_copy_image_to_image: source texture has no \
+                 VkImage",
+                self.label
+            ))
+        })?;
+        let destination_image = destination.vulkan_inner().image().ok_or_else(|| {
+            Error::GpuError(format!(
+                "RhiCommandRecorder '{}': record_copy_image_to_image: destination texture has \
+                 no VkImage",
+                self.label
+            ))
+        })?;
+        if source_image == destination_image {
+            return Err(Error::GpuError(format!(
+                "RhiCommandRecorder '{}': record_copy_image_to_image: source and destination \
+                 are one image, which cannot be in TRANSFER_SRC and TRANSFER_DST at once",
+                self.label
+            )));
+        }
+        if source.format() != destination.format() {
+            return Err(Error::GpuError(format!(
+                "RhiCommandRecorder '{}': record_copy_image_to_image: source is {:?} and \
+                 destination is {:?}; an image copy converts nothing",
+                self.label,
+                source.format(),
+                destination.format()
+            )));
+        }
+        if (source.width(), source.height()) != (destination.width(), destination.height()) {
+            return Err(Error::GpuError(format!(
+                "RhiCommandRecorder '{}': record_copy_image_to_image: source is {}x{} and \
+                 destination is {}x{}; a whole-image copy needs one extent",
+                self.label,
+                source.width(),
+                source.height(),
+                destination.width(),
+                destination.height()
+            )));
+        }
+        if source_known_layout == VulkanLayout::UNDEFINED {
+            return Err(Error::GpuError(format!(
+                "RhiCommandRecorder '{}': record_copy_image_to_image: the source's known layout \
+                 is UNDEFINED, so it holds no contents to copy",
+                self.label
+            )));
+        }
+        if !source.supports_transfer_read() {
+            return Err(Error::GpuError(format!(
+                "RhiCommandRecorder '{}': record_copy_image_to_image: the source texture was \
+                 allocated without \"copy_src\" usage",
+                self.label
+            )));
+        }
+        if !destination.supports_transfer_write() {
+            return Err(Error::GpuError(format!(
+                "RhiCommandRecorder '{}': record_copy_image_to_image: the destination texture \
+                 was allocated without \"copy_dst\" usage",
+                self.label
+            )));
+        }
+        let destination_restore_layout = if destination_known_layout == VulkanLayout::UNDEFINED {
+            VulkanLayout::GENERAL
+        } else {
+            destination_known_layout
+        };
+
+        self.record_image_barrier(
+            source,
+            source_known_layout,
+            VulkanLayout::TRANSFER_SRC_OPTIMAL,
+            VulkanStage::ALL_COMMANDS,
+            VulkanStage::ALL_TRANSFER,
+            VulkanAccess::MEMORY_WRITE,
+            VulkanAccess::TRANSFER_READ,
+        )?;
+        self.record_image_barrier(
+            destination,
+            destination_known_layout,
+            VulkanLayout::TRANSFER_DST_OPTIMAL,
+            VulkanStage::ALL_COMMANDS,
+            VulkanStage::ALL_TRANSFER,
+            VulkanAccess::MEMORY_READ | VulkanAccess::MEMORY_WRITE,
+            VulkanAccess::TRANSFER_WRITE,
+        )?;
+        let whole_color_layer = vk::ImageSubresourceLayers::builder()
+            .aspect_mask(vk::ImageAspectFlags::COLOR)
+            .mip_level(0)
+            .base_array_layer(0)
+            .layer_count(1)
+            .build();
+        let region = vk::ImageCopy::builder()
+            .src_subresource(whole_color_layer)
+            .src_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
+            .dst_subresource(whole_color_layer)
+            .dst_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
+            .extent(vk::Extent3D {
+                width: source.width(),
+                height: source.height(),
+                depth: 1,
+            })
+            .build();
+        unsafe {
+            self.device.cmd_copy_image(
+                self.command_buffer,
+                source_image,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                destination_image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+                &[region],
+            );
+        }
+        self.record_image_barrier(
+            source,
+            VulkanLayout::TRANSFER_SRC_OPTIMAL,
+            source_known_layout,
+            VulkanStage::ALL_TRANSFER,
+            VulkanStage::ALL_COMMANDS,
+            VulkanAccess::TRANSFER_READ,
+            VulkanAccess::MEMORY_READ,
+        )?;
+        self.record_image_barrier(
+            destination,
+            VulkanLayout::TRANSFER_DST_OPTIMAL,
+            destination_restore_layout,
+            VulkanStage::ALL_TRANSFER,
+            VulkanStage::ALL_COMMANDS,
+            VulkanAccess::TRANSFER_WRITE,
+            VulkanAccess::MEMORY_READ | VulkanAccess::MEMORY_WRITE,
+        )?;
+        Ok(destination_restore_layout)
+    }
+
     /// Record a compute dispatch via [`VulkanComputeKernel::record`]
     /// into the recorder's command buffer.
     ///
@@ -1138,6 +1291,22 @@ impl RhiCommandRecorder {
     ) -> Result<()> {
         self.host_inner_mut()
             .record_copy_buffer_to_buffer(src, dst, byte_size)
+    }
+
+    /// Copy image → image. See [`RhiCommandRecorderInner::record_copy_image_to_image`].
+    pub fn record_copy_image_to_image(
+        &mut self,
+        source: &Texture,
+        source_known_layout: VulkanLayout,
+        destination: &Texture,
+        destination_known_layout: VulkanLayout,
+    ) -> Result<VulkanLayout> {
+        self.host_inner_mut().record_copy_image_to_image(
+            source,
+            source_known_layout,
+            destination,
+            destination_known_layout,
+        )
     }
 
     /// Compute dispatch.

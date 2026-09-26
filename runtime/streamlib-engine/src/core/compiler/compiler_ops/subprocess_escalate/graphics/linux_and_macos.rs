@@ -526,7 +526,7 @@ pub(super) fn bind_and_render_graphics_kernel(
                 .cloned()
                 .zip(color_targets.iter().cloned()),
         );
-        publish_bound_surface_layouts_to_surface_share(full, &bound_surfaces);
+        publish_bound_surface_layouts_to_surface_share(full.surface_store(), &bound_surfaces);
     }
     drop(color_targets);
     drop(bound_inputs);

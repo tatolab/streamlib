@@ -906,6 +906,12 @@ pub struct GpuContext {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     batched_compute_dispatch_recorder:
         Arc<parking_lot::Mutex<Option<crate::vulkan::rhi::RhiCommandRecorder>>>,
+    /// The recorder every surface-to-surface copy reuses, for the reason
+    /// `batched_compute_dispatch_recorder` is one recorder; its lock is what
+    /// serializes two copies.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub(crate) surface_to_surface_copy_recorder:
+        Arc<parking_lot::Mutex<Option<crate::vulkan::rhi::RhiCommandRecorder>>>,
     /// Graphics kernels built for the `register_graphics_kernel` escalate op,
     /// keyed the same way `compute_kernel_cache` is and with the same
     /// lifetime.
@@ -960,6 +966,8 @@ impl GpuContext {
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             batched_compute_dispatch_recorder: Arc::new(parking_lot::Mutex::new(None)),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
+            surface_to_surface_copy_recorder: Arc::new(parking_lot::Mutex::new(None)),
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             graphics_kernel_cache: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             ray_tracing_kernel_cache: Arc::new(Mutex::new(HashMap::new())),
@@ -996,6 +1004,8 @@ impl GpuContext {
             ),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             batched_compute_dispatch_recorder: Arc::new(parking_lot::Mutex::new(None)),
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            surface_to_surface_copy_recorder: Arc::new(parking_lot::Mutex::new(None)),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             graphics_kernel_cache: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(any(target_os = "linux", target_os = "macos"))]

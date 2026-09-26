@@ -463,7 +463,7 @@ pub(super) fn dispatch_compute_recording_and_publish_bound_surface_layouts(
     bound_surfaces: &[(String, TextureRegistration)],
 ) -> crate::core::error::Result<()> {
     full.dispatch_compute_kernel_batch(recording)?;
-    publish_bound_surface_layouts_to_surface_share(full, bound_surfaces);
+    publish_bound_surface_layouts_to_surface_share(full.surface_store(), bound_surfaces);
     Ok(())
 }
 
