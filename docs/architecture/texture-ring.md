@@ -235,10 +235,12 @@ contract).
   via the texture cache (Path 1). The cross-process sibling is the
   wheel's `streamlib.ProcessorOutputTextureRing`
   (`sdk/streamlib-python-wheel/python/streamlib/processor_output_texture_ring.py`):
-  same allocate-once-rotate discipline, composed over the escalate
-  `AcquireTexture` op, whose slots the engine allocates
-  cross-process-importable and registers with surface-share — which
-  is what a helper-placed producer's published ids need.
+  it asks the escalate `AcquireTexture` op for each frame's slot under a
+  processor output pool key, and the engine's lease-aware ring
+  (`runtime/streamlib-engine/src/core/context/lease_aware_pool_slot_ring.rs`)
+  answers — slots allocated cross-process-importable and registered with
+  surface-share, each frame published as `<slot>#<generation>`, and a
+  slot any consumer still holds skipped rather than rewritten.
 - **Render-target rings for the display swapchain.** Display
   manages its own per-image render-finished semaphores keyed by
   `image_index` from `acquire_next_image_khr`
