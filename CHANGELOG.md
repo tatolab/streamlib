@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.29](https://github.com/tatolab/streamlib/compare/v0.26.28...v0.26.29) (2026-09-26)
+
+
+### Features
+
+* **engine:** VideoToolbox behind the codec seam — H.264 and H.265 on macOS ([#2483](https://github.com/tatolab/streamlib/issues/2483)) ([5805213](https://github.com/tatolab/streamlib/commit/5805213cbf2b5afd14b84f1ba70335dc3260f6c2))
+
 ## [0.26.28](https://github.com/tatolab/streamlib/compare/v0.26.27...v0.26.28) (2026-09-26)
 
 
