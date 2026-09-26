@@ -17,7 +17,7 @@ Entering the scope hands the engine's texture out as a linear DLPack view, so
 `torch.from_dlpack` is the whole read and the tensor is GPU-resident. The same
 tensor is the write door: boxes drawn into it are blitted back when the scope
 closes, ordered by the engine ahead of its own next read. No fence, no
-timeline, no `torch.cuda.synchronize()`, and no copy through the host.
+timeline, no device synchronize, and no copy through the host.
 """
 
 from __future__ import annotations
@@ -216,13 +216,22 @@ class UndistortingObjectDetector:
                 UNDISTORTED_FRAME_BINDING: "storage_image",
             },
         )
+        # A frame's DLPack capsule imports onto the accelerator this torch build
+        # drives, so the model and the box colours go there too.
+        detection_device = torch.accelerator.current_accelerator()
+        if detection_device is None:
+            raise RuntimeError(
+                "torch.accelerator.current_accelerator() is None: this torch "
+                "build drives no GPU, and the detector reads the frame where "
+                "the engine left it, on the GPU"
+            )
         # Weights land beside the app on first run and are cached there after.
         # The model goes to the GPU here, in `setup()`, so the first frame pays
         # for a forward pass and not for loading a network.
         self.detection_model = YOLO(self.detection_model_weights)
-        self.detection_model.to("cuda")
+        self.detection_model.to(detection_device)
         self.box_colours = [
-            torch.tensor(colour, dtype=torch.uint8, device="cuda")
+            torch.tensor(colour, dtype=torch.uint8, device=detection_device)
             for colour in BOX_COLOUR_PALETTE_RGBA
         ]
         log.info(

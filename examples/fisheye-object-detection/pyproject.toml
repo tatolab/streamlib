@@ -4,10 +4,10 @@ version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
     "streamlib",
-    # The device-to-device landing copy, the tensor the detector runs on, and
-    # the slice assignments that draw the boxes. One GPU array package for all
-    # three, because the detector needs this one in particular.
-    "torch>=2.6",
+    # The tensor the detector runs on and the slice assignments that draw the
+    # boxes. 2.10 is the floor where a frame's Metal DLPack capsule imports,
+    # sliced tensors included.
+    "torch>=2.10",
     # YOLOv8n and its weights fetcher. Pulls opencv and its own dependency set
     # — a detector is not a small dependency, and this app is about what one
     # costs to wire up, not about avoiding it.
