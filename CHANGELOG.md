@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.28](https://github.com/tatolab/streamlib/compare/v0.26.27...v0.26.28) (2026-09-26)
+
+
+### Features
+
+* **engine:** a video codec backend seam, with Vulkan Video moved behind it ([#2481](https://github.com/tatolab/streamlib/issues/2481)) ([446cdc5](https://github.com/tatolab/streamlib/commit/446cdc53b1b510fbd3b353eeb7f20523c14919d5))
+
 ## [0.26.27](https://github.com/tatolab/streamlib/compare/v0.26.26...v0.26.27) (2026-09-25)
 
 
