@@ -31,7 +31,7 @@ EXAMPLE_DIRECTORY = Path(__file__).resolve().parent.parent
 TEST_APP = Path(__file__).resolve().parent / "shader_effect_test_app.py"
 
 # A cold engine boot stands up a GPU context and a helper interpreter per
-# processor, and cupy's first import is slow; a real hang blows through it.
+# processor; a real hang blows through it.
 FIRST_RENDERED_FRAME_TIMEOUT_SECONDS = 90.0
 CLEAN_EXIT_TIMEOUT_SECONDS = 60.0
 

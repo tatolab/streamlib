@@ -62,19 +62,20 @@ surface id and it is refused by name. So each frame is copied into a texture
 this processor owns before the kernel can sample it:
 
 ```python
-with camera_frame_landing_texture.as_device_tensor() as writable_texture:
-    cupy.from_dlpack(writable_texture)[...] = cupy.from_dlpack(frame)
+ctx.gpu_limited_access.copy_surface_to_surface(
+    frame.surface_id, camera_frame_landing_texture
+)
 ```
 
-That is the engine's interop door, and it is worth reading closely. `frame` —
-the object `ctx.inputs.read(port, into=VideoFrame)` handed back — is a DLPack
-producer in its own right, so `cupy.from_dlpack(frame)` is the entire read,
-GPU-resident, and the claim that cast took is what holds the camera's pixels
-still for the length of the copy. Entering the device-tensor scope hands the
-destination texture out as a linear view; leaving it blits the write back,
-ordered by the engine ahead of its own next read of that texture. The pixels
-never reach the host, and cupy does nothing here but the copy — any
-DLPack-speaking GPU array package would serve, which is the point.
+The engine does the copy, so it is worth reading closely. `frame` — the object
+`ctx.inputs.read(port, into=VideoFrame)` handed back — holds a claim on the
+camera's surface, and that claim is what keeps the camera's pixels still for
+the length of the copy. The call picks the copy a buffer-to-texture pair needs,
+converts nothing, and returns once the kernel's read of the texture would see
+the copied pixels. The pixels never reach the host, and no GPU array package is
+involved. The two surfaces must share a format and an extent — the camera's
+`rgba` and the texture's `rgba8_unorm` are one format — and a mismatch is
+refused by name rather than converted.
 
 ### Two rings, two depths
 
@@ -127,8 +128,8 @@ maturin develop --manifest-path ../../sdk/streamlib-python-wheel/Cargo.toml
 ```
 
 This app needs real hardware, and says so rather than pretending: the kernel
-runs on the engine's own Vulkan device and `cupy-cuda13x` wants a CUDA runtime,
-so a machine with neither fails while the graph is starting. There is no
+runs on the engine's own Vulkan device, so a machine without one fails while
+the graph is starting. It runs on Linux and on macOS alike. There is no
 demotion path here of the kind the audio backends have — a null GPU would have
 no pixels to hand back.
 
