@@ -1032,6 +1032,14 @@ impl GpuContext {
         self.get_pixel_buffer(surface_id)
     }
 
+    /// The generation every lease-aware ring this context owns most recently
+    /// minted per slot.
+    pub(crate) fn lease_aware_pool_minted_frame_generations(
+        &self,
+    ) -> &LeaseAwarePoolMintedFrameGenerations {
+        &self.lease_aware_pool_minted_frame_generations
+    }
+
     /// Refuse a published frame id whose slot has been recycled since.
     ///
     /// An id with no generation suffix passes. A slot one of this context's
@@ -3799,6 +3807,13 @@ impl GpuContextLimitedAccess {
     /// See [`GpuContext::unregister_texture`].
     pub fn unregister_texture(&self, id: &str) {
         self.host_inner().unregister_texture(id)
+    }
+
+    /// Drop a torn-down lease-aware pool slot from the generation index.
+    pub(crate) fn forget_lease_aware_pool_slot(&self, pool_slot_key: &str) {
+        self.host_inner()
+            .lease_aware_pool_minted_frame_generations
+            .forget_slot(pool_slot_key)
     }
 
     /// Get the shared command queue.

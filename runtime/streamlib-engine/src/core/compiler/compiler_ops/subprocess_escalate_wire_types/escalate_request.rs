@@ -167,6 +167,13 @@ pub(crate) struct EscalateRequestAcquireTexture {
     /// Pixel height of the texture.
     pub(crate) height: u32,
 
+    /// The processor output pool this acquire hands its slot out of. Absent
+    /// for a one-off texture the helper owns until it releases it; present,
+    /// the answer names this frame (`<slot>#<generation>`) in a slot the pool
+    /// owns, skipping any slot a consumer still holds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) processor_output_pool: Option<EscalateRequestProcessorOutputPool>,
+
     /// Correlates request with response. UUID string.
     pub(crate) request_id: String,
 
@@ -178,6 +185,19 @@ pub(crate) struct EscalateRequestAcquireTexture {
 
     /// Pixel width of the texture.
     pub(crate) width: u32,
+}
+
+/// Which processor output pool an `acquire_texture` hands its slot out of.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EscalateRequestProcessorOutputPool {
+    /// The pool's name, minted by the helper's ring; acquires under one key
+    /// share one pool, scoped to the helper that sent them.
+    pub(crate) pool_key: String,
+
+    /// How many slots the pool rotates through before reusing one nobody
+    /// holds — how many publishes an unclaimed frame stays resolvable for.
+    pub(crate) rotation_depth: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

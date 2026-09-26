@@ -51,6 +51,11 @@ impl<Resource> LeaseAwarePoolSlot<Resource> {
         &self.resource
     }
 
+    /// The resource, for a slot being torn down.
+    pub(crate) fn into_resource(self) -> Resource {
+        self.resource
+    }
+
     /// The generation the most recent hand-off published.
     pub(crate) fn published_frame_generation(&self) -> u64 {
         self.published_frame_generation
@@ -89,10 +94,7 @@ impl LeaseAwarePoolMintedFrameGenerations {
         self.minted_frame_generation_by_pool_slot
             .lock()
             .unwrap()
-            .insert(
-                slot.pool_slot_key.clone(),
-                slot.published_frame_generation,
-            );
+            .insert(slot.pool_slot_key.clone(), slot.published_frame_generation);
     }
 
     /// The generation most recently minted over `pool_slot_key`, if a

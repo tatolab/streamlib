@@ -4,8 +4,14 @@
 //! What the parent holds on a helper process's behalf, and the release every
 //! acquire owes — by explicit `release_handle` or at bridge teardown.
 
+mod processor_output_texture_pools;
 #[cfg(test)]
 mod tests;
+
+pub(crate) use processor_output_texture_pools::{
+    ProcessorOutputTextureDescriptor, ProcessorOutputTexturePoolsOfOneHelper,
+    ReleasedProcessorOutputTextureSlot,
+};
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -108,6 +114,10 @@ pub(crate) struct EscalateHandleRegistry {
     /// Python object carries the method) is the child's guard and never the
     /// engine's: both Python capability tiers collapse onto this one wire.
     last_lifecycle_command_sent_to_the_helper_process: Mutex<Option<String>>,
+    /// The processor output texture pools this helper's rings publish from.
+    /// Their slots are never [`RegisteredHandle`]s of their own: a frame's id
+    /// names a generation, and the slot outlives it.
+    processor_output_texture_pools: Mutex<ProcessorOutputTexturePoolsOfOneHelper>,
 }
 
 impl EscalateHandleRegistry {
@@ -115,51 +125,28 @@ impl EscalateHandleRegistry {
         Arc::new(Self::default())
     }
 
+    /// Hold `registered_handle` under `handle_id` until the helper releases it.
+    pub(crate) fn insert_registered_handle(
+        &self,
+        handle_id: String,
+        registered_handle: RegisteredHandle,
+    ) {
+        let mut map = self.handles.lock().expect("poisoned");
+        map.insert(handle_id, registered_handle);
+    }
+
+    /// The processor output texture pools this helper publishes from.
+    pub(crate) fn processor_output_texture_pools(
+        &self,
+    ) -> std::sync::MutexGuard<'_, ProcessorOutputTexturePoolsOfOneHelper> {
+        self.processor_output_texture_pools
+            .lock()
+            .expect("poisoned")
+    }
+
     pub(crate) fn insert_buffer(&self, handle_id: String, buffer: PixelBuffer) {
         let mut map = self.handles.lock().expect("poisoned");
         map.insert(handle_id, RegisteredHandle::PixelBuffer(buffer));
-    }
-
-    #[cfg(target_os = "linux")]
-    pub(crate) fn insert_texture(
-        &self,
-        handle_id: String,
-        texture: PooledTextureHandle,
-        produce_done: Option<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>>,
-        consume_done: Option<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>>,
-    ) {
-        let mut map = self.handles.lock().expect("poisoned");
-        map.insert(
-            handle_id,
-            RegisteredHandle::Texture {
-                texture,
-                produce_done,
-                consume_done,
-            },
-        );
-    }
-
-    #[cfg(target_os = "macos")]
-    pub(crate) fn insert_texture(
-        &self,
-        handle_id: String,
-        texture: PooledTextureHandle,
-        timeline_pair: Option<Arc<crate::apple::surface_share::CrossProcessTimelinePair>>,
-    ) {
-        let mut map = self.handles.lock().expect("poisoned");
-        map.insert(
-            handle_id,
-            RegisteredHandle::Texture {
-                texture,
-                timeline_pair,
-            },
-        );
-    }
-
-    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-    pub(crate) fn insert_texture(&self, handle_id: String, texture: PooledTextureHandle) {
-        let mut map = self.handles.lock().expect("poisoned");
-        map.insert(handle_id, RegisteredHandle::Texture { texture });
     }
 
     #[cfg(target_os = "linux")]
@@ -348,6 +335,21 @@ pub(crate) fn release_surface_share_and_texture_cache_for_handle(
     if removed_handle.is_texture_backed() {
         sandbox.unregister_texture(handle_id);
     }
+}
+
+/// The release a processor output texture slot is owed when its pool lets it
+/// go: everything a released texture handle is owed, and its place in the
+/// generation index.
+pub(crate) fn release_processor_output_texture_slot(
+    sandbox: &GpuContextLimitedAccess,
+    (pool_slot_key, registered_texture): ReleasedProcessorOutputTextureSlot,
+) {
+    release_surface_share_and_texture_cache_for_handle(
+        sandbox,
+        &pool_slot_key,
+        &registered_texture,
+    );
+    sandbox.forget_lease_aware_pool_slot(&pool_slot_key);
 }
 
 /// Best-effort surface-share release paired with registry eviction, for the

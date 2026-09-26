@@ -16,22 +16,25 @@ mod tests;
 use std::sync::Arc;
 
 #[cfg(target_os = "linux")]
-use linux::acquire_texture_for_helper;
+use linux::allocate_registered_texture_for_helper;
 #[cfg(target_os = "linux")]
 pub(super) use linux::handle_acquire_image;
 #[cfg(target_os = "macos")]
-use macos::acquire_texture_for_helper;
+use macos::allocate_registered_texture_for_helper;
 #[cfg(target_os = "macos")]
 pub(super) use macos::handle_acquire_image;
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-use neither_linux_nor_macos::acquire_texture_for_helper;
+use neither_linux_nor_macos::allocate_registered_texture_for_helper;
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub(super) use neither_linux_nor_macos::handle_acquire_image;
 
-use super::handle_lifecycle::EscalateHandleRegistry;
+use super::handle_lifecycle::{
+    EscalateHandleRegistry, ProcessorOutputTextureDescriptor, release_processor_output_texture_slot,
+};
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
     EscalateRequestAcquirePixelBuffer, EscalateRequestAcquireTexture,
+    EscalateRequestProcessorOutputPool,
 };
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_response::{
     EscalateResponseErr, EscalateResponseOk,
@@ -86,8 +89,9 @@ pub(super) fn handle_acquire_pixel_buffer(
     }
 }
 
-/// Acquire a pooled texture on behalf of a helper process, holding it in
-/// `registry` until the helper releases it.
+/// Acquire a texture on behalf of a helper process: a one-off the registry
+/// holds until the helper releases it, or the next frame of a processor output
+/// pool, which the pool holds.
 pub(super) fn handle_acquire_texture(
     sandbox: &GpuContextLimitedAccess,
     registry: &EscalateHandleRegistry,
@@ -99,6 +103,7 @@ pub(super) fn handle_acquire_texture(
         width,
         height,
         format,
+        processor_output_pool,
         usage,
     } = request;
     let parsed_format = match parse_texture_format(&format) {
@@ -119,14 +124,30 @@ pub(super) fn handle_acquire_texture(
             });
         }
     };
-    let acquired = acquire_texture_for_helper(
-        sandbox,
-        registry,
-        width,
-        height,
-        parsed_format,
-        parsed_usage,
-    );
+    let acquired = match processor_output_pool {
+        None => sandbox.escalate(|full| {
+            let (handle_id, registered_texture) = allocate_registered_texture_for_helper(
+                full,
+                width,
+                height,
+                parsed_format,
+                parsed_usage,
+            )?;
+            registry.insert_registered_handle(handle_id.clone(), registered_texture);
+            Ok(handle_id)
+        }),
+        Some(processor_output_pool) => hand_off_processor_output_texture_frame(
+            sandbox,
+            registry,
+            processor_output_pool,
+            ProcessorOutputTextureDescriptor {
+                width,
+                height,
+                format: parsed_format,
+                usage: parsed_usage,
+            },
+        ),
+    };
     match acquired {
         Ok(handle_id) => EscalateResponse::Ok(EscalateResponseOk {
             request_id: rid,
@@ -142,6 +163,36 @@ pub(super) fn handle_acquire_texture(
             message: format!("acquire_texture failed: {e}"),
         }),
     }
+}
+
+/// Hand out the next frame of one of the helper's processor output pools,
+/// answering the frame's published id.
+fn hand_off_processor_output_texture_frame(
+    sandbox: &GpuContextLimitedAccess,
+    registry: &EscalateHandleRegistry,
+    EscalateRequestProcessorOutputPool {
+        pool_key,
+        rotation_depth,
+    }: EscalateRequestProcessorOutputPool,
+    descriptor: ProcessorOutputTextureDescriptor,
+) -> crate::core::error::Result<String> {
+    let (published_frame_id, slots_a_descriptor_change_released) = sandbox.escalate(|full| {
+        registry
+            .processor_output_texture_pools()
+            .hand_off_next_frame(full, &pool_key, rotation_depth as usize, descriptor, || {
+                allocate_registered_texture_for_helper(
+                    full,
+                    descriptor.width,
+                    descriptor.height,
+                    descriptor.format,
+                    descriptor.usage,
+                )
+            })
+    })?;
+    for released_slot in slots_a_descriptor_change_released {
+        release_processor_output_texture_slot(sandbox, released_slot);
+    }
+    Ok(published_frame_id)
 }
 
 /// Resolve the `handle_id` returned to the subprocess for a pixel buffer.

@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use uuid::Uuid;
 
-use super::super::handle_lifecycle::EscalateHandleRegistry;
+use super::super::handle_lifecycle::{EscalateHandleRegistry, RegisteredHandle};
 use super::{new_exportable_timeline_edge, parse_texture_format};
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::EscalateRequestAcquireImage;
@@ -13,49 +13,52 @@ use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalat
     EscalateResponseErr, EscalateResponseOk,
 };
 use crate::core::context::{
-    GpuContextLimitedAccess, PooledTextureHandle, TextureCrossProcessImportability,
-    TexturePoolDescriptor,
+    GpuContextFullAccess, GpuContextLimitedAccess, PooledTextureHandle,
+    TextureCrossProcessImportability, TexturePoolDescriptor,
 };
 use crate::core::rhi::{TextureFormat, TextureUsages};
 use crate::host_rhi::HostSurfaceStoreExt;
 
-/// Acquire one texture from the pool and register it for a helper, answering
-/// the handle id the helper names it by.
-pub(super) fn acquire_texture_for_helper(
-    sandbox: &GpuContextLimitedAccess,
-    registry: &EscalateHandleRegistry,
+/// Allocate one texture and register it for a helper — with the
+/// surface-share service and the parent's texture cache — answering the id it
+/// is registered under and what holds it alive.
+pub(super) fn allocate_registered_texture_for_helper(
+    full: &GpuContextFullAccess,
     width: u32,
     height: u32,
     parsed_format: TextureFormat,
     parsed_usage: TextureUsages,
-) -> crate::core::error::Result<String> {
-    sandbox.escalate(|full| {
-        // The importability flavor is derived engine-side from the
-        // request — there is no Python dial for it, and a flavor the
-        // request cannot take falls back to NotImportable so a later
-        // import refuses by name instead of the acquire failing.
-        let desc = TexturePoolDescriptor::new(width, height, parsed_format)
-            .with_usage(parsed_usage)
-            .with_cross_process_importability(match full.host_vulkan_device_arc() {
-                Ok(device) => derive_texture_cross_process_importability(
-                    parsed_format,
-                    parsed_usage,
-                    device.has_render_target_modifier_for_texture_format(parsed_format),
-                    device.opaque_fd_image_pool().is_some(),
-                ),
-                Err(_) => TextureCrossProcessImportability::NotImportable,
-            });
-        let texture = full.acquire_texture(&desc)?;
-        let (handle_id, produce_done, consume_done) = assign_texture_handle_id(full, &texture)?;
-        // The parent answers its own binding resolutions from the
-        // texture cache — without this entry it would re-import its
-        // own allocation through the surface-share socket, a path
-        // that cannot rebuild every flavour and re-interprets the
-        // ones it can.
-        full.register_texture(&handle_id, texture.texture_clone());
-        registry.insert_texture(handle_id.clone(), texture, produce_done, consume_done);
-        Ok(handle_id)
-    })
+) -> crate::core::error::Result<(String, RegisteredHandle)> {
+    // The importability flavor is derived engine-side from the request —
+    // there is no Python dial for it, and a flavor the request cannot take
+    // falls back to NotImportable so a later import refuses by name instead of
+    // the acquire failing.
+    let desc = TexturePoolDescriptor::new(width, height, parsed_format)
+        .with_usage(parsed_usage)
+        .with_cross_process_importability(match full.host_vulkan_device_arc() {
+            Ok(device) => derive_texture_cross_process_importability(
+                parsed_format,
+                parsed_usage,
+                device.has_render_target_modifier_for_texture_format(parsed_format),
+                device.opaque_fd_image_pool().is_some(),
+            ),
+            Err(_) => TextureCrossProcessImportability::NotImportable,
+        });
+    let texture = full.acquire_texture(&desc)?;
+    let (handle_id, produce_done, consume_done) = assign_texture_handle_id(full, &texture)?;
+    // The parent answers its own binding resolutions from the texture cache —
+    // without this entry it would re-import its own allocation through the
+    // surface-share socket, a path that cannot rebuild every flavour and
+    // re-interprets the ones it can.
+    full.register_texture(&handle_id, texture.texture_clone());
+    Ok((
+        handle_id,
+        RegisteredHandle::Texture {
+            texture,
+            produce_done,
+            consume_done,
+        },
+    ))
 }
 
 /// Acquire a render-target DMA-BUF image on behalf of a helper process,

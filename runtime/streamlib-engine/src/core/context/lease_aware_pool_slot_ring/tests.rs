@@ -82,7 +82,9 @@ fn a_slot_a_consumer_has_checked_out_is_skipped_until_released() {
         "a leased slot must never be rehanded to its producer"
     );
 
-    leases.release_one_check_out_lease(&first, consumer).unwrap();
+    leases
+        .release_one_check_out_lease(&first, consumer)
+        .unwrap();
     assert_eq!(
         next_published_id(&mut ring, Some(&leases), &minted).unwrap(),
         "slot-a#2"
@@ -177,7 +179,10 @@ fn a_fresh_slots_first_frame_is_published_at_the_service() {
         },
     );
     ring.hand_off_fresh_slot(slot_index, Some(&leases), &minted);
-    assert_eq!(ring.slot(slot_index).currently_published_frame_id(), "slot-a#1");
+    assert_eq!(
+        ring.slot(slot_index).currently_published_frame_id(),
+        "slot-a#1"
+    );
     assert_eq!(leases.current_frame_generation("slot-a").unwrap(), Some(1));
     assert_eq!(minted.minted_frame_generation_of_slot("slot-a"), Some(1));
 }

@@ -68,7 +68,9 @@ fn with_nothing_held_the_pool_never_grows_past_its_rotation_depth() {
     let published: Vec<_> = (0..6).map(|_| pool.next_frame(2).unwrap()).collect();
     assert_eq!(
         published,
-        ["slot-0#1", "slot-1#1", "slot-0#2", "slot-1#2", "slot-0#3", "slot-1#3"]
+        [
+            "slot-0#1", "slot-1#1", "slot-0#2", "slot-1#2", "slot-0#3", "slot-1#3"
+        ]
     );
     assert_eq!(pool.pool.slot_count(), 2);
 }
@@ -81,11 +83,16 @@ fn a_held_frames_slot_is_skipped_never_rewritten() {
 
     let while_held: Vec<_> = (0..4).map(|_| pool.next_frame(2).unwrap()).collect();
     assert!(
-        while_held.iter().all(|published| !published.starts_with("slot-0#")),
+        while_held
+            .iter()
+            .all(|published| !published.starts_with("slot-0#")),
         "the held frame's slot was rehanded: {while_held:?}"
     );
     assert_eq!(
-        pool.minted.refusal_of_a_retired_frame_id(&held_frame).unwrap().ok(),
+        pool.minted
+            .refusal_of_a_retired_frame_id(&held_frame)
+            .unwrap()
+            .ok(),
         Some(()),
         "the held frame's id still names a live frame"
     );
@@ -103,7 +110,9 @@ fn every_slot_held_grows_the_pool_until_its_cap_then_refuses_by_name() {
         PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY
     );
 
-    let refusal = pool.next_frame(2).expect_err("every slot is held at the cap");
+    let refusal = pool
+        .next_frame(2)
+        .expect_err("every slot is held at the cap");
     assert!(
         matches!(
             &refusal,
@@ -150,7 +159,10 @@ fn a_recycled_frames_id_is_refused_naming_the_recycling() {
 fn a_rotation_depth_of_zero_or_past_the_cap_is_refused() {
     let mut pool = PoolUnderTest::new();
     assert!(pool.next_frame(0).is_err());
-    assert!(pool.next_frame(PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY + 1).is_err());
+    assert!(
+        pool.next_frame(PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY + 1)
+            .is_err()
+    );
     assert_eq!(pool.pool.slot_count(), 0);
 }
 

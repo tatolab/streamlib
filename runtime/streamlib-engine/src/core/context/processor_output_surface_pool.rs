@@ -84,6 +84,7 @@ impl<Resource: LeaseAwarePoolSlotResource> ProcessorOutputSurfacePool<Resource> 
     }
 
     /// How many slots the pool holds.
+    #[cfg(test)]
     pub(crate) fn slot_count(&self) -> usize {
         self.ring.slot_count()
     }
