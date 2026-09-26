@@ -22,6 +22,8 @@ pub(crate) mod surface_export_staging;
 pub(crate) mod surface_pixel_exchange;
 pub(crate) mod surface_share_wire_verbs;
 pub(crate) mod surface_store;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod surface_to_surface_copy;
 pub mod texture_pool;
 pub(crate) mod texture_registration;
 mod texture_ring;

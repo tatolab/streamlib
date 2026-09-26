@@ -31,6 +31,9 @@ pub(crate) enum EscalateRequest {
     #[serde(rename = "copy_device_export_staging_back_to_surface")]
     CopyDeviceExportStagingBackToSurface(EscalateRequestCopyDeviceExportStagingBackToSurface),
 
+    #[serde(rename = "copy_surface_to_surface")]
+    CopySurfaceToSurface(EscalateRequestCopySurfaceToSurface),
+
     #[serde(rename = "create_processor_owned_window")]
     CreateProcessorOwnedWindow(EscalateRequestCreateProcessorOwnedWindow),
 
@@ -90,6 +93,24 @@ pub(crate) enum EscalateRequest {
 
     #[serde(rename = "wait_device_idle")]
     WaitDeviceIdle(EscalateRequestWaitDeviceIdle),
+}
+
+/// Copy one surface's pixels into another, same format and extent. The host
+/// records, submits and waits before it answers, so the reply means the
+/// destination's next reader sees the copied pixels; no timeline value
+/// crosses back.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EscalateRequestCopySurfaceToSurface {
+    /// Any surface id the engine can resolve: a published frame
+    /// (`<slot>#<generation>`), a pool slot, or a registered texture's id.
+    pub(crate) destination_surface_id: String,
+
+    /// Correlates request with response. UUID string.
+    pub(crate) request_id: String,
+
+    /// Any surface id the engine can resolve, as `destination_surface_id`.
+    pub(crate) source_surface_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

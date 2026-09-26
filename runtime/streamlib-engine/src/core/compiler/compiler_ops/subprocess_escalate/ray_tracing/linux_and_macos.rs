@@ -708,7 +708,7 @@ pub(super) fn bind_and_trace_ray_tracing_kernel(
     let traced = kernel.trace_rays(req.width, req.height, req.depth);
     if traced.is_ok() {
         publish_bound_surface_layouts_to_surface_share(
-            full,
+            full.surface_store(),
             &bound_surface_layout_publish_pairs(&bound_inputs),
         );
     }

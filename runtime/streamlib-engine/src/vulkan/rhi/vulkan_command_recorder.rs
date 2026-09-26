@@ -75,6 +75,17 @@ impl ImageCopyRegion {
     }
 }
 
+/// The layout an image comes back to after a transfer: the one it was in,
+/// or GENERAL for an image nothing had written, since UNDEFINED is never a
+/// barrier target.
+fn layout_an_image_rests_in_after_a_transfer(known_layout: VulkanLayout) -> VulkanLayout {
+    if known_layout == VulkanLayout::UNDEFINED {
+        VulkanLayout::GENERAL
+    } else {
+        known_layout
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RecorderState {
     /// No active recording. `begin()` is permitted; `record_*` and
@@ -474,6 +485,13 @@ impl RhiCommandRecorderInner {
         byte_size: u64,
     ) -> Result<()> {
         self.expect_recording("record_copy_buffer_to_buffer")?;
+        if src.vk_buffer() == dst.vk_buffer() {
+            return Err(Error::GpuError(format!(
+                "RhiCommandRecorder '{}': record_copy_buffer_to_buffer: source and destination \
+                 are one buffer, and a whole-range copy onto itself overlaps",
+                self.label
+            )));
+        }
         if byte_size > src.vk_buffer_size() || byte_size > dst.vk_buffer_size() {
             return Err(Error::GpuError(format!(
                 "RhiCommandRecorder '{}': record_copy_buffer_to_buffer: copy of {} bytes exceeds \
@@ -494,6 +512,124 @@ impl RhiCommandRecorderInner {
                 self.command_buffer,
                 src.vk_buffer(),
                 dst.vk_buffer(),
+                &[region],
+            );
+        }
+        Ok(())
+    }
+
+    /// Refuse an image→image copy that cannot be recorded legally, naming
+    /// why: a missing image, one image on both sides, a format or extent
+    /// mismatch, a source holding nothing, or a usage forbidding the copy.
+    pub(crate) fn refuse_an_image_to_image_copy_it_cannot_record(
+        &self,
+        source: &Texture,
+        source_known_layout: VulkanLayout,
+        destination: &Texture,
+    ) -> Result<()> {
+        use crate::host_rhi::HostTextureExt;
+        let refusal = |reason: String| {
+            Error::GpuError(format!(
+                "RhiCommandRecorder '{}': record_copy_image_to_image: {reason}",
+                self.label
+            ))
+        };
+        let source_image = source
+            .vulkan_inner()
+            .image()
+            .ok_or_else(|| refusal("source texture has no VkImage".into()))?;
+        let destination_image = destination
+            .vulkan_inner()
+            .image()
+            .ok_or_else(|| refusal("destination texture has no VkImage".into()))?;
+        if source_image == destination_image {
+            return Err(refusal(
+                "source and destination are one image, which cannot be in TRANSFER_SRC and \
+                 TRANSFER_DST at once"
+                    .into(),
+            ));
+        }
+        if source.format() != destination.format() {
+            return Err(refusal(format!(
+                "source is {:?} and destination is {:?}; an image copy converts nothing",
+                source.format(),
+                destination.format()
+            )));
+        }
+        if (source.width(), source.height()) != (destination.width(), destination.height()) {
+            return Err(refusal(format!(
+                "source is {}x{} and destination is {}x{}; a whole-image copy needs one extent",
+                source.width(),
+                source.height(),
+                destination.width(),
+                destination.height()
+            )));
+        }
+        if source_known_layout == VulkanLayout::UNDEFINED {
+            return Err(refusal(
+                "the source's known layout is UNDEFINED, so it holds no contents to copy".into(),
+            ));
+        }
+        if !source.supports_transfer_read() {
+            return Err(refusal(
+                "the source texture was allocated without \"copy_src\" usage".into(),
+            ));
+        }
+        if !destination.supports_transfer_write() {
+            return Err(refusal(
+                "the destination texture was allocated without \"copy_dst\" usage".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Record a whole-image `vkCmdCopyImage` from `source`, already in
+    /// `TRANSFER_SRC_OPTIMAL`, into `destination`, already in
+    /// `TRANSFER_DST_OPTIMAL`; the caller has run
+    /// [`Self::refuse_an_image_to_image_copy_it_cannot_record`].
+    #[tracing::instrument(level = "trace", skip(self, source, destination), fields(label = %self.label))]
+    pub fn record_copy_image_to_image_in_transfer_layouts(
+        &mut self,
+        source: &Texture,
+        destination: &Texture,
+    ) -> Result<()> {
+        self.expect_recording("record_copy_image_to_image_in_transfer_layouts")?;
+
+        use crate::host_rhi::HostTextureExt;
+        let (Some(source_image), Some(destination_image)) = (
+            source.vulkan_inner().image(),
+            destination.vulkan_inner().image(),
+        ) else {
+            return Err(Error::GpuError(format!(
+                "RhiCommandRecorder '{}': record_copy_image_to_image_in_transfer_layouts: a \
+                 texture has no VkImage",
+                self.label
+            )));
+        };
+        let whole_color_layer = vk::ImageSubresourceLayers::builder()
+            .aspect_mask(vk::ImageAspectFlags::COLOR)
+            .mip_level(0)
+            .base_array_layer(0)
+            .layer_count(1)
+            .build();
+        let region = vk::ImageCopy::builder()
+            .src_subresource(whole_color_layer)
+            .src_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
+            .dst_subresource(whole_color_layer)
+            .dst_offset(vk::Offset3D { x: 0, y: 0, z: 0 })
+            .extent(vk::Extent3D {
+                width: source.width(),
+                height: source.height(),
+                depth: 1,
+            })
+            .build();
+        unsafe {
+            self.device.cmd_copy_image(
+                self.command_buffer,
+                source_image,
+                vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+                destination_image,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 &[region],
             );
         }
@@ -1138,6 +1274,137 @@ impl RhiCommandRecorder {
     ) -> Result<()> {
         self.host_inner_mut()
             .record_copy_buffer_to_buffer(src, dst, byte_size)
+    }
+
+    /// Copy one whole image into another, same format and extent, with the
+    /// layout transitions around it, answering the layout `destination`
+    /// comes to rest in.
+    ///
+    /// Each image is barriered from the layout the caller knows it to be in;
+    /// a source known to be UNDEFINED holds nothing and is refused.
+    pub fn record_copy_image_to_image(
+        &mut self,
+        source: &Texture,
+        source_known_layout: VulkanLayout,
+        destination: &Texture,
+        destination_known_layout: VulkanLayout,
+    ) -> Result<VulkanLayout> {
+        self.host_inner_mut()
+            .refuse_an_image_to_image_copy_it_cannot_record(
+                source,
+                source_known_layout,
+                destination,
+            )?;
+        self.record_image_write_as_transfer_destination(
+            destination,
+            destination_known_layout,
+            |recorder| {
+                recorder.record_image_read_as_transfer_source(
+                    source,
+                    source_known_layout,
+                    |recorder| {
+                        recorder
+                            .host_inner_mut()
+                            .record_copy_image_to_image_in_transfer_layouts(source, destination)
+                    },
+                )?;
+                Ok(())
+            },
+        )
+    }
+
+    /// Move `texture` from `known_layout` into `TRANSFER_SRC_OPTIMAL`, record
+    /// `record_copy` reading it, and bring it back, answering the layout it
+    /// comes to rest in (see [`layout_an_image_rests_in_after_a_transfer`]).
+    pub fn record_image_read_as_transfer_source(
+        &mut self,
+        texture: &Texture,
+        known_layout: VulkanLayout,
+        record_copy: impl FnOnce(&mut Self) -> Result<()>,
+    ) -> Result<VulkanLayout> {
+        let resting_layout = layout_an_image_rests_in_after_a_transfer(known_layout);
+        self.record_image_barrier(
+            texture,
+            known_layout,
+            VulkanLayout::TRANSFER_SRC_OPTIMAL,
+            VulkanStage::ALL_COMMANDS,
+            VulkanStage::ALL_TRANSFER,
+            VulkanAccess::MEMORY_WRITE,
+            VulkanAccess::TRANSFER_READ,
+        )?;
+        record_copy(self)?;
+        self.record_image_barrier(
+            texture,
+            VulkanLayout::TRANSFER_SRC_OPTIMAL,
+            resting_layout,
+            VulkanStage::ALL_TRANSFER,
+            VulkanStage::ALL_COMMANDS,
+            VulkanAccess::TRANSFER_READ,
+            VulkanAccess::MEMORY_READ | VulkanAccess::MEMORY_WRITE,
+        )?;
+        Ok(resting_layout)
+    }
+
+    /// Move `texture` from `known_layout` into `TRANSFER_DST_OPTIMAL`, record
+    /// `record_copy` writing it, and bring it back, answering the layout it
+    /// comes to rest in (see [`layout_an_image_rests_in_after_a_transfer`]).
+    pub fn record_image_write_as_transfer_destination(
+        &mut self,
+        texture: &Texture,
+        known_layout: VulkanLayout,
+        record_copy: impl FnOnce(&mut Self) -> Result<()>,
+    ) -> Result<VulkanLayout> {
+        let resting_layout = layout_an_image_rests_in_after_a_transfer(known_layout);
+        self.record_image_barrier(
+            texture,
+            known_layout,
+            VulkanLayout::TRANSFER_DST_OPTIMAL,
+            VulkanStage::ALL_COMMANDS,
+            VulkanStage::ALL_TRANSFER,
+            VulkanAccess::MEMORY_READ | VulkanAccess::MEMORY_WRITE,
+            VulkanAccess::TRANSFER_WRITE,
+        )?;
+        record_copy(self)?;
+        self.record_image_barrier(
+            texture,
+            VulkanLayout::TRANSFER_DST_OPTIMAL,
+            resting_layout,
+            VulkanStage::ALL_TRANSFER,
+            VulkanStage::ALL_COMMANDS,
+            VulkanAccess::TRANSFER_WRITE,
+            VulkanAccess::MEMORY_READ | VulkanAccess::MEMORY_WRITE,
+        )?;
+        Ok(resting_layout)
+    }
+
+    /// Make every earlier submission's writes to `buffer` visible to a
+    /// transfer read of it — submission order alone does not.
+    pub fn record_buffer_barrier_before_a_transfer_read(
+        &mut self,
+        buffer: &(impl VulkanBufferLike + ?Sized),
+    ) -> Result<()> {
+        self.record_buffer_barrier(
+            buffer,
+            VulkanStage::ALL_COMMANDS,
+            VulkanStage::ALL_TRANSFER,
+            VulkanAccess::MEMORY_WRITE,
+            VulkanAccess::TRANSFER_READ,
+        )
+    }
+
+    /// Make a transfer write into `buffer` visible to whoever reads next,
+    /// on the GPU or, through a coherent mapping after the host wait, the CPU.
+    pub fn record_buffer_barrier_publishing_a_transfer_write(
+        &mut self,
+        buffer: &(impl VulkanBufferLike + ?Sized),
+    ) -> Result<()> {
+        self.record_buffer_barrier(
+            buffer,
+            VulkanStage::ALL_TRANSFER,
+            VulkanStage::ALL_COMMANDS,
+            VulkanAccess::TRANSFER_WRITE,
+            VulkanAccess::MEMORY_READ | VulkanAccess::MEMORY_WRITE,
+        )
     }
 
     /// Compute dispatch.

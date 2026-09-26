@@ -19,10 +19,10 @@ use crate::host_rhi::HostTextureExt as _;
 /// in-process-only surface, not an error, and a publish failure costs the
 /// consumer its content-preserving acquire, never the dispatch.
 pub(super) fn publish_bound_surface_layouts_to_surface_share(
-    full: &crate::core::context::GpuContextFullAccess,
+    surface_store: Option<crate::core::context::SurfaceStore>,
     bound_surfaces: &[(String, TextureRegistration)],
 ) {
-    let Some(store) = full.surface_store() else {
+    let Some(store) = surface_store else {
         return;
     };
     let mut published_surface_ids: Vec<&str> = Vec::with_capacity(bound_surfaces.len());

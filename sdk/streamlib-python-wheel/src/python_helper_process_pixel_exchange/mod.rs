@@ -53,6 +53,8 @@ mod linux;
 mod macos;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod processor_owned_window;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod surface_copy;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) use gpu_kernels::{

@@ -95,6 +95,31 @@ impl ResolvedSurfaceBacking {
 }
 
 impl GpuContext {
+    /// Whether a write into `surface_id`'s resolved backing publishes to
+    /// every holder — the one write-back rule every write door answers from.
+    pub(crate) fn resolved_backing_takes_a_write_back(
+        &self,
+        surface_id: &str,
+        backing: &ResolvedSurfaceBacking,
+    ) -> bool {
+        match backing {
+            // A texture answers only when no pooled member resolves ahead of
+            // it, and cross-process registrations mint their own handle ids
+            // rather than pool ids, so no pool slot is at stake; what gates
+            // the write is whether the image may take a recorded copy, which
+            // its usage decided at allocation.
+            ResolvedSurfaceBacking::RegisteredTexture(registration) => {
+                registration.texture().supports_transfer_write()
+            }
+            // A pool member a producer also published as a registered
+            // texture is a frame that producer still owns, and a write would
+            // land in a live pool slot.
+            ResolvedSurfaceBacking::PixelBuffer(_) => self
+                .producer_registered_texture_for_surface_id(surface_id)
+                .is_none(),
+        }
+    }
+
     /// Resolve the current blit source for `surface_id` — the surface's
     /// pooled backing whenever it has one, the registered texture only
     /// for surfaces that have none.
