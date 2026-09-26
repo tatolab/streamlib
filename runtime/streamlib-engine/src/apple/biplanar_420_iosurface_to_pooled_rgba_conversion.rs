@@ -107,6 +107,9 @@ impl Biplanar420IOSurfaceToPooledRgbaConversion {
                 }
             }
             Biplanar420IOSurfaceTransport::CopiedIntoAStorageBuffer { staging } => {
+                // One staging buffer serves every frame, and the last
+                // submission may still read it if its own wait timed out.
+                self.conversion_stage.wait_for_the_previous_submission()?;
                 staging.copy_the_planes_of(iosurface)?;
                 CapturedVideoFrameBytesInAStorageBuffer {
                     storage_buffer: &staging.storage_buffer,
