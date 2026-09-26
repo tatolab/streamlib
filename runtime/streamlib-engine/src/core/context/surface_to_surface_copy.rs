@@ -86,23 +86,23 @@ fn refuse_a_pair_that_is_one_allocation(
     destination: &SurfaceToSurfaceCopyEndpoint<'_>,
 ) -> Result<()> {
     use crate::host_rhi::HostTextureExt as _;
+    use crate::vulkan::rhi::VulkanBufferLike as _;
 
     let one_allocation = match (&source.backing, &destination.backing) {
         (
             ResolvedSurfaceBacking::PixelBuffer(source_buffer),
             ResolvedSurfaceBacking::PixelBuffer(destination_buffer),
-        ) => std::sync::Arc::ptr_eq(
-            &source_buffer.buffer_ref().inner,
-            &destination_buffer.buffer_ref().inner,
-        ),
+        ) => source_buffer.vk_buffer() == destination_buffer.vk_buffer(),
         (
             ResolvedSurfaceBacking::RegisteredTexture(source_registration),
             ResolvedSurfaceBacking::RegisteredTexture(destination_registration),
-        ) => {
-            let source_image = source_registration.texture().vulkan_inner().image();
-            source_image.is_some()
-                && source_image == destination_registration.texture().vulkan_inner().image()
-        }
+        ) => source_registration
+            .texture()
+            .vulkan_inner()
+            .image()
+            .is_some_and(|image| {
+                Some(image) == destination_registration.texture().vulkan_inner().image()
+            }),
         _ => false,
     };
     if one_allocation {
