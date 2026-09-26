@@ -35,7 +35,10 @@
 //!   - `skia_animated_stress.mp4` — full 30 s × 60 fps H.264 encode.
 //!   - `skia_animated_stress_hero.png` — frame at t=15 s.
 
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
+
+#[path = "support/render_target_texture.rs"]
+mod render_target_texture;
 
 use std::io::Write as _;
 use std::path::PathBuf;
@@ -103,9 +106,9 @@ fn skia_animated_stress() {
     };
 
     // Production allocation path (what the polyglot wrapper will hit).
-    let stream_tex = gpu
-        .acquire_render_target_dma_buf_image(W, H, TextureFormat::Bgra8Unorm)
-        .expect("acquire_render_target_dma_buf_image");
+    let stream_tex =
+        render_target_texture::acquire_render_target_texture(&gpu, W, H, TextureFormat::Bgra8Unorm)
+            .expect("acquire_render_target_texture");
     let texture = stream_tex.vulkan_inner().clone();
     // Single-writer-per-edge per
     // `docs/architecture/adapter-timeline-single-writer.md`: the test

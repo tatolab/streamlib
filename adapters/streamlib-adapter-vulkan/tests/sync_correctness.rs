@@ -12,7 +12,10 @@
 //! `current_signal_value` counter, so signals across the two timelines
 //! advance the underlying counter in interleaving order.
 
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
+
+#[path = "support/render_target_texture.rs"]
+mod render_target_texture;
 
 use std::sync::Arc;
 use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
@@ -52,9 +55,13 @@ fn timeline_counter_advances_on_release_and_is_observable_by_next_acquire() {
     let ctx = VulkanContext::new(Arc::clone(&adapter));
 
     let surface_id: SurfaceId = 1;
-    let stream_tex = gpu
-        .acquire_render_target_dma_buf_image(64, 64, TextureFormat::Bgra8Unorm)
-        .expect("acquire_render_target_dma_buf_image");
+    let stream_tex = render_target_texture::acquire_render_target_texture(
+        &gpu,
+        64,
+        64,
+        TextureFormat::Bgra8Unorm,
+    )
+    .expect("acquire_render_target_texture");
     let texture = stream_tex.vulkan_inner().clone();
     let produce_done = Arc::new(
         HostVulkanTimelineSemaphore::new(adapter.device().device(), 0)

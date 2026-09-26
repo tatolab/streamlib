@@ -19,7 +19,7 @@
 //! `HostVulkanDevice`, and the validation counter is per device — a
 //! finding raised by either would otherwise land in the other's delta.
 
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 #[path = "common.rs"]
 mod common;

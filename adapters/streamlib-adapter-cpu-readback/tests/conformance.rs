@@ -3,7 +3,7 @@
 
 //! `streamlib_adapter_cpu_readback::tests::conformance` — runs the
 //! public `run_conformance` suite from `streamlib-surface-adapter` against
-//! a real cpu-readback adapter wired to a host-allocated DMA-BUF
+//! a real cpu-readback adapter wired to a host-allocated render-target
 //! `VkImage`, per-plane staging buffers, and an exportable timeline
 //! semaphore.
 //!
@@ -12,7 +12,7 @@
 //! `try_acquire_*` returning `Ok(None)` on contention, and Send+Sync
 //! under multi-thread reads.
 
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 #[path = "common.rs"]
 mod common;
@@ -77,10 +77,13 @@ fn duplicate_registration_returns_surface_already_registered() {
     // Build a fresh registration for the same id and assert the
     // adapter rejects it as `SurfaceAlreadyRegistered` rather than
     // the overloaded `SurfaceNotFound`.
-    let stream_texture = fixture
-        .gpu
-        .acquire_render_target_dma_buf_image(64, 64, TextureFormat::Bgra8Unorm)
-        .expect("acquire_render_target_dma_buf_image");
+    let stream_texture = common::render_target_texture::acquire_render_target_texture(
+        &fixture.gpu,
+        64,
+        64,
+        TextureFormat::Bgra8Unorm,
+    )
+    .expect("acquire_render_target_texture");
     let texture_arc = Arc::clone(stream_texture.vulkan_inner());
     let staging = Arc::new(
         HostVulkanBuffer::new(

@@ -3,7 +3,7 @@
 
 [package]
 name = "streamlib-adapter-cpu-readback"
-description = "Explicit GPU→CPU surface adapter (Linux). The single named, opt-in path for customers who need CPU memory access to a streamlib surface — returns numpy.ndarray (Python) / Uint8Array (Deno) / &[u8] (Rust) from a host-side vkCmdCopyImageToBuffer at acquire time. Sole implementor of the CpuReadable / CpuWritable capability traits from streamlib-surface-adapter; GPU adapters do not implement them, by design."
+description = "Explicit GPU→CPU surface adapter (Linux and macOS). The single named, opt-in path for customers who need CPU memory access to a streamlib surface — returns numpy.ndarray (Python) / Uint8Array (Deno) / &[u8] (Rust) from a host-side vkCmdCopyImageToBuffer at acquire time. Sole implementor of the CpuReadable / CpuWritable capability traits from streamlib-surface-adapter; GPU adapters do not implement them, by design."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -19,7 +19,7 @@ streamlib-surface-adapter = { path = "../streamlib-surface-adapter", version = "
 thiserror.workspace = true
 tracing.workspace = true
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 streamlib-consumer-rhi = { path = "../../runtime/streamlib-consumer-rhi", version = "0.26.30" }
 streamlib-surface-client = { path = "../../runtime/streamlib-surface-client", version = "0.26.30" }
 vulkanalia.workspace = true
@@ -38,7 +38,7 @@ tracing-subscriber.workspace = true
 # absent from their dep graph (asserted by `cargo tree | grep -c
 # "^streamlib v"` returning 0). Mirrors `streamlib-adapter-vulkan`'s
 # shape post-#560.
-[target.'cfg(target_os = "linux")'.dev-dependencies]
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dev-dependencies]
 streamlib-engine = { path = "../../runtime/streamlib-engine" }
 streamlib = { path = "../../sdk/streamlib-sdk" }
 serde = { workspace = true }

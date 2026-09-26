@@ -508,7 +508,6 @@ impl<D: VulkanRhiDevice + 'static> CpuReadbackSurfaceAdapter<D> {
     }
 }
 
-#[cfg(target_os = "linux")]
 impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for CpuReadbackSurfaceAdapter<D> {
     type ReadView<'g> = CpuReadbackReadView<'g>;
     type WriteView<'g> = CpuReadbackWriteView<'g>;
@@ -666,7 +665,6 @@ impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for CpuReadbackSurfaceAdapter<
 /// thread-local pools — see issue #620 AI Agent Notes).
 pub struct InProcessCpuReadbackCopyTrigger<D: VulkanRhiDevice> {
     device: Arc<D>,
-    #[cfg(target_os = "linux")]
     submit_ctx: Mutex<Option<AdapterPersistentSubmitContext>>,
     /// Counts the number of times the persistent submit context was
     /// (re)created — incremented on lazy-init and on rebuild after
@@ -679,7 +677,6 @@ impl<D: VulkanRhiDevice> InProcessCpuReadbackCopyTrigger<D> {
     pub fn new(device: Arc<D>) -> Self {
         Self {
             device,
-            #[cfg(target_os = "linux")]
             submit_ctx: Mutex::new(None),
             submit_ctx_create_count: AtomicUsize::new(0),
         }
@@ -699,7 +696,6 @@ impl<D: VulkanRhiDevice> InProcessCpuReadbackCopyTrigger<D> {
     }
 }
 
-#[cfg(target_os = "linux")]
 impl<D: VulkanRhiDevice + 'static> CpuReadbackCopyTrigger<D::Privilege>
     for InProcessCpuReadbackCopyTrigger<D>
 {
@@ -738,7 +734,6 @@ impl<D: VulkanRhiDevice + 'static> CpuReadbackCopyTrigger<D::Privilege>
     }
 }
 
-#[cfg(target_os = "linux")]
 impl<D: VulkanRhiDevice> Drop for InProcessCpuReadbackCopyTrigger<D> {
     fn drop(&mut self) {
         let mut guard = match self.submit_ctx.lock() {
@@ -757,7 +752,6 @@ enum CopyDirection {
     BufferToImage,
 }
 
-#[cfg(target_os = "linux")]
 impl<D: VulkanRhiDevice + 'static> InProcessCpuReadbackCopyTrigger<D> {
     fn submit_image_buffer_copy<P: DevicePrivilege>(
         &self,
@@ -927,14 +921,12 @@ impl<D: VulkanRhiDevice + 'static> InProcessCpuReadbackCopyTrigger<D> {
 /// already CPU-waits on the timeline before the customer reads).
 /// `vkResetCommandPool` is the cheap path per Vulkan spec — recycles
 /// every command buffer's memory in one call.
-#[cfg(target_os = "linux")]
 struct AdapterPersistentSubmitContext {
     pool: vk::CommandPool,
     cmd: vk::CommandBuffer,
     fence: vk::Fence,
 }
 
-#[cfg(target_os = "linux")]
 impl AdapterPersistentSubmitContext {
     fn new(device: &vulkanalia::Device, qf: u32) -> Result<Self, AdapterError> {
         let pool_info = vk::CommandPoolCreateInfo::builder()

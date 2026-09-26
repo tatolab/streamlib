@@ -29,11 +29,12 @@
 //! All tests skip gracefully when no GPU / no Vulkan loader is
 //! available, matching `consumer_vulkan_device.rs::tests`.
 
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use serial_test::serial;
+#[cfg(target_os = "linux")]
 use streamlib::sdk::engine::host_rhi::HostVulkanDevice;
 use streamlib_consumer_rhi::{ConsumerVulkanDevice, VulkanRhiDevice};
 use vulkanalia::prelude::v1_4::*;
@@ -49,6 +50,7 @@ fn try_consumer() -> Option<Arc<ConsumerVulkanDevice>> {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn try_host() -> Option<Arc<HostVulkanDevice>> {
     match HostVulkanDevice::new() {
         Ok(d) => Some(d),
@@ -272,6 +274,7 @@ fn consumer_device_implements_vulkan_rhi_device_trait() {
 /// `consumer_device_drop_with_live_imports_emits_leak_warning` to
 /// assert the warn message fired without coupling to the global
 /// subscriber.
+#[cfg(target_os = "linux")]
 mod warn_capture {
     use std::sync::{Arc, Mutex};
 
@@ -332,9 +335,12 @@ mod warn_capture {
     }
 }
 
+// Imports a DMA-BUF; the IOSurface import's lifetime is the consumer RHI's own test.
+#[cfg(target_os = "linux")]
 #[test]
 #[serial]
 fn consumer_device_drop_with_live_imports_emits_leak_warning() {
+    use std::sync::Mutex;
     use streamlib::sdk::engine::host_rhi::HostVulkanBuffer;
     use tracing_subscriber::layer::SubscriberExt;
 

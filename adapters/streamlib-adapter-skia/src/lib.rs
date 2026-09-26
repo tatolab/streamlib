@@ -26,13 +26,16 @@
 //! `docs/architecture/surface-adapter.md` for the full architecture
 //! brief.
 
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 mod adapter;
 mod context;
 mod error;
+#[cfg(target_os = "linux")]
 mod gl_adapter;
+#[cfg(target_os = "linux")]
 mod gl_context;
+#[cfg(target_os = "linux")]
 mod gl_view;
 mod skia_internal;
 mod view;
@@ -40,7 +43,10 @@ mod view;
 pub use adapter::SkiaSurfaceAdapter;
 pub use context::SkiaContext;
 pub use error::SkiaAdapterError;
+#[cfg(target_os = "linux")]
 pub use gl_adapter::SkiaGlSurfaceAdapter;
+#[cfg(target_os = "linux")]
 pub use gl_context::SkiaGlContext;
+#[cfg(target_os = "linux")]
 pub use gl_view::{SkiaGlReadView, SkiaGlWriteView};
 pub use view::{SkiaReadView, SkiaWriteView};

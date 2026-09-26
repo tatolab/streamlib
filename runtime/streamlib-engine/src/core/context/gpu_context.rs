@@ -1736,32 +1736,32 @@ impl GpuContext {
             "GpuContext::acquire_render_target_dma_buf_image"
         );
 
-        let desc = TextureDescriptor::new(width, height, format).with_usage(
-            TextureUsages::RENDER_ATTACHMENT
-                | TextureUsages::TEXTURE_BINDING
-                | TextureUsages::COPY_SRC
-                // COPY_DST is required by Skia's `check_image_info`
-                // gate (`GrVkGpu.cpp:1298-1302`): Skia mandates both
-                // `VK_IMAGE_USAGE_TRANSFER_SRC_BIT` and
-                // `VK_IMAGE_USAGE_TRANSFER_DST_BIT` on every
-                // externally-allocated image it wraps as a Surface or
-                // Image — without TRANSFER_DST, both
-                // `wrap_backend_render_target` and `borrow_texture_from`
-                // silently return `None`. The bit is also additive
-                // for OpenGL / Vulkan compute / cpu-readback adapters,
-                // so it lives at the canonical render-target
-                // allocation point rather than per-adapter.
-                | TextureUsages::COPY_DST
-                // STORAGE_BINDING is on by default so subprocess Vulkan
-                // adapters can bind the imported VkImage as a storage
-                // image for compute writes (#531). Render-target +
-                // sample-only adapters (OpenGL fragment shader, Skia)
-                // still work — STORAGE is additive and tiled modifiers
-                // for these formats reliably support it on every driver
-                // streamlib runs on.
-                | TextureUsages::STORAGE_BINDING,
-        );
+        let desc = TextureDescriptor::new(width, height, format)
+            .with_usage(render_target_texture_usages());
         self.device.create_texture_render_target_dma_buf(&desc)
+    }
+
+    /// Allocate a render-target-capable VkImage over a fresh private
+    /// IOSurface — the macOS peer of
+    /// [`Self::acquire_render_target_dma_buf_image`], with the same usage
+    /// set. Single-plane formats only.
+    #[cfg(target_os = "macos")]
+    pub fn acquire_render_target_iosurface_image(
+        &self,
+        width: u32,
+        height: u32,
+        format: TextureFormat,
+    ) -> Result<Texture> {
+        tracing::debug!(
+            rhi_op = "acquire_render_target_iosurface_image",
+            width,
+            height,
+            format = ?format,
+            "GpuContext::acquire_render_target_iosurface_image"
+        );
+        let desc = TextureDescriptor::new(width, height, format)
+            .with_usage(render_target_texture_usages());
+        self.device.create_texture_iosurface_backed(&desc)
     }
 
     /// Acquire a HOST_VISIBLE storage buffer for CPU→GPU SSBO upload.
@@ -4100,6 +4100,20 @@ impl GpuContextFullAccess {
             .acquire_render_target_dma_buf_image(width, height, format)
     }
 
+    /// Allocate a render-target-capable VkImage over a private IOSurface
+    /// (privileged path). See
+    /// [`GpuContext::acquire_render_target_iosurface_image`].
+    #[cfg(target_os = "macos")]
+    pub fn acquire_render_target_iosurface_image(
+        &self,
+        width: u32,
+        height: u32,
+        format: TextureFormat,
+    ) -> Result<Texture> {
+        self.host_inner()
+            .acquire_render_target_iosurface_image(width, height, format)
+    }
+
     /// Register a PipeWire `Video/Source` node with `media.role = Camera`, so
     /// a portal-based application can select this graph as a camera.
     ///
@@ -4841,6 +4855,35 @@ impl std::fmt::Debug for GpuContextFullAccess {
             .field("handle", &self.handle)
             .finish()
     }
+}
+
+/// The usage set of a render-target image a consumer adapter wraps, on every
+/// platform.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn render_target_texture_usages() -> TextureUsages {
+    TextureUsages::RENDER_ATTACHMENT
+            | TextureUsages::TEXTURE_BINDING
+            | TextureUsages::COPY_SRC
+            // COPY_DST is required by Skia's `check_image_info`
+            // gate (`GrVkGpu.cpp:1298-1302`): Skia mandates both
+            // `VK_IMAGE_USAGE_TRANSFER_SRC_BIT` and
+            // `VK_IMAGE_USAGE_TRANSFER_DST_BIT` on every
+            // externally-allocated image it wraps as a Surface or
+            // Image — without TRANSFER_DST, both
+            // `wrap_backend_render_target` and `borrow_texture_from`
+            // silently return `None`. The bit is also additive
+            // for OpenGL / Vulkan compute / cpu-readback adapters,
+            // so it lives at the canonical render-target
+            // allocation point rather than per-adapter.
+            | TextureUsages::COPY_DST
+            // STORAGE_BINDING is on by default so subprocess Vulkan
+            // adapters can bind the imported VkImage as a storage
+            // image for compute writes (#531). Render-target +
+            // sample-only adapters (OpenGL fragment shader, Skia)
+            // still work — STORAGE is additive and tiled modifiers
+            // for these formats reliably support it on every driver
+            // streamlib runs on.
+            | TextureUsages::STORAGE_BINDING
 }
 
 #[cfg(test)]

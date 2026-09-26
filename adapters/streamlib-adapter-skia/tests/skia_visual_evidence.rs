@@ -23,7 +23,10 @@
 //! on every CI run. This test exists purely to produce
 //! reviewer-readable PNG evidence for PRs.
 
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
+
+#[path = "support/render_target_texture.rs"]
+mod render_target_texture;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -83,9 +86,9 @@ fn skia_visual_evidence() {
         }
     };
 
-    let stream_tex = gpu
-        .acquire_render_target_dma_buf_image(W, H, TextureFormat::Bgra8Unorm)
-        .expect("acquire_render_target_dma_buf_image");
+    let stream_tex =
+        render_target_texture::acquire_render_target_texture(&gpu, W, H, TextureFormat::Bgra8Unorm)
+            .expect("acquire_render_target_texture");
     let texture = stream_tex.vulkan_inner().clone();
     // Single-writer-per-edge per
     // `docs/architecture/adapter-timeline-single-writer.md`: only

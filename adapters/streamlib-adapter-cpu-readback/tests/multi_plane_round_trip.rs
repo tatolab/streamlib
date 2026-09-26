@@ -20,9 +20,10 @@
 //! which only succeeds when the EGL probe advertised an NV12 modifier
 //! that's render-target-capable. Drivers without that modifier (e.g.
 //! pre-570 NVIDIA, llvmpipe-only) skip the test cleanly via the
-//! fallible registration path.
+//! fallible registration path, as does macOS, whose IOSurface-backed
+//! image carries one plane.
 
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 #[path = "common.rs"]
 mod common;
@@ -58,7 +59,7 @@ fn register_nv12_or_skip(
         Err(e) => {
             println!(
                 "{test_name}: skipping — host can't allocate NV12 \
-                 render-target DMA-BUF on this driver ({e})"
+                 render-target image on this driver ({e})"
             );
             None
         }
@@ -66,6 +67,10 @@ fn register_nv12_or_skip(
 }
 
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "the IOSurface-backed render-target image is single-plane"
+)]
 fn nv12_multi_plane_write_round_trips_to_read() {
     let fixture = match HostFixture::try_new() {
         Some(f) => f,
@@ -165,6 +170,10 @@ fn nv12_multi_plane_write_round_trips_to_read() {
 }
 
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "the IOSurface-backed render-target image is single-plane"
+)]
 fn nv12_per_plane_distinct_patterns_lands_unscrambled() {
     // Distinct bytes per row of each plane catch column-vs-row swaps
     // and aspect-mask swaps simultaneously — a test where both planes

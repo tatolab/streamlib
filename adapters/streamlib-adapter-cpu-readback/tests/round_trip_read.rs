@@ -5,7 +5,7 @@
 //! writes a known pattern into a `VkImage`, customer acquires READ,
 //! asserts the bytes the customer sees match the host's pattern.
 
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 #[path = "common.rs"]
 mod common;

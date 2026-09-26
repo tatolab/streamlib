@@ -17,7 +17,7 @@
 //! call) and the assertion fires — that's how this test stays
 //! load-bearing rather than feel-good.
 
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 #[path = "common.rs"]
 mod common;

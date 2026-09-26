@@ -21,7 +21,7 @@
 //! `VulkanWritable` or `VulkanImageInfoExt`, this test stops
 //! compiling.
 
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 use streamlib_adapter_skia::{SkiaReadView, SkiaWriteView};
 use streamlib_consumer_rhi::ConsumerVulkanDevice;

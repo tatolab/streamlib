@@ -14,7 +14,7 @@
 //! and `docs/architecture/adapter-authoring.md` for the 3rd-party
 //! authoring guide.
 
-#![cfg(target_os = "linux")]
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 mod adapter;
 mod context;
