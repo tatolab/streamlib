@@ -18,8 +18,8 @@ textures rather than one edited in place.
 The one step that is not the kernel is the landing copy. `CameraSource`
 publishes a buffer-backed frame and a dispatch binds texture-backed surfaces
 only, so each frame is copied device-to-device into a texture this processor
-owns before the kernel can sample it. cupy does nothing in this module but
-that copy; the pixels never touch the host.
+owns before the kernel can sample it. The engine does that copy, so the
+pixels never touch the host.
 """
 
 from __future__ import annotations
@@ -27,8 +27,6 @@ from __future__ import annotations
 import math
 import struct
 from dataclasses import dataclass
-
-import cupy
 
 from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
     ProcessorOutputTextureRing,
@@ -235,13 +233,12 @@ class HalftoneCompute:
                 ctx.gpu_limited_access, frame.width, frame.height
             )
         )
-        # The frame is a DLPack producer in its own right, so this is the whole
-        # read — GPU-resident, and the cast object's claim is what holds the
-        # camera's pixels still for the length of the copy. Leaving the scope
-        # blits the write into the texture, ordered ahead of the engine's next
-        # read of it.
-        with camera_frame_landing_texture.as_device_tensor() as writable_texture:
-            cupy.from_dlpack(writable_texture)[...] = cupy.from_dlpack(frame)
+        # The cast object's claim is what holds the camera's pixels still for
+        # the length of the copy, which returns once the kernel's read of the
+        # texture would see them.
+        ctx.gpu_limited_access.copy_surface_to_surface(
+            frame.surface_id, camera_frame_landing_texture
+        )
 
         halftone_frame_texture = self.halftone_frame_ring.next_texture_for_this_frame(
             ctx.gpu_limited_access, frame.width, frame.height

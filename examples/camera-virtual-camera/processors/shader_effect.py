@@ -20,7 +20,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import cupy
 from streamlib import (
     ProcessorOutputTextureRing,
     RuntimeContextFullAccess,
@@ -125,8 +124,7 @@ class ShaderEffect:
         landing_texture = self.landing_texture_ring.next_texture_for_this_frame(
             ctx.gpu_limited_access, frame.width, frame.height
         )
-        with landing_texture.as_device_tensor() as writable_landing_texture:
-            cupy.from_dlpack(writable_landing_texture)[...] = cupy.from_dlpack(frame)
+        ctx.gpu_limited_access.copy_surface_to_surface(frame.surface_id, landing_texture)
 
         rendered_output_texture = (
             self.rendered_output_texture_ring.next_texture_for_this_frame(

@@ -134,17 +134,24 @@ The effect keeps its source's rate: 30 fps in that 640×480 showcase run, and
 
 Each frame is copied device-to-device into a texture the effect owns before the
 pass samples it: a camera publishes buffer-backed frames, and a draw binds
-texture-backed ones. `cupy` does nothing in the module but that copy.
+texture-backed ones. The engine does that copy, with
+`ctx.gpu_limited_access.copy_surface_to_surface`.
 
 The tests in `tests/` run each shipped look over a known pattern and check a
 pixel against the same maths done on the CPU, and check that a broken shader is
-refused. They boot an engine and build kernels, so they need an NVIDIA GPU:
+refused. They boot an engine and build kernels, so they need a GPU the engine
+can drive:
 
 ```bash
 uv run pytest
 ```
 
 ## Run it
+
+This app runs on Linux only. `VirtualCameraSink` is a v4l2loopback and
+PipeWire mechanism, and macOS has no virtual camera the engine can create. The
+processors are not what binds it — they use nothing single-floor, and the
+cross-floor check `streamlib dev` prints names only the two sinks in `app.py`.
 
 ```bash
 uv venv --python 3.12 && uv sync
