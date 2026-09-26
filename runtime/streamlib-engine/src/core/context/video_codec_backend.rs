@@ -29,6 +29,19 @@ pub enum VideoCodecElementaryStream {
     H265,
 }
 
+/// The encode knobs a block's config sets — known at `setup()`, before any
+/// frame says what extent or rate the session codes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VideoEncodeKnobs {
+    /// Target bitrate in bits per second. `None`: constant-quality encoding
+    /// at the arm's balanced preset.
+    pub bitrate_bps: Option<u32>,
+    /// Seconds between sync points.
+    pub keyframe_interval_seconds: u32,
+    /// The arm's encoder-effort index. `None`: the arm's default.
+    pub effort_level: Option<u32>,
+}
+
 /// What a caller asks a backend to open an encode session for.
 #[derive(Debug, Clone, PartialEq)]
 pub struct VideoEncodeSessionRequest {
@@ -40,13 +53,8 @@ pub struct VideoEncodeSessionRequest {
     pub height: u32,
     /// The rate the session's rate control and sync-point cadence assume.
     pub frames_per_second: u32,
-    /// Target bitrate in bits per second. `None`: constant-quality encoding
-    /// at the arm's balanced preset.
-    pub bitrate_bps: Option<u32>,
-    /// Seconds between sync points.
-    pub keyframe_interval_seconds: u32,
-    /// The arm's encoder-effort index. `None`: the arm's default.
-    pub effort_level: Option<u32>,
+    /// The knobs the block's config set.
+    pub knobs: VideoEncodeKnobs,
     /// The colour the parameter sets' VUI signals. `None` emits no colour
     /// description block.
     pub color_vui: Option<H273ColorVui>,
@@ -162,6 +170,15 @@ pub trait VideoCodecBackend: Send + Sync {
     /// The arm's name, for the one probe log line and for error text.
     fn backend_name(&self) -> &'static str;
 
+    /// Refuse, by name, a knob this arm would not honour for
+    /// `elementary_stream`. Asked at the block's `setup()`, so a knob is
+    /// never silently dropped when the first frame mints the session.
+    fn refuse_encode_knobs_this_arm_does_not_honour(
+        &self,
+        elementary_stream: VideoCodecElementaryStream,
+        knobs: &VideoEncodeKnobs,
+    ) -> Result<()>;
+
     /// Open an encode session. Takes the full-access context because an arm
     /// may allocate device resources for the session.
     fn open_encode_session(
@@ -232,9 +249,20 @@ fn platform_video_codec_backend_arms() -> Vec<VideoCodecBackendArm> {
     })]
 }
 
+/// The chain's real arms: VideoToolbox, else — once it has declined — the
+/// refusing backend the walk falls through to.
+#[cfg(target_os = "macos")]
+fn platform_video_codec_backend_arms() -> Vec<VideoCodecBackendArm> {
+    use crate::apple::videotoolbox_video_codec_backend::VideoToolboxVideoCodecBackend;
+
+    vec![VideoCodecBackendArm::named("videotoolbox", || {
+        Ok(Arc::new(VideoToolboxVideoCodecBackend) as SharedVideoCodecBackend)
+    })]
+}
+
 /// No codec arm serves this platform; the walk falls through to the refusing
 /// backend.
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn platform_video_codec_backend_arms() -> Vec<VideoCodecBackendArm> {
     Vec::new()
 }
@@ -257,7 +285,7 @@ mod tests {
     fn the_video_codec_chain_always_lands_on_an_arm_whether_or_not_the_platform_codes() {
         let backend = probe_video_codec_backend();
         assert!(
-            ["vulkan-video", "refusing-null"].contains(&backend.backend_name()),
+            ["vulkan-video", "videotoolbox", "refusing-null"].contains(&backend.backend_name()),
             "the chain resolved to an arm nothing declares: {}",
             backend.backend_name()
         );
@@ -276,7 +304,19 @@ mod tests {
         assert_eq!(arm_names, ["vulkan-video"]);
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_macos_video_codec_chain_offers_videotoolbox_before_falling_through_to_the_refusing_backend()
+     {
+        let arm_names: Vec<&str> = platform_video_codec_backend_arms()
+            .iter()
+            .map(|arm| arm.backend_name)
+            .collect();
+        assert_eq!(arm_names, ["videotoolbox"]);
+        assert_eq!(probe_video_codec_backend().backend_name(), "videotoolbox");
+    }
+
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     #[test]
     fn a_platform_with_no_codec_arm_falls_straight_through_to_the_refusing_backend() {
         assert!(platform_video_codec_backend_arms().is_empty());

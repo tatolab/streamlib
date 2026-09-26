@@ -9,8 +9,8 @@ use crate::core::color::H273ColorVui;
 use crate::core::context::{
     DecodedVideoPictureInPooledPixelBuffer, EncodedVideoAccessUnitFromSession,
     GpuContextFullAccess, GpuContextLimitedAccess, VideoCodecBackend, VideoCodecElementaryStream,
-    VideoDecodeSession, VideoDecodeSessionRequest, VideoEncodeSession, VideoEncodeSessionRequest,
-    VideoEncodeSourceSurface,
+    VideoDecodeSession, VideoDecodeSessionRequest, VideoEncodeKnobs, VideoEncodeSession,
+    VideoEncodeSessionRequest, VideoEncodeSourceSurface,
 };
 use crate::core::rhi::PixelFormat;
 use crate::core::{Error, Result};
@@ -24,6 +24,15 @@ pub(crate) struct VulkanVideoCodecBackend;
 impl VideoCodecBackend for VulkanVideoCodecBackend {
     fn backend_name(&self) -> &'static str {
         "vulkan-video"
+    }
+
+    /// Every knob maps onto the session config.
+    fn refuse_encode_knobs_this_arm_does_not_honour(
+        &self,
+        _elementary_stream: VideoCodecElementaryStream,
+        _knobs: &VideoEncodeKnobs,
+    ) -> Result<()> {
+        Ok(())
     }
 
     fn open_encode_session(
@@ -79,13 +88,13 @@ fn simple_encoder_config_for(request: &VideoEncodeSessionRequest) -> SimpleEncod
         codec: session_codec_for(request.elementary_stream),
         preset: Preset::Medium,
         qp: None,
-        bitrate_bps: request.bitrate_bps,
+        bitrate_bps: request.knobs.bitrate_bps,
         // The seam's streaming shape: no B-frames, periodic IDR, parameter
         // sets prepended to every IDR for mid-stream join.
         streaming: true,
-        idr_interval_secs: request.keyframe_interval_seconds,
+        idr_interval_secs: request.knobs.keyframe_interval_seconds,
         prepend_header_to_idr: Some(true),
-        effort_level: request.effort_level,
+        effort_level: request.knobs.effort_level,
         color_vui: request.color_vui,
     }
 }
@@ -229,9 +238,11 @@ mod tests {
             width: 1920,
             height: 1080,
             frames_per_second: 30,
-            bitrate_bps: Some(4_000_000),
-            keyframe_interval_seconds: 1,
-            effort_level: Some(2),
+            knobs: VideoEncodeKnobs {
+                bitrate_bps: Some(4_000_000),
+                keyframe_interval_seconds: 1,
+                effort_level: Some(2),
+            },
             color_vui: None,
         });
         assert!(config.streaming);

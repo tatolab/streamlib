@@ -160,6 +160,8 @@ block2 = "0.6"
 objc2-core-audio = { workspace = true, features = ["std", "AudioHardware", "block2", "dispatch2", "objc2-core-audio-types"] }
 objc2-core-audio-types = { workspace = true, features = ["std", "CoreAudioBaseTypes"] }
 objc2-audio-toolbox = { workspace = true, features = ["std", "AUComponent", "AudioComponent", "AudioConverter", "AudioOutputUnit", "AudioUnitProperties", "objc2-core-audio-types"] }
+# The VideoToolbox arm of the video codec seam.
+objc2-video-toolbox = { workspace = true, features = ["std", "VTSession", "VTCompressionSession", "VTCompressionProperties", "VTDecompressionSession", "VTDecompressionProperties", "VTErrors", "VTVideoEncoderList", "objc2-core-media", "objc2-core-video"] }
 objc2-app-kit.workspace = true
 objc2-quartz-core.workspace = true
 objc2-core-text.workspace = true
@@ -324,6 +326,14 @@ required-features = ["hardware-tests"]
 # seam. Rig tier — a camera, the GPU, and camera access allowed for the
 # terminal running it — so it builds only under `hardware-tests`. Empty off
 # Apple.
+# The VideoToolbox codec arm round-trips the PSNR references on Apple's
+# hardware encoder and decoder. Rig tier — a virtual machine exposes neither —
+# so it builds only under `hardware-tests`. Empty off Apple.
+[[test]]
+name = "videotoolbox_arm_round_trips_the_psnr_references"
+path = "tests/videotoolbox_arm_round_trips_the_psnr_references.rs"
+required-features = ["hardware-tests"]
+
 [[test]]
 name = "avfoundation_camera_captures_through_the_video_device_seam"
 path = "tests/avfoundation_camera_captures_through_the_video_device_seam.rs"

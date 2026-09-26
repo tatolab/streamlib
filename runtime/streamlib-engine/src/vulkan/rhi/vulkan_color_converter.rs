@@ -39,6 +39,11 @@ const IMAGE_TO_YUYV_BUFFER_BINDINGS: &[ComputeBindingSpec] = &[
     ComputeBindingSpec::storage_buffer(1),  // YUYV byte output
 ];
 
+const IMAGE_TO_NV12_BUFFER_BINDINGS: &[ComputeBindingSpec] = &[
+    ComputeBindingSpec::sampled_texture(0), // RGBA input, fetched by texel
+    ComputeBindingSpec::storage_buffer(1),  // NV12 byte output
+];
+
 /// Vulkan implementation of [`crate::core::rhi::RhiColorConverter`].
 pub struct VulkanColorConverter {
     vulkan_device: Arc<HostVulkanDevice>,
@@ -46,6 +51,7 @@ pub struct VulkanColorConverter {
     dst_format: PixelFormat,
     buffer_to_image_kernel: Mutex<Option<Arc<VulkanComputeKernel>>>,
     image_to_yuyv_buffer_kernel: Mutex<Option<Arc<VulkanComputeKernel>>>,
+    image_to_nv12_buffer_kernel: Mutex<Option<Arc<VulkanComputeKernel>>>,
 }
 
 impl VulkanColorConverter {
@@ -63,6 +69,7 @@ impl VulkanColorConverter {
             dst_format,
             buffer_to_image_kernel: Mutex::new(None),
             image_to_yuyv_buffer_kernel: Mutex::new(None),
+            image_to_nv12_buffer_kernel: Mutex::new(None),
         })
     }
 
@@ -197,6 +204,73 @@ impl VulkanColorConverter {
         Ok(kernel)
     }
 
+    /// Bind an RGBA texture source, an NV12 storage-buffer destination laid
+    /// out as `dst_layout` describes, and the encoding push-constants on the
+    /// image→NV12 kernel, and return it for the caller to dispatch over
+    /// `⌈width/4 / 16⌉ × ⌈height/2 / 16⌉` groups.
+    pub fn prepare_image_to_nv12_buffer(
+        &self,
+        src: &Texture,
+        dst: &crate::core::rhi::StorageBuffer,
+        dst_layout: SourceLayoutInfo,
+        info: &ResolvedColorInfo,
+    ) -> Result<Arc<VulkanComputeKernel>> {
+        let (width, height) = (src.width(), src.height());
+        refuse_an_nv12_destination_the_kernel_cannot_write(width, height, dst, dst_layout)?;
+        let kernel = self.get_or_build_image_to_nv12_buffer_kernel()?;
+        kernel.set_sampled_texture(0, src)?;
+        kernel.set_storage_buffer_storage_from_byte_offset(
+            1,
+            dst,
+            u64::from(dst_layout.plane0_offset_bytes),
+        )?;
+        let push = ColorConverterPushConstants::from_resolved_for_rgb_to_ycbcr_nv12(
+            info, width, height, dst_layout,
+        );
+        kernel.set_push_constants_value(&push)?;
+        Ok(kernel)
+    }
+
+    fn get_or_build_image_to_nv12_buffer_kernel(&self) -> Result<Arc<VulkanComputeKernel>> {
+        let mut guard = self.image_to_nv12_buffer_kernel.lock();
+        if let Some(k) = guard.as_ref() {
+            return Ok(Arc::clone(k));
+        }
+        let kernel = Arc::new(self.build_image_to_nv12_buffer_kernel()?);
+        *guard = Some(Arc::clone(&kernel));
+        Ok(kernel)
+    }
+
+    fn build_image_to_nv12_buffer_kernel(&self) -> Result<VulkanComputeKernel> {
+        if !matches!(
+            self.dst_format,
+            PixelFormat::Nv12VideoRange | PixelFormat::Nv12FullRange
+        ) {
+            return Err(Error::NotSupported(format!(
+                "color converter image→NV12 path: destination {:?} is not NV12",
+                self.dst_format
+            )));
+        }
+        let spv: &[u8] = include_bytes!(concat!(
+            env!("OUT_DIR"),
+            "/color_convert_rgba_image_to_nv12_buffer.spv"
+        ));
+        let label = format!(
+            "color_convert_image_to_buffer:{:?}_to_{:?}",
+            self.src_format, self.dst_format
+        );
+        VulkanComputeKernel::new(
+            &self.vulkan_device,
+            &ComputeKernelDescriptor {
+                entry_point: "main",
+                label: label.as_str(),
+                spv,
+                bindings: IMAGE_TO_NV12_BUFFER_BINDINGS,
+                push_constant_size: COLOR_CONVERTER_PUSH_CONSTANT_SIZE,
+            },
+        )
+    }
+
     fn get_or_build_image_to_yuyv_buffer_kernel(&self) -> Result<Arc<VulkanComputeKernel>> {
         let mut guard = self.image_to_yuyv_buffer_kernel.lock();
         if let Some(k) = guard.as_ref() {
@@ -310,6 +384,54 @@ impl VulkanColorConverter {
     }
 }
 
+/// The kernel writes whole `u32`s: both strides and the chroma offset must
+/// be multiples of 4, each luma row must hold the width rounded up to 4, and
+/// both planes must fit the buffer past the luma plane's start.
+fn refuse_an_nv12_destination_the_kernel_cannot_write(
+    width: u32,
+    height: u32,
+    dst: &crate::core::rhi::StorageBuffer,
+    dst_layout: SourceLayoutInfo,
+) -> Result<()> {
+    let SourceLayoutInfo {
+        plane0_offset_bytes,
+        plane0_stride_bytes,
+        plane1_stride_bytes,
+        plane1_offset_bytes,
+    } = dst_layout;
+    let luma_row_bytes = width.next_multiple_of(4);
+    if plane0_stride_bytes < luma_row_bytes
+        || plane1_stride_bytes < luma_row_bytes
+        || ![
+            plane0_stride_bytes,
+            plane1_stride_bytes,
+            plane1_offset_bytes,
+        ]
+        .iter()
+        .all(|value| value.is_multiple_of(4))
+    {
+        return Err(Error::Configuration(format!(
+            "color converter image→NV12: strides {plane0_stride_bytes} / {plane1_stride_bytes} \
+             and chroma offset {plane1_offset_bytes} must be multiples of 4, each stride at \
+             least {luma_row_bytes} for a {width}-wide frame"
+        )));
+    }
+    let needed = u64::from(plane0_offset_bytes)
+        + u64::from(plane1_offset_bytes)
+        + u64::from(plane1_stride_bytes) * u64::from(height.div_ceil(2));
+    let luma_needed =
+        u64::from(plane0_offset_bytes) + u64::from(plane0_stride_bytes) * u64::from(height);
+    if dst.byte_size() < needed.max(luma_needed) {
+        return Err(Error::Configuration(format!(
+            "color converter image→NV12: destination holds {} bytes but a {width}x{height} \
+             frame laid out as {dst_layout:?} needs {}",
+            dst.byte_size(),
+            needed.max(luma_needed)
+        )));
+    }
+    Ok(())
+}
+
 fn validate_format_pair(src: PixelFormat, dst: PixelFormat) -> Result<()> {
     let decode_pair = matches!(
         src,
@@ -320,11 +442,14 @@ fn validate_format_pair(src: PixelFormat, dst: PixelFormat) -> Result<()> {
             | PixelFormat::Bgra32
     ) && matches!(dst, PixelFormat::Rgba32);
     let encode_pair = matches!(src, PixelFormat::Rgba32 | PixelFormat::Bgra32)
-        && matches!(dst, PixelFormat::Yuyv422);
+        && matches!(
+            dst,
+            PixelFormat::Yuyv422 | PixelFormat::Nv12VideoRange | PixelFormat::Nv12FullRange
+        );
     if !decode_pair && !encode_pair {
         return Err(Error::NotSupported(format!(
             "color converter: unsupported format pair {:?} → {:?} (today: \
-             {{NV12, YUYV, RGBA, BGRA}} → RGBA, and {{RGBA, BGRA}} → YUYV)",
+             {{NV12, YUYV, RGBA, BGRA}} → RGBA, and {{RGBA, BGRA}} → {{YUYV, NV12}})",
             src, dst
         )));
     }

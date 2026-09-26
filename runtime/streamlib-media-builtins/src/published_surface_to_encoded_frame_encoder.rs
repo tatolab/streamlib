@@ -20,7 +20,7 @@ use std::marker::PhantomData;
 use serde::{Deserialize, Serialize};
 use streamlib::sdk::context::{
     EncodedVideoAccessUnitFromSession, GpuContextLimitedAccess, RuntimeContextFullAccess,
-    VideoEncodeSession, VideoEncodeSessionRequest, VideoEncodeSourceSurface,
+    VideoEncodeKnobs, VideoEncodeSession, VideoEncodeSessionRequest, VideoEncodeSourceSurface,
     probe_video_codec_backend,
 };
 use streamlib::sdk::error::{Error, Result};
@@ -142,9 +142,22 @@ impl<Identity: HardwareVideoCodecProcessorIdentity>
     PublishedSurfaceToEncodedFrameEncoder<Identity>
 {
     /// The encoder-session mint is deferred to the first frame so its
-    /// dimensions track upstream; setup only keeps the context handle the
-    /// mint and the per-frame resolve need.
-    pub fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+    /// dimensions track upstream; setup keeps the context handle the mint and
+    /// the per-frame resolve need, and refuses a knob the platform's codec
+    /// arm would not honour before any frame arrives.
+    pub fn setup(
+        &mut self,
+        ctx: &RuntimeContextFullAccess<'_>,
+        config: &HardwareVideoEncoderConfig,
+    ) -> Result<()> {
+        probe_video_codec_backend()
+            .refuse_encode_knobs_this_arm_does_not_honour(
+                Identity::VIDEO_CODEC_ELEMENTARY_STREAM,
+                &encode_knobs_from(config),
+            )
+            .map_err(|refusal| {
+                Error::Configuration(format!("{}: {refusal}", Identity::PROCESSOR_NAME))
+            })?;
         self.gpu_context = Some(ctx.gpu_limited_access().clone());
         Ok(())
     }
@@ -360,6 +373,17 @@ fn resolve_encode_dimensions_from_first_frame(
 
 /// Mint the encoder session from the first frame inside a one-shot escalate
 /// window; per-frame submits ride the session's own methods afterwards.
+/// The knobs `config` sets, with the keyframe interval's default filled in.
+fn encode_knobs_from(config: &HardwareVideoEncoderConfig) -> VideoEncodeKnobs {
+    VideoEncodeKnobs {
+        bitrate_bps: config.bitrate_bps,
+        keyframe_interval_seconds: config
+            .keyframe_interval_seconds
+            .unwrap_or(DEFAULT_IDR_INTERVAL_SECONDS),
+        effort_level: config.effort_level,
+    }
+}
+
 fn mint_encode_session_from_first_frame<Identity: HardwareVideoCodecProcessorIdentity>(
     gpu_context: &GpuContextLimitedAccess,
     config: &HardwareVideoEncoderConfig,
@@ -386,11 +410,7 @@ fn mint_encode_session_from_first_frame<Identity: HardwareVideoCodecProcessorIde
         width,
         height,
         frames_per_second: fps,
-        bitrate_bps: config.bitrate_bps,
-        keyframe_interval_seconds: config
-            .keyframe_interval_seconds
-            .unwrap_or(DEFAULT_IDR_INTERVAL_SECONDS),
-        effort_level: config.effort_level,
+        knobs: encode_knobs_from(config),
         color_vui,
     };
 

@@ -115,6 +115,7 @@ objc2-vision = "0.3.2"
 objc2-core-audio = { version = "0.3.2", default-features = false }
 objc2-core-audio-types = { version = "0.3.2", default-features = false }
 objc2-audio-toolbox = { version = "0.3.2", default-features = false }
+objc2-video-toolbox = { version = "0.3.2", default-features = false }
 libc = "0.2.177"
 
 # Vulkan bindings (vendored tatolab fork — VMA 3.3.0 + Vulkan-Headers 1.4.309

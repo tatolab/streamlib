@@ -151,6 +151,26 @@ impl ColorConverterPushConstants {
             plane1_offset_bytes: 0,
         }
     }
+
+    /// [`Self::from_resolved_for_rgb_to_ycbcr`] for a two-plane NV12
+    /// destination laid out as `destination_layout` describes.
+    pub fn from_resolved_for_rgb_to_ycbcr_nv12(
+        info: &ResolvedColorInfo,
+        width: u32,
+        height: u32,
+        destination_layout: SourceLayoutInfo,
+    ) -> Self {
+        Self {
+            plane1_stride_bytes: destination_layout.plane1_stride_bytes,
+            plane1_offset_bytes: destination_layout.plane1_offset_bytes,
+            ..Self::from_resolved_for_rgb_to_ycbcr(
+                info,
+                width,
+                height,
+                destination_layout.plane0_stride_bytes,
+            )
+        }
+    }
 }
 
 /// Source-buffer layout description — plane strides and offsets.
@@ -335,6 +355,21 @@ impl RhiColorConverterInner {
             .prepare_image_to_yuyv_buffer(src, dst, dst_stride_bytes, info)
     }
 
+    /// Bind an RGBA texture source, an NV12 storage-buffer destination laid
+    /// out as `dst_layout` describes, and the encoding push-constants on the
+    /// image→NV12 kernel, and return it for recorder-driven dispatch.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn prepare_image_to_nv12_buffer(
+        &self,
+        src: &Texture,
+        dst: &crate::core::rhi::StorageBuffer,
+        dst_layout: SourceLayoutInfo,
+        info: &ResolvedColorInfo,
+    ) -> Result<std::sync::Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
+        self.inner
+            .prepare_image_to_nv12_buffer(src, dst, dst_layout, info)
+    }
+
     /// Source pixel format this converter accepts.
     pub fn src_format(&self) -> PixelFormat {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -505,6 +540,25 @@ impl RhiColorConverter {
     ) -> Result<std::sync::Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
         self.host_inner()
             .prepare_image_to_yuyv_buffer(src, dst, dst_stride_bytes, info)
+    }
+
+    /// The NV12 sibling of [`Self::prepare_image_to_yuyv_buffer`]: bind an
+    /// RGBA texture source (`SHADER_READ_ONLY_OPTIMAL` when the dispatch
+    /// runs), an NV12 storage-buffer destination laid out as `dst_layout`
+    /// describes — both strides and the chroma offset multiples of 4, each
+    /// luma row holding the width rounded up to 4 — and the encoding
+    /// push-constants. Dispatch it over `⌈width/4 / 16⌉ × ⌈height/2 / 16⌉`
+    /// groups — one thread per 4×2 block.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn prepare_image_to_nv12_buffer(
+        &self,
+        src: &Texture,
+        dst: &crate::core::rhi::StorageBuffer,
+        dst_layout: SourceLayoutInfo,
+        info: &ResolvedColorInfo,
+    ) -> Result<std::sync::Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
+        self.host_inner()
+            .prepare_image_to_nv12_buffer(src, dst, dst_layout, info)
     }
 
     /// Source pixel format this converter accepts. Cached POD —

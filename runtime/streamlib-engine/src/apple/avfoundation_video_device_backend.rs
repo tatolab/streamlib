@@ -5,9 +5,7 @@
 //! biplanar negotiation, and the capture session whose every frame lands in a
 //! pooled `Rgba32` pixel buffer before it is handed off.
 //!
-//! Camera→GPU transport imports each frame's IOSurface memory as a storage
-//! buffer, zero-copy; from the first import the driver refuses, the planes are
-//! copied into a staging buffer instead — no dial.
+//! Camera→GPU transport is [`Biplanar420IOSurfaceToPooledRgbaConversion`]'s.
 
 use std::collections::HashMap;
 use std::ptr::NonNull;
@@ -40,43 +38,33 @@ use objc2_foundation::{
     NSArray, NSDictionary, NSNotification, NSNotificationCenter, NSNotificationName, NSNumber,
     NSObject, NSObjectProtocol, NSString,
 };
-use objc2_io_surface::{IOSurfaceID, IOSurfaceLockOptions, IOSurfaceRef};
 use parking_lot::Mutex;
 
+use crate::apple::biplanar_420_iosurface_to_pooled_rgba_conversion::Biplanar420IOSurfaceToPooledRgbaConversion;
 use crate::apple::core_video_pixel_buffer_color::core_video_pixel_buffer_color_to_h273_color_vui;
+use crate::apple::core_video_pixel_format_dictionary::ensure_core_video_pixel_format_dictionary_is_initialised;
 use crate::apple::permissions::{
     AvFoundationCaptureDeviceAuthorizationAuthority, CaptureDeviceAuthorizationAtOpen,
     CaptureDeviceAuthorizationAuthority, CaptureDeviceRefusal, PrivacyGatedCaptureDevice,
     authorize_the_capture_device_without_waiting_for_the_user, capture_device_refusal_for_the_user,
 };
 use crate::core::color::{ColorSpaceKind, H273ColorVui};
-use crate::core::context::captured_video_frame_to_pooled_rgba_conversion_stage::{
-    CapturedVideoFrameBytesInAStorageBuffer, CapturedVideoFrameDeliveryTally,
-    CapturedVideoFrameToPooledRgbaConversionStage,
-};
+use crate::core::context::captured_video_frame_to_pooled_rgba_conversion_stage::CapturedVideoFrameDeliveryTally;
 use crate::core::context::{
     CapturedVideoFrameFromDevice, CapturedVideoFrameHandOff, DeviceReportedCaptureStamp,
     DeviceStreamFailureReason, DeviceStreamFailureRecorder, DeviceStreamLivenessReport,
-    GpuContextFullAccess, GpuContextLimitedAccess, VideoCaptureDevice, VideoCaptureInstantResolver,
-    VideoCaptureStream, VideoCaptureStreamFormat, VideoDeviceBackend, VideoDeviceStreamRequest,
+    GpuContextLimitedAccess, VideoCaptureDevice, VideoCaptureInstantResolver, VideoCaptureStream,
+    VideoCaptureStreamFormat, VideoDeviceBackend, VideoDeviceStreamRequest,
     refusal_for_a_named_camera_that_is_not_attached,
 };
 use crate::core::media_clock::MediaClock;
-use crate::core::rhi::{
-    PixelBuffer, PixelFormat, PublishedPixelBufferFrameId, SourceLayoutInfo, StorageBuffer,
-};
+use crate::core::rhi::{PixelBuffer, PixelFormat, PublishedPixelBufferFrameId};
 use crate::core::{Error, Result};
-use crate::vulkan::rhi::ImportedIOSurfaceStorageBuffer;
 
 /// How long a stop waits for a frame already on the sample-buffer queue to
 /// finish before saying it could not confirm delivery stopped — well inside
 /// the engine's budget for a processor to stop.
 const DELIVERY_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
-
-/// How many distinct IOSurfaces a stream keeps imported. AVFoundation recycles
-/// a handful from its own pool, so a stream past this is churning surfaces and
-/// starts over rather than growing.
-const MOST_IMPORTED_IOSURFACES_KEPT: usize = 16;
 
 /// The AVFoundation backend. The framework is always present, so this arm
 /// always opens; a Mac with no camera enumerates no devices.
@@ -646,6 +634,7 @@ impl AvFoundationCaptureSessionRequest {
             shortest_frame_duration,
         } = &self.capture_device;
 
+        ensure_core_video_pixel_format_dictionary_is_initialised();
         // SAFETY: AVFoundation's documented configuration sequence, on objects
         // this stream owns, on its serial control queue.
         let (session, output) = unsafe {
@@ -979,9 +968,9 @@ impl AvFoundationFrameDelivery {
             tracing::info!(
                 camera = %self.camera_name,
                 transport = capture_progress
-                    .capture_gpu
+                    .conversion
                     .as_ref()
-                    .map(|capture_gpu| capture_gpu.frame_transport.describe()),
+                    .map(Biplanar420IOSurfaceToPooledRgbaConversion::describe_transport),
                 width = self.stream_format.width,
                 height = self.stream_format.height,
                 pixel_format = ?self.pixel_format_delivered,
@@ -1044,144 +1033,11 @@ impl AvFoundationFrameDelivery {
     }
 }
 
-/// How a stream's frames reach the GPU.
-enum AvFoundationFrameTransport {
-    /// Each IOSurface's memory imported as a storage buffer, zero-copy, kept
-    /// for the next time AVFoundation recycles the surface.
-    ImportedIOSurfaceStorageBuffers {
-        imported_by_iosurface_id: HashMap<IOSurfaceID, ImportedIOSurfaceStorageBuffer>,
-    },
-    /// Each frame's planes copied into one host-visible storage buffer.
-    CopiedIntoAStorageBuffer {
-        staging: CpuUploadStagingStorageBuffer,
-    },
-}
-
-impl AvFoundationFrameTransport {
-    fn describe(&self) -> &'static str {
-        match self {
-            Self::ImportedIOSurfaceStorageBuffers { .. } => "IOSurface zero-copy",
-            Self::CopiedIntoAStorageBuffer { .. } => "CPU upload",
-        }
-    }
-}
-
-/// The storage buffer a CPU upload lands both planes in, luma then chroma,
-/// and the plane geometry it was shaped for.
-struct CpuUploadStagingStorageBuffer {
-    storage_buffer: StorageBuffer,
-    layout: SourceLayoutInfo,
-    luma_bytes_per_row: usize,
-    luma_height: usize,
-    chroma_bytes_per_row: usize,
-    chroma_height: usize,
-}
-
-impl CpuUploadStagingStorageBuffer {
-    /// Staging shaped for `iosurface`'s two planes at their own strides.
-    fn shaped_for(full: &GpuContextFullAccess, iosurface: &IOSurfaceRef) -> Result<Self> {
-        if iosurface.plane_count() != 2 {
-            return Err(Error::Runtime(format!(
-                "the camera's IOSurface has {} planes where biplanar 4:2:0 has 2",
-                iosurface.plane_count()
-            )));
-        }
-        let (luma_bytes_per_row, luma_height) = (
-            iosurface.bytes_per_row_of_plane(0),
-            iosurface.height_of_plane(0),
-        );
-        let (chroma_bytes_per_row, chroma_height) = (
-            iosurface.bytes_per_row_of_plane(1),
-            iosurface.height_of_plane(1),
-        );
-        let luma_plane_bytes = luma_bytes_per_row * luma_height;
-        let as_u32 = |value: usize| {
-            u32::try_from(value).map_err(|_| {
-                Error::Runtime(format!(
-                    "the camera's IOSurface geometry {value} does not fit a u32"
-                ))
-            })
-        };
-        let layout = SourceLayoutInfo::nv12(
-            as_u32(luma_bytes_per_row)?,
-            as_u32(chroma_bytes_per_row)?,
-            as_u32(luma_plane_bytes)?,
-        );
-        let byte_size =
-            (luma_plane_bytes + chroma_bytes_per_row * chroma_height).next_multiple_of(4) as u64;
-        Ok(Self {
-            storage_buffer: full.acquire_storage_buffer(byte_size)?,
-            layout,
-            luma_bytes_per_row,
-            luma_height,
-            chroma_bytes_per_row,
-            chroma_height,
-        })
-    }
-
-    /// Copy both of `iosurface`'s planes in, under a read-only lock so the copy
-    /// sees a coherent frame, refusing a surface of any other shape.
-    fn copy_the_planes_of(&self, iosurface: &IOSurfaceRef) -> Result<()> {
-        let surface_geometry = (
-            iosurface.plane_count(),
-            iosurface.bytes_per_row_of_plane(0),
-            iosurface.height_of_plane(0),
-            iosurface.bytes_per_row_of_plane(1),
-            iosurface.height_of_plane(1),
-        );
-        let staged_geometry = (
-            2,
-            self.luma_bytes_per_row,
-            self.luma_height,
-            self.chroma_bytes_per_row,
-            self.chroma_height,
-        );
-        if surface_geometry != staged_geometry {
-            return Err(Error::Runtime(format!(
-                "the camera's IOSurface changed shape (planes, rows and strides \
-                 {surface_geometry:?}, staged for {staged_geometry:?})"
-            )));
-        }
-        let luma_plane_bytes = self.luma_bytes_per_row * self.luma_height;
-        let chroma_plane_bytes = self.chroma_bytes_per_row * self.chroma_height;
-        let destination = self.storage_buffer.mapped_ptr();
-        // SAFETY: the surface is locked for reading around the copies; its
-        // geometry was just checked to be the one the staging buffer was sized
-        // for, so each plane is `bytes_per_row × height` bytes at its base
-        // address and lands inside the buffer, luma then chroma.
-        unsafe {
-            let locked = iosurface.lock(IOSurfaceLockOptions::ReadOnly, std::ptr::null_mut());
-            if locked != 0 {
-                return Err(Error::Runtime(format!(
-                    "locking the camera's IOSurface for reading failed ({locked})"
-                )));
-            }
-            std::ptr::copy_nonoverlapping(
-                iosurface.base_address_of_plane(0).as_ptr().cast::<u8>(),
-                destination,
-                luma_plane_bytes,
-            );
-            std::ptr::copy_nonoverlapping(
-                iosurface.base_address_of_plane(1).as_ptr().cast::<u8>(),
-                destination.add(luma_plane_bytes),
-                chroma_plane_bytes,
-            );
-            iosurface.unlock(IOSurfaceLockOptions::ReadOnly, std::ptr::null_mut());
-        }
-        Ok(())
-    }
-}
-
-/// A stream's GPU state, created on its first frame.
-struct AvFoundationCaptureGpu {
-    conversion_stage: CapturedVideoFrameToPooledRgbaConversionStage,
-    frame_transport: AvFoundationFrameTransport,
-}
-
 /// A stream's per-frame state, touched only from its sample-buffer queue.
 #[derive(Default)]
 struct AvFoundationCaptureProgress {
-    capture_gpu: Option<AvFoundationCaptureGpu>,
+    /// Created on the stream's first frame.
+    conversion: Option<Biplanar420IOSurfaceToPooledRgbaConversion>,
     delivery_tally: CapturedVideoFrameDeliveryTally,
 }
 
@@ -1207,116 +1063,24 @@ impl AvFoundationCaptureProgress {
             Error::Runtime("AVFoundation delivered a pixel buffer with no IOSurface".into())
         })?;
 
-        let capture_gpu = match &mut self.capture_gpu {
-            Some(capture_gpu) => capture_gpu,
-            None => {
-                let source_pixel_format = delivery.pixel_format_delivered;
-                let conversion_stage = delivery.gpu_context.escalate(|full| {
-                    CapturedVideoFrameToPooledRgbaConversionStage::create(
-                        full,
-                        source_pixel_format,
-                        width,
-                        height,
-                    )
-                })?;
-                self.capture_gpu.insert(AvFoundationCaptureGpu {
-                    conversion_stage,
-                    frame_transport: AvFoundationFrameTransport::ImportedIOSurfaceStorageBuffers {
-                        imported_by_iosurface_id: HashMap::new(),
-                    },
-                })
-            }
+        let conversion = match &mut self.conversion {
+            Some(conversion) => conversion,
+            None => self
+                .conversion
+                .insert(Biplanar420IOSurfaceToPooledRgbaConversion::create(
+                    &delivery.gpu_context,
+                    &delivery.camera_name,
+                    delivery.pixel_format_delivered,
+                    width,
+                    height,
+                )?),
         };
-        take_this_surface_into_the_transport(capture_gpu, delivery, &iosurface)?;
-
-        let device_bytes = match &capture_gpu.frame_transport {
-            AvFoundationFrameTransport::ImportedIOSurfaceStorageBuffers {
-                imported_by_iosurface_id,
-            } => {
-                let imported = imported_by_iosurface_id
-                    .get(&iosurface.id())
-                    .ok_or_else(|| {
-                        Error::Runtime("the frame's IOSurface was not imported".into())
-                    })?;
-                CapturedVideoFrameBytesInAStorageBuffer {
-                    storage_buffer: imported.storage_buffer(),
-                    layout: imported.nv12_source_layout()?,
-                    written_by_another_device: true,
-                }
-            }
-            AvFoundationFrameTransport::CopiedIntoAStorageBuffer { staging } => {
-                staging.copy_the_planes_of(&iosurface)?;
-                CapturedVideoFrameBytesInAStorageBuffer {
-                    storage_buffer: &staging.storage_buffer,
-                    layout: staging.layout,
-                    written_by_another_device: false,
-                }
-            }
-        };
-        capture_gpu
-            .conversion_stage
-            .convert_into_pooled_pixel_buffer(
-                &delivery.gpu_context,
-                device_bytes,
-                &color.resolve_defaults(ColorSpaceKind::Yuv),
-            )
+        conversion.convert_into_pooled_pixel_buffer(
+            &delivery.gpu_context,
+            &iosurface,
+            &color.resolve_defaults(ColorSpaceKind::Yuv),
+        )
     }
-}
-
-/// Make sure the transport can take `iosurface`: import it on the first frame
-/// it carries, and from the first import the driver refuses, switch the stream
-/// to CPU upload staged for this surface's shape.
-fn take_this_surface_into_the_transport(
-    capture_gpu: &mut AvFoundationCaptureGpu,
-    delivery: &AvFoundationFrameDelivery,
-    iosurface: &IOSurfaceRef,
-) -> Result<()> {
-    let AvFoundationFrameTransport::ImportedIOSurfaceStorageBuffers {
-        imported_by_iosurface_id,
-    } = &mut capture_gpu.frame_transport
-    else {
-        return Ok(());
-    };
-    if imported_by_iosurface_id.contains_key(&iosurface.id()) {
-        return Ok(());
-    }
-    match delivery
-        .gpu_context
-        .escalate(|full| full.import_iosurface_as_storage_buffer(iosurface))
-    {
-        Ok(imported) => {
-            if imported_by_iosurface_id.len() >= MOST_IMPORTED_IOSURFACES_KEPT {
-                capture_gpu
-                    .conversion_stage
-                    .wait_for_the_previous_submission()?;
-                imported_by_iosurface_id.clear();
-            }
-            imported_by_iosurface_id.insert(iosurface.id(), imported);
-            tracing::debug!(
-                camera = %delivery.camera_name,
-                iosurface_id = iosurface.id(),
-                imported_iosurfaces = imported_by_iosurface_id.len(),
-                "imported one more of the camera's recycled IOSurfaces"
-            );
-        }
-        Err(import_refusal) => {
-            tracing::warn!(
-                camera = %delivery.camera_name,
-                error = %import_refusal,
-                "the GPU cannot import the camera's IOSurfaces; copying each frame through the \
-                 CPU instead"
-            );
-            capture_gpu
-                .conversion_stage
-                .wait_for_the_previous_submission()?;
-            capture_gpu.frame_transport = AvFoundationFrameTransport::CopiedIntoAStorageBuffer {
-                staging: delivery
-                    .gpu_context
-                    .escalate(|full| CpuUploadStagingStorageBuffer::shaped_for(full, iosurface))?,
-            };
-        }
-    }
-    Ok(())
 }
 
 define_class!(
