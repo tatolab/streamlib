@@ -26,7 +26,7 @@ audible-hardware-tests = ["streamlib-engine/audible-hardware-tests"]
 test-support = ["streamlib-engine/test-support"]
 
 [dependencies]
-streamlib-engine = { path = "../../runtime/streamlib-engine", version = "0.26.29" }
+streamlib-engine = { path = "../../runtime/streamlib-engine", version = "0.26.30" }
 # `App` sugar takes `impl Serialize` configs and encodes them to the JSON the
 # runtime carries.
 serde = { workspace = true }
