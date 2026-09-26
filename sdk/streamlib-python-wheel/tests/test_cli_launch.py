@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Callable
 
 import pytest
+from app_under_test import ENGINE_READY_LOG_LINE
 
 from streamlib import cli
 
@@ -480,6 +481,41 @@ def test_the_scaffolded_app_reaches_a_running_graph(
     node.await_exit(CLEAN_EXIT_TIMEOUT_SECONDS)
 
     assert_the_window_showed_live_video(node, "the app `streamlib new` writes")
+
+
+def test_a_scaffolded_app_with_a_cross_floor_finding_warns_and_starts_anyway(
+    tmp_path: Path, launch_node
+):
+    """The cross-floor check informs; it never walls off a start.
+
+    The finding sits in a function nothing calls, so the app needs neither
+    cupy nor CUDA to run: the check reads source, and this proves a finding in
+    it reaches the agent's stdout without costing the start.
+    """
+    app_directory = tmp_path / "app"
+    cli.scaffold_new_app(app_directory, use_test_pattern_source=True)
+    effect_module = app_directory / cli.SCAFFOLDED_EFFECT_MODULE_PATH
+    effect_module.write_text(
+        effect_module.read_text()
+        + "\n\ndef never_called():\n"
+        "    import cupy\n"
+        "    import torch\n"
+        '    return torch.device("cuda")\n'
+    )
+
+    node = launch_node("dev", app_directory, free_port(), capture_output=True)
+    node.await_captured_output_containing(ENGINE_READY_LOG_LINE, NODE_READY_TIMEOUT_SECONDS)
+    node.interrupt()
+    node.await_exit(CLEAN_EXIT_TIMEOUT_SECONDS)
+
+    output = node.captured_output()
+    assert f"{cli.SCAFFOLDED_EFFECT_MODULE_PATH}:" in output and "imports `cupy`" in output, (
+        f"the warning block must name the cupy import; output ended:\n{node.recent_output()}"
+    )
+    assert "names the device 'cuda'" in output, (
+        f"the warning block must name the device literal; output ended:\n{node.recent_output()}"
+    )
+    assert output.index("cross-floor check") < output.index(ENGINE_READY_LOG_LINE)
 
 
 def assert_the_window_showed_live_video(node: LaunchedNode, what_ran: str) -> None:
