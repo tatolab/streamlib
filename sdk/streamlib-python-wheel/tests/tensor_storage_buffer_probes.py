@@ -400,8 +400,6 @@ class TensorStorageBufferKernelBindingProbe:
                     torch.from_dlpack(tensor_surface).fill_(
                         KERNEL_TENSOR_UNWRITTEN_SENTINEL
                     )
-                # The kernel's Vulkan reads and writes follow torch's fill.
-                torch.cuda.synchronize()
                 compute_kernel.dispatch(
                     bindings={INDEX_PATTERN_TENSOR_BINDING: dispatched_tensor},
                     group_count=(element_count // 64, 1, 1),
@@ -441,7 +439,6 @@ class TensorStorageBufferKernelBindingProbe:
                     torch.from_dlpack(colour_tensor).copy_(
                         torch.tensor(colour, dtype=torch.float32)
                     )
-                    torch.cuda.synchronize()
                     graphics_kernel.draw(
                         bindings={PAINT_COLOUR_BINDING: colour_tensor},
                         color_targets=[colour_target],

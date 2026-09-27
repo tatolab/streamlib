@@ -208,6 +208,28 @@ impl PythonGpuSurfaceHandle {
         self.publish_pending_staged_write(python)
     }
 
+    /// Order the CUDA writes a writable tensor capsule took ahead of a kernel
+    /// that reads this surface.
+    ///
+    /// The flag stays set: the capsule outlives the kernel, so torch can write
+    /// through it again before the next one.
+    #[cfg(target_os = "linux")]
+    pub(super) fn order_tensor_device_writes_ahead_of_a_kernel_read(
+        &self,
+        python: Python<'_>,
+    ) -> PyResult<()> {
+        if !self
+            .a_writable_tensor_capsule_went_out
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Ok(());
+        }
+        let Some(owned_memory) = self.owned_memory.lock().clone() else {
+            return Ok(());
+        };
+        publish_tensor_storage_buffer_device_writes(python, &owned_memory)
+    }
+
     #[cfg(target_os = "macos")]
     fn settle_this_lock_scopes_pending_writes(&self, python: Python<'_>) -> PyResult<()> {
         let metal_writes_retired = if self

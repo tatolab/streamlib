@@ -91,6 +91,11 @@ impl PythonComputeKernel {
         {
             let (wire_bindings, push_constants_hex) =
                 self.validated_wire_dispatch(python, bindings, push_constants)?;
+            #[cfg(target_os = "linux")]
+            order_tensor_device_writes_ahead_of_the_kernel(
+                python,
+                &bound_surface_handles(bindings),
+            )?;
             self.helper_process_exchange_client.run_compute_kernel(
                 python,
                 &self.kernel_id,
@@ -141,6 +146,10 @@ struct RecordedKernelDispatch {
     kernel_id: String,
     #[cfg_attr(not(any(target_os = "linux", target_os = "macos")), expect(dead_code))]
     wire_entry: Py<PyDict>,
+    /// Ordered when the batch runs, not when it records: torch can write
+    /// between the two.
+    #[cfg(target_os = "linux")]
+    bound_surface_handles: Vec<Py<PythonGpuSurfaceHandle>>,
 }
 
 /// What a batch has accumulated, and where its scope stands.
@@ -290,6 +299,8 @@ impl PythonKernelDispatchBatch {
             recording.dispatches.push(RecordedKernelDispatch {
                 kernel_id: kernel.kernel_id.clone(),
                 wire_entry: wire_entry.unbind(),
+                #[cfg(target_os = "linux")]
+                bound_surface_handles: bound_surface_handles(bindings),
             });
             Ok(())
         }
@@ -306,6 +317,13 @@ impl PythonKernelDispatchBatch {
     fn run(&self, python: Python<'_>, recorded: Vec<RecordedKernelDispatch>) -> PyResult<()> {
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         if let Some(exchange_client) = &self.helper_process_exchange_client {
+            #[cfg(target_os = "linux")]
+            for entry in &recorded {
+                order_tensor_device_writes_ahead_of_the_kernel(
+                    python,
+                    &entry.bound_surface_handles,
+                )?;
+            }
             let dispatches = PyList::new(
                 python,
                 recorded.iter().map(|entry| entry.wire_entry.bind(python)),
@@ -403,6 +421,11 @@ impl PythonGraphicsKernel {
                 &self.reflected_binding_kinds,
                 bindings,
                 "surface_uuid",
+            )?;
+            #[cfg(target_os = "linux")]
+            order_tensor_device_writes_ahead_of_the_kernel(
+                python,
+                &bound_surface_handles(bindings),
             )?;
             self.helper_process_exchange_client.run_graphics_draw(
                 python,
@@ -560,6 +583,32 @@ impl PythonAccelerationStructureHandle {
     fn label(&self) -> String {
         self.structure_label.clone()
     }
+}
+
+/// The surface handles a binding dict binds; an id string or an acceleration
+/// structure is not one.
+#[cfg(target_os = "linux")]
+fn bound_surface_handles(bindings: &Bound<'_, PyDict>) -> Vec<Py<PythonGpuSurfaceHandle>> {
+    bindings
+        .values()
+        .iter()
+        .filter_map(|bound_to| bound_to.extract::<Py<PythonGpuSurfaceHandle>>().ok())
+        .collect()
+}
+
+/// Order every CUDA write torch took through these handles' tensors ahead of
+/// the kernel's Vulkan read — no fence connects torch's stream to the engine.
+#[cfg(target_os = "linux")]
+fn order_tensor_device_writes_ahead_of_the_kernel(
+    python: Python<'_>,
+    bound_surface_handles: &[Py<PythonGpuSurfaceHandle>],
+) -> PyResult<()> {
+    for bound_surface_handle in bound_surface_handles {
+        bound_surface_handle
+            .get()
+            .order_tensor_device_writes_ahead_of_a_kernel_read(python)?;
+    }
+    Ok(())
 }
 
 /// The surface id a value bound at `name` names.
