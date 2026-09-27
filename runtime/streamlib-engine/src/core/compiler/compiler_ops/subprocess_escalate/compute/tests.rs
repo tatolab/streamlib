@@ -1932,13 +1932,21 @@ fn assert_every_element_is(values: &[f32], expected: impl Fn(usize) -> f32, what
 /// tensor, inside one recording.
 ///
 /// Built on `GpuContext` directly rather than through the escalate op, so it
-/// needs no surface-id map and runs on every device the engine opens.
+/// needs no surface-id map and runs on every device the engine opens. A driver
+/// that happens to finish pass 1 first reads back correctly with no barrier at
+/// all, so under `STREAMLIB_VULKAN_SYNC_VALIDATION=1` the layer's error count
+/// is the discriminating check: a missing barrier is a read-after-write hazard.
 #[test]
 fn a_later_pass_in_a_batch_reads_the_tensor_an_earlier_pass_wrote() {
     let Some(sandbox) = make_gpu_sandbox_if_available() else {
         println!("batched tensor chain: no GPU — skipping");
         return;
     };
+    let validation_counts_before = sandbox
+        .host_inner()
+        .device()
+        .inner
+        .validation_layer_message_counts();
     let write_index_pattern = register_glsl_kernel(&sandbox, WRITE_INDEX_PATTERN_GLSL);
     let double_tensor = register_glsl_kernel(&sandbox, DOUBLE_TENSOR_GLSL);
 
@@ -2004,6 +2012,19 @@ fn a_later_pass_in_a_batch_reads_the_tensor_an_earlier_pass_wrote() {
         |index| index as f32,
         "the index-pattern tensor — pass 1's own output",
     );
+    if let Some(validation_counts_before) = validation_counts_before {
+        let validation_counts_after = sandbox
+            .host_inner()
+            .device()
+            .inner
+            .validation_layer_message_counts()
+            .expect("the messenger stays installed for the whole test");
+        assert_eq!(
+            validation_counts_after.error_count, validation_counts_before.error_count,
+            "the two-pass tensor chain raised a validation error — under synchronization \
+             validation, a missing buffer barrier between the passes"
+        );
+    }
 }
 
 /// Register a HOST_VISIBLE tensor in the parent-wide map under `surface_id`, as

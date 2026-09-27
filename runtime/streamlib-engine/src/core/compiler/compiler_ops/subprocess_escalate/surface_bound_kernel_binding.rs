@@ -367,7 +367,6 @@ pub(super) fn transition_bound_kernel_inputs_into_descriptor_layouts(
     consuming_stage: crate::vulkan::rhi::VulkanStage,
     bound_inputs: &[ResolvedSurfaceBoundKernelBinding<'_>],
 ) -> crate::core::error::Result<()> {
-
     let bound_textures: Vec<(&TextureRegistration, crate::core::rhi::VulkanLayout)> = bound_inputs
         .iter()
         .filter_map(|binding| binding.surface_bound_resource.texture_and_required_layout())

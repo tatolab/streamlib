@@ -340,9 +340,10 @@ class GraphicsBufferBindingRefusalProbe(_GraphicsKernelProbeBase):
     """A uniform-buffer binding is reflected, declared and refused at the draw.
 
     No escalate op mints a uniform buffer, so a draw that accepted a surface
-    here would bind whatever the descriptor last held. The name is read back off the kernel rather than spelled here — how
-    reflection names a uniform block is the shader's business, and the refusal
-    has to name whatever it named.
+    here would bind whatever the descriptor last held. The name is read back
+    off the kernel rather than spelled here — how reflection names a uniform
+    block is the shader's business, and the refusal has to name whatever it
+    named.
     """
 
     def observe(self, kernel, source, color_target) -> dict:

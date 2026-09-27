@@ -1910,7 +1910,9 @@ class ComputeKernel:
         raises before anything is submitted. Each binding's kind comes from the
         shader's own reflection, never from the caller. A `storage_buffer`
         binding takes a tensor surface from `acquire_storage_buffer` (Linux
-        until #2431); a `uniform_buffer` binding raises naming its kind.
+        until #2431); a `uniform_buffer` binding raises naming its kind. The
+        dispatch does not wait on torch: call `torch.cuda.synchronize()`
+        after writing a tensor through torch and before dispatching over it.
 
         Returns when the GPU work has retired and the writes are visible — a
         tensor the dispatch wrote reads back through `torch.from_dlpack`.
