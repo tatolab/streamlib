@@ -91,6 +91,17 @@ from .encoded_audio_packet import EncodedAudioPacket as EncodedAudioPacket
 from .encoded_video_frame import EncodedVideoFrame as EncodedVideoFrame
 from .glsl_pixel_effect import GlslPixelEffect as GlslPixelEffect
 from .glsl_pixel_effect import GlslPixelEffectDialType as GlslPixelEffectDialType
+from .model_input_tensor_kernel import ModelInputTensor as ModelInputTensor
+from .model_input_tensor_kernel import (
+    ModelInputTensorChannelOrder as ModelInputTensorChannelOrder,
+)
+from .model_input_tensor_kernel import ModelInputTensorDtype as ModelInputTensorDtype
+from .model_input_tensor_kernel import ModelInputTensorFit as ModelInputTensorFit
+from .model_input_tensor_kernel import (
+    ModelInputTensorGeometry as ModelInputTensorGeometry,
+)
+from .model_input_tensor_kernel import ModelInputTensorKernel as ModelInputTensorKernel
+from .model_input_tensor_kernel import ModelInputTensorLayout as ModelInputTensorLayout
 from .processor_output_texture_ring import (
     ProcessorOutputTextureRing as ProcessorOutputTextureRing,
 )
@@ -129,6 +140,13 @@ __all__ = [
     "LinkOutputDataWriter",
     "MasteringDisplay",
     "MicrophoneSource",
+    "ModelInputTensor",
+    "ModelInputTensorChannelOrder",
+    "ModelInputTensorDtype",
+    "ModelInputTensorFit",
+    "ModelInputTensorGeometry",
+    "ModelInputTensorKernel",
+    "ModelInputTensorLayout",
     "MonotonicTimer",
     "Mp4Sink",
     "OpaqueFdTextureExport",
