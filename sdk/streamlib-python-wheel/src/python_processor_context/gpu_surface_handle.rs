@@ -484,8 +484,8 @@ impl PythonGpuSurfaceHandle {
     }
 
     #[getter]
-    fn format(&self) -> PyResult<String> {
-        Ok(self.pixel_geometry()?.format_wire_name.to_string())
+    fn format(&self) -> PyResult<&'static str> {
+        Ok(self.pixel_geometry()?.format_wire_name)
     }
 
     /// A tensor surface's dimensions, outermost first; `None` for pixels.

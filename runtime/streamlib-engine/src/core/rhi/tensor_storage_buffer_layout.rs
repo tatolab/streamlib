@@ -150,7 +150,7 @@ impl TensorStorageBufferLayout {
 
     /// Write this layout's `shape` and `dtype` fields onto a surface-share
     /// registration or lookup reply.
-    pub fn write_surface_share_fields(&self, fields: &mut serde_json::Value) {
+    pub(crate) fn write_surface_share_fields(&self, fields: &mut serde_json::Value) {
         fields[SURFACE_SHARE_TENSOR_SHAPE_FIELD] = self.shape.as_slice().into();
         fields[SURFACE_SHARE_TENSOR_DTYPE_FIELD] = self.element_type.wire_name().into();
     }
