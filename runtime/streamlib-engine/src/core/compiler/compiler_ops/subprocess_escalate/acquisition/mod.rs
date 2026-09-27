@@ -29,7 +29,8 @@ use neither_linux_nor_macos::allocate_registered_texture_for_helper;
 pub(super) use neither_linux_nor_macos::handle_acquire_image;
 
 use super::handle_lifecycle::{
-    EscalateHandleRegistry, ProcessorOutputTextureDescriptor, release_processor_output_texture_slot,
+    EscalateHandleRegistry, ProcessorOutputTextureDescriptor, ProcessorOutputTextureFrameHandOff,
+    ProcessorOutputTextureFreshSlotHandOff, release_processor_output_texture_slot,
 };
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
@@ -191,6 +192,10 @@ pub(super) fn handle_acquire_texture(
 
 /// Hand out the next frame of one of the helper's processor output pools,
 /// answering the frame's published id.
+///
+/// Only a fresh slot's allocation enters the escalate scope. The pool lock is
+/// never held across it: the helper's teardown drains the pools under that
+/// lock, and can run while another scope holds the gate.
 fn hand_off_processor_output_texture_frame(
     sandbox: &GpuContextLimitedAccess,
     registry: &EscalateHandleRegistry,
@@ -200,24 +205,47 @@ fn hand_off_processor_output_texture_frame(
     }: EscalateRequestProcessorOutputPool,
     descriptor: ProcessorOutputTextureDescriptor,
 ) -> crate::core::error::Result<String> {
-    let (published_frame_id, slots_a_descriptor_change_released) = sandbox.escalate(|full| {
-        registry
-            .processor_output_texture_pools()
-            .hand_off_next_frame(full, &pool_key, rotation_depth as usize, descriptor, || {
-                allocate_registered_texture_for_helper(
-                    full,
-                    descriptor.width,
-                    descriptor.height,
-                    descriptor.format,
-                    descriptor.usage,
-                    TexturePoolWaitWhenExhausted::RefuseAtOnce,
-                )
-            })
-    })?;
+    let host = sandbox.host_inner();
+    let (handed_off, slots_a_descriptor_change_released) = registry
+        .processor_output_texture_pools()
+        .hand_off_a_reusable_frame(host, &pool_key, rotation_depth as usize, descriptor);
     for released_slot in slots_a_descriptor_change_released {
         release_processor_output_texture_slot(sandbox, released_slot);
     }
-    Ok(published_frame_id)
+    if let ProcessorOutputTextureFrameHandOff::Published(published_frame_id) = handed_off? {
+        return Ok(published_frame_id);
+    }
+    let (pool_slot_key, registered_texture) = sandbox.escalate(|full| {
+        allocate_registered_texture_for_helper(
+            full,
+            descriptor.width,
+            descriptor.height,
+            descriptor.format,
+            descriptor.usage,
+            TexturePoolWaitWhenExhausted::RefuseAtOnce,
+        )
+    })?;
+    let fresh_slot_handed_off = registry
+        .processor_output_texture_pools()
+        .hand_off_a_fresh_slot(
+            host,
+            &pool_key,
+            descriptor,
+            pool_slot_key,
+            registered_texture,
+        );
+    match fresh_slot_handed_off {
+        ProcessorOutputTextureFreshSlotHandOff::Published(published_frame_id) => {
+            Ok(published_frame_id)
+        }
+        ProcessorOutputTextureFreshSlotHandOff::Refused {
+            refusal,
+            slot_owed_its_release,
+        } => {
+            release_processor_output_texture_slot(sandbox, slot_owed_its_release);
+            Err(refusal)
+        }
+    }
 }
 
 /// Resolve the `handle_id` returned to the subprocess for a pixel buffer.

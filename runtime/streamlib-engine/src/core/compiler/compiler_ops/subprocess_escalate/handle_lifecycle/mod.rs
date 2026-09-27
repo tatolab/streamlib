@@ -9,7 +9,8 @@ mod processor_output_texture_pools;
 mod tests;
 
 pub(crate) use processor_output_texture_pools::{
-    ProcessorOutputTextureDescriptor, ProcessorOutputTexturePoolsOfOneHelper,
+    ProcessorOutputTextureDescriptor, ProcessorOutputTextureFrameHandOff,
+    ProcessorOutputTextureFreshSlotHandOff, ProcessorOutputTexturePoolsOfOneHelper,
     ReleasedProcessorOutputTextureSlot,
 };
 

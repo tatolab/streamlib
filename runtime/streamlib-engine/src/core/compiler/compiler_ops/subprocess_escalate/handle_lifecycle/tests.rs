@@ -350,3 +350,199 @@ fn a_processor_output_pool_never_rewrites_a_frame_a_consumer_holds() {
         );
     }
 }
+
+/// Ask one of the helper's processor output pools for its next frame over the
+/// real escalate op, answering the published frame id or the refusal.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn next_processor_output_frame_over_the_escalate_op(
+    sandbox: &crate::core::context::GpuContextLimitedAccess,
+    registry: &EscalateHandleRegistry,
+    pool_key: &str,
+    rotation_depth: u32,
+) -> std::result::Result<String, String> {
+    use super::super::handle_escalate_op;
+    use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
+        EscalateRequestAcquireTexture, EscalateRequestProcessorOutputPool,
+    };
+    use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::{
+        EscalateRequest, EscalateResponse,
+    };
+    use crate::core::rhi::TextureFormat;
+    use crate::core::runtime::mesh::a_mesh_link_ingress_table_carrying_nothing;
+
+    match handle_escalate_op(
+        sandbox,
+        registry,
+        &a_mesh_link_ingress_table_carrying_nothing(),
+        EscalateRequest::AcquireTexture(EscalateRequestAcquireTexture {
+            request_id: "req-pooled".to_string(),
+            width: 64,
+            height: 32,
+            format: TextureFormat::Rgba8Unorm.wire_name().to_string(),
+            processor_output_pool: Some(EscalateRequestProcessorOutputPool {
+                pool_key: pool_key.to_string(),
+                rotation_depth,
+            }),
+            usage: vec!["texture_binding".to_string()],
+        }),
+    ) {
+        Some(EscalateResponse::Ok(ok)) => Ok(ok.handle_id),
+        Some(EscalateResponse::Err(err)) => Err(err.message),
+        None => Err("the pooled acquire_texture got no response".to_string()),
+    }
+}
+
+/// A reused slot is handed off with an escalate scope held open on the same
+/// thread — a hand-off that entered the gate would panic on the re-entry — while
+/// growing the pool still enters it, and the pool is usable once the scope
+/// closes.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+)]
+#[test]
+fn a_reused_processor_output_slot_skips_the_escalate_gate_and_growth_enters_it() {
+    use std::panic::{AssertUnwindSafe, catch_unwind};
+
+    use uuid::Uuid;
+
+    use super::release_processor_output_texture_slot;
+    use crate::core::context::{GpuContext, GpuContextLimitedAccess};
+    use crate::core::rhi::pool_slot_key_of_surface_id;
+
+    let Ok(gpu) = GpuContext::init_for_platform_sync() else {
+        println!("no GPU device — skipping");
+        return;
+    };
+    let sandbox = GpuContextLimitedAccess::new(gpu);
+    let registry = EscalateHandleRegistry::new();
+    let pool_key = format!("gateless-reuse-test-{}", Uuid::new_v4().simple());
+    let next_frame = |rotation_depth: u32| {
+        next_processor_output_frame_over_the_escalate_op(
+            &sandbox,
+            &registry,
+            &pool_key,
+            rotation_depth,
+        )
+    };
+
+    let first_frame = next_frame(1).expect("the first frame allocates its slot");
+    let escalate_gate = sandbox.host_inner().escalate_gate();
+    escalate_gate.enter();
+    let reused_frame = next_frame(1);
+    let growth_under_the_held_gate = catch_unwind(AssertUnwindSafe(|| next_frame(2)));
+    escalate_gate.exit();
+
+    let reused_frame = reused_frame.expect("a reuse hand-off completes while the gate is held");
+    assert_eq!(
+        pool_slot_key_of_surface_id(&reused_frame),
+        pool_slot_key_of_surface_id(&first_frame),
+        "with nothing held a depth-1 pool republishes its one slot"
+    );
+    assert_ne!(
+        reused_frame, first_frame,
+        "a republished slot names a new frame"
+    );
+    let Err(growth_panic) = growth_under_the_held_gate else {
+        panic!("growing the pool must allocate inside the escalate scope");
+    };
+    let growth_panic_message = growth_panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| growth_panic.downcast_ref::<&str>().copied())
+        .unwrap_or_default();
+    assert!(
+        growth_panic_message.contains("EscalateGate::enter() called twice"),
+        "growth panicked for a reason other than re-entering the gate: {growth_panic_message}"
+    );
+
+    let grown_frame = next_frame(2).expect("the pool grows once the scope closes");
+    assert_ne!(
+        pool_slot_key_of_surface_id(&grown_frame),
+        pool_slot_key_of_surface_id(&first_frame)
+    );
+
+    for released_slot in registry.processor_output_texture_pools().drain_slots() {
+        release_processor_output_texture_slot(&sandbox, released_slot);
+    }
+    let refusal = next_frame(2).expect_err("a hand-off after teardown is refused");
+    assert!(refusal.contains("torn down"), "got: {refusal}");
+}
+
+/// A slot allocated while the helper's teardown drained its pools is handed
+/// back for release rather than added to a pool nothing drains again.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+)]
+#[test]
+fn a_slot_allocated_across_the_helpers_teardown_is_handed_back_for_release() {
+    use super::super::acquisition::parse_texture_usages;
+    use super::super::handle_escalate_op;
+    use super::{
+        ProcessorOutputTextureDescriptor, ProcessorOutputTextureFreshSlotHandOff,
+        release_processor_output_texture_slot,
+    };
+    use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::EscalateRequestAcquireTexture;
+    use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::{
+        EscalateRequest, EscalateResponse,
+    };
+    use crate::core::context::{GpuContext, GpuContextLimitedAccess};
+    use crate::core::rhi::TextureFormat;
+    use crate::core::runtime::mesh::a_mesh_link_ingress_table_carrying_nothing;
+
+    let Ok(gpu) = GpuContext::init_for_platform_sync() else {
+        println!("no GPU device — skipping");
+        return;
+    };
+    let sandbox = GpuContextLimitedAccess::new(gpu);
+    let registry = EscalateHandleRegistry::new();
+    let usage = vec!["texture_binding".to_string()];
+    let descriptor = ProcessorOutputTextureDescriptor {
+        width: 64,
+        height: 32,
+        format: TextureFormat::Rgba8Unorm,
+        usage: parse_texture_usages(&usage).unwrap(),
+    };
+    let Some(EscalateResponse::Ok(allocated)) = handle_escalate_op(
+        &sandbox,
+        &registry,
+        &a_mesh_link_ingress_table_carrying_nothing(),
+        EscalateRequest::AcquireTexture(EscalateRequestAcquireTexture {
+            request_id: "req-fresh-slot".to_string(),
+            width: descriptor.width,
+            height: descriptor.height,
+            format: descriptor.format.wire_name().to_string(),
+            processor_output_pool: None,
+            usage,
+        }),
+    ) else {
+        panic!("the texture a fresh slot stands for was not allocated");
+    };
+    let registered_texture = registry
+        .remove_handle(&allocated.handle_id)
+        .expect("the allocation is registered");
+
+    let mut pools = registry.processor_output_texture_pools();
+    assert!(pools.drain_slots().is_empty());
+    let handed_off = pools.hand_off_a_fresh_slot(
+        sandbox.host_inner(),
+        "pool-torn-down-mid-allocation",
+        descriptor,
+        allocated.handle_id.clone(),
+        registered_texture,
+    );
+    drop(pools);
+    let ProcessorOutputTextureFreshSlotHandOff::Refused {
+        refusal,
+        slot_owed_its_release: released_slot,
+    } = handed_off
+    else {
+        panic!("a slot handed in after teardown was added to a pool");
+    };
+    assert!(refusal.to_string().contains("torn down"), "got: {refusal}");
+    assert_eq!(released_slot.pool_slot_key, allocated.handle_id);
+    release_processor_output_texture_slot(&sandbox, released_slot);
+}
