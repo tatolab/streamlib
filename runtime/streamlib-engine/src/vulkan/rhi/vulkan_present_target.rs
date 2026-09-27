@@ -20,8 +20,7 @@ use crate::core::rhi::TextureFormat;
 use crate::core::{Error, Result};
 
 use super::HostVulkanDevice;
-use super::vulkan_command_recorder::RhiCommandRecorder;
-use super::vulkan_command_recorder::SwapchainImageBarrierScopes;
+use super::vulkan_command_recorder::{RhiCommandRecorder, SwapchainImageBarrierScopes};
 use super::vulkan_pipeline_flags::VulkanStage;
 use super::vulkan_swapchain_colorspace::{
     SwapchainColorPick, build_hdr_metadata, pick_swapchain_format,
