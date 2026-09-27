@@ -89,6 +89,7 @@ from .claimed_surface_pixel_access import (
 )
 from .encoded_audio_packet import EncodedAudioPacket as EncodedAudioPacket
 from .encoded_video_frame import EncodedVideoFrame as EncodedVideoFrame
+from .glsl_pixel_effect import GlslPixelEffect as GlslPixelEffect
 from .processor_output_texture_ring import (
     ProcessorOutputTextureRing as ProcessorOutputTextureRing,
 )
@@ -111,6 +112,7 @@ __all__ = [
     "DisplayWindow",
     "EncodedAudioPacket",
     "EncodedVideoFrame",
+    "GlslPixelEffect",
     "GpuContextFullAccess",
     "GpuContextLimitedAccess",
     "GpuSurfaceCheckOutLease",
