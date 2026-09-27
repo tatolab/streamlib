@@ -373,7 +373,7 @@ pub(super) fn resolve_supplied_compute_bindings(
 
     refuse_one_image_bound_as_two_kinds(
         "a dispatch",
-        resolved
+        &resolved
             .iter()
             .zip(&planned)
             .map(|(binding, plan)| BoundSurfaceUnderKindClashCheck {
@@ -381,7 +381,7 @@ pub(super) fn resolve_supplied_compute_bindings(
                 target_id: plan.target_id,
                 surface_bound_resource: &binding.dispatch_binding.surface_bound_resource,
             })
-            .collect(),
+            .collect::<Vec<_>>(),
     )?;
     Ok(resolved)
 }

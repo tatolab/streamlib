@@ -3395,30 +3395,25 @@ impl GpuContext {
 
         for (dispatch_index, dispatch) in batch.iter().enumerate() {
             for binding in &dispatch.bindings {
-                let (registration, required_layout) = match &binding.surface_bound_resource {
-                    SurfaceBoundKernelBindingResource::StorageBuffer(buffer) => {
-                        let (from_stage, from_access) = barrier_source_stage_and_access_for_touch(
-                            buffers_touched_in_this_recording.insert(buffer.vk_buffer()),
-                        );
-                        // Recorded on every touch: it carries the previous
-                        // pass's stores to this pass's loads.
-                        recorder.record_buffer_barrier(
-                            buffer,
-                            from_stage,
-                            VulkanStage::COMPUTE_SHADER,
-                            from_access,
-                            VulkanAccess::SHADER_READ | VulkanAccess::SHADER_WRITE,
-                        )?;
-                        continue;
-                    }
-                    SurfaceBoundKernelBindingResource::StorageImage(registration) => (
-                        registration,
-                        SurfaceBoundKernelBindingResource::STORAGE_IMAGE_REQUIRED_LAYOUT,
-                    ),
-                    SurfaceBoundKernelBindingResource::SampledTexture(registration) => (
-                        registration,
-                        SurfaceBoundKernelBindingResource::SAMPLED_TEXTURE_REQUIRED_LAYOUT,
-                    ),
+                if let Some(buffer) = binding.surface_bound_resource.storage_buffer() {
+                    let (from_stage, from_access) = barrier_source_stage_and_access_for_touch(
+                        buffers_touched_in_this_recording.insert(buffer.vk_buffer()),
+                    );
+                    // Recorded on every touch: it carries the previous pass's
+                    // stores to this pass's loads.
+                    recorder.record_buffer_barrier(
+                        buffer,
+                        from_stage,
+                        VulkanStage::COMPUTE_SHADER,
+                        from_access,
+                        VulkanAccess::SHADER_READ | VulkanAccess::SHADER_WRITE,
+                    )?;
+                    continue;
+                }
+                let Some((registration, required_layout)) =
+                    binding.surface_bound_resource.texture_and_required_layout()
+                else {
+                    continue;
                 };
                 let image = registration
                     .texture()
@@ -3427,7 +3422,7 @@ impl GpuContext {
                     .ok_or_else(|| {
                         Error::GpuError(format!(
                             "{} names a texture with no image, which a descriptor cannot be \
-                         written from",
+                             written from",
                             binding_location_in_this_recording(
                                 batch,
                                 dispatch_index,

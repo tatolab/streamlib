@@ -1305,8 +1305,8 @@ fn a_trace_resolves_its_bindings_by_name_and_writes_the_storage_image() {
     );
 }
 
-/// A trace still refuses a storage buffer: the tensor buffer binds at a
-/// dispatch or a draw, and the ray-tracing path is left as it was.
+/// A trace refuses a storage buffer by name; a tensor buffer binds only at a
+/// dispatch or a draw.
 #[test]
 fn a_trace_refuses_a_storage_buffer_binding_by_name() {
     use super::super::surface_bound_kernel_binding::{

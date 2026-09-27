@@ -687,13 +687,13 @@ pub(super) fn bind_and_trace_ray_tracing_kernel(
     for binding in &bound_inputs {
         match &binding.surface_bound_resource {
             SurfaceBoundKernelBindingResource::SampledTexture(registration) => {
-                kernel.set_sampled_texture(binding.planned.binding_slot, registration.texture())?
+                kernel.set_sampled_texture(binding.binding_slot, registration.texture())?
             }
             SurfaceBoundKernelBindingResource::StorageImage(registration) => {
-                kernel.set_storage_image(binding.planned.binding_slot, registration.texture())?
+                kernel.set_storage_image(binding.binding_slot, registration.texture())?
             }
             SurfaceBoundKernelBindingResource::StorageBuffer(buffer) => {
-                kernel.set_storage_buffer_storage(binding.planned.binding_slot, buffer)?
+                kernel.set_storage_buffer_storage(binding.binding_slot, buffer)?
             }
         }
     }

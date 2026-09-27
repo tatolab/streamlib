@@ -6,7 +6,7 @@
 
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_response::EscalateResponseKernelBinding;
 use crate::core::context::{SurfaceBoundKernelBindingResource, TextureRegistration};
-use crate::core::rhi::SurfaceBoundKernelBindingKind;
+use crate::core::rhi::{StorageBuffer, SurfaceBoundKernelBindingKind};
 use crate::host_rhi::HostTextureExt as _;
 
 /// Publish each bound surface's post-dispatch layout to the surface-share
@@ -83,9 +83,11 @@ pub(super) struct PlannedSurfaceBoundKernelBinding<'a> {
 /// shared index: every step after resolution — the kind-clash check, the
 /// pre-run barrier, the colour-target check, the `set_*` calls — needs the plan
 /// and the resource together, and a shared index is a desynchronisation
-/// waiting to be introduced.
+/// waiting to be introduced. The kind is the resource's variant.
 pub(super) struct ResolvedSurfaceBoundKernelBinding<'a> {
-    pub(super) planned: PlannedSurfaceBoundKernelBinding<'a>,
+    pub(super) binding_slot: u32,
+    pub(super) name: &'a str,
+    pub(super) target_id: &'a str,
     pub(super) surface_bound_resource: SurfaceBoundKernelBindingResource,
 }
 
@@ -275,21 +277,23 @@ pub(super) fn resolve_planned_surface_bound_kernel_bindings<'a>(
             binding.target_id,
         )?;
         resolved.push(ResolvedSurfaceBoundKernelBinding {
-            planned: binding,
+            binding_slot: binding.binding_slot,
+            name: binding.name,
+            target_id: binding.target_id,
             surface_bound_resource,
         });
     }
 
     refuse_one_image_bound_as_two_kinds(
         "this run",
-        resolved
+        &resolved
             .iter()
             .map(|binding| BoundSurfaceUnderKindClashCheck {
-                name: binding.planned.name,
-                target_id: binding.planned.target_id,
+                name: binding.name,
+                target_id: binding.target_id,
                 surface_bound_resource: &binding.surface_bound_resource,
             })
-            .collect(),
+            .collect::<Vec<_>>(),
     )?;
     Ok(resolved)
 }
@@ -313,7 +317,7 @@ pub(super) struct BoundSurfaceUnderKindClashCheck<'a> {
 /// run this refuses. `invocation_phrase` names the run as the refusal reads.
 pub(super) fn refuse_one_image_bound_as_two_kinds(
     invocation_phrase: &str,
-    bound_surfaces: Vec<BoundSurfaceUnderKindClashCheck<'_>>,
+    bound_surfaces: &[BoundSurfaceUnderKindClashCheck<'_>],
 ) -> crate::core::error::Result<()> {
     for (index, binding) in bound_surfaces.iter().enumerate() {
         // A texture carrying no image is its own error, raised where the
@@ -389,10 +393,11 @@ pub(super) fn transition_bound_kernel_inputs_into_descriptor_layouts(
         images_already_barriered.push(image);
         textures_to_barrier.push((*registration, *required_layout));
     }
-    let binds_a_storage_buffer = bound_inputs
+    let bound_storage_buffers: Vec<&StorageBuffer> = bound_inputs
         .iter()
-        .any(|binding| binding.surface_bound_resource.storage_buffer().is_some());
-    if textures_to_barrier.is_empty() && !binds_a_storage_buffer {
+        .filter_map(|binding| binding.surface_bound_resource.storage_buffer())
+        .collect();
+    if textures_to_barrier.is_empty() && bound_storage_buffers.is_empty() {
         return Ok(());
     }
 
@@ -401,7 +406,7 @@ pub(super) fn transition_bound_kernel_inputs_into_descriptor_layouts(
     if let Err(e) = record_bound_input_barriers(
         &mut recorder,
         &textures_to_barrier,
-        bound_inputs,
+        &bound_storage_buffers,
         consuming_stage,
     ) {
         recorder.abort_recording();
@@ -427,7 +432,7 @@ pub(super) fn transition_bound_kernel_inputs_into_descriptor_layouts(
 fn record_bound_input_barriers(
     recorder: &mut crate::vulkan::rhi::RhiCommandRecorder,
     textures_to_barrier: &[(&TextureRegistration, crate::core::rhi::VulkanLayout)],
-    bound_inputs: &[ResolvedSurfaceBoundKernelBinding<'_>],
+    bound_storage_buffers: &[&StorageBuffer],
     consuming_stage: crate::vulkan::rhi::VulkanStage,
 ) -> crate::core::error::Result<()> {
     use crate::vulkan::rhi::{VulkanAccess, VulkanStage};
@@ -445,10 +450,7 @@ fn record_bound_input_barriers(
     }
     // A buffer has no layout to compare, so it is barriered on every run: the
     // barrier is the memory dependency itself.
-    for buffer in bound_inputs
-        .iter()
-        .filter_map(|binding| binding.surface_bound_resource.storage_buffer())
-    {
+    for &buffer in bound_storage_buffers {
         recorder.record_buffer_barrier(
             buffer,
             VulkanStage::ALL_COMMANDS,
@@ -472,9 +474,7 @@ pub(super) fn bound_surface_layout_publish_pairs(
             binding
                 .surface_bound_resource
                 .texture_and_required_layout()
-                .map(|(registration, _)| {
-                    (binding.planned.target_id.to_string(), registration.clone())
-                })
+                .map(|(registration, _)| (binding.target_id.to_string(), registration.clone()))
         })
         .collect()
 }

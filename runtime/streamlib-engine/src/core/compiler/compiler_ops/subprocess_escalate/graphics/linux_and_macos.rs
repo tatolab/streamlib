@@ -443,7 +443,7 @@ pub(super) fn bind_and_render_graphics_kernel(
                 "binding `{}` (surface {:?}) and colour target {surface_id:?} name one texture; \
                  the pass discards a colour target's contents on entry, so the binding would \
                  read pixels this draw has already thrown away",
-                clashing.planned.name, clashing.planned.target_id
+                clashing.name, clashing.target_id
             )));
         }
         color_targets.push(registration);
@@ -454,21 +454,18 @@ pub(super) fn bind_and_render_graphics_kernel(
             SurfaceBoundKernelBindingResource::SampledTexture(registration) => kernel
                 .set_sampled_texture(
                     req.frame_index,
-                    binding.planned.binding_slot,
+                    binding.binding_slot,
                     registration.texture(),
                 )?,
             SurfaceBoundKernelBindingResource::StorageImage(registration) => kernel
                 .set_storage_image(
                     req.frame_index,
-                    binding.planned.binding_slot,
+                    binding.binding_slot,
                     registration.texture(),
                 )?,
-            SurfaceBoundKernelBindingResource::StorageBuffer(buffer) => kernel
-                .set_storage_buffer_storage(
-                    req.frame_index,
-                    binding.planned.binding_slot,
-                    buffer,
-                )?,
+            SurfaceBoundKernelBindingResource::StorageBuffer(buffer) => {
+                kernel.set_storage_buffer_storage(req.frame_index, binding.binding_slot, buffer)?
+            }
         }
     }
 
