@@ -145,15 +145,20 @@ pub(crate) struct ProcessorOutputPoolRequest<'pool_key> {
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 impl ProcessorOutputPoolRequest<'_> {
-    /// The request's wire field, as the escalate op spells it.
-    fn to_escalate_field<'python>(
-        self,
-        python: Python<'python>,
-    ) -> PyResult<Bound<'python, PyDict>> {
+    /// Name the pool on an acquire's escalate op; a one-off acquire carries
+    /// no `processor_output_pool` field.
+    fn write_onto_escalate_op(
+        processor_output_pool: Option<Self>,
+        python: Python<'_>,
+        op: &Bound<'_, PyDict>,
+    ) -> PyResult<()> {
+        let Some(processor_output_pool) = processor_output_pool else {
+            return Ok(());
+        };
         let field = PyDict::new(python);
-        field.set_item("pool_key", self.pool_key)?;
-        field.set_item("rotation_depth", self.rotation_depth)?;
-        Ok(field)
+        field.set_item("pool_key", processor_output_pool.pool_key)?;
+        field.set_item("rotation_depth", processor_output_pool.rotation_depth)?;
+        op.set_item("processor_output_pool", field)
     }
 }
 
@@ -621,6 +626,26 @@ pub(crate) struct HelperProcessGpuExchangeClient {
 }
 
 impl HelperProcessGpuExchangeClient {
+    /// The release an acquire owes its parent from the moment the parent
+    /// allocated: a one-off's own `release_handle`; a processor output pool's
+    /// frame owes none, since the pool owns the slot.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn release_debt_unless_pooled(
+        &self,
+        python: Python<'_>,
+        processor_output_pool: Option<ProcessorOutputPoolRequest<'_>>,
+        handle_id: &str,
+    ) -> Option<HelperSurfaceReleaseDebt> {
+        processor_output_pool
+            .is_none()
+            .then(|| HelperSurfaceReleaseDebt {
+                release_to_parent_without_waiting: self
+                    .release_to_parent_without_waiting
+                    .clone_ref(python),
+                handle_id: handle_id.to_owned(),
+            })
+    }
+
     /// `surface_share_channel_name` is the socket path on Linux and the
     /// Mach service name on macOS — what the parent put in the helper's
     /// environment.

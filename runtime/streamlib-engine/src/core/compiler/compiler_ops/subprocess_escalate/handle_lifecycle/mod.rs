@@ -95,7 +95,10 @@ impl RegisteredHandle {
     /// map an eviction.
     #[cfg(target_os = "linux")]
     pub(crate) fn is_storage_buffer_backed(&self) -> bool {
-        matches!(self, Self::StorageBuffer { .. })
+        match self {
+            Self::PixelBuffer(_) | Self::Texture { .. } | Self::Image { .. } => false,
+            Self::StorageBuffer { .. } => true,
+        }
     }
 }
 

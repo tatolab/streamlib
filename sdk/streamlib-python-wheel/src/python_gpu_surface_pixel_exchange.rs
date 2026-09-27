@@ -391,7 +391,14 @@ impl PixelExchangeTensorLayout {
             })?;
         let mut strides = vec![1i64; shape.len()];
         for axis in (0..shape.len().saturating_sub(1)).rev() {
-            strides[axis] = strides[axis + 1] * shape[axis + 1];
+            strides[axis] = strides[axis + 1]
+                .checked_mul(shape[axis + 1])
+                .ok_or_else(|| {
+                    PyValueError::new_err(format!(
+                        "tensor shape {:?} has an element stride DLPack's int64 cannot carry",
+                        tensor_layout.shape()
+                    ))
+                })?;
         }
         let (code, bits) = match tensor_layout.element_type() {
             TensorElementType::Float32 => (DataTypeCode::Float, 32),

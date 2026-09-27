@@ -28,8 +28,8 @@ use crate::python_cuda_pixel_exchange::{CudaImportedSurface, import_opaque_fd_in
 pub(crate) struct HelperCheckedOutStorageBuffer {
     pub(crate) surface_id: String,
     pub(crate) tensor_layout: TensorStorageBufferLayout,
-    /// Whether this process may write the tensor: the acquirer may; a
-    /// resolver reads a published tensor, which stays immutable while held.
+    /// Whether this process may write the tensor: the acquirer may, a
+    /// resolver may not.
     pub(crate) writable: bool,
     exporting_device_uuid: [u8; 16],
     cuda_import: OnceLock<Arc<CudaImportedSurface>>,
@@ -99,25 +99,14 @@ impl HelperProcessGpuExchangeClient {
         op.set_item("op", "acquire_storage_buffer")?;
         op.set_item("shape", tensor_layout.shape())?;
         op.set_item("dtype", tensor_layout.element_type().wire_name())?;
-        if let Some(processor_output_pool) = processor_output_pool {
-            op.set_item(
-                "processor_output_pool",
-                processor_output_pool.to_escalate_field(python)?,
-            )?;
-        }
+        ProcessorOutputPoolRequest::write_onto_escalate_op(processor_output_pool, python, &op)?;
         let response =
             escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
         let surface_id: String = response_field(&response, "handle_id")?.extract()?;
         // Bound before the checkout, so a failed checkout or a malformed
         // answer still pays the release instead of stranding the allocation.
-        let release_to_parent = processor_output_pool
-            .is_none()
-            .then(|| HelperSurfaceReleaseDebt {
-                release_to_parent_without_waiting: self
-                    .release_to_parent_without_waiting
-                    .clone_ref(python),
-                handle_id: surface_id.clone(),
-            });
+        let release_to_parent =
+            self.release_debt_unless_pooled(python, processor_output_pool, &surface_id);
         let checked_out = python.detach(|| self.check_out_and_import(&surface_id))?;
         let HelperCheckedOutSurface::StorageBuffer(mut checked_out_storage_buffer) = checked_out
         else {

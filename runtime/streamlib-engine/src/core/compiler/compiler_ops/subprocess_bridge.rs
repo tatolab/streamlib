@@ -612,8 +612,9 @@ impl Drop for SubprocessBridge {
                 &removed_handle,
             );
         }
-        let processor_output_texture_slots = self.registry.processor_output_pools().drain_slots();
-        for released_slot in processor_output_texture_slots {
+        let processor_output_pool_slots_drained_at_teardown =
+            self.registry.processor_output_pools().drain_slots();
+        for released_slot in processor_output_pool_slots_drained_at_teardown {
             release_processor_output_pool_slot(&self.sandbox, released_slot);
         }
         // Detached, never joined: the OS reaps both on process exit.
