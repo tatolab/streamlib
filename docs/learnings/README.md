@@ -144,6 +144,10 @@ Avoid the two failure modes:
   `IOSurfaceIsInUse` is true for an outstanding Mach port or a use count in any process, not
   for a cached `IOSurfaceRef`; a killed holder's use count clears promptly but asynchronously,
   up to a few hundred microseconds after `waitpid`
+- [@docs/learnings/iosurface-property-maximums-are-advisory-for-byte-shaped-surfaces.md](iosurface-property-maximums-are-advisory-for-byte-shaped-surfaces.md) —
+  `IOSurfaceGetPropertyMaximum` reports width/height 16384 and a 128-byte row alignment, but a
+  byte-shaped surface of 16384-byte rows is created well past them (4 GiB measured); a tensor
+  storage buffer's ceiling is MoltenVK's buffer limit, not IOSurface's
 - [@docs/learnings/iosurface-first-call-scans-the-executables-directory.md](iosurface-first-call-scans-the-executables-directory.md) —
   The first IOSurface call in a `cargo test` binary takes ~3 s: IOSurface reads the main bundle's
   info dictionary, and an unbundled executable's bundle is its directory, which CFBundle lists
