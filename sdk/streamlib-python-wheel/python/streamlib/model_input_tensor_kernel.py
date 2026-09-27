@@ -11,8 +11,8 @@ pool, so a tensor a consumer still holds is never rewritten, and
 `torch.from_dlpack` reads it with no copy. The fit's geometry maps the model's
 boxes back to the frame's own coordinates.
 
-Wheel grammar over `create_compute_kernel`, `ProcessorOutputTextureRing`,
-`copy_surface_to_surface`, `acquire_storage_buffer_from_processor_output_pool`
+Wheel grammar over `create_compute_kernel`, the landing copy
+`GlslPixelEffect` shares, `acquire_storage_buffer_from_processor_output_pool`
 and `dispatch`; the engine sees nothing but a copy, a kernel and a tensor.
 No colour conversion: a YUV frame is converted before it is published.
 """
@@ -24,18 +24,15 @@ import struct
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Literal, Union
+from typing import Any, Literal
 
-from ._engine import (
-    ComputeKernel,
-    GpuContextFullAccess,
-    GpuContextLimitedAccess,
-    GpuSurfaceHandle,
+from ._engine import ComputeKernel, GpuContextFullAccess, GpuSurfaceHandle
+from ._sampled_source_landing import (
+    SAMPLED_SOURCE_BINDING_NAME,
+    GpuContextWithSurfaceCopy,
+    SampledSourceLandingTextureRing,
 )
-from .processor_output_texture_ring import (
-    STANDARD_RING_DEPTH,
-    ProcessorOutputTextureRing,
-)
+from .processor_output_texture_ring import STANDARD_RING_DEPTH
 
 __all__ = [
     "ModelInputTensor",
@@ -65,10 +62,7 @@ _CHANNEL_COUNT = 3
 # A pixel buffer's and a texture's spelling of 8-bit RGBA — the two sources the
 # engine copy lands in the kernel's `rgba8_unorm` texture as they are.
 _RGBA_SOURCE_FORMATS = ("rgba32", "rgba8_unorm")
-_SOURCE_LANDING_TEXTURE_FORMAT = "rgba8_unorm"
-_SOURCE_LANDING_TEXTURE_USAGE = ["texture_binding"]
 
-_SOURCE_SAMPLER_BINDING_NAME = "streamlib_source"
 _MODEL_INPUT_TENSOR_BINDING_NAME = "streamlib_model_input_tensor"
 
 # `ivec2 resized_extent; ivec2 pad_offset;` — the per-apply fit.
@@ -82,8 +76,7 @@ _FIT_PUSH_CONSTANT_BLOCK_BYTE_SIZE = struct.calcsize(_FIT_PUSH_CONSTANT_FORMAT)
 _INVOCATIONS_PER_WORKGROUP = 64
 _WORKGROUPS_PER_ROW = 1024
 _WORDS_PER_ROW = _INVOCATIONS_PER_WORKGROUP * _WORKGROUPS_PER_ROW
-
-_GpuContextWithSurfaceCopy = Union[GpuContextLimitedAccess, GpuContextFullAccess]
+_MAXIMUM_ROWS = 65535
 
 
 def _is_plain_int(value: Any) -> bool:
@@ -129,8 +122,12 @@ def _three_finite_numbers(parameter: str, value: Any) -> "tuple[float, float, fl
     return (float(value[0]), float(value[1]), float(value[2]))
 
 
+def _divided_rounding_up(value: int, divisor: int) -> int:
+    return (value + divisor - 1) // divisor
+
+
 def _rounded_up_to_multiple(value: int, multiple: int) -> int:
-    return (value + multiple - 1) // multiple * multiple
+    return _divided_rounding_up(value, multiple) * multiple
 
 
 def _glsl_float(value: float) -> str:
@@ -207,7 +204,7 @@ class ModelInputTensor:
 
 
 @dataclass(frozen=True)
-class _ModelInputTensorShape:
+class _ModelInputTensorLayoutPlan:
     """The tensor's extent, the region the fit may fill, and how it is laid out."""
 
     tensor_width: int
@@ -236,6 +233,17 @@ class _ModelInputTensorShape:
     def word_count(self) -> int:
         return self.element_count // self.elements_per_word
 
+    @property
+    def dispatch_group_count(self) -> "tuple[int, int, int]":
+        return (
+            min(
+                _WORKGROUPS_PER_ROW,
+                _divided_rounding_up(self.word_count, _INVOCATIONS_PER_WORKGROUP),
+            ),
+            _divided_rounding_up(self.word_count, _WORDS_PER_ROW),
+            1,
+        )
+
     def geometry_for_source(self, source_width: int, source_height: int) -> ModelInputTensorGeometry:
         if self.fit == "stretch":
             return ModelInputTensorGeometry(
@@ -259,15 +267,15 @@ class _ModelInputTensorShape:
 
 
 def _compute_kernel_glsl(
-    tensor_shape: _ModelInputTensorShape,
+    tensor_layout_plan: _ModelInputTensorLayoutPlan,
     channel_order: ModelInputTensorChannelOrder,
     scale: float,
     mean: "tuple[float, float, float]",
     std: "tuple[float, float, float]",
 ) -> str:
-    width = tensor_shape.tensor_width
-    plane = tensor_shape.tensor_width * tensor_shape.tensor_height
-    if tensor_shape.layout == "nchw":
+    width = tensor_layout_plan.tensor_width
+    plane = tensor_layout_plan.tensor_width * tensor_layout_plan.tensor_height
+    if tensor_layout_plan.layout == "nchw":
         element_position = (
             f"    uint channel = element_index / {plane}u;\n"
             f"    uint pixel_index = element_index % {plane}u;\n"
@@ -277,7 +285,7 @@ def _compute_kernel_glsl(
             f"    uint channel = element_index % {_CHANNEL_COUNT}u;\n"
             f"    uint pixel_index = element_index / {_CHANNEL_COUNT}u;\n"
         )
-    if tensor_shape.dtype == "float32":
+    if tensor_layout_plan.dtype == "float32":
         tensor_word_type = "float"
         write_word = (
             "    streamlib_model_input_tensor.words[word_index] = "
@@ -298,7 +306,7 @@ def _compute_kernel_glsl(
     return (
         "#version 450\n"
         f"layout(local_size_x = {_INVOCATIONS_PER_WORKGROUP}) in;\n"
-        f"layout(set = 0, binding = 0) uniform sampler2D {_SOURCE_SAMPLER_BINDING_NAME};\n"
+        f"layout(set = 0, binding = 0) uniform sampler2D {SAMPLED_SOURCE_BINDING_NAME};\n"
         "layout(set = 0, binding = 1, std430) writeonly buffer ModelInputTensorWords {\n"
         f"    {tensor_word_type} words[];\n"
         f"}} {_MODEL_INPUT_TENSOR_BINDING_NAME};\n"
@@ -318,7 +326,7 @@ def _compute_kernel_glsl(
         "    if (all(greaterThanEqual(in_resized, ivec2(0)))\n"
         "            && all(lessThan(in_resized, fit.resized_extent))) {\n"
         "        vec2 uv = (vec2(in_resized) + 0.5) / vec2(fit.resized_extent);\n"
-        f"        pixel_value = textureLod({_SOURCE_SAMPLER_BINDING_NAME}, uv, 0.0)"
+        f"        pixel_value = textureLod({SAMPLED_SOURCE_BINDING_NAME}, uv, 0.0)"
         "[SOURCE_CHANNEL_BY_OUTPUT_CHANNEL[channel]] * 255.0;\n"
         "    }\n"
         "    return (pixel_value * SCALE - MEAN[channel]) / STD[channel];\n"
@@ -326,7 +334,7 @@ def _compute_kernel_glsl(
         "void main() {\n"
         f"    uint word_index = gl_GlobalInvocationID.y * {_WORDS_PER_ROW}u"
         " + gl_GlobalInvocationID.x;\n"
-        f"    if (word_index >= {tensor_shape.word_count}u) {{\n"
+        f"    if (word_index >= {tensor_layout_plan.word_count}u) {{\n"
         "        return;\n"
         "    }\n"
         f"{write_word}"
@@ -337,23 +345,24 @@ def _compute_kernel_glsl(
 class ModelInputTensorKernel:
     """Prepares a model's input tensor from an RGBA frame on the GPU, frame by frame."""
 
-    def __init__(self, compute_kernel: ComputeKernel, tensor_shape: _ModelInputTensorShape) -> None:
+    def __init__(
+        self, compute_kernel: ComputeKernel, tensor_layout_plan: _ModelInputTensorLayoutPlan
+    ) -> None:
         self._compute_kernel = compute_kernel
-        self._tensor_shape = tensor_shape
-        self._source_landing_ring = ProcessorOutputTextureRing(
-            _SOURCE_LANDING_TEXTURE_FORMAT, _SOURCE_LANDING_TEXTURE_USAGE, depth=1
-        )
+        self._tensor_layout_plan = tensor_layout_plan
+        self._dispatch_group_count = tensor_layout_plan.dispatch_group_count
+        self._source_landing_ring = SampledSourceLandingTextureRing()
         self._tensor_output_pool_key = f"model-input-tensor-kernel-{uuid.uuid4().hex}"
 
     @property
     def tensor_shape(self) -> "list[int]":
         """The shape of every tensor this kernel writes, batch of one first."""
-        return self._tensor_shape.dimensions
+        return self._tensor_layout_plan.dimensions
 
     @property
     def tensor_dtype(self) -> ModelInputTensorDtype:
         """The element type of every tensor this kernel writes."""
-        return self._tensor_shape.dtype
+        return self._tensor_layout_plan.dtype
 
     @classmethod
     def compile(
@@ -408,10 +417,16 @@ class ModelInputTensorKernel:
                 f"ModelInputTensorKernel.compile: std {std!r} holds a zero, which "
                 f"every element of that channel would be divided by"
             )
-        tensor_shape = _ModelInputTensorShape(
+        tensor_layout_plan = _ModelInputTensorLayoutPlan(
             tensor_width, tensor_height, fit_width, fit_height, fit, layout, dtype
         )
-        if tensor_shape.element_count % tensor_shape.elements_per_word:
+        if tensor_layout_plan.word_count > _MAXIMUM_ROWS * _WORDS_PER_ROW:
+            raise ValueError(
+                f"ModelInputTensorKernel.compile: a {tensor_width}x{tensor_height} "
+                f"tensor is past the largest one dispatch covers — reduce width "
+                f"and height"
+            )
+        if tensor_layout_plan.element_count % tensor_layout_plan.elements_per_word:
             raise ValueError(
                 f"ModelInputTensorKernel.compile: a float16 tensor of "
                 f"{tensor_width}x{tensor_height} has an odd element count, and "
@@ -420,18 +435,18 @@ class ModelInputTensorKernel:
             )
         compute_kernel = gpu_full_access.create_compute_kernel(
             source=_compute_kernel_glsl(
-                tensor_shape, channel_order, float(scale), mean_by_channel, std_by_channel
+                tensor_layout_plan, channel_order, float(scale), mean_by_channel, std_by_channel
             ),
             push_constant_size=_FIT_PUSH_CONSTANT_BLOCK_BYTE_SIZE,
             bindings={
-                _SOURCE_SAMPLER_BINDING_NAME: "sampled_texture",
+                SAMPLED_SOURCE_BINDING_NAME: "sampled_texture",
                 _MODEL_INPUT_TENSOR_BINDING_NAME: "storage_buffer",
             },
         )
-        return cls(compute_kernel, tensor_shape)
+        return cls(compute_kernel, tensor_layout_plan)
 
     def apply_to_surface(
-        self, gpu_limited_access: _GpuContextWithSurfaceCopy, surface: GpuSurfaceHandle
+        self, gpu_limited_access: GpuContextWithSurfaceCopy, surface: GpuSurfaceHandle
     ) -> ModelInputTensor:
         """Write the model input for `surface` into the next pooled tensor, in `process()`.
 
@@ -455,43 +470,28 @@ class ModelInputTensorKernel:
                 f"the kernel converts no colour"
             )
         source_width, source_height = surface.width, surface.height
-        geometry = self._tensor_shape.geometry_for_source(source_width, source_height)
+        geometry = self._tensor_layout_plan.geometry_for_source(source_width, source_height)
 
-        source_landing_texture = self._source_landing_ring.next_texture_for_this_frame(
-            gpu_limited_access, source_width, source_height
+        source_landing_texture = self._source_landing_ring.land_source_for_this_frame(
+            gpu_limited_access,
+            source_surface_id,
+            source_width,
+            source_height,
+            f"ModelInputTensorKernel.apply_to_surface: surface {source_surface_id!r}",
         )
-        try:
-            gpu_limited_access.copy_surface_to_surface(
-                source_surface_id, source_landing_texture
-            )
-        except RuntimeError as copy_refusal:
-            raise ValueError(
-                f"ModelInputTensorKernel.apply_to_surface: surface {source_surface_id!r} "
-                f"({source_width}x{source_height}) could not land in the kernel's "
-                f"{_SOURCE_LANDING_TEXTURE_FORMAT} source; the engine copy refused "
-                f"it: {copy_refusal}"
-            ) from copy_refusal
 
         tensor_surface = gpu_limited_access.acquire_storage_buffer_from_processor_output_pool(
             self._tensor_output_pool_key,
             STANDARD_RING_DEPTH,
-            self._tensor_shape.dimensions,
-            self._tensor_shape.dtype,
+            self._tensor_layout_plan.dimensions,
+            self._tensor_layout_plan.dtype,
         )
-        word_count = self._tensor_shape.word_count
         self._compute_kernel.dispatch(
             bindings={
-                _SOURCE_SAMPLER_BINDING_NAME: source_landing_texture,
+                SAMPLED_SOURCE_BINDING_NAME: source_landing_texture,
                 _MODEL_INPUT_TENSOR_BINDING_NAME: tensor_surface,
             },
-            group_count=(
-                min(
-                    _WORKGROUPS_PER_ROW,
-                    (word_count + _INVOCATIONS_PER_WORKGROUP - 1) // _INVOCATIONS_PER_WORKGROUP,
-                ),
-                (word_count + _WORDS_PER_ROW - 1) // _WORDS_PER_ROW,
-                1,
-            ),
+            group_count=self._dispatch_group_count,
             push_constants=struct.pack(
                 _FIT_PUSH_CONSTANT_FORMAT,
                 geometry.resized_width,

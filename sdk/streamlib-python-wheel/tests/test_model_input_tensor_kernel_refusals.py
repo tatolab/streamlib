@@ -364,3 +364,8 @@ def test_boxes_that_are_not_xyxy_are_refused(boxes: Any) -> None:
     geometry = ModelInputTensorGeometry(1920, 1080, 640, 360, 0, 140)
     with pytest.raises(ValueError, match="xyxy"):
         geometry.boxes_to_source(boxes)
+
+
+def test_a_tensor_past_the_largest_dispatch_is_refused_naming_its_extent() -> None:
+    message = refusal_of_compile(width=65536, height=21846)
+    assert "65536x21846" in message
