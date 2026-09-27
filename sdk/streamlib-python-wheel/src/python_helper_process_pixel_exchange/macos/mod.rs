@@ -112,6 +112,24 @@ impl HelperCheckedOutSurface {
     }
 }
 
+/// The IOSurface a checkout's port names, releasing the port as soon as it is
+/// looked up: a live port keeps the surface reading in use.
+fn iosurface_named_by_the_check_out_port(
+    checked_out_surface_description: &str,
+    iosurface_port: SurfaceShareTransferredHandle,
+) -> PyResult<objc2_core_foundation::CFRetained<objc2_io_surface::IOSurfaceRef>> {
+    let iosurface =
+        objc2_io_surface::IOSurfaceRef::lookup_from_mach_port(iosurface_port.as_raw_name())
+            .ok_or_else(|| {
+                PyRuntimeError::new_err(format!(
+                    "check_out of {checked_out_surface_description} carried a port that names \
+                     no IOSurface"
+                ))
+            })?;
+    drop(iosurface_port);
+    Ok(iosurface)
+}
+
 /// The per-slot cache, shared with the thread that empties it when the
 /// parent's service goes away.
 pub(super) type HelperIOSurfaceImportsByPoolSlot =
@@ -544,15 +562,7 @@ impl HelperProcessGpuExchangeClient {
             return Ok(Arc::clone(cached));
         }
         let iosurface =
-            objc2_io_surface::IOSurfaceRef::lookup_from_mach_port(iosurface_port.as_raw_name())
-                .ok_or_else(|| {
-                    PyRuntimeError::new_err(format!(
-                        "check_out of {surface_id:?} carried a port that names no IOSurface"
-                    ))
-                })?;
-        // Released as soon as it is looked up: a live port keeps the
-        // surface reading in use.
-        drop(iosurface_port);
+            iosurface_named_by_the_check_out_port(&format!("{surface_id:?}"), iosurface_port)?;
         let vulkan_device = self.consumer_vulkan_device()?;
         let imported = Arc::new(
             HelperIOSurfacePoolSlotImport::import(&vulkan_device, &iosurface).map_err(

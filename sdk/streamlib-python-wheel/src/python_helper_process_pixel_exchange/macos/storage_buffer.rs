@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
+use streamlib::sdk::engine::apple_surface_share::RetainedIOSurfaceSharedAcrossThreads;
 use streamlib::sdk::rhi::TensorStorageBufferLayout;
 use streamlib_consumer_rhi::ConsumerVulkanBuffer;
 
@@ -28,8 +29,9 @@ pub(crate) struct HelperCheckedOutStorageBuffer {
     /// resolver may not.
     pub(crate) writable: bool,
     /// The tensor's IOSurface pages imported on this helper's consumer
-    /// device; the import retains the surface.
+    /// device.
     iosurface_pages_import: ConsumerVulkanBuffer,
+    iosurface: RetainedIOSurfaceSharedAcrossThreads,
     /// Present only on an acquired one-off — a pooled tensor belongs to its
     /// pool, and a resolved one to its acquirer.
     pub(crate) release_to_parent: Option<HelperSurfaceReleaseDebt>,
@@ -43,9 +45,7 @@ pub(crate) struct HelperCheckedOutStorageBuffer {
 impl HelperCheckedOutStorageBuffer {
     /// The tensor's IOSurface.
     pub(crate) fn iosurface(&self) -> &objc2_io_surface::IOSurfaceRef {
-        self.iosurface_pages_import
-            .backing_iosurface()
-            .expect("an import built from an IOSurface is backed by it")
+        &self.iosurface
     }
 
     /// The no-copy `MTLBuffer` MoltenVK backs the imported pages with — the
@@ -86,16 +86,13 @@ impl HelperProcessGpuExchangeClient {
                     ports.len()
                 ))
             })?;
-        let iosurface =
-            objc2_io_surface::IOSurfaceRef::lookup_from_mach_port(iosurface_port.as_raw_name())
-                .ok_or_else(|| {
-                    PyRuntimeError::new_err(format!(
-                        "check_out of tensor surface {surface_id:?} carried a port that names \
-                         no IOSurface"
-                    ))
-                })?;
-        drop(iosurface_port);
-        if (iosurface.alloc_size() as u64) < tensor_layout.byte_size() {
+        let iosurface = super::iosurface_named_by_the_check_out_port(
+            &format!("tensor surface {surface_id:?}"),
+            iosurface_port,
+        )?;
+        if u64::try_from(iosurface.alloc_size())
+            .is_ok_and(|alloc_byte_size| alloc_byte_size < tensor_layout.byte_size())
+        {
             return Err(PyRuntimeError::new_err(format!(
                 "tensor surface {surface_id:?}'s IOSurface holds {} bytes, but its shape and \
                  dtype span {}",
@@ -118,6 +115,7 @@ impl HelperProcessGpuExchangeClient {
             tensor_layout,
             writable: false,
             iosurface_pages_import,
+            iosurface: RetainedIOSurfaceSharedAcrossThreads::new(iosurface),
             release_to_parent: None,
             release_check_out_to_surface_share,
         })

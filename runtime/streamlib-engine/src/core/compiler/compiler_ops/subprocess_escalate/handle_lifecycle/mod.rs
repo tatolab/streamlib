@@ -95,7 +95,12 @@ impl RegisteredHandle {
     /// map an eviction.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) fn is_storage_buffer_backed(&self) -> bool {
-        matches!(self, Self::StorageBuffer { .. })
+        match self {
+            Self::PixelBuffer(_) | Self::Texture { .. } => false,
+            #[cfg(target_os = "linux")]
+            Self::Image { .. } => false,
+            Self::StorageBuffer { .. } => true,
+        }
     }
 }
 
@@ -386,11 +391,10 @@ pub(super) fn release_surface_share_surface(
     handle_id: &str,
     removed_handle: &RegisteredHandle,
 ) {
-    let registered_under_its_own_id = cfg!(target_os = "linux")
-        || removed_handle.is_texture_backed()
-        || removed_handle.is_storage_buffer_backed();
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    if registered_under_its_own_id
+    if (cfg!(target_os = "linux")
+        || removed_handle.is_texture_backed()
+        || removed_handle.is_storage_buffer_backed())
         && let Some(store) = sandbox.surface_store()
         && let Err(e) = store.release(handle_id)
     {

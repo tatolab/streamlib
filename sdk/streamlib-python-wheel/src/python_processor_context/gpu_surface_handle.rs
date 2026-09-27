@@ -235,13 +235,16 @@ impl PythonGpuSurfaceHandle {
 
     #[cfg(target_os = "macos")]
     fn settle_this_lock_scopes_pending_writes(&self, python: Python<'_>) -> PyResult<()> {
-        let a_writable_metal_capsule_went_out = self
+        if self
+            .a_writable_tensor_capsule_went_out
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return self.order_tensor_device_writes_ahead_of_a_kernel_read(python);
+        }
+        let metal_writes_retired = if self
             .a_writable_metal_capsule_went_out_this_lock_scope
             .swap(false, std::sync::atomic::Ordering::SeqCst)
-            || self
-                .a_writable_tensor_capsule_went_out
-                .load(std::sync::atomic::Ordering::SeqCst);
-        let metal_writes_retired = if a_writable_metal_capsule_went_out {
+        {
             drain_torch_mps_queue_if_imported(python)
         } else {
             Ok(())

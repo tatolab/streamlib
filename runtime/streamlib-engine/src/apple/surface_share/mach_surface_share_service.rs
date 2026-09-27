@@ -814,7 +814,8 @@ fn registration_of_request(
     let resource_type = requested_str("resource_type", SURFACE_RESOURCE_TYPE_PIXEL_BUFFER);
     let tensor_layout = tensor_layout_of_a_storage_buffer_registration(request)?;
     if let Some(tensor_layout) = &tensor_layout
-        && (iosurface.alloc_size() as u64) < tensor_layout.byte_size()
+        && u64::try_from(iosurface.alloc_size())
+            .is_ok_and(|alloc_byte_size| alloc_byte_size < tensor_layout.byte_size())
     {
         return Err(format!(
             "the registered IOSurface's {} bytes cannot hold a {tensor_layout} tensor",
