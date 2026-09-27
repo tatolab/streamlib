@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.37](https://github.com/tatolab/streamlib/compare/v0.26.36...v0.26.37) (2026-09-27)
+
+
+### Bug Fixes
+
+* **rhi:** the swapchain acquire barrier chains off the image-available wait ([#2509](https://github.com/tatolab/streamlib/issues/2509)) ([7b5207c](https://github.com/tatolab/streamlib/commit/7b5207c8495fdbd125e65108d8f88afdcf0d62fc))
+
 ## [0.26.36](https://github.com/tatolab/streamlib/compare/v0.26.35...v0.26.36) (2026-09-27)
 
 
