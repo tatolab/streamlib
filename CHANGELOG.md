@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.40](https://github.com/tatolab/streamlib/compare/v0.26.39...v0.26.40) (2026-09-27)
+
+
+### Features
+
+* **engine:** a kernel binds a tensor buffer by surface id ([#2514](https://github.com/tatolab/streamlib/issues/2514)) ([19921fd](https://github.com/tatolab/streamlib/commit/19921fd13536b238c60b0265cf82025b789c9059))
+
 ## [0.26.39](https://github.com/tatolab/streamlib/compare/v0.26.38...v0.26.39) (2026-09-27)
 
 
