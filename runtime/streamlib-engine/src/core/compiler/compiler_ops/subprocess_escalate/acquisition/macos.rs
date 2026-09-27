@@ -17,17 +17,6 @@ use crate::core::context::{
 };
 use crate::core::rhi::{TextureFormat, TextureUsages};
 
-/// A tensor storage buffer that crosses to a helper process is Linux-only
-/// until its macOS arm lands.
-pub(super) fn allocate_registered_storage_buffer_for_helper(
-    _full: &GpuContextFullAccess,
-    _tensor_layout: &crate::core::rhi::TensorStorageBufferLayout,
-) -> crate::core::error::Result<(String, RegisteredHandle)> {
-    Err(crate::core::Error::NotSupported(
-        "acquire_storage_buffer is Linux-only until its macOS arm lands (#2431)".to_string(),
-    ))
-}
-
 /// Allocate one texture and register it for a helper — with the
 /// surface-share service and the parent's texture cache — answering the id it
 /// is registered under and what holds it alive.

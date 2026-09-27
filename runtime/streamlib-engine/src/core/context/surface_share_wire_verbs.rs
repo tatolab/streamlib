@@ -310,10 +310,10 @@ pub(crate) fn parse_vk_image_create_info_fields(request: &Value) -> VkImageCreat
 /// The declared tensor layout a `storage_buffer` registration carries, `None`
 /// for any other resource type, or the refusal naming what is missing.
 #[cfg_attr(
-    all(not(target_os = "linux"), not(test)),
+    all(not(target_os = "linux"), not(target_os = "macos"), not(test)),
     expect(
         dead_code,
-        reason = "only the Unix-socket arm registers a tensor surface"
+        reason = "only the Unix-socket and Mach arms register a tensor surface"
     )
 )]
 pub(crate) fn tensor_layout_of_a_storage_buffer_registration(
@@ -331,10 +331,10 @@ pub(crate) fn tensor_layout_of_a_storage_buffer_registration(
 /// Echo a tensor surface's `shape` and `dtype` onto its lookup reply; a reply
 /// for any other surface carries neither.
 #[cfg_attr(
-    all(not(target_os = "linux"), not(test)),
+    all(not(target_os = "linux"), not(target_os = "macos"), not(test)),
     expect(
         dead_code,
-        reason = "only the Unix-socket arm registers a tensor surface"
+        reason = "only the Unix-socket and Mach arms register a tensor surface"
     )
 )]
 pub(crate) fn echo_the_tensor_layout_onto_a_lookup_reply(

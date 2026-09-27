@@ -725,10 +725,11 @@ fn binding_location_in_this_recording(
 pub(crate) enum StorageBufferAllocationFlavour {
     /// HOST_VISIBLE and mapped: the Rust caller that acquired it keeps it.
     CallerHeldHostVisible,
-    /// DEVICE_LOCAL OPAQUE_FD: it crosses to a helper process, and from there
-    /// to CUDA, which cannot import DMA-BUF. Linux-only until #2431.
-    #[cfg(target_os = "linux")]
-    CrossesToAHelperProcessOrCuda,
+    /// It crosses to a helper process and from there to the floor's array
+    /// library: DEVICE_LOCAL OPAQUE_FD on Linux, which CUDA imports and
+    /// DMA-BUF it cannot; a byte-shaped private IOSurface on macOS, which a
+    /// helper imports and hands torch-MPS or MLX as its `MTLBuffer`.
+    CrossesToAHelperProcess,
 }
 
 #[derive(Clone)]
@@ -778,7 +779,7 @@ pub struct GpuContext {
     /// Tensor storage buffers a helper process acquired, keyed by pool slot —
     /// the parent-wide map a dispatch in any helper binds another helper's
     /// tensor surface from.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     storage_buffer_registrations: Arc<Mutex<HashMap<String, crate::core::rhi::StorageBuffer>>>,
     /// Engine-wide cache of `(src, dst)`-keyed color converters. Per-frame
     /// `ResolvedColorInfo` lives in push constants, so a single cached
@@ -896,7 +897,7 @@ impl GpuContext {
             #[cfg(target_os = "linux")]
             surface_export_stagings: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             buffer_texture_cache: Arc::new(Mutex::new(HashMap::new())),
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             storage_buffer_registrations: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             color_converter_cache: Arc::new(RwLock::new(HashMap::new())),
@@ -943,7 +944,7 @@ impl GpuContext {
             #[cfg(target_os = "linux")]
             surface_export_stagings: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             buffer_texture_cache: Arc::new(Mutex::new(HashMap::new())),
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             storage_buffer_registrations: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             color_converter_cache: Arc::new(RwLock::new(HashMap::new())),
@@ -1207,7 +1208,7 @@ impl GpuContext {
     }
 
     /// Register a tensor storage buffer under `id` in the parent-wide map.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) fn register_storage_buffer_in_the_parent_wide_map(
         &self,
         id: &str,
@@ -1220,7 +1221,7 @@ impl GpuContext {
     }
 
     /// Remove `id` from the parent-wide storage buffer map. Idempotent.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) fn unregister_storage_buffer_from_the_parent_wide_map(&self, id: &str) {
         self.storage_buffer_registrations
             .lock()
@@ -1231,7 +1232,7 @@ impl GpuContext {
     /// The tensor storage buffer the parent-wide map holds under
     /// `surface_id`, refusing a published frame id whose slot has been
     /// recycled since.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) fn resolve_storage_buffer_from_the_parent_wide_map_by_surface_id(
         &self,
         surface_id: &str,
@@ -1844,8 +1845,19 @@ impl GpuContext {
                 ))
             }
             #[cfg(target_os = "linux")]
-            StorageBufferAllocationFlavour::CrossesToAHelperProcessOrCuda => {
+            StorageBufferAllocationFlavour::CrossesToAHelperProcess => {
                 self.create_opaque_fd_export_buffer(byte_size, true)
+            }
+            #[cfg(target_os = "macos")]
+            StorageBufferAllocationFlavour::CrossesToAHelperProcess => {
+                let buffer =
+                    crate::vulkan::rhi::HostVulkanBuffer::new_iosurface_backed_storage_buffer(
+                        &self.device.inner,
+                        byte_size,
+                    )?;
+                Ok(crate::core::rhi::StorageBuffer::from_host_vulkan_buffer(
+                    Arc::new(buffer),
+                ))
             }
         }
     }

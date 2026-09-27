@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 /// Raw byte-shaped GPU storage buffer (SSBO).
 ///
-/// Linux-only — SSBO allocation rides the Vulkan RHI path. Compute
+/// SSBO allocation rides the Vulkan RHI path, on Linux and macOS. Compute
 /// kernels bind it via
 /// [`crate::vulkan::rhi::VulkanComputeKernel::set_storage_buffer`].
 ///
@@ -105,7 +105,7 @@ impl StorageBuffer {
     /// Number of handles sharing this buffer's host `Arc`. Engine-internal — a
     /// lease-aware pool reads it to tell whether a holder in this process still
     /// has the slot.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) fn strong_count(&self) -> usize {
         if self.handle.is_null() {
             return 0;

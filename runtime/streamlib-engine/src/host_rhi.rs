@@ -274,6 +274,15 @@ pub trait HostSurfaceStoreExt {
         pixel_buffer: &crate::core::rhi::PixelBuffer,
         timeline_pair: &std::sync::Arc<crate::apple::surface_share::CrossProcessTimelinePair>,
     ) -> crate::core::error::Result<()>;
+
+    /// Register an IOSurface-backed tensor storage buffer as a
+    /// `storage_buffer` surface carrying its shape and dtype.
+    fn register_storage_buffer(
+        &self,
+        surface_id: &str,
+        buffer: &crate::core::rhi::StorageBuffer,
+        tensor_layout: &crate::core::rhi::TensorStorageBufferLayout,
+    ) -> crate::core::error::Result<()>;
 }
 
 #[cfg(target_os = "macos")]
@@ -300,6 +309,15 @@ impl HostSurfaceStoreExt for crate::core::context::SurfaceStore {
         timeline_pair: &std::sync::Arc<crate::apple::surface_share::CrossProcessTimelinePair>,
     ) -> crate::core::error::Result<()> {
         self.host_register_pixel_buffer_with_timeline_pair(surface_id, pixel_buffer, timeline_pair)
+    }
+
+    fn register_storage_buffer(
+        &self,
+        surface_id: &str,
+        buffer: &crate::core::rhi::StorageBuffer,
+        tensor_layout: &crate::core::rhi::TensorStorageBufferLayout,
+    ) -> crate::core::error::Result<()> {
+        self.host_register_storage_buffer(surface_id, buffer, tensor_layout)
     }
 }
 

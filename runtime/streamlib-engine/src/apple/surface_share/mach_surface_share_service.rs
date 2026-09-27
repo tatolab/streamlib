@@ -35,10 +35,11 @@ use crate::apple::iosurface::{
 use crate::core::context::SurfaceCheckOutLeaseHolderId;
 use crate::core::context::surface_share_wire_verbs::{
     SURFACE_RESOURCE_TYPE_PIXEL_BUFFER, SURFACE_RESOURCE_TYPE_TEXTURE, answer_release_check_out,
-    answer_unregister, latch_the_first_named_runtime_id, parse_vk_image_create_info_fields,
+    answer_unregister, echo_the_tensor_layout_onto_a_lookup_reply,
+    latch_the_first_named_runtime_id, parse_vk_image_create_info_fields,
     record_check_out_lease_or_refusal, refusal_of_a_retired_frame_id,
     release_what_a_closed_connection_held, requested_runtime_id, requested_surface_id,
-    stated_current_image_layout,
+    stated_current_image_layout, tensor_layout_of_a_storage_buffer_registration,
 };
 
 use super::state::{
@@ -811,6 +812,15 @@ fn registration_of_request(
             .to_string()
     };
     let resource_type = requested_str("resource_type", SURFACE_RESOURCE_TYPE_PIXEL_BUFFER);
+    let tensor_layout = tensor_layout_of_a_storage_buffer_registration(request)?;
+    if let Some(tensor_layout) = &tensor_layout
+        && (iosurface.alloc_size() as u64) < tensor_layout.byte_size()
+    {
+        return Err(format!(
+            "the registered IOSurface's {} bytes cannot hold a {tensor_layout} tensor",
+            iosurface.alloc_size()
+        ));
+    }
     let texture_image = (resource_type == SURFACE_RESOURCE_TYPE_TEXTURE).then(|| {
         Arc::new(RegisteredTextureImage::new(
             parse_vk_image_create_info_fields(request),
@@ -827,6 +837,7 @@ fn registration_of_request(
         iosurface: RetainedIOSurfaceSharedAcrossThreads::new(iosurface),
         timeline_send_rights,
         texture_image,
+        tensor_layout,
     })
 }
 
@@ -955,6 +966,7 @@ fn handle_lookup(
             texture_image.current_image_layout().into(),
         );
     }
+    echo_the_tensor_layout_onto_a_lookup_reply(&mut reply, registration.tensor_layout.as_ref());
     (reply, reply_ports)
 }
 
@@ -1218,6 +1230,66 @@ mod tests {
         assert_eq!(ports.len(), 3);
         assert_eq!(signaled_value_behind(&ports[1]), 11);
         assert_eq!(signaled_value_behind(&ports[2]), 22);
+    }
+
+    #[test]
+    fn a_storage_buffer_registration_checks_out_with_its_shape_and_dtype() {
+        let state = IOSurfaceShareState::new();
+        let iosurface =
+            create_private_iosurface_with_packed_rows(16384, 1, 1, PixelFormat::Unknown)
+                .expect("a byte-shaped IOSurface");
+        let holder = state.check_out_leases().mint_holder_id();
+        let (registered, _) = answer_surface_share_request(
+            &state,
+            &serde_json::json!({
+                "op": "register",
+                "surface_id": "tensor-slot",
+                "runtime_id": "R-test",
+                "resource_type": "storage_buffer",
+                "shape": [3, 7, 11],
+                "dtype": "float16",
+            }),
+            vec![a_port_to(&iosurface)],
+            holder,
+        );
+        assert_eq!(registered, serde_json::json!({"success": true}));
+
+        let (checked_out, ports) = answer_surface_share_request(
+            &state,
+            &serde_json::json!({"op": "check_out", "surface_id": "tensor-slot"}),
+            Vec::new(),
+            holder,
+        );
+        assert_eq!(checked_out["resource_type"], "storage_buffer");
+        assert_eq!(checked_out["shape"], serde_json::json!([3, 7, 11]));
+        assert_eq!(checked_out["dtype"], "float16");
+        assert_eq!(ports.len(), 1);
+    }
+
+    #[test]
+    fn a_storage_buffer_registration_its_surface_cannot_hold_is_refused() {
+        let state = IOSurfaceShareState::new();
+        let iosurface = a_small_iosurface();
+        let (refused, _) = answer_surface_share_request(
+            &state,
+            &serde_json::json!({
+                "op": "register",
+                "surface_id": "tensor-too-big",
+                "runtime_id": "R-test",
+                "resource_type": "storage_buffer",
+                "shape": [1, 3, 640, 640],
+                "dtype": "float32",
+            }),
+            vec![a_port_to(&iosurface)],
+            state.check_out_leases().mint_holder_id(),
+        );
+        assert!(
+            refused["error"]
+                .as_str()
+                .is_some_and(|error| error.contains("cannot hold")),
+            "{refused}"
+        );
+        assert!(state.registration_of("tensor-too-big").is_none());
     }
 
     #[test]
