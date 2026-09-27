@@ -135,6 +135,13 @@ impl HelperProcessGpuExchangeClient {
         response: &serde_json::Value,
         plane_fds: Vec<OwnedFd>,
     ) -> PyResult<HelperCheckedOutStorageBuffer> {
+        // Owed from the moment the service granted the checkout, so a refusal
+        // below releases the claim instead of pinning the slot until this
+        // helper's connection closes.
+        let release_check_out_to_surface_share = HelperSurfaceCheckOutLeaseDebt {
+            exchange_client: Arc::clone(self),
+            surface_id: surface_id.to_string(),
+        };
         let tensor_layout = tensor_layout_of_a_check_out(surface_id, response)?;
         let handle_type = response
             .get("handle_type")
@@ -183,10 +190,7 @@ impl HelperProcessGpuExchangeClient {
             cuda_import: OnceLock::new(),
             opaque_memory_fd_until_cuda_imports_it: Mutex::new(Some(opaque_memory_fd)),
             release_to_parent: None,
-            release_check_out_to_surface_share: HelperSurfaceCheckOutLeaseDebt {
-                exchange_client: Arc::clone(self),
-                surface_id: surface_id.to_string(),
-            },
+            release_check_out_to_surface_share,
             exchange_client: Arc::clone(self),
         })
     }
