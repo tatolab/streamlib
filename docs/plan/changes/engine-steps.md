@@ -175,7 +175,8 @@ dispatch.
 - ADDED: `ModelInputTensorKernel` in the wheel's Python: one compute pass from an RGBA surface into
   a tensor surface from the output ring decision 1 settles.
   - **Parameters:** target size; fit `stretch`, `letterbox` or `pad_bottom_right` with
-    `pad_to_multiple_of`; channel order with alpha dropped; layout `nchw` or `nhwc`; `float32`
+    `pad_to_multiple_of` — `pad_bottom_right` takes no target size and never resizes: each
+    tensor is the frame's own extent rounded up (owner ruling on #2432, 2026-09-27); channel order with alpha dropped; layout `nchw` or `nhwc`; `float32`
     or `float16`; `scale`, `mean`, `std`.
   - **Returns:** `apply_to_surface(gpu_limited_access, surface)` returns
     `(tensor_surface, geometry)`, where `geometry.boxes_to_source(...)` maps detections back to
