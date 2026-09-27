@@ -333,11 +333,20 @@ impl PythonGpuSurfaceHandle {
         let Some(storage_buffer) = owned_memory.tensor_storage_buffer() else {
             return Ok(None);
         };
-        if dl_device.is_some_and(|(device_type, _)| device_type == DeviceType::Cpu as i32) {
-            return Err(PyBufferError::new_err(
-                "a tensor surface lives on the device and exports no host view; copy it with \
-                 torch's `.cpu()` after `torch.from_dlpack`",
-            ));
+        if let Some(requested_device) = dl_device {
+            if requested_device.0 == DeviceType::Cpu as i32 {
+                return Err(PyBufferError::new_err(
+                    "a tensor surface lives on the device and exports no host view; copy it \
+                     with torch's `.cpu()` after `torch.from_dlpack`",
+                ));
+            }
+            let tensor_device = tensor_storage_buffer_dlpack_device(python, storage_buffer)?;
+            if requested_device != tensor_device {
+                return Err(PyBufferError::new_err(format!(
+                    "a tensor surface exports only on the DLPack device it lives on, \
+                     {tensor_device:?}; {requested_device:?} was requested"
+                )));
+            }
         }
         let writable = storage_buffer.writable;
         if writable {
@@ -680,16 +689,9 @@ impl PythonGpuSurfaceHandle {
     /// IOSurface exports a no-copy `MTLBuffer`.
     fn __dlpack_device__(&self, python: Python<'_>) -> PyResult<(i32, i32)> {
         let owned_memory = self.owned_memory()?;
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         if let Some(storage_buffer) = owned_memory.tensor_storage_buffer() {
-            let cuda_import = python
-                .detach(|| storage_buffer.cuda_import())
-                .map_err(super::gpu_operation_error)?;
-            return Ok(dlpack_device_as_python_pair(cuda_import.dlpack_device()));
-        }
-        #[cfg(target_os = "macos")]
-        if owned_memory.tensor_storage_buffer().is_some() {
-            return Ok(dlpack_device_as_python_pair(METAL_DLPACK_DEVICE));
+            return tensor_storage_buffer_dlpack_device(python, storage_buffer);
         }
         // Routed through the same once-per-handle decision `__dlpack__`
         // serves, so a probe failure here (answered CPU) cannot be
@@ -850,4 +852,26 @@ impl PythonGpuSurfaceHandle {
                 from_dlpack_failure
             })
     }
+}
+
+/// The DLPack device a tensor storage buffer's capsule lives on: the CUDA
+/// device its memory is imported onto, making the import on first ask.
+#[cfg(target_os = "linux")]
+fn tensor_storage_buffer_dlpack_device(
+    python: Python<'_>,
+    storage_buffer: &crate::python_helper_process_pixel_exchange::HelperCheckedOutStorageBuffer,
+) -> PyResult<(i32, i32)> {
+    let cuda_import = python
+        .detach(|| storage_buffer.cuda_import())
+        .map_err(super::gpu_operation_error)?;
+    Ok(dlpack_device_as_python_pair(cuda_import.dlpack_device()))
+}
+
+/// The DLPack device a tensor storage buffer's capsule lives on: `kDLMetal`.
+#[cfg(target_os = "macos")]
+fn tensor_storage_buffer_dlpack_device(
+    _python: Python<'_>,
+    _storage_buffer: &crate::python_helper_process_pixel_exchange::HelperCheckedOutStorageBuffer,
+) -> PyResult<(i32, i32)> {
+    Ok(dlpack_device_as_python_pair(METAL_DLPACK_DEVICE))
 }

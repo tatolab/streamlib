@@ -220,6 +220,10 @@ def test_a_kernel_writes_a_tensor_bound_by_surface_id_and_a_draw_reads_one(
         "a tensor no dispatch named carries the pattern: the comparison is vacuous"
     )
     assert observed["undispatched_still_holds_the_sentinel"]
+    assert observed["foreign_device_refusal"] is not None, (
+        "a tensor exported a capsule for a DLPack device it does not live on"
+    )
+    assert "was requested" in observed["foreign_device_refusal"]
 
     def rgba8(colour):
         return [round(channel * 255) for channel in colour]

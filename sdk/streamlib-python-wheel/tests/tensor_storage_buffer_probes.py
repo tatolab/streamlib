@@ -33,6 +33,8 @@ RESULT_MARKER = "MARKER:PROBE_RESULT "
 
 # The device a tensor's DLPack export lands on, in torch's name for it.
 NATURAL_TORCH_DEVICE_TYPE = "mps" if sys.platform == "darwin" else "cuda"
+# A DLPack device the tensor does not live on: CUDA on macOS, Metal on Linux.
+FOREIGN_DLPACK_DEVICE = (2, 0) if sys.platform == "darwin" else (8, 0)
 
 
 def _report(probe_name: str, observation_body) -> None:
@@ -440,7 +442,15 @@ class TensorStorageBufferKernelBindingProbe:
                 )
                 dispatched = torch.from_dlpack(dispatched_tensor)
                 undispatched = torch.from_dlpack(undispatched_tensor)
+                try:
+                    dispatched_tensor.__dlpack__(
+                        max_version=(1, 0), dl_device=FOREIGN_DLPACK_DEVICE
+                    )
+                    foreign_device_refusal = None
+                except BufferError as refusal:
+                    foreign_device_refusal = str(refusal)
                 compute_observation = {
+                    "foreign_device_refusal": foreign_device_refusal,
                     "compute_binding_names": list(compute_kernel.binding_names),
                     "dispatched_tensor_device": str(dispatched.device),
                     "dispatched_tensor_shape": list(dispatched.shape),
