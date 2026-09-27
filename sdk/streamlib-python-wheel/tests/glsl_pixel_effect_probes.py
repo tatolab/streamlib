@@ -16,6 +16,7 @@ import numpy
 
 from streamlib import (
     GlslPixelEffect,
+    GlslPixelEffectDialType,
     GpuContextLimitedAccess,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
@@ -68,7 +69,7 @@ vec4 effect(vec4 source, ivec2 at) {
     return vec4(dials.tint.rgb * dials.strength, dials.center.x + float(dials.steps) / 255.0);
 }
 """
-EVERY_DIAL_TYPE_DECLARATION = {"strength": "float", "tint": "vec4", "center": "vec2", "steps": "int"}
+EVERY_DIAL_TYPE_DECLARATION: "dict[str, GlslPixelEffectDialType]" = {"strength": "float", "tint": "vec4", "center": "vec2", "steps": "int"}
 EVERY_DIAL_TYPE_VALUES = {
     "strength": 1.0,
     "tint": (51 / 255, 102 / 255, 153 / 255, 0.0),

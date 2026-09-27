@@ -38,7 +38,7 @@ from ._engine import (
 from .processor_output_texture_ring import ProcessorOutputTextureRing
 from .video_frame import VideoFrame
 
-__all__ = ["GlslPixelEffect"]
+__all__ = ["GlslPixelEffect", "GlslPixelEffectDialType"]
 
 GlslPixelEffectDialType = Literal["float", "int", "vec2", "vec4"]
 
