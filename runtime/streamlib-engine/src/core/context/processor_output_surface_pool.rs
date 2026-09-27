@@ -102,6 +102,12 @@ impl<Resource: LeaseAwarePoolSlotResource> ProcessorOutputSurfacePool<Resource> 
         check_out_leases: Option<&SurfaceCheckOutLeaseRegistry>,
         minted_frame_generations: &LeaseAwarePoolMintedFrameGenerations,
     ) -> &LeaseAwarePoolSlot<Resource> {
+        debug_assert!(
+            self.ring.slot_count() < PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY,
+            "processor output pool '{}' was handed a fresh slot at its cap; the reuse call \
+             that asked for it refuses there",
+            self.pool_key
+        );
         let slot_index = self.ring.push_fresh_slot(pool_slot_key, resource);
         self.ring
             .hand_off_fresh_slot(slot_index, check_out_leases, minted_frame_generations);

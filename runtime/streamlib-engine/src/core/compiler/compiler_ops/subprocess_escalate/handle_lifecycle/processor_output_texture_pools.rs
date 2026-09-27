@@ -161,7 +161,7 @@ impl ProcessorOutputTexturePoolsOfOneHelper {
         };
         let surface_store = host.surface_store();
         self.replace_the_pool_if_its_descriptor_changed(pool_key, descriptor);
-        let published = self
+        let published_frame_id = self
             .pool_under(pool_key, descriptor)
             .hand_off_a_fresh_slot(
                 pool_slot_key,
@@ -173,7 +173,9 @@ impl ProcessorOutputTexturePoolsOfOneHelper {
                 host.lease_aware_pool_minted_frame_generations(),
             )
             .currently_published_frame_id();
-        Ok(ProcessorOutputTextureFreshSlotHandOff::Published(published))
+        Ok(ProcessorOutputTextureFreshSlotHandOff::Published(
+            published_frame_id,
+        ))
     }
 
     fn refuse_after_the_helpers_teardown(&self, pool_key: &str) -> Result<()> {
