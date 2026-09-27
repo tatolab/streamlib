@@ -18,6 +18,7 @@ import pytest
 
 from model_input_tensor_kernel_probes import (
     FIT_CASES,
+    SECOND_FIT_CASE,
     NATURAL_TORCH_DEVICE_TYPE,
     TOLERATED_ERROR_IN_PIXEL_LEVELS,
     matrix_case_name,
@@ -97,3 +98,23 @@ def test_a_bgra_frame_and_a_tensor_surface_are_refused_by_name(start_app_under_t
     assert "RGBA" in observed["bgra_refusal"]
     assert observed["tensor_surface_id"] in observed["tensor_refusal"]
     assert "tensor" in observed["tensor_refusal"]
+
+
+def test_a_pad_bottom_right_tensor_follows_its_frame_across_an_extent_change(
+    start_app_under_test,
+):
+    observed = run_scenario(start_app_under_test, "PadBottomRightExtentChangeProbe")
+
+    applies = observed["applies"]
+    assert [apply["tensor_shape"] for apply in applies] == [
+        [1, 3, 48, 64],
+        [1, 3, *reversed(SECOND_FIT_CASE["expected_tensor_extent"])],
+        [1, 3, 48, 64],
+    ]
+    assert [apply["geometry"] for apply in applies] == [
+        FIT_CASES["pad_bottom_right_to_multiple_of_16"]["expected_geometry"],
+        SECOND_FIT_CASE["expected_geometry"],
+        FIT_CASES["pad_bottom_right_to_multiple_of_16"]["expected_geometry"],
+    ]
+    for apply in applies:
+        assert apply["max_error_in_pixel_levels"] <= TOLERATED_ERROR_IN_PIXEL_LEVELS, apply

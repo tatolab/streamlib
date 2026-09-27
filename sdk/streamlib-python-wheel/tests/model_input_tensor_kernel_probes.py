@@ -51,8 +51,8 @@ NATURAL_TORCH_DEVICE_TYPE = "mps" if sys.platform == "darwin" else "cuda"
 
 class FitCase(TypedDict):
     fit: ModelInputTensorFit
-    width: int
-    height: int
+    width: "int | None"
+    height: "int | None"
     pad_to_multiple_of: "int | None"
     # The geometry worked out by hand for a 60x36 frame:
     # resized width, resized height, pad left, pad top.
@@ -70,13 +70,13 @@ FIT_CASES: "dict[str, FitCase]" = {
         "fit": "letterbox", "width": 32, "height": 24, "pad_to_multiple_of": None,
         "expected_geometry": [32, 19, 0, 2], "expected_tensor_extent": [32, 24],
     },
+    # The frame at its own extent, so boxes stay in frame coordinates.
     "pad_bottom_right": {
-        "fit": "pad_bottom_right", "width": 32, "height": 24, "pad_to_multiple_of": None,
-        "expected_geometry": [32, 19, 0, 0], "expected_tensor_extent": [32, 24],
+        "fit": "pad_bottom_right", "width": None, "height": None, "pad_to_multiple_of": None,
+        "expected_geometry": [60, 36, 0, 0], "expected_tensor_extent": [60, 36],
     },
     "pad_bottom_right_to_multiple_of_16": {
-        # The frame at its own extent, so boxes stay in frame coordinates.
-        "fit": "pad_bottom_right", "width": 60, "height": 36, "pad_to_multiple_of": 16,
+        "fit": "pad_bottom_right", "width": None, "height": None, "pad_to_multiple_of": 16,
         "expected_geometry": [60, 36, 0, 0], "expected_tensor_extent": [64, 48],
     },
 }
@@ -325,3 +325,80 @@ class NonRgbaSourceRefusalProbe:
                 }
 
         _report(refuse_each)
+
+
+# A second extent the frame changes to, and its tensor under a multiple of 16.
+SECOND_SOURCE_WIDTH = 30
+SECOND_SOURCE_HEIGHT = 18
+SECOND_FIT_CASE: FitCase = {
+    "fit": "pad_bottom_right", "width": None, "height": None, "pad_to_multiple_of": 16,
+    "expected_geometry": [30, 18, 0, 0], "expected_tensor_extent": [32, 32],
+}
+
+
+@processor
+class PadBottomRightExtentChangeProbe:
+    """Applies one `pad_bottom_right` kernel to the frame, then to a smaller
+    RGBA pixel buffer written from numpy, then to the frame again — each
+    tensor at its own source's extent, each compared with torch."""
+
+    @input(delivery_profile="ordered")
+    def video_from_upstream(self) -> VideoFrame: ...
+
+    def __init__(self) -> None:
+        self.reported = False
+
+    def setup(self, ctx: RuntimeContextFullAccess) -> None:
+        self.kernel = ModelInputTensorKernel.compile(
+            ctx.gpu_full_access,
+            fit="pad_bottom_right",
+            pad_to_multiple_of=16,
+            scale=SCALE,
+            mean=IMAGENET_MEAN,
+            std=IMAGENET_STD,
+        )
+
+    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+        frame = ctx.inputs.read("video_from_upstream", into=VideoFrame)
+        if frame is None or self.reported:
+            return
+        self.reported = True
+        gpu = ctx.gpu_limited_access
+
+        def compare(surface: GpuSurfaceHandle, source_rgba, fit_case: FitCase) -> "dict[str, Any]":
+            return compare_with_the_torch_reference(
+                gpu, surface, source_rgba, self.kernel, fit_case, "nchw", "rgb",
+                IMAGENET_MEAN, IMAGENET_STD,
+            )
+
+        def apply_across_an_extent_change() -> "dict[str, Any]":
+            import numpy
+
+            unavailable = _torch_device_unavailable_reason()
+            if unavailable is not None:
+                return {"torch_device_unavailable": unavailable}
+            ramp = numpy.arange(SECOND_SOURCE_WIDTH * SECOND_SOURCE_HEIGHT * 4) * 7 % 256
+            second_source_rgba = ramp.astype(numpy.uint8).reshape(
+                SECOND_SOURCE_HEIGHT, SECOND_SOURCE_WIDTH, 4
+            )
+            with (
+                gpu.resolve_surface(frame.surface_id) as frame_surface,
+                gpu.acquire_pixel_buffer(
+                    SECOND_SOURCE_WIDTH, SECOND_SOURCE_HEIGHT, "rgba"
+                ) as second_source,
+            ):
+                second_source.lock(read_only=False)
+                try:
+                    second_source.as_numpy()[..., :4] = second_source_rgba
+                finally:
+                    second_source.unlock()
+                frame_rgba = _source_pixels(frame_surface)
+                return {
+                    "applies": [
+                        compare(frame_surface, frame_rgba, FIT_CASES["pad_bottom_right_to_multiple_of_16"]),
+                        compare(second_source, second_source_rgba, SECOND_FIT_CASE),
+                        compare(frame_surface, frame_rgba, FIT_CASES["pad_bottom_right_to_multiple_of_16"]),
+                    ]
+                }
+
+        _report(apply_across_an_extent_change)

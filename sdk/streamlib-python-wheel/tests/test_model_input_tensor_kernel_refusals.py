@@ -92,10 +92,17 @@ class GpuLimitedAccessStandIn:
         return SurfaceHandleStandIn(f"tensor#{len(self.calls)}", shape=shape, dtype=dtype)
 
 
+def with_a_model_extent_unless_padding(parameters: "dict[str, Any]") -> "dict[str, Any]":
+    """640x640 for the fits that resize; `pad_bottom_right` takes the frame's extent."""
+    if parameters.get("fit") == "pad_bottom_right":
+        return parameters
+    return {"width": 640, "height": 640, **parameters}
+
+
 def compiled(**parameters: Any) -> "tuple[ModelInputTensorKernel, GpuFullAccessStandIn]":
     gpu = GpuFullAccessStandIn()
     kernel = ModelInputTensorKernel.compile(
-        cast(GpuContextFullAccess, gpu), **{"width": 640, "height": 640, **parameters}
+        cast(GpuContextFullAccess, gpu), **with_a_model_extent_unless_padding(parameters)
     )
     return kernel, gpu
 
@@ -104,7 +111,7 @@ def refusal_of_compile(**parameters: Any) -> str:
     gpu = GpuFullAccessStandIn()
     with pytest.raises(ValueError) as refusal:
         ModelInputTensorKernel.compile(
-            cast(GpuContextFullAccess, gpu), **{"width": 640, "height": 640, **parameters}
+            cast(GpuContextFullAccess, gpu), **with_a_model_extent_unless_padding(parameters)
         )
     assert gpu.kernel_requests == [], "a refusal must fire before the engine is asked"
     return str(refusal.value)
@@ -122,6 +129,11 @@ def apply(
         cast(GpuContextLimitedAccess, gpu), source if source is not None else frame()
     )
     return model_input, gpu
+
+
+def tensor_shape_for(kernel: ModelInputTensorKernel, source: GpuSurfaceHandle) -> "list[int]":
+    model_input, _ = apply(kernel, source)
+    return model_input.tensor_surface.shape
 
 
 def refusal_of_apply(kernel: ModelInputTensorKernel, source: GpuSurfaceHandle) -> str:
@@ -159,7 +171,7 @@ def test_a_pad_to_multiple_of_is_refused_for_a_fit_that_pads_no_edge(fit: str) -
 @pytest.mark.parametrize(
     "parameters",
     [{"width": 0}, {"height": -1}, {"width": 640.0}, {"height": True},
-     {"fit": "pad_bottom_right", "pad_to_multiple_of": 0}],
+     {"width": None}, {"fit": "pad_bottom_right", "pad_to_multiple_of": 0}],
 )
 def test_a_size_that_is_not_a_positive_int_is_refused(parameters: "dict[str, Any]") -> None:
     assert "must be a positive int" in refusal_of_compile(**parameters)
@@ -235,15 +247,46 @@ def test_the_tensor_comes_from_the_kernels_output_pool_in_its_layout(
     layout: str, dtype: str, expected_shape: "list[int]"
 ) -> None:
     kernel, _ = compiled(layout=layout, dtype=dtype)
-    assert kernel.tensor_shape == expected_shape
-    assert kernel.tensor_dtype == dtype
     _, gpu = apply(kernel)
     assert gpu.tensor_requests == [(2, expected_shape, dtype)]
 
 
-def test_pad_to_multiple_of_rounds_the_tensor_extent_up() -> None:
-    kernel, _ = compiled(width=1920, height=1080, fit="pad_bottom_right", pad_to_multiple_of=32)
-    assert kernel.tensor_shape == [1, 3, 1088, 1920]
+@pytest.mark.parametrize("parameters", [{"width": 640}, {"height": 640}])
+def test_a_model_extent_is_refused_for_pad_bottom_right_which_never_resizes(
+    parameters: "dict[str, Any]",
+) -> None:
+    message = refusal_of_compile(fit="pad_bottom_right", **parameters)
+    assert "never resizes" in message
+    assert "frame's own extent" in message
+
+
+def test_pad_bottom_right_takes_the_frames_extent_rounded_up_to_the_multiple() -> None:
+    kernel, _ = compiled(fit="pad_bottom_right", pad_to_multiple_of=32)
+    assert tensor_shape_for(kernel, frame(1920, 1080)) == [1, 3, 1088, 1920]
+
+
+def test_pad_bottom_right_without_a_multiple_is_the_frames_own_extent() -> None:
+    kernel, _ = compiled(fit="pad_bottom_right", layout="nhwc")
+    assert tensor_shape_for(kernel, frame(1279, 719)) == [1, 719, 1279, 3]
+
+
+def test_a_new_frame_extent_under_pad_bottom_right_asks_the_pool_for_its_tensor() -> None:
+    kernel, gpu = compiled(fit="pad_bottom_right", pad_to_multiple_of=32)
+    first, _ = apply(kernel, frame(1280, 720))
+    second, _ = apply(kernel, frame(640, 360))
+    assert first.tensor_surface.shape == [1, 3, 736, 1280]
+    assert second.tensor_surface.shape == [1, 3, 384, 640]
+    assert struct.unpack("<6i", gpu.kernel.dispatches[1]["push_constants"]) == (
+        640, 360, 0, 0, 640, 384,
+    )
+
+
+def test_an_odd_float16_frame_under_pad_bottom_right_is_refused_at_apply_naming_it() -> None:
+    kernel, _ = compiled(fit="pad_bottom_right", dtype="float16")
+    message = refusal_of_apply(kernel, frame(1279, 719))
+    assert "'camera#7'" in message
+    assert "1279x719" in message
+    tensor_shape_for(kernel, frame(1279, 720))
 
 
 def test_the_kernel_binds_the_landed_source_and_the_tensor_by_their_reflected_names() -> None:
@@ -252,17 +295,19 @@ def test_the_kernel_binds_the_landed_source_and_the_tensor_by_their_reflected_na
         "streamlib_source": "sampled_texture",
         "streamlib_model_input_tensor": "storage_buffer",
     }
-    assert gpu.kernel_requests[0]["push_constant_size"] == 16
+    assert gpu.kernel_requests[0]["push_constant_size"] == 24
     _, limited = apply(kernel)
     bindings = gpu.kernel.dispatches[0]["bindings"]
     assert bindings["streamlib_source"].surface_id == "texture#1"
     assert bindings["streamlib_model_input_tensor"].surface_id == "tensor#3"
 
 
-def test_the_fit_reaches_the_kernel_as_resized_extent_then_pad_offset() -> None:
+def test_the_fit_reaches_the_kernel_as_resized_extent_pad_offset_and_tensor_extent() -> None:
     kernel, gpu = compiled(fit="letterbox")
     apply(kernel)
-    assert struct.unpack("<4i", gpu.kernel.dispatches[0]["push_constants"]) == (640, 360, 0, 140)
+    assert struct.unpack("<6i", gpu.kernel.dispatches[0]["push_constants"]) == (
+        640, 360, 0, 140, 640, 640,
+    )
 
 
 @pytest.mark.parametrize(
@@ -299,8 +344,8 @@ def test_the_affine_and_channel_order_are_compiled_into_the_kernel() -> None:
         ("stretch", (1920, 1080), (640, 640, 0, 0)),
         ("letterbox", (1920, 1080), (640, 360, 0, 140)),
         ("letterbox", (480, 640), (480, 640, 80, 0)),
-        ("pad_bottom_right", (1920, 1080), (640, 360, 0, 0)),
-        ("pad_bottom_right", (320, 320), (640, 640, 0, 0)),
+        ("pad_bottom_right", (1920, 1080), (1920, 1080, 0, 0)),
+        ("pad_bottom_right", (320, 320), (320, 320, 0, 0)),
     ],
 )
 def test_each_fit_places_the_source_in_the_tensor(
@@ -335,7 +380,7 @@ def test_a_stretched_box_maps_back_per_axis() -> None:
 
 
 def test_a_box_padded_to_a_multiple_is_already_in_frame_coordinates() -> None:
-    kernel, _ = compiled(width=1920, height=1080, fit="pad_bottom_right", pad_to_multiple_of=32)
+    kernel, _ = compiled(fit="pad_bottom_right", pad_to_multiple_of=32)
     model_input, _ = apply(kernel, frame(1920, 1080))
     boxes = numpy.array([[10, 20, 1900, 1070], [0, 0, 1, 1]], dtype=numpy.int64)
     numpy.testing.assert_array_equal(model_input.geometry.boxes_to_source(boxes), boxes)

@@ -3,8 +3,8 @@
 
 """A model's input tensor, prepared from an RGBA frame in one compute pass.
 
-The frame is fitted to the model's input size — stretched, letterboxed, or
-padded on the bottom and right — its alpha dropped and its channels put in the
+The frame is stretched or letterboxed to the model's input size, or padded
+on the bottom and right at its own extent — its alpha dropped and its channels put in the
 model's order, then written as `(x * scale - mean) / std` into a tensor
 surface laid out `nchw` or `nhwc`. The tensor comes from a processor output
 pool, so a tensor a consumer still holds is never rewritten, and
@@ -65,8 +65,9 @@ _RGBA_SOURCE_FORMATS = ("rgba32", "rgba8_unorm")
 
 _MODEL_INPUT_TENSOR_BINDING_NAME = "streamlib_model_input_tensor"
 
-# `ivec2 resized_extent; ivec2 pad_offset;` — the per-apply fit.
-_FIT_PUSH_CONSTANT_FORMAT = "<4i"
+# `ivec2 resized_extent; ivec2 pad_offset; ivec2 tensor_extent;` — the
+# per-apply fit, since a `pad_bottom_right` tensor takes the frame's extent.
+_FIT_PUSH_CONSTANT_FORMAT = "<6i"
 _FIT_PUSH_CONSTANT_BLOCK_BYTE_SIZE = struct.calcsize(_FIT_PUSH_CONSTANT_FORMAT)
 
 # One invocation writes one 32-bit word of the tensor: one float32 element,
@@ -204,14 +205,12 @@ class ModelInputTensor:
 
 
 @dataclass(frozen=True)
-class _ModelInputTensorLayoutPlan:
-    """The tensor's extent, the region the fit may fill, and how it is laid out."""
+class _ModelInputTensorExtent:
+    """One apply's tensor: its extent, where the frame lands in it, and its layout."""
 
     tensor_width: int
     tensor_height: int
-    fit_width: int
-    fit_height: int
-    fit: ModelInputTensorFit
+    geometry: ModelInputTensorGeometry
     layout: ModelInputTensorLayout
     dtype: ModelInputTensorDtype
 
@@ -222,16 +221,10 @@ class _ModelInputTensorLayoutPlan:
         return [1, self.tensor_height, self.tensor_width, _CHANNEL_COUNT]
 
     @property
-    def element_count(self) -> int:
-        return _CHANNEL_COUNT * self.tensor_width * self.tensor_height
-
-    @property
-    def elements_per_word(self) -> int:
-        return 1 if self.dtype == "float32" else 2
-
-    @property
     def word_count(self) -> int:
-        return self.element_count // self.elements_per_word
+        return _CHANNEL_COUNT * self.tensor_width * self.tensor_height // _elements_per_word(
+            self.dtype
+        )
 
     @property
     def dispatch_group_count(self) -> "tuple[int, int, int]":
@@ -244,48 +237,102 @@ class _ModelInputTensorLayoutPlan:
             1,
         )
 
-    def geometry_for_source(self, source_width: int, source_height: int) -> ModelInputTensorGeometry:
+    @property
+    def push_constants(self) -> bytes:
+        return struct.pack(
+            _FIT_PUSH_CONSTANT_FORMAT,
+            self.geometry.resized_width,
+            self.geometry.resized_height,
+            self.geometry.pad_left,
+            self.geometry.pad_top,
+            self.tensor_width,
+            self.tensor_height,
+        )
+
+
+def _elements_per_word(dtype: ModelInputTensorDtype) -> int:
+    return 1 if dtype == "float32" else 2
+
+
+def _refuse_a_tensor_extent_the_kernel_cannot_write(
+    refusal_subject: str, tensor_width: int, tensor_height: int, dtype: ModelInputTensorDtype
+) -> None:
+    element_count = _CHANNEL_COUNT * tensor_width * tensor_height
+    if element_count // _elements_per_word(dtype) > _MAXIMUM_ROWS * _WORDS_PER_ROW:
+        raise ValueError(
+            f"{refusal_subject}: a {tensor_width}x{tensor_height} tensor is past "
+            f"the largest one dispatch covers"
+        )
+    if element_count % _elements_per_word(dtype):
+        raise ValueError(
+            f"{refusal_subject}: a float16 tensor of {tensor_width}x{tensor_height} "
+            f"has an odd element count, and the kernel writes float16 elements in "
+            f"pairs — make the width or the height even, or use float32"
+        )
+
+
+@dataclass(frozen=True)
+class _ModelInputTensorPlan:
+    """What `compile` fixed: the fit, the model's extent when the fit has one, and the layout."""
+
+    fit: ModelInputTensorFit
+    model_width: "int | None"
+    model_height: "int | None"
+    pad_to_multiple_of: int
+    layout: ModelInputTensorLayout
+    dtype: ModelInputTensorDtype
+
+    def extent_for_source(self, source_width: int, source_height: int) -> _ModelInputTensorExtent:
+        if self.model_width is None or self.model_height is None:
+            return _ModelInputTensorExtent(
+                _rounded_up_to_multiple(source_width, self.pad_to_multiple_of),
+                _rounded_up_to_multiple(source_height, self.pad_to_multiple_of),
+                ModelInputTensorGeometry(
+                    source_width, source_height, source_width, source_height, 0, 0
+                ),
+                self.layout,
+                self.dtype,
+            )
         if self.fit == "stretch":
-            return ModelInputTensorGeometry(
-                source_width, source_height, self.fit_width, self.fit_height, 0, 0
+            geometry = ModelInputTensorGeometry(
+                source_width, source_height, self.model_width, self.model_height, 0, 0
             )
-        scale = min(self.fit_width / source_width, self.fit_height / source_height)
-        resized_width = min(self.fit_width, max(1, round(source_width * scale)))
-        resized_height = min(self.fit_height, max(1, round(source_height * scale)))
-        if self.fit == "pad_bottom_right":
-            return ModelInputTensorGeometry(
-                source_width, source_height, resized_width, resized_height, 0, 0
+        else:
+            scale = min(self.model_width / source_width, self.model_height / source_height)
+            resized_width = min(self.model_width, max(1, round(source_width * scale)))
+            resized_height = min(self.model_height, max(1, round(source_height * scale)))
+            geometry = ModelInputTensorGeometry(
+                source_width,
+                source_height,
+                resized_width,
+                resized_height,
+                (self.model_width - resized_width) // 2,
+                (self.model_height - resized_height) // 2,
             )
-        return ModelInputTensorGeometry(
-            source_width,
-            source_height,
-            resized_width,
-            resized_height,
-            (self.fit_width - resized_width) // 2,
-            (self.fit_height - resized_height) // 2,
+        return _ModelInputTensorExtent(
+            self.model_width, self.model_height, geometry, self.layout, self.dtype
         )
 
 
 def _compute_kernel_glsl(
-    tensor_layout_plan: _ModelInputTensorLayoutPlan,
+    layout: ModelInputTensorLayout,
+    dtype: ModelInputTensorDtype,
     channel_order: ModelInputTensorChannelOrder,
     scale: float,
     mean: "tuple[float, float, float]",
     std: "tuple[float, float, float]",
 ) -> str:
-    width = tensor_layout_plan.tensor_width
-    plane = tensor_layout_plan.tensor_width * tensor_layout_plan.tensor_height
-    if tensor_layout_plan.layout == "nchw":
+    if layout == "nchw":
         element_position = (
-            f"    uint channel = element_index / {plane}u;\n"
-            f"    uint pixel_index = element_index % {plane}u;\n"
+            "    uint channel = element_index / plane;\n"
+            "    uint pixel_index = element_index % plane;\n"
         )
     else:
         element_position = (
             f"    uint channel = element_index % {_CHANNEL_COUNT}u;\n"
             f"    uint pixel_index = element_index / {_CHANNEL_COUNT}u;\n"
         )
-    if tensor_layout_plan.dtype == "float32":
+    if dtype == "float32":
         tensor_word_type = "float"
         write_word = (
             "    streamlib_model_input_tensor.words[word_index] = "
@@ -313,14 +360,18 @@ def _compute_kernel_glsl(
         "layout(push_constant) uniform ModelInputTensorFit {\n"
         "    ivec2 resized_extent;\n"
         "    ivec2 pad_offset;\n"
+        "    ivec2 tensor_extent;\n"
         "} fit;\n"
         f"const float SCALE = {_glsl_float(scale)};\n"
         f"const vec3 MEAN = vec3({', '.join(_glsl_float(value) for value in mean)});\n"
         f"const vec3 STD = vec3({', '.join(_glsl_float(value) for value in std)});\n"
         f"const ivec3 SOURCE_CHANNEL_BY_OUTPUT_CHANNEL = ivec3({source_channels});\n"
+        f"const uint ELEMENTS_PER_WORD = {_elements_per_word(dtype)}u;\n"
         "float model_input_element(uint element_index) {\n"
+        "    uint tensor_width = uint(fit.tensor_extent.x);\n"
+        "    uint plane = tensor_width * uint(fit.tensor_extent.y);\n"
         f"{element_position}"
-        f"    ivec2 at = ivec2(int(pixel_index % {width}u), int(pixel_index / {width}u));\n"
+        "    ivec2 at = ivec2(int(pixel_index % tensor_width), int(pixel_index / tensor_width));\n"
         "    ivec2 in_resized = at - fit.pad_offset;\n"
         "    float pixel_value = 0.0;\n"
         "    if (all(greaterThanEqual(in_resized, ivec2(0)))\n"
@@ -334,7 +385,9 @@ def _compute_kernel_glsl(
         "void main() {\n"
         f"    uint word_index = gl_GlobalInvocationID.y * {_WORDS_PER_ROW}u"
         " + gl_GlobalInvocationID.x;\n"
-        f"    if (word_index >= {tensor_layout_plan.word_count}u) {{\n"
+        f"    uint word_count = {_CHANNEL_COUNT}u * uint(fit.tensor_extent.x)"
+        " * uint(fit.tensor_extent.y) / ELEMENTS_PER_WORD;\n"
+        "    if (word_index >= word_count) {\n"
         "        return;\n"
         "    }\n"
         f"{write_word}"
@@ -345,31 +398,18 @@ def _compute_kernel_glsl(
 class ModelInputTensorKernel:
     """Prepares a model's input tensor from an RGBA frame on the GPU, frame by frame."""
 
-    def __init__(
-        self, compute_kernel: ComputeKernel, tensor_layout_plan: _ModelInputTensorLayoutPlan
-    ) -> None:
+    def __init__(self, compute_kernel: ComputeKernel, tensor_plan: _ModelInputTensorPlan) -> None:
         self._compute_kernel = compute_kernel
-        self._tensor_layout_plan = tensor_layout_plan
-        self._dispatch_group_count = tensor_layout_plan.dispatch_group_count
+        self._tensor_plan = tensor_plan
         self._source_landing_ring = SampledSourceLandingTextureRing()
         self._tensor_output_pool_key = f"model-input-tensor-kernel-{uuid.uuid4().hex}"
-
-    @property
-    def tensor_shape(self) -> "list[int]":
-        """The shape of every tensor this kernel writes, batch of one first."""
-        return self._tensor_layout_plan.dimensions
-
-    @property
-    def tensor_dtype(self) -> ModelInputTensorDtype:
-        """The element type of every tensor this kernel writes."""
-        return self._tensor_layout_plan.dtype
 
     @classmethod
     def compile(
         cls,
         gpu_full_access: GpuContextFullAccess,
-        width: int,
-        height: int,
+        width: "int | None" = None,
+        height: "int | None" = None,
         fit: ModelInputTensorFit = "stretch",
         pad_to_multiple_of: "int | None" = None,
         channel_order: ModelInputTensorChannelOrder = "rgb",
@@ -381,30 +421,45 @@ class ModelInputTensorKernel:
     ) -> "ModelInputTensorKernel":
         """Build the kernel for one model's input, in `setup()`.
 
-        The frame fits `width` x `height`: `stretch` fills it, `letterbox`
-        keeps the aspect and pads both sides evenly, and `pad_bottom_right`
-        keeps the aspect and pads after the frame — `pad_to_multiple_of`
-        then rounds the tensor's extent up. A pixel's 0-255 channel value
-        `x` is written as `(x * scale - mean) / std`, per output channel;
-        padding is a black pixel through the same affine. Raises naming the
-        parameter for an unknown fit, layout, dtype or channel order.
+        `stretch` fills the model's `width` x `height` and `letterbox` keeps
+        the aspect and pads both sides evenly. `pad_bottom_right` takes no
+        `width` or `height`: it never resizes, and each tensor is the frame's
+        own extent rounded up to `pad_to_multiple_of`, so boxes come back in
+        frame coordinates. A pixel's 0-255 channel value `x` is written as
+        `(x * scale - mean) / std`, per output channel; padding is a black
+        pixel through the same affine. Raises naming the parameter for an
+        unknown fit, layout, dtype or channel order.
         """
         _refuse_unless_one_of("fit", fit, _FITS)
         _refuse_unless_one_of("channel_order", channel_order, tuple(_SOURCE_CHANNEL_BY_OUTPUT_CHANNEL))
         _refuse_unless_one_of("layout", layout, _LAYOUTS)
         _refuse_unless_one_of("dtype", dtype, _DTYPES)
-        fit_width = _positive_int("width", width)
-        fit_height = _positive_int("height", height)
-        tensor_width, tensor_height = fit_width, fit_height
-        if pad_to_multiple_of is not None:
-            if fit != "pad_bottom_right":
+        if fit == "pad_bottom_right":
+            if width is not None or height is not None:
+                raise ValueError(
+                    f"ModelInputTensorKernel.compile: fit='pad_bottom_right' never "
+                    f"resizes, so it takes no width or height (got {width!r} x "
+                    f"{height!r}) — each tensor is the frame's own extent, rounded "
+                    f"up to pad_to_multiple_of"
+                )
+            model_width = model_height = None
+            multiple = (
+                1
+                if pad_to_multiple_of is None
+                else _positive_int("pad_to_multiple_of", pad_to_multiple_of)
+            )
+        else:
+            if pad_to_multiple_of is not None:
                 raise ValueError(
                     f"ModelInputTensorKernel.compile: pad_to_multiple_of pads after "
                     f"the frame, so it needs fit='pad_bottom_right', not {fit!r}"
                 )
-            multiple = _positive_int("pad_to_multiple_of", pad_to_multiple_of)
-            tensor_width = _rounded_up_to_multiple(fit_width, multiple)
-            tensor_height = _rounded_up_to_multiple(fit_height, multiple)
+            model_width = _positive_int("width", width)
+            model_height = _positive_int("height", height)
+            multiple = 1
+            _refuse_a_tensor_extent_the_kernel_cannot_write(
+                "ModelInputTensorKernel.compile", model_width, model_height, dtype
+            )
         if not _is_finite_number(scale):
             raise ValueError(
                 f"ModelInputTensorKernel.compile: scale must be a finite number, "
@@ -417,25 +472,9 @@ class ModelInputTensorKernel:
                 f"ModelInputTensorKernel.compile: std {std!r} holds a zero, which "
                 f"every element of that channel would be divided by"
             )
-        tensor_layout_plan = _ModelInputTensorLayoutPlan(
-            tensor_width, tensor_height, fit_width, fit_height, fit, layout, dtype
-        )
-        if tensor_layout_plan.word_count > _MAXIMUM_ROWS * _WORDS_PER_ROW:
-            raise ValueError(
-                f"ModelInputTensorKernel.compile: a {tensor_width}x{tensor_height} "
-                f"tensor is past the largest one dispatch covers — reduce width "
-                f"and height"
-            )
-        if tensor_layout_plan.element_count % tensor_layout_plan.elements_per_word:
-            raise ValueError(
-                f"ModelInputTensorKernel.compile: a float16 tensor of "
-                f"{tensor_width}x{tensor_height} has an odd element count, and "
-                f"the kernel writes float16 elements in pairs — make the width "
-                f"or the height even, or use float32"
-            )
         compute_kernel = gpu_full_access.create_compute_kernel(
             source=_compute_kernel_glsl(
-                tensor_layout_plan, channel_order, float(scale), mean_by_channel, std_by_channel
+                layout, dtype, channel_order, float(scale), mean_by_channel, std_by_channel
             ),
             push_constant_size=_FIT_PUSH_CONSTANT_BLOCK_BYTE_SIZE,
             bindings={
@@ -443,7 +482,10 @@ class ModelInputTensorKernel:
                 _MODEL_INPUT_TENSOR_BINDING_NAME: "storage_buffer",
             },
         )
-        return cls(compute_kernel, tensor_layout_plan)
+        return cls(
+            compute_kernel,
+            _ModelInputTensorPlan(fit, model_width, model_height, multiple, layout, dtype),
+        )
 
     def apply_to_surface(
         self, gpu_limited_access: GpuContextWithSurfaceCopy, surface: GpuSurfaceHandle
@@ -453,51 +495,49 @@ class ModelInputTensorKernel:
         `surface` is one 8-bit RGBA frame, a pixel buffer's `rgba32` or a
         texture's `rgba8_unorm`. The returned tensor surface is written when
         this returns; `torch.from_dlpack` reads it with no copy, and its id
-        publishes downstream. Raises naming the surface for a tensor or a
-        non-RGBA source, and when every pool slot is still held.
+        publishes downstream. A frame of a new extent under `pad_bottom_right`
+        re-sizes the pool's tensors. Raises naming the surface for a tensor,
+        a non-RGBA source, or an extent the kernel cannot write, and when
+        every pool slot is still held.
         """
         source_surface_id = surface.surface_id
+        refusal_subject = f"ModelInputTensorKernel.apply_to_surface: surface {source_surface_id!r}"
         if surface.shape is not None:
             raise ValueError(
-                f"ModelInputTensorKernel.apply_to_surface: surface {source_surface_id!r} "
-                f"is a tensor of {surface.shape} {surface.dtype}, not an RGBA frame"
+                f"{refusal_subject} is a tensor of {surface.shape} {surface.dtype}, "
+                f"not an RGBA frame"
             )
         if surface.format not in _RGBA_SOURCE_FORMATS:
             raise ValueError(
-                f"ModelInputTensorKernel.apply_to_surface: surface {source_surface_id!r} "
-                f"is {surface.format!r}; the source is one 8-bit RGBA frame, "
-                f"{' or '.join(repr(name) for name in _RGBA_SOURCE_FORMATS)} — "
+                f"{refusal_subject} is {surface.format!r}; the source is one 8-bit "
+                f"RGBA frame, {' or '.join(repr(name) for name in _RGBA_SOURCE_FORMATS)} — "
                 f"the kernel converts no colour"
             )
         source_width, source_height = surface.width, surface.height
-        geometry = self._tensor_layout_plan.geometry_for_source(source_width, source_height)
+        tensor_extent = self._tensor_plan.extent_for_source(source_width, source_height)
+        if self._tensor_plan.model_width is None:
+            _refuse_a_tensor_extent_the_kernel_cannot_write(
+                refusal_subject,
+                tensor_extent.tensor_width,
+                tensor_extent.tensor_height,
+                tensor_extent.dtype,
+            )
 
         source_landing_texture = self._source_landing_ring.land_source_for_this_frame(
-            gpu_limited_access,
-            source_surface_id,
-            source_width,
-            source_height,
-            f"ModelInputTensorKernel.apply_to_surface: surface {source_surface_id!r}",
+            gpu_limited_access, source_surface_id, source_width, source_height, refusal_subject
         )
-
         tensor_surface = gpu_limited_access.acquire_storage_buffer_from_processor_output_pool(
             self._tensor_output_pool_key,
             STANDARD_RING_DEPTH,
-            self._tensor_layout_plan.dimensions,
-            self._tensor_layout_plan.dtype,
+            tensor_extent.dimensions,
+            tensor_extent.dtype,
         )
         self._compute_kernel.dispatch(
             bindings={
                 SAMPLED_SOURCE_BINDING_NAME: source_landing_texture,
                 _MODEL_INPUT_TENSOR_BINDING_NAME: tensor_surface,
             },
-            group_count=self._dispatch_group_count,
-            push_constants=struct.pack(
-                _FIT_PUSH_CONSTANT_FORMAT,
-                geometry.resized_width,
-                geometry.resized_height,
-                geometry.pad_left,
-                geometry.pad_top,
-            ),
+            group_count=tensor_extent.dispatch_group_count,
+            push_constants=tensor_extent.push_constants,
         )
-        return ModelInputTensor(tensor_surface, geometry)
+        return ModelInputTensor(tensor_surface, tensor_extent.geometry)
