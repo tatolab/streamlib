@@ -661,6 +661,22 @@ fn binding_location_in_this_recording(
     }
 }
 
+/// A tensor storage buffer in the parent-wide map, with the layout it was
+/// acquired for.
+#[cfg(target_os = "linux")]
+#[derive(Clone)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "read by the storage_buffer dispatch binding, #2430"
+    )
+)]
+pub(crate) struct RegisteredTensorStorageBuffer {
+    pub(crate) buffer: crate::core::rhi::StorageBuffer,
+    pub(crate) tensor_layout: crate::core::rhi::TensorStorageBufferLayout,
+}
+
 /// Which allocation a storage buffer takes, derived from where it goes.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -719,19 +735,9 @@ pub struct GpuContext {
     buffer_texture_cache: Arc<Mutex<HashMap<String, Texture>>>,
     /// Tensor storage buffers a helper process acquired, keyed by pool slot —
     /// the parent-wide map a dispatch in any helper binds another helper's
-    /// tensor surface from. Evicted by `unregister_storage_buffer`.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    storage_buffer_registrations: Arc<
-        Mutex<
-            HashMap<
-                String,
-                (
-                    crate::core::rhi::StorageBuffer,
-                    crate::core::rhi::TensorStorageBufferLayout,
-                ),
-            >,
-        >,
-    >,
+    /// tensor surface from.
+    #[cfg(target_os = "linux")]
+    storage_buffer_registrations: Arc<Mutex<HashMap<String, RegisteredTensorStorageBuffer>>>,
     /// Engine-wide cache of `(src, dst)`-keyed color converters. Per-frame
     /// `ResolvedColorInfo` lives in push constants, so a single cached
     /// converter handles every variation of source color description.
@@ -848,7 +854,7 @@ impl GpuContext {
             #[cfg(target_os = "linux")]
             surface_export_stagings: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             buffer_texture_cache: Arc::new(Mutex::new(HashMap::new())),
-            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            #[cfg(target_os = "linux")]
             storage_buffer_registrations: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             color_converter_cache: Arc::new(RwLock::new(HashMap::new())),
@@ -895,7 +901,7 @@ impl GpuContext {
             #[cfg(target_os = "linux")]
             surface_export_stagings: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             buffer_texture_cache: Arc::new(Mutex::new(HashMap::new())),
-            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            #[cfg(target_os = "linux")]
             storage_buffer_registrations: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             color_converter_cache: Arc::new(RwLock::new(HashMap::new())),
@@ -1159,38 +1165,42 @@ impl GpuContext {
     }
 
     /// Register a tensor storage buffer under `id` in the parent-wide map.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pub fn register_storage_buffer(
+    #[cfg(target_os = "linux")]
+    pub(crate) fn register_storage_buffer_in_the_parent_wide_map(
         &self,
         id: &str,
-        buffer: crate::core::rhi::StorageBuffer,
-        layout: crate::core::rhi::TensorStorageBufferLayout,
+        registered_tensor_storage_buffer: RegisteredTensorStorageBuffer,
     ) {
         self.storage_buffer_registrations.lock().unwrap().insert(
             pool_slot_key_of_surface_id(id).to_string(),
-            (buffer, layout),
+            registered_tensor_storage_buffer,
         );
     }
 
     /// Remove `id` from the parent-wide storage buffer map. Idempotent.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pub fn unregister_storage_buffer(&self, id: &str) {
+    #[cfg(target_os = "linux")]
+    pub(crate) fn unregister_storage_buffer_from_the_parent_wide_map(&self, id: &str) {
         self.storage_buffer_registrations
             .lock()
             .unwrap()
             .remove(pool_slot_key_of_surface_id(id));
     }
 
-    /// The tensor storage buffer registered under `surface_id` and its layout,
-    /// refusing a published frame id whose slot has been recycled since.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pub fn resolve_storage_buffer_by_surface_id(
+    /// The tensor storage buffer the parent-wide map holds under
+    /// `surface_id`, refusing a published frame id whose slot has been
+    /// recycled since.
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "read by the storage_buffer dispatch binding, #2430"
+        )
+    )]
+    pub(crate) fn resolve_storage_buffer_from_the_parent_wide_map_by_surface_id(
         &self,
         surface_id: &str,
-    ) -> Result<(
-        crate::core::rhi::StorageBuffer,
-        crate::core::rhi::TensorStorageBufferLayout,
-    )> {
+    ) -> Result<RegisteredTensorStorageBuffer> {
         self.refuse_a_retired_frame_id(surface_id)?;
         self.storage_buffer_registrations
             .lock()

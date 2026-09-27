@@ -93,12 +93,9 @@ impl RegisteredHandle {
 
     /// Whether releasing this handle also owes the parent-wide storage buffer
     /// map an eviction.
+    #[cfg(target_os = "linux")]
     pub(crate) fn is_storage_buffer_backed(&self) -> bool {
-        #[cfg(target_os = "linux")]
-        if let Self::StorageBuffer { .. } = self {
-            return true;
-        }
-        false
+        matches!(self, Self::StorageBuffer { .. })
     }
 }
 
@@ -352,9 +349,11 @@ pub(crate) fn release_surface_share_and_parent_caches_for_handle(
     if removed_handle.is_texture_backed() {
         sandbox.unregister_texture(handle_id);
     }
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(target_os = "linux")]
     if removed_handle.is_storage_buffer_backed() {
-        sandbox.host_inner().unregister_storage_buffer(handle_id);
+        sandbox
+            .host_inner()
+            .unregister_storage_buffer_from_the_parent_wide_map(handle_id);
     }
 }
 

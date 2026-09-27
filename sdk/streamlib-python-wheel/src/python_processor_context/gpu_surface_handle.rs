@@ -27,7 +27,9 @@ use crate::python_gpu_surface_pixel_exchange::{
 use crate::python_helper_process_pixel_exchange::HelperAcquiredTexture;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::python_helper_process_pixel_exchange::HelperCheckedOutSurface;
+#[cfg(target_os = "linux")]
 use crate::python_helper_process_pixel_exchange::a_tensor_surface_is_not_a_pixel_surface;
+use crate::python_helper_process_pixel_exchange::{GpuSurfaceGeometry, PixelSurfaceGeometry};
 #[cfg(target_os = "macos")]
 use crate::python_metal_framework_queue_synchronization::drain_torch_mps_queue_if_imported;
 use streamlib::sdk::rhi::TensorStorageBufferLayout;
@@ -46,12 +48,9 @@ use super::left_by_a_propagating_exception;
 pub(crate) struct PythonGpuSurfaceHandle {
     /// `None` for pooled textures — see [`Self::surface_id`].
     minted_surface_id: Option<String>,
-    /// Width, height and format name; `None` for a tensor storage buffer,
-    /// which states a shape and dtype instead.
-    surface_pixel_geometry: Option<(u32, u32, String)>,
-    /// The declared shape and dtype of a tensor storage buffer; `None` for
-    /// pixels.
-    surface_tensor_layout: Option<TensorStorageBufferLayout>,
+    /// Pixels with a width, height and format, or a tensor storage buffer
+    /// with a shape and dtype.
+    surface_geometry: GpuSurfaceGeometry,
     /// Whether a writable tensor capsule went out, whose CUDA writes the
     /// close must order ahead of any other holder's read.
     #[cfg(target_os = "linux")]
@@ -80,14 +79,12 @@ pub(crate) struct PythonGpuSurfaceHandle {
 impl PythonGpuSurfaceHandle {
     fn new(
         minted_surface_id: Option<String>,
-        surface_pixel_geometry: Option<(u32, u32, String)>,
-        surface_tensor_layout: Option<TensorStorageBufferLayout>,
+        surface_geometry: GpuSurfaceGeometry,
         owned_memory: Arc<GpuSurfaceOwnedMemory>,
     ) -> Self {
         Self {
             minted_surface_id,
-            surface_pixel_geometry,
-            surface_tensor_layout,
+            surface_geometry,
             #[cfg(target_os = "linux")]
             a_writable_tensor_capsule_went_out: std::sync::atomic::AtomicBool::new(false),
             owned_memory: Mutex::new(Some(owned_memory)),
@@ -252,16 +249,33 @@ impl PythonGpuSurfaceHandle {
     /// nothing outside this process can resolve one, a present loop least of
     /// all.
     pub(crate) fn surface_id_and_extent_a_window_can_name(&self) -> PyResult<(String, u32, u32)> {
-        let (width, height, _) = self.pixel_geometry()?;
-        Ok((self.surface_id()?, *width, *height))
+        let pixel_geometry = self.pixel_geometry()?;
+        Ok((
+            self.surface_id()?,
+            pixel_geometry.width,
+            pixel_geometry.height,
+        ))
     }
 
-    /// Width, height and format name, or the refusal a tensor surface gives
-    /// every pixel-shaped door.
-    fn pixel_geometry(&self) -> PyResult<&(u32, u32, String)> {
-        self.surface_pixel_geometry
-            .as_ref()
-            .ok_or_else(a_tensor_surface_is_not_a_pixel_surface)
+    /// Width, height and format, or the refusal a tensor surface gives every
+    /// pixel-shaped door.
+    fn pixel_geometry(&self) -> PyResult<PixelSurfaceGeometry> {
+        match &self.surface_geometry {
+            GpuSurfaceGeometry::Pixels(pixel_geometry) => Ok(*pixel_geometry),
+            #[cfg(target_os = "linux")]
+            GpuSurfaceGeometry::TensorStorageBuffer(_) => {
+                Err(a_tensor_surface_is_not_a_pixel_surface())
+            }
+        }
+    }
+
+    /// The declared layout of a tensor surface; `None` for pixels.
+    fn tensor_layout(&self) -> Option<&TensorStorageBufferLayout> {
+        match &self.surface_geometry {
+            GpuSurfaceGeometry::Pixels(_) => None,
+            #[cfg(target_os = "linux")]
+            GpuSurfaceGeometry::TensorStorageBuffer(tensor_layout) => Some(tensor_layout),
+        }
     }
 
     /// Refuse a pixel-shaped door on a tensor surface.
@@ -281,7 +295,7 @@ impl PythonGpuSurfaceHandle {
         max_version: Option<(u32, u32)>,
         dl_device: Option<(i32, i32)>,
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
-        if self.surface_tensor_layout.is_none() {
+        if self.tensor_layout().is_none() {
             return Ok(None);
         }
         let owned_memory = self.owned_memory()?;
@@ -319,15 +333,14 @@ impl PythonGpuSurfaceHandle {
     #[cfg(target_os = "linux")]
     pub(super) fn from_helper_acquired_texture(acquired: HelperAcquiredTexture) -> Self {
         let surface_id = acquired.surface_id.clone();
-        let pixel_geometry = (
-            acquired.width,
-            acquired.height,
-            acquired.format.wire_name().to_string(),
-        );
+        let pixel_geometry = GpuSurfaceGeometry::Pixels(PixelSurfaceGeometry {
+            width: acquired.width,
+            height: acquired.height,
+            format_wire_name: acquired.format.wire_name(),
+        });
         Self::new(
             Some(surface_id.clone()),
-            Some(pixel_geometry),
-            None,
+            pixel_geometry,
             GpuSurfaceOwnedMemory::new(
                 HelperCheckedOutSurface::AcquiredDeviceTexture(acquired),
                 Some(surface_id),
@@ -341,19 +354,10 @@ impl PythonGpuSurfaceHandle {
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(super) fn from_helper_checked_out_surface(checked_out: HelperCheckedOutSurface) -> Self {
         let surface_id = checked_out.surface_id().to_string();
-        let pixel_geometry = checked_out
-            .pixel_geometry()
-            .map(|(width, height, format_wire_name)| (width, height, format_wire_name.to_string()));
-        #[cfg(target_os = "linux")]
-        let tensor_layout = checked_out
-            .tensor_storage_buffer()
-            .map(|storage_buffer| storage_buffer.tensor_layout.clone());
-        #[cfg(not(target_os = "linux"))]
-        let tensor_layout = None;
+        let surface_geometry = checked_out.geometry();
         Self::new(
             Some(surface_id.clone()),
-            pixel_geometry,
-            tensor_layout,
+            surface_geometry,
             // The release an acquired surface owes its parent rides the
             // debt inside the checked-out value, so this holds nothing but
             // the value and the id it travels under.
@@ -471,32 +475,30 @@ impl PythonGpuSurfaceHandle {
 
     #[getter]
     fn width(&self) -> PyResult<u32> {
-        Ok(self.pixel_geometry()?.0)
+        Ok(self.pixel_geometry()?.width)
     }
 
     #[getter]
     fn height(&self) -> PyResult<u32> {
-        Ok(self.pixel_geometry()?.1)
+        Ok(self.pixel_geometry()?.height)
     }
 
     #[getter]
     fn format(&self) -> PyResult<String> {
-        Ok(self.pixel_geometry()?.2.clone())
+        Ok(self.pixel_geometry()?.format_wire_name.to_string())
     }
 
     /// A tensor surface's dimensions, outermost first; `None` for pixels.
     #[getter]
     fn shape(&self) -> Option<Vec<u64>> {
-        self.surface_tensor_layout
-            .as_ref()
+        self.tensor_layout()
             .map(|tensor_layout| tensor_layout.shape().to_vec())
     }
 
     /// A tensor surface's element type; `None` for pixels.
     #[getter]
     fn dtype(&self) -> Option<&'static str> {
-        self.surface_tensor_layout
-            .as_ref()
+        self.tensor_layout()
             .map(|tensor_layout| tensor_layout.element_type().wire_name())
     }
 

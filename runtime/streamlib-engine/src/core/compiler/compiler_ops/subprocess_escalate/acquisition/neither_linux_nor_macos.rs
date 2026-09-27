@@ -13,14 +13,14 @@ use crate::core::context::{
 };
 use crate::core::rhi::{TextureFormat, TextureUsages};
 
-/// A tensor storage buffer that crosses to a helper process is Linux-only
-/// until its macOS arm lands.
+/// A tensor storage buffer needs the Linux or macOS GPU exchange.
 pub(super) fn allocate_registered_storage_buffer_for_helper(
     _full: &GpuContextFullAccess,
     _tensor_layout: &crate::core::rhi::TensorStorageBufferLayout,
 ) -> crate::core::error::Result<(String, RegisteredHandle)> {
     Err(crate::core::Error::NotSupported(
-        "acquire_storage_buffer is Linux-only until its macOS arm lands (#2404)".to_string(),
+        "acquire_storage_buffer needs the Linux GPU exchange, which this platform has not"
+            .to_string(),
     ))
 }
 

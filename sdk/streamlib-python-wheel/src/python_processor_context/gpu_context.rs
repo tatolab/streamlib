@@ -101,7 +101,13 @@ fn acquire_texture_through_the_helper_process_exchange(
 /// Acquire a tensor storage buffer through the helper's exchange client: a
 /// one-off, or the next tensor of the processor output pool named by
 /// `processor_output_pool`. Linux-only until its macOS arm lands (#2404).
-#[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
+#[cfg_attr(
+    not(target_os = "linux"),
+    expect(
+        unused_variables,
+        reason = "off Linux the request is refused before it reaches the parent"
+    )
+)]
 fn acquire_storage_buffer_through_the_helper_process_exchange(
     helper_process_exchange_client: Option<&Arc<HelperProcessGpuExchangeClient>>,
     python: Python<'_>,
@@ -127,10 +133,7 @@ fn acquire_storage_buffer_through_the_helper_process_exchange(
         "acquire_storage_buffer is Linux-only until its macOS arm lands (#2404)",
     ));
     #[cfg(not(target_os = "macos"))]
-    {
-        let _ = tensor_layout;
-        Err(gpu_unreachable_from_a_helper_process_error())
-    }
+    Err(gpu_unreachable_from_a_helper_process_error())
 }
 
 /// Non-allocating GPU capability, valid for the whole processor life.

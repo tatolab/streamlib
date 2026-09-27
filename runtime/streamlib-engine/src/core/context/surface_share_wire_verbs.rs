@@ -323,21 +323,7 @@ pub(crate) fn tensor_layout_of_a_storage_buffer_registration(
     if resource_type != Some(SURFACE_RESOURCE_TYPE_STORAGE_BUFFER) {
         return Ok(None);
     }
-    let shape = request
-        .get("shape")
-        .and_then(Value::as_array)
-        .and_then(|dimensions| {
-            dimensions
-                .iter()
-                .map(Value::as_u64)
-                .collect::<Option<Vec<_>>>()
-        })
-        .ok_or("a storage_buffer registration carries no shape array of unsigned integers")?;
-    let dtype = request
-        .get("dtype")
-        .and_then(Value::as_str)
-        .ok_or("a storage_buffer registration carries no dtype")?;
-    TensorStorageBufferLayout::from_wire(shape, dtype)
+    TensorStorageBufferLayout::from_surface_share_fields(request)
         .map(Some)
         .map_err(|refusal| refusal.to_string())
 }
@@ -356,8 +342,7 @@ pub(crate) fn echo_the_tensor_layout_onto_a_lookup_reply(
     tensor_layout: Option<&TensorStorageBufferLayout>,
 ) {
     if let Some(tensor_layout) = tensor_layout {
-        reply["shape"] = tensor_layout.shape().into();
-        reply["dtype"] = tensor_layout.element_type().wire_name().into();
+        tensor_layout.write_surface_share_fields(reply);
     }
 }
 

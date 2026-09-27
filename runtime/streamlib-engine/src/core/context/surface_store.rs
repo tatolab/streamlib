@@ -1960,7 +1960,7 @@ fn storage_buffer_registration_payload(
     memory_type_index: u32,
     exporting_device_uuid: &str,
 ) -> serde_json::Value {
-    serde_json::json!({
+    let mut payload = serde_json::json!({
         "op": "register",
         "surface_id": surface_id,
         "runtime_id": runtime_id,
@@ -1969,11 +1969,11 @@ fn storage_buffer_registration_payload(
         "plane_sizes": [tensor_layout.byte_size()],
         "plane_offsets": [0u64],
         "plane_strides": [0u64],
-        "shape": tensor_layout.shape(),
-        "dtype": tensor_layout.element_type().wire_name(),
         "vk_memory_type_index": memory_type_index,
         "exporting_device_uuid": exporting_device_uuid,
-    })
+    });
+    tensor_layout.write_surface_share_fields(&mut payload);
+    payload
 }
 
 /// The register-op payload a DMA-BUF-backed texture publishes.

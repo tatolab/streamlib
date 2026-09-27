@@ -76,7 +76,25 @@ use macos::{
     HelperIOSurfaceUseCountClaim,
 };
 
+/// The width, height and format a pixel surface carries.
+#[derive(Clone, Copy)]
+pub(crate) struct PixelSurfaceGeometry {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) format_wire_name: &'static str,
+}
+
+/// What a surface is shaped as: pixels, or a tensor storage buffer's declared
+/// shape and dtype — never both, never neither.
+#[derive(Clone)]
+pub(crate) enum GpuSurfaceGeometry {
+    Pixels(PixelSurfaceGeometry),
+    #[cfg(target_os = "linux")]
+    TensorStorageBuffer(streamlib::sdk::rhi::TensorStorageBufferLayout),
+}
+
 /// The refusal every pixel-shaped door gives a tensor surface.
+#[cfg(target_os = "linux")]
 pub(crate) fn a_tensor_surface_is_not_a_pixel_surface() -> PyErr {
     pyo3::exceptions::PyRuntimeError::new_err(
         "this surface is a tensor storage buffer, not pixels: it has a shape and a dtype, no \
@@ -387,28 +405,36 @@ impl HelperCheckedOutSurface {
         }
     }
 
-    /// The width, height and snake-case format name a pixel surface carries;
-    /// `None` for a tensor storage buffer, which has a shape instead.
-    pub(crate) fn pixel_geometry(&self) -> Option<(u32, u32, &'static str)> {
+    /// Whether this surface is pixels or a tensor, and its geometry.
+    pub(crate) fn geometry(&self) -> GpuSurfaceGeometry {
+        let pixels = |width, height, format_wire_name| {
+            GpuSurfaceGeometry::Pixels(PixelSurfaceGeometry {
+                width,
+                height,
+                format_wire_name,
+            })
+        };
         match self {
-            Self::PixelBuffer(pixel_surface) => Some((
+            Self::PixelBuffer(pixel_surface) => pixels(
                 pixel_surface.width,
                 pixel_surface.height,
                 pixel_surface.format.wire_name(),
-            )),
-            Self::Texture(texture_surface) => Some((
+            ),
+            Self::Texture(texture_surface) => pixels(
                 texture_surface.width,
                 texture_surface.height,
                 texture_surface.format.wire_name(),
-            )),
+            ),
             #[cfg(target_os = "linux")]
-            Self::AcquiredDeviceTexture(acquired_texture) => Some((
+            Self::AcquiredDeviceTexture(acquired_texture) => pixels(
                 acquired_texture.width,
                 acquired_texture.height,
                 acquired_texture.format.wire_name(),
-            )),
+            ),
             #[cfg(target_os = "linux")]
-            Self::StorageBuffer(_) => None,
+            Self::StorageBuffer(storage_buffer) => {
+                GpuSurfaceGeometry::TensorStorageBuffer(storage_buffer.tensor_layout.clone())
+            }
         }
     }
 

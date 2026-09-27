@@ -9,9 +9,13 @@ use crate::core::{Error, Result};
 /// DLPack-conventional lowercase name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TensorElementType {
+    /// IEEE 754 binary32.
     Float32,
+    /// IEEE 754 binary16.
     Float16,
+    /// Unsigned 8-bit integer.
     Uint8,
+    /// Signed 32-bit integer.
     Int32,
 }
 
@@ -46,6 +50,18 @@ impl TensorElementType {
     }
 }
 
+impl std::fmt::Display for TensorElementType {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.wire_name())
+    }
+}
+
+/// The surface-share wire key a tensor's dimensions travel under.
+const SURFACE_SHARE_TENSOR_SHAPE_FIELD: &str = "shape";
+
+/// The surface-share wire key a tensor's element type travels under.
+const SURFACE_SHARE_TENSOR_DTYPE_FIELD: &str = "dtype";
+
 /// A contiguous row-major tensor: its shape and its element type, validated
 /// so the byte size is non-zero and fits a `u64`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -77,8 +93,7 @@ impl TensorStorageBufferLayout {
             })
             .ok_or_else(|| {
                 Error::Configuration(format!(
-                    "tensor shape {shape:?} of {} overflows a 64-bit byte size",
-                    element_type.wire_name()
+                    "tensor shape {shape:?} of {element_type} overflows a 64-bit byte size"
                 ))
             })?;
         Ok(Self {
@@ -106,6 +121,40 @@ impl TensorStorageBufferLayout {
         Self::new(shape, element_type)
     }
 
+    /// The layout a surface-share registration or checkout states in its
+    /// `shape` and `dtype` fields, refusing either missing or malformed.
+    pub fn from_surface_share_fields(fields: &serde_json::Value) -> Result<Self> {
+        let shape = fields
+            .get(SURFACE_SHARE_TENSOR_SHAPE_FIELD)
+            .and_then(serde_json::Value::as_array)
+            .and_then(|dimensions| {
+                dimensions
+                    .iter()
+                    .map(serde_json::Value::as_u64)
+                    .collect::<Option<Vec<_>>>()
+            })
+            .ok_or_else(|| {
+                Error::Configuration(
+                    "a tensor storage buffer carries no shape array of unsigned integers"
+                        .to_string(),
+                )
+            })?;
+        let dtype = fields
+            .get(SURFACE_SHARE_TENSOR_DTYPE_FIELD)
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                Error::Configuration("a tensor storage buffer carries no dtype".to_string())
+            })?;
+        Self::from_wire(shape, dtype)
+    }
+
+    /// Write this layout's `shape` and `dtype` fields onto a surface-share
+    /// registration or lookup reply.
+    pub fn write_surface_share_fields(&self, fields: &mut serde_json::Value) {
+        fields[SURFACE_SHARE_TENSOR_SHAPE_FIELD] = self.shape.as_slice().into();
+        fields[SURFACE_SHARE_TENSOR_DTYPE_FIELD] = self.element_type.wire_name().into();
+    }
+
     /// The dimensions, outermost first.
     pub fn shape(&self) -> &[u64] {
         &self.shape
@@ -119,6 +168,12 @@ impl TensorStorageBufferLayout {
     /// The tensor's exact byte size — never an allocation's rounded size.
     pub fn byte_size(&self) -> u64 {
         self.byte_size
+    }
+}
+
+impl std::fmt::Display for TensorStorageBufferLayout {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{:?} of {}", self.shape, self.element_type)
     }
 }
 
@@ -170,6 +225,33 @@ mod tests {
                 Some(element_type)
             );
         }
+    }
+
+    #[test]
+    fn the_surface_share_fields_round_trip_the_layout() {
+        let layout = TensorStorageBufferLayout::new(vec![3, 7, 11], TensorElementType::Float16)
+            .expect("an odd shape is valid");
+        let mut fields = serde_json::json!({});
+        layout.write_surface_share_fields(&mut fields);
+        assert_eq!(
+            fields,
+            serde_json::json!({"shape": [3, 7, 11], "dtype": "float16"})
+        );
+        assert_eq!(
+            TensorStorageBufferLayout::from_surface_share_fields(&fields).unwrap(),
+            layout
+        );
+        assert_eq!(layout.to_string(), "[3, 7, 11] of float16");
+    }
+
+    #[test]
+    fn surface_share_fields_without_a_shape_are_refused_by_name() {
+        let refusal = TensorStorageBufferLayout::from_surface_share_fields(&serde_json::json!({
+            "shape": [3, -1],
+            "dtype": "float32",
+        }))
+        .expect_err("a negative dimension is not a shape");
+        assert!(refusal.to_string().contains("no shape"));
     }
 
     #[test]

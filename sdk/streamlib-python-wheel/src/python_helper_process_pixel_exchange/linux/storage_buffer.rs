@@ -128,14 +128,8 @@ impl HelperProcessGpuExchangeClient {
         };
         if checked_out_storage_buffer.tensor_layout != *tensor_layout {
             return Err(PyRuntimeError::new_err(format!(
-                "acquire_storage_buffer asked for {:?} of {} and the parent registered {:?} of {}",
-                tensor_layout.shape(),
-                tensor_layout.element_type().wire_name(),
-                checked_out_storage_buffer.tensor_layout.shape(),
-                checked_out_storage_buffer
-                    .tensor_layout
-                    .element_type()
-                    .wire_name(),
+                "acquire_storage_buffer asked for {tensor_layout} and the parent registered {}",
+                checked_out_storage_buffer.tensor_layout
             )));
         }
         checked_out_storage_buffer.writable = true;
@@ -215,27 +209,7 @@ fn tensor_layout_of_a_check_out(
     surface_id: &str,
     response: &serde_json::Value,
 ) -> PyResult<TensorStorageBufferLayout> {
-    let shape = response
-        .get("shape")
-        .and_then(|value| value.as_array())
-        .and_then(|dimensions| {
-            dimensions
-                .iter()
-                .map(|dimension| dimension.as_u64())
-                .collect::<Option<Vec<_>>>()
-        })
-        .ok_or_else(|| {
-            PyRuntimeError::new_err(format!(
-                "tensor surface {surface_id:?} carries no shape of unsigned integers"
-            ))
-        })?;
-    let dtype = response
-        .get("dtype")
-        .and_then(|value| value.as_str())
-        .ok_or_else(|| {
-            PyRuntimeError::new_err(format!("tensor surface {surface_id:?} carries no dtype"))
-        })?;
-    TensorStorageBufferLayout::from_wire(shape, dtype).map_err(|refusal| {
+    TensorStorageBufferLayout::from_surface_share_fields(response).map_err(|refusal| {
         PyRuntimeError::new_err(format!("tensor surface {surface_id:?}: {refusal}"))
     })
 }

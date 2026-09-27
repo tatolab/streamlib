@@ -682,13 +682,13 @@ fn a_tensor_storage_buffer_registers_its_shape_and_leaves_every_table_on_release
     assert_eq!(checkout.tensor_layout.as_ref(), Some(&expected_layout));
     assert!(checkout.vk_memory_type_index.is_some());
     assert!(checkout.exporting_device_uuid.is_some());
-    let (buffer, layout) = sandbox
+    let registered = sandbox
         .host_inner()
-        .resolve_storage_buffer_by_surface_id(&surface_id)
+        .resolve_storage_buffer_from_the_parent_wide_map_by_surface_id(&surface_id)
         .expect("the parent-wide map resolves the tensor by its id");
-    assert_eq!(layout, expected_layout);
-    assert_eq!(buffer.byte_size(), expected_layout.byte_size());
-    drop(buffer);
+    assert_eq!(registered.tensor_layout, expected_layout);
+    assert_eq!(registered.buffer.byte_size(), expected_layout.byte_size());
+    drop(registered);
 
     let released = handle_escalate_op(
         &sandbox,
@@ -707,7 +707,7 @@ fn a_tensor_storage_buffer_registers_its_shape_and_leaves_every_table_on_release
     assert!(matches!(
         sandbox
             .host_inner()
-            .resolve_storage_buffer_by_surface_id(&surface_id),
+            .resolve_storage_buffer_from_the_parent_wide_map_by_surface_id(&surface_id),
         Err(Error::NotFound(_))
     ));
     service.stop();
@@ -776,7 +776,7 @@ fn a_tensor_storage_buffer_pool_never_rewrites_a_tensor_a_consumer_holds() {
     );
     sandbox
         .host_inner()
-        .resolve_storage_buffer_by_surface_id(&held_tensor)
+        .resolve_storage_buffer_from_the_parent_wide_map_by_surface_id(&held_tensor)
         .expect("the held tensor still resolves");
     let recycled_tensor = while_held
         .iter()
@@ -791,7 +791,7 @@ fn a_tensor_storage_buffer_pool_never_rewrites_a_tensor_a_consumer_holds() {
         matches!(
             sandbox
                 .host_inner()
-                .resolve_storage_buffer_by_surface_id(recycled_tensor),
+                .resolve_storage_buffer_from_the_parent_wide_map_by_surface_id(recycled_tensor),
             Err(Error::SurfaceFrameRecycled { .. })
         ),
         "a recycled tensor's id {recycled_tensor} must be refused as recycled"
@@ -820,7 +820,7 @@ fn a_tensor_storage_buffer_pool_never_rewrites_a_tensor_a_consumer_holds() {
         assert!(
             sandbox
                 .host_inner()
-                .resolve_storage_buffer_by_surface_id(pool_slot_key)
+                .resolve_storage_buffer_from_the_parent_wide_map_by_surface_id(pool_slot_key)
                 .is_err(),
             "teardown left tensor slot {pool_slot_key} in the parent-wide map"
         );
