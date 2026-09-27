@@ -15,7 +15,7 @@ use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalat
 };
 use crate::core::context::{
     GpuContextFullAccess, GpuContextLimitedAccess, PooledTextureHandle,
-    RegisteredTensorStorageBuffer, StorageBufferAllocationFlavour,
+    StorageBufferAllocationFlavour,
     TextureCrossProcessImportability, TexturePoolDescriptor,
 };
 use crate::core::rhi::{TensorStorageBufferLayout, TextureFormat, TextureUsages};
@@ -81,13 +81,7 @@ pub(super) fn allocate_registered_storage_buffer_for_helper(
     if let Some(store) = full.surface_store() {
         store.register_storage_buffer(&handle_id, &buffer, tensor_layout)?;
     }
-    host.register_storage_buffer_in_the_parent_wide_map(
-        &handle_id,
-        RegisteredTensorStorageBuffer {
-            buffer: buffer.clone(),
-            tensor_layout: tensor_layout.clone(),
-        },
-    );
+    host.register_storage_buffer_in_the_parent_wide_map(&handle_id, buffer.clone());
     Ok((handle_id, RegisteredHandle::StorageBuffer { buffer }))
 }
 

@@ -458,9 +458,9 @@ fn a_binding_supplied_as_the_wrong_kind_is_refused() {
     );
 }
 
-/// A buffer binding is legal in a shader and legal on the wire, but no
-/// escalate op mints a buffer a descriptor can point at — so the draw
-/// that would need one is refused rather than silently unbound.
+/// A uniform buffer is legal in a shader and legal on the wire, but no
+/// escalate op mints one a descriptor can point at — so the draw that
+/// would need one is refused rather than silently unbound.
 #[test]
 fn a_binding_of_a_kind_no_surface_can_back_is_refused() {
     let message = draw_plan_refusal(
@@ -472,13 +472,39 @@ fn a_binding_of_a_kind_no_surface_can_back_is_refused() {
         )],
     );
     assert!(
-        message.contains("binding `tint_parameters` is uniform_buffer"),
+        message.contains(
+            "binding `tint_parameters` is uniform_buffer, which a draw cannot bind by surface id"
+        ),
         "must name the binding and its kind, got: {message}"
     );
-    assert!(
-        message.contains("storage_image and sampled_texture"),
-        "must name the kinds a draw can bind, got: {message}"
-    );
+}
+
+/// A draw binds a tensor storage buffer by surface id, as a dispatch does.
+#[test]
+fn a_storage_buffer_binding_plans_as_a_storage_buffer() {
+    const A_TENSOR_READING_KERNELS_BINDINGS: &[(u32, &str, GraphicsBindingKind)] = &[
+        (0, "source_image", GraphicsBindingKind::SampledTexture),
+        (1, "detection_scores", GraphicsBindingKind::StorageBuffer),
+    ];
+    let declared = declared_graphics_bindings(A_TENSOR_READING_KERNELS_BINDINGS);
+    let supplied = supplied_graphics_bindings(&[
+        (
+            "source_image",
+            EscalateGraphicsBindingKind::SampledTexture,
+            "surface-in",
+        ),
+        (
+            "detection_scores",
+            EscalateGraphicsBindingKind::StorageBuffer,
+            "tensor-in",
+        ),
+    ]);
+    let planned = plan_supplied_surface_bound_kernel_bindings("draw", &supplied, &declared)
+        .expect("a storage buffer is a bindable kind");
+    assert_eq!(planned[1].name, "detection_scores");
+    assert_eq!(planned[1].binding_slot, 1);
+    assert_eq!(planned[1].kind, SurfaceBoundKernelBindingKind::StorageBuffer);
+    assert_eq!(planned[1].target_id, "tensor-in");
 }
 
 /// A kernel with no bindings at all draws — the empty case is not an

@@ -686,8 +686,7 @@ fn a_tensor_storage_buffer_registers_its_shape_and_leaves_every_table_on_release
         .host_inner()
         .resolve_storage_buffer_from_the_parent_wide_map_by_surface_id(&surface_id)
         .expect("the parent-wide map resolves the tensor by its id");
-    assert_eq!(registered.tensor_layout, expected_layout);
-    assert_eq!(registered.buffer.byte_size(), expected_layout.byte_size());
+    assert_eq!(registered.byte_size(), expected_layout.byte_size());
     drop(registered);
 
     let released = handle_escalate_op(

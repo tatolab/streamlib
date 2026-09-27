@@ -7,6 +7,7 @@ use super::super::hex_encoded_wire_bytes::decode_hex;
 use super::super::kernel_shader_stage_source::registered_shader_stage_source;
 use super::super::surface_bound_kernel_binding::{
     publish_bound_surface_layouts_to_surface_share, reflected_kernel_binding_response,
+    resolve_surface_bound_kernel_binding_resource,
 };
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse;
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
@@ -22,7 +23,6 @@ use crate::core::context::{
     TextureRegistration,
 };
 use crate::core::rhi::{GlslCompilationTargetStage, SurfaceBoundKernelBindingKind};
-use crate::host_rhi::HostTextureExt as _;
 
 /// The binding kind a wire enum names.
 pub(super) fn compute_binding_kind_from_wire(
@@ -252,8 +252,8 @@ pub(super) struct PlannedComputeBinding<'a> {
 ///   default and no carried-over value.
 /// - **kind mismatch** — a name supplied as a kind the shader disagrees with.
 /// - **unbindable kind** — a declared kind no surface can be named for
-///   (buffers, samplerless images). Checked here so the plan is total before
-///   any `set_*` call mutates the kernel's staged bindings.
+///   (uniform buffers, samplerless images). Checked here so the plan is total
+///   before any `set_*` call mutates the kernel's staged bindings.
 pub(super) fn plan_supplied_compute_bindings<'a>(
     supplied: &'a [EscalateRequestRunComputeKernelBinding],
     declared: &'a [crate::core::rhi::ComputeBindingSpec],
@@ -310,13 +310,12 @@ pub(super) fn plan_supplied_compute_bindings<'a>(
         let surface_bound_kind = match spec.kind {
             ComputeBindingKind::StorageImage => SurfaceBoundKernelBindingKind::StorageImage,
             ComputeBindingKind::SampledTexture => SurfaceBoundKernelBindingKind::SampledTexture,
-            ComputeBindingKind::SampledImage
-            | ComputeBindingKind::StorageBuffer
-            | ComputeBindingKind::UniformBuffer => {
+            ComputeBindingKind::StorageBuffer => SurfaceBoundKernelBindingKind::StorageBuffer,
+            ComputeBindingKind::SampledImage | ComputeBindingKind::UniformBuffer => {
                 return Err(Error::GpuError(format!(
-                    "binding `{}` is {:?}, which a dispatch cannot name a surface for — the \
-                     surface-backed kinds are storage_image and sampled_texture",
-                    wire.name, spec.kind
+                    "binding `{}` is {}, which a dispatch cannot bind by surface id",
+                    wire.name,
+                    compute_binding_kind_to_wire(spec.kind).wire_name()
                 )));
             }
         };
@@ -340,7 +339,7 @@ pub(super) struct ResolvedComputeKernelDispatchBindingWithSurfaceId {
 }
 
 /// Plan a dispatch's supplied bindings against the kernel, then resolve each
-/// one to the device texture it names.
+/// one to the texture or tensor storage buffer it names.
 ///
 /// Shared by the two dispatch paths — one kernel on its own, and a kernel
 /// inside a batch — so the extent convention below and the refusal wording
@@ -358,26 +357,17 @@ pub(super) fn resolve_supplied_compute_bindings(
 
     let mut resolved = Vec::with_capacity(planned.len());
     for binding in &planned {
-        // Zero extent: a kernel binding names a surface the graph already has
-        // as a device texture, which resolves from the same-process cache or
-        // the surface-share service. The pixel-buffer fallback is the one
-        // path that consults the extent, and it refuses a zero one — a
-        // buffer-backed surface is not something a dispatch can bind.
-        let registration = full
-            .resolve_texture_registration_by_surface_id(binding.target_id, None, 0, 0)
-            .map_err(|e| {
-                Error::GpuError(format!(
-                    "binding `{}` names surface {:?}, which this graph cannot resolve to a \
-                     device texture: {e}",
-                    binding.name, binding.target_id
-                ))
-            })?;
+        let resource = resolve_surface_bound_kernel_binding_resource(
+            full,
+            binding.kind,
+            binding.name,
+            binding.target_id,
+        )?;
         resolved.push(ResolvedComputeKernelDispatchBindingWithSurfaceId {
             surface_id: binding.target_id.to_string(),
             dispatch_binding: BatchedComputeKernelDispatchBinding {
                 binding: binding.binding,
-                kind: binding.kind,
-                registration,
+                resource,
             },
         });
     }
@@ -397,24 +387,12 @@ pub(super) fn resolve_supplied_compute_bindings(
         // descriptor would be written. Skipped rather than compared, because
         // two absent images are not one texture and refusing them here would
         // send the caller looking for a duplicate they did not write.
-        let Some(image) = binding
-            .dispatch_binding
-            .registration
-            .texture()
-            .vulkan_inner()
-            .image()
-        else {
+        let Some(image) = binding.dispatch_binding.resource.bound_image() else {
             continue;
         };
         let clashing = resolved[..index].iter().zip(&planned).find(|(prior, _)| {
-            prior.dispatch_binding.kind != binding.dispatch_binding.kind
-                && prior
-                    .dispatch_binding
-                    .registration
-                    .texture()
-                    .vulkan_inner()
-                    .image()
-                    == Some(image)
+            prior.dispatch_binding.resource.kind() != binding.dispatch_binding.resource.kind()
+                && prior.dispatch_binding.resource.bound_image() == Some(image)
         });
         if let Some((prior, prior_plan)) = clashing {
             // Both ids, as the caller wrote them: a published frame id and its
@@ -429,8 +407,8 @@ pub(super) fn resolve_supplied_compute_bindings(
                 prior_plan.target_id,
                 plan.name,
                 plan.target_id,
-                prior.dispatch_binding.kind,
-                binding.dispatch_binding.kind
+                prior.dispatch_binding.resource.kind(),
+                binding.dispatch_binding.resource.kind()
             )));
         }
     }
@@ -439,17 +417,18 @@ pub(super) fn resolve_supplied_compute_bindings(
 
 /// The `(surface id, registration)` pairs the post-dispatch layout publish
 /// consumes, from resolver output — paired by construction, never by a
-/// shared index.
+/// shared index. A storage buffer has no layout, so it publishes none.
 pub(super) fn compute_bound_surface_layout_publish_pairs(
     resolved: &[ResolvedComputeKernelDispatchBindingWithSurfaceId],
 ) -> Vec<(String, TextureRegistration)> {
     resolved
         .iter()
-        .map(|binding| {
-            (
-                binding.surface_id.clone(),
-                binding.dispatch_binding.registration.clone(),
-            )
+        .filter_map(|binding| {
+            binding
+                .dispatch_binding
+                .resource
+                .texture_and_required_layout()
+                .map(|(registration, _)| (binding.surface_id.clone(), registration.clone()))
         })
         .collect()
 }

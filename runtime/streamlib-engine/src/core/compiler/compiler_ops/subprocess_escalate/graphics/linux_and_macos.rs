@@ -8,7 +8,7 @@ use super::super::hex_encoded_wire_bytes::decode_hex;
 use super::super::kernel_shader_stage_source::registered_shader_stage_source;
 use super::super::surface_bound_kernel_binding::{
     DeclaredKernelBindingUnderPlanning, SuppliedKernelBindingUnderPlanning,
-    bound_surface_layout_publish_pairs, descriptor_layout_transition_pairs,
+    bound_surface_layout_publish_pairs,
     plan_supplied_surface_bound_kernel_bindings, publish_bound_surface_layouts_to_surface_share,
     reflected_kernel_binding_response, resolve_planned_surface_bound_kernel_bindings,
     transition_bound_kernel_inputs_into_descriptor_layouts,
@@ -33,7 +33,7 @@ use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalat
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_response::{
     EscalateResponseErr, EscalateResponseOk,
 };
-use crate::core::context::GpuContextLimitedAccess;
+use crate::core::context::{GpuContextLimitedAccess, SurfaceBoundKernelBindingResource};
 use crate::core::rhi::{GlslCompilationTargetStage, SurfaceBoundKernelBindingKind};
 use crate::host_rhi::HostTextureExt as _;
 
@@ -71,7 +71,8 @@ pub(super) fn surface_bound_graphics_binding_kind(
     match kind {
         GraphicsBindingKind::SampledTexture => Some(SurfaceBoundKernelBindingKind::SampledTexture),
         GraphicsBindingKind::StorageImage => Some(SurfaceBoundKernelBindingKind::StorageImage),
-        GraphicsBindingKind::StorageBuffer | GraphicsBindingKind::UniformBuffer => None,
+        GraphicsBindingKind::StorageBuffer => Some(SurfaceBoundKernelBindingKind::StorageBuffer),
+        GraphicsBindingKind::UniformBuffer => None,
     }
 }
 
@@ -410,7 +411,7 @@ pub(super) fn bind_and_render_graphics_kernel(
         full,
         "escalate_graphics_draw_input_layouts",
         VulkanStage::ALL_GRAPHICS,
-        &descriptor_layout_transition_pairs(&bound_inputs),
+        &bound_inputs,
     )?;
 
     let mut color_targets = Vec::with_capacity(req.color_target_uuids.len());
@@ -433,9 +434,9 @@ pub(super) fn bind_and_render_graphics_kernel(
                 .vulkan_inner()
                 .image()
                 .and_then(|target_image| {
-                    bound_inputs.iter().find(|input| {
-                        input.registration.texture().vulkan_inner().image() == Some(target_image)
-                    })
+                    bound_inputs
+                        .iter()
+                        .find(|input| input.resource.bound_image() == Some(target_image))
                 });
         if let Some(clashing) = clashing_binding {
             return Err(Error::GpuError(format!(
@@ -449,15 +450,16 @@ pub(super) fn bind_and_render_graphics_kernel(
     }
 
     for binding in &bound_inputs {
-        let texture = binding.registration.texture();
-        match binding.planned.kind {
-            SurfaceBoundKernelBindingKind::SampledTexture => kernel.set_sampled_texture(
-                req.frame_index,
-                binding.planned.binding_slot,
-                texture,
-            )?,
-            SurfaceBoundKernelBindingKind::StorageImage => {
-                kernel.set_storage_image(req.frame_index, binding.planned.binding_slot, texture)?
+        let slot = binding.planned.binding_slot;
+        match &binding.resource {
+            SurfaceBoundKernelBindingResource::SampledTexture(registration) => {
+                kernel.set_sampled_texture(req.frame_index, slot, registration.texture())?
+            }
+            SurfaceBoundKernelBindingResource::StorageImage(registration) => {
+                kernel.set_storage_image(req.frame_index, slot, registration.texture())?
+            }
+            SurfaceBoundKernelBindingResource::StorageBuffer(buffer) => {
+                kernel.set_storage_buffer_storage(req.frame_index, slot, buffer)?
             }
         }
     }

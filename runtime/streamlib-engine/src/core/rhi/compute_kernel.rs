@@ -42,9 +42,8 @@ pub enum ComputeBindingKind {
 /// can name a surface for.
 ///
 /// Narrower than its parent on purpose: a caller holding this has already
-/// refused the buffer and samplerless kinds, so every match on it is total
-/// with no panic arm to keep in sync. It also carries the image layout the
-/// descriptor requires, which is what a batch's barriers move a texture into.
+/// refused the uniform-buffer and samplerless kinds, so every match on it is
+/// total with no panic arm to keep in sync.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SurfaceBoundKernelBindingKind {
     /// Written through `imageStore`; the descriptor requires `GENERAL`.
@@ -52,17 +51,8 @@ pub enum SurfaceBoundKernelBindingKind {
     /// Read through a combined sampler; the descriptor requires
     /// `SHADER_READ_ONLY_OPTIMAL`.
     SampledTexture,
-}
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-impl SurfaceBoundKernelBindingKind {
-    /// The image layout this kind's descriptor requires when the pipeline runs.
-    pub fn required_image_layout(self) -> streamlib_consumer_rhi::VulkanLayout {
-        match self {
-            Self::StorageImage => streamlib_consumer_rhi::VulkanLayout::GENERAL,
-            Self::SampledTexture => streamlib_consumer_rhi::VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
-        }
-    }
+    /// A tensor storage buffer, read and written as an SSBO; it has no layout.
+    StorageBuffer,
 }
 
 /// One binding declaration: (binding index, resource kind, the shader's own

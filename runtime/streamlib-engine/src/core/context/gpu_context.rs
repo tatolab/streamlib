@@ -612,12 +612,8 @@ pub struct BatchedComputeKernelDispatch {
 pub struct BatchedComputeKernelDispatchBinding {
     /// Descriptor binding number the kernel declares this resource at.
     pub binding: u32,
-    /// How this dispatch uses the surface, which decides both the descriptor
-    /// write and the layout its barrier moves the texture into.
-    pub kind: crate::core::rhi::SurfaceBoundKernelBindingKind,
-    /// The bound texture and the layout it is currently tracked in — the
-    /// barrier's source layout.
-    pub registration: TextureRegistration,
+    /// The surface bound there, as the kind the shader declares it.
+    pub resource: SurfaceBoundKernelBindingResource,
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -630,15 +626,69 @@ impl BatchedComputeKernelDispatchBinding {
         &self,
         kernel: &crate::vulkan::rhi::VulkanComputeKernel,
     ) -> Result<()> {
+        match &self.resource {
+            SurfaceBoundKernelBindingResource::StorageImage(registration) => {
+                kernel.set_storage_image(self.binding, registration.texture())
+            }
+            SurfaceBoundKernelBindingResource::SampledTexture(registration) => {
+                kernel.set_sampled_texture(self.binding, registration.texture())
+            }
+            SurfaceBoundKernelBindingResource::StorageBuffer(buffer) => {
+                kernel.set_storage_buffer_storage(self.binding, buffer)
+            }
+        }
+    }
+}
+
+/// The resource a surface id resolved to for one kernel binding, carried as
+/// the kind the shader declares it.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[derive(Clone)]
+pub enum SurfaceBoundKernelBindingResource {
+    /// A texture written through `imageStore`, and the layout it is tracked in.
+    StorageImage(TextureRegistration),
+    /// A texture read through a combined sampler, and the layout it is tracked in.
+    SampledTexture(TextureRegistration),
+    /// A tensor storage buffer, read and written as an SSBO.
+    StorageBuffer(crate::core::rhi::StorageBuffer),
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+impl SurfaceBoundKernelBindingResource {
+    /// The binding kind this resource is bound as.
+    pub fn kind(&self) -> crate::core::rhi::SurfaceBoundKernelBindingKind {
         use crate::core::rhi::SurfaceBoundKernelBindingKind;
-        let texture = self.registration.texture();
-        match self.kind {
-            SurfaceBoundKernelBindingKind::StorageImage => {
-                kernel.set_storage_image(self.binding, texture)
+        match self {
+            Self::StorageImage(_) => SurfaceBoundKernelBindingKind::StorageImage,
+            Self::SampledTexture(_) => SurfaceBoundKernelBindingKind::SampledTexture,
+            Self::StorageBuffer(_) => SurfaceBoundKernelBindingKind::StorageBuffer,
+        }
+    }
+
+    /// The bound texture and the image layout its descriptor requires, or
+    /// `None` for a storage buffer, which has no layout.
+    pub fn texture_and_required_layout(&self) -> Option<(&TextureRegistration, VulkanLayout)> {
+        match self {
+            Self::StorageImage(registration) => Some((registration, VulkanLayout::GENERAL)),
+            Self::SampledTexture(registration) => {
+                Some((registration, VulkanLayout::SHADER_READ_ONLY_OPTIMAL))
             }
-            SurfaceBoundKernelBindingKind::SampledTexture => {
-                kernel.set_sampled_texture(self.binding, texture)
-            }
+            Self::StorageBuffer(_) => None,
+        }
+    }
+
+    /// The image a texture binding names; `None` for a storage buffer, or a
+    /// texture that carries no image.
+    pub(crate) fn bound_image(&self) -> Option<vulkanalia::vk::Image> {
+        self.texture_and_required_layout()
+            .and_then(|(registration, _)| registration.texture().vulkan_inner().image())
+    }
+
+    /// The bound storage buffer, or `None` for a texture.
+    pub fn storage_buffer(&self) -> Option<&crate::core::rhi::StorageBuffer> {
+        match self {
+            Self::StorageBuffer(buffer) => Some(buffer),
+            Self::StorageImage(_) | Self::SampledTexture(_) => None,
         }
     }
 }
@@ -659,22 +709,6 @@ fn binding_location_in_this_recording(
     } else {
         format!("dispatch {dispatch_index} of this batch, binding {binding}")
     }
-}
-
-/// A tensor storage buffer in the parent-wide map, with the layout it was
-/// acquired for.
-#[cfg(target_os = "linux")]
-#[derive(Clone)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "read by the storage_buffer dispatch binding, #2430"
-    )
-)]
-pub(crate) struct RegisteredTensorStorageBuffer {
-    pub(crate) buffer: crate::core::rhi::StorageBuffer,
-    pub(crate) tensor_layout: crate::core::rhi::TensorStorageBufferLayout,
 }
 
 /// Which allocation a storage buffer takes, derived from where it goes.
@@ -737,7 +771,7 @@ pub struct GpuContext {
     /// the parent-wide map a dispatch in any helper binds another helper's
     /// tensor surface from.
     #[cfg(target_os = "linux")]
-    storage_buffer_registrations: Arc<Mutex<HashMap<String, RegisteredTensorStorageBuffer>>>,
+    storage_buffer_registrations: Arc<Mutex<HashMap<String, crate::core::rhi::StorageBuffer>>>,
     /// Engine-wide cache of `(src, dst)`-keyed color converters. Per-frame
     /// `ResolvedColorInfo` lives in push constants, so a single cached
     /// converter handles every variation of source color description.
@@ -1169,11 +1203,11 @@ impl GpuContext {
     pub(crate) fn register_storage_buffer_in_the_parent_wide_map(
         &self,
         id: &str,
-        registered_tensor_storage_buffer: RegisteredTensorStorageBuffer,
+        tensor_storage_buffer: crate::core::rhi::StorageBuffer,
     ) {
         self.storage_buffer_registrations.lock().unwrap().insert(
             pool_slot_key_of_surface_id(id).to_string(),
-            registered_tensor_storage_buffer,
+            tensor_storage_buffer,
         );
     }
 
@@ -1190,17 +1224,10 @@ impl GpuContext {
     /// `surface_id`, refusing a published frame id whose slot has been
     /// recycled since.
     #[cfg(target_os = "linux")]
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "read by the storage_buffer dispatch binding, #2430"
-        )
-    )]
     pub(crate) fn resolve_storage_buffer_from_the_parent_wide_map_by_surface_id(
         &self,
         surface_id: &str,
-    ) -> Result<RegisteredTensorStorageBuffer> {
+    ) -> Result<crate::core::rhi::StorageBuffer> {
         self.refuse_a_retired_frame_id(surface_id)?;
         self.storage_buffer_registrations
             .lock()
@@ -3289,11 +3316,14 @@ impl GpuContext {
         // layout cells — and every cell must learn the layout the recording
         // left the image in, or the stale one is what gets published.
         for binding in batch.iter().flat_map(|dispatch| &dispatch.bindings) {
-            let Some(image) = binding.registration.texture().vulkan_inner().image() else {
+            let Some((registration, _)) = binding.resource.texture_and_required_layout() else {
+                continue;
+            };
+            let Some(image) = registration.texture().vulkan_inner().image() else {
                 continue;
             };
             if let Some(layout_landed_in) = layout_each_image_landed_in.get(&image) {
-                binding.registration.update_layout(*layout_landed_in);
+                registration.update_layout(*layout_landed_in);
             }
         }
         recorder.wait_for_completion()?;
@@ -3316,7 +3346,7 @@ impl GpuContext {
         recorder: &mut crate::vulkan::rhi::RhiCommandRecorder,
         batch: &[BatchedComputeKernelDispatch],
     ) -> Result<HashMap<vulkanalia::vk::Image, VulkanLayout>> {
-        use crate::vulkan::rhi::{VulkanAccess, VulkanStage};
+        use crate::vulkan::rhi::{VulkanAccess, VulkanBufferLike as _, VulkanStage};
 
         // The layout each image is in *as the recording proceeds*. Tracking it
         // here rather than re-reading the registration is what makes a chain
@@ -3331,47 +3361,66 @@ impl GpuContext {
         // would otherwise track two independent layouts for one image.
         let mut layout_during_recording: HashMap<vulkanalia::vk::Image, VulkanLayout> =
             HashMap::new();
+        // A buffer has no layout to track, only whether this recording has
+        // touched it yet — which decides the barrier's source scope as it
+        // does for an image.
+        let mut buffers_touched_in_this_recording: std::collections::HashSet<
+            vulkanalia::vk::Buffer,
+        > = std::collections::HashSet::new();
+
+        // The source scope narrows only once the batch is the writer.
+        // On a resource's first touch the previous writer is whatever
+        // the graph did — a transfer upload, a camera, another node,
+        // CUDA — so the wide scope every other entry-from-an-unknown-
+        // producer barrier in the engine uses is the only correct one.
+        // From the second touch on, this recording wrote it, and
+        // compute-to-compute is exactly the dependency to name.
+        let source_scope = |first_touch_in_this_recording: bool| {
+            if first_touch_in_this_recording {
+                (VulkanStage::ALL_COMMANDS, VulkanAccess::MEMORY_WRITE)
+            } else {
+                (VulkanStage::COMPUTE_SHADER, VulkanAccess::SHADER_WRITE)
+            }
+        };
 
         for (dispatch_index, dispatch) in batch.iter().enumerate() {
             for binding in &dispatch.bindings {
-                let required_layout = binding.kind.required_image_layout();
-                let image = binding
-                    .registration
-                    .texture()
-                    .vulkan_inner()
-                    .image()
-                    .ok_or_else(|| {
-                        Error::GpuError(format!(
-                            "{} names a texture with no image, which a descriptor cannot be \
-                             written from",
-                            binding_location_in_this_recording(
-                                batch,
-                                dispatch_index,
-                                binding.binding
-                            )
-                        ))
-                    })?;
+                let Some((registration, required_layout)) =
+                    binding.resource.texture_and_required_layout()
+                else {
+                    if let Some(buffer) = binding.resource.storage_buffer() {
+                        let (from_stage, from_access) = source_scope(
+                            buffers_touched_in_this_recording.insert(buffer.vk_buffer()),
+                        );
+                        // Recorded on every touch: it carries the previous
+                        // pass's stores to this pass's loads.
+                        recorder.record_buffer_barrier(
+                            buffer,
+                            from_stage,
+                            VulkanStage::COMPUTE_SHADER,
+                            from_access,
+                            VulkanAccess::SHADER_READ | VulkanAccess::SHADER_WRITE,
+                        )?;
+                    }
+                    continue;
+                };
+                let image = registration.texture().vulkan_inner().image().ok_or_else(|| {
+                    Error::GpuError(format!(
+                        "{} names a texture with no image, which a descriptor cannot be \
+                         written from",
+                        binding_location_in_this_recording(batch, dispatch_index, binding.binding)
+                    ))
+                })?;
                 let first_touch_in_this_recording = !layout_during_recording.contains_key(&image);
                 let layout_so_far = *layout_during_recording
                     .entry(image)
-                    .or_insert_with(|| binding.registration.current_layout());
-                // The source scope narrows only once the batch is the writer.
-                // On an image's first touch the previous writer is whatever the
-                // graph did — a transfer upload, a camera, another node — so
-                // the wide scope every other entry-from-an-unknown-producer
-                // barrier in the engine uses is the only correct one. From the
-                // second touch on, this recording wrote it, and compute-to-
-                // compute is exactly the dependency to name.
-                let (from_stage, from_access) = if first_touch_in_this_recording {
-                    (VulkanStage::ALL_COMMANDS, VulkanAccess::MEMORY_WRITE)
-                } else {
-                    (VulkanStage::COMPUTE_SHADER, VulkanAccess::SHADER_WRITE)
-                };
+                    .or_insert_with(|| registration.current_layout());
+                let (from_stage, from_access) = source_scope(first_touch_in_this_recording);
                 // Recorded even when the layout already matches: the barrier is
                 // carrying the previous pass's stores to this pass's reads, and
                 // a same-layout transition is exactly that memory dependency.
                 recorder.record_image_barrier(
-                    binding.registration.texture(),
+                    registration.texture(),
                     layout_so_far,
                     required_layout,
                     from_stage,
