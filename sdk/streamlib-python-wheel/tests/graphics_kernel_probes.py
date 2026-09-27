@@ -74,8 +74,8 @@ void main() {
 }
 """
 
-# A second binding no draw can ever name a surface for: the only by-surface-id
-# resolution the engine has is texture-shaped.
+# A second binding no draw can name a surface for: no escalate op mints a
+# uniform buffer, so nothing resolves one by surface id.
 TINTED_SAMPLED_INPUT_FRAGMENT_GLSL = """\
 #version 450
 layout(set = 0, binding = 0) uniform sampler2D source_image;
@@ -334,14 +334,13 @@ class GraphicsStageMismatchProbe(_GraphicsKernelProbeBase):
 
 @processor(
     execution="manual",
-    description="A buffer-kind binding a draw cannot name a surface for",
+    description="A uniform-buffer binding a draw cannot name a surface for",
 )
 class GraphicsBufferBindingRefusalProbe(_GraphicsKernelProbeBase):
     """A uniform-buffer binding is reflected, declared and refused at the draw.
 
-    The only by-surface-id resolution the engine has is texture-shaped, so a
-    draw that accepted a surface here would bind whatever the descriptor last
-    held. The name is read back off the kernel rather than spelled here — how
+    No escalate op mints a uniform buffer, so a draw that accepted a surface
+    here would bind whatever the descriptor last held. The name is read back off the kernel rather than spelled here — how
     reflection names a uniform block is the shader's business, and the refusal
     has to name whatever it named.
     """

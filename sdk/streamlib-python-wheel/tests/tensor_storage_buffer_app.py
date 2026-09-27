@@ -13,6 +13,7 @@ from tensor_storage_buffer_probes import (
     POOL_ROTATION_DEPTH,
     HeldTensorRereadingSink,
     PublishedTensorReadingSink,
+    TensorStorageBufferKernelBindingProbe,
     TensorStorageBufferPublishingSource,
 )
 
@@ -85,6 +86,15 @@ def scenario_a_tensor_acquired_after_a_window_opens_round_trips() -> None:
     )
 
 
+def scenario_a_kernel_binds_a_tensor_by_surface_id() -> None:
+    """One helper, no link: the probe acquires its tensors and reports from
+    `setup`."""
+    runtime = streamlib.Runtime()
+    runtime.add(TensorStorageBufferKernelBindingProbe)
+    runtime.run()
+    print("MARKER:CLEAN_EXIT", flush=True)
+
+
 SCENARIOS = {
     "a_written_tensor_is_read_by_another_process": (
         scenario_a_written_tensor_is_read_by_another_process
@@ -96,6 +106,9 @@ SCENARIOS = {
     "a_held_tensor_is_never_rewritten": scenario_a_held_tensor_is_never_rewritten,
     "a_tensor_acquired_after_a_window_opens_round_trips": (
         scenario_a_tensor_acquired_after_a_window_opens_round_trips
+    ),
+    "a_kernel_binds_a_tensor_by_surface_id": (
+        scenario_a_kernel_binds_a_tensor_by_surface_id
     ),
 }
 

@@ -88,8 +88,8 @@ layout(location = 0) rayPayloadInEXT vec3 ray_payload_colour;
 void main() { ray_payload_colour = vec3(0.0, 1.0, 0.0); }
 """
 
-# A third binding no trace can ever name a surface for: the only by-surface-id
-# resolution the engine has is texture-shaped.
+# A third binding no trace can name a surface for: no escalate op mints a
+# uniform buffer, so nothing resolves one by surface id.
 RAY_GENERATION_WITH_A_UNIFORM_BUFFER_GLSL = """\
 #version 460
 #extension GL_EXT_ray_tracing : require
@@ -381,7 +381,7 @@ class RayTracingStageMismatchProbe(_RayTracingKernelProbeBase):
 
 @processor(
     execution="manual",
-    description="A buffer-kind binding a trace cannot name a surface for",
+    description="A uniform-buffer binding a trace cannot name a surface for",
 )
 class RayTracingBufferBindingRefusalProbe(_RayTracingKernelProbeBase):
     """A uniform-buffer binding is reflected, and refused at the trace.
