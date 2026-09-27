@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.41](https://github.com/tatolab/streamlib/compare/v0.26.40...v0.26.41) (2026-09-27)
+
+
+### Features
+
+* **engine:** tensor buffers on macOS, on a byte-shaped IOSurface as kDLMetal ([#2516](https://github.com/tatolab/streamlib/issues/2516)) ([d15f984](https://github.com/tatolab/streamlib/commit/d15f984bd1c4c756f4bea890971ee492c3044fae))
+
 ## [0.26.40](https://github.com/tatolab/streamlib/compare/v0.26.39...v0.26.40) (2026-09-27)
 
 
