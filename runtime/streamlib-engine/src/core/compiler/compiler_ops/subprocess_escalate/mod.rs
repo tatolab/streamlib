@@ -66,6 +66,7 @@ pub(crate) const ESCALATE_OP_ANSWERED_BY_NOTHING: &str = "log";
 fn request_id(op: &EscalateRequest) -> Option<&str> {
     match op {
         EscalateRequest::AcquirePixelBuffer(p) => Some(&p.request_id),
+        EscalateRequest::AcquireStorageBuffer(p) => Some(&p.request_id),
         EscalateRequest::AcquireTexture(p) => Some(&p.request_id),
         EscalateRequest::AcquireImage(p) => Some(&p.request_id),
         EscalateRequest::RunCpuReadbackCopy(p) => Some(&p.request_id),
@@ -121,6 +122,9 @@ pub(crate) fn handle_escalate_op(
         EscalateRequest::AcquireTexture(req) => Some(acquisition::handle_acquire_texture(
             sandbox, registry, rid, req,
         )),
+        EscalateRequest::AcquireStorageBuffer(req) => Some(
+            acquisition::handle_acquire_storage_buffer(sandbox, registry, rid, req),
+        ),
         EscalateRequest::AcquireImage(req) => Some(acquisition::handle_acquire_image(
             sandbox, registry, rid, req,
         )),

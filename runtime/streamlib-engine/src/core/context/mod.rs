@@ -50,6 +50,8 @@ pub use device_stream_liveness_report::{
 };
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use gpu_context::GpuCapabilitiesSnapshot;
+#[cfg(target_os = "linux")]
+pub(crate) use gpu_context::StorageBufferAllocationFlavour;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use gpu_context::{BatchedComputeKernelDispatch, BatchedComputeKernelDispatchBinding};
 pub use gpu_context::{GpuContext, GpuContextFullAccess, GpuContextLimitedAccess};

@@ -23,6 +23,7 @@ mod ray_tracing_kernel;
 #[cfg(test)]
 pub(crate) mod spirv_module_rewriting_for_tests;
 mod storage_buffer;
+mod tensor_storage_buffer_layout;
 pub(crate) mod texture;
 mod texture_readback;
 mod tone_mapper;
@@ -93,6 +94,7 @@ pub use ray_tracing_kernel::{
 };
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use storage_buffer::StorageBuffer;
+pub use tensor_storage_buffer_layout::{TensorElementType, TensorStorageBufferLayout};
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use tone_mapper::ToneMapperFinalTextureLayouts;
 pub use tone_mapper::{

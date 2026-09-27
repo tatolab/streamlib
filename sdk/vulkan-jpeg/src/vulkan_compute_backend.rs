@@ -21,7 +21,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use streamlib::sdk::context::{GpuContextFullAccess, TextureRing};
 use streamlib::sdk::engine::host_rhi::{VulkanAccess, VulkanStage};
 use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::rhi::{StorageBuffer, TextureFormat, TextureUsages, VulkanLayout};
+use streamlib::sdk::rhi::{
+    StorageBuffer, TensorStorageBufferLayout, TextureFormat, TextureUsages, VulkanLayout,
+};
 
 use crate::JpegColorSource;
 use crate::backend::{JpegBackendKind, JpegDecodeBackend};
@@ -89,8 +91,11 @@ impl VulkanComputeBackend {
         let kernel = JpegDecodeKernel::new(full_access)?;
 
         let coef_bytes = worst_case_coefficient_buffer_bytes_420(max_width, max_height);
-        let coef_buf = full_access.acquire_storage_buffer(coef_bytes)?;
-        let qt_buf = full_access.acquire_storage_buffer(QUANT_TABLE_BUFFER_BYTES)?;
+        let coef_buf = full_access
+            .acquire_storage_buffer(&TensorStorageBufferLayout::of_bytes(coef_bytes)?)?;
+        let qt_buf = full_access.acquire_storage_buffer(&TensorStorageBufferLayout::of_bytes(
+            QUANT_TABLE_BUFFER_BYTES,
+        )?)?;
 
         let ring = full_access.create_texture_ring(
             max_width,

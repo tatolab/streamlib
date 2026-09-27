@@ -429,7 +429,12 @@ mod tests {
         assert_eq!(unlocked, 0, "IOSurfaceUnlock");
 
         let storage_buffer = full
-            .acquire_storage_buffer(packed.len().next_multiple_of(4) as u64)
+            .acquire_storage_buffer(
+                &crate::core::rhi::TensorStorageBufferLayout::of_bytes(
+                    packed.len().next_multiple_of(4) as u64,
+                )
+                .expect("a non-empty packed plane"),
+            )
             .expect("plain storage buffer");
         unsafe {
             std::ptr::copy_nonoverlapping(
@@ -490,8 +495,11 @@ mod tests {
         let readbacks: Vec<StorageBuffer> = sources
             .iter()
             .map(|_| {
-                full.acquire_storage_buffer(rgba_byte_len as u64)
-                    .expect("readback buffer")
+                full.acquire_storage_buffer(
+                    &crate::core::rhi::TensorStorageBufferLayout::of_bytes(rgba_byte_len as u64)
+                        .expect("a non-zero readback"),
+                )
+                .expect("readback buffer")
             })
             .collect();
         let mut recorder = full

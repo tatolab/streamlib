@@ -142,6 +142,8 @@ const SURFACE_HANDLE_TYPE_DMA_BUF: &str = "dma_buf";
 #[cfg(target_os = "linux")]
 const SURFACE_HANDLE_TYPE_OPAQUE_FD: &str = "opaque_fd";
 
+#[cfg(target_os = "linux")]
+use super::surface_share_wire_verbs::SURFACE_RESOURCE_TYPE_STORAGE_BUFFER;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::surface_share_wire_verbs::{
     SURFACE_RESOURCE_TYPE_PIXEL_BUFFER, SURFACE_RESOURCE_TYPE_TEXTURE,
@@ -724,6 +726,44 @@ impl SurfaceStoreInner {
     ) -> Result<()> {
         let response = self.send_surface_share_request_owning_fds(operation, request, fds)?;
         refusal_of_a_registration_answer(operation, &response)
+    }
+
+    /// Register a DEVICE_LOCAL OPAQUE_FD tensor storage buffer under
+    /// `surface_id` as a `storage_buffer` surface carrying `shape` and `dtype`.
+    ///
+    /// Its one plane is the tensor's exact byte size — what a CUDA import
+    /// maps — not the allocation's rounded size.
+    #[cfg(target_os = "linux")]
+    pub fn register_storage_buffer(
+        &self,
+        surface_id: &str,
+        buffer: &crate::core::rhi::StorageBuffer,
+        tensor_layout: &crate::core::rhi::TensorStorageBufferLayout,
+    ) -> Result<()> {
+        let host_buffer = buffer.host_inner();
+        let memory_type_index = memory_type_index_stated_by_an_opaque_fd_export(
+            host_buffer.vma_allocation_memory_type_index(),
+            surface_id,
+            "OPAQUE_FD tensor storage buffer registration",
+        )?;
+        let exporting_device_uuid =
+            lowercase_hex_of_device_uuid(host_buffer.vulkan_device().physical_device_uuid());
+        // SAFETY: the export mints a fresh fd this process owns and has handed
+        // to no one else; adopting it closes it exactly once on every path.
+        let owned_memory_fd =
+            unsafe { OwnedFd::from_raw_fd(host_buffer.export_opaque_fd_memory()?) };
+        let request = storage_buffer_registration_payload(
+            surface_id,
+            &self.runtime_id,
+            tensor_layout,
+            memory_type_index,
+            &exporting_device_uuid,
+        );
+        self.send_surface_share_registration(
+            "register_storage_buffer",
+            &request,
+            vec![owned_memory_fd],
+        )
     }
 
     /// Register a buffer with the surface-share service via Unix socket.
@@ -1911,6 +1951,31 @@ fn surface_export_staging_registration_payload(
     })
 }
 
+/// The surface-share registration payload for a tensor storage buffer.
+#[cfg(target_os = "linux")]
+fn storage_buffer_registration_payload(
+    surface_id: &str,
+    runtime_id: &str,
+    tensor_layout: &crate::core::rhi::TensorStorageBufferLayout,
+    memory_type_index: u32,
+    exporting_device_uuid: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "op": "register",
+        "surface_id": surface_id,
+        "runtime_id": runtime_id,
+        "resource_type": SURFACE_RESOURCE_TYPE_STORAGE_BUFFER,
+        "handle_type": SURFACE_HANDLE_TYPE_OPAQUE_FD,
+        "plane_sizes": [tensor_layout.byte_size()],
+        "plane_offsets": [0u64],
+        "plane_strides": [0u64],
+        "shape": tensor_layout.shape(),
+        "dtype": tensor_layout.element_type().wire_name(),
+        "vk_memory_type_index": memory_type_index,
+        "exporting_device_uuid": exporting_device_uuid,
+    })
+}
+
 /// The register-op payload a DMA-BUF-backed texture publishes.
 ///
 /// Carries the DRM format modifier and per-plane row pitch so the
@@ -2143,6 +2208,24 @@ impl SurfaceStore {
             consume_done,
             current_image_layout,
         )
+    }
+
+    /// **Engine-only** — register a tensor storage buffer (Linux). See
+    /// [`SurfaceStoreInner::register_storage_buffer`].
+    #[cfg(target_os = "linux")]
+    pub(crate) fn host_register_storage_buffer(
+        &self,
+        surface_id: &str,
+        buffer: &crate::core::rhi::StorageBuffer,
+        tensor_layout: &crate::core::rhi::TensorStorageBufferLayout,
+    ) -> Result<()> {
+        if self.is_none() {
+            return Err(Error::Configuration(
+                "SurfaceStore::register_storage_buffer: null handle".into(),
+            ));
+        }
+        self.host_inner()
+            .register_storage_buffer(surface_id, buffer, tensor_layout)
     }
 
     /// **Engine-only** — register a pool slot with its cross-process timeline

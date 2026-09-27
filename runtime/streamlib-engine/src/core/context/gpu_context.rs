@@ -661,6 +661,18 @@ fn binding_location_in_this_recording(
     }
 }
 
+/// Which allocation a storage buffer takes, derived from where it goes.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StorageBufferAllocationFlavour {
+    /// HOST_VISIBLE and mapped: the Rust caller that acquired it keeps it.
+    CallerHeldHostVisible,
+    /// DEVICE_LOCAL OPAQUE_FD: it crosses to a helper process, and from there
+    /// to CUDA, which cannot import DMA-BUF. Linux-only until #2404.
+    #[cfg(target_os = "linux")]
+    CrossesToAHelperProcessOrCuda,
+}
+
 #[derive(Clone)]
 pub struct GpuContext {
     device: Arc<GpuDevice>,
@@ -705,6 +717,21 @@ pub struct GpuContext {
     /// from `texture_cache` so a same-process cache hit can't shortcut the
     /// refresh.
     buffer_texture_cache: Arc<Mutex<HashMap<String, Texture>>>,
+    /// Tensor storage buffers a helper process acquired, keyed by pool slot —
+    /// the parent-wide map a dispatch in any helper binds another helper's
+    /// tensor surface from. Evicted by `unregister_storage_buffer`.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    storage_buffer_registrations: Arc<
+        Mutex<
+            HashMap<
+                String,
+                (
+                    crate::core::rhi::StorageBuffer,
+                    crate::core::rhi::TensorStorageBufferLayout,
+                ),
+            >,
+        >,
+    >,
     /// Engine-wide cache of `(src, dst)`-keyed color converters. Per-frame
     /// `ResolvedColorInfo` lives in push constants, so a single cached
     /// converter handles every variation of source color description.
@@ -822,6 +849,8 @@ impl GpuContext {
             surface_export_stagings: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             buffer_texture_cache: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
+            storage_buffer_registrations: Arc::new(Mutex::new(HashMap::new())),
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             color_converter_cache: Arc::new(RwLock::new(HashMap::new())),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             present_compositor_cache: Arc::new(parking_lot::Mutex::new(HashMap::new())),
@@ -866,6 +895,8 @@ impl GpuContext {
             #[cfg(target_os = "linux")]
             surface_export_stagings: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             buffer_texture_cache: Arc::new(Mutex::new(HashMap::new())),
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            storage_buffer_registrations: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
             color_converter_cache: Arc::new(RwLock::new(HashMap::new())),
             #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -1125,6 +1156,52 @@ impl GpuContext {
             .remove(pool_slot_key_of_surface_id(id));
         #[cfg(target_os = "linux")]
         self.evict_surface_export_stagings(id);
+    }
+
+    /// Register a tensor storage buffer under `id` in the parent-wide map.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn register_storage_buffer(
+        &self,
+        id: &str,
+        buffer: crate::core::rhi::StorageBuffer,
+        layout: crate::core::rhi::TensorStorageBufferLayout,
+    ) {
+        self.storage_buffer_registrations.lock().unwrap().insert(
+            pool_slot_key_of_surface_id(id).to_string(),
+            (buffer, layout),
+        );
+    }
+
+    /// Remove `id` from the parent-wide storage buffer map. Idempotent.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn unregister_storage_buffer(&self, id: &str) {
+        self.storage_buffer_registrations
+            .lock()
+            .unwrap()
+            .remove(pool_slot_key_of_surface_id(id));
+    }
+
+    /// The tensor storage buffer registered under `surface_id` and its layout,
+    /// refusing a published frame id whose slot has been recycled since.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub fn resolve_storage_buffer_by_surface_id(
+        &self,
+        surface_id: &str,
+    ) -> Result<(
+        crate::core::rhi::StorageBuffer,
+        crate::core::rhi::TensorStorageBufferLayout,
+    )> {
+        self.refuse_a_retired_frame_id(surface_id)?;
+        self.storage_buffer_registrations
+            .lock()
+            .unwrap()
+            .get(pool_slot_key_of_surface_id(surface_id))
+            .cloned()
+            .ok_or_else(|| {
+                Error::NotFound(format!(
+                    "no tensor storage buffer is registered under surface id {surface_id:?}"
+                ))
+            })
     }
 
     /// The texture a producer registered of its own under `surface_id`
@@ -1677,41 +1754,55 @@ impl GpuContext {
         self.device.create_texture_iosurface_backed(&desc)
     }
 
-    /// Acquire a HOST_VISIBLE storage buffer for CPU→GPU SSBO upload.
+    /// Acquire a caller-held storage buffer sized for `layout`: HOST_VISIBLE,
+    /// persistently mapped, never pooled — the caller keeps the
+    /// [`crate::core::rhi::StorageBuffer`] in its processor state and drops it
+    /// at teardown. A byte-shaped SSBO is a one-dimensional `uint8` layout.
     ///
-    /// Thin wrapper over
-    /// [`crate::vulkan::rhi::HostVulkanBuffer::new_storage_buffer_host_visible`].
-    /// Unlike [`Self::acquire_pixel_buffer`], the returned buffer is
-    /// **caller-owned-lifecycle, not pool-managed** — SSBOs are typically
-    /// per-stage ring slots whose count is known at processor setup, so
-    /// pool churn is the wrong shape. Callers retain the
-    /// [`crate::core::rhi::StorageBuffer`] in their processor state and
-    /// drop it when teardown runs.
-    ///
-    /// The buffer carries `STORAGE_BUFFER | TRANSFER_SRC | TRANSFER_DST`
-    /// usage, plus DMA-BUF export flags on Linux (macOS has no DMA-BUF and
-    /// allocates it unexported); compute kernels bind it via
+    /// Usage is `STORAGE_BUFFER | TRANSFER_SRC | TRANSFER_DST`, plus DMA-BUF
+    /// export flags on Linux; compute kernels bind it via
     /// [`crate::vulkan::rhi::VulkanComputeKernel::set_storage_buffer_storage`].
-    /// `byte_size` must fit in `u32` (4 GB cap); larger SSBOs are not a
-    /// current consumer need.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn acquire_storage_buffer(
         &self,
-        byte_size: u64,
+        layout: &crate::core::rhi::TensorStorageBufferLayout,
     ) -> Result<crate::core::rhi::StorageBuffer> {
+        self.acquire_storage_buffer_of_flavour(
+            layout,
+            StorageBufferAllocationFlavour::CallerHeldHostVisible,
+        )
+    }
+
+    /// Acquire a storage buffer for `layout` in the flavour its destination
+    /// needs — derived by the engine per acquisition, never a caller's dial.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub(crate) fn acquire_storage_buffer_of_flavour(
+        &self,
+        layout: &crate::core::rhi::TensorStorageBufferLayout,
+        flavour: StorageBufferAllocationFlavour,
+    ) -> Result<crate::core::rhi::StorageBuffer> {
+        let byte_size = layout.byte_size();
         tracing::debug!(
             rhi_op = "acquire_storage_buffer",
             byte_size,
+            ?flavour,
             "GpuContext::acquire_storage_buffer"
         );
-        let vulkan_device = &self.device.inner;
-        let buffer = crate::vulkan::rhi::HostVulkanBuffer::new_storage_buffer_host_visible(
-            vulkan_device,
-            byte_size,
-        )?;
-        Ok(crate::core::rhi::StorageBuffer::from_host_vulkan_buffer(
-            Arc::new(buffer),
-        ))
+        match flavour {
+            StorageBufferAllocationFlavour::CallerHeldHostVisible => {
+                let buffer = crate::vulkan::rhi::HostVulkanBuffer::new_storage_buffer_host_visible(
+                    &self.device.inner,
+                    byte_size,
+                )?;
+                Ok(crate::core::rhi::StorageBuffer::from_host_vulkan_buffer(
+                    Arc::new(buffer),
+                ))
+            }
+            #[cfg(target_os = "linux")]
+            StorageBufferAllocationFlavour::CrossesToAHelperProcessOrCuda => {
+                self.create_opaque_fd_export_buffer(byte_size, true)
+            }
+        }
     }
 
     /// Acquire a HOST_VISIBLE uniform buffer (UBO).
@@ -3689,14 +3780,14 @@ impl GpuContextLimitedAccess {
             .acquire_pixel_buffer(width, height, format)
     }
 
-    /// Acquire a HOST_VISIBLE storage buffer for CPU→GPU SSBO upload.
+    /// Acquire a caller-held storage buffer sized for `layout`.
     /// See [`GpuContext::acquire_storage_buffer`].
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn acquire_storage_buffer(
         &self,
-        byte_size: u64,
+        layout: &crate::core::rhi::TensorStorageBufferLayout,
     ) -> Result<crate::core::rhi::StorageBuffer> {
-        self.host_inner().acquire_storage_buffer(byte_size)
+        self.host_inner().acquire_storage_buffer(layout)
     }
 
     /// Acquire a HOST_VISIBLE uniform buffer.
@@ -3975,14 +4066,14 @@ impl GpuContextFullAccess {
             .acquire_pixel_buffer(width, height, format)
     }
 
-    /// Acquire a HOST_VISIBLE storage buffer for CPU→GPU SSBO upload.
+    /// Acquire a caller-held storage buffer sized for `layout`.
     /// See [`GpuContext::acquire_storage_buffer`].
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub fn acquire_storage_buffer(
         &self,
-        byte_size: u64,
+        layout: &crate::core::rhi::TensorStorageBufferLayout,
     ) -> Result<crate::core::rhi::StorageBuffer> {
-        self.host_inner().acquire_storage_buffer(byte_size)
+        self.host_inner().acquire_storage_buffer(layout)
     }
 
     /// Acquire a HOST_VISIBLE uniform buffer.
@@ -5538,7 +5629,10 @@ mod tests {
         let byte_size: u64 = 1024 * 64;
 
         let buffer: crate::core::rhi::StorageBuffer = limited
-            .acquire_storage_buffer(byte_size)
+            .acquire_storage_buffer(
+                &crate::core::rhi::TensorStorageBufferLayout::of_bytes(byte_size)
+                    .expect("a non-zero size"),
+            )
             .expect("Sandbox-side acquire_storage_buffer should succeed");
 
         // Public StorageBuffer surface: byte_size, mapped_ptr only —
@@ -5552,7 +5646,10 @@ mod tests {
         // FullAccess mirror also reaches the same inner context.
         let full = limited.to_full_access();
         let buffer2 = full
-            .acquire_storage_buffer(byte_size)
+            .acquire_storage_buffer(
+                &crate::core::rhi::TensorStorageBufferLayout::of_bytes(byte_size)
+                    .expect("a non-zero size"),
+            )
             .expect("FullAccess mirror should succeed");
         assert_eq!(buffer2.byte_size(), byte_size);
 

@@ -56,8 +56,8 @@ use crate::core::processors::{
 use crate::core::runtime::mesh::MeshLinkIngressTable;
 
 use super::subprocess_escalate::handle_lifecycle::{
-    EscalateHandleRegistry, release_processor_output_texture_slot,
-    release_surface_share_and_texture_cache_for_handle,
+    EscalateHandleRegistry, release_processor_output_pool_slot,
+    release_surface_share_and_parent_caches_for_handle,
 };
 use super::subprocess_escalate::{
     ESCALATE_OP_ANSWERED_BY_NOTHING, process_bridge_message, refusal_of_an_escalate_request,
@@ -606,16 +606,15 @@ impl Drop for SubprocessBridge {
         // connection registered those on the helper's behalf, so the
         // service's disconnect watchdog rightly never reclaims them.
         for (handle_id, removed_handle) in self.registry.drain_handles() {
-            release_surface_share_and_texture_cache_for_handle(
+            release_surface_share_and_parent_caches_for_handle(
                 &self.sandbox,
                 &handle_id,
                 &removed_handle,
             );
         }
-        let processor_output_texture_slots =
-            self.registry.processor_output_texture_pools().drain_slots();
+        let processor_output_texture_slots = self.registry.processor_output_pools().drain_slots();
         for released_slot in processor_output_texture_slots {
-            release_processor_output_texture_slot(&self.sandbox, released_slot);
+            release_processor_output_pool_slot(&self.sandbox, released_slot);
         }
         // Detached, never joined: the OS reaps both on process exit.
         self.frame_demultiplexing_reader_thread.take();

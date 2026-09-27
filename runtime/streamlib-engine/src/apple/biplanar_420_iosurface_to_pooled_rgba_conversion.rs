@@ -212,7 +212,9 @@ impl CpuUploadStagingStorageBuffer {
         let byte_size =
             (luma_plane_bytes + chroma_bytes_per_row * chroma_height).next_multiple_of(4) as u64;
         Ok(Self {
-            storage_buffer: full.acquire_storage_buffer(byte_size)?,
+            storage_buffer: full.acquire_storage_buffer(
+                &crate::core::rhi::TensorStorageBufferLayout::of_bytes(byte_size)?,
+            )?,
             layout,
             luma_bytes_per_row,
             luma_height,

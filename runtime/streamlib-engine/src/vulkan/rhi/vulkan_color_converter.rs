@@ -1485,7 +1485,10 @@ mod image_to_nv12_buffer_tests {
             };
             let shape = nv12_destination_shape(width, height);
             let destination = gpu
-                .acquire_storage_buffer(shape.byte_len as u64)
+                .acquire_storage_buffer(
+                    &crate::core::rhi::TensorStorageBufferLayout::of_bytes(shape.byte_len as u64)
+                        .expect("a non-zero destination"),
+                )
                 .expect("a host-visible destination");
             // SAFETY: the buffer is host-mapped and `byte_len` long.
             unsafe { std::ptr::write_bytes(destination.mapped_ptr(), 0, shape.byte_len) };

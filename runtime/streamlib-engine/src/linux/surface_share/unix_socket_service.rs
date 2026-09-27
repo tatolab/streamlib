@@ -23,10 +23,11 @@ use streamlib_surface_client::{
 
 use crate::core::context::SurfaceCheckOutLeaseHolderId;
 use crate::core::context::surface_share_wire_verbs::{
-    answer_release_check_out, answer_unregister, latch_the_first_named_runtime_id,
-    parse_vk_image_create_info_fields, record_check_out_lease_or_refusal,
-    refusal_of_a_retired_frame_id, release_what_a_closed_connection_held, requested_runtime_id,
-    requested_surface_id,
+    answer_release_check_out, answer_unregister, echo_the_tensor_layout_onto_a_lookup_reply,
+    latch_the_first_named_runtime_id, parse_vk_image_create_info_fields,
+    record_check_out_lease_or_refusal, refusal_of_a_retired_frame_id,
+    release_what_a_closed_connection_held, requested_runtime_id, requested_surface_id,
+    tensor_layout_of_a_storage_buffer_registration,
 };
 
 use super::state::{SurfaceRegistration, SurfaceShareState};
@@ -457,6 +458,10 @@ fn handle_register(
         .get("exporting_device_uuid")
         .and_then(|v| v.as_str())
         .map(str::to_string);
+    let tensor_layout = match tensor_layout_of_a_storage_buffer_registration(request) {
+        Ok(tensor_layout) => tensor_layout,
+        Err(refusal) => return (serde_json::json!({"error": refusal}), Vec::new()),
+    };
 
     let mut dup_plane_fds: Vec<RawFd> = Vec::with_capacity(plane_fds.len());
     for fd in plane_fds {
@@ -534,6 +539,7 @@ fn handle_register(
         vk_image_allocation_size: vk_image.vk_image_allocation_size,
         vk_memory_type_index,
         exporting_device_uuid,
+        tensor_layout,
     }) {
         Ok(()) => {
             tracing::debug!(
@@ -738,6 +744,7 @@ fn handle_lookup(
     if let Some(exporting_device_uuid) = checkout.exporting_device_uuid {
         response["exporting_device_uuid"] = exporting_device_uuid.into();
     }
+    echo_the_tensor_layout_onto_a_lookup_reply(&mut response, checkout.tensor_layout.as_ref());
     (response, dup_fds)
 }
 
@@ -895,6 +902,7 @@ fn handle_check_in(
             // contract fields ride texture registrations only.
             vk_memory_type_index: None,
             exporting_device_uuid: None,
+            tensor_layout: None,
         })
     {
         for fd in &leftover_planes {
@@ -1763,6 +1771,7 @@ mod tests {
                     vk_image_allocation_size: VK_IMAGE_ALLOCATION_SIZE_DEFAULT,
                     vk_memory_type_index: None,
                     exporting_device_uuid: None,
+                    tensor_layout: None,
                 })
                 .expect("register");
         }
@@ -1990,6 +1999,88 @@ mod tests {
         close_every_fd(&bare_lookup_fds);
         assert!(bare_lookup_resp.get("vk_memory_type_index").is_none());
         assert!(bare_lookup_resp.get("exporting_device_uuid").is_none());
+
+        drop(stream);
+        service.stop();
+    }
+
+    /// A `storage_buffer` registration's tensor shape and dtype round-trip
+    /// through a checkout, and one that omits them is refused before the table
+    /// takes its fd.
+    #[test]
+    fn a_tensor_storage_buffer_registration_round_trips_its_shape_and_dtype() {
+        let state = SurfaceShareState::new();
+        let (_socket_dir, socket_path, mut service) = started_service(state.clone());
+        let stream = connect_to_surface_share_socket(&socket_path).expect("connect");
+        let send_fd = make_memfd_with(b"tensor-storage-buffer-fixture");
+
+        let (register_resp, _) = send_request_with_fds(
+            &stream,
+            &serde_json::json!({
+                "op": "register",
+                "surface_id": "tensor-storage-buffer",
+                "runtime_id": "test-runtime",
+                "resource_type": "storage_buffer",
+                "handle_type": "opaque_fd",
+                "plane_sizes": [462u64],
+                "plane_offsets": [0u64],
+                "plane_strides": [0u64],
+                "shape": [3u64, 7, 11],
+                "dtype": "float16",
+                "vk_memory_type_index": 2u32,
+                "exporting_device_uuid": "00112233445566778899aabbccddeeff",
+            }),
+            &[send_fd],
+            0,
+        )
+        .expect("register request");
+        assert_eq!(
+            register_resp.get("success").and_then(|v| v.as_bool()),
+            Some(true),
+            "register must succeed: {register_resp:?}",
+        );
+
+        let (check_out_resp, check_out_fds) = send_request_with_fds(
+            &stream,
+            &serde_json::json!({"op": "check_out", "surface_id": "tensor-storage-buffer"}),
+            &[],
+            MAX_DMA_BUF_PLANES,
+        )
+        .expect("check_out request");
+        assert_eq!(
+            check_out_fds.len(),
+            1,
+            "the tensor's memory crosses as one fd"
+        );
+        close_every_fd(&check_out_fds);
+        assert_eq!(check_out_resp["resource_type"], "storage_buffer");
+        assert_eq!(check_out_resp["shape"], serde_json::json!([3, 7, 11]));
+        assert_eq!(check_out_resp["dtype"], "float16");
+        assert_eq!(check_out_resp["plane_sizes"], serde_json::json!([462]));
+
+        let (refused_resp, _) = send_request_with_fds(
+            &stream,
+            &serde_json::json!({
+                "op": "register",
+                "surface_id": "tensor-without-a-shape",
+                "runtime_id": "test-runtime",
+                "resource_type": "storage_buffer",
+                "handle_type": "opaque_fd",
+                "dtype": "float32",
+            }),
+            &[send_fd],
+            0,
+        )
+        .expect("register request");
+        unsafe { libc::close(send_fd) };
+        assert!(
+            refused_resp
+                .get("error")
+                .and_then(|v| v.as_str())
+                .is_some_and(|refusal| refusal.contains("no shape")),
+            "a tensor registration without its shape must be refused: {refused_resp:?}",
+        );
+        assert!(state.get_surface_planes("tensor-without-a-shape").is_none());
 
         drop(stream);
         service.stop();

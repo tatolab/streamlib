@@ -4,14 +4,14 @@
 //! What the parent holds on a helper process's behalf, and the release every
 //! acquire owes — by explicit `release_handle` or at bridge teardown.
 
-mod processor_output_texture_pools;
+mod processor_output_pools_of_one_helper;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use processor_output_texture_pools::{
-    ProcessorOutputTextureDescriptor, ProcessorOutputTextureFrameHandOff,
-    ProcessorOutputTextureFreshSlotHandOff, ProcessorOutputTexturePoolsOfOneHelper,
-    ReleasedProcessorOutputTextureSlot,
+pub(crate) use processor_output_pools_of_one_helper::{
+    ProcessorOutputFrameHandOff, ProcessorOutputFreshSlotHandOff, ProcessorOutputPoolsOfOneHelper,
+    ProcessorOutputSlotDescriptor, ProcessorOutputTextureDescriptor,
+    ReleasedProcessorOutputPoolSlot,
 };
 
 use std::collections::HashMap;
@@ -68,6 +68,12 @@ pub(crate) enum RegisteredHandle {
         produce_done: Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
         consume_done: Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
     },
+    /// Tensor storage buffer handed out via `AcquireStorageBuffer`, registered
+    /// with surface-share and the parent-wide storage buffer map.
+    #[cfg(target_os = "linux")]
+    StorageBuffer {
+        buffer: crate::core::rhi::StorageBuffer,
+    },
 }
 
 impl RegisteredHandle {
@@ -80,7 +86,19 @@ impl RegisteredHandle {
             Self::Texture { .. } => true,
             #[cfg(target_os = "linux")]
             Self::Image { .. } => true,
+            #[cfg(target_os = "linux")]
+            Self::StorageBuffer { .. } => false,
         }
+    }
+
+    /// Whether releasing this handle also owes the parent-wide storage buffer
+    /// map an eviction.
+    pub(crate) fn is_storage_buffer_backed(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        if let Self::StorageBuffer { .. } = self {
+            return true;
+        }
+        false
     }
 }
 
@@ -115,10 +133,10 @@ pub(crate) struct EscalateHandleRegistry {
     /// Python object carries the method) is the child's guard and never the
     /// engine's: both Python capability tiers collapse onto this one wire.
     last_lifecycle_command_sent_to_the_helper_process: Mutex<Option<String>>,
-    /// The processor output texture pools this helper's rings publish from.
-    /// Their slots are never [`RegisteredHandle`]s of their own: a frame's id
-    /// names a generation, and the slot outlives it.
-    processor_output_texture_pools: Mutex<ProcessorOutputTexturePoolsOfOneHelper>,
+    /// The processor output pools this helper's rings publish from. Their
+    /// slots are never registry entries of their own: a frame's id names a
+    /// generation, and the slot outlives it.
+    processor_output_pools: Mutex<ProcessorOutputPoolsOfOneHelper>,
 }
 
 impl EscalateHandleRegistry {
@@ -136,13 +154,11 @@ impl EscalateHandleRegistry {
         map.insert(handle_id, registered_handle);
     }
 
-    /// The processor output texture pools this helper publishes from.
-    pub(crate) fn processor_output_texture_pools(
+    /// The processor output pools this helper publishes from.
+    pub(crate) fn processor_output_pools(
         &self,
-    ) -> std::sync::MutexGuard<'_, ProcessorOutputTexturePoolsOfOneHelper> {
-        self.processor_output_texture_pools
-            .lock()
-            .expect("poisoned")
+    ) -> std::sync::MutexGuard<'_, ProcessorOutputPoolsOfOneHelper> {
+        self.processor_output_pools.lock().expect("poisoned")
     }
 
     pub(crate) fn insert_buffer(&self, handle_id: String, buffer: PixelBuffer) {
@@ -275,7 +291,7 @@ pub(super) fn handle_release_handle(
     let removed_handle = registry.remove_handle(&handle_id);
     let removed = removed_handle.is_some();
     if let Some(removed_handle) = removed_handle {
-        release_surface_share_and_texture_cache_for_handle(sandbox, &handle_id, &removed_handle);
+        release_surface_share_and_parent_caches_for_handle(sandbox, &handle_id, &removed_handle);
     }
     // An acceleration structure is registered against `GpuContext`
     // rather than against the per-subprocess handle registry, so its id
@@ -322,7 +338,7 @@ pub(super) fn release_acceleration_structure(
 /// The cleanup a registry eviction owes outside the registry, shared by the
 /// explicit `release_handle` op and bridge teardown so a crashed helper's
 /// acquires release exactly what an explicit release would (#1901).
-pub(crate) fn release_surface_share_and_texture_cache_for_handle(
+pub(crate) fn release_surface_share_and_parent_caches_for_handle(
     sandbox: &GpuContextLimitedAccess,
     handle_id: &str,
     removed_handle: &RegisteredHandle,
@@ -336,23 +352,23 @@ pub(crate) fn release_surface_share_and_texture_cache_for_handle(
     if removed_handle.is_texture_backed() {
         sandbox.unregister_texture(handle_id);
     }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    if removed_handle.is_storage_buffer_backed() {
+        sandbox.host_inner().unregister_storage_buffer(handle_id);
+    }
 }
 
-/// The release a processor output texture slot is owed when its pool lets it
-/// go: everything a released texture handle is owed, and its place in the
+/// The release a processor output slot is owed when its pool lets it go:
+/// everything a released handle of its kind is owed, and its place in the
 /// generation index.
-pub(crate) fn release_processor_output_texture_slot(
+pub(crate) fn release_processor_output_pool_slot(
     sandbox: &GpuContextLimitedAccess,
-    ReleasedProcessorOutputTextureSlot {
+    ReleasedProcessorOutputPoolSlot {
         pool_slot_key,
-        registered_texture,
-    }: ReleasedProcessorOutputTextureSlot,
+        registered_handle,
+    }: ReleasedProcessorOutputPoolSlot,
 ) {
-    release_surface_share_and_texture_cache_for_handle(
-        sandbox,
-        &pool_slot_key,
-        &registered_texture,
-    );
+    release_surface_share_and_parent_caches_for_handle(sandbox, &pool_slot_key, &registered_handle);
     sandbox.forget_lease_aware_pool_slot(&pool_slot_key);
 }
 

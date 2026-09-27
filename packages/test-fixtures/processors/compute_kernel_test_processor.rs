@@ -17,7 +17,8 @@
 //!         completeness — the kernel return must be valid for the rest
 //!         of this test).
 //!      b. Acquire input + output `StorageBuffer` handles via
-//!         `gpu_limited_access().acquire_storage_buffer(...)`.
+//!         `gpu_limited_access().acquire_storage_buffer(...)` with a
+//!         byte-shaped `TensorStorageBufferLayout`.
 //!         HOST_VISIBLE allocations, persistently-mapped pointer
 //!         cached on the handle.
 //!      c. Populate input through `mapped_ptr()` with `[1, 2, 3,
@@ -53,7 +54,9 @@
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ManualProcessor;
-use streamlib::sdk::rhi::{ComputeBindingKind, ComputeBindingSpec, ComputeKernelDescriptor};
+use streamlib::sdk::rhi::{
+    ComputeBindingKind, ComputeBindingSpec, ComputeKernelDescriptor, TensorStorageBufferLayout,
+};
 
 /// SPIR-V for the `output[i] = input[i] * 2` reference kernel.
 /// Compiled from `shaders/cpu_ref_doubler.comp` by this crate's
@@ -136,10 +139,10 @@ fn run_compute_kernel_round_trip(
     // required to read/write them.
     let byte_size = (element_count as u64) * (std::mem::size_of::<u32>() as u64);
     let input = gpu_limited
-        .acquire_storage_buffer(byte_size)
+        .acquire_storage_buffer(&TensorStorageBufferLayout::of_bytes(byte_size)?)
         .map_err(|e| Error::Runtime(format!("acquire input storage_buffer: {e}")))?;
     let output = gpu_limited
-        .acquire_storage_buffer(byte_size)
+        .acquire_storage_buffer(&TensorStorageBufferLayout::of_bytes(byte_size)?)
         .map_err(|e| Error::Runtime(format!("acquire output storage_buffer: {e}")))?;
 
     // Kernel construction is FullAccess-privileged (touches
