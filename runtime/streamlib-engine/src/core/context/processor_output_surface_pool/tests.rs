@@ -36,23 +36,28 @@ impl PoolUnderTest {
     }
 
     fn next_frame(&mut self, rotation_depth: usize) -> Result<String> {
+        let handed_off = self.pool.hand_off_a_reusable_frame(
+            rotation_depth,
+            Some(&self.leases),
+            &self.minted,
+        )?;
+        if let ProcessorOutputSurfacePoolHandOff::ReusedSlot(slot) = handed_off {
+            return Ok(slot.currently_published_frame_id());
+        }
         let fresh_slot_number = self.in_process_hold_by_slot.len();
         let held = Arc::new(AtomicBool::new(false));
-        let mut allocated = None;
-        let published = self
+        self.in_process_hold_by_slot.push(Arc::clone(&held));
+        Ok(self
             .pool
-            .hand_off_next_frame(rotation_depth, Some(&self.leases), &self.minted, || {
-                allocated = Some(Arc::clone(&held));
-                Ok((
-                    format!("slot-{fresh_slot_number}"),
-                    SlotResourceHeldOnlyWhenTheTestSays {
-                        held_in_this_process: held,
-                    },
-                ))
-            })?
-            .currently_published_frame_id();
-        self.in_process_hold_by_slot.extend(allocated);
-        Ok(published)
+            .hand_off_a_fresh_slot(
+                format!("slot-{fresh_slot_number}"),
+                SlotResourceHeldOnlyWhenTheTestSays {
+                    held_in_this_process: held,
+                },
+                Some(&self.leases),
+                &self.minted,
+            )
+            .currently_published_frame_id())
     }
 
     fn check_out(&self, published_id: &str) {
@@ -167,17 +172,31 @@ fn a_rotation_depth_of_zero_or_past_the_cap_is_refused() {
 }
 
 #[test]
-fn a_failed_allocation_reaches_the_caller_and_adds_no_slot() {
+fn a_pool_short_of_its_depth_asks_for_a_fresh_slot_until_one_is_handed_in() {
     let mut pool = ProcessorOutputSurfacePool::<SlotResourceHeldOnlyWhenTheTestSays>::new(
         "pool-under-test".to_string(),
     );
     let minted = LeaseAwarePoolMintedFrameGenerations::default();
-    let refusal = pool
-        .hand_off_next_frame(2, None, &minted, || {
-            Err(Error::GpuError("out of device memory".into()))
-        })
-        .err()
-        .expect("the allocation failure propagates");
-    assert!(matches!(refusal, Error::GpuError(_)));
-    assert_eq!(pool.slot_count(), 0);
+    for _ in 0..2 {
+        assert!(matches!(
+            pool.hand_off_a_reusable_frame(2, None, &minted),
+            Ok(ProcessorOutputSurfacePoolHandOff::NeedsAFreshSlot)
+        ));
+    }
+    assert_eq!(pool.slot_count(), 0, "asking for a fresh slot adds none");
+}
+
+#[test]
+fn at_its_rotation_depth_with_nothing_held_the_pool_reuses_without_asking_for_a_slot() {
+    let mut pool = PoolUnderTest::new();
+    pool.next_frame(2).unwrap();
+    pool.next_frame(2).unwrap();
+    for _ in 0..4 {
+        assert!(matches!(
+            pool.pool
+                .hand_off_a_reusable_frame(2, Some(&pool.leases), &pool.minted),
+            Ok(ProcessorOutputSurfacePoolHandOff::ReusedSlot(_))
+        ));
+    }
+    assert_eq!(pool.pool.slot_count(), 2);
 }
