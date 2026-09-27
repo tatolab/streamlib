@@ -57,6 +57,7 @@ impl PoolUnderTest {
                 Some(&self.leases),
                 &self.minted,
             )
+            .map_err(|refused| refused.refusal)?
             .currently_published_frame_id())
     }
 
@@ -199,4 +200,32 @@ fn at_its_rotation_depth_with_nothing_held_the_pool_reuses_without_asking_for_a_
         ));
     }
     assert_eq!(pool.pool.slot_count(), 2);
+}
+
+#[test]
+fn a_fresh_slot_handed_in_at_the_cap_is_refused_by_name_and_handed_back() {
+    let mut pool = PoolUnderTest::new();
+    for _ in 0..PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY {
+        let published = pool.next_frame(2).unwrap();
+        pool.check_out(&published);
+    }
+    let Err(refused) = pool.pool.hand_off_a_fresh_slot(
+        "slot-past-the-cap".to_string(),
+        SlotResourceHeldOnlyWhenTheTestSays {
+            held_in_this_process: Arc::new(AtomicBool::new(false)),
+        },
+        Some(&pool.leases),
+        &pool.minted,
+    ) else {
+        panic!("a fresh slot past the cap was added");
+    };
+    assert!(matches!(
+        refused.refusal,
+        Error::EverySlotInTheProcessorOutputPoolIsInUse { .. }
+    ));
+    assert_eq!(refused.pool_slot_key, "slot-past-the-cap");
+    assert_eq!(
+        pool.pool.slot_count(),
+        PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY
+    );
 }

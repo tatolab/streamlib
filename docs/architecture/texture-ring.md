@@ -240,7 +240,12 @@ contract).
   (`runtime/streamlib-engine/src/core/context/lease_aware_pool_slot_ring.rs`)
   answers — slots allocated cross-process-importable and registered with
   surface-share, each frame published as `<slot>#<generation>`, and a
-  slot any consumer still holds skipped rather than rewritten.
+  slot any consumer still holds skipped rather than rewritten. Handing
+  out a reused slot runs outside the escalate scope; only growing the
+  pool allocates under it. "Unheld" means no lease and no extra
+  in-process `Arc`, not that the GPU has finished reading the slot: a
+  reuse no longer implies the device went idle, so ordering against an
+  earlier read rests on the writer's own barrier.
 - **Render-target rings for the display swapchain.** Display
   manages its own per-image render-finished semaphores keyed by
   `image_index` from `acquire_next_image_khr`

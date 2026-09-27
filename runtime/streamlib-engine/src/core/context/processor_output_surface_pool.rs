@@ -31,6 +31,14 @@ pub(crate) enum ProcessorOutputSurfacePoolHandOff<'pool, Resource> {
     NeedsAFreshSlot,
 }
 
+/// A fresh slot the pool refused at its capacity, handed back to the caller
+/// that allocated it.
+pub(crate) struct ProcessorOutputSurfacePoolRefusedFreshSlot<Resource> {
+    pub(crate) refusal: Error,
+    pub(crate) pool_slot_key: String,
+    pub(crate) resource: Resource,
+}
+
 /// The slots a processor publishes its output frames from, under one pool key.
 pub(crate) struct ProcessorOutputSurfacePool<Resource> {
     pool_key: String,
@@ -79,39 +87,48 @@ impl<Resource: LeaseAwarePoolSlotResource> ProcessorOutputSurfacePool<Resource> 
             ));
         }
         if slot_count >= PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY {
-            tracing::warn!(
-                "processor output pool '{}': all {} slots are held by consumers; the producer \
-                 drops this frame",
-                self.pool_key,
-                slot_count
-            );
-            return Err(Error::EverySlotInTheProcessorOutputPoolIsInUse {
-                pool_key: self.pool_key.clone(),
-                pool_capacity: PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY,
-            });
+            return Err(self.every_slot_in_use_refusal());
         }
         Ok(ProcessorOutputSurfacePoolHandOff::NeedsAFreshSlot)
     }
 
     /// Add a slot allocated after [`Self::hand_off_a_reusable_frame`] asked
-    /// for one, and hand it out under its first generation.
+    /// for one, and hand it out under its first generation; at
+    /// [`PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY`] the slot is handed back.
     pub(crate) fn hand_off_a_fresh_slot(
         &mut self,
         pool_slot_key: String,
         resource: Resource,
         check_out_leases: Option<&SurfaceCheckOutLeaseRegistry>,
         minted_frame_generations: &LeaseAwarePoolMintedFrameGenerations,
-    ) -> &LeaseAwarePoolSlot<Resource> {
-        debug_assert!(
-            self.ring.slot_count() < PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY,
-            "processor output pool '{}' was handed a fresh slot at its cap; the reuse call \
-             that asked for it refuses there",
-            self.pool_key
-        );
+    ) -> std::result::Result<
+        &LeaseAwarePoolSlot<Resource>,
+        ProcessorOutputSurfacePoolRefusedFreshSlot<Resource>,
+    > {
+        if self.ring.slot_count() >= PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY {
+            return Err(ProcessorOutputSurfacePoolRefusedFreshSlot {
+                refusal: self.every_slot_in_use_refusal(),
+                pool_slot_key,
+                resource,
+            });
+        }
         let slot_index = self.ring.push_fresh_slot(pool_slot_key, resource);
         self.ring
             .hand_off_fresh_slot(slot_index, check_out_leases, minted_frame_generations);
-        self.ring.slot(slot_index)
+        Ok(self.ring.slot(slot_index))
+    }
+
+    fn every_slot_in_use_refusal(&self) -> Error {
+        tracing::warn!(
+            "processor output pool '{}': all {} slots are held by consumers; the producer \
+             drops this frame",
+            self.pool_key,
+            self.ring.slot_count()
+        );
+        Error::EverySlotInTheProcessorOutputPoolIsInUse {
+            pool_key: self.pool_key.clone(),
+            pool_capacity: PROCESSOR_OUTPUT_SURFACE_POOL_CAPACITY,
+        }
     }
 
     /// How many slots the pool holds.

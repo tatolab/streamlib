@@ -208,11 +208,11 @@ fn hand_off_processor_output_texture_frame(
     let host = sandbox.host_inner();
     let (handed_off, slots_a_descriptor_change_released) = registry
         .processor_output_texture_pools()
-        .hand_off_a_reusable_frame(host, &pool_key, rotation_depth as usize, descriptor)?;
+        .hand_off_a_reusable_frame(host, &pool_key, rotation_depth as usize, descriptor);
     for released_slot in slots_a_descriptor_change_released {
         release_processor_output_texture_slot(sandbox, released_slot);
     }
-    if let ProcessorOutputTextureFrameHandOff::Published(published_frame_id) = handed_off {
+    if let ProcessorOutputTextureFrameHandOff::Published(published_frame_id) = handed_off? {
         return Ok(published_frame_id);
     }
     let (pool_slot_key, registered_texture) = sandbox.escalate(|full| {
@@ -233,17 +233,17 @@ fn hand_off_processor_output_texture_frame(
             descriptor,
             pool_slot_key,
             registered_texture,
-        )?;
+        );
     match fresh_slot_handed_off {
         ProcessorOutputTextureFreshSlotHandOff::Published(published_frame_id) => {
             Ok(published_frame_id)
         }
-        ProcessorOutputTextureFreshSlotHandOff::RefusedAfterTheHelpersTeardown(released_slot) => {
-            release_processor_output_texture_slot(sandbox, released_slot);
-            Err(crate::core::error::Error::Runtime(format!(
-                "processor output pool '{pool_key}' allocated a slot after its helper process \
-                 was torn down"
-            )))
+        ProcessorOutputTextureFreshSlotHandOff::Refused {
+            refusal,
+            slot_owed_its_release,
+        } => {
+            release_processor_output_texture_slot(sandbox, slot_owed_its_release);
+            Err(refusal)
         }
     }
 }

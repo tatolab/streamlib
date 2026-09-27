@@ -444,9 +444,17 @@ fn a_reused_processor_output_slot_skips_the_escalate_gate_and_growth_enters_it()
         reused_frame, first_frame,
         "a republished slot names a new frame"
     );
+    let Err(growth_panic) = growth_under_the_held_gate else {
+        panic!("growing the pool must allocate inside the escalate scope");
+    };
+    let growth_panic_message = growth_panic
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| growth_panic.downcast_ref::<&str>().copied())
+        .unwrap_or_default();
     assert!(
-        growth_under_the_held_gate.is_err(),
-        "growing the pool must allocate inside the escalate scope"
+        growth_panic_message.contains("EscalateGate::enter() called twice"),
+        "growth panicked for a reason other than re-entering the gate: {growth_panic_message}"
     );
 
     let grown_frame = next_frame(2).expect("the pool grows once the scope closes");
@@ -519,21 +527,22 @@ fn a_slot_allocated_across_the_helpers_teardown_is_handed_back_for_release() {
 
     let mut pools = registry.processor_output_texture_pools();
     assert!(pools.drain_slots().is_empty());
-    let handed_off = pools
-        .hand_off_a_fresh_slot(
-            sandbox.host_inner(),
-            "pool-torn-down-mid-allocation",
-            descriptor,
-            allocated.handle_id.clone(),
-            registered_texture,
-        )
-        .expect("a pooled texture is a valid slot");
+    let handed_off = pools.hand_off_a_fresh_slot(
+        sandbox.host_inner(),
+        "pool-torn-down-mid-allocation",
+        descriptor,
+        allocated.handle_id.clone(),
+        registered_texture,
+    );
     drop(pools);
-    let ProcessorOutputTextureFreshSlotHandOff::RefusedAfterTheHelpersTeardown(released_slot) =
-        handed_off
+    let ProcessorOutputTextureFreshSlotHandOff::Refused {
+        refusal,
+        slot_owed_its_release: released_slot,
+    } = handed_off
     else {
         panic!("a slot handed in after teardown was added to a pool");
     };
+    assert!(refusal.to_string().contains("torn down"), "got: {refusal}");
     assert_eq!(released_slot.pool_slot_key, allocated.handle_id);
     release_processor_output_texture_slot(&sandbox, released_slot);
 }
