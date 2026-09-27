@@ -78,7 +78,7 @@ host-layout drift.
 | Don't (raw device, build-fragile) | Do (FullAccess primitive, plugin-safe) |
 |---|---|
 | `VulkanComputeKernel::new(device, desc)` | `full.create_compute_kernel(desc)` |
-| `HostVulkanBuffer::new_storage_buffer_*(device, n)` | `full.acquire_storage_buffer(n)` |
+| `HostVulkanBuffer::new_storage_buffer_*(device, n)` | `full.acquire_storage_buffer(&TensorStorageBufferLayout::of_bytes(n)?)` |
 | hand-rolled `Vec<Texture>` decode ring | `full.create_texture_ring(…)` |
 
 The descriptor data is the same; only the construction site changes. A
