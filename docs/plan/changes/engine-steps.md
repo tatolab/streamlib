@@ -136,8 +136,9 @@ dispatch.
     by the device-wide synchronize the write-back path already uses.
   - **macOS:** the capsule is `kDLMetal` over the MTLBuffer exported from the helper's imported
     buffer. It rides #2402 (Mach sidecars, consumer-RHI IOSurface arm) and #2404
-    (`vkExportMetalObjectsEXT` → `kDLMetal`). Its tests carry
-    `awaiting_macos_parity(issue=2404)`.
+    (`vkExportMetalObjectsEXT` → `kDLMetal`). ~~Its tests carry
+    `awaiting_macos_parity(issue=2404)`.~~ — Superseded 2026-09-27 by #2431: the tensor tests
+    run on macOS unmarked, torch-MPS and MLX reading over the byte-shaped IOSurface.
 - ADDED: a tensor surface resolves downstream. `resolve_surface` imports the new `resource_type`
   and yields a handle that states `shape` and `dtype`. Width, height and format are not invented
   for it. Its bare `__dlpack__` is the read path. No typed cast object for tensors in this change —

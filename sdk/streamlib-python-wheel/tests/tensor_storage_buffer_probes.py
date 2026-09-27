@@ -226,7 +226,7 @@ def _read_a_published_tensor(
         }
         mx = _mlx_or_none()
         if mx is not None:
-            mlx_read = mx.from_dlpack(tensor_surface)
+            mlx_read = mx.from_dlpack(tensor_surface, copy=False)
             expected = expected_tensor_values(torch, shape, dtype, frame_index)
             observation["mlx_shape"] = list(mlx_read.shape)
             observation["mlx_values_equal"] = bool(
