@@ -286,8 +286,8 @@ impl PythonGpuSurfaceHandle {
     /// A tensor surface's DLPack capsule, `None` for a pixel surface. It needs
     /// no lock — there is no CPU door to open — and serves the device only: a
     /// host copy is torch's `.cpu()`. The acquirer's capsule is writable, and
-    /// the close orders its writes; a resolver's is read-only, since a
-    /// published tensor stays immutable while anyone holds it.
+    /// the close orders its writes; a resolver's is read-only. A write through
+    /// the acquirer's tensor after the close is out of contract, not revoked.
     #[cfg(target_os = "linux")]
     fn tensor_storage_buffer_dlpack_capsule<'py>(
         &self,

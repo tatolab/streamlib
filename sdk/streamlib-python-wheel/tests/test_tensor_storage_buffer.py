@@ -6,7 +6,7 @@ no copy; another processor resolves it by surface id and reads the same values.
 
 Both run out of process, each in its own helper, and report over the
 `MARKER:PROBE_RESULT` lines their helpers forward. Linux only until the macOS
-arm lands (#2404); a rig without CUDA skips, since the export is `kDLCUDA`.
+arm lands (#2431); a rig without CUDA skips, since the export is `kDLCUDA`.
 """
 
 import json
@@ -28,7 +28,7 @@ pytestmark = [
     pytest.mark.requires_gpu,
     pytest.mark.skipif(
         sys.platform != "linux",
-        reason="the tensor storage buffer's macOS arm rides #2404",
+        reason="the tensor storage buffer's macOS arm rides #2431",
     ),
 ]
 

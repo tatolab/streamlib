@@ -24,7 +24,7 @@ pub(super) fn allocate_registered_storage_buffer_for_helper(
     _tensor_layout: &crate::core::rhi::TensorStorageBufferLayout,
 ) -> crate::core::error::Result<(String, RegisteredHandle)> {
     Err(crate::core::Error::NotSupported(
-        "acquire_storage_buffer is Linux-only until its macOS arm lands (#2404)".to_string(),
+        "acquire_storage_buffer is Linux-only until its macOS arm lands (#2431)".to_string(),
     ))
 }
 

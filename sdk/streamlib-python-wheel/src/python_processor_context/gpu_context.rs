@@ -100,7 +100,7 @@ fn acquire_texture_through_the_helper_process_exchange(
 
 /// Acquire a tensor storage buffer through the helper's exchange client: a
 /// one-off, or the next tensor of the processor output pool named by
-/// `processor_output_pool`. Linux-only until its macOS arm lands (#2404).
+/// `processor_output_pool`. Linux-only until its macOS arm lands (#2431).
 #[cfg_attr(
     not(target_os = "linux"),
     expect(
@@ -130,7 +130,7 @@ fn acquire_storage_buffer_through_the_helper_process_exchange(
     }
     #[cfg(target_os = "macos")]
     return Err(pyo3::exceptions::PyNotImplementedError::new_err(
-        "acquire_storage_buffer is Linux-only until its macOS arm lands (#2404)",
+        "acquire_storage_buffer is Linux-only until its macOS arm lands (#2431)",
     ));
     #[cfg(not(target_os = "macos"))]
     Err(gpu_unreachable_from_a_helper_process_error())

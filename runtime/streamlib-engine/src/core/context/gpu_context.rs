@@ -684,7 +684,7 @@ pub(crate) enum StorageBufferAllocationFlavour {
     /// HOST_VISIBLE and mapped: the Rust caller that acquired it keeps it.
     CallerHeldHostVisible,
     /// DEVICE_LOCAL OPAQUE_FD: it crosses to a helper process, and from there
-    /// to CUDA, which cannot import DMA-BUF. Linux-only until #2404.
+    /// to CUDA, which cannot import DMA-BUF. Linux-only until #2431.
     #[cfg(target_os = "linux")]
     CrossesToAHelperProcessOrCuda,
 }

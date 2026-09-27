@@ -1127,7 +1127,7 @@ class GpuContextLimitedAccess:
         orders those writes ahead of every other holder's read, so publish the
         id after it. A one-off is released at close; a tensor published
         downstream comes from `acquire_storage_buffer_from_processor_output_pool`.
-        Linux only until the macOS arm lands (#2404).
+        Linux only until the macOS arm lands (#2431).
         """
     def acquire_storage_buffer_from_processor_output_pool(
         self,
@@ -1243,7 +1243,7 @@ class GpuContextFullAccess:
         orders those writes ahead of every other holder's read, so publish the
         id after it. A one-off is released at close; a tensor published
         downstream comes from `acquire_storage_buffer_from_processor_output_pool`.
-        Linux only until the macOS arm lands (#2404).
+        Linux only until the macOS arm lands (#2431).
         """
     def acquire_storage_buffer_from_processor_output_pool(
         self,
@@ -1655,9 +1655,11 @@ class GpuSurfaceHandle:
 
         A tensor surface needs no lock: its capsule is `kDLCUDA` in its declared
         shape straight over the engine's memory — writable for the processor
-        that acquired it, read-only for one that resolved it, since a published
-        tensor stays immutable while anyone holds it. A host capsule is
-        refused; copy with torch's `.cpu()`.
+        that acquired it, read-only for one that resolved it. The acquirer's
+        writes are ordered at the handle's close, so publish the id after it;
+        a write through a tensor kept past that close is out of contract and
+        the engine does not revoke it. A host capsule is refused; copy with
+        torch's `.cpu()`.
         """
 
 @final
