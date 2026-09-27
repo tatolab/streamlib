@@ -61,6 +61,22 @@ vec4 effect(vec4 source, ivec2 at) {
 }
 """
 
+# Every dial type, the block ending unaligned at 44 bytes, so the engine's
+# reflected-size check and each std430 offset are exercised.
+EVERY_DIAL_TYPE_GLSL = """\
+vec4 effect(vec4 source, ivec2 at) {
+    return vec4(dials.tint.rgb * dials.strength, dials.center.x + float(dials.steps) / 255.0);
+}
+"""
+EVERY_DIAL_TYPE_DECLARATION = {"strength": "float", "tint": "vec4", "center": "vec2", "steps": "int"}
+EVERY_DIAL_TYPE_VALUES = {
+    "strength": 1.0,
+    "tint": (51 / 255, 102 / 255, 153 / 255, 0.0),
+    "center": (0.0, 0.5),
+    "steps": 204,
+}
+EVERY_DIAL_TYPE_EXPECTED_PIXEL = [51, 102, 153, 204]
+
 # The mistake is on the body's third line.
 UNDEFINED_FUNCTION_ON_LINE_THREE_GLSL = """\
 vec4 effect(vec4 source, ivec2 at) {
@@ -193,6 +209,41 @@ class PreDeclaredHelpersProbe:
             }
 
         _report(apply_each)
+
+
+@processor
+class EveryDialTypeProbe:
+    """Applies an effect that paints one colour out of every dial type and
+    reports the distinct pixels it wrote."""
+
+    @input(delivery_profile="ordered")
+    def video_from_upstream(self) -> VideoFrame: ...
+
+    def __init__(self) -> None:
+        self.reported = False
+
+    def setup(self, ctx: RuntimeContextFullAccess) -> None:
+        self.effect = GlslPixelEffect.compile(
+            ctx.gpu_full_access,
+            effect_glsl=EVERY_DIAL_TYPE_GLSL,
+            dials=EVERY_DIAL_TYPE_DECLARATION,
+        )
+
+    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+        frame = ctx.inputs.read("video_from_upstream", into=VideoFrame)
+        if frame is None or self.reported:
+            return
+        self.reported = True
+        gpu = ctx.gpu_limited_access
+
+        def apply_and_read() -> "dict[str, Any]":
+            output_bag = self.effect.apply_to_frame(gpu, frame, dials=EVERY_DIAL_TYPE_VALUES)
+            output = _pixels_of(gpu, output_bag["surface_id"])
+            return {
+                "distinct_pixels": numpy.unique(output.reshape(-1, 4), axis=0).tolist()
+            }
+
+        _report(apply_and_read)
 
 
 @processor

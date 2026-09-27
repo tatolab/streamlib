@@ -69,6 +69,14 @@ def test_the_pre_declared_extent_and_sampling_helpers_read_the_source(
     assert observed["texel_centres_through_uv_helper"] == 0
 
 
+def test_every_dial_type_reaches_the_shader_at_its_std430_offset(start_app_under_test):
+    observed = run_scenario(start_app_under_test, "EveryDialTypeProbe")
+
+    assert observed["distinct_pixels"] == [
+        glsl_pixel_effect_probes.EVERY_DIAL_TYPE_EXPECTED_PIXEL
+    ]
+
+
 def test_a_compiler_diagnostic_names_the_line_of_the_users_body(start_app_under_test):
     observed = run_scenario(start_app_under_test, "CompilerDiagnosticLineProbe")
 
