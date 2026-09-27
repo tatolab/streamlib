@@ -54,6 +54,8 @@ mod macos;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod processor_owned_window;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
+mod storage_buffer;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod surface_copy;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -69,7 +71,10 @@ pub(crate) use linux::{
     HelperForeignSurfaceUnregisterDebt, OpaqueFdTextureExportDescription,
 };
 #[cfg(target_os = "macos")]
-pub(crate) use macos::{HelperCheckedOutTextureSurface, IOSurfaceMachPortExportDescription};
+pub(crate) use macos::{
+    HelperCheckedOutStorageBuffer, HelperCheckedOutTextureSurface,
+    IOSurfaceMachPortExportDescription,
+};
 #[cfg(target_os = "macos")]
 use macos::{
     HelperIOSurfaceCpuLock, HelperIOSurfaceImportsByPoolSlot, HelperIOSurfacePoolSlotImport,
@@ -89,12 +94,12 @@ pub(crate) struct PixelSurfaceGeometry {
 #[derive(Clone)]
 pub(crate) enum GpuSurfaceGeometry {
     Pixels(PixelSurfaceGeometry),
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     TensorStorageBuffer(streamlib::sdk::rhi::TensorStorageBufferLayout),
 }
 
 /// The refusal every pixel-shaped door gives a tensor surface.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) fn a_tensor_surface_is_not_a_pixel_surface() -> PyErr {
     pyo3::exceptions::PyRuntimeError::new_err(
         "this surface is a tensor storage buffer, not pixels: it has a shape and a dtype, no \
@@ -393,7 +398,7 @@ pub(crate) enum HelperCheckedOutSurface {
     Texture(HelperCheckedOutTextureSurface),
     #[cfg(target_os = "linux")]
     AcquiredDeviceTexture(HelperAcquiredTexture),
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     StorageBuffer(HelperCheckedOutStorageBuffer),
 }
 
@@ -405,7 +410,7 @@ impl HelperCheckedOutSurface {
             Self::Texture(texture_surface) => &texture_surface.surface_id,
             #[cfg(target_os = "linux")]
             Self::AcquiredDeviceTexture(acquired_texture) => &acquired_texture.surface_id,
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             Self::StorageBuffer(storage_buffer) => &storage_buffer.surface_id,
         }
     }
@@ -436,7 +441,7 @@ impl HelperCheckedOutSurface {
                 acquired_texture.height,
                 acquired_texture.format.wire_name(),
             ),
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             Self::StorageBuffer(storage_buffer) => {
                 GpuSurfaceGeometry::TensorStorageBuffer(storage_buffer.tensor_layout.clone())
             }
@@ -444,7 +449,7 @@ impl HelperCheckedOutSurface {
     }
 
     /// The tensor storage buffer this surface is, if it is one.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) fn tensor_storage_buffer(&self) -> Option<&HelperCheckedOutStorageBuffer> {
         match self {
             Self::StorageBuffer(storage_buffer) => Some(storage_buffer),

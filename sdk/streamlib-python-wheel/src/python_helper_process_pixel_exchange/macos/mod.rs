@@ -15,7 +15,9 @@ use super::{
     required_positive_u32_check_out_metadata_field,
 };
 
+mod storage_buffer;
 mod texture;
+pub(crate) use storage_buffer::HelperCheckedOutStorageBuffer;
 pub(crate) use texture::HelperCheckedOutTextureSurface;
 
 /// A pool slot's IOSurface pages imported as host memory on this helper's
@@ -105,6 +107,7 @@ impl HelperCheckedOutSurface {
                 None,
             ),
             Self::Texture(texture_surface) => texture_surface.export_iosurface(),
+            Self::StorageBuffer(_) => Err(super::a_tensor_surface_is_not_a_pixel_surface()),
         }
     }
 }
@@ -447,12 +450,24 @@ impl HelperProcessGpuExchangeClient {
             .get("handle_type")
             .and_then(|value| value.as_str())
             .unwrap_or("iosurface");
-        if handle_type != "iosurface" || !matches!(resource_type, "pixel_buffer" | "texture") {
+        if handle_type != "iosurface"
+            || !matches!(resource_type, "pixel_buffer" | "texture" | "storage_buffer")
+        {
             return Err(PyRuntimeError::new_err(format!(
                 "surface {surface_id:?} is registered as a {resource_type:?} over a \
-                 {handle_type:?} handle; a macOS helper imports IOSurface-backed pixel buffers \
-                 and textures only"
+                 {handle_type:?} handle; a macOS helper imports IOSurface-backed pixel buffers, \
+                 textures and tensor storage buffers only"
             )));
+        }
+        if resource_type == "storage_buffer" {
+            return self
+                .import_checked_out_storage_buffer(
+                    surface_id,
+                    response,
+                    received_ports,
+                    release_check_out_to_surface_share,
+                )
+                .map(HelperCheckedOutSurface::StorageBuffer);
         }
         if resource_type == "texture" {
             return self

@@ -100,12 +100,12 @@ fn acquire_texture_through_the_helper_process_exchange(
 
 /// Acquire a tensor storage buffer through the helper's exchange client: a
 /// one-off, or the next tensor of the processor output pool named by
-/// `processor_output_pool`. Linux-only until its macOS arm lands (#2431).
+/// `processor_output_pool`.
 #[cfg_attr(
-    not(target_os = "linux"),
+    not(any(target_os = "linux", target_os = "macos")),
     expect(
         unused_variables,
-        reason = "off Linux the request is refused before it reaches the parent"
+        reason = "off Linux and macOS the request is refused before it reaches the parent"
     )
 )]
 fn acquire_storage_buffer_through_the_helper_process_exchange(
@@ -117,7 +117,7 @@ fn acquire_storage_buffer_through_the_helper_process_exchange(
 ) -> PyResult<PythonGpuSurfaceHandle> {
     let tensor_layout = streamlib::sdk::rhi::TensorStorageBufferLayout::from_wire(shape, dtype)
         .map_err(|refusal| pyo3::exceptions::PyValueError::new_err(refusal.to_string()))?;
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     if let Some(exchange_client) = helper_process_exchange_client {
         let acquired = exchange_client.acquire_storage_buffer(
             python,
@@ -128,11 +128,6 @@ fn acquire_storage_buffer_through_the_helper_process_exchange(
             HelperCheckedOutSurface::StorageBuffer(acquired),
         ));
     }
-    #[cfg(target_os = "macos")]
-    return Err(pyo3::exceptions::PyNotImplementedError::new_err(
-        "acquire_storage_buffer is Linux-only until its macOS arm lands (#2431)",
-    ));
-    #[cfg(not(target_os = "macos"))]
     Err(gpu_unreachable_from_a_helper_process_error())
 }
 

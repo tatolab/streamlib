@@ -1122,12 +1122,14 @@ class GpuContextLimitedAccess:
 
         Contiguous row-major, every dimension non-zero. The handle states
         `shape` and `dtype` and no pixel geometry; `torch.from_dlpack` writes it
-        on the GPU in place — Linux: `kDLCUDA` over the engine's own memory, no
-        staging and no copy. Closing the handle (or leaving its `with` block)
-        orders those writes ahead of every other holder's read, so publish the
-        id after it. A one-off is released at close; a tensor published
-        downstream comes from `acquire_storage_buffer_from_processor_output_pool`.
-        Linux only until the macOS arm lands (#2431).
+        on the GPU in place, over the engine's own memory with no staging and
+        no copy — `kDLCUDA` on Linux, `kDLMetal` on macOS, which torch imports
+        as `mps` and MLX as an array. Closing the handle (or leaving its `with`
+        block) orders torch's writes ahead of every other holder's read, so
+        publish the id after it; an MLX write is ordered by the `mx.eval` it
+        owes inside the block. A one-off is released at close; a tensor
+        published downstream comes from
+        `acquire_storage_buffer_from_processor_output_pool`.
         """
     def acquire_storage_buffer_from_processor_output_pool(
         self,
@@ -1238,12 +1240,14 @@ class GpuContextFullAccess:
 
         Contiguous row-major, every dimension non-zero. The handle states
         `shape` and `dtype` and no pixel geometry; `torch.from_dlpack` writes it
-        on the GPU in place — Linux: `kDLCUDA` over the engine's own memory, no
-        staging and no copy. Closing the handle (or leaving its `with` block)
-        orders those writes ahead of every other holder's read, so publish the
-        id after it. A one-off is released at close; a tensor published
-        downstream comes from `acquire_storage_buffer_from_processor_output_pool`.
-        Linux only until the macOS arm lands (#2431).
+        on the GPU in place, over the engine's own memory with no staging and
+        no copy — `kDLCUDA` on Linux, `kDLMetal` on macOS, which torch imports
+        as `mps` and MLX as an array. Closing the handle (or leaving its `with`
+        block) orders torch's writes ahead of every other holder's read, so
+        publish the id after it; an MLX write is ordered by the `mx.eval` it
+        owes inside the block. A one-off is released at close; a tensor
+        published downstream comes from
+        `acquire_storage_buffer_from_processor_output_pool`.
         """
     def acquire_storage_buffer_from_processor_output_pool(
         self,
@@ -1653,8 +1657,9 @@ class GpuSurfaceHandle:
         The tensor may outlive this handle: it holds its own share of the
         surface, so the pool slot is not reused until the tensor is released.
 
-        A tensor surface needs no lock: its capsule is `kDLCUDA` in its declared
-        shape straight over the engine's memory — writable for the processor
+        A tensor surface needs no lock: its capsule is `kDLCUDA` on Linux and
+        `kDLMetal` on macOS, in its declared shape straight over the engine's
+        memory — writable for the processor
         that acquired it, read-only for one that resolved it. The acquirer's
         writes are ordered at the handle's close, so publish the id after it;
         a write through a tensor kept past that close is out of contract and
@@ -1909,10 +1914,10 @@ class ComputeKernel:
         previous frame. Supplying an unknown name or omitting a declared one
         raises before anything is submitted. Each binding's kind comes from the
         shader's own reflection, never from the caller. A `storage_buffer`
-        binding takes a tensor surface from `acquire_storage_buffer` (Linux
-        until #2431); a `uniform_buffer` binding raises naming its kind. Bind
-        the handle, not its id string: the dispatch orders the writes torch
-        took through a handle's tensor ahead of the kernel's reads.
+        binding takes a tensor surface from `acquire_storage_buffer`; a
+        `uniform_buffer` binding raises naming its kind. Bind the handle, not
+        its id string: the dispatch orders the writes torch took through a
+        handle's tensor ahead of the kernel's reads.
 
         Returns when the GPU work has retired and the writes are visible — a
         tensor the dispatch wrote reads back through `torch.from_dlpack`.

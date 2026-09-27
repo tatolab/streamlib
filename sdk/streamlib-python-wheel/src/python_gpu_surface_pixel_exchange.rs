@@ -124,6 +124,9 @@ impl GpuSurfaceOwnedMemory {
             HelperCheckedOutSurface::Texture(texture_surface) => {
                 texture_surface.lock_the_iosurface_for_cpu_access_once(read_only)
             }
+            HelperCheckedOutSurface::StorageBuffer(_) => {
+                Err(crate::python_helper_process_pixel_exchange::a_tensor_surface_is_not_a_pixel_surface())
+            }
         }
     }
 
@@ -137,6 +140,7 @@ impl GpuSurfaceOwnedMemory {
             HelperCheckedOutSurface::Texture(texture_surface) => {
                 texture_surface.unlock_the_iosurface_after_cpu_access()
             }
+            HelperCheckedOutSurface::StorageBuffer(_) => Ok(()),
         }
     }
 
@@ -192,7 +196,7 @@ impl GpuSurfaceOwnedMemory {
     }
 
     /// The tensor storage buffer this surface is, if it is one.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) fn tensor_storage_buffer(
         &self,
     ) -> Option<&crate::python_helper_process_pixel_exchange::HelperCheckedOutStorageBuffer> {
@@ -272,6 +276,9 @@ impl GpuSurfaceOwnedMemory {
             HelperCheckedOutSurface::Texture(texture_surface) => {
                 texture_surface.host_visible_pixel_plane_view()
             }
+            HelperCheckedOutSurface::StorageBuffer(_) => {
+                Err(crate::python_helper_process_pixel_exchange::a_tensor_surface_is_not_a_pixel_surface())
+            }
         }
     }
 
@@ -289,6 +296,9 @@ impl GpuSurfaceOwnedMemory {
             }
             HelperCheckedOutSurface::Texture(texture_surface) => {
                 texture_surface.metal_buffer_over_the_iosurface_pages()
+            }
+            HelperCheckedOutSurface::StorageBuffer(storage_buffer) => {
+                storage_buffer.metal_buffer_over_the_iosurface_pages()
             }
         }
     }
@@ -372,7 +382,7 @@ fn single_plane_shape(format: PixelFormat) -> Option<(u32, DataType, Option<i64>
 impl PixelExchangeTensorLayout {
     /// The contiguous row-major layout a tensor storage buffer declares:
     /// its own shape, element strides from the innermost dimension out.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) fn for_tensor_storage_buffer(
         tensor_layout: &streamlib::sdk::rhi::TensorStorageBufferLayout,
     ) -> PyResult<Self> {
@@ -740,8 +750,6 @@ pub(crate) fn metal_dlpack_capsule<'py>(
     exchange_shape: DlpackExchangeShape,
     read_only: bool,
 ) -> PyResult<Bound<'py, PyAny>> {
-    use objc2_metal::MTLBuffer as _;
-
     let plane_view = owned_memory.host_visible_pixel_plane()?;
     let layout = PixelExchangeTensorLayout::for_pixel_format(
         plane_view.format,
@@ -749,13 +757,63 @@ pub(crate) fn metal_dlpack_capsule<'py>(
         plane_view.height,
         plane_view.bytes_per_row,
     )?;
+    metal_dlpack_capsule_over_the_iosurface_base(
+        python,
+        owned_memory,
+        plane_view.base_address,
+        layout,
+        exchange_shape,
+        read_only,
+    )
+}
+
+/// Build a `kDLMetal` capsule straight over a tensor storage buffer's
+/// IOSurface pages, in its declared shape — torch-MPS's and MLX's zero-copy
+/// door to the same memory a kernel binding the tensor addresses. The capsule
+/// holds the surface, and with it the checkout lease, so the slot is not
+/// reused while the tensor lives.
+#[cfg(target_os = "macos")]
+pub(crate) fn tensor_storage_buffer_dlpack_capsule<'py>(
+    python: Python<'py>,
+    owned_memory: &Arc<GpuSurfaceOwnedMemory>,
+    exchange_shape: DlpackExchangeShape,
+    read_only: bool,
+) -> PyResult<Bound<'py, PyAny>> {
+    let storage_buffer = owned_memory
+        .tensor_storage_buffer()
+        .ok_or_else(|| PyRuntimeError::new_err("this surface is not a tensor storage buffer"))?;
+    let layout =
+        PixelExchangeTensorLayout::for_tensor_storage_buffer(&storage_buffer.tensor_layout)?;
+    metal_dlpack_capsule_over_the_iosurface_base(
+        python,
+        owned_memory,
+        storage_buffer.iosurface().base_address().as_ptr().cast(),
+        layout,
+        exchange_shape,
+        read_only,
+    )
+}
+
+/// Wrap the surface's no-copy `MTLBuffer` in a `kDLMetal` capsule of
+/// `layout`, whose strides count from `iosurface_base_address`.
+#[cfg(target_os = "macos")]
+fn metal_dlpack_capsule_over_the_iosurface_base<'py>(
+    python: Python<'py>,
+    owned_memory: &Arc<GpuSurfaceOwnedMemory>,
+    iosurface_base_address: *const u8,
+    layout: PixelExchangeTensorLayout,
+    exchange_shape: DlpackExchangeShape,
+    read_only: bool,
+) -> PyResult<Bound<'py, PyAny>> {
+    use objc2_metal::MTLBuffer as _;
+
     let metal_buffer = owned_memory.metal_buffer_over_the_iosurface_pages()?;
-    // The layout's strides are counted from the host mapping's base, so the
-    // buffer must start exactly there; anything else would shift every pixel.
-    if metal_buffer.contents().as_ptr().cast::<u8>() != plane_view.base_address {
+    // The layout's strides are counted from the IOSurface's base, so the
+    // buffer must start exactly there; anything else would shift every element.
+    if metal_buffer.contents().as_ptr().cast::<u8>().cast_const() != iosurface_base_address {
         return Err(PyRuntimeError::new_err(
             "the surface's Metal buffer does not start at its IOSurface's base address, so a \
-             Metal tensor over it would not address the frame's pixels",
+             Metal tensor over it would not address the surface's memory",
         ));
     }
     let metal_buffer_address = objc2::rc::Retained::as_ptr(&metal_buffer) as u64;
@@ -948,6 +1006,18 @@ pub(crate) fn publish_tensor_storage_buffer_device_writes(
             )
         })
         .map_err(crate::python_processor_context::gpu_operation_error)
+}
+
+/// Order every Metal write to a tensor storage buffer ahead of any other
+/// holder's read: torch-MPS's queue drain, since the capsule protocol carries
+/// no stream to order against. An MLX write is retired by the `mx.eval` the
+/// write contract names.
+#[cfg(target_os = "macos")]
+pub(crate) fn publish_tensor_storage_buffer_device_writes(
+    python: Python<'_>,
+    _owned_memory: &Arc<GpuSurfaceOwnedMemory>,
+) -> PyResult<()> {
+    crate::python_metal_framework_queue_synchronization::drain_torch_mps_queue_if_imported(python)
 }
 
 /// Publish a device-side write back into the surface, so every other
