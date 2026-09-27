@@ -292,8 +292,8 @@ class GlslPixelEffect:
     ) -> "dict[str, Any]":
         """Run the effect over `frame` and return the output frame's bag, in `process()`.
 
-        Every declared dial is supplied on every apply; none persists. The
-        output is an `rgba8_unorm` frame at the source's extent, carrying its
+        `frame` is one single-plane RGBA frame. Every declared dial is
+        supplied on every apply; none persists. The output is an `rgba8_unorm` frame at the source's extent, carrying its
         timestamp and colour description. Raises naming the dial for an
         undeclared, missing or ill-typed one, and naming the frame when the
         engine copy refuses to land it.
@@ -311,8 +311,8 @@ class GlslPixelEffect:
             raise ValueError(
                 f"GlslPixelEffect.apply_to_frame: frame {frame.surface_id!r} "
                 f"({frame.width}x{frame.height}) could not land in the effect's "
-                f"{_EFFECT_TEXTURE_FORMAT} source — the effect takes one single-plane RGBA "
-                f"frame: {copy_refusal}"
+                f"{_EFFECT_TEXTURE_FORMAT} source; the engine copy refused it: "
+                f"{copy_refusal}"
             ) from copy_refusal
 
         output_texture = self._output_ring.next_texture_for_this_frame(
