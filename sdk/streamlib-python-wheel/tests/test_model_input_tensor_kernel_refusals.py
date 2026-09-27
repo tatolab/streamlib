@@ -276,8 +276,8 @@ def test_a_new_frame_extent_under_pad_bottom_right_asks_the_pool_for_its_tensor(
     second, _ = apply(kernel, frame(640, 360))
     assert first.tensor_surface.shape == [1, 3, 736, 1280]
     assert second.tensor_surface.shape == [1, 3, 384, 640]
-    assert struct.unpack("<6i", gpu.kernel.dispatches[1]["push_constants"]) == (
-        640, 360, 0, 0, 640, 384,
+    assert struct.unpack("<6iI", gpu.kernel.dispatches[1]["push_constants"]) == (
+        640, 360, 0, 0, 640, 384, 3 * 640 * 384,
     )
 
 
@@ -295,7 +295,7 @@ def test_the_kernel_binds_the_landed_source_and_the_tensor_by_their_reflected_na
         "streamlib_source": "sampled_texture",
         "streamlib_model_input_tensor": "storage_buffer",
     }
-    assert gpu.kernel_requests[0]["push_constant_size"] == 24
+    assert gpu.kernel_requests[0]["push_constant_size"] == 28
     _, limited = apply(kernel)
     bindings = gpu.kernel.dispatches[0]["bindings"]
     assert bindings["streamlib_source"].surface_id == "texture#1"
@@ -305,8 +305,8 @@ def test_the_kernel_binds_the_landed_source_and_the_tensor_by_their_reflected_na
 def test_the_fit_reaches_the_kernel_as_resized_extent_pad_offset_and_tensor_extent() -> None:
     kernel, gpu = compiled(fit="letterbox")
     apply(kernel)
-    assert struct.unpack("<6i", gpu.kernel.dispatches[0]["push_constants"]) == (
-        640, 360, 0, 140, 640, 640,
+    assert struct.unpack("<6iI", gpu.kernel.dispatches[0]["push_constants"]) == (
+        640, 360, 0, 140, 640, 640, 3 * 640 * 640,
     )
 
 
@@ -414,3 +414,7 @@ def test_boxes_that_are_not_xyxy_are_refused(boxes: Any) -> None:
 def test_a_tensor_past_the_largest_dispatch_is_refused_naming_its_extent() -> None:
     message = refusal_of_compile(width=65536, height=21846)
     assert "65536x21846" in message
+
+
+def test_a_float16_tensor_past_32_bit_element_indexing_is_refused() -> None:
+    assert "40000x40000" in refusal_of_compile(width=40000, height=40000, dtype="float16")
