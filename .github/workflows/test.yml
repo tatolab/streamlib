@@ -314,8 +314,11 @@ jobs:
           # The lease-aware slot ring every pool hands frames out of, and the
           # processor output pool on it: which slot is next, a held one
           # skipped, growth to the cap and the refusal there — no device.
+          # The swapchain acquire barrier's source stage, which must chain off
+          # the image-available semaphore wait.
           cargo test --locked -p streamlib-engine --lib -- \
             vulkan::rhi::vulkan_video_session::tests \
+            vulkan::rhi::vulkan_present_target::tests::acquire_barrier_source_stage_chains_off_the_image_available_wait \
             vulkan::video::codec_utils::vk_video_core_profile::tests \
             core::processor_owned_window \
             core::compiler::compiler_ops::subprocess_escalate::processor_owned_window::tests \

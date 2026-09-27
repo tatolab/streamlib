@@ -125,6 +125,34 @@ struct InFlightFrame {
     timeline_signal_value: u64,
 }
 
+/// Stage the frame submit waits the image-available semaphore at.
+const IMAGE_AVAILABLE_SEMAPHORE_WAIT_STAGE: vk::PipelineStageFlags2 =
+    vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT;
+
+/// Stage and access scopes of one swapchain-image layout barrier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SwapchainImageBarrierScopes {
+    src_stage: vk::PipelineStageFlags2,
+    src_access: vk::AccessFlags2,
+    dst_stage: vk::PipelineStageFlags2,
+    dst_access: vk::AccessFlags2,
+}
+
+/// The acquired image's UNDEFINED → COLOR_ATTACHMENT_OPTIMAL barrier.
+///
+/// The source stage must include [`IMAGE_AVAILABLE_SEMAPHORE_WAIT_STAGE`]:
+/// only then does the semaphore wait chain into the layout transition, so the
+/// transition's write is ordered after the presentation engine's read of the
+/// image. A `NONE` source stage leaves it unordered
+/// (`SYNC-HAZARD-WRITE-AFTER-READ` against `vkAcquireNextImageKHR`).
+const SWAPCHAIN_ACQUIRE_BARRIER_SCOPES: SwapchainImageBarrierScopes =
+    SwapchainImageBarrierScopes {
+        src_stage: IMAGE_AVAILABLE_SEMAPHORE_WAIT_STAGE,
+        src_access: vk::AccessFlags2::NONE,
+        dst_stage: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+        dst_access: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+    };
+
 /// A recorder operation [`VulkanPresentTarget::end_frame`] emits after the
 /// frame's draws, before submit + present.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -591,14 +619,15 @@ impl VulkanPresentTarget {
         // every reuse because the render pass uses CLEAR load op (set by
         // `PresentFrame::begin_rendering` / `cmd_begin_dynamic_rendering`
         // with a clear color).
+        let acquire_barrier = SWAPCHAIN_ACQUIRE_BARRIER_SCOPES;
         self.recorders[frame_index].record_swapchain_image_barrier(
             swapchain_image,
             vk::ImageLayout::UNDEFINED,
             vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-            vk::PipelineStageFlags2::NONE,
-            vk::AccessFlags2::NONE,
-            vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-            vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+            acquire_barrier.src_stage,
+            acquire_barrier.src_access,
+            acquire_barrier.dst_stage,
+            acquire_barrier.dst_access,
         )?;
 
         self.in_flight = Some(InFlightFrame {
@@ -700,7 +729,7 @@ impl VulkanPresentTarget {
         wait_infos.push(
             vk::SemaphoreSubmitInfo::builder()
                 .semaphore(image_available_semaphore)
-                .stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
+                .stage_mask(IMAGE_AVAILABLE_SEMAPHORE_WAIT_STAGE)
                 .build(),
         );
         wait_infos.extend_from_slice(extra_waits);
@@ -1333,6 +1362,25 @@ mod tests {
             present_end_frame_post_draw_ops(false),
             vec![RecordSwapchainPresentBarrier],
             "a balanced frame records the present barrier alone"
+        );
+    }
+
+    /// #2506: the acquire barrier's source stage chains off the
+    /// image-available semaphore wait. A `NONE` source stage fails here.
+    #[test]
+    fn acquire_barrier_source_stage_chains_off_the_image_available_wait() {
+        assert!(
+            SWAPCHAIN_ACQUIRE_BARRIER_SCOPES
+                .src_stage
+                .contains(IMAGE_AVAILABLE_SEMAPHORE_WAIT_STAGE),
+            "acquire barrier src stage {:?} must include the image-available wait stage {:?}",
+            SWAPCHAIN_ACQUIRE_BARRIER_SCOPES.src_stage,
+            IMAGE_AVAILABLE_SEMAPHORE_WAIT_STAGE
+        );
+        assert_eq!(
+            SWAPCHAIN_ACQUIRE_BARRIER_SCOPES.src_access,
+            vk::AccessFlags2::NONE,
+            "the presentation engine's read needs no availability op — execution only"
         );
     }
 
