@@ -37,7 +37,7 @@ vec4 effect(vec4 source, ivec2 at) {
 }
 """
 
-IDENTITY_WITH_STRENGTH_GLSL = """\
+IDENTITY_GLSL = """\
 vec4 effect(vec4 source, ivec2 at) {
     return source;
 }
@@ -72,7 +72,7 @@ UNDEFINED_FUNCTION_LINE = 3
 
 EFFECT_GLSL_BY_NAME = {
     "invert": INVERT_WITH_STRENGTH_GLSL,
-    "identity": IDENTITY_WITH_STRENGTH_GLSL,
+    "identity": IDENTITY_GLSL,
 }
 
 HELPER_EFFECT_GLSL_BY_NAME = {
@@ -238,7 +238,7 @@ class CopyRefusedFrameProbe:
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         self.effect = GlslPixelEffect.compile(
-            ctx.gpu_full_access, effect_glsl=IDENTITY_WITH_STRENGTH_GLSL
+            ctx.gpu_full_access, effect_glsl=IDENTITY_GLSL
         )
         self.bgra_pixel_buffer = ctx.gpu_full_access.acquire_pixel_buffer(
             FRAME_WIDTH, FRAME_HEIGHT, "bgra"

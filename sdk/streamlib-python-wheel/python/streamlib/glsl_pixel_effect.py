@@ -26,7 +26,7 @@ from __future__ import annotations
 import re
 import struct
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from typing import Any, Literal, Union
 
 from ._engine import (
@@ -46,34 +46,37 @@ _GpuContextWithSurfaceCopy = Union[GpuContextLimitedAccess, GpuContextFullAccess
 
 # Vulkan's required minimum for `maxPushConstantsSize`: the one size every
 # device on every floor is guaranteed to accept.
-PUSH_CONSTANT_BLOCK_BYTE_LIMIT = 128
+_PUSH_CONSTANT_BLOCK_BYTE_LIMIT = 128
 
 # The `local_size` the template declares and the tile the dispatch counts in.
-WORKGROUP_TILE_SIZE = 8
+_WORKGROUP_TILE_SIZE_IN_PIXELS = 8
 
-TEXTURE_FORMAT = "rgba8_unorm"
-SOURCE_LANDING_TEXTURE_USAGE = ["texture_binding"]
-OUTPUT_TEXTURE_USAGE = ["storage_binding", "texture_binding"]
+_EFFECT_TEXTURE_FORMAT = "rgba8_unorm"
+_SOURCE_LANDING_TEXTURE_USAGE = ["texture_binding"]
+_OUTPUT_TEXTURE_USAGE = ["storage_binding", "texture_binding"]
 
-SOURCE_BINDING = "streamlib_source"
-OUTPUT_BINDING = "streamlib_output"
+_SOURCE_SAMPLER_BINDING_NAME = "streamlib_source"
+_OUTPUT_STORAGE_IMAGE_BINDING_NAME = "streamlib_output"
 
-ELAPSED_SECONDS_PUSH_CONSTANT_MEMBER = "streamlib_elapsed_seconds_since_first_apply"
+_ELAPSED_SECONDS_PUSH_CONSTANT_MEMBER_NAME = "streamlib_elapsed_seconds_since_first_apply"
 
-# std430 alignment and size in bytes, and the little-endian `struct` code of
-# one component. Push-constant blocks lay out as std430.
-_DIAL_LAYOUT_BY_TYPE: "dict[str, tuple[int, int, str]]" = {
-    "float": (4, 4, "f"),
-    "int": (4, 4, "i"),
-    "vec2": (8, 8, "f"),
-    "vec4": (16, 16, "f"),
-}
 
-_COMPONENT_COUNT_BY_TYPE: "dict[str, int]" = {
-    "float": 1,
-    "int": 1,
-    "vec2": 2,
-    "vec4": 4,
+@dataclass(frozen=True)
+class _DialLayout:
+    """One dial type's std430 footprint — push-constant blocks lay out as
+    std430 — and the little-endian `struct` code of one component."""
+
+    byte_alignment: int
+    byte_size: int
+    component_count: int
+    struct_component_code: str
+
+
+_DIAL_LAYOUT_BY_TYPE: "dict[str, _DialLayout]" = {
+    "float": _DialLayout(4, 4, 1, "f"),
+    "int": _DialLayout(4, 4, 1, "i"),
+    "vec2": _DialLayout(8, 8, 2, "f"),
+    "vec4": _DialLayout(16, 16, 4, "f"),
 }
 
 _INT32_RANGE = range(-(2**31), 2**31)
@@ -91,20 +94,42 @@ _REQUIRED_SIGNATURE = "vec4 effect(vec4 source, ivec2 at)"
 
 
 def _workgroups_covering(pixels: int) -> int:
-    return (pixels + WORKGROUP_TILE_SIZE - 1) // WORKGROUP_TILE_SIZE
+    return (
+        pixels + _WORKGROUP_TILE_SIZE_IN_PIXELS - 1
+    ) // _WORKGROUP_TILE_SIZE_IN_PIXELS
+
+
+def _is_plain_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
 
 
 def _is_plain_number(value: Any) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
+@dataclass(frozen=True)
 class _PushConstantMember:
-    __slots__ = ("name", "glsl_type", "offset")
+    name: str
+    glsl_type: str
+    offset: int
 
-    def __init__(self, name: str, glsl_type: str, offset: int) -> None:
-        self.name = name
-        self.glsl_type = glsl_type
-        self.offset = offset
+    @property
+    def layout(self) -> _DialLayout:
+        return _DIAL_LAYOUT_BY_TYPE[self.glsl_type]
+
+
+@dataclass(frozen=True)
+class _PushConstantBlockLayout:
+    """The template's elapsed-seconds member, the user's dials after it, and
+    the block's size as reflection reports it — the end of its last member."""
+
+    elapsed_seconds_member: _PushConstantMember
+    dial_members: "tuple[_PushConstantMember, ...]"
+    byte_size: int
+
+    @property
+    def members(self) -> "tuple[_PushConstantMember, ...]":
+        return (self.elapsed_seconds_member, *self.dial_members)
 
 
 def _refuse_malformed_dial_declaration(name: Any, glsl_type: Any) -> None:
@@ -134,31 +159,32 @@ def _refuse_malformed_dial_declaration(name: Any, glsl_type: Any) -> None:
 
 def _lay_out_push_constant_block(
     dial_types_by_name: Mapping[str, str],
-) -> "tuple[list[_PushConstantMember], int]":
-    """Each member's std430 offset, the elapsed seconds first, and the block's
-    size as reflection reports it — the end of its last member."""
-    members = [_PushConstantMember(ELAPSED_SECONDS_PUSH_CONSTANT_MEMBER, "float", 0)]
-    end = _DIAL_LAYOUT_BY_TYPE["float"][1]
+) -> _PushConstantBlockLayout:
+    elapsed_seconds_member = _PushConstantMember(
+        _ELAPSED_SECONDS_PUSH_CONSTANT_MEMBER_NAME, "float", 0
+    )
+    end = elapsed_seconds_member.layout.byte_size
+    dial_members: "list[_PushConstantMember]" = []
     for name, glsl_type in dial_types_by_name.items():
         _refuse_malformed_dial_declaration(name, glsl_type)
-        alignment, size, _ = _DIAL_LAYOUT_BY_TYPE[glsl_type]
-        offset = (end + alignment - 1) // alignment * alignment
-        end = offset + size
-        if end > PUSH_CONSTANT_BLOCK_BYTE_LIMIT:
+        layout = _DIAL_LAYOUT_BY_TYPE[glsl_type]
+        offset = (end + layout.byte_alignment - 1) // layout.byte_alignment * layout.byte_alignment
+        end = offset + layout.byte_size
+        if end > _PUSH_CONSTANT_BLOCK_BYTE_LIMIT:
             raise ValueError(
                 f"GlslPixelEffect.compile: dial {name!r} ends the push-constant "
-                f"block at {end} bytes, past the {PUSH_CONSTANT_BLOCK_BYTE_LIMIT} "
+                f"block at {end} bytes, past the {_PUSH_CONSTANT_BLOCK_BYTE_LIMIT} "
                 f"every GPU guarantees — the block holds 4 bytes of elapsed "
                 f"seconds and then the dials in declaration order; declare fewer "
                 f"or smaller dials"
             )
-        members.append(_PushConstantMember(name, glsl_type, offset))
-    return members, end
+        dial_members.append(_PushConstantMember(name, glsl_type, offset))
+    return _PushConstantBlockLayout(elapsed_seconds_member, tuple(dial_members), end)
 
 
-def _compute_kernel_glsl(effect_glsl: str, members: Sequence[_PushConstantMember]) -> str:
+def _compute_kernel_glsl(effect_glsl: str, block_layout: _PushConstantBlockLayout) -> str:
     push_constant_block_members = "".join(
-        f"    {member.glsl_type} {member.name};\n" for member in members
+        f"    {member.glsl_type} {member.name};\n" for member in block_layout.members
     )
     # `#line 1` sits directly above the body so a compiler diagnostic names
     # the line of `effect_glsl` the user wrote, not the template's.
@@ -169,35 +195,36 @@ def _compute_kernel_glsl(effect_glsl: str, members: Sequence[_PushConstantMember
     # SPIR-V reflects — so a body reading no dial would otherwise not build.
     return (
         "#version 450\n"
-        f"layout(local_size_x = {WORKGROUP_TILE_SIZE}, "
-        f"local_size_y = {WORKGROUP_TILE_SIZE}) in;\n"
-        f"layout(set = 0, binding = 0) uniform sampler2D {SOURCE_BINDING};\n"
-        f"layout(set = 0, binding = 1, rgba8) uniform writeonly image2D {OUTPUT_BINDING};\n"
+        f"layout(local_size_x = {_WORKGROUP_TILE_SIZE_IN_PIXELS}, "
+        f"local_size_y = {_WORKGROUP_TILE_SIZE_IN_PIXELS}) in;\n"
+        f"layout(set = 0, binding = 0) uniform sampler2D {_SOURCE_SAMPLER_BINDING_NAME};\n"
+        "layout(set = 0, binding = 1, rgba8) uniform writeonly image2D "
+        f"{_OUTPUT_STORAGE_IMAGE_BINDING_NAME};\n"
         "layout(push_constant) uniform GlslPixelEffectDials {\n"
         f"{push_constant_block_members}"
         "} dials;\n"
         "ivec2 streamlib_extent;\n"
         "float streamlib_elapsed_seconds;\n"
         "vec4 streamlib_source_at(ivec2 at) {\n"
-        f"    return texelFetch({SOURCE_BINDING}, "
+        f"    return texelFetch({_SOURCE_SAMPLER_BINDING_NAME}, "
         "clamp(at, ivec2(0), streamlib_extent - 1), 0);\n"
         "}\n"
         "vec4 streamlib_source_uv(vec2 uv) {\n"
-        f"    return textureLod({SOURCE_BINDING}, uv, 0.0);\n"
+        f"    return textureLod({_SOURCE_SAMPLER_BINDING_NAME}, uv, 0.0);\n"
         "}\n"
         "#line 1\n"
         f"{effect_glsl}\n"
         "void main() {\n"
         "    ivec2 at = ivec2(gl_GlobalInvocationID.xy);\n"
-        f"    streamlib_extent = textureSize({SOURCE_BINDING}, 0);\n"
+        f"    streamlib_extent = textureSize({_SOURCE_SAMPLER_BINDING_NAME}, 0);\n"
         "    streamlib_elapsed_seconds = "
-        f"dials.{ELAPSED_SECONDS_PUSH_CONSTANT_MEMBER};\n"
+        f"dials.{block_layout.elapsed_seconds_member.name};\n"
         "    if (at.x >= streamlib_extent.x || at.y >= streamlib_extent.y\n"
         "            || streamlib_elapsed_seconds < 0.0) {\n"
         "        return;\n"
         "    }\n"
-        f"    imageStore({OUTPUT_BINDING}, at, "
-        f"effect(texelFetch({SOURCE_BINDING}, at, 0), at));\n"
+        f"    imageStore({_OUTPUT_STORAGE_IMAGE_BINDING_NAME}, at, "
+        f"effect(texelFetch({_SOURCE_SAMPLER_BINDING_NAME}, at, 0), at));\n"
         "}\n"
     )
 
@@ -206,21 +233,19 @@ class GlslPixelEffect:
     """A pixel effect built from one GLSL `effect` function, applied frame by frame."""
 
     def __init__(
-        self,
-        compute_kernel: ComputeKernel,
-        push_constant_members: "list[_PushConstantMember]",
-        push_constant_block_size: int,
+        self, compute_kernel: ComputeKernel, push_constant_block_layout: _PushConstantBlockLayout
     ) -> None:
         self._compute_kernel = compute_kernel
-        self._push_constant_members = push_constant_members
-        self._push_constant_block_size = push_constant_block_size
+        self._push_constant_block_layout = push_constant_block_layout
         self._declared_dial_names = frozenset(
-            member.name for member in push_constant_members[1:]
+            member.name for member in push_constant_block_layout.dial_members
         )
         self._source_landing_ring = ProcessorOutputTextureRing(
-            TEXTURE_FORMAT, SOURCE_LANDING_TEXTURE_USAGE, depth=1
+            _EFFECT_TEXTURE_FORMAT, _SOURCE_LANDING_TEXTURE_USAGE, depth=1
         )
-        self._output_ring = ProcessorOutputTextureRing(TEXTURE_FORMAT, OUTPUT_TEXTURE_USAGE)
+        self._output_ring = ProcessorOutputTextureRing(
+            _EFFECT_TEXTURE_FORMAT, _OUTPUT_TEXTURE_USAGE
+        )
         self._first_apply_monotonic_ns: "int | None" = None
 
     @classmethod
@@ -248,13 +273,16 @@ class GlslPixelEffect:
                 f"`{_REQUIRED_SIGNATURE}` — the effect is that one function, "
                 f"returning the output pixel for the source pixel at `at`"
             )
-        members, block_size = _lay_out_push_constant_block(dict(dials or {}))
+        block_layout = _lay_out_push_constant_block(dict(dials or {}))
         compute_kernel = gpu_full_access.create_compute_kernel(
-            source=_compute_kernel_glsl(effect_glsl, members),
-            push_constant_size=block_size,
-            bindings={SOURCE_BINDING: "sampled_texture", OUTPUT_BINDING: "storage_image"},
+            source=_compute_kernel_glsl(effect_glsl, block_layout),
+            push_constant_size=block_layout.byte_size,
+            bindings={
+                _SOURCE_SAMPLER_BINDING_NAME: "sampled_texture",
+                _OUTPUT_STORAGE_IMAGE_BINDING_NAME: "storage_image",
+            },
         )
-        return cls(compute_kernel, members, block_size)
+        return cls(compute_kernel, block_layout)
 
     def apply_to_frame(
         self,
@@ -283,7 +311,7 @@ class GlslPixelEffect:
             raise ValueError(
                 f"GlslPixelEffect.apply_to_frame: frame {frame.surface_id!r} "
                 f"({frame.width}x{frame.height}) could not land in the effect's "
-                f"{TEXTURE_FORMAT} source — the effect takes one single-plane RGBA "
+                f"{_EFFECT_TEXTURE_FORMAT} source — the effect takes one single-plane RGBA "
                 f"frame: {copy_refusal}"
             ) from copy_refusal
 
@@ -292,8 +320,8 @@ class GlslPixelEffect:
         )
         self._compute_kernel.dispatch(
             bindings={
-                SOURCE_BINDING: source_landing_texture,
-                OUTPUT_BINDING: output_texture,
+                _SOURCE_SAMPLER_BINDING_NAME: source_landing_texture,
+                _OUTPUT_STORAGE_IMAGE_BINDING_NAME: output_texture,
             },
             group_count=(
                 _workgroups_covering(frame.width),
@@ -325,32 +353,47 @@ class GlslPixelEffect:
                     f"GlslPixelEffect.apply_to_frame: dial {name!r} was not declared "
                     f"— add it to `dials=` in GlslPixelEffect.compile"
                 )
+        components_by_dial_member = [
+            (member, _dial_components(member, supplied_dials))
+            for member in self._push_constant_block_layout.dial_members
+        ]
 
         now_ns = monotonic_now_ns()
         if self._first_apply_monotonic_ns is None:
             self._first_apply_monotonic_ns = now_ns
         elapsed_seconds = (now_ns - self._first_apply_monotonic_ns) / 1e9
 
-        block = bytearray(self._push_constant_block_size)
-        struct.pack_into("<f", block, 0, elapsed_seconds)
-        for member in self._push_constant_members[1:]:
-            if member.name not in supplied_dials:
-                raise ValueError(
-                    f"GlslPixelEffect.apply_to_frame: dial {member.name!r} was not "
-                    f"supplied — every apply supplies every declared dial; none "
-                    f"persists from the last frame"
-                )
-            components = _dial_components(member, supplied_dials[member.name])
-            component_code = _DIAL_LAYOUT_BY_TYPE[member.glsl_type][2]
-            struct.pack_into(
-                f"<{len(components)}{component_code}", block, member.offset, *components
-            )
+        block = bytearray(self._push_constant_block_layout.byte_size)
+        elapsed_seconds_member = self._push_constant_block_layout.elapsed_seconds_member
+        _pack_member_into(block, elapsed_seconds_member, [elapsed_seconds])
+        for member, components in components_by_dial_member:
+            _pack_member_into(block, member, components)
         return bytes(block)
 
 
-def _dial_components(member: _PushConstantMember, value: Any) -> "list[float | int]":
+def _pack_member_into(
+    block: bytearray, member: _PushConstantMember, components: "list[float | int]"
+) -> None:
+    struct.pack_into(
+        f"<{member.layout.component_count}{member.layout.struct_component_code}",
+        block,
+        member.offset,
+        *components,
+    )
+
+
+def _dial_components(
+    member: _PushConstantMember, supplied_dials: "dict[str, Any]"
+) -> "list[float | int]":
+    if member.name not in supplied_dials:
+        raise ValueError(
+            f"GlslPixelEffect.apply_to_frame: dial {member.name!r} was not "
+            f"supplied — every apply supplies every declared dial; none "
+            f"persists from the last frame"
+        )
+    value = supplied_dials[member.name]
     if member.glsl_type == "int":
-        if not isinstance(value, int) or isinstance(value, bool) or value not in _INT32_RANGE:
+        if not _is_plain_int(value) or value not in _INT32_RANGE:
             raise ValueError(
                 f"GlslPixelEffect.apply_to_frame: dial {member.name!r} is an int and "
                 f"was supplied {value!r} — supply a 32-bit int"
@@ -363,7 +406,7 @@ def _dial_components(member: _PushConstantMember, value: Any) -> "list[float | i
                 f"was supplied {value!r} — supply a number"
             )
         return [float(value)]
-    component_count = _COMPONENT_COUNT_BY_TYPE[member.glsl_type]
+    component_count = member.layout.component_count
     if (
         isinstance(value, (str, bytes))
         or not isinstance(value, Sequence)
