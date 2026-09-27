@@ -18,6 +18,15 @@ use super::{
     VulkanComputeKernel, VulkanGraphicsKernel, VulkanStage,
 };
 
+/// Stage and access scopes of one swapchain-image layout barrier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SwapchainImageBarrierScopes {
+    pub(crate) src_stage: vk::PipelineStageFlags2,
+    pub(crate) src_access: vk::AccessFlags2,
+    pub(crate) dst_stage: vk::PipelineStageFlags2,
+    pub(crate) dst_access: vk::AccessFlags2,
+}
+
 /// Image-to-buffer / buffer-to-image copy region.
 ///
 /// Wraps the most common shape of `VkBufferImageCopy` — single mip
@@ -947,10 +956,7 @@ impl RhiCommandRecorderInner {
         image: vk::Image,
         old_layout: vk::ImageLayout,
         new_layout: vk::ImageLayout,
-        src_stage: vk::PipelineStageFlags2,
-        src_access: vk::AccessFlags2,
-        dst_stage: vk::PipelineStageFlags2,
-        dst_access: vk::AccessFlags2,
+        scopes: SwapchainImageBarrierScopes,
     ) -> Result<()> {
         self.expect_recording("record_swapchain_image_barrier")?;
         let subresource = vk::ImageSubresourceRange::builder()
@@ -961,10 +967,10 @@ impl RhiCommandRecorderInner {
             .layer_count(1)
             .build();
         let barrier = vk::ImageMemoryBarrier2::builder()
-            .src_stage_mask(src_stage)
-            .src_access_mask(src_access)
-            .dst_stage_mask(dst_stage)
-            .dst_access_mask(dst_access)
+            .src_stage_mask(scopes.src_stage)
+            .src_access_mask(scopes.src_access)
+            .dst_stage_mask(scopes.dst_stage)
+            .dst_access_mask(scopes.dst_access)
             .old_layout(old_layout)
             .new_layout(new_layout)
             .src_queue_family_index(vk::QUEUE_FAMILY_IGNORED)
@@ -1480,20 +1486,15 @@ impl RhiCommandRecorder {
     /// Engine-internal swapchain-image layout transition.
     /// **Engine-internal** — for `VulkanPresentTarget`'s pre/post-draw
     /// barriers.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_swapchain_image_barrier(
         &mut self,
         image: vk::Image,
         old_layout: vk::ImageLayout,
         new_layout: vk::ImageLayout,
-        src_stage: vk::PipelineStageFlags2,
-        src_access: vk::AccessFlags2,
-        dst_stage: vk::PipelineStageFlags2,
-        dst_access: vk::AccessFlags2,
+        scopes: SwapchainImageBarrierScopes,
     ) -> Result<()> {
-        self.host_inner_mut().record_swapchain_image_barrier(
-            image, old_layout, new_layout, src_stage, src_access, dst_stage, dst_access,
-        )
+        self.host_inner_mut()
+            .record_swapchain_image_barrier(image, old_layout, new_layout, scopes)
     }
 
     /// Engine-internal dynamic-rendering begin.

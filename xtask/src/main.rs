@@ -403,6 +403,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "--lib",
                 "--",
                 "vulkan::rhi::vulkan_video_session::tests",
+                "vulkan::rhi::vulkan_present_target::tests::acquire_barrier_source_stage_chains_off_the_image_available_wait",
                 "vulkan::video::codec_utils::vk_video_core_profile::tests",
                 "core::processor_owned_window",
                 "core::compiler::compiler_ops::subprocess_escalate::processor_owned_window::tests",
