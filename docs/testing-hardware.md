@@ -62,7 +62,7 @@ which is why CI is unaffected):
 | Env var | Effect |
 |---|---|
 | `STREAMLIB_VULKAN_VALIDATION=1` | Load the layer, forward `ERROR` and `WARNING` findings into `tracing`, count them per device. |
-| `STREAMLIB_VULKAN_SYNC_VALIDATION=1` | Load the layer and add synchronization validation. |
+| `STREAMLIB_VULKAN_SYNC_VALIDATION=1` | Load the layer and add synchronization validation, including the loads and stores a dispatch or draw makes through its bound descriptors (`syncval_shader_accesses_heuristic`, off in the layer by default). |
 | `STREAMLIB_VULKAN_VALIDATION_ABORT_ON_ERROR=1` | Load the layer, and let the first error kill the process, naming its VUID. |
 
 In particular the whole-sweep gate below sets only the third, so it runs

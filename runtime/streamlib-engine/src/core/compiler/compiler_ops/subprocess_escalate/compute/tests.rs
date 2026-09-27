@@ -390,8 +390,8 @@ fn a_storage_buffer_binding_plans_as_a_storage_buffer() {
     assert_eq!(planned[1].target_id, "tensor-out");
 }
 
-/// Uniform buffers trail the tensor buffer, so they still refuse — naming the
-/// kind that refused, and nothing about storage buffers.
+/// A uniform buffer is refused naming its kind, and the refusal does not
+/// mention storage buffers.
 #[test]
 fn a_uniform_buffer_binding_is_refused_naming_its_kind() {
     let declared = vec![
@@ -1043,6 +1043,11 @@ fn a_later_pass_in_a_batch_reads_what_an_earlier_pass_wrote() {
         println!("batched chain: no GPU — skipping");
         return;
     };
+    let validation_counts_before = sandbox
+        .host_inner()
+        .device()
+        .inner
+        .validation_layer_message_counts();
     let brighten = register_glsl_kernel(&sandbox, BRIGHTEN_GLSL);
     let double = register_glsl_kernel(&sandbox, DOUBLE_GLSL);
     let held = seeded_chain_textures(
@@ -1115,6 +1120,19 @@ fn a_later_pass_in_a_batch_reads_what_an_earlier_pass_wrote() {
         "the final output was only ever written, so it ends in GENERAL"
     );
     drop(held);
+    if let Some(validation_counts_before) = validation_counts_before {
+        let validation_counts_after = sandbox
+            .host_inner()
+            .device()
+            .inner
+            .validation_layer_message_counts()
+            .expect("the messenger stays installed for the whole test");
+        assert_eq!(
+            validation_counts_after.error_count, validation_counts_before.error_count,
+            "the two-pass image chain raised a validation error — under synchronization \
+             validation, a missing or mis-scoped image barrier between the passes"
+        );
+    }
 }
 
 /// The reason the op exists, counted rather than timed: N passes
