@@ -51,8 +51,10 @@ pub(crate) struct PythonGpuSurfaceHandle {
     /// Pixels with a width, height and format, or a tensor storage buffer
     /// with a shape and dtype.
     surface_geometry: GpuSurfaceGeometry,
-    /// Whether a writable tensor capsule went out, whose CUDA writes the
-    /// close must order ahead of any other holder's read.
+    /// Whether a writable tensor capsule went out, whose CUDA writes every
+    /// settle and every kernel bound to this handle must order ahead of the
+    /// read. Never cleared: the capsule outlives any scope, so torch can write
+    /// through it again.
     #[cfg(target_os = "linux")]
     a_writable_tensor_capsule_went_out: std::sync::atomic::AtomicBool,
     owned_memory: Mutex<Option<Arc<GpuSurfaceOwnedMemory>>>,
@@ -200,12 +202,31 @@ impl PythonGpuSurfaceHandle {
     fn settle_this_lock_scopes_pending_writes(&self, python: Python<'_>) -> PyResult<()> {
         if self
             .a_writable_tensor_capsule_went_out
-            .swap(false, std::sync::atomic::Ordering::SeqCst)
+            .load(std::sync::atomic::Ordering::SeqCst)
             && let Some(owned_memory) = self.owned_memory.lock().clone()
         {
             return publish_tensor_storage_buffer_device_writes(python, &owned_memory);
         }
         self.publish_pending_staged_write(python)
+    }
+
+    /// Order the CUDA writes a writable tensor capsule took ahead of a kernel
+    /// that reads this surface.
+    #[cfg(target_os = "linux")]
+    pub(super) fn order_tensor_device_writes_ahead_of_a_kernel_read(
+        &self,
+        python: Python<'_>,
+    ) -> PyResult<()> {
+        if !self
+            .a_writable_tensor_capsule_went_out
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Ok(());
+        }
+        let Some(owned_memory) = self.owned_memory.lock().clone() else {
+            return Ok(());
+        };
+        publish_tensor_storage_buffer_device_writes(python, &owned_memory)
     }
 
     #[cfg(target_os = "macos")]

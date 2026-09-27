@@ -1304,3 +1304,39 @@ fn a_trace_resolves_its_bindings_by_name_and_writes_the_storage_image() {
                  proved nothing"
     );
 }
+
+/// A trace refuses a storage buffer by name; a tensor buffer binds only at a
+/// dispatch or a draw.
+#[test]
+fn a_trace_refuses_a_storage_buffer_binding_by_name() {
+    use super::super::surface_bound_kernel_binding::{
+        DeclaredKernelBindingUnderPlanning, SuppliedKernelBindingUnderPlanning,
+        plan_supplied_surface_bound_kernel_bindings,
+    };
+    use super::linux_and_macos::surface_bound_ray_tracing_binding_kind;
+    use crate::core::rhi::RayTracingBindingKind;
+
+    let declared = [DeclaredKernelBindingUnderPlanning {
+        binding_slot: 0,
+        name: Some("scene_parameters"),
+        kind_wire_name: EscalateRayTracingBindingKind::StorageBuffer.wire_name(),
+        surface_bound_kind: surface_bound_ray_tracing_binding_kind(
+            RayTracingBindingKind::StorageBuffer,
+        ),
+    }];
+    let supplied = [SuppliedKernelBindingUnderPlanning {
+        name: "scene_parameters",
+        target_id: "tensor-in",
+        kind_wire_name: EscalateRayTracingBindingKind::StorageBuffer.wire_name(),
+    }];
+    let message = plan_supplied_surface_bound_kernel_bindings("trace", &supplied, &declared)
+        .err()
+        .expect("a trace refuses a storage buffer")
+        .to_string();
+    assert!(
+        message.contains(
+            "binding `scene_parameters` is storage_buffer, which a trace cannot bind by surface id"
+        ),
+        "must name the binding and its kind, got: {message}"
+    );
+}

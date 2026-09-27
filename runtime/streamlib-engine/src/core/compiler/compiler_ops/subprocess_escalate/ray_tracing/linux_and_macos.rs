@@ -7,10 +7,9 @@ use super::super::hex_encoded_wire_bytes::decode_hex;
 use super::super::kernel_shader_stage_source::registered_shader_stage_source;
 use super::super::surface_bound_kernel_binding::{
     DeclaredKernelBindingUnderPlanning, SuppliedKernelBindingUnderPlanning,
-    bound_surface_layout_publish_pairs, descriptor_layout_transition_pairs,
-    plan_supplied_surface_bound_kernel_bindings, publish_bound_surface_layouts_to_surface_share,
-    reflected_kernel_binding_response, refuse_a_kernel_binding_name_supplied_twice,
-    resolve_planned_surface_bound_kernel_bindings,
+    bound_surface_layout_publish_pairs, plan_supplied_surface_bound_kernel_bindings,
+    publish_bound_surface_layouts_to_surface_share, reflected_kernel_binding_response,
+    refuse_a_kernel_binding_name_supplied_twice, resolve_planned_surface_bound_kernel_bindings,
     transition_bound_kernel_inputs_into_descriptor_layouts,
 };
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse;
@@ -24,7 +23,7 @@ use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalat
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_response::{
     EscalateResponseErr, EscalateResponseOk,
 };
-use crate::core::context::GpuContextLimitedAccess;
+use crate::core::context::{GpuContextLimitedAccess, SurfaceBoundKernelBindingResource};
 use crate::core::rhi::SurfaceBoundKernelBindingKind;
 
 /// The RHI binding kind a ray-tracing wire enum names.
@@ -679,20 +678,22 @@ pub(super) fn bind_and_trace_ray_tracing_kernel(
         full,
         "escalate_ray_tracing_trace_input_layouts",
         VulkanStage::ALL_COMMANDS,
-        &descriptor_layout_transition_pairs(&bound_inputs),
+        &bound_inputs,
     )?;
 
     for (slot, tlas) in &acceleration_structure_bindings {
         kernel.set_acceleration_structure(*slot, tlas)?;
     }
     for binding in &bound_inputs {
-        let texture = binding.registration.texture();
-        match binding.planned.kind {
-            SurfaceBoundKernelBindingKind::SampledTexture => {
-                kernel.set_sampled_texture(binding.planned.binding_slot, texture)?
+        match &binding.surface_bound_resource {
+            SurfaceBoundKernelBindingResource::SampledTexture(registration) => {
+                kernel.set_sampled_texture(binding.binding_slot, registration.texture())?
             }
-            SurfaceBoundKernelBindingKind::StorageImage => {
-                kernel.set_storage_image(binding.planned.binding_slot, texture)?
+            SurfaceBoundKernelBindingResource::StorageImage(registration) => {
+                kernel.set_storage_image(binding.binding_slot, registration.texture())?
+            }
+            SurfaceBoundKernelBindingResource::StorageBuffer(buffer) => {
+                kernel.set_storage_buffer_storage(binding.binding_slot, buffer)?
             }
         }
     }

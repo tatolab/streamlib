@@ -30,6 +30,18 @@ const DEBUG_UTILS_EXTENSION_NAME: &CStr = c"VK_EXT_debug_utils";
 /// enumeration and must be looked up under the layer's own name.
 const VALIDATION_FEATURES_EXTENSION_NAME: &CStr = c"VK_EXT_validation_features";
 
+/// Instance extension carrying `VkLayerSettingsCreateInfoEXT`. Layer-provided,
+/// like `VK_EXT_validation_features`.
+const LAYER_SETTINGS_EXTENSION_NAME: &CStr = c"VK_EXT_layer_settings";
+
+/// Syncval's switch for tracking the loads and stores a dispatch or draw makes
+/// through its bound descriptors. Off by default in the layer, and with it off
+/// syncval sees no shader access at all, so a missing barrier between two
+/// shader passes raises nothing.
+const SYNCVAL_SHADER_ACCESSES_HEURISTIC_SETTING_NAME: &CStr = c"syncval_shader_accesses_heuristic";
+
+static SYNCVAL_SHADER_ACCESSES_HEURISTIC_ENABLED_VALUE: [vk::Bool32; 1] = [vk::TRUE];
+
 /// Env var that loads the Khronos validation layer.
 const VALIDATION_ENV_VAR: &str = "STREAMLIB_VULKAN_VALIDATION";
 
@@ -134,6 +146,7 @@ pub(crate) struct VulkanValidationInstanceSetup {
     pub(crate) enabled_layer_names: Vec<*const c_char>,
     pub(crate) enabled_extension_names: Vec<*const c_char>,
     pub(crate) enabled_validation_features: Vec<vk::ValidationFeatureEnableEXT>,
+    pub(crate) enabled_layer_settings: Vec<vk::LayerSettingEXT>,
     messenger_callback_state: Option<Arc<VulkanValidationMessengerCallbackState>>,
 }
 
@@ -150,6 +163,7 @@ impl VulkanValidationInstanceSetup {
             enabled_layer_names: Vec::new(),
             enabled_extension_names: Vec::new(),
             enabled_validation_features: Vec::new(),
+            enabled_layer_settings: Vec::new(),
             messenger_callback_state: None,
         };
         if !configuration.enable_validation_layer {
@@ -215,6 +229,27 @@ impl VulkanValidationInstanceSetup {
         self.enabled_validation_features
             .push(vk::ValidationFeatureEnableEXT::SYNCHRONIZATION_VALIDATION);
         tracing::info!("Vulkan synchronization validation enabled ({SYNC_VALIDATION_ENV_VAR})");
+
+        let advertises_layer_settings = layer_extension_properties
+            .iter()
+            .any(|properties| properties.extension_name.as_cstr() == LAYER_SETTINGS_EXTENSION_NAME);
+        if !advertises_layer_settings {
+            tracing::warn!(
+                "{SYNC_VALIDATION_ENV_VAR} set but the installed VK_LAYER_KHRONOS_validation does \
+                 not advertise VK_EXT_layer_settings — shader descriptor accesses will not be \
+                 checked for hazards"
+            );
+            return;
+        }
+        self.enabled_extension_names
+            .push(LAYER_SETTINGS_EXTENSION_NAME.as_ptr());
+        self.enabled_layer_settings.push(
+            vk::LayerSettingEXT::builder()
+                .layer_name(KHRONOS_VALIDATION_LAYER_NAME.to_bytes_with_nul())
+                .setting_name(SYNCVAL_SHADER_ACCESSES_HEURISTIC_SETTING_NAME.to_bytes_with_nul())
+                .values_bool32(&SYNCVAL_SHADER_ACCESSES_HEURISTIC_ENABLED_VALUE)
+                .build(),
+        );
     }
 
     /// Create-info to chain into `VkInstanceCreateInfo::pNext`, covering the

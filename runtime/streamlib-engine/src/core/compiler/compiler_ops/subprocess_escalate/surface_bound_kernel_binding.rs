@@ -5,8 +5,8 @@
 //! names, shared by the compute, graphics and ray-tracing families.
 
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_response::EscalateResponseKernelBinding;
-use crate::core::context::TextureRegistration;
-use crate::core::rhi::SurfaceBoundKernelBindingKind;
+use crate::core::context::{SurfaceBoundKernelBindingResource, TextureRegistration};
+use crate::core::rhi::{StorageBuffer, SurfaceBoundKernelBindingKind};
 use crate::host_rhi::HostTextureExt as _;
 
 /// Publish each bound surface's post-dispatch layout to the surface-share
@@ -62,8 +62,9 @@ pub(super) struct DeclaredKernelBindingUnderPlanning<'a> {
     /// by name.
     pub(super) name: Option<&'a str>,
     pub(super) kind_wire_name: &'static str,
-    /// `None` for a kind no surface can be named for — buffers, and the
-    /// acceleration structure a trace resolves through its own registry.
+    /// `None` for a kind no surface can be named for — a uniform buffer, a
+    /// trace's storage buffer, and the acceleration structure a trace resolves
+    /// through its own registry.
     pub(super) surface_bound_kind: Option<SurfaceBoundKernelBindingKind>,
 }
 
@@ -76,16 +77,18 @@ pub(super) struct PlannedSurfaceBoundKernelBinding<'a> {
     pub(super) target_id: &'a str,
 }
 
-/// One planned binding carried together with the device texture it names.
+/// One planned binding carried together with the resource it names.
 ///
 /// The pair travels as one value rather than as two collections read at a
 /// shared index: every step after resolution — the kind-clash check, the
 /// pre-run barrier, the colour-target check, the `set_*` calls — needs the plan
-/// and the registration together, and a shared index is a desynchronisation
-/// waiting to be introduced.
+/// and the resource together, and a shared index is a desynchronisation
+/// waiting to be introduced. The kind is the resource's variant.
 pub(super) struct ResolvedSurfaceBoundKernelBinding<'a> {
-    pub(super) planned: PlannedSurfaceBoundKernelBinding<'a>,
-    pub(super) registration: TextureRegistration,
+    pub(super) binding_slot: u32,
+    pub(super) name: &'a str,
+    pub(super) target_id: &'a str,
+    pub(super) surface_bound_resource: SurfaceBoundKernelBindingResource,
 }
 
 /// Refuse one binding name supplied twice in a single run's wire array.
@@ -169,8 +172,7 @@ pub(super) fn plan_supplied_surface_bound_kernel_bindings<'a>(
         }
         let kind = declaration.surface_bound_kind.ok_or_else(|| {
             Error::GpuError(format!(
-                "binding `{}` is {}, which a {invocation_noun} cannot name a surface for — the \
-                 surface-backed kinds are storage_image and sampled_texture",
+                "binding `{}` is {}, which a {invocation_noun} cannot bind by surface id",
                 entry.name, declaration.kind_wire_name
             ))
         })?;
@@ -184,105 +186,199 @@ pub(super) fn plan_supplied_surface_bound_kernel_bindings<'a>(
     Ok(planned)
 }
 
-/// Resolve every planned binding to the device texture it names, keeping the
-/// two together.
+/// Resolve one surface id to the resource a binding of `kind` binds: a device
+/// texture for the image kinds, a tensor storage buffer from the parent-wide
+/// map for `storage_buffer`.
 ///
-/// Each registration is a refcount on the texture its descriptor will point at
-/// — the caller holds them across the submission, because dropping the last one
-/// before the GPU has run frees the image out from under it.
+/// Shared by every family's resolver so a binding reads the same refusal
+/// whichever op named it.
+pub(super) fn resolve_surface_bound_kernel_binding_resource(
+    full: &crate::core::context::GpuContextFullAccess,
+    kind: SurfaceBoundKernelBindingKind,
+    binding_name: &str,
+    surface_id: &str,
+) -> crate::core::error::Result<SurfaceBoundKernelBindingResource> {
+    use crate::core::error::Error;
+
+    let resolve_texture = || {
+        // Zero extent: a kernel binding names a surface the graph already has
+        // as a device texture, which resolves from the same-process cache or
+        // the surface-share service. The pixel-buffer fallback is the one path
+        // that consults the extent, and it refuses a zero one — a pixel buffer
+        // is not something a kernel can bind as an image.
+        full.resolve_texture_registration_by_surface_id(surface_id, None, 0, 0)
+            .map_err(|e| {
+                Error::GpuError(format!(
+                    "binding `{binding_name}` names surface {surface_id:?}, which this graph \
+                     cannot resolve to a device texture: {e}"
+                ))
+            })
+    };
+    match kind {
+        SurfaceBoundKernelBindingKind::StorageImage => {
+            resolve_texture().map(SurfaceBoundKernelBindingResource::StorageImage)
+        }
+        SurfaceBoundKernelBindingKind::SampledTexture => {
+            resolve_texture().map(SurfaceBoundKernelBindingResource::SampledTexture)
+        }
+        SurfaceBoundKernelBindingKind::StorageBuffer => {
+            resolve_tensor_storage_buffer(full, binding_name, surface_id)
+                .map(SurfaceBoundKernelBindingResource::StorageBuffer)
+        }
+    }
+}
+
+/// The tensor storage buffer the parent-wide map holds under `surface_id`.
+#[cfg(target_os = "linux")]
+fn resolve_tensor_storage_buffer(
+    full: &crate::core::context::GpuContextFullAccess,
+    binding_name: &str,
+    surface_id: &str,
+) -> crate::core::error::Result<crate::core::rhi::StorageBuffer> {
+    full.host_inner()
+        .resolve_storage_buffer_from_the_parent_wide_map_by_surface_id(surface_id)
+        .map_err(|e| {
+            crate::core::error::Error::GpuError(format!(
+                "binding `{binding_name}` names surface {surface_id:?}, which this graph \
+                 cannot resolve to a tensor storage buffer: {e}"
+            ))
+        })
+}
+
+/// The tensor storage buffer is Linux-only until its macOS arm lands (#2431).
+#[cfg(target_os = "macos")]
+fn resolve_tensor_storage_buffer(
+    _full: &crate::core::context::GpuContextFullAccess,
+    binding_name: &str,
+    surface_id: &str,
+) -> crate::core::error::Result<crate::core::rhi::StorageBuffer> {
+    Err(crate::core::error::Error::NotSupported(format!(
+        "binding `{binding_name}` names tensor storage buffer {surface_id:?}; a kernel binds \
+         one on Linux only until the macOS arm lands (#2431)"
+    )))
+}
+
+/// Resolve every planned binding to the resource it names, keeping the two
+/// together.
+///
+/// Each resource is a refcount on what its descriptor will point at — the
+/// caller holds them across the submission, because dropping the last one
+/// before the GPU has run frees the memory out from under it.
 pub(super) fn resolve_planned_surface_bound_kernel_bindings<'a>(
     full: &crate::core::context::GpuContextFullAccess,
     planned: Vec<PlannedSurfaceBoundKernelBinding<'a>>,
 ) -> crate::core::error::Result<Vec<ResolvedSurfaceBoundKernelBinding<'a>>> {
-    use crate::core::error::Error;
-
     let mut resolved = Vec::with_capacity(planned.len());
     for binding in planned {
-        // Zero extent: a kernel binding names a surface the graph already has
-        // as a device texture, which resolves from the same-process cache or
-        // the surface-share service. The pixel-buffer fallback is the one path
-        // that consults the extent, and it refuses a zero one — a
-        // buffer-backed surface is not something a draw can bind.
-        let registration = full
-            .resolve_texture_registration_by_surface_id(binding.target_id, None, 0, 0)
-            .map_err(|e| {
-                Error::GpuError(format!(
-                    "binding `{}` names surface {:?}, which this graph cannot resolve to a \
-                     device texture: {e}",
-                    binding.name, binding.target_id
-                ))
-            })?;
+        let surface_bound_resource = resolve_surface_bound_kernel_binding_resource(
+            full,
+            binding.kind,
+            binding.name,
+            binding.target_id,
+        )?;
         resolved.push(ResolvedSurfaceBoundKernelBinding {
-            planned: binding,
-            registration,
+            binding_slot: binding.binding_slot,
+            name: binding.name,
+            target_id: binding.target_id,
+            surface_bound_resource,
         });
     }
 
-    // One image cannot serve two kinds in one run. The descriptor layouts are
-    // fixed and disagree — a combined image sampler is written
-    // SHADER_READ_ONLY_OPTIMAL and a storage image GENERAL — so whatever layout
-    // the texture is put in, one of the two descriptors is wrong.
-    //
-    // Compared after resolution and on the image, not on the id the caller
-    // wrote: a published frame id and its pool slot are two spellings of one
-    // texture (`<slot>#<generation>` resolves through the same cache entry as
-    // `<slot>`), so a string comparison would let the pair through to exactly
-    // the run this refuses.
-    for (index, binding) in resolved.iter().enumerate() {
+    refuse_one_image_bound_as_two_kinds(
+        "this run",
+        &resolved
+            .iter()
+            .map(|binding| BoundSurfaceUnderKindClashCheck {
+                name: binding.name,
+                target_id: binding.target_id,
+                surface_bound_resource: &binding.surface_bound_resource,
+            })
+            .collect::<Vec<_>>(),
+    )?;
+    Ok(resolved)
+}
+
+/// One resolved binding as the kind-clash check reads it.
+pub(super) struct BoundSurfaceUnderKindClashCheck<'a> {
+    pub(super) name: &'a str,
+    pub(super) target_id: &'a str,
+    pub(super) surface_bound_resource: &'a SurfaceBoundKernelBindingResource,
+}
+
+/// Refuse one image bound as two kinds in a single run. The descriptor
+/// layouts are fixed and disagree — a combined image sampler is written
+/// SHADER_READ_ONLY_OPTIMAL and a storage image GENERAL — so whatever layout
+/// the texture is put in, one of the two descriptors is wrong.
+///
+/// Compared after resolution and on the image, not on the id the caller
+/// wrote: a published frame id and its pool slot are two spellings of one
+/// texture (`<slot>#<generation>` resolves through the same cache entry as
+/// `<slot>`), so a string comparison would let the pair through to exactly the
+/// run this refuses. `invocation_phrase` names the run as the refusal reads.
+pub(super) fn refuse_one_image_bound_as_two_kinds(
+    invocation_phrase: &str,
+    bound_surfaces: &[BoundSurfaceUnderKindClashCheck<'_>],
+) -> crate::core::error::Result<()> {
+    for (index, binding) in bound_surfaces.iter().enumerate() {
         // A texture carrying no image is its own error, raised where the
         // descriptor would be written. Skipped rather than compared, because
         // two absent images are not one texture and refusing them here would
         // send the caller looking for a duplicate they did not write.
-        let Some(image) = binding.registration.texture().vulkan_inner().image() else {
+        let Some(image) = binding.surface_bound_resource.bound_image() else {
             continue;
         };
-        let clashing = resolved[..index].iter().find(|prior| {
-            prior.planned.kind != binding.planned.kind
-                && prior.registration.texture().vulkan_inner().image() == Some(image)
+        let clashing = bound_surfaces[..index].iter().find(|prior| {
+            prior.surface_bound_resource.kind() != binding.surface_bound_resource.kind()
+                && prior.surface_bound_resource.bound_image() == Some(image)
         });
         if let Some(prior) = clashing {
             // Both ids, as the caller wrote them: a published frame id and its
             // pool slot are different strings for one texture, so naming only
             // one would leave the reader looking for a duplicate that is not
             // there on the page.
-            return Err(Error::GpuError(format!(
+            return Err(crate::core::error::Error::GpuError(format!(
                 "bindings `{}` (surface {:?}) and `{}` (surface {:?}) name one texture but as \
-                 {:?} and {:?}; no image layout satisfies both descriptors, so this run reads \
-                 and writes different surfaces or binds one of them alone",
-                prior.planned.name,
-                prior.planned.target_id,
-                binding.planned.name,
-                binding.planned.target_id,
-                prior.planned.kind,
-                binding.planned.kind
+                 {:?} and {:?}; no image layout satisfies both descriptors, so \
+                 {invocation_phrase} reads and writes different surfaces or binds one of them \
+                 alone",
+                prior.name,
+                prior.target_id,
+                binding.name,
+                binding.target_id,
+                prior.surface_bound_resource.kind(),
+                binding.surface_bound_resource.kind()
             )));
         }
     }
-    Ok(resolved)
+    Ok(())
 }
 
-/// Barrier every bound input into the layout its descriptor requires, and
-/// publish the layout each one landed in.
+/// Barrier every bound input for the run: each texture into the layout its
+/// descriptor requires, each storage buffer for the shader's reads and writes —
+/// and publish the layout each texture landed in.
 ///
 /// Neither `VulkanGraphicsKernel::offscreen_render` nor
 /// `VulkanRayTracingKernel::trace_rays` barriers a bound input — the draw
 /// path transitions its colour targets and nothing else — so a surface
 /// arriving in the wrong layout would be read or written through a
 /// descriptor its layout does not satisfy, and its registration
-/// would keep claiming a layout the run has left behind. A run whose inputs
-/// already sit in the right layout records nothing and mints no command
-/// buffer.
+/// would keep claiming a layout the run has left behind. A run whose textures
+/// already sit in the right layout and that binds no buffer records nothing
+/// and mints no command buffer.
 pub(super) fn transition_bound_kernel_inputs_into_descriptor_layouts(
     full: &crate::core::context::GpuContextFullAccess,
     recorder_label: &str,
     consuming_stage: crate::vulkan::rhi::VulkanStage,
-    bound_inputs: &[(&TextureRegistration, crate::core::rhi::VulkanLayout)],
+    bound_inputs: &[ResolvedSurfaceBoundKernelBinding<'_>],
 ) -> crate::core::error::Result<()> {
-    use crate::vulkan::rhi::{VulkanAccess, VulkanStage};
+    let bound_textures: Vec<(&TextureRegistration, crate::core::rhi::VulkanLayout)> = bound_inputs
+        .iter()
+        .filter_map(|binding| binding.surface_bound_resource.texture_and_required_layout())
+        .collect();
 
     let mut images_already_barriered = Vec::new();
-    let mut bindings_to_barrier = Vec::new();
-    for (registration, required_layout) in bound_inputs {
+    let mut textures_to_barrier = Vec::new();
+    for (registration, required_layout) in &bound_textures {
         if registration.current_layout() == *required_layout {
             continue;
         }
@@ -295,20 +391,54 @@ pub(super) fn transition_bound_kernel_inputs_into_descriptor_layouts(
             continue;
         }
         images_already_barriered.push(image);
-        bindings_to_barrier.push((registration, *required_layout));
+        textures_to_barrier.push((*registration, *required_layout));
     }
-    if bindings_to_barrier.is_empty() {
+    let bound_storage_buffers: Vec<&StorageBuffer> = bound_inputs
+        .iter()
+        .filter_map(|binding| binding.surface_bound_resource.storage_buffer())
+        .collect();
+    if textures_to_barrier.is_empty() && bound_storage_buffers.is_empty() {
         return Ok(());
     }
 
     let mut recorder = full.create_command_recorder(recorder_label)?;
     recorder.begin()?;
-    for (registration, required_layout) in &bindings_to_barrier {
-        // Whatever wrote this surface before the run is not this run's to know
-        // — a transfer upload, a camera, another node — so the source scope is
-        // the wide one every other entry-from-an-unknown-producer barrier in
-        // the engine uses.
-        let recorded = recorder.record_image_barrier(
+    if let Err(e) = record_bound_input_barriers(
+        &mut recorder,
+        &textures_to_barrier,
+        &bound_storage_buffers,
+        consuming_stage,
+    ) {
+        recorder.abort_recording();
+        return Err(e);
+    }
+    recorder.submit_and_wait()?;
+    // Published for every binding, not just the ones that were barriered: a
+    // cross-process import synthesizes a fresh registration per resolve, so two
+    // slots naming one surface hold two layout cells for the one image.
+    for (registration, required_layout) in &bound_textures {
+        registration.update_layout(*required_layout);
+    }
+    Ok(())
+}
+
+/// Record the pre-run barriers: each texture from its tracked layout into the
+/// one its descriptor requires, and every bound storage buffer.
+///
+/// Whatever wrote these surfaces before the run is not this run's to know — a
+/// transfer upload, a camera, another node, CUDA — so the source scope is the
+/// wide one every other entry-from-an-unknown-producer barrier in the engine
+/// uses.
+fn record_bound_input_barriers(
+    recorder: &mut crate::vulkan::rhi::RhiCommandRecorder,
+    textures_to_barrier: &[(&TextureRegistration, crate::core::rhi::VulkanLayout)],
+    bound_storage_buffers: &[&StorageBuffer],
+    consuming_stage: crate::vulkan::rhi::VulkanStage,
+) -> crate::core::error::Result<()> {
+    use crate::vulkan::rhi::{VulkanAccess, VulkanStage};
+
+    for (registration, required_layout) in textures_to_barrier {
+        recorder.record_image_barrier(
             registration.texture(),
             registration.current_layout(),
             *required_layout,
@@ -316,51 +446,35 @@ pub(super) fn transition_bound_kernel_inputs_into_descriptor_layouts(
             consuming_stage,
             VulkanAccess::MEMORY_WRITE,
             VulkanAccess::SHADER_READ | VulkanAccess::SHADER_WRITE,
-        );
-        if let Err(e) = recorded {
-            recorder.abort_recording();
-            return Err(e);
-        }
+        )?;
     }
-    recorder.submit_and_wait()?;
-    // Published for every binding, not just the ones that were barriered: a
-    // cross-process import synthesizes a fresh registration per resolve, so two
-    // slots naming one surface hold two layout cells for the one image.
-    for (registration, required_layout) in bound_inputs {
-        registration.update_layout(*required_layout);
+    // A buffer has no layout to compare, so it is barriered on every run: the
+    // barrier is the memory dependency itself.
+    for &buffer in bound_storage_buffers {
+        recorder.record_buffer_barrier(
+            buffer,
+            VulkanStage::ALL_COMMANDS,
+            consuming_stage,
+            VulkanAccess::MEMORY_WRITE,
+            VulkanAccess::SHADER_READ | VulkanAccess::SHADER_WRITE,
+        )?;
     }
     Ok(())
 }
 
-/// The `(registration, required layout)` pairs the transition fn consumes,
-/// derived from planner-resolved bindings.
-pub(super) fn descriptor_layout_transition_pairs<'a>(
-    bound_inputs: &'a [ResolvedSurfaceBoundKernelBinding<'_>],
-) -> Vec<(&'a TextureRegistration, crate::core::rhi::VulkanLayout)> {
-    bound_inputs
-        .iter()
-        .map(|binding| {
-            (
-                &binding.registration,
-                binding.planned.kind.required_image_layout(),
-            )
-        })
-        .collect()
-}
-
 /// The `(surface id, registration)` pairs the post-dispatch layout publish
 /// consumes, from planner-resolved bindings — paired by construction, never
-/// by a shared index.
+/// by a shared index. A storage buffer has no layout, so it publishes none.
 pub(super) fn bound_surface_layout_publish_pairs(
     bound_inputs: &[ResolvedSurfaceBoundKernelBinding<'_>],
 ) -> Vec<(String, TextureRegistration)> {
     bound_inputs
         .iter()
-        .map(|binding| {
-            (
-                binding.planned.target_id.to_string(),
-                binding.registration.clone(),
-            )
+        .filter_map(|binding| {
+            binding
+                .surface_bound_resource
+                .texture_and_required_layout()
+                .map(|(registration, _)| (binding.target_id.to_string(), registration.clone()))
         })
         .collect()
 }

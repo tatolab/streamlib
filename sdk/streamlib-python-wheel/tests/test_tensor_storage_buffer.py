@@ -18,9 +18,14 @@ from pathlib import Path
 import pytest
 
 from tensor_storage_buffer_probes import (
+    CONTROL_PAINT_COLOUR,
     FRAMES_PUBLISHED_WHILE_THE_FIRST_IS_HELD,
+    INDEX_PATTERN_TENSOR_BINDING,
+    KERNEL_WRITTEN_TENSOR_SHAPE,
     MODEL_INPUT_TENSOR_SHAPE,
     ODD_TENSOR_SHAPE,
+    PAINT_COLOUR,
+    PAINT_COLOUR_BINDING,
     POOL_ROTATION_DEPTH,
 )
 
@@ -188,3 +193,38 @@ def test_a_tensor_acquired_after_a_window_opens_round_trips(start_app_under_test
     )
     for read in reports["PublishedTensorReadingSink"]:
         assert read["values_equal"], read
+
+
+def test_a_kernel_writes_a_tensor_bound_by_surface_id_and_a_draw_reads_one(
+    start_app_under_test,
+):
+    """A compute kernel fills a tensor with an index pattern and
+    `torch.from_dlpack` sees exactly that pattern; a tensor the kernel never
+    named keeps its sentinel. A draw paints the colour its bound tensor holds,
+    and a second tensor paints a second colour."""
+    reports = run_scenario(
+        start_app_under_test, "a_kernel_binds_a_tensor_by_surface_id", 1
+    )
+    observed = reports["TensorStorageBufferKernelBindingProbe"][0]
+
+    assert observed["compute_binding_names"] == [INDEX_PATTERN_TENSOR_BINDING]
+    assert observed["dispatched_tensor_device"].startswith("cuda"), observed
+    assert observed["dispatched_tensor_shape"] == KERNEL_WRITTEN_TENSOR_SHAPE
+    assert observed["dispatched_holds_the_index_pattern"], (
+        "torch did not read the index pattern the kernel wrote"
+    )
+    assert not observed["undispatched_holds_the_index_pattern"], (
+        "a tensor no dispatch named carries the pattern: the comparison is vacuous"
+    )
+    assert observed["undispatched_still_holds_the_sentinel"]
+
+    def rgba8(colour):
+        return [round(channel * 255) for channel in colour]
+
+    assert observed["graphics_binding_names"] == [PAINT_COLOUR_BINDING]
+    assert observed["distinct_pixels_painted_from_the_tensor"] == [
+        rgba8(PAINT_COLOUR)
+    ]
+    assert observed["distinct_pixels_painted_from_the_control_tensor"] == [
+        rgba8(CONTROL_PAINT_COLOUR)
+    ]

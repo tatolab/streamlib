@@ -248,20 +248,19 @@ def test_a_refused_draw_leaves_the_kernel_drawable(start_app_under_test):
 
 
 @pytest.mark.requires_gpu
-def test_a_buffer_kind_binding_is_refused_naming_the_kinds_a_draw_can_bind(
+def test_a_uniform_buffer_binding_is_refused_naming_its_kind(
     start_app_under_test,
 ):
-    """The only by-surface-id resolution the engine has is texture-shaped, so a
-    uniform-buffer binding is refused rather than pointed at a texture."""
+    """No escalate op mints a uniform buffer, so a uniform-buffer binding is
+    refused by name rather than pointed at whatever the descriptor last held."""
     observed = run_probe(start_app_under_test, "GraphicsBufferBindingRefusalProbe")
 
     refusal = observed["buffer_kind_binding"]
     assert observed["buffer_binding"] in refusal, (
         f"must name the binding it cannot resolve: {refusal}"
     )
-    assert "uniform_buffer" in refusal, refusal
-    assert "storage_image" in refusal and "sampled_texture" in refusal, (
-        f"must name the kinds a draw can bind a surface for: {refusal}"
+    assert "is uniform_buffer, which a draw cannot bind by surface id" in refusal, (
+        refusal
     )
 
 

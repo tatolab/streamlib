@@ -307,3 +307,164 @@ class HeldTensorRereadingSink:
             }
 
         _report("HeldTensorRereadingSink", reread_the_held_tensor)
+
+
+KERNEL_WRITTEN_TENSOR_SHAPE = [4, 64, 64]
+KERNEL_TENSOR_UNWRITTEN_SENTINEL = -1.0
+INDEX_PATTERN_TENSOR_BINDING = "index_pattern_tensor"
+WRITE_INDEX_PATTERN_GLSL = """\
+#version 450
+layout(local_size_x = 64) in;
+layout(set = 0, binding = 0, std430) writeonly buffer IndexPatternTensor {
+    float values[];
+} index_pattern_tensor;
+void main() {
+    uint at = gl_GlobalInvocationID.x;
+    if (at < index_pattern_tensor.values.length()) {
+        index_pattern_tensor.values[at] = float(at);
+    }
+}
+"""
+
+DRAWN_COLOUR_TARGET_EXTENT = 16
+PAINT_COLOUR_BINDING = "paint_colour_tensor"
+# Each channel a multiple of 1/255 exactly, so the rgba8 target holds it with
+# no rounding to argue about.
+PAINT_COLOUR = [0.2, 0.4, 0.6, 1.0]
+CONTROL_PAINT_COLOUR = [0.6, 0.2, 0.4, 1.0]
+FULL_SCREEN_TRIANGLE_VERTEX_GLSL = """\
+#version 450
+void main() {
+    vec2 corner = vec2((gl_VertexIndex << 1) & 2, gl_VertexIndex & 2);
+    gl_Position = vec4(corner * 2.0 - 1.0, 0.0, 1.0);
+}
+"""
+PAINT_THE_TENSORS_COLOUR_FRAGMENT_GLSL = """\
+#version 450
+layout(set = 0, binding = 0, std430) readonly buffer PaintColourTensor {
+    float values[4];
+} paint_colour_tensor;
+layout(location = 0) out vec4 painted_colour;
+void main() {
+    painted_colour = vec4(
+        paint_colour_tensor.values[0],
+        paint_colour_tensor.values[1],
+        paint_colour_tensor.values[2],
+        paint_colour_tensor.values[3]
+    );
+}
+"""
+
+
+@processor(
+    execution="manual",
+    description="A compute kernel and a draw each bind a tensor storage buffer by surface id",
+)
+class TensorStorageBufferKernelBindingProbe:
+    """A compute kernel writes an index pattern into one tensor, which torch
+    reads back; a second tensor the kernel never names keeps its sentinel.
+    A draw reads its colour from a tensor, and a second tensor paints a
+    different colour — so the pixels come from the binding, not the shader."""
+
+    def setup(self, ctx) -> None:
+        import torch
+
+        unavailable = _cuda_unavailable_reason()
+        if unavailable is not None:
+            _report(
+                "TensorStorageBufferKernelBindingProbe",
+                lambda: {"cuda_unavailable": unavailable},
+            )
+            return
+        gpu = ctx.gpu_full_access
+
+        def observe() -> dict:
+            element_count = math.prod(KERNEL_WRITTEN_TENSOR_SHAPE)
+            index_pattern = (
+                torch.arange(element_count, dtype=torch.float32)
+                .reshape(KERNEL_WRITTEN_TENSOR_SHAPE)
+                .cuda()
+            )
+            compute_kernel = gpu.create_compute_kernel(
+                source=WRITE_INDEX_PATTERN_GLSL
+            )
+            with (
+                gpu.acquire_storage_buffer(
+                    KERNEL_WRITTEN_TENSOR_SHAPE, "float32"
+                ) as dispatched_tensor,
+                gpu.acquire_storage_buffer(
+                    KERNEL_WRITTEN_TENSOR_SHAPE, "float32"
+                ) as undispatched_tensor,
+            ):
+                for tensor_surface in (dispatched_tensor, undispatched_tensor):
+                    torch.from_dlpack(tensor_surface).fill_(
+                        KERNEL_TENSOR_UNWRITTEN_SENTINEL
+                    )
+                compute_kernel.dispatch(
+                    bindings={INDEX_PATTERN_TENSOR_BINDING: dispatched_tensor},
+                    group_count=(element_count // 64, 1, 1),
+                )
+                dispatched = torch.from_dlpack(dispatched_tensor)
+                undispatched = torch.from_dlpack(undispatched_tensor)
+                compute_observation = {
+                    "compute_binding_names": list(compute_kernel.binding_names),
+                    "dispatched_tensor_device": str(dispatched.device),
+                    "dispatched_tensor_shape": list(dispatched.shape),
+                    "dispatched_holds_the_index_pattern": bool(
+                        torch.equal(dispatched, index_pattern)
+                    ),
+                    "undispatched_holds_the_index_pattern": bool(
+                        torch.equal(undispatched, index_pattern)
+                    ),
+                    "undispatched_still_holds_the_sentinel": bool(
+                        torch.all(undispatched == KERNEL_TENSOR_UNWRITTEN_SENTINEL)
+                    ),
+                }
+
+            graphics_kernel = gpu.create_graphics_kernel(
+                color_attachment_formats=["rgba8_unorm"],
+                vertex_source=FULL_SCREEN_TRIANGLE_VERTEX_GLSL,
+                fragment_source=PAINT_THE_TENSORS_COLOUR_FRAGMENT_GLSL,
+                label="python-tensor-painted-fullscreen-triangle",
+            )
+            colour_target = gpu.acquire_texture(
+                DRAWN_COLOUR_TARGET_EXTENT,
+                DRAWN_COLOUR_TARGET_EXTENT,
+                "rgba8_unorm",
+                ["render_attachment", "texture_binding", "copy_src", "copy_dst"],
+            )
+
+            def draw_painting_from(colour: "list[float]") -> "list[list[int]]":
+                with gpu.acquire_storage_buffer([4], "float32") as colour_tensor:
+                    torch.from_dlpack(colour_tensor).copy_(
+                        torch.tensor(colour, dtype=torch.float32)
+                    )
+                    graphics_kernel.draw(
+                        bindings={PAINT_COLOUR_BINDING: colour_tensor},
+                        color_targets=[colour_target],
+                        extent=(DRAWN_COLOUR_TARGET_EXTENT, DRAWN_COLOUR_TARGET_EXTENT),
+                        vertex_count=3,
+                    )
+                colour_target.lock(read_only=True)
+                try:
+                    pixels = colour_target.as_numpy().reshape(-1, 4)
+                    distinct = {tuple(int(channel) for channel in pixel) for pixel in pixels}
+                    return [list(pixel) for pixel in sorted(distinct)]
+                finally:
+                    colour_target.unlock()
+
+            return {
+                **compute_observation,
+                "graphics_binding_names": list(graphics_kernel.binding_names),
+                "distinct_pixels_painted_from_the_tensor": draw_painting_from(
+                    PAINT_COLOUR
+                ),
+                "distinct_pixels_painted_from_the_control_tensor": draw_painting_from(
+                    CONTROL_PAINT_COLOUR
+                ),
+            }
+
+        _report("TensorStorageBufferKernelBindingProbe", observe)
+
+    def process(self, ctx) -> None:
+        pass

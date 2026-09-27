@@ -1908,9 +1908,14 @@ class ComputeKernel:
         them: there is no implicit default and no value carried over from the
         previous frame. Supplying an unknown name or omitting a declared one
         raises before anything is submitted. Each binding's kind comes from the
-        shader's own reflection, never from the caller.
+        shader's own reflection, never from the caller. A `storage_buffer`
+        binding takes a tensor surface from `acquire_storage_buffer` (Linux
+        until #2431); a `uniform_buffer` binding raises naming its kind. Bind
+        the handle, not its id string: the dispatch orders the writes torch
+        took through a handle's tensor ahead of the kernel's reads.
 
-        Returns when the GPU work has retired and the writes are visible.
+        Returns when the GPU work has retired and the writes are visible — a
+        tensor the dispatch wrote reads back through `torch.from_dlpack`.
         """
 
 @final
@@ -2032,7 +2037,8 @@ class GraphicsKernel:
         Bindings never persist on the kernel, so every draw supplies all of
         them. Supplying an unknown name or omitting a declared one raises
         before anything is submitted. Each binding's kind comes from the
-        shaders' own reflection, never from the caller.
+        shaders' own reflection, never from the caller. A `storage_buffer`
+        binding takes a tensor surface, as `ComputeKernel.dispatch` does.
 
         Returns when the GPU work has retired and the pixels are visible.
         """

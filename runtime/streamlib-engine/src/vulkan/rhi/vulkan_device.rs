@@ -617,8 +617,14 @@ impl HostVulkanDevice {
             .enabled_extension_names(&instance_extensions)
             .enabled_layer_names(&validation_setup.enabled_layer_names)
             .flags(instance_create_flags);
+        let mut layer_settings = vk::LayerSettingsCreateInfoEXT::builder()
+            .settings(&validation_setup.enabled_layer_settings)
+            .build();
         if !validation_setup.enabled_validation_features.is_empty() {
             instance_info = instance_info.push_next(&mut validation_features);
+        }
+        if !validation_setup.enabled_layer_settings.is_empty() {
+            instance_info = instance_info.push_next(&mut layer_settings);
         }
         if let Some(messenger_info) = instance_creation_messenger_info.as_mut() {
             instance_info = instance_info.push_next(messenger_info);
