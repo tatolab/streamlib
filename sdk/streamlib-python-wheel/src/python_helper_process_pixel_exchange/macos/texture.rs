@@ -13,7 +13,7 @@ use streamlib_consumer_rhi::{
 
 use super::super::{
     HelperCheckedOutSurface, HelperProcessGpuExchangeClient, HelperSurfaceCheckOutLeaseDebt,
-    HelperSurfaceReleaseDebt, ProcessorOutputTexturePoolRequest, SurfaceShareTransferredHandle,
+    HelperSurfaceReleaseDebt, ProcessorOutputPoolRequest, SurfaceShareTransferredHandle,
     escalate_round_trip_to_parent, required_positive_u32_check_out_metadata_field,
     vk_image_creation_recipe_of_check_out,
 };
@@ -246,7 +246,7 @@ impl HelperProcessGpuExchangeClient {
         height: u32,
         wire_format_name: &str,
         usage: &[String],
-        processor_output_pool: Option<ProcessorOutputTexturePoolRequest<'_>>,
+        processor_output_pool: Option<ProcessorOutputPoolRequest<'_>>,
     ) -> PyResult<HelperCheckedOutTextureSurface> {
         let op = PyDict::new(python);
         op.set_item("op", "acquire_texture")?;

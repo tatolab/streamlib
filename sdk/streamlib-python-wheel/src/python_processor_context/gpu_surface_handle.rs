@@ -20,14 +20,17 @@ use crate::python_gpu_surface_pixel_exchange::{METAL_DLPACK_DEVICE, metal_dlpack
 #[cfg(target_os = "linux")]
 use crate::python_gpu_surface_pixel_exchange::{
     StagedWriteBackSource, device_dlpack_capsule, imported_device_for, prepare_device_export,
-    read_the_frame_into_its_cpu_staging,
+    publish_tensor_storage_buffer_device_writes, read_the_frame_into_its_cpu_staging,
+    tensor_storage_buffer_dlpack_capsule,
 };
 #[cfg(target_os = "linux")]
 use crate::python_helper_process_pixel_exchange::HelperAcquiredTexture;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::python_helper_process_pixel_exchange::HelperCheckedOutSurface;
+use crate::python_helper_process_pixel_exchange::a_tensor_surface_is_not_a_pixel_surface;
 #[cfg(target_os = "macos")]
 use crate::python_metal_framework_queue_synchronization::drain_torch_mps_queue_if_imported;
+use streamlib::sdk::rhi::TensorStorageBufferLayout;
 
 use super::gpu_surface_device_tensor_scope::PythonGpuSurfaceDeviceTensorScope;
 use super::left_by_a_propagating_exception;
@@ -43,9 +46,16 @@ use super::left_by_a_propagating_exception;
 pub(crate) struct PythonGpuSurfaceHandle {
     /// `None` for pooled textures — see [`Self::surface_id`].
     minted_surface_id: Option<String>,
-    surface_width: u32,
-    surface_height: u32,
-    surface_format_name: String,
+    /// Width, height and format name; `None` for a tensor storage buffer,
+    /// which states a shape and dtype instead.
+    surface_pixel_geometry: Option<(u32, u32, String)>,
+    /// The declared shape and dtype of a tensor storage buffer; `None` for
+    /// pixels.
+    surface_tensor_layout: Option<TensorStorageBufferLayout>,
+    /// Whether a writable tensor capsule went out, whose CUDA writes the
+    /// close must order ahead of any other holder's read.
+    #[cfg(target_os = "linux")]
+    a_writable_tensor_capsule_went_out: std::sync::atomic::AtomicBool,
     owned_memory: Mutex<Option<Arc<GpuSurfaceOwnedMemory>>>,
     cpu_access: CpuAccessGate,
     /// Whether the readback staging already holds this lock scope's
@@ -70,16 +80,16 @@ pub(crate) struct PythonGpuSurfaceHandle {
 impl PythonGpuSurfaceHandle {
     fn new(
         minted_surface_id: Option<String>,
-        surface_width: u32,
-        surface_height: u32,
-        surface_format_name: String,
+        surface_pixel_geometry: Option<(u32, u32, String)>,
+        surface_tensor_layout: Option<TensorStorageBufferLayout>,
         owned_memory: Arc<GpuSurfaceOwnedMemory>,
     ) -> Self {
         Self {
             minted_surface_id,
-            surface_width,
-            surface_height,
-            surface_format_name,
+            surface_pixel_geometry,
+            surface_tensor_layout,
+            #[cfg(target_os = "linux")]
+            a_writable_tensor_capsule_went_out: std::sync::atomic::AtomicBool::new(false),
             owned_memory: Mutex::new(Some(owned_memory)),
             cpu_access: CpuAccessGate::new_unlocked(),
             #[cfg(target_os = "linux")]
@@ -186,8 +196,18 @@ impl PythonGpuSurfaceHandle {
     /// it. On macOS it retires the stores a writable Metal capsule took, then
     /// lets the IOSurface's CPU lock go; both run whatever the other
     /// answered, and the first failure is returned with the second logged.
+    ///
+    /// A tensor surface has no lock scope; its settle orders the CUDA writes a
+    /// writable capsule took ahead of every other holder's read.
     #[cfg(target_os = "linux")]
     fn settle_this_lock_scopes_pending_writes(&self, python: Python<'_>) -> PyResult<()> {
+        if self
+            .a_writable_tensor_capsule_went_out
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+            && let Some(owned_memory) = self.owned_memory.lock().clone()
+        {
+            return publish_tensor_storage_buffer_device_writes(python, &owned_memory);
+        }
         self.publish_pending_staged_write(python)
     }
 
@@ -232,7 +252,60 @@ impl PythonGpuSurfaceHandle {
     /// nothing outside this process can resolve one, a present loop least of
     /// all.
     pub(crate) fn surface_id_and_extent_a_window_can_name(&self) -> PyResult<(String, u32, u32)> {
-        Ok((self.surface_id()?, self.surface_width, self.surface_height))
+        let (width, height, _) = self.pixel_geometry()?;
+        Ok((self.surface_id()?, *width, *height))
+    }
+
+    /// Width, height and format name, or the refusal a tensor surface gives
+    /// every pixel-shaped door.
+    fn pixel_geometry(&self) -> PyResult<&(u32, u32, String)> {
+        self.surface_pixel_geometry
+            .as_ref()
+            .ok_or_else(a_tensor_surface_is_not_a_pixel_surface)
+    }
+
+    /// Refuse a pixel-shaped door on a tensor surface.
+    fn refuse_a_pixel_door_on_a_tensor_surface(&self) -> PyResult<()> {
+        self.pixel_geometry().map(|_| ())
+    }
+
+    /// A tensor surface's DLPack capsule, `None` for a pixel surface. It needs
+    /// no lock — there is no CPU door to open — and serves the device only: a
+    /// host copy is torch's `.cpu()`. The acquirer's capsule is writable, and
+    /// the close orders its writes; a resolver's is read-only, since a
+    /// published tensor stays immutable while anyone holds it.
+    #[cfg(target_os = "linux")]
+    fn tensor_storage_buffer_dlpack_capsule<'py>(
+        &self,
+        python: Python<'py>,
+        max_version: Option<(u32, u32)>,
+        dl_device: Option<(i32, i32)>,
+    ) -> PyResult<Option<Bound<'py, PyAny>>> {
+        if self.surface_tensor_layout.is_none() {
+            return Ok(None);
+        }
+        let owned_memory = self.owned_memory()?;
+        let Some(storage_buffer) = owned_memory.tensor_storage_buffer() else {
+            return Ok(None);
+        };
+        if dl_device.is_some_and(|(device_type, _)| device_type == DeviceType::Cpu as i32) {
+            return Err(PyBufferError::new_err(
+                "a tensor surface lives on the device and exports no host view; copy it with \
+                 torch's `.cpu()` after `torch.from_dlpack`",
+            ));
+        }
+        let writable = storage_buffer.writable;
+        if writable {
+            self.a_writable_tensor_capsule_went_out
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        tensor_storage_buffer_dlpack_capsule(
+            python,
+            &owned_memory,
+            exchange_shape_for_max_version(max_version),
+            !writable,
+        )
+        .map(Some)
     }
 
     /// A pooled device texture the parent acquired for this helper.
@@ -246,13 +319,15 @@ impl PythonGpuSurfaceHandle {
     #[cfg(target_os = "linux")]
     pub(super) fn from_helper_acquired_texture(acquired: HelperAcquiredTexture) -> Self {
         let surface_id = acquired.surface_id.clone();
-        let (width, height) = (acquired.width, acquired.height);
-        let format_wire_name = acquired.format.wire_name().to_string();
+        let pixel_geometry = (
+            acquired.width,
+            acquired.height,
+            acquired.format.wire_name().to_string(),
+        );
         Self::new(
             Some(surface_id.clone()),
-            width,
-            height,
-            format_wire_name,
+            Some(pixel_geometry),
+            None,
             GpuSurfaceOwnedMemory::new(
                 HelperCheckedOutSurface::AcquiredDeviceTexture(acquired),
                 Some(surface_id),
@@ -260,19 +335,25 @@ impl PythonGpuSurfaceHandle {
         )
     }
 
-    /// A surface a helper process checked out of its parent — pixel buffer
-    /// or texture, whichever the registration named — behind the same handle
-    /// surface the engine path mints.
+    /// A surface a helper process checked out of its parent — pixel buffer,
+    /// texture or tensor storage buffer, whichever the registration named —
+    /// behind the same handle surface the engine path mints.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(super) fn from_helper_checked_out_surface(checked_out: HelperCheckedOutSurface) -> Self {
         let surface_id = checked_out.surface_id().to_string();
-        let (width, height) = (checked_out.width(), checked_out.height());
-        let format_wire_name = checked_out.format_wire_name().to_string();
+        let pixel_geometry = checked_out
+            .pixel_geometry()
+            .map(|(width, height, format_wire_name)| (width, height, format_wire_name.to_string()));
+        #[cfg(target_os = "linux")]
+        let tensor_layout = checked_out
+            .tensor_storage_buffer()
+            .map(|storage_buffer| storage_buffer.tensor_layout.clone());
+        #[cfg(not(target_os = "linux"))]
+        let tensor_layout = None;
         Self::new(
             Some(surface_id.clone()),
-            width,
-            height,
-            format_wire_name,
+            pixel_geometry,
+            tensor_layout,
             // The release an acquired surface owes its parent rides the
             // debt inside the checked-out value, so this holds nothing but
             // the value and the id it travels under.
@@ -389,23 +470,40 @@ impl PythonGpuSurfaceHandle {
     }
 
     #[getter]
-    fn width(&self) -> u32 {
-        self.surface_width
+    fn width(&self) -> PyResult<u32> {
+        Ok(self.pixel_geometry()?.0)
     }
 
     #[getter]
-    fn height(&self) -> u32 {
-        self.surface_height
+    fn height(&self) -> PyResult<u32> {
+        Ok(self.pixel_geometry()?.1)
     }
 
     #[getter]
-    fn format(&self) -> String {
-        self.surface_format_name.clone()
+    fn format(&self) -> PyResult<String> {
+        Ok(self.pixel_geometry()?.2.clone())
+    }
+
+    /// A tensor surface's dimensions, outermost first; `None` for pixels.
+    #[getter]
+    fn shape(&self) -> Option<Vec<u64>> {
+        self.surface_tensor_layout
+            .as_ref()
+            .map(|tensor_layout| tensor_layout.shape().to_vec())
+    }
+
+    /// A tensor surface's element type; `None` for pixels.
+    #[getter]
+    fn dtype(&self) -> Option<&'static str> {
+        self.surface_tensor_layout
+            .as_ref()
+            .map(|tensor_layout| tensor_layout.element_type().wire_name())
     }
 
     /// Row pitch in bytes, including any padding the allocation carries.
     #[getter]
     fn bytes_per_row(&self, python: Python<'_>) -> PyResult<u64> {
+        self.refuse_a_pixel_door_on_a_tensor_surface()?;
         let owned_memory = self.owned_memory()?;
         // The staging's shape is the answer, so mapping it is enough; a
         // pitch is not a reason to copy a frame.
@@ -499,6 +597,7 @@ impl PythonGpuSurfaceHandle {
     /// tensor writable.
     #[pyo3(signature = (read_only = true))]
     fn lock(&self, python: Python<'_>, read_only: bool) -> PyResult<()> {
+        self.refuse_a_pixel_door_on_a_tensor_surface()?;
         let owned_memory = self.owned_memory()?;
         // A lock over a lock closes the first scope's doors: its Metal writes
         // retire and its IOSurface lock goes, so this scope opens its own.
@@ -548,6 +647,13 @@ impl PythonGpuSurfaceHandle {
     /// IOSurface exports a no-copy `MTLBuffer`.
     fn __dlpack_device__(&self, python: Python<'_>) -> PyResult<(i32, i32)> {
         let owned_memory = self.owned_memory()?;
+        #[cfg(target_os = "linux")]
+        if let Some(storage_buffer) = owned_memory.tensor_storage_buffer() {
+            let cuda_import = python
+                .detach(|| storage_buffer.cuda_import())
+                .map_err(super::gpu_operation_error)?;
+            return Ok(dlpack_device_as_python_pair(cuda_import.dlpack_device()));
+        }
         // Routed through the same once-per-handle decision `__dlpack__`
         // serves, so a probe failure here (answered CPU) cannot be
         // followed by a successful device capsule there.
@@ -592,6 +698,12 @@ impl PythonGpuSurfaceHandle {
             return Err(PyBufferError::new_err(
                 "this surface exports in place; ask the consumer to copy the tensor instead",
             ));
+        }
+        #[cfg(target_os = "linux")]
+        if let Some(capsule) =
+            self.tensor_storage_buffer_dlpack_capsule(python, max_version, dl_device)?
+        {
+            return Ok(capsule);
         }
         self.cpu_access.require_locked()?;
         let owned_memory = self.owned_memory()?;
@@ -657,6 +769,7 @@ impl PythonGpuSurfaceHandle {
     /// consults the CPU access gate — that gate belongs to the
     /// handle-level `lock()` + `__dlpack__` spelling.
     fn as_device_tensor(&self) -> PyResult<PythonGpuSurfaceDeviceTensorScope> {
+        self.refuse_a_pixel_door_on_a_tensor_surface()?;
         Ok(PythonGpuSurfaceDeviceTensorScope::over(
             self.owned_memory()?,
         ))

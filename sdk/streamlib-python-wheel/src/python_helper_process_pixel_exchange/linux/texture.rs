@@ -14,7 +14,7 @@ use streamlib_consumer_rhi::{
 
 use crate::python_helper_process_pixel_exchange::{
     HelperProcessGpuExchangeClient, HelperSurfaceCheckOutLeaseDebt, HelperSurfaceReleaseDebt,
-    ProcessorOutputTexturePoolRequest, escalate_round_trip_to_parent,
+    ProcessorOutputPoolRequest, escalate_round_trip_to_parent,
     required_positive_u32_check_out_metadata_field, vk_image_creation_recipe_of_check_out,
 };
 use crate::python_processor_context::{ExportedVkImageCreationRecipe, OpaqueFdExportContract};
@@ -412,7 +412,7 @@ impl HelperProcessGpuExchangeClient {
         height: u32,
         wire_format_name: &str,
         usage: &[String],
-        processor_output_pool: Option<ProcessorOutputTexturePoolRequest<'_>>,
+        processor_output_pool: Option<ProcessorOutputPoolRequest<'_>>,
     ) -> PyResult<HelperAcquiredTexture> {
         let op = PyDict::new(python);
         op.set_item("op", "acquire_texture")?;

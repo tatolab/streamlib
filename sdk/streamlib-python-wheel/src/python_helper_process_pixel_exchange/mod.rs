@@ -64,9 +64,9 @@ pub(crate) use gpu_kernels::{
 
 #[cfg(target_os = "linux")]
 pub(crate) use linux::{
-    CpuReadbackCopyDirection, HelperAcquiredTexture, HelperCheckedOutTextureSurface,
-    HelperCpuReadbackExport, HelperDeviceExport, HelperForeignSurfaceUnregisterDebt,
-    OpaqueFdTextureExportDescription,
+    CpuReadbackCopyDirection, HelperAcquiredTexture, HelperCheckedOutStorageBuffer,
+    HelperCheckedOutTextureSurface, HelperCpuReadbackExport, HelperDeviceExport,
+    HelperForeignSurfaceUnregisterDebt, OpaqueFdTextureExportDescription,
 };
 #[cfg(target_os = "macos")]
 pub(crate) use macos::{HelperCheckedOutTextureSurface, IOSurfaceMachPortExportDescription};
@@ -75,6 +75,15 @@ use macos::{
     HelperIOSurfaceCpuLock, HelperIOSurfaceImportsByPoolSlot, HelperIOSurfacePoolSlotImport,
     HelperIOSurfaceUseCountClaim,
 };
+
+/// The refusal every pixel-shaped door gives a tensor surface.
+pub(crate) fn a_tensor_surface_is_not_a_pixel_surface() -> PyErr {
+    pyo3::exceptions::PyRuntimeError::new_err(
+        "this surface is a tensor storage buffer, not pixels: it has a shape and a dtype, no \
+         width, height, format or CPU mapping, and its one door is `__dlpack__` \
+         (`torch.from_dlpack`)",
+    )
+}
 
 /// One field of an escalate response, named in the failure so a parent
 /// that answered a shape this child does not understand says which part.
@@ -108,15 +117,16 @@ fn escalate_round_trip_to_parent<'py>(
         })
 }
 
-/// Which processor output pool a texture acquire hands its slot out of.
+/// Which processor output pool a texture or tensor storage buffer acquire
+/// hands its slot out of.
 #[derive(Clone, Copy)]
-pub(crate) struct ProcessorOutputTexturePoolRequest<'pool_key> {
+pub(crate) struct ProcessorOutputPoolRequest<'pool_key> {
     pub(crate) pool_key: &'pool_key str,
     pub(crate) rotation_depth: u32,
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-impl ProcessorOutputTexturePoolRequest<'_> {
+impl ProcessorOutputPoolRequest<'_> {
     /// The request's wire field, as the escalate op spells it.
     fn to_escalate_field<'python>(
         self,
@@ -351,14 +361,17 @@ impl HelperCheckedOutPixelSurface {
 }
 
 /// The backings one surface id can stand for, behind one lifetime story:
-/// the two a checkout imports, and the acquired device texture that was
-/// never checked out at all — a name whose memory stays engine-side.
+/// the pixel buffer, texture and tensor storage buffer a checkout imports,
+/// and the acquired device texture that was never checked out at all — a
+/// name whose memory stays engine-side.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) enum HelperCheckedOutSurface {
     PixelBuffer(HelperCheckedOutPixelSurface),
     Texture(HelperCheckedOutTextureSurface),
     #[cfg(target_os = "linux")]
     AcquiredDeviceTexture(HelperAcquiredTexture),
+    #[cfg(target_os = "linux")]
+    StorageBuffer(HelperCheckedOutStorageBuffer),
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -369,34 +382,42 @@ impl HelperCheckedOutSurface {
             Self::Texture(texture_surface) => &texture_surface.surface_id,
             #[cfg(target_os = "linux")]
             Self::AcquiredDeviceTexture(acquired_texture) => &acquired_texture.surface_id,
+            #[cfg(target_os = "linux")]
+            Self::StorageBuffer(storage_buffer) => &storage_buffer.surface_id,
         }
     }
 
-    pub(crate) fn width(&self) -> u32 {
+    /// The width, height and snake-case format name a pixel surface carries;
+    /// `None` for a tensor storage buffer, which has a shape instead.
+    pub(crate) fn pixel_geometry(&self) -> Option<(u32, u32, &'static str)> {
         match self {
-            Self::PixelBuffer(pixel_surface) => pixel_surface.width,
-            Self::Texture(texture_surface) => texture_surface.width,
+            Self::PixelBuffer(pixel_surface) => Some((
+                pixel_surface.width,
+                pixel_surface.height,
+                pixel_surface.format.wire_name(),
+            )),
+            Self::Texture(texture_surface) => Some((
+                texture_surface.width,
+                texture_surface.height,
+                texture_surface.format.wire_name(),
+            )),
             #[cfg(target_os = "linux")]
-            Self::AcquiredDeviceTexture(acquired_texture) => acquired_texture.width,
+            Self::AcquiredDeviceTexture(acquired_texture) => Some((
+                acquired_texture.width,
+                acquired_texture.height,
+                acquired_texture.format.wire_name(),
+            )),
+            #[cfg(target_os = "linux")]
+            Self::StorageBuffer(_) => None,
         }
     }
 
-    pub(crate) fn height(&self) -> u32 {
+    /// The tensor storage buffer this surface is, if it is one.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn tensor_storage_buffer(&self) -> Option<&HelperCheckedOutStorageBuffer> {
         match self {
-            Self::PixelBuffer(pixel_surface) => pixel_surface.height,
-            Self::Texture(texture_surface) => texture_surface.height,
-            #[cfg(target_os = "linux")]
-            Self::AcquiredDeviceTexture(acquired_texture) => acquired_texture.height,
-        }
-    }
-
-    /// The snake-case format name the Python surface spells.
-    pub(crate) fn format_wire_name(&self) -> &'static str {
-        match self {
-            Self::PixelBuffer(pixel_surface) => pixel_surface.format.wire_name(),
-            Self::Texture(texture_surface) => texture_surface.format.wire_name(),
-            #[cfg(target_os = "linux")]
-            Self::AcquiredDeviceTexture(acquired_texture) => acquired_texture.format.wire_name(),
+            Self::StorageBuffer(storage_buffer) => Some(storage_buffer),
+            _ => None,
         }
     }
 }
