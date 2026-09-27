@@ -383,7 +383,10 @@ fn a_storage_buffer_binding_plans_as_a_storage_buffer() {
         .expect("a storage buffer is a bindable kind");
     assert_eq!(planned[1].name, "model_input_tensor");
     assert_eq!(planned[1].binding, 1);
-    assert_eq!(planned[1].kind, SurfaceBoundKernelBindingKind::StorageBuffer);
+    assert_eq!(
+        planned[1].kind,
+        SurfaceBoundKernelBindingKind::StorageBuffer
+    );
     assert_eq!(planned[1].target_id, "tensor-out");
 }
 
@@ -1414,13 +1417,13 @@ fn every_registration_cell_naming_one_image_learns_the_landed_layout() {
                 bindings: vec![
                     BatchedComputeKernelDispatchBinding {
                         binding: 0,
-                        resource: SurfaceBoundKernelBindingResource::StorageImage(
+                        surface_bound_resource: SurfaceBoundKernelBindingResource::StorageImage(
                             cell_a.clone(),
                         ),
                     },
                     BatchedComputeKernelDispatchBinding {
                         binding: 1,
-                        resource: SurfaceBoundKernelBindingResource::StorageImage(
+                        surface_bound_resource: SurfaceBoundKernelBindingResource::StorageImage(
                             cell_b.clone(),
                         ),
                     },
@@ -1953,7 +1956,7 @@ fn a_later_pass_in_a_batch_reads_the_tensor_an_earlier_pass_wrote() {
                     kernel: kernel(&write_index_pattern),
                     bindings: vec![BatchedComputeKernelDispatchBinding {
                         binding: 0,
-                        resource: SurfaceBoundKernelBindingResource::StorageBuffer(
+                        surface_bound_resource: SurfaceBoundKernelBindingResource::StorageBuffer(
                             index_pattern_tensor.clone(),
                         ),
                     }],
@@ -1967,15 +1970,17 @@ fn a_later_pass_in_a_batch_reads_the_tensor_an_earlier_pass_wrote() {
                     bindings: vec![
                         BatchedComputeKernelDispatchBinding {
                             binding: 0,
-                            resource: SurfaceBoundKernelBindingResource::StorageBuffer(
-                                index_pattern_tensor.clone(),
-                            ),
+                            surface_bound_resource:
+                                SurfaceBoundKernelBindingResource::StorageBuffer(
+                                    index_pattern_tensor.clone(),
+                                ),
                         },
                         BatchedComputeKernelDispatchBinding {
                             binding: 1,
-                            resource: SurfaceBoundKernelBindingResource::StorageBuffer(
-                                doubled_tensor.clone(),
-                            ),
+                            surface_bound_resource:
+                                SurfaceBoundKernelBindingResource::StorageBuffer(
+                                    doubled_tensor.clone(),
+                                ),
                         },
                     ],
                     push_constants: Vec::new(),

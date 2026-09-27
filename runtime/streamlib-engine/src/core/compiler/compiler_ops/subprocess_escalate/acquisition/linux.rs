@@ -15,8 +15,7 @@ use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalat
 };
 use crate::core::context::{
     GpuContextFullAccess, GpuContextLimitedAccess, PooledTextureHandle,
-    StorageBufferAllocationFlavour,
-    TextureCrossProcessImportability, TexturePoolDescriptor,
+    StorageBufferAllocationFlavour, TextureCrossProcessImportability, TexturePoolDescriptor,
 };
 use crate::core::rhi::{TensorStorageBufferLayout, TextureFormat, TextureUsages};
 use crate::host_rhi::HostSurfaceStoreExt;

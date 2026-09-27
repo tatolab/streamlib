@@ -503,7 +503,10 @@ fn a_storage_buffer_binding_plans_as_a_storage_buffer() {
         .expect("a storage buffer is a bindable kind");
     assert_eq!(planned[1].name, "detection_scores");
     assert_eq!(planned[1].binding_slot, 1);
-    assert_eq!(planned[1].kind, SurfaceBoundKernelBindingKind::StorageBuffer);
+    assert_eq!(
+        planned[1].kind,
+        SurfaceBoundKernelBindingKind::StorageBuffer
+    );
     assert_eq!(planned[1].target_id, "tensor-in");
 }
 

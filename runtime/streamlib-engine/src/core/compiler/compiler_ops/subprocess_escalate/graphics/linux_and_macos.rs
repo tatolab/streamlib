@@ -8,9 +8,9 @@ use super::super::hex_encoded_wire_bytes::decode_hex;
 use super::super::kernel_shader_stage_source::registered_shader_stage_source;
 use super::super::surface_bound_kernel_binding::{
     DeclaredKernelBindingUnderPlanning, SuppliedKernelBindingUnderPlanning,
-    bound_surface_layout_publish_pairs,
-    plan_supplied_surface_bound_kernel_bindings, publish_bound_surface_layouts_to_surface_share,
-    reflected_kernel_binding_response, resolve_planned_surface_bound_kernel_bindings,
+    bound_surface_layout_publish_pairs, plan_supplied_surface_bound_kernel_bindings,
+    publish_bound_surface_layouts_to_surface_share, reflected_kernel_binding_response,
+    resolve_planned_surface_bound_kernel_bindings,
     transition_bound_kernel_inputs_into_descriptor_layouts,
 };
 use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse;
@@ -434,9 +434,9 @@ pub(super) fn bind_and_render_graphics_kernel(
                 .vulkan_inner()
                 .image()
                 .and_then(|target_image| {
-                    bound_inputs
-                        .iter()
-                        .find(|input| input.resource.bound_image() == Some(target_image))
+                    bound_inputs.iter().find(|input| {
+                        input.surface_bound_resource.bound_image() == Some(target_image)
+                    })
                 });
         if let Some(clashing) = clashing_binding {
             return Err(Error::GpuError(format!(
@@ -450,17 +450,25 @@ pub(super) fn bind_and_render_graphics_kernel(
     }
 
     for binding in &bound_inputs {
-        let slot = binding.planned.binding_slot;
-        match &binding.resource {
-            SurfaceBoundKernelBindingResource::SampledTexture(registration) => {
-                kernel.set_sampled_texture(req.frame_index, slot, registration.texture())?
-            }
-            SurfaceBoundKernelBindingResource::StorageImage(registration) => {
-                kernel.set_storage_image(req.frame_index, slot, registration.texture())?
-            }
-            SurfaceBoundKernelBindingResource::StorageBuffer(buffer) => {
-                kernel.set_storage_buffer_storage(req.frame_index, slot, buffer)?
-            }
+        match &binding.surface_bound_resource {
+            SurfaceBoundKernelBindingResource::SampledTexture(registration) => kernel
+                .set_sampled_texture(
+                    req.frame_index,
+                    binding.planned.binding_slot,
+                    registration.texture(),
+                )?,
+            SurfaceBoundKernelBindingResource::StorageImage(registration) => kernel
+                .set_storage_image(
+                    req.frame_index,
+                    binding.planned.binding_slot,
+                    registration.texture(),
+                )?,
+            SurfaceBoundKernelBindingResource::StorageBuffer(buffer) => kernel
+                .set_storage_buffer_storage(
+                    req.frame_index,
+                    binding.planned.binding_slot,
+                    buffer,
+                )?,
         }
     }
 

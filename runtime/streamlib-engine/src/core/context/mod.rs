@@ -50,13 +50,14 @@ pub use device_stream_liveness_report::{
 };
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use gpu_context::GpuCapabilitiesSnapshot;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub use gpu_context::{
-    BatchedComputeKernelDispatch, BatchedComputeKernelDispatchBinding, SurfaceBoundKernelBindingResource,
-};
-pub use gpu_context::{GpuContext, GpuContextFullAccess, GpuContextLimitedAccess};
 #[cfg(target_os = "linux")]
 pub(crate) use gpu_context::StorageBufferAllocationFlavour;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub use gpu_context::{
+    BatchedComputeKernelDispatch, BatchedComputeKernelDispatchBinding,
+    SurfaceBoundKernelBindingResource,
+};
+pub use gpu_context::{GpuContext, GpuContextFullAccess, GpuContextLimitedAccess};
 pub(crate) use isolation::FullAccessGrant;
 pub use isolation::IsolationTier;
 pub use runtime_context::{RuntimeContext, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
