@@ -11,7 +11,7 @@ use pyo3::types::PyDict;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::python_helper_process_pixel_exchange::HelperCheckedOutSurface;
 use crate::python_helper_process_pixel_exchange::{
-    HelperProcessGpuExchangeClient, ProcessorOutputTexturePoolRequest,
+    HelperProcessGpuExchangeClient, ProcessorOutputPoolRequest,
 };
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::python_helper_process_pixel_exchange::{
@@ -63,7 +63,7 @@ fn acquire_texture_through_the_helper_process_exchange(
     height: u32,
     format: &str,
     usage: &[String],
-    processor_output_pool: Option<ProcessorOutputTexturePoolRequest<'_>>,
+    processor_output_pool: Option<ProcessorOutputPoolRequest<'_>>,
 ) -> PyResult<PythonGpuSurfaceHandle> {
     let texture_format = parse_texture_format_name(format)?;
     #[cfg(target_os = "linux")]
@@ -95,6 +95,44 @@ fn acquire_texture_through_the_helper_process_exchange(
         ));
     }
     let _ = texture_format;
+    Err(gpu_unreachable_from_a_helper_process_error())
+}
+
+/// Acquire a tensor storage buffer through the helper's exchange client: a
+/// one-off, or the next tensor of the processor output pool named by
+/// `processor_output_pool`. Linux-only until its macOS arm lands (#2431).
+#[cfg_attr(
+    not(target_os = "linux"),
+    expect(
+        unused_variables,
+        reason = "off Linux the request is refused before it reaches the parent"
+    )
+)]
+fn acquire_storage_buffer_through_the_helper_process_exchange(
+    helper_process_exchange_client: Option<&Arc<HelperProcessGpuExchangeClient>>,
+    python: Python<'_>,
+    shape: Vec<u64>,
+    dtype: &str,
+    processor_output_pool: Option<ProcessorOutputPoolRequest<'_>>,
+) -> PyResult<PythonGpuSurfaceHandle> {
+    let tensor_layout = streamlib::sdk::rhi::TensorStorageBufferLayout::from_wire(shape, dtype)
+        .map_err(|refusal| pyo3::exceptions::PyValueError::new_err(refusal.to_string()))?;
+    #[cfg(target_os = "linux")]
+    if let Some(exchange_client) = helper_process_exchange_client {
+        let acquired = exchange_client.acquire_storage_buffer(
+            python,
+            &tensor_layout,
+            processor_output_pool,
+        )?;
+        return Ok(PythonGpuSurfaceHandle::from_helper_checked_out_surface(
+            HelperCheckedOutSurface::StorageBuffer(acquired),
+        ));
+    }
+    #[cfg(target_os = "macos")]
+    return Err(pyo3::exceptions::PyNotImplementedError::new_err(
+        "acquire_storage_buffer is Linux-only until its macOS arm lands (#2431)",
+    ));
+    #[cfg(not(target_os = "macos"))]
     Err(gpu_unreachable_from_a_helper_process_error())
 }
 
@@ -202,7 +240,48 @@ impl PythonGpuContextLimitedAccess {
             height,
             format,
             &usage,
-            Some(ProcessorOutputTexturePoolRequest {
+            Some(ProcessorOutputPoolRequest {
+                pool_key,
+                rotation_depth,
+            }),
+        )
+    }
+
+    /// Acquire a tensor storage buffer of `shape` and `dtype` (`float32`,
+    /// `float16`, `uint8`, `int32`), named by the surface id the engine minted
+    /// for it. `torch.from_dlpack` reads and writes it on the GPU in place.
+    fn acquire_storage_buffer(
+        &self,
+        python: Python<'_>,
+        shape: Vec<u64>,
+        dtype: &str,
+    ) -> PyResult<PythonGpuSurfaceHandle> {
+        acquire_storage_buffer_through_the_helper_process_exchange(
+            self.helper_process_exchange_client.as_ref(),
+            python,
+            shape,
+            dtype,
+            None,
+        )
+    }
+
+    /// The tensor this frame publishes into, from the processor output pool
+    /// named `pool_key`: a fresh `<slot>#<generation>` per call, never a slot a
+    /// consumer still holds; at the pool's cap, refused by name.
+    fn acquire_storage_buffer_from_processor_output_pool(
+        &self,
+        python: Python<'_>,
+        pool_key: &str,
+        rotation_depth: u32,
+        shape: Vec<u64>,
+        dtype: &str,
+    ) -> PyResult<PythonGpuSurfaceHandle> {
+        acquire_storage_buffer_through_the_helper_process_exchange(
+            self.helper_process_exchange_client.as_ref(),
+            python,
+            shape,
+            dtype,
+            Some(ProcessorOutputPoolRequest {
                 pool_key,
                 rotation_depth,
             }),
@@ -404,7 +483,48 @@ impl PythonGpuContextFullAccess {
             height,
             format,
             &usage,
-            Some(ProcessorOutputTexturePoolRequest {
+            Some(ProcessorOutputPoolRequest {
+                pool_key,
+                rotation_depth,
+            }),
+        )
+    }
+
+    /// Acquire a tensor storage buffer of `shape` and `dtype` (`float32`,
+    /// `float16`, `uint8`, `int32`), named by the surface id the engine minted
+    /// for it. `torch.from_dlpack` reads and writes it on the GPU in place.
+    fn acquire_storage_buffer(
+        &self,
+        python: Python<'_>,
+        shape: Vec<u64>,
+        dtype: &str,
+    ) -> PyResult<PythonGpuSurfaceHandle> {
+        acquire_storage_buffer_through_the_helper_process_exchange(
+            self.helper_process_exchange_client.as_ref(),
+            python,
+            shape,
+            dtype,
+            None,
+        )
+    }
+
+    /// The tensor this frame publishes into, from the processor output pool
+    /// named `pool_key`: a fresh `<slot>#<generation>` per call, never a slot a
+    /// consumer still holds; at the pool's cap, refused by name.
+    fn acquire_storage_buffer_from_processor_output_pool(
+        &self,
+        python: Python<'_>,
+        pool_key: &str,
+        rotation_depth: u32,
+        shape: Vec<u64>,
+        dtype: &str,
+    ) -> PyResult<PythonGpuSurfaceHandle> {
+        acquire_storage_buffer_through_the_helper_process_exchange(
+            self.helper_process_exchange_client.as_ref(),
+            python,
+            shape,
+            dtype,
+            Some(ProcessorOutputPoolRequest {
                 pool_key,
                 rotation_depth,
             }),

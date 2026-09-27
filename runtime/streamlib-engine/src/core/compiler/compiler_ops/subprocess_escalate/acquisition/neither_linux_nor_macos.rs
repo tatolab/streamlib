@@ -13,6 +13,16 @@ use crate::core::context::{
 };
 use crate::core::rhi::{TextureFormat, TextureUsages};
 
+/// A tensor storage buffer needs the Linux GPU exchange.
+pub(super) fn allocate_registered_storage_buffer_for_helper(
+    _full: &GpuContextFullAccess,
+    _tensor_layout: &crate::core::rhi::TensorStorageBufferLayout,
+) -> crate::core::error::Result<(String, RegisteredHandle)> {
+    Err(crate::core::Error::NotSupported(
+        "acquire_storage_buffer needs the Linux GPU exchange; this platform has none".to_string(),
+    ))
+}
+
 /// Allocate one texture and register it in the parent's texture cache,
 /// answering the id it is registered under and what holds it alive.
 pub(super) fn allocate_registered_texture_for_helper(

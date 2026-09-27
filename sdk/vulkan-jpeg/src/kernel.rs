@@ -19,7 +19,7 @@ use streamlib::sdk::engine::host_rhi::VulkanComputeKernel;
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::rhi::{
     ColorConverterPushConstants, ComputeBindingSpec, ComputeKernelDescriptor, SourceLayoutInfo,
-    StorageBuffer, Texture,
+    StorageBuffer, TensorStorageBufferLayout, Texture,
 };
 
 use crate::header::DecodedJpeg;
@@ -147,8 +147,11 @@ impl JpegDecodeKernel {
         let coef_bytes = bytemuck::cast_slice::<i32, u8>(&coef_words);
         let qt_bytes = bytemuck::cast_slice::<u32, u8>(&qt_words);
 
-        let coef_buf = full_access.acquire_storage_buffer(coef_bytes.len() as u64)?;
-        let qt_buf = full_access.acquire_storage_buffer(qt_bytes.len() as u64)?;
+        let coef_buf = full_access.acquire_storage_buffer(&TensorStorageBufferLayout::of_bytes(
+            coef_bytes.len() as u64,
+        )?)?;
+        let qt_buf = full_access
+            .acquire_storage_buffer(&TensorStorageBufferLayout::of_bytes(qt_bytes.len() as u64)?)?;
 
         self.dispatch_with_buffers(
             decoded,

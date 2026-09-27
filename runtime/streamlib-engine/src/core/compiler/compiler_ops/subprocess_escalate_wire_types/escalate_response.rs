@@ -98,6 +98,11 @@ pub(crate) struct EscalateResponseOk {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) stamp_clock_identity: Option<String>,
 
+    /// Element type of the acquired tensor storage buffer. Set on
+    /// `acquire_storage_buffer` responses.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) dtype: Option<String>,
+
     /// Lowercase hex of the exporting Vulkan device's
     /// `VkPhysicalDeviceIDProperties::deviceUUID` (32 characters, no
     /// separators). Set on `open_device_export_staging` responses. The external
@@ -126,6 +131,11 @@ pub(crate) struct EscalateResponseOk {
     /// gesture never takes a pipeline down.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) processor_owned_window_is_closed: Option<bool>,
+
+    /// Dimensions of the acquired tensor storage buffer, outermost first. Set
+    /// on `acquire_storage_buffer` responses.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) shape: Option<Vec<u64>>,
 
     /// Decimal-string-encoded u64 byte size of the device-export staging
     /// buffer — the span an imported device pointer covers. Set on

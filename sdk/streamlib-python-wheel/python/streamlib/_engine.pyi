@@ -1113,6 +1113,35 @@ class GpuContextLimitedAccess:
         own frame rather than wait. `ProcessorOutputTextureRing` is the
         spelling a processor reaches for.
         """
+    def acquire_storage_buffer(
+        self,
+        shape: Sequence[int],
+        dtype: Literal["float32", "float16", "uint8", "int32"],
+    ) -> GpuSurfaceHandle:
+        """A tensor storage buffer of `shape` and `dtype`, named by the surface id the engine minted.
+
+        Contiguous row-major, every dimension non-zero. The handle states
+        `shape` and `dtype` and no pixel geometry; `torch.from_dlpack` writes it
+        on the GPU in place — Linux: `kDLCUDA` over the engine's own memory, no
+        staging and no copy. Closing the handle (or leaving its `with` block)
+        orders those writes ahead of every other holder's read, so publish the
+        id after it. A one-off is released at close; a tensor published
+        downstream comes from `acquire_storage_buffer_from_processor_output_pool`.
+        Linux only until the macOS arm lands (#2431).
+        """
+    def acquire_storage_buffer_from_processor_output_pool(
+        self,
+        pool_key: str,
+        rotation_depth: int,
+        shape: Sequence[int],
+        dtype: Literal["float32", "float16", "uint8", "int32"],
+    ) -> GpuSurfaceHandle:
+        """The tensor this frame publishes into, from the processor output pool `pool_key`.
+
+        The pool contract `acquire_texture_from_processor_output_pool` states:
+        a new `<slot>#<generation>` per call, a slot a consumer still holds is
+        never rewritten, and at the cap the call raises naming the pool.
+        """
     def resolve_surface(self, surface_id: str) -> GpuSurfaceHandle: ...
     def claim_surface_against_producer_reuse(
         self, surface_id: str
@@ -1199,6 +1228,35 @@ class GpuContextFullAccess:
         frames, and at its cap raises naming the pool — the producer drops its
         own frame rather than wait. `ProcessorOutputTextureRing` is the
         spelling a processor reaches for.
+        """
+    def acquire_storage_buffer(
+        self,
+        shape: Sequence[int],
+        dtype: Literal["float32", "float16", "uint8", "int32"],
+    ) -> GpuSurfaceHandle:
+        """A tensor storage buffer of `shape` and `dtype`, named by the surface id the engine minted.
+
+        Contiguous row-major, every dimension non-zero. The handle states
+        `shape` and `dtype` and no pixel geometry; `torch.from_dlpack` writes it
+        on the GPU in place — Linux: `kDLCUDA` over the engine's own memory, no
+        staging and no copy. Closing the handle (or leaving its `with` block)
+        orders those writes ahead of every other holder's read, so publish the
+        id after it. A one-off is released at close; a tensor published
+        downstream comes from `acquire_storage_buffer_from_processor_output_pool`.
+        Linux only until the macOS arm lands (#2431).
+        """
+    def acquire_storage_buffer_from_processor_output_pool(
+        self,
+        pool_key: str,
+        rotation_depth: int,
+        shape: Sequence[int],
+        dtype: Literal["float32", "float16", "uint8", "int32"],
+    ) -> GpuSurfaceHandle:
+        """The tensor this frame publishes into, from the processor output pool `pool_key`.
+
+        The pool contract `acquire_texture_from_processor_output_pool` states:
+        a new `<slot>#<generation>` per call, a slot a consumer still holds is
+        never rewritten, and at the cap the call raises naming the pool.
         """
 
     def create_window(
@@ -1484,7 +1542,12 @@ class GpuContextFullAccess:
 
 @final
 class GpuSurfaceHandle:
-    """An owned GPU surface, and the pixels behind it."""
+    """An owned GPU surface: pixels, or a tensor storage buffer.
+
+    A tensor surface states `shape` and `dtype`; its pixel accessors (`width`,
+    `height`, `format`, `bytes_per_row`, `lock`, `as_numpy`,
+    `as_device_tensor`) raise naming it, and `__dlpack__` is its one door.
+    """
 
     @property
     def surface_id(self) -> str: ...
@@ -1494,6 +1557,14 @@ class GpuSurfaceHandle:
     def height(self) -> int: ...
     @property
     def format(self) -> str: ...
+    @property
+    def shape(self) -> list[int] | None:
+        """A tensor surface's dimensions, outermost first; None for pixels."""
+
+    @property
+    def dtype(self) -> str | None:
+        """A tensor surface's element type; None for pixels."""
+
     @property
     def bytes_per_row(self) -> int:
         """Row pitch in bytes, including any padding the allocation carries.
@@ -1581,6 +1652,14 @@ class GpuSurfaceHandle:
 
         The tensor may outlive this handle: it holds its own share of the
         surface, so the pool slot is not reused until the tensor is released.
+
+        A tensor surface needs no lock: its capsule is `kDLCUDA` in its declared
+        shape straight over the engine's memory — writable for the processor
+        that acquired it, read-only for one that resolved it. The acquirer's
+        writes are ordered at the handle's close, so publish the id after it;
+        a write through a tensor kept past that close is out of contract and
+        the engine does not revoke it. A host capsule is refused; copy with
+        torch's `.cpu()`.
         """
 
 @final

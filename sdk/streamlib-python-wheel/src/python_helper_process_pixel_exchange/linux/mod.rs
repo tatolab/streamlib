@@ -18,12 +18,14 @@ use texture::an_acquired_device_texture_carries_no_exportable_fd_error;
 
 mod export_staging;
 mod foreign_dma_buf;
+mod storage_buffer;
 mod texture;
 
 pub(crate) use export_staging::{
     CpuReadbackCopyDirection, HelperCpuReadbackExport, HelperDeviceExport,
 };
 pub(crate) use foreign_dma_buf::HelperForeignSurfaceUnregisterDebt;
+pub(crate) use storage_buffer::HelperCheckedOutStorageBuffer;
 pub(crate) use texture::{
     HelperAcquiredTexture, HelperCheckedOutTextureSurface, OpaqueFdTextureExportDescription,
 };
@@ -147,6 +149,7 @@ impl HelperCheckedOutSurface {
             Self::PixelBuffer(pixel_surface) => &pixel_surface.exchange_client,
             Self::Texture(texture_surface) => &texture_surface.exchange_client,
             Self::AcquiredDeviceTexture(acquired_texture) => &acquired_texture.exchange_client,
+            Self::StorageBuffer(storage_buffer) => &storage_buffer.exchange_client,
         }
     }
 
@@ -159,6 +162,7 @@ impl HelperCheckedOutSurface {
             Self::AcquiredDeviceTexture(_) => {
                 Err(an_acquired_device_texture_carries_no_exportable_fd_error())
             }
+            Self::StorageBuffer(_) => Err(super::a_tensor_surface_is_not_a_pixel_surface()),
         }
     }
 
@@ -174,6 +178,7 @@ impl HelperCheckedOutSurface {
             Self::AcquiredDeviceTexture(_) => {
                 Err(an_acquired_device_texture_carries_no_exportable_fd_error())
             }
+            Self::StorageBuffer(_) => Err(super::a_tensor_surface_is_not_a_pixel_surface()),
         }
     }
 }
@@ -342,6 +347,11 @@ impl HelperProcessGpuExchangeClient {
                         consume_done_fd,
                     )
                     .map(HelperCheckedOutSurface::Texture);
+            }
+            "storage_buffer" => {
+                return self
+                    .import_checked_out_storage_buffer(surface_id, response, plane_fds)
+                    .map(HelperCheckedOutSurface::StorageBuffer);
             }
             "pixel_buffer" => {}
             other => {

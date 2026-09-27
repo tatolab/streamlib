@@ -15,9 +15,10 @@ use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalat
 };
 use crate::core::context::{
     GpuContextFullAccess, GpuContextLimitedAccess, PooledTextureHandle,
+    RegisteredTensorStorageBuffer, StorageBufferAllocationFlavour,
     TextureCrossProcessImportability, TexturePoolDescriptor,
 };
-use crate::core::rhi::{TextureFormat, TextureUsages};
+use crate::core::rhi::{TensorStorageBufferLayout, TextureFormat, TextureUsages};
 use crate::host_rhi::HostSurfaceStoreExt;
 
 /// Allocate one texture and register it for a helper — with the
@@ -61,6 +62,33 @@ pub(super) fn allocate_registered_texture_for_helper(
             consume_done,
         },
     ))
+}
+
+/// Allocate one DEVICE_LOCAL OPAQUE_FD tensor storage buffer and register it
+/// for a helper — with the surface-share service as a `storage_buffer` surface
+/// and in the parent-wide storage buffer map — answering the id it is
+/// registered under and what holds it alive.
+pub(super) fn allocate_registered_storage_buffer_for_helper(
+    full: &GpuContextFullAccess,
+    tensor_layout: &TensorStorageBufferLayout,
+) -> crate::core::error::Result<(String, RegisteredHandle)> {
+    let host = full.host_inner();
+    let buffer = host.acquire_storage_buffer_of_flavour(
+        tensor_layout,
+        StorageBufferAllocationFlavour::CrossesToAHelperProcessOrCuda,
+    )?;
+    let handle_id = Uuid::new_v4().to_string();
+    if let Some(store) = full.surface_store() {
+        store.register_storage_buffer(&handle_id, &buffer, tensor_layout)?;
+    }
+    host.register_storage_buffer_in_the_parent_wide_map(
+        &handle_id,
+        RegisteredTensorStorageBuffer {
+            buffer: buffer.clone(),
+            tensor_layout: tensor_layout.clone(),
+        },
+    );
+    Ok((handle_id, RegisteredHandle::StorageBuffer { buffer }))
 }
 
 /// Acquire a render-target DMA-BUF image on behalf of a helper process,

@@ -22,6 +22,9 @@ pub(crate) enum EscalateRequest {
     #[serde(rename = "acquire_pixel_buffer")]
     AcquirePixelBuffer(EscalateRequestAcquirePixelBuffer),
 
+    #[serde(rename = "acquire_storage_buffer")]
+    AcquireStorageBuffer(EscalateRequestAcquireStorageBuffer),
+
     #[serde(rename = "acquire_texture")]
     AcquireTexture(EscalateRequestAcquireTexture),
 
@@ -156,6 +159,27 @@ pub(crate) struct EscalateRequestAcquirePixelBuffer {
     pub(crate) width: u32,
 }
 
+/// Acquire a tensor storage buffer: engine-owned memory of a declared shape and
+/// element type, named by surface id and importable by CUDA.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct EscalateRequestAcquireStorageBuffer {
+    /// Element type: float32, float16, uint8 or int32.
+    pub(crate) dtype: String,
+
+    /// The processor output pool this acquire hands its slot out of, as for
+    /// `acquire_texture`. Absent for a one-off buffer the helper owns until it
+    /// releases it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) processor_output_pool: Option<EscalateRequestProcessorOutputPool>,
+
+    /// Correlates request with response. UUID string.
+    pub(crate) request_id: String,
+
+    /// Dimensions, outermost first; contiguous row-major, every one non-zero.
+    pub(crate) shape: Vec<u64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EscalateRequestAcquireTexture {
@@ -187,7 +211,8 @@ pub(crate) struct EscalateRequestAcquireTexture {
     pub(crate) width: u32,
 }
 
-/// Which processor output pool an `acquire_texture` hands its slot out of.
+/// Which processor output pool an `acquire_texture` or `acquire_storage_buffer`
+/// hands its slot out of.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EscalateRequestProcessorOutputPool {

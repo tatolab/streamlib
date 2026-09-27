@@ -186,8 +186,17 @@ impl GpuSurfaceOwnedMemory {
                 pixel_surface.consumer_buffer.mapped_ptr().is_null()
             }
             HelperCheckedOutSurface::Texture(_)
-            | HelperCheckedOutSurface::AcquiredDeviceTexture(_) => true,
+            | HelperCheckedOutSurface::AcquiredDeviceTexture(_)
+            | HelperCheckedOutSurface::StorageBuffer(_) => true,
         }
+    }
+
+    /// The tensor storage buffer this surface is, if it is one.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn tensor_storage_buffer(
+        &self,
+    ) -> Option<&crate::python_helper_process_pixel_exchange::HelperCheckedOutStorageBuffer> {
+        self.checked_out_surface.tensor_storage_buffer()
     }
 
     /// Off Linux no export staging exists: a macOS surface is its IOSurface's
@@ -361,6 +370,53 @@ fn single_plane_shape(format: PixelFormat) -> Option<(u32, DataType, Option<i64>
 }
 
 impl PixelExchangeTensorLayout {
+    /// The contiguous row-major layout a tensor storage buffer declares:
+    /// its own shape, element strides from the innermost dimension out.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn for_tensor_storage_buffer(
+        tensor_layout: &streamlib::sdk::rhi::TensorStorageBufferLayout,
+    ) -> PyResult<Self> {
+        use streamlib::sdk::rhi::TensorElementType;
+
+        let shape = tensor_layout
+            .shape()
+            .iter()
+            .map(|dimension| i64::try_from(*dimension))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| {
+                PyValueError::new_err(format!(
+                    "tensor shape {:?} has a dimension DLPack's int64 cannot carry",
+                    tensor_layout.shape()
+                ))
+            })?;
+        let mut strides = vec![1i64; shape.len()];
+        for axis in (0..shape.len().saturating_sub(1)).rev() {
+            strides[axis] = strides[axis + 1]
+                .checked_mul(shape[axis + 1])
+                .ok_or_else(|| {
+                    PyValueError::new_err(format!(
+                        "tensor shape {:?} has an element stride DLPack's int64 cannot carry",
+                        tensor_layout.shape()
+                    ))
+                })?;
+        }
+        let (code, bits) = match tensor_layout.element_type() {
+            TensorElementType::Float32 => (DataTypeCode::Float, 32),
+            TensorElementType::Float16 => (DataTypeCode::Float, 16),
+            TensorElementType::Uint8 => (DataTypeCode::UInt, 8),
+            TensorElementType::Int32 => (DataTypeCode::Int, 32),
+        };
+        Ok(Self {
+            shape,
+            strides,
+            dtype: DataType {
+                code,
+                bits,
+                lanes: 1,
+            },
+        })
+    }
+
     /// Derive the layout for a single-plane surface.
     ///
     /// `bytes_per_row` comes from the allocation rather than from
@@ -838,6 +894,60 @@ pub(crate) fn device_dlpack_capsule<'py>(
         read_only,
         owner,
     )
+}
+
+/// Build a `kDLCUDA` capsule straight over a tensor storage buffer's memory,
+/// in its declared shape — no staging, no refill, no copy-back. The capsule
+/// holds the surface, and with it CUDA's import and the checkout lease, so the
+/// slot is not reused while the tensor lives. Detached for the import.
+#[cfg(target_os = "linux")]
+pub(crate) fn tensor_storage_buffer_dlpack_capsule<'py>(
+    python: Python<'py>,
+    owned_memory: &Arc<GpuSurfaceOwnedMemory>,
+    exchange_shape: DlpackExchangeShape,
+    read_only: bool,
+) -> PyResult<Bound<'py, PyAny>> {
+    let storage_buffer = owned_memory
+        .tensor_storage_buffer()
+        .ok_or_else(|| PyRuntimeError::new_err("this surface is not a tensor storage buffer"))?;
+    let layout =
+        PixelExchangeTensorLayout::for_tensor_storage_buffer(&storage_buffer.tensor_layout)?;
+    let cuda_import = python
+        .detach(|| storage_buffer.cuda_import())
+        .map_err(crate::python_processor_context::gpu_operation_error)?;
+    dlpack_capsule_over(
+        python,
+        cuda_import.device_pointer(),
+        layout,
+        cuda_import.dlpack_device(),
+        exchange_shape,
+        read_only,
+        Box::new(Arc::clone(owned_memory)),
+    )
+}
+
+/// Order every CUDA write to a tensor storage buffer ahead of any other
+/// holder's read: the device-wide synchronize the write-back path uses, since
+/// no fence connects a consumer's CUDA stream to the engine. A tensor CUDA
+/// never imported has nothing to order.
+#[cfg(target_os = "linux")]
+pub(crate) fn publish_tensor_storage_buffer_device_writes(
+    python: Python<'_>,
+    owned_memory: &Arc<GpuSurfaceOwnedMemory>,
+) -> PyResult<()> {
+    let Some(cuda_import) = owned_memory
+        .tensor_storage_buffer()
+        .and_then(|storage_buffer| storage_buffer.cuda_import_already_made())
+    else {
+        return Ok(());
+    };
+    python
+        .detach(|| {
+            crate::python_cuda_pixel_exchange::synchronize_every_stream_on_the_import_device(
+                &cuda_import,
+            )
+        })
+        .map_err(crate::python_processor_context::gpu_operation_error)
 }
 
 /// Publish a device-side write back into the surface, so every other

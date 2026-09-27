@@ -1134,7 +1134,10 @@ mod tests {
     ) -> Vec<u8> {
         let byte_size = staging.staging_byte_size();
         let host_readback = gpu
-            .acquire_storage_buffer(byte_size)
+            .acquire_storage_buffer(
+                &crate::core::rhi::TensorStorageBufferLayout::of_bytes(byte_size)
+                    .expect("a non-zero staging"),
+            )
             .expect("host-visible readback allocation");
         let mut recorder = gpu
             .create_command_recorder("device_export_staging_test_readback")
@@ -1172,7 +1175,10 @@ mod tests {
     ) {
         let byte_size = staging.staging_byte_size();
         let host_upload = gpu
-            .acquire_storage_buffer(byte_size)
+            .acquire_storage_buffer(
+                &crate::core::rhi::TensorStorageBufferLayout::of_bytes(byte_size)
+                    .expect("a non-zero staging"),
+            )
             .expect("host-visible upload allocation");
         let mapped = host_upload.mapped_ptr();
         assert!(!mapped.is_null(), "the upload allocation must be mapped");

@@ -34,7 +34,7 @@ fn a_helpers_texture_crosses_on_an_iosurface_and_its_slot_is_held_until_teardown
 
     use super::super::acquisition::parse_texture_usages;
     use super::super::handle_escalate_op;
-    use super::{RegisteredHandle, release_surface_share_and_texture_cache_for_handle};
+    use super::{RegisteredHandle, release_surface_share_and_parent_caches_for_handle};
     use crate::apple::surface_share::{IOSurfaceShareState, MachSurfaceShareService};
     use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::EscalateRequestAcquireTexture;
     use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::{
@@ -136,7 +136,7 @@ fn a_helpers_texture_crosses_on_an_iosurface_and_its_slot_is_held_until_teardown
     drop(while_held);
 
     for (drained_handle_id, removed_handle) in registry.drain_handles() {
-        release_surface_share_and_texture_cache_for_handle(
+        release_surface_share_and_parent_caches_for_handle(
             &sandbox,
             &drained_handle_id,
             &removed_handle,
@@ -178,7 +178,7 @@ fn a_processor_output_pool_never_rewrites_a_frame_a_consumer_holds() {
     use uuid::Uuid;
 
     use super::super::handle_escalate_op;
-    use super::release_processor_output_texture_slot;
+    use super::release_processor_output_pool_slot;
     use crate::apple::surface_share::{IOSurfaceShareState, MachSurfaceShareService};
     use crate::core::Error;
     use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
@@ -333,12 +333,12 @@ fn a_processor_output_pool_never_rewrites_a_frame_a_consumer_holds() {
         "a released slot's last frame id still checks out"
     );
     let slot_keys: Vec<String> = registry
-        .processor_output_texture_pools()
+        .processor_output_pools()
         .drain_slots()
         .into_iter()
         .map(|released_slot| {
             let pool_slot_key = released_slot.pool_slot_key.clone();
-            release_processor_output_texture_slot(&sandbox, released_slot);
+            release_processor_output_pool_slot(&sandbox, released_slot);
             pool_slot_key
         })
         .collect();
@@ -407,7 +407,7 @@ fn a_reused_processor_output_slot_skips_the_escalate_gate_and_growth_enters_it()
 
     use uuid::Uuid;
 
-    use super::release_processor_output_texture_slot;
+    use super::release_processor_output_pool_slot;
     use crate::core::context::{GpuContext, GpuContextLimitedAccess};
     use crate::core::rhi::pool_slot_key_of_surface_id;
 
@@ -463,8 +463,8 @@ fn a_reused_processor_output_slot_skips_the_escalate_gate_and_growth_enters_it()
         pool_slot_key_of_surface_id(&first_frame)
     );
 
-    for released_slot in registry.processor_output_texture_pools().drain_slots() {
-        release_processor_output_texture_slot(&sandbox, released_slot);
+    for released_slot in registry.processor_output_pools().drain_slots() {
+        release_processor_output_pool_slot(&sandbox, released_slot);
     }
     let refusal = next_frame(2).expect_err("a hand-off after teardown is refused");
     assert!(refusal.contains("torn down"), "got: {refusal}");
@@ -482,8 +482,8 @@ fn a_slot_allocated_across_the_helpers_teardown_is_handed_back_for_release() {
     use super::super::acquisition::parse_texture_usages;
     use super::super::handle_escalate_op;
     use super::{
-        ProcessorOutputTextureDescriptor, ProcessorOutputTextureFreshSlotHandOff,
-        release_processor_output_texture_slot,
+        ProcessorOutputFreshSlotHandOff, ProcessorOutputSlotDescriptor,
+        ProcessorOutputTextureDescriptor, release_processor_output_pool_slot,
     };
     use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::EscalateRequestAcquireTexture;
     use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::{
@@ -525,17 +525,17 @@ fn a_slot_allocated_across_the_helpers_teardown_is_handed_back_for_release() {
         .remove_handle(&allocated.handle_id)
         .expect("the allocation is registered");
 
-    let mut pools = registry.processor_output_texture_pools();
+    let mut pools = registry.processor_output_pools();
     assert!(pools.drain_slots().is_empty());
     let handed_off = pools.hand_off_a_fresh_slot(
         sandbox.host_inner(),
         "pool-torn-down-mid-allocation",
-        descriptor,
+        &ProcessorOutputSlotDescriptor::Texture(descriptor),
         allocated.handle_id.clone(),
         registered_texture,
     );
     drop(pools);
-    let ProcessorOutputTextureFreshSlotHandOff::Refused {
+    let ProcessorOutputFreshSlotHandOff::Refused {
         refusal,
         slot_owed_its_release: released_slot,
     } = handed_off
@@ -544,5 +544,286 @@ fn a_slot_allocated_across_the_helpers_teardown_is_handed_back_for_release() {
     };
     assert!(refusal.to_string().contains("torn down"), "got: {refusal}");
     assert_eq!(released_slot.pool_slot_key, allocated.handle_id);
-    release_processor_output_texture_slot(&sandbox, released_slot);
+    release_processor_output_pool_slot(&sandbox, released_slot);
+}
+
+/// A live Unix-socket surface-share service wired into `gpu` as its store, so an
+/// escalate acquire registers exactly as a helper's would.
+#[cfg(target_os = "linux")]
+fn gpu_registering_with_a_live_surface_share_service(
+    gpu: &crate::core::context::GpuContext,
+) -> (
+    tempfile::TempDir,
+    crate::linux::surface_share::SurfaceShareState,
+    crate::linux::surface_share::UnixSocketSurfaceService,
+) {
+    use std::sync::Arc;
+
+    use crate::core::context::SurfaceStore;
+    use crate::linux::surface_share::{SurfaceShareState, UnixSocketSurfaceService};
+
+    let socket_dir = tempfile::TempDir::new().expect("temp dir for the test socket");
+    let socket_path = socket_dir.path().join("surface-share.sock");
+    let state = SurfaceShareState::new();
+    let mut service = UnixSocketSurfaceService::new(state.clone(), socket_path.clone());
+    service.start().expect("service start");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    while !socket_path.exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let store = SurfaceStore::new_reading_check_out_leases(
+        socket_path.to_string_lossy().into_owned(),
+        "R-tensor-storage-buffer".to_string(),
+        Arc::clone(state.check_out_leases()),
+    );
+    store.connect().expect("the store connects");
+    gpu.set_surface_store(store);
+    (socket_dir, state, service)
+}
+
+/// Acquire a tensor storage buffer over the real escalate op, from a processor
+/// output pool when one is named, answering the surface id or the refusal.
+#[cfg(target_os = "linux")]
+fn acquire_tensor_storage_buffer_over_the_escalate_op(
+    sandbox: &crate::core::context::GpuContextLimitedAccess,
+    registry: &EscalateHandleRegistry,
+    shape: &[u64],
+    dtype: &str,
+    processor_output_pool: Option<(&str, u32)>,
+) -> std::result::Result<String, String> {
+    use super::super::handle_escalate_op;
+    use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
+        EscalateRequestAcquireStorageBuffer, EscalateRequestProcessorOutputPool,
+    };
+    use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::{
+        EscalateRequest, EscalateResponse,
+    };
+    use crate::core::runtime::mesh::a_mesh_link_ingress_table_carrying_nothing;
+
+    match handle_escalate_op(
+        sandbox,
+        registry,
+        &a_mesh_link_ingress_table_carrying_nothing(),
+        EscalateRequest::AcquireStorageBuffer(EscalateRequestAcquireStorageBuffer {
+            request_id: "req-tensor".to_string(),
+            shape: shape.to_vec(),
+            dtype: dtype.to_string(),
+            processor_output_pool: processor_output_pool.map(|(pool_key, rotation_depth)| {
+                EscalateRequestProcessorOutputPool {
+                    pool_key: pool_key.to_string(),
+                    rotation_depth,
+                }
+            }),
+        }),
+    ) {
+        Some(EscalateResponse::Ok(ok)) => {
+            assert_eq!(
+                ok.shape.as_deref(),
+                Some(shape),
+                "the reply echoes the shape"
+            );
+            assert_eq!(
+                ok.dtype.as_deref(),
+                Some(dtype),
+                "the reply echoes the dtype"
+            );
+            Ok(ok.handle_id)
+        }
+        Some(EscalateResponse::Err(err)) => Err(err.message),
+        None => Err("acquire_storage_buffer got no response".to_string()),
+    }
+}
+
+/// A one-off tensor acquire registers a `storage_buffer` surface carrying its
+/// shape and dtype, enters the parent-wide map, and leaves both on release.
+#[cfg(target_os = "linux")]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+)]
+#[test]
+fn a_tensor_storage_buffer_registers_its_shape_and_leaves_every_table_on_release() {
+    use super::super::handle_escalate_op;
+    use crate::core::Error;
+    use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateRequest;
+    use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::EscalateRequestReleaseHandle;
+    use crate::core::context::{GpuContext, GpuContextLimitedAccess};
+    use crate::core::rhi::{TensorElementType, TensorStorageBufferLayout};
+    use crate::core::runtime::mesh::a_mesh_link_ingress_table_carrying_nothing;
+
+    let Ok(gpu) = GpuContext::init_for_platform_sync() else {
+        println!("no GPU device — skipping");
+        return;
+    };
+    let (_socket_dir, state, mut service) = gpu_registering_with_a_live_surface_share_service(&gpu);
+    let sandbox = GpuContextLimitedAccess::new(gpu);
+    let registry = EscalateHandleRegistry::new();
+
+    let surface_id = acquire_tensor_storage_buffer_over_the_escalate_op(
+        &sandbox,
+        &registry,
+        &[3, 7, 11],
+        "float16",
+        None,
+    )
+    .expect("a one-off tensor storage buffer is acquired");
+    let expected_layout =
+        TensorStorageBufferLayout::new(vec![3, 7, 11], TensorElementType::Float16)
+            .expect("an odd shape is valid");
+    let checkout = state
+        .get_surface_planes(&surface_id)
+        .expect("the tensor is registered with the surface-share service");
+    assert_eq!(checkout.handle_type, "opaque_fd");
+    assert_eq!(
+        checkout.plane_sizes,
+        vec![expected_layout.byte_size()],
+        "the registered size is the tensor's exact byte size, not the allocation's"
+    );
+    assert_eq!(checkout.tensor_layout.as_ref(), Some(&expected_layout));
+    assert!(checkout.vk_memory_type_index.is_some());
+    assert!(checkout.exporting_device_uuid.is_some());
+    let registered = sandbox
+        .host_inner()
+        .resolve_storage_buffer_from_the_parent_wide_map_by_surface_id(&surface_id)
+        .expect("the parent-wide map resolves the tensor by its id");
+    assert_eq!(registered.tensor_layout, expected_layout);
+    assert_eq!(registered.buffer.byte_size(), expected_layout.byte_size());
+    drop(registered);
+
+    let released = handle_escalate_op(
+        &sandbox,
+        &registry,
+        &a_mesh_link_ingress_table_carrying_nothing(),
+        EscalateRequest::ReleaseHandle(EscalateRequestReleaseHandle {
+            request_id: "req-release-tensor".to_string(),
+            handle_id: surface_id.clone(),
+        }),
+    );
+    assert!(matches!(
+        released,
+        Some(crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse::Ok(_))
+    ));
+    assert!(state.get_surface_planes(&surface_id).is_none());
+    assert!(matches!(
+        sandbox
+            .host_inner()
+            .resolve_storage_buffer_from_the_parent_wide_map_by_surface_id(&surface_id),
+        Err(Error::NotFound(_))
+    ));
+    service.stop();
+}
+
+/// A pooled tensor acquire never rehands the slot of a tensor a consumer
+/// holds, a recycled tensor's id is refused by name, and teardown leaves no
+/// registration behind.
+#[cfg(target_os = "linux")]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+)]
+#[test]
+fn a_tensor_storage_buffer_pool_never_rewrites_a_tensor_a_consumer_holds() {
+    use uuid::Uuid;
+
+    use super::release_processor_output_pool_slot;
+    use crate::core::Error;
+    use crate::core::context::{GpuContext, GpuContextLimitedAccess};
+    use crate::core::rhi::pool_slot_key_of_surface_id;
+
+    let Ok(gpu) = GpuContext::init_for_platform_sync() else {
+        println!("no GPU device — skipping");
+        return;
+    };
+    let (_socket_dir, state, mut service) = gpu_registering_with_a_live_surface_share_service(&gpu);
+    let sandbox = GpuContextLimitedAccess::new(gpu);
+    let registry = EscalateHandleRegistry::new();
+    let pool_key = format!("tensor-pool-test-{}", Uuid::new_v4().simple());
+    let next_tensor = || {
+        acquire_tensor_storage_buffer_over_the_escalate_op(
+            &sandbox,
+            &registry,
+            &[1, 3, 640, 640],
+            "float32",
+            Some((&pool_key, 2)),
+        )
+        .expect("the pooled tensor acquire succeeds")
+    };
+
+    let unheld: Vec<String> = (0..4).map(|_| next_tensor()).collect();
+    let unheld_slots: std::collections::HashSet<_> = unheld
+        .iter()
+        .map(|tensor| pool_slot_key_of_surface_id(tensor).to_string())
+        .collect();
+    assert_eq!(
+        unheld_slots.len(),
+        2,
+        "with nobody holding a tensor the pool rotates through exactly its depth: {unheld:?}"
+    );
+
+    let held_tensor = next_tensor();
+    let consumer = state.check_out_leases().mint_holder_id();
+    state
+        .check_out_leases()
+        .record_check_out_lease(&held_tensor, consumer)
+        .expect("the current tensor checks out");
+    let while_held: Vec<String> = (0..4).map(|_| next_tensor()).collect();
+    assert!(
+        while_held
+            .iter()
+            .all(|tensor| pool_slot_key_of_surface_id(tensor)
+                != pool_slot_key_of_surface_id(&held_tensor)),
+        "the pool rehanded the slot of a tensor a consumer holds: {held_tensor} then {while_held:?}"
+    );
+    sandbox
+        .host_inner()
+        .resolve_storage_buffer_from_the_parent_wide_map_by_surface_id(&held_tensor)
+        .expect("the held tensor still resolves");
+    let recycled_tensor = while_held
+        .iter()
+        .find(|tensor| {
+            while_held.iter().any(|later| {
+                pool_slot_key_of_surface_id(later) == pool_slot_key_of_surface_id(tensor)
+                    && later != *tensor
+            })
+        })
+        .expect("an unheld slot republished while the other was held");
+    assert!(
+        matches!(
+            sandbox
+                .host_inner()
+                .resolve_storage_buffer_from_the_parent_wide_map_by_surface_id(recycled_tensor),
+            Err(Error::SurfaceFrameRecycled { .. })
+        ),
+        "a recycled tensor's id {recycled_tensor} must be refused as recycled"
+    );
+    state
+        .check_out_leases()
+        .release_one_check_out_lease(&held_tensor, consumer)
+        .unwrap();
+
+    let slot_keys: Vec<String> = registry
+        .processor_output_pools()
+        .drain_slots()
+        .into_iter()
+        .map(|released_slot| {
+            let pool_slot_key = released_slot.pool_slot_key.clone();
+            release_processor_output_pool_slot(&sandbox, released_slot);
+            pool_slot_key
+        })
+        .collect();
+    assert!(!slot_keys.is_empty());
+    for pool_slot_key in &slot_keys {
+        assert!(
+            state.get_surface_planes(pool_slot_key).is_none(),
+            "teardown left tensor slot {pool_slot_key} registered"
+        );
+        assert!(
+            sandbox
+                .host_inner()
+                .resolve_storage_buffer_from_the_parent_wide_map_by_surface_id(pool_slot_key)
+                .is_err(),
+            "teardown left tensor slot {pool_slot_key} in the parent-wide map"
+        );
+    }
+    service.stop();
 }

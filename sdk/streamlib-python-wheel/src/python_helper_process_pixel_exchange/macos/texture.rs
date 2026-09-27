@@ -13,7 +13,7 @@ use streamlib_consumer_rhi::{
 
 use super::super::{
     HelperCheckedOutSurface, HelperProcessGpuExchangeClient, HelperSurfaceCheckOutLeaseDebt,
-    HelperSurfaceReleaseDebt, ProcessorOutputTexturePoolRequest, SurfaceShareTransferredHandle,
+    HelperSurfaceReleaseDebt, ProcessorOutputPoolRequest, SurfaceShareTransferredHandle,
     escalate_round_trip_to_parent, required_positive_u32_check_out_metadata_field,
     vk_image_creation_recipe_of_check_out,
 };
@@ -246,7 +246,7 @@ impl HelperProcessGpuExchangeClient {
         height: u32,
         wire_format_name: &str,
         usage: &[String],
-        processor_output_pool: Option<ProcessorOutputTexturePoolRequest<'_>>,
+        processor_output_pool: Option<ProcessorOutputPoolRequest<'_>>,
     ) -> PyResult<HelperCheckedOutTextureSurface> {
         let op = PyDict::new(python);
         op.set_item("op", "acquire_texture")?;
@@ -254,12 +254,7 @@ impl HelperProcessGpuExchangeClient {
         op.set_item("height", height)?;
         op.set_item("format", wire_format_name)?;
         op.set_item("usage", usage)?;
-        if let Some(processor_output_pool) = processor_output_pool {
-            op.set_item(
-                "processor_output_pool",
-                processor_output_pool.to_escalate_field(python)?,
-            )?;
-        }
+        ProcessorOutputPoolRequest::write_onto_escalate_op(processor_output_pool, python, &op)?;
         let response =
             escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
         let handle_id: String = response
@@ -273,14 +268,8 @@ impl HelperProcessGpuExchangeClient {
         // The debt exists from the moment the parent allocated, so a refused
         // checkout or import below still hands the pool slot back. A processor
         // output pool's frame owes none: the pool owns the slot.
-        let release_to_parent = processor_output_pool
-            .is_none()
-            .then(|| HelperSurfaceReleaseDebt {
-                release_to_parent_without_waiting: self
-                    .release_to_parent_without_waiting
-                    .clone_ref(python),
-                handle_id: handle_id.clone(),
-            });
+        let release_to_parent =
+            self.release_debt_unless_pooled(python, processor_output_pool, &handle_id);
         let checked_out = python
             .detach(|| self.check_out_and_import(&handle_id))
             .map_err(|check_out_failure| {

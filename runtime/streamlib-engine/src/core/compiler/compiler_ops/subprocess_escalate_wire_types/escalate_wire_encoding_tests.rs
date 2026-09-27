@@ -110,6 +110,8 @@ fn escalate_request_vectors_round_trip() {
     assert_golden_vectors_round_trip!(EscalateRequest:
         AcquireImage => r#"{"op":"acquire_image","format":"acquire_image.format-1","height":2,"request_id":"acquire_image.request_id-3","width":4}"#,
         AcquirePixelBuffer => r#"{"op":"acquire_pixel_buffer","format":"acquire_pixel_buffer.format-5","height":6,"request_id":"acquire_pixel_buffer.request_id-7","width":8}"#,
+        AcquireStorageBuffer => r#"{"op":"acquire_storage_buffer","dtype":"float32","request_id":"acquire_storage_buffer.request_id-265","shape":[1,3,640,640]}"#,
+        AcquireStorageBuffer => r#"{"op":"acquire_storage_buffer","dtype":"float16","processor_output_pool":{"pool_key":"acquire_storage_buffer.processor_output_pool.pool_key-266","rotation_depth":3},"request_id":"acquire_storage_buffer.request_id-267","shape":[3,7,11]}"#,
         AcquireTexture => r#"{"op":"acquire_texture","format":"acquire_texture.format-9","height":10,"request_id":"acquire_texture.request_id-11","usage":["acquire_texture.usage[0]-12","acquire_texture.usage[1]-13"],"width":14}"#,
         AcquireTexture => r#"{"op":"acquire_texture","format":"rgba8_unorm","height":10,"processor_output_pool":{"pool_key":"acquire_texture.processor_output_pool.pool_key-15","rotation_depth":2},"request_id":"acquire_texture.request_id-11","usage":["texture_binding"],"width":14}"#,
         CloseProcessorOwnedWindow => r#"{"op":"close_processor_owned_window","request_id":"close_processor_owned_window.request_id-236","window_id":"close_processor_owned_window.window_id-237"}"#,
@@ -143,7 +145,7 @@ fn escalate_request_vectors_round_trip() {
 fn escalate_response_vectors_round_trip() {
     assert_golden_vectors_round_trip!(EscalateResponse:
         Err => r#"{"result":"err","message":"err.message-2","request_id":"err.request_id-3"}"#,
-        Ok => r#"{"result":"ok","handle_id":"ok.handle_id-4","request_id":"ok.request_id-5","bindings":[{"kind":"sampled_texture","name":"ok.bindings[0].name-6"},{"kind":"storage_image","name":"ok.bindings[1].name-7"}],"bytes_per_row":"ok.bytes_per_row-8","close_requested_by_user":true,"stamp_clock_identity":"ok.stamp_clock_identity-17","exporting_device_uuid":"ok.exporting_device_uuid-9","format":"ok.format-10","height":11,"processor_owned_window_is_closed":true,"staging_byte_size":"ok.staging_byte_size-12","timeline_value":"ok.timeline_value-13","usage":["ok.usage[0]-14","ok.usage[1]-15"],"width":16,"writable":false}"#,
+        Ok => r#"{"result":"ok","handle_id":"ok.handle_id-4","request_id":"ok.request_id-5","bindings":[{"kind":"sampled_texture","name":"ok.bindings[0].name-6"},{"kind":"storage_image","name":"ok.bindings[1].name-7"}],"bytes_per_row":"ok.bytes_per_row-8","close_requested_by_user":true,"stamp_clock_identity":"ok.stamp_clock_identity-17","dtype":"float32","exporting_device_uuid":"ok.exporting_device_uuid-9","format":"ok.format-10","height":11,"processor_owned_window_is_closed":true,"shape":[1,3,640,640],"staging_byte_size":"ok.staging_byte_size-12","timeline_value":"ok.timeline_value-13","usage":["ok.usage[0]-14","ok.usage[1]-15"],"width":16,"writable":false}"#,
     );
 }
 

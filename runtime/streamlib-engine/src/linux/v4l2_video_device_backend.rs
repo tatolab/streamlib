@@ -634,7 +634,9 @@ fn capture_thread_loop(
         let mut input_storage_buffers: Vec<StorageBuffer> = Vec::with_capacity(2);
         let mut input_mapped_ptrs: [*mut u8; 2] = [std::ptr::null_mut(); 2];
         for slot in &mut input_mapped_ptrs {
-            let buf = full.acquire_storage_buffer(input_alloc_size)?;
+            let buf = full.acquire_storage_buffer(
+                &crate::core::rhi::TensorStorageBufferLayout::of_bytes(input_alloc_size)?,
+            )?;
             *slot = buf.mapped_ptr();
             input_storage_buffers.push(buf);
         }

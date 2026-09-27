@@ -53,6 +53,8 @@ pub use gpu_context::GpuCapabilitiesSnapshot;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use gpu_context::{BatchedComputeKernelDispatch, BatchedComputeKernelDispatchBinding};
 pub use gpu_context::{GpuContext, GpuContextFullAccess, GpuContextLimitedAccess};
+#[cfg(target_os = "linux")]
+pub(crate) use gpu_context::{RegisteredTensorStorageBuffer, StorageBufferAllocationFlavour};
 pub(crate) use isolation::FullAccessGrant;
 pub use isolation::IsolationTier;
 pub use runtime_context::{RuntimeContext, RuntimeContextFullAccess, RuntimeContextLimitedAccess};

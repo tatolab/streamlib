@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use parking_lot::RwLock;
 
 use crate::core::context::SurfaceCheckOutLeaseRegistry;
-use crate::core::rhi::pool_slot_key_of_surface_id;
+use crate::core::rhi::{TensorStorageBufferLayout, pool_slot_key_of_surface_id};
 
 #[derive(Debug)]
 pub struct SurfaceMetadata {
@@ -148,6 +148,9 @@ pub struct SurfaceMetadata {
     /// the entire device-binding contract. `None` when the registration
     /// did not carry one.
     pub exporting_device_uuid: Option<String>,
+    /// The declared tensor shape and dtype of a `storage_buffer`
+    /// registration; `None` for every other resource type.
+    pub tensor_layout: Option<TensorStorageBufferLayout>,
 }
 
 // The atomic field makes `SurfaceMetadata` not `Clone`-by-derive. Hand-roll
@@ -180,6 +183,7 @@ impl Clone for SurfaceMetadata {
             vk_image_allocation_size: self.vk_image_allocation_size,
             vk_memory_type_index: self.vk_memory_type_index,
             exporting_device_uuid: self.exporting_device_uuid.clone(),
+            tensor_layout: self.tensor_layout.clone(),
         }
     }
 }
@@ -247,6 +251,8 @@ pub struct SurfacePlaneCheckout {
     pub vk_memory_type_index: Option<u32>,
     /// Snapshot of [`SurfaceMetadata::exporting_device_uuid`] at lookup time.
     pub exporting_device_uuid: Option<String>,
+    /// Snapshot of [`SurfaceMetadata::tensor_layout`] at lookup time.
+    pub tensor_layout: Option<TensorStorageBufferLayout>,
 }
 
 /// Arguments to [`SurfaceShareState::register_surface`]. Grouped so the
@@ -323,6 +329,9 @@ pub struct SurfaceRegistration<'a> {
     /// The exporting device's UUID as 32 hex characters, or `None` —
     /// see [`SurfaceMetadata::exporting_device_uuid`].
     pub exporting_device_uuid: Option<String>,
+    /// The declared tensor layout of a `storage_buffer` registration, or
+    /// `None` — see [`SurfaceMetadata::tensor_layout`].
+    pub tensor_layout: Option<TensorStorageBufferLayout>,
 }
 
 impl SurfaceShareState {
@@ -378,6 +387,7 @@ impl SurfaceShareState {
                 vk_image_allocation_size: reg.vk_image_allocation_size,
                 vk_memory_type_index: reg.vk_memory_type_index,
                 exporting_device_uuid: reg.exporting_device_uuid,
+                tensor_layout: reg.tensor_layout,
             },
         );
         Ok(())
@@ -432,6 +442,7 @@ impl SurfaceShareState {
                     vk_image_allocation_size: metadata.vk_image_allocation_size,
                     vk_memory_type_index: metadata.vk_memory_type_index,
                     exporting_device_uuid: metadata.exporting_device_uuid.clone(),
+                    tensor_layout: metadata.tensor_layout.clone(),
                 }
             })
     }
@@ -534,6 +545,7 @@ mod tests {
             vk_image_allocation_size: VK_IMAGE_ALLOCATION_SIZE_DEFAULT,
             vk_memory_type_index: None,
             exporting_device_uuid: None,
+            tensor_layout: None,
         }
     }
 
@@ -701,6 +713,7 @@ mod tests {
                 vk_image_allocation_size: 16_777_216,
                 vk_memory_type_index: Some(7),
                 exporting_device_uuid: Some("00112233445566778899aabbccddeeff".to_string()),
+                tensor_layout: None,
             })
             .expect("register vk-image-rt");
 
@@ -788,6 +801,7 @@ mod tests {
                 vk_image_allocation_size: VK_IMAGE_ALLOCATION_SIZE_DEFAULT,
                 vk_memory_type_index: None,
                 exporting_device_uuid: None,
+                tensor_layout: None,
             })
             .expect("register multi-plane");
 

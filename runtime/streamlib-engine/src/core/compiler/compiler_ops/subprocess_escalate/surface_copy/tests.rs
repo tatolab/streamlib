@@ -96,7 +96,10 @@ fn register_texture_holding(
         return surface_id;
     };
     let upload = gpu
-        .acquire_storage_buffer(pixels.len() as u64)
+        .acquire_storage_buffer(
+            &crate::core::rhi::TensorStorageBufferLayout::of_bytes(pixels.len() as u64)
+                .expect("non-empty pixels"),
+        )
         .expect("upload allocation");
     unsafe { std::ptr::copy_nonoverlapping(pixels.as_ptr(), upload.mapped_ptr(), pixels.len()) };
     let mut recorder = gpu
@@ -150,7 +153,10 @@ fn read_registered_texture(gpu: &GpuContext, surface_id: &str) -> Vec<u8> {
     let known_layout = registration.current_layout();
     let texture = registration.texture();
     let readback = gpu
-        .acquire_storage_buffer(RGBA_BYTE_COUNT as u64)
+        .acquire_storage_buffer(
+            &crate::core::rhi::TensorStorageBufferLayout::of_bytes(RGBA_BYTE_COUNT as u64)
+                .expect("a non-zero readback"),
+        )
         .expect("readback allocation");
     let mut recorder = gpu
         .create_command_recorder("surface_copy_test_readback")

@@ -64,9 +64,9 @@ pub(crate) use gpu_kernels::{
 
 #[cfg(target_os = "linux")]
 pub(crate) use linux::{
-    CpuReadbackCopyDirection, HelperAcquiredTexture, HelperCheckedOutTextureSurface,
-    HelperCpuReadbackExport, HelperDeviceExport, HelperForeignSurfaceUnregisterDebt,
-    OpaqueFdTextureExportDescription,
+    CpuReadbackCopyDirection, HelperAcquiredTexture, HelperCheckedOutStorageBuffer,
+    HelperCheckedOutTextureSurface, HelperCpuReadbackExport, HelperDeviceExport,
+    HelperForeignSurfaceUnregisterDebt, OpaqueFdTextureExportDescription,
 };
 #[cfg(target_os = "macos")]
 pub(crate) use macos::{HelperCheckedOutTextureSurface, IOSurfaceMachPortExportDescription};
@@ -75,6 +75,33 @@ use macos::{
     HelperIOSurfaceCpuLock, HelperIOSurfaceImportsByPoolSlot, HelperIOSurfacePoolSlotImport,
     HelperIOSurfaceUseCountClaim,
 };
+
+/// The width, height and format a pixel surface carries.
+#[derive(Clone, Copy)]
+pub(crate) struct PixelSurfaceGeometry {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) format_wire_name: &'static str,
+}
+
+/// What a surface is shaped as: pixels, or a tensor storage buffer's declared
+/// shape and dtype — never both, never neither.
+#[derive(Clone)]
+pub(crate) enum GpuSurfaceGeometry {
+    Pixels(PixelSurfaceGeometry),
+    #[cfg(target_os = "linux")]
+    TensorStorageBuffer(streamlib::sdk::rhi::TensorStorageBufferLayout),
+}
+
+/// The refusal every pixel-shaped door gives a tensor surface.
+#[cfg(target_os = "linux")]
+pub(crate) fn a_tensor_surface_is_not_a_pixel_surface() -> PyErr {
+    pyo3::exceptions::PyRuntimeError::new_err(
+        "this surface is a tensor storage buffer, not pixels: it has a shape and a dtype, no \
+         width, height, format or CPU mapping, and its one door is `__dlpack__` \
+         (`torch.from_dlpack`)",
+    )
+}
 
 /// One field of an escalate response, named in the failure so a parent
 /// that answered a shape this child does not understand says which part.
@@ -108,24 +135,30 @@ fn escalate_round_trip_to_parent<'py>(
         })
 }
 
-/// Which processor output pool a texture acquire hands its slot out of.
+/// Which processor output pool a texture or tensor storage buffer acquire
+/// hands its slot out of.
 #[derive(Clone, Copy)]
-pub(crate) struct ProcessorOutputTexturePoolRequest<'pool_key> {
+pub(crate) struct ProcessorOutputPoolRequest<'pool_key> {
     pub(crate) pool_key: &'pool_key str,
     pub(crate) rotation_depth: u32,
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-impl ProcessorOutputTexturePoolRequest<'_> {
-    /// The request's wire field, as the escalate op spells it.
-    fn to_escalate_field<'python>(
-        self,
-        python: Python<'python>,
-    ) -> PyResult<Bound<'python, PyDict>> {
+impl ProcessorOutputPoolRequest<'_> {
+    /// Name the pool on an acquire's escalate op; a one-off acquire carries
+    /// no `processor_output_pool` field.
+    fn write_onto_escalate_op(
+        processor_output_pool: Option<Self>,
+        python: Python<'_>,
+        op: &Bound<'_, PyDict>,
+    ) -> PyResult<()> {
+        let Some(processor_output_pool) = processor_output_pool else {
+            return Ok(());
+        };
         let field = PyDict::new(python);
-        field.set_item("pool_key", self.pool_key)?;
-        field.set_item("rotation_depth", self.rotation_depth)?;
-        Ok(field)
+        field.set_item("pool_key", processor_output_pool.pool_key)?;
+        field.set_item("rotation_depth", processor_output_pool.rotation_depth)?;
+        op.set_item("processor_output_pool", field)
     }
 }
 
@@ -351,14 +384,17 @@ impl HelperCheckedOutPixelSurface {
 }
 
 /// The backings one surface id can stand for, behind one lifetime story:
-/// the two a checkout imports, and the acquired device texture that was
-/// never checked out at all — a name whose memory stays engine-side.
+/// the pixel buffer, texture and tensor storage buffer a checkout imports,
+/// and the acquired device texture that was never checked out at all — a
+/// name whose memory stays engine-side.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) enum HelperCheckedOutSurface {
     PixelBuffer(HelperCheckedOutPixelSurface),
     Texture(HelperCheckedOutTextureSurface),
     #[cfg(target_os = "linux")]
     AcquiredDeviceTexture(HelperAcquiredTexture),
+    #[cfg(target_os = "linux")]
+    StorageBuffer(HelperCheckedOutStorageBuffer),
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -369,34 +405,50 @@ impl HelperCheckedOutSurface {
             Self::Texture(texture_surface) => &texture_surface.surface_id,
             #[cfg(target_os = "linux")]
             Self::AcquiredDeviceTexture(acquired_texture) => &acquired_texture.surface_id,
+            #[cfg(target_os = "linux")]
+            Self::StorageBuffer(storage_buffer) => &storage_buffer.surface_id,
         }
     }
 
-    pub(crate) fn width(&self) -> u32 {
+    /// Whether this surface is pixels or a tensor, and its geometry.
+    pub(crate) fn geometry(&self) -> GpuSurfaceGeometry {
+        let pixels = |width, height, format_wire_name| {
+            GpuSurfaceGeometry::Pixels(PixelSurfaceGeometry {
+                width,
+                height,
+                format_wire_name,
+            })
+        };
         match self {
-            Self::PixelBuffer(pixel_surface) => pixel_surface.width,
-            Self::Texture(texture_surface) => texture_surface.width,
+            Self::PixelBuffer(pixel_surface) => pixels(
+                pixel_surface.width,
+                pixel_surface.height,
+                pixel_surface.format.wire_name(),
+            ),
+            Self::Texture(texture_surface) => pixels(
+                texture_surface.width,
+                texture_surface.height,
+                texture_surface.format.wire_name(),
+            ),
             #[cfg(target_os = "linux")]
-            Self::AcquiredDeviceTexture(acquired_texture) => acquired_texture.width,
+            Self::AcquiredDeviceTexture(acquired_texture) => pixels(
+                acquired_texture.width,
+                acquired_texture.height,
+                acquired_texture.format.wire_name(),
+            ),
+            #[cfg(target_os = "linux")]
+            Self::StorageBuffer(storage_buffer) => {
+                GpuSurfaceGeometry::TensorStorageBuffer(storage_buffer.tensor_layout.clone())
+            }
         }
     }
 
-    pub(crate) fn height(&self) -> u32 {
+    /// The tensor storage buffer this surface is, if it is one.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn tensor_storage_buffer(&self) -> Option<&HelperCheckedOutStorageBuffer> {
         match self {
-            Self::PixelBuffer(pixel_surface) => pixel_surface.height,
-            Self::Texture(texture_surface) => texture_surface.height,
-            #[cfg(target_os = "linux")]
-            Self::AcquiredDeviceTexture(acquired_texture) => acquired_texture.height,
-        }
-    }
-
-    /// The snake-case format name the Python surface spells.
-    pub(crate) fn format_wire_name(&self) -> &'static str {
-        match self {
-            Self::PixelBuffer(pixel_surface) => pixel_surface.format.wire_name(),
-            Self::Texture(texture_surface) => texture_surface.format.wire_name(),
-            #[cfg(target_os = "linux")]
-            Self::AcquiredDeviceTexture(acquired_texture) => acquired_texture.format.wire_name(),
+            Self::StorageBuffer(storage_buffer) => Some(storage_buffer),
+            _ => None,
         }
     }
 }
@@ -574,6 +626,26 @@ pub(crate) struct HelperProcessGpuExchangeClient {
 }
 
 impl HelperProcessGpuExchangeClient {
+    /// The release an acquire owes its parent from the moment the parent
+    /// allocated: a one-off's own `release_handle`; a processor output pool's
+    /// frame owes none, since the pool owns the slot.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn release_debt_unless_pooled(
+        &self,
+        python: Python<'_>,
+        processor_output_pool: Option<ProcessorOutputPoolRequest<'_>>,
+        handle_id: &str,
+    ) -> Option<HelperSurfaceReleaseDebt> {
+        processor_output_pool
+            .is_none()
+            .then(|| HelperSurfaceReleaseDebt {
+                release_to_parent_without_waiting: self
+                    .release_to_parent_without_waiting
+                    .clone_ref(python),
+                handle_id: handle_id.to_owned(),
+            })
+    }
+
     /// `surface_share_channel_name` is the socket path on Linux and the
     /// Mach service name on macOS — what the parent put in the helper's
     /// environment.

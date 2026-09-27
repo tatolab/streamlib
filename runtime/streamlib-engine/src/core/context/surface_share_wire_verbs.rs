@@ -9,6 +9,7 @@
 use serde_json::Value;
 
 use super::{SurfaceCheckOutLeaseHolderId, SurfaceCheckOutLeaseRegistry};
+use crate::core::rhi::TensorStorageBufferLayout;
 
 /// The `runtime_id` a request that names none is charged to. Never a real
 /// runtime, so a connection that only ever sends it latches none.
@@ -20,6 +21,10 @@ pub(crate) const SURFACE_RESOURCE_TYPE_TEXTURE: &str = "texture";
 
 /// Wire value of `resource_type` for a pixel-buffer registration.
 pub(crate) const SURFACE_RESOURCE_TYPE_PIXEL_BUFFER: &str = "pixel_buffer";
+
+/// Wire value of `resource_type` for a tensor storage buffer registration,
+/// which carries `shape` and `dtype` beside its memory handle.
+pub(crate) const SURFACE_RESOURCE_TYPE_STORAGE_BUFFER: &str = "storage_buffer";
 
 /// A surface-share table's registrations, by the runtime that made them.
 pub(crate) trait SurfaceShareRegistrationsByRuntime {
@@ -302,9 +307,103 @@ pub(crate) fn parse_vk_image_create_info_fields(request: &Value) -> VkImageCreat
     }
 }
 
+/// The declared tensor layout a `storage_buffer` registration carries, `None`
+/// for any other resource type, or the refusal naming what is missing.
+#[cfg_attr(
+    all(not(target_os = "linux"), not(test)),
+    expect(
+        dead_code,
+        reason = "only the Unix-socket arm registers a tensor surface"
+    )
+)]
+pub(crate) fn tensor_layout_of_a_storage_buffer_registration(
+    request: &Value,
+) -> Result<Option<TensorStorageBufferLayout>, String> {
+    let resource_type = request.get("resource_type").and_then(Value::as_str);
+    if resource_type != Some(SURFACE_RESOURCE_TYPE_STORAGE_BUFFER) {
+        return Ok(None);
+    }
+    TensorStorageBufferLayout::from_surface_share_fields(request)
+        .map(Some)
+        .map_err(|refusal| refusal.to_string())
+}
+
+/// Echo a tensor surface's `shape` and `dtype` onto its lookup reply; a reply
+/// for any other surface carries neither.
+#[cfg_attr(
+    all(not(target_os = "linux"), not(test)),
+    expect(
+        dead_code,
+        reason = "only the Unix-socket arm registers a tensor surface"
+    )
+)]
+pub(crate) fn echo_the_tensor_layout_onto_a_lookup_reply(
+    reply: &mut Value,
+    tensor_layout: Option<&TensorStorageBufferLayout>,
+) {
+    if let Some(tensor_layout) = tensor_layout {
+        tensor_layout.write_surface_share_fields(reply);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_storage_buffer_registration_carries_its_tensor_layout_to_the_lookup_reply() {
+        let registration = serde_json::json!({
+            "resource_type": SURFACE_RESOURCE_TYPE_STORAGE_BUFFER,
+            "shape": [1, 3, 640, 640],
+            "dtype": "float32",
+        });
+        let tensor_layout = tensor_layout_of_a_storage_buffer_registration(&registration)
+            .expect("a well-formed tensor registration parses")
+            .expect("a storage_buffer registration carries a layout");
+        let mut reply = serde_json::json!({"surface_id": "tensor-a"});
+        echo_the_tensor_layout_onto_a_lookup_reply(&mut reply, Some(&tensor_layout));
+        assert_eq!(reply["shape"], serde_json::json!([1, 3, 640, 640]));
+        assert_eq!(reply["dtype"], "float32");
+    }
+
+    #[test]
+    fn a_pixel_surface_registration_carries_no_tensor_layout() {
+        let registration = serde_json::json!({
+            "resource_type": SURFACE_RESOURCE_TYPE_PIXEL_BUFFER,
+            "shape": [4],
+            "dtype": "uint8",
+        });
+        assert_eq!(
+            tensor_layout_of_a_storage_buffer_registration(&registration),
+            Ok(None)
+        );
+        let mut reply = serde_json::json!({"surface_id": "pixels-a"});
+        echo_the_tensor_layout_onto_a_lookup_reply(&mut reply, None);
+        assert!(reply.get("shape").is_none() && reply.get("dtype").is_none());
+    }
+
+    #[test]
+    fn a_storage_buffer_registration_without_its_layout_is_refused_by_name() {
+        let without_shape = serde_json::json!({
+            "resource_type": SURFACE_RESOURCE_TYPE_STORAGE_BUFFER,
+            "dtype": "float32",
+        });
+        assert!(
+            tensor_layout_of_a_storage_buffer_registration(&without_shape)
+                .expect_err("a tensor with no shape is refused")
+                .contains("no shape")
+        );
+        let unknown_dtype = serde_json::json!({
+            "resource_type": SURFACE_RESOURCE_TYPE_STORAGE_BUFFER,
+            "shape": [2, 2],
+            "dtype": "complex64",
+        });
+        assert!(
+            tensor_layout_of_a_storage_buffer_registration(&unknown_dtype)
+                .expect_err("an unknown dtype is refused")
+                .contains("complex64")
+        );
+    }
 
     #[test]
     fn a_connection_latches_the_first_runtime_it_names_and_skips_the_unnamed_defaults() {

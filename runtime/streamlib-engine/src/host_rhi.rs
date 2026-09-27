@@ -240,6 +240,14 @@ pub trait HostSurfaceStoreExt {
         produce_done: Option<&HostVulkanTimelineSemaphore>,
         consume_done: Option<&HostVulkanTimelineSemaphore>,
     ) -> crate::core::error::Result<()>;
+    /// Register a DEVICE_LOCAL OPAQUE_FD tensor storage buffer as a
+    /// `storage_buffer` surface carrying its shape and dtype.
+    fn register_storage_buffer(
+        &self,
+        surface_id: &str,
+        buffer: &crate::core::rhi::StorageBuffer,
+        tensor_layout: &crate::core::rhi::TensorStorageBufferLayout,
+    ) -> crate::core::error::Result<()>;
 }
 
 /// The macOS arm of the engine-only registration surface: a registration
@@ -297,6 +305,15 @@ impl HostSurfaceStoreExt for crate::core::context::SurfaceStore {
 
 #[cfg(target_os = "linux")]
 impl HostSurfaceStoreExt for crate::core::context::SurfaceStore {
+    fn register_storage_buffer(
+        &self,
+        surface_id: &str,
+        buffer: &crate::core::rhi::StorageBuffer,
+        tensor_layout: &crate::core::rhi::TensorStorageBufferLayout,
+    ) -> crate::core::error::Result<()> {
+        self.host_register_storage_buffer(surface_id, buffer, tensor_layout)
+    }
+
     fn register_texture(
         &self,
         surface_id: &str,

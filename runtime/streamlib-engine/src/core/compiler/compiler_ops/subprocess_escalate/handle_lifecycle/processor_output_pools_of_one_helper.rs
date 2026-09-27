@@ -1,8 +1,9 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The processor output texture pools one helper process publishes kernel
-//! outputs from, each under the pool key its ring minted.
+//! The processor output pools one helper process publishes kernel outputs
+//! from — textures and tensor storage buffers alike — each under the pool key
+//! its ring minted.
 
 use std::collections::HashMap;
 
@@ -15,7 +16,7 @@ use crate::core::context::processor_output_surface_pool::{
     ProcessorOutputSurfacePoolRefusedFreshSlot,
 };
 use crate::core::context::{GpuContext, SurfaceCheckOutLeaseRegistry, SurfaceStore};
-use crate::core::rhi::{TextureFormat, TextureUsages};
+use crate::core::rhi::{TensorStorageBufferLayout, TextureFormat, TextureUsages};
 use crate::core::{Error, Result};
 
 /// The allocation every slot of one processor output texture pool shares.
@@ -27,41 +28,52 @@ pub(crate) struct ProcessorOutputTextureDescriptor {
     pub(crate) usage: TextureUsages,
 }
 
-/// One slot of a processor output texture pool: the texture, registered with
-/// the surface-share service and the parent's texture cache under the slot key.
-pub(crate) struct ProcessorOutputTextureSlot {
-    registered_texture: RegisteredHandle,
-    /// The texture's handle count once allocation and registration settled —
-    /// every share the engine itself keeps. A count above it is a reader.
-    texture_strong_count_with_no_holder: usize,
+/// The allocation every slot of one processor output pool shares: a texture,
+/// or a tensor storage buffer of one shape and element type.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ProcessorOutputSlotDescriptor {
+    Texture(ProcessorOutputTextureDescriptor),
+    StorageBuffer(TensorStorageBufferLayout),
 }
 
-/// The handle count of a pooled texture's host `Arc`; `None` for any other
-/// kind of registered handle, which no processor output pool may hold.
-fn pooled_texture_strong_count(registered_texture: &RegisteredHandle) -> Option<usize> {
-    match registered_texture {
+/// One slot of a processor output pool: the texture or storage buffer,
+/// registered with the surface-share service and the parent's texture cache or
+/// storage buffer map under the slot key.
+pub(crate) struct ProcessorOutputPoolSlot {
+    registered_handle: RegisteredHandle,
+    /// The resource's handle count once allocation and registration settled —
+    /// every share the engine itself keeps. A count above it is a reader.
+    strong_count_with_no_holder: usize,
+}
+
+/// The handle count of a pooled resource's host `Arc`; `None` for any kind of
+/// registered handle no processor output pool may hold.
+fn pooled_resource_strong_count(registered_handle: &RegisteredHandle) -> Option<usize> {
+    match registered_handle {
         RegisteredHandle::Texture { texture, .. } => Some(texture.texture().strong_count()),
+        #[cfg(target_os = "linux")]
+        RegisteredHandle::StorageBuffer { buffer } => Some(buffer.strong_count()),
         _ => None,
     }
 }
 
-impl LeaseAwarePoolSlotResource for ProcessorOutputTextureSlot {
+impl LeaseAwarePoolSlotResource for ProcessorOutputPoolSlot {
     fn is_held_in_this_process(&self) -> bool {
-        pooled_texture_strong_count(&self.registered_texture)
-            .is_some_and(|strong_count| strong_count > self.texture_strong_count_with_no_holder)
+        pooled_resource_strong_count(&self.registered_handle)
+            .is_some_and(|strong_count| strong_count > self.strong_count_with_no_holder)
     }
 }
 
-type ProcessorOutputTexturePool = ProcessorOutputSurfacePool<ProcessorOutputTextureSlot>;
+type ProcessorOutputPool = ProcessorOutputSurfacePool<ProcessorOutputPoolSlot>;
 
 /// Pool key → the descriptor its slots were allocated for, and the pool.
 #[derive(Default)]
-pub(crate) struct ProcessorOutputTexturePoolsOfOneHelper {
-    pools_by_key: HashMap<String, (ProcessorOutputTextureDescriptor, ProcessorOutputTexturePool)>,
+pub(crate) struct ProcessorOutputPoolsOfOneHelper {
+    pools_by_key: HashMap<String, (ProcessorOutputSlotDescriptor, ProcessorOutputPool)>,
     /// Slots of pools a descriptor change replaced, kept until nothing holds
-    /// them: releasing a held slot would hand its texture back to the texture
-    /// pool, and another acquire could rewrite it under its reader.
-    retiring_slots: Vec<LeaseAwarePoolSlot<ProcessorOutputTextureSlot>>,
+    /// them: releasing a held slot would hand its resource back to its
+    /// allocator, and another acquire could rewrite it under its reader.
+    retiring_slots: Vec<LeaseAwarePoolSlot<ProcessorOutputPoolSlot>>,
     /// Set by the helper's teardown drain: nothing drains the pools again, so
     /// a slot handed in after it would never be released.
     drained_at_the_helpers_teardown: bool,
@@ -69,36 +81,36 @@ pub(crate) struct ProcessorOutputTexturePoolsOfOneHelper {
 
 /// What one helper's pools answer when asked for a pool's next frame without
 /// allocating.
-pub(crate) enum ProcessorOutputTextureFrameHandOff {
+pub(crate) enum ProcessorOutputFrameHandOff {
     /// A reused slot's frame, under its published id.
     Published(String),
     /// The pool must grow: allocate a slot and hand it to
-    /// [`ProcessorOutputTexturePoolsOfOneHelper::hand_off_a_fresh_slot`].
+    /// [`ProcessorOutputPoolsOfOneHelper::hand_off_a_fresh_slot`].
     NeedsAFreshSlot,
 }
 
 /// What one helper's pools answer when handed a freshly allocated slot.
-pub(crate) enum ProcessorOutputTextureFreshSlotHandOff {
+pub(crate) enum ProcessorOutputFreshSlotHandOff {
     /// The fresh slot's first frame, under its published id.
     Published(String),
     /// The pools refused the slot — the helper was torn down while it was
-    /// allocated, the pool is at its capacity, or it is not a pooled texture —
-    /// and it is owed its release.
+    /// allocated, the pool is at its capacity, or it is not a poolable
+    /// resource — and it is owed its release.
     Refused {
         refusal: Error,
-        slot_owed_its_release: ReleasedProcessorOutputTextureSlot,
+        slot_owed_its_release: ReleasedProcessorOutputPoolSlot,
     },
 }
 
 /// A slot this helper's pools no longer hold, owed the release every
-/// registered texture is owed.
-pub(crate) struct ReleasedProcessorOutputTextureSlot {
-    /// The key the slot's texture is registered under — never a frame id.
+/// registered handle of its kind is owed.
+pub(crate) struct ReleasedProcessorOutputPoolSlot {
+    /// The key the slot's resource is registered under — never a frame id.
     pub(crate) pool_slot_key: String,
-    pub(crate) registered_texture: RegisteredHandle,
+    pub(crate) registered_handle: RegisteredHandle,
 }
 
-impl ProcessorOutputTexturePoolsOfOneHelper {
+impl ProcessorOutputPoolsOfOneHelper {
     /// Hand out the next frame of the pool under `pool_key` when it needs no
     /// fresh slot, answering — refused or not — every slot a descriptor change
     /// retired, each owed its release.
@@ -112,10 +124,10 @@ impl ProcessorOutputTexturePoolsOfOneHelper {
         host: &GpuContext,
         pool_key: &str,
         rotation_depth: usize,
-        descriptor: ProcessorOutputTextureDescriptor,
+        descriptor: &ProcessorOutputSlotDescriptor,
     ) -> (
-        Result<ProcessorOutputTextureFrameHandOff>,
-        Vec<ReleasedProcessorOutputTextureSlot>,
+        Result<ProcessorOutputFrameHandOff>,
+        Vec<ReleasedProcessorOutputPoolSlot>,
     ) {
         if let Err(refusal) = self.refuse_after_the_helpers_teardown(pool_key) {
             return (Err(refusal), Vec::new());
@@ -131,12 +143,10 @@ impl ProcessorOutputTexturePoolsOfOneHelper {
             .hand_off_a_reusable_frame(rotation_depth, check_out_leases, minted_frame_generations)
             .map(|handed_off| match handed_off {
                 ProcessorOutputSurfacePoolHandOff::ReusedSlot(slot) => {
-                    ProcessorOutputTextureFrameHandOff::Published(
-                        slot.currently_published_frame_id(),
-                    )
+                    ProcessorOutputFrameHandOff::Published(slot.currently_published_frame_id())
                 }
                 ProcessorOutputSurfacePoolHandOff::NeedsAFreshSlot => {
-                    ProcessorOutputTextureFrameHandOff::NeedsAFreshSlot
+                    ProcessorOutputFrameHandOff::NeedsAFreshSlot
                 }
             });
         (handed_off, released_slots)
@@ -148,49 +158,48 @@ impl ProcessorOutputTexturePoolsOfOneHelper {
         &mut self,
         host: &GpuContext,
         pool_key: &str,
-        descriptor: ProcessorOutputTextureDescriptor,
+        descriptor: &ProcessorOutputSlotDescriptor,
         pool_slot_key: String,
-        registered_texture: RegisteredHandle,
-    ) -> ProcessorOutputTextureFreshSlotHandOff {
-        let refused = |refusal, pool_slot_key, registered_texture| {
-            ProcessorOutputTextureFreshSlotHandOff::Refused {
+        registered_handle: RegisteredHandle,
+    ) -> ProcessorOutputFreshSlotHandOff {
+        let refused =
+            |refusal, pool_slot_key, registered_handle| ProcessorOutputFreshSlotHandOff::Refused {
                 refusal,
-                slot_owed_its_release: ReleasedProcessorOutputTextureSlot {
+                slot_owed_its_release: ReleasedProcessorOutputPoolSlot {
                     pool_slot_key,
-                    registered_texture,
+                    registered_handle,
                 },
-            }
-        };
+            };
         if let Err(refusal) = self.refuse_after_the_helpers_teardown(pool_key) {
-            return refused(refusal, pool_slot_key, registered_texture);
+            return refused(refusal, pool_slot_key, registered_handle);
         }
-        let Some(texture_strong_count_with_no_holder) =
-            pooled_texture_strong_count(&registered_texture)
+        let Some(strong_count_with_no_holder) = pooled_resource_strong_count(&registered_handle)
         else {
             let refusal = Error::GpuError(format!(
-                "processor output pool '{pool_key}' was handed a slot that is not a pooled texture"
+                "processor output pool '{pool_key}' was handed a slot that is neither a pooled \
+                 texture nor a tensor storage buffer"
             ));
-            return refused(refusal, pool_slot_key, registered_texture);
+            return refused(refusal, pool_slot_key, registered_handle);
         };
         let surface_store = host.surface_store();
         self.replace_the_pool_if_its_descriptor_changed(pool_key, descriptor);
         match self.pool_under(pool_key, descriptor).hand_off_a_fresh_slot(
             pool_slot_key,
-            ProcessorOutputTextureSlot {
-                registered_texture,
-                texture_strong_count_with_no_holder,
+            ProcessorOutputPoolSlot {
+                registered_handle,
+                strong_count_with_no_holder,
             },
             check_out_leases_of(surface_store.as_ref()),
             host.lease_aware_pool_minted_frame_generations(),
         ) {
-            Ok(slot) => ProcessorOutputTextureFreshSlotHandOff::Published(
-                slot.currently_published_frame_id(),
-            ),
+            Ok(slot) => {
+                ProcessorOutputFreshSlotHandOff::Published(slot.currently_published_frame_id())
+            }
             Err(ProcessorOutputSurfacePoolRefusedFreshSlot {
                 refusal,
                 pool_slot_key,
                 resource,
-            }) => refused(refusal, pool_slot_key, resource.registered_texture),
+            }) => refused(refusal, pool_slot_key, resource.registered_handle),
         }
     }
 
@@ -207,10 +216,10 @@ impl ProcessorOutputTexturePoolsOfOneHelper {
     fn replace_the_pool_if_its_descriptor_changed(
         &mut self,
         pool_key: &str,
-        descriptor: ProcessorOutputTextureDescriptor,
+        descriptor: &ProcessorOutputSlotDescriptor,
     ) {
         if let Some((existing_descriptor, _)) = self.pools_by_key.get(pool_key)
-            && *existing_descriptor != descriptor
+            && existing_descriptor != descriptor
             && let Some((_, replaced_pool)) = self.pools_by_key.remove(pool_key)
         {
             self.retiring_slots.extend(replaced_pool.into_slots());
@@ -220,14 +229,14 @@ impl ProcessorOutputTexturePoolsOfOneHelper {
     fn pool_under(
         &mut self,
         pool_key: &str,
-        descriptor: ProcessorOutputTextureDescriptor,
-    ) -> &mut ProcessorOutputTexturePool {
+        descriptor: &ProcessorOutputSlotDescriptor,
+    ) -> &mut ProcessorOutputPool {
         let (_, pool) = self
             .pools_by_key
             .entry(pool_key.to_string())
             .or_insert_with(|| {
                 (
-                    descriptor,
+                    descriptor.clone(),
                     ProcessorOutputSurfacePool::new(pool_key.to_string()),
                 )
             });
@@ -242,7 +251,7 @@ impl ProcessorOutputTexturePoolsOfOneHelper {
         &mut self,
         check_out_leases: Option<&SurfaceCheckOutLeaseRegistry>,
         minted_frame_generations: &LeaseAwarePoolMintedFrameGenerations,
-    ) -> Vec<ReleasedProcessorOutputTextureSlot> {
+    ) -> Vec<ReleasedProcessorOutputPoolSlot> {
         if self.retiring_slots.is_empty() {
             return Vec::new();
         }
@@ -281,7 +290,7 @@ impl ProcessorOutputTexturePoolsOfOneHelper {
 
     /// Every slot of every pool, retiring ones included, for teardown; every
     /// hand-off after it is refused.
-    pub(crate) fn drain_slots(&mut self) -> Vec<ReleasedProcessorOutputTextureSlot> {
+    pub(crate) fn drain_slots(&mut self) -> Vec<ReleasedProcessorOutputPoolSlot> {
         self.drained_at_the_helpers_teardown = true;
         self.pools_by_key
             .drain()
@@ -301,10 +310,10 @@ fn check_out_leases_of(
 }
 
 fn released_slot(
-    slot: LeaseAwarePoolSlot<ProcessorOutputTextureSlot>,
-) -> ReleasedProcessorOutputTextureSlot {
-    ReleasedProcessorOutputTextureSlot {
+    slot: LeaseAwarePoolSlot<ProcessorOutputPoolSlot>,
+) -> ReleasedProcessorOutputPoolSlot {
+    ReleasedProcessorOutputPoolSlot {
         pool_slot_key: slot.pool_slot_key().to_string(),
-        registered_texture: slot.into_resource().registered_texture,
+        registered_handle: slot.into_resource().registered_handle,
     }
 }

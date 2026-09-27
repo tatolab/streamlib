@@ -102,6 +102,26 @@ impl StorageBuffer {
         self.mapped_ptr_cached
     }
 
+    /// Number of handles sharing this buffer's host `Arc`. Engine-internal — a
+    /// lease-aware pool reads it to tell whether a holder in this process still
+    /// has the slot.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn strong_count(&self) -> usize {
+        if self.handle.is_null() {
+            return 0;
+        }
+        // SAFETY: `handle` is `Arc::into_raw(Arc<HostVulkanBuffer>)` (see
+        // `from_arc_into_raw`). The Arc is reconstructed to read the count and
+        // immediately re-leaked, so the strong count returns to its pre-call
+        // value.
+        unsafe {
+            let arc = Arc::from_raw(self.handle as *const crate::vulkan::rhi::HostVulkanBuffer);
+            let count = Arc::strong_count(&arc);
+            let _ = Arc::into_raw(arc);
+            count
+        }
+    }
+
     /// Engine-internal clone of the underlying `Arc<HostVulkanBuffer>`
     /// (bumps the strong count by one). Used by host-side FullAccess
     /// bodies that must hand the same allocation to another RHI wrapper
