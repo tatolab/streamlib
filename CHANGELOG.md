@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.39](https://github.com/tatolab/streamlib/compare/v0.26.38...v0.26.39) (2026-09-27)
+
+
+### Features
+
+* **engine:** a tensor buffer from Python, handed to torch with no copy, on Linux ([#2512](https://github.com/tatolab/streamlib/issues/2512)) ([46e3fea](https://github.com/tatolab/streamlib/commit/46e3fea9c3558b9c6874eb7f4a078ff9f084c55f))
+
 ## [0.26.38](https://github.com/tatolab/streamlib/compare/v0.26.37...v0.26.38) (2026-09-27)
 
 
