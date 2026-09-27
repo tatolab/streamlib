@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.36](https://github.com/tatolab/streamlib/compare/v0.26.35...v0.26.36) (2026-09-27)
+
+
+### Performance
+
+* **engine:** a processor output pool hands out a reused slot without the escalate gate ([#2504](https://github.com/tatolab/streamlib/issues/2504)) ([d3e7c9e](https://github.com/tatolab/streamlib/commit/d3e7c9e2b13a3e0f788b518f50d786a41a5061dd))
+
 ## [0.26.35](https://github.com/tatolab/streamlib/compare/v0.26.34...v0.26.35) (2026-09-26)
 
 
