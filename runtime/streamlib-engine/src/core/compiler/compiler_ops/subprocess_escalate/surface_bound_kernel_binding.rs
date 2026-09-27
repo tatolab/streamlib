@@ -229,7 +229,6 @@ pub(super) fn resolve_surface_bound_kernel_binding_resource(
 }
 
 /// The tensor storage buffer the parent-wide map holds under `surface_id`.
-#[cfg(target_os = "linux")]
 fn resolve_tensor_storage_buffer(
     full: &crate::core::context::GpuContextFullAccess,
     binding_name: &str,
@@ -243,19 +242,6 @@ fn resolve_tensor_storage_buffer(
                  cannot resolve to a tensor storage buffer: {e}"
             ))
         })
-}
-
-/// The tensor storage buffer is Linux-only until its macOS arm lands (#2431).
-#[cfg(target_os = "macos")]
-fn resolve_tensor_storage_buffer(
-    _full: &crate::core::context::GpuContextFullAccess,
-    binding_name: &str,
-    surface_id: &str,
-) -> crate::core::error::Result<crate::core::rhi::StorageBuffer> {
-    Err(crate::core::error::Error::NotSupported(format!(
-        "binding `{binding_name}` names tensor storage buffer {surface_id:?}; a kernel binds \
-         one on Linux only until the macOS arm lands (#2431)"
-    )))
 }
 
 /// Resolve every planned binding to the resource it names, keeping the two

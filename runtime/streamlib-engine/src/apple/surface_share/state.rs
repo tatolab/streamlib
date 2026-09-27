@@ -32,7 +32,8 @@ pub struct IOSurfaceShareRegistration {
     pub height: u32,
     /// The pixel format's wire name, as the registration stated it.
     pub format: String,
-    /// `pixel_buffer` or `texture`, as the registration stated it.
+    /// `pixel_buffer`, `texture` or `storage_buffer`, as the registration
+    /// stated it.
     pub resource_type: String,
     /// The surface's timeline pair as shared-event send rights, when the
     /// registrant sent them; every lookup hands out a fresh reference to each.
@@ -40,6 +41,9 @@ pub struct IOSurfaceShareRegistration {
     /// The image a `texture` registration's surface backs; `None` for a
     /// pixel buffer.
     pub texture_image: Option<Arc<RegisteredTextureImage>>,
+    /// The shape and dtype a `storage_buffer` registration declares; `None`
+    /// for pixels.
+    pub tensor_layout: Option<crate::core::rhi::TensorStorageBufferLayout>,
 }
 
 /// What a texture registration carries beyond its surface: the recipe a

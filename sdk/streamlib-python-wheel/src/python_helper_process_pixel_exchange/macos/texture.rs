@@ -338,15 +338,10 @@ impl HelperProcessGpuExchangeClient {
                     received_ports.len()
                 ))
             })?;
-        let iosurface =
-            objc2_io_surface::IOSurfaceRef::lookup_from_mach_port(iosurface_port.as_raw_name())
-                .ok_or_else(|| {
-                    PyRuntimeError::new_err(format!(
-                        "check_out of texture {surface_id:?} carried a port that names no \
-                         IOSurface"
-                    ))
-                })?;
-        drop(iosurface_port);
+        let iosurface = super::iosurface_named_by_the_check_out_port(
+            &format!("texture {surface_id:?}"),
+            iosurface_port,
+        )?;
         let vulkan_device = self.consumer_vulkan_device()?;
         let consumer_texture = ConsumerVulkanTexture::from_iosurface(
             &vulkan_device,

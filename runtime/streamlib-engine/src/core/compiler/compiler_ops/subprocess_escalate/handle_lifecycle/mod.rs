@@ -70,7 +70,7 @@ pub(crate) enum RegisteredHandle {
     },
     /// Tensor storage buffer handed out via `AcquireStorageBuffer`, registered
     /// with surface-share and the parent-wide storage buffer map.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     StorageBuffer {
         buffer: crate::core::rhi::StorageBuffer,
     },
@@ -86,17 +86,19 @@ impl RegisteredHandle {
             Self::Texture { .. } => true,
             #[cfg(target_os = "linux")]
             Self::Image { .. } => true,
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             Self::StorageBuffer { .. } => false,
         }
     }
 
     /// Whether releasing this handle also owes the parent-wide storage buffer
     /// map an eviction.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) fn is_storage_buffer_backed(&self) -> bool {
         match self {
-            Self::PixelBuffer(_) | Self::Texture { .. } | Self::Image { .. } => false,
+            Self::PixelBuffer(_) | Self::Texture { .. } => false,
+            #[cfg(target_os = "linux")]
+            Self::Image { .. } => false,
             Self::StorageBuffer { .. } => true,
         }
     }
@@ -352,7 +354,7 @@ pub(crate) fn release_surface_share_and_parent_caches_for_handle(
     if removed_handle.is_texture_backed() {
         sandbox.unregister_texture(handle_id);
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     if removed_handle.is_storage_buffer_backed() {
         sandbox
             .host_inner()
@@ -376,8 +378,8 @@ pub(crate) fn release_processor_output_pool_slot(
 
 /// Best-effort surface-share release paired with registry eviction, for the
 /// handles registered under their own id: every acquire on Linux, where each
-/// is checked in; a texture on macOS, where a pixel buffer's id names its
-/// pool slot's registration, which outlives the handle.
+/// is checked in; a texture or a tensor storage buffer on macOS, where a pixel
+/// buffer's id names its pool slot's registration, which outlives the handle.
 ///
 /// The registry drop alone releases the host's strong refcount on the
 /// underlying resource, but the surface-share service still holds the
@@ -389,10 +391,10 @@ pub(super) fn release_surface_share_surface(
     handle_id: &str,
     removed_handle: &RegisteredHandle,
 ) {
-    let registered_under_its_own_id =
-        cfg!(target_os = "linux") || removed_handle.is_texture_backed();
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    if registered_under_its_own_id
+    if (cfg!(target_os = "linux")
+        || removed_handle.is_texture_backed()
+        || removed_handle.is_storage_buffer_backed())
         && let Some(store) = sandbox.surface_store()
         && let Err(e) = store.release(handle_id)
     {

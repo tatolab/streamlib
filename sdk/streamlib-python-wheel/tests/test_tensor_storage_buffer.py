@@ -5,8 +5,9 @@
 no copy; another processor resolves it by surface id and reads the same values.
 
 Both run out of process, each in its own helper, and report over the
-`MARKER:PROBE_RESULT` lines their helpers forward. Linux only until the macOS
-arm lands (#2431); a rig without CUDA skips, since the export is `kDLCUDA`.
+`MARKER:PROBE_RESULT` lines their helpers forward. The export is `kDLCUDA` on
+Linux and `kDLMetal` on macOS, where MLX reads the same tensor too; a rig whose
+torch sees no such device skips.
 """
 
 import json
@@ -23,19 +24,14 @@ from tensor_storage_buffer_probes import (
     INDEX_PATTERN_TENSOR_BINDING,
     KERNEL_WRITTEN_TENSOR_SHAPE,
     MODEL_INPUT_TENSOR_SHAPE,
+    NATURAL_TORCH_DEVICE_TYPE,
     ODD_TENSOR_SHAPE,
     PAINT_COLOUR,
     PAINT_COLOUR_BINDING,
     POOL_ROTATION_DEPTH,
 )
 
-pytestmark = [
-    pytest.mark.requires_gpu,
-    pytest.mark.skipif(
-        sys.platform != "linux",
-        reason="the tensor storage buffer's macOS arm rides #2431",
-    ),
-]
+pytestmark = pytest.mark.requires_gpu
 
 APP = Path(__file__).parent / "tensor_storage_buffer_app.py"
 
@@ -44,13 +40,13 @@ PROBE_RESULT = re.compile(r"MARKER:PROBE_RESULT (\{.*\})")
 
 def run_scenario(start_app_under_test, scenario: str, awaited_reports: int) -> dict:
     """Run one scenario to completion, and return its reports by probe name;
-    skip when the producer found no CUDA device to hand the tensor to."""
+    skip when the producer found no torch device to hand the tensor to."""
     app = start_app_under_test(APP, scenario)
     for report_number in range(awaited_reports):
         app.await_output_containing(
             "MARKER:PROBE_RESULT", f"report {report_number + 1} of {awaited_reports}"
         )
-        if "cuda_unavailable" in app.output:
+        if "torch_device_unavailable" in app.output:
             break
     app.interrupt()
     app.await_marker("CLEAN_EXIT")
@@ -63,8 +59,10 @@ def run_scenario(start_app_under_test, scenario: str, awaited_reports: int) -> d
             pytest.fail(
                 f"{report['probe']} raised in its helper process:\n{report['failure']}"
             )
-        if "cuda_unavailable" in report:
-            pytest.skip(f"no CUDA device on this rig: {report['cuda_unavailable']}")
+        if "torch_device_unavailable" in report:
+            pytest.skip(
+                f"no torch device on this rig: {report['torch_device_unavailable']}"
+            )
         reports_by_probe.setdefault(report["probe"], []).append(report)
     return reports_by_probe
 
@@ -76,7 +74,9 @@ def slot_of(surface_id: str) -> str:
 
 def assert_written_through_torch_with_no_copy(producer_report: dict, shape) -> None:
     for observation in producer_report["producer_observations"]:
-        assert observation["tensor_device"].startswith("cuda"), observation
+        assert observation["tensor_device"].startswith(NATURAL_TORCH_DEVICE_TYPE), (
+            observation
+        )
         assert observation["tensor_shape"] == shape
         assert observation["stated_shape"] == shape
         assert observation["exports_share_memory"], (
@@ -104,7 +104,7 @@ def test_a_tensor_written_through_torch_is_read_by_another_process(
     assert_written_through_torch_with_no_copy(producer, MODEL_INPUT_TENSOR_SHAPE)
     assert [read["surface_id"] for read in reads] == producer["surface_ids_published"]
     for read in reads:
-        assert read["tensor_device"].startswith("cuda"), read
+        assert read["tensor_device"].startswith(NATURAL_TORCH_DEVICE_TYPE), read
         assert read["stated_shape"] == MODEL_INPUT_TENSOR_SHAPE
         assert read["stated_dtype"] == "float32"
         assert read["tensor_shape"] == MODEL_INPUT_TENSOR_SHAPE
@@ -116,7 +116,8 @@ def test_a_tensor_written_through_torch_is_read_by_another_process(
 
 def test_an_odd_shaped_tensor_round_trips(start_app_under_test):
     """(3, 7, 11) float16 — 462 bytes, no page multiple: CUDA maps the tensor's
-    exact byte size, never the allocation's rounded one."""
+    exact byte size, never the allocation's rounded one, and on macOS the
+    capsule spans the tensor alone over its IOSurface's one 16 KiB row."""
     reports = run_scenario(
         start_app_under_test,
         "an_odd_shaped_tensor_round_trips",
@@ -208,7 +209,9 @@ def test_a_kernel_writes_a_tensor_bound_by_surface_id_and_a_draw_reads_one(
     observed = reports["TensorStorageBufferKernelBindingProbe"][0]
 
     assert observed["compute_binding_names"] == [INDEX_PATTERN_TENSOR_BINDING]
-    assert observed["dispatched_tensor_device"].startswith("cuda"), observed
+    assert observed["dispatched_tensor_device"].startswith(
+        NATURAL_TORCH_DEVICE_TYPE
+    ), observed
     assert observed["dispatched_tensor_shape"] == KERNEL_WRITTEN_TENSOR_SHAPE
     assert observed["dispatched_holds_the_index_pattern"], (
         "torch did not read the index pattern the kernel wrote"
@@ -217,6 +220,10 @@ def test_a_kernel_writes_a_tensor_bound_by_surface_id_and_a_draw_reads_one(
         "a tensor no dispatch named carries the pattern: the comparison is vacuous"
     )
     assert observed["undispatched_still_holds_the_sentinel"]
+    assert observed["foreign_device_refusal"] is not None, (
+        "a tensor exported a capsule for a DLPack device it does not live on"
+    )
+    assert "was requested" in observed["foreign_device_refusal"]
 
     def rgba8(colour):
         return [round(channel * 255) for channel in colour]
@@ -228,3 +235,30 @@ def test_a_kernel_writes_a_tensor_bound_by_surface_id_and_a_draw_reads_one(
     assert observed["distinct_pixels_painted_from_the_control_tensor"] == [
         rgba8(CONTROL_PAINT_COLOUR)
     ]
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="MLX reads kDLMetal on macOS")
+@pytest.mark.parametrize(
+    "scenario, shape",
+    [
+        ("a_written_tensor_is_read_by_another_process", MODEL_INPUT_TENSOR_SHAPE),
+        ("an_odd_shaped_tensor_round_trips", ODD_TENSOR_SHAPE),
+    ],
+)
+def test_mlx_reads_the_tensor_torch_mps_wrote_in_another_process(
+    start_app_under_test, scenario, shape
+):
+    """The reader hands the resolved tensor to MLX as well as torch: MLX sees
+    the values torch-MPS wrote in the producer's process, over the same
+    IOSurface pages."""
+    reports = run_scenario(start_app_under_test, scenario, POOL_ROTATION_DEPTH + 1)
+    reads = reports["PublishedTensorReadingSink"]
+    assert reads, "the sink resolved no tensor"
+    for read in reads:
+        assert "mlx_values_equal" in read, (
+            "mlx is not installed in this venv; it is a darwin test dependency"
+        )
+        assert read["mlx_shape"] == shape
+        assert read["mlx_values_equal"], (
+            f"MLX read other values than frame {read['frame_index']}'s"
+        )

@@ -2048,7 +2048,6 @@ fn a_later_pass_in_a_batch_reads_the_tensor_an_earlier_pass_wrote() {
 /// Register a HOST_VISIBLE tensor in the parent-wide map under `surface_id`, as
 /// the escalate acquire registers a helper's — mappable, so the test reads the
 /// dispatch's writes back without a copy.
-#[cfg(target_os = "linux")]
 fn registered_sentinel_filled_tensor(
     sandbox: &GpuContextLimitedAccess,
     surface_id: &str,
@@ -2063,7 +2062,6 @@ fn registered_sentinel_filled_tensor(
         .expect("a registered tensor")
 }
 
-#[cfg(target_os = "linux")]
 fn write_index_pattern_into(
     sandbox: &GpuContextLimitedAccess,
     kernel_id: &str,
@@ -2090,7 +2088,6 @@ fn write_index_pattern_into(
 
 /// A dispatch names a tensor storage buffer by its surface id, the parent-wide
 /// map resolves it, and the kernel's writes land in that buffer.
-#[cfg(target_os = "linux")]
 #[test]
 fn a_dispatch_writes_the_tensor_storage_buffer_its_surface_id_names() {
     let Some(sandbox) = make_gpu_sandbox_if_available() else {
@@ -2123,7 +2120,6 @@ fn a_dispatch_writes_the_tensor_storage_buffer_its_surface_id_names() {
 
 /// A published tensor id whose slot has been recycled is refused by name, and
 /// nothing is written into the slot's current tensor.
-#[cfg(target_os = "linux")]
 #[test]
 fn a_retired_tensor_frame_id_is_refused_and_writes_nothing() {
     let Some(sandbox) = make_gpu_sandbox_if_available() else {
@@ -2169,7 +2165,6 @@ fn a_retired_tensor_frame_id_is_refused_and_writes_nothing() {
 
 /// An id with no tensor behind it refuses naming the binding, rather than
 /// binding whatever the descriptor last held.
-#[cfg(target_os = "linux")]
 #[test]
 fn a_surface_id_with_no_tensor_behind_it_is_refused_naming_the_binding() {
     let Some(sandbox) = make_gpu_sandbox_if_available() else {

@@ -142,11 +142,10 @@ const SURFACE_HANDLE_TYPE_DMA_BUF: &str = "dma_buf";
 #[cfg(target_os = "linux")]
 const SURFACE_HANDLE_TYPE_OPAQUE_FD: &str = "opaque_fd";
 
-#[cfg(target_os = "linux")]
-use super::surface_share_wire_verbs::SURFACE_RESOURCE_TYPE_STORAGE_BUFFER;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use super::surface_share_wire_verbs::{
-    SURFACE_RESOURCE_TYPE_PIXEL_BUFFER, SURFACE_RESOURCE_TYPE_TEXTURE,
+    SURFACE_RESOURCE_TYPE_PIXEL_BUFFER, SURFACE_RESOURCE_TYPE_STORAGE_BUFFER,
+    SURFACE_RESOURCE_TYPE_TEXTURE,
 };
 
 /// How long a connect waits for the service to admit this process.
@@ -1503,6 +1502,28 @@ impl SurfaceStoreInner {
         )
     }
 
+    /// Register an IOSurface-backed tensor storage buffer under `surface_id`
+    /// as a `storage_buffer` surface carrying `shape` and `dtype`. No timeline
+    /// pair crosses: a tensor's writes are ordered by its writer's queue
+    /// drain, as on Linux.
+    #[cfg(target_os = "macos")]
+    pub fn register_storage_buffer(
+        &self,
+        surface_id: &str,
+        buffer: &crate::core::rhi::StorageBuffer,
+        tensor_layout: &crate::core::rhi::TensorStorageBufferLayout,
+    ) -> Result<()> {
+        let mut registration = serde_json::json!({
+            "surface_id": surface_id,
+            "resource_type": SURFACE_RESOURCE_TYPE_STORAGE_BUFFER,
+        });
+        tensor_layout.write_surface_share_fields(&mut registration);
+        self.send_iosurface_registration(
+            vec![buffer.host_inner().export_iosurface_mach_send_right()?],
+            registration,
+        )
+    }
+
     /// Register an IOSurface-backed texture under `surface_id` whole: its
     /// surface, its image recipe, the layout it is in, and its timeline pair.
     /// Refused when the pair will not export: a helper imports a texture only
@@ -2210,9 +2231,9 @@ impl SurfaceStore {
         )
     }
 
-    /// **Engine-only** — register a tensor storage buffer (Linux). See
+    /// **Engine-only** — register a tensor storage buffer. See
     /// [`SurfaceStoreInner::register_storage_buffer`].
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(crate) fn host_register_storage_buffer(
         &self,
         surface_id: &str,

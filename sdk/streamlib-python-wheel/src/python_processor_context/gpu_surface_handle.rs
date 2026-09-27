@@ -20,14 +20,17 @@ use crate::python_gpu_surface_pixel_exchange::{METAL_DLPACK_DEVICE, metal_dlpack
 #[cfg(target_os = "linux")]
 use crate::python_gpu_surface_pixel_exchange::{
     StagedWriteBackSource, device_dlpack_capsule, imported_device_for, prepare_device_export,
-    publish_tensor_storage_buffer_device_writes, read_the_frame_into_its_cpu_staging,
-    tensor_storage_buffer_dlpack_capsule,
+    read_the_frame_into_its_cpu_staging,
+};
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+use crate::python_gpu_surface_pixel_exchange::{
+    publish_tensor_storage_buffer_device_writes, tensor_storage_buffer_dlpack_capsule,
 };
 #[cfg(target_os = "linux")]
 use crate::python_helper_process_pixel_exchange::HelperAcquiredTexture;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::python_helper_process_pixel_exchange::HelperCheckedOutSurface;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use crate::python_helper_process_pixel_exchange::a_tensor_surface_is_not_a_pixel_surface;
 use crate::python_helper_process_pixel_exchange::{GpuSurfaceGeometry, PixelSurfaceGeometry};
 #[cfg(target_os = "macos")]
@@ -51,11 +54,11 @@ pub(crate) struct PythonGpuSurfaceHandle {
     /// Pixels with a width, height and format, or a tensor storage buffer
     /// with a shape and dtype.
     surface_geometry: GpuSurfaceGeometry,
-    /// Whether a writable tensor capsule went out, whose CUDA writes every
-    /// settle and every kernel bound to this handle must order ahead of the
-    /// read. Never cleared: the capsule outlives any scope, so torch can write
-    /// through it again.
-    #[cfg(target_os = "linux")]
+    /// Whether a writable tensor capsule went out, whose CUDA or Metal writes
+    /// every settle and every kernel bound to this handle must order ahead of
+    /// the read. Never cleared: the capsule outlives any scope, so torch can
+    /// write through it again.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     a_writable_tensor_capsule_went_out: std::sync::atomic::AtomicBool,
     owned_memory: Mutex<Option<Arc<GpuSurfaceOwnedMemory>>>,
     cpu_access: CpuAccessGate,
@@ -87,7 +90,7 @@ impl PythonGpuSurfaceHandle {
         Self {
             minted_surface_id,
             surface_geometry,
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             a_writable_tensor_capsule_went_out: std::sync::atomic::AtomicBool::new(false),
             owned_memory: Mutex::new(Some(owned_memory)),
             cpu_access: CpuAccessGate::new_unlocked(),
@@ -196,8 +199,9 @@ impl PythonGpuSurfaceHandle {
     /// lets the IOSurface's CPU lock go; both run whatever the other
     /// answered, and the first failure is returned with the second logged.
     ///
-    /// A tensor surface has no lock scope; its settle orders the CUDA writes a
-    /// writable capsule took ahead of every other holder's read.
+    /// A tensor surface has no lock scope; its settle orders the CUDA or
+    /// torch-MPS writes a writable capsule took ahead of every other holder's
+    /// read.
     #[cfg(target_os = "linux")]
     fn settle_this_lock_scopes_pending_writes(&self, python: Python<'_>) -> PyResult<()> {
         if self
@@ -210,9 +214,9 @@ impl PythonGpuSurfaceHandle {
         self.publish_pending_staged_write(python)
     }
 
-    /// Order the CUDA writes a writable tensor capsule took ahead of a kernel
-    /// that reads this surface.
-    #[cfg(target_os = "linux")]
+    /// Order the CUDA or Metal writes a writable tensor capsule took ahead of
+    /// a kernel that reads this surface.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(super) fn order_tensor_device_writes_ahead_of_a_kernel_read(
         &self,
         python: Python<'_>,
@@ -231,6 +235,12 @@ impl PythonGpuSurfaceHandle {
 
     #[cfg(target_os = "macos")]
     fn settle_this_lock_scopes_pending_writes(&self, python: Python<'_>) -> PyResult<()> {
+        if self
+            .a_writable_tensor_capsule_went_out
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return self.order_tensor_device_writes_ahead_of_a_kernel_read(python);
+        }
         let metal_writes_retired = if self
             .a_writable_metal_capsule_went_out_this_lock_scope
             .swap(false, std::sync::atomic::Ordering::SeqCst)
@@ -283,7 +293,7 @@ impl PythonGpuSurfaceHandle {
     fn pixel_geometry(&self) -> PyResult<PixelSurfaceGeometry> {
         match &self.surface_geometry {
             GpuSurfaceGeometry::Pixels(pixel_geometry) => Ok(*pixel_geometry),
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             GpuSurfaceGeometry::TensorStorageBuffer(_) => {
                 Err(a_tensor_surface_is_not_a_pixel_surface())
             }
@@ -294,7 +304,7 @@ impl PythonGpuSurfaceHandle {
     fn tensor_layout(&self) -> Option<&TensorStorageBufferLayout> {
         match &self.surface_geometry {
             GpuSurfaceGeometry::Pixels(_) => None,
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             GpuSurfaceGeometry::TensorStorageBuffer(tensor_layout) => Some(tensor_layout),
         }
     }
@@ -309,7 +319,7 @@ impl PythonGpuSurfaceHandle {
     /// host copy is torch's `.cpu()`. The acquirer's capsule is writable, and
     /// the close orders its writes; a resolver's is read-only. A write through
     /// the acquirer's tensor after the close is out of contract, not revoked.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn tensor_storage_buffer_dlpack_capsule<'py>(
         &self,
         python: Python<'py>,
@@ -323,11 +333,20 @@ impl PythonGpuSurfaceHandle {
         let Some(storage_buffer) = owned_memory.tensor_storage_buffer() else {
             return Ok(None);
         };
-        if dl_device.is_some_and(|(device_type, _)| device_type == DeviceType::Cpu as i32) {
-            return Err(PyBufferError::new_err(
-                "a tensor surface lives on the device and exports no host view; copy it with \
-                 torch's `.cpu()` after `torch.from_dlpack`",
-            ));
+        if let Some(requested_device) = dl_device {
+            if requested_device.0 == DeviceType::Cpu as i32 {
+                return Err(PyBufferError::new_err(
+                    "a tensor surface lives on the device and exports no host view; copy it \
+                     with torch's `.cpu()` after `torch.from_dlpack`",
+                ));
+            }
+            let tensor_device = tensor_storage_buffer_dlpack_device(python, storage_buffer)?;
+            if requested_device != tensor_device {
+                return Err(PyBufferError::new_err(format!(
+                    "a tensor surface exports only on the DLPack device it lives on, \
+                     {tensor_device:?}; {requested_device:?} was requested"
+                )));
+            }
         }
         let writable = storage_buffer.writable;
         if writable {
@@ -670,12 +689,9 @@ impl PythonGpuSurfaceHandle {
     /// IOSurface exports a no-copy `MTLBuffer`.
     fn __dlpack_device__(&self, python: Python<'_>) -> PyResult<(i32, i32)> {
         let owned_memory = self.owned_memory()?;
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         if let Some(storage_buffer) = owned_memory.tensor_storage_buffer() {
-            let cuda_import = python
-                .detach(|| storage_buffer.cuda_import())
-                .map_err(super::gpu_operation_error)?;
-            return Ok(dlpack_device_as_python_pair(cuda_import.dlpack_device()));
+            return tensor_storage_buffer_dlpack_device(python, storage_buffer);
         }
         // Routed through the same once-per-handle decision `__dlpack__`
         // serves, so a probe failure here (answered CPU) cannot be
@@ -722,7 +738,7 @@ impl PythonGpuSurfaceHandle {
                 "this surface exports in place; ask the consumer to copy the tensor instead",
             ));
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         if let Some(capsule) =
             self.tensor_storage_buffer_dlpack_capsule(python, max_version, dl_device)?
         {
@@ -836,4 +852,26 @@ impl PythonGpuSurfaceHandle {
                 from_dlpack_failure
             })
     }
+}
+
+/// The DLPack device a tensor storage buffer's capsule lives on: the CUDA
+/// device its memory is imported onto, making the import on first ask.
+#[cfg(target_os = "linux")]
+fn tensor_storage_buffer_dlpack_device(
+    python: Python<'_>,
+    storage_buffer: &crate::python_helper_process_pixel_exchange::HelperCheckedOutStorageBuffer,
+) -> PyResult<(i32, i32)> {
+    let cuda_import = python
+        .detach(|| storage_buffer.cuda_import())
+        .map_err(super::gpu_operation_error)?;
+    Ok(dlpack_device_as_python_pair(cuda_import.dlpack_device()))
+}
+
+/// The DLPack device a tensor storage buffer's capsule lives on: `kDLMetal`.
+#[cfg(target_os = "macos")]
+fn tensor_storage_buffer_dlpack_device(
+    _python: Python<'_>,
+    _storage_buffer: &crate::python_helper_process_pixel_exchange::HelperCheckedOutStorageBuffer,
+) -> PyResult<(i32, i32)> {
+    Ok(dlpack_device_as_python_pair(METAL_DLPACK_DEVICE))
 }

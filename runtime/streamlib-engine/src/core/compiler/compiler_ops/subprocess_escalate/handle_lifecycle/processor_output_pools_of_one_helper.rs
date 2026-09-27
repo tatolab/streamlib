@@ -51,7 +51,7 @@ pub(crate) struct ProcessorOutputPoolSlot {
 fn pooled_resource_strong_count(registered_handle: &RegisteredHandle) -> Option<usize> {
     match registered_handle {
         RegisteredHandle::Texture { texture, .. } => Some(texture.texture().strong_count()),
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         RegisteredHandle::StorageBuffer { buffer } => Some(buffer.strong_count()),
         _ => None,
     }

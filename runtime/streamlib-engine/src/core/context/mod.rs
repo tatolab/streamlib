@@ -50,7 +50,7 @@ pub use device_stream_liveness_report::{
 };
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use gpu_context::GpuCapabilitiesSnapshot;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) use gpu_context::StorageBufferAllocationFlavour;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use gpu_context::{

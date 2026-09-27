@@ -17,6 +17,11 @@ use crate::apple::iosurface::{
     RetainedIOSurfaceSharedAcrossThreads, create_iosurface_mach_send_right,
 };
 
+/// The row width of a tensor storage buffer's byte-shaped IOSurface: one
+/// 16 KiB page, so every row starts on the host-pointer import alignment and
+/// the surface's pages are its bytes, back to back.
+const TENSOR_STORAGE_BUFFER_IOSURFACE_ROW_BYTE_SIZE: u32 = 16384;
+
 /// An IOSurface's memory imported as a storage buffer, zero-copy.
 ///
 /// The buffer aliases the surface's pages: what the producer writes, a
@@ -212,6 +217,32 @@ impl HostVulkanBuffer {
         )?;
         let pixel_byte_len = u64::from(width) * u64::from(height) * u64::from(bytes_per_pixel);
         Self::from_iosurface_pages(vulkan_device, &iosurface, Some(pixel_byte_len))
+    }
+
+    /// A storage buffer whose memory is a fresh private byte-shaped IOSurface,
+    /// so it can cross to a helper process as a Mach port: 16 KiB rows of
+    /// one-byte elements, as many as `byte_len` needs. The buffer spans
+    /// exactly `byte_len`.
+    pub fn new_iosurface_backed_storage_buffer(
+        vulkan_device: &Arc<HostVulkanDevice>,
+        byte_len: u64,
+    ) -> Result<Self> {
+        let row_count = byte_len
+            .div_ceil(u64::from(TENSOR_STORAGE_BUFFER_IOSURFACE_ROW_BYTE_SIZE))
+            .try_into()
+            .map_err(|_| {
+                Error::Configuration(format!(
+                    "new_iosurface_backed_storage_buffer: {byte_len} bytes need more rows than \
+                     an IOSurface's u32 height carries"
+                ))
+            })?;
+        let iosurface = crate::apple::iosurface::create_private_iosurface_with_packed_rows(
+            TENSOR_STORAGE_BUFFER_IOSURFACE_ROW_BYTE_SIZE,
+            row_count,
+            1,
+            PixelFormat::Unknown,
+        )?;
+        Self::from_iosurface_pages(vulkan_device, &iosurface, Some(byte_len))
     }
 
     /// A fresh send right naming this buffer's IOSurface, for the

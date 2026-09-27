@@ -547,43 +547,112 @@ fn a_slot_allocated_across_the_helpers_teardown_is_handed_back_for_release() {
     release_processor_output_pool_slot(&sandbox, released_slot);
 }
 
-/// A live Unix-socket surface-share service wired into `gpu` as its store, so an
+/// A live surface-share service wired into a GPU context as its store, so an
 /// escalate acquire registers exactly as a helper's would.
 #[cfg(target_os = "linux")]
-fn gpu_registering_with_a_live_surface_share_service(
-    gpu: &crate::core::context::GpuContext,
-) -> (
-    tempfile::TempDir,
-    crate::linux::surface_share::SurfaceShareState,
-    crate::linux::surface_share::UnixSocketSurfaceService,
-) {
-    use std::sync::Arc;
+struct LiveSurfaceShareServiceForATest {
+    state: crate::linux::surface_share::SurfaceShareState,
+    service: crate::linux::surface_share::UnixSocketSurfaceService,
+    _socket_dir: tempfile::TempDir,
+}
 
-    use crate::core::context::SurfaceStore;
-    use crate::linux::surface_share::{SurfaceShareState, UnixSocketSurfaceService};
+#[cfg(target_os = "linux")]
+impl LiveSurfaceShareServiceForATest {
+    fn wired_into(gpu: &crate::core::context::GpuContext) -> Self {
+        use std::sync::Arc;
 
-    let socket_dir = tempfile::TempDir::new().expect("temp dir for the test socket");
-    let socket_path = socket_dir.path().join("surface-share.sock");
-    let state = SurfaceShareState::new();
-    let mut service = UnixSocketSurfaceService::new(state.clone(), socket_path.clone());
-    service.start().expect("service start");
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-    while !socket_path.exists() && std::time::Instant::now() < deadline {
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        use crate::core::context::SurfaceStore;
+        use crate::linux::surface_share::{SurfaceShareState, UnixSocketSurfaceService};
+
+        let socket_dir = tempfile::TempDir::new().expect("temp dir for the test socket");
+        let socket_path = socket_dir.path().join("surface-share.sock");
+        let state = SurfaceShareState::new();
+        let mut service = UnixSocketSurfaceService::new(state.clone(), socket_path.clone());
+        service.start().expect("service start");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while !socket_path.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        let store = SurfaceStore::new_reading_check_out_leases(
+            socket_path.to_string_lossy().into_owned(),
+            "R-tensor-storage-buffer".to_string(),
+            Arc::clone(state.check_out_leases()),
+        );
+        store.connect().expect("the store connects");
+        gpu.set_surface_store(store);
+        Self {
+            state,
+            service,
+            _socket_dir: socket_dir,
+        }
     }
-    let store = SurfaceStore::new_reading_check_out_leases(
-        socket_path.to_string_lossy().into_owned(),
-        "R-tensor-storage-buffer".to_string(),
-        Arc::clone(state.check_out_leases()),
-    );
-    store.connect().expect("the store connects");
-    gpu.set_surface_store(store);
-    (socket_dir, state, service)
+
+    fn check_out_leases(&self) -> &crate::core::context::SurfaceCheckOutLeaseRegistry {
+        self.state.check_out_leases()
+    }
+
+    fn is_registered(&self, surface_id: &str) -> bool {
+        self.state.get_surface_planes(surface_id).is_some()
+    }
+
+    fn stop(mut self) {
+        self.service.stop();
+    }
+}
+
+#[cfg(target_os = "macos")]
+struct LiveSurfaceShareServiceForATest {
+    state: crate::apple::surface_share::IOSurfaceShareState,
+    service: crate::apple::surface_share::MachSurfaceShareService,
+}
+
+#[cfg(target_os = "macos")]
+impl LiveSurfaceShareServiceForATest {
+    fn wired_into(gpu: &crate::core::context::GpuContext) -> Self {
+        use std::sync::Arc;
+
+        use crate::apple::surface_share::{IOSurfaceShareState, MachSurfaceShareService};
+        use crate::core::context::SurfaceStore;
+
+        let state = IOSurfaceShareState::new();
+        let mut service = MachSurfaceShareService::new(
+            state.clone(),
+            format!(
+                "com.tatolab.streamlib.escalate-tensor-test.{}.{}",
+                std::process::id(),
+                uuid::Uuid::new_v4().simple()
+            ),
+        );
+        service
+            .start()
+            .expect("the Mach surface-share service starts");
+        let store = SurfaceStore::new_sharing_the_mach_services_tables(
+            service.service_name().to_string(),
+            "R-tensor-storage-buffer".to_string(),
+            Arc::clone(state.check_out_leases()),
+            Arc::clone(state.cross_process_timeline_pairs()),
+        );
+        store.connect().expect("the store connects");
+        gpu.set_surface_store(store);
+        Self { state, service }
+    }
+
+    fn check_out_leases(&self) -> &crate::core::context::SurfaceCheckOutLeaseRegistry {
+        self.state.check_out_leases()
+    }
+
+    fn is_registered(&self, surface_id: &str) -> bool {
+        self.state.registration_of(surface_id).is_some()
+    }
+
+    fn stop(mut self) {
+        self.service.stop();
+    }
 }
 
 /// Acquire a tensor storage buffer over the real escalate op, from a processor
 /// output pool when one is named, answering the surface id or the refusal.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn acquire_tensor_storage_buffer_over_the_escalate_op(
     sandbox: &crate::core::context::GpuContextLimitedAccess,
     registry: &EscalateHandleRegistry,
@@ -655,7 +724,7 @@ fn a_tensor_storage_buffer_registers_its_shape_and_leaves_every_table_on_release
         println!("no GPU device — skipping");
         return;
     };
-    let (_socket_dir, state, mut service) = gpu_registering_with_a_live_surface_share_service(&gpu);
+    let live_service = LiveSurfaceShareServiceForATest::wired_into(&gpu);
     let sandbox = GpuContextLimitedAccess::new(gpu);
     let registry = EscalateHandleRegistry::new();
 
@@ -670,7 +739,8 @@ fn a_tensor_storage_buffer_registers_its_shape_and_leaves_every_table_on_release
     let expected_layout =
         TensorStorageBufferLayout::new(vec![3, 7, 11], TensorElementType::Float16)
             .expect("an odd shape is valid");
-    let checkout = state
+    let checkout = live_service
+        .state
         .get_surface_planes(&surface_id)
         .expect("the tensor is registered with the surface-share service");
     assert_eq!(checkout.handle_type, "opaque_fd");
@@ -702,20 +772,115 @@ fn a_tensor_storage_buffer_registers_its_shape_and_leaves_every_table_on_release
         released,
         Some(crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse::Ok(_))
     ));
-    assert!(state.get_surface_planes(&surface_id).is_none());
+    assert!(!live_service.is_registered(&surface_id));
     assert!(matches!(
         sandbox
             .host_inner()
             .resolve_storage_buffer_from_the_parent_wide_map_by_surface_id(&surface_id),
         Err(Error::NotFound(_))
     ));
-    service.stop();
+    live_service.stop();
+}
+
+/// On macOS a one-off tensor acquire allocates a byte-shaped private IOSurface
+/// of 16 KiB rows, registers it as a `storage_buffer` surface carrying its
+/// shape and dtype, enters the parent-wide map over those same pages, and
+/// leaves both on release.
+#[cfg(target_os = "macos")]
+#[cfg_attr(
+    not(feature = "hardware-tests"),
+    ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+)]
+#[test]
+fn a_tensor_storage_buffer_crosses_on_a_byte_shaped_iosurface_and_leaves_every_table_on_release() {
+    use super::super::handle_escalate_op;
+    use crate::core::Error;
+    use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateRequest;
+    use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::EscalateRequestReleaseHandle;
+    use crate::core::context::{GpuContext, GpuContextLimitedAccess};
+    use crate::core::rhi::{TensorElementType, TensorStorageBufferLayout};
+    use crate::core::runtime::mesh::a_mesh_link_ingress_table_carrying_nothing;
+
+    let Ok(gpu) = GpuContext::init_for_platform_sync() else {
+        println!("no GPU device — skipping");
+        return;
+    };
+    let live_service = LiveSurfaceShareServiceForATest::wired_into(&gpu);
+    let sandbox = GpuContextLimitedAccess::new(gpu);
+    let registry = EscalateHandleRegistry::new();
+
+    // 16385 bytes: one byte past a row, so the surface takes a second row.
+    for (shape, dtype, element_type, row_count) in [
+        (vec![3, 7, 11], "float16", TensorElementType::Float16, 1),
+        (vec![16385], "uint8", TensorElementType::Uint8, 2),
+    ] {
+        let surface_id = acquire_tensor_storage_buffer_over_the_escalate_op(
+            &sandbox, &registry, &shape, dtype, None,
+        )
+        .expect("a one-off tensor storage buffer is acquired");
+        let expected_layout =
+            TensorStorageBufferLayout::new(shape.clone(), element_type).expect("a valid shape");
+        let registration = live_service
+            .state
+            .registration_of(&surface_id)
+            .expect("the tensor is registered with the Mach surface-share service");
+        assert_eq!(registration.resource_type, "storage_buffer");
+        assert_eq!(registration.tensor_layout.as_ref(), Some(&expected_layout));
+        assert_eq!(registration.iosurface.bytes_per_element(), 1);
+        assert_eq!(
+            registration.iosurface.bytes_per_row(),
+            16384,
+            "{shape:?}: rows are one packed 16 KiB page"
+        );
+        assert_eq!(registration.iosurface.height(), row_count, "{shape:?}");
+        let registered = sandbox
+            .host_inner()
+            .resolve_storage_buffer_from_the_parent_wide_map_by_surface_id(&surface_id)
+            .expect("the parent-wide map resolves the tensor by its id");
+        assert_eq!(
+            registered.byte_size(),
+            expected_layout.byte_size(),
+            "{shape:?}: the buffer spans exactly the tensor"
+        );
+        let backing_iosurface = registered
+            .host_inner()
+            .backing_iosurface()
+            .expect("the buffer is IOSurface-backed");
+        assert_eq!(
+            backing_iosurface.id(),
+            registration.iosurface.id(),
+            "{shape:?}: the service shares the pages the buffer imports"
+        );
+        drop(registered);
+
+        let released = handle_escalate_op(
+            &sandbox,
+            &registry,
+            &a_mesh_link_ingress_table_carrying_nothing(),
+            EscalateRequest::ReleaseHandle(EscalateRequestReleaseHandle {
+                request_id: "req-release-tensor".to_string(),
+                handle_id: surface_id.clone(),
+            }),
+        );
+        assert!(matches!(
+            released,
+            Some(crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::EscalateResponse::Ok(_))
+        ));
+        assert!(!live_service.is_registered(&surface_id));
+        assert!(matches!(
+            sandbox
+                .host_inner()
+                .resolve_storage_buffer_from_the_parent_wide_map_by_surface_id(&surface_id),
+            Err(Error::NotFound(_))
+        ));
+    }
+    live_service.stop();
 }
 
 /// A pooled tensor acquire never rehands the slot of a tensor a consumer
 /// holds, a recycled tensor's id is refused by name, and teardown leaves no
 /// registration behind.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[cfg_attr(
     not(feature = "hardware-tests"),
     ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
@@ -733,7 +898,7 @@ fn a_tensor_storage_buffer_pool_never_rewrites_a_tensor_a_consumer_holds() {
         println!("no GPU device — skipping");
         return;
     };
-    let (_socket_dir, state, mut service) = gpu_registering_with_a_live_surface_share_service(&gpu);
+    let live_service = LiveSurfaceShareServiceForATest::wired_into(&gpu);
     let sandbox = GpuContextLimitedAccess::new(gpu);
     let registry = EscalateHandleRegistry::new();
     let pool_key = format!("tensor-pool-test-{}", Uuid::new_v4().simple());
@@ -760,8 +925,8 @@ fn a_tensor_storage_buffer_pool_never_rewrites_a_tensor_a_consumer_holds() {
     );
 
     let held_tensor = next_tensor();
-    let consumer = state.check_out_leases().mint_holder_id();
-    state
+    let consumer = live_service.check_out_leases().mint_holder_id();
+    live_service
         .check_out_leases()
         .record_check_out_lease(&held_tensor, consumer)
         .expect("the current tensor checks out");
@@ -795,7 +960,7 @@ fn a_tensor_storage_buffer_pool_never_rewrites_a_tensor_a_consumer_holds() {
         ),
         "a recycled tensor's id {recycled_tensor} must be refused as recycled"
     );
-    state
+    live_service
         .check_out_leases()
         .release_one_check_out_lease(&held_tensor, consumer)
         .unwrap();
@@ -813,7 +978,7 @@ fn a_tensor_storage_buffer_pool_never_rewrites_a_tensor_a_consumer_holds() {
     assert!(!slot_keys.is_empty());
     for pool_slot_key in &slot_keys {
         assert!(
-            state.get_surface_planes(pool_slot_key).is_none(),
+            !live_service.is_registered(pool_slot_key),
             "teardown left tensor slot {pool_slot_key} registered"
         );
         assert!(
@@ -824,5 +989,5 @@ fn a_tensor_storage_buffer_pool_never_rewrites_a_tensor_a_consumer_holds() {
             "teardown left tensor slot {pool_slot_key} in the parent-wide map"
         );
     }
-    service.stop();
+    live_service.stop();
 }

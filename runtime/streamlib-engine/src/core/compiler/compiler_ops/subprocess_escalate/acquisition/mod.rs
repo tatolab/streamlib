@@ -16,17 +16,13 @@ mod tests;
 use std::sync::Arc;
 
 #[cfg(target_os = "linux")]
-pub(super) use linux::handle_acquire_image;
+use linux::allocate_registered_texture_for_helper;
 #[cfg(target_os = "linux")]
-use linux::{
-    allocate_registered_storage_buffer_for_helper, allocate_registered_texture_for_helper,
-};
+pub(super) use linux::handle_acquire_image;
+#[cfg(target_os = "macos")]
+use macos::allocate_registered_texture_for_helper;
 #[cfg(target_os = "macos")]
 pub(super) use macos::handle_acquire_image;
-#[cfg(target_os = "macos")]
-use macos::{
-    allocate_registered_storage_buffer_for_helper, allocate_registered_texture_for_helper,
-};
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub(super) use neither_linux_nor_macos::handle_acquire_image;
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
@@ -250,6 +246,30 @@ pub(super) fn handle_acquire_storage_buffer(
             message: format!("acquire_storage_buffer failed: {e}"),
         }),
     }
+}
+
+/// Allocate one tensor storage buffer that crosses to a helper and register it
+/// — with the surface-share service as a `storage_buffer` surface and in the
+/// parent-wide storage buffer map — answering the id it is registered under
+/// and what holds it alive.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn allocate_registered_storage_buffer_for_helper(
+    full: &crate::core::context::GpuContextFullAccess,
+    tensor_layout: &TensorStorageBufferLayout,
+) -> crate::core::error::Result<(String, RegisteredHandle)> {
+    use crate::host_rhi::HostSurfaceStoreExt as _;
+
+    let host = full.host_inner();
+    let buffer = host.acquire_storage_buffer_of_flavour(
+        tensor_layout,
+        crate::core::context::StorageBufferAllocationFlavour::CrossesToAHelperProcess,
+    )?;
+    let handle_id = uuid::Uuid::new_v4().to_string();
+    if let Some(store) = full.surface_store() {
+        store.register_storage_buffer(&handle_id, &buffer, tensor_layout)?;
+    }
+    host.register_storage_buffer_in_the_parent_wide_map(&handle_id, buffer.clone());
+    Ok((handle_id, RegisteredHandle::StorageBuffer { buffer }))
 }
 
 /// Allocate and register one fresh slot of the kind `descriptor` names,

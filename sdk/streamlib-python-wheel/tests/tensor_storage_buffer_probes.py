@@ -12,6 +12,7 @@ import dataclasses
 import json
 import math
 import os
+import sys
 import traceback
 import uuid
 
@@ -30,6 +31,11 @@ MINIMUM_INTERVAL_BETWEEN_HELD_TENSOR_PUBLISHES_NS = 150_000_000
 
 RESULT_MARKER = "MARKER:PROBE_RESULT "
 
+# The device a tensor's DLPack export lands on, in torch's name for it.
+NATURAL_TORCH_DEVICE_TYPE = "mps" if sys.platform == "darwin" else "cuda"
+# A DLPack device the tensor does not live on: CUDA on macOS, Metal on Linux.
+FOREIGN_DLPACK_DEVICE = (2, 0) if sys.platform == "darwin" else (8, 0)
+
 
 def _report(probe_name: str, observation_body) -> None:
     """One result line per observation — a failure carries its own traceback."""
@@ -43,12 +49,33 @@ def _report(probe_name: str, observation_body) -> None:
     )
 
 
-def _cuda_unavailable_reason() -> "str | None":
+def _torch_device_unavailable_reason() -> "str | None":
     import torch
 
-    if not torch.cuda.is_available():
+    if NATURAL_TORCH_DEVICE_TYPE == "mps" and not torch.backends.mps.is_available():
+        return "torch sees no MPS device"
+    if NATURAL_TORCH_DEVICE_TYPE == "cuda" and not torch.cuda.is_available():
         return "torch sees no CUDA device"
     return None
+
+
+def _synchronize_the_torch_device(torch) -> None:
+    if NATURAL_TORCH_DEVICE_TYPE == "mps":
+        torch.mps.synchronize()
+    else:
+        torch.cuda.synchronize()
+
+
+def _mlx_or_none():
+    """MLX on macOS, where it reads a `kDLMetal` capsule; `None` elsewhere."""
+    if sys.platform != "darwin":
+        return None
+    try:
+        import mlx.core  # pyright: ignore[reportMissingImports]
+
+        return mlx.core
+    except ImportError:
+        return None
 
 
 def expected_tensor_values(torch, shape: "list[int]", dtype: str, frame_index: int):
@@ -99,12 +126,12 @@ class TensorStorageBufferPublishingSource:
         frame_index = len(self._surface_ids_published_so_far)
         if frame_index >= self._config.frames_to_publish:
             return
-        unavailable = _cuda_unavailable_reason()
+        unavailable = _torch_device_unavailable_reason()
         if unavailable is not None:
             self._stopped = True
             _report(
                 "TensorStorageBufferPublishingSource",
-                lambda: {"cuda_unavailable": unavailable},
+                lambda: {"torch_device_unavailable": unavailable},
             )
             return
         now_ns = clock.monotonic_now_ns()
@@ -130,7 +157,7 @@ class TensorStorageBufferPublishingSource:
                 ).to(written.device)
             )
             reread = torch.from_dlpack(tensor_surface)
-            torch.cuda.synchronize()
+            _synchronize_the_torch_device(torch)
             with ctx.gpu_limited_access.resolve_surface(
                 surface_id
             ) as independently_imported_surface:
@@ -190,7 +217,7 @@ def _read_a_published_tensor(
             expected = expected_tensor_values(torch, shape, dtype, index)
             return bool(torch.equal(read, expected.to(read.device)))
 
-        return {
+        observation = {
             "surface_id": surface_id,
             "stated_shape": tensor_surface.shape,
             "stated_dtype": tensor_surface.dtype,
@@ -199,6 +226,15 @@ def _read_a_published_tensor(
             "values_equal": equals_frame(frame_index),
             "values_equal_its_own_frames": equals_frame(resolved_frame_index),
         }
+        mx = _mlx_or_none()
+        if mx is not None:
+            mlx_read = mx.from_dlpack(tensor_surface, copy=False)
+            expected = expected_tensor_values(torch, shape, dtype, frame_index)
+            observation["mlx_shape"] = list(mlx_read.shape)
+            observation["mlx_values_equal"] = bool(
+                mx.array_equal(mlx_read, mx.array(expected.float().numpy()))
+            )
+        return observation
 
 
 @dataclasses.dataclass
@@ -269,8 +305,8 @@ class HeldTensorRereadingSink:
         # outlasts the first tensor.
         import torch
 
-        if torch.cuda.is_available():
-            torch.zeros(1, device="cuda")
+        if _torch_device_unavailable_reason() is None:
+            torch.zeros(1, device=NATURAL_TORCH_DEVICE_TYPE)
 
     def process(self, ctx) -> None:
         import torch
@@ -369,11 +405,11 @@ class TensorStorageBufferKernelBindingProbe:
     def setup(self, ctx) -> None:
         import torch
 
-        unavailable = _cuda_unavailable_reason()
+        unavailable = _torch_device_unavailable_reason()
         if unavailable is not None:
             _report(
                 "TensorStorageBufferKernelBindingProbe",
-                lambda: {"cuda_unavailable": unavailable},
+                lambda: {"torch_device_unavailable": unavailable},
             )
             return
         gpu = ctx.gpu_full_access
@@ -383,7 +419,7 @@ class TensorStorageBufferKernelBindingProbe:
             index_pattern = (
                 torch.arange(element_count, dtype=torch.float32)
                 .reshape(KERNEL_WRITTEN_TENSOR_SHAPE)
-                .cuda()
+                .to(NATURAL_TORCH_DEVICE_TYPE)
             )
             compute_kernel = gpu.create_compute_kernel(
                 source=WRITE_INDEX_PATTERN_GLSL
@@ -406,7 +442,15 @@ class TensorStorageBufferKernelBindingProbe:
                 )
                 dispatched = torch.from_dlpack(dispatched_tensor)
                 undispatched = torch.from_dlpack(undispatched_tensor)
+                try:
+                    dispatched_tensor.__dlpack__(
+                        max_version=(1, 0), dl_device=FOREIGN_DLPACK_DEVICE
+                    )
+                    foreign_device_refusal = None
+                except BufferError as refusal:
+                    foreign_device_refusal = str(refusal)
                 compute_observation = {
+                    "foreign_device_refusal": foreign_device_refusal,
                     "compute_binding_names": list(compute_kernel.binding_names),
                     "dispatched_tensor_device": str(dispatched.device),
                     "dispatched_tensor_shape": list(dispatched.shape),
