@@ -21,6 +21,7 @@ use crate::core::{Error, Result};
 
 use super::HostVulkanDevice;
 use super::vulkan_command_recorder::RhiCommandRecorder;
+use super::vulkan_command_recorder::SwapchainImageBarrierScopes;
 use super::vulkan_pipeline_flags::VulkanStage;
 use super::vulkan_swapchain_colorspace::{
     SwapchainColorPick, build_hdr_metadata, pick_swapchain_format,
@@ -86,7 +87,7 @@ pub struct VulkanPresentTarget {
     render_finished_semaphores: Vec<vk::Semaphore>,
 
     /// Per-frame-in-flight binary semaphore signaled by
-    /// `vkAcquireNextImageKHR`; waited on at `COLOR_ATTACHMENT_OUTPUT`
+    /// `vkAcquireNextImageKHR`; waited on at [`IMAGE_AVAILABLE_SEMAPHORE_WAIT_STAGE`]
     /// before the render submit writes to the swapchain image.
     image_available_semaphores: Vec<vk::Semaphore>,
 
@@ -129,15 +130,6 @@ struct InFlightFrame {
 const IMAGE_AVAILABLE_SEMAPHORE_WAIT_STAGE: vk::PipelineStageFlags2 =
     vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT;
 
-/// Stage and access scopes of one swapchain-image layout barrier.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct SwapchainImageBarrierScopes {
-    src_stage: vk::PipelineStageFlags2,
-    src_access: vk::AccessFlags2,
-    dst_stage: vk::PipelineStageFlags2,
-    dst_access: vk::AccessFlags2,
-}
-
 /// The acquired image's UNDEFINED → COLOR_ATTACHMENT_OPTIMAL barrier.
 ///
 /// The source stage must include [`IMAGE_AVAILABLE_SEMAPHORE_WAIT_STAGE`]:
@@ -145,13 +137,21 @@ struct SwapchainImageBarrierScopes {
 /// transition's write is ordered after the presentation engine's read of the
 /// image. A `NONE` source stage leaves it unordered
 /// (`SYNC-HAZARD-WRITE-AFTER-READ` against `vkAcquireNextImageKHR`).
-const SWAPCHAIN_ACQUIRE_BARRIER_SCOPES: SwapchainImageBarrierScopes =
-    SwapchainImageBarrierScopes {
-        src_stage: IMAGE_AVAILABLE_SEMAPHORE_WAIT_STAGE,
-        src_access: vk::AccessFlags2::NONE,
-        dst_stage: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-        dst_access: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
-    };
+const SWAPCHAIN_ACQUIRE_BARRIER_SCOPES: SwapchainImageBarrierScopes = SwapchainImageBarrierScopes {
+    src_stage: IMAGE_AVAILABLE_SEMAPHORE_WAIT_STAGE,
+    src_access: vk::AccessFlags2::NONE,
+    dst_stage: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+    dst_access: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+};
+
+/// The drawn image's COLOR_ATTACHMENT_OPTIMAL → PRESENT_SRC_KHR barrier; the
+/// render-finished semaphore signal orders the present after it.
+const SWAPCHAIN_PRESENT_BARRIER_SCOPES: SwapchainImageBarrierScopes = SwapchainImageBarrierScopes {
+    src_stage: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+    src_access: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+    dst_stage: vk::PipelineStageFlags2::NONE,
+    dst_access: vk::AccessFlags2::NONE,
+};
 
 /// A recorder operation [`VulkanPresentTarget::end_frame`] emits after the
 /// frame's draws, before submit + present.
@@ -619,15 +619,11 @@ impl VulkanPresentTarget {
         // every reuse because the render pass uses CLEAR load op (set by
         // `PresentFrame::begin_rendering` / `cmd_begin_dynamic_rendering`
         // with a clear color).
-        let acquire_barrier = SWAPCHAIN_ACQUIRE_BARRIER_SCOPES;
         self.recorders[frame_index].record_swapchain_image_barrier(
             swapchain_image,
             vk::ImageLayout::UNDEFINED,
             vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-            acquire_barrier.src_stage,
-            acquire_barrier.src_access,
-            acquire_barrier.dst_stage,
-            acquire_barrier.dst_access,
+            SWAPCHAIN_ACQUIRE_BARRIER_SCOPES,
         )?;
 
         self.in_flight = Some(InFlightFrame {
@@ -712,16 +708,13 @@ impl VulkanPresentTarget {
                         swapchain_image,
                         vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
                         vk::ImageLayout::PRESENT_SRC_KHR,
-                        vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-                        vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
-                        vk::PipelineStageFlags2::NONE,
-                        vk::AccessFlags2::NONE,
+                        SWAPCHAIN_PRESENT_BARRIER_SCOPES,
                     )?;
                 }
             }
         }
 
-        // Submit: wait on image_available (binary, COLOR_ATTACHMENT_OUTPUT)
+        // Submit: wait on image_available (binary)
         // + any caller-added timeline waits; signal render_finished (binary,
         // ALL_COMMANDS) + frame timeline.
         let mut wait_infos: Vec<vk::SemaphoreSubmitInfo> =
@@ -1365,7 +1358,7 @@ mod tests {
         );
     }
 
-    /// #2506: the acquire barrier's source stage chains off the
+    /// The acquire barrier's source stage chains off the
     /// image-available semaphore wait. A `NONE` source stage fails here.
     #[test]
     fn acquire_barrier_source_stage_chains_off_the_image_available_wait() {
