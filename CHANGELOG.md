@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.38](https://github.com/tatolab/streamlib/compare/v0.26.37...v0.26.38) (2026-09-27)
+
+
+### Features
+
+* **wheel:** GlslPixelEffect — a pixel effect as one shader function ([#2508](https://github.com/tatolab/streamlib/issues/2508)) ([5e0c122](https://github.com/tatolab/streamlib/commit/5e0c12279be39d71216a887bd0a17d6d240fad2b))
+
 ## [0.26.37](https://github.com/tatolab/streamlib/compare/v0.26.36...v0.26.37) (2026-09-27)
 
 
