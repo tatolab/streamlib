@@ -77,6 +77,10 @@ def assert_written_through_torch_with_no_copy(producer_report: dict, shape) -> N
         assert observation["exports_share_memory"], (
             f"two exports of {observation['surface_id']} addressed different memory"
         )
+        assert observation["write_visible_through_an_independent_import"], (
+            f"a second import of {observation['surface_id']} did not see torch's "
+            "write before the close: torch wrote a copy, not the engine's memory"
+        )
 
 
 def test_a_tensor_written_through_torch_is_read_by_another_process(
@@ -138,6 +142,10 @@ def test_a_reader_resolving_a_different_id_sees_different_values(
         assert read["surface_id"] != read["published_surface_id"]
         assert not read["values_equal"], (
             f"frame {read['frame_index']}'s values were read from another tensor's id"
+        )
+        assert read["values_equal_its_own_frames"], (
+            f"{read['surface_id']} did not carry the values of the frame it was "
+            "published for"
         )
 
 

@@ -130,6 +130,18 @@ class TensorStorageBufferPublishingSource:
                 ).to(written.device)
             )
             reread = torch.from_dlpack(tensor_surface)
+            torch.cuda.synchronize()
+            with ctx.gpu_limited_access.resolve_surface(
+                surface_id
+            ) as independently_imported_surface:
+                # A second checkout imports the engine allocation on its own,
+                # so it sees the write before the close only if torch wrote
+                # that allocation rather than a staging copy of it.
+                write_visible_through_an_independent_import = bool(
+                    torch.equal(
+                        torch.from_dlpack(independently_imported_surface), written
+                    )
+                )
             self._producer_observations.append(
                 {
                     "surface_id": surface_id,
@@ -138,9 +150,10 @@ class TensorStorageBufferPublishingSource:
                     "tensor_device": str(written.device),
                     "tensor_shape": list(written.shape),
                     "tensor_dtype": str(written.dtype),
-                    # Two exports of one surface address the same memory: the
-                    # capsule is the engine's allocation, never a copy of it.
                     "exports_share_memory": written.data_ptr() == reread.data_ptr(),
+                    "write_visible_through_an_independent_import": (
+                        write_visible_through_an_independent_import
+                    ),
                 }
             )
 
@@ -163,19 +176,28 @@ class TensorStorageBufferPublishingSource:
             )
 
 
-def _read_a_published_tensor(ctx, surface_id: str, shape, dtype, frame_index) -> dict:
+def _read_a_published_tensor(
+    ctx, surface_id: str, shape, dtype, frame_index, resolved_frame_index
+) -> dict:
+    """Compare the tensor `surface_id` names against the values of the frame
+    whose bag arrived and of the frame the id was published for."""
     import torch
 
     with ctx.gpu_limited_access.resolve_surface(surface_id) as tensor_surface:
         read = torch.from_dlpack(tensor_surface)
-        expected = expected_tensor_values(torch, shape, dtype, frame_index).to(read.device)
+
+        def equals_frame(index: int) -> bool:
+            expected = expected_tensor_values(torch, shape, dtype, index)
+            return bool(torch.equal(read, expected.to(read.device)))
+
         return {
             "surface_id": surface_id,
             "stated_shape": tensor_surface.shape,
             "stated_dtype": tensor_surface.dtype,
             "tensor_device": str(read.device),
             "tensor_shape": list(read.shape),
-            "values_equal": bool(torch.equal(read, expected)),
+            "values_equal": equals_frame(frame_index),
+            "values_equal_its_own_frames": equals_frame(resolved_frame_index),
         }
 
 
@@ -204,12 +226,14 @@ class PublishedTensorReadingSink:
         if bag is None:
             return
         resolved_surface_id = bag["surface_id"]
+        resolved_frame_index = bag["frame_index"]
         if self._config.resolve_the_previous_frames_id:
             previous_surface_id = self._previous_surface_id
             self._previous_surface_id = bag["surface_id"]
             if previous_surface_id is None:
                 return
             resolved_surface_id = previous_surface_id
+            resolved_frame_index = bag["frame_index"] - 1
 
         _report(
             "PublishedTensorReadingSink",
@@ -221,6 +245,7 @@ class PublishedTensorReadingSink:
                     resolved_surface_id,
                     *TENSORS_BY_NAME[self._config.tensor_name],
                     bag["frame_index"],
+                    resolved_frame_index,
                 ),
             },
         )
@@ -238,6 +263,15 @@ class HeldTensorRereadingSink:
         self._held_tensor_surface = None
         self._later_tensors_seen = 0
 
+    def setup(self, ctx) -> None:
+        # Loading torch and its CUDA context takes longer than the producer
+        # takes to cycle the pool; done lazily in the first process() it
+        # outlasts the first tensor.
+        import torch
+
+        if torch.cuda.is_available():
+            torch.zeros(1, device="cuda")
+
     def process(self, ctx) -> None:
         import torch
 
@@ -245,9 +279,17 @@ class HeldTensorRereadingSink:
         if bag is None:
             return
         if self._held_tensor_surface is None:
+            # The claim holds the slot from the read to the resolve, then
+            # drops, so the rereads rest on the resolved handle alone.
+            claim_from_the_read = (
+                ctx.gpu_limited_access.claim_surface_against_producer_reuse(
+                    bag["surface_id"]
+                )
+            )
             self._held_tensor_surface = ctx.gpu_limited_access.resolve_surface(
                 bag["surface_id"]
             )
+            del claim_from_the_read
             return
         self._later_tensors_seen += 1
         held_tensor_surface = self._held_tensor_surface
