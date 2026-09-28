@@ -63,6 +63,10 @@ const THE_DISPLAY_NAME: &str = "Camera Source 2";
 /// has to name.
 const THE_PORT: &str = "video";
 
+/// What the test writes to a source holding its burst, to release it — spelled
+/// here too for the same reason as [`THE_PORT`].
+const RELEASE_THE_HELD_BURST_LINE: &str = "RELEASE-THE-HELD-BURST";
+
 /// The runtime names one arm's source and reader take.
 ///
 /// Per arm rather than shared: an arm's peers leave at the end of it, but a
@@ -130,7 +134,7 @@ struct HowToLaunchAPeer {
     link_from: Option<String>,
     iceoryx2_domain_root: std::path::PathBuf,
     burst_once_a_reader_arrives: Option<u64>,
-    recreate_the_publisher_just_before_the_burst: bool,
+    recreate_the_publisher_then_hold_the_burst_until_told: bool,
     take_every_destination_slot: bool,
     refuse_to_say_how_to_read_the_port: bool,
 }
@@ -171,8 +175,8 @@ impl CrossRuntimeLinkPeerProcess {
                 .arg("--burst-once-a-reader-arrives")
                 .arg(burst.to_string());
         }
-        if how.recreate_the_publisher_just_before_the_burst {
-            command.arg("--recreate-the-publisher-just-before-the-burst");
+        if how.recreate_the_publisher_then_hold_the_burst_until_told {
+            command.arg("--recreate-the-publisher-then-hold-the-burst-until-told");
         }
         if how.refuse_to_say_how_to_read_the_port {
             command.arg("--refuse-to-say-how-to-read-the-port");
@@ -305,6 +309,30 @@ impl CrossRuntimeLinkPeerProcess {
             .iter()
             .rev()
             .find_map(|reported| reported.get("burst_ended_at_index")?.as_u64())
+    }
+
+    /// The index of the first bag this source's replacement publisher sent,
+    /// once it has replaced the one it started with.
+    fn the_index_its_replacement_publisher_began_at(&self) -> Option<u64> {
+        self.everything_it_has_reported()
+            .iter()
+            .rev()
+            .find_map(|reported| {
+                reported
+                    .get("index_the_replacement_publisher_began_at")?
+                    .as_u64()
+            })
+    }
+
+    /// Release the burst this source is holding.
+    fn release_its_held_burst(&self) {
+        use std::io::Write as _;
+        let mut stdin = self
+            .child
+            .stdin
+            .as_ref()
+            .expect("a peer that has not been asked to leave still has its stdin");
+        writeln!(stdin, "{RELEASE_THE_HELD_BURST_LINE}").expect("the source reads its stdin");
     }
 
     /// How many publishers this source's port has had — two once it has
@@ -1308,6 +1336,12 @@ fn every_bag_a_burst_lost_between_two_runtimes_is_counted_on_the_link() {
 /// `bags_a_gap_in_the_numbering_says_were_lost`'s
 /// `a_new_run_is_a_baseline_even_once_its_numbering_has_overtaken`.
 ///
+/// The source holds its burst until a bag of the replacement has reached the
+/// reader. A new generation's loss counts from the first of its bags the
+/// reading runtime sees, so a burst sent before the egress had read any of the
+/// replacement's bags falls wholly before that baseline, and the arm would
+/// read the scheduler rather than the count.
+///
 /// What this arm does prove, against two real runtimes and a real publisher
 /// replacement: the grown attachment crosses the wire and is read at the far
 /// end, the link keeps carrying after its producer is replaced, the burst's
@@ -1333,7 +1367,7 @@ fn a_producer_recreated_mid_stream_is_a_baseline_and_not_a_gap() {
         display_name: THE_DISPLAY_NAME.to_string(),
         iceoryx2_domain_root: source_domain.path().to_path_buf(),
         burst_once_a_reader_arrives: Some(HOW_MANY_BAGS_THE_BURST_PUBLISHES),
-        recreate_the_publisher_just_before_the_burst: true,
+        recreate_the_publisher_then_hold_the_burst_until_told: true,
         ..Default::default()
     });
     source.wait_until_it_is_up();
@@ -1349,6 +1383,22 @@ fn a_producer_recreated_mid_stream_is_a_baseline_and_not_a_gap() {
         ..Default::default()
     });
     reader.wait_until_it_is_up();
+
+    source.wait_until("the port's publisher to be replaced", || {
+        source
+            .the_index_its_replacement_publisher_began_at()
+            .is_some()
+    });
+    let replacement_began_at = source
+        .the_index_its_replacement_publisher_began_at()
+        .expect("the source reported where its replacement publisher began");
+    reader.wait_until("a bag of the replacement publisher to arrive", || {
+        reader
+            .what_last_reached_it()
+            .last_bag_index
+            .is_some_and(|last| last >= replacement_began_at)
+    });
+    source.release_its_held_burst();
 
     let reached = wait_until_the_burst_is_behind_the_reader(&source, &reader);
 

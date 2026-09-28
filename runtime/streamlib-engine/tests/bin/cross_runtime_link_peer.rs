@@ -51,6 +51,9 @@ const READY_LINE: &str = "READY";
 /// What the peer writes instead when it could not come up at all.
 const REFUSED_LINE_PREFIX: &str = "REFUSED ";
 
+/// What the test writes to a source holding its burst, to release it.
+const RELEASE_THE_HELD_BURST_LINE: &str = "RELEASE-THE-HELD-BURST";
+
 /// The processor id the source's channel is keyed on. Not a mesh name: the
 /// mesh addresses the port by its *display* name, and this is the local side
 /// the display name resolves to.
@@ -91,10 +94,19 @@ fn main() {
     let report = ReportChannelTakenBeforeAnythingReplacesStdout::take();
     let how = HowToRunThisPeer::read_from_the_command_line();
     let asked_to_leave = Arc::new(AtomicBool::new(false));
-    read_stdin_until_it_closes(Arc::clone(&asked_to_leave));
+    let told_to_release_the_held_burst = Arc::new(AtomicBool::new(false));
+    read_stdin_until_it_closes(
+        Arc::clone(&asked_to_leave),
+        Arc::clone(&told_to_release_the_held_burst),
+    );
 
     let outcome = match how.role {
-        WhatThisPeerIs::TheSourceOfTheLink => run_as_the_source(&report, &how, &asked_to_leave),
+        WhatThisPeerIs::TheSourceOfTheLink => run_as_the_source(
+            &report,
+            &how,
+            &asked_to_leave,
+            &told_to_release_the_held_burst,
+        ),
         WhatThisPeerIs::TheReaderOfTheLink => run_as_the_reader(&report, &how, &asked_to_leave),
     };
     if let Err(why) = outcome {
@@ -108,6 +120,7 @@ fn run_as_the_source(
     report: &ReportChannelTakenBeforeAnythingReplacesStdout,
     how: &HowToRunThisPeer,
     asked_to_leave: &AtomicBool,
+    told_to_release_the_held_burst: &AtomicBool,
 ) -> Result<(), String> {
     let iceoryx2_node = how.open_an_iceoryx2_node()?;
     let channel_service_name =
@@ -164,6 +177,7 @@ fn run_as_the_source(
     let mut publishers_this_port_has_had: u64 = 1;
     let mut next_sequence_number: u64 = 0;
     let mut burst_ended_at_index: Option<u64> = None;
+    let mut index_the_replacement_publisher_began_at: Option<u64> = None;
     let mut reports_since_a_reader_arrived: Option<u64> = None;
     while !asked_to_leave.load(Ordering::Relaxed) {
         let how_many_to_publish_now = match how.burst_once_a_reader_arrives {
@@ -180,22 +194,33 @@ fn run_as_the_source(
                     0
                 } else {
                     let report_number = reports_since_a_reader_arrived.get_or_insert(0);
-                    let publishing_now = if *report_number == HOW_MANY_BAGS_LEAD_AND_TRAIL_A_BURST {
-                        if how.recreate_the_publisher_just_before_the_burst {
-                            // Replaced under a running egress, which is what a
-                            // processor's last link going and coming back
-                            // does. The replacement numbers its own sends from
-                            // zero and then floods, so the first of its bags
-                            // the reading runtime actually sees is numbered
-                            // past the one it last saw — which without the
-                            // generation beside the number reads as loss.
-                            drop(publisher);
-                            publisher = service
-                                .create_publisher(1024)
-                                .map_err(|why| why.to_string())?;
-                            publishers_this_port_has_had += 1;
-                            next_sequence_number = 0;
-                        }
+                    let the_lead_is_out = *report_number >= HOW_MANY_BAGS_LEAD_AND_TRAIL_A_BURST;
+                    if *report_number == HOW_MANY_BAGS_LEAD_AND_TRAIL_A_BURST
+                        && how.recreate_the_publisher_then_hold_the_burst_until_told
+                    {
+                        // Replaced under a running egress, which is what a
+                        // processor's last link going and coming back does.
+                        // The replacement numbers its own sends from zero.
+                        drop(publisher);
+                        publisher = service
+                            .create_publisher(1024)
+                            .map_err(|why| why.to_string())?;
+                        publishers_this_port_has_had += 1;
+                        next_sequence_number = 0;
+                        index_the_replacement_publisher_began_at = Some(published);
+                    }
+                    // Held until the test says a bag of the replacement has
+                    // reached the reader: a new generation's loss counts from
+                    // the first of its bags the reading runtime sees, so a
+                    // burst the egress only meets once it has overrun the
+                    // channel would fall wholly before that baseline.
+                    let the_burst_is_released = !how
+                        .recreate_the_publisher_then_hold_the_burst_until_told
+                        || told_to_release_the_held_burst.load(Ordering::Relaxed);
+                    let publishing_now = if the_lead_is_out
+                        && burst_ended_at_index.is_none()
+                        && the_burst_is_released
+                    {
                         burst
                     } else {
                         1
@@ -221,6 +246,7 @@ fn run_as_the_source(
             &serde_json::json!({
                 "published_count": published,
                 "burst_ended_at_index": burst_ended_at_index,
+                "index_the_replacement_publisher_began_at": index_the_replacement_publisher_began_at,
                 "publishers_this_port_has_had": publishers_this_port_has_had,
                 "timestamp_ns": a_stamp_for(published.saturating_sub(1)),
                 "egress_ports": membership.render_for_graph().egress_ports,
@@ -583,9 +609,10 @@ struct HowToRunThisPeer {
     /// one per report. Far more than the channel is deep, so the egress cannot
     /// drain them all and the loss is the rings' rather than the network's.
     burst_once_a_reader_arrives: Option<u64>,
-    /// Replace the channel publisher immediately before the burst, so the
-    /// numbering restarts under a running egress and then floods.
-    recreate_the_publisher_just_before_the_burst: bool,
+    /// Replace the channel publisher once the lead is out, so the numbering
+    /// restarts under a running egress, and hold the burst until the test
+    /// writes [`RELEASE_THE_HELD_BURST_LINE`].
+    recreate_the_publisher_then_hold_the_burst_until_told: bool,
     /// Hold every destination slot on this source's own channel, so the egress
     /// a reader asks for is refused one and its thread ends.
     take_every_destination_slot: bool,
@@ -603,7 +630,7 @@ impl HowToRunThisPeer {
         let mut link_from = None;
         let mut iceoryx2_domain_root = std::path::PathBuf::from("/tmp");
         let mut burst_once_a_reader_arrives = None;
-        let mut recreate_the_publisher_just_before_the_burst = false;
+        let mut recreate_the_publisher_then_hold_the_burst_until_told = false;
         let mut take_every_destination_slot = false;
         let mut refuse_to_say_how_to_read_the_port = false;
         let mut arguments = std::env::args().skip(1);
@@ -629,8 +656,8 @@ impl HowToRunThisPeer {
                 "--burst-once-a-reader-arrives" => {
                     burst_once_a_reader_arrives = Some(value().parse().expect("a bag count"))
                 }
-                "--recreate-the-publisher-just-before-the-burst" => {
-                    recreate_the_publisher_just_before_the_burst = true
+                "--recreate-the-publisher-then-hold-the-burst-until-told" => {
+                    recreate_the_publisher_then_hold_the_burst_until_told = true
                 }
                 "--take-every-destination-slot" => take_every_destination_slot = true,
                 "--refuse-to-say-how-to-read-the-port" => refuse_to_say_how_to_read_the_port = true,
@@ -644,7 +671,7 @@ impl HowToRunThisPeer {
             link_from,
             iceoryx2_domain_root,
             burst_once_a_reader_arrives,
-            recreate_the_publisher_just_before_the_burst,
+            recreate_the_publisher_then_hold_the_burst_until_told,
             take_every_destination_slot,
             refuse_to_say_how_to_read_the_port,
         }
@@ -705,11 +732,18 @@ impl ReportChannelTakenBeforeAnythingReplacesStdout {
     }
 }
 
-/// Watch stdin on its own thread: the parent closing it is the ask to leave.
-fn read_stdin_until_it_closes(asked_to_leave: Arc<AtomicBool>) {
+/// Watch stdin on its own thread: the parent closing it is the ask to leave,
+/// and [`RELEASE_THE_HELD_BURST_LINE`] on it releases a held burst.
+fn read_stdin_until_it_closes(
+    asked_to_leave: Arc<AtomicBool>,
+    told_to_release_the_held_burst: Arc<AtomicBool>,
+) {
     std::thread::spawn(move || {
         let mut line = String::new();
         while std::io::stdin().lock().read_line(&mut line).unwrap_or(0) > 0 {
+            if line.trim_end() == RELEASE_THE_HELD_BURST_LINE {
+                told_to_release_the_held_burst.store(true, Ordering::Relaxed);
+            }
             line.clear();
         }
         asked_to_leave.store(true, Ordering::Relaxed);
