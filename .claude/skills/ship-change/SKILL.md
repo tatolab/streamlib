@@ -24,6 +24,8 @@ sequence — no improvisation:
 4. `git mv docs/plan/changes/<name>.md docs/plan/changes/archive/<YYYY-MM-DD>-<name>.md`
    — the date is the last ticket's merge date from `gh pr view`, not today's guess.
 5. Branch, open the PR (plan changes merge only with the owner's review).
+6. If the change's milestone has no open issues, close it in the same run
+   (`gh api -X PATCH repos/tatolab/streamlib/milestones/<n> -f state=closed`) and say so.
 
 Completion = the archive PR is open and the gate script's clean run is pasted into its
 body.

@@ -20,7 +20,7 @@ operating model exists to prevent. Right-size for iteration: every change should
 the MVP with showable work.
 
 1. Draft **as few tickets as the change honestly needs** — ticket count is guidance, not
-   a cap (owner decision 2026-08-02, `OPERATING-MODEL.md:271`). Each is a tracer bullet:
+   a cap (owner decision 2026-08-02, `OPERATING-MODEL.md` §Numeric caps). Each is a tracer bullet:
    a narrow but COMPLETE vertical slice (schema → engine → SDK → test), demoable on its
    own, sized to one fresh context window. Never a horizontal slice of one layer. A long
    list is a signal to re-read the change for a seam it should have been split at — check
