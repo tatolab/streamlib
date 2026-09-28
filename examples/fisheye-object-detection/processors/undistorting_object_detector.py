@@ -223,8 +223,8 @@ class UndistortingObjectDetector:
             },
         )
         # Padded rather than resized, and at the right and bottom rather than
-        # centred, so a box the model reports is already in frame coordinates
-        # and nothing has to be scaled back.
+        # centred, so a box the model reports is already in frame coordinates:
+        # the geometry's mapping back to the frame leaves every box unchanged.
         self.detector_input_kernel = ModelInputTensorKernel.compile(
             ctx.gpu_full_access,
             fit="pad_bottom_right",

@@ -373,13 +373,12 @@ Everything is literal config in `app.py` — edit it and re-run.
 
 ## Where the pixels do touch the host
 
-One place, and it is not streamlib's side of the hand-off. The tensor handed
-to the detector is built entirely on the device — channel order, layout, scale
-and pad in the engine's one compute pass — and ultralytics takes a
-`torch.Tensor` source as already preprocessed, so it neither letterboxes nor
-rescales it. What its
-postprocessing then does with that batch is its own business, and it does copy
-it back to make the `orig_imgs` its result objects carry.
+One place, and it is not streamlib's side of the hand-off. The tensor handed to
+the detector is built entirely on the device — channel order, layout, scale and
+pad in the engine's one compute pass — and ultralytics takes a `torch.Tensor`
+source as already preprocessed, so it neither letterboxes nor rescales it. What
+its postprocessing then does with that batch is its own business, and it does
+copy it back to make the `orig_imgs` its result objects carry.
 
 This app does not use that copy — the boxes are drawn into the engine's own
 texture, on the GPU — but it pays for it, once a frame. Reaching under
