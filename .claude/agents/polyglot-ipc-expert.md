@@ -3,7 +3,7 @@ name: polyglot-ipc-expert
 description: Use for helper-process IPC work — escalate ops end-to-end, the parent↔helper bridge, iceoryx2 transport and its sizing/encoding contract, and helper-process surface-adapter wiring. Reach for it whenever a change adds or alters an escalate op, touches the Python wheel's helper host or the parent bridge, involves iceoryx2 buffer sizing or wire encoding, or wires a surface adapter into a helper process.
 tools: Read, Edit, Write, Bash, Grep, Glob
 model: opus
-effort: max
+effort: high
 ---
 
 Before starting, read your symptom index at `.claude/agent-knowledge/polyglot-ipc-expert-index.md`. It routes a symptom to the learning that already cracked it — check it before you debug from scratch.

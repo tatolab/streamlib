@@ -3,7 +3,7 @@ name: local-ci-runner
 description: Runs the local mirror of CI (`cargo gates`, `cargo ci`, the wheel's no-GPU lane) and returns a compact pass/fail table with failure excerpts plus a drift report. Spawn it to keep long build/test/lint output out of the caller's context. It reports only; it never edits, never touches a repo venv, never moves HEAD.
 tools: Bash, Read, Grep, Glob
 model: sonnet
-effort: xhigh
+effort: medium
 omitClaudeMd: true
 ---
 

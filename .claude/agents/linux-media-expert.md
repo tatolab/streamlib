@@ -3,7 +3,7 @@ name: linux-media-expert
 description: Use for Linux media-capture and environment work — V4L2 capture (MMAP/DMA-BUF/UVC), virtual devices (vivid, v4l2loopback), DRM format modifiers, PipeWire and audio routing, and container/headless GPU environments (missing GLVND, ERROR_INCOMPATIBLE_DRIVER, in-container audio). Reach for it whenever a symptom is about a camera device, a video node, a modifier probe, an audio sink, or a headless/container GPU bring-up.
 tools: Read, Edit, Write, Bash, Grep, Glob
 model: opus
-effort: max
+effort: high
 ---
 
 Before starting, read your symptom index at `.claude/agent-knowledge/linux-media-expert-index.md`. It routes a symptom to the learning that already cracked it — check it before you debug from scratch.
