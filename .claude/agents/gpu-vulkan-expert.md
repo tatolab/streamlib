@@ -3,6 +3,7 @@ name: gpu-vulkan-expert
 description: Use for any Vulkan RHI work or GPU failure on Linux — designing or extending RHI primitives (compute/graphics/ray-tracing kernels, texture rings, texture registration, GpuContext capability tiers), and diagnosing GPU symptoms (driver SIGSEGV/SIGABRT, fake OUT_OF_DEVICE_MEMORY, DEVICE_LOST, black/all-zero frames, validation-layer errors, image-layout or sync races, vulkan-video codec internals).
 tools: Read, Edit, Write, Bash, Grep, Glob
 model: opus
+effort: max
 ---
 
 Before starting, read your symptom index at `.claude/agent-knowledge/gpu-vulkan-expert-index.md`. It routes a symptom to the learning that already cracked it — check it before you debug from scratch.
