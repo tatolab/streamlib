@@ -11,6 +11,7 @@
 //! source's gateway publishes, read off its mesh description on every
 //! attempt, so a gateway that reconnected under a fresh session id is followed.
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -153,9 +154,13 @@ async fn read_one_subscription(
     why_it_ended
 }
 
-/// Hand every object the track carries to `where_it_lands`, racing each open
-/// group against the next so a newer group is never missed while an older
-/// one drains.
+/// Hand every object the track carries to `where_it_lands`, group by group
+/// in the order the groups opened.
+///
+/// Every group's reader is held until its stream ends: moq-transport removes
+/// the whole subscription when an object arrives for a subgroup nobody reads,
+/// so dropping a superseded group whose tail is still in flight would end the
+/// link. Newer groups wait, buffered, behind the one being read.
 async fn drain_one_track(
     track_reader: moq_transport::serve::TrackReader,
     how: &HowAnIngressReadsOffTheRelay,
@@ -168,28 +173,37 @@ async fn drain_one_track(
         Ok(_) => return format!("{namespace_and_track} is not published as subgroups"),
         Err(failure) => return format!("{namespace_and_track} ended: {failure}"),
     };
-    let mut open_group: Option<moq_transport::serve::SubgroupReader> = None;
+    let mut groups_waiting_their_turn: VecDeque<moq_transport::serve::SubgroupReader> =
+        VecDeque::new();
+    let mut group_being_read: Option<moq_transport::serve::SubgroupReader> = None;
     let mut said_why_an_object_did_not_open = false;
+    let mut the_track_has_ended = false;
     loop {
         if stop.load(Ordering::Acquire) {
             return "the ingress stopped".to_string();
         }
-        let next_step = match open_group.as_mut() {
+        if group_being_read.is_none() {
+            group_being_read = groups_waiting_their_turn.pop_front();
+        }
+        let next_step = match group_being_read.as_mut() {
+            None if the_track_has_ended => return format!("{namespace_and_track} ended"),
             None => match subgroups.next().await {
                 Ok(Some(opened)) => DrainStep::ANewGroupOpened(opened),
-                Ok(None) => return format!("{namespace_and_track} ended"),
+                Ok(None) => DrainStep::TheTrackEnded,
                 Err(failure) => return format!("{namespace_and_track} ended: {failure}"),
             },
+            // Groups first: moq-transport hands out only its newest, so one
+            // not taken before the next opens is never seen.
             Some(group) => tokio::select! {
                 biased;
+                opened = subgroups.next(), if !the_track_has_ended => match opened {
+                    Ok(Some(opened)) => DrainStep::ANewGroupOpened(opened),
+                    Ok(None) => DrainStep::TheTrackEnded,
+                    Err(failure) => return format!("{namespace_and_track} ended: {failure}"),
+                },
                 object = group.read_next() => match object {
                     Ok(Some(object)) => DrainStep::AnObjectArrived(object),
                     Ok(None) | Err(_) => DrainStep::TheGroupEnded,
-                },
-                opened = subgroups.next() => match opened {
-                    Ok(Some(opened)) => DrainStep::ANewGroupOpened(opened),
-                    Ok(None) => return format!("{namespace_and_track} ended"),
-                    Err(failure) => return format!("{namespace_and_track} ended: {failure}"),
                 },
             },
         };
@@ -208,24 +222,9 @@ async fn drain_one_track(
                     }
                 }
             }
-            DrainStep::ANewGroupOpened(opened) => {
-                if let Some(mut superseded) = open_group.take() {
-                    while superseded.pos() < superseded.len() {
-                        match superseded.read_next().await {
-                            Ok(Some(object)) => {
-                                if let Ok(Some((attachment, payload))) =
-                                    an_arriving_object_opened(how, namespace_and_track, &object)
-                                {
-                                    where_it_lands(attachment, payload);
-                                }
-                            }
-                            _ => break,
-                        }
-                    }
-                }
-                open_group = Some(opened);
-            }
-            DrainStep::TheGroupEnded => open_group = None,
+            DrainStep::ANewGroupOpened(opened) => groups_waiting_their_turn.push_back(opened),
+            DrainStep::TheGroupEnded => group_being_read = None,
+            DrainStep::TheTrackEnded => the_track_has_ended = true,
         }
     }
 }
@@ -236,6 +235,8 @@ enum DrainStep {
     ANewGroupOpened(moq_transport::serve::SubgroupReader),
     AnObjectArrived(bytes::Bytes),
     TheGroupEnded,
+    /// No group will open again; the ones already open are still read out.
+    TheTrackEnded,
 }
 
 /// The attachment and payload one arriving object carries, opening it first
@@ -259,4 +260,86 @@ fn an_arriving_object_opened(
     let (attachment, payload) = split_a_plaintext_moq_object(plaintext)
         .ok_or_else(|| "it is not a gateway object".to_string())?;
     Ok(Some((attachment, payload.to_vec())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::runtime::mesh::machine_clock_identity::MachineClockIdentity;
+    use crate::core::runtime::mesh::mesh_data_message_attachment::PublisherGenerationOnTheMesh;
+    use crate::core::runtime::mesh::moq_gateway_configuration::MoqGatewayDoors;
+    use crate::core::runtime::mesh::moq_gateway_object_framing::a_plaintext_moq_object_carrying;
+    use parking_lot::Mutex;
+
+    fn an_object_numbered(sequence_number: u64) -> bytes::Bytes {
+        bytes::Bytes::from(a_plaintext_moq_object_carrying(
+            MeshDataMessageAttachment {
+                timestamp_ns: 0,
+                sequence_number,
+                publisher_generation: PublisherGenerationOnTheMesh(0),
+                clock_identity: MachineClockIdentity::of_this_machine(),
+                frame_pixel_description_bytes: 0,
+            },
+            b"bag",
+        ))
+    }
+
+    /// Through a far relay the next group's stream opens while the last
+    /// group's tail is still arriving. The tail must still be taken — an
+    /// object written for a subgroup nobody reads ends the subscription — and
+    /// it lands ahead of the newer group's objects.
+    #[test]
+    fn a_superseded_groups_late_tail_lands_in_order_and_ends_nothing() {
+        let landed: Arc<Mutex<Vec<u64>>> = Arc::default();
+        let transport = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        transport.block_on(async {
+            let namespace = moq_transport::coding::TrackNamespace::try_from("p/rt/1").unwrap();
+            let (track_writer, track_reader) =
+                moq_transport::serve::Track::new(namespace, "Source/out").produce();
+            let mut subgroups = track_writer.subgroups().unwrap();
+            let where_it_lands: WhereAnArrivingMoqObjectLands = {
+                let landed = Arc::clone(&landed);
+                Arc::new(move |attachment, _payload| landed.lock().push(attachment.sequence_number))
+            };
+            let how = HowAnIngressReadsOffTheRelay {
+                doors: MoqGatewayDoors::told_nothing("reader"),
+                where_the_source_gateway_publishes: Arc::new(|| None),
+            };
+            let stop = AtomicBool::new(false);
+            let draining = drain_one_track(
+                track_reader,
+                &how,
+                "p/rt/1/Source/out",
+                &where_it_lands,
+                &stop,
+            );
+            let publishing = async {
+                let mut older = subgroups.append(127).unwrap();
+                older.write(an_object_numbered(1)).unwrap();
+                while landed.lock().is_empty() {
+                    tokio::task::yield_now().await;
+                }
+                let mut newer = subgroups.append(127).unwrap();
+                newer.write(an_object_numbered(3)).unwrap();
+                // Long enough for the drain to take the newer group before
+                // the older one's tail arrives, as a far relay delivers it.
+                for _ in 0..100 {
+                    tokio::task::yield_now().await;
+                }
+                older
+                    .write(an_object_numbered(2))
+                    .expect("the superseded group still has a reader");
+                drop(older);
+                drop(newer);
+                tokio::task::yield_now().await;
+                drop(subgroups);
+            };
+            let (why_it_ended, ()) = tokio::join!(draining, publishing);
+            assert!(why_it_ended.ends_with("ended"), "{why_it_ended}");
+        });
+        assert_eq!(*landed.lock(), [1, 2, 3]);
+    }
 }

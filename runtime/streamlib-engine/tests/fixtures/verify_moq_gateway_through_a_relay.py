@@ -140,7 +140,7 @@ def main() -> int:
         [sys.executable, str(FIXTURES / "moq_gateway_node.py"), "--role", "source",
          "--workload", "smoke", "--runtime-name", runtime_name,
          "--control-plane-port", str(control_plane_port)],
-        env=environment, cwd=FIXTURES, stdout=node_log, stderr=subprocess.STDOUT,
+        env=environment, cwd=output, stdout=node_log, stderr=subprocess.STDOUT,
         start_new_session=True,
     )
     report: dict = {"relay": arguments.relay, "runtime_name": runtime_name, "tracks": {},

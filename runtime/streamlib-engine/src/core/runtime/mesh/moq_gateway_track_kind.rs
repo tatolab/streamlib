@@ -55,8 +55,12 @@ impl MoqGatewayTrackKind {
     }
 
     /// Whether a sync point on this kind of track opens a new MoQ group.
+    ///
+    /// Video only: every Opus packet is a sync point, and a subscriber keeps
+    /// only its newest group, so a group per packet loses packets whenever two
+    /// groups' streams overlap on the relay path.
     pub(crate) fn is_cut_at_sync_points(self) -> bool {
-        matches!(self, Self::Video | Self::Audio)
+        self == Self::Video
     }
 }
 
@@ -133,6 +137,23 @@ mod tests {
             MoqGatewayTrackKind::Detections
         );
         assert_eq!(shown(&keys(|_| {})), MoqGatewayTrackKind::Bags);
+    }
+
+    #[test]
+    fn only_a_video_track_opens_a_group_at_each_sync_point() {
+        assert!(MoqGatewayTrackKind::Video.is_cut_at_sync_points());
+        for kind in [
+            MoqGatewayTrackKind::Audio,
+            MoqGatewayTrackKind::Bags,
+            MoqGatewayTrackKind::Detections,
+            MoqGatewayTrackKind::Surface,
+            MoqGatewayTrackKind::Unknown,
+        ] {
+            assert!(
+                !kind.is_cut_at_sync_points(),
+                "{kind:?} is cut at sync points"
+            );
+        }
     }
 
     #[test]

@@ -101,7 +101,7 @@ def run_one(transport: str, workload: str, arguments, log_directory: Path,
     source = subprocess.Popen(
         [sys.executable, node, "--role", "source", "--workload", workload,
          "--runtime-name", source_name, "--control-plane-port", str(source_control_port)],
-        env=source_environment, cwd=FIXTURES, stdout=source_log, stderr=subprocess.STDOUT,
+        env=source_environment, cwd=log_directory, stdout=source_log, stderr=subprocess.STDOUT,
         start_new_session=True,
     )
     time.sleep(2.0)
@@ -109,7 +109,7 @@ def run_one(transport: str, workload: str, arguments, log_directory: Path,
         [sys.executable, node, "--role", "sink", "--workload", workload,
          "--runtime-name", f"moq-bench-sink-{run_id}", "--source-runtime-name", source_name,
          "--control-plane-port", str(sink_control_port)],
-        env=sink_environment, cwd=FIXTURES, stdout=sink_log, stderr=subprocess.STDOUT,
+        env=sink_environment, cwd=log_directory, stdout=sink_log, stderr=subprocess.STDOUT,
         start_new_session=True,
     )
     if workload == "bags":

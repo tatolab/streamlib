@@ -450,6 +450,32 @@ async fn serve_one_relay_session(
     session_task.abort();
 }
 
+/// When a relay last forwarded any group of one served track.
+struct WhenARelayLastForwardedOneTrack {
+    last_seen_at: Instant,
+}
+
+impl WhenARelayLastForwardedOneTrack {
+    fn starting_at(now: Instant) -> Self {
+        Self { last_seen_at: now }
+    }
+
+    /// Note whether `group` has a forwarder, at `now`. Called on the group
+    /// being closed as well as the open one: a group opened for this very
+    /// object has no forwarder yet, so on a track cut into one-object groups
+    /// the open group alone would never show one.
+    fn note(&mut self, group: &moq_transport::serve::SubgroupWriter, now: Instant) {
+        if group.forwarded().is_some() {
+            self.last_seen_at = now;
+        }
+    }
+
+    fn has_gone_unforwarded(&self, now: Instant) -> bool {
+        now.saturating_duration_since(self.last_seen_at)
+            >= HOW_LONG_A_TRACK_GOES_UNFORWARDED_BEFORE_IT_IS_DROPPED
+    }
+}
+
 /// One port being served to the relay on its own thread.
 struct MoqGatewayPortServing {
     stop: Arc<AtomicBool>,
@@ -597,7 +623,8 @@ fn serve_one_port_to_the_relay(serving: OnePortServedToTheRelay) {
     );
     let mut idle_poll_backoff = ChannelIdlePollBackoff::starting_at_the_shortest_sleep();
     let clock_identity = MachineClockIdentity::of_this_machine();
-    let mut a_forwarder_was_last_seen_at = Instant::now();
+    let mut when_the_relay_last_forwarded =
+        WhenARelayLastForwardedOneTrack::starting_at(Instant::now());
     let mut said_it_is_waiting_for_a_key = false;
 
     while !stop.load(Ordering::Acquire) {
@@ -703,6 +730,9 @@ fn serve_one_port_to_the_relay(serving: OnePortServedToTheRelay) {
         if cut_policy.this_object_opens_a_new_group(it_is_an_encoded_sync_point, now)
             || open_group.is_none()
         {
+            if let Some(closing) = open_group.as_ref() {
+                when_the_relay_last_forwarded.note(closing, now);
+            }
             // Dropped before the next opens: the finished group's forwarder
             // drains it and FINs its stream, and a lagging subscriber moves on
             // to the newest group rather than working through a backlog.
@@ -726,11 +756,8 @@ fn serve_one_port_to_the_relay(serving: OnePortServedToTheRelay) {
         }
         record.objects_published.fetch_add(1, Ordering::Relaxed);
 
-        if group.forwarded().is_some() {
-            a_forwarder_was_last_seen_at = now;
-        } else if now.saturating_duration_since(a_forwarder_was_last_seen_at)
-            >= HOW_LONG_A_TRACK_GOES_UNFORWARDED_BEFORE_IT_IS_DROPPED
-        {
+        when_the_relay_last_forwarded.note(group, now);
+        if when_the_relay_last_forwarded.has_gone_unforwarded(now) {
             tracing::info!(
                 "The MoQ gateway stopped serving {namespace_and_track}: nothing has forwarded it \
                  for {HOW_LONG_A_TRACK_GOES_UNFORWARDED_BEFORE_IT_IS_DROPPED:?}"
@@ -757,6 +784,59 @@ mod tests {
             assert_ne!(fresh, previous);
             previous = fresh;
         }
+    }
+
+    /// A track cut into one-object groups — Opus, a group per packet — is
+    /// still live while the relay forwards the groups it closes.
+    #[test]
+    fn a_forwarded_group_being_closed_keeps_its_track_live() {
+        let transport = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        transport.block_on(async {
+            let namespace = moq_transport::coding::TrackNamespace::try_from("p/rt/1").unwrap();
+            let (track_writer, track_reader) =
+                moq_transport::serve::Track::new(namespace, "Mic/audio").produce();
+            let mut subgroups = track_writer.subgroups().unwrap();
+            let moq_transport::serve::TrackReaderMode::Subgroups(mut relay_side) =
+                track_reader.mode().await.unwrap()
+            else {
+                panic!("the track is subgroups");
+            };
+            let start = Instant::now();
+            let mut liveness = WhenARelayLastForwardedOneTrack::starting_at(start);
+
+            let mut closing = subgroups.append(MOQ_GATEWAY_GROUP_PRIORITY).unwrap();
+            closing.write(bytes::Bytes::from_static(b"packet")).unwrap();
+            relay_side
+                .next()
+                .await
+                .unwrap()
+                .unwrap()
+                .mark_forwarding_started();
+            let opened = subgroups.append(MOQ_GATEWAY_GROUP_PRIORITY).unwrap();
+
+            let later = start + HOW_LONG_A_TRACK_GOES_UNFORWARDED_BEFORE_IT_IS_DROPPED;
+            liveness.note(&opened, later);
+            assert!(
+                liveness.has_gone_unforwarded(later),
+                "a fresh group alone shows no forwarder"
+            );
+            liveness.note(&closing, later);
+            assert!(!liveness.has_gone_unforwarded(later));
+        });
+    }
+
+    #[test]
+    fn a_track_no_relay_forwards_goes_unforwarded() {
+        let start = Instant::now();
+        let liveness = WhenARelayLastForwardedOneTrack::starting_at(start);
+        assert!(!liveness.has_gone_unforwarded(start));
+        assert!(
+            liveness.has_gone_unforwarded(
+                start + HOW_LONG_A_TRACK_GOES_UNFORWARDED_BEFORE_IT_IS_DROPPED
+            )
+        );
     }
 
     #[test]

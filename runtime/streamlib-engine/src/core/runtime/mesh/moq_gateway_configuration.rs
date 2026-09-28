@@ -253,6 +253,18 @@ impl MoqGatewayDoors {
         Some(doors)
     }
 
+    /// Doors with no handoff and nothing told: no relay, no keys.
+    #[cfg(test)]
+    pub(crate) fn told_nothing(this_runtimes_name: &str) -> Arc<Self> {
+        Arc::new(Self {
+            handoff_directory: None,
+            this_runtimes_name: this_runtimes_name.to_string(),
+            what_it_is_told: RwLock::default(),
+            accept_any_relay_certificate: false,
+            serve_surface_ports: false,
+        })
+    }
+
     /// What the gateway is told right now.
     pub(crate) fn what_it_is_told(&self) -> WhatTheMoqGatewayIsToldRightNow {
         self.what_it_is_told.read().clone()
