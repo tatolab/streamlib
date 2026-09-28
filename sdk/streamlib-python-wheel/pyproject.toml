@@ -59,6 +59,8 @@ dev = [
     "pydantic>=2.0",
     # `assert_type` at the 3.10 floor, and the stub's own `disjoint_base`.
     "typing_extensions>=4.6",
+    # Lints and format-checks each render of the `streamlib new` templates.
+    "ruff==0.16.9",
 ]
 
 [tool.pytest.ini_options]
@@ -99,7 +101,7 @@ exclude = ["**/__pycache__/**"]
 macos-deployment-target = "15.0"
 
 [tool.ruff]
-# ruff runs over the `streamlib new` template tree only (python-wheel.yml).
+# ruff runs over the `streamlib new` renders only (tests/test_cli.py).
 # Rooted there so `processors` sorts as the scaffolded app's own first-party
 # package, as it does in the project `new` writes.
 src = ["python/streamlib/_scaffold_template"]

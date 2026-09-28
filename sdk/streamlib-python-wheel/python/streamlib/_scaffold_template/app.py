@@ -1,3 +1,6 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
 """A StreamLib app: camera → effect → window.
 
 `streamlib dev` finds `setup(rt)` below by convention — there is no manifest and

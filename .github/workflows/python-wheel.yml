@@ -105,8 +105,8 @@ jobs:
           # module scope — collection needs it even when `requires_gpu`
           # deselects every test that would use it. pydantic is what proves a
           # model is a legal `read(port, into=T)` target; the wheel never
-          # imports it.
-          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy numpy pydantic typing_extensions
+          # imports it. ruff lints each `streamlib new` render in test_cli.py.
+          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy numpy pydantic typing_extensions ruff==0.16.9
           VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
 
       # An extension wheel depends on `streamlib` as a binary, so its lane
@@ -349,14 +349,6 @@ jobs:
       - name: Type-check the wheel's Python surface
         working-directory: sdk/streamlib-python-wheel
         run: uvx pyright@1.1.411
-
-      # The `streamlib new` templates are the first code a user reads, and the
-      # only Python here held to a linter and formatter. Config in pyproject.toml.
-      - name: Lint and format-check the scaffold templates
-        working-directory: sdk/streamlib-python-wheel
-        run: |
-          uvx ruff@0.16.9 check python/streamlib/_scaffold_template
-          uvx ruff@0.16.9 format --check python/streamlib/_scaffold_template
 
       # The release channel's index generator. Stdlib-only, so it rides the
       # no-build job rather than waiting on a wheel it has nothing to do with —

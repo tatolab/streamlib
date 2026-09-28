@@ -464,6 +464,50 @@ def test_new_writes_exactly_the_rendered_templates(
         ).items()
     }
     assert written_files == rendered_files
+    assert not any(b"SPDX-License-Identifier" in contents for contents in written_files.values()), (
+        "the app `new` writes is the user's own code, not StreamLib's"
+    )
+
+
+# The source tree's copy, so ruff resolves the wheel's `[tool.ruff]` config.
+SCAFFOLD_TEMPLATE_SOURCE_DIRECTORY = (
+    Path(__file__).resolve().parents[1] / "python" / "streamlib" / "_scaffold_template"
+)
+
+
+@pytest.mark.parametrize("use_test_pattern_source", [False, True])
+@pytest.mark.parametrize("ruff_arguments", [("check",), ("format", "--check")])
+def test_every_scaffolded_python_file_passes_ruff(
+    use_test_pattern_source: bool, ruff_arguments: "tuple[str, ...]"
+):
+    """Linted as rendered, not as templated: the test-pattern variant is text no
+    template file holds."""
+    rendered_files = cli.render_scaffold_template_files(
+        distribution_name="demo", use_test_pattern_source=use_test_pattern_source
+    )
+
+    for file_name, contents in rendered_files.items():
+        if not file_name.endswith(".py"):
+            continue
+        finished = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "ruff",
+                *ruff_arguments,
+                "--stdin-filename",
+                str(SCAFFOLD_TEMPLATE_SOURCE_DIRECTORY / file_name),
+                "-",
+            ],
+            input=contents,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert finished.returncode == 0, (
+            f"ruff {' '.join(ruff_arguments)} rejects the scaffolded {file_name}:\n"
+            f"{finished.stdout}{finished.stderr}"
+        )
 
 
 def test_every_scaffold_template_file_is_one_new_writes():

@@ -1,3 +1,6 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
 """The effect the app wires between its source and its window.
 
 Importable as `processors.inverting_effect:InvertingEffect`, which is the

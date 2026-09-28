@@ -72,7 +72,6 @@ DEFAULT_CONTROL_PLANE_BIND_HOST = "0.0.0.0"
 DEFAULT_CONTROL_PLANE_BIND_PORT = 9000
 
 
-
 class ObservationVerbUsageError(Exception):
     """An observation verb invoked with flags that contradict each other.
 
@@ -302,6 +301,10 @@ def _python_distribution_name_for(directory_name: str) -> str:
 
 SCAFFOLD_TEMPLATE_DIRECTORY = Path(__file__).resolve().parent / "_scaffold_template"
 SCAFFOLDED_EFFECT_MODULE_PATH = "processors/inverting_effect.py"
+# The template sources are StreamLib's; the app `new` writes is the user's own.
+SCAFFOLD_TEMPLATE_LICENSE_HEADER = (
+    "# Copyright (c) 2025 Jonathan Fontanez\n# SPDX-License-Identifier: BUSL-1.1\n\n"
+)
 
 # Template file → the path `new` writes it to, in write order. The dotfiles
 # are stored without their dot so no packaging walk skips them as hidden or
@@ -330,10 +333,17 @@ def render_scaffold_template_files(
         if use_test_pattern_source
         else ("CameraSource", "camera")
     )
+    streamlib_import_names = ", ".join(
+        sorted([source_class_name, "DisplayWindow", "Runtime"])
+    )
     substitutions_for_template_file = {
         "app.py": {
-            "CameraSource": source_class_name,
             "A StreamLib app: camera →": f"A StreamLib app: {source_description} →",
+            # The whole line, so each variant's names stay in sorted order.
+            "from streamlib import CameraSource, DisplayWindow, Runtime": (
+                f"from streamlib import {streamlib_import_names}"
+            ),
+            "rt.add(CameraSource)": f"rt.add({source_class_name})",
         },
         "pyproject.toml": {'name = "streamlib-app"': f'name = "{distribution_name}"'},
     }
@@ -341,6 +351,13 @@ def render_scaffold_template_files(
     rendered_files: "dict[str, str]" = {}
     for template_file, scaffolded_file in SCAFFOLDED_FILE_PATH_FOR_TEMPLATE_FILE.items():
         rendered = (SCAFFOLD_TEMPLATE_DIRECTORY / template_file).read_text(encoding="utf-8")
+        if template_file.endswith(".py"):
+            if not rendered.startswith(SCAFFOLD_TEMPLATE_LICENSE_HEADER):
+                raise RuntimeError(
+                    f"scaffold template `{template_file}` no longer opens with the "
+                    f"licence header `new` strips from it"
+                )
+            rendered = rendered[len(SCAFFOLD_TEMPLATE_LICENSE_HEADER) :]
         for placeholder, value in substitutions_for_template_file.get(
             template_file, {}
         ).items():
