@@ -1202,8 +1202,9 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   [engine-steps-for-effects-and-model-input]
 - **DECIDED** — Model input is prepared on the GPU by `ModelInputTensorKernel`, wheel
   grammar over the tensor buffer and a compute kernel: one pass from an RGBA surface to a
-  tensor buffer at the model's input size — fit `stretch`, `letterbox` or
-  `pad_bottom_right` with an optional pad-to-multiple, channel order with alpha dropped,
+  tensor buffer at the model's input size — fit `stretch` or `letterbox` — or, with
+  `pad_bottom_right`, at the frame's own extent, never resized and rounded up to an optional
+  pad-to-multiple (owner ruling on #2432, 2026-09-27), channel order with alpha dropped,
   layout `nchw` or `nhwc`, `float32` or `float16`, scale, mean and std — returning the
   tensor surface, which `torch.from_dlpack` reads zero-copy, and the fit's geometry, which
   maps detections back to source coordinates. No colour conversion: a YUV frame is

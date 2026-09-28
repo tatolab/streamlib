@@ -27,13 +27,17 @@ import re
 import struct
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
-from typing import Any, Literal, Union
+from typing import Any, Literal
 
 from ._engine import (
     ComputeKernel,
     GpuContextFullAccess,
-    GpuContextLimitedAccess,
     monotonic_now_ns,
+)
+from ._sampled_source_landing import (
+    SAMPLED_SOURCE_BINDING_NAME,
+    GpuContextWithSurfaceCopy,
+    SampledSourceLandingTextureRing,
 )
 from .processor_output_texture_ring import ProcessorOutputTextureRing
 from .video_frame import VideoFrame
@@ -41,8 +45,6 @@ from .video_frame import VideoFrame
 __all__ = ["GlslPixelEffect", "GlslPixelEffectDialType"]
 
 GlslPixelEffectDialType = Literal["float", "int", "vec2", "vec4"]
-
-_GpuContextWithSurfaceCopy = Union[GpuContextLimitedAccess, GpuContextFullAccess]
 
 # Vulkan's required minimum for `maxPushConstantsSize`: the one size every
 # device on every floor is guaranteed to accept.
@@ -52,10 +54,8 @@ _PUSH_CONSTANT_BLOCK_BYTE_LIMIT = 128
 _WORKGROUP_TILE_SIZE_IN_PIXELS = 8
 
 _EFFECT_TEXTURE_FORMAT = "rgba8_unorm"
-_SOURCE_LANDING_TEXTURE_USAGE = ["texture_binding"]
 _OUTPUT_TEXTURE_USAGE = ["storage_binding", "texture_binding"]
 
-_SOURCE_SAMPLER_BINDING_NAME = "streamlib_source"
 _OUTPUT_STORAGE_IMAGE_BINDING_NAME = "streamlib_output"
 
 _ELAPSED_SECONDS_PUSH_CONSTANT_MEMBER_NAME = "streamlib_elapsed_seconds_since_first_apply"
@@ -197,7 +197,7 @@ def _compute_kernel_glsl(effect_glsl: str, block_layout: _PushConstantBlockLayou
         "#version 450\n"
         f"layout(local_size_x = {_WORKGROUP_TILE_SIZE_IN_PIXELS}, "
         f"local_size_y = {_WORKGROUP_TILE_SIZE_IN_PIXELS}) in;\n"
-        f"layout(set = 0, binding = 0) uniform sampler2D {_SOURCE_SAMPLER_BINDING_NAME};\n"
+        f"layout(set = 0, binding = 0) uniform sampler2D {SAMPLED_SOURCE_BINDING_NAME};\n"
         "layout(set = 0, binding = 1, rgba8) uniform writeonly image2D "
         f"{_OUTPUT_STORAGE_IMAGE_BINDING_NAME};\n"
         "layout(push_constant) uniform GlslPixelEffectDials {\n"
@@ -206,17 +206,17 @@ def _compute_kernel_glsl(effect_glsl: str, block_layout: _PushConstantBlockLayou
         "ivec2 streamlib_extent;\n"
         "float streamlib_elapsed_seconds;\n"
         "vec4 streamlib_source_at(ivec2 at) {\n"
-        f"    return texelFetch({_SOURCE_SAMPLER_BINDING_NAME}, "
+        f"    return texelFetch({SAMPLED_SOURCE_BINDING_NAME}, "
         "clamp(at, ivec2(0), streamlib_extent - 1), 0);\n"
         "}\n"
         "vec4 streamlib_source_uv(vec2 uv) {\n"
-        f"    return textureLod({_SOURCE_SAMPLER_BINDING_NAME}, uv, 0.0);\n"
+        f"    return textureLod({SAMPLED_SOURCE_BINDING_NAME}, uv, 0.0);\n"
         "}\n"
         "#line 1\n"
         f"{effect_glsl}\n"
         "void main() {\n"
         "    ivec2 at = ivec2(gl_GlobalInvocationID.xy);\n"
-        f"    streamlib_extent = textureSize({_SOURCE_SAMPLER_BINDING_NAME}, 0);\n"
+        f"    streamlib_extent = textureSize({SAMPLED_SOURCE_BINDING_NAME}, 0);\n"
         "    streamlib_elapsed_seconds = "
         f"dials.{block_layout.elapsed_seconds_member.name};\n"
         "    if (at.x >= streamlib_extent.x || at.y >= streamlib_extent.y\n"
@@ -224,7 +224,7 @@ def _compute_kernel_glsl(effect_glsl: str, block_layout: _PushConstantBlockLayou
         "        return;\n"
         "    }\n"
         f"    imageStore({_OUTPUT_STORAGE_IMAGE_BINDING_NAME}, at, "
-        f"effect(texelFetch({_SOURCE_SAMPLER_BINDING_NAME}, at, 0), at));\n"
+        f"effect(texelFetch({SAMPLED_SOURCE_BINDING_NAME}, at, 0), at));\n"
         "}\n"
     )
 
@@ -240,9 +240,7 @@ class GlslPixelEffect:
         self._declared_dial_names = frozenset(
             member.name for member in push_constant_block_layout.dial_members
         )
-        self._source_landing_ring = ProcessorOutputTextureRing(
-            _EFFECT_TEXTURE_FORMAT, _SOURCE_LANDING_TEXTURE_USAGE, depth=1
-        )
+        self._source_landing_ring = SampledSourceLandingTextureRing()
         self._output_ring = ProcessorOutputTextureRing(
             _EFFECT_TEXTURE_FORMAT, _OUTPUT_TEXTURE_USAGE
         )
@@ -278,7 +276,7 @@ class GlslPixelEffect:
             source=_compute_kernel_glsl(effect_glsl, block_layout),
             push_constant_size=block_layout.byte_size,
             bindings={
-                _SOURCE_SAMPLER_BINDING_NAME: "sampled_texture",
+                SAMPLED_SOURCE_BINDING_NAME: "sampled_texture",
                 _OUTPUT_STORAGE_IMAGE_BINDING_NAME: "storage_image",
             },
         )
@@ -286,7 +284,7 @@ class GlslPixelEffect:
 
     def apply_to_frame(
         self,
-        gpu_limited_access: _GpuContextWithSurfaceCopy,
+        gpu_limited_access: GpuContextWithSurfaceCopy,
         frame: VideoFrame,
         dials: "Mapping[str, float | Sequence[float]] | None" = None,
     ) -> "dict[str, Any]":
@@ -300,27 +298,20 @@ class GlslPixelEffect:
         """
         push_constants = self._pack_push_constants(dict(dials or {}))
 
-        source_landing_texture = self._source_landing_ring.next_texture_for_this_frame(
-            gpu_limited_access, frame.width, frame.height
+        source_landing_texture = self._source_landing_ring.land_source_for_this_frame(
+            gpu_limited_access,
+            frame.surface_id,
+            frame.width,
+            frame.height,
+            f"GlslPixelEffect.apply_to_frame: frame {frame.surface_id!r}",
         )
-        try:
-            gpu_limited_access.copy_surface_to_surface(
-                frame.surface_id, source_landing_texture
-            )
-        except RuntimeError as copy_refusal:
-            raise ValueError(
-                f"GlslPixelEffect.apply_to_frame: frame {frame.surface_id!r} "
-                f"({frame.width}x{frame.height}) could not land in the effect's "
-                f"{_EFFECT_TEXTURE_FORMAT} source; the engine copy refused it: "
-                f"{copy_refusal}"
-            ) from copy_refusal
 
         output_texture = self._output_ring.next_texture_for_this_frame(
             gpu_limited_access, frame.width, frame.height
         )
         self._compute_kernel.dispatch(
             bindings={
-                _SOURCE_SAMPLER_BINDING_NAME: source_landing_texture,
+                SAMPLED_SOURCE_BINDING_NAME: source_landing_texture,
                 _OUTPUT_STORAGE_IMAGE_BINDING_NAME: output_texture,
             },
             group_count=(
