@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.43](https://github.com/tatolab/streamlib/compare/v0.26.42...v0.26.43) (2026-09-28)
+
+
+### Bug Fixes
+
+* **engine:** the Linux surface-share service accepts a new connection at once ([#2526](https://github.com/tatolab/streamlib/issues/2526)) ([ce8106e](https://github.com/tatolab/streamlib/commit/ce8106e6db37f6f3d597690adf8a68e0ad49be1e))
+
 ## [0.26.42](https://github.com/tatolab/streamlib/compare/v0.26.41...v0.26.42) (2026-09-28)
 
 
