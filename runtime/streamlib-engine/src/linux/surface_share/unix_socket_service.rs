@@ -169,7 +169,7 @@ fn run_listener(
                 });
             }
             Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                thread::sleep(std::time::Duration::from_millis(50));
+                wait_until_a_connection_is_pending_or_shutdown_is_due(&listener);
             }
             Err(e) => {
                 if shutdown_flag.load(std::sync::atomic::Ordering::Relaxed) {
@@ -180,6 +180,36 @@ fn run_listener(
             }
         }
     }
+}
+
+/// How long the idle accept loop goes before it looks at the shutdown flag.
+/// It bounds only how late [`UnixSocketSurfaceService::stop`] is noticed — a
+/// connection wakes the wait at once.
+const ACCEPT_LOOP_SHUTDOWN_CHECK_INTERVAL_MS: libc::c_int = 50;
+
+/// Block until the listener has a connection to accept, or the shutdown
+/// check interval passes.
+///
+/// A helper opens its connection lazily on its first claim, and until the
+/// accept that claim cannot be answered — a frame from a shallow output pool
+/// can be recycled in that time, so the wait wakes on the connection itself.
+fn wait_until_a_connection_is_pending_or_shutdown_is_due(listener: &UnixListener) {
+    let mut listener_readiness = libc::pollfd {
+        fd: listener.as_raw_fd(),
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // SAFETY: one valid pollfd for the call's duration, over a listener fd
+    // the caller keeps open. Its result is not inspected: readiness, the
+    // timeout, EINTR and a poll error all go back to `accept`, which says
+    // which one it was.
+    unsafe {
+        libc::poll(
+            &mut listener_readiness,
+            1,
+            ACCEPT_LOOP_SHUTDOWN_CHECK_INTERVAL_MS,
+        )
+    };
 }
 
 fn handle_client_connection(
@@ -1668,6 +1698,44 @@ mod tests {
             0,
         );
         drop(stream);
+        service.stop();
+    }
+
+    /// A helper connects lazily on its first claim, and the claim is what
+    /// keeps a shallow output pool from recycling the frame it names — so
+    /// time spent before the service accepts is time the frame can vanish in.
+    #[test]
+    fn a_new_connections_first_request_is_answered_without_waiting_on_the_accept_loop() {
+        const FRESH_CONNECTIONS: u32 = 40;
+        // Forty accepts that each wait on a 50 ms nap take about two seconds;
+        // forty prompt accepts take a few ms, leaving room for a loaded CI
+        // worker.
+        const ALL_FRESH_CONNECTIONS_ANSWERED_WITHIN: std::time::Duration =
+            std::time::Duration::from_millis(250);
+        let (_socket_dir, socket_path, mut service) = started_service(SurfaceShareState::new());
+
+        let started_at = std::time::Instant::now();
+        for connection_index in 0..FRESH_CONNECTIONS {
+            let stream = connect_to_surface_share_socket(&socket_path).expect("connect");
+            let response = ask(
+                &stream,
+                &serde_json::json!({
+                    "op": "check_out",
+                    "surface_id": format!("no-such-surface-{connection_index}"),
+                }),
+            );
+            assert!(
+                response.get("error").is_some(),
+                "an unknown id is refused, got {response}"
+            );
+        }
+        let elapsed = started_at.elapsed();
+
+        assert!(
+            elapsed < ALL_FRESH_CONNECTIONS_ANSWERED_WITHIN,
+            "{FRESH_CONNECTIONS} fresh connections took {elapsed:?} to be answered; the accept \
+             loop is making each new connection wait"
+        );
         service.stop();
     }
 
