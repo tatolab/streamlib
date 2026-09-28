@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.42](https://github.com/tatolab/streamlib/compare/v0.26.41...v0.26.42) (2026-09-28)
+
+
+### Features
+
+* **wheel:** ModelInputTensorKernel — model input prepared on the GPU ([#2518](https://github.com/tatolab/streamlib/issues/2518)) ([ad5959f](https://github.com/tatolab/streamlib/commit/ad5959ff03e5149729f14e447cfc8b9e26a69b56))
+
 ## [0.26.41](https://github.com/tatolab/streamlib/compare/v0.26.40...v0.26.41) (2026-09-27)
 
 
