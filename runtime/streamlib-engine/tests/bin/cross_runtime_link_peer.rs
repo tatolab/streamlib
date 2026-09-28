@@ -66,7 +66,8 @@ const THE_PORT: &str = "video";
 const HOW_OFTEN_THE_PEER_REPORTS: Duration = Duration::from_millis(100);
 
 /// How many bags a bursting source publishes at the report cadence either side
-/// of its burst.
+/// of its burst, at the least: a source holding its burst goes on publishing
+/// at that cadence until it is released.
 ///
 /// The lead is what makes a burst's loss countable: the reading runtime cannot
 /// count what went missing before the first bag it ever saw, because that bag
