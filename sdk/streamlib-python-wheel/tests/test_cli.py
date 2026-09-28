@@ -619,11 +619,17 @@ def test_the_scaffold_models_pixels_on_the_gpu_and_logic_on_the_cpu(tmp_path: Pa
     assert "numpy" not in effect_source, "the effect in the video path touches no host pixels"
     assert "frame.cpu()" in meter_source, "the meter's host view of the pixels is explicit"
     assert "ctx.time" in meter_source, "the meter paces itself on the monotonic clock"
-    effect_output = 'effect.output("video_to_downstream")'
-    assert f'rt.connect({effect_output}, window.input("video"))' in entry_source
-    assert f'rt.connect({effect_output}, meter.input("video_from_upstream"))' in entry_source, (
-        "the meter reads a fan-out of the effect's output, off the window's path"
+    readers_of_the_effect_output = sorted(
+        ast.unparse(call.args[1])
+        for call in ast.walk(ast.parse(entry_source))
+        if isinstance(call, ast.Call)
+        and ast.unparse(call.func) == "rt.connect"
+        and ast.unparse(call.args[0]) == "effect.output('video_to_downstream')"
     )
+    assert readers_of_the_effect_output == [
+        "meter.input('video_from_upstream')",
+        "window.input('video')",
+    ], "the meter reads a fan-out of the effect's output, off the window's path"
 
 
 def test_the_scaffold_depends_on_streamlib_and_numpy_only(tmp_path: Path):

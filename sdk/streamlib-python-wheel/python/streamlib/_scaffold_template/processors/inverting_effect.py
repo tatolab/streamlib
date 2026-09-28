@@ -38,7 +38,7 @@ class InvertingEffect:
     def video_to_downstream(self) -> VideoFrame: ...
 
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        self.invert = GlslPixelEffect.compile(
+        self.inverting_pixel_effect = GlslPixelEffect.compile(
             ctx.gpu_full_access, effect_glsl=INVERT_GLSL
         )
 
@@ -48,5 +48,5 @@ class InvertingEffect:
             return
         ctx.outputs.write(
             "video_to_downstream",
-            self.invert.apply_to_frame(ctx.gpu_limited_access, frame),
+            self.inverting_pixel_effect.apply_to_frame(ctx.gpu_limited_access, frame),
         )

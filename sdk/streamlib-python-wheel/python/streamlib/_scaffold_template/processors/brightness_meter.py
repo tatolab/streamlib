@@ -17,14 +17,14 @@ from streamlib import (
     processor,
 )
 
-REPORT_INTERVAL_NS = 1_000_000_000
+BRIGHTNESS_REPORT_INTERVAL_NS = 1_000_000_000
 
 
 @processor
 class BrightnessMeter:
     """Logs the mean brightness of the frames it sees, once a second."""
 
-    next_report_at_ns = 0
+    next_brightness_report_at_ns: int = 0
 
     @input(delivery_profile="newest")
     def video_from_upstream(self) -> VideoFrame: ...
@@ -32,13 +32,13 @@ class BrightnessMeter:
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         frame = ctx.inputs.read("video_from_upstream", into=VideoFrame)
         # `ctx.time` is the monotonic clock every processor shares, in ns.
-        if frame is None or ctx.time < self.next_report_at_ns:
+        if frame is None or ctx.time < self.next_brightness_report_at_ns:
             return
         # `frame.cpu()` is the slow door, named so: the frame lives on the GPU
         # and this reads it back into host memory. Once a second is cheap;
         # per-frame pixel work belongs in a GPU effect like InvertingEffect.
         with frame.cpu() as pixels:
-            # Color channels only, as a strided view — no copy of the frame.
+            # Color channels only — alpha is opaque and would skew the mean.
             brightness = float(numpy.mean(pixels[:, :, :3]))
         log.info(
             "brightness",
@@ -46,4 +46,4 @@ class BrightnessMeter:
             width=frame.width,
             height=frame.height,
         )
-        self.next_report_at_ns = ctx.time + REPORT_INTERVAL_NS
+        self.next_brightness_report_at_ns = ctx.time + BRIGHTNESS_REPORT_INTERVAL_NS
