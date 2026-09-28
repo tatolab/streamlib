@@ -74,7 +74,7 @@ const HOW_OFTEN_A_HELPERS_ANSWER_IS_LOOKED_AT: Duration = Duration::from_millis(
 /// generation differs from the last one's is a baseline rather than a gap, so
 /// a producer recreated mid-stream is never read as loss.
 #[derive(Default)]
-struct PublisherGenerationsOnePortHasHad {
+pub(super) struct PublisherGenerationsOnePortHasHad {
     /// The publisher that numbered the last sample this egress sent; `None`
     /// until the first.
     numbering_publisher_id: Option<UniquePublisherId>,
@@ -87,7 +87,7 @@ impl PublisherGenerationsOnePortHasHad {
     ///
     /// The first sample of all takes generation zero rather than bumping onto
     /// one: there is no earlier numbering for it to be told apart from.
-    fn generation_of_a_sample_numbered_by(
+    pub(super) fn generation_of_a_sample_numbered_by(
         &mut self,
         numbering_publisher_id: UniquePublisherId,
     ) -> u64 {
@@ -226,7 +226,7 @@ fn a_helper_opened_its_publisher(
 /// nothing that needs a Zenoh session: the ordering this holds — no token
 /// until a helper-placed source says it opened its publisher — is then
 /// provable without standing a session up.
-fn take_a_destination_slot_once_the_port_publishes(
+pub(super) fn take_a_destination_slot_once_the_port_publishes(
     how_to_read_the_port: &HowToReadAnOfferedOutputPort,
     iceoryx2_node: &Iceoryx2Node,
     stop: &AtomicBool,
@@ -402,6 +402,24 @@ fn send_one_port_to_the_mesh(sending: WhatOneEgressSends, stop: Arc<AtomicBool>)
             return;
         }
     };
+
+    if crate::core::runtime::mesh::moq_gateway_configuration::MeshDataTransport::from_the_environment()
+        == crate::core::runtime::mesh::moq_gateway_configuration::MeshDataTransport::Moq
+    {
+        // The data rides the MoQ gateway, which takes its own slot when the
+        // relay asks for this port's track; this egress only holds the token
+        // that tells the reader the port is being sent.
+        drop(subscriber);
+        tracing::info!("The mesh is sending {addressed} over the MoQ gateway");
+        while !stop.load(Ordering::Acquire) {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        if let Err(undeclare_failure) = egress_token.undeclare().wait() {
+            tracing::debug!("the mesh's token for {addressed} did not undeclare: {undeclare_failure}");
+        }
+        tracing::info!("The mesh stopped sending {addressed}");
+        return;
+    }
 
     tracing::info!("The mesh is sending {addressed}");
     let data_key = key_space.data_key(&this_runtimes_name, &processor_display_name, &port_name);

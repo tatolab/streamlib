@@ -24,6 +24,8 @@ use crate::core::runtime::mesh::OutputPortsOfferedOnTheMesh;
 use crate::core::runtime::mesh::gpu_context_the_mesh_copies_frames_with::GpuContextTheMeshCopiesFramesWith;
 use crate::core::runtime::mesh::machine_clock_a_remote_link_carries_from::MachineClockARemoteLinkCarriesFrom;
 use crate::core::runtime::mesh::mesh_link_ingress::MeshLinkIngress;
+use crate::core::runtime::mesh::moq_gateway_configuration::{MeshDataTransport, MoqGatewayDoors};
+use crate::core::runtime::mesh::moq_link_ingress_data_path::HowAnIngressReadsOffTheRelay;
 use crate::core::runtime::mesh::output_ports_offered_on_the_mesh::ask_a_runtime_what_output_ports_it_offers;
 use crate::core::runtime::mesh::runtime_mesh_description::RuntimeMeshDescription;
 use crate::core::runtime::mesh::runtime_mesh_key::{AnnouncedRuntimeIdentity, RuntimeMeshKeySpace};
@@ -293,12 +295,13 @@ impl MeshLinkIngressTable {
     }
 
     /// Start resolving waiting links, now that this runtime is on a mesh.
-    pub fn start_resolving_every_waiting_link(
+    pub(crate) fn start_resolving_every_waiting_link(
         self: &Arc<Self>,
         session: &zenoh::Session,
         key_space: &RuntimeMeshKeySpace,
         this_runtimes_name: &str,
         peers: &Arc<RuntimeMeshPeerTable>,
+        moq_gateway_doors: Option<Arc<MoqGatewayDoors>>,
     ) {
         // Any resolver already running goes first. Replacing the handle would
         // only drop it: the thread holds a sender of its own, so the channel
@@ -347,6 +350,7 @@ impl MeshLinkIngressTable {
                 &self.gpu_context_the_mesh_copies_frames_with,
             ),
             wake_the_resolver: wake_the_resolver.clone(),
+            moq_gateway_doors,
         };
         let whether_this_thread_keeps_resolving = Arc::clone(&whether_to_keep_resolving);
         match std::thread::Builder::new()
@@ -439,6 +443,38 @@ struct ResolvingLinksNeeds {
     /// Handed to each ingress, so the pass runs the moment the source starts or
     /// stops sending rather than on the next tick.
     wake_the_resolver: Sender<()>,
+    /// This runtime's MoQ relay and keys, which a MoQ ingress reads through.
+    moq_gateway_doors: Option<Arc<MoqGatewayDoors>>,
+}
+
+/// How an ingress for `address` reads its bags: `None` for Zenoh, the MoQ
+/// relay when `STREAMLIB_MESH_TRANSPORT=moq` — or why it cannot.
+fn how_an_ingress_reads_off_the_relay(
+    resolving: &ResolvingLinksNeeds,
+    address: &MeshPortAddress,
+) -> std::result::Result<Option<HowAnIngressReadsOffTheRelay>, String> {
+    if MeshDataTransport::from_the_environment() != MeshDataTransport::Moq {
+        return Ok(None);
+    }
+    let Some(doors) = resolving.moq_gateway_doors.clone() else {
+        return Err(
+            "STREAMLIB_MESH_TRANSPORT=moq and this runtime has no MoQ relay configured".to_string(),
+        );
+    };
+    let peers = Arc::clone(&resolving.peers);
+    let source_runtime_name = address.runtime_name().to_string();
+    Ok(Some(HowAnIngressReadsOffTheRelay {
+        doors,
+        where_the_source_gateway_publishes: Arc::new(move || {
+            match peers
+                .every_peer_holding_the_name(&source_runtime_name)
+                .as_slice()
+            {
+                [(_, Some(described))] => described.moq_gateway_namespace.clone(),
+                _ => None,
+            }
+        }),
+    }))
 }
 
 /// The resolving thread's body.
@@ -658,6 +694,17 @@ fn start_carrying(resolving: &ResolvingLinksNeeds, address: &MeshPortAddress) {
     // `connect` and `disconnect` waits on.
     let machine_clock_it_carries_from =
         resolving.carried.lock().machine_clock_carried_from(address);
+    let how_it_reads_off_the_relay = match how_an_ingress_reads_off_the_relay(resolving, address) {
+        Ok(how_it_reads_off_the_relay) => how_it_reads_off_the_relay,
+        Err(why_not) => {
+            say_how_far_every_link_from(
+                resolving,
+                address,
+                RemoteLinkResolution::AwaitingRemote { reason: why_not },
+            );
+            return;
+        }
+    };
     let ingress = match MeshLinkIngress::start(
         &resolving.session,
         &resolving.key_space,
@@ -667,6 +714,7 @@ fn start_carrying(resolving: &ResolvingLinksNeeds, address: &MeshPortAddress) {
         resolving.wake_the_resolver.clone(),
         &resolving.gpu_context_the_mesh_copies_frames_with,
         &machine_clock_it_carries_from,
+        how_it_reads_off_the_relay,
     ) {
         Ok(ingress) => ingress,
         Err(cannot_start) => {
@@ -946,6 +994,8 @@ mod tests {
                 pid: process_id,
                 engine_version: engine_version.to_string(),
                 control_plane_urls: vec![],
+                moq_gateway_namespace: None,
+                moq_gateway_relay_host: None,
             }),
         )
     }

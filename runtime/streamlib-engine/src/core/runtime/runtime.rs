@@ -1317,8 +1317,14 @@ impl Runner {
             .map(LoadedCapabilityExtensionOutput::from)
             .collect();
         let runtime_mesh = self.runtime_mesh.render_for_graph();
+        // Outside the compiler's scope: the listing reads the graph through it.
+        let moq_gateway = self
+            .runtime_mesh
+            .render_the_moq_gateway_for_graph(&self._offered_on_the_mesh);
         self.compiler.scope(|graph, _tx| {
-            serde_json::to_value(graph.to_graph_response(extensions, runtime_mesh))
+            let mut response = graph.to_graph_response(extensions, runtime_mesh);
+            response.moq_gateway = Some(moq_gateway);
+            serde_json::to_value(response)
                 .map_err(|_| Error::GraphError("Unable to serialize graph".into()))
         })
     }

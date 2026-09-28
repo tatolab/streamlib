@@ -115,6 +115,8 @@ mod tests {
             pid: 4321,
             engine_version: "0.25.0".to_string(),
             control_plane_urls: vec!["http://198.51.100.7:9000".to_string()],
+            moq_gateway_namespace: None,
+            moq_gateway_relay_host: None,
         }
     }
 

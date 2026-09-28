@@ -40,6 +40,14 @@ pub struct RuntimeMeshDescription {
     /// One `http://<address>:<port>` per address another machine could reach
     /// this runtime's control plane at. Empty with no control plane.
     pub control_plane_urls: Vec<String>,
+    /// The namespace this runtime's MoQ gateway announces right now, which a
+    /// peer's MoQ ingress subscribes under. Absent while none is announced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moq_gateway_namespace: Option<String>,
+    /// The relay host that namespace is announced on — never the relay URL,
+    /// whose path carries a token.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moq_gateway_relay_host: Option<String>,
 }
 
 impl RuntimeMeshDescription {
@@ -56,7 +64,21 @@ impl RuntimeMeshDescription {
             pid: std::process::id(),
             engine_version: env!("CARGO_PKG_VERSION").to_string(),
             control_plane_urls: hosted_control_plane.urls_another_machine_could_reach_it_at(),
+            moq_gateway_namespace: None,
+            moq_gateway_relay_host: None,
         }
+    }
+
+    /// This description, naming where the runtime's MoQ gateway publishes.
+    pub(crate) fn naming_where_its_moq_gateway_publishes(
+        mut self,
+        where_it_publishes: &crate::core::runtime::mesh::moq_gateway::WhereTheMoqGatewayPublishes,
+    ) -> Self {
+        if let Some(announced) = where_it_publishes.right_now() {
+            self.moq_gateway_namespace = Some(announced.namespace);
+            self.moq_gateway_relay_host = Some(announced.relay_host);
+        }
+        self
     }
 
     /// This document on the wire.
@@ -183,6 +205,8 @@ mod tests {
             pid: 4321,
             engine_version: "0.25.0".to_string(),
             control_plane_urls: vec!["http://[2001:db8::1]:9000".to_string()],
+            moq_gateway_namespace: None,
+            moq_gateway_relay_host: None,
         }
     }
 

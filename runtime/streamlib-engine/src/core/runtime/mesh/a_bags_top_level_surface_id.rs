@@ -106,6 +106,65 @@ pub fn the_top_level_surface_id_of_a_bag(bag_bytes: &[u8]) -> Option<ATopLevelSu
     None
 }
 
+/// What a bag's top-level keys tell the MoQ gateway about the track it rides:
+/// whether it is encoded media and a sync point, its codec, whether it names a
+/// surface, and whether it carries a `detections` array.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct TopLevelBagKeysTheMoqGatewayReads {
+    pub carries_a_bitstream: bool,
+    pub is_a_sync_point: bool,
+    pub codec: Option<String>,
+    pub names_a_surface: bool,
+    pub carries_a_detections_array: bool,
+}
+
+/// Read the top-level keys the MoQ gateway cuts groups and names track kinds
+/// by, stepping over every value it does not read the way the surface-id walk
+/// does. A bag the walk cannot read answers what it had read before the fault.
+pub fn the_top_level_keys_the_moq_gateway_reads(
+    bag_bytes: &[u8],
+) -> TopLevelBagKeysTheMoqGatewayReads {
+    let mut read = TopLevelBagKeysTheMoqGatewayReads::default();
+    let mut walk = MsgpackWalk::over(bag_bytes);
+    let Some(entries) = walk.read_a_map_header() else {
+        return read;
+    };
+    for _ in 0..entries {
+        let key = walk.read_a_string();
+        if key.is_none() && !walk.step_over_one_value() {
+            return read;
+        }
+        match key {
+            Some("bitstream") => read.carries_a_bitstream = true,
+            Some(SURFACE_ID_KEY) => read.names_a_surface = true,
+            Some("is_sync_point") => match walk.peek_marker() {
+                Some(Marker::True) => read.is_a_sync_point = true,
+                Some(Marker::False) => read.is_a_sync_point = false,
+                _ => {}
+            },
+            Some("detections") => {
+                read.carries_a_detections_array = matches!(
+                    walk.peek_marker(),
+                    Some(Marker::FixArray(_) | Marker::Array16 | Marker::Array32)
+                )
+            }
+            Some("codec") => {
+                let value_begins_at = walk.at;
+                if let Some(codec) = walk.read_a_string() {
+                    read.codec = Some(codec.to_string());
+                    continue;
+                }
+                walk.at = value_begins_at;
+            }
+            _ => {}
+        }
+        if !walk.step_over_one_value() {
+            return read;
+        }
+    }
+    read
+}
+
 /// A cursor over one msgpack document, reading only the shape it is asked for.
 struct MsgpackWalk<'a> {
     bytes: &'a [u8],
@@ -232,6 +291,10 @@ impl<'a> MsgpackWalk<'a> {
         true
     }
 
+    fn peek_marker(&self) -> Option<Marker> {
+        self.bytes.get(self.at).copied().map(Marker::from_u8)
+    }
+
     fn take_marker(&mut self) -> Option<Marker> {
         self.take_byte().map(Marker::from_u8)
     }
@@ -267,6 +330,55 @@ impl<'a> MsgpackWalk<'a> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn the_moq_gateway_reads_an_encoded_sync_points_keys_past_its_bitstream() {
+        #[derive(serde::Serialize)]
+        struct AnEncodedFrame<'a> {
+            codec: &'a str,
+            #[serde(with = "serde_bytes")]
+            bitstream: &'a [u8],
+            is_sync_point: bool,
+            group_index: u64,
+        }
+        let bag = rmp_serde::to_vec_named(&AnEncodedFrame {
+            codec: "h264",
+            bitstream: &[0, 0, 0, 1, 0x65, 0x88],
+            is_sync_point: true,
+            group_index: 4,
+        })
+        .unwrap();
+        assert_eq!(
+            the_top_level_keys_the_moq_gateway_reads(&bag),
+            TopLevelBagKeysTheMoqGatewayReads {
+                carries_a_bitstream: true,
+                is_a_sync_point: true,
+                codec: Some("h264".to_string()),
+                names_a_surface: false,
+                carries_a_detections_array: false,
+            }
+        );
+    }
+
+    #[test]
+    fn the_moq_gateway_reads_a_surface_and_a_detections_array() {
+        let surface = the_top_level_keys_the_moq_gateway_reads(&a_bag(json!({
+            "surface_id": "7#3", "width": 1920,
+        })));
+        assert!(surface.names_a_surface && !surface.carries_a_bitstream);
+        let detections = the_top_level_keys_the_moq_gateway_reads(&a_bag(json!({
+            "detections": [{"label": "cup"}], "is_sync_point": false,
+        })));
+        assert!(detections.carries_a_detections_array && !detections.is_a_sync_point);
+        let not_an_array = the_top_level_keys_the_moq_gateway_reads(&a_bag(json!({
+            "detections": 3,
+        })));
+        assert!(!not_an_array.carries_a_detections_array);
+        assert_eq!(
+            the_top_level_keys_the_moq_gateway_reads(b"\x93\x01\x02\x03"),
+            TopLevelBagKeysTheMoqGatewayReads::default()
+        );
+    }
 
     fn a_bag(shape: serde_json::Value) -> Vec<u8> {
         rmp_serde::to_vec_named(&shape).expect("a bag encodes")

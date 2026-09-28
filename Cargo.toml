@@ -37,6 +37,11 @@ members = [
     # closure).
     "packages/test-fixtures",    # Attribute-macro test fixtures (TestConfiguredProcessor)
 ]
+# The MoQ extension wheel is its own workspace root, and the engine path-deps
+# the moq-transport tree vendored inside it. Without this, that path dep would
+# make the vendored crate an automatic member of this workspace as well as of
+# the wheel's.
+exclude = ["packages/streamlib-moq"]
 
 [workspace.package]
 version = "0.26.44"

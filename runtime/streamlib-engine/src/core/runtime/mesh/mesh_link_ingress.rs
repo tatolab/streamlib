@@ -41,6 +41,9 @@ use crate::core::runtime::mesh::machine_clock_a_remote_link_carries_from::{
 use crate::core::runtime::mesh::mesh_data_message_attachment::{
     MeshDataMessageAttachment, PublisherGenerationOnTheMesh,
 };
+use crate::core::runtime::mesh::moq_link_ingress_data_path::{
+    HowAnIngressReadsOffTheRelay, MoqLinkIngressDataPath,
+};
 use crate::core::runtime::mesh::runtime_mesh_key::RuntimeMeshKeySpace;
 use crate::iceoryx2::{
     BagsAGapInTheNumberingSaysWereLost, ChannelEgressConfig, ChannelTrustTier,
@@ -232,9 +235,17 @@ impl SourceSendingState {
     }
 }
 
+/// Which transport carries one ingress's bags.
+enum TheDataPathOfOneIngress {
+    Zenoh(#[allow(dead_code)] zenoh::pubsub::Subscriber<()>),
+    Moq(#[allow(dead_code)] MoqLinkIngressDataPath),
+}
+
 /// What one ingress holds on the mesh, dropped in declaration order.
 struct HeldOnTheMeshByOneIngress {
-    _data_subscriber: zenoh::pubsub::Subscriber<()>,
+    /// The Zenoh data subscriber, or — with `STREAMLIB_MESH_TRANSPORT=moq` —
+    /// the subscription to the source's gateway track on the relay.
+    _data_path: TheDataPathOfOneIngress,
     _egress_token_subscriber: zenoh::pubsub::Subscriber<()>,
     reader_token: Option<zenoh::liveliness::LivelinessToken>,
 }
@@ -259,6 +270,7 @@ impl MeshLinkIngress {
         wake_the_resolver: crossbeam_channel::Sender<()>,
         gpu_context_the_mesh_copies_frames_with: &Arc<GpuContextTheMeshCopiesFramesWith>,
         machine_clock_it_carries_from: &Arc<MachineClockARemoteLinkCarriesFrom>,
+        how_it_reads_off_the_relay: Option<HowAnIngressReadsOffTheRelay>,
     ) -> crate::core::Result<Self> {
         let local_channel = mesh_ingress_channel_name(&address.to_string()).into_string();
         let writes_onto_the_local_channel = Arc::new(OutputWriterInner::new());
@@ -300,7 +312,29 @@ impl MeshLinkIngress {
         ));
         let the_source_is_sending = Arc::new(SourceSendingState::default());
 
-        let data_subscriber = declare_the_data_subscriber(session, key_space, address, &arrived)?;
+        let data_path = match how_it_reads_off_the_relay {
+            None => TheDataPathOfOneIngress::Zenoh(declare_the_data_subscriber(
+                session, key_space, address, &arrived,
+            )?),
+            Some(how_it_reads_off_the_relay) => {
+                let arrived = Arc::clone(&arrived);
+                TheDataPathOfOneIngress::Moq(
+                    MoqLinkIngressDataPath::start(
+                        address,
+                        how_it_reads_off_the_relay,
+                        Arc::new(move |attached, payload_bytes| {
+                            let (arrived, someone_is_waiting) = &*arrived;
+                            arrived.lock().take_this_one_in(ABagOffTheMesh {
+                                payload_bytes,
+                                attached,
+                            });
+                            someone_is_waiting.notify_one();
+                        }),
+                    )
+                    .map_err(crate::core::Error::Runtime)?,
+                )
+            }
+        };
         let egress_token_subscriber = declare_the_egress_token_subscriber(
             session,
             key_space,
@@ -344,7 +378,7 @@ impl MeshLinkIngress {
             arrived,
             every_link_it_feeds,
             held_on_the_mesh: Some(HeldOnTheMeshByOneIngress {
-                _data_subscriber: data_subscriber,
+                _data_path: data_path,
                 _egress_token_subscriber: egress_token_subscriber,
                 reader_token: Some(reader_token),
             }),

@@ -39,6 +39,10 @@ use crate::core::runtime::mesh::link_requests_from_other_runtimes::{
 use crate::core::runtime::mesh::link_requests_this_runtime_has_sent::LinkRequestsThisRuntimeHasSent;
 use crate::core::runtime::mesh::mesh_link_ingress_table::MeshLinkIngressTable;
 use crate::core::runtime::mesh::mesh_port_egress_table::MeshPortEgressTable;
+use crate::core::runtime::mesh::moq_gateway::{
+    MoqGateway, WhereTheMoqGatewayPublishes, render_an_unconfigured_moq_gateway_for_graph,
+};
+use crate::core::runtime::mesh::moq_gateway_configuration::MoqGatewayDoors;
 use crate::core::runtime::mesh::output_ports_offered_on_the_mesh::{
     OfferedOutputPortsQueryable, WhatThisRuntimeOffersOnTheMeshRegistry,
 };
@@ -85,6 +89,14 @@ pub struct RuntimeMeshMembership {
     /// or not this runtime ever reached a mesh — a request made off one is
     /// still a request the author asked for.
     link_requests_it_has_sent: Arc<LinkRequestsThisRuntimeHasSent>,
+    /// The MoQ gateway's doors, read at join — `None` when no relay is
+    /// configured, which leaves the gateway off.
+    moq_gateway_doors: Option<Arc<MoqGatewayDoors>>,
+    /// Where the gateway publishes right now, which this runtime's mesh
+    /// description names for a peer's MoQ ingress.
+    where_the_moq_gateway_publishes: Arc<WhereTheMoqGatewayPublishes>,
+    /// The gateway, started with the rest of what this runtime serves.
+    moq_gateway: Mutex<Option<MoqGateway>>,
 }
 
 /// What a runtime holds on the mesh to serve its own output ports: the
@@ -140,6 +152,9 @@ impl RuntimeMeshMembership {
         let key_space = RuntimeMeshKeySpace::of(resolved.mesh_name.clone());
         let announced_identity = AnnouncedRuntimeIdentity::of_this_runtime(runtime_name);
         let peers = Arc::new(RuntimeMeshPeerTable::default());
+        let where_the_moq_gateway_publishes = Arc::new(WhereTheMoqGatewayPublishes::default());
+        let moq_gateway_doors =
+            MoqGatewayDoors::read_for_the_runtime_named(&announced_identity.runtime_name);
 
         let session = match off_any_current_thread_tokio_runtime("join", || {
             announce_on_the_mesh(
@@ -150,6 +165,7 @@ impl RuntimeMeshMembership {
                 runtime_id,
                 host_name,
                 hosted_control_plane,
+                &where_the_moq_gateway_publishes,
             )
         })
         .unwrap_or_else(|cannot_spawn| Err(cannot_spawn.into()))
@@ -185,7 +201,23 @@ impl RuntimeMeshMembership {
             being_read_by_other_runtimes: Arc::default(),
             applies_link_requests: Arc::default(),
             link_requests_it_has_sent: Arc::default(),
+            moq_gateway_doors,
+            where_the_moq_gateway_publishes,
+            moq_gateway: Mutex::new(None),
         })
+    }
+
+    /// The MoQ gateway as `graph` renders it — `off` with every port listed
+    /// when no relay is configured. Reads the graph, so never call it under
+    /// the compiler's scope.
+    pub fn render_the_moq_gateway_for_graph(
+        &self,
+        offered: &WhatThisRuntimeOffersOnTheMeshRegistry,
+    ) -> crate::core::json_schema::MoqGatewayOutput {
+        match &*self.moq_gateway.lock() {
+            Some(moq_gateway) => moq_gateway.render_for_graph(),
+            None => render_an_unconfigured_moq_gateway_for_graph(offered),
+        }
     }
 
     /// Ask the runtime that owns `request`'s input to apply it.
@@ -271,6 +303,21 @@ impl RuntimeMeshMembership {
         iceoryx2_node: &Iceoryx2Node,
         gpu_context_the_mesh_copies_frames_with: &Arc<GpuContextTheMeshCopiesFramesWith>,
     ) {
+        // Before the session check: the gateway reaches its relay without the
+        // Zenoh mesh, so a local-only runtime still serves it.
+        if let Some(moq_gateway_doors) = &self.moq_gateway_doors {
+            match MoqGateway::start(
+                Arc::clone(moq_gateway_doors),
+                &self.announced_identity.runtime_name,
+                offered,
+                iceoryx2_node,
+                gpu_context_the_mesh_copies_frames_with,
+                &self.where_the_moq_gateway_publishes,
+            ) {
+                Ok(moq_gateway) => *self.moq_gateway.lock() = Some(moq_gateway),
+                Err(why_not) => tracing::warn!("The MoQ gateway did not start: {why_not}"),
+            }
+        }
         let Some(session) = self.the_session_it_is_announced_on() else {
             return;
         };
@@ -344,12 +391,14 @@ impl RuntimeMeshMembership {
         // The requests this runtime sends wait on the same event the links it
         // pulls do — a runtime appearing — so both start together.
         let link_requests_it_has_sent = Arc::clone(&self.link_requests_it_has_sent);
+        let moq_gateway_doors = self.moq_gateway_doors.clone();
         if let Err(cannot_spawn) = off_any_current_thread_tokio_runtime("carry", move || {
             ingress_table.start_resolving_every_waiting_link(
                 &session,
                 &key_space,
                 &this_runtimes_name,
                 &peers,
+                moq_gateway_doors,
             );
             link_requests_it_has_sent
                 .start_sending_every_waiting_request(&session, &key_space, &peers);
@@ -409,6 +458,8 @@ impl RuntimeMeshMembership {
         // because that teardown joins threads and talks to the network.
         let stopped_serving = self.serving_this_runtimes_output_ports.lock().take();
         drop(stopped_serving);
+        let stopped_moq_gateway = self.moq_gateway.lock().take();
+        drop(stopped_moq_gateway);
         let stopped_carrying = self.carrying_links_from_other_runtimes.lock().take();
         if let Some(carrying) = stopped_carrying {
             carrying.stop();
@@ -495,6 +546,9 @@ impl RuntimeMeshMembership {
             being_read_by_other_runtimes: Arc::default(),
             applies_link_requests: Arc::default(),
             link_requests_it_has_sent: Arc::default(),
+            moq_gateway_doors: None,
+            where_the_moq_gateway_publishes: Arc::default(),
+            moq_gateway: Mutex::new(None),
         }
     }
 
@@ -559,6 +613,7 @@ fn announce_on_the_mesh(
     runtime_id: &str,
     host_name: &str,
     hosted_control_plane: &Arc<HostedControlPlaneEndpointRegistry>,
+    where_the_moq_gateway_publishes: &Arc<WhereTheMoqGatewayPublishes>,
 ) -> std::result::Result<AnnouncedOnTheMesh, WhyThisRuntimeIsNotAnnounced> {
     let session = zenoh::open(resolved.as_a_zenoh_configuration()?).wait()?;
 
@@ -587,6 +642,7 @@ fn announce_on_the_mesh(
         runtime_id,
         host_name,
         hosted_control_plane,
+        where_the_moq_gateway_publishes,
     )?;
 
     let (what_the_mesh_saw, what_the_discovery_thread_reads) = crossbeam_channel::unbounded();
@@ -627,7 +683,9 @@ fn declare_the_description_queryable(
     runtime_id: &str,
     host_name: &str,
     hosted_control_plane: &Arc<HostedControlPlaneEndpointRegistry>,
+    where_the_moq_gateway_publishes: &Arc<WhereTheMoqGatewayPublishes>,
 ) -> zenoh::Result<zenoh::query::Queryable<()>> {
+    let where_the_moq_gateway_publishes = Arc::clone(where_the_moq_gateway_publishes);
     let announcement_key = key_space.announcement_key_for(announced_identity);
     let answered_key = announcement_key.clone();
     let runtime_id = runtime_id.to_string();
@@ -641,7 +699,8 @@ fn declare_the_description_queryable(
                 &runtime_id,
                 &host_name,
                 &hosted_control_plane,
-            );
+            )
+            .naming_where_its_moq_gateway_publishes(&where_the_moq_gateway_publishes);
             match described.encode() {
                 Ok(wire_bytes) => {
                     if let Err(reply_failure) = asked.reply(answered_key.clone(), wire_bytes).wait()

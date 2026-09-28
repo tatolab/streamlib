@@ -125,6 +125,23 @@ zenoh = { version = "1.10.1", default-features = false, features = [
     "transport_udp",
 ] }
 
+# The MoQ gateway: every output port served as a MoQ track on a relay, and the
+# data path of a cross-host remote link when `STREAMLIB_MESH_TRANSPORT=moq`.
+# The moq-transport tree is the one the MoQ extension wheel vendors (draft-16,
+# with its recorded patches), taken by path rather than copied a second time.
+# `web-transport` stays on 0.10 because that is what moq-transport depends on.
+moq-transport = { path = "../../packages/streamlib-moq/vendor/moq-transport", version = "0.16.2" }
+web-transport = "0.10.9"
+quinn = "0.11.11"
+url = "2.5"
+rustls = { version = "0.23.43", features = ["ring"] }
+rustls-native-certs = "0.8.4"
+bytes = "1"
+# The secure object envelope's AES-128-GCM, and the handoff's base64url keys.
+aes-gcm = "0.10.3"
+base64 = "0.22"
+getrandom = "0.2"
+
 # Serialization
 serde.workspace = true
 serde_json.workspace = true

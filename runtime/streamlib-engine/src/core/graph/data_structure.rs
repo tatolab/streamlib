@@ -161,6 +161,9 @@ impl Graph {
                 .collect(),
             extensions: loaded_capability_extensions,
             mesh: runtime_mesh,
+            // The runtime's to fill: the gateway reads the graph through the
+            // compiler's own scope, which this is rendered inside.
+            moq_gateway: None,
         }
     }
 }

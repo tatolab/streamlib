@@ -328,8 +328,10 @@ pub const RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL: usize = 1;
 /// [`MAX_DESTINATIONS_PER_CHANNEL`] would make a port at its fan-out cap fail
 /// to send across the mesh — and fail on the *sending* machine, where the
 /// runtime that asked for the link cannot see it. One, because a port has at
-/// most one egress however many runtimes read it.
-pub const RESERVED_MESH_EGRESS_SUBSCRIBER_SLOTS_PER_CHANNEL: usize = 1;
+/// most one egress however many runtimes read it — and a second for the MoQ
+/// gateway, which reads a port when a relay subscribes to it, beside a Zenoh
+/// egress reading the same port for a remote link.
+pub const RESERVED_MESH_EGRESS_SUBSCRIBER_SLOTS_PER_CHANNEL: usize = 2;
 
 /// Destinations one channel — one source output port — may feed at once.
 ///

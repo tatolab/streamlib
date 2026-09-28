@@ -38,6 +38,81 @@ pub struct GraphResponse {
     /// Where this runtime sits on the runtime mesh, and who else it sees
     /// there. Always present: every runtime is on a mesh.
     pub mesh: RuntimeMeshOutput,
+    /// This runtime's MoQ gateway: where it publishes and every output port
+    /// as a relay track. Absent from a document written before it existed.
+    #[serde(default)]
+    pub moq_gateway: Option<MoqGatewayOutput>,
+}
+
+/// This runtime's MoQ gateway, as `graph` renders it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+pub struct MoqGatewayOutput {
+    /// The relay's host (never its URL, whose path carries a token). Empty
+    /// with no relay configured.
+    pub relay_host: String,
+    /// The namespace announced right now; empty while none is.
+    pub namespace: String,
+    /// Whether the gateway is serving.
+    pub state: MoqGatewayStateOutput,
+    /// Every output port of this runtime, subscribed or not.
+    pub tracks: Vec<MoqGatewayTrackOutput>,
+}
+
+/// Whether the MoQ gateway is serving.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum MoqGatewayStateOutput {
+    /// A namespace is announced on the relay.
+    Serving,
+    /// The handoff paused it.
+    Paused,
+    /// Configured, and not (yet) announced on its relay.
+    WaitingForRelay,
+    /// No relay configured.
+    Off,
+}
+
+/// One output port as a MoQ gateway track.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
+pub struct MoqGatewayTrackOutput {
+    /// The processor's display name.
+    pub display_name: String,
+    /// The output port's name.
+    pub port: String,
+    /// The namespace the track is published under.
+    pub relay_namespace: String,
+    /// The track name: `<display name>/<port>`.
+    pub relay_track: String,
+    /// What the port carries, guessed from its names until a bag is read.
+    pub kind: MoqGatewayTrackKind,
+    /// Whether the gateway would serve it to the relay.
+    pub servable: bool,
+    /// Whether a relay subscription is being served right now.
+    pub subscribed: bool,
+    /// Objects the gateway has published on it.
+    pub objects_published: u64,
+}
+
+/// The kind of content one MoQ gateway track carries.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, utoipa::ToSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum MoqGatewayTrackKind {
+    /// Encoded video bags.
+    Video,
+    /// Encoded audio bags.
+    Audio,
+    /// Ordinary bags.
+    Bags,
+    /// Bags carrying a `detections` array.
+    Detections,
+    /// Bags naming a surface — raw pixels.
+    Surface,
+    /// Encoded bags of a codec the gateway does not name.
+    Unknown,
 }
 
 /// This runtime's place on the runtime mesh.
@@ -1517,7 +1592,10 @@ mod capability_extension_and_mesh_rendering_tests {
                 .unwrap();
 
         let keys: Vec<&String> = rendered.as_object().unwrap().keys().collect();
-        assert_eq!(keys, ["nodes", "links", "extensions", "mesh"]);
+        assert_eq!(
+            keys,
+            ["nodes", "links", "extensions", "mesh", "moq_gateway"]
+        );
         assert_eq!(rendered["extensions"], serde_json::json!([]));
     }
 
