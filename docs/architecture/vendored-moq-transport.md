@@ -26,6 +26,14 @@ It lives under the wheel rather than under the repo-root `vendor/` because
 maturin's sdist root is the wheel directory: a path dependency outside it
 would not reach the manylinux release build.
 
+The engine (`runtime/streamlib-engine`) path-depends on the same tree for its
+MoQ gateway, which reads `SubgroupWriter::forwarded` (patch 2 below) to tell
+whether a relay is still subscribed. The repo-root workspace lists
+`packages/streamlib-moq` under `exclude`: a path dependency inside the root
+directory is otherwise made an automatic member of the root workspace, and the
+tree is already a member of the wheel's. The root `cargo fmt --all --check`
+walks it as a local path dependency, and finds it clean.
+
 ## Why vendored
 
 The publisher needs behaviour the crate does not have — abandoning a
@@ -128,8 +136,9 @@ stands upstream.
 2. Replace the tree with it, minus `.cargo-ok` and `Cargo.lock`.
 3. Re-apply the patches listed above, one commit each, or drop the ones the
    release has taken.
-4. Update `version` on the wheel's `moq-transport` path dependency and run
-   `cargo check` in the wheel directory so its lockfile follows.
+4. Update `version` on the wheel's and the engine's `moq-transport` path
+   dependencies and run `cargo check` in the wheel directory and at the repo
+   root so both lockfiles follow.
 5. Record the new release and upstream commit in the Provenance section.
 6. Re-capture the drift-guard hash: run `cargo xtask check-vendored-trees` —
    it fails printing the new hash — and update `VENDORED_TREES` in

@@ -39,9 +39,8 @@ pub struct GraphResponse {
     /// there. Always present: every runtime is on a mesh.
     pub mesh: RuntimeMeshOutput,
     /// This runtime's MoQ gateway: where it publishes and every output port
-    /// as a relay track. Absent from a document written before it existed.
-    #[serde(default)]
-    pub moq_gateway: Option<MoqGatewayOutput>,
+    /// as a relay track. Always present: `off` with no relay configured.
+    pub moq_gateway: MoqGatewayOutput,
 }
 
 /// This runtime's MoQ gateway, as `graph` renders it.
@@ -1573,6 +1572,15 @@ mod capability_extension_and_mesh_rendering_tests {
     use crate::core::graph::Graph;
     use crate::core::runtime::{LoadedCapabilityExtension, LoadedCapabilityExtensionRegistry};
 
+    fn an_unconfigured_moq_gateway() -> MoqGatewayOutput {
+        MoqGatewayOutput {
+            relay_host: String::new(),
+            namespace: String::new(),
+            state: MoqGatewayStateOutput::Off,
+            tracks: Vec::new(),
+        }
+    }
+
     fn an_isolated_mesh() -> RuntimeMeshOutput {
         RuntimeMeshOutput {
             mesh_name: "default".to_string(),
@@ -1587,9 +1595,12 @@ mod capability_extension_and_mesh_rendering_tests {
 
     #[test]
     fn a_graph_with_no_extensions_still_carries_the_key_as_an_empty_list() {
-        let rendered =
-            serde_json::to_value(Graph::new().to_graph_response(Vec::new(), an_isolated_mesh()))
-                .unwrap();
+        let rendered = serde_json::to_value(Graph::new().to_graph_response(
+            Vec::new(),
+            an_isolated_mesh(),
+            an_unconfigured_moq_gateway(),
+        ))
+        .unwrap();
 
         let keys: Vec<&String> = rendered.as_object().unwrap().keys().collect();
         assert_eq!(
@@ -1603,9 +1614,12 @@ mod capability_extension_and_mesh_rendering_tests {
     /// tells it apart from one whose session never opened.
     #[test]
     fn an_isolated_runtime_renders_an_open_session_with_no_peers_and_no_reason() {
-        let rendered =
-            serde_json::to_value(Graph::new().to_graph_response(Vec::new(), an_isolated_mesh()))
-                .unwrap();
+        let rendered = serde_json::to_value(Graph::new().to_graph_response(
+            Vec::new(),
+            an_isolated_mesh(),
+            an_unconfigured_moq_gateway(),
+        ))
+        .unwrap();
 
         assert_eq!(
             rendered["mesh"],
@@ -1638,6 +1652,7 @@ mod capability_extension_and_mesh_rendering_tests {
                 }],
                 ..an_isolated_mesh()
             },
+            an_unconfigured_moq_gateway(),
         ))
         .unwrap();
 
@@ -1681,6 +1696,7 @@ mod capability_extension_and_mesh_rendering_tests {
                 ],
                 ..an_isolated_mesh()
             },
+            an_unconfigured_moq_gateway(),
         ))
         .unwrap();
 
@@ -1706,6 +1722,7 @@ mod capability_extension_and_mesh_rendering_tests {
                 local_only_reason: Some("the listen endpoint is already taken".to_string()),
                 ..an_isolated_mesh()
             },
+            an_unconfigured_moq_gateway(),
         ))
         .unwrap();
 
@@ -1732,9 +1749,12 @@ mod capability_extension_and_mesh_rendering_tests {
             .map(LoadedCapabilityExtensionOutput::from)
             .collect();
 
-        let rendered =
-            serde_json::to_value(Graph::new().to_graph_response(extensions, an_isolated_mesh()))
-                .unwrap();
+        let rendered = serde_json::to_value(Graph::new().to_graph_response(
+            extensions,
+            an_isolated_mesh(),
+            an_unconfigured_moq_gateway(),
+        ))
+        .unwrap();
 
         assert_eq!(
             rendered["extensions"],

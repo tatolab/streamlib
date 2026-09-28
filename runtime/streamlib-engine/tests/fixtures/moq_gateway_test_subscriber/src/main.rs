@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Spike-only test subscriber for the MoQ gateway.
+//! The MoQ gateway fixtures' independent test subscriber.
 //!
 //! Subscribes to one track on a relay, and for every object checks the secure
 //! object envelope (`SLE1` ‖ epoch BE ‖ IV ‖ AES-128-GCM with the first eight
@@ -10,11 +10,13 @@
 //! prints one JSON line per object and a summary. Written against the wire
 //! contract, sharing no code with the engine.
 //!
-//!   MOQ_TEST_RELAY_URL=https://relay/<token> moq-gateway-test-subscriber \
-//!     --namespace example/spike/rt/1727000000 --track "Ticker/out" \
-//!     [--key-base64url AAEC...] [--count 20] [--accept-any-certificate]
+//!   MOQ_TEST_RELAY_URL=https://relay/<token> \
+//!   [MOQ_TEST_CONTENT_KEY_BASE64URL=AAEC...] moq-gateway-test-subscriber \
+//!     --namespace prefix/runtime/<session id> --track "Ticker/out" \
+//!     [--count 20] [--timeout-seconds 30] [--accept-any-certificate]
 //!
-//! The relay URL is read from the environment so its token never rides argv.
+//! The relay URL and the content key are read from the environment so neither
+//! rides argv, which `/proc` publishes.
 
 #![allow(clippy::disallowed_macros)] // a CLI: stdout is its output channel
 
@@ -62,19 +64,22 @@ fn read_arguments() -> Result<Arguments, String> {
                     .parse()
                     .map_err(|_| "--timeout-seconds is a number")?
             }
-            "--key-base64url" => {
-                let encoded = raw.next().ok_or("--key-base64url needs a value")?;
-                let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
-                    .decode(encoded.trim_end_matches('='))
-                    .map_err(|_| "the key is not base64url")?;
-                arguments.key = Some(decoded.try_into().map_err(|_| "the key is not 16 bytes")?);
-            }
             "--accept-any-certificate" => arguments.accept_any_certificate = true,
             other => return Err(format!("unknown argument {other}")),
         }
     }
     if arguments.namespace.is_empty() || arguments.track.is_empty() {
         return Err("--namespace and --track are required".to_string());
+    }
+    if let Ok(encoded) = std::env::var("MOQ_TEST_CONTENT_KEY_BASE64URL") {
+        let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(encoded.trim_end_matches('='))
+            .map_err(|_| "MOQ_TEST_CONTENT_KEY_BASE64URL is not base64url")?;
+        arguments.key = Some(
+            decoded
+                .try_into()
+                .map_err(|_| "MOQ_TEST_CONTENT_KEY_BASE64URL is not 16 bytes")?,
+        );
     }
     Ok(arguments)
 }

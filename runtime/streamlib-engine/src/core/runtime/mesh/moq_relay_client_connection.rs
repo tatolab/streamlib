@@ -25,9 +25,9 @@ const MOQ_TRANSPORT_RUNTIME_WORKER_THREADS: usize = 4;
 /// The build's result, stored because `get_or_init` cannot fail.
 static MOQ_TRANSPORT_RUNTIME: OnceLock<Result<tokio::runtime::Runtime, String>> = OnceLock::new();
 
-/// The runtime every MoQ session in this process runs on, with the rustls
-/// provider installed first. Never dropped: a tokio runtime dropped inside an
-/// async context panics.
+/// The runtime every MoQ session in this process runs on, with ring installed
+/// first as the process's rustls provider. Never dropped: a tokio runtime
+/// dropped inside an async context panics.
 pub(crate) fn the_moq_transport_runtime() -> Result<&'static tokio::runtime::Runtime, String> {
     if rustls::crypto::CryptoProvider::get_default().is_none()
         && rustls::crypto::ring::default_provider()
@@ -70,7 +70,9 @@ pub(crate) async fn open_a_moq_session_to_the_relay(
             dial_url.scheme()
         ));
     }
-    let provider = web_transport::quinn::crypto::default_provider();
+    // Named rather than taken from the process default: aws-lc-rs is linked
+    // too (see Cargo.toml), and another library may have installed it.
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
     let builder = rustls::ClientConfig::builder_with_provider(Arc::clone(&provider))
         .with_protocol_versions(&[&rustls::version::TLS13])
         .map_err(|failure| format!("the TLS 1.3 client config could not be built: {failure}"))?;

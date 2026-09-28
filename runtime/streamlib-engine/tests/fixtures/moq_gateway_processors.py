@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The two Python processors the MoQ gateway spike benchmark runs.
+"""The Python processors the MoQ gateway fixtures run.
 
 `MoqBenchStampSource` publishes small bags carrying a monotonic stamp at a
 stepped rate schedule; `MoqBenchLatencySink` reads them off a remote link and

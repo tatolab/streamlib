@@ -9,7 +9,7 @@
 //! Control stays on Zenoh: the source runtime is found, asked what it offers
 //! and told it is being read exactly as before. What Zenoh adds is where the
 //! source's gateway publishes, read off its mesh description on every
-//! attempt, so a gateway that reconnected under a fresh epoch is followed.
+//! attempt, so a gateway that reconnected under a fresh session id is followed.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};

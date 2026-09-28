@@ -4,10 +4,10 @@
 //! The MoQ gateway: every output port of this runtime as a MoQ track on a
 //! relay, pulled on subscribe.
 //!
-//! One session to the relay announces `<prefix>/<runtime name>/<epoch>`, the
-//! epoch being the unix second the session opened — a relay keeps a namespace
-//! routed to a publisher that died without saying so for minutes, so no two
-//! sessions of this gateway ever announce the same one. Nothing is read off a
+//! One session to the relay announces `<prefix>/<runtime name>/<session id>`,
+//! the session id random per session — a relay keeps a namespace routed to a
+//! publisher that died without saying so for minutes, so no two sessions of
+//! this gateway ever announce the same one. Nothing is read off a
 //! port until the relay asks for its track: moq-transport hands the gateway a
 //! fresh track writer for every track nobody is serving yet, and only then
 //! does a port-serving thread take a subscriber slot on the port's channel.
@@ -274,17 +274,14 @@ fn render_the_gateway_for_graph(
     }
 }
 
-/// The epoch a fresh session announces under: the unix second now, and never
-/// one an earlier session of this gateway announced.
-fn a_fresh_announcement_epoch(the_last_one: Option<u64>) -> u64 {
-    // An identifier by the wire contract, not a timekeeping read: subscribers
-    // only need it to differ between sessions.
-    let unix_seconds_now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |since| since.as_secs());
-    match the_last_one {
-        Some(last) if unix_seconds_now <= last => last + 1,
-        _ => unix_seconds_now,
+/// The id a fresh relay session announces its namespace under: random, and
+/// never the one the previous session of this gateway announced.
+fn a_fresh_announcement_session_id(the_previous_one: Option<u64>) -> u64 {
+    loop {
+        let (candidate, _) = uuid::Uuid::new_v4().as_u64_pair();
+        if Some(candidate) != the_previous_one {
+            return candidate;
+        }
     }
 }
 
@@ -292,7 +289,7 @@ fn a_fresh_announcement_epoch(the_last_one: Option<u64>) -> u64 {
 /// a port-serving thread, and start over whenever the session ends or the
 /// handoff says to.
 async fn run_the_moq_gateway_until_stopped(shared: Arc<MoqGatewayShared>) {
-    let mut the_last_epoch = None;
+    let mut the_previous_session_id = None;
     let mut said_why_it_is_not_serving: Option<String> = None;
     while !shared.stop.load(Ordering::Acquire) {
         shared.doors.read_the_handoff_again();
@@ -328,10 +325,10 @@ async fn run_the_moq_gateway_until_stopped(shared: Arc<MoqGatewayShared>) {
             }
         };
         said_why_it_is_not_serving = None;
-        let epoch = a_fresh_announcement_epoch(the_last_epoch);
-        the_last_epoch = Some(epoch);
+        let session_id = a_fresh_announcement_session_id(the_previous_session_id);
+        the_previous_session_id = Some(session_id);
         let namespace = format!(
-            "{}/{}/{epoch}",
+            "{}/{}/{session_id}",
             namespace_prefix.trim_matches('/'),
             shared.this_runtimes_name
         );
@@ -753,11 +750,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_fresh_epoch_is_never_one_an_earlier_session_announced() {
-        let first = a_fresh_announcement_epoch(None);
-        let second = a_fresh_announcement_epoch(Some(first));
-        let third = a_fresh_announcement_epoch(Some(second));
-        assert!(second > first && third > second);
-        assert!(first > 1_700_000_000, "the epoch is a unix second");
+    fn a_fresh_session_id_is_never_the_previous_sessions() {
+        let mut previous = a_fresh_announcement_session_id(None);
+        for _ in 0..10_000 {
+            let fresh = a_fresh_announcement_session_id(Some(previous));
+            assert_ne!(fresh, previous);
+            previous = fresh;
+        }
+    }
+
+    #[test]
+    fn two_gateways_starting_together_announce_different_session_ids() {
+        let seen: std::collections::HashSet<u64> = (0..10_000)
+            .map(|_| a_fresh_announcement_session_id(None))
+            .collect();
+        assert_eq!(seen.len(), 10_000, "two first sessions drew the same id");
     }
 }

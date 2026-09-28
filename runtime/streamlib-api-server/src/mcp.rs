@@ -2937,6 +2937,12 @@ mod tests {
                 "peers": [],
                 "egress_ports": [],
                 "link_requests_awaiting_runtime": []
+            },
+            "moq_gateway": {
+                "relay_host": "",
+                "namespace": "",
+                "state": "off",
+                "tracks": []
             }
         })
     }

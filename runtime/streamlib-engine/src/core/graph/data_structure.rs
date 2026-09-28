@@ -9,8 +9,8 @@ use petgraph::graph::DiGraph;
 
 use super::traversal::{TraversalSource, TraversalSourceMut};
 use crate::core::json_schema::{
-    GraphResponse, LinkOutput, LoadedCapabilityExtensionOutput, ProcessorNodeOutput,
-    RuntimeMeshOutput,
+    GraphResponse, LinkOutput, LoadedCapabilityExtensionOutput, MoqGatewayOutput,
+    ProcessorNodeOutput, RuntimeMeshOutput,
 };
 
 /// Graph state.
@@ -134,15 +134,17 @@ impl std::fmt::Display for Graph {
 
 impl Graph {
     /// Render this graph as the `/api/graph` payload, carrying
-    /// `loaded_capability_extensions` and `runtime_mesh` alongside it.
+    /// `loaded_capability_extensions`, `runtime_mesh` and `moq_gateway`
+    /// alongside it.
     ///
-    /// Neither is a property of the graph — the extensions belong to the
-    /// process and the mesh to the runtime — so the runtime that reads them
+    /// None is a property of the graph — the extensions belong to the process,
+    /// the mesh and the gateway to the runtime — so the runtime that reads them
     /// passes them in.
     pub(crate) fn to_graph_response(
         &self,
         loaded_capability_extensions: Vec<LoadedCapabilityExtensionOutput>,
         runtime_mesh: RuntimeMeshOutput,
+        moq_gateway: MoqGatewayOutput,
     ) -> GraphResponse {
         GraphResponse {
             nodes: self
@@ -161,9 +163,7 @@ impl Graph {
                 .collect(),
             extensions: loaded_capability_extensions,
             mesh: runtime_mesh,
-            // The runtime's to fill: the gateway reads the graph through the
-            // compiler's own scope, which this is rendered inside.
-            moq_gateway: None,
+            moq_gateway,
         }
     }
 }

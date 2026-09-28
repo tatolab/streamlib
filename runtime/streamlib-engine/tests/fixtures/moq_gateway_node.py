@@ -2,7 +2,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""One runtime of the MoQ gateway spike: a source or a sink, bags or video.
+"""One runtime of the MoQ gateway fixtures: a source or a sink, bags or video.
 
 The transport is the environment's: `STREAMLIB_MESH_TRANSPORT=moq` with a
 relay configured carries the remote link over MoQ, unset carries it over
@@ -29,7 +29,7 @@ def main() -> None:
     runtime = streamlib.Runtime(runtime_name=arguments.runtime_name)
     if arguments.role == "source":
         if arguments.workload in ("bags", "smoke"):
-            from moq_gateway_bench_processors import MoqBenchStampSource
+            from moq_gateway_processors import MoqBenchStampSource
 
             runtime.add(MoqBenchStampSource, display_name=SOURCE_DISPLAY_NAME)
         if arguments.workload in ("video", "smoke"):
@@ -44,7 +44,7 @@ def main() -> None:
             runtime.connect(pattern.output("video"), encoder.input("video"))
     else:
         if arguments.workload == "bags":
-            from moq_gateway_bench_processors import MoqBenchLatencySink
+            from moq_gateway_processors import MoqBenchLatencySink
 
             sink = runtime.add(MoqBenchLatencySink, display_name="BenchSink")
             runtime.connect(
@@ -54,7 +54,7 @@ def main() -> None:
                 sink.input("stamps"),
             )
         else:
-            from moq_gateway_bench_processors import MoqBenchEncodedVideoSink
+            from moq_gateway_processors import MoqBenchEncodedVideoSink
 
             sink = runtime.add(MoqBenchEncodedVideoSink, display_name="BenchVideoSink")
             runtime.connect(

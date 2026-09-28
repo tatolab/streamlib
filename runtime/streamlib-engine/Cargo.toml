@@ -132,9 +132,19 @@ zenoh = { version = "1.10.1", default-features = false, features = [
 # `web-transport` stays on 0.10 because that is what moq-transport depends on.
 moq-transport = { path = "../../packages/streamlib-moq/vendor/moq-transport", version = "0.16.2" }
 web-transport = "0.10.9"
-quinn = "0.11.11"
+# ring is the one rustls provider the engine asks for. aws-lc-rs is still
+# compiled: `web-transport` (every 0.10.x) takes `web-transport-quinn` with its
+# default `aws-lc-rs` feature, and moq-transport takes `web-transport`, so no
+# feature switch here can turn it off. It builds with a C compiler, not cmake.
+quinn = { version = "0.11.11", default-features = false, features = [
+    "runtime-tokio",
+    "rustls-ring",
+] }
 url = "2.5"
-rustls = { version = "0.23.43", features = ["ring"] }
+rustls = { version = "0.23.43", default-features = false, features = [
+    "ring",
+    "std",
+] }
 rustls-native-certs = "0.8.4"
 bytes = "1"
 # The secure object envelope's AES-128-GCM, and the handoff's base64url keys.

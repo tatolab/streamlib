@@ -1322,9 +1322,7 @@ impl Runner {
             .runtime_mesh
             .render_the_moq_gateway_for_graph(&self._offered_on_the_mesh);
         self.compiler.scope(|graph, _tx| {
-            let mut response = graph.to_graph_response(extensions, runtime_mesh);
-            response.moq_gateway = Some(moq_gateway);
-            serde_json::to_value(response)
+            serde_json::to_value(graph.to_graph_response(extensions, runtime_mesh, moq_gateway))
                 .map_err(|_| Error::GraphError("Unable to serialize graph".into()))
         })
     }
