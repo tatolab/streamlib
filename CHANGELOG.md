@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.44](https://github.com/tatolab/streamlib/compare/v0.26.43...v0.26.44) (2026-09-28)
+
+
+### Features
+
+* **cli:** streamlib new scaffolds a pixel effect plus a CPU logic processor ([#2522](https://github.com/tatolab/streamlib/issues/2522)) ([3012087](https://github.com/tatolab/streamlib/commit/3012087cb8c2245982f8f5771478fe6857e7aee3))
+
 ## [0.26.43](https://github.com/tatolab/streamlib/compare/v0.26.42...v0.26.43) (2026-09-28)
 
 
