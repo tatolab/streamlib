@@ -94,6 +94,13 @@ def setup(rt):
 '''
 
 LIVE_HELPER_MARKER = re.compile(r"MARKER:LIVE (\d+)")
+SCAFFOLDED_METER_REPORT = re.compile(r"brightness\b.*\bmean=")
+# The meter reports once a second, so the observation window holds about a
+# dozen. Both bounds are loose on purpose: the floor catches a meter that
+# stopped after its first frame, the ceiling one that reports per frame
+# (~360 in the window), and neither is a claim about wake latency.
+MINIMUM_METER_REPORTS = 5
+MAXIMUM_METER_REPORTS = 2 * int(SCAFFOLD_OBSERVATION_WINDOW_SECONDS)
 DISPLAY_WINDOW_FRAME_COUNT = re.compile(r"DisplayWindow: stopped \((\d+) frames\)")
 
 # Enough tail to carry a traceback and the lines around it.
@@ -465,6 +472,8 @@ def test_the_scaffolded_app_reaches_a_running_graph(
     raises every frame; the delivered-frame count catches an effect that is
     correct but so slow the demo is a slideshow — which is what editing the
     write-combined mapping in place through a strided view produced (~4fps).
+    The meter's line is the logic half of the first minute: a fan-out reader
+    that never reports is a graph that shows the picture and drops the rest.
     """
     app_directory = tmp_path / "app"
     cli.scaffold_new_app(app_directory, use_test_pattern_source=True)
@@ -481,6 +490,15 @@ def test_the_scaffolded_app_reaches_a_running_graph(
     node.await_exit(CLEAN_EXIT_TIMEOUT_SECONDS)
 
     assert_the_window_showed_live_video(node, "the app `streamlib new` writes")
+    meter_reports = len(SCAFFOLDED_METER_REPORT.findall(node.captured_output()))
+    assert meter_reports >= MINIMUM_METER_REPORTS, (
+        f"the scaffolded meter logged a brightness {meter_reports} times in "
+        f"{SCAFFOLD_OBSERVATION_WINDOW_SECONDS}s; output ended:\n{node.recent_output()}"
+    )
+    assert meter_reports <= MAXIMUM_METER_REPORTS, (
+        f"the scaffolded meter logged a brightness {meter_reports} times in "
+        f"{SCAFFOLD_OBSERVATION_WINDOW_SECONDS}s — that is per frame, not once a second"
+    )
 
 
 def test_a_scaffolded_app_with_a_cross_floor_finding_warns_and_starts_anyway(
@@ -636,7 +654,7 @@ def edit_the_scaffolded_effect(app_directory: Path) -> None:
     copy: a copy would keep passing after the scaffold changed underneath it,
     proving something about a module `new` no longer writes.
     """
-    effect_module = app_directory / "processors" / "inverting_effect.py"
+    effect_module = app_directory / cli.SCAFFOLDED_EFFECT_MODULE_PATH
     edited = effect_module.read_text()
     for anchor, replacement in (
         (
@@ -648,11 +666,11 @@ def edit_the_scaffolded_effect(app_directory: Path) -> None:
             '    announced = False\n\n    @input(delivery_profile="newest")',
         ),
         (
-            '        ctx.outputs.write("video_to_downstream", bag)',
+            "        ctx.outputs.write(\n",
             "        if not self.announced:\n"
             "            self.announced = True\n"
             '            log.info("MARKER:EDITED_EFFECT")\n'
-            '        ctx.outputs.write("video_to_downstream", bag)',
+            "        ctx.outputs.write(\n",
         ),
     ):
         # Named one at a time, and required to be unique: a scaffold that grew

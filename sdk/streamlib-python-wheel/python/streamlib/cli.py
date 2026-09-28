@@ -301,6 +301,7 @@ def _python_distribution_name_for(directory_name: str) -> str:
 
 SCAFFOLD_TEMPLATE_DIRECTORY = Path(__file__).resolve().parent / "_scaffold_template"
 SCAFFOLDED_EFFECT_MODULE_PATH = "processors/inverting_effect.py"
+SCAFFOLDED_METER_MODULE_PATH = "processors/brightness_meter.py"
 # The template sources are StreamLib's; the app `new` writes is the user's own.
 SCAFFOLD_TEMPLATE_LICENSE_HEADER = (
     "# Copyright (c) 2025 Jonathan Fontanez\n# SPDX-License-Identifier: BUSL-1.1\n\n"
@@ -313,6 +314,7 @@ SCAFFOLDED_FILE_PATH_FOR_TEMPLATE_FILE = {
     "app.py": DEFAULT_APP_ENTRY_FILE_NAME,
     "processors/__init__.py": "processors/__init__.py",
     SCAFFOLDED_EFFECT_MODULE_PATH: SCAFFOLDED_EFFECT_MODULE_PATH,
+    SCAFFOLDED_METER_MODULE_PATH: SCAFFOLDED_METER_MODULE_PATH,
     "pyproject.toml": "pyproject.toml",
     "python-version": ".python-version",
     "gitignore": ".gitignore",

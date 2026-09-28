@@ -426,6 +426,7 @@ SCAFFOLDED_FILE_NAMES = (
     "app.py",
     "processors/__init__.py",
     "processors/inverting_effect.py",
+    "processors/brightness_meter.py",
     "pyproject.toml",
     ".python-version",
     ".gitignore",
@@ -565,7 +566,16 @@ def test_every_scaffolded_python_file_is_valid_python_that_explains_itself(
         )
 
 
-def test_the_scaffolded_processor_lives_outside_the_entry_file(tmp_path: Path):
+@pytest.mark.parametrize(
+    ("module_path", "class_name"),
+    [
+        (cli.SCAFFOLDED_EFFECT_MODULE_PATH, "InvertingEffect"),
+        (cli.SCAFFOLDED_METER_MODULE_PATH, "BrightnessMeter"),
+    ],
+)
+def test_each_scaffolded_processor_lives_outside_the_entry_file(
+    tmp_path: Path, module_path: str, class_name: str
+):
     """A processor class in the entry file identifies as `__main__:<Type>`,
     which is a wiring error — the entry runs as `__main__`, and the child
     interpreter that runs the processor imports its class by name.
@@ -577,20 +587,60 @@ def test_the_scaffolded_processor_lives_outside_the_entry_file(tmp_path: Path):
     cli.scaffold_new_app(app_directory, use_test_pattern_source=False)
 
     entry_source = (app_directory / "app.py").read_text()
-    effect_source = (app_directory / "processors" / "inverting_effect.py").read_text()
+    processor_source = (app_directory / module_path).read_text()
+    module_name = module_path.removesuffix(".py").replace("/", ".")
 
     assert "@processor" not in entry_source, (
         "a processor class in the entry file would identify as `__main__:<Type>`"
     )
-    assert "class InvertingEffect" not in entry_source
-    assert "@processor" in effect_source, "the class belongs in the importable module"
-    assert "class InvertingEffect" in effect_source
-    assert "from processors.inverting_effect import InvertingEffect" in entry_source, (
+    assert f"class {class_name}" not in entry_source
+    assert "@processor" in processor_source, "the class belongs in the importable module"
+    assert f"class {class_name}" in processor_source
+    assert f"from {module_name} import {class_name}" in entry_source, (
         "the entry file imports the class it wires"
     )
-    # Both halves must parse — the entry is useless if its effect module is not.
+    # Both halves must parse — the entry is useless if its processor module is not.
     ast.parse(entry_source)
-    ast.parse(effect_source)
+    ast.parse(processor_source)
+
+
+def test_the_scaffold_models_pixels_on_the_gpu_and_logic_on_the_cpu(tmp_path: Path):
+    """The pathway the plan sets: the effect in the video path runs on the GPU,
+    and the numpy processor reads an explicit CPU view off a fan-out, so the
+    slow door never sits between the camera and the window."""
+    app_directory = tmp_path / "demo"
+    cli.scaffold_new_app(app_directory, use_test_pattern_source=False)
+
+    entry_source = (app_directory / "app.py").read_text()
+    effect_source = (app_directory / cli.SCAFFOLDED_EFFECT_MODULE_PATH).read_text()
+    meter_source = (app_directory / cli.SCAFFOLDED_METER_MODULE_PATH).read_text()
+
+    assert "GlslPixelEffect.compile(" in effect_source
+    assert "numpy" not in effect_source, "the effect in the video path touches no host pixels"
+    assert "frame.cpu()" in meter_source, "the meter's host view of the pixels is explicit"
+    assert "ctx.time" in meter_source, "the meter paces itself on the monotonic clock"
+    readers_of_the_effect_output = sorted(
+        ast.unparse(call.args[1])
+        for call in ast.walk(ast.parse(entry_source))
+        if isinstance(call, ast.Call)
+        and ast.unparse(call.func) == "rt.connect"
+        and ast.unparse(call.args[0]) == "effect.output('video_to_downstream')"
+    )
+    assert readers_of_the_effect_output == [
+        "meter.input('video_from_upstream')",
+        "window.input('video')",
+    ], "the meter reads a fan-out of the effect's output, off the window's path"
+
+
+def test_the_scaffold_depends_on_streamlib_and_numpy_only(tmp_path: Path):
+    app_directory = tmp_path / "demo"
+    cli.scaffold_new_app(app_directory, use_test_pattern_source=False)
+
+    manifest = (app_directory / "pyproject.toml").read_text()
+
+    assert 'dependencies = ["streamlib", "numpy>=2.1"]\n' in manifest, (
+        "the pixel effect needs no GPU package of the user's own — torch never enters"
+    )
 
 
 def test_the_test_pattern_scaffold_needs_no_capture_device(tmp_path: Path):
@@ -602,8 +652,9 @@ def test_the_test_pattern_scaffold_needs_no_capture_device(tmp_path: Path):
     ast.parse(entry_source)
     assert "TestPatternSource" in entry_source
     assert "CameraSource" not in entry_source
-    # The effect is source-agnostic, so the split must not have made it vary.
-    ast.parse((app_directory / "processors" / "inverting_effect.py").read_text())
+    # The processors are source-agnostic, so the split must not have made them vary.
+    ast.parse((app_directory / cli.SCAFFOLDED_EFFECT_MODULE_PATH).read_text())
+    ast.parse((app_directory / cli.SCAFFOLDED_METER_MODULE_PATH).read_text())
 
 
 def test_the_scaffold_pins_streamlib_to_its_own_index(tmp_path: Path):

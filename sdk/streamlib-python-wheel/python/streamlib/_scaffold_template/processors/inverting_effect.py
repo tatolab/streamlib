@@ -1,13 +1,15 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The effect the app wires between its source and its window.
+"""Pixels on the GPU: the effect the app wires between its source and its window.
 
 Importable as `processors.inverting_effect:InvertingEffect`, which is the
 name the engine spawns this processor's child interpreter with.
 """
 
 from streamlib import (
+    GlslPixelEffect,
+    RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
     VideoFrame,
     input,  # noqa: A004 — streamlib's port decorator
@@ -15,35 +17,36 @@ from streamlib import (
     processor,
 )
 
+# The whole effect: the output pixel for the source pixel at `at`, with each
+# channel in 0.0-1.0. Edit it and re-run `streamlib dev`.
+INVERT_GLSL = """
+vec4 effect(vec4 source, ivec2 at) {
+    // Color channels only — inverting alpha would erase the picture.
+    return vec4(1.0 - source.rgb, source.a);
+}
+"""
+
 
 @processor
 class InvertingEffect:
-    """Reads each frame, inverts its colors in place, and passes it on."""
+    """Inverts every frame's colors on the GPU and passes it on."""
 
     @input(delivery_profile="newest")
-    def video_from_upstream(self) -> None: ...
+    def video_from_upstream(self) -> VideoFrame: ...
 
     @output()
-    def video_to_downstream(self) -> None: ...
+    def video_to_downstream(self) -> VideoFrame: ...
+
+    def setup(self, ctx: RuntimeContextFullAccess) -> None:
+        self.inverting_pixel_effect = GlslPixelEffect.compile(
+            ctx.gpu_full_access, effect_glsl=INVERT_GLSL
+        )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        bag = ctx.inputs.read("video_from_upstream")
-        if bag is None:
+        frame = ctx.inputs.read("video_from_upstream", into=VideoFrame)
+        if frame is None:
             return
-        frame = VideoFrame.from_bag(bag)
-        # The frame arrives as a surface id, not pixels: resolve it and open
-        # CPU access to the engine's own memory.
-        with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
-            surface.lock(read_only=False)
-            pixels = surface.as_numpy()
-            # One bulk read out, edit on the host, one bulk write back. On
-            # Linux the mapping is write-combined: CPU reads of it run around
-            # 175 MB/s, so editing in place through a strided view re-reads
-            # that memory per channel and costs ~225ms a frame against ~30ms
-            # this way. On a Mac the mapping is cached and both ways are fast.
-            edited = pixels.copy()
-            # Color channels only — inverting alpha would erase the picture.
-            edited[:, :, :3] = 255 - edited[:, :, :3]
-            pixels[...] = edited
-            surface.unlock()
-        ctx.outputs.write("video_to_downstream", bag)
+        ctx.outputs.write(
+            "video_to_downstream",
+            self.inverting_pixel_effect.apply_to_frame(ctx.gpu_limited_access, frame),
+        )

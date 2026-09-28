@@ -96,9 +96,9 @@ the engine; nothing is generated, compiled, or downloaded at run time.
 ## Quickstart
 
 ```bash
-streamlib new my-rig        # camera → effect → window, wired and working
+streamlib new my-rig        # camera → GPU effect → window, plus a CPU meter, wired and working
 cd my-rig
-streamlib dev               # your camera, live, in a window
+streamlib dev               # your camera, live and inverted, in a window
 ```
 
 No camera on this machine? `streamlib new my-rig --test-pattern` uses the built-in test source.
@@ -107,49 +107,71 @@ No camera on this machine? `streamlib new my-rig --test-pattern` uses the built-
 it from the working directory and calls `setup(rt)`:
 
 ```python
-from processors.inverting_effect import InvertingEffect
 from streamlib import CameraSource, DisplayWindow, Runtime
+
+from processors.brightness_meter import BrightnessMeter
+from processors.inverting_effect import InvertingEffect
 
 
 def setup(rt: Runtime) -> None:
     source = rt.add(CameraSource)
     effect = rt.add(InvertingEffect)
+    meter = rt.add(BrightnessMeter)
     window = rt.add(DisplayWindow, config={"title": "StreamLib", "scaling": "fit"})
 
     rt.connect(source.output("video"), effect.input("video_from_upstream"))
+    # One output, two readers: the window shows the frame, the meter measures it.
     rt.connect(effect.output("video_to_downstream"), window.input("video"))
+    rt.connect(effect.output("video_to_downstream"), meter.input("video_from_upstream"))
 ```
 
-`processors/inverting_effect.py` is the stage — the file you replace with your model:
+Pixels stay on the GPU. `processors/inverting_effect.py` is one shader function:
 
 ```python
-from streamlib import RuntimeContextLimitedAccess, VideoFrame, input, output, processor
+from streamlib import (
+    GlslPixelEffect,
+    RuntimeContextFullAccess,
+    RuntimeContextLimitedAccess,
+    VideoFrame,
+    input,
+    output,
+    processor,
+)
+
+INVERT_GLSL = """
+vec4 effect(vec4 source, ivec2 at) {
+    // Color channels only — inverting alpha would erase the picture.
+    return vec4(1.0 - source.rgb, source.a);
+}
+"""
 
 
 @processor
 class InvertingEffect:
     @input(delivery_profile="newest")
-    def video_from_upstream(self) -> None: ...
+    def video_from_upstream(self) -> VideoFrame: ...
 
     @output()
-    def video_to_downstream(self) -> None: ...
+    def video_to_downstream(self) -> VideoFrame: ...
+
+    def setup(self, ctx: RuntimeContextFullAccess) -> None:
+        self.inverting_pixel_effect = GlslPixelEffect.compile(
+            ctx.gpu_full_access, effect_glsl=INVERT_GLSL
+        )
 
     def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        bag = ctx.inputs.read("video_from_upstream")
-        if bag is None:
+        frame = ctx.inputs.read("video_from_upstream", into=VideoFrame)
+        if frame is None:
             return
-        frame = VideoFrame.from_bag(bag)
-        # The frame arrives as a handle, not pixels: resolve it and open
-        # CPU access to the engine's own memory.
-        with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
-            surface.lock(read_only=False)
-            pixels = surface.as_numpy()
-            edited = pixels.copy()
-            edited[:, :, :3] = 255 - edited[:, :, :3]
-            pixels[...] = edited
-            surface.unlock()
-        ctx.outputs.write("video_to_downstream", bag)
+        ctx.outputs.write(
+            "video_to_downstream",
+            self.inverting_pixel_effect.apply_to_frame(ctx.gpu_limited_access, frame),
+        )
 ```
+
+Logic runs on the CPU. `processors/brightness_meter.py` reads each frame back through an explicit
+`frame.cpu()` view and logs its mean brightness once a second. It sits on a fan-out in its own
+process, so it never slows the picture — it is the stage you replace with your model call.
 
 Edit a stage, re-run `dev`. Each stage runs `reactive` (the default once it has an input),
 `manual`, or `continuous` at an interval you set.
