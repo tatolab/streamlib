@@ -1706,11 +1706,12 @@ mod tests {
     /// time spent before the service accepts is time the frame can vanish in.
     #[test]
     fn a_new_connections_first_request_is_answered_without_waiting_on_the_accept_loop() {
-        const FRESH_CONNECTIONS: u32 = 10;
-        // Ten accepts that each wait on a 50 ms nap sum past this with
-        // probability ~3e-4; ten prompt accepts take a few ms.
+        const FRESH_CONNECTIONS: u32 = 40;
+        // Forty accepts that each wait on a 50 ms nap take about two seconds;
+        // forty prompt accepts take a few ms, leaving room for a loaded CI
+        // worker.
         const ALL_FRESH_CONNECTIONS_ANSWERED_WITHIN: std::time::Duration =
-            std::time::Duration::from_millis(100);
+            std::time::Duration::from_millis(250);
         let (_socket_dir, socket_path, mut service) = started_service(SurfaceShareState::new());
 
         let started_at = std::time::Instant::now();
