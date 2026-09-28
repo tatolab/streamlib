@@ -7,17 +7,21 @@ exactly where a wide lens bends it most: the periphery, which on a drone is
 where the obstacle you have not hit yet lives. So the distortion is undone
 before the model sees anything, on the GPU, with the frame never leaving it.
 
-Two things happen inside one scope here, and that is the point of the module:
+The detector reads a tensor the engine prepared, and the boxes are drawn back
+into the frame itself:
 
+    detector_input = self.detector_input_kernel.apply_to_surface(gpu, texture)
+    with detector_input.tensor_surface as detector_input_tensor:
+        ...detect on torch.from_dlpack(detector_input_tensor)...
     with undistorted_frame_texture.as_device_tensor() as rectified_pixels:
-        rectified_frame = torch.from_dlpack(rectified_pixels)
-        ...detect on it, then draw the boxes back into it...
+        ...draw the boxes into torch.from_dlpack(rectified_pixels)...
 
-Entering the scope hands the engine's texture out as a linear DLPack view, so
-`torch.from_dlpack` is the whole read and the tensor is GPU-resident. The same
-tensor is the write door: boxes drawn into it are blitted back when the scope
-closes, ordered by the engine ahead of its own next read. No fence, no
-timeline, no device synchronize, and no copy through the host.
+`ModelInputTensorKernel` writes the model's input — RGB, channels-first,
+scaled into `[0, 1]`, padded to the stride — in one compute pass, and
+`torch.from_dlpack` reads it with no copy. The frame's own DLPack view is the
+write door: boxes drawn into it are blitted back when the scope closes,
+ordered by the engine ahead of its own next read. No fence, no timeline, no
+device synchronize, and no copy through the host.
 """
 
 from __future__ import annotations
@@ -35,6 +39,7 @@ from processors.radial_distortion_model import (
     workgroups_covering,
 )
 from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
+    ModelInputTensorKernel,
     ProcessorOutputTextureRing,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
@@ -67,8 +72,8 @@ NEWTON_ITERATIONS = 4
 
 # YOLOv8's coarsest feature stride. A tensor handed to `predict` is taken as
 # already preprocessed — ultralytics does not letterbox one — so both of its
-# spatial dimensions must be whole multiples of this, and it is the caller who
-# makes them so.
+# spatial dimensions must be whole multiples of this, and it is the model input
+# kernel that makes them so.
 DETECTOR_INPUT_STRIDE = 32
 
 # One summary line a second rather than one a frame: at camera cadence the
@@ -216,6 +221,18 @@ class UndistortingObjectDetector:
                 UNDISTORTED_FRAME_BINDING: "storage_image",
             },
         )
+        # Padded rather than resized, and at the right and bottom rather than
+        # centred, so a box the model reports is already in frame coordinates
+        # and nothing has to be scaled back.
+        self.detector_input_kernel = ModelInputTensorKernel.compile(
+            ctx.gpu_full_access,
+            fit="pad_bottom_right",
+            pad_to_multiple_of=DETECTOR_INPUT_STRIDE,
+            channel_order="rgb",
+            layout="nchw",
+            dtype="float32",
+            scale=1.0 / 255.0,
+        )
         # A frame's DLPack capsule imports onto the accelerator this torch build
         # drives, so the model and the box colours go there too.
         detection_device = torch.accelerator.current_accelerator(
@@ -270,10 +287,16 @@ class UndistortingObjectDetector:
             push_constants=self.lens_coefficient_push_constants,
         )
 
+        detector_input = self.detector_input_kernel.apply_to_surface(
+            ctx.gpu_limited_access, undistorted_frame_texture
+        )
+        with detector_input.tensor_surface as detector_input_tensor:
+            detections = self._detections_in(
+                torch.from_dlpack(detector_input_tensor), frame.width, frame.height
+            )
+
         with undistorted_frame_texture.as_device_tensor() as rectified_pixels:
-            rectified_frame = torch.from_dlpack(rectified_pixels)
-            detections = self._detections_in(rectified_frame)
-            self._draw_boxes_into(rectified_frame, detections)
+            self._draw_boxes_into(torch.from_dlpack(rectified_pixels), detections)
 
         self._report_detections(ctx.time, detections)
         ctx.outputs.write(
@@ -292,33 +315,17 @@ class UndistortingObjectDetector:
             },
         )
 
-    def _detections_in(self, rectified_frame: torch.Tensor) -> "list[dict[str, Any]]":
-        """Run the detector over the rectified frame, without leaving the GPU.
+    def _detections_in(
+        self, detector_input: torch.Tensor, width: int, height: int
+    ) -> "list[dict[str, Any]]":
+        """Run the detector over the rectified frame's model input, without leaving the GPU.
 
         A `torch.Tensor` source is taken as already preprocessed — ultralytics
-        letterboxes arrays, never tensors — so the batch is built here in the
-        shape the model wants: RGB, channels-first, batched, and scaled into
-        `[0, 1]`. Every step of that is a device operation on a device tensor.
+        letterboxes arrays, never tensors — so `detector_input` arrives in the
+        shape the model wants: RGB, channels-first, batched, scaled into
+        `[0, 1]`, and padded to the stride. `width` and `height` are the
+        frame's, which the boxes are clamped to.
         """
-        height, width, _ = rectified_frame.shape
-        detector_input = (
-            rectified_frame[..., :3]
-            .permute(2, 0, 1)
-            .unsqueeze(0)
-            .contiguous()
-            .float()
-            .div_(255.0)
-        )
-        # Padded rather than resized, and at the right and bottom rather than
-        # centred, so a box the model reports is already in frame coordinates
-        # and nothing has to be scaled back.
-        pad_right = -width % DETECTOR_INPUT_STRIDE
-        pad_bottom = -height % DETECTOR_INPUT_STRIDE
-        if pad_right or pad_bottom:
-            detector_input = torch.nn.functional.pad(
-                detector_input, (0, pad_right, 0, pad_bottom)
-            )
-
         result = self.detection_model.predict(
             source=detector_input,
             conf=self.detection_confidence_threshold,

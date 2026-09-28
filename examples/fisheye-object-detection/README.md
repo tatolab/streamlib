@@ -27,25 +27,37 @@ real thing.
 
 ## The model this example teaches
 
-### One scope, both directions
+### The engine prepares the model input; the frame takes the boxes back
 
 The whole hand-off between the engine and a third-party GPU stack is these
-four lines, in `processors/undistorting_object_detector.py`:
+lines, in `processors/undistorting_object_detector.py`:
 
 ```python
+detector_input = self.detector_input_kernel.apply_to_surface(
+    ctx.gpu_limited_access, undistorted_frame_texture
+)
+with detector_input.tensor_surface as detector_input_tensor:
+    detections = self._detections_in(
+        torch.from_dlpack(detector_input_tensor), frame.width, frame.height
+    )
+
 with undistorted_frame_texture.as_device_tensor() as rectified_pixels:
-    rectified_frame = torch.from_dlpack(rectified_pixels)
-    detections = self._detections_in(rectified_frame)
-    self._draw_boxes_into(rectified_frame, detections)
+    self._draw_boxes_into(torch.from_dlpack(rectified_pixels), detections)
 ```
 
-Entering the scope hands the engine's texture out as a linear DLPack view, so
-`torch.from_dlpack` is the entire read and the tensor it returns is
-GPU-resident. That same tensor is the write door: the boxes drawn into it are
-blitted back into the texture when the scope closes, ordered by the engine
-ahead of its own next read of that texture. No fence, no timeline, no
-device synchronize — none of that vocabulary reaches Python, and the
-pixels do not travel through the host to get read or to get written.
+`ModelInputTensorKernel`, compiled once in `setup()` with
+`fit="pad_bottom_right", pad_to_multiple_of=32`, writes the detector's input —
+RGB, channels-first, scaled into `[0, 1]`, padded at the bottom and right to
+YOLOv8's stride — in one compute pass, into a tensor surface that
+`torch.from_dlpack` reads with no copy. Padding rather than resizing keeps
+every box the model reports in frame coordinates.
+
+Entering the frame's scope hands the engine's texture out as a linear DLPack
+view, and that tensor is the write door: the boxes drawn into it are blitted
+back into the texture when the scope closes, ordered by the engine ahead of
+its own next read of that texture. No fence, no timeline, no device
+synchronize — none of that vocabulary reaches Python, and the pixels do not
+travel through the host to get read or to get written.
 
 Leaving the scope by a raise is the other half of the contract: the write is
 discarded and the texture keeps the frame it already held, because half a
@@ -359,8 +371,8 @@ Everything is literal config in `app.py` — edit it and re-run.
 ## Where the pixels do touch the host
 
 One place, and it is not streamlib's side of the hand-off. The tensor handed
-to the detector is built entirely on the device — channel slice, permute,
-batch, scale, pad, all of it — and ultralytics takes a `torch.Tensor` source as
+to the detector is built entirely on the device — channel order, layout,
+scale and pad in the engine's one compute pass — and ultralytics takes a `torch.Tensor` source as
 already preprocessed, so it neither letterboxes nor rescales it. What its
 postprocessing then does with that batch is its own business, and it does copy
 it back to make the `orig_imgs` its result objects carry.
