@@ -30,6 +30,8 @@ this skill — route to `/align` first.
      choice the plan doesn't state: write `[NEEDS DECISION]` with the options and your
      recommendation. **You may never resolve one yourself.**
 4. Flip the affected plan sections to `IN-FLIGHT (→ <name>)`.
-5. **Stop.** Present the proposal. The owner approves in their own words before
+5. Branch off `main`, commit, and `gh pr create` in the same turn, without asking — a
+   proposal left uncommitted is lost to the next session.
+6. **Stop.** Present the proposal. The owner approves in their own words before
    `/derive-tickets` may run — and a proposal with an unresolved `[NEEDS DECISION]`
    cannot be approved yet.
