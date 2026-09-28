@@ -639,7 +639,10 @@ def edit_the_scaffolded_effect(app_directory: Path) -> None:
     effect_module = app_directory / "processors" / "inverting_effect.py"
     edited = effect_module.read_text()
     for anchor, replacement in (
-        ("    input,\n", "    input,\n    log,\n"),
+        (
+            "    input,  # noqa: A004 — streamlib's port decorator\n",
+            "    input,  # noqa: A004 — streamlib's port decorator\n    log,\n",
+        ),
         (
             '    @input(delivery_profile="newest")',
             '    announced = False\n\n    @input(delivery_profile="newest")',

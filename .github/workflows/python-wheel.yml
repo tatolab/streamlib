@@ -105,8 +105,8 @@ jobs:
           # module scope — collection needs it even when `requires_gpu`
           # deselects every test that would use it. pydantic is what proves a
           # model is a legal `read(port, into=T)` target; the wheel never
-          # imports it.
-          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy numpy pydantic typing_extensions
+          # imports it. ruff lints each `streamlib new` render in test_cli.py.
+          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy numpy pydantic typing_extensions ruff==0.16.9
           VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
 
       # An extension wheel depends on `streamlib` as a binary, so its lane

@@ -444,6 +444,84 @@ def test_new_writes_a_working_app(tmp_path: Path):
     )
 
 
+@pytest.mark.parametrize("use_test_pattern_source", [False, True])
+def test_new_writes_exactly_the_rendered_templates(
+    tmp_path: Path, use_test_pattern_source: bool
+):
+    app_directory = tmp_path / "demo"
+
+    cli.scaffold_new_app(app_directory, use_test_pattern_source=use_test_pattern_source)
+
+    written_files = {
+        path.relative_to(app_directory).as_posix(): path.read_bytes()
+        for path in app_directory.rglob("*")
+        if path.is_file()
+    }
+    rendered_files = {
+        file_name: contents.encode("utf-8")
+        for file_name, contents in cli.render_scaffold_template_files(
+            distribution_name="demo", use_test_pattern_source=use_test_pattern_source
+        ).items()
+    }
+    assert written_files == rendered_files
+    assert not any(b"SPDX-License-Identifier" in contents for contents in written_files.values()), (
+        "the app `new` writes is the user's own code, not StreamLib's"
+    )
+
+
+# The source tree's copy, so ruff resolves the wheel's `[tool.ruff]` config.
+SCAFFOLD_TEMPLATE_SOURCE_DIRECTORY = (
+    Path(__file__).resolve().parents[1] / "python" / "streamlib" / "_scaffold_template"
+)
+
+
+@pytest.mark.parametrize("use_test_pattern_source", [False, True])
+@pytest.mark.parametrize("ruff_arguments", [("check",), ("format", "--check")])
+def test_every_scaffolded_python_file_passes_ruff(
+    use_test_pattern_source: bool, ruff_arguments: "tuple[str, ...]"
+):
+    """Linted as rendered, not as templated: the test-pattern variant is text no
+    template file holds."""
+    rendered_files = cli.render_scaffold_template_files(
+        distribution_name="demo", use_test_pattern_source=use_test_pattern_source
+    )
+
+    for file_name, contents in rendered_files.items():
+        if not file_name.endswith(".py"):
+            continue
+        finished = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "ruff",
+                *ruff_arguments,
+                "--stdin-filename",
+                str(SCAFFOLD_TEMPLATE_SOURCE_DIRECTORY / file_name),
+                "-",
+            ],
+            input=contents,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert finished.returncode == 0, (
+            f"ruff {' '.join(ruff_arguments)} rejects the scaffolded {file_name}:\n"
+            f"{finished.stdout}{finished.stderr}"
+        )
+
+
+def test_every_scaffold_template_file_is_one_new_writes():
+    """A template file the mapping does not name would ship in the wheel and never
+    reach an app."""
+    template_files = {
+        path.relative_to(cli.SCAFFOLD_TEMPLATE_DIRECTORY).as_posix()
+        for path in cli.SCAFFOLD_TEMPLATE_DIRECTORY.rglob("*")
+        if path.is_file() and "__pycache__" not in path.parts
+    }
+
+    assert template_files == set(cli.SCAFFOLDED_FILE_PATH_FOR_TEMPLATE_FILE)
+
+
 def test_the_scaffolded_app_parses_and_declares_setup(tmp_path: Path):
     """The scaffold is the first code the user reads — it must at least parse.
 
@@ -534,7 +612,7 @@ def test_the_scaffold_pins_streamlib_to_its_own_index(tmp_path: Path):
     cli.scaffold_new_app(app_directory, use_test_pattern_source=True)
 
     manifest = (app_directory / "pyproject.toml").read_text()
-    assert cli.STREAMLIB_SIMPLE_INDEX_URL in manifest
+    assert 'url = "https://tatolab.github.io/streamlib/simple/"' in manifest
     assert 'name = "demo"' in manifest, "the project takes its directory's name"
 
 

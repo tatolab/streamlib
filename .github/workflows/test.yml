@@ -857,7 +857,7 @@ jobs:
         working-directory: sdk/streamlib-python-wheel
         run: |
           uv venv --python 3.12 .venv
-          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy numpy pydantic typing_extensions
+          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy numpy pydantic typing_extensions ruff==0.16.9
           VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
 
       # One `_engine.pyi` for both binaries: a method the macOS build lacks

@@ -71,9 +71,6 @@ APP_DIRECTORY_ENVIRONMENT_VARIABLE = "STREAMLIB_APP_DIRECTORY"
 DEFAULT_CONTROL_PLANE_BIND_HOST = "0.0.0.0"
 DEFAULT_CONTROL_PLANE_BIND_PORT = 9000
 
-SCAFFOLD_PYTHON_VERSION = "3.12"
-STREAMLIB_SIMPLE_INDEX_URL = "https://tatolab.github.io/streamlib/simple/"
-
 
 class ObservationVerbUsageError(Exception):
     """An observation verb invoked with flags that contradict each other.
@@ -302,148 +299,84 @@ def _python_distribution_name_for(directory_name: str) -> str:
     return normalized.lower() or "streamlib-app"
 
 
+SCAFFOLD_TEMPLATE_DIRECTORY = Path(__file__).resolve().parent / "_scaffold_template"
 SCAFFOLDED_EFFECT_MODULE_PATH = "processors/inverting_effect.py"
-SCAFFOLDED_EFFECT_CLASS_NAME = "InvertingEffect"
-SCAFFOLDED_EFFECT_MODULE_NAME = "processors.inverting_effect"
-
-# Carries a docstring rather than being empty: every other file `new` writes
-# explains itself, and this one is where a reader first meets the rule that
-# sends processor classes out of the entry file.
-SCAFFOLDED_PROCESSOR_PACKAGE_SOURCE = (
-    '"""One module per processor — each one a class a child interpreter imports."""\n'
+# The template sources are StreamLib's; the app `new` writes is the user's own.
+SCAFFOLD_TEMPLATE_LICENSE_HEADER = (
+    "# Copyright (c) 2025 Jonathan Fontanez\n# SPDX-License-Identifier: BUSL-1.1\n\n"
 )
 
+# Template file → the path `new` writes it to, in write order. The dotfiles
+# are stored without their dot so no packaging walk skips them as hidden or
+# reads the template's `.gitignore` as its own ignore rules.
+SCAFFOLDED_FILE_PATH_FOR_TEMPLATE_FILE = {
+    "app.py": DEFAULT_APP_ENTRY_FILE_NAME,
+    "processors/__init__.py": "processors/__init__.py",
+    SCAFFOLDED_EFFECT_MODULE_PATH: SCAFFOLDED_EFFECT_MODULE_PATH,
+    "pyproject.toml": "pyproject.toml",
+    "python-version": ".python-version",
+    "gitignore": ".gitignore",
+}
 
-def _scaffolded_app_entry_source(*, source_class_name: str) -> str:
-    """The entry file: imports, wiring, and nothing else.
 
-    The effect lives in its own module rather than here because a processor
-    class defined in the entry file identifies as `__main__:<Type>`, which is a
-    wiring error — the entry file runs as `__main__`, and the child interpreter
-    that runs the processor imports its class by name.
+def render_scaffold_template_files(
+    *, distribution_name: str, use_test_pattern_source: bool
+) -> "dict[str, str]":
+    """Each file `new` writes, keyed by its path in the app, rendered from the templates.
+
+    A placeholder is its template's own default value, so the template stays a
+    real, checkable file: the camera variant of `app.py` and a `streamlib-app`
+    project name.
     """
-    source_description = (
-        "camera" if source_class_name == "CameraSource" else "test pattern"
+    source_class_name, source_description = (
+        ("TestPatternSource", "test pattern")
+        if use_test_pattern_source
+        else ("CameraSource", "camera")
     )
-    return f'''"""A StreamLib app: {source_description} → effect → window.
+    streamlib_import_names = ", ".join(
+        sorted([source_class_name, "DisplayWindow", "Runtime"])
+    )
+    substitutions_for_template_file = {
+        "app.py": {
+            "A StreamLib app: camera →": f"A StreamLib app: {source_description} →",
+            # The whole line, so each variant's names stay in sorted order.
+            "from streamlib import CameraSource, DisplayWindow, Runtime": (
+                f"from streamlib import {streamlib_import_names}"
+            ),
+            "rt.add(CameraSource)": f"rt.add({source_class_name})",
+        },
+        "pyproject.toml": {'name = "streamlib-app"': f'name = "{distribution_name}"'},
+    }
 
-`streamlib dev` finds `setup(rt)` below by convention — there is no manifest and
-no `main()`. Edit `{SCAFFOLDED_EFFECT_MODULE_PATH}` and re-run `streamlib dev` to
-see the change.
-
-Processors live in their own modules, never in this file: each one runs in its
-own child interpreter, which imports the class by name.
-"""
-
-from {SCAFFOLDED_EFFECT_MODULE_NAME} import {SCAFFOLDED_EFFECT_CLASS_NAME}
-from streamlib import {source_class_name}, DisplayWindow, Runtime
-
-
-def setup(rt: Runtime) -> None:
-    source = rt.add({source_class_name})
-    effect = rt.add({SCAFFOLDED_EFFECT_CLASS_NAME})
-    window = rt.add(DisplayWindow, config={{"title": "StreamLib", "scaling": "fit"}})
-
-    rt.connect(source.output("video"), effect.input("video_from_upstream"))
-    rt.connect(effect.output("video_to_downstream"), window.input("video"))
-'''
-
-
-def _scaffolded_effect_module_source() -> str:
-    """The effect, in a module the engine can import by name."""
-    return f'''"""The effect the app wires between its source and its window.
-
-Importable as `{SCAFFOLDED_EFFECT_MODULE_NAME}:{SCAFFOLDED_EFFECT_CLASS_NAME}`, which is the
-name the engine spawns this processor's child interpreter with.
-"""
-
-import numpy
-
-from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
-    RuntimeContextLimitedAccess,
-    VideoFrame,
-    input,
-    output,
-    processor,
-)
-
-
-@processor
-class {SCAFFOLDED_EFFECT_CLASS_NAME}:
-    """Reads each frame, inverts its colors in place, and passes it on."""
-
-    @input(delivery_profile="newest")
-    def video_from_upstream(self) -> None: ...
-
-    @output()
-    def video_to_downstream(self) -> None: ...
-
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        bag = ctx.inputs.read("video_from_upstream")
-        if bag is None:
-            return
-        frame = VideoFrame.from_bag(bag)
-        # The frame arrives as a surface id, not pixels: resolve it and open
-        # CPU access to the engine's own memory.
-        with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
-            surface.lock(read_only=False)
-            pixels = surface.as_numpy()
-            # One bulk read out, edit on the host, one bulk write back. On
-            # Linux the mapping is write-combined: CPU reads of it run around
-            # 175 MB/s, so editing in place through a strided view re-reads
-            # that memory per channel and costs ~225ms a frame against ~30ms
-            # this way. On a Mac the mapping is cached and both ways are fast.
-            edited = pixels.copy()
-            # Color channels only — inverting alpha would erase the picture.
-            edited[:, :, :3] = 255 - edited[:, :, :3]
-            pixels[...] = edited
-            surface.unlock()
-        ctx.outputs.write("video_to_downstream", bag)
-'''
-
-
-def _scaffolded_project_manifest(distribution_name: str) -> str:
-    return f'''[project]
-name = "{distribution_name}"
-version = "0.1.0"
-requires-python = ">={SCAFFOLD_PYTHON_VERSION}"
-dependencies = ["streamlib", "numpy>=2.1"]
-
-# streamlib is served from its own simple index until the PyPI publication that
-# follows the project rename; everything else resolves from PyPI as usual.
-[[tool.uv.index]]
-name = "streamlib"
-url = "{STREAMLIB_SIMPLE_INDEX_URL}"
-explicit = true
-
-[tool.uv.sources]
-streamlib = {{ index = "streamlib" }}
-'''
-
-
-SCAFFOLDED_GITIGNORE = """.venv/
-__pycache__/
-*.py[cod]
-"""
+    rendered_files: "dict[str, str]" = {}
+    for template_file, scaffolded_file in SCAFFOLDED_FILE_PATH_FOR_TEMPLATE_FILE.items():
+        rendered = (SCAFFOLD_TEMPLATE_DIRECTORY / template_file).read_text(encoding="utf-8")
+        if template_file.endswith(".py"):
+            if not rendered.startswith(SCAFFOLD_TEMPLATE_LICENSE_HEADER):
+                raise RuntimeError(
+                    f"scaffold template `{template_file}` no longer opens with the "
+                    f"licence header `new` strips from it"
+                )
+            rendered = rendered[len(SCAFFOLD_TEMPLATE_LICENSE_HEADER) :]
+        for placeholder, value in substitutions_for_template_file.get(
+            template_file, {}
+        ).items():
+            if placeholder not in rendered:
+                raise RuntimeError(
+                    f"scaffold template `{template_file}` no longer carries its "
+                    f"placeholder {placeholder!r}"
+                )
+            rendered = rendered.replace(placeholder, value)
+        rendered_files[scaffolded_file] = rendered
+    return rendered_files
 
 
 def scaffold_new_app(target_directory: Path, *, use_test_pattern_source: bool) -> int:
     """Write a working app into `target_directory`."""
-    source_class_name = (
-        "TestPatternSource" if use_test_pattern_source else "CameraSource"
+    scaffolded_files = render_scaffold_template_files(
+        distribution_name=_python_distribution_name_for(target_directory.resolve().name),
+        use_test_pattern_source=use_test_pattern_source,
     )
-    scaffolded_files = {
-        DEFAULT_APP_ENTRY_FILE_NAME: _scaffolded_app_entry_source(
-            source_class_name=source_class_name
-        ),
-        "processors/__init__.py": SCAFFOLDED_PROCESSOR_PACKAGE_SOURCE,
-        SCAFFOLDED_EFFECT_MODULE_PATH: _scaffolded_effect_module_source(),
-        "pyproject.toml": _scaffolded_project_manifest(
-            _python_distribution_name_for(target_directory.resolve().name)
-        ),
-        ".python-version": f"{SCAFFOLD_PYTHON_VERSION}\n",
-        ".gitignore": SCAFFOLDED_GITIGNORE,
-    }
 
     # Checked before anything is written: a half-scaffolded directory is worse
     # than a refusal, and the user's own `app.py` is the file most likely to
@@ -466,7 +399,8 @@ def scaffold_new_app(target_directory: Path, *, use_test_pattern_source: bool) -
     print(f"Created a StreamLib app in `{target_directory}`.\n")
     print("Next:")
     print(f"    cd {target_directory}")
-    print(f"    uv venv --python {SCAFFOLD_PYTHON_VERSION} && uv sync")
+    scaffolded_python_version = scaffolded_files[".python-version"].strip()
+    print(f"    uv venv --python {scaffolded_python_version} && uv sync")
     print("    streamlib dev")
     return 0
 
@@ -907,7 +841,7 @@ def build_argument_parser() -> argparse.ArgumentParser:
         "new",
         help="Scaffold a new StreamLib app.",
         description=(
-            "Write app.py, pyproject.toml, .python-version and .gitignore into "
+            "Write app.py, processors/, pyproject.toml, .python-version and .gitignore into "
             "DIRECTORY — a working camera → effect → window pipeline."
         ),
     )
