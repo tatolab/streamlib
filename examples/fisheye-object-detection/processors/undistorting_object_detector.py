@@ -10,9 +10,9 @@ before the model sees anything, on the GPU, with the frame never leaving it.
 The detector reads a tensor the engine prepared, and the boxes are drawn back
 into the frame itself:
 
-    detector_input = self.detector_input_kernel.apply_to_surface(gpu, texture)
-    with detector_input.tensor_surface as detector_input_tensor:
-        ...detect on torch.from_dlpack(detector_input_tensor)...
+    detector_model_input = self.detector_input_kernel.apply_to_surface(gpu, texture)
+    with detector_model_input.tensor_surface as detector_input_tensor_surface:
+        ...detect on torch.from_dlpack(detector_input_tensor_surface)...
     with undistorted_frame_texture.as_device_tensor() as rectified_pixels:
         ...draw the boxes into torch.from_dlpack(rectified_pixels)...
 
@@ -39,6 +39,7 @@ from processors.radial_distortion_model import (
     workgroups_covering,
 )
 from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
+    ModelInputTensorGeometry,
     ModelInputTensorKernel,
     ProcessorOutputTextureRing,
     RuntimeContextFullAccess,
@@ -287,12 +288,13 @@ class UndistortingObjectDetector:
             push_constants=self.lens_coefficient_push_constants,
         )
 
-        detector_input = self.detector_input_kernel.apply_to_surface(
+        detector_model_input = self.detector_input_kernel.apply_to_surface(
             ctx.gpu_limited_access, undistorted_frame_texture
         )
-        with detector_input.tensor_surface as detector_input_tensor:
+        with detector_model_input.tensor_surface as detector_input_tensor_surface:
             detections = self._detections_in(
-                torch.from_dlpack(detector_input_tensor), frame.width, frame.height
+                torch.from_dlpack(detector_input_tensor_surface),
+                detector_model_input.geometry,
             )
 
         with undistorted_frame_texture.as_device_tensor() as rectified_pixels:
@@ -316,18 +318,22 @@ class UndistortingObjectDetector:
         )
 
     def _detections_in(
-        self, detector_input: torch.Tensor, width: int, height: int
+        self,
+        detector_input_batch: torch.Tensor,
+        detector_input_geometry: ModelInputTensorGeometry,
     ) -> "list[dict[str, Any]]":
-        """Run the detector over the rectified frame's model input, without leaving the GPU.
+        """Run the detector over the prepared model input, on the GPU.
 
         A `torch.Tensor` source is taken as already preprocessed — ultralytics
-        letterboxes arrays, never tensors — so `detector_input` arrives in the
-        shape the model wants: RGB, channels-first, batched, scaled into
-        `[0, 1]`, and padded to the stride. `width` and `height` are the
-        frame's, which the boxes are clamped to.
+        letterboxes arrays, never tensors — so `detector_input_batch` arrives
+        in the shape the model wants: RGB, channels-first, batched, scaled into
+        `[0, 1]`, and padded to the stride. The boxes come back in the frame's
+        own pixels through `detector_input_geometry`.
         """
+        width = detector_input_geometry.source_width
+        height = detector_input_geometry.source_height
         result = self.detection_model.predict(
-            source=detector_input,
+            source=detector_input_batch,
             conf=self.detection_confidence_threshold,
             verbose=False,
         )[0]
@@ -338,7 +344,12 @@ class UndistortingObjectDetector:
         # One host transfer, of a few dozen numbers, because the drawing below
         # is Python slicing the tensor and Python needs the indices. The pixels
         # stay where they are.
-        corners = boxes.xyxy.round().to(torch.int32).tolist()
+        corners = (
+            detector_input_geometry.boxes_to_source(boxes.xyxy)
+            .round()
+            .to(torch.int32)
+            .tolist()
+        )
         class_indices = boxes.cls.to(torch.int32).tolist()
         confidences = boxes.conf.tolist()
         return [

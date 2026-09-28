@@ -33,12 +33,13 @@ The whole hand-off between the engine and a third-party GPU stack is these
 lines, in `processors/undistorting_object_detector.py`:
 
 ```python
-detector_input = self.detector_input_kernel.apply_to_surface(
+detector_model_input = self.detector_input_kernel.apply_to_surface(
     ctx.gpu_limited_access, undistorted_frame_texture
 )
-with detector_input.tensor_surface as detector_input_tensor:
+with detector_model_input.tensor_surface as detector_input_tensor_surface:
     detections = self._detections_in(
-        torch.from_dlpack(detector_input_tensor), frame.width, frame.height
+        torch.from_dlpack(detector_input_tensor_surface),
+        detector_model_input.geometry,
     )
 
 with undistorted_frame_texture.as_device_tensor() as rectified_pixels:
@@ -50,7 +51,9 @@ with undistorted_frame_texture.as_device_tensor() as rectified_pixels:
 RGB, channels-first, scaled into `[0, 1]`, padded at the bottom and right to
 YOLOv8's stride — in one compute pass, into a tensor surface that
 `torch.from_dlpack` reads with no copy. Padding rather than resizing keeps
-every box the model reports in frame coordinates.
+every box the model reports in frame coordinates; the geometry the kernel
+returns beside the tensor is what maps them back, and under this fit it maps
+them onto themselves.
 
 Entering the frame's scope hands the engine's texture out as a linear DLPack
 view, and that tensor is the write door: the boxes drawn into it are blitted
@@ -371,9 +374,10 @@ Everything is literal config in `app.py` — edit it and re-run.
 ## Where the pixels do touch the host
 
 One place, and it is not streamlib's side of the hand-off. The tensor handed
-to the detector is built entirely on the device — channel order, layout,
-scale and pad in the engine's one compute pass — and ultralytics takes a `torch.Tensor` source as
-already preprocessed, so it neither letterboxes nor rescales it. What its
+to the detector is built entirely on the device — channel order, layout, scale
+and pad in the engine's one compute pass — and ultralytics takes a
+`torch.Tensor` source as already preprocessed, so it neither letterboxes nor
+rescales it. What its
 postprocessing then does with that batch is its own business, and it does copy
 it back to make the `orig_imgs` its result objects carry.
 
