@@ -303,25 +303,24 @@ impl CrossRuntimeLinkPeerProcess {
         });
     }
 
-    /// The last bag index of this source's burst, once it has sent one.
-    fn the_index_its_burst_ended_at(&self) -> Option<u64> {
+    /// The number this peer last reported under `key`, once it has reported
+    /// one.
+    fn the_number_it_last_reported_under(&self, key: &str) -> Option<u64> {
         self.everything_it_has_reported()
             .iter()
             .rev()
-            .find_map(|reported| reported.get("burst_ended_at_index")?.as_u64())
+            .find_map(|reported| reported.get(key)?.as_u64())
+    }
+
+    /// The last bag index of this source's burst, once it has sent one.
+    fn the_index_its_burst_ended_at(&self) -> Option<u64> {
+        self.the_number_it_last_reported_under("burst_ended_at_index")
     }
 
     /// The index of the first bag this source's replacement publisher sent,
     /// once it has replaced the one it started with.
     fn the_index_its_replacement_publisher_began_at(&self) -> Option<u64> {
-        self.everything_it_has_reported()
-            .iter()
-            .rev()
-            .find_map(|reported| {
-                reported
-                    .get("index_the_replacement_publisher_began_at")?
-                    .as_u64()
-            })
+        self.the_number_it_last_reported_under("index_the_replacement_publisher_began_at")
     }
 
     /// Release the burst this source is holding.
@@ -338,10 +337,7 @@ impl CrossRuntimeLinkPeerProcess {
     /// How many publishers this source's port has had — two once it has
     /// replaced the one it started with.
     fn how_many_publishers_its_port_has_had(&self) -> u64 {
-        self.everything_it_has_reported()
-            .iter()
-            .rev()
-            .find_map(|reported| reported.get("publishers_this_port_has_had")?.as_u64())
+        self.the_number_it_last_reported_under("publishers_this_port_has_had")
             .unwrap_or(0)
     }
 
@@ -1337,10 +1333,7 @@ fn every_bag_a_burst_lost_between_two_runtimes_is_counted_on_the_link() {
 /// `a_new_run_is_a_baseline_even_once_its_numbering_has_overtaken`.
 ///
 /// The source holds its burst until a bag of the replacement has reached the
-/// reader. A new generation's loss counts from the first of its bags the
-/// reading runtime sees, so a burst sent before the egress had read any of the
-/// replacement's bags falls wholly before that baseline, and the arm would
-/// read the scheduler rather than the count.
+/// reader, so the new generation's baseline is set before the burst begins.
 ///
 /// What this arm does prove, against two real runtimes and a real publisher
 /// replacement: the grown attachment crosses the wire and is read at the far

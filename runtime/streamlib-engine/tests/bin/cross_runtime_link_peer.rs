@@ -93,21 +93,16 @@ fn main() {
 
     let report = ReportChannelTakenBeforeAnythingReplacesStdout::take();
     let how = HowToRunThisPeer::read_from_the_command_line();
-    let asked_to_leave = Arc::new(AtomicBool::new(false));
-    let told_to_release_the_held_burst = Arc::new(AtomicBool::new(false));
-    read_stdin_until_it_closes(
-        Arc::clone(&asked_to_leave),
-        Arc::clone(&told_to_release_the_held_burst),
-    );
+    let what_the_test_has_said = Arc::new(WhatTheTestHasSaidOnStdin::default());
+    read_stdin_until_it_closes(Arc::clone(&what_the_test_has_said));
 
     let outcome = match how.role {
-        WhatThisPeerIs::TheSourceOfTheLink => run_as_the_source(
-            &report,
-            &how,
-            &asked_to_leave,
-            &told_to_release_the_held_burst,
-        ),
-        WhatThisPeerIs::TheReaderOfTheLink => run_as_the_reader(&report, &how, &asked_to_leave),
+        WhatThisPeerIs::TheSourceOfTheLink => {
+            run_as_the_source(&report, &how, &what_the_test_has_said)
+        }
+        WhatThisPeerIs::TheReaderOfTheLink => {
+            run_as_the_reader(&report, &how, &what_the_test_has_said.asked_to_leave)
+        }
     };
     if let Err(why) = outcome {
         report.write_line(&format!("{REFUSED_LINE_PREFIX}{why}"));
@@ -119,8 +114,7 @@ fn main() {
 fn run_as_the_source(
     report: &ReportChannelTakenBeforeAnythingReplacesStdout,
     how: &HowToRunThisPeer,
-    asked_to_leave: &AtomicBool,
-    told_to_release_the_held_burst: &AtomicBool,
+    what_the_test_has_said: &WhatTheTestHasSaidOnStdin,
 ) -> Result<(), String> {
     let iceoryx2_node = how.open_an_iceoryx2_node()?;
     let channel_service_name =
@@ -179,7 +173,10 @@ fn run_as_the_source(
     let mut burst_ended_at_index: Option<u64> = None;
     let mut index_the_replacement_publisher_began_at: Option<u64> = None;
     let mut reports_since_a_reader_arrived: Option<u64> = None;
-    while !asked_to_leave.load(Ordering::Relaxed) {
+    while !what_the_test_has_said
+        .asked_to_leave
+        .load(Ordering::Relaxed)
+    {
         let how_many_to_publish_now = match how.burst_once_a_reader_arrives {
             // No burst asked for: one bag per report, which is what every
             // other arm reads.
@@ -216,7 +213,9 @@ fn run_as_the_source(
                     // channel would fall wholly before that baseline.
                     let the_burst_is_released = !how
                         .recreate_the_publisher_then_hold_the_burst_until_told
-                        || told_to_release_the_held_burst.load(Ordering::Relaxed);
+                        || what_the_test_has_said
+                            .told_to_release_the_held_burst
+                            .load(Ordering::Relaxed);
                     let publishing_now = if the_lead_is_out
                         && burst_ended_at_index.is_none()
                         && the_burst_is_released
@@ -732,20 +731,29 @@ impl ReportChannelTakenBeforeAnythingReplacesStdout {
     }
 }
 
-/// Watch stdin on its own thread: the parent closing it is the ask to leave,
-/// and [`RELEASE_THE_HELD_BURST_LINE`] on it releases a held burst.
-fn read_stdin_until_it_closes(
-    asked_to_leave: Arc<AtomicBool>,
-    told_to_release_the_held_burst: Arc<AtomicBool>,
-) {
+/// What the test has said to this peer on its stdin.
+#[derive(Default)]
+struct WhatTheTestHasSaidOnStdin {
+    /// The parent closed stdin.
+    asked_to_leave: AtomicBool,
+    /// The parent wrote [`RELEASE_THE_HELD_BURST_LINE`].
+    told_to_release_the_held_burst: AtomicBool,
+}
+
+/// Watch stdin on its own thread until the parent closes it.
+fn read_stdin_until_it_closes(what_the_test_has_said: Arc<WhatTheTestHasSaidOnStdin>) {
     std::thread::spawn(move || {
         let mut line = String::new();
         while std::io::stdin().lock().read_line(&mut line).unwrap_or(0) > 0 {
             if line.trim_end() == RELEASE_THE_HELD_BURST_LINE {
-                told_to_release_the_held_burst.store(true, Ordering::Relaxed);
+                what_the_test_has_said
+                    .told_to_release_the_held_burst
+                    .store(true, Ordering::Relaxed);
             }
             line.clear();
         }
-        asked_to_leave.store(true, Ordering::Relaxed);
+        what_the_test_has_said
+            .asked_to_leave
+            .store(true, Ordering::Relaxed);
     });
 }
