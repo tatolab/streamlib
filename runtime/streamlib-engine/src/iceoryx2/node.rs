@@ -152,7 +152,7 @@ pub fn reclaim_dead_iceoryx2_nodes_in_engine_owned_domain(
 ) -> Result<u64> {
     let config = engine_owned_iceoryx2_config(domain_root)?;
     let mut reclaimed_dead_nodes = 0u64;
-    let mut dead_nodes_another_process_is_reclaiming = 0u64;
+    let mut dead_nodes_another_cleaner_is_reclaiming = 0u64;
     let listing = Node::<ipc::Service>::list(&config, |node_state| {
         if let NodeState::Dead(dead_node) = node_state {
             let dead_node_id = *dead_node.id();
@@ -161,7 +161,7 @@ pub fn reclaim_dead_iceoryx2_nodes_in_engine_owned_domain(
                     reclaimed_dead_nodes += 1
                 }
                 Err(NodeCleanupFailure::AnotherInstanceIsCleaningUpTheNode) => {
-                    dead_nodes_another_process_is_reclaiming += 1
+                    dead_nodes_another_cleaner_is_reclaiming += 1
                 }
                 Err(cannot_reclaim) => tracing::warn!(
                     "dead iceoryx2 node {dead_node_id:?} cannot be reclaimed and keeps its place \
@@ -177,10 +177,10 @@ pub fn reclaim_dead_iceoryx2_nodes_in_engine_owned_domain(
              only what it reached: {listing_failure:?}"
         );
     }
-    if dead_nodes_another_process_is_reclaiming > 0 {
+    if dead_nodes_another_cleaner_is_reclaiming > 0 {
         tracing::debug!(
-            "{dead_nodes_another_process_is_reclaiming} dead iceoryx2 node(s) are being \
-             reclaimed by another process",
+            "{dead_nodes_another_cleaner_is_reclaiming} dead iceoryx2 node(s) are being \
+             reclaimed by another process or thread",
         );
     }
     Ok(reclaimed_dead_nodes)
