@@ -1911,36 +1911,33 @@ mod tests {
         );
     }
 
+    /// A test-domain prefix naming an exited pid, so the next test process's
+    /// sweep reclaims the shared memory a test leaves under it.
+    ///
+    /// Settles this process's own domain first, because doing so runs the
+    /// one-time sweep that deletes every `/dev/shm` segment whose prefix names a
+    /// process that is gone — which is exactly the shape this prefix creates.
+    /// Left to happen on its own, that sweep fires whenever some sibling test
+    /// first asks for the shared domain, and if that lands mid-test it deletes
+    /// the test's shared memory underneath it (`ServiceInCorruptedState`).
+    /// `OnceLock`, so forcing it here means it cannot fire again.
+    fn a_test_domain_prefix_the_next_test_process_reclaims() -> String {
+        use crate::iceoryx2::iceoryx2_domain_for_this_test_process::{
+            test_domain_prefix, tests::a_process_id_that_has_exited,
+        };
+
+        let _ = crate::iceoryx2::iceoryx2_domain_for_this_test_process();
+        test_domain_prefix(current_process_uid(), a_process_id_that_has_exited())
+    }
+
     #[test]
     fn two_test_process_domains_share_neither_files_nor_shared_memory() {
-        // Settle this process's own domain FIRST, because doing so runs the
-        // one-time sweep that deletes every `/dev/shm` segment whose prefix
-        // names a process that is gone — which is exactly the shape this test
-        // then creates. Left to happen on its own, that sweep fires whenever
-        // some sibling test first asks for the shared domain, and if that lands
-        // between the creates below and the reopen at the end it deletes this
-        // test's shared memory underneath it (`ServiceInCorruptedState`).
-        // `OnceLock`, so forcing it here means it cannot fire again.
-        let _ = crate::iceoryx2::iceoryx2_domain_for_this_test_process();
-
-        let first_process = domain_root_parent_within_the_socket_path_budget();
-        let second_process = domain_root_parent_within_the_socket_path_budget();
-        let first_root = first_process.path().join("iox2");
-        let second_root = second_process.path().join("iox2");
-        // Prefixes of exited pids, so the next test process's sweep reclaims the
-        // shared memory this test leaves behind.
-        let uid = current_process_uid();
-        let exited = crate::iceoryx2::iceoryx2_domain_for_this_test_process::tests::a_process_id_that_has_exited;
-        let first_prefix =
-            crate::iceoryx2::iceoryx2_domain_for_this_test_process::test_domain_prefix(
-                uid,
-                exited(),
-            );
-        let second_prefix =
-            crate::iceoryx2::iceoryx2_domain_for_this_test_process::test_domain_prefix(
-                uid,
-                exited(),
-            );
+        let first_domain_root_parent = domain_root_parent_within_the_socket_path_budget();
+        let second_domain_root_parent = domain_root_parent_within_the_socket_path_budget();
+        let first_root = first_domain_root_parent.path().join("iox2");
+        let second_root = second_domain_root_parent.path().join("iox2");
+        let first_prefix = a_test_domain_prefix_the_next_test_process_reclaims();
+        let second_prefix = a_test_domain_prefix_the_next_test_process_reclaims();
         let service_name = ServiceName::new(&unique_service_name("disjoint")).unwrap();
 
         let first_node =
@@ -2002,26 +1999,26 @@ mod tests {
     fn two_domains_sharing_a_prefix_never_share_a_channel() {
         use crate::iceoryx2::DeliveryProfile;
 
-        // Settled first, for the reason the sibling test above gives.
-        let _ = crate::iceoryx2::iceoryx2_domain_for_this_test_process();
-
-        let first_process = domain_root_parent_within_the_socket_path_budget();
-        let second_process = domain_root_parent_within_the_socket_path_budget();
-        let first_root = first_process.path().join("iox2");
-        let second_root = second_process.path().join("iox2");
-        // An exited pid's prefix, so the next test process's sweep reclaims the
-        // shared memory this test leaves behind.
-        let shared_prefix =
-            crate::iceoryx2::iceoryx2_domain_for_this_test_process::test_domain_prefix(
-                current_process_uid(),
-                crate::iceoryx2::iceoryx2_domain_for_this_test_process::tests::a_process_id_that_has_exited(),
-            );
+        let first_domain_root_parent = domain_root_parent_within_the_socket_path_budget();
+        let second_domain_root_parent = domain_root_parent_within_the_socket_path_budget();
+        let first_root = first_domain_root_parent.path().join("iox2");
+        let second_root = second_domain_root_parent.path().join("iox2");
+        let shared_prefix = a_test_domain_prefix_the_next_test_process_reclaims();
         let channel_service_name = unique_service_name("shared_prefix");
+        // One past the first domain's lone subscriber, so a refusal for room
+        // can never stand in for the delivery this test asserts on.
+        let max_subscribers = 2;
         let open_the_channel_in = |root: &std::path::Path, node_name: &str| {
             Iceoryx2Node::wrapping(
-                create_iceoryx2_node_in_domain(root, &shared_prefix, node_name).unwrap(),
+                create_iceoryx2_node_in_domain(root, &shared_prefix, node_name).unwrap_or_else(
+                    |refusal| panic!("{node_name} opens a node in its domain: {refusal:?}"),
+                ),
             )
-            .open_or_create_service(&channel_service_name, 2, DeliveryProfile::ORDERED_DEPTH)
+            .open_or_create_service(
+                &channel_service_name,
+                max_subscribers,
+                DeliveryProfile::ORDERED_DEPTH,
+            )
             .unwrap_or_else(|refusal| panic!("{node_name} opens the channel: {refusal:?}"))
         };
         let publish_one_bag_from = |publisher: &ChannelDataServicePublisher| {
