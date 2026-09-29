@@ -13,7 +13,7 @@
 //! - One processor owns one session. There is no process-global registry for a
 //!   second owner to reach through.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -661,8 +661,12 @@ pub(crate) struct MoqBroadcastSubscribingSession {
 /// arm has to mutate the state the other borrows.
 enum DrainStep {
     ANewGroupOpened(moq_transport::serve::SubgroupReader),
+    AnObjectStarted(moq_transport::serve::SubgroupObjectReader),
     AnObjectArrived(bytes::Bytes),
-    TheTrackEnded,
+    TheGroupEnded,
+    TheGroupFailed(moq_transport::serve::ServeError),
+    /// The track ended; the groups already open are still read out.
+    NoMoreGroupsWillOpen,
     ItFailed(String),
 }
 
@@ -764,14 +768,15 @@ impl MoqBroadcastSubscribingSession {
 
 /// Read one track's objects in order, for as long as it lasts.
 ///
-/// The shape is load-bearing. A subscriber holds only the newest subgroup a
-/// track has produced, so a loop that takes a subgroup, drains it to its end
-/// and only then asks for the next stops asking for the whole time it is
-/// draining — and every group opened meanwhile is gone with no error anywhere.
-/// Asking for the next group and reading the current one are raced instead,
-/// and the objects that have already arrived in the old group are
-/// drained before the new one takes its place, so the order a producer wrote in
-/// is the order that leaves here.
+/// The shape is load-bearing. A subscriber hands out only the newest subgroup
+/// a track has produced, so the next group is asked for while the current one
+/// is read, or a group opened meanwhile is gone with no error anywhere. Every
+/// group this drain is handed keeps its reader until its stream ends:
+/// moq-transport removes the whole subscription when an object arrives for a
+/// subgroup nobody reads, and through a distant relay a group's tail is
+/// routinely still in flight when the next group opens. Newer groups wait,
+/// buffered, behind the one being read, so the order a producer wrote in is
+/// the order that leaves here.
 async fn drain_one_track(
     track_name: String,
     reader: moq_transport::serve::TrackReader,
@@ -796,38 +801,47 @@ async fn drain_one_track(
         }
     };
 
-    let mut open_group: Option<moq_transport::serve::SubgroupReader> = None;
+    let mut groups_waiting_their_turn: VecDeque<moq_transport::serve::SubgroupReader> =
+        VecDeque::new();
+    let mut group_being_read: Option<moq_transport::serve::SubgroupReader> = None;
+    // Held across a group opening: its chunks are read through a clone, so a
+    // read the opening interrupts starts again from the object's first chunk.
+    let mut object_being_read: Option<moq_transport::serve::SubgroupObjectReader> = None;
+    let mut no_more_groups_will_open = false;
     loop {
-        let step = match open_group.as_mut() {
-            None => match subgroups.next().await {
-                Ok(Some(opened)) => DrainStep::ANewGroupOpened(opened),
-                Ok(None) => DrainStep::TheTrackEnded,
-                Err(failure) => DrainStep::ItFailed(describe_track_end(&track_name, &failure)),
-            },
+        if group_being_read.is_none() {
+            group_being_read = groups_waiting_their_turn.pop_front();
+        }
+        let step = match group_being_read.as_mut() {
+            None if no_more_groups_will_open => {
+                return end_the_drain(&track_name, &sender, None).await;
+            }
+            None => the_step_a_group_opening_is(&track_name, subgroups.next().await),
             Some(group) => tokio::select! {
                 biased;
-                opened = subgroups.next() => match opened {
-                    Ok(Some(opened)) => DrainStep::ANewGroupOpened(opened),
-                    Ok(None) => DrainStep::TheTrackEnded,
-                    Err(failure) => DrainStep::ItFailed(describe_track_end(&track_name, &failure)),
-                },
-                object = group.read_next() => match object {
-                    Ok(Some(payload)) => DrainStep::AnObjectArrived(payload),
-                    // The group is finished, not the track: wait for the next.
-                    Ok(None) => DrainStep::ANewGroupOpened(match subgroups.next().await {
-                        Ok(Some(opened)) => opened,
-                        Ok(None) => return end_the_drain(&track_name, &sender, None).await,
-                        Err(failure) => {
-                            return end_the_drain(&track_name, &sender, Some(failure)).await;
-                        }
-                    }),
-                    Err(failure) => DrainStep::ItFailed(describe_track_end(&track_name, &failure)),
-                },
+                opened = subgroups.next(), if !no_more_groups_will_open => {
+                    the_step_a_group_opening_is(&track_name, opened)
+                }
+                step = async {
+                    match object_being_read.clone() {
+                        Some(mut object) => match object.read_all().await {
+                            Ok(payload) => DrainStep::AnObjectArrived(payload),
+                            Err(failure) => DrainStep::TheGroupFailed(failure),
+                        },
+                        None => match group.next().await {
+                            Ok(Some(object)) => DrainStep::AnObjectStarted(object),
+                            Ok(None) => DrainStep::TheGroupEnded,
+                            Err(failure) => DrainStep::TheGroupFailed(failure),
+                        },
+                    }
+                } => step,
             },
         };
 
         match step {
+            DrainStep::AnObjectStarted(object) => object_being_read = Some(object),
             DrainStep::AnObjectArrived(payload) => {
+                object_being_read = None;
                 if send_one_object(&track_name, &sender, payload)
                     .await
                     .is_err()
@@ -835,41 +849,42 @@ async fn drain_one_track(
                     return;
                 }
             }
-            DrainStep::ANewGroupOpened(opened) => {
-                if let Some(mut superseded) = open_group.take() {
-                    // Whatever of the old group has already arrived is still in
-                    // publication order and still ahead of the new group's
-                    // first object, so it goes out before the swap.
-                    while superseded.pos() < superseded.len() {
-                        match superseded.read_next().await {
-                            Ok(Some(payload)) => {
-                                if send_one_object(&track_name, &sender, payload)
-                                    .await
-                                    .is_err()
-                                {
-                                    return;
-                                }
-                            }
-                            Ok(None) => break,
-                            Err(failure) => {
-                                tracing::debug!(
-                                    track = %track_name,
-                                    %failure,
-                                    "the superseded MoQ group could not be finished"
-                                );
-                                break;
-                            }
-                        }
-                    }
-                }
-                open_group = Some(opened);
+            DrainStep::ANewGroupOpened(opened) => groups_waiting_their_turn.push_back(opened),
+            DrainStep::TheGroupEnded => group_being_read = None,
+            DrainStep::TheGroupFailed(failure) => {
+                // One stream reset — a publisher's delivery deadline, a relay
+                // dropping a stale group — ends that group, not the track.
+                tracing::debug!(
+                    track = %track_name,
+                    %failure,
+                    "a MoQ group ended before its last object; the track reads on"
+                );
+                object_being_read = None;
+                group_being_read = None;
             }
-            DrainStep::TheTrackEnded => return end_the_drain(&track_name, &sender, None).await,
+            DrainStep::NoMoreGroupsWillOpen => no_more_groups_will_open = true,
             DrainStep::ItFailed(ended) => {
                 let _ = sender.send(Err(ended)).await;
                 return;
             }
         }
+    }
+}
+
+/// What asking a track for its next group came back with. A clean end,
+/// whether the track writer was dropped or closed with `Done`, still lets the
+/// groups already open be read out.
+fn the_step_a_group_opening_is(
+    track_name: &str,
+    opened: std::result::Result<
+        Option<moq_transport::serve::SubgroupReader>,
+        moq_transport::serve::ServeError,
+    >,
+) -> DrainStep {
+    match opened {
+        Ok(Some(opened)) => DrainStep::ANewGroupOpened(opened),
+        Ok(None) | Err(moq_transport::serve::ServeError::Done) => DrainStep::NoMoreGroupsWillOpen,
+        Err(failure) => DrainStep::ItFailed(describe_track_end(track_name, &failure)),
     }
 }
 
@@ -919,8 +934,8 @@ fn describe_track_end(track_name: &str, failure: &moq_transport::serve::ServeErr
 #[cfg(test)]
 mod tests {
     use super::{
-        AUDIO_MEDIA_TRACK_PRIORITY, GroupTheUplinkBacklogAbandoned, OpenGroupsByTrack,
-        VIDEO_MEDIA_TRACK_PRIORITY,
+        AUDIO_MEDIA_TRACK_PRIORITY, DrainedObject, GroupTheUplinkBacklogAbandoned,
+        OpenGroupsByTrack, VIDEO_MEDIA_TRACK_PRIORITY, drain_one_track,
     };
     use crate::delivery_deadline::UplinkBacklogReading;
     use moq_transport::data::DataStreamResetCode;
@@ -1223,5 +1238,175 @@ mod tests {
         );
         // No error: the subgroup finished, which is what FINs its QUIC stream.
         assert_eq!(reader.read_next().await.expect("the group ends"), None);
+    }
+
+    /// A track being drained: its subgroups writer, what the drain delivers,
+    /// and the drain itself.
+    fn a_draining_track() -> (
+        SubgroupsWriter,
+        tokio::sync::mpsc::Receiver<DrainedObject>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let namespace = moq_transport::coding::TrackNamespace::try_from(A_NAMESPACE)
+            .expect("the namespace parses");
+        let (track_writer, track_reader) = Track::new(namespace, A_TRACK).produce();
+        let subgroups = track_writer
+            .subgroups()
+            .expect("a fresh track enters subgroups mode");
+        let (sender, received) = tokio::sync::mpsc::channel::<DrainedObject>(16);
+        let draining = tokio::spawn(drain_one_track(A_TRACK.to_owned(), track_reader, sender));
+        (subgroups, received, draining)
+    }
+
+    /// Long enough for the drain to take a group opened just before, as a far
+    /// relay delivers it ahead of the previous group's tail.
+    async fn let_the_drain_catch_up() {
+        for _ in 0..100 {
+            tokio::task::yield_now().await;
+        }
+    }
+
+    async fn the_next_payload(
+        received: &mut tokio::sync::mpsc::Receiver<DrainedObject>,
+    ) -> bytes::Bytes {
+        received
+            .recv()
+            .await
+            .expect("the drain delivers")
+            .expect("an object arrives")
+            .payload
+    }
+
+    /// Everything the drain delivers until the track ends, and how it ended.
+    async fn every_payload_until_the_end(
+        received: &mut tokio::sync::mpsc::Receiver<DrainedObject>,
+    ) -> (Vec<bytes::Bytes>, String) {
+        let mut payloads = Vec::new();
+        while let Some(drained) = received.recv().await {
+            match drained {
+                Ok(object) => payloads.push(object.payload),
+                Err(ended) => return (payloads, ended),
+            }
+        }
+        (payloads, "the drain closed without saying why".to_owned())
+    }
+
+    fn bytes_of(text: &'static str) -> bytes::Bytes {
+        bytes::Bytes::from_static(text.as_bytes())
+    }
+
+    /// Through a distant relay the next group's stream opens while the last
+    /// group's tail is still arriving. The tail must still be taken — an
+    /// object written for a subgroup nobody reads ends the whole subscription
+    /// — and it leaves ahead of the newer group's objects.
+    #[tokio::test]
+    async fn a_superseded_groups_late_tail_is_read_in_order_and_ends_nothing() {
+        let (mut subgroups, mut received, draining) = a_draining_track();
+        let mut older = subgroups
+            .append(VIDEO_MEDIA_TRACK_PRIORITY)
+            .expect("a group opens");
+        older.write(bytes_of("older-1")).expect("written");
+        assert_eq!(the_next_payload(&mut received).await, bytes_of("older-1"));
+
+        let mut newer = subgroups
+            .append(VIDEO_MEDIA_TRACK_PRIORITY)
+            .expect("a group opens");
+        newer.write(bytes_of("newer-1")).expect("written");
+        let_the_drain_catch_up().await;
+        older
+            .write(bytes_of("older-2"))
+            .expect("the superseded group still has a reader");
+        drop((older, newer, subgroups));
+
+        let (payloads, ended) = every_payload_until_the_end(&mut received).await;
+        assert_eq!(payloads, [bytes_of("older-2"), bytes_of("newer-1")]);
+        assert_eq!(ended, format!("`{A_TRACK}` ended"));
+        draining.await.expect("the drain returns");
+    }
+
+    /// A group opening while an object's chunks are still arriving must not
+    /// cost that object: a video frame through a far relay spans many packets.
+    #[tokio::test]
+    async fn an_object_half_arrived_when_a_group_opens_arrives_whole() {
+        let (mut subgroups, mut received, draining) = a_draining_track();
+        let mut older = subgroups
+            .append(VIDEO_MEDIA_TRACK_PRIORITY)
+            .expect("a group opens");
+        older.write(bytes_of("older-1")).expect("written");
+        assert_eq!(the_next_payload(&mut received).await, bytes_of("older-1"));
+
+        let mut straddling = older.create(8, None).expect("an object opens");
+        straddling
+            .write(bytes_of("olde"))
+            .expect("its first chunk is written");
+        let_the_drain_catch_up().await;
+        let mut newer = subgroups
+            .append(VIDEO_MEDIA_TRACK_PRIORITY)
+            .expect("a group opens");
+        newer.write(bytes_of("newer-1")).expect("written");
+        let_the_drain_catch_up().await;
+        straddling
+            .write(bytes_of("r-22"))
+            .expect("its last chunk is written");
+        drop((straddling, older, newer, subgroups));
+
+        let (payloads, ended) = every_payload_until_the_end(&mut received).await;
+        assert_eq!(payloads, [bytes_of("older-22"), bytes_of("newer-1")]);
+        assert_eq!(ended, format!("`{A_TRACK}` ended"));
+        draining.await.expect("the drain returns");
+    }
+
+    /// A stream reset mid-object — a publisher's delivery deadline abandoning
+    /// a stale group — ends that group and nothing more.
+    #[tokio::test]
+    async fn a_group_cut_short_ends_that_group_and_the_track_reads_on() {
+        let (mut subgroups, mut received, draining) = a_draining_track();
+        let mut older = subgroups
+            .append(VIDEO_MEDIA_TRACK_PRIORITY)
+            .expect("a group opens");
+        older.write(bytes_of("older-1")).expect("written");
+        assert_eq!(the_next_payload(&mut received).await, bytes_of("older-1"));
+
+        let mut newer = subgroups
+            .append(VIDEO_MEDIA_TRACK_PRIORITY)
+            .expect("a group opens");
+        newer.write(bytes_of("newer-1")).expect("written");
+        let_the_drain_catch_up().await;
+        let mut cut_short = older.create(8, None).expect("an object opens");
+        cut_short
+            .write(bytes_of("olde"))
+            .expect("half of it is written");
+        drop((cut_short, older));
+        newer.write(bytes_of("newer-2")).expect("written");
+        drop((newer, subgroups));
+
+        let (payloads, ended) = every_payload_until_the_end(&mut received).await;
+        assert_eq!(payloads, [bytes_of("newer-1"), bytes_of("newer-2")]);
+        assert_eq!(ended, format!("`{A_TRACK}` ended"));
+        draining.await.expect("the drain returns");
+    }
+
+    /// A publisher ending the track cleanly — PUBLISH_DONE closes it with
+    /// `Done` — still lets the groups already open be read out.
+    #[tokio::test]
+    async fn a_track_closed_with_done_still_reads_out_its_open_groups() {
+        let (mut subgroups, mut received, draining) = a_draining_track();
+        let mut older = subgroups
+            .append(VIDEO_MEDIA_TRACK_PRIORITY)
+            .expect("a group opens");
+        older.write(bytes_of("older-1")).expect("written");
+        assert_eq!(the_next_payload(&mut received).await, bytes_of("older-1"));
+
+        subgroups.close(ServeError::Done).expect("the track closes");
+        let_the_drain_catch_up().await;
+        older
+            .write(bytes_of("older-2"))
+            .expect("the open group still has a reader");
+        drop(older);
+
+        let (payloads, ended) = every_payload_until_the_end(&mut received).await;
+        assert_eq!(payloads, [bytes_of("older-2")]);
+        assert_eq!(ended, format!("`{A_TRACK}` ended"));
+        draining.await.expect("the drain returns");
     }
 }
