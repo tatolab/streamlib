@@ -720,7 +720,8 @@ fn a_source_holds_no_egress_until_somebody_reads_its_port() {
     let reader_domain = a_domain_root_of_its_own("lazy-reader");
     let source_listen = format!("udp/{LOOPBACK_INTERFACE}:{}?rel=1", a_free_loopback_port());
     let every_egress_token = format!("streamlib/{mesh_name}/@runtime/{source_name}/@egress/**");
-    let every_token_the_source_holds = format!("streamlib/{mesh_name}/@runtime/{source_name}/**");
+    let every_announcement_token_of_the_source =
+        format!("streamlib/{mesh_name}/@runtime/{source_name}/**");
 
     let source = CrossRuntimeLinkPeerProcess::launch(HowToLaunchAPeer {
         runtime_name: source_name.clone(),
@@ -740,7 +741,7 @@ fn a_source_holds_no_egress_until_somebody_reads_its_port() {
     // liveliness, which its own announcement shows.
     wait_until_the_tokens_under(
         &looking,
-        &every_token_the_source_holds,
+        &every_announcement_token_of_the_source,
         "the looking session to see the source's announcement",
         |tokens| !tokens.is_empty(),
     );
