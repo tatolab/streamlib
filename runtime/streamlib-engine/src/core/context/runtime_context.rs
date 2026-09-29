@@ -861,6 +861,12 @@ impl<'a> RuntimeContextFullAccess<'a> {
         self.host_base().runtime_directory()
     }
 
+    /// The runtime's iceoryx2 node, from which a spawn host sweeps the nodes a
+    /// helper process left behind.
+    pub fn iceoryx2_node(&self) -> &Iceoryx2Node {
+        self.host_base().iceoryx2_node()
+    }
+
     /// The name this runtime is addressed by on the runtime mesh — what a
     /// control plane publishes and what a mesh address begins with.
     pub fn runtime_name(&self) -> &RuntimeName {

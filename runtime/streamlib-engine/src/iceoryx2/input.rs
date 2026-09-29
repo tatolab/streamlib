@@ -955,19 +955,16 @@ impl InputMailboxesInner {
             .map(|l| unsafe { l.file_descriptor().native_handle() })
     }
 
-    /// Drain any pending event-IDs from the listener so the fd transitions
+    /// Drain any pending event activations from the listener so the fd transitions
     /// back to the not-readable state. No-op when no listener is configured.
     ///
     /// Call this after `epoll_wait` reports the fd readable, before the next
     /// `epoll_wait`, otherwise the wait returns immediately on the same event.
     pub fn drain_listener(&self) {
         if let Some(listener) = &self.inbound_link_subscribers_and_listener.lock().listener
-            && let Err(e) = listener.try_wait_all(|_event_id| {})
+            && let Err(e) = listener.try_wait(|_event_activation| {})
         {
-            tracing::trace!(
-                "InputMailboxes: drain_listener try_wait_all failed: {:?}",
-                e
-            );
+            tracing::trace!("InputMailboxes: drain_listener try_wait failed: {:?}", e);
         }
     }
 

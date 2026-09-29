@@ -729,7 +729,7 @@ mod tests {
 
         // Pre-flight: the listener has no events queued.
         let mut count: usize = 0;
-        listener.try_wait_all(|_| count += 1).unwrap();
+        listener.try_wait(|_| count += 1).unwrap();
         assert_eq!(count, 0);
 
         let writer = OutputWriter::from_inner_arc(inner);
@@ -737,16 +737,16 @@ mod tests {
         writer.write_raw("out", b"more", 5678).unwrap();
 
         // Notifier::notify is non-blocking; give iceoryx2 a moment to deliver
-        // before draining. timed_wait_all returns as soon as the first event
+        // before draining. timed_wait returns as soon as the first event
         // arrives, so the deadline is generous, not the typical wait time.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
         while count == 0 && std::time::Instant::now() < deadline {
             listener
-                .timed_wait_all(|_| count += 1, std::time::Duration::from_millis(50))
+                .timed_wait(|_| count += 1, std::time::Duration::from_millis(50))
                 .unwrap();
         }
         // Drain anything still pending.
-        listener.try_wait_all(|_| count += 1).unwrap();
+        listener.try_wait(|_| count += 1).unwrap();
         assert!(
             count >= 1,
             "expected at least one notify after write_raw, got {}",
@@ -874,7 +874,7 @@ mod tests {
                 1,
                 "send {send} reached no listener despite the listener being drained every time"
             );
-            drained_listener.try_wait_all(|_| {}).unwrap();
+            drained_listener.try_wait(|_| {}).unwrap();
         }
     }
 

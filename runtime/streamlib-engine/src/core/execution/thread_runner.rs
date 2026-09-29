@@ -1448,7 +1448,7 @@ mod tests {
             matches!(outcome, ReactiveLoopWakeOutcome::Notified),
             "expected Notified, got {outcome:?}"
         );
-        fixture.listener.try_wait_all(|_| {}).unwrap();
+        fixture.listener.try_wait(|_| {}).unwrap();
     }
 
     /// The production shutdown signal makes the waiter report shutdown, with
@@ -1479,7 +1479,7 @@ mod tests {
             matches!(outcome, ReactiveLoopWakeOutcome::Shutdown),
             "expected Shutdown, got {outcome:?}"
         );
-        fixture.listener.try_wait_all(|_| {}).unwrap();
+        fixture.listener.try_wait(|_| {}).unwrap();
     }
 
     /// A wait with nothing to report returns on its own, which is what lets a
@@ -1638,6 +1638,6 @@ mod tests {
             matches!(outcome, ReactiveLoopWakeOutcome::Notified),
             "a notify on the reconnected link must wake the runner; got {outcome:?}"
         );
-        second_listener.try_wait_all(|_| {}).unwrap();
+        second_listener.try_wait(|_| {}).unwrap();
     }
 }
