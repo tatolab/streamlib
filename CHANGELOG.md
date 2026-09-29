@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.46](https://github.com/tatolab/streamlib/compare/v0.26.45...v0.26.46) (2026-09-29)
+
+
+### Features
+
+* **engine:** move to iceoryx2 0.10.0 ([#2542](https://github.com/tatolab/streamlib/issues/2542)) ([f553f51](https://github.com/tatolab/streamlib/commit/f553f514048659a64148feddf81d7a39652201c9)), closes [#2475](https://github.com/tatolab/streamlib/issues/2475)
+
 ## [0.26.45](https://github.com/tatolab/streamlib/compare/v0.26.44...v0.26.45) (2026-09-29)
 
 
