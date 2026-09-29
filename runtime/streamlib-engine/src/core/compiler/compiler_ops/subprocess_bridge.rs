@@ -1827,7 +1827,7 @@ mod tests {
         };
 
         let state = SurfaceShareState::new();
-        let socket_dir = crate::core::test_support::a_temporary_directory_the_owner_can_enter()
+        let socket_dir = crate::core::test_support::a_temporary_directory_at_owner_only_mode()
             .expect("socket dir");
         let socket_path = socket_dir.path().join("bridge-teardown.sock");
         let mut service = UnixSocketSurfaceService::new(state.clone(), socket_path.clone());

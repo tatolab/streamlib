@@ -123,9 +123,9 @@ pub fn write_entry(
     registry_directory: &Path,
     entry: &NodeRegistryEntry,
 ) -> Result<PathBuf, NodeRegistryError> {
-    streamlib::sdk::iceoryx2::create_directory_and_parents_the_owner_can_enter(
+    streamlib::sdk::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
         registry_directory,
-        streamlib::sdk::iceoryx2::ORDINARY_DIRECTORY_MODE_BEFORE_THE_UMASK,
+        streamlib::sdk::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
     )
     .map_err(|source| NodeRegistryError::RegistryDirCreate {
         path: registry_directory.to_path_buf(),

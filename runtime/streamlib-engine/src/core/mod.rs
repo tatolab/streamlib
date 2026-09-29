@@ -28,6 +28,7 @@ pub mod app_directory;
 pub mod color;
 pub mod context;
 pub mod descriptors;
+pub mod directory_at_an_explicit_mode;
 pub mod display_info;
 pub mod error;
 pub mod execution;

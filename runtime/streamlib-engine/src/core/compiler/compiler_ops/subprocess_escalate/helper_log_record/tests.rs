@@ -28,7 +28,7 @@ use crate::core::logging::{
 use crate::core::runtime::RuntimeUniqueId;
 
 fn install_logging(runtime_tag: &str) -> (TempDir, StreamlibLoggingGuard) {
-    let tmp = crate::core::test_support::a_temporary_directory_the_owner_can_enter().unwrap();
+    let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
     unsafe {
         std::env::set_var("XDG_STATE_HOME", tmp.path());
         // Capture debug+ so all the test levels surface.
@@ -446,7 +446,7 @@ mod python_subprocess {
     }
 
     fn install_logging(tag: &str) -> (TempDir, StreamlibLoggingGuard) {
-        let tmp = crate::core::test_support::a_temporary_directory_the_owner_can_enter().unwrap();
+        let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
         unsafe {
             std::env::set_var("XDG_STATE_HOME", tmp.path());
             std::env::set_var("RUST_LOG", "debug");

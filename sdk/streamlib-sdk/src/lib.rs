@@ -80,6 +80,7 @@ pub mod sdk {
     pub use streamlib_engine::core::color;
     pub use streamlib_engine::core::context;
     pub use streamlib_engine::core::descriptors;
+    pub use streamlib_engine::core::directory_at_an_explicit_mode;
     pub use streamlib_engine::core::display_info;
     pub use streamlib_engine::core::error;
     pub use streamlib_engine::core::execution;

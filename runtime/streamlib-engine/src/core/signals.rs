@@ -875,7 +875,7 @@ mod tests {
             interrupt_this_process_three_times_holding_a_helper_process_group(record_path.into());
         }
 
-        let record = crate::core::test_support::a_temporary_directory_the_owner_can_enter()
+        let record = crate::core::test_support::a_temporary_directory_at_owner_only_mode()
             .expect("a temporary directory");
         let record_path = record.path().join("helper-process-group");
         let child = crate::core::test_support::rerun_this_test_in_a_child_process(

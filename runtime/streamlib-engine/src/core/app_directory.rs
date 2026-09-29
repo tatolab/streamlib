@@ -179,12 +179,12 @@ mod tests {
     /// other half of the same property.
     #[test]
     fn a_real_directory_named_two_ways_resolves_to_one_spelling() {
-        let parent = crate::core::test_support::a_temporary_directory_the_owner_can_enter()
-            .expect("tempdir");
+        let parent =
+            crate::core::test_support::a_temporary_directory_at_owner_only_mode().expect("tempdir");
         let app_directory = parent.path().join("myapp");
-        crate::iceoryx2::create_directory_and_parents_the_owner_can_enter(
+        crate::core::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
             &app_directory,
-            crate::iceoryx2::ORDINARY_DIRECTORY_MODE_BEFORE_THE_UMASK,
+            crate::core::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
         )
         .expect("create the app directory");
 
@@ -208,12 +208,12 @@ mod tests {
     /// environment value naming the same place.
     #[test]
     fn every_arm_that_names_a_real_directory_agrees_on_its_spelling() {
-        let parent = crate::core::test_support::a_temporary_directory_the_owner_can_enter()
-            .expect("tempdir");
+        let parent =
+            crate::core::test_support::a_temporary_directory_at_owner_only_mode().expect("tempdir");
         let app_directory = parent.path().join("myapp");
-        crate::iceoryx2::create_directory_and_parents_the_owner_can_enter(
+        crate::core::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
             &app_directory,
-            crate::iceoryx2::ORDINARY_DIRECTORY_MODE_BEFORE_THE_UMASK,
+            crate::core::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
         )
         .expect("create the app directory");
 

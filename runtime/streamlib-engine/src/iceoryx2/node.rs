@@ -1609,14 +1609,14 @@ mod tests {
     /// anyway, so a test domain built under it matches what a real run gets.
     fn domain_root_parent_within_the_socket_path_budget() -> tempfile::TempDir {
         #[cfg(target_os = "macos")]
-        return crate::core::test_support::the_owner_can_enter(
+        return crate::core::test_support::at_owner_only_mode(
             tempfile::Builder::new()
                 .tempdir_in("/tmp")
                 .expect("a temp directory under /tmp"),
         )
         .expect("a temp directory under /tmp");
         #[cfg(not(target_os = "macos"))]
-        return crate::core::test_support::a_temporary_directory_the_owner_can_enter()
+        return crate::core::test_support::a_temporary_directory_at_owner_only_mode()
             .expect("a temp directory");
     }
 
@@ -1835,11 +1835,11 @@ mod tests {
         }
 
         let working_directory =
-            crate::core::test_support::a_temporary_directory_the_owner_can_enter().unwrap();
+            crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
         let hijacked_root = working_directory.path().join("hijacked");
-        crate::iceoryx2::create_directory_and_parents_the_owner_can_enter(
+        crate::core::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
             &working_directory.path().join("config"),
-            crate::iceoryx2::ORDINARY_DIRECTORY_MODE_BEFORE_THE_UMASK,
+            crate::core::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
         )
         .unwrap();
         std::fs::write(

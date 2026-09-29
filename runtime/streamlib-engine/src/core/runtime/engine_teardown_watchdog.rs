@@ -150,7 +150,7 @@ mod tests {
             panic!("the watchdog did not end a teardown that outlived it");
         }
 
-        let record = crate::core::test_support::a_temporary_directory_the_owner_can_enter()
+        let record = crate::core::test_support::a_temporary_directory_at_owner_only_mode()
             .expect("a temporary directory");
         let record_path = record.path().join("helper-process-group");
         let started = std::time::Instant::now();

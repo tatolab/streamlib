@@ -50,7 +50,11 @@ impl SurfaceShareUnderTest {
     pub(crate) fn start(label: &str) -> Self {
         let socket_directory = Self::a_directory_short_enough_for_a_unix_socket(label);
         let _ = std::fs::remove_dir_all(&socket_directory);
-        std::fs::create_dir_all(&socket_directory).expect("a directory for the test socket");
+        streamlib::sdk::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
+            &socket_directory,
+            streamlib::sdk::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
+        )
+        .expect("a directory for the test socket");
         let socket_path = socket_directory.join("s.sock");
 
         let state = SurfaceShareState::new();

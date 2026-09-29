@@ -1460,9 +1460,9 @@ if os.fork() == 0:
         // socket paths leave a domain root.
         let domain = Path::new("/tmp").join(format!("streamlib-host-sweep-{}", std::process::id()));
         let domain_root = domain.join("iox2");
-        streamlib::sdk::iceoryx2::create_directory_and_parents_the_owner_can_enter(
+        streamlib::sdk::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
             &domain_root,
-            streamlib::sdk::iceoryx2::ORDINARY_DIRECTORY_MODE_BEFORE_THE_UMASK,
+            streamlib::sdk::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
         )
         .expect("a private domain root");
         let dead_node_owner = Command::new(std::env::current_exe().unwrap())
