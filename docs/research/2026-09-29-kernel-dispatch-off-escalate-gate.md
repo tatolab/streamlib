@@ -340,6 +340,7 @@ Each dispatch path fence-waits its own submission before it returns:
 
 - #2505 closed as not planned; dispatch stays in the escalate scope until item 3's measurement
   says otherwise.
-- Item 2 shipped as #2546. Sync validation on an M1 Max reported the write-after-read in a
+- Item 2 shipped as #2546, as `ALL_COMMANDS` / `MEMORY_WRITE` — the compute path's entry
+  scope; a prior read needs only the execution dependency. Sync validation on an M1 Max reported the write-after-read in a
   real graphics producer → `DisplayWindow` run in 3 of 3 runs without the fix and 0 of 3 with
   it; the evidence is on the issue.

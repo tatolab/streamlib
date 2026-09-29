@@ -619,9 +619,9 @@ impl VulkanGraphicsKernelInner {
                     ))
                 })?;
 
-            // A target can still be sampled by an earlier submission on this
-            // queue — a display lets a pool slot go at compose submit — so the
-            // transition needs an execution dependency on every prior stage.
+            // An earlier submission on this queue can still be touching a
+            // target — a display lets a pool slot go at compose submit — so
+            // the transition waits on every prior stage and write.
             let mut barriers: Vec<vk::ImageMemoryBarrier2> =
                 Vec::with_capacity(color_targets.len());
             use crate::host_rhi::HostTextureExt;
@@ -635,7 +635,7 @@ impl VulkanGraphicsKernelInner {
                 barriers.push(
                     vk::ImageMemoryBarrier2::builder()
                         .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
-                        .src_access_mask(vk::AccessFlags2::NONE)
+                        .src_access_mask(vk::AccessFlags2::MEMORY_WRITE)
                         .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
                         .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
                         .old_layout(vk::ImageLayout::UNDEFINED)
