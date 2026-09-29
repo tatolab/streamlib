@@ -1049,8 +1049,8 @@ class HelperProcessLifecycle:
             if self._link_data_access.any_input_port_has_data():
                 # Drained on every pass, not only when idle: a processor that
                 # runs slower than its upstream never reaches the wait below,
-                # and a listener nobody drains fills its socket within seconds,
-                # after which every upstream notify fails and is logged.
+                # so the wait it does reach wakes only for a bag this pass did
+                # not already answer.
                 self._link_data_access.drain_input_listener()
                 self._hosted.call_hook("process", self._hosted.limited_access_context)
                 self._drain_commands_arriving_mid_run()

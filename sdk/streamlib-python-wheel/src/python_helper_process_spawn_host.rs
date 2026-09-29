@@ -35,7 +35,7 @@ use streamlib::sdk::helper_process_transport::{
     HelperProcessShutdownCommand, SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS, SubprocessBridge,
     refusal_of_a_link_into_a_helper_process_that_failed, spawn_fd_line_reader,
 };
-use streamlib::sdk::iceoryx2::{ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, Iceoryx2Node};
+use streamlib::sdk::iceoryx2::ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE;
 use streamlib::sdk::processors::{DynGeneratedProcessor, OutOfProcessLinkWiringEnvelope};
 
 /// The module CPython is launched with in a helper process.
@@ -194,10 +194,10 @@ pub(crate) struct PythonHelperProcessSpawnHostProcessor {
     interpreter_path: PathBuf,
     app_entry_directory: Option<PathBuf>,
     child: Option<Child>,
-    /// The runtime's iceoryx2 node, kept from `setup` because the sweep that
-    /// reclaims a dead helper's nodes runs from a liveness poll that is handed
-    /// no context, and iceoryx2 sweeps a domain only from a node in it.
-    runtime_iceoryx2_node: Option<Iceoryx2Node>,
+    /// The engine-owned iceoryx2 domain this processor's nodes live in, kept
+    /// from `setup` because the sweep that reclaims a dead helper's nodes runs
+    /// from a liveness poll that is handed no context.
+    iceoryx2_domain_root: Option<PathBuf>,
     child_standard_error_tail: Option<HelperProcessStandardErrorTail>,
     bridge: Option<SubprocessBridge>,
     /// Set once the child stops answering. The pipeline keeps running and the
@@ -596,17 +596,25 @@ impl PythonHelperProcessSpawnHostProcessor {
     /// sweep takes it out. Run at every helper exit and not only at a detected
     /// crash: a helper the ladder had to kill never finalized its interpreter,
     /// so its engine half never dropped the node either.
+    ///
+    /// The engine's own domain configuration, never the ambient one: the global
+    /// lookup path would sweep another domain, or none.
     fn reclaim_the_iceoryx2_nodes_the_helper_left(&self) {
-        let Some(runtime_iceoryx2_node) = self.runtime_iceoryx2_node.as_ref() else {
+        let Some(iceoryx2_domain_root) = self.iceoryx2_domain_root.as_deref() else {
             return;
         };
-        let reclaimed_node_count =
-            runtime_iceoryx2_node.reclaim_dead_iceoryx2_nodes_in_its_domain();
-        if reclaimed_node_count > 0 {
-            tracing::info!(
+        match streamlib::sdk::iceoryx2::reclaim_dead_iceoryx2_nodes_in_engine_owned_domain(
+            iceoryx2_domain_root,
+        ) {
+            Ok(reclaimed_node_count) if reclaimed_node_count > 0 => tracing::info!(
                 "[{}] reclaimed {reclaimed_node_count} iceoryx2 node(s) its helper left",
                 self.processor_display_name,
-            );
+            ),
+            Ok(_) => {}
+            Err(sweep_failure) => tracing::warn!(
+                "[{}] could not reclaim the iceoryx2 nodes its helper left: {sweep_failure}",
+                self.processor_display_name,
+            ),
         }
     }
 
@@ -672,12 +680,13 @@ impl PythonHelperProcessSpawnHostProcessor {
                     self.processor_display_name
                 ))
             })?;
+        let iceoryx2_domain_root = ctx.runtime_directory().iceoryx2_domain_root();
         let mut command = self.build_helper_process_command(
             &ctx.runtime_id(),
-            &ctx.runtime_directory().iceoryx2_domain_root(),
+            &iceoryx2_domain_root,
             surface_share_channel,
         );
-        self.runtime_iceoryx2_node = Some(ctx.iceoryx2_node().clone());
+        self.iceoryx2_domain_root = Some(iceoryx2_domain_root);
         let mut escalate_transport = EscalateTransport::attach(&mut command)?;
 
         let mut child = command.spawn().map_err(|spawn_failure| {
@@ -1307,7 +1316,7 @@ pub(crate) fn spawn_host_for_processor_node(
         interpreter_path: launch_environment.interpreter_path.clone(),
         app_entry_directory: launch_environment.app_entry_directory.clone(),
         child: None,
-        runtime_iceoryx2_node: None,
+        iceoryx2_domain_root: None,
         child_standard_error_tail: None,
         bridge: None,
         child_is_gone: false,
@@ -1428,7 +1437,7 @@ if os.fork() == 0:
         if let Some(domain_root) =
             std::env::var_os(DEAD_NODE_CHILD_DOMAIN_ROOT_ENVIRONMENT_VARIABLE)
         {
-            let _node = Iceoryx2Node::new(
+            let _node = streamlib::sdk::iceoryx2::Iceoryx2Node::new(
                 Path::new(&domain_root),
                 "streamlib-test/host-sweep-placement",
             )
@@ -1452,12 +1461,6 @@ if os.fork() == 0:
         let domain = Path::new("/tmp").join(format!("streamlib-host-sweep-{}", std::process::id()));
         let domain_root = domain.join("iox2");
         std::fs::create_dir_all(&domain_root).expect("a private domain root");
-        // The runtime's node, opened before the child's exists: creating a node
-        // sweeps its domain, so one opened after the kill would reclaim the dead
-        // node itself and leave the exit's sweep nothing to prove.
-        let runtime_iceoryx2_node =
-            Iceoryx2Node::new(&domain_root, "streamlib-test/host-sweep-runtime")
-                .expect("a node opens in the engine-owned domain");
         let dead_node_owner = Command::new(std::env::current_exe().unwrap())
             .args([
                 "python_helper_process_spawn_host::tests::\
@@ -1483,7 +1486,7 @@ if os.fork() == 0:
 
         // A host whose own helper has already left, closed the ordinary way.
         let mut host = spawn_host_for_test(None);
-        host.runtime_iceoryx2_node = Some(runtime_iceoryx2_node.clone());
+        host.iceoryx2_domain_root = Some(domain_root.clone());
         host.child = Some(
             Command::new("true")
                 .spawn()
@@ -1493,9 +1496,10 @@ if os.fork() == 0:
         host.take_the_helper_process_group_down();
 
         let left_for_somebody_else =
-            runtime_iceoryx2_node.reclaim_dead_iceoryx2_nodes_in_its_domain();
-        drop(host);
-        drop(runtime_iceoryx2_node);
+            streamlib::sdk::iceoryx2::reclaim_dead_iceoryx2_nodes_in_engine_owned_domain(
+                &domain_root,
+            )
+            .expect("the domain can be swept");
         std::fs::remove_dir_all(&domain).ok();
 
         assert_eq!(
@@ -1666,7 +1670,7 @@ sys.exit(0)
             interpreter_path: PathBuf::from("/venv/bin/python"),
             app_entry_directory,
             child: None,
-            runtime_iceoryx2_node: None,
+            iceoryx2_domain_root: None,
             child_standard_error_tail: None,
             bridge: None,
             child_is_gone: false,

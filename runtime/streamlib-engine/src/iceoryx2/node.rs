@@ -136,6 +136,47 @@ pub(crate) fn iceoryx2_config_for_domain(
     Ok(config)
 }
 
+/// Reclaim what every dead iceoryx2 node in the engine-owned domain still holds,
+/// and say how many went.
+///
+/// A dead node keeps its place in every service it had opened, so a channel
+/// whose helper process crashed counts that helper against the subscriber cap
+/// until a sweep takes it out. The engine's own configuration and never the
+/// ambient one: the lookup path would sweep another domain, or none.
+///
+/// The non-blocking form, because this runs from a liveness poll — a node
+/// another process is already cleaning up is left to that process and gone by
+/// the next sweep, rather than parking the poll on it.
+pub fn reclaim_dead_iceoryx2_nodes_in_engine_owned_domain(
+    domain_root: &std::path::Path,
+) -> Result<u64> {
+    let config = engine_owned_iceoryx2_config(domain_root)?;
+    let mut reclaimed_dead_nodes = 0u64;
+    let mut dead_nodes_another_process_holds = 0u64;
+    let listing = Node::<ipc::Service>::list(&config, |node_state| {
+        if let NodeState::Dead(dead_node) = node_state {
+            match dead_node.try_remove_stale_resources() {
+                Ok(()) => reclaimed_dead_nodes += 1,
+                Err(_) => dead_nodes_another_process_holds += 1,
+            }
+        }
+        CallbackProgression::Continue
+    });
+    if let Err(listing_failure) = listing {
+        tracing::debug!(
+            "the engine's iceoryx2 domain could not be listed in full, so the sweep reclaimed \
+             only what it reached: {listing_failure:?}"
+        );
+    }
+    if dead_nodes_another_process_holds > 0 {
+        tracing::debug!(
+            "{dead_nodes_another_process_holds} dead iceoryx2 node(s) could not be reclaimed, \
+             which is ordinary when another process holds them",
+        );
+    }
+    Ok(reclaimed_dead_nodes)
+}
+
 /// Create a raw iceoryx2 node, labelled `node_name`, in the engine-owned domain rooted at `domain_root`.
 pub fn create_iceoryx2_node_in_engine_owned_domain(
     domain_root: &std::path::Path,
@@ -227,28 +268,6 @@ impl Iceoryx2Node {
     #[cfg(test)]
     pub(crate) fn config(&self) -> Config {
         self.inner.lock().config().clone()
-    }
-
-    /// Reclaim what every dead iceoryx2 node in this node's domain still holds,
-    /// and say how many went.
-    ///
-    /// A dead node keeps its place in every service it had opened, so a channel
-    /// whose helper process crashed counts that helper against the subscriber
-    /// cap until a sweep takes it out.
-    ///
-    /// The non-blocking form, because this runs from a liveness poll — a node
-    /// another process is already cleaning up is left to that process and gone
-    /// by the next sweep, rather than parking the poll on it.
-    pub fn reclaim_dead_iceoryx2_nodes_in_its_domain(&self) -> u64 {
-        let reclaimed = self.inner.lock().try_cleanup_dead_nodes();
-        if reclaimed.failed_cleanups > 0 {
-            tracing::debug!(
-                "{} dead iceoryx2 node(s) could not be reclaimed, which is ordinary when another \
-                 process holds them",
-                reclaimed.failed_cleanups,
-            );
-        }
-        reclaimed.cleanups
     }
 
     /// Open or create an iceoryx2 Event service for fd-multiplexed wakeups.
@@ -1616,11 +1635,6 @@ mod tests {
 
         let domain = domain_root_parent_within_the_socket_path_budget();
         let domain_root = domain.path().join("iox2");
-        // Opened before the child's node exists: creating a node sweeps its
-        // domain, so one opened after the kill would reclaim the dead node
-        // itself and leave the sweep under test nothing to find.
-        let sweeping_node = Iceoryx2Node::new(&domain_root, "streamlib-test/sweeper")
-            .expect("a node opens in the engine-owned domain");
 
         let child = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
@@ -1646,7 +1660,8 @@ mod tests {
         let mut reclaimed = 0u64;
         let started_sweeping = std::time::Instant::now();
         while reclaimed == 0 && started_sweeping.elapsed() < std::time::Duration::from_secs(5) {
-            reclaimed += sweeping_node.reclaim_dead_iceoryx2_nodes_in_its_domain();
+            reclaimed += reclaim_dead_iceoryx2_nodes_in_engine_owned_domain(&domain_root)
+                .expect("the sweep runs against the engine-owned domain");
             if reclaimed == 0 {
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
@@ -1657,7 +1672,7 @@ mod tests {
             "the killed child's node was left registered with no process behind it"
         );
         assert_eq!(
-            sweeping_node.reclaim_dead_iceoryx2_nodes_in_its_domain(),
+            reclaim_dead_iceoryx2_nodes_in_engine_owned_domain(&domain_root).unwrap(),
             0,
             "a swept domain has nothing left to reclaim"
         );
@@ -1726,9 +1741,30 @@ mod tests {
             )
             .output()
             .expect("the test binary re-runs this test in a holder process");
-        assert!(
-            !holder.status.success(),
-            "the holder must die where it stood rather than report a result"
+        // The signal and not merely a non-zero exit: a holder that panicked
+        // before it created its shallow service would also exit non-zero, and
+        // the deeper open below would then create a fresh service and prove
+        // nothing.
+        assert_eq!(
+            std::os::unix::process::ExitStatusExt::signal(&holder.status),
+            Some(libc::SIGKILL),
+            "the holder must die where it stood, holding its service: {}",
+            String::from_utf8_lossy(&holder.stderr),
+        );
+        let shallow_service_the_holder_left =
+            <ipc::Service as iceoryx2::service::Service>::details(
+                &iceoryx2_service_name_of(STALE_HOLDER_CHANNEL_SERVICE_NAME).unwrap(),
+                &long_lived_node.config(),
+                iceoryx2::service::messaging_pattern::MessagingPattern::PublishSubscribe,
+            )
+            .expect("the domain's services can be read without opening one")
+            .expect("the dead holder's shallow service is still there");
+        assert_eq!(
+            shallow_service_the_holder_left
+                .static_details
+                .publish_subscribe()
+                .subscriber_max_buffer_size(),
+            STALE_HOLDER_SHALLOW_DEPTH,
         );
 
         let deeper_channel = long_lived_node
@@ -1742,6 +1778,29 @@ mod tests {
             deeper_channel.channel_service_creation_depth(),
             STALE_HOLDER_DEEPER_DEPTH,
             "the recreated service must carry the depth this open asked for"
+        );
+    }
+
+    #[test]
+    fn the_sweep_reads_the_engine_owned_domain_and_never_the_ambient_one() {
+        // The root-and-prefix budget belongs to `engine_owned_iceoryx2_config`,
+        // so a refusal by name here is the proof the sweep is built from that
+        // configuration rather than from iceoryx2's own lookup path.
+        let prefix = engine_owned_iceoryx2_prefix_for_this_user();
+        let root_one_byte_past_the_budget = format!(
+            "/{}",
+            "r".repeat(ICEORYX2_DOMAIN_ROOT_AND_PREFIX_BUDGET_BYTES - prefix.len())
+        );
+
+        let refusal = reclaim_dead_iceoryx2_nodes_in_engine_owned_domain(std::path::Path::new(
+            &root_one_byte_past_the_budget,
+        ))
+        .expect_err("a root past the budget is refused before any listing")
+        .to_string();
+
+        assert!(
+            refusal.contains(&root_one_byte_past_the_budget),
+            "{refusal}"
         );
     }
 

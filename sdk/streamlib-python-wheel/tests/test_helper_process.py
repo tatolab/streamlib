@@ -1659,10 +1659,9 @@ class _CountingLinkDataAccess:
 
 def test_a_helper_that_cannot_keep_up_still_drains_its_listener_every_pass(stand_in_parent):
     """A processor slower than its upstream never goes idle, so a loop that
-    drains only when idle leaves the listener's datagram socket to fill within
-    seconds — after which every upstream notify fails and is logged, one
-    warning per frame for the rest of the run. The drain has to happen on
-    every pass.
+    drains only when idle leaves every notification of the burst pending, and
+    the wait it finally reaches wakes for bags already answered. The drain has
+    to happen on every pass.
 
     Fail-without-fix: move the drain back under the idle branch and the burst
     below is processed with a drain or two at most, all after it ended.
