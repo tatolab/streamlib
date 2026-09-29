@@ -186,9 +186,9 @@ fn every_channel_service_opens_under_safe_overflow() {
 /// `__internal_available_payload_memory` is hidden upstream, and it is the one
 /// view iceoryx2 gives of the chunk a loan really took.
 ///
-/// Fail-without-fix: keep 0.9.3's `header + user_header + user_header_alignment
-/// - 1` against 0.10's header and the mirror claims 7 bytes of overhead the
-/// chunk does not have, so the ceiling-sized bag leaves them empty.
+/// Fail-without-fix: pad the user header by `user_header_alignment - 1` rather
+/// than aligning it and the mirror claims 7 bytes of overhead the chunk does not
+/// have, so the ceiling-sized bag leaves them empty.
 #[test]
 fn a_ceiling_sized_bag_fills_the_ceilings_chunk_and_one_byte_more_takes_the_next() {
     let chunk_ceiling_bytes = (DEFAULT_EXPECTED_PAYLOAD_BYTES * 4).next_power_of_two();

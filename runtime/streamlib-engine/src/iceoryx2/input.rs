@@ -149,7 +149,7 @@ struct InboundLinkSubscribersAndListener {
 }
 
 // SAFETY: `Subscriber` and `Listener` are `!Send` only because `ipc::Service`
-// sets `ArcThreadSafetyPolicy` to `SingleThreaded`, which in iceoryx2 0.9.3 is a
+// sets `ArcThreadSafetyPolicy` to `SingleThreaded`, which in iceoryx2 0.10 is a
 // bare `Rc` with no thread-affine state; `ipc_threadsafe::Service` differs in
 // that one type, putting the same state behind a mutex. The `Rc` is cloned only
 // into the `Sample`s `receive` returns, and everything a port shares with other

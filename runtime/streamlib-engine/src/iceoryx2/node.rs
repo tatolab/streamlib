@@ -1667,8 +1667,7 @@ mod tests {
     ///
     /// Fail-without-fix: set `cleanup_dead_nodes_on_open` to `false` in
     /// [`iceoryx2_config_for_domain`] and the open is refused for depth on every
-    /// reopen, for as long as the long-lived node lives — which is also what
-    /// iceoryx2 0.9.3 did, sweeping only after an open succeeded.
+    /// reopen, for as long as the long-lived node lives.
     #[test]
     fn a_deeper_open_survives_a_shallow_service_a_dead_holder_left_behind() {
         if let Some(domain_root) =

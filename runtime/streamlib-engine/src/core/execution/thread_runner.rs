@@ -1223,9 +1223,9 @@ mod tests {
     /// notified whatever mode it runs in.
     ///
     /// The #1764 repro: a 2 ms `process()` against a 1 kHz source.
-    /// Fail-without-fix: an event transport queuing a wakeup per send, as
-    /// iceoryx2 0.9.3's did, comes back undelivered about 280 frames in once
-    /// the dispatch loop stops draining.
+    /// Fail-without-fix: an event transport queuing a wakeup per send comes
+    /// back undelivered about 280 frames in once the dispatch loop stops
+    /// draining.
     #[test]
     fn a_processor_slower_than_its_upstream_keeps_every_notify_deliverable() {
         const FRAMES_AT_ONE_KILOHERTZ: usize = 1000;
