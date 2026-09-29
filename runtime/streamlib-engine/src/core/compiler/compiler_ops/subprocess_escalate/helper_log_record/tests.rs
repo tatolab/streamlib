@@ -480,16 +480,17 @@ mod python_subprocess {
         if !lib.exists() {
             return None;
         }
-        let mut child = Command::new(py)
-            .arg("-c")
-            .arg(snippet)
-            .env("PYTHONPATH", &lib)
-            .env_remove("PYTHONHOME")
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("spawn python3");
+        let mut child = crate::iceoryx2::spawn_outside_every_iceoryx2_listener_bind(
+            Command::new(py)
+                .arg("-c")
+                .arg(snippet)
+                .env("PYTHONPATH", &lib)
+                .env_remove("PYTHONHOME")
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped()),
+        )
+        .expect("spawn python3");
 
         let stdout = child.stdout.take().expect("child stdout");
         let mut reader = BufReader::new(stdout);
@@ -661,7 +662,8 @@ log.shutdown()
             .stderr(Stdio::piped());
         let mut transport = EscalateTransport::attach(&mut command).expect("attach transport");
 
-        let mut child = command.spawn().expect("spawn python3");
+        let mut child = crate::iceoryx2::spawn_outside_every_iceoryx2_listener_bind(&mut command)
+            .expect("spawn python3");
         transport.release_child_end();
 
         if let Some(stdout) = child.stdout.take() {

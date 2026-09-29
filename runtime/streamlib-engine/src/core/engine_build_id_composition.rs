@@ -156,10 +156,14 @@ mod tests {
     use super::*;
 
     fn run_git_or_panic(directory: &Path, arguments: &[&str]) -> String {
-        let output = git_command_resolving_the_checkout_of(directory)
-            .args(arguments)
-            .output()
-            .expect("git runs");
+        let output = crate::iceoryx2::spawn_outside_every_iceoryx2_listener_bind(
+            git_command_resolving_the_checkout_of(directory)
+                .args(arguments)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped()),
+        )
+        .and_then(std::process::Child::wait_with_output)
+        .expect("git runs");
         assert!(
             output.status.success(),
             "git {arguments:?} failed: {}",
