@@ -596,7 +596,6 @@ impl PythonHelperProcessSpawnHostProcessor {
     /// sweep takes it out. Run at every helper exit and not only at a detected
     /// crash: a helper the ladder had to kill never finalized its interpreter,
     /// so its engine half never dropped the node either.
-    ///
     fn reclaim_the_iceoryx2_nodes_the_helper_left(&self) {
         let Some(runtime_iceoryx2_node) = self.runtime_iceoryx2_node.as_ref() else {
             return;

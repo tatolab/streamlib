@@ -142,8 +142,8 @@ struct ChannelEgress {
 /// that wakes its destination.
 ///
 /// The notifier is `None` where no listener waits on the destination's side —
-/// a helper publisher pulled onto the mesh, or a mesh link whose local
-/// destination is not wired yet. The link id tags the entry so a per-link
+/// a helper publisher pulled onto the mesh — or where a mesh ingress could not
+/// mint the destination's notifier. The link id tags the entry so a per-link
 /// `disconnect` reclaims exactly its own (see
 /// [`OutputWriterInner::remove_channel_link`]) rather than the whole fan-out —
 /// a source feeding N destinations must keep the other N-1 alive.

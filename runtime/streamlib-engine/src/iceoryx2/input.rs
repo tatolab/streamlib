@@ -1005,13 +1005,12 @@ impl InputMailboxesInner {
     fn next_bag_for_the_reader(&self, port: &str) -> Result<Option<BagBodyForTheReader>> {
         self.receive_pending();
 
-        let audio_windowing = {
-            let ports = self.ports.lock();
-            let port_config = ports
-                .get(port)
-                .ok_or_else(|| Error::Link(format!("Unknown input port: {}", port)))?;
-            port_config.audio_windowing.clone()
-        };
+        let audio_windowing = self
+            .ports
+            .lock()
+            .get(port)
+            .map(|port_config| port_config.audio_windowing.clone())
+            .ok_or_else(|| unknown_input_port(port))?;
 
         // The stage's decode, channel convert, resample and framing all run
         // here, with the `ports` mutex released — it guards the port map, and a

@@ -349,16 +349,16 @@ fn run_as_the_reader(
     );
     // What the wiring op does in a real runtime, and what this peer does for
     // itself because it has no compiler: the destination's side of the local
-    // channel is open, so the link is one the mesh may report as carrying. The
-    // notify service is `None` because this peer polls its own subscriber
-    // rather than waiting on a listener. The counts stand in for the ones a
+    // channel is open, so the link is one the mesh may report as carrying. This
+    // peer polls its own subscriber and never drains the notify service it
+    // names, which costs the ingress nothing. The counts stand in for the ones a
     // real destination's node carries, and are read back the same way `graph`
     // reads those.
     let where_the_hop_loss_is_counted =
         Arc::new(MeshHopDroppedBagCountsByRemoteInboundLink::default());
     ingress_table.note_how_a_links_destination_is_woken(
         &link_id,
-        None,
+        format!("cross-runtime-link-peer/{link_id}/notify"),
         Some(Arc::clone(&where_the_hop_loss_is_counted)),
     );
     report.write_line(READY_LINE);

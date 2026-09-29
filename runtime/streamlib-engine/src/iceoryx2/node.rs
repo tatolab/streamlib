@@ -117,6 +117,9 @@ pub(crate) fn iceoryx2_config_for_domain(
     }
 
     let mut config = Config::default();
+    // `Iceoryx2Node::open_or_create_service` gets past a shallow service whose
+    // only holder died by leaning on this reclaim.
+    config.global.service.cleanup_dead_nodes_on_open = true;
     config
         .global
         .set_root_path(&Path::new(root_bytes).map_err(|refusal| {
@@ -340,7 +343,7 @@ impl Iceoryx2Node {
                 return Err(channel_data_service_open_failure(
                     &service_name,
                     &failure,
-                    ChannelDataServiceOpenRefusedAfter::TheFirstOpen,
+                    ChannelDataServiceOpenRefusedFor::SomethingAReopenCannotChange,
                 ));
             }
         };
@@ -362,13 +365,24 @@ impl Iceoryx2Node {
                     );
                     return Ok(Iceoryx2Service { inner: service });
                 }
-                Err(failure) => latest_failure = failure,
+                Err(
+                    failure @ PublishSubscribeOpenOrCreateError::PublishSubscribeOpenError(
+                        PublishSubscribeOpenError::DoesNotSupportRequestedMinBufferSize,
+                    ),
+                ) => latest_failure = failure,
+                Err(failure) => {
+                    return Err(channel_data_service_open_failure(
+                        &service_name,
+                        &failure,
+                        ChannelDataServiceOpenRefusedFor::SomethingAReopenCannotChange,
+                    ));
+                }
             }
         }
         Err(channel_data_service_open_failure(
             &service_name,
             &latest_failure,
-            ChannelDataServiceOpenRefusedAfter::EveryReopen,
+            ChannelDataServiceOpenRefusedFor::DepthOnEveryReopen,
         ))
     }
 
@@ -503,20 +517,20 @@ fn channel_data_service_builder_under_the_channel_policy(
         .enable_safe_overflow(true)
 }
 
-/// The refusal for a failed open-or-create of a channel data service, naming the
-/// failure the sweep-and-retry started from when there was one.
-/// How far [`Iceoryx2Node::open_or_create_service`] got before its refusal.
-enum ChannelDataServiceOpenRefusedAfter {
-    /// Refused for something a reopen cannot change.
-    TheFirstOpen,
-    /// Refused for depth on every reopen the dead-holder budget allows.
-    EveryReopen,
+/// Why [`Iceoryx2Node::open_or_create_service`] gave up.
+enum ChannelDataServiceOpenRefusedFor {
+    /// Something a reopen cannot change.
+    SomethingAReopenCannotChange,
+    /// Depth, on every reopen the dead-holder budget allows.
+    DepthOnEveryReopen,
 }
 
+/// The refusal for a failed open-or-create of a channel data service, saying
+/// whether the dead-holder reopen budget was spent.
 fn channel_data_service_open_failure(
     service_name: &ServiceName,
     failure: &PublishSubscribeOpenOrCreateError,
-    refused_after: ChannelDataServiceOpenRefusedAfter,
+    refused_for: ChannelDataServiceOpenRefusedFor,
 ) -> Error {
     if let PublishSubscribeOpenOrCreateError::PublishSubscribeOpenError(
         PublishSubscribeOpenError::IncompatibleTypes,
@@ -527,11 +541,11 @@ fn channel_data_service_open_failure(
             failure,
         );
     }
-    match refused_after {
-        ChannelDataServiceOpenRefusedAfter::TheFirstOpen => {
+    match refused_for {
+        ChannelDataServiceOpenRefusedFor::SomethingAReopenCannotChange => {
             Error::Runtime(format!("Failed to open/create service: {failure:?}"))
         }
-        ChannelDataServiceOpenRefusedAfter::EveryReopen => Error::Runtime(format!(
+        ChannelDataServiceOpenRefusedFor::DepthOnEveryReopen => Error::Runtime(format!(
             "Failed to open/create service: {failure:?} (still refused after \
              {DEAD_HOLDER_RECLAIM_ATTEMPTS} reopens, each of which reclaims the service's dead \
              holders, so a live holder is genuinely shallower than this open asks for)"

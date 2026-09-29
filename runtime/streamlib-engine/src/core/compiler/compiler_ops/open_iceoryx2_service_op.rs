@@ -273,7 +273,7 @@ pub fn open_iceoryx2_service(
     if source_on_this_runtime.is_none() {
         mesh_link_ingress_table.note_how_a_links_destination_is_woken(
             link_id,
-            Some(notify_service_name_for_the_destination),
+            notify_service_name_for_the_destination,
             where_a_remote_links_hop_loss_is_counted(graph, &dest_proc_id, link_id),
         );
     }
@@ -2968,14 +2968,16 @@ mod tests {
     fn a_destination_is_notified_and_listens_whatever_it_runs() {
         use crate::core::test_support::{MockInputOnlyProcessor, MockReactiveInputOnlyProcessor};
 
+        const SELF_DRIVEN: &str = "self-driven";
+        const REACTIVE: &str = "reactive";
         for (tag, (source_output, dest_input)) in [
             (
-                "self-driven",
-                wire_one_test_link::<MockInputOnlyProcessor::Processor>("self-driven", false),
+                SELF_DRIVEN,
+                wire_one_test_link::<MockInputOnlyProcessor::Processor>(SELF_DRIVEN, false),
             ),
             (
-                "reactive",
-                wire_one_test_link::<MockReactiveInputOnlyProcessor::Processor>("reactive", true),
+                REACTIVE,
+                wire_one_test_link::<MockReactiveInputOnlyProcessor::Processor>(REACTIVE, true),
             ),
         ] {
             assert!(source_output.has_channel_publisher("out1"));
