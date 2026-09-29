@@ -138,11 +138,16 @@ jobs:
           # gets its pull_request runs created but held for a maintainer's
           # approval. Merging closes them unapproved, and GitHub then concludes
           # each as a zero-job `failure` on the release PR and its commits.
-          # Delete them while they are still only awaiting approval.
+          # Delete them while they are still only awaiting approval: a held run
+          # reports `completed` / `action_required` with no jobs, and its
+          # `pull_requests` list is empty, so it is matched by the release
+          # branch and the PR's own commits instead.
+          export RELEASE_BRANCH=$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+            --json headRefName --jq '.headRefName')
           for head_sha in $(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
               --json commits --jq '.commits[].oid'); do
-            for run_id in $(gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$head_sha&event=pull_request" \
-                --jq '.workflow_runs[].id'); do
+            for run_id in $(gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$head_sha&event=pull_request&status=action_required" \
+                --jq '.workflow_runs[] | select(.head_branch == env.RELEASE_BRANCH and .conclusion == "action_required") | .id'); do
               gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" \
                 || echo "::warning::could not delete unapproved release-PR run $run_id"
             done
