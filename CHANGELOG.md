@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.47](https://github.com/tatolab/streamlib/compare/v0.26.46...v0.26.47) (2026-09-29)
+
+
+### Bug Fixes
+
+* **engine:** a graphics draw into a ring slot waits for the display's in-flight compose ([#2548](https://github.com/tatolab/streamlib/issues/2548)) ([bbcc2ee](https://github.com/tatolab/streamlib/commit/bbcc2eeae361fea40023ffe2777ae2d5d5ba22cf))
+
 ## [0.26.46](https://github.com/tatolab/streamlib/compare/v0.26.45...v0.26.46) (2026-09-29)
 
 
