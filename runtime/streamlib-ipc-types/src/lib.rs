@@ -52,20 +52,28 @@ pub const UNTRUSTED_SESSION_CHANNEL_CHUNK_CEILING_BYTES: usize = 16 * 1024 * 102
 /// that carries it: its own publish-subscribe header, this crate's
 /// [`DataChannelBagSequenceNumberUserHeader`], and the padding aligning them.
 ///
-/// Mirrors `MessageTypeDetails::sample_layout`, which is crate-private upstream:
-/// `header + user_header + user_header_alignment - 1 + payload`, the whole
-/// aligned to the header's alignment. The payload term contributes
-/// `alignment - 1 = 0` for a `[u8]` slice. Composed from the real types rather
+/// Mirrors `MessageTypeDetails::all_headers_len`, which is crate-private
+/// upstream: the header, then the user header at its alignment, then the
+/// payload at its — `1` for a `[u8]` slice. Composed from the real types rather
 /// than written out, so a size change upstream moves this with it.
 const ICEORYX2_SAMPLE_BYTES_AHEAD_OF_A_CHANNEL_FRAME: usize =
-    size_of::<iceoryx2::service::header::publish_subscribe::Header>()
-        + size_of::<DataChannelBagSequenceNumberUserHeader>()
-        + align_of::<DataChannelBagSequenceNumberUserHeader>()
-        - 1;
+    (size_of::<iceoryx2::service::header::publish_subscribe::Header>()
+        .next_multiple_of(align_of::<DataChannelBagSequenceNumberUserHeader>())
+        + size_of::<DataChannelBagSequenceNumberUserHeader>())
+    .next_multiple_of(align_of::<u8>());
 
-/// The alignment iceoryx2 rounds a whole channel sample up to.
-const ICEORYX2_SAMPLE_ALIGNMENT_BYTES: usize =
-    align_of::<iceoryx2::service::header::publish_subscribe::Header>();
+/// The alignment iceoryx2 rounds a whole channel sample up to. Mirrors
+/// `MessageTypeDetails::chunk_layout`, which takes the largest of the header's,
+/// the user header's and the payload's; a `[u8]` payload's is `1`.
+const ICEORYX2_SAMPLE_ALIGNMENT_BYTES: usize = {
+    let header_alignment = align_of::<iceoryx2::service::header::publish_subscribe::Header>();
+    let user_header_alignment = align_of::<DataChannelBagSequenceNumberUserHeader>();
+    if header_alignment > user_header_alignment {
+        header_alignment
+    } else {
+        user_header_alignment
+    }
+};
 
 /// The shared-memory sample a channel frame of `frame_total_bytes` occupies —
 /// the layout iceoryx2's pool allocator buckets, never the frame alone.
@@ -987,23 +995,28 @@ mod tests {
         assert_eq!(FrameHeader::read_port_from_slice(&well_formed), "cam");
     }
 
-    /// The shape of `MessageTypeDetails::sample_layout`, spelled out here so a
-    /// one-sided edit of the constant reddens. Both sides read the same upstream
+    /// The shape of `MessageTypeDetails::chunk_layout`, spelled out here so a
+    /// one-sided edit of the constants reddens. Both sides read the same upstream
     /// types, so this deliberately does NOT catch an upstream size change — that
-    /// moves the constant and the formula together, which is the point of
-    /// composing the constant from the types rather than writing a number.
+    /// moves the constants and the formula together, which is the point of
+    /// composing them from the types rather than writing a number. What catches
+    /// an upstream change to the formula itself is the engine's
+    /// `a_ceiling_sized_bag_fills_the_ceilings_chunk_and_one_byte_more_takes_the_next`,
+    /// which loans a real chunk.
     #[test]
     fn a_channel_samples_layout_is_iceoryx2s_own_over_the_two_headers_and_the_payload() {
         type Iceoryx2PublishSubscribeHeader = iceoryx2::service::header::publish_subscribe::Header;
+        let all_headers_len = (size_of::<Iceoryx2PublishSubscribeHeader>()
+            .next_multiple_of(align_of::<DataChannelBagSequenceNumberUserHeader>())
+            + size_of::<DataChannelBagSequenceNumberUserHeader>())
+        .next_multiple_of(align_of::<u8>());
+        let max_alignment = align_of::<Iceoryx2PublishSubscribeHeader>()
+            .max(align_of::<DataChannelBagSequenceNumberUserHeader>())
+            .max(align_of::<u8>());
         for frame_total_bytes in [0usize, 1, 7, 8, 9, 4096, 65_536, 1_000_003] {
-            let upstream_formula = (size_of::<Iceoryx2PublishSubscribeHeader>()
-                + size_of::<DataChannelBagSequenceNumberUserHeader>()
-                + align_of::<DataChannelBagSequenceNumberUserHeader>()
-                - 1
-                + size_of::<u8>() * frame_total_bytes
-                + align_of::<u8>()
-                - 1)
-            .next_multiple_of(align_of::<Iceoryx2PublishSubscribeHeader>());
+            let upstream_formula = (all_headers_len
+                + size_of::<u8>().next_multiple_of(align_of::<u8>()) * frame_total_bytes)
+                .next_multiple_of(max_alignment);
             assert_eq!(
                 iceoryx2_sample_bytes_for_a_channel_frame(frame_total_bytes),
                 upstream_formula,
