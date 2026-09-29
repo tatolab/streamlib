@@ -119,6 +119,11 @@ pub(crate) const LONGEST_OPEN_GROUP_AGE_ON_A_VIDEO_FREE_BROADCAST_NS: i64 = 1_00
 /// is. Set where a stall is visible as latency rather than as memory.
 const OBJECTS_WAITING_FOR_THE_PROCESSOR: usize = 256;
 
+/// How many newer groups may queue behind one whose stream has not ended
+/// before the track is ended as stalled — never by dropping a queued group,
+/// since an object arriving later for it would end the whole subscription.
+const MOST_GROUPS_WAITING_BEHIND_AN_UNFINISHED_ONE: usize = 64;
+
 /// Open the WebTransport session a MoQ session runs on, and hand back a
 /// second handle on it that still reaches the QUIC connection.
 ///
@@ -849,7 +854,18 @@ async fn drain_one_track(
                     return;
                 }
             }
-            DrainStep::ANewGroupOpened(opened) => groups_waiting_their_turn.push_back(opened),
+            DrainStep::ANewGroupOpened(opened) => {
+                if groups_waiting_their_turn.len() >= MOST_GROUPS_WAITING_BEHIND_AN_UNFINISHED_ONE {
+                    let _ = sender
+                        .send(Err(format!(
+                            "`{track_name}` stalled: {MOST_GROUPS_WAITING_BEHIND_AN_UNFINISHED_ONE} \
+                             newer groups are waiting behind one whose stream has not ended"
+                        )))
+                        .await;
+                    return;
+                }
+                groups_waiting_their_turn.push_back(opened);
+            }
             DrainStep::TheGroupEnded => group_being_read = None,
             DrainStep::TheGroupFailed(failure) => {
                 // One stream reset — a publisher's delivery deadline, a relay
@@ -935,7 +951,8 @@ fn describe_track_end(track_name: &str, failure: &moq_transport::serve::ServeErr
 mod tests {
     use super::{
         AUDIO_MEDIA_TRACK_PRIORITY, DrainedObject, GroupTheUplinkBacklogAbandoned,
-        OpenGroupsByTrack, VIDEO_MEDIA_TRACK_PRIORITY, drain_one_track,
+        MOST_GROUPS_WAITING_BEHIND_AN_UNFINISHED_ONE, OpenGroupsByTrack,
+        VIDEO_MEDIA_TRACK_PRIORITY, drain_one_track,
     };
     use crate::delivery_deadline::UplinkBacklogReading;
     use moq_transport::data::DataStreamResetCode;
@@ -1408,5 +1425,40 @@ mod tests {
         assert_eq!(payloads, [bytes_of("older-2")]);
         assert_eq!(ended, format!("`{A_TRACK}` ended"));
         draining.await.expect("the drain returns");
+    }
+
+    /// A group whose stream never ends must not freeze the track in silence:
+    /// once too many newer groups wait behind it, the track ends by name and
+    /// the processor re-subscribes.
+    #[tokio::test]
+    async fn a_group_that_never_ends_stalls_the_track_by_name_rather_than_forever() {
+        let (mut subgroups, mut received, draining) = a_draining_track();
+        let mut unfinished = subgroups
+            .append(VIDEO_MEDIA_TRACK_PRIORITY)
+            .expect("a group opens");
+        unfinished.write(bytes_of("first")).expect("written");
+        assert_eq!(the_next_payload(&mut received).await, bytes_of("first"));
+
+        let mut waiting = Vec::new();
+        for _ in 0..=MOST_GROUPS_WAITING_BEHIND_AN_UNFINISHED_ONE {
+            let mut newer = subgroups
+                .append(VIDEO_MEDIA_TRACK_PRIORITY)
+                .expect("a group opens");
+            newer.write(bytes_of("newer")).expect("written");
+            waiting.push(newer);
+            let_the_drain_catch_up().await;
+        }
+
+        let (payloads, ended) = every_payload_until_the_end(&mut received).await;
+        assert!(
+            payloads.is_empty(),
+            "nothing overtakes the unfinished group"
+        );
+        assert!(
+            ended.starts_with(&format!("`{A_TRACK}` stalled")),
+            "the track ends by name: {ended}"
+        );
+        draining.await.expect("the drain returns");
+        drop((unfinished, waiting, subgroups));
     }
 }
