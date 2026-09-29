@@ -58,6 +58,9 @@ use crate::core::{Error, Result};
 
 use super::HostVulkanDevice;
 use super::vulkan_kernel_capability_refusal::VulkanSubgroupOperationSupport;
+use crate::core::directory_at_an_explicit_mode::{
+    OWNER_ONLY_DIRECTORY_MODE, create_directory_and_its_missing_parents_at_mode,
+};
 use crate::core::machine_global_unique_name::mint_machine_global_unique_name_suffix;
 
 /// Env var that overrides the default pipeline-cache directory. Shared with
@@ -2324,7 +2327,7 @@ fn persist_pipeline_cache(
 
 fn atomic_write_pipeline_cache(path: &Path, data: &[u8]) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        create_directory_and_its_missing_parents_at_mode(parent, OWNER_ONLY_DIRECTORY_MODE)?;
     }
     let suffix = format!("tmp.{}", mint_machine_global_unique_name_suffix());
     let mut tmp = path.to_path_buf();

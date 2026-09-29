@@ -2871,7 +2871,8 @@ mod fd_ownership_tests {
         UnixStream,
         SurfaceStore,
     ) {
-        let socket_dir = tempfile::TempDir::new().expect("temp dir for the test socket");
+        let socket_dir = crate::core::test_support::a_temporary_directory_at_owner_only_mode()
+            .expect("temp dir for the test socket");
         let socket_path = socket_dir.path().join("surface-share.sock");
         let mut service =
             UnixSocketSurfaceService::new(SurfaceShareState::new(), socket_path.clone());

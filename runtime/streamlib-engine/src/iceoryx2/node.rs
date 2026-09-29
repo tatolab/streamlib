@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use iceoryx2::node::Node;
+use iceoryx2::node::{Node, NodeCleanupFailure, NodeView};
 use iceoryx2::port::listener::Listener;
 use iceoryx2::port::notifier::Notifier;
 use iceoryx2::prelude::*;
@@ -59,23 +59,19 @@ const CHANNEL_PUBLISHER_MAX_LOANED_SAMPLES: usize = 1;
 /// replayed bag is stale by the time it arrives.
 const CHANNEL_HISTORY_SIZE: usize = 0;
 
-/// How many times a channel open refused for depth sweeps for the dead holder
-/// behind it before giving up.
+/// How many times a channel open refused for depth reopens before giving up.
 ///
-/// A process that has just died is not reclaimable the instant it goes —
-/// measured at about 10 ms on Linux 7.0 — so a single sweep loses the race with
-/// a link rewired right after a helper crashed. Kept to a handful rather than a
-/// poll loop because a sweep is domain-wide: every runtime and helper sharing
-/// this domain is opening in it, and reclaiming underneath one that is still
-/// creating its own node is a cost this recovery must not spread around. Three
-/// covers the measured window several times over.
+/// iceoryx2 reclaims a service's dead holders on every open, but a process
+/// that has just died is not reclaimable the instant it goes — measured at
+/// about 10 ms on Linux 7.0 — so the open that follows a helper crash can lose
+/// that race. Three covers the measured window several times over.
 const DEAD_HOLDER_RECLAIM_ATTEMPTS: usize = 3;
 
-/// How long to wait after a sweep that did not get the holder back, doubling
-/// for the attempt after it. Holds the whole recovery to about 60 ms, so a
-/// wiring call the caller is waiting on is never parked long.
+/// How long to wait before the first reopen, doubling for each one after it.
+/// Holds the whole recovery to about 70 ms, so a wiring call the caller is
+/// waiting on is never parked long.
 const DEAD_HOLDER_RECLAIM_FIRST_RETRY_INTERVAL: std::time::Duration =
-    std::time::Duration::from_millis(20);
+    std::time::Duration::from_millis(10);
 
 /// The environment variable a parent hands its helper the iceoryx2 domain root in.
 pub const ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_ICEORYX2_DOMAIN_ROOT";
@@ -121,6 +117,9 @@ pub(crate) fn iceoryx2_config_for_domain(
     }
 
     let mut config = Config::default();
+    // `Iceoryx2Node::open_or_create_service` gets past a shallow service whose
+    // only holder died by leaning on this reclaim.
+    config.global.service.cleanup_dead_nodes_on_open = true;
     config
         .global
         .set_root_path(&Path::new(root_bytes).map_err(|refusal| {
@@ -152,21 +151,39 @@ pub fn reclaim_dead_iceoryx2_nodes_in_engine_owned_domain(
     domain_root: &std::path::Path,
 ) -> Result<u64> {
     let config = engine_owned_iceoryx2_config(domain_root)?;
-    Ok(reclaim_dead_iceoryx2_nodes_in(&config))
-}
-
-/// The sweep itself, over a configuration already built — what a node holding
-/// its own config runs, so a retry sweeps the domain it is actually opening in.
-fn reclaim_dead_iceoryx2_nodes_in(config: &Config) -> u64 {
-    let reclaimed = Node::<ipc::Service>::try_cleanup_dead_nodes(config);
-    if reclaimed.failed_cleanups > 0 {
+    let mut reclaimed_dead_nodes = 0u64;
+    let mut dead_nodes_another_cleaner_is_reclaiming = 0u64;
+    let listing = Node::<ipc::Service>::list(&config, |node_state| {
+        if let NodeState::Dead(dead_node) = node_state {
+            let dead_node_id = *dead_node.id();
+            match dead_node.try_remove_stale_resources() {
+                Ok(()) | Err(NodeCleanupFailure::ResourcesAlreadyCleanedUp) => {
+                    reclaimed_dead_nodes += 1
+                }
+                Err(NodeCleanupFailure::AnotherInstanceIsCleaningUpTheNode) => {
+                    dead_nodes_another_cleaner_is_reclaiming += 1
+                }
+                Err(cannot_reclaim) => tracing::warn!(
+                    "dead iceoryx2 node {dead_node_id:?} cannot be reclaimed and keeps its place \
+                     in every service it had opened: {cannot_reclaim:?}"
+                ),
+            }
+        }
+        CallbackProgression::Continue
+    });
+    if let Err(listing_failure) = listing {
         tracing::debug!(
-            "{} dead iceoryx2 node(s) could not be reclaimed, which is ordinary when another \
-             process holds them",
-            reclaimed.failed_cleanups,
+            "the engine's iceoryx2 domain could not be listed in full, so the sweep reclaimed \
+             only what it reached: {listing_failure:?}"
         );
     }
-    reclaimed.cleanups
+    if dead_nodes_another_cleaner_is_reclaiming > 0 {
+        tracing::debug!(
+            "{dead_nodes_another_cleaner_is_reclaiming} dead iceoryx2 node(s) are being \
+             reclaimed by another process or thread",
+        );
+    }
+    Ok(reclaimed_dead_nodes)
 }
 
 /// Create a raw iceoryx2 node, labelled `node_name`, in the engine-owned domain rooted at `domain_root`.
@@ -257,6 +274,7 @@ impl Iceoryx2Node {
     }
 
     /// The iceoryx2 configuration this node was created with.
+    #[cfg(test)]
     pub(crate) fn config(&self) -> Config {
         self.inner.lock().config().clone()
     }
@@ -318,13 +336,10 @@ impl Iceoryx2Node {
     /// never blocks.
     ///
     /// A shallower live service refuses the depth this asks for. That is a real
-    /// refusal while a live holder is genuinely shallower, and a stale one once
-    /// every holder has died: iceoryx2 sweeps dead nodes only after a
-    /// *successful* open, so a long-lived node keeps failing the same reopen
-    /// until some new node is created anywhere on the machine. This therefore
-    /// sweeps its own domain and reopens, up to
-    /// [`DEAD_HOLDER_RECLAIM_ATTEMPTS`] times, which turns that permanent
-    /// failure back into the transient it is.
+    /// refusal while a live holder is genuinely shallower, and a transient one
+    /// while the only holder is a process that has just died: iceoryx2 reclaims
+    /// a service's dead holders on open, once it can tell they are dead. This
+    /// therefore reopens up to [`DEAD_HOLDER_RECLAIM_ATTEMPTS`] times.
     pub fn open_or_create_service(
         &self,
         service_name: &str,
@@ -345,58 +360,44 @@ impl Iceoryx2Node {
             .open_or_create()
         };
 
-        let first_failure = match open_or_create_once() {
-            Ok(service) => return Ok(Iceoryx2Service { inner: service }),
-            Err(
-                failure @ PublishSubscribeOpenOrCreateError::PublishSubscribeOpenError(
-                    PublishSubscribeOpenError::DoesNotSupportRequestedMinBufferSize,
-                ),
-            ) => failure,
-            Err(failure) => {
+        let started_opening = std::time::Instant::now();
+        let mut reopens = 0;
+        let mut retry_interval = DEAD_HOLDER_RECLAIM_FIRST_RETRY_INTERVAL;
+        loop {
+            let failure = match open_or_create_once() {
+                Ok(service) => {
+                    if reopens > 0 {
+                        tracing::info!(
+                            service = service_name.as_str(),
+                            channel_service_creation_depth,
+                            recovered_in_ms = started_opening.elapsed().as_millis() as u64,
+                            "a channel service was held shallower than this open asks for by a \
+                             node whose process had just died; reopened it once iceoryx2 \
+                             reclaimed the node"
+                        );
+                    }
+                    return Ok(Iceoryx2Service { inner: service });
+                }
+                Err(failure) => failure,
+            };
+            if !a_reopen_can_get_past(&failure) {
                 return Err(channel_data_service_open_failure(
                     &service_name,
                     &failure,
-                    None,
+                    ChannelDataServiceOpenRefusedFor::SomethingAReopenCannotChange,
                 ));
             }
-        };
-
-        let engine_owned_domain_config = self.config();
-        let started_recovering = std::time::Instant::now();
-        let mut swept_dead_nodes = 0u64;
-        let mut latest_failure = first_failure;
-        let mut retry_interval = DEAD_HOLDER_RECLAIM_FIRST_RETRY_INTERVAL;
-        for attempt in 1..=DEAD_HOLDER_RECLAIM_ATTEMPTS {
-            swept_dead_nodes += reclaim_dead_iceoryx2_nodes_in(&engine_owned_domain_config);
-            // Reopened whatever this sweep reclaimed, not only when it reclaimed
-            // something itself: the node lock is dropped between attempts, so a
-            // concurrent opener's sweep can be what frees the service, and
-            // gating on our own count would leave this call failing a service
-            // that is already openable.
-            match open_or_create_once() {
-                Ok(service) => {
-                    tracing::info!(
-                        service = service_name.as_str(),
-                        channel_service_creation_depth,
-                        reclaimed_dead_nodes = swept_dead_nodes,
-                        recovered_in_ms = started_recovering.elapsed().as_millis() as u64,
-                        "a channel service was held shallower than this open asks for by a node \
-                         whose process is gone; swept the engine's domain and reopened it"
-                    );
-                    return Ok(Iceoryx2Service { inner: service });
-                }
-                Err(failure) => latest_failure = failure,
+            if reopens == DEAD_HOLDER_RECLAIM_ATTEMPTS {
+                return Err(channel_data_service_open_failure(
+                    &service_name,
+                    &failure,
+                    ChannelDataServiceOpenRefusedFor::DepthOnEveryReopen,
+                ));
             }
-            if attempt < DEAD_HOLDER_RECLAIM_ATTEMPTS {
-                std::thread::sleep(retry_interval);
-                retry_interval *= 2;
-            }
+            reopens += 1;
+            std::thread::sleep(retry_interval);
+            retry_interval *= 2;
         }
-        Err(channel_data_service_open_failure(
-            &service_name,
-            &latest_failure,
-            Some(swept_dead_nodes),
-        ))
     }
 
     /// The channel data service named `service_name`, or `None` when nothing
@@ -530,12 +531,31 @@ fn channel_data_service_builder_under_the_channel_policy(
         .enable_safe_overflow(true)
 }
 
-/// The refusal for a failed open-or-create of a channel data service, naming the
-/// failure the sweep-and-retry started from when there was one.
+/// Whether a reopen can get past `failure`: only a refusal for depth, which a
+/// holder that has just died stops causing once iceoryx2 reclaims it.
+fn a_reopen_can_get_past(failure: &PublishSubscribeOpenOrCreateError) -> bool {
+    matches!(
+        failure,
+        PublishSubscribeOpenOrCreateError::PublishSubscribeOpenError(
+            PublishSubscribeOpenError::DoesNotSupportRequestedMinBufferSize
+        )
+    )
+}
+
+/// Why [`Iceoryx2Node::open_or_create_service`] gave up.
+enum ChannelDataServiceOpenRefusedFor {
+    /// Something a reopen cannot change.
+    SomethingAReopenCannotChange,
+    /// Depth, on every reopen the dead-holder budget allows.
+    DepthOnEveryReopen,
+}
+
+/// The refusal for a failed open-or-create of a channel data service, saying
+/// whether the dead-holder reopen budget was spent.
 fn channel_data_service_open_failure(
     service_name: &ServiceName,
     failure: &PublishSubscribeOpenOrCreateError,
-    dead_nodes_swept_while_retrying: Option<u64>,
+    refused_for: ChannelDataServiceOpenRefusedFor,
 ) -> Error {
     if let PublishSubscribeOpenOrCreateError::PublishSubscribeOpenError(
         PublishSubscribeOpenError::IncompatibleTypes,
@@ -546,13 +566,14 @@ fn channel_data_service_open_failure(
             failure,
         );
     }
-    match dead_nodes_swept_while_retrying {
-        None => Error::Runtime(format!("Failed to open/create service: {failure:?}")),
-        Some(swept) => Error::Runtime(format!(
+    match refused_for {
+        ChannelDataServiceOpenRefusedFor::SomethingAReopenCannotChange => {
+            Error::Runtime(format!("Failed to open/create service: {failure:?}"))
+        }
+        ChannelDataServiceOpenRefusedFor::DepthOnEveryReopen => Error::Runtime(format!(
             "Failed to open/create service: {failure:?} (still refused after \
-             {DEAD_HOLDER_RECLAIM_ATTEMPTS} sweeps of the engine's iceoryx2 domain, which \
-             reclaimed {swept} dead node(s), so a live holder is genuinely shallower than this \
-             open asks for)"
+             {DEAD_HOLDER_RECLAIM_ATTEMPTS} reopens, each of which reclaims the service's dead \
+             holders, so a live holder is genuinely shallower than this open asks for)"
         )),
     }
 }
@@ -707,9 +728,7 @@ impl Iceoryx2NotifyService {
 
     /// Create a listener for this service.
     pub fn create_listener(&self) -> Result<Listener<ipc::Service>> {
-        self.inner
-            .listener_builder()
-            .create()
+        crate::iceoryx2::bind_an_iceoryx2_listener_outside_every_child_process_start(&self.inner)
             .map_err(|e| Error::Runtime(format!("Failed to create listener: {:?}", e)))
     }
 }
@@ -1588,11 +1607,15 @@ mod tests {
     /// anyway, so a test domain built under it matches what a real run gets.
     fn domain_root_parent_within_the_socket_path_budget() -> tempfile::TempDir {
         #[cfg(target_os = "macos")]
-        return tempfile::Builder::new()
-            .tempdir_in("/tmp")
-            .expect("a temp directory under /tmp");
+        return crate::core::test_support::at_owner_only_mode(
+            tempfile::Builder::new()
+                .tempdir_in("/tmp")
+                .expect("a temp directory under /tmp"),
+        )
+        .expect("a temp directory under /tmp");
         #[cfg(not(target_os = "macos"))]
-        return tempfile::tempdir().expect("a temp directory");
+        return crate::core::test_support::a_temporary_directory_at_owner_only_mode()
+            .expect("a temp directory");
     }
 
     /// Set only in the child process the dead-node test re-runs itself in.
@@ -1676,11 +1699,12 @@ mod tests {
     const STALE_HOLDER_DEEPER_DEPTH: usize = 16;
     const STALE_HOLDER_MAX_SUBSCRIBERS: usize = 4;
 
-    /// Mental-revert guard for the sweep-and-retry: drop it and the assertion
-    /// below that the raw builder still fails is what this open does forever —
-    /// iceoryx2 sweeps dead nodes only after a *successful* open, so the app
-    /// process's long-lived node keeps failing the same reopen until some new
-    /// node happens to be created anywhere on the machine.
+    /// A long-lived node's deeper open gets past a shallow service whose only
+    /// holder died, because iceoryx2 reclaims a service's dead holders on open.
+    ///
+    /// Fail-without-fix: set `cleanup_dead_nodes_on_open` to `false` in
+    /// [`iceoryx2_config_for_domain`] and the open is refused for depth on every
+    /// reopen, for as long as the long-lived node lives.
     #[test]
     fn a_deeper_open_survives_a_shallow_service_a_dead_holder_left_behind() {
         if let Some(domain_root) =
@@ -1708,8 +1732,8 @@ mod tests {
         let domain_root = domain.path().join("iox2");
 
         // This node is created BEFORE the holder dies and is never replaced, so
-        // nothing but an explicit sweep can clear the dead holder out from under
-        // it — the app process's own arrangement.
+        // no node creation sweeps the dead holder out from under it — the app
+        // process's own arrangement.
         let long_lived_node = Iceoryx2Node::new(&domain_root, "streamlib-test/long-lived")
             .expect("the long-lived node opens first");
 
@@ -1725,36 +1749,31 @@ mod tests {
             )
             .output()
             .expect("the test binary re-runs this test in a holder process");
-        assert!(
-            !holder.status.success(),
-            "the holder must die where it stood rather than report a result"
+        // The signal and not merely a non-zero exit: a holder that panicked
+        // before it created its shallow service would also exit non-zero, and
+        // the deeper open below would then create a fresh service and prove
+        // nothing.
+        assert_eq!(
+            std::os::unix::process::ExitStatusExt::signal(&holder.status),
+            Some(libc::SIGKILL),
+            "the holder must die where it stood, holding its service: {}",
+            String::from_utf8_lossy(&holder.stderr),
         );
-
-        // The trap, proven before the fix is exercised: a plain open of the same
-        // depth still fails, because a failed open sweeps nothing.
-        {
-            let raw_node = long_lived_node.inner.lock();
-            let service_name = iceoryx2_service_name_of(STALE_HOLDER_CHANNEL_SERVICE_NAME).unwrap();
-            let unswept_failure = channel_data_service_builder_under_the_channel_policy(
-                &raw_node,
-                &service_name,
-                STALE_HOLDER_MAX_SUBSCRIBERS,
-                STALE_HOLDER_DEEPER_DEPTH,
+        let shallow_service_the_holder_left =
+            <ipc::Service as iceoryx2::service::Service>::details(
+                &iceoryx2_service_name_of(STALE_HOLDER_CHANNEL_SERVICE_NAME).unwrap(),
+                &long_lived_node.config(),
+                iceoryx2::service::messaging_pattern::MessagingPattern::PublishSubscribe,
             )
-            .open_or_create();
-            assert!(
-                matches!(
-                    unswept_failure,
-                    Err(
-                        PublishSubscribeOpenOrCreateError::PublishSubscribeOpenError(
-                            PublishSubscribeOpenError::DoesNotSupportRequestedMinBufferSize
-                        )
-                    )
-                ),
-                "the dead holder's shallow service must be what blocks the deeper open, \
-                 got {unswept_failure:?}"
-            );
-        }
+            .expect("the domain's services can be read without opening one")
+            .expect("the dead holder's shallow service is still there");
+        assert_eq!(
+            shallow_service_the_holder_left
+                .static_details
+                .publish_subscribe()
+                .subscriber_max_buffer_size(),
+            STALE_HOLDER_SHALLOW_DEPTH,
+        );
 
         let deeper_channel = long_lived_node
             .open_or_create_service(
@@ -1762,7 +1781,7 @@ mod tests {
                 STALE_HOLDER_MAX_SUBSCRIBERS,
                 STALE_HOLDER_DEEPER_DEPTH,
             )
-            .expect("the sweep-and-retry must get past a shallow service nothing live holds");
+            .expect("the open must get past a shallow service nothing live holds");
         assert_eq!(
             deeper_channel.channel_service_creation_depth(),
             STALE_HOLDER_DEEPER_DEPTH,
@@ -1813,9 +1832,14 @@ mod tests {
             return;
         }
 
-        let working_directory = tempfile::tempdir().unwrap();
+        let working_directory =
+            crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
         let hijacked_root = working_directory.path().join("hijacked");
-        std::fs::create_dir(working_directory.path().join("config")).unwrap();
+        crate::core::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
+            &working_directory.path().join("config"),
+            crate::core::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
+        )
+        .unwrap();
         std::fs::write(
             working_directory
                 .path()

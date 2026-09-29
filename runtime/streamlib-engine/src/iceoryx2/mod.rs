@@ -10,6 +10,7 @@ mod channel_idle_poll_backoff;
 mod channel_name;
 #[cfg(test)]
 mod channel_sizing_tests;
+mod child_process_start_outside_listener_binds;
 mod delivery_profile;
 mod helper_process_loss_count_board;
 #[cfg(any(test, feature = "test-support"))]
@@ -48,6 +49,8 @@ pub use channel_name::{
     THE_ONE_CHUNK_GRAMMAR, first_reason_this_is_not_one_channel_name_chunk,
     mesh_ingress_channel_name, source_channel_name, validate_channel_name,
 };
+pub(crate) use child_process_start_outside_listener_binds::bind_an_iceoryx2_listener_outside_every_child_process_start;
+pub use child_process_start_outside_listener_binds::spawn_outside_every_iceoryx2_listener_bind;
 pub(crate) use delivery_profile::delivery_profile_for_input_port;
 pub use delivery_profile::{DeliveryProfile, DeliveryResolution};
 #[cfg(test)]
@@ -63,7 +66,7 @@ pub use iceoryx2_domain_for_this_test_process::{
     Iceoryx2DomainForThisTestProcess, create_iceoryx2_node_for_this_test_process,
     iceoryx2_domain_for_this_test_process,
 };
-pub use input::{BoundedReadOutcome, InputMailboxes, InputMailboxesInner};
+pub use input::{InputMailboxes, InputMailboxesInner};
 pub use loss_counters::{
     DiscardedSampleCountsByInboundLink, DroppedBagCountsByInboundLink,
     MeshHopDroppedBagCountsByRemoteInboundLink, RefusedBagCountsByOutputPort,

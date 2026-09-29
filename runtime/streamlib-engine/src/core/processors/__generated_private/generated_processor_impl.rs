@@ -165,8 +165,7 @@ impl OutOfProcessLinkWiringEnvelope {
         }
     }
 
-    /// The mode the far side drives its processor in, which decides whether
-    /// it ever drains the listener its sources would notify.
+    /// The mode the far side drives its processor in.
     pub fn far_side_process_execution(&self) -> ProcessExecution {
         self.far_side_process_execution
     }

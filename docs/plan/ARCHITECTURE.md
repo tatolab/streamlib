@@ -1658,7 +1658,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: cargo test -p streamlib-engine --lib core::compiler::compiler_ops::open_iceoryx2_service_op::tests::a_second_inbound_link_into_a_windowed_port_is_refused_naming_the_port_and_both_links -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::audio_window::audio_window_stage_tests::a_channel_pair_with_neither_side_at_one_is_refused_naming_both_counts -->
 - **DECIDED** — One stage, at the one read seam every reader already shares. It sits in
-  `read_raw_bounded`, which an app-process Rust processor reaches through the parent's
+  `next_bag_for_the_reader`, which an app-process Rust processor reaches through the parent's
   mailboxes and a helper-placed Python processor through its own — one implementation
   serving both, with no new IPC hop and no parent↔child contract to design, which matters
   because every Python processor is helper-placed and a Python consumer is who this

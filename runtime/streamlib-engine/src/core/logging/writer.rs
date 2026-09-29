@@ -9,6 +9,9 @@ use std::io::{self, Write};
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
 
+use crate::core::directory_at_an_explicit_mode::{
+    OWNER_ONLY_DIRECTORY_MODE, create_directory_and_its_missing_parents_at_mode,
+};
 use crate::core::logging::paths::{
     replacement_runtime_log_segment_path, rotated_runtime_log_segment_path,
     rotated_runtime_log_segment_sequence,
@@ -51,7 +54,7 @@ impl JsonlBatchedWriter {
         rotation_policy: JsonlSegmentRotationPolicy,
     ) -> io::Result<Self> {
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
+            create_directory_and_its_missing_parents_at_mode(parent, OWNER_ONLY_DIRECTORY_MODE)?;
         }
         let active_segment_file = open_segment_for_append(path)?;
         let active_segment_bytes = active_segment_file.metadata()?.len();
@@ -223,7 +226,6 @@ fn rotated_segment_sequences_on_disk(active_segment_path: &Path) -> io::Result<V
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
 
     fn read_all(path: &Path) -> String {
         std::fs::read_to_string(path).unwrap()
@@ -283,7 +285,7 @@ mod tests {
 
     #[test]
     fn records_accumulate_until_size_flush() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
         let path = tmp.path().join("out.jsonl");
         let mut w =
             JsonlBatchedWriter::open(&path, 32, false, JsonlSegmentRotationPolicy::NEVER_ROTATE)
@@ -306,7 +308,7 @@ mod tests {
 
     #[test]
     fn flush_if_pending_emits_buffered() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
         let path = tmp.path().join("out.jsonl");
         let mut w = JsonlBatchedWriter::open(
             &path,
@@ -323,7 +325,7 @@ mod tests {
 
     #[test]
     fn flush_and_fsync_persists() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
         let path = tmp.path().join("out.jsonl");
         let mut w = JsonlBatchedWriter::open(
             &path,
@@ -339,7 +341,7 @@ mod tests {
 
     #[test]
     fn append_opens_parent_dirs() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
         let path = tmp.path().join("nested").join("dirs").join("out.jsonl");
         let mut w = JsonlBatchedWriter::open(
             &path,
@@ -355,7 +357,7 @@ mod tests {
 
     #[test]
     fn rotation_at_size_threshold_rolls_over() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
         let path = tmp.path().join("Rabc-1000.jsonl");
         let mut w =
             JsonlBatchedWriter::open(&path, 512, false, rotating_every(4 * 1024, None)).unwrap();
@@ -392,7 +394,7 @@ mod tests {
 
     #[test]
     fn retention_deletes_oldest_segments() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
         let path = tmp.path().join("Rabc-1000.jsonl");
         let record = numbered_record(0);
         // One record per flush, a threshold one record wide: every flush rotates.
@@ -424,7 +426,7 @@ mod tests {
 
     #[test]
     fn a_retention_of_one_keeps_only_the_active_segment() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
         let path = tmp.path().join("Rabc-1000.jsonl");
         let mut w = JsonlBatchedWriter::open(&path, 1, false, rotating_every(1, Some(1))).unwrap();
 
@@ -437,7 +439,7 @@ mod tests {
 
     #[test]
     fn rotation_atomicity_no_split_records() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
         let path = tmp.path().join("Rabc-1000.jsonl");
         let record_bytes = numbered_record(0).len() as u64 + 1;
         // Each batch holds seven records and the threshold is crossed partway
@@ -465,7 +467,7 @@ mod tests {
 
     #[test]
     fn flush_and_fsync_never_rotates_the_active_segment() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
         let path = tmp.path().join("Rabc-1000.jsonl");
         let mut w =
             JsonlBatchedWriter::open(&path, 1024 * 1024, false, rotating_every(1, None)).unwrap();
@@ -479,7 +481,7 @@ mod tests {
 
     #[test]
     fn reopening_an_existing_segment_counts_its_bytes_toward_the_threshold() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
         let path = tmp.path().join("Rabc-1000.jsonl");
         std::fs::write(&path, "x".repeat(4 * 1024)).unwrap();
         let mut w =
@@ -495,7 +497,7 @@ mod tests {
 
     #[test]
     fn reopening_an_existing_segment_numbers_rotations_after_the_ones_already_on_disk() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
         let path = tmp.path().join("Rabc-1000.jsonl");
         std::fs::write(tmp.path().join("Rabc-1000.1.jsonl"), "{\"sequence\":100}\n").unwrap();
         std::fs::write(tmp.path().join("Rabc-1000.2.jsonl"), "{\"sequence\":101}\n").unwrap();
@@ -523,7 +525,7 @@ mod tests {
 
     #[test]
     fn reopening_past_an_earlier_runs_backlog_trims_it_to_the_retention_bound() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
         let path = tmp.path().join("Rabc-1000.jsonl");
         for rotated_sequence in [1, 2, 4, 5, 6] {
             std::fs::write(
@@ -563,7 +565,7 @@ mod tests {
 
     #[test]
     fn a_rotated_segment_removed_from_outside_does_not_stop_retention() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
         let path = tmp.path().join("Rabc-1000.jsonl");
         let mut w = JsonlBatchedWriter::open(&path, 1, false, rotating_every(1, Some(3))).unwrap();
         for sequence in 0..2 {
@@ -584,7 +586,7 @@ mod tests {
 
     #[test]
     fn a_rotation_leaves_no_replacement_file_behind() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
         let path = tmp.path().join("Rabc-1000.jsonl");
         let mut w = JsonlBatchedWriter::open(&path, 1, false, rotating_every(1, None)).unwrap();
 
@@ -599,7 +601,7 @@ mod tests {
 
     #[test]
     fn a_rotation_that_cannot_create_its_replacement_leaves_the_active_name_in_place() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
         let path = tmp.path().join("Rabc-1000.jsonl");
         let blocking_directory = tmp.path().join("Rabc-1000.jsonl.rotating");
         std::fs::create_dir(&blocking_directory).unwrap();
@@ -627,7 +629,7 @@ mod tests {
 
     #[test]
     fn a_rotated_in_segment_truncated_from_outside_keeps_appending_at_its_end() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
         let path = tmp.path().join("Rabc-1000.jsonl");
         let record_bytes = numbered_record(0).len() as u64 + 1;
         let mut w =

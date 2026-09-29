@@ -156,10 +156,14 @@ mod tests {
     use super::*;
 
     fn run_git_or_panic(directory: &Path, arguments: &[&str]) -> String {
-        let output = git_command_resolving_the_checkout_of(directory)
-            .args(arguments)
-            .output()
-            .expect("git runs");
+        let output = crate::iceoryx2::spawn_outside_every_iceoryx2_listener_bind(
+            git_command_resolving_the_checkout_of(directory)
+                .args(arguments)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped()),
+        )
+        .and_then(std::process::Child::wait_with_output)
+        .expect("git runs");
         assert!(
             output.status.success(),
             "git {arguments:?} failed: {}",
@@ -169,7 +173,11 @@ mod tests {
     }
 
     fn write_manifest(crate_directory: &Path, manifest: &str) {
-        std::fs::create_dir_all(crate_directory).unwrap();
+        crate::core::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
+            crate_directory,
+            crate::core::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
+        )
+        .unwrap();
         std::fs::write(crate_directory.join("Cargo.toml"), manifest).unwrap();
     }
 
@@ -184,7 +192,8 @@ mod tests {
 
     #[test]
     fn a_build_with_no_git_checkout_names_its_sha_unknown() {
-        let directory_outside_any_checkout = tempfile::tempdir().unwrap();
+        let directory_outside_any_checkout =
+            crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
 
         let git_sha = git_sha_of_the_checkout_containing(directory_outside_any_checkout.path());
 
@@ -197,7 +206,8 @@ mod tests {
 
     #[test]
     fn a_checkout_names_the_commit_it_has_out() {
-        let checkout = tempfile::tempdir().unwrap();
+        let checkout =
+            crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
         run_git_or_panic(checkout.path(), &["init", "--quiet"]);
         run_git_or_panic(
             checkout.path(),
@@ -215,7 +225,11 @@ mod tests {
             ],
         );
         let nested_directory = checkout.path().join("runtime/streamlib-engine");
-        std::fs::create_dir_all(&nested_directory).unwrap();
+        crate::core::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
+            &nested_directory,
+            crate::core::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
+        )
+        .unwrap();
 
         assert_eq!(
             git_sha_of_the_checkout_containing(&nested_directory),
@@ -232,7 +246,8 @@ mod tests {
     /// built before an edit to them keeps passing the check.
     #[test]
     fn every_crate_linked_through_a_path_dependency_is_found_and_no_other() {
-        let workspace = tempfile::tempdir().unwrap();
+        let workspace =
+            crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
         let workspace_root = workspace.path();
         write_manifest(
             workspace_root,

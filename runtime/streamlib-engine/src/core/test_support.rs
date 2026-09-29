@@ -420,13 +420,16 @@ pub(crate) fn rerun_this_test_in_a_child_process(
     environment_variable: &str,
     value: &std::ffi::OsStr,
 ) -> std::process::Output {
-    let child_process_output =
+    let child_process_output = crate::iceoryx2::spawn_outside_every_iceoryx2_listener_bind(
         std::process::Command::new(std::env::current_exe().expect("the test binary's own path"))
             .args([test_path, "--exact", "--test-threads=1", "--nocapture"])
             .env(environment_variable, value)
             .stdin(std::process::Stdio::null())
-            .output()
-            .expect("the test binary re-runs this test in a child process");
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped()),
+    )
+    .and_then(std::process::Child::wait_with_output)
+    .expect("the test binary re-runs this test in a child process");
     // `--exact` on a name that matches nothing runs no test and exits 0, which
     // reads as a pass for a test that was renamed away.
     let child_standard_output = String::from_utf8_lossy(&child_process_output.stdout);
@@ -435,4 +438,26 @@ pub(crate) fn rerun_this_test_in_a_child_process(
         "the child process ran no test named `{test_path}`:\n{child_standard_output}"
     );
     child_process_output
+}
+
+/// A temporary directory at exactly owner-only mode, even when it was made
+/// while another test's thread was binding an iceoryx2 listener under its
+/// process-wide umask.
+pub(crate) fn a_temporary_directory_at_owner_only_mode() -> std::io::Result<tempfile::TempDir> {
+    at_owner_only_mode(tempfile::tempdir()?)
+}
+
+/// Give `temporary_directory` exactly owner-only mode, whatever umask it was
+/// made under.
+pub(crate) fn at_owner_only_mode(
+    temporary_directory: tempfile::TempDir,
+) -> std::io::Result<tempfile::TempDir> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(
+        temporary_directory.path(),
+        std::fs::Permissions::from_mode(
+            crate::core::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
+        ),
+    )?;
+    Ok(temporary_directory)
 }

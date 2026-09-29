@@ -35,7 +35,9 @@ use streamlib::sdk::helper_process_transport::{
     HelperProcessShutdownCommand, SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS, SubprocessBridge,
     refusal_of_a_link_into_a_helper_process_that_failed, spawn_fd_line_reader,
 };
-use streamlib::sdk::iceoryx2::ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE;
+use streamlib::sdk::iceoryx2::{
+    ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, spawn_outside_every_iceoryx2_listener_bind,
+};
 use streamlib::sdk::processors::{DynGeneratedProcessor, OutOfProcessLinkWiringEnvelope};
 
 /// The module CPython is launched with in a helper process.
@@ -689,7 +691,8 @@ impl PythonHelperProcessSpawnHostProcessor {
         self.iceoryx2_domain_root = Some(iceoryx2_domain_root);
         let mut escalate_transport = EscalateTransport::attach(&mut command)?;
 
-        let mut child = command.spawn().map_err(|spawn_failure| {
+        let spawned_helper_process = spawn_outside_every_iceoryx2_listener_bind(&mut command);
+        let mut child = spawned_helper_process.map_err(|spawn_failure| {
             Error::Runtime(format!(
                 "[{}] could not start its helper process with `{} -m {HELPER_PROCESS_MODULE}`: \
                  {spawn_failure}",
@@ -1460,7 +1463,11 @@ if os.fork() == 0:
         // socket paths leave a domain root.
         let domain = Path::new("/tmp").join(format!("streamlib-host-sweep-{}", std::process::id()));
         let domain_root = domain.join("iox2");
-        std::fs::create_dir_all(&domain_root).expect("a private domain root");
+        streamlib::sdk::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
+            &domain_root,
+            streamlib::sdk::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
+        )
+        .expect("a private domain root");
         let dead_node_owner = Command::new(std::env::current_exe().unwrap())
             .args([
                 "python_helper_process_spawn_host::tests::\
@@ -1683,12 +1690,12 @@ sys.exit(0)
         }
     }
 
-    /// The engine decides whether a helper destination's sources notify it from
-    /// the envelope, and this host reports `Manual` whatever the class declared,
-    /// so the envelope has to carry the child's own mode.
+    /// The child is told to run its loop in the mode the envelope carries, and
+    /// this host reports `Manual` for its own thread whatever the class
+    /// declared, so the envelope has to carry the child's own mode.
     ///
     /// Fail-without-fix: build the envelope as `Reactive` regardless and a
-    /// `continuous` helper with an input gets a notifier it never drains again.
+    /// `continuous` helper is told to run a reactive loop.
     #[test]
     fn the_wiring_envelope_carries_the_mode_the_child_drives_its_processor_in() {
         let _ = captured_launch_environment().set(HelperProcessLaunchEnvironment {

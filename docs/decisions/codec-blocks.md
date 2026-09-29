@@ -62,7 +62,8 @@ binary type wire-expanded bitstream ~1.5× as a msgpack array (#859 capped the J
 rig at quality 70); then a growth hint (#1421/#1482) the schema-free pivot deleted as
 initial-allocation priming only. Today's wire is variable-size by construction:
 slice loans with `AllocationStrategy::PowerOfTwo`, grow-and-retry reads that drop
-nothing, ceilings of 16 MiB (helper-touching links) / 64 MiB (app-process). A 500 KB
+nothing [#2475: the read copies each frame out whole; the grow-and-retry path was
+deleted as dead], ceilings of 16 MiB (helper-touching links) / 64 MiB (app-process). A 500 KB
 IDR is 3% of the untrusted ceiling; msgpack `bin` is 1× footprint. The delivery
 -profile ADR already chose producer-written sync-point/group/sequence bag fields
 (mapping onto MoQ group/object ids), and the plan's loss doctrine was written

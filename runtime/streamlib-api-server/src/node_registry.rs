@@ -18,6 +18,9 @@
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use streamlib::sdk::directory_at_an_explicit_mode::{
+    OWNER_ONLY_DIRECTORY_MODE, create_directory_and_its_missing_parents_at_mode,
+};
 use streamlib::sdk::runtime::RuntimeName;
 
 /// Schema version stamped into every [`NodeRegistryEntry`]. A reader skips an
@@ -123,12 +126,11 @@ pub fn write_entry(
     registry_directory: &Path,
     entry: &NodeRegistryEntry,
 ) -> Result<PathBuf, NodeRegistryError> {
-    std::fs::create_dir_all(registry_directory).map_err(|source| {
-        NodeRegistryError::RegistryDirCreate {
+    create_directory_and_its_missing_parents_at_mode(registry_directory, OWNER_ONLY_DIRECTORY_MODE)
+        .map_err(|source| NodeRegistryError::RegistryDirCreate {
             path: registry_directory.to_path_buf(),
             source,
-        }
-    })?;
+        })?;
     let path = registry_directory.join(entry_file_name(&entry.runtime_id));
     let json =
         serde_json::to_vec_pretty(entry).map_err(|source| NodeRegistryError::EntryEncode {

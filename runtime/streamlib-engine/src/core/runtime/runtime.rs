@@ -2012,7 +2012,8 @@ mod tests {
         /// closure. Tests using this must be `#[serial]` so no other runtime
         /// construct reads the mutated env.
         fn with_isolated_xdg_runtime_dir<F: FnOnce(&std::path::Path) -> R, R>(f: F) -> R {
-            let tmp = tempfile::tempdir().expect("tempdir");
+            let tmp = crate::core::test_support::a_temporary_directory_at_owner_only_mode()
+                .expect("tempdir");
             with_environment_variables_set(&[("XDG_RUNTIME_DIR", tmp.path().as_os_str())], || {
                 f(tmp.path())
             })
@@ -2191,10 +2192,13 @@ mod tests {
         #[test]
         #[serial]
         fn a_runtime_pinned_to_a_live_runtimes_id_is_refused_before_it_creates_an_iceoryx2_node() {
-            let base = tempfile::Builder::new()
-                .prefix("sl")
-                .tempdir_in("/tmp")
-                .expect("tempdir under /tmp");
+            let base = crate::core::test_support::at_owner_only_mode(
+                tempfile::Builder::new()
+                    .prefix("sl")
+                    .tempdir_in("/tmp")
+                    .expect("tempdir under /tmp"),
+            )
+            .expect("tempdir under /tmp");
             let domain_root_suffix = "/streamlib/iox2";
             let xdg_runtime_dir_bytes =
                 crate::iceoryx2::ICEORYX2_DOMAIN_ROOT_AND_PREFIX_BUDGET_BYTES
@@ -2304,7 +2308,11 @@ mod tests {
                     std::env::set_var("STREAMLIB_RUNTIME_ID", &pinned_id);
                 }
 
-                std::fs::create_dir(xdg.join("streamlib")).expect("create runtime directory");
+                crate::core::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
+                    &xdg.join("streamlib"),
+                    crate::core::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
+                )
+                .expect("create runtime directory");
                 let stale_path = xdg
                     .join("streamlib")
                     .join(format!("surface-share-{pinned_id}.sock"));

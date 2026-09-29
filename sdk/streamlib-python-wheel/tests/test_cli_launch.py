@@ -559,24 +559,27 @@ def assert_the_window_showed_live_video(node: LaunchedNode, what_ran: str) -> No
         f"{SCAFFOLD_OBSERVATION_WINDOW_SECONDS}s — that is a slideshow, not live video"
     )
     # The MVP minute is a terminal as well as a window. `DisplayWindow` drives
-    # itself and polls its mailboxes, so it drains no listener; a notifier
-    # pointed at it fills that listener and then fails delivery on every frame,
-    # each failure a kilobytes-wide iceoryx2 dump. Measured at 303 warnings and
-    # 2.4MB over this graph before #1764.
+    # itself and polls its mailboxes, so it never drains the listener its
+    # source notifies. iceoryx2 counts repeat notifications and sends no further
+    # wakeup until the listener drains, so nothing fails; a transport queuing a
+    # wakeup per send fills that listener and then fails delivery on every
+    # frame, each failure a kilobytes-wide iceoryx2 dump — measured at 303
+    # warnings and 2.4MB over this graph (#1764).
     #
-    # The observation window is what makes this assertable: saturation takes
-    # ~280 notifications, and one notification rides every frame the SOURCE
+    # The observation window is what makes this assertable: that saturation
+    # takes ~280 notifications, and one notification rides every frame the SOURCE
     # publishes. `TestPatternSource` is `continuous(interval_ms = 33)` on its
     # own thread, so it publishes ~30/s whatever the display manages —
     # ~360 by 12s, comfortably past the onset. That rate is independent of
     # MINIMUM_FRAMES_FOR_LIVE_VIDEO above, which measures what the window drew;
     # a slow display shortens neither the source's output nor this margin.
     # Shorten the window below ~9.4s and this assertion stops discriminating.
-    undeliverable_notifications = output.count("FailedToDeliverSignal")
+    # The text iceoryx2 logs for a notify that did not reach a listener.
+    undeliverable_notifications = output.count("Unable to send notification")
     assert undeliverable_notifications == 0, (
         f"{what_ran}: {undeliverable_notifications} undeliverable link notifications in "
-        f"{SCAFFOLD_OBSERVATION_WINDOW_SECONDS}s — something is notifying a destination "
-        f"that never drains its listener; output ended:\n{node.recent_output()}"
+        f"{SCAFFOLD_OBSERVATION_WINDOW_SECONDS}s — a notify failed to reach its listener; "
+        f"output ended:\n{node.recent_output()}"
     )
 
 

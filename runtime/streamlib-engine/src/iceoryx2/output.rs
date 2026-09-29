@@ -141,10 +141,9 @@ struct ChannelEgress {
 /// One outbound `connect()` link from a source output port, and the notifier
 /// that wakes its destination.
 ///
-/// The notifier is `None` when that destination never drains a listener — a
-/// self-driven sink that polls its mailboxes — because a notification nobody
-/// collects fills the listener's queue and then fails delivery on every frame
-/// for the rest of the run. The link id tags the entry so a per-link
+/// The notifier is `None` where no listener waits on the destination's side —
+/// a helper publisher pulled onto the mesh — or where a mesh ingress could not
+/// mint the destination's notifier. The link id tags the entry so a per-link
 /// `disconnect` reclaims exactly its own (see
 /// [`OutputWriterInner::remove_channel_link`]) rather than the whole fan-out —
 /// a source feeding N destinations must keep the other N-1 alive.
@@ -302,8 +301,8 @@ impl OutputWriterInner {
     /// Record one outbound `connect()` link from this output port, with the
     /// notifier that wakes its destination.
     ///
-    /// Pass `None` when the destination never drains a listener; the link is
-    /// then carried for reclaim bookkeeping and notified on no frame. No-op
+    /// Pass `None` where no listener waits on the destination's side; the link
+    /// is then carried for reclaim bookkeeping and notified on no frame. No-op
     /// (the notifier is dropped) if the channel publisher has not been
     /// installed yet, which the wiring op never does.
     pub fn add_channel_link(
@@ -712,7 +711,9 @@ mod tests {
             .open_or_create()
             .unwrap();
         let notifier = notify.notifier_builder().create().unwrap();
-        let listener = notify.listener_builder().create().unwrap();
+        let listener =
+            crate::iceoryx2::bind_an_iceoryx2_listener_outside_every_child_process_start(&notify)
+                .unwrap();
 
         let inner = Arc::new(OutputWriterInner::new());
         inner.set_channel_publisher(
@@ -729,7 +730,7 @@ mod tests {
 
         // Pre-flight: the listener has no events queued.
         let mut count: usize = 0;
-        listener.try_wait_all(|_| count += 1).unwrap();
+        listener.try_wait(|_| count += 1).unwrap();
         assert_eq!(count, 0);
 
         let writer = OutputWriter::from_inner_arc(inner);
@@ -737,16 +738,16 @@ mod tests {
         writer.write_raw("out", b"more", 5678).unwrap();
 
         // Notifier::notify is non-blocking; give iceoryx2 a moment to deliver
-        // before draining. timed_wait_all returns as soon as the first event
+        // before draining. timed_wait returns as soon as the first event
         // arrives, so the deadline is generous, not the typical wait time.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
         while count == 0 && std::time::Instant::now() < deadline {
             listener
-                .timed_wait_all(|_| count += 1, std::time::Duration::from_millis(50))
+                .timed_wait(|_| count += 1, std::time::Duration::from_millis(50))
                 .unwrap();
         }
         // Drain anything still pending.
-        listener.try_wait_all(|_| count += 1).unwrap();
+        listener.try_wait(|_| count += 1).unwrap();
         assert!(
             count >= 1,
             "expected at least one notify after write_raw, got {}",
@@ -811,71 +812,58 @@ mod tests {
         assert!(!inner.has_channel_publisher("out"));
     }
 
-    /// Why a notifier aimed at a destination that never drains is a defect and
-    /// not merely waste: iceoryx2 posts to the listener's signal mechanism on
-    /// every `notify()`, so an undrained listener's queue fills after a bounded
-    /// number of sends and every send after that fails to deliver —
-    /// permanently, since nothing will ever drain it. Drain the same listener
-    /// and the same send count delivers every time.
+    /// A notifier aimed at a destination that never drains its listener is
+    /// delivered to on every send, and draining the listener later hands back
+    /// every notification it counted — the iceoryx2 guarantee that lets every
+    /// destination be notified whatever mode it runs in.
     ///
     /// The observable is `notify()`'s `Ok(usize)` — the number of listeners it
-    /// actually triggered. A failed delivery does not surface as `Err`:
-    /// iceoryx2 logs its own per-connection warning (a `{:?}` of the whole
-    /// `Notifier`, kilobytes wide) and returns a count that excludes the
-    /// listener it could not reach. That swallowed count is why the flood in
-    /// #1764 ran for the life of the process with the engine none the wiser.
+    /// actually triggered. A failed delivery does not surface as `Err`: it
+    /// returns a count that excludes the listener it could not reach. On an
+    /// event transport that queues a wakeup per send, the undrained listener
+    /// stops counting after a bounded number of sends (#1764 measured ~280).
     #[test]
-    fn an_undrained_listener_stops_being_delivered_to_a_drained_one_never_does() {
-        // Well past any plausible queue depth — the ticket measured the onset
-        // at ~280 notifications against the default socket buffer.
+    fn an_undrained_listener_is_delivered_every_send_and_drains_the_whole_count() {
         const SENDS: usize = 8192;
 
         let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
-
-        let open_notify_service = |name: &str| {
-            node.service_builder(&ServiceName::new(name).unwrap())
-                .event()
-                .max_notifiers(1)
-                .max_listeners(1)
-                .open_or_create()
-                .unwrap()
-        };
-
-        let undrained = open_notify_service(&unique_suffix("saturation/undrained"));
-        let undrained_notifier = undrained.notifier_builder().create().unwrap();
-        let _undrained_listener = undrained.listener_builder().create().unwrap();
-
-        let mut sends_until_undeliverable = None;
-        for send in 0..SENDS {
-            if undrained_notifier.notify().unwrap() == 0 {
-                sends_until_undeliverable = Some(send);
-                break;
-            }
-        }
-        let saturated_at = sends_until_undeliverable.unwrap_or_else(|| {
-            panic!("an undrained listener absorbed {SENDS} notifications and still took more")
-        });
-
-        // Once full it stays full: this is what turns a one-off warning into a
-        // per-frame flood for the rest of the run.
-        assert_eq!(
-            undrained_notifier.notify().unwrap(),
-            0,
-            "delivery recovered after saturating at send {saturated_at} with nothing draining"
-        );
-
-        let drained = open_notify_service(&unique_suffix("saturation/drained"));
-        let drained_notifier = drained.notifier_builder().create().unwrap();
-        let drained_listener = drained.listener_builder().create().unwrap();
+        let notify_service = node
+            .service_builder(&ServiceName::new(&unique_suffix("undrained")).unwrap())
+            .event()
+            .max_notifiers(1)
+            .max_listeners(1)
+            .open_or_create()
+            .unwrap();
+        let notifier = notify_service.notifier_builder().create().unwrap();
+        let listener =
+            crate::iceoryx2::bind_an_iceoryx2_listener_outside_every_child_process_start(
+                &notify_service,
+            )
+            .unwrap();
 
         for send in 0..SENDS {
             assert_eq!(
-                drained_notifier.notify().unwrap(),
+                notifier.notify().unwrap(),
                 1,
-                "send {send} reached no listener despite the listener being drained every time"
+                "send {send} reached no listener while nothing drained it"
             );
-            drained_listener.try_wait_all(|_| {}).unwrap();
         }
+
+        let mut drained_notifications = 0;
+        listener
+            .try_wait(|event_activation| drained_notifications += event_activation.count)
+            .unwrap();
+        assert_eq!(drained_notifications, SENDS as u64);
+
+        notifier.notify().unwrap();
+        let mut notifications_after_the_drain = 0;
+        listener
+            .try_wait(|event_activation| notifications_after_the_drain += event_activation.count)
+            .unwrap();
+        assert_eq!(
+            notifications_after_the_drain, 1,
+            "a drained listener must be woken by the next send"
+        );
     }
 
     /// 1→N fan-out DELIVERY lock (#1419): a single `write_raw` publishes ONE
@@ -930,7 +918,12 @@ mod tests {
                 &format!("L-test-fanout-{i}"),
                 Some(notify.notifier_builder().create().unwrap()),
             );
-            listeners.push(notify.listener_builder().create().unwrap());
+            listeners.push(
+                crate::iceoryx2::bind_an_iceoryx2_listener_outside_every_child_process_start(
+                    &notify,
+                )
+                .unwrap(),
+            );
         }
 
         let writer = OutputWriter::from_inner_arc(inner);

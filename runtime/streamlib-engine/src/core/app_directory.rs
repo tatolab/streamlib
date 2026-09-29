@@ -179,9 +179,14 @@ mod tests {
     /// other half of the same property.
     #[test]
     fn a_real_directory_named_two_ways_resolves_to_one_spelling() {
-        let parent = tempfile::tempdir().expect("tempdir");
+        let parent =
+            crate::core::test_support::a_temporary_directory_at_owner_only_mode().expect("tempdir");
         let app_directory = parent.path().join("myapp");
-        std::fs::create_dir(&app_directory).expect("create the app directory");
+        crate::core::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
+            &app_directory,
+            crate::core::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
+        )
+        .expect("create the app directory");
 
         let named_relatively = resolve_app_directory(
             Some(OsString::from("./myapp")),
@@ -203,9 +208,14 @@ mod tests {
     /// environment value naming the same place.
     #[test]
     fn every_arm_that_names_a_real_directory_agrees_on_its_spelling() {
-        let parent = tempfile::tempdir().expect("tempdir");
+        let parent =
+            crate::core::test_support::a_temporary_directory_at_owner_only_mode().expect("tempdir");
         let app_directory = parent.path().join("myapp");
-        std::fs::create_dir(&app_directory).expect("create the app directory");
+        crate::core::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
+            &app_directory,
+            crate::core::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
+        )
+        .expect("create the app directory");
 
         assert_eq!(
             resolve_app_directory(None, Some(&app_directory), None),

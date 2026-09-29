@@ -232,17 +232,20 @@ pub(crate) mod tests {
 
     #[test]
     fn only_the_domains_of_gone_processes_are_swept() {
-        let runtime_directory = tempfile::tempdir().unwrap();
-        let posix_shared_memory_directory = tempfile::tempdir().unwrap();
+        let runtime_directory =
+            crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
+        let posix_shared_memory_directory =
+            crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
         let uid = current_process_uid();
         let gone = a_process_id_that_has_exited();
         let alive = std::os::unix::process::parent_id();
         for process_id in [gone, alive] {
-            std::fs::create_dir_all(
-                runtime_directory
+            crate::core::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
+                &runtime_directory
                     .path()
                     .join(format!("iox2-test-{process_id}"))
                     .join("nodes"),
+                crate::core::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
             )
             .unwrap();
             std::fs::write(
@@ -253,7 +256,11 @@ pub(crate) mod tests {
             )
             .unwrap();
         }
-        std::fs::create_dir(runtime_directory.path().join("iox2")).unwrap();
+        crate::core::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
+            &runtime_directory.path().join("iox2"),
+            crate::core::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
+        )
+        .unwrap();
         std::fs::write(
             posix_shared_memory_directory
                 .path()

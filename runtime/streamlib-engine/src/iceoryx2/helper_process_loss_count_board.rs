@@ -93,7 +93,7 @@ struct HelperProcessLossCountBoardReadHandles {
     _service: HelperProcessLossCountBoardService,
 }
 
-// SAFETY: `Reader` is the one field iceoryx2 0.9.3 leaves `!Send` and `!Sync`,
+// SAFETY: `Reader` is the one field iceoryx2 0.10 leaves `!Send` and `!Sync`,
 // because `ipc::Service`'s `SingleThreaded` policy keeps its shared state in a
 // bare `Rc`. Every `EntryHandle` holds a clone of that same `Rc`; iceoryx2
 // declares the handle `Send + Sync` all the same, which is sound only while no
@@ -220,7 +220,7 @@ struct HelperProcessLossCountBoardWriteHandles {
     _service: HelperProcessLossCountBoardService,
 }
 
-// SAFETY: `Writer` is the one field iceoryx2 0.9.3 leaves `!Send` and `!Sync`,
+// SAFETY: `Writer` is the one field iceoryx2 0.10 leaves `!Send` and `!Sync`,
 // for the `SingleThreaded` `Rc` its shared state sits in. Every `EntryHandleMut`
 // holds a clone of that `Rc` and is declared `Send + Sync` upstream regardless,
 // which is sound only while no handle leaves this struct on its own. Every

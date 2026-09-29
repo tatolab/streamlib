@@ -19,8 +19,8 @@ terms are in [`LICENSE`](LICENSE) and are not reproduced below.
 
 ## Overview
 
-- **MIT License** — 579 crates
-- **Apache License 2.0** — 56 crates
+- **MIT License** — 580 crates
+- **Apache License 2.0** — 57 crates
 - **BSD 3-Clause "New" or "Revised" License** — 25 crates
 - **ISC License** — 21 crates
 - **zlib License** — 8 crates
@@ -1874,6 +1874,7 @@ Used by:
 
 - [ab_glyph 0.2.32](https://github.com/alexheretic/ab-glyph)
 - [ab_glyph_rasterizer 0.1.10](https://github.com/alexheretic/ab-glyph)
+- [flatbuffers 25.12.19](https://github.com/google/flatbuffers)
 - [gl 0.14.0](https://github.com/brendanzab/gl-rs/)
 - [gl_generator 0.14.0](https://github.com/brendanzab/gl-rs/)
 - [keyed-set 1.1.0](https://github.com/p-avital/keyed-set-rs)
@@ -8406,7 +8407,7 @@ SOFTWARE.
 
 Used by:
 
-- [libc 0.2.183](https://github.com/rust-lang/libc)
+- [libc 0.2.189](https://github.com/rust-lang/libc)
 
 ````text
 Copyright (c) The Rust Project Developers
@@ -9425,27 +9426,28 @@ Used by:
 - [dispatch2 0.3.1](https://github.com/madsmtm/objc2)
 - [dispatch 0.2.0](http://github.com/SSheldon/rust-dispatch)
 - [dpi 0.1.2](https://github.com/rust-windowing/winit)
-- [iceoryx2-bb-concurrency 0.9.3](https://github.com/eclipse-iceoryx/iceoryx2)
-- [iceoryx2-bb-container 0.9.3](https://github.com/eclipse-iceoryx/iceoryx2)
-- [iceoryx2-bb-derive-macros 0.9.3](https://github.com/eclipse-iceoryx/iceoryx2)
-- [iceoryx2-bb-elementary-traits 0.9.3](https://github.com/eclipse-iceoryx/iceoryx2)
-- [iceoryx2-bb-elementary 0.9.3](https://github.com/eclipse-iceoryx/iceoryx2)
-- [iceoryx2-bb-linux 0.9.3](https://github.com/eclipse-iceoryx/iceoryx2)
-- [iceoryx2-bb-lock-free 0.9.3](https://github.com/eclipse-iceoryx/iceoryx2)
-- [iceoryx2-bb-loggers 0.9.3](https://github.com/eclipse-iceoryx/iceoryx2)
-- [iceoryx2-bb-memory 0.9.3](https://github.com/eclipse-iceoryx/iceoryx2)
-- [iceoryx2-bb-posix 0.9.3](https://github.com/eclipse-iceoryx/iceoryx2)
-- [iceoryx2-bb-print 0.9.3](https://github.com/eclipse-iceoryx/iceoryx2)
-- [iceoryx2-bb-system-types 0.9.3](https://github.com/eclipse-iceoryx/iceoryx2)
-- [iceoryx2-cal 0.9.3](https://github.com/eclipse-iceoryx/iceoryx2)
-- [iceoryx2-log-types 0.9.3](https://github.com/eclipse-iceoryx/iceoryx2)
-- [iceoryx2-log 0.9.3](https://github.com/eclipse-iceoryx/iceoryx2)
-- [iceoryx2-pal-concurrency-sync 0.9.3](https://github.com/eclipse-iceoryx/iceoryx2)
-- [iceoryx2-pal-configuration 0.9.3](https://github.com/eclipse-iceoryx/iceoryx2)
-- [iceoryx2-pal-os-api 0.9.3](https://github.com/eclipse-iceoryx/iceoryx2)
-- [iceoryx2-pal-posix 0.9.3](https://github.com/eclipse-iceoryx/iceoryx2)
-- [iceoryx2-pal-print 0.9.3](https://github.com/eclipse-iceoryx/iceoryx2)
-- [iceoryx2 0.9.3](https://github.com/eclipse-iceoryx/iceoryx2)
+- [iceoryx2-bb-concurrency 0.10.0](https://github.com/eclipse-iceoryx/iceoryx2)
+- [iceoryx2-bb-container 0.10.0](https://github.com/eclipse-iceoryx/iceoryx2)
+- [iceoryx2-bb-derive-macros 0.10.0](https://github.com/eclipse-iceoryx/iceoryx2)
+- [iceoryx2-bb-elementary-traits 0.10.0](https://github.com/eclipse-iceoryx/iceoryx2)
+- [iceoryx2-bb-elementary 0.10.0](https://github.com/eclipse-iceoryx/iceoryx2)
+- [iceoryx2-bb-flatbuffers 0.10.0](https://github.com/eclipse-iceoryx/iceoryx2)
+- [iceoryx2-bb-linux 0.10.0](https://github.com/eclipse-iceoryx/iceoryx2)
+- [iceoryx2-bb-lock-free 0.10.0](https://github.com/eclipse-iceoryx/iceoryx2)
+- [iceoryx2-bb-loggers 0.10.0](https://github.com/eclipse-iceoryx/iceoryx2)
+- [iceoryx2-bb-memory 0.10.0](https://github.com/eclipse-iceoryx/iceoryx2)
+- [iceoryx2-bb-posix 0.10.0](https://github.com/eclipse-iceoryx/iceoryx2)
+- [iceoryx2-bb-print 0.10.0](https://github.com/eclipse-iceoryx/iceoryx2)
+- [iceoryx2-bb-system-types 0.10.0](https://github.com/eclipse-iceoryx/iceoryx2)
+- [iceoryx2-cal 0.10.0](https://github.com/eclipse-iceoryx/iceoryx2)
+- [iceoryx2-log-types 0.10.0](https://github.com/eclipse-iceoryx/iceoryx2)
+- [iceoryx2-log 0.10.0](https://github.com/eclipse-iceoryx/iceoryx2)
+- [iceoryx2-pal-concurrency-sync 0.10.0](https://github.com/eclipse-iceoryx/iceoryx2)
+- [iceoryx2-pal-configuration 0.10.0](https://github.com/eclipse-iceoryx/iceoryx2)
+- [iceoryx2-pal-os-api 0.10.0](https://github.com/eclipse-iceoryx/iceoryx2)
+- [iceoryx2-pal-posix 0.10.0](https://github.com/eclipse-iceoryx/iceoryx2)
+- [iceoryx2-pal-print 0.10.0](https://github.com/eclipse-iceoryx/iceoryx2)
+- [iceoryx2 0.10.0](https://github.com/eclipse-iceoryx/iceoryx2)
 - [jni-macros 0.22.4](https://github.com/jni-rs/jni-rs)
 - [jni-sys-macros 0.4.1](https://github.com/jni-rs/jni-sys)
 - [jni 0.22.4](https://github.com/jni-rs/jni-rs)

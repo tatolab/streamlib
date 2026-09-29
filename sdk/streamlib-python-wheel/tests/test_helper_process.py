@@ -298,15 +298,14 @@ def test_a_helper_opens_the_channel_at_its_creation_depth_and_reads_at_its_own_p
     assert every_bag_read(deep_destination) == list(range(bags_published_while_neither_reads))
 
 
-def test_a_helper_publishes_to_a_destination_that_wants_no_notification():
-    """An empty `dest_notify_service_name` is the engine saying this
-    destination never drains a listener — a self-driven sink like
-    `DisplayWindow`, which polls its mailboxes from its own render thread.
+def test_a_helper_publishes_with_no_notifier_where_no_listener_waits():
+    """An empty `dest_notify_service_name` is the engine saying no listener
+    waits on the other end — the mesh's egress, pulling a port nothing local
+    reads, which polls its subscriber.
 
-    The helper must wire the link for data only. Before #1764 it opened a
-    notify service unconditionally, so the empty name failed the child's whole
-    `setup` on an invalid iceoryx2 service name — reached through the MVP
-    graph's own `helper -> DisplayWindow` link.
+    The helper must wire the link for data only: a notify service opened on
+    the empty name fails the child's whole `setup` on an invalid iceoryx2
+    service name.
     """
     from streamlib import ProcessorLinkDataAccess
 
@@ -1660,10 +1659,9 @@ class _CountingLinkDataAccess:
 
 def test_a_helper_that_cannot_keep_up_still_drains_its_listener_every_pass(stand_in_parent):
     """A processor slower than its upstream never goes idle, so a loop that
-    drains only when idle leaves the listener's datagram socket to fill within
-    seconds — after which every upstream notify fails and is logged, one
-    warning per frame for the rest of the run. The drain has to happen on
-    every pass.
+    drains only when idle leaves every notification of the burst pending, and
+    the wait it finally reaches wakes for bags already answered. The drain has
+    to happen on every pass.
 
     Fail-without-fix: move the drain back under the idle branch and the burst
     below is processed with a drain or two at most, all after it ended.

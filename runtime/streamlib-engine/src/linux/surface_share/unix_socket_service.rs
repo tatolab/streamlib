@@ -37,6 +37,9 @@ use crate::core::context::surface_share_wire_verbs::{
     VK_IMAGE_SAMPLES_DEFAULT, VK_IMAGE_TILING_DEFAULT, VK_IMAGE_TYPE_DEFAULT,
     VK_IMAGE_USAGE_DEFAULT,
 };
+use crate::core::directory_at_an_explicit_mode::{
+    OWNER_ONLY_DIRECTORY_MODE, create_directory_and_its_missing_parents_at_mode,
+};
 
 pub struct UnixSocketSurfaceService {
     state: SurfaceShareState,
@@ -62,7 +65,7 @@ impl UnixSocketSurfaceService {
         }
 
         if let Some(parent) = self.socket_path.parent() {
-            std::fs::create_dir_all(parent)
+            create_directory_and_its_missing_parents_at_mode(parent, OWNER_ONLY_DIRECTORY_MODE)
                 .map_err(|e| format!("Failed to create socket directory: {}", e))?;
         }
 
@@ -1019,7 +1022,8 @@ mod tests {
     /// `TMPDIR` is even accounted for; a private dir keeps the path short and
     /// unlinks it on drop. The returned [`TempDir`] owns that lifetime.
     fn tmp_socket_path() -> (TempDir, PathBuf) {
-        let dir = TempDir::new().expect("temp dir for test socket");
+        let dir = crate::core::test_support::a_temporary_directory_at_owner_only_mode()
+            .expect("temp dir for test socket");
         let path = dir.path().join("surface-share.sock");
         (dir, path)
     }

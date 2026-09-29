@@ -180,7 +180,7 @@ fn drain_in_line(fx: &BenchFixture) {
     // empty. The publish-then-receive sequence is what the
     // engine's real consumer does on every frame.
     let _ = fx.subscriber.receive();
-    let _ = fx.listener.try_wait_all(|_| {});
+    let _ = fx.listener.try_wait(|_| {});
 }
 
 fn bench_baseline_direct_inner(c: &mut Criterion) {
@@ -287,7 +287,7 @@ fn drain_fanout_in_line(fx: &FanoutFixture) {
         let _ = subscriber.receive();
     }
     for listener in &fx.listeners {
-        let _ = listener.try_wait_all(|_| {});
+        let _ = listener.try_wait(|_| {});
     }
 }
 

@@ -5,10 +5,13 @@
 //! gone: the iceoryx2 domain, the surface-sharing socket and the node registry.
 
 use std::ffi::OsString;
-use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use super::RuntimeUniqueId;
+use crate::core::directory_at_an_explicit_mode::{
+    OWNER_ONLY_DIRECTORY_MODE, create_directory_and_its_missing_parents_at_mode,
+};
 use crate::core::error::{Error, Result};
 
 /// The folder the resolver keeps inside `$XDG_RUNTIME_DIR`.
@@ -16,9 +19,6 @@ const STREAMLIB_FOLDER_INSIDE_XDG_RUNTIME_DIR: &str = "streamlib";
 
 /// The shared temporary directory the per-user fallback folder is created in.
 const SHARED_TEMPORARY_DIRECTORY_FOR_THE_FALLBACK: &str = "/tmp";
-
-/// Owner-only: read, write and search for the uid, nothing for group or other.
-const OWNER_ONLY_DIRECTORY_MODE: u32 = 0o700;
 
 /// Every permission bit a group or other could hold.
 const GROUP_AND_OTHER_PERMISSION_BITS: u32 = 0o077;
@@ -80,20 +80,16 @@ fn resolve_streamlib_runtime_directory(
 ) -> Result<StreamlibRuntimeDirectory> {
     if let Some(xdg_runtime_dir) = xdg_runtime_dir.filter(|value| !value.is_empty()) {
         let path = PathBuf::from(xdg_runtime_dir).join(STREAMLIB_FOLDER_INSIDE_XDG_RUNTIME_DIR);
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(OWNER_ONLY_DIRECTORY_MODE)
-            .create(&path)
+        create_directory_and_its_missing_parents_at_mode(&path, OWNER_ONLY_DIRECTORY_MODE)
             .map_err(|source| runtime_directory_creation_failure(&path, source))?;
         return Ok(StreamlibRuntimeDirectory { path });
     }
 
     let path = shared_temporary_directory.join(format!("streamlib-{uid}"));
-    match std::fs::DirBuilder::new()
-        .mode(OWNER_ONLY_DIRECTORY_MODE)
-        .create(&path)
-    {
+    match create_directory_and_its_missing_parents_at_mode(&path, OWNER_ONLY_DIRECTORY_MODE) {
         Ok(()) => {}
+        // Whatever already stands at the path, a symlink included, is the
+        // trust check's to name and refuse.
         Err(source) if source.kind() == std::io::ErrorKind::AlreadyExists => {}
         Err(source) => return Err(runtime_directory_creation_failure(&path, source)),
     }
@@ -163,8 +159,10 @@ mod tests {
 
     #[test]
     fn a_set_xdg_runtime_dir_resolves_to_its_streamlib_folder() {
-        let xdg_runtime_dir = tempfile::tempdir().unwrap();
-        let shared_temporary_directory = tempfile::tempdir().unwrap();
+        let xdg_runtime_dir =
+            crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
+        let shared_temporary_directory =
+            crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
 
         let directory = resolve_streamlib_runtime_directory(
             Some(xdg_runtime_dir.path().as_os_str().to_owned()),
@@ -180,7 +178,8 @@ mod tests {
 
     #[test]
     fn an_empty_xdg_runtime_dir_takes_the_per_user_fallback() {
-        let shared_temporary_directory = tempfile::tempdir().unwrap();
+        let shared_temporary_directory =
+            crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
 
         let directory = resolve_streamlib_runtime_directory(
             Some(OsString::new()),
@@ -197,7 +196,8 @@ mod tests {
 
     #[test]
     fn an_unset_xdg_runtime_dir_creates_an_owner_only_fallback() {
-        let shared_temporary_directory = tempfile::tempdir().unwrap();
+        let shared_temporary_directory =
+            crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
 
         let directory = resolve_streamlib_runtime_directory(
             None,
@@ -214,11 +214,10 @@ mod tests {
 
     #[test]
     fn a_fallback_that_already_exists_and_passes_the_check_is_taken_as_it_is() {
-        let shared_temporary_directory = tempfile::tempdir().unwrap();
+        let shared_temporary_directory =
+            crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
         let fallback = fallback_path_for(shared_temporary_directory.path());
-        std::fs::DirBuilder::new()
-            .mode(0o700)
-            .create(&fallback)
+        create_directory_and_its_missing_parents_at_mode(&fallback, OWNER_ONLY_DIRECTORY_MODE)
             .unwrap();
         std::fs::write(fallback.join("left-by-an-earlier-run"), b"").unwrap();
 
@@ -235,13 +234,10 @@ mod tests {
 
     #[test]
     fn a_fallback_that_is_a_symlink_is_refused_by_name() {
-        let shared_temporary_directory = tempfile::tempdir().unwrap();
-        let somewhere_else = tempfile::tempdir().unwrap();
-        std::fs::set_permissions(
-            somewhere_else.path(),
-            std::fs::Permissions::from_mode(0o700),
-        )
-        .unwrap();
+        let shared_temporary_directory =
+            crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
+        let somewhere_else =
+            crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
         let fallback = fallback_path_for(shared_temporary_directory.path());
         std::os::unix::fs::symlink(somewhere_else.path(), &fallback).unwrap();
 
@@ -260,15 +256,14 @@ mod tests {
 
     #[test]
     fn a_fallback_owned_by_another_uid_is_refused_by_name() {
-        let shared_temporary_directory = tempfile::tempdir().unwrap();
+        let shared_temporary_directory =
+            crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
         let this_uid = current_process_uid();
         let another_uid = this_uid.wrapping_add(1);
         let fallback = shared_temporary_directory
             .path()
             .join(format!("streamlib-{another_uid}"));
-        std::fs::DirBuilder::new()
-            .mode(0o700)
-            .create(&fallback)
+        create_directory_and_its_missing_parents_at_mode(&fallback, OWNER_ONLY_DIRECTORY_MODE)
             .unwrap();
 
         let refusal = refusal_text(resolve_streamlib_runtime_directory(
@@ -298,7 +293,8 @@ mod tests {
     }
 
     fn a_fallback_at_this_mode_is_refused_naming_it(mode: u32) {
-        let shared_temporary_directory = tempfile::tempdir().unwrap();
+        let shared_temporary_directory =
+            crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
         let fallback = fallback_path_for(shared_temporary_directory.path());
         std::fs::create_dir(&fallback).unwrap();
         std::fs::set_permissions(&fallback, std::fs::Permissions::from_mode(mode)).unwrap();

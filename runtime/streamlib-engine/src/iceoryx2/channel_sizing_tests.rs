@@ -174,3 +174,52 @@ fn every_channel_service_opens_under_safe_overflow() {
          producer-blocking this engine deleted"
     );
 }
+
+/// The sample layout `streamlib_ipc_types` mirrors matches the one iceoryx2
+/// really lays out: a bag sized to the most a power-of-two ceiling admits fills
+/// that ceiling's chunk to the byte, and one byte more takes the next power of
+/// two.
+///
+/// The mirror is composed from iceoryx2's types rather than read off it, so
+/// nothing else holds it to the real layout — an iceoryx2 upgrade that moves
+/// the header or the alignment rule leaves every other sizing test green.
+/// `__internal_available_payload_memory` is hidden upstream, and it is the one
+/// view iceoryx2 gives of the chunk a loan really took.
+///
+/// Fail-without-fix: pad the user header by `user_header_alignment - 1` rather
+/// than aligning it and the mirror claims 7 bytes of overhead the chunk does not
+/// have, so the ceiling-sized bag leaves them empty.
+#[test]
+fn a_ceiling_sized_bag_fills_the_ceilings_chunk_and_one_byte_more_takes_the_next() {
+    let chunk_ceiling_bytes = (DEFAULT_EXPECTED_PAYLOAD_BYTES * 4).next_power_of_two();
+    let largest_admitted_frame_bytes =
+        streamlib_ipc_types::largest_channel_frame_bytes_under_a_chunk_ceiling(chunk_ceiling_bytes);
+
+    for (frame_bytes, frame_bytes_its_chunk_must_hold) in [
+        (largest_admitted_frame_bytes, largest_admitted_frame_bytes),
+        (
+            largest_admitted_frame_bytes + 1,
+            largest_admitted_frame_bytes + chunk_ceiling_bytes,
+        ),
+    ] {
+        let service = Iceoryx2Node::for_this_test_process()
+            .open_or_create_service(
+                &format!("streamlib/test/sizing-real-chunk-{frame_bytes}"),
+                2,
+                DeliveryProfile::ORDERED_DEPTH,
+            )
+            .unwrap();
+        let publisher = service
+            .create_publisher(DEFAULT_EXPECTED_PAYLOAD_BYTES)
+            .unwrap();
+        let sample = publisher
+            .loan_slice_uninit(frame_bytes)
+            .expect("a growing publisher loans past its prime");
+
+        assert_eq!(
+            sample.__internal_available_payload_memory(),
+            frame_bytes_its_chunk_must_hold,
+            "a {frame_bytes}-byte frame under a {chunk_ceiling_bytes}-byte ceiling"
+        );
+    }
+}

@@ -269,10 +269,9 @@ fn run_reactive_scheduling_loop(
             was_paused = false;
         }
 
-        // Every path that is not waking on the listener fd still owns that
-        // listener, and upstream still notifies it on every frame — so each
-        // one drains. Skip a drain here and the listener's queue fills, after
-        // which iceoryx2 warns per frame for the rest of the run (#1764).
+        // Every path that is not waking on the listener fd drains it too, so
+        // the next wait wakes only for a notification sent after this tick
+        // looked at its ports, never for one this tick already answered.
         if is_paused {
             // While paused we deliberately poll: the pause_gate is an
             // AtomicBool with no fd, so on_resume can't fire from the wait.
@@ -335,10 +334,10 @@ fn run_reactive_scheduling_loop(
         }
 
         // Drain-loop dispatch: iceoryx2's Event service coalesces
-        // multiple notify()s on the same EventId into one fd-readable
-        // transition (the underlying IdTracker is a bit-set, not a
-        // counter). After `drain_listener` clears that bit, the
-        // listener fd is not-readable again, and the next wait
+        // every notify() between two drains into one fd-readable
+        // transition — it counts them in shared memory and signals
+        // the fd only once. After `drain_listener` resets that count,
+        // the listener fd is not-readable again, and the next wait
         // would block — even though the subscriber's shared-memory
         // ring and the per-port mailboxes may still hold unread
         // samples from the same burst. Call `process()` until every
@@ -363,10 +362,10 @@ fn run_reactive_scheduling_loop(
 
             // Drained on every dispatch, not only on a wake: a processor slower
             // than its upstream stays in this loop for as long as bags keep
-            // arriving, each one notifies, and a listener left undrained here
-            // fills within a few hundred of them. Drained before the readiness
-            // check below, so a bag whose notify this clears is one that check
-            // sees.
+            // arriving, and each one notifies, so the wait after the loop wakes
+            // only for a bag its last readiness check did not see. Drained
+            // before that check, so a bag whose notify this clears is one that
+            // check sees.
             drain_input_listener(processor);
 
             // A processor with no mailboxes drains in one dispatch, which is
@@ -1219,13 +1218,14 @@ mod tests {
     }
 
     /// A reactive processor slower than its upstream never leaves its dispatch
-    /// loop while bags keep arriving, and every bag notifies — so the loop
-    /// drains the listener on every dispatch, or the listener's queue fills and
-    /// every later notify reaches nobody, one iceoryx2 warning per frame.
+    /// loop while bags keep arriving, and every bag notifies — and every notify
+    /// is still delivered, the guarantee that lets every destination be
+    /// notified whatever mode it runs in.
     ///
-    /// The ticket's repro: a 2 ms `process()` against a 1 kHz source.
-    /// Fail-without-fix: drop the drain from the dispatch loop and about 280
-    /// frames in, every notify comes back undelivered.
+    /// The #1764 repro: a 2 ms `process()` against a 1 kHz source.
+    /// Fail-without-fix: an event transport queuing a wakeup per send comes
+    /// back undelivered about 280 frames in once the dispatch loop stops
+    /// draining.
     #[test]
     fn a_processor_slower_than_its_upstream_keeps_every_notify_deliverable() {
         const FRAMES_AT_ONE_KILOHERTZ: usize = 1000;
@@ -1234,7 +1234,8 @@ mod tests {
         let service = open_one_listener_event_service(&node, "slow-consumer");
         let notifier = service.notifier_builder().create().unwrap();
         let (processor, mailboxes) = input_only_processor_with_plain_port(Some(
-            service.listener_builder().create().unwrap(),
+            crate::iceoryx2::bind_an_iceoryx2_listener_outside_every_child_process_start(&service)
+                .unwrap(),
         ));
         let running = ReactiveSchedulingLoopOnItsOwnThread::start(
             processor,
@@ -1278,7 +1279,8 @@ mod tests {
         let service = open_one_listener_event_service(&node, "paused-consumer");
         let notifier = service.notifier_builder().create().unwrap();
         let (processor, mailboxes) = input_only_processor_with_plain_port(Some(
-            service.listener_builder().create().unwrap(),
+            crate::iceoryx2::bind_an_iceoryx2_listener_outside_every_child_process_start(&service)
+                .unwrap(),
         ));
         let running = ReactiveSchedulingLoopOnItsOwnThread::start(
             processor,
@@ -1329,7 +1331,10 @@ mod tests {
         let service = open_one_listener_event_service(&node, "first-link-gap");
         let (processor, mailboxes) = input_only_processor_with_plain_port(None);
         mailboxes.route(one_frame_for_in1());
-        mailboxes.set_listener(service.listener_builder().create().unwrap());
+        mailboxes.set_listener(
+            crate::iceoryx2::bind_an_iceoryx2_listener_outside_every_child_process_start(&service)
+                .unwrap(),
+        );
 
         let running = ReactiveSchedulingLoopOnItsOwnThread::start(
             processor,
@@ -1349,28 +1354,18 @@ mod tests {
         );
     }
 
-    /// Every reactive tick that is not an fd wake still has to drain, because
-    /// the listener stays subscribed and upstream keeps notifying it. This is
-    /// the primitive those ticks call: a listener saturated to the point of
-    /// undeliverable notifications takes them again straight after.
+    /// The drain every reactive tick runs leaves the listener fd not readable
+    /// however many notifications piled up behind it, and the next send makes
+    /// it readable again — so a wait after a drain wakes only for something new.
     ///
-    /// Fail-without-fix: drop the `drain_input_listener` call from the paused
-    /// branch, the no-waiter arm, or the wait-error arm and that path is back
-    /// to #1764 — an fd nobody clears, warned about once per frame. Those arms
-    /// are unreachable from the waiter-backed tests in this module, so this is
-    /// what covers them.
+    /// Fail-without-fix: make `drain_input_listener` a no-op and the fd still
+    /// reads readable after the drain.
     #[test]
-    fn draining_a_saturated_listener_lets_it_be_notified_again() {
+    fn a_drained_listener_waits_for_the_next_send_however_many_came_before() {
         use crate::core::test_support::MockInputOnlyProcessor;
 
         let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
-        let service = node
-            .service_builder(&ServiceName::new(&unique_suffix("saturated-drain")).unwrap())
-            .event()
-            .max_notifiers(1)
-            .max_listeners(1)
-            .open_or_create()
-            .unwrap();
+        let service = open_one_listener_event_service(&node, "drain-then-wait");
         let notifier = service.notifier_builder().create().unwrap();
 
         let mut instance = ProcessorInstance::new(Box::new(
@@ -1382,27 +1377,41 @@ mod tests {
         instance
             .install_iceoryx2_resources()
             .expect("the mock accepts its iceoryx2 resources");
-        instance
+        let input_mailboxes = instance
             .iceoryx2_input_mailboxes_inner()
-            .expect("an input-only mock holds input mailboxes")
-            .set_listener(service.listener_builder().create().unwrap());
+            .expect("an input-only mock holds input mailboxes");
+        input_mailboxes.set_listener(
+            crate::iceoryx2::bind_an_iceoryx2_listener_outside_every_child_process_start(&service)
+                .unwrap(),
+        );
+        let waiter = ReactiveLoopFdWaiter::new(
+            input_mailboxes
+                .listener_fd()
+                .expect("the listener was just installed"),
+            1,
+            None,
+        )
+        .expect("the readiness queue registers the listener fd");
         let processor = Arc::new(Mutex::new(instance));
 
-        // Well past any plausible queue depth; the ticket measured the onset at
-        // ~280 notifications against the default socket buffer.
-        const SENDS: usize = 8192;
-        let saturated = (0..SENDS).any(|_| notifier.notify().unwrap() == 0);
+        for _ in 0..8192 {
+            notifier.notify().unwrap();
+        }
+        drain_input_listener(&processor);
+        let outcome_after_the_drain = waiter.wait(std::time::Duration::ZERO);
         assert!(
-            saturated,
-            "an undrained listener absorbed {SENDS} notifications and still took more"
+            matches!(outcome_after_the_drain, ReactiveLoopWakeOutcome::TimedOut),
+            "a drained listener must not wake the next wait; got {outcome_after_the_drain:?}"
         );
 
-        drain_input_listener(&processor);
-
-        assert_eq!(
-            notifier.notify().unwrap(),
-            1,
-            "the listener must take notifications again once the runner drains it"
+        notifier.notify().unwrap();
+        let outcome_after_the_next_send = waiter.wait(std::time::Duration::ZERO);
+        assert!(
+            matches!(
+                outcome_after_the_next_send,
+                ReactiveLoopWakeOutcome::Notified
+            ),
+            "the next send must wake the wait; got {outcome_after_the_next_send:?}"
         );
     }
 
@@ -1420,7 +1429,11 @@ mod tests {
             let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
             let service = open_one_listener_event_service(&node, tag);
             let notifier = service.notifier_builder().create().unwrap();
-            let listener = service.listener_builder().create().unwrap();
+            let listener =
+                crate::iceoryx2::bind_an_iceoryx2_listener_outside_every_child_process_start(
+                    &service,
+                )
+                .unwrap();
             let (shutdown_channel, shutdown_wake_fd) = shutdown_channel_and_its_wake_fd();
             let waiter =
                 ReactiveLoopFdWaiter::new(listener_fd_of(&listener), 1, Some(shutdown_wake_fd))
@@ -1448,7 +1461,7 @@ mod tests {
             matches!(outcome, ReactiveLoopWakeOutcome::Notified),
             "expected Notified, got {outcome:?}"
         );
-        fixture.listener.try_wait_all(|_| {}).unwrap();
+        fixture.listener.try_wait(|_| {}).unwrap();
     }
 
     /// The production shutdown signal makes the waiter report shutdown, with
@@ -1479,7 +1492,7 @@ mod tests {
             matches!(outcome, ReactiveLoopWakeOutcome::Shutdown),
             "expected Shutdown, got {outcome:?}"
         );
-        fixture.listener.try_wait_all(|_| {}).unwrap();
+        fixture.listener.try_wait(|_| {}).unwrap();
     }
 
     /// A wait with nothing to report returns on its own, which is what lets a
@@ -1506,7 +1519,8 @@ mod tests {
         let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let service = open_one_listener_event_service(&node, "loop-wake-fd-shutdown");
         let (processor, _mailboxes) = input_only_processor_with_plain_port(Some(
-            service.listener_builder().create().unwrap(),
+            crate::iceoryx2::bind_an_iceoryx2_listener_outside_every_child_process_start(&service)
+                .unwrap(),
         ));
         let (shutdown_channel, shutdown_wake_fd) = shutdown_channel_and_its_wake_fd();
         let (withheld_shutdown_sender, withheld_shutdown_receiver) = crossbeam_channel::bounded(1);
@@ -1561,7 +1575,9 @@ mod tests {
         let mut waiter_setup_failed = false;
 
         let first = open_event_service("replaced-first");
-        let first_listener = first.listener_builder().create().unwrap();
+        let first_listener =
+            crate::iceoryx2::bind_an_iceoryx2_listener_outside_every_child_process_start(&first)
+                .unwrap();
         let first_fd = listener_fd_of(&first_listener);
         refresh_reactive_loop_waiter(
             &id,
@@ -1619,7 +1635,9 @@ mod tests {
 
         // A reconnect creates a new listener, on a fresh notify service.
         let second = open_event_service("replaced-second");
-        let second_listener = second.listener_builder().create().unwrap();
+        let second_listener =
+            crate::iceoryx2::bind_an_iceoryx2_listener_outside_every_child_process_start(&second)
+                .unwrap();
         let second_fd = listener_fd_of(&second_listener);
         refresh_reactive_loop_waiter(
             &id,
@@ -1638,6 +1656,6 @@ mod tests {
             matches!(outcome, ReactiveLoopWakeOutcome::Notified),
             "a notify on the reconnected link must wake the runner; got {outcome:?}"
         );
-        second_listener.try_wait_all(|_| {}).unwrap();
+        second_listener.try_wait(|_| {}).unwrap();
     }
 }

@@ -355,8 +355,9 @@ impl PythonProcessorLinkDataAccess {
     /// One call per link. The publisher is installed once — the first link out
     /// of a port creates it and every later link only appends itself — because
     /// iceoryx2 admits exactly one publisher per channel. An empty
-    /// `dest_notify_service_name` means the destination never drains a
-    /// listener, so the link opens no notifier and carries data only.
+    /// `dest_notify_service_name` means no listener waits on the other end —
+    /// the mesh's egress, which polls — so the link opens no notifier and
+    /// carries data only.
     #[pyo3(signature = (
         port_name,
         channel_service_name,
@@ -434,9 +435,9 @@ impl PythonProcessorLinkDataAccess {
                         )?;
                     }
                 }
-                // An empty name is the engine saying this destination never
-                // drains a listener, so there is nothing to wake and the link
-                // is wired for data only.
+                // An empty name is the engine saying no listener waits on the
+                // other end, so there is nothing to wake and the link is wired
+                // for data only.
                 let notifier = if dest_notify_service_name.is_empty() {
                     None
                 } else {
@@ -469,8 +470,7 @@ impl PythonProcessorLinkDataAccess {
     ///
     /// `notify_service_name` is always a real name here, unlike the output
     /// side's: a helper-hosted destination opens its listener whatever
-    /// execution mode the class declares, and the engine withholds only its
-    /// sources' notifiers when that mode never drains it.
+    /// execution mode the class declares.
     ///
     /// One call per link. The mailbox and the destination-keyed listener are
     /// installed once — fan-in appends subscribers to the same port, and

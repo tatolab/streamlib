@@ -150,7 +150,8 @@ mod tests {
             panic!("the watchdog did not end a teardown that outlived it");
         }
 
-        let record = tempfile::tempdir().expect("a temporary directory");
+        let record = crate::core::test_support::a_temporary_directory_at_owner_only_mode()
+            .expect("a temporary directory");
         let record_path = record.path().join("helper-process-group");
         let started = std::time::Instant::now();
         let child = rerun_this_test_in_a_child_process(
