@@ -8,6 +8,7 @@ permissions:
   contents: write
   pull-requests: write
   packages: write
+  actions: write
 
 jobs:
   release-please:
@@ -113,7 +114,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add -u -- '*Cargo.lock' '*Cargo.toml'
-          git commit -m "chore: sync the version pins and Cargo.lock to the release version"
+          # `[skip ci]` keeps this push from creating a batch of pull_request runs
+          # that could only ever wait for approval — see the step below.
+          git commit -m "chore: sync the version pins and Cargo.lock to the release version" -m "[skip ci]"
           git push origin "$BRANCH"
 
       # A version cut is pure bookkeeping — version + changelog, no code — so it
@@ -131,6 +134,19 @@ jobs:
             echo "no open release PR to merge this run"
             exit 0
           fi
+          # Since GitHub's 2026-06-11 change, a PR opened by github-actions[bot]
+          # gets its pull_request runs created but held for a maintainer's
+          # approval. Merging closes them unapproved, and GitHub then concludes
+          # each as a zero-job `failure` on the release PR and its commits.
+          # Delete them while they are still only awaiting approval.
+          for head_sha in $(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" \
+              --json commits --jq '.commits[].oid'); do
+            for run_id in $(gh api "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$head_sha&event=pull_request" \
+                --jq '.workflow_runs[].id'); do
+              gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" \
+                || echo "::warning::could not delete unapproved release-PR run $run_id"
+            done
+          done
           for attempt in 1 2 3 4 5; do
             if gh pr merge "$PR_NUMBER" --squash --repo "$GITHUB_REPOSITORY"; then
               echo "merged release PR #$PR_NUMBER"
