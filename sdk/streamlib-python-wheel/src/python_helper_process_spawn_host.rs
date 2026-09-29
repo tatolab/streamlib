@@ -35,7 +35,9 @@ use streamlib::sdk::helper_process_transport::{
     HelperProcessShutdownCommand, SETUP_LIFECYCLE_COMMAND_TO_HELPER_PROCESS, SubprocessBridge,
     refusal_of_a_link_into_a_helper_process_that_failed, spawn_fd_line_reader,
 };
-use streamlib::sdk::iceoryx2::ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE;
+use streamlib::sdk::iceoryx2::{
+    ICEORYX2_DOMAIN_ROOT_ENVIRONMENT_VARIABLE, spawn_outside_every_iceoryx2_listener_bind,
+};
 use streamlib::sdk::processors::{DynGeneratedProcessor, OutOfProcessLinkWiringEnvelope};
 
 /// The module CPython is launched with in a helper process.
@@ -689,18 +691,15 @@ impl PythonHelperProcessSpawnHostProcessor {
         self.iceoryx2_domain_root = Some(iceoryx2_domain_root);
         let mut escalate_transport = EscalateTransport::attach(&mut command)?;
 
-        let mut child =
-            streamlib::sdk::iceoryx2::start_a_child_process_outside_every_iceoryx2_listener_bind(
-                || command.spawn(),
-            )
-            .map_err(|spawn_failure| {
-                Error::Runtime(format!(
-                    "[{}] could not start its helper process with `{} -m {HELPER_PROCESS_MODULE}`: \
+        let spawned_helper_process = spawn_outside_every_iceoryx2_listener_bind(&mut command);
+        let mut child = spawned_helper_process.map_err(|spawn_failure| {
+            Error::Runtime(format!(
+                "[{}] could not start its helper process with `{} -m {HELPER_PROCESS_MODULE}`: \
                  {spawn_failure}",
-                    self.processor_display_name,
-                    self.interpreter_path.display(),
-                ))
-            })?;
+                self.processor_display_name,
+                self.interpreter_path.display(),
+            ))
+        })?;
         // At once: a connect that arrives before its admission waits for it,
         // but only for a bounded while.
         #[cfg(target_os = "macos")]

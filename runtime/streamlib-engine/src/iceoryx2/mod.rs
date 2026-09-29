@@ -50,7 +50,7 @@ pub use channel_name::{
     mesh_ingress_channel_name, source_channel_name, validate_channel_name,
 };
 pub(crate) use child_process_start_outside_listener_binds::bind_an_iceoryx2_listener_outside_every_child_process_start;
-pub use child_process_start_outside_listener_binds::start_a_child_process_outside_every_iceoryx2_listener_bind;
+pub use child_process_start_outside_listener_binds::spawn_outside_every_iceoryx2_listener_bind;
 pub(crate) use delivery_profile::delivery_profile_for_input_port;
 pub use delivery_profile::{DeliveryProfile, DeliveryResolution};
 #[cfg(test)]
