@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use iceoryx2::node::Node;
+use iceoryx2::node::{Node, NodeCleanupFailure, NodeView};
 use iceoryx2::port::listener::Listener;
 use iceoryx2::port::notifier::Notifier;
 use iceoryx2::prelude::*;
@@ -152,12 +152,21 @@ pub fn reclaim_dead_iceoryx2_nodes_in_engine_owned_domain(
 ) -> Result<u64> {
     let config = engine_owned_iceoryx2_config(domain_root)?;
     let mut reclaimed_dead_nodes = 0u64;
-    let mut dead_nodes_another_process_holds = 0u64;
+    let mut dead_nodes_another_process_is_reclaiming = 0u64;
     let listing = Node::<ipc::Service>::list(&config, |node_state| {
         if let NodeState::Dead(dead_node) = node_state {
+            let dead_node_id = *dead_node.id();
             match dead_node.try_remove_stale_resources() {
-                Ok(()) => reclaimed_dead_nodes += 1,
-                Err(_) => dead_nodes_another_process_holds += 1,
+                Ok(()) | Err(NodeCleanupFailure::ResourcesAlreadyCleanedUp) => {
+                    reclaimed_dead_nodes += 1
+                }
+                Err(NodeCleanupFailure::AnotherInstanceIsCleaningUpTheNode) => {
+                    dead_nodes_another_process_is_reclaiming += 1
+                }
+                Err(cannot_reclaim) => tracing::warn!(
+                    "dead iceoryx2 node {dead_node_id:?} cannot be reclaimed and keeps its place \
+                     in every service it had opened: {cannot_reclaim:?}"
+                ),
             }
         }
         CallbackProgression::Continue
@@ -168,10 +177,10 @@ pub fn reclaim_dead_iceoryx2_nodes_in_engine_owned_domain(
              only what it reached: {listing_failure:?}"
         );
     }
-    if dead_nodes_another_process_holds > 0 {
+    if dead_nodes_another_process_is_reclaiming > 0 {
         tracing::debug!(
-            "{dead_nodes_another_process_holds} dead iceoryx2 node(s) could not be reclaimed, \
-             which is ordinary when another process holds them",
+            "{dead_nodes_another_process_is_reclaiming} dead iceoryx2 node(s) are being \
+             reclaimed by another process",
         );
     }
     Ok(reclaimed_dead_nodes)
@@ -351,58 +360,44 @@ impl Iceoryx2Node {
             .open_or_create()
         };
 
-        let first_failure = match open_or_create_once() {
-            Ok(service) => return Ok(Iceoryx2Service { inner: service }),
-            Err(
-                failure @ PublishSubscribeOpenOrCreateError::PublishSubscribeOpenError(
-                    PublishSubscribeOpenError::DoesNotSupportRequestedMinBufferSize,
-                ),
-            ) => failure,
-            Err(failure) => {
+        let started_opening = std::time::Instant::now();
+        let mut reopens = 0;
+        let mut retry_interval = DEAD_HOLDER_RECLAIM_FIRST_RETRY_INTERVAL;
+        loop {
+            let failure = match open_or_create_once() {
+                Ok(service) => {
+                    if reopens > 0 {
+                        tracing::info!(
+                            service = service_name.as_str(),
+                            channel_service_creation_depth,
+                            recovered_in_ms = started_opening.elapsed().as_millis() as u64,
+                            "a channel service was held shallower than this open asks for by a \
+                             node whose process had just died; reopened it once iceoryx2 \
+                             reclaimed the node"
+                        );
+                    }
+                    return Ok(Iceoryx2Service { inner: service });
+                }
+                Err(failure) => failure,
+            };
+            if !a_reopen_can_get_past(&failure) {
                 return Err(channel_data_service_open_failure(
                     &service_name,
                     &failure,
                     ChannelDataServiceOpenRefusedFor::SomethingAReopenCannotChange,
                 ));
             }
-        };
-
-        let started_recovering = std::time::Instant::now();
-        let mut latest_failure = first_failure;
-        let mut retry_interval = DEAD_HOLDER_RECLAIM_FIRST_RETRY_INTERVAL;
-        for _ in 0..DEAD_HOLDER_RECLAIM_ATTEMPTS {
+            if reopens == DEAD_HOLDER_RECLAIM_ATTEMPTS {
+                return Err(channel_data_service_open_failure(
+                    &service_name,
+                    &failure,
+                    ChannelDataServiceOpenRefusedFor::DepthOnEveryReopen,
+                ));
+            }
+            reopens += 1;
             std::thread::sleep(retry_interval);
             retry_interval *= 2;
-            match open_or_create_once() {
-                Ok(service) => {
-                    tracing::info!(
-                        service = service_name.as_str(),
-                        channel_service_creation_depth,
-                        recovered_in_ms = started_recovering.elapsed().as_millis() as u64,
-                        "a channel service was held shallower than this open asks for by a node \
-                         whose process had just died; reopened it once iceoryx2 reclaimed the node"
-                    );
-                    return Ok(Iceoryx2Service { inner: service });
-                }
-                Err(
-                    failure @ PublishSubscribeOpenOrCreateError::PublishSubscribeOpenError(
-                        PublishSubscribeOpenError::DoesNotSupportRequestedMinBufferSize,
-                    ),
-                ) => latest_failure = failure,
-                Err(failure) => {
-                    return Err(channel_data_service_open_failure(
-                        &service_name,
-                        &failure,
-                        ChannelDataServiceOpenRefusedFor::SomethingAReopenCannotChange,
-                    ));
-                }
-            }
         }
-        Err(channel_data_service_open_failure(
-            &service_name,
-            &latest_failure,
-            ChannelDataServiceOpenRefusedFor::DepthOnEveryReopen,
-        ))
     }
 
     /// The channel data service named `service_name`, or `None` when nothing
@@ -534,6 +529,17 @@ fn channel_data_service_builder_under_the_channel_policy(
         .subscriber_max_borrowed_samples(CHANNEL_SUBSCRIBER_MAX_BORROWED_SAMPLES)
         .history_size(CHANNEL_HISTORY_SIZE)
         .enable_safe_overflow(true)
+}
+
+/// Whether a reopen can get past `failure`: only a refusal for depth, which a
+/// holder that has just died stops causing once iceoryx2 reclaims it.
+fn a_reopen_can_get_past(failure: &PublishSubscribeOpenOrCreateError) -> bool {
+    matches!(
+        failure,
+        PublishSubscribeOpenOrCreateError::PublishSubscribeOpenError(
+            PublishSubscribeOpenError::DoesNotSupportRequestedMinBufferSize
+        )
+    )
 }
 
 /// Why [`Iceoryx2Node::open_or_create_service`] gave up.
