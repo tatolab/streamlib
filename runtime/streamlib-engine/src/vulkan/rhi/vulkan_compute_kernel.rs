@@ -26,6 +26,9 @@ use rspirv_reflect::{DescriptorType as RDescriptorType, Reflection};
 
 use std::ffi::{CStr, c_void};
 
+use crate::core::directory_at_an_explicit_mode::{
+    OWNER_ONLY_DIRECTORY_MODE, create_directory_and_its_missing_parents_at_mode,
+};
 use crate::core::rhi::{
     ComputeBindingKind, ComputeBindingSpec, ComputeKernelDescriptor, Texture,
     refuse_a_descriptor_set_other_than_set_0,
@@ -1622,10 +1625,7 @@ fn persist_pipeline_cache(
 
 fn atomic_write_pipeline_cache(path: &Path, data: &[u8]) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
-        crate::core::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
-            parent,
-            crate::core::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
-        )?;
+        create_directory_and_its_missing_parents_at_mode(parent, OWNER_ONLY_DIRECTORY_MODE)?;
     }
     // Same-directory temp file → POSIX rename is atomic on the same
     // filesystem. The loser of a race just overwrites the winner, which is
@@ -2396,11 +2396,8 @@ void main() {
         let device = vulkan_device_for_dispatch_tests();
         let dir = unique_cache_dir("corrupt-blob");
         with_pipeline_cache_dir(&dir, || {
-            crate::core::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
-                &dir,
-                crate::core::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
-            )
-            .expect("mkdir");
+            create_directory_and_its_missing_parents_at_mode(&dir, OWNER_ONLY_DIRECTORY_MODE)
+                .expect("mkdir");
             let cache_path = pipeline_cache_file_path(blend_spv(1), c"main").expect("path");
             // Plant a header-invalid blob that the driver will reject.
             // 32 bytes of zeros has header_version=0 ≠ 1 — driver ignores
@@ -2441,11 +2438,8 @@ void main() {
         let device = vulkan_device_for_dispatch_tests();
         let dir = unique_cache_dir("readonly-dir");
         with_pipeline_cache_dir(&dir, || {
-            crate::core::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
-                &dir,
-                crate::core::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
-            )
-            .expect("mkdir");
+            create_directory_and_its_missing_parents_at_mode(&dir, OWNER_ONLY_DIRECTORY_MODE)
+                .expect("mkdir");
             let mut perms = std::fs::metadata(&dir).unwrap().permissions();
             #[cfg(unix)]
             {

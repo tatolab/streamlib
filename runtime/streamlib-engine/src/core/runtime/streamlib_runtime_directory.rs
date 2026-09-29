@@ -6,13 +6,12 @@
 
 use std::ffi::OsString;
 use std::os::unix::fs::MetadataExt;
-
-use crate::core::directory_at_an_explicit_mode::{
-    OWNER_ONLY_DIRECTORY_MODE, create_directory_and_its_missing_parents_at_mode,
-};
 use std::path::{Path, PathBuf};
 
 use super::RuntimeUniqueId;
+use crate::core::directory_at_an_explicit_mode::{
+    OWNER_ONLY_DIRECTORY_MODE, create_directory_and_its_missing_parents_at_mode,
+};
 use crate::core::error::{Error, Result};
 
 /// The folder the resolver keeps inside `$XDG_RUNTIME_DIR`.
@@ -218,7 +217,8 @@ mod tests {
         let shared_temporary_directory =
             crate::core::test_support::a_temporary_directory_at_owner_only_mode().unwrap();
         let fallback = fallback_path_for(shared_temporary_directory.path());
-        create_directory_and_its_missing_parents_at_mode(&fallback, 0o700).unwrap();
+        create_directory_and_its_missing_parents_at_mode(&fallback, OWNER_ONLY_DIRECTORY_MODE)
+            .unwrap();
         std::fs::write(fallback.join("left-by-an-earlier-run"), b"").unwrap();
 
         let directory = resolve_streamlib_runtime_directory(
@@ -263,7 +263,8 @@ mod tests {
         let fallback = shared_temporary_directory
             .path()
             .join(format!("streamlib-{another_uid}"));
-        create_directory_and_its_missing_parents_at_mode(&fallback, 0o700).unwrap();
+        create_directory_and_its_missing_parents_at_mode(&fallback, OWNER_ONLY_DIRECTORY_MODE)
+            .unwrap();
 
         let refusal = refusal_text(resolve_streamlib_runtime_directory(
             None,

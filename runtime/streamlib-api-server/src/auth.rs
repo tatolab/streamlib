@@ -30,6 +30,9 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::Serialize;
+use streamlib::sdk::directory_at_an_explicit_mode::{
+    OWNER_ONLY_DIRECTORY_MODE, create_directory_and_its_missing_parents_at_mode,
+};
 use streamlib::sdk::error::{Error, Result};
 
 /// Subdirectory (under the streamlib data dir) that holds the api-server's
@@ -138,10 +141,7 @@ fn generate_token() -> Result<String> {
 /// pre-existing file with looser bits is tightened.
 fn persist_token_0600(path: &Path, secret: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
-        streamlib::sdk::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
-            parent,
-            streamlib::sdk::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
-        )?;
+        create_directory_and_its_missing_parents_at_mode(parent, OWNER_ONLY_DIRECTORY_MODE)?;
     }
     let mut file = std::fs::OpenOptions::new()
         .write(true)

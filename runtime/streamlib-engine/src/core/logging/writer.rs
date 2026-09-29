@@ -9,6 +9,9 @@ use std::io::{self, Write};
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
 
+use crate::core::directory_at_an_explicit_mode::{
+    OWNER_ONLY_DIRECTORY_MODE, create_directory_and_its_missing_parents_at_mode,
+};
 use crate::core::logging::paths::{
     replacement_runtime_log_segment_path, rotated_runtime_log_segment_path,
     rotated_runtime_log_segment_sequence,
@@ -51,10 +54,7 @@ impl JsonlBatchedWriter {
         rotation_policy: JsonlSegmentRotationPolicy,
     ) -> io::Result<Self> {
         if let Some(parent) = path.parent() {
-            crate::core::directory_at_an_explicit_mode::create_directory_and_its_missing_parents_at_mode(
-                parent,
-                crate::core::directory_at_an_explicit_mode::OWNER_ONLY_DIRECTORY_MODE,
-            )?;
+            create_directory_and_its_missing_parents_at_mode(parent, OWNER_ONLY_DIRECTORY_MODE)?;
         }
         let active_segment_file = open_segment_for_append(path)?;
         let active_segment_bytes = active_segment_file.metadata()?.len();
