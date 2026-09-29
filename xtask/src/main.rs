@@ -511,6 +511,7 @@ fn run_local_ci_gates(workspace_root: &Path) -> Result<()> {
                 "iceoryx2::node::tests::a_domain_root_past_the_socket_path_budget_is_refused_by_name",
                 "iceoryx2::node::tests::an_iceoryx2_toml_in_the_working_directory_has_no_effect_on_a_node",
                 "iceoryx2::node::tests::two_test_process_domains_share_neither_files_nor_shared_memory",
+                "iceoryx2::node::tests::two_domains_sharing_a_prefix_never_share_a_channel",
                 "iceoryx2::node::tests::a_node_whose_process_was_killed_is_reclaimed_by_the_sweep",
                 "iceoryx2::node::tests::the_sweep_reads_the_engine_owned_domain_and_never_the_ambient_one",
                 "iceoryx2::output::tests::write_raw_refuses_over_ceiling_and_grows_within_it",
