@@ -1987,4 +1987,88 @@ mod tests {
             .open()
             .expect("the same root and prefix are the same domain");
     }
+
+    /// Two domains that differ only by root, sharing one prefix as every
+    /// engine-owned node does, never share a channel — which is what lets the
+    /// two-process mesh fixtures stand each peer up as a runtime of its own with
+    /// nothing but a root.
+    ///
+    /// Fail-without-fix: iceoryx2 0.9.3 named a service's dynamic config from
+    /// the prefix and the service name alone, so creating the channel in the
+    /// second domain replaced the first domain's, and a subscriber the first
+    /// domain opened afterwards joined the second domain's channel: it heard
+    /// the second domain's publisher and never its own.
+    #[test]
+    fn two_domains_sharing_a_prefix_never_share_a_channel() {
+        use crate::iceoryx2::DeliveryProfile;
+
+        // Settled first, for the reason the sibling test above gives.
+        let _ = crate::iceoryx2::iceoryx2_domain_for_this_test_process();
+
+        let first_process = domain_root_parent_within_the_socket_path_budget();
+        let second_process = domain_root_parent_within_the_socket_path_budget();
+        let first_root = first_process.path().join("iox2");
+        let second_root = second_process.path().join("iox2");
+        // An exited pid's prefix, so the next test process's sweep reclaims the
+        // shared memory this test leaves behind.
+        let shared_prefix =
+            crate::iceoryx2::iceoryx2_domain_for_this_test_process::test_domain_prefix(
+                current_process_uid(),
+                crate::iceoryx2::iceoryx2_domain_for_this_test_process::tests::a_process_id_that_has_exited(),
+            );
+        let channel_service_name = unique_service_name("shared_prefix");
+        let open_the_channel_in = |root: &std::path::Path, node_name: &str| {
+            Iceoryx2Node::wrapping(
+                create_iceoryx2_node_in_domain(root, &shared_prefix, node_name).unwrap(),
+            )
+            .open_or_create_service(&channel_service_name, 2, DeliveryProfile::ORDERED_DEPTH)
+            .unwrap_or_else(|refusal| panic!("{node_name} opens the channel: {refusal:?}"))
+        };
+        let publish_one_bag_from = |publisher: &ChannelDataServicePublisher| {
+            publisher
+                .loan_slice(8)
+                .expect("a loan")
+                .send()
+                .expect("a send")
+        };
+
+        // The order the fixture's peers meet it in: each source opens and
+        // publishes, and only then does the egress beside it open the channel.
+        let first_domains_publisher = open_the_channel_in(&first_root, "streamlib-test/first")
+            .create_publisher(64)
+            .expect("the first domain's publisher");
+        let second_domains_publisher = open_the_channel_in(&second_root, "streamlib-test/second")
+            .create_publisher(64)
+            .expect("the second domain's publisher");
+        let first_domains_subscriber =
+            open_the_channel_in(&first_root, "streamlib-test/first-egress")
+                .create_subscriber(DeliveryProfile::ORDERED_DEPTH)
+                .expect("the first domain's subscriber");
+
+        assert_eq!(
+            publish_one_bag_from(&second_domains_publisher),
+            0,
+            "the second domain's publisher reached a subscriber, and the only one on this \
+             channel name lives in the first domain"
+        );
+        assert!(
+            first_domains_subscriber
+                .receive()
+                .expect("a receive")
+                .is_none(),
+            "the first domain's subscriber heard a bag published in the second domain"
+        );
+        assert_eq!(
+            publish_one_bag_from(&first_domains_publisher),
+            1,
+            "the first domain's publisher must reach the subscriber its own domain opened"
+        );
+        assert!(
+            first_domains_subscriber
+                .receive()
+                .expect("a receive")
+                .is_some(),
+            "the first domain's subscriber must hear its own domain's publisher"
+        );
+    }
 }
