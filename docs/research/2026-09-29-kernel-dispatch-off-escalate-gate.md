@@ -17,11 +17,17 @@ it worth the risk?
 
 ## Short answer
 
-- **Yes in principle, and it is not needed now.** The device-idle wait does no job for dispatch
-  that the dispatch's own fence wait does not already do, with one exception: it hides a
-  graphics-draw write-after-read gap. The gate does one real job, keeping a shared graphics or
-  ray-tracing kernel's single command buffer, fence and staged bindings from interleaving.
-  Compute already has its own lock for that.
+- **Yes in principle, and it is not needed now.** For the GPU work a dispatch submits, the
+  device-idle wait orders nothing the dispatch's own fence wait does not already order, with
+  two exceptions:
+  - it hides a graphics-draw write-after-read gap (closed by #2546);
+  - dispatch still creates resources per frame — graphics and ray tracing build a fresh
+    command recorder on an input transition, and a Path-2 binding re-imports its image — and
+    that creation still relies on the gate and the idle (job 1 below).
+
+  The gate does one more real job, keeping a shared graphics or ray-tracing kernel's single
+  command buffer, fence and staged bindings from interleaving. Compute already has its own
+  lock for that.
 - **Harm is not measured, only rate.** The rig measured 5–6 escalates/s at 5 fps and 63/s at
   60 fps. Nobody has measured a dropped frame, added latency or lost throughput. The one
   60 fps producer held 60 fps.
