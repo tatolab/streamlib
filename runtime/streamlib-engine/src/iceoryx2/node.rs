@@ -1609,11 +1609,15 @@ mod tests {
     /// anyway, so a test domain built under it matches what a real run gets.
     fn domain_root_parent_within_the_socket_path_budget() -> tempfile::TempDir {
         #[cfg(target_os = "macos")]
-        return tempfile::Builder::new()
-            .tempdir_in("/tmp")
-            .expect("a temp directory under /tmp");
+        return crate::core::test_support::the_owner_can_enter(
+            tempfile::Builder::new()
+                .tempdir_in("/tmp")
+                .expect("a temp directory under /tmp"),
+        )
+        .expect("a temp directory under /tmp");
         #[cfg(not(target_os = "macos"))]
-        return tempfile::tempdir().expect("a temp directory");
+        return crate::core::test_support::a_temporary_directory_the_owner_can_enter()
+            .expect("a temp directory");
     }
 
     /// Set only in the child process the dead-node test re-runs itself in.
@@ -1830,9 +1834,14 @@ mod tests {
             return;
         }
 
-        let working_directory = tempfile::tempdir().unwrap();
+        let working_directory =
+            crate::core::test_support::a_temporary_directory_the_owner_can_enter().unwrap();
         let hijacked_root = working_directory.path().join("hijacked");
-        std::fs::create_dir(working_directory.path().join("config")).unwrap();
+        crate::iceoryx2::create_directory_and_parents_the_owner_can_enter(
+            &working_directory.path().join("config"),
+            crate::iceoryx2::ORDINARY_DIRECTORY_MODE_BEFORE_THE_UMASK,
+        )
+        .unwrap();
         std::fs::write(
             working_directory
                 .path()

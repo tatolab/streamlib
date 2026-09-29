@@ -169,7 +169,11 @@ mod tests {
     }
 
     fn write_manifest(crate_directory: &Path, manifest: &str) {
-        std::fs::create_dir_all(crate_directory).unwrap();
+        crate::iceoryx2::create_directory_and_parents_the_owner_can_enter(
+            crate_directory,
+            crate::iceoryx2::ORDINARY_DIRECTORY_MODE_BEFORE_THE_UMASK,
+        )
+        .unwrap();
         std::fs::write(crate_directory.join("Cargo.toml"), manifest).unwrap();
     }
 
@@ -184,7 +188,8 @@ mod tests {
 
     #[test]
     fn a_build_with_no_git_checkout_names_its_sha_unknown() {
-        let directory_outside_any_checkout = tempfile::tempdir().unwrap();
+        let directory_outside_any_checkout =
+            crate::core::test_support::a_temporary_directory_the_owner_can_enter().unwrap();
 
         let git_sha = git_sha_of_the_checkout_containing(directory_outside_any_checkout.path());
 
@@ -197,7 +202,8 @@ mod tests {
 
     #[test]
     fn a_checkout_names_the_commit_it_has_out() {
-        let checkout = tempfile::tempdir().unwrap();
+        let checkout =
+            crate::core::test_support::a_temporary_directory_the_owner_can_enter().unwrap();
         run_git_or_panic(checkout.path(), &["init", "--quiet"]);
         run_git_or_panic(
             checkout.path(),
@@ -215,7 +221,11 @@ mod tests {
             ],
         );
         let nested_directory = checkout.path().join("runtime/streamlib-engine");
-        std::fs::create_dir_all(&nested_directory).unwrap();
+        crate::iceoryx2::create_directory_and_parents_the_owner_can_enter(
+            &nested_directory,
+            crate::iceoryx2::ORDINARY_DIRECTORY_MODE_BEFORE_THE_UMASK,
+        )
+        .unwrap();
 
         assert_eq!(
             git_sha_of_the_checkout_containing(&nested_directory),
@@ -232,7 +242,8 @@ mod tests {
     /// built before an edit to them keeps passing the check.
     #[test]
     fn every_crate_linked_through_a_path_dependency_is_found_and_no_other() {
-        let workspace = tempfile::tempdir().unwrap();
+        let workspace =
+            crate::core::test_support::a_temporary_directory_the_owner_can_enter().unwrap();
         let workspace_root = workspace.path();
         write_manifest(
             workspace_root,

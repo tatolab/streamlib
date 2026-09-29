@@ -1622,7 +1622,10 @@ fn persist_pipeline_cache(
 
 fn atomic_write_pipeline_cache(path: &Path, data: &[u8]) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        crate::iceoryx2::create_directory_and_parents_the_owner_can_enter(
+            parent,
+            crate::iceoryx2::ORDINARY_DIRECTORY_MODE_BEFORE_THE_UMASK,
+        )?;
     }
     // Same-directory temp file → POSIX rename is atomic on the same
     // filesystem. The loser of a race just overwrites the winner, which is
@@ -2393,7 +2396,11 @@ void main() {
         let device = vulkan_device_for_dispatch_tests();
         let dir = unique_cache_dir("corrupt-blob");
         with_pipeline_cache_dir(&dir, || {
-            std::fs::create_dir_all(&dir).expect("mkdir");
+            crate::iceoryx2::create_directory_and_parents_the_owner_can_enter(
+                &dir,
+                crate::iceoryx2::ORDINARY_DIRECTORY_MODE_BEFORE_THE_UMASK,
+            )
+            .expect("mkdir");
             let cache_path = pipeline_cache_file_path(blend_spv(1), c"main").expect("path");
             // Plant a header-invalid blob that the driver will reject.
             // 32 bytes of zeros has header_version=0 ≠ 1 — driver ignores
@@ -2434,7 +2441,11 @@ void main() {
         let device = vulkan_device_for_dispatch_tests();
         let dir = unique_cache_dir("readonly-dir");
         with_pipeline_cache_dir(&dir, || {
-            std::fs::create_dir_all(&dir).expect("mkdir");
+            crate::iceoryx2::create_directory_and_parents_the_owner_can_enter(
+                &dir,
+                crate::iceoryx2::ORDINARY_DIRECTORY_MODE_BEFORE_THE_UMASK,
+            )
+            .expect("mkdir");
             let mut perms = std::fs::metadata(&dir).unwrap().permissions();
             #[cfg(unix)]
             {

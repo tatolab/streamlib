@@ -2324,7 +2324,10 @@ fn persist_pipeline_cache(
 
 fn atomic_write_pipeline_cache(path: &Path, data: &[u8]) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        crate::iceoryx2::create_directory_and_parents_the_owner_can_enter(
+            parent,
+            crate::iceoryx2::ORDINARY_DIRECTORY_MODE_BEFORE_THE_UMASK,
+        )?;
     }
     let suffix = format!("tmp.{}", mint_machine_global_unique_name_suffix());
     let mut tmp = path.to_path_buf();

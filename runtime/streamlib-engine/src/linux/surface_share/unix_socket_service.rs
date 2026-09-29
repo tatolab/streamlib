@@ -62,8 +62,11 @@ impl UnixSocketSurfaceService {
         }
 
         if let Some(parent) = self.socket_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create socket directory: {}", e))?;
+            crate::iceoryx2::create_directory_and_parents_the_owner_can_enter(
+                parent,
+                crate::iceoryx2::ORDINARY_DIRECTORY_MODE_BEFORE_THE_UMASK,
+            )
+            .map_err(|e| format!("Failed to create socket directory: {}", e))?;
         }
 
         let listener = UnixListener::bind(&self.socket_path).map_err(|e| {
@@ -1019,7 +1022,8 @@ mod tests {
     /// `TMPDIR` is even accounted for; a private dir keeps the path short and
     /// unlinks it on drop. The returned [`TempDir`] owns that lifetime.
     fn tmp_socket_path() -> (TempDir, PathBuf) {
-        let dir = TempDir::new().expect("temp dir for test socket");
+        let dir = crate::core::test_support::a_temporary_directory_the_owner_can_enter()
+            .expect("temp dir for test socket");
         let path = dir.path().join("surface-share.sock");
         (dir, path)
     }

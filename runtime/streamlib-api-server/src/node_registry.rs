@@ -123,11 +123,13 @@ pub fn write_entry(
     registry_directory: &Path,
     entry: &NodeRegistryEntry,
 ) -> Result<PathBuf, NodeRegistryError> {
-    std::fs::create_dir_all(registry_directory).map_err(|source| {
-        NodeRegistryError::RegistryDirCreate {
-            path: registry_directory.to_path_buf(),
-            source,
-        }
+    streamlib::sdk::iceoryx2::create_directory_and_parents_the_owner_can_enter(
+        registry_directory,
+        streamlib::sdk::iceoryx2::ORDINARY_DIRECTORY_MODE_BEFORE_THE_UMASK,
+    )
+    .map_err(|source| NodeRegistryError::RegistryDirCreate {
+        path: registry_directory.to_path_buf(),
+        source,
     })?;
     let path = registry_directory.join(entry_file_name(&entry.runtime_id));
     let json =

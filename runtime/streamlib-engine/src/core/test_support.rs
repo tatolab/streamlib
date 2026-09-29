@@ -436,3 +436,23 @@ pub(crate) fn rerun_this_test_in_a_child_process(
     );
     child_process_output
 }
+
+/// A temporary directory its owner can enter even when it was made while
+/// another test's thread was binding an iceoryx2 listener, whose process-wide
+/// umask would otherwise leave it without the owner's search bit.
+pub(crate) fn a_temporary_directory_the_owner_can_enter() -> std::io::Result<tempfile::TempDir> {
+    the_owner_can_enter(tempfile::tempdir()?)
+}
+
+/// Give `temporary_directory` back the owner bits a concurrent listener bind's
+/// umask may have taken while it was being made.
+pub(crate) fn the_owner_can_enter(
+    temporary_directory: tempfile::TempDir,
+) -> std::io::Result<tempfile::TempDir> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(
+        temporary_directory.path(),
+        std::fs::Permissions::from_mode(0o700),
+    )?;
+    Ok(temporary_directory)
+}

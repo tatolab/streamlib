@@ -54,7 +54,7 @@ fn reset_for_test() {
 #[serial]
 fn jsonl_file_created_on_runtime_new() {
     reset_for_test();
-    let tmp = TempDir::new().unwrap();
+    let tmp = crate::core::test_support::a_temporary_directory_the_owner_can_enter().unwrap();
     set_streamlib_home(&tmp);
 
     let runtime_id = Arc::new(RuntimeUniqueId::from("Rtest1"));
@@ -90,7 +90,7 @@ fn jsonl_file_created_on_runtime_new() {
 fn stdout_mirror_suppressed_by_quiet_env_keeps_jsonl() {
     reset_for_test();
     unsafe { std::env::set_var("STREAMLIB_QUIET", "1") };
-    let tmp = TempDir::new().unwrap();
+    let tmp = crate::core::test_support::a_temporary_directory_the_owner_can_enter().unwrap();
     set_streamlib_home(&tmp);
 
     let runtime_id = Arc::new(RuntimeUniqueId::from("RtestQ"));
@@ -116,7 +116,7 @@ fn stdout_mirror_suppressed_by_quiet_env_keeps_jsonl() {
 #[serial]
 fn drop_triggers_flush_and_persists() {
     reset_for_test();
-    let tmp = TempDir::new().unwrap();
+    let tmp = crate::core::test_support::a_temporary_directory_the_owner_can_enter().unwrap();
     set_streamlib_home(&tmp);
 
     let runtime_id = Arc::new(RuntimeUniqueId::from("RtestDrop"));
@@ -147,7 +147,7 @@ fn drop_triggers_flush_and_persists() {
 #[serial]
 fn time_triggered_flush_writes_without_size_trigger() {
     reset_for_test();
-    let tmp = TempDir::new().unwrap();
+    let tmp = crate::core::test_support::a_temporary_directory_the_owner_can_enter().unwrap();
     set_streamlib_home(&tmp);
 
     let runtime_id = Arc::new(RuntimeUniqueId::from("RtestTime"));
@@ -188,7 +188,7 @@ fn concurrent_runtime_paths_do_not_collide() {
     // Pure path-function test — no subscriber involvement, just
     // confirms two distinct runtime ids resolve to distinct files in
     // the shared log directory.
-    let tmp = TempDir::new().unwrap();
+    let tmp = crate::core::test_support::a_temporary_directory_the_owner_can_enter().unwrap();
     set_streamlib_home(&tmp);
 
     let dir = log_dir();
@@ -209,7 +209,7 @@ fn concurrent_runtime_paths_do_not_collide() {
 #[serial]
 fn origin_fields_round_trip_via_event_fields() {
     reset_for_test();
-    let tmp = TempDir::new().unwrap();
+    let tmp = crate::core::test_support::a_temporary_directory_the_owner_can_enter().unwrap();
     set_streamlib_home(&tmp);
 
     let runtime_id = Arc::new(RuntimeUniqueId::from("RtestOrigin"));
@@ -255,7 +255,7 @@ fn panic_hook_best_effort_flush() {
     // the global hook — that's only wired on global init) and verify
     // the hook routes a flush through the doorbell.
     reset_for_test();
-    let tmp = TempDir::new().unwrap();
+    let tmp = crate::core::test_support::a_temporary_directory_the_owner_can_enter().unwrap();
     set_streamlib_home(&tmp);
 
     let runtime_id = Arc::new(RuntimeUniqueId::from("RtestPanic"));
@@ -301,7 +301,7 @@ fn panic_hook_best_effort_flush() {
 #[serial]
 fn hot_path_is_not_blocked_on_io() {
     reset_for_test();
-    let tmp = TempDir::new().unwrap();
+    let tmp = crate::core::test_support::a_temporary_directory_the_owner_can_enter().unwrap();
     set_streamlib_home(&tmp);
 
     let runtime_id = Arc::new(RuntimeUniqueId::from("RtestHot"));
@@ -359,7 +359,7 @@ fn rust_println_captured_via_fd_redirect() {
     use std::os::fd::FromRawFd;
 
     reset_for_test();
-    let tmp = TempDir::new().unwrap();
+    let tmp = crate::core::test_support::a_temporary_directory_the_owner_can_enter().unwrap();
     set_streamlib_home(&tmp);
 
     let runtime_id = Arc::new(RuntimeUniqueId::from("RintercFdPrint"));
@@ -407,7 +407,7 @@ fn rust_println_captured_via_fd_redirect() {
 #[serial]
 fn rust_c_printf_via_libc_captured() {
     reset_for_test();
-    let tmp = TempDir::new().unwrap();
+    let tmp = crate::core::test_support::a_temporary_directory_the_owner_can_enter().unwrap();
     set_streamlib_home(&tmp);
 
     let runtime_id = Arc::new(RuntimeUniqueId::from("RintercFdLibc"));
@@ -457,7 +457,7 @@ fn rust_c_printf_via_libc_captured() {
 #[serial]
 fn intercept_stdio_off_in_tests() {
     reset_for_test();
-    let tmp = TempDir::new().unwrap();
+    let tmp = crate::core::test_support::a_temporary_directory_the_owner_can_enter().unwrap();
     set_streamlib_home(&tmp);
 
     let runtime_id = Arc::new(RuntimeUniqueId::from("RintercFdOff"));
@@ -503,7 +503,7 @@ fn intercept_stdio_off_in_tests() {
 #[serial]
 fn intercepted_fd2_uses_channel_fd2() {
     reset_for_test();
-    let tmp = TempDir::new().unwrap();
+    let tmp = crate::core::test_support::a_temporary_directory_the_owner_can_enter().unwrap();
     set_streamlib_home(&tmp);
 
     let runtime_id = Arc::new(RuntimeUniqueId::from("RintercFd2"));
@@ -555,7 +555,7 @@ fn intercepted_fd2_uses_channel_fd2() {
 #[serial]
 fn no_redirect_loop_when_mirror_enabled() {
     reset_for_test();
-    let tmp = TempDir::new().unwrap();
+    let tmp = crate::core::test_support::a_temporary_directory_the_owner_can_enter().unwrap();
     set_streamlib_home(&tmp);
 
     let runtime_id = Arc::new(RuntimeUniqueId::from("RintercFdLoop"));
@@ -605,7 +605,7 @@ fn no_redirect_loop_when_mirror_enabled() {
 #[serial]
 fn reader_thread_shuts_down_on_runtime_drop() {
     reset_for_test();
-    let tmp = TempDir::new().unwrap();
+    let tmp = crate::core::test_support::a_temporary_directory_the_owner_can_enter().unwrap();
     set_streamlib_home(&tmp);
 
     let runtime_id = Arc::new(RuntimeUniqueId::from("RintercFdShut"));
@@ -656,7 +656,7 @@ fn trace_compiled_out_in_release() {
     // Open the subscriber filter as wide as possible so any record that
     // survives the compile-time strip reaches the JSONL.
     unsafe { std::env::set_var("RUST_LOG", "trace") };
-    let tmp = TempDir::new().unwrap();
+    let tmp = crate::core::test_support::a_temporary_directory_the_owner_can_enter().unwrap();
     set_streamlib_home(&tmp);
 
     let runtime_id = Arc::new(RuntimeUniqueId::from("RtestTraceStrip"));
@@ -713,7 +713,7 @@ fn trace_compiled_out_in_release() {
 #[cfg(not(feature = "strip_debug_logging"))]
 fn debug_lives_in_release_default() {
     reset_for_test();
-    let tmp = TempDir::new().unwrap();
+    let tmp = crate::core::test_support::a_temporary_directory_the_owner_can_enter().unwrap();
     set_streamlib_home(&tmp);
 
     let runtime_id = Arc::new(RuntimeUniqueId::from("RtestDebugLive"));
@@ -746,7 +746,7 @@ fn debug_lives_in_release_default() {
 fn strip_debug_logging_feature_strips_debug() {
     reset_for_test();
     unsafe { std::env::set_var("RUST_LOG", "trace") };
-    let tmp = TempDir::new().unwrap();
+    let tmp = crate::core::test_support::a_temporary_directory_the_owner_can_enter().unwrap();
     set_streamlib_home(&tmp);
 
     let runtime_id = Arc::new(RuntimeUniqueId::from("RtestDebugStrip"));
@@ -800,7 +800,7 @@ fn strip_debug_logging_feature_strips_debug() {
 #[serial]
 fn warn_and_error_never_stripped() {
     reset_for_test();
-    let tmp = TempDir::new().unwrap();
+    let tmp = crate::core::test_support::a_temporary_directory_the_owner_can_enter().unwrap();
     set_streamlib_home(&tmp);
 
     let runtime_id = Arc::new(RuntimeUniqueId::from("RtestWarnErr"));
@@ -841,7 +841,7 @@ fn warn_and_error_never_stripped() {
 #[serial]
 fn burst_surfaces_dropped_counter_record() {
     reset_for_test();
-    let tmp = TempDir::new().unwrap();
+    let tmp = crate::core::test_support::a_temporary_directory_the_owner_can_enter().unwrap();
     set_streamlib_home(&tmp);
 
     let runtime_id = Arc::new(RuntimeUniqueId::from("RtestBurst"));
@@ -926,7 +926,7 @@ fn the_pretty_rendering_matches_the_golden_the_python_reader_asserts() {
 #[serial]
 fn a_runtime_logging_past_its_rotation_threshold_keeps_every_retained_record_whole() {
     reset_for_test();
-    let tmp = TempDir::new().unwrap();
+    let tmp = crate::core::test_support::a_temporary_directory_the_owner_can_enter().unwrap();
     set_streamlib_home(&tmp);
 
     let runtime_id = Arc::new(RuntimeUniqueId::from("RtestRotate"));

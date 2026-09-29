@@ -138,7 +138,10 @@ fn generate_token() -> Result<String> {
 /// pre-existing file with looser bits is tightened.
 fn persist_token_0600(path: &Path, secret: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
+        streamlib::sdk::iceoryx2::create_directory_and_parents_the_owner_can_enter(
+            parent,
+            streamlib::sdk::iceoryx2::ORDINARY_DIRECTORY_MODE_BEFORE_THE_UMASK,
+        )?;
     }
     let mut file = std::fs::OpenOptions::new()
         .write(true)

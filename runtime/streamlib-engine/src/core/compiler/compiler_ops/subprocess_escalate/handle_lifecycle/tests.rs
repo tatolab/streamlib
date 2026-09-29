@@ -564,7 +564,8 @@ impl LiveSurfaceShareServiceForATest {
         use crate::core::context::SurfaceStore;
         use crate::linux::surface_share::{SurfaceShareState, UnixSocketSurfaceService};
 
-        let socket_dir = tempfile::TempDir::new().expect("temp dir for the test socket");
+        let socket_dir = crate::core::test_support::a_temporary_directory_the_owner_can_enter()
+            .expect("temp dir for the test socket");
         let socket_path = socket_dir.path().join("surface-share.sock");
         let state = SurfaceShareState::new();
         let mut service = UnixSocketSurfaceService::new(state.clone(), socket_path.clone());
