@@ -335,3 +335,11 @@ Each dispatch path fence-waits its own submission before it returns:
 4. **If the trigger fires, take option B** with its two preconditions (creation-free
    graphics/ray-tracing dispatch, and the barrier fix). Leave the gate and the shared-kernel
    question to the bindings-at-dispatch convergence that is already decided.
+
+## Outcome
+
+- #2505 closed as not planned; dispatch stays in the escalate scope until item 3's measurement
+  says otherwise.
+- Item 2 shipped as #2546. Sync validation on an M1 Max reported the write-after-read in a
+  real graphics producer → `DisplayWindow` run in 3 of 3 runs without the fix and 0 of 3 with
+  it; the evidence is on the issue.
