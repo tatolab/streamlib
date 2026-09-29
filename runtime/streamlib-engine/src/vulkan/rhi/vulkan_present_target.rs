@@ -1678,4 +1678,142 @@ mod tests {
         };
         let _ = device.queue_family_index();
     }
+
+    /// A producer's offscreen draw into a pool slot the display's compose is
+    /// still sampling on the queue: the reuse a lease-aware pool permits once
+    /// the display drops the registration at submit.
+    ///
+    /// A driver that finishes the compose first renders correctly with no
+    /// dependency at all, so under `STREAMLIB_VULKAN_SYNC_VALIDATION=1` the
+    /// layer's error count is the discriminating check: a missing dependency
+    /// is a write-after-read hazard on the draw's layout transition.
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests"
+    )]
+    #[test]
+    fn offscreen_draw_into_a_slot_the_display_is_still_composing_is_ordered_after_the_compose() {
+        use crate::core::context::TextureRegistration;
+        use crate::core::rhi::{Texture, TextureDescriptor, TextureUsages, VulkanLayout};
+        use crate::host_rhi::HostTextureExt;
+        use crate::vulkan::rhi::vulkan_validation_messenger::VulkanValidationConfiguration;
+        use crate::vulkan::rhi::{HostVulkanTexture, PresentScalingMode, VulkanPresentCompositor};
+
+        let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+        let Some(device) = try_vulkan_device() else {
+            println!("Skipping — no Vulkan device available");
+            return;
+        };
+        if !VulkanValidationConfiguration::from_environment().enable_synchronization_validation {
+            println!(
+                "Skipping — only synchronization validation can see this hazard. Re-run with \
+                 STREAMLIB_VULKAN_SYNC_VALIDATION=1."
+            );
+            return;
+        }
+        let Some(validation_counts_before) = device.validation_layer_message_counts() else {
+            println!(
+                "Skipping — no validation messenger installed. Re-run with \
+                 STREAMLIB_VULKAN_SYNC_VALIDATION=1 and VK_LAYER_KHRONOS_validation present."
+            );
+            return;
+        };
+
+        let extent = (256u32, 256u32);
+        let make_texture = |label: &'static str| -> Texture {
+            let descriptor = TextureDescriptor {
+                width: extent.0,
+                height: extent.1,
+                format: TextureFormat::Bgra8Unorm,
+                usage: TextureUsages::TEXTURE_BINDING | TextureUsages::RENDER_ATTACHMENT,
+                label: Some(label),
+            };
+            <Texture as HostTextureExt>::from_vulkan(
+                HostVulkanTexture::new(&device, &descriptor).expect("texture"),
+            )
+        };
+        let producer_input = make_texture("war-test-producer-input");
+        let pool_slot = make_texture("war-test-pool-slot");
+        let swapchain_stand_in = make_texture("war-test-swapchain-stand-in");
+
+        let producer_kernel =
+            VulkanPresentCompositor::new(&device, TextureFormat::Bgra8Unorm).expect("producer");
+        let display_compositor =
+            VulkanPresentCompositor::new(&device, TextureFormat::Bgra8Unorm).expect("display");
+
+        // Frame N into the slot, then the escalate's trailing idle.
+        producer_kernel
+            .compose_to_offscreen_texture(
+                0,
+                &pool_slot,
+                &producer_input,
+                VulkanLayout::UNDEFINED,
+                PresentScalingMode::Stretch,
+            )
+            .expect("producer draw N");
+        device.wait_idle().expect("idle after draw N");
+        let pool_slot_registration =
+            TextureRegistration::new(pool_slot.clone(), VulkanLayout::COLOR_ATTACHMENT_OPTIMAL);
+
+        // The display composes frame N and submits without waiting.
+        let mut display_recorder =
+            RhiCommandRecorder::new(&device, "war-test-display").expect("display recorder");
+        display_recorder.begin().expect("display begin");
+        let swapchain_stand_in_image = swapchain_stand_in
+            .vulkan_inner()
+            .image()
+            .expect("stand-in image");
+        display_recorder
+            .record_swapchain_image_barrier(
+                swapchain_stand_in_image,
+                vk::ImageLayout::UNDEFINED,
+                vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                SWAPCHAIN_ACQUIRE_BARRIER_SCOPES,
+            )
+            .expect("acquire barrier");
+        {
+            let mut frame = synthetic_present_frame(
+                &mut display_recorder,
+                0,
+                0,
+                extent,
+                TextureFormat::Bgra8Unorm,
+            );
+            frame.inner.image_view = swapchain_stand_in
+                .vulkan_inner()
+                .image_view()
+                .expect("stand-in view");
+            display_compositor
+                .compose_to_present_frame(
+                    &mut frame,
+                    &pool_slot_registration,
+                    PresentScalingMode::Stretch,
+                )
+                .expect("compose");
+        }
+        display_recorder.submit().expect("display submit");
+        drop(pool_slot_registration);
+
+        // The slot reads as unheld, so the producer's frame N+k draws into it.
+        producer_kernel
+            .compose_to_offscreen_texture(
+                0,
+                &pool_slot,
+                &producer_input,
+                VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+                PresentScalingMode::Stretch,
+            )
+            .expect("producer draw N+k");
+        display_recorder
+            .wait_for_completion()
+            .expect("display completion");
+
+        let validation_counts_after = device
+            .validation_layer_message_counts()
+            .expect("the messenger stays installed for the whole test");
+        assert_eq!(
+            validation_counts_after.error_count, validation_counts_before.error_count,
+            "sync validation flagged the draw into a slot the display was still composing"
+        );
+    }
 }

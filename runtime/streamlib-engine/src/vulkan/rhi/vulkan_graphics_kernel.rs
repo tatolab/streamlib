@@ -619,10 +619,9 @@ impl VulkanGraphicsKernelInner {
                     ))
                 })?;
 
-            // Transition every color target UNDEFINED → COLOR_ATTACHMENT_OPTIMAL.
-            // Caller-supplied targets are expected to be freshly-acquired or
-            // post-presented; UNDEFINED with CLEAR/LOAD load_op is the
-            // tolerant pattern.
+            // An earlier submission on this queue can still be touching a
+            // target — a display lets a pool slot go at compose submit — so
+            // the transition waits on every prior stage and write.
             let mut barriers: Vec<vk::ImageMemoryBarrier2> =
                 Vec::with_capacity(color_targets.len());
             use crate::host_rhi::HostTextureExt;
@@ -635,8 +634,8 @@ impl VulkanGraphicsKernelInner {
                 })?;
                 barriers.push(
                     vk::ImageMemoryBarrier2::builder()
-                        .src_stage_mask(vk::PipelineStageFlags2::NONE)
-                        .src_access_mask(vk::AccessFlags2::NONE)
+                        .src_stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+                        .src_access_mask(vk::AccessFlags2::MEMORY_WRITE)
                         .dst_stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
                         .dst_access_mask(vk::AccessFlags2::COLOR_ATTACHMENT_WRITE)
                         .old_layout(vk::ImageLayout::UNDEFINED)
