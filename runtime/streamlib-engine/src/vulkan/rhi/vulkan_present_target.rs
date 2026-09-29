@@ -1696,16 +1696,20 @@ mod tests {
         use crate::core::context::TextureRegistration;
         use crate::core::rhi::{Texture, TextureDescriptor, TextureUsages, VulkanLayout};
         use crate::host_rhi::HostTextureExt;
-        use crate::vulkan::rhi::{
-            HostVulkanTexture, PresentScalingMode, VulkanPresentCompositor,
-        };
+        use crate::vulkan::rhi::{HostVulkanTexture, PresentScalingMode, VulkanPresentCompositor};
 
         let _ = tracing_subscriber::fmt().with_test_writer().try_init();
         let Some(device) = try_vulkan_device() else {
             println!("Skipping — no Vulkan device available");
             return;
         };
-        let validation_counts_before = device.validation_layer_message_counts();
+        let Some(validation_counts_before) = device.validation_layer_message_counts() else {
+            println!(
+                "Skipping — no validation messenger installed. Re-run with \
+                 STREAMLIB_VULKAN_SYNC_VALIDATION=1 and VK_LAYER_KHRONOS_validation present."
+            );
+            return;
+        };
 
         let extent = (256u32, 256u32);
         let make_texture = |label: &'static str| -> Texture {
@@ -1796,9 +1800,11 @@ mod tests {
             .wait_for_completion()
             .expect("display completion");
 
+        let validation_counts_after = device
+            .validation_layer_message_counts()
+            .expect("the messenger stays installed for the whole test");
         assert_eq!(
-            device.validation_layer_message_counts(),
-            validation_counts_before,
+            validation_counts_after.error_count, validation_counts_before.error_count,
             "sync validation flagged the draw into a slot the display was still composing"
         );
     }
