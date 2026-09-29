@@ -1696,6 +1696,7 @@ mod tests {
         use crate::core::context::TextureRegistration;
         use crate::core::rhi::{Texture, TextureDescriptor, TextureUsages, VulkanLayout};
         use crate::host_rhi::HostTextureExt;
+        use crate::vulkan::rhi::vulkan_validation_messenger::VulkanValidationConfiguration;
         use crate::vulkan::rhi::{HostVulkanTexture, PresentScalingMode, VulkanPresentCompositor};
 
         let _ = tracing_subscriber::fmt().with_test_writer().try_init();
@@ -1703,6 +1704,13 @@ mod tests {
             println!("Skipping — no Vulkan device available");
             return;
         };
+        if !VulkanValidationConfiguration::from_environment().enable_synchronization_validation {
+            println!(
+                "Skipping — only synchronization validation can see this hazard. Re-run with \
+                 STREAMLIB_VULKAN_SYNC_VALIDATION=1."
+            );
+            return;
+        }
         let Some(validation_counts_before) = device.validation_layer_message_counts() else {
             println!(
                 "Skipping — no validation messenger installed. Re-run with \
