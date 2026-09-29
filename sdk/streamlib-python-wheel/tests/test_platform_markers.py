@@ -3,8 +3,8 @@
 
 """The two platform markers are held to what the plan allows them to say.
 
-`linux_only_capability` names only the closed list in
-`docs/plan/changes/macos-capability-parity.md`, so a test red on macOS cannot
+`linux_only_capability` names only the closed list in `docs/plan/ARCHITECTURE.md`
+§Product, so a test red on macOS cannot
 be quietly skipped. `awaiting_macos_parity` names only a ticket an active
 change still lists under `## Tickets`, so the mark cannot outlive the work it
 waits on.

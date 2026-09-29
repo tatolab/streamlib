@@ -8,19 +8,27 @@ never round-tripped back) move together: every DECIDED entry is represented in t
 
 Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an owner decision.
 
-## Product (the MVP sentence) — IN-FLIGHT (→ macos-platform-floor, macos-capability-parity, engine-steps)
+## Product (the MVP sentence) — SHIPPED
 <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py -->
 
-- **DECIDED** — A Python developer on Linux with an NVIDIA GPU pip-installs streamlib
-  (initially from this repo's releases; PyPI after the project rename) into an
-  ordinary uv-managed venv, runs `streamlib new` then `streamlib dev`,
+- **DECIDED** — A Python developer on Linux with an NVIDIA GPU, or on Apple Silicon,
+  pip-installs streamlib (initially from this repo's releases; PyPI after the project
+  rename) into an ordinary uv-managed venv, runs `streamlib new` then `streamlib dev`,
   sees their camera live in a window within a minute, and makes the pipeline theirs by
   editing the scaffolded processor — zero ceremony: no manifest, no `main()`, no schema
-  wrangling, a fast edit loop. Every ticket traces to this sentence or does not
-  exist. [importable-python-library — SHIPPED #1683, #1684, #1711]
+  wrangling, a fast edit loop. The zero-ceremony clauses bind both floors alike. Apple
+  Silicon is a supported floor, not a developer machine: CI gates it on every PR, its
+  `aarch64-apple-darwin` wheel is in the release closure, and a macOS-only regression
+  blocks a release as a Linux one does. macOS security prompts are part of the
+  experience and do not breach zero ceremony; needing an app bundle to obtain them
+  would. Every ticket traces to this sentence or does not exist.
+  [importable-python-library — SHIPPED #1683, #1684, #1711; macos-platform-floor —
+  SHIPPED #2357, #2359, #2361, #2362]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_new_writes_a_working_app -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py::test_the_scaffolded_app_reaches_a_running_graph -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py::test_every_helper_interpreter_goes_live_inside_the_startup_budget -->
+  <!-- verify: grep -n "The scaffolded app runs on the driver the wheel carries" .github/workflows/macos-wheel.yml -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_every_mach_o_the_wheel_carries_is_portable -->
 - **DECIDED** — Terms of the sentence: StreamLib is an importable Python library — one
   PyPI wheel carrying the Python API, the CLI, and the Rust engine (PyO3, the
   pydantic-core model); a StreamLib app is a normal Python codebase — one venv, one
@@ -36,22 +44,53 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   processor; the scaffold pins `.python-version` (3.12) and the wheel supports a small
   Python version range. [importable-python-library — SHIPPED #1684, #1711; the
   bags/schemas clause with schema-free-ports #1814]
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_the_scaffolded_processor_lives_outside_the_entry_file -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_each_scaffolded_processor_lives_outside_the_entry_file -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py::test_the_edit_loop_survives_a_bad_save_and_shows_a_good_one -->
 - **DECIDED** — Rust authoring stays a supported capability: a Rust app is a plain
   cargo project depending on the `streamlib` crate — no wrapper generation, no special
   format; third-party Rust processors for Rust apps are ordinary cargo dependencies,
   source-compiled. [importable-python-library — SHIPPED #1715]
+- **DECIDED** — The two floors are one product surface. A Python processor written
+  against the wheel's public surface runs on both; where it cannot is a short closed
+  list that refuses by name before a frame flows — at `rt.add()` or in `setup()`,
+  naming the platform — never mid-frame: ray-tracing kernels (MoltenVK has no
+  `VK_KHR_ray_tracing_pipeline`; each constructor refuses at `setup()` naming the absent
+  tier), `VirtualCameraSink` (refused at `rt.add()`), the CUDA Array Interface, and the
+  fd-shaped raw handles (`export_dma_buf`, `export_opaque_fd`, `import_dma_buf` exist on
+  macOS and refuse pointing at `export_iosurface`). The scaffold and the examples use
+  only the portable surface. The guarantee is mechanical, never prose: one
+  `_engine.pyi`, gated by `stubtest` against both binaries in CI, so no class or method
+  exists on one floor and not the other; one Python suite runs on both floors — its
+  GPU-free half on both CI lanes, its `requires_gpu` half on each floor's rig; and a
+  test skipped off Linux carries `linux_only_capability(reason=…)`, whose reason
+  `test_platform_markers.py` holds to the closed list plus one named group — a test
+  whose body is itself a Linux mechanism (`XDG_RUNTIME_DIR`, v4l2loopback and udev, the
+  boot-session file, X11/Wayland, SIGHUP and SIGINT hand-back). A test red on macOS for
+  any other reason is a parity bug, never a skip.
+  [macos-capability-parity — SHIPPED #2400, #2403, #2405]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_platform_markers.py -->
+  <!-- verify: grep -n "mypy.stubtest streamlib._engine" .github/workflows/test.yml .github/workflows/python-wheel.yml -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_ray_tracing_tier_refusal.py::test_every_ray_tracing_constructor_refuses_at_setup_naming_the_absent_tier -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_helper_process.py::test_an_fd_shaped_raw_handle_refuses_by_name_off_linux -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_device_exchange.py::test_each_raw_handle_flavour_refuses_by_name_off_its_platform -->
 - **DECIDED** — The scaffold models the pathway: pixels on the GPU, logic on the CPU, the
-  pixel view explicit. `streamlib new` writes two processors — a `GlslPixelEffect` invert
-  in the camera-to-window path, and a numpy processor on a fan-out of the effect's output
-  that reads a strided CPU view of the frame and logs a number once a second — with
-  dependencies `streamlib` and `numpy`, nothing more. The scaffold takes this shape only
-  once the surface copy and Python kernels run on both floors; until then it stays the
-  numpy CPU effect, so the first minute is the same on Linux and macOS.
-  [engine-steps-for-effects-and-model-input]
+  pixel view explicit. `streamlib new` writes two processors, each in its own module
+  under `processors/` — an `InvertingEffect` over `GlslPixelEffect` (one GLSL `effect`
+  function) in the camera-to-window path, and a numpy `BrightnessMeter` on a fan-out of
+  the effect's output that reads the frame through `frame.cpu()` and logs its mean once a
+  second, paced on `ctx.time` — with dependencies `streamlib` and `numpy>=2.1`, nothing
+  more, the same on both floors. The files render from template files the wheel ships
+  (`streamlib/_scaffold_template/`), each placeholder its template's own default value so
+  the templates stay importable and checkable; ruff runs over every render, pyright over
+  the template tree, and the cross-floor check gates the output.
+  [engine-steps-for-effects-and-model-input; engine-steps — SHIPPED #2434, #2438]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_the_scaffold_models_pixels_on_the_gpu_and_logic_on_the_cpu -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_the_scaffold_depends_on_streamlib_and_numpy_only -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_new_writes_exactly_the_rendered_templates -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_every_scaffolded_python_file_passes_ruff -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cross_floor_check.py::test_the_scaffold_binds_to_no_floor -->
 
-## Packages & extension model — IN-FLIGHT (→ macos-capability-parity, portable-gpu-interop)
+## Packages & extension model — SHIPPED
 
 - **DECIDED** — PyPI and cargo are the package systems. The custom module system is
   deleted in full: `streamlib_modules/`, the `.slpkg` format, `streamlib.lock`, the
@@ -126,7 +165,8 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   extension. What an extension needs and the engine does not yet expose is engine work,
   done as engine code inside the extension's own change, rather than by the extension
   reaching past the surface. Known gaps at the pivot: a Python compute dispatch cannot
-  bind a storage buffer, and codec sessions are not exported to Python. [extension-model;
+  bind a storage buffer — closed by the tensor buffer (§Graphics, engine-steps #2430) —
+  and codec sessions are not exported to Python. [extension-model;
   clause (c) added and first fired by virtual-camera-sink — SHIPPED #2196, #2197, #2198]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_virtual_camera_sink.py -->
 - **DECIDED** — The `streamlib` wheel exports its bag codec as two module-level functions
@@ -206,18 +246,29 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   to make and never a session's inference; until it is made there is no carve-out.
   [extension-model]
 - **DECIDED** — The engine's handle-shaped primitive surface is the public contract
-  for native interop: DMA-BUF / OPAQUE_FD import and export, the present target,
-  texture rings, codec byte pumps, the audio clock, color resolution — surfaced to
-  the Python ecosystem as DLPack and the CUDA Array Interface (DLPack first). The
-  contract is zero-CPU-copy, stated honestly: tiled engine textures reach a linear
-  tensor via one GPU blit into an exportable staging buffer, because DLPack expresses
-  strided linear memory only — and that blit reads the surface's pooled backing
-  whenever one exists; a producer-internal texture never sources a cross-process
-  export. The Vulkan↔CUDA and Vulkan↔GL interop adapters survive
-  as in-process capabilities (torch/cupy and GL consumers); only their cross-DSO
-  `-abi` halves die with the plugin ABI. [importable-python-library — SHIPPED #1710;
-  surface-id-lifetime-contract — SHIPPED #1868 for the source clause]
+  for native interop: DMA-BUF / OPAQUE_FD import and export on Linux and IOSurface export
+  on macOS, the present target, texture rings, codec byte pumps, the audio clock, color
+  resolution — surfaced to the Python ecosystem as DLPack and the CUDA Array Interface
+  (DLPack first; the CUDA Array Interface is CUDA by nature and never offered on macOS).
+  A graph frame's natural DLPack side is the device on both floors. On Linux it is
+  `kDLCUDA`, and the contract is zero-CPU-copy stated honestly: tiled engine textures
+  reach a linear tensor via one GPU blit into an exportable OPAQUE_FD staging buffer,
+  because DLPack expresses strided linear memory only — and that blit reads the
+  surface's pooled backing whenever one exists; a producer-internal texture never
+  sources a cross-process export. On macOS it is `kDLMetal` over a no-copy `MTLBuffer`
+  on the frame's own IOSurface — zero copies and no staging, because unified memory
+  makes the surface's bytes the device's bytes. `torch.from_dlpack` yields `cuda` on one
+  and `mps` on the other, and `mx.from_dlpack` consumes the same Metal capsule. The
+  stub states the consumer floors where the capsule is minted — torch ≥ 2.10 by source
+  (2.9 maps `kDLMetal`, 2.10 fixes a sliced import; measured on 2.14) and MLX ≥ 0.32 —
+  and no refusal names them, since the wheel imports neither. The Vulkan↔CUDA and
+  Vulkan↔GL interop adapters survive as in-process capabilities (torch/cupy and GL
+  consumers); only their cross-DSO `-abi` halves die with the plugin ABI.
+  [importable-python-library — SHIPPED #1710; surface-id-lifetime-contract — SHIPPED
+  #1868 for the source clause; macos-capability-parity — SHIPPED #2404 for the Metal side]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_pixel_exchange.py -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_device_exchange.py::test_a_graph_frame_reaches_torch_as_a_device_tensor -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_device_exchange.py::test_mlx_reads_a_graph_frame_over_its_own_bytes -->
 - **DECIDED** — Raw-handle export is public contract for both flavours, gated by
   the Full capability surface: a raw memory fd is minted only by
   `GpuContextFullAccess` — `export_dma_buf` for the DMA-BUF flavour,
@@ -240,17 +291,34 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   counts), dedicated-allocation status, the exporter's memory type index, and the
   exporting device UUID — and no per-frame state (no image layout, no timeline
   edges); `export_dma_buf` keeps `(fd, byte_size)` and refuses the OPAQUE_FD
-  flavour by name, pointing at `export_opaque_fd`. An export is taken from a
+  flavour by name, pointing at `export_opaque_fd`. An fd flavour's export is taken from a
   resolved surface, never from a name: the fd reaches a helper at checkout, so a
   texture acquired but not yet resolved is refused telling the caller to resolve
   its surface id first, and every other refusal likewise names the flavour's own
   door. The recipe travels because a raw allocation is consumed as an image — a
   linear buffer mapping over tiled memory yields block-linear bytes, never pixels —
   and a successful import pins the payload past the exporter destroying the texture
-  it came from. [raw-handle-export-contract — SHIPPED #1900]
+  it came from.
+  On macOS the raw handle is the IOSurface flavour: `export_iosurface` on the Full
+  surface returns an `IOSurfaceMachPortExport` — a fresh Mach send right per export,
+  owned by the caller and given back with `mach_port_deallocate` — carrying allocation
+  byte size, row pitch, extent, format, and for a texture the image recipe (tiling,
+  usage, mip/layer/sample counts; `None` for a pixel buffer, which exports too). It
+  carries no device UUID, memory type index or dedicated-allocation status, which name
+  nothing on one unified-memory device. It is gated, owned and bounded as the fd
+  flavours are: a held right keeps the surface reading as in use, pinning its pool slot
+  as a held fd pins a DMA-BUF. `export_dma_buf`, `export_opaque_fd` and `import_dma_buf`
+  exist on macOS and refuse by name pointing at `export_iosurface`; `export_iosurface`
+  exists on Linux and refuses by name pointing back. A raw handle is platform-shaped by
+  nature; choosing one is visible in the code.
+  [raw-handle-export-contract — SHIPPED #1900; macos-capability-parity — SHIPPED #2400
+  for the refusing arms, #2405 for the IOSurface flavour]
   <!-- verify: cargo test -p streamlib-adapter-cuda --test opaque_fd_wheel_export_foreign_consumer a_wheel_exported_opaque_fd_read_by_a_foreign_process_shows_the_kernels_pixels -->
   <!-- verify: cargo test -p streamlib-adapter-cuda --test opaque_fd_image_consumer_rhi_round_trip an_exported_opaque_fd_pins_the_payload_past_source_texture_teardown -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_device_exchange.py::test_a_texture_handle_round_trips_across_the_process_boundary -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_device_exchange.py::test_an_iosurface_port_is_looked_up_and_read_by_native_code_in_the_helper -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_device_exchange.py::test_each_iosurface_export_is_a_fresh_send_right_the_caller_owns_and_gives_back -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_device_exchange.py::test_each_raw_handle_flavour_refuses_by_name_off_its_platform -->
 - **OPEN** — Zero-copy per-frame consumption by a foreign GPU stack: intended, do
   not build until designed. Direction: export a surface's slot set once at setup,
   name the current frame per-frame by surface id, signal the hand-off with an
@@ -341,23 +409,51 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   from that tensor or from `torch.accelerator`, and never spelled by name. Any DLPack
   consumer may read a frame on the floor that supports it — cupy and jax on Linux, MLX on
   macOS — and the engine refuses none; only the torch path is portable, and the cross-floor
-  check says which is which. Array-API wrappers are neither modelled nor refused. The
-  scaffold and the shipped examples model this path and no other for GPU math; torch is a
-  dependency of neither the wheel nor the scaffold. [portable-gpu-interop]
+  check says which is which. Array-API wrappers are neither modelled nor refused.
+  Landing a frame in a texture is the engine's `copy_surface_to_surface` (§Graphics),
+  never an array library. The scaffold and the shipped examples model this path and no
+  other for GPU math — the kernel examples and `camera-python-effects` land frames with
+  the engine copy and depend on no cupy, `fisheye-object-detection` takes its device from
+  `torch.accelerator.current_accelerator()` and pins `torch>=2.10`, and
+  `camera-virtual-camera`'s processors are portable while its app is Linux-only by
+  `VirtualCameraSink`; torch is a dependency of neither the wheel nor the scaffold.
+  [portable-gpu-interop — SHIPPED #2420, #2422, #2423, #2424]
+  <!-- verify: git grep -n -e "copy_surface_to_surface" -e "torch.accelerator" -- examples -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_the_scaffold_depends_on_streamlib_and_numpy_only -->
 - **DECIDED** — A frame's DLPack export honours a request for the host side on every
   floor: `dl_device=(kDLCPU, 0)` hands back the surface's host mapping, so
   `numpy.from_dlpack(frame, device="cpu")` is one line on both floors — on macOS the same
   IOSurface pages the Metal capsule aliases, not a copy. `copy=True` stays refused by name
-  at every door. [portable-gpu-interop]
+  at every door — the surface handle's `__dlpack__` and the device-tensor scope — and
+  `as_numpy()` rides the same host request, one mapping, not two copies.
+  [portable-gpu-interop — SHIPPED #2404]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_device_exchange.py::test_the_host_side_stays_reachable_on_explicit_request -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_device_exchange.py::test_a_copy_request_is_refused_at_both_doors -->
 - **DECIDED** — The cross-floor check reads a Python processor's source and its
-  `pyproject.toml` for what binds it to one floor — a floor-bound library's import, a
-  device named as a literal, a closed-list method, a floor-bound dependency with no
-  platform marker — and names the portable spelling for each. It runs inside
-  `streamlib dev` and `streamlib run` as a warning that never blocks a start, gates in CI
-  the wheel's own Python and the scaffold's output, and runs over `examples/` when a change
-  ships; it is no CLI verb of its own. It reads source, not behaviour: a dynamic import or
-  a dependency's own device choice is left to the same Python suite running on both
-  floors' CI lanes. [portable-gpu-interop]
+  `pyproject.toml` for what binds it to one floor and names the file, line and portable
+  spelling of each. It runs inside `streamlib dev` and `streamlib run` as a warning that
+  never blocks a start, gates in CI the wheel's own Python and the scaffold's output, and
+  runs over `examples/` when a change ships; it is no CLI verb of its own. It reads
+  source, not behaviour: a dynamic import or a dependency's own device choice is left to
+  the same Python suite running on both floors. As built, `streamlib._cross_floor_check`
+  (stdlib `ast` and `tomllib`) reads every `.py` under the app anchor — skipping
+  dot-directories, `.venv`/`venv` and any directory holding a `pyvenv.cfg` — and the
+  anchor's `pyproject.toml`, and flags: an import of `cupy`, `pycuda`, `numba.cuda`,
+  `torch.cuda` (also reached as an attribute) or `mlx`; `"cuda"` or `"mps"` passed as a
+  device (`device=`, `.device(…)`, `.to(…)`) and `.cuda()`; a closed-list stub name
+  (`VirtualCameraSink`, the three ray-tracing constructors, `export_dma_buf`,
+  `export_opaque_fd`, `import_dma_buf`, `__cuda_array_interface__`) where it is used,
+  never where it is imported, reported as allowed on its floor with the other floor's
+  peer; and a `cupy*` or `mlx*` dependency with no `sys_platform`/`platform_system`
+  marker. Nothing under a `sys.platform` guard is flagged, in either branch.
+  `launch_app_node` prints the block on stdout between resolving the entry file and
+  executing it — nothing when clean, a failure of the check itself reported, a start
+  never blocked; on Python 3.10 the dependency rule is skipped and the block says so. CI
+  gates the wheel's own Python and both scaffold variants on both lanes.
+  [portable-gpu-interop — SHIPPED #2421]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cross_floor_check.py -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cross_floor_check.py::test_the_wheels_own_python_binds_to_no_floor -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py::test_a_scaffolded_app_with_a_cross_floor_finding_warns_and_starts_anyway -->
 
 ## Consumers — examples & packages — SHIPPED
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-31-consumer-tree-disposition.md -->
@@ -420,6 +516,19 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   virtual-camera-sink #2198]
   <!-- verify: git ls-files examples/camera-halftone examples/camera-compute-kernel examples/fisheye-object-detection examples/camera-codec-roundtrip examples/camera-virtual-camera -->
   <!-- verify: git ls-files examples/camera-audio-recorder/app.py examples/camera-audio-recorder/pyproject.toml -->
+- **DECIDED** — The GPU examples run on the portable path: `camera-compute-kernel`,
+  `camera-halftone`, `camera-virtual-camera` and `camera-python-effects` land frames with
+  `copy_surface_to_surface` and carry no cupy; `camera-python-effects` decimates through
+  `numpy.from_dlpack(frame, device="cpu")`, and each dependency was measured on macOS
+  arm64, so none is platform-marked and no processor is Linux-only (`mediapipe` 1.0.1,
+  which aborts on macOS, is excluded by pin); `fisheye-object-detection` takes its device
+  from `torch.accelerator` and prepares its detector input with `ModelInputTensorKernel`
+  (`fit="pad_bottom_right", pad_to_multiple_of=32`), its boxes staying in frame
+  coordinates. The cross-floor check found nothing in any example at ship time save
+  `VirtualCameraSink` in `camera-virtual-camera`'s app and the ray-tracing constructors in
+  `raytracing-showcase`, both on the closed list. [portable-gpu-interop — SHIPPED #2422,
+  #2423, #2424; engine-steps — SHIPPED #2433]
+  <!-- verify: git grep -n -e "ModelInputTensorKernel" -e "copy_surface_to_surface" -- examples -->
 - **DECIDED** — Retired in one sweep, superseded by deleted machinery or shipped pivots:
   `examples/pipelines`, `examples/camera-deno-subprocess` (its halftone effect rebuilt as
   `examples/camera-halftone`), `examples/camera-python-subprocess`,
@@ -469,7 +578,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   [consumer-tree-disposition — SHIPPED; a standing convention, and by the same decision
   the showcase carries no CI check to run]
 
-## Processor model & scheduling — IN-FLIGHT (→ macos-platform-floor, macos-capability-parity)
+## Processor model & scheduling — SHIPPED
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a bag
   (self-describing msgpack named map). The engine has no type layer: ports carry no
@@ -818,6 +927,31 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   OS thread per processor with descriptor-driven priority (realtime / high / normal);
   synchronous lifecycle traits; Full/Limited capability typestate on the phase axis
   (setup/teardown vs process). [execution-model]
+- **DECIDED** — Reactive and continuous execution pace the same on both floors. A reactive
+  processor waits on one readiness queue — epoll on Linux, kqueue `EVFILT_READ` on macOS,
+  level-triggered on both, with one 500 ms bound — holding its inbound listener and its
+  shutdown wake (an `eventfd` on Linux, a close-on-exec pipe written once on macOS), so a bag
+  or a shutdown wakes it on arrival. The 100 ms channel-poll loop survives only as the
+  fallback for a platform with neither queue or a waiter whose setup failed, and a wake that
+  cannot be created leaves channel-only shutdown rather than a panic. `MonotonicTimer` runs on
+  both floors behind the unchanged Python surface: `timerfd` on Linux; on macOS a one-shot
+  kqueue `EVFILT_TIMER` with `NOTE_MACHTIME | NOTE_ABSOLUTE | NOTE_CRITICAL`, re-armed after
+  each fire at the next absolute deadline, `first + k·interval` on `MediaClock`, converted to
+  Mach ticks and rounded up so a deadline never fires early. `wait()` returns the deadlines
+  passed, `0` on timeout and `-1` once closed, as on Linux.
+  Three readings the build settled. **`NOTE_MACH_CONTINUOUS_TIME` is never set** — only
+  without it is an absolute `NOTE_MACHTIME` deadline in the `mach_absolute_time` epoch, the
+  engine's clock. **`NOTE_CRITICAL` is load-bearing**: without it the kernel's coalescing
+  makes wakes about 1.3 ms late on average. **Two waiters on one timer differ by floor, both
+  bounded**: on macOS the one that misses the one-shot waits until its own timeout or the next
+  deadline, on Linux it returns `0` at once; the helper waits from one thread.
+  [macos-capability-parity — SHIPPED #2408, #2409]
+  <!-- verify: cargo test -p streamlib-engine --lib core::execution::thread_runner::tests::a_shutdown_seen_only_on_the_wake_fd_ends_a_loop_blocked_in_its_wait -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::execution::thread_runner::tests::a_delivered_notify_makes_the_wait_report_notified -->
+  <!-- verify: cargo test -p streamlib-python-wheel --lib python_monotonic_timer::tests::late_wakes_never_move_a_later_deadline_off_the_grid -->
+  <!-- verify: cargo test -p streamlib-python-wheel --lib python_monotonic_timer::tests::a_kqueue_deadline_is_armed_absolute_in_the_mach_absolute_time_epoch -->
+  <!-- verify: cargo test -p streamlib-engine --lib apple::media_clock::tests::a_tick_rounded_up_from_nanos_never_converts_back_to_an_earlier_nano -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_helper_process.py::test_a_continuous_processor_runs_at_the_start_rather_than_one_interval_in -->
 - **DECIDED** — Helper-process placement is the only execution placement. Every Python
   processor runs in its own child process — its own interpreter, its own GIL — spawned
   by the Rust engine as an exec of `sys.executable` from the app's venv: never fork
@@ -831,6 +965,105 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   must be import-addressable from a module whose import is side-effect-safe; there is
   nothing to equalize and nothing to move between, because there is no second
   placement. [helper-process-placement-only — SHIPPED #1714]
+- **DECIDED** — A surface crosses to a helper on Apple over raw Mach. The surface-share
+  service above the transport does not change: its verbs, its per-slot-not-per-frame shape,
+  the checkout lease and the retired-frame refusal are one platform-neutral core both arms
+  call (`surface_share_wire_verbs`). On Linux the transport is a Unix socket with
+  `SCM_RIGHTS`; on Apple each request or reply is one complex Mach message — port descriptors
+  plus a length-prefixed JSON payload — with a surface crossing as an IOSurface Mach port.
+  iceoryx2 stays the data plane on both. There is no XPC, no launchd service, no plist and no
+  bundle. Rendezvous is a dynamic `bootstrap_check_in` name,
+  `com.tatolab.streamlib.surface-share.<runtime id>`, registered at construction and refusing
+  a live duplicate as the socket bind does; the child receives it in
+  `STREAMLIB_SURFACE_MACH_SERVICE`. The name is listed in the user's launchd domain, so the
+  peer check is the gate, not defence in depth: a connect is admitted only for the engine's
+  own process or a pid its spawner admitted right after the spawn and keeps admitted until the
+  child is reaped; the pid version, from the kernel audit trailer, is pinned at first contact
+  and checked on every message; and each admitted connection gets its own unlisted request
+  port. Surfaces are private and never `kIOSurfaceIsGlobal` — a global surface is readable by
+  any process on the machine — so the port carries the surface and never the id. A client's
+  death arrives as a dead-name notification and releases its checkout leases, and its
+  registrations too if it was another process. A pooled pixel-buffer slot is a private
+  IOSurface imported as the slot's buffer; it carries no timeline on either floor, and the
+  pool rehands it only when no lease holds it and the kernel reports its surface not in use —
+  a Mach port in flight or a use count in any process; a helper raises the use count while it
+  holds a frame, and the kernel clears it when that process dies.
+  Four readings the build settled. **The admission wait is bounded**: a helper's connect can
+  arrive before its spawner learns its pid, so an unadmitted connect waits up to 5 s, at most
+  64 at once, and is then refused and given no port. **A killed holder's in-use answer clears
+  promptly but asynchronously** — 100–400 µs after the reap under load — so a slot is skipped
+  for one more acquire, never rehanded early. **A cached `IOSurfaceRef` does not pin a
+  slot**: the helper caches one import per pool slot, raises the use count only while it holds
+  a frame, and empties the cache when the service dies. **A Mach request has no response
+  timeout** (the Linux socket has 10 s); a pending request wakes when the service dies, never
+  on a timer. The capability-secure rendezvous, an unlisted `mach_ports_register` stash,
+  needs helpers spawned by `posix_spawn`, which the spawn host's `pre_exec` closures prevent;
+  that move is #2368, its own change with its own Linux proof.
+  [macos-platform-floor — SHIPPED #2360, #2361]
+  <!-- verify: cargo test -p streamlib-engine --test surface_share_over_raw_mach -->
+  <!-- verify: cargo test -p streamlib-engine --lib apple::surface_share::mach_surface_share_service::tests::an_admitted_pid_is_pinned_to_the_pid_version_it_first_connects_with -->
+  <!-- verify: cargo test -p streamlib-surface-client destroying_a_receive_right_notifies_the_dead_name_watcher -->
+  <!-- verify: cargo test -p streamlib-engine --features hardware-tests --lib core::context::surface_store::mach_surface_share_pool_tests::a_slot_whose_iosurface_is_in_use_is_not_rehanded_to_its_producer -->
+  <!-- verify: cargo test -p streamlib-python-wheel --lib python_helper_process_pixel_exchange::macos::iosurface_pool_slot_import_tests::a_killed_helper_releases_the_frame_it_held -->
+  <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-09-29-macos-platform-floor.md -->
+- **DECIDED** — Where a surface carries a cross-process timeline on Apple, it carries it as
+  Metal shared events, and no engine GPU wait is ever on a value a peer signals. The pair
+  crosses with every texture a helper acquires through the escalate path: the engine mints
+  `produce_done` / `consume_done` exportable (`VkExportMetalObjectCreateInfoEXT`), each
+  exports as a Mach send right — through a subclass of the public `NSXPCCoder` that captures
+  the one port `MTLSharedEventHandle` encodes — and rides the Mach channel beside the IOSurface
+  port, and the helper imports each at `initialValue = 0`, which joins the producer's value
+  because a shared event ignores a decrease. Values advance and are never reset. A pooled
+  frame carries no timeline on either floor: publication orders producer to helper, and the
+  lease plus the kernel's in-use answer order reuse (owner, 2026-09-22). A wait for a helper's
+  release is a host wait of at most `CROSS_PROCESS_TIMELINE_WAIT_BOUND` (2 s), well under the
+  ~5 s after which IOGPU kills an unsatisfied command buffer and MoltenVK loses the device for
+  good; past the bound the engine signals the value itself and names the frame stale.
+  Host-side ordering is the same pair's fallback, chosen at runtime and never at build time:
+  the producer host-waits its own GPU work before the hand-off, and the helper's release
+  returns over the channel as `signal_consume_done`; a pair that falls back never reverts.
+  Four readings the build settled. **A texture crosses only with both edges**: one whose pair
+  will not export is refused at registration, and a helper whose import refuses fails the
+  check-out naming the edge, because a consumer outside the pair is an unsynchronised reader —
+  so the host-side fallback is reached only through a pixel-buffer registration carrying a
+  pair, which no production path makes today; tests prove it. **Nothing signals
+  `produce_done` yet**: every escalate GPU op retires its work before any consumer learns the
+  id; the helper holds the edge for a producer that later starts signalling, and signals
+  `consume_done` host-side once, at release. **A release reported past what was produced is
+  refused**, and a reported signal and a forced one are serialised, so a late report after a
+  forced release is harmless. **The engine's device-side waits on a peer stay Linux-only**
+  (`copy_texture_to_storage_buffer_and_signal`); none is reached on macOS.
+  [macos-platform-floor — SHIPPED #2360; macos-capability-parity — SHIPPED #2401, #2402; the
+  pooled-frame reading — #2361, #2404]
+  <!-- verify: cargo test -p streamlib-engine --features hardware-tests --test timeline_crosses_to_a_helper_as_a_metal_shared_event -->
+  <!-- verify: cargo test -p streamlib-engine --features hardware-tests --lib apple::surface_share::cross_process_timeline_pair::tests::a_stalled_consumer_is_forced_past_within_the_bound_and_a_late_report_is_harmless -->
+  <!-- verify: cargo test -p streamlib-engine --features hardware-tests --lib apple::surface_share::cross_process_timeline_pair::tests::a_release_reported_past_what_was_produced_is_refused_and_moves_nothing -->
+  <!-- verify: cargo test -p streamlib-engine --lib apple::surface_share::mach_surface_share_service::tests::a_registration_announcing_one_timeline_port_is_refused -->
+  <!-- verify: cargo test -p streamlib-engine --features hardware-tests --test texture_crosses_to_a_helper_on_an_iosurface a_texture_whose_timeline_pair_will_not_export_is_refused_and_registers_nothing -->
+- **DECIDED** — The helper's importer is `streamlib-consumer-rhi` on both floors, and it stays
+  Vulkan. Metal appears only as exported handles at the boundary, never as an API a helper
+  writes against — owner, 2026-09-22, over a Metal-direct importer, which would be a second
+  system beside the consumer RHI. The measured cost is inside the helper startup budget: a
+  MoltenVK device takes ~0.5 s cold and 26–70 ms warm per helper. The MoltenVK arm opts its
+  instance into portability enumeration, carries a per-platform required-extension list —
+  `VK_EXT_external_memory_host` on macOS, the DMA-BUF and fd set on Linux — and treats
+  `VK_EXT_metal_objects` as optional. A pooled pixel buffer imports as a
+  `ConsumerVulkanBuffer` over the IOSurface's own pages by host-pointer import, through the
+  same create/bind/map core the fd imports use; a texture imports as a
+  `ConsumerVulkanTexture` through `VkImportMetalIOSurfaceInfoEXT` — `OPTIMAL` tiling, bound to
+  a device-local memory type that is not host-visible, chosen by query, one MoltenVK contract
+  (`iosurface_backed_image.rs`) shared by the engine's allocation and the helper's import; a
+  timeline edge imports as a `ConsumerVulkanTimelineSemaphore` through
+  `VkImportMetalSharedEventInfoEXT`. The Mach channel carries what the Unix socket carries: a
+  texture registration crosses whole — its `vk_image_*` recipe, its layout cell and its two
+  timeline ports beside the IOSurface port — within the four ports a message reserves;
+  `lookup` and `check_out` echo all of it, and `update_layout` exists.
+  [macos-capability-parity — SHIPPED #2361, #2401, #2402]
+  <!-- verify: cargo test -p streamlib-consumer-rhi --lib iosurface_import_tests -->
+  <!-- verify: cargo test -p streamlib-consumer-rhi --lib consumer_vulkan_sync::tests::a_shared_event_imports_at_the_producers_value_and_both_sides_observe_each_other -->
+  <!-- verify: cargo test -p streamlib-engine --lib apple::surface_share::mach_surface_share_service::tests::a_texture_registration_round_trips_its_recipe_layout_and_timeline_ports -->
+  <!-- verify: cargo test -p streamlib-python-wheel --lib python_helper_process_pixel_exchange::macos::texture::texture_check_out_tests::a_checked_out_texture_reads_its_iosurface_rows_and_releases_on_its_shared_event -->
+  <!-- verify: cargo test -p streamlib-engine --features hardware-tests --test texture_crosses_to_a_helper_on_an_iosurface -->
 - **DECIDED** — Shutdown always ends, and a cooperative processor's `teardown()` always
   runs. The engine stops every helper at once, never one after another, each on the same
   ladder: `stop` and `teardown` are sent together; a Python callback still running after one
@@ -847,7 +1080,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   the app's exit, or keep issuing the helper's privileged operations. A descendant that leaves
   the process group on purpose is the stated residual: it survives, holding none of the app's
   descriptors and reaching no engine operation.
-  Five readings the build settled, each binding where an implementer would otherwise choose
+  Seven readings the build settled, each binding where an implementer would otherwise choose
   inline. **Any** Python callback interrupted at shutdown is followed by `teardown()`,
   `setup()` included — a `setup()` that raises by itself keeps the no-teardown rule it
   already had, and a `teardown()` touching state `setup()` never built raises and is logged
@@ -859,17 +1092,38 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   change did not end cleanly. The engine's ends of a helper's stdout and stderr are detached
   at its exit rather than closed, so a surviving `setsid` descendant's writes are still
   logged rather than raising SIGPIPE, and each reader thread lives only while a survivor
-  holds its pipe. And the ladder is Linux-first: process groups, `waitid` and
-  CLOEXEC-at-source compile on both platforms, with macOS closing descriptors one at a time
-  where `close_range` is absent. On macOS SIGINT and SIGTERM escalate the same way, from
-  handlers installed once for the process's life; SIGHUP is not owned there and no
-  disposition is handed back.
-  [shutdown-ladder; local-transport-hardening — SHIPPED #2264, #2266]
+  holds its pipe. And the ladder runs on both floors: process groups, `waitid` and
+  CLOEXEC-at-source compile on both, with macOS closing descriptors one at a time where
+  `close_range` is absent until the spawn moves to `posix_spawn` (#2368). On macOS SIGINT and
+  SIGTERM escalate the same way, from handlers installed once for the process's life; SIGHUP
+  is not owned there and no disposition is handed back — named platform differences in the
+  test closed list, not gaps. **A helper never outlives its app on either floor.** On Linux
+  the kernel ends it: the spawn host sets `PR_SET_PDEATHSIG` to `SIGKILL`. Darwin has no such
+  signal, so a macOS helper arms its own watch at boot, before capability extensions or its
+  processor's module load — kqueue `EVFILT_PROC` with `NOTE_EXIT` on the parent's pid,
+  belt-and-braces with a dead-name notification on a boot-time connection to the
+  surface-share service. Whichever fires first shuts the escalate socket, so the helper reads
+  the end of its channel and runs the `stop` and `teardown()` the engine can no longer send,
+  while a thread that needs no GIL walks the ladder's own budgets: it interrupts a callback
+  still running after one second and kills the process group of whatever is alive at 6.5 s,
+  skipping the terminate rung because the teardown budget is already spent. A `SIGKILL`ed app
+  therefore leaves no helper on either floor, and on macOS the helper's `teardown()` still
+  runs. **A third interrupt exits 130 on both floors**: the run loop parks for good while the
+  process is being ended at once, so killing the helper groups can no longer let `run()`
+  return inside the log-flush grace and exit 0.
+  [shutdown-ladder; local-transport-hardening — SHIPPED #2264, #2266; the macOS arm —
+  macos-platform-floor, SHIPPED #2357; parent death and ladder coverage on macOS —
+  macos-capability-parity, SHIPPED #2410]
   <!-- verify: sdk/streamlib-python-wheel/tests/test_helper_placement.py -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_helper_placement.py::test_a_processor_interrupted_while_still_setting_up_still_tears_down -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_helper_placement.py::test_a_worker_a_processor_forked_goes_down_with_the_apps_helper -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_three_helpers_slow_to_stop_cost_about_one_ladder -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_a_process_the_app_started_never_holds_the_apps_output_past_its_exit -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_no_helper_outlives_an_app_killed_outright -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_a_helper_whose_app_was_killed_still_runs_its_teardown_on_macos -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_a_third_ctrl_c_kills_every_helper_process_group_and_exits_130 -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::signals::tests::sighup_is_not_owned_on_macos -->
+  <!-- verify: cargo test -p streamlib-python-wheel --lib python_helper_process_parent_death_watch::tests::the_watch_fires_when_the_watched_process_exits -->
 - **DECIDED** — A link onto a helper reads `wired` only once the helper says so. The helper
   answers every `wire_link` it receives with a link-scoped `wired` or `wire_failed` reply,
   `wire_failed` carrying the reason its open failed; the reply rides its own rpc tag, which
@@ -978,64 +1232,133 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   green-thread style): intended, do not build until designed; hard constraint — no new
   configuration dials. [execution-model]
 
-## Graphics (RHI / GPU) — IN-FLIGHT (→ macos-platform-floor, macos-capability-parity, portable-gpu-interop, engine-steps)
+## Graphics (RHI / GPU) — SHIPPED
 
 - **DECIDED** — All Vulkan lives in the RHI (`vulkan/rhi/` + `streamlib-consumer-rhi`); one
-  kernel abstraction per pipeline kind; consumers go through `GpuContext` only.
+  kernel abstraction per pipeline kind; consumers go through `GpuContext` only. Vulkan is the
+  one RHI on every supported platform: MoltenVK is the macOS driver, reached through the same
+  `HostVulkanDevice` and, in a helper, the same `ConsumerVulkanDevice`. Metal appears only as
+  handles exported from Vulkan objects (`vkExportMetalObjectsEXT`) — the `MTLBuffer` behind an
+  imported IOSurface, the shared event behind a timeline. There is no second backend, no
+  per-platform RHI, and no backend selector at build or run time: the Metal tree, the
+  `backend-metal` / `backend-vulkan` features and `STREAMLIB_RHI_BACKEND` are deleted.
+  [macos-platform-floor — SHIPPED #2355, #2356; macos-capability-parity — SHIPPED #2402, #2404]
+  <!-- verify: cargo test -p streamlib-engine --features hardware-tests a_device_comes_up_on_this_hosts_driver_and_names_itself -->
+  <!-- verify: cargo test -p streamlib-consumer-rhi an_iosurface_import_exports_a_metal_buffer_over_the_surfaces_own_pages -->
+  <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-09-29-macos-platform-floor.md -->
+  <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-09-26-macos-capability-parity.md -->
+- **DECIDED** — Instance and device creation are one probed path on every platform. Host and
+  helper instances request `VK_KHR_portability_enumeration` with `ENUMERATE_PORTABILITY_KHR`,
+  and both devices request `VK_KHR_portability_subset`, wherever the driver advertises them.
+  Both request one instance API version, `REQUESTED_VULKAN_INSTANCE_API_VERSION` (1.4), shared
+  from `streamlib-consumer-rhi` so host and helper cannot resolve different entry points
+  across the IPC seam. It is the floor that makes the promoted 1.3 entry points resolve and is
+  never inferred from a device query — MoltenVK clamps a device's reported `apiVersion` to
+  whatever the instance asked for — and a source gate bans branching on the reported version,
+  tests included. [macos-platform-floor — SHIPPED #2356]
+  <!-- verify: cargo test -p streamlib-engine the_requested_instance_api_version_clears_the_promoted_entry_point_floor -->
+  <!-- verify: cargo run -p xtask -- check-no-device-api-version-branch -->
+- **DECIDED** — A capability a driver does not implement is an absent tier, never a failure or
+  an abort. Ray tracing on MoltenVK: `supports_ray_tracing_pipeline` and the capability
+  snapshot answer on both floors, and every ray-tracing kernel and acceleration-structure
+  constructor — in Rust, and from Python at `setup()` through the escalate pre-check — refuses
+  with one typed message naming the tier and its extension. Vulkan Video on macOS is
+  compile-time absent, the codec seam routing to VideoToolbox (§Media I/O); on a Linux device
+  without it, session construction refuses with `Error::GpuError` naming the missing
+  direction, classified for all seven codec operations. A kernel whose SPIR-V declares a
+  subgroup operation the driver does not serve, or uses one in a stage it does not serve,
+  refuses at `create_*_kernel` naming the driver, the operation and the stage (MoltenVK serves
+  none in vertex, measured) — the one class of GLSL construct found that MoltenVK cannot serve.
+  A vsync-off present request on a surface advertising no `MAILBOX` takes FIFO — never
+  IMMEDIATE, which tears — and says so once per process.
+  [macos-platform-floor — SHIPPED #2356, #2357, #2374; macos-capability-parity — SHIPPED #2403]
+  <!-- verify: cargo test -p streamlib-engine --features hardware-tests ray_tracing_on_a_device_without_it_refuses_rather_than_panicking -->
+  <!-- verify: cargo test -p streamlib-engine the_ray_tracing_refusal_names_the_tier_and_the_extension -->
+  <!-- verify: cargo test -p streamlib-engine device_without_video_refuses_every_codec_operation_naming_its_direction -->
+  <!-- verify: cargo test -p streamlib-engine a_subgroup_operation_in_a_stage_the_driver_does_not_serve_is_refused -->
+  <!-- verify: cargo test -p streamlib-engine a_vsync_off_request_takes_fifo_where_the_driver_advertises_no_mailbox -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_ray_tracing_tier_refusal.py::test_every_ray_tracing_constructor_refuses_at_setup_naming_the_absent_tier -->
 - **DECIDED** — The engine's kernel primitives are exposable to Python as configured
   blocks: shader/compute source and binding config passed from Python, compiled and
   executed by the engine on its device — no user-side Vulkan, ever.
   [importable-python-library — SHIPPED #1717 for the align; python-kernel-surface —
   SHIPPED #1773, #1775]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_compute_kernel.py -->
-- **DECIDED** — Python reaches every kernel kind Rust authoring reaches: compute,
-  graphics and ray-tracing kernels, acceleration structures, and CPU readback. Python
-  names and drives; the engine allocates, compiles, binds, and dispatches. No kernel
-  kind is Rust-only. Pipeline state and buffer resources inside a kind are a narrower
-  claim, and the two a Python processor cannot reach are named rather than left silent:
-  vertex and index buffers with indexed draws — no escalate op mints either buffer, and
-  no consumer in either language binds one; and uniform-buffer bindings — Rust consumers
-  in the engine tree hold them, and the only by-surface-id resolution the escalate path
-  has is texture-shaped, so a Python processor is refused by name. Both are undesigned.
-  Storage buffers are decided below as the tensor buffer.
+- **DECIDED** — Python reaches every kernel kind Rust authoring reaches, per floor: compute,
+  graphics and ray-tracing kernels, acceleration structures, and CPU readback. Python names
+  and drives; the engine allocates, compiles, binds, and dispatches. No kernel kind is
+  Rust-only. On macOS, compute and graphics run — `GpuContext`'s kernel and buffer surface and
+  every kernel escalate family build on both floors, and no op answers "only available on
+  Linux" — while ray tracing and acceleration structures are the typed absent tier above. CPU
+  readback there is the IOSurface's own rows, and the five export-staging ops and
+  `acquire_image` refuse naming why. Pipeline state and buffer resources inside a kind are a
+  narrower claim, and the three a Python processor cannot reach are named rather than left
+  silent: vertex and index buffers with indexed draws — no escalate op mints either buffer,
+  and no consumer in either language binds one; uniform-buffer bindings — Rust consumers in
+  the engine tree hold them, and a dispatch refuses one by name as a kind it cannot bind by
+  surface id; and a storage buffer bound to a ray-tracing kernel, which the trace refuses by
+  name. All three are undesigned. Storage buffers bind by surface id for compute and
+  graphics, as the tensor buffer below.
   [python-kernel-api; python-kernel-surface — SHIPPED #1773, #1774, #1777;
-  kernel-kind-parity-bar — the parity claim narrowed to kernel kinds]
-  <!-- verify: cargo test -p streamlib-engine compute_kernel_dispatch -->
-  <!-- verify: cargo test -p streamlib-engine graphics_kernel_dispatch -->
-  <!-- verify: cargo test -p streamlib-engine ray_tracing_kernel_dispatch -->
-  <!-- verify: cargo test -p streamlib-engine cpu_readback_answers_from_gpu_context -->
-  <!-- verify: sdk/streamlib-python-wheel/tests/test_graphics_kernel.py::test_a_draw_takes_no_vertex_buffer_no_index_buffer_and_no_depth_target -->
-  <!-- verify: sdk/streamlib-python-wheel/tests/test_graphics_kernel.py::test_a_graphics_kernel_carries_no_depth_or_vertex_input_state -->
+  kernel-kind-parity-bar — the parity claim narrowed to kernel kinds; macos-capability-parity
+  — SHIPPED #2403; engine-steps — SHIPPED #2430]
+  <!-- verify: cargo test -p streamlib-engine subprocess_escalate::compute::tests -->
+  <!-- verify: cargo test -p streamlib-engine subprocess_escalate::graphics::tests -->
+  <!-- verify: cargo test -p streamlib-engine subprocess_escalate::ray_tracing::tests -->
+  <!-- verify: cargo test -p streamlib-engine subprocess_escalate::export_staging::tests -->
+  <!-- verify: cargo test -p streamlib-engine every_staging_op_and_acquire_image_refuse_on_macos_naming_the_reason -->
+  <!-- verify: cargo test -p streamlib-engine a_uniform_buffer_binding_is_refused_naming_its_kind -->
+  <!-- verify: cargo test -p streamlib-engine a_trace_refuses_a_storage_buffer_binding_by_name -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_graphics_kernel.py::test_a_uniform_buffer_binding_is_refused_naming_its_kind -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_graphics_kernel.py::test_a_draw_takes_no_vertex_buffer_no_index_buffer_and_no_depth_target -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_graphics_kernel.py::test_a_graphics_kernel_carries_no_depth_or_vertex_input_state -->
 - **DECIDED** — A kernel's output is an engine-owned texture that Python names by
   surface id and passes downstream in a bag, and that a third-party GPU library in its
-  own Python package reaches through a scope: entering blits the texture to a linear
-  view (DLPack over DMA-BUF / OPAQUE_FD), leaving blits any write back and orders it on
-  the surface's timeline ahead of the engine's next read. The engine owns that
-  ordering — no fence or timeline vocabulary reaches Python. Leaving the scope by a
-  propagating exception discards the write instead: a half-written view blitted back
-  publishes a torn frame that surfaces as corrupt pixels somewhere downstream rather
-  than at the `raise`, so the engine keeps the complete frame it already holds and lets
-  the exception propagate — one rule for both device-write scopes, the CPU pixel-buffer
-  scope included (the surface handle's scope and its pending *device* write —
-  distinct from the cast object's `cpu()`, whose coherent-mapped stores publish per
-  store; its staged arm over a texture backing follows this same discard rule —
-  see the cast-object entry in §Packages), and discarding never suppresses the
-  exception. A write-back is always
-  an edit of a frame the processor read, never a fresh-frame write: the engine refuses
-  a write-back into a staging that has not first read that same frame, because it cannot
-  tell a consumer's write from uninitialised memory and one staging spans every frame its
-  pool slot publishes. Cross-process texture import is part of the capability, and
-  importability is an allocation flavour the engine derives per acquisition, never a
-  Python dial: single-plane render-attachment usage takes explicit-modifier DMA-BUF
-  where the render-target modifier probes available; a CUDA-mappable format whose usage
-  sits inside the OPAQUE_FD set takes OPAQUE_FD where that image pool exists; everything
-  else keeps a non-importable allocation. A flavour the device or format cannot take
-  falls back rather than failing the acquire, and the later cross-process import refuses
-  by naming the flavour.
-  [python-kernel-api; python-kernel-surface — SHIPPED #1778, #1779]
+  own Python package reaches through a scope. On Linux, entering blits the texture to a
+  linear view (`kDLCUDA` over DMA-BUF / OPAQUE_FD) and leaving blits any write back and
+  orders it on the surface's timeline ahead of the engine's next read. On macOS there is no
+  blit: the view is a `kDLMetal` capsule over a no-copy `MTLBuffer` on the texture's own
+  IOSurface, strided at the surface's row pitch, and leaving retires the write before the
+  scope closes — torch's MPS queue is drained on exit, the exception path included, and an MLX
+  write is `mx.eval`ed inside the scope — so it is complete before the id can be published.
+  The engine owns that ordering — no fence or timeline vocabulary reaches Python. On Linux,
+  leaving the scope by a propagating exception discards the write instead: a half-written
+  view blitted back publishes a torn frame that surfaces as corrupt pixels somewhere
+  downstream rather than at the `raise`, so the engine keeps the complete frame it already
+  holds and lets the exception propagate — one rule for both device-write scopes, the CPU
+  pixel-buffer scope included (the surface handle's scope and its pending *device* write —
+  distinct from the cast object's `cpu()`, whose coherent-mapped stores publish per store;
+  its staged arm over a texture backing follows this same discard rule — see the cast-object
+  entry in §Packages), and discarding never suppresses the exception. On macOS the scope
+  writes the surface in place, so a raise keeps the stores that landed — published per store,
+  as the pixel-buffer door is everywhere — and still never suppresses the exception. A
+  write-back is always an edit of a frame the processor read, never a fresh-frame write: the
+  engine refuses a write-back into a staging that has not first read that same frame, because
+  it cannot tell a consumer's write from uninitialised memory and one staging spans every
+  frame its pool slot publishes. Cross-process texture import is part of the capability, and
+  importability is an allocation flavour the engine derives per acquisition, never a Python
+  dial. Linux: single-plane render-attachment usage takes explicit-modifier DMA-BUF where the
+  render-target modifier probes available; a CUDA-mappable format whose usage sits inside the
+  OPAQUE_FD set takes OPAQUE_FD where that image pool exists. macOS: any single-plane format
+  on a device with `VK_EXT_metal_objects` takes an `OPTIMAL` image over a private IOSurface
+  the engine creates — never `kIOSurfaceIsGlobal`, which MoltenVK's own export path sets —
+  bound to a device-local memory type that is not host-visible, chosen by query; a
+  host-visible type would eagerly allocate a private `MTLBuffer` per image. Everything else
+  keeps a non-importable allocation. A planar format is refused an IOSurface-backed image by
+  name: NV12 render targets are absent on macOS, since MoltenVK refuses a biplanar 4:2:0
+  IOSurface as a multi-planar image and no driver patch is carried (owner, 2026-09-26). A
+  flavour the device or format cannot take falls back at derivation rather than failing the
+  acquire, and the later cross-process import refuses by naming the flavour.
+  [python-kernel-api; python-kernel-surface — SHIPPED #1778, #1779; macos-capability-parity
+  — SHIPPED #2402, #2404]
   <!-- verify: cargo test -p streamlib-engine the_seam_refuses_to_publish_a_staging_no_frame_was_read_into -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_device_exchange.py::test_a_raise_inside_the_device_tensor_scope_discards_the_write -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_device_exchange.py::test_a_raise_inside_the_device_tensor_scope_follows_its_floors_publication_rule -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_device_exchange.py::test_a_texture_handle_round_trips_across_the_process_boundary -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_device_exchange.py::test_a_device_write_is_ordered_ahead_of_the_engines_next_gpu_read -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_device_exchange.py::test_the_device_tensor_strides_follow_the_surfaces_row_pitch -->
+  <!-- verify: cargo test -p streamlib-engine --features hardware-tests every_single_plane_format_takes_an_iosurface_backed_image -->
+  <!-- verify: cargo test -p streamlib-engine --features hardware-tests a_planar_format_is_refused_an_iosurface_backed_image_by_name -->
+  <!-- verify: cargo test -p streamlib-consumer-rhi the_binding_takes_device_local_memory_that_is_not_host_visible -->
 - **DECIDED** — CPU reach into a texture-backed surface goes through the same doors
   as every surface — the cast object's `cpu()`, the surface handle's CPU lock and
   `as_numpy()` — routed over the surface's host-visible export staging; no separate
@@ -1056,7 +1379,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   `contended` reaches no author, and the unconsumed non-blocking surface — the
   `try_run_cpu_readback_copy` wire op,
   the `contended` response variant, and the engine's `try_`-prefixed staging
-  copies — is deleted. The readback staging allocates host-cached from a third
+  copies — is deleted. On Linux the readback staging allocates host-cached from a third
   OPAQUE_FD pool (probed HOST_ACCESS_RANDOM), falling back to the sequential-write
   pool on a device with no cached exportable memory type — slower there, never
   refused. Every OPAQUE_FD checkout binds the exporter's stated memory type index:
@@ -1066,12 +1389,23 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   derive one from. Python's `acquire_texture` implies `copy_src` and `copy_dst`;
   Rust's descriptor stays explicit; a texture whose usage still cannot take the
   copy refuses the door by name.
-  [texture-backed-cpu-reach — SHIPPED #1940, #1941, #1942]
+  On macOS the door has a direct arm: the image stays declared `OPTIMAL`, but its storage is
+  the IOSurface's own linear rows — MoltenVK treats the tiling as metadata — so `cpu()` and
+  the surface handle's host side read and write the surface itself under `IOSurfaceLock`,
+  taken by the first host-side accessor and never by the lock alone, with no export staging
+  and no readback copy. What that narrows is stated (owner, 2026-09-22, over a Linux-identical
+  staging): the texture door's edit publishes per store, as the pixel-buffer door's does
+  everywhere, so a raise keeps the stores that landed; the engine never reads a torn frame,
+  but a second concurrent holder can observe an edit mid-flight.
+  [texture-backed-cpu-reach — SHIPPED #1940, #1941, #1942; macos-capability-parity — SHIPPED
+  #2402, #2403]
   <!-- verify: cargo test -p streamlib-engine a_device_whose_probed_type_is_not_host_cached_gets_no_host_cached_pool -->
   <!-- verify: cargo test -p streamlib-engine a_staging_registration_states_the_exporters_memory_type_index -->
   <!-- verify: cargo test -p streamlib-engine parse_texture_usages_combines_tokens_and_implies_both_copy_bits -->
   <!-- verify: cargo test -p streamlib-engine the_seam_publishes_a_staged_edit_back_into_the_pooled_backing -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_compute_kernel.py::test_a_texture_backed_surfaces_pixels_reach_the_cpu_with_numpy_alone -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_compute_kernel.py::test_a_raise_inside_the_texture_cpu_door_propagates_and_follows_its_floors_publication_rule -->
+  <!-- verify: cargo test -p streamlib-python-wheel a_checked_out_texture_reads_its_iosurface_rows_and_releases_on_its_shared_event -->
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-24-texture-backed-cpu-reach.md -->
 - **DECIDED** — The RHI imports a caller's own host mapping as memory the GPU writes
   into: one primitive, `GpuContextFullAccess::import_host_mapping_for_gpu_writes` over
@@ -1118,7 +1452,9 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   from one producer can therefore observe the same layout and both barrier out of it. It
   is confined to the same-process texture cache — a re-imported registration and a private
   host texture share no cell — and whether the fix is a lock, a per-consumer view, or a
-  narrower contract is an engine-wide call, not one a built-in makes for itself.
+  narrower contract is an engine-wide call, not one a built-in makes for itself. The surface
+  copy follows the same contract, and each escalate op family records under its own recorder
+  lock, so a copy and a dispatch from two helpers are two such consumers of one cell.
 - **DECIDED** — Python spells a kernel as an object: constructed in `setup()` where the
   capability typestate is Full, dispatched per frame in `process()`. Construction is
   registration and dispatch is a method call; no kernel handle string reaches Python.
@@ -1171,44 +1507,154 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   sequenced after the Python surface. [python-kernel-api]
 - **DECIDED** — Python copies one surface into another through the engine:
   `copy_surface_to_surface(source_surface_id, destination_surface)` on the Limited GPU
-  capability, and so on Full. Any backing pair, same format and extent, no conversion: the
-  engine picks the copy the two backings need and orders it on the destination's timeline
-  ahead of its next read. The source is claimed for the copy's duration; the destination
-  must take a write-back; a format or extent mismatch, or a destination that cannot take a
-  write-back, refuses by name. A frame lands in a kernel's input texture this way, with no
-  array library. [portable-gpu-interop]
+  capability, and so on Full, stated on both stub classes — the escalate op
+  `copy_surface_to_surface`, on both floors. Any backing pair, same format and extent, no
+  conversion: the engine resolves both surfaces through the any-backing resolver and picks
+  buffer→buffer, buffer→image, image→buffer or image→image. The last rides the RHI's
+  `record_copy_image_to_image`: whole-image, each image barriered from its known layout,
+  refusing by name a missing image, one image on both sides, a format or extent mismatch, a
+  source in `UNDEFINED`, and missing copy usage. Wherever a pixel buffer is in the pair,
+  format compares on the one-buffer pixel shape, so a pool `rgba` frame and an `rgba8_unorm`
+  texture are one format; two textures match exactly. The copy is ordered ahead of the
+  destination's next read by recording, submitting and waiting on the host before the reply,
+  as dispatch and every other escalate GPU op are, on both floors — one round trip per copy,
+  so copy-then-dispatch pays two (owner, 2026-09-22, over a signalled timeline, which becomes
+  its own change if the round trip shows in a measured budget). Both resolved backings are
+  held across record and wait, which keeps the allocations alive but takes no lease: a caller
+  copying a frame its producer may recycle holds `claim_surface_against_producer_reuse`. A
+  destination texture's settled layout is updated and republished, as a dispatch does.
+  Refused by name: a format or extent mismatch, a retired frame generation, a destination
+  that cannot take a write-back — answered by the same `resolved_backing_takes_a_write_back`
+  rule `writable()` and the stagings use, never by minting a staging — a source and
+  destination that are one allocation, and a texture source nothing has written. A frame
+  lands in a kernel's input texture this way, with no array library.
+  [portable-gpu-interop — SHIPPED #2420]
+  <!-- verify: cargo test -p streamlib-engine a_texture_copies_into_a_texture_and_the_source_keeps_its_layout_and_pixels -->
+  <!-- verify: cargo test -p streamlib-engine an_rgba_pool_frame_lands_in_an_rgba8_unorm_texture -->
+  <!-- verify: cargo test -p streamlib-engine a_retired_frame_is_refused_by_name -->
+  <!-- verify: cargo test -p streamlib-engine a_pool_frame_its_producer_still_owns_is_refused_as_taking_no_write_back -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_surface_copy.py::test_a_frame_lands_in_a_kernel_input_texture_with_no_array_library -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_surface_copy.py::test_the_landing_check_fails_when_the_copy_is_skipped -->
+  <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-09-26-portable-gpu-interop.md -->
 - **DECIDED** — Python holds a tensor buffer: `acquire_storage_buffer(shape, dtype)` on the
-  Limited GPU capability, and so on Full, mints an engine-owned storage buffer with a
-  declared tensor shape and element type, named by surface id like every surface. A
-  kernel binds it at dispatch as `storage_buffer`, by id; it leaves the processor as a
-  DLPack capsule of that shape on the floor's own device — CUDA on Linux, Metal on macOS
-  — and travels downstream in a bag by id. It is held to the surface-id lifetime contract
-  every surface id is (§Packages): immutable while any holder has it, and a ring slot a
-  holder still retains is skipped, never rewritten under a live tensor. Uniform buffers
+  Limited GPU capability, and so on Full, mints an engine-owned storage buffer of a declared
+  contiguous row-major shape and element type (`float32`, `float16`, `uint8`, `int32`), named
+  by surface id like every surface. One method in both languages — Rust's takes a
+  `TensorStorageBufferLayout`, the byte form spelled `TensorStorageBufferLayout::of_bytes` —
+  and the engine derives the allocation flavour per acquisition: a caller-held Rust buffer
+  stays HOST_VISIBLE; one that crosses to a helper takes DEVICE_LOCAL OPAQUE_FD on Linux and a
+  private byte-shaped IOSurface on macOS (packed 16 KiB one-byte rows, imported as host memory
+  spanning exactly the tensor). On the wire and in the surface store it is its own kind,
+  `resource_type` `storage_buffer`, never a pixel buffer in disguise. Its registration carries
+  `shape`, `dtype`, `exporting_device_uuid` and `vk_memory_type_index`, and is refused when it
+  lacks its layout or its surface cannot hold the tensor; lookup and checkout echo the layout.
+  The escalate op `acquire_storage_buffer {request_id, shape, dtype, processor_output_pool?}`
+  answers `shape` and `dtype` on `EscalateResponseOk`; the handle registers as
+  `RegisteredHandle::StorageBuffer` and releases through the shared release path. A
+  parent-wide surface id → `StorageBuffer` map beside `texture_cache`, gated by the
+  retired-generation check, lets any helper bind any helper's tensor. A compute kernel or a
+  draw binds it at dispatch as `storage_buffer`, by id; the batch recorder barriers each bound
+  buffer on every touch, and dispatch stays synchronous. It leaves the processor as a DLPack
+  capsule of its declared shape over the engine's own memory — `kDLCUDA` on Linux, CUDA
+  importing the tensor's exact byte size once; `kDLMetal` on macOS, over the `MTLBuffer`
+  exported from the helper's import — with no staging and no copy, writable for the acquirer
+  and read-only for a resolver. Closing the handle, and any dispatch, batch or draw that binds
+  the handle, orders the acquirer's torch writes ahead of every other holder (CUDA's
+  device-wide synchronize; a drained MPS queue); an MLX write is ordered by the `mx.eval` it
+  owes inside the scope, and a tensor bound by bare id string is not ordered. Downstream,
+  `resolve_surface` yields a handle stating `shape` and `dtype` and no pixel geometry —
+  `width`, `height`, `format`, `lock`, `as_numpy`, `as_device_tensor` and `bytes_per_row`
+  refuse by name — whose bare `__dlpack__` is the read path. It is held to the surface-id
+  lifetime contract every surface id is (§Packages): a tensor published downstream comes from
+  the processor output pool below, whose held slots are never rewritten. Uniform buffers
   trail it; push constants carry per-dispatch parameters meanwhile.
-  [engine-steps-for-effects-and-model-input]
-- **DECIDED** — A pixel effect is written as a shader body: `GlslPixelEffect`, wheel
-  grammar over the shipped kernel, texture-ring and surface-copy primitives with no engine
-  change and no wire change. The user writes one GLSL function, `vec4 effect(vec4 source,
-  ivec2 at)`; `GlslPixelEffect.compile(gpu_full_access, effect_glsl=, dials=)` in
-  `setup()` builds an ordinary compute kernel around it, and
-  `apply_to_frame(gpu_limited_access, frame, dials=)` in `process()` lands the frame
-  with the engine copy, dispatches, and returns the output bag. One single-plane RGBA
+  [engine-steps-for-effects-and-model-input; engine-steps — SHIPPED #2429, #2430, #2431]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_tensor_storage_buffer.py::test_a_tensor_written_through_torch_is_read_by_another_process -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_tensor_storage_buffer.py::test_an_odd_shaped_tensor_round_trips -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_tensor_storage_buffer.py::test_a_tensor_acquired_after_a_window_opens_round_trips -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_tensor_storage_buffer.py::test_a_kernel_writes_a_tensor_bound_by_surface_id_and_a_draw_reads_one -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_tensor_storage_buffer.py::test_mlx_reads_the_tensor_torch_mps_wrote_in_another_process -->
+  <!-- verify: cargo test -p streamlib-engine a_storage_buffer_registration_without_its_layout_is_refused_by_name -->
+  <!-- verify: cargo test -p streamlib-engine a_later_pass_in_a_batch_reads_the_tensor_an_earlier_pass_wrote -->
+  <!-- verify: cargo test -p streamlib-engine a_retired_tensor_frame_id_is_refused_and_writes_nothing -->
+  <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-09-29-engine-steps.md -->
+- **DECIDED** — Every processor output ring hands out slots from the engine's lease-aware
+  pool; no wheel ring rotates on its own. One slot ring, `LeaseAwarePoolSlotRing`, serves the
+  pixel-buffer pool and the processor output pools alike: it mints `<slot>#<generation>` per
+  publication, skips a slot any consumer has checked out or this process holds, retires the
+  previous id in-process and at the surface-share service, and fails closed on a poisoned
+  lease table. A processor output pool is per helper, keyed by a pool key the helper mints,
+  and holds textures or tensor storage buffers:
+  `acquire_texture_from_processor_output_pool` and
+  `acquire_storage_buffer_from_processor_output_pool` on both GPU capabilities, riding an
+  optional `processor_output_pool {pool_key, rotation_depth}` on the two acquire ops. It
+  rotates through `rotation_depth` slots, grows while consumers hold frames to a cap of 16,
+  and at the cap refuses by name so the producer drops its own frame; a descriptor change
+  replaces the pool, bridge teardown releases every slot, and a retired id is refused as
+  recycled at resolve. `ProcessorOutputTextureRing` keeps its spelling and asks this pool for
+  every frame; `ModelInputTensorKernel` asks its tensor side directly. Handing out a reused
+  slot is bookkeeping only — a lease scan and a generation mint, entering neither the
+  escalate gate nor a device-idle wait; only growth allocates under the gate. Nothing
+  therefore drains a slot's earlier readers before its next write, so every write into a slot
+  orders itself: a draw's colour-target barrier sources `ALL_COMMANDS` / `MEMORY_WRITE`, as
+  the compute path's entry scope does, so it waits on the one queue for a display's in-flight
+  compose of that slot. Owner, 2026-09-22, over a wheel ring asking a "still held?" op per
+  rotation, which would be a second system deciding slot reuse.
+  [engine-steps — SHIPPED #2427, #2429, #2503; the draw barrier — SHIPPED #2546]
+  <!-- verify: cargo test -p streamlib-engine every_slot_held_grows_the_pool_until_its_cap_then_refuses_by_name -->
+  <!-- verify: cargo test -p streamlib-engine a_slot_a_consumer_has_checked_out_is_skipped_until_released -->
+  <!-- verify: cargo test -p streamlib-engine --features hardware-tests a_tensor_storage_buffer_pool_never_rewrites_a_tensor_a_consumer_holds -->
+  <!-- verify: cargo test -p streamlib-engine --features hardware-tests a_reused_processor_output_slot_skips_the_escalate_gate_and_growth_enters_it -->
+  <!-- verify: cargo test -p streamlib-engine --features hardware-tests offscreen_draw_into_a_slot_the_display_is_still_composing_is_ordered_after_the_compose -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_texture_ring_producer.py::test_a_frame_a_consumer_holds_keeps_its_pixels_while_the_producer_produces -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_texture_ring_producer.py::test_the_same_schedule_with_no_claim_recycles_the_first_frame -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_tensor_storage_buffer.py::test_a_tensor_a_consumer_holds_is_never_rewritten -->
+- **DECIDED** — A pixel effect is written as a shader body: `GlslPixelEffect`, pure wheel
+  Python over `create_compute_kernel`, the processor output texture ring,
+  `copy_surface_to_surface` and dispatch, with no engine, wire or stub change. The user writes
+  one GLSL function, `vec4 effect(vec4 source, ivec2 at)`;
+  `GlslPixelEffect.compile(gpu_full_access, effect_glsl=, dials=)` in `setup()` builds an
+  ordinary compute kernel around it, and `apply_to_frame(gpu_limited_access, frame, dials=)`
+  in `process()` lands the frame with the engine copy, dispatches, and returns the output bag
+  (`surface_id`, `width`, `height`, `timestamp_ns`, `color_info`). One single-plane RGBA
   source, output at its extent in `rgba8_unorm`. Dials are push constants typed `float`,
-  `int`, `vec2` or `vec4` — `vec3` refused by name — declared at compile and supplied at
-  every apply; the frame's extent, the monotonic elapsed seconds and two sampling helpers
-  are pre-declared; a compiler diagnostic names the user's own line. Refusals are named at
-  the line the user can fix. No Rust peer until a Rust consumer names one.
-  [engine-steps-for-effects-and-model-input]
-- **DECIDED** — Model input is prepared on the GPU by `ModelInputTensorKernel`, wheel
-  grammar over the tensor buffer and a compute kernel: one pass from an RGBA surface to a
-  tensor buffer at the model's input size — fit `stretch` or `letterbox` — or, with
-  `pad_bottom_right`, at the frame's own extent, never resized and rounded up to an optional
-  pad-to-multiple (owner ruling on #2432, 2026-09-27), channel order with alpha dropped,
-  layout `nchw` or `nhwc`, `float32` or `float16`, scale, mean and std — returning the
-  tensor surface, which `torch.from_dlpack` reads zero-copy, and the fit's geometry, which
-  maps detections back to source coordinates. No colour conversion: a YUV frame is
-  converted by the engine before it is published. [engine-steps-for-effects-and-model-input]
+  `int`, `vec2` or `vec4`, read as `dials.<name>` and laid out std430 after the template's
+  elapsed-seconds member — `vec3` refused by name, and a block past 128 bytes refused naming
+  the dial that crosses it — declared at compile and supplied at every apply, checked before
+  any GPU work. Pre-declared: `streamlib_extent`, `streamlib_elapsed_seconds` (monotonic, zero
+  at the first apply), `streamlib_source_at` (clamped at the edge) and `streamlib_source_uv`
+  (bilinear). `#line 1` above the body makes a compiler diagnostic name the user's own line.
+  Refusals name the line the user can fix: a missing `effect` signature, a malformed or
+  reserved dial name, a `vec3`, an oversize block, an undeclared, missing or mistyped dial,
+  and a frame the copy refuses. No Rust peer until a Rust consumer names one.
+  [engine-steps-for-effects-and-model-input; engine-steps — SHIPPED #2428]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_glsl_pixel_effect.py::test_an_invert_effect_with_a_strength_dial_outputs_255_minus_the_source -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_glsl_pixel_effect.py::test_the_invert_check_fails_for_an_identity_effect -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_glsl_pixel_effect.py::test_every_dial_type_reaches_the_shader_at_its_std430_offset -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_glsl_pixel_effect.py::test_a_compiler_diagnostic_names_the_line_of_the_users_body -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_glsl_pixel_effect_refusals.py -->
+- **DECIDED** — Model input is prepared on the GPU by `ModelInputTensorKernel`, pure wheel
+  Python over a compute kernel, the tensor side of the processor output pool and binding by
+  surface id — no engine or wire change. `ModelInputTensorKernel.compile(gpu_full_access,
+  width=, height=, fit=, pad_to_multiple_of=, channel_order=, layout=, dtype=, scale=, mean=,
+  std=)` in `setup()`; `apply_to_surface(gpu_limited_access, surface)` in `process()` runs one
+  pass from an 8-bit RGBA surface (`rgba32` or `rgba8_unorm`) into a pooled tensor and returns
+  a `ModelInputTensor`: `tensor_surface`, which `torch.from_dlpack` reads zero-copy, and
+  `geometry`, whose `boxes_to_source` maps xyxy detections back to source coordinates. Fit
+  `stretch` or `letterbox` produces the model's `width` × `height`, bilinear with no
+  antialias, letterbox padding black; `pad_bottom_right` takes no size and never resizes —
+  each tensor is the frame's own extent rounded up to `pad_to_multiple_of`, and the pool
+  re-sizes when the extent changes (owner ruling on #2432, 2026-09-27). Channel order `rgb` or
+  `bgr` with alpha dropped, layout `nchw` or `nhwc`, `float32` or `float16`,
+  `(x * scale - mean) / std`. Refused by name: an unknown fit, layout, dtype or channel order;
+  a size given with `pad_bottom_right`, or `pad_to_multiple_of` with any other fit; a tensor
+  or non-RGBA source; a float16 tensor with an odd element count; an extent past one
+  dispatch. No colour conversion: a YUV frame is converted by the engine before it is
+  published. [engine-steps-for-effects-and-model-input; engine-steps — SHIPPED #2432]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_model_input_tensor_kernel.py::test_every_layout_and_dtype_of_a_fit_matches_the_torch_reference -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_model_input_tensor_kernel.py::test_the_comparison_fails_for_a_kernel_compiled_with_the_wrong_mean -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_model_input_tensor_kernel.py::test_a_pad_bottom_right_tensor_follows_its_frame_across_an_extent_change -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_model_input_tensor_kernel_refusals.py -->
 - **OPEN** — Everything else, including the two graphics capabilities no language can
   render: depth attachments — Rust constructs a depth-testing pipeline that Python cannot
   name, and no pass in either language renders against one — and MSAA, refused for every
@@ -1216,7 +1662,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   unbuilt engine capabilities rather than Python-reach gaps; equalising the construction
   surface with no pass to render against would buy nothing.
 
-## Media I/O — camera, display, audio, codecs — IN-FLIGHT (→ macos-platform-floor, macos-capability-parity)
+## Media I/O — camera, display, audio, codecs — SHIPPED
 
 - **DECIDED** — First-party camera, display, and audio are native built-in processors
   in the engine tree, statically linked into the wheel — pre-built named blocks
@@ -1229,8 +1675,12 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_native_builtin_blocks.py -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py::test_a_native_block_added_without_config_reaches_a_running_graph -->
 - **DECIDED** — A virtual camera is a fifth device class and a built-in under criterion
-  (c): `VirtualCameraSink`, in the media built-ins crate, Linux only, as many instances
-  as the graph adds — the display's rule. Each instance is one camera that exists only
+  (c): `VirtualCameraSink`, in the media built-ins crate, Linux only — with no Apple port,
+  stated rather than deferred: a macOS virtual camera is a CoreMediaIO Camera Extension
+  inside a bundled, entitled, notarised app, which the floor rules out under any
+  justification, and the DAL plug-in stopped loading in macOS 14.1; on macOS the marker
+  refuses by name at `rt.add()` and `streamlib enable-virtual-camera` refuses by name. As
+  many instances as the graph adds — the display's rule. Each instance is one camera that exists only
   while its processor runs: created at `setup()`, removed at `teardown()`, a camera plugged
   in and pulled out from every other application's point of view, whose frames are
   whatever the graph writes. It takes video on an input `video` declared `newest`, the
@@ -1289,10 +1739,12 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   reachable on the rig negotiates a PipeWire camera at all — `pipewiresrc` fails identically
   for WirePlumber's own V4L2 devices, and Chrome 152 ships the flag off — so which door a
   consumer takes and what stamp it observes is unproven, and closing it needs a machine with
-  a working PipeWire camera consumer. [virtual-camera-sink — SHIPPED #2196, #2197, #2198]
+  a working PipeWire camera consumer. [virtual-camera-sink — SHIPPED #2196, #2197, #2198;
+  the Apple statement — macos-capability-parity]
   <!-- verify: cargo test -p streamlib-media-builtins virtual_camera_sink -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_virtual_camera_sink.py -->
   <!-- verify: cargo test -p streamlib-engine a_pipewire_camera_node_offers_a_modifier_and_a_shared_memory_sibling -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_enable_virtual_camera_refuses_by_name_off_linux -->
 - **OPEN** — Two `VirtualCameraSink` behaviours the loopback door shipped with, each a
   stated placeholder the implementation left for a ruling rather than deciding inline.
   Re-negotiation keys on the extent alone, so a source that changes its `color_info` at the
@@ -1304,13 +1756,83 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   is owed, and whether it belongs to this built-in or to the runtime's restart policy, is
   undecided.
 - **DECIDED** — Built-ins are written against the same handle-shaped hardware
-  primitives third parties get — DMA-BUF / OPAQUE_FD import-export, present target,
-  audio clock, color resolution, codec sessions — never against private engine guts;
+  primitives third parties get — DMA-BUF / OPAQUE_FD / IOSurface import-export, present
+  target, audio clock, color resolution, and the audio device, video device and video codec
+  backend seams — never against private engine guts;
   the layering wall survives the ABI's deletion as internal discipline.
   [importable-python-library — SHIPPED #1709, #1710]
-- **DECIDED** — V4L2 is the only capture backend (platform floor: Linux + NVIDIA).
-  Apple capture (AVFoundation) is post-MVP and undesigned; only the TCC permission
-  shims exist. [media-io-layering]
+- **DECIDED** — Capture is a video device backend seam with two arms — V4L2 on Linux,
+  AVFoundation on Apple — built on the audio seam's own pieces rather than beside them:
+  `VideoDeviceBackend` lists capture devices and opens a `VideoCaptureStream` whose hand-off
+  delivers each frame already converted into a pooled `Rgba32` pixel buffer (its
+  `PublishedPixelBufferFrameId`, extent, H.273 colour and capture instant) and which carries
+  the same `DeviceStreamLivenessReport` an audio stream does. The arm is chosen by the one
+  generic first-arm-that-opens walk audio uses, probed once per process and logged once, with
+  no dial and no environment override; a platform with no arm lands on a refusing backend that
+  lists nothing and refuses every open by name. `CameraSource` is platform-free above it and
+  opens its stream at `setup()`, refusing there by name a named `device_id` that is not
+  attached and listing the ones that are. The published contract does not move: a
+  `VideoFrame` bag on port `video` whose `surface_id` names a pooled buffer, colour as the
+  H.273 four-tuple resolved through the one table in `core::color`, an undescribed axis still
+  an empty map. The V4L2 arm is `linux/v4l2_video_device_backend.rs`, its EXPBUF/DMA-BUF
+  probe, MMAP fallback and virtual-device skip list unchanged. The AVFoundation arm lists
+  built-in cameras first, takes a camera's `uniqueID` as `device_id`, negotiates the most
+  pixels within the `max_width`/`max_height` cap, then the highest frame rate, then
+  `420v`/`420f`, reads colour from CoreVideo's own H.273 table, runs each device on its own
+  serial control queue so `start()` never waits on camera power-up and a stop never waits on
+  the session, and ends liveness on a runtime error or a disconnect. CoreVideo's pixel-format
+  dictionary is initialised once per process ahead of both a camera's device input and any
+  VideoToolbox session, because its first initialisation races `AVCaptureDeviceInput`'s.
+  [media-io-layering; macos-platform-floor — SHIPPED #2358, #2359]
+  <!-- verify: cargo test -p streamlib-engine --lib the_video_chain_is_probed_once_and_hands_back_the_same_backend_every_time -->
+  <!-- verify: cargo test -p streamlib-engine --lib the_linux_video_chain_offers_v4l2_before_falling_through_to_the_refusing_backend -->
+  <!-- verify: cargo test -p streamlib-engine --lib the_macos_video_chain_offers_avfoundation_before_falling_through_to_the_refusing_backend -->
+  <!-- verify: cargo test -p streamlib-engine --lib a_named_camera_that_is_not_attached_is_refused_listing_the_ones_that_are -->
+  <!-- verify: cargo test -p streamlib-engine --lib a_named_device_is_refused_naming_it_and_the_way_to_run_without_one -->
+  <!-- verify: cargo test -p streamlib-engine --lib the_largest_format_within_the_cap_is_chosen -->
+  <!-- verify: cargo test -p streamlib-media-builtins --lib a_captured_frame_is_published_as_the_bag_a_camera_has_always_published -->
+  <!-- verify: cargo test -p streamlib-engine --features hardware-tests --test avfoundation_camera_captures_through_the_video_device_seam -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_camera_source.py::test_a_device_that_was_named_and_cannot_be_opened_refuses_at_setup -->
+  <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-09-29-macos-platform-floor.md -->
+- **DECIDED** — A camera frame carries one capture instant on both of its stamps. The
+  seam's hand-off carries `capture_timestamp_ns`, resolved under one rule every arm shares
+  (`VideoCaptureInstantResolver`), and `CameraSource` assigns it to the frame's own
+  `timestamp_ns` **and** passes the same value to `write_with_timestamp` — never the implicit
+  write, whose `MediaClock::now()` stamps publication, and never the call swap alone, which
+  sets only the envelope. The encoder reads the payload's stamp, `Mp4Sink` and the mesh the
+  envelope's; both name the instant of capture on both floors. A device stamp is trusted only
+  when it is on the machine's monotonic clock and non-zero — V4L2's dequeued-buffer stamp with
+  its timestamp flags, AVFoundation's sample presentation stamp converted from the session's
+  synchronisation clock to host time; anything else falls back to the dequeue instant and is
+  reported once per device, naming it. **A stamp ahead of the dequeue instant is clamped to it
+  and counted**, the first reported: no real capture happens in the future, and trusting one
+  silently ships a frame-period of audio-video skew. Owner, 2026-09-19, on evidence that
+  `vivid` sets the monotonic flag honestly and still stamps roughly nine tenths of a frame
+  period ahead; what a real UVC device reports is unmeasured, and the clamp is what makes that
+  gap safe to carry. [macos-platform-floor — SHIPPED #2359]
+  <!-- verify: cargo test -p streamlib-engine --lib a_monotonic_stamp_from_the_future_is_clamped_to_dequeue_and_counted -->
+  <!-- verify: cargo test -p streamlib-engine --lib a_stamp_off_the_monotonic_clock_falls_back_to_the_dequeue_instant -->
+  <!-- verify: cargo test -p streamlib-engine --lib a_zero_stamp_falls_back_to_the_dequeue_instant_and_is_not_counted_as_clamped -->
+  <!-- verify: cargo test -p streamlib-engine --lib a_device_that_never_stamps_usably_is_reported_once_however_many_frames_it_sends -->
+  <!-- verify: cargo test -p streamlib-engine --lib a_buffer_flagged_monotonic_carries_its_stamp_in_nanoseconds -->
+  <!-- verify: cargo test -p streamlib-media-builtins --features hardware-tests --test camera_to_display_window_on_the_macos_window_server -->
+- **DECIDED** — Camera and microphone permission on Apple is requested, never merely
+  queried, and never awaited on a path that stalls the graph — one privacy gate serves both
+  devices. The graph starts under a pending prompt and frames or blocks begin once the user
+  allows it; a prompt still unanswered after ten seconds is warned about once. The engine is
+  not the permission subject — the application that launched it is, found by walking up the
+  process tree — so a refusal names that responsible application and the Camera or Microphone
+  setting to change, and never says "Python". A microphone's AUHAL unit is bound only after
+  access is granted, because binding an input-enabled unit blocks inside coreaudiod's privacy
+  check until the user answers. The engine is never daemonised: detaching breaks the
+  attribution chain and silently costs device access. [macos-platform-floor — SHIPPED #2359;
+  macos-capability-parity — SHIPPED #2411 for the microphone]
+  <!-- verify: cargo test -p streamlib-engine --lib a_pending_request_is_made_once_and_never_waited_on -->
+  <!-- verify: cargo test -p streamlib-engine --lib a_denial_names_the_responsible_application_and_the_setting_but_not_python -->
+  <!-- verify: cargo test -p streamlib-engine --lib a_microphone_denial_names_the_microphone_setting_and_not_the_cameras -->
+  <!-- verify: cargo test -p streamlib-engine --lib a_reminder_due_before_any_answer_warns_once_naming_the_application_and_the_setting -->
+  <!-- verify: cargo test -p streamlib-engine --lib a_terminal_is_named_by_its_bundle -->
+  <!-- verify: cargo test -p streamlib-engine --features hardware-tests --lib a_stream_waiting_on_the_user_binds_no_unit_and_delivers_once_allowed -->
 - **DECIDED** — Windowing: the engine owns the process's one event pump and mints
   windows on request; a window-owning processor registers with it and keeps every
   window policy decision — title, extent, what a resize means, when to redraw, what
@@ -1323,13 +1845,29 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   and its queues. The raw-window-handle seam remains the internal boundary — the
   engine mints the present target from the raw handle and owns every swapchain and
   acquire detail,
-  plus the platform main-thread event loop where the OS demands it (in the importable
-  arrangement the process main thread belongs to the user's script; `rt.run()` blocks
-  with the GIL released while the engine pumps). A processor that cannot get a window
-  drains and discards, so upstream still sees a live consumer.
+  plus the platform main-thread event loop where the OS demands it. On Linux the pump runs
+  on its own thread; on Apple it is built on the process's first thread when the runtime
+  starts and driven there while `rt.run()` blocks with the GIL released (in the importable
+  arrangement that thread belongs to the user's script). A runtime started off the first
+  thread, or a process whose first thread another `NSApplication` loop already drives, is
+  refused a pump by name, and every caller gets the same answer. On Apple the present target
+  is minted from a `CAMetalLayer` the pump adds as a sublayer of the window's content view at
+  creation, since winit hands out a raw window handle and AppKit a view only on the first
+  thread; a present target opens at the size the pump read at creation, so opening one under
+  the escalate gate never waits on that thread; and a registration hands its window back to
+  the pump to close, AppKit closing a window only there. Cmd+Q from the engine's application
+  menu requests the same shutdown Ctrl-C does. A window's requested size is in the desktop's
+  logical pixels, so `DisplayWindow`'s `width`/`height` and a processor-owned window's
+  request mean the same apparent size on a 1x and a 2x display while the swapchain renders at
+  full density — owner, 2026-09-21, while shipping #2357, on a 640×360 window showing at
+  320×180 on a Retina Mac. A processor that cannot get a window drains and discards, so
+  upstream still sees a live consumer.
   [importable-python-library — SHIPPED #1707 for the `rt.run()` clause;
-  shared-window-event-pump — SHIPPED #1734]
+  shared-window-event-pump — SHIPPED #1734; macos-platform-floor — SHIPPED #2357]
   <!-- verify: cargo test -p streamlib-engine --test window_event_pump_serves_many_windows -->
+  <!-- verify: cargo test -p streamlib-engine --lib a_request_carries_its_title_and_size_to_the_window_attributes -->
+  <!-- verify: cargo test -p streamlib-engine --features hardware-tests --test processor_owned_window_on_the_first_thread -->
+  <!-- verify: cargo test -p streamlib-media-builtins --features hardware-tests --test two_display_windows_on_the_macos_window_server -->
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-23-shared-window-event-pump.md -->
 - **DECIDED** — Window ownership is a processor capability, not a built-in privilege:
   a processor requests a window from the engine and owns its policy; the engine mints
@@ -1368,15 +1906,35 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   topology. The present compositor stays engine-internal — no cross-process spelling
   and no Python name; at this capability surface, present-class means windows. One
   present-loop machinery serves the built-in display and every processor-owned
-  window. [processor-owned-windows — SHIPPED #1928, #1929, #1930]
+  window. The capability is Python's on both floors: on macOS a Python processor requests,
+  shows, drains and closes its own window and carries the HDR sidecar through the same
+  present loop, the helper's window exchange client being fd-free and shared.
+  [processor-owned-windows — SHIPPED #1928, #1929, #1930; macos-capability-parity — SHIPPED
+  #2407]
   <!-- verify: cargo test -p streamlib-engine --test processor_owned_window_over_the_escalate_wire -->
   <!-- verify: cargo test -p streamlib-engine --test processor_owned_window_shows_named_surfaces -->
   <!-- verify: cargo test -p streamlib-engine --test processor_owned_window_refused_without_a_display_server -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_processor_owned_window.py::test_all_three_ways_of_naming_a_published_surface_reach_the_window -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_processor_owned_window.py::test_a_users_close_leaves_the_pipeline_running_and_the_owner_informed -->
-- **DECIDED** — Camera → GPU transport: zero-copy DMA-BUF import when the device
-  exports it, transparent CPU-upload fallback otherwise, selected automatically —
-  no configuration dial. [media-io-layering]
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_processor_owned_window.py::test_a_frame_that_names_its_colour_reaches_the_window_with_its_hdr_sidecar -->
+- **DECIDED** — Camera → GPU transport: zero-copy import of the device's own memory when
+  the driver takes it, transparent CPU upload otherwise, selected automatically — no
+  configuration dial. Both arms land frames through one stage: the device's NV12 or YUYV
+  bytes, read as a storage buffer by the RHI colour converter into one local scratch
+  texture, copied into a pooled `Rgba32` pixel buffer and waited on host-side before the
+  hand-off, so colour is the engine's on both floors. On Linux the buffer is an imported V4L2
+  DMA-BUF. On Apple the capture's IOSurface-backed `CVPixelBuffer` has its memory imported as
+  a storage buffer through `VK_EXT_external_memory_host` — the buffer keeps the surface alive,
+  and the luma plane's 512-byte offset rides the source layout — and is read by the same NV12
+  kernel, **never as a multi-planar `VkImage`**: MoltenVK refuses every CoreVideo 4:2:0
+  surface as one, its import check comparing the surface's one-byte top-level element with
+  the format's six-byte 2×2 block, through v1.4.2 and on `main`. A driver refusing the buffer
+  import (MoltenVK before 1.4.1) falls back to CPU upload. Owner, 2026-09-21, while shipping
+  #2359; a driver patch to import the surface as an NV12 image was ruled out, 2026-09-26
+  (#2488, #2489). [media-io-layering; macos-platform-floor — SHIPPED #2359]
+  <!-- verify: cargo test -p streamlib-engine --features hardware-tests --lib a_corevideo_420v_surface_imported_as_a_storage_buffer_converts_like_a_copy_and_follows_cpu_writes -->
+  <!-- verify: cargo test -p streamlib-engine --features hardware-tests --lib a_storage_buffer_clone_keeps_the_imported_surface_alive_until_it_drops -->
+  <!-- verify: cargo test -p streamlib-engine --features hardware-tests --lib nv12_starting_past_byte_0_converts_identically_to_the_same_bytes_at_byte_0 -->
 - **DECIDED** — Python-authored media processors (vendor or user) run in their own
   helper process like every other Python processor and are supported where deadlines
   allow: camera-class sources and block-level audio fit within the helper hop's
@@ -1386,11 +1944,16 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
 - **DECIDED** — One clock on the data plane: every timestamp a processor stamps, reads,
   or compares — frames, bags, audio ticks, `ctx.time` — is the machine's monotonic clock
   (`CLOCK_MONOTONIC` on Linux, `mach_absolute_time` on Apple), the same epoch the V4L2
-  and ALSA driver stamps carry, comparable across every node on a host — and on that host
+  and ALSA driver stamps carry on Linux and CoreAudio's `mHostTime` and AVFoundation's
+  host-time-converted presentation stamps carry on Apple, comparable across every node on a host — and on that host
   alone, since the epoch is that machine's own boot: two stamps from two machines are
   readings of two unrelated clocks, which is why every link names the machine its bags were
   stamped on (§Networking). No
-  process-relative epoch anywhere, and each language exports exactly one name for it.
+  process-relative epoch anywhere, and each language exports exactly one name for it. The
+  wheel's name reads the engine's own `MediaClock`, so on macOS a helper's
+  `monotonic_now_ns`, `ctx.time`, its default write stamp and its timer deadlines share
+  `mach_absolute_time`'s domain with the engine rather than `CLOCK_MONOTONIC`, which keeps
+  counting through sleep; Linux is unchanged.
   Wall clock is permitted on exactly three observability surfaces and nowhere else: log
   record `host_ts` and `source_ts`, and log file naming — their job is correlating with
   the outside world, which monotonic time cannot do. A wall-clock value never enters the
@@ -1402,18 +1965,23 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   allowlist is per-file, which is why a data-plane file never joins it — a machine-global
   unique name comes from the engine's unique-name primitive, never from reading a clock.
   [one-monotonic-clock — SHIPPED #1725, #1726, #1727, #1728; the pubsub event timestamp no
-  listener ever received left the list with the in-process event bus, #2276]
+  listener ever received left the list with the in-process event bus, #2276; the wheel on
+  the engine's clock — macos-capability-parity, SHIPPED #2408]
   <!-- verify: cargo test -p streamlib-engine --lib now_lands_in_the_kernel_monotonic_domain -->
-  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_clock_and_log.py::test_monotonic_now_ns_reads_the_kernel_monotonic_clock -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_clock_and_log.py::test_monotonic_now_ns_reads_the_engine_media_clock -->
+  <!-- verify: cargo test -p streamlib-python-wheel --lib python_logging::tests::a_wheel_stamp_and_an_engine_stamp_taken_back_to_back_differ_by_microseconds -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_capability_contexts.py::test_ctx_time_is_the_engine_media_clock_in_nanoseconds -->
   <!-- verify: cargo run -p xtask -- check-clock-usage -->
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-13-one-monotonic-clock.md -->
-- **DECIDED** — Audio backend: PipeWire-native, reached by runtime dlopen — the
-  MIT-licensed PipeWire/SPA headers are vendored, the header-only SPA layer compiles
-  into the wheel as a small shim, and every `pw_*` symbol binds at runtime — falling
-  back to dlopen'd `libasound`, falling back to a null backend under which audio
-  processors run, produce silence, and discard. The chain is probed once per process
-  and logged once, no configuration dial and no environment override, and no audio
-  library ever appears in the wheel's `DT_NEEDED`. **An arm is chosen by opening, not
+- **DECIDED** — Audio backend: one chain per platform, probed once per process and logged
+  once, no configuration dial and no environment override. On Linux, PipeWire-native,
+  reached by runtime dlopen — the MIT-licensed PipeWire/SPA headers are vendored, the
+  header-only SPA layer compiles into the wheel as a small shim, and every `pw_*` symbol
+  binds at runtime — falling back to dlopen'd `libasound`, falling back to a null backend
+  under which audio processors run, produce silence, and discard; no audio library ever
+  appears in the wheel's `DT_NEEDED`. On Apple, CoreAudio through the AUHAL audio unit — the
+  system's own frameworks — falling through to the same null backend only when CoreAudio
+  offers no AUHAL unit or no default device in either direction. **An arm is chosen by opening, not
   by loading**: a library that resolves but yields no usable connection — `libpipewire`
   present with no daemon answering, the common container case — demotes to the next arm
   exactly as a missing library does, because probing on presence alone would strand
@@ -1421,25 +1989,54 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   one case that does not demote: it raises at `setup()`, since a wrong device id is a
   wiring error and silently landing on a different device is worse than failing. CPAL
   is gone with it: no audio path links an audio library, interim or otherwise.
-  [audio-subsystem; dlopen-audio-backend-and-audio-blocks — SHIPPED #1989, #1990, #1991]
+  [audio-subsystem; dlopen-audio-backend-and-audio-blocks — SHIPPED #1989, #1990, #1991;
+  the Apple arm — macos-capability-parity, SHIPPED #2411]
   <!-- verify: cargo test -p streamlib-engine --lib the_chain_is_probed_once_and_hands_back_the_same_backend_every_time -->
+  <!-- verify: cargo test -p streamlib-engine --lib the_macos_chain_offers_coreaudio_before_falling_through_to_null -->
   <!-- verify: cargo test -p streamlib-engine --lib the_walk_demotes_past_every_arm_that_declines_in_the_order_it_was_given -->
   <!-- verify: cargo test -p streamlib-engine --lib the_linux_chain_offers_pipewire_then_alsa_before_falling_through_to_null -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_microphone_source.py::test_a_device_that_was_named_and_cannot_be_opened_refuses_at_setup -->
 - **DECIDED** — The audio device seam is an engine primitive beside the audio clock,
   not built-in-private code: `AudioDeviceBackend` opening `AudioCaptureStream` and
   `AudioPlaybackStream`, living in `core/context/` with its Linux implementations under
-  `linux/`, exactly where the audio clock's two halves already sit. `MicrophoneSource`
+  `linux/` and its CoreAudio one under `apple/`, exactly where the audio clock's two halves already sit. `MicrophoneSource`
   and `SpeakerSink` are written against it and reach no engine guts — the layering wall
   above, applied to a fourth device class. There is no second audio device path: the
   built-ins, the null backend and every test open streams through this one seam. A
   stream carries a liveness report its owner reads, so a publishing or draining thread
   whose device died comes back and says why rather than only telling the log.
-  [dlopen-audio-backend-and-audio-blocks — SHIPPED #1989, #2012]
+  [dlopen-audio-backend-and-audio-blocks — SHIPPED #1989, #2012; macos-capability-parity —
+  SHIPPED #2411]
   <!-- verify: cargo test -p streamlib-engine --test silent_null_arm_captures_without_ever_dying -->
   <!-- verify: cargo test -p streamlib-engine --test silent_null_arm_plays_what_it_is_given -->
   <!-- verify: cargo test -p streamlib-media-builtins --lib a_publishing_thread_whose_device_died_comes_back_and_says_why -->
   <!-- verify: cargo test -p streamlib-media-builtins --lib a_drain_thread_whose_device_died_comes_back_and_says_why -->
+- **DECIDED** — The CoreAudio arm opens one AUHAL unit per stream, I/O enabled in its
+  direction only, with an interleaved `f32` client format at the stream's rate. Devices are
+  named by CoreAudio UID; one not attached is refused naming it and the UIDs that are. A
+  stream with no `device_id` follows the system default device — headphones or AirPods
+  arriving move it — while a named stream stays pinned and ends if its device goes away
+  (owner, 2026-09-25, #2411). A stream keeps the format it opened with for life: on output
+  AUHAL converts to the device's format; on input an `AudioConverter` bridges a device of
+  another rate or channel count, and stamps stay continuous on the host clock through the
+  converter and through a rebind. Property listeners are CoreAudio blocks on the stream's own
+  serial queue. Failures land on the stream's liveness report naming the device and the
+  `OSStatus` — failed renders reaching the bound, a vanished device, a refused rebind, an
+  oversized cycle. A playback stream reports its device period (`BufferFrameSize`) and
+  `SpeakerSink` sizes its `match_device` window and hop, ring and underrun cadence from it;
+  the PipeWire, ALSA and null arms report none, and `SpeakerSink` falls back to 10 ms there.
+  Audible tests are attended only (`audible-hardware-tests`); the standing `hardware-tests`
+  sweep on the Mac stays silent. The deviceless audio clock on Apple is a GCD timer, the
+  peer of Linux's timerfd. [macos-capability-parity — SHIPPED #2411]
+  <!-- verify: cargo test -p streamlib-engine --lib a_named_device_that_is_not_attached_is_refused_naming_it_and_the_ones_that_are -->
+  <!-- verify: cargo test -p streamlib-engine --lib an_unnamed_stream_moves_to_a_default_that_moved -->
+  <!-- verify: cargo test -p streamlib-engine --lib a_named_stream_stays_on_its_device_when_the_default_moves -->
+  <!-- verify: cargo test -p streamlib-engine --lib failed_renders_reaching_the_bound_in_a_row_end_the_stream_once -->
+  <!-- verify: cargo test -p streamlib-engine --lib a_month_long_converted_stream_still_stamps_exactly -->
+  <!-- verify: cargo test -p streamlib-media-builtins --lib a_stream_reporting_its_device_period_sizes_everything_from_that_period -->
+  <!-- verify: cargo test -p streamlib-media-builtins --lib a_stream_reporting_no_device_period_is_sized_from_ten_milliseconds -->
+  <!-- verify: cargo test -p streamlib-engine --features hardware-tests --test coreaudio_arm_stamps_blocks_with_the_devices_own_timing -->
+  <!-- verify: cargo test -p streamlib-engine --features hardware-tests --test coreaudio_arm_plays_what_it_is_given -->
 - **DECIDED** — Every audio symbol binds at runtime and the wheel's `DT_NEEDED` set does
   not grow: `libpipewire-0.3.so.0` and `libasound.so.2` resolve through `libloading`,
   the pattern the DRM modifier probe already uses for `libEGL.so.1` — a library held
@@ -1498,13 +2095,17 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   capture block's timestamp is the backend's own timing for its first sample —
   `pw_time`-derived status minus reported delay on the PipeWire arm,
   `snd_pcm_status_get_htstamp` on the ALSA arm with the monotonic timestamp type set
-  explicitly so the stamp cannot arrive on `CLOCK_REALTIME` — and it is published
+  explicitly so the stamp cannot arrive on `CLOCK_REALTIME`, and the input cycle's
+  `mHostTime` (the `mach_absolute_time` domain) minus the device and stream latency on the
+  CoreAudio arm — and it is published
   through the timestamped write, never the implicit one, whose `MediaClock::now()`
   would stamp the moment of publication rather than the instant of capture. Both the
   bag field and the frame header therefore carry the same device-derived value, in the
   same epoch a video frame's timestamp carries, which is the whole of block-level A/V
   sync: joining audio to camera frames is subtracting two integers.
-  [dlopen-audio-backend-and-audio-blocks — SHIPPED #1990, #1991]
+  [dlopen-audio-backend-and-audio-blocks — SHIPPED #1990, #1991; the CoreAudio arm —
+  macos-capability-parity, SHIPPED #2411]
+  <!-- verify: cargo test -p streamlib-engine --lib the_devices_latency_moves_the_stamp_back_by_that_many_frames -->
   <!-- verify: cargo test -p streamlib-engine --lib a_blocks_stamp_sits_one_period_before_a_status_reporting_one_unread_period -->
   <!-- verify: cargo test -p streamlib-engine --lib a_stamp_from_the_wrong_clock_is_refused_and_a_monotonic_one_is_not -->
 - **DECIDED** — A device callback never blocks, and the loss is counted at the edge.
@@ -1845,9 +2446,8 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   pair: `H264Encoder`, `H264Decoder`, `H265Encoder`, `H265Decoder`, `JpegDecoder`,
   `OpusEncoder`, `OpusDecoder`, `Mp4Sink` — instantiated and configured the one way a
   built-in is configured (`rt.add(H264Encoder)`), per-frame paths never entering an
-  interpreter, serving Python and Rust apps alike. Video blocks are built on the
-  engine's existing Vulkan Video machinery reached through `GpuContext`'s session
-  surface; JPEG decode is its own backend (`sdk/vulkan-jpeg`; the nvJPEG backend stays
+  interpreter, serving Python and Rust apps alike. Video blocks are built on the video
+  codec backend seam — Vulkan Video on Linux, VideoToolbox on Apple; JPEG decode is its own backend (`sdk/vulkan-jpeg`; the nvJPEG backend stays
   parked). AV1 and VP9 remain ported but unexposed until a consumer demands them.
   Encoder sessions mint lazily from the first frame's dimensions; decoder sessions
   auto-size the DPB from the stream's parameter sets. Config shape, rate-control and
@@ -1856,20 +2456,54 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   processors — the pair differs in an enumerant, the bag's `codec` string and a name —
   and each built-in is its own port surface, registration and identity. The layering
   wall holds at this fourth device class too: colour conversion into the codec's NV12
-  input rides the engine's existing `rgb_to_nv12` converter stage, and no new RHI
-  primitive was built for codecs. [codec-blocks — SHIPPED #2083, #2084, #2086 for the
+  input rides the engine's existing RHI colour converter — the `rgb_to_nv12` stage on
+  Linux, an RGBA-image → NV12-buffer pass beside the RGBA → YUYV one on Apple — and no new
+  RHI primitive was built for codecs. [codec-blocks — SHIPPED #2083, #2084, #2086 for the
   four video blocks, engine half; python-codec-block-api — SHIPPED #2105 for their
   Python surface; opus-mp4-recording-rung — SHIPPED #2125, #2126 for the Opus pair and
   #2127, #2128 for `Mp4Sink`, which is a sink rather than a codec and holds no session.
   extension-model — the "native built-ins" clause is the record of these seven and not the
   rule for the next codec, which follows the built-in criterion in §Packages & extension
   model; `JpegDecoder` is frozen — neither built nor retired — until its drone consumer
-  returns (owner, 2026-09-04)]
+  returns (owner, 2026-09-04); the seam — macos-capability-parity, SHIPPED #2412, #2413]
   <!-- verify: cargo test -p streamlib-media-builtins --test h264_decoder_completes_the_round_trip -->
   <!-- verify: cargo test -p streamlib-media-builtins --test h265_decoder_completes_the_round_trip -->
   <!-- verify: cargo test -p streamlib-media-builtins --test h264_encoder_publishes_the_bag_convention -->
   <!-- verify: cargo test -p streamlib-media-builtins --lib encoded_packet_to_audio_block_decoder::tests::a_tone_survives_the_round_trip_at_one_two_and_six_channels -->
   <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_fragmented_file_writer::tests::the_file_opens_with_the_brands_and_one_trak_per_link_named_after_its_producer -->
+- **DECIDED** — The video codec backend seam has the video device seam's shape: a
+  `VideoCodecBackend` opening a `VideoEncodeSession` or `VideoDecodeSession`, probed once per
+  process through the shared walk and logged once, no dial, a refusing backend naming
+  platform, direction and stream where no arm exists. It is the only way to a session —
+  `GpuContext`'s session mints are crate-private — and decode hands back pictures already in
+  pooled pixel buffers, as capture does. The four video blocks are platform-free above it and
+  register on both floors. The VideoToolbox arm is hardware-only — a hardware codec block
+  never falls back to software — runs without reordering, sets the sync-point cadence in
+  seconds and frames, and maps `bitrate_bps` to average bitrate, constant quality otherwise.
+  Encode never wraps the pooled frame, since CoreVideo wraps no `'RGBA'` IOSurface: the
+  converter pass writes it on the GPU into an NV12 IOSurface from the compression session's
+  own pool, `'420f'`/`'420v'` by the resolved range, with no host copy. Decoded IOSurfaces
+  reach the pool through the camera's IOSurface → pooled-RGBA transport, read from the clean
+  aperture, which CoreMedia sets from the SPS display window. VideoToolbox speaks AVCC with
+  parameter sets in the format description; the arm converts at its own edge — 4-byte start
+  codes, the parameter sets in front of every sync point and nowhere else — so the published
+  `EncodedVideoFrame` is one wire on both floors, through the one platform-free Annex-B walk
+  (`core/annex_b_access_unit.rs`) the arm, `Mp4Sink` and the proof rig share. What an arm
+  cannot honour refuses by name at `setup()`: on VideoToolbox `effort_level`, a
+  `keyframe_interval_seconds` of 0, and a decoder with no hardware support; on a Linux device
+  without Vulkan Video, session construction names the missing direction instead of
+  aborting. The decoders' `max_width`/`max_height` differ by floor: Linux sizes the DPB for
+  the coded extent; on Apple, where CoreMedia reports only the cropped extent, a picture past
+  the cap is refused. [macos-capability-parity — SHIPPED #2412, #2413; the absent-tier guard,
+  macos-platform-floor — SHIPPED #2374]
+  <!-- verify: cargo test -p streamlib-engine --lib the_video_codec_chain_is_probed_once_and_hands_back_the_same_backend_every_time -->
+  <!-- verify: cargo test -p streamlib-engine --lib the_linux_video_codec_chain_offers_vulkan_video_before_falling_through_to_the_refusing_backend -->
+  <!-- verify: cargo test -p streamlib-engine --lib the_macos_video_codec_chain_offers_videotoolbox_before_falling_through_to_the_refusing_backend -->
+  <!-- verify: cargo test -p streamlib-engine --lib a_refusal_names_the_platform_the_direction_and_the_stream -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::annex_b_access_unit -->
+  <!-- verify: cargo test -p streamlib-engine --lib device_without_video_refuses_every_codec_operation_naming_its_direction -->
+  <!-- verify: cargo test -p streamlib-media-builtins --test video_encoders_refuse_knobs_videotoolbox_does_not_honour_at_setup -->
+  <!-- verify: cargo test -p streamlib-engine --features hardware-tests --test videotoolbox_arm_round_trips_the_psnr_references -->
 - **DECIDED** — An encoded frame is an ordinary bag: the bitstream rides inline as a
   msgpack `bin` field beside the producer-written stream metadata the delivery-profile
   decision already specified (sync-point flag, group index, sequence). No pooled-buffer
@@ -1996,15 +2630,17 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   processor's own minted import path, an `add_class` line, a re-export with its
   `__all__` entry, and a stub entry gated by stubtest with no allowlist. Configured the
   one way a built-in is configured — `rt.add(H265Encoder)`,
-  `rt.add(H264Encoder, config={"keyframe_interval_seconds": 2})` — and Linux-only at
-  the marker, the unsupported-platform arm raising by name rather than resolving a path
-  the codec modules do not build there. No engine registration was added: the wheel
+  `rt.add(H264Encoder, config={"keyframe_interval_seconds": 2})` — and resolving on both
+  floors, since the codec seam made the blocks platform-free and they register
+  everywhere. No engine registration was added: the wheel
   already linked all four and already registered them at import, which is what makes
   this rung five touchpoints and no engine change. The stub docstring is where a
   block's config keys and port names are written down, as it is for every built-in, and
   it states the engine's own behavior rather than an aspiration — the encoder's
   `width`/`height` guardrails that a mismatching frame wins against with a warning, its
-  lazy session mint from the first frame, the decoder's eager mint at `setup()`, and
+  lazy session mint from the first frame, the decoder's eager mint at `setup()` — which
+  refuses there by name where no hardware decoder exists, and on macOS holds
+  `max_width`/`max_height` against the picture extent — and
   the `max_width`/`max_height` pair that warns and auto-detects from the first SPS when
   half-specified. What a Python app may wire follows from the engine half and is stated
   so the docstrings can say it: the encoder's `video` input takes any published
@@ -2012,7 +2648,8 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   an ordinary `VideoFrame` on a pooled RGBA pixel-buffer surface — so a decoded frame
   reaches a Python kernel through a DLPack landing copy and never by bare surface id,
   which is the camera's existing gap carried, not a new one.
-  [python-codec-block-api — SHIPPED #2105]
+  [python-codec-block-api — SHIPPED #2105; both floors — macos-capability-parity, SHIPPED
+  #2413]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_video_codec_blocks.py::test_the_marker_class_cannot_be_instantiated -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_video_codec_blocks.py::test_the_round_trip_wires_without_an_adapter -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_video_codec_blocks.py::test_display_name_defaults_to_the_type_name -->
@@ -2171,11 +2808,13 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
 - **DECIDED** — Video sample entries are `avc1`/`avcC` and `hvc1`/`hvcC` from the first
   sync-point access unit's parameter sets: H.264's profile, compatibility and level bytes
   are the SPS payload's first three; H.265's profile-tier-level, chroma and bit depths come
-  from the engine's own parser, never a second one for the same bytes. Parameter-set NALs
+  from the engine's own SPS parser, platform-free in `core/h265_sequence_parameter_set.rs`,
+  never a second one for the same bytes. Parameter-set NALs
   are stripped from samples — ISO/IEC 14496-15 forbids in-band sets under `avc1`/`hvc1`,
   and `hvc1` is what Apple hardware plays, which retires the ffmpeg re-tag `/verify-video`
-  used to shell to. Every remaining NAL is 4-byte length-prefixed, the walk reusing the
-  engine's byte-stream parser rather than a fourth splitter; a sync-point bag is a sync
+  used to shell to. Every remaining NAL is 4-byte length-prefixed, the walk being the
+  engine's one platform-free Annex-B walk, shared with the VideoToolbox arm, rather than a
+  fourth splitter; a sync-point bag is a sync
   sample. A parameter set that changes mid-file, a track whose `codec` changes, and an
   Opus track whose `channels` changes are each refused by name, **per track and never per
   file**: there is no second sample entry to switch to — one lives only in the one `moov`
@@ -2186,7 +2825,9 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   track that stops appearing is a legal file, and one microphone's format change must not
   end two cameras' recording. The refusal is the built-in's own latch, the shape both
   encoders already use: a `reactive` processor has no `Error` state to reach — the runner
-  logs an `Err` from `process()` and carries on. [opus-mp4-recording-rung — SHIPPED #2127]
+  logs an `Err` from `process()` and carries on. [opus-mp4-recording-rung — SHIPPED #2127;
+  the platform-free parser and walk — macos-capability-parity, SHIPPED #2413, #2414]
+  <!-- verify: cargo test -p streamlib-media-builtins --lib an_h265_and_opus_recording_is_byte_identical_to_the_golden_file -->
   <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_track_sample_entry::tests::avcc_takes_profile_compatibility_and_level_from_the_sps_payloads_first_three_bytes -->
   <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_track_sample_entry::tests::hvcc_takes_chroma_and_bit_depths_from_the_engines_own_parser -->
   <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_fragmented_file_writer::tests::no_parameter_set_nal_survives_into_any_sample -->
@@ -2249,7 +2890,12 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   docstrings state the engine's own behavior rather than an aspiration: the encoder's
   window and first-block mint, its two config keys, the decoder's entry and gap rule, the
   sink's track-per-link rule, its `moov` wait, fragment rule and truncate-at-setup.
-  [opus-mp4-recording-rung — SHIPPED #2126, #2128]
+  `Mp4Sink` records on both floors: the SPS reader, RBSP bit reader and emulation-prevention
+  removal it reads live in the platform-free `core/h265_sequence_parameter_set.rs` and
+  `core/nal_unit_raw_byte_sequence_payload.rs`, re-exported through `streamlib::sdk`, so
+  nothing it reads sits under the Vulkan Video tree.
+  [opus-mp4-recording-rung — SHIPPED #2126, #2128; both floors — macos-capability-parity,
+  SHIPPED #2414]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_opus_blocks.py::test_the_round_trip_wires_without_an_adapter -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_mp4_sink.py::test_two_encoders_wire_into_the_one_input_without_an_adapter -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_mp4_sink.py::test_the_marker_class_cannot_be_instantiated -->
@@ -2265,7 +2911,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   durations as JSON — so nothing downstream needs ffprobe.
   [opus-mp4-recording-rung — SHIPPED #2123, #2124, #2125, #2126, #2127]
   <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_fragmented_file_writer -->
-  <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_annex_b_access_unit -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::annex_b_access_unit -->
   <!-- verify: cargo test -p xtask mp4_inspect -->
   <!-- verify: cargo test -p xtask mp4_inspect::tests::a_real_sink_recording_reports_both_tracks_under_their_link_names -->
 - **DECIDED** — Rig-only, `requires_gpu` and said in the module docstring:
@@ -2326,7 +2972,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   machine-global scan paths; the lane costs nothing when unused (no `DT_NEEDED`
   entries, no import-time work). [audio-subsystem]
 
-## Networking — transport, runtime mesh, moq, webrtc — IN-FLIGHT (→ macos-platform-floor, macos-capability-parity)
+## Networking — transport, runtime mesh, moq, webrtc — SHIPPED
 
 - **DECIDED** — Cross-language interop happens on the wire between nodes, as
   self-describing bags — never in-graph. [importable-python-library — SHIPPED #1715]
@@ -2735,9 +3381,9 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   matches it, and since a display name may not begin with `@` no address can collide with it.
   Discovery is a liveliness subscriber with history plus one description query per runtime
   that appears, and a runtime that leaves is removed; `graph` reads the peer table lock-free
-  and never waits. Multicast discovery is proven in CI, not only on the rig: the two-process
-  fixture runs a multicast arm beside its explicit-peer arms, with scouting pinned to
-  loopback.
+  and never waits. Multicast discovery is proven by the two-process fixture's multicast arm,
+  run beside its explicit-peer arms with scouting pinned to loopback — a local end-to-end
+  tier, compiled on both CI lanes and never a merge gate.
   [runtime-mesh — SHIPPED #2283]
   <!-- verify: cargo test -p streamlib-engine --features multi-process-mesh-e2e-tests --test runtime_mesh_two_processes two_runtimes_discovering_by_multicast_each_list_the_other -->
   <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::capability_extension_and_mesh_rendering_tests::a_peer_that_has_not_answered_still_deserializes_beside_one_that_has -->
@@ -2778,8 +3424,15 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   holder's host and pid (both on the token key) and offering both fixes — stop it, or start
   under another name — unless the holder's host identity is this host's and its pid is gone.
   Host identity on Linux is the kernel boot id plus the pid-namespace inode, so a container on
-  the same kernel is never mistaken for its host; macOS has no host identity and therefore no
-  exception, so a duplicate there is refused until the old token leaves. `runtime_id` stays
+  the same kernel is never mistaken for its host. On Apple it is the kernel's boot session
+  UUID, `kern.bootsessionuuid`, and nothing else: Darwin has no pid namespaces, so every
+  process on one boot shares one process table. The two shapes are different key chunks,
+  `kernel.<boot id>.<inode>` and `bootsession.<uuid>`, so a Linux host and an Apple host never
+  read as one; a platform reporting neither is `unidentified`, which is never this host.
+  Pid-is-gone is one native probe on both floors — `kill(pid, 0)` answering `ESRCH`, and only
+  that — so a crashed `streamlib dev` on a Mac restarts under its own name, as on Linux.
+  Apple reads the boot session at one site, `apple/host_identity.rs`, which the machine clock
+  identity shares, as Linux shares its boot id. `runtime_id` stays
   per-run — logs, the registry file, iceoryx2 names, the description — and is never an
   address.
   Stated residual: two runtimes that start inside one discovery window, or that meet when a
@@ -2787,10 +3440,40 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   host, and `graph` lists both. Which one a remote link reaches is settled below: neither —
   the link is `error` naming both hosts and carries from neither until one leaves, because a
   link that picked one could feed the wrong machine.
-  [runtime-mesh — SHIPPED #2282, #2284; the residual settled by cross-runtime-links #2292]
+  [runtime-mesh — SHIPPED #2282, #2284; the residual settled by cross-runtime-links #2292;
+  the Apple host identity and native liveness — macos-platform-floor, SHIPPED #2363]
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::runtime_name -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::duplicate_runtime_name_on_the_mesh -->
   <!-- verify: cargo test -p streamlib-engine --features multi-process-mesh-e2e-tests --test runtime_mesh_two_processes -->
+  <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::host_identity -->
+  <!-- verify: cargo test -p streamlib-engine --features multi-process-mesh-e2e-tests --test runtime_mesh_two_processes a_token_left_by_a_dead_process_on_this_host_is_taken_over_and_a_live_one_is_not -->
+- **DECIDED** — The mesh runs on both floors and is proven on each rather than assumed. Zenoh
+  builds for `aarch64-apple-darwin` with the engine's own feature set unchanged; the Apple arm
+  is the host identity above and nothing else. PR CI keeps it honest hermetically: the macOS
+  lane runs the engine's whole lib suite — serialised, because its iceoryx2 child-process
+  tests race in parallel — which carries the host-identity shapes, the duplicate-name
+  decision table and the liveness probe on Apple. The three multi-process suites —
+  `runtime_mesh_two_processes`, `cross_runtime_links_two_processes`,
+  `cross_runtime_link_requests_two_processes` — sit behind `multi-process-mesh-e2e-tests`,
+  compile on both lanes with `--no-run` so they cannot rot, and run locally: process
+  start-up and network discovery decide their result, so no bound makes them a merge gate
+  (owner, at #2468). They pass on macOS, the reclaim arm included. A Mac and a Linux box on
+  one LAN found each other by multicast alone and exchanged bags both ways with no hop loss,
+  each link's `stamp_clock_identity` naming the other machine's boot, and each refused a
+  name the other held, naming host and pid. The arms wait for what they assert rather than
+  asking once: a freshly opened look-only session can answer its first liveliness `get`
+  before it has learned the tokens, and a recreated producer's burst is held until the
+  reader has the replacement's baseline. Each peer is its own iceoryx2 domain under its own
+  root sharing the engine's `sl<uid>_` prefix, which holds only from iceoryx2 0.10.0: 0.9.3
+  named a service's dynamic config from prefix and service name alone, so two such domains
+  opening one channel name shared it and the egress went quiet.
+  Where it bites, stated: macOS Local Network privacy can silently cut a terminal-launched
+  runtime off the LAN (measured under iTerm2: every dial `No route to host`, visible only at
+  `debug`), so discovery finds nobody and a duplicate goes unrefused.
+  [macos-platform-floor — SHIPPED #2363; the arms' waits #2450, #2457; shared-prefix domains
+  #2529]
+  <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::node::tests::two_domains_sharing_a_prefix_never_share_a_channel -->
+  <!-- verify: cargo test -p streamlib-engine --features multi-process-mesh-e2e-tests --test runtime_mesh_two_processes --test cross_runtime_links_two_processes --test cross_runtime_link_requests_two_processes -->
 - **DECIDED** — A bag's top-level `surface_id` crosses the mesh transparently, for now: the
   sending runtime resolves it locally and sends the frame's pixels with what the receiver
   needs to rebuild them, and the receiving runtime writes the pixels into a freshly minted
@@ -2799,18 +3482,21 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   mechanism replaces in a later release.
   As built: the message is `[pixel description][bag][pixel bytes]`, and the attachment carries
   the description's length — zero for a bag naming no surface, which therefore still crosses
-  verbatim. The sender's copy door is `SurfaceExportStaging` at host-visible residency on
-  Linux, and on macOS the frame's own IOSurface, read through its host mapping under
-  `IOSurfaceLock` with rows packed. Either way it is held under a check-out claim that spans
+  verbatim. The sender's copy door is per floor: `SurfaceExportStaging` at host-visible
+  residency on Linux; on macOS the frame's own IOSurface, read through its host mapping under
+  `IOSurfaceLock` read-only, with rows packed and a padded stride stripped, and no staging or
+  GPU copy. The macOS read is ordered by publication, not a timeline: a producer publishes an
+  id only after its write has retired on the host, so one that published with its GPU
+  submission still in flight would be read early there, where Linux's same-queue staging copy
+  would have waited. Both doors resolve the backing through one `ResolvedSurfaceBacking`,
+  shared with the exchange. Either way the read is held under a check-out claim that spans
   the copy alone, so a slow network never pins the producer's pool slot. The description's format, extent and byte length are read from the
   backing, never from the bag, which names no format at all. Each refusal is counted and said
   once per port or per source by its own name: a recycled frame, a multi-plane format, a pool
   at its cap, and a source offering more than the four format-and-extent pairs one may mint
-  pools of (pools are never freed). ~~The copy-out door is Linux-only, because
-  `SurfaceExportStaging` is; a non-Linux sender says once per port that its surface bags do
-  not cross.~~ *(Corrected 2026-09-24 by #2406: the door reads the IOSurface on macOS.)* On
-  macOS a texture backing with no IOSurface behind it is refused by name — today that is
-  `GpuContext::acquire_output_texture`, which macOS allocates non-importable.
+  pools of (pools are never freed). On macOS a backing with no IOSurface behind it is refused
+  by name — today that is `GpuContext::acquire_output_texture`, which allocates
+  non-importable.
   Where it bites, stated rather than discovered. A texture-backed frame — a kernel output —
   lands buffer-backed on the far side, inheriting the camera's existing gap: a bare-id kernel
   dispatch refuses it, and the display's buffer fallback draws only RGBA correctly. An sRGB
@@ -2966,7 +3652,8 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   clock per machine.
   A **clock identity** is the kernel's boot-session UUID — `/proc/sys/kernel/random/boot_id` on
   Linux, `kern.bootsessionuuid` on macOS — the boot alone and never the pid-namespace inode
-  the duplicate-name `HostIdentity` pairs it with, because a container and its host share a
+  Linux's duplicate-name `HostIdentity` pairs it with (on Apple the two identities are one
+  read of one sysctl), because a container and its host share a
   kernel and so share one monotonic epoch. It rides each mesh message's attachment. The frame
   header does not change.
   **The inbound link carries it, and the relay gap is recorded as known** (owner, 2026-09-14).
@@ -3002,8 +3689,10 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   They order events between hosts that already share NTP time and cannot map a remote monotonic
   stamp onto ours.
   [runtime-mesh; cross-runtime-links — SHIPPED #2288 for the carried identity and #2291 for its
-  reads, rendering and the `Mp4Sink` refusal; the MoQ deadline's arm #2340]
+  reads, rendering and the `Mp4Sink` refusal; the MoQ deadline's arm #2340; the shared Apple
+  read — macos-platform-floor, SHIPPED #2363]
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::machine_clock_identity -->
+  <!-- verify: cargo test -p streamlib-engine --lib apple::host_identity::tests::the_host_identity_is_the_boot_session_the_clock_identity_names -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::machine_clock_a_remote_link_carries_from -->
   <!-- verify: cargo test -p streamlib-media-builtins --lib mp4_fragmented_file_writer -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_inbound_link_stamp_clock.py -->
@@ -3146,7 +3835,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_sighup_tears_the_graph_down_gracefully -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_a_runtime_held_by_a_live_thread_is_torn_down_at_exit -->
 
-## Distribution & versioning — IN-FLIGHT (→ macos-platform-floor, macos-capability-parity)
+## Distribution & versioning — SHIPPED
 <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py -->
 
 - **DECIDED** — Two artifacts, one version, released together: the streamlib wheel
@@ -3158,21 +3847,106 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   material; never marketed as "a Python library" even though the shape is one.
   [importable-python-library — SHIPPED #1691, #1692, #1694, #1711]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_the_scaffold_pins_streamlib_to_its_own_index -->
-- **DECIDED** — Wheel portability model: system libraries (Vulkan loader, window
-  system, libcuda) are dlopen'd at runtime, never linked — the wgpu/opencv-python
-  manylinux shape; "baked in" means our Rust is compiled in, not that system deps
-  are static. abi3 across a small range of GIL-enabled CPython builds only
-  (free-threaded builds wait for the stable ABI to exist for them). "Our code" includes
-  vendored C/C++ we compile and link statically, not only our Rust: the wheel carries a
-  C++ GLSL shader compiler so a kernel author needs no system shader toolchain. The
-  wheel's adapter closure excludes skia. Helper processes import the wheel itself — one
-  native artifact, no separate helper cdylib.
+- **DECIDED** — Wheel portability model: what the host may supply is stated per platform,
+  and nothing else is linked. On Linux, system libraries (Vulkan loader, window system,
+  libcuda) are dlopen'd at runtime, never linked — the wgpu/opencv-python manylinux shape.
+  On macOS a stock machine has no Vulkan driver, so the wheel carries one in
+  `streamlib/_vulkan_driver/`: the Vulkan loader (built from source at the wheel's
+  deployment target), MoltenVK and its unedited ICD manifest, and still links only
+  `/usr/lib/` and `/System/`. Engine and helper alike dlopen that loader by absolute path,
+  found beside the `_engine` image through `dladdr`, after the bare names and `VULKAN_SDK`
+  and before the Homebrew prefixes, which are developer-machine fallbacks.
+  `streamlib/__init__.py` names the bundled manifest to the loader additively — through
+  `VK_ADD_DRIVER_FILES`, before `_engine` loads, idempotently for a re-importing helper, and
+  not at all when `VK_DRIVER_FILES` or `VK_ICD_FILENAMES` says the user chose their drivers —
+  so a user's own driver stays discoverable. The MoltenVK carried is 1.4.1 or later: camera
+  zero-copy under §Media I/O imports IOSurface memory through `VK_EXT_external_memory_host`
+  in its spec-correct form, which 1.4.0 refuses and 1.4.1's source is the first to accept
+  (owner, 2026-09-21, #2359). It is the Khronos release build, pinned by tag and SHA-256,
+  thinned to arm64 and carried unpatched: a driver patch was ruled out (owner, 2026-09-26,
+  #2488), so what MoltenVK refuses stays refused. "Baked in" means our Rust is compiled in,
+  not that system deps are static. abi3 across a small range of GIL-enabled CPython builds
+  only (free-threaded builds wait for the stable ABI to exist for them). "Our code" includes
+  vendored C/C++ we compile and link statically, not only our Rust: the wheel carries a C++
+  GLSL shader compiler so a kernel author needs no system shader toolchain. The wheel's
+  adapter closure excludes skia. Helper processes import the wheel itself — one native
+  artifact, no separate helper cdylib. The portability proof parses ELF and Mach-O itself:
+  every Mach-O the installed wheel carries links only the system, carries
+  `LC_CODE_SIGNATURE` — verified by `codesign --verify --strict` where the host has it, since
+  a byte rewritten after signing keeps the load command — and names in `LC_BUILD_VERSION` a
+  macOS no newer than the wheel's tag. A binary it cannot parse, a fat binary, or a
+  `.so`/`.dylib` that is neither format fails rather than skips.
   [importable-python-library — SHIPPED #1691, #1692; the vendored GLSL compiler with
-  python-kernel-surface #1775]
+  python-kernel-surface #1775; the macOS arm — macos-platform-floor, SHIPPED #2362]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_the_native_extension_links_nothing_the_host_may_not_supply -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_the_glsl_compiler_is_linked_statically -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_every_mach_o_the_wheel_carries_is_portable -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_every_native_binary_the_wheel_carries_parses -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_an_unsigned_binary_is_caught -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py::test_a_binary_needing_a_newer_macos_than_the_tag_is_caught -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_bundled_vulkan_driver.py -->
+  <!-- verify: cargo test -p streamlib-consumer-rhi --lib vulkan_loader_library -->
+- **DECIDED** — The macOS artifact is one `aarch64-apple-darwin` wheel at the same abi3
+  floor, released beside the manylinux one at the same version. Apple Silicon only: no
+  Intel wheel, no universal2, and Rosetta is not a supported path — not as a fallback, not
+  as a courtesy (owner, 2026-09-19). It is built on a pinned `macos-15` runner, because the
+  image decides the SDK. The deployment target is macOS 15.0, pinned once in
+  `[tool.maturin.target.aarch64-apple-darwin]` and exported as `MACOSX_DEPLOYMENT_TARGET`,
+  because maturin tags the wheel with it but does not hand it to the link; the bundled
+  loader is built to it. 15.0 is the newest target that runner can both build for and run,
+  clears MoltenVK's floor (12) and AVFoundation's `AVCaptureDeviceTypeExternal` (14), and
+  every Apple Silicon Mac can run it; a Mac on 14 or older gets no matching distribution.
+  No notarisation and no signing identity: nothing pip delivers is quarantined. Every
+  post-link rewrite of a shipped binary — `lipo -thin` on MoltenVK — is re-signed ad hoc
+  (`codesign -f -s -`) in the step that rewrites it, and signatures are verified in the
+  built zip and again after install. The same workflow runs on every PR on a runner with no
+  Vulkan SDK: it builds the wheel, checks signatures, runs the portability, notices and
+  driver-search tests against the installed wheel, and runs the `--test-pattern` scaffold
+  for twenty seconds, which must open the carried loader, raise nothing from the effect and
+  show at least sixty frames. On release it attaches the wheel, and a failed macOS wheel
+  withholds the simple index exactly as the manylinux one does.
+  [macos-platform-floor — SHIPPED #2362]
+  <!-- verify: grep -n 'macos-deployment-target = "15.0"' sdk/streamlib-python-wheel/pyproject.toml -->
+  <!-- verify: grep -n "runs-on: macos-15" .github/workflows/macos-wheel.yml -->
+  <!-- verify: grep -n "build-macos-wheel" .github/workflows/release-wheel.yml -->
+- **DECIDED** — The wheel is built, tested and linted on the macOS lane, not excluded from
+  it. `Rust Build (macOS)` compiles the whole workspace with the wheel in it (clippy on
+  default targets, `check --all-targets`) and runs the wheel crate's unit tests; it then
+  `maturin develop`s the wheel, gates `_engine.pyi` with `stubtest` against the macOS
+  binary — one stub for both floors — and runs the Python suite's GPU-free half. The test
+  target's pipe is `std::io::pipe()`, and `check-no-inheritable-descriptor` accepts that
+  portable spelling for its two pipe entries, with every Linux flag it accepts or refuses
+  unchanged; on Darwin that pipe is `pipe` then `fcntl`, not atomic, and the spawn-side
+  answer to the race is `posix_spawn` (#2368). `lint-logging` evaluates `cfg` for macOS
+  too, so `apple/` is linted. A test absent on macOS carries
+  `linux_only_capability(reason=…)`, held to the closed list §Product states. The Python
+  suite's `requires_gpu` half does not run on the macOS lane — it runs on each floor's rig;
+  the runner's paravirtual Metal device serves the in-process adapter tests below.
+  [macos-capability-parity — SHIPPED #2400]
+  <!-- verify: cargo run -p xtask -- check-no-inheritable-descriptor -->
+  <!-- verify: cargo test -p xtask check_no_inheritable_descriptor::tests::the_portable_std_pipe_is_accepted_and_a_refused_pipe_names_it -->
+  <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_platform_markers.py -->
+- **DECIDED** — The in-process adapters are per floor and say so. `streamlib-adapter-vulkan`,
+  `streamlib-adapter-cpu-readback` and `streamlib-adapter-skia` build on MoltenVK, and the
+  macOS lane runs their in-process tests on the runner's paravirtual Metal device, failing
+  on any skip line but the validation-layer test's, because a fixture that cannot bring up
+  its device prints a skip and passes. Each wraps an engine image over a private IOSurface
+  from `GpuContext::acquire_render_target_iosurface_image`, the macOS peer of
+  `acquire_render_target_dma_buf_image`, both built from one render-target usage set. The
+  fd-based cross-process tests stay Linux, and cpu-readback's NV12 tests are ignored on
+  macOS: the engine's IOSurface-backed image is single-plane by construction. Skia's GL arm
+  stays Linux; on macOS Skia takes the prebuilt rust-skia publishes without `gl` and finds
+  `vkGetInstanceProcAddr` through the consumer RHI's one loader search list.
+  `streamlib-adapter-opengl` is a named absent tier on macOS — its seam is EGL and DMA-BUF,
+  OpenGL is deprecated there, and a native macOS consumer takes the Vulkan adapter.
+  `streamlib-adapter-cuda` is absent by nature. Each says so at its crate root, and the CUDA
+  adapter's DLPack module builds on both floors as the workspace's one home for the ABI.
+  [macos-capability-parity — SHIPPED #2415]
+  <!-- verify: cargo test -p streamlib-adapter-vulkan -p streamlib-adapter-cpu-readback -->
+  <!-- verify: grep -n "Absent on macOS" adapters/streamlib-adapter-opengl/src/lib.rs adapters/streamlib-adapter-cuda/src/lib.rs -->
+  <!-- verify: grep -n "p streamlib-adapter-skia" .github/workflows/test.yml -->
 
-## Control plane & observability — IN-FLIGHT (→ macos-capability-parity)
+## Control plane & observability — SHIPPED
 <!-- verify: cargo test -p streamlib-api-server tools_list_advertises_exactly_the_control_vocabulary -->
 
 - **DECIDED** — The control plane carries no optional capability's routes natively. A
@@ -3341,13 +4115,16 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   outside the RHI and no second converter is built. The operation reaches the engine
   through `RuntimeOperations` and nothing else — the api-server's HTTP task deliberately
   holds only `Arc<dyn RuntimeOperations>`, the trait gains one operation, and `Runner`
-  implements it over ~~the shipped doors: the surface store's checkout for a pooled
-  pixel-buffer backing, the host-visible export staging for a texture backing, the same
-  doors the cast object's `cpu()` rides~~ the pool's own claim and the RHI's color
-  converter, blit and texture readback, on Linux and macOS alike *(corrected 2026-09-24:
-  the exchange as built never rode the export staging; #2406 opened it on macOS)*. No new surface-resolution path exists, and the
-  caller needs no Vulkan device, no surface socket and no runtime link.
-  [control-plane-surface-pixel-exchange — SHIPPED #1972]
+  implements it over the pool's own claim and the RHI's color converter, blit and texture
+  readback, on Linux and macOS alike; it never rode the export staging on either floor. On
+  macOS it runs the same conversion under MoltenVK, a pooled frame's IOSurface pages reaching
+  the GPU through their host-pointer import, never a CPU read of the surface — so `streamlib
+  tap` → `exchange`, and the repo's own live verification with it, answer on a Mac. No new
+  surface-resolution path exists — the backing resolution it shares with the mesh's copy-out
+  door is one `ResolvedSurfaceBacking` — and the caller needs no Vulkan device, no surface
+  socket and no runtime link.
+  [control-plane-surface-pixel-exchange — SHIPPED #1972; opened on macOS by
+  macos-capability-parity — SHIPPED #2406]
   <!-- verify: cargo test -p streamlib-engine --lib a_pooled_rgba_frame_exchanges_for_the_pixels_the_bag_published -->
   <!-- verify: cargo test -p streamlib-engine --lib a_texture_backed_frame_exchanges_for_the_pixels_its_producer_rendered -->
 - **DECIDED** — Two spellings of one operation: MCP tool and REST route serve the same
