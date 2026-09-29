@@ -45,19 +45,28 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    /// The umask iceoryx2 0.10 holds the whole process under while it binds a
-    /// listener's socket, as `sh -c umask` prints it.
-    const UMASK_WHILE_ICEORYX2_BINDS_A_LISTENER: &str = "0177";
+    /// This process's own umask, read while no listener can be binding, as
+    /// `sh -c umask` prints one.
+    fn this_processs_own_umask() -> String {
+        let _no_listener_is_being_bound = ICEORYX2_LISTENER_BIND_OR_CHILD_PROCESS_START.lock();
+        // SAFETY: `umask` only swaps the process's file-creation mask, and it
+        // is put straight back; the lock keeps every listener bind and child
+        // start away from the moment it reads 0.
+        let umask = unsafe { libc::umask(0) };
+        unsafe { libc::umask(umask) };
+        format!("{umask:04o}")
+    }
 
     /// Children started while another thread binds listener after listener
-    /// never inherit the umask iceoryx2 binds under.
+    /// all inherit this process's own umask, never the one iceoryx2 binds
+    /// under.
     ///
     /// Fail-without-fix: spawn the children without the lock and some report
-    /// `0177` — 3 to 5 of the 200 in each of three runs on the rig. How many
-    /// depends on how the binds and the starts interleave, so a revert can pass
-    /// a single run; the fixed form cannot produce one at all.
+    /// `0177` — between 1 and 8 of the 200 per run on the rig. How many depends
+    /// on how the binds and the starts interleave, so a revert can pass a single
+    /// run; the fixed form cannot produce one at all.
     #[test]
-    fn a_child_started_beside_listener_binds_never_inherits_iceoryx2s_bind_umask() {
+    fn a_child_started_beside_listener_binds_inherits_this_processs_own_umask() {
         let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let notify_service = node
             .service_builder(
@@ -72,6 +81,8 @@ mod tests {
             .max_listeners(1)
             .open_or_create()
             .unwrap();
+
+        let umask_this_process_runs_under = this_processs_own_umask();
 
         let keep_binding = Arc::new(AtomicBool::new(true));
         let binder = {
@@ -103,14 +114,14 @@ mod tests {
         keep_binding.store(false, Ordering::Relaxed);
         binder.join().unwrap();
 
-        let children_under_the_bind_umask = umasks_the_children_reported
+        let children_under_another_umask = umasks_the_children_reported
             .iter()
-            .filter(|umask| umask.as_str() == UMASK_WHILE_ICEORYX2_BINDS_A_LISTENER)
+            .filter(|umask| **umask != umask_this_process_runs_under)
             .count();
         assert_eq!(
-            children_under_the_bind_umask, 0,
-            "{children_under_the_bind_umask} of 200 children inherited iceoryx2's bind umask: \
-             {umasks_the_children_reported:?}"
+            children_under_another_umask, 0,
+            "{children_under_another_umask} of 200 children did not inherit this process's umask \
+             {umask_this_process_runs_under}: {umasks_the_children_reported:?}"
         );
     }
 }
