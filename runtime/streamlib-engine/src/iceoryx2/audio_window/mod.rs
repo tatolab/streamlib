@@ -5,7 +5,7 @@
 //! natively, so `process()` receives exact-size timestamped blocks.
 //!
 //! One stage at the one read seam every reader already shares
-//! ([`InputMailboxesInner::read_raw_bounded`]): an app-process Rust processor
+//! ([`InputMailboxesInner::next_bag_for_the_reader`]): an app-process Rust processor
 //! reads through the parent's mailboxes, and a helper-placed Python processor
 //! through its own, which the child opens for itself and which compiles this
 //! same code into the wheel. One implementation serving both, with no new IPC
@@ -21,7 +21,7 @@
 //! not something the contract changes, and the blocks they do receive are the
 //! declared size like everyone else's.
 //!
-//! [`InputMailboxesInner::read_raw_bounded`]: crate::iceoryx2::InputMailboxesInner::read_raw_bounded
+//! [`InputMailboxesInner::next_bag_for_the_reader`]: crate::iceoryx2::InputMailboxesInner::next_bag_for_the_reader
 
 mod audio_block_bag_wire_codec;
 mod audio_window_accumulator;

@@ -201,39 +201,10 @@ impl InboundLinkSubscribersAndListener {
     }
 }
 
-/// Outcome of a bounded read for the grow-and-retry read protocol.
-///
-/// A publisher under PowerOfTwo growth can deliver a frame larger than any fixed
-/// receive buffer; [`InputMailboxesInner::read_raw_bounded`] reports that as
-/// [`BoundedReadOutcome::NeedsLargerBuffer`] (the frame is stashed, not dropped)
-/// so the caller resizes and retries.
-pub enum BoundedReadOutcome {
-    /// The port's mailbox was empty.
-    Empty,
-    /// A frame fit the caller's buffer and is being returned.
-    Frame {
-        /// The frame's serialized body (header stripped).
-        data: Vec<u8>,
-        /// The frame's monotonic timestamp.
-        timestamp_ns: i64,
-        /// The inbound link it arrived on; `None` for a manually injected
-        /// frame, which no link delivered.
-        inbound_link_name: Option<InboundLinkName>,
-    },
-    /// The next frame is `required_bytes` long — larger than the caller's
-    /// buffer. The caller must resize to at least this many bytes and read
-    /// again; the frame is held for that retry.
-    NeedsLargerBuffer {
-        /// Byte length the caller's next buffer must reach.
-        required_bytes: usize,
-    },
-}
-
 /// What one port would hand a reader, read off its state under the `ports`
 /// lock and judged with that lock released.
 enum PortReadiness {
-    /// A frame is queued, or one was staged by a bounded read that could not
-    /// fit it — either way the next read returns something.
+    /// A frame is queued.
     AFrameIsWaiting,
     /// Nothing is waiting.
     NothingIsWaiting,
@@ -250,9 +221,6 @@ enum PortReadiness {
 
 impl PortReadiness {
     fn of(port_config: &PortConfig) -> Self {
-        if port_config.staged_oversized.is_some() {
-            return PortReadiness::AFrameIsWaiting;
-        }
         match &port_config.audio_windowing {
             InstalledInputPortAudioWindowing::NotWindowed => {
                 if port_config.mailbox.is_empty() {
@@ -303,12 +271,6 @@ impl PortReadiness {
 /// `&mut self` through `Arc<...>`.
 struct PortConfig {
     mailbox: PortMailbox,
-    /// A frame popped by [`InputMailboxesInner::read_raw_bounded`] that did not
-    /// fit the caller's buffer. It is stashed here (not lost) and re-delivered
-    /// on the next call once the caller resizes — the grow-and-retry contract
-    /// that lets a PowerOfTwo-grown oversized payload reach the reader without
-    /// dropping it.
-    staged_oversized: Option<BagBodyForTheReader>,
     /// How this port windows what arrives on it.
     audio_windowing: InstalledInputPortAudioWindowing,
 }
@@ -385,7 +347,6 @@ fn windowed_port_config(
                 contract,
                 Arc::clone(&latest_queued_source_audio_format),
             )),
-        staged_oversized: None,
         audio_windowing: InstalledInputPortAudioWindowing::Windowed(Arc::new(
             parking_lot::Mutex::new(AudioWindowAccumulator::new(
                 port,
@@ -495,7 +456,6 @@ impl InputMailboxesInner {
             port.to_string(),
             PortConfig {
                 mailbox: PortMailbox::new(buffer_size, read_mode),
-                staged_oversized: None,
                 audio_windowing: InstalledInputPortAudioWindowing::NotWindowed,
             },
         );
@@ -539,7 +499,6 @@ impl InputMailboxesInner {
                         port, depth,
                     ),
                 ),
-                staged_oversized: None,
                 audio_windowing: InstalledInputPortAudioWindowing::AwaitingItsDeviceStreamFormat,
             },
         );
@@ -621,18 +580,11 @@ impl InputMailboxesInner {
             let settled = windowed_port_config(port, existing.mailbox.read_mode(), contract);
             // Anything that arrived while the contract was unsettled moves into
             // the mailbox the contract sized, rather than being dropped where
-            // no counter would see it. The staged frame moves with them: a
-            // waiting port hands a reader nothing, so it is always `None` here,
-            // and carrying it says so locally instead of leaving the next
-            // reader to re-derive it from the read path.
+            // no counter would see it.
             existing
                 .mailbox
                 .hand_every_queued_frame_over_to(&settled.mailbox);
-            let staged_before_the_settle = existing.staged_oversized.take();
-            *existing = PortConfig {
-                staged_oversized: staged_before_the_settle,
-                ..settled
-            };
+            *existing = settled;
         }
         self.device_matched_audio_window_contracts
             .settle_for_input_port(port, contract);
@@ -1028,7 +980,7 @@ impl InputMailboxesInner {
                     continue;
                 };
                 // The read side's per-frame cost after #1822 is this `to_vec`
-                // plus the header-strip memmove in `read_raw_bounded`. The copy
+                // plus the header-strip memmove in `pop_one_bag_off_the_mailbox`. The copy
                 // is irreducible without parking the iceoryx2 `Sample` here
                 // instead of bytes — pinning shm slots while frames sit queued and
                 // coupling the mailbox's drop-oldest depth to the subscriber
@@ -1047,66 +999,34 @@ impl InputMailboxesInner {
         }
     }
 
-    /// Read the next frame for `port` into a caller buffer bounded by `out_cap`
-    /// bytes, following the port's read mode.
-    ///
-    /// This is the grow-and-retry primitive behind the out-of-process read
-    /// path: with PowerOfTwo publisher growth a frame can exceed any fixed
-    /// receive buffer, so a frame that would not fit `out_cap` is stashed
-    /// ([`PortConfig::staged_oversized`]) rather than dropped and reported as
-    /// [`BoundedReadOutcome::NeedsLargerBuffer`]. The caller resizes to
-    /// `required_bytes` and calls again; the staged frame is re-delivered in
-    /// order.
-    pub fn read_raw_bounded(&self, port: &str, out_cap: usize) -> Result<BoundedReadOutcome> {
+    /// The next bag body `port` hands a reader, following its read mode, or
+    /// `None` when there is none — the one read seam every reader shares, and
+    /// where a windowed port's stage cuts its windows.
+    fn next_bag_for_the_reader(&self, port: &str) -> Result<Option<BagBodyForTheReader>> {
         self.receive_pending();
 
-        let (staged, audio_windowing) = {
-            let mut ports = self.ports.lock();
+        let audio_windowing = {
+            let ports = self.ports.lock();
             let port_config = ports
-                .get_mut(port)
+                .get(port)
                 .ok_or_else(|| Error::Link(format!("Unknown input port: {}", port)))?;
-            (
-                port_config.staged_oversized.take(),
-                port_config.audio_windowing.clone(),
-            )
+            port_config.audio_windowing.clone()
         };
 
         // The stage's decode, channel convert, resample and framing all run
         // here, with the `ports` mutex released — it guards the port map, and a
         // resampler pass is not port-map work.
-        let candidate = match staged {
-            Some(staged) => Some(staged),
-            None => match audio_windowing {
-                InstalledInputPortAudioWindowing::NotWindowed => {
-                    self.pop_one_bag_off_the_mailbox(port, None)?
-                }
-                // Nothing, and deliberately not the bag underneath: a port
-                // whose contract is unsettled has no exact size to cut one to.
-                InstalledInputPortAudioWindowing::AwaitingItsDeviceStreamFormat => None,
-                InstalledInputPortAudioWindowing::Windowed(stage) => {
-                    self.next_window_out_of_the_stage(port, &stage)?
-                }
-            },
-        };
-        let Some(candidate) = candidate else {
-            return Ok(BoundedReadOutcome::Empty);
-        };
-
-        if candidate.body.len() <= out_cap {
-            return Ok(BoundedReadOutcome::Frame {
-                data: candidate.body,
-                timestamp_ns: candidate.first_sample_or_publish_timestamp_ns,
-                inbound_link_name: candidate.inbound_link_name,
-            });
+        match audio_windowing {
+            InstalledInputPortAudioWindowing::NotWindowed => {
+                self.pop_one_bag_off_the_mailbox(port, None)
+            }
+            // Nothing, and deliberately not the bag underneath: a port whose
+            // contract is unsettled has no exact size to cut one to.
+            InstalledInputPortAudioWindowing::AwaitingItsDeviceStreamFormat => Ok(None),
+            InstalledInputPortAudioWindowing::Windowed(stage) => {
+                self.next_window_out_of_the_stage(port, &stage)
+            }
         }
-
-        let required_bytes = candidate.body.len();
-        let mut ports = self.ports.lock();
-        let port_config = ports
-            .get_mut(port)
-            .ok_or_else(|| unknown_input_port(port))?;
-        port_config.staged_oversized = Some(candidate);
-        Ok(BoundedReadOutcome::NeedsLargerBuffer { required_bytes })
     }
 
     /// Pop the next queued frame for `port` per its read mode and strip its
@@ -1196,37 +1116,13 @@ impl InputMailboxesInner {
         }
     }
 
-    /// Read the next frame for `port` with no buffer bound — the host-internal
-    /// convenience over [`Self::read_raw_bounded`]. Returns
+    /// Read the next frame for `port` without deserializing it. Returns
     /// `Ok(Some((data, timestamp_ns)))` if data is available, `Ok(None)` if the
     /// mailbox is empty.
     pub fn read_raw(&self, port: &str) -> Result<Option<(Vec<u8>, i64)>> {
         Ok(self
-            .read_one_frame_unbounded(port)?
-            .map(|(data, timestamp_ns, _)| (data, timestamp_ns)))
-    }
-
-    /// The next frame for `port` with no buffer bound, and the link it arrived
-    /// on — the one read both public unbounded reads sit on.
-    ///
-    /// A `usize::MAX` cap always fits, so the grow-and-retry outcome cannot
-    /// arise here and is reported as the internal inconsistency it would be.
-    fn read_one_frame_unbounded(
-        &self,
-        port: &str,
-    ) -> Result<Option<(Vec<u8>, i64, Option<InboundLinkName>)>> {
-        match self.read_raw_bounded(port, usize::MAX)? {
-            BoundedReadOutcome::Empty => Ok(None),
-            BoundedReadOutcome::Frame {
-                data,
-                timestamp_ns,
-                inbound_link_name,
-            } => Ok(Some((data, timestamp_ns, inbound_link_name))),
-            BoundedReadOutcome::NeedsLargerBuffer { required_bytes } => Err(Error::Link(format!(
-                "read of input port '{port}': frame of {required_bytes} bytes did not fit an \
-                 unbounded buffer"
-            ))),
-        }
+            .next_bag_for_the_reader(port)?
+            .map(|bag| (bag.body, bag.first_sample_or_publish_timestamp_ns)))
     }
 
     /// The next frame for `port` with the inbound link it arrived on.
@@ -1249,7 +1145,11 @@ impl InputMailboxesInner {
         &self,
         port: &str,
     ) -> Result<Option<(Vec<u8>, i64, InboundLinkName)>> {
-        let Some((data, timestamp_ns, inbound_link_name)) = self.read_one_frame_unbounded(port)?
+        let Some(BagBodyForTheReader {
+            body: data,
+            first_sample_or_publish_timestamp_ns: timestamp_ns,
+            inbound_link_name,
+        }) = self.next_bag_for_the_reader(port)?
         else {
             return Ok(None);
         };
@@ -1483,16 +1383,6 @@ impl InputMailboxes {
     /// Read raw bytes and timestamp from the given port without
     /// deserialization. Returns `Ok(Some((data, timestamp_ns)))` on
     /// success, `Ok(None)` when the mailbox is empty.
-    ///
-    /// Sizes the receive buffer to
-    /// [`streamlib_ipc_types::DEFAULT_EXPECTED_PAYLOAD_BYTES`] and grows on
-    /// demand: a publisher under PowerOfTwo growth can deliver a frame larger
-    /// than any fixed buffer, so when the host reports the next frame is bigger
-    /// than `out_cap` (`out_len > buf.len()`, `has_data == true`) this resizes to
-    /// exactly that length and reads again. The host stashes the oversized frame
-    /// across the two calls (grow-and-retry), so nothing is dropped — retiring
-    /// the pre-#1421 `max_payload_for_port` up-front sizing that dropped every
-    /// frame past the authored budget.
     pub fn read_raw(&self, port: &str) -> Result<Option<(Vec<u8>, i64)>> {
         let Some(inner) = self.host_inner() else {
             return Ok(None);
@@ -3802,78 +3692,16 @@ mod tests {
         assert!(!mb.has_data("any"));
     }
 
-    /// Grow-and-retry staging (#1421): a frame larger than the caller's buffer
-    /// is NOT dropped — [`InputMailboxesInner::read_raw_bounded`] reports its
-    /// required length and stashes it, then re-delivers it intact on the retry
-    /// with a large-enough buffer.
-    ///
-    /// Fail-without-fix: revert `read_raw_bounded` to consume-then-error on a
-    /// too-small buffer and the second read returns `Empty` (the frame was
-    /// dropped) — the byte-for-byte re-delivery assertion fails.
-    #[test]
-    fn read_raw_bounded_stages_oversized_frame_and_redelivers() {
-        let inner = InputMailboxesInner::new();
-        inner.add_port("in", 8, ReadMode::ReadNextInOrder);
-
-        let body: Vec<u8> = (0..300u32).map(|i| (i % 251) as u8).collect();
-        let frame = wire_frame_stamping("in", 42, body.len() as u32, &body);
-        assert!(inner.route(frame), "frame must route to port 'in'");
-
-        // Buffer too small: the frame is reported (not consumed).
-        match inner.read_raw_bounded("in", 100).expect("bounded read") {
-            BoundedReadOutcome::NeedsLargerBuffer { required_bytes } => {
-                assert_eq!(required_bytes, body.len());
-            }
-            BoundedReadOutcome::Empty => panic!("expected NeedsLargerBuffer, got Empty"),
-            BoundedReadOutcome::Frame { .. } => {
-                panic!("expected NeedsLargerBuffer, but the too-small buffer delivered a Frame")
-            }
-        }
-
-        // A staged frame is data waiting. Before the readiness gate consulted
-        // it, a grow-and-retry frame with an empty mailbox behind it reported
-        // no data — so the reactive drain loop stopped and the frame sat until
-        // some later bag happened to wake the port.
-        assert!(
-            inner.has_data("in"),
-            "a frame staged by a bounded read is still waiting for its retry"
-        );
-        assert!(inner.any_port_has_data());
-
-        // Retry with a large-enough buffer: the SAME frame is re-delivered.
-        match inner
-            .read_raw_bounded("in", body.len())
-            .expect("bounded read retry")
-        {
-            BoundedReadOutcome::Frame {
-                data, timestamp_ns, ..
-            } => {
-                assert_eq!(data, body, "staged frame must re-deliver byte-for-byte");
-                assert_eq!(timestamp_ns, 42);
-            }
-            _ => panic!("expected the staged frame to be re-delivered"),
-        }
-
-        // The staged frame was consumed exactly once — the mailbox is now empty.
-        assert!(!inner.has_data("in"));
-        assert!(matches!(
-            inner
-                .read_raw_bounded("in", body.len())
-                .expect("bounded read"),
-            BoundedReadOutcome::Empty
-        ));
-    }
-
     /// The payload length is the last wire-derived number the read path trusts,
     /// and a frame claiming more than it carries has no safe default — it is
     /// unusable, so it must surface as a typed error naming the port and both
     /// numbers rather than slicing past the frame.
     ///
-    /// Fail-without-fix: drop the bound and `read_raw_bounded` slices
+    /// Fail-without-fix: drop the bound and the read slices
     /// `[76..76 + 4096]` out of an 84-byte frame — "range end index 4172 out of
     /// range for slice of length 84".
     #[test]
-    fn read_raw_bounded_rejects_a_frame_stamping_more_payload_than_it_carries() {
+    fn a_read_rejects_a_frame_stamping_more_payload_than_it_carries() {
         const STAMPED: u32 = 4096;
         const CARRIED: usize = 8;
 
@@ -3883,7 +3711,7 @@ mod tests {
         let malformed = wire_frame_stamping("in", 42, STAMPED, &[0u8; CARRIED]);
         assert!(inner.route(malformed), "frame must route to port 'in'");
 
-        let err = match inner.read_raw_bounded("in", usize::MAX) {
+        let err = match inner.read_raw("in") {
             Err(e) => e,
             Ok(_) => panic!("a frame stamping more than it carries must not read"),
         };
@@ -3909,7 +3737,7 @@ mod tests {
             );
         }
 
-        // The malformed frame is dropped, not staged — the port keeps serving.
+        // The malformed frame is dropped — the port keeps serving.
         let body = [1u8, 2, 3, 4];
         let well_formed = wire_frame_stamping("in", 43, body.len() as u32, &body);
         assert!(
@@ -3917,18 +3745,12 @@ mod tests {
             "well-formed frame must route to port 'in'"
         );
 
-        match inner
-            .read_raw_bounded("in", usize::MAX)
-            .expect("bounded read")
-        {
-            BoundedReadOutcome::Frame {
-                data, timestamp_ns, ..
-            } => {
-                assert_eq!(data, body, "a well-formed frame still delivers intact");
-                assert_eq!(timestamp_ns, 43);
-            }
-            _ => panic!("expected the well-formed frame to deliver"),
-        }
+        let (data, timestamp_ns) = inner
+            .read_raw("in")
+            .expect("read")
+            .expect("the well-formed frame delivers");
+        assert_eq!(data, body, "a well-formed frame still delivers intact");
+        assert_eq!(timestamp_ns, 43);
     }
 
     /// A frame may carry more bytes than its header stamps — the wire
@@ -3939,7 +3761,7 @@ mod tests {
     /// slicing (or truncating) to the stamped length and the delivered
     /// payload grows by the slack bytes — the exact-length assertion fails.
     #[test]
-    fn read_raw_bounded_delivers_exactly_the_stamped_payload_from_an_over_carrying_frame() {
+    fn a_read_delivers_exactly_the_stamped_payload_from_an_over_carrying_frame() {
         const STAMPED: usize = 200;
         const CARRIED: usize = 300;
 
@@ -3950,35 +3772,24 @@ mod tests {
         let frame = wire_frame_stamping("in", 77, STAMPED as u32, &body);
         assert!(inner.route(frame), "frame must route to port 'in'");
 
-        match inner
-            .read_raw_bounded("in", usize::MAX)
-            .expect("bounded read")
-        {
-            BoundedReadOutcome::Frame {
-                data, timestamp_ns, ..
-            } => {
-                assert_eq!(
-                    data.len(),
-                    STAMPED,
-                    "payload must stop at the stamped length"
-                );
-                assert_eq!(
-                    data[..],
-                    body[..STAMPED],
-                    "payload must be the stamped prefix"
-                );
-                assert_eq!(timestamp_ns, 77);
-            }
-            _ => panic!("expected the over-carrying frame to deliver its stamped payload"),
-        }
+        let (data, timestamp_ns) = inner
+            .read_raw("in")
+            .expect("read")
+            .expect("the over-carrying frame delivers its stamped payload");
+        assert_eq!(
+            data.len(),
+            STAMPED,
+            "payload must stop at the stamped length"
+        );
+        assert_eq!(
+            data[..],
+            body[..STAMPED],
+            "payload must be the stamped prefix"
+        );
+        assert_eq!(timestamp_ns, 77);
 
-        // The slack was dropped with the frame, not staged — the port is empty.
-        assert!(matches!(
-            inner
-                .read_raw_bounded("in", usize::MAX)
-                .expect("bounded read"),
-            BoundedReadOutcome::Empty
-        ));
+        // The slack was dropped with the frame — the port is empty.
+        assert!(inner.read_raw("in").expect("read").is_none());
     }
 
     /// A malformed length prefix must not deliver a frame to a real mailbox.

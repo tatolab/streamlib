@@ -1520,9 +1520,8 @@ fn wire_subprocess_dest(
     link_id: &LinkUniqueId,
     audio_windowing: Option<AudioWindowDeclarationOfAnInputPort>,
 ) -> Result<Option<Arc<OutOfProcessLinkWireReply>>> {
-    // The dest reader carries no payload-size hint: the subprocess read buffer
-    // starts at the default and grows to the frame it actually receives
-    // (PowerOfTwo segment growth on the publisher side, grow-and-retry on read).
+    // The dest reader carries no payload-size hint: the publisher's segment
+    // grows to whatever frame it sends, and the reader copies each out whole.
     // The drain order is the port's own delivery profile's, resolved host-side.
     // The creation depth is what the child opens the service with, and the ring
     // depth what its subscriber takes — the windowed ring for a windowed port,

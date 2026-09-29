@@ -63,7 +63,7 @@ pub use iceoryx2_domain_for_this_test_process::{
     Iceoryx2DomainForThisTestProcess, create_iceoryx2_node_for_this_test_process,
     iceoryx2_domain_for_this_test_process,
 };
-pub use input::{BoundedReadOutcome, InputMailboxes, InputMailboxesInner};
+pub use input::{InputMailboxes, InputMailboxesInner};
 pub use loss_counters::{
     DiscardedSampleCountsByInboundLink, DroppedBagCountsByInboundLink,
     MeshHopDroppedBagCountsByRemoteInboundLink, RefusedBagCountsByOutputPort,
