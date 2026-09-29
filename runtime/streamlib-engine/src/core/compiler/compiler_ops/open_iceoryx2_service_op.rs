@@ -137,23 +137,15 @@ pub fn open_iceoryx2_service(
 
     let channel_service_name = channel_service_name(&from_port)?;
 
-    // A notifier aimed at a destination that never drains its listener fills
-    // that listener's queue and then silently stops being delivered for the
-    // rest of the run, one iceoryx2 warning per frame (#1764). A helper's own
-    // input wiring opens a listener whatever mode it runs in and refuses an
-    // empty name, so a helper destination is always handed the service and
-    // only its sources go without.
-    let sources_notify_the_destination = destination_consumes_notifications(graph, &dest_proc_id);
-    let notify_service_name_for_the_destination = (sources_notify_the_destination
-        || dest_is_subprocess)
-        .then(|| notify_service_name_for(&dest_proc_id));
-    let notify_service_name_for_the_source = notify_service_name_for_the_destination
-        .as_deref()
-        .filter(|_| sources_notify_the_destination);
+    // Every destination is notified whatever mode it runs in. One that never
+    // drains its listener costs its sources a counter increment per frame:
+    // iceoryx2 counts repeat notifications in shared memory and sends no
+    // further wakeup until the listener drains.
+    let notify_service_name_for_the_destination = notify_service_name_for(&dest_proc_id);
 
     tracing::info!(
         channel = %channel_service_name,
-        notify = notify_service_name_for_the_source.unwrap_or("<destination drains no listener>"),
+        notify = %notify_service_name_for_the_destination,
         "Opening iceoryx2 channel: {} -> ({}:{}) [{}] (source_subprocess={}, dest_subprocess={}, \
          source_on_another_runtime={})",
         from_port,
@@ -187,13 +179,8 @@ pub fn open_iceoryx2_service(
         channel_sizing.max_subscribers,
         channel_sizing.channel_service_creation_depth,
     )?;
-    let notify_service_for_the_destination = notify_service_name_for_the_destination
-        .as_deref()
-        .map(|name| iceoryx2_node.open_or_create_notify_service(name, max_notifiers))
-        .transpose()?;
-    let notify_service_for_the_source = notify_service_for_the_destination
-        .as_ref()
-        .filter(|_| sources_notify_the_destination);
+    let notify_service_for_the_destination = iceoryx2_node
+        .open_or_create_notify_service(&notify_service_name_for_the_destination, max_notifiers)?;
 
     // Every out-of-process end this link was handed to and has not answered
     // for. Empty is a link wholly in the app process, or one carried in a far
@@ -217,7 +204,7 @@ pub fn open_iceoryx2_service(
                 source_proc_id,
                 &source_port,
                 &channel_service_name,
-                notify_service_name_for_the_source.unwrap_or(""),
+                &notify_service_name_for_the_destination,
                 DEFAULT_EXPECTED_PAYLOAD_BYTES,
                 channel_ceiling_bytes,
                 channel_sizing,
@@ -233,7 +220,7 @@ pub fn open_iceoryx2_service(
                 &source_port,
                 link_id,
                 &service,
-                notify_service_for_the_source,
+                &notify_service_for_the_destination,
                 ChannelEgressConfig {
                     service_name: channel_service_name.clone(),
                     trust_tier,
@@ -255,9 +242,7 @@ pub fn open_iceoryx2_service(
             &channel_service_name,
             &inbound_link_name_of(&from_port, &channel_service_name),
             &the_clock_this_links_stamps_are_taken_on,
-            notify_service_name_for_the_destination
-                .as_deref()
-                .unwrap_or(""),
+            &notify_service_name_for_the_destination,
             dest_input_port_delivery,
             channel_sizing,
             max_notifiers,
@@ -276,7 +261,7 @@ pub fn open_iceoryx2_service(
             the_clock_this_links_stamps_are_taken_on.clone(),
             dest_input_port_delivery,
             &service,
-            notify_service_for_the_destination.as_ref(),
+            &notify_service_for_the_destination,
             dest_audio_windowing,
         )?;
     }
@@ -288,7 +273,7 @@ pub fn open_iceoryx2_service(
     if source_on_this_runtime.is_none() {
         mesh_link_ingress_table.note_how_a_links_destination_is_woken(
             link_id,
-            notify_service_name_for_the_source.map(str::to_string),
+            Some(notify_service_name_for_the_destination),
             where_a_remote_links_hop_loss_is_counted(graph, &dest_proc_id, link_id),
         );
     }
@@ -940,28 +925,6 @@ fn destination_max_notifiers(graph: &mut Graph, dest_proc_id: &ProcessorUniqueId
     Ok(MAX_INBOUND_LINKS_PER_DESTINATION)
 }
 
-/// Whether the destination ever drains the listener its sources would notify —
-/// true of a reactive one only.
-///
-/// A helper host reports `Manual` for its own thread whatever the class
-/// declared, so a destination out of process is asked through its envelope.
-fn destination_consumes_notifications(graph: &mut Graph, dest_proc_id: &ProcessorUniqueId) -> bool {
-    if let Some(link_wiring) = out_of_process_link_wiring_of(graph, dest_proc_id) {
-        return link_wiring.far_side_process_execution().is_reactive();
-    }
-    // A destination the graph cannot resolve is wired as before; the wiring
-    // path itself reports the missing processor.
-    get_single_processor(graph, dest_proc_id)
-        .map(|dest_processor| {
-            dest_processor
-                .lock()
-                .execution_config()
-                .execution
-                .is_reactive()
-        })
-        .unwrap_or(true)
-}
-
 /// The drain order and ring depth of one destination input port, from the
 /// delivery profile that port declares.
 ///
@@ -1178,9 +1141,6 @@ fn get_single_processor(
 /// Install (once) the source's single channel publisher, append this link's
 /// destination notifier onto the Rust source's [`OutputWriterInner`], and
 /// publish its loss counts onto its graph node.
-///
-/// `notify_service` is `None` when the destination never drains a listener, and
-/// the link is then wired for data only.
 #[allow(clippy::too_many_arguments)]
 fn wire_rust_source(
     graph: &mut Graph,
@@ -1189,7 +1149,7 @@ fn wire_rust_source(
     source_port: &str,
     link_id: &LinkUniqueId,
     service: &Iceoryx2Service,
-    notify_service: Option<&Iceoryx2NotifyService>,
+    notify_service: &Iceoryx2NotifyService,
     egress_config: ChannelEgressConfig,
 ) -> Result<()> {
     let source_guard = source_processor.lock();
@@ -1206,10 +1166,8 @@ fn wire_rust_source(
         );
     }
 
-    let notifier = notify_service
-        .map(|notify_service| notify_service.create_notifier())
-        .transpose()?;
-    output_inner.add_channel_link(source_port, link_id.as_str(), notifier);
+    let notifier = notify_service.create_notifier()?;
+    output_inner.add_channel_link(source_port, link_id.as_str(), Some(notifier));
     publish_loss_counts_on_processor_node(graph, source_proc_id, &source_guard);
     Ok(())
 }
@@ -1220,8 +1178,7 @@ fn wire_rust_source(
 ///
 /// A plain port's subscriber ring and mailbox take the port's own delivery
 /// resolution. A windowed port's subscriber takes the windowed ring and its
-/// mailbox is sized from its contract. `notify_service` is `None` when this
-/// destination never drains a listener, and no listener is created for it.
+/// mailbox is sized from its contract.
 #[allow(clippy::too_many_arguments)]
 fn wire_rust_dest(
     graph: &mut Graph,
@@ -1233,7 +1190,7 @@ fn wire_rust_dest(
     stamp_clock: TheClockAnInboundLinksStampsAreTakenOn,
     dest_input_port_delivery: DeliveryResolution,
     service: &Iceoryx2Service,
-    notify_service: Option<&Iceoryx2NotifyService>,
+    notify_service: &Iceoryx2NotifyService,
     audio_windowing: Option<AudioWindowDeclarationOfAnInputPort>,
 ) -> Result<()> {
     let dest_guard = dest_processor.lock();
@@ -1287,12 +1244,10 @@ fn wire_rust_dest(
         dest_port
     );
 
-    if let Some(notify_service) = notify_service {
-        if !input_inner.has_listener() {
-            let listener = notify_service.create_listener()?;
-            input_inner.set_listener(listener);
-            tracing::debug!("Created listener for destination on its notify service");
-        }
+    if !input_inner.has_listener() {
+        let listener = notify_service.create_listener()?;
+        input_inner.set_listener(listener);
+        tracing::debug!("Created listener for destination on its notify service");
     }
     publish_loss_counts_on_processor_node(graph, dest_proc_id, &dest_guard);
     publish_device_matched_audio_window_contracts_on_destination_node(
@@ -1439,9 +1394,9 @@ fn publish_device_matched_audio_window_contracts_on_destination_node(
 /// from the envelope. One entry per link — the far side installs the single
 /// publisher once (keyed by source port) and appends a notifier per entry.
 ///
-/// An empty `notify_service_name` is the wire's way of saying the destination
-/// drains no listener, so the far side opens no notifier for this link. Every
-/// SDK reads it that way.
+/// An empty `notify_service_name` is the wire's way of saying no listener waits
+/// on the other end — the mesh's egress, which polls — so the far side opens no
+/// notifier for this link. Every SDK reads it that way.
 ///
 /// Hands back the cell this end's answer will land in, or `None` where the
 /// entry rides the far side's startup envelope instead and its `ready`
@@ -2402,7 +2357,7 @@ mod tests {
             .clone();
 
         let (channel, notify_service) =
-            open_test_link_services("mixed-endpoints", true, DeliveryProfile::ORDERED_DEPTH);
+            open_test_link_services("mixed-endpoints", DeliveryProfile::ORDERED_DEPTH);
         wire_rust_source(
             &mut graph,
             &source_id.as_str().into(),
@@ -2410,7 +2365,7 @@ mod tests {
             "out1",
             &link_id,
             &channel,
-            notify_service.as_ref(),
+            &notify_service,
             ChannelEgressConfig {
                 service_name: unique_service_name("mixed-endpoints"),
                 trust_tier: ChannelTrustTier::UntrustedSession,
@@ -2508,11 +2463,10 @@ mod tests {
     /// channel created `channel_service_creation_depth` deep.
     fn open_test_link_services(
         tag: &str,
-        destination_consumes_notifications: bool,
         channel_service_creation_depth: usize,
     ) -> (
         crate::iceoryx2::Iceoryx2Service,
-        Option<crate::iceoryx2::Iceoryx2NotifyService>,
+        crate::iceoryx2::Iceoryx2NotifyService,
     ) {
         let node = crate::iceoryx2::Iceoryx2Node::for_this_test_process();
         let channel = node
@@ -2522,65 +2476,10 @@ mod tests {
                 channel_service_creation_depth,
             )
             .expect("the channel service must open");
-        let notify = destination_consumes_notifications.then(|| {
-            node.open_or_create_notify_service(&unique_service_name(&format!("{tag}/notify")), 1)
-                .expect("the notify service must open")
-        });
+        let notify = node
+            .open_or_create_notify_service(&unique_service_name(&format!("{tag}/notify")), 1)
+            .expect("the notify service must open");
         (channel, notify)
-    }
-
-    /// The decision behind #1764: only a destination that will actually wait on
-    /// its listener is notified.
-    ///
-    /// Manual and Continuous destinations drive themselves and poll their
-    /// mailboxes — a notifier aimed at one fills its listener and then floods
-    /// the terminal for the rest of the run. That holds out of process too, where
-    /// the host reports `Manual` for its own thread and the envelope says what
-    /// the child runs. Revert this predicate to a constant `true` and every
-    /// `DisplayWindow`-shaped sink is back to that; answer `true` for every
-    /// helper again and a `continuous` Python sink is.
-    #[test]
-    fn only_a_reactive_destination_consumes_notifications_in_or_out_of_process() {
-        use crate::core::test_support::{MockInputOnlyProcessor, MockReactiveInputOnlyProcessor};
-
-        let mut graph = Graph::new();
-
-        let self_driven_id = add_mock_input_only(&mut graph);
-        attach_mock_instance::<MockInputOnlyProcessor::Processor>(&mut graph, &self_driven_id);
-        assert!(
-            !destination_consumes_notifications(&mut graph, &self_driven_id.as_str().into()),
-            "a manual destination never drains its listener, so it must get no notifier"
-        );
-
-        let woken_id = add_mock_reactive_input_only(&mut graph);
-        attach_mock_instance::<MockReactiveInputOnlyProcessor::Processor>(&mut graph, &woken_id);
-        assert!(
-            destination_consumes_notifications(&mut graph, &woken_id.as_str().into()),
-            "a reactive destination waits on its listener fd and must keep its notifier"
-        );
-
-        for (far_side_process_execution, consumes) in [
-            (ProcessExecution::Reactive, true),
-            (ProcessExecution::Continuous { interval_ms: 0 }, false),
-            (ProcessExecution::Manual, false),
-        ] {
-            let helper_hosted_id = add_mock_input_only(&mut graph);
-            attach_processor_instance(
-                &mut graph,
-                &helper_hosted_id,
-                ProcessorInstance::new(Box::new(
-                    OutOfCrateHelperSpawnHostStub::with_a_far_side_past_its_setup_command(
-                        RecordingOutOfProcessFarSideLinkDelivery::default(),
-                        far_side_process_execution,
-                    ),
-                )),
-            );
-            assert_eq!(
-                destination_consumes_notifications(&mut graph, &helper_hosted_id.as_str().into()),
-                consumes,
-                "a helper destination whose child runs {far_side_process_execution:?}"
-            );
-        }
     }
 
     /// What one helper destination was wired with, beside what each of its two
@@ -2668,18 +2567,16 @@ mod tests {
         }
     }
 
-    /// A helper destination that never drains its listener is notified by no
-    /// source, in the app process or out of it — yet it is still handed the
-    /// service name, because its own input wiring opens a listener whatever its
-    /// mode and refuses an empty name.
+    /// A helper destination is notified by both kinds of source whatever mode
+    /// its child runs in, on the service its own wiring opens its listener on.
     ///
-    /// Fail-without-fix: treat every helper destination as a consumer again and
-    /// both sources notify a `continuous` sink that never drains; blank the name
-    /// for both ends of the link and the helper's input wiring refuses it.
+    /// Fail-without-fix: notify only a reactive destination again and a
+    /// `continuous` or `manual` helper's app-process source holds no notifier
+    /// while its helper source is handed an empty name.
     #[test]
-    fn a_helper_destination_that_never_drains_is_notified_by_no_source_and_still_opens_its_listener()
-     {
+    fn a_helper_destination_is_notified_by_both_kinds_of_source_whatever_its_child_runs() {
         for far_side_process_execution in [
+            ProcessExecution::Reactive,
             ProcessExecution::Continuous { interval_ms: 0 },
             ProcessExecution::Manual,
         ] {
@@ -2687,52 +2584,34 @@ mod tests {
                 far_side_process_execution,
             );
             assert_eq!(
-                wired.notifiers_the_engine_source_holds, 0,
-                "an app-process source must hold no notifier aimed at a {far_side_process_execution:?} helper"
+                wired.notifiers_the_engine_source_holds, 1,
+                "an app-process source must notify a {far_side_process_execution:?} helper"
             );
-            assert_eq!(
+            assert_ne!(
                 wired.dest_notify_service_name_the_helper_source_was_handed,
                 serde_json::json!(""),
-                "a helper source must be told to open no notifier for a {far_side_process_execution:?} helper"
+                "a helper source must notify a {far_side_process_execution:?} helper"
             );
-            for handed in &wired.notify_service_names_the_destination_was_handed {
-                assert!(
-                    handed.as_str().is_some_and(|name| !name.is_empty()),
-                    "the destination's own wiring must carry a real name; got {handed}"
-                );
-            }
+            assert_eq!(
+                wired.notify_service_names_the_destination_was_handed,
+                vec![
+                    wired
+                        .dest_notify_service_name_the_helper_source_was_handed
+                        .clone();
+                    2
+                ],
+                "a helper source notifies the service a {far_side_process_execution:?} helper \
+                 listens on"
+            );
         }
     }
 
-    /// The same two sources into a reactive helper destination still notify it,
-    /// on the service its own wiring opens its listener on.
-    #[test]
-    fn a_reactive_helper_destination_is_still_notified_by_both_kinds_of_source() {
-        let wired = wire_both_kinds_of_source_into_a_helper_destination_driven_in(
-            ProcessExecution::Reactive,
-        );
-        assert_eq!(wired.notifiers_the_engine_source_holds, 1);
-        assert_eq!(
-            wired.notify_service_names_the_destination_was_handed,
-            vec![
-                wired
-                    .dest_notify_service_name_the_helper_source_was_handed
-                    .clone();
-                2
-            ],
-            "the helper source notifies the service the destination listens on"
-        );
-        assert_ne!(
-            wired.dest_notify_service_name_the_helper_source_was_handed,
-            serde_json::json!("")
-        );
-    }
-
-    /// Wire one Rust→Rust link end to end the way the compiler op does, with or
-    /// without the notify service, and hand back the two sides' iceoryx2 state.
+    /// Wire one Rust→Rust link end to end the way the compiler op does, into a
+    /// reactive or a self-driven destination, and hand back the two sides'
+    /// iceoryx2 state.
     fn wire_one_test_link<Destination>(
         tag: &str,
-        destination_consumes_notifications: bool,
+        destination_is_reactive: bool,
     ) -> (
         Arc<crate::iceoryx2::OutputWriterInner>,
         Arc<crate::iceoryx2::InputMailboxesInner>,
@@ -2749,7 +2628,7 @@ mod tests {
             attach_mock_instance::<MockOutputOnlyProcessor::Processor>(&mut graph, &source_id);
         let source_output = source_output.expect("an output-only mock holds an output writer");
 
-        let dest_id = if destination_consumes_notifications {
+        let dest_id = if destination_is_reactive {
             add_mock_reactive_input_only(&mut graph)
         } else {
             add_mock_input_only(&mut graph)
@@ -2758,11 +2637,8 @@ mod tests {
         let (dest, _, dest_input) = attach_mock_instance::<Destination>(&mut graph, &dest_id);
         let dest_input = dest_input.expect("an input-only mock holds input mailboxes");
 
-        let (channel, notify_service) = open_test_link_services(
-            tag,
-            destination_consumes_notifications,
-            DeliveryProfile::ORDERED_DEPTH,
-        );
+        let (channel, notify_service) =
+            open_test_link_services(tag, DeliveryProfile::ORDERED_DEPTH);
         let link_id: LinkUniqueId = format!("L-{tag}").as_str().into();
 
         wire_rust_source(
@@ -2772,7 +2648,7 @@ mod tests {
             "out1",
             &link_id,
             &channel,
-            notify_service.as_ref(),
+            &notify_service,
             ChannelEgressConfig {
                 service_name: unique_service_name(tag),
                 trust_tier: ChannelTrustTier::Trusted,
@@ -2791,7 +2667,7 @@ mod tests {
             TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             DeliveryProfile::Newest.resolve(),
             &channel,
-            notify_service.as_ref(),
+            &notify_service,
             None,
         )
         .expect("the destination side wires");
@@ -2827,7 +2703,8 @@ mod tests {
             let source_id: ProcessorUniqueId = source_id.as_str().into();
             let dest_id: ProcessorUniqueId = dest_id.as_str().into();
 
-            let (channel, _) = open_test_link_services(tag, false, DeliveryProfile::ORDERED_DEPTH);
+            let (channel, notify_service) =
+                open_test_link_services(tag, DeliveryProfile::ORDERED_DEPTH);
             let link_id: LinkUniqueId = format!("L-{tag}").as_str().into();
             wire_rust_source(
                 &mut graph,
@@ -2836,7 +2713,7 @@ mod tests {
                 "out1",
                 &link_id,
                 &channel,
-                None,
+                &notify_service,
                 ChannelEgressConfig {
                     service_name: unique_service_name(tag),
                     trust_tier: ChannelTrustTier::Trusted,
@@ -2855,7 +2732,7 @@ mod tests {
                 TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
                 dest_delivery,
                 &channel,
-                None,
+                &notify_service,
                 None,
             )
             .expect("the destination side wires");
@@ -3080,54 +2957,39 @@ mod tests {
         );
     }
 
-    /// The decision reaches the ports: no notify service means the source
-    /// installs its channel publisher and no notifier, and the destination
-    /// subscribes with no listener. Data wiring is untouched either way — the
-    /// frames still flow, which is why #1764 cost terminal output and not video.
+    /// Every destination is notified and holds a listener, a self-driven one
+    /// that never drains it included: iceoryx2 counts repeat notifications in
+    /// shared memory and sends no further wakeup until the listener drains, so
+    /// an undrained listener costs its source nothing but that count.
+    ///
+    /// Fail-without-fix: notify only a reactive destination again and the
+    /// `manual` destination's link carries no notifier and opens no listener.
     #[test]
-    fn a_destination_that_consumes_nothing_is_wired_for_data_only() {
-        use crate::core::test_support::MockInputOnlyProcessor;
+    fn a_destination_is_notified_and_listens_whatever_it_runs() {
+        use crate::core::test_support::{MockInputOnlyProcessor, MockReactiveInputOnlyProcessor};
 
-        let (source_output, dest_input) =
-            wire_one_test_link::<MockInputOnlyProcessor::Processor>("data-only", false);
-
-        assert!(
-            source_output.has_channel_publisher("out1"),
-            "the data path must be wired exactly as before"
-        );
-        assert!(
-            dest_input.has_port("in1"),
-            "the destination's mailbox must be wired exactly as before"
-        );
-        assert!(
-            !dest_input.has_listener(),
-            "a destination that never drains must hold no listener at all"
-        );
-        assert_eq!(
-            source_output.channel_notifier_count("out1"),
-            0,
-            "the source must hold no notifier aimed at a destination that never drains"
-        );
-    }
-
-    /// The same seam with a consuming destination still opens both ends —
-    /// the fix removes notifiers only where nobody reads them.
-    #[test]
-    fn a_destination_that_consumes_notifications_keeps_its_notifier_and_listener() {
-        use crate::core::test_support::MockReactiveInputOnlyProcessor;
-
-        let (source_output, dest_input) =
-            wire_one_test_link::<MockReactiveInputOnlyProcessor::Processor>("notified", true);
-
-        assert_eq!(
-            source_output.channel_notifier_count("out1"),
-            1,
-            "a reactive destination's link must still carry its notifier"
-        );
-        assert!(
-            dest_input.has_listener(),
-            "a reactive destination must still hold the listener its runner waits on"
-        );
+        for (tag, (source_output, dest_input)) in [
+            (
+                "self-driven",
+                wire_one_test_link::<MockInputOnlyProcessor::Processor>("self-driven", false),
+            ),
+            (
+                "reactive",
+                wire_one_test_link::<MockReactiveInputOnlyProcessor::Processor>("reactive", true),
+            ),
+        ] {
+            assert!(source_output.has_channel_publisher("out1"));
+            assert!(dest_input.has_port("in1"));
+            assert_eq!(
+                source_output.channel_notifier_count("out1"),
+                1,
+                "a {tag} destination's link must carry its notifier"
+            );
+            assert!(
+                dest_input.has_listener(),
+                "a {tag} destination must hold the listener its sources notify"
+            );
+        }
     }
 
     fn add_mock_output_only(graph: &mut Graph) -> String {
@@ -3910,11 +3772,8 @@ mod tests {
         >(&mut graph, &dest_unique_id.to_string());
         let dest_input = dest_input.expect("a windowed consumer holds input mailboxes");
 
-        let (channel, _) = open_test_link_services(
-            "match-device-graph",
-            false,
-            WINDOWED_PORT_SUBSCRIBER_RING_DEPTH,
-        );
+        let (channel, notify_service) =
+            open_test_link_services("match-device-graph", WINDOWED_PORT_SUBSCRIBER_RING_DEPTH);
         wire_rust_dest(
             &mut graph,
             &dest_unique_id,
@@ -3925,7 +3784,7 @@ mod tests {
             TheClockAnInboundLinksStampsAreTakenOn::ThisMachine,
             DeliveryProfile::Ordered.resolve(),
             &channel,
-            None,
+            &notify_service,
             Some(AudioWindowDeclarationOfAnInputPort::MatchesItsProcessorsDeviceStream),
         )
         .expect("a sentinel wires rather than refusing");

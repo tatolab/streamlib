@@ -51,9 +51,9 @@ struct ALinkFromAnotherRuntime {
     /// means the ingress *and* the local destination, never one of the two.
     its_destination_is_open: bool,
     /// The notify service the destination waits on, named by the wiring op —
-    /// `None` for a destination that drains no listener. The name rather than
-    /// a notifier: an iceoryx2 notifier is `!Send`, so it is minted on the
-    /// thread that hands it to the ingress.
+    /// `None` until it does, and for a destination with no listener to wake.
+    /// The name rather than a notifier: an iceoryx2 notifier is `!Send`, so it
+    /// is minted on the thread that hands it to the ingress.
     notify_service_name: Option<String>,
     /// Where this link's hop loss is counted — the counts on its destination
     /// processor's node, which `graph` renders. `None` until the wiring op
@@ -206,8 +206,7 @@ impl MeshLinkIngressTable {
     /// hop loss is counted, both named by the wiring op once the destination's
     /// side of the channel is open.
     ///
-    /// A `None` notify service is a destination that drains no listener — a
-    /// `manual` processor polls its own ports and is woken by nobody. The
+    /// A `None` notify service is a destination with no listener to wake. The
     /// counts are the destination processor's own, which is what puts this
     /// link's hop loss on that processor's node in `graph`.
     ///

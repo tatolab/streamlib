@@ -1680,12 +1680,12 @@ sys.exit(0)
         }
     }
 
-    /// The engine decides whether a helper destination's sources notify it from
-    /// the envelope, and this host reports `Manual` whatever the class declared,
-    /// so the envelope has to carry the child's own mode.
+    /// The child is told to run its loop in the mode the envelope carries, and
+    /// this host reports `Manual` for its own thread whatever the class
+    /// declared, so the envelope has to carry the child's own mode.
     ///
     /// Fail-without-fix: build the envelope as `Reactive` regardless and a
-    /// `continuous` helper with an input gets a notifier it never drains again.
+    /// `continuous` helper is told to run a reactive loop.
     #[test]
     fn the_wiring_envelope_carries_the_mode_the_child_drives_its_processor_in() {
         let _ = captured_launch_environment().set(HelperProcessLaunchEnvironment {

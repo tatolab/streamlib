@@ -298,15 +298,14 @@ def test_a_helper_opens_the_channel_at_its_creation_depth_and_reads_at_its_own_p
     assert every_bag_read(deep_destination) == list(range(bags_published_while_neither_reads))
 
 
-def test_a_helper_publishes_to_a_destination_that_wants_no_notification():
-    """An empty `dest_notify_service_name` is the engine saying this
-    destination never drains a listener — a self-driven sink like
-    `DisplayWindow`, which polls its mailboxes from its own render thread.
+def test_a_helper_publishes_with_no_notifier_where_no_listener_waits():
+    """An empty `dest_notify_service_name` is the engine saying no listener
+    waits on the other end — the mesh's egress, pulling a port nothing local
+    reads, which polls its subscriber.
 
-    The helper must wire the link for data only. Before #1764 it opened a
-    notify service unconditionally, so the empty name failed the child's whole
-    `setup` on an invalid iceoryx2 service name — reached through the MVP
-    graph's own `helper -> DisplayWindow` link.
+    The helper must wire the link for data only: a notify service opened on
+    the empty name fails the child's whole `setup` on an invalid iceoryx2
+    service name.
     """
     from streamlib import ProcessorLinkDataAccess
 

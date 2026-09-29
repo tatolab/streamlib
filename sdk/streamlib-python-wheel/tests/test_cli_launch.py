@@ -559,10 +559,12 @@ def assert_the_window_showed_live_video(node: LaunchedNode, what_ran: str) -> No
         f"{SCAFFOLD_OBSERVATION_WINDOW_SECONDS}s — that is a slideshow, not live video"
     )
     # The MVP minute is a terminal as well as a window. `DisplayWindow` drives
-    # itself and polls its mailboxes, so it drains no listener; a notifier
-    # pointed at it fills that listener and then fails delivery on every frame,
-    # each failure a kilobytes-wide iceoryx2 dump. Measured at 303 warnings and
-    # 2.4MB over this graph before #1764.
+    # itself and polls its mailboxes, so it never drains the listener its
+    # source notifies. iceoryx2 counts repeat notifications and sends no further
+    # wakeup until the listener drains, so nothing fails; a transport queuing a
+    # wakeup per send fills that listener and then fails delivery on every
+    # frame, each failure a kilobytes-wide iceoryx2 dump — measured at 303
+    # warnings and 2.4MB over this graph (#1764).
     #
     # The observation window is what makes this assertable: saturation takes
     # ~280 notifications, and one notification rides every frame the SOURCE

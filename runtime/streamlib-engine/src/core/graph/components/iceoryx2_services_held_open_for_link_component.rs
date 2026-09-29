@@ -16,7 +16,6 @@ use crate::iceoryx2::{Iceoryx2NotifyService, Iceoryx2Service};
 pub struct Iceoryx2ServicesHeldOpenForLinkComponent {
     /// The data service of the link's source output port.
     pub channel_data_service: Iceoryx2Service,
-    /// The destination's notify service, absent when the destination drains no
-    /// listener.
-    pub destination_notify_service: Option<Iceoryx2NotifyService>,
+    /// The destination's notify service.
+    pub destination_notify_service: Iceoryx2NotifyService,
 }
