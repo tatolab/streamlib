@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.45](https://github.com/tatolab/streamlib/compare/v0.26.44...v0.26.45) (2026-09-29)
+
+
+### Bug Fixes
+
+* **extension:** the MoQ subscriber reads every group it is handed to its end ([#2534](https://github.com/tatolab/streamlib/issues/2534)) ([275dda8](https://github.com/tatolab/streamlib/commit/275dda80a762492d92d21cb4250a524299426c4a))
+
 ## [0.26.44](https://github.com/tatolab/streamlib/compare/v0.26.43...v0.26.44) (2026-09-28)
 
 
