@@ -501,6 +501,30 @@ fn every_token_under(session: &zenoh::Session, key: &str) -> BTreeSet<String> {
         .collect()
 }
 
+/// Look under `key` until the tokens there hold `what_to_wait_for`, and return
+/// that look; fail naming the last look if they never do.
+///
+/// A session that just opened can answer before it has learned the peers'
+/// liveliness, so a single look can see fewer tokens than the mesh holds.
+fn wait_until_the_tokens_under(
+    session: &zenoh::Session,
+    key: &str,
+    described: &str,
+    what_to_wait_for: impl Fn(&BTreeSet<String>) -> bool,
+) -> BTreeSet<String> {
+    let gave_up_at = Instant::now() + HOW_LONG_AN_ARM_WAITS;
+    loop {
+        let tokens = every_token_under(session, key);
+        if what_to_wait_for(&tokens) {
+            return tokens;
+        }
+        if Instant::now() >= gave_up_at {
+            panic!("timed out waiting for {described}; the last look under {key} saw {tokens:?}");
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 /// What one reader last reported about what reached it.
 ///
 /// `graph`'s own `metrics.mesh_hop_dropped_bags_by_link` for the hop, and this
@@ -731,7 +755,12 @@ fn a_source_holds_no_egress_until_somebody_reads_its_port() {
         !reader.every_bag_it_received().is_empty()
     });
 
-    let while_it_is_read = every_token_under(&looking, &every_egress_token);
+    let while_it_is_read = wait_until_the_tokens_under(
+        &looking,
+        &every_egress_token,
+        "the source somebody reads to hold an egress token",
+        |tokens| !tokens.is_empty(),
+    );
     assert_eq!(
         while_it_is_read.len(),
         1,
@@ -740,14 +769,12 @@ fn a_source_holds_no_egress_until_somebody_reads_its_port() {
 
     // The last reader leaving takes the egress with it.
     reader.ask_it_to_leave();
-    let gave_up_at = Instant::now() + HOW_LONG_AN_ARM_WAITS;
-    while Instant::now() < gave_up_at {
-        if every_token_under(&looking, &every_egress_token).is_empty() {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    panic!("the last reader leaving must take the source's egress token with it");
+    wait_until_the_tokens_under(
+        &looking,
+        &every_egress_token,
+        "the last reader leaving to take the source's egress token with it",
+        BTreeSet::is_empty,
+    );
 }
 
 /// The source's own `graph` names the port the mesh is reading from it and the
@@ -1201,14 +1228,24 @@ fn one_egress_serves_every_reader_and_outlives_all_but_the_last() {
     });
 
     let looking = a_session_that_only_looks(&source_listen);
-    let while_both_read = every_token_under(&looking, &every_reader_token);
+    let while_both_read = wait_until_the_tokens_under(
+        &looking,
+        &every_reader_token,
+        "both readers' tokens",
+        |tokens| tokens.len() >= 2,
+    );
     assert_eq!(
         while_both_read.len(),
         2,
         "each runtime reading the port declares its own reader token; the source saw \
          {while_both_read:?}"
     );
-    let one_egress = every_token_under(&looking, &every_egress_token);
+    let one_egress = wait_until_the_tokens_under(
+        &looking,
+        &every_egress_token,
+        "the source two runtimes read to hold an egress token",
+        |tokens| !tokens.is_empty(),
+    );
     assert_eq!(
         one_egress.len(),
         1,
@@ -1223,7 +1260,12 @@ fn one_egress_serves_every_reader_and_outlives_all_but_the_last() {
         "the remaining reader to receive a bag after the other left",
         || second_reader.every_bag_it_received().len() > bags_the_second_reader_had,
     );
-    let after_the_first_left = every_token_under(&looking, &every_egress_token);
+    let after_the_first_left = wait_until_the_tokens_under(
+        &looking,
+        &every_egress_token,
+        "the source one runtime still reads to hold an egress token",
+        |tokens| !tokens.is_empty(),
+    );
     assert_eq!(
         after_the_first_left.len(),
         1,
@@ -1233,14 +1275,12 @@ fn one_egress_serves_every_reader_and_outlives_all_but_the_last() {
 
     // The second is the last, and takes it with it.
     second_reader.ask_it_to_leave();
-    let gave_up_at = Instant::now() + HOW_LONG_AN_ARM_WAITS;
-    while Instant::now() < gave_up_at {
-        if every_token_under(&looking, &every_egress_token).is_empty() {
-            return;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    panic!("the last of two readers leaving must take the source's egress token with it");
+    wait_until_the_tokens_under(
+        &looking,
+        &every_egress_token,
+        "the last of two readers leaving to take the source's egress token with it",
+        BTreeSet::is_empty,
+    );
 }
 
 /// One source and one reader, with a burst far larger than either ring, and
