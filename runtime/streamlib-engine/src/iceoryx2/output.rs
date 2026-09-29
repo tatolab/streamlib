@@ -711,7 +711,9 @@ mod tests {
             .open_or_create()
             .unwrap();
         let notifier = notify.notifier_builder().create().unwrap();
-        let listener = notify.listener_builder().create().unwrap();
+        let listener =
+            crate::iceoryx2::bind_an_iceoryx2_listener_outside_every_child_process_start(&notify)
+                .unwrap();
 
         let inner = Arc::new(OutputWriterInner::new());
         inner.set_channel_publisher(
@@ -833,7 +835,11 @@ mod tests {
             .open_or_create()
             .unwrap();
         let notifier = notify_service.notifier_builder().create().unwrap();
-        let listener = notify_service.listener_builder().create().unwrap();
+        let listener =
+            crate::iceoryx2::bind_an_iceoryx2_listener_outside_every_child_process_start(
+                &notify_service,
+            )
+            .unwrap();
 
         for send in 0..SENDS {
             assert_eq!(
@@ -912,7 +918,12 @@ mod tests {
                 &format!("L-test-fanout-{i}"),
                 Some(notify.notifier_builder().create().unwrap()),
             );
-            listeners.push(notify.listener_builder().create().unwrap());
+            listeners.push(
+                crate::iceoryx2::bind_an_iceoryx2_listener_outside_every_child_process_start(
+                    &notify,
+                )
+                .unwrap(),
+            );
         }
 
         let writer = OutputWriter::from_inner_arc(inner);

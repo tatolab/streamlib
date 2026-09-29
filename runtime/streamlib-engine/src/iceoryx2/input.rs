@@ -1657,7 +1657,9 @@ mod tests {
             .open_or_create()
             .unwrap();
         let notifier = svc.notifier_builder().create().unwrap();
-        let listener = svc.listener_builder().create().unwrap();
+        let listener =
+            crate::iceoryx2::bind_an_iceoryx2_listener_outside_every_child_process_start(&svc)
+                .unwrap();
 
         let mailboxes = InputMailboxesInner::new();
         mailboxes.set_listener(listener);
@@ -3621,15 +3623,16 @@ mod tests {
                 .create_subscriber(4)
                 .unwrap()
         };
-        let listener = node
-            .service_builder(&ServiceName::new(&unique_suffix("reclaim/notify")).unwrap())
-            .event()
-            .max_notifiers(2)
-            .max_listeners(1)
-            .open_or_create()
-            .unwrap()
-            .listener_builder()
-            .create()
+        let listener =
+            crate::iceoryx2::bind_an_iceoryx2_listener_outside_every_child_process_start(
+                &node
+                    .service_builder(&ServiceName::new(&unique_suffix("reclaim/notify")).unwrap())
+                    .event()
+                    .max_notifiers(2)
+                    .max_listeners(1)
+                    .open_or_create()
+                    .unwrap(),
+            )
             .unwrap();
 
         let inner = InputMailboxesInner::new();

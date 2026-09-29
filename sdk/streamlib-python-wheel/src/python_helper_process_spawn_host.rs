@@ -689,14 +689,18 @@ impl PythonHelperProcessSpawnHostProcessor {
         self.iceoryx2_domain_root = Some(iceoryx2_domain_root);
         let mut escalate_transport = EscalateTransport::attach(&mut command)?;
 
-        let mut child = command.spawn().map_err(|spawn_failure| {
-            Error::Runtime(format!(
-                "[{}] could not start its helper process with `{} -m {HELPER_PROCESS_MODULE}`: \
+        let mut child =
+            streamlib::sdk::iceoryx2::start_a_child_process_outside_every_iceoryx2_listener_bind(
+                || command.spawn(),
+            )
+            .map_err(|spawn_failure| {
+                Error::Runtime(format!(
+                    "[{}] could not start its helper process with `{} -m {HELPER_PROCESS_MODULE}`: \
                  {spawn_failure}",
-                self.processor_display_name,
-                self.interpreter_path.display(),
-            ))
-        })?;
+                    self.processor_display_name,
+                    self.interpreter_path.display(),
+                ))
+            })?;
         // At once: a connect that arrives before its admission waits for it,
         // but only for a bounded while.
         #[cfg(target_os = "macos")]

@@ -1234,7 +1234,8 @@ mod tests {
         let service = open_one_listener_event_service(&node, "slow-consumer");
         let notifier = service.notifier_builder().create().unwrap();
         let (processor, mailboxes) = input_only_processor_with_plain_port(Some(
-            service.listener_builder().create().unwrap(),
+            crate::iceoryx2::bind_an_iceoryx2_listener_outside_every_child_process_start(&service)
+                .unwrap(),
         ));
         let running = ReactiveSchedulingLoopOnItsOwnThread::start(
             processor,
@@ -1278,7 +1279,8 @@ mod tests {
         let service = open_one_listener_event_service(&node, "paused-consumer");
         let notifier = service.notifier_builder().create().unwrap();
         let (processor, mailboxes) = input_only_processor_with_plain_port(Some(
-            service.listener_builder().create().unwrap(),
+            crate::iceoryx2::bind_an_iceoryx2_listener_outside_every_child_process_start(&service)
+                .unwrap(),
         ));
         let running = ReactiveSchedulingLoopOnItsOwnThread::start(
             processor,
@@ -1329,7 +1331,10 @@ mod tests {
         let service = open_one_listener_event_service(&node, "first-link-gap");
         let (processor, mailboxes) = input_only_processor_with_plain_port(None);
         mailboxes.route(one_frame_for_in1());
-        mailboxes.set_listener(service.listener_builder().create().unwrap());
+        mailboxes.set_listener(
+            crate::iceoryx2::bind_an_iceoryx2_listener_outside_every_child_process_start(&service)
+                .unwrap(),
+        );
 
         let running = ReactiveSchedulingLoopOnItsOwnThread::start(
             processor,
@@ -1375,7 +1380,10 @@ mod tests {
         let input_mailboxes = instance
             .iceoryx2_input_mailboxes_inner()
             .expect("an input-only mock holds input mailboxes");
-        input_mailboxes.set_listener(service.listener_builder().create().unwrap());
+        input_mailboxes.set_listener(
+            crate::iceoryx2::bind_an_iceoryx2_listener_outside_every_child_process_start(&service)
+                .unwrap(),
+        );
         let waiter = ReactiveLoopFdWaiter::new(
             input_mailboxes
                 .listener_fd()
@@ -1421,7 +1429,11 @@ mod tests {
             let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
             let service = open_one_listener_event_service(&node, tag);
             let notifier = service.notifier_builder().create().unwrap();
-            let listener = service.listener_builder().create().unwrap();
+            let listener =
+                crate::iceoryx2::bind_an_iceoryx2_listener_outside_every_child_process_start(
+                    &service,
+                )
+                .unwrap();
             let (shutdown_channel, shutdown_wake_fd) = shutdown_channel_and_its_wake_fd();
             let waiter =
                 ReactiveLoopFdWaiter::new(listener_fd_of(&listener), 1, Some(shutdown_wake_fd))
@@ -1507,7 +1519,8 @@ mod tests {
         let node = crate::iceoryx2::create_iceoryx2_node_for_this_test_process();
         let service = open_one_listener_event_service(&node, "loop-wake-fd-shutdown");
         let (processor, _mailboxes) = input_only_processor_with_plain_port(Some(
-            service.listener_builder().create().unwrap(),
+            crate::iceoryx2::bind_an_iceoryx2_listener_outside_every_child_process_start(&service)
+                .unwrap(),
         ));
         let (shutdown_channel, shutdown_wake_fd) = shutdown_channel_and_its_wake_fd();
         let (withheld_shutdown_sender, withheld_shutdown_receiver) = crossbeam_channel::bounded(1);
@@ -1562,7 +1575,9 @@ mod tests {
         let mut waiter_setup_failed = false;
 
         let first = open_event_service("replaced-first");
-        let first_listener = first.listener_builder().create().unwrap();
+        let first_listener =
+            crate::iceoryx2::bind_an_iceoryx2_listener_outside_every_child_process_start(&first)
+                .unwrap();
         let first_fd = listener_fd_of(&first_listener);
         refresh_reactive_loop_waiter(
             &id,
@@ -1620,7 +1635,9 @@ mod tests {
 
         // A reconnect creates a new listener, on a fresh notify service.
         let second = open_event_service("replaced-second");
-        let second_listener = second.listener_builder().create().unwrap();
+        let second_listener =
+            crate::iceoryx2::bind_an_iceoryx2_listener_outside_every_child_process_start(&second)
+                .unwrap();
         let second_fd = listener_fd_of(&second_listener);
         refresh_reactive_loop_waiter(
             &id,

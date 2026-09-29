@@ -728,9 +728,7 @@ impl Iceoryx2NotifyService {
 
     /// Create a listener for this service.
     pub fn create_listener(&self) -> Result<Listener<ipc::Service>> {
-        self.inner
-            .listener_builder()
-            .create()
+        crate::iceoryx2::bind_an_iceoryx2_listener_outside_every_child_process_start(&self.inner)
             .map_err(|e| Error::Runtime(format!("Failed to create listener: {:?}", e)))
     }
 }

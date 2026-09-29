@@ -421,12 +421,14 @@ pub(crate) fn rerun_this_test_in_a_child_process(
     value: &std::ffi::OsStr,
 ) -> std::process::Output {
     let child_process_output =
-        std::process::Command::new(std::env::current_exe().expect("the test binary's own path"))
-            .args([test_path, "--exact", "--test-threads=1", "--nocapture"])
-            .env(environment_variable, value)
-            .stdin(std::process::Stdio::null())
-            .output()
-            .expect("the test binary re-runs this test in a child process");
+        crate::iceoryx2::start_a_child_process_outside_every_iceoryx2_listener_bind(|| {
+            std::process::Command::new(std::env::current_exe().expect("the test binary's own path"))
+                .args([test_path, "--exact", "--test-threads=1", "--nocapture"])
+                .env(environment_variable, value)
+                .stdin(std::process::Stdio::null())
+                .output()
+        })
+        .expect("the test binary re-runs this test in a child process");
     // `--exact` on a name that matches nothing runs no test and exits 0, which
     // reads as a pass for a test that was renamed away.
     let child_standard_output = String::from_utf8_lossy(&child_process_output.stdout);
