@@ -133,9 +133,9 @@ not just develop on it"* — is what the nine tickets trace to.
 
 Read this before giving a helper process its own Metal code, before adding a staging copy on
 macOS because Linux has one, and before deciding a Linux-only capability "has no macOS
-equivalent". The floor above reaches the MVP sentence; `docs/plan/changes/archive/2026-09-26-
-macos-capability-parity.md` carried everything else the Linux floor offers, and the owner's ruling is the
-trigger: *"streamlib on osx requires the full capabilities and feature set"* — the first delta's
+equivalent". The floor above reaches the MVP sentence;
+`docs/plan/changes/archive/2026-09-26-macos-capability-parity.md` carried everything else
+the Linux floor offers, and the owner's ruling is the trigger: *"streamlib on osx requires the full capabilities and feature set"* — the first delta's
 "Not in scope" block was a session's reading of the MVP sentence, not the intent.
 
 > **The helper's importer stays Vulkan.** `streamlib-consumer-rhi` gains a MoltenVK arm — an
