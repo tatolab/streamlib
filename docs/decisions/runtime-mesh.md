@@ -18,9 +18,9 @@ process, announces itself, and discovers other runtimes peer-to-peer by default.
 carries a link on iceoryx2 when both ends share a runtime and on Zenoh when they do not, so a
 processor is unchanged either way.
 
-> Amended 2026-09-30 by `one-host-per-machine.md`: a host builds its Zenoh session from its own
-> configuration and dials routers, rather than building it from engine defaults, and MoQ never
-> carries a link between runtimes. What a host is exactly is OPEN in the plan.
+> Amended 2026-09-30 by `one-runtime-per-machine.md`: the runtime — one per machine, its session the
+> machine's Zenoh router — builds its Zenoh session from its own configuration and dials routers,
+> rather than building it from engine defaults, and MoQ never carries a link between runtimes.
 
 - **Mesh name.** Everything on the mesh lives under a mesh name, `default` unless a runtime
   names another. There is no switch that turns the mesh off.
@@ -31,9 +31,9 @@ processor is unchanged either way.
   minted local surface id. The `surface_id` key is a stand-in until a general mechanism
   replaces it.
 - **Security.** There is no authentication in this work; that is a separate, later pass.
-  > Amended 2026-09-30 by `one-host-per-machine.md`: the pass has its shape. A host enforces a pushed stream
-  > map that refuses links to unexposed ports, and authenticates peers. Who pushes the map, what a
-  > host with none exposes, and how a peer authenticates are OPEN.
+  > Amended 2026-09-30 by `one-runtime-per-machine.md`: the pass has its shape. The runtime enforces a pushed
+  > stream map that refuses links to unexposed ports, and authenticates peers. Who pushes the map,
+  > what a runtime with none exposes, and how a peer authenticates are OPEN.
 - **Remote links.** Any runtime may create one: a receiver pulling, a sender pushing, or a
   third runtime wiring two others. The runtime owning the input applies it with `connect`'s
   own refusals. A missing runtime makes the link wait; a missing port is refused by name.
@@ -190,5 +190,5 @@ engine at `d4ce808f6`.
   machines has to re-anchor explicitly until a common network clock exists.
 - Any runtime on a reachable network can wire links into any other until the security pass
   lands.
-  > Amended 2026-09-30 by `one-host-per-machine.md`: a host's stream map decides who may link to which of its
-  > ports.
+  > Amended 2026-09-30 by `one-runtime-per-machine.md`: the runtime's stream map decides who may link to which of
+  > its ports.

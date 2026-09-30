@@ -39,7 +39,7 @@ SPIR-V, or when someone asks why the four GPU bridge traits were deleted.
    (shaderc / glslang).
 5. **The four bridge traits are deleted.** Compute, graphics, ray tracing and CPU readback
    are always-present capabilities of `GpuContext`.
-   > Amended 2026-09-30 by `one-host-per-machine.md`: accelerators are optional, so a stream that needs no GPU
+   > Amended 2026-09-30 by `one-runtime-per-machine.md`: accelerators are optional, so a stream that needs no GPU
    > runs on a machine without one. How that squares with these always-present capabilities is
    > OPEN in the plan.
 6. **Dispatch is synchronous**, with batching for multi-pass work.

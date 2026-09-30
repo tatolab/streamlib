@@ -1,25 +1,28 @@
-# one-host-per-machine-ripout
+# one-runtime-per-machine-ripout
 
 > **On hold (2026-09-30).** The plan PR was reworked so that only the owner's confirmed sentences
 > are DECIDED. The entries this change implements (the local API, and the control plane reachable
 > only on its own machine) are now OPEN. So are both of its `[NEEDS DECISION]` blocks: a later
 > owner requirement, a free user seeing and using streams locally, may need a loopback listener. No
-> plan section is flipped to IN-FLIGHT while this waits. The recon below stays valid as a record of
-> the tree at 30fbef3.
+> plan section is flipped to IN-FLIGHT while this waits. Decision 2 below carries the plan's current
+> direction as option (c). The recon below stays valid as a record of the tree at 30fbef3.
 
-The rip-out step of the one-host-per-machine pivot: the control plane leaves the network. After this
+The rip-out step of the one-runtime-per-machine pivot: the control plane leaves the network. After this
 change:
 - every engine process that hosts its control plane serves it — the same router, vocabulary and MCP
-  tools — on one Unix domain socket in its runtime directory, and on nothing else;
+  tools — on one Unix domain socket in its runtime directory, and on nothing else for control (the
+  URL forms' loopback listener is the local-API OPEN's, decision 2 below);
 - the TCP listener, its all-interfaces default, the port walk from 9000, `--host`, `--port`, `--url`
-  and the registry's `control_url` are gone, with no TCP path kept running beside the socket;
+  and the registry's `control_url` are gone, with no TCP path for control kept running beside the
+  socket;
 - a runtime stops announcing control-plane URLs on the mesh, and `nodes` stops printing them;
 - an MCP host reaches the tools the way the owner decides below.
 
-The change implements §Control plane & observability's `[one-host-per-machine]` entries at
-`docs/plan/ARCHITECTURE.md:4265-4273` (the local API; reachable only on its own machine), and the
-announcement clause of §Networking `:3442-3460` and `:3804-3836`. Rationale:
-`docs/decisions/one-host-per-machine.md`. Of the pivot's legacy inventory, this is the part that
+The change implements §Control plane & observability's `[one-runtime-per-machine]` local-API OPEN
+(one local API per machine, the socket the authority for control, so control is reachable only on its
+own machine), and the `control_plane_urls` clauses of §Networking's announcement entry and of its
+`graph` mesh-peers entry (`CONTROL_PLANE_URLS`). Rationale:
+`docs/decisions/one-runtime-per-machine.md`. Of the pivot's legacy inventory, this is the part that
 retires outright. Everything else in it is reshaped by a build change, and each item is mapped to its
 change under "The rest of the inventory" below, so nothing is lost.
 
@@ -29,11 +32,12 @@ change under "The rest of the inventory" below, so nothing is lost.
 - The wire: the mesh description loses a field.
 - The control plane's transport.
 
-**Precondition.** The entries above are DECIDED once the pivot's plan PR merges; this PR stacks on
-it. The OPEN at `:4277` (whether a host serves a machine or a user) does not block, because this
-change serves embedded runtimes, whose runtime directory is per-user today (`:4155-4176`). The host
-inherits the mechanism when it exists. The OPEN at `:4274` is decision 2 below. Flipped to
-`IN-FLIGHT (→ one-host-per-machine-ripout)`: §Networking, §Control plane & observability.
+**Precondition.** The entries above are OPEN, and this change waits for them to be decided; nothing
+flips. §Product's `[one-runtime-per-machine]` OPEN on how the runtime is started (whether it serves a
+machine or a user) does not block, because this change serves today's per-app runtimes, whose runtime
+directory is per-user today (§Control plane & observability, the runtime-directory entry). The runtime
+inherits the mechanism when it exists. The local-API OPEN's undecided "how MCP hosts reach it" is
+decision 2 below. No plan section flips to IN-FLIGHT while this change is on hold.
 
 **Verified against the tree 2026-09-30 (HEAD 30fbef3; its code is identical to main 9c0356b).** One
 read-only recon sweep, and the pivot's inventory sweep.
@@ -121,7 +125,7 @@ The plan says one socket and the vocabulary unchanged. It does not say what runs
 
 **Recommendation: (a).**
 
-## [NEEDS DECISION] 2 — how an MCP host reaches the tools (the plan's OPEN at `:4274`)
+## [NEEDS DECISION] 2 — how an MCP host reaches the tools (the local-API OPEN's undecided "how MCP hosts reach it", §Control plane & observability)
 
 An MCP host is configured with a command (stdio) or a URL (HTTP); none dials a Unix socket.
 
@@ -130,15 +134,27 @@ An MCP host is configured with a command (stdio) or a URL (HTTP); none dials a U
   `claude mcp add streamlib -- streamlib mcp --node <runtime name>`.
   - Nothing listens on TCP, and the socket's permissions are the only gate.
   - It reverses mcp-served-with-the-node's "no CLI verb, stdio server, or bridge process" clause
-    (§Control plane `:4075-4126`), and `test_the_wheel_serves_no_mcp_verb` goes with it.
+    (§Control plane & observability, the mcp-served-with-the-node entry), and
+    `test_the_wheel_serves_no_mcp_verb` goes with it.
   - The bearer gate has nothing left to protect, so it goes too.
 - **(b) A loopback HTTP listener beside the socket.** It listens on 127.0.0.1 at an OS-chosen port
   recorded in the registry, and is bearer-gated.
   - URL-configured hosts keep working.
   - It brings back a TCP listener, a port to discover, and a token to hand out — which nothing does
     today (`api_server.rs:70-73` only logs the token's path).
+- **(c) The plan's current direction: the socket for control, a loopback HTTP listener for the URL
+  forms.** The local-API OPEN's direction (review, not decided) keeps the socket as the authority for
+  control and serves the URL forms — `ndjson`, `png`, `ts`, `hls`, `whep`, `moq`, `page` — on a
+  separate HTTP listener, loopback by default and a LAN or tailnet address on request, because
+  browsers and ffmpeg cannot dial a socket. An MCP host then uses either (a)'s stdio bridge over the
+  socket or that listener's URL. "Nothing listens on TCP" is therefore no longer the direction: a TCP
+  listener stays for the forms, and whether it also serves `/mcp`, and how it is gated, follows the
+  local-API OPEN.
 
-**Recommendation: (a).**
+**Recommendation: (c).** It is the plan's direction; (a) stands as its stdio half.
+
+On 2(c), `tokio::net::TcpListener` stays for the forms listener, and none of 2(a)'s candidates below
+join the REMOVED list until the local-API OPEN decides that listener's gate.
 
 On 2(a), these join the REMOVED list below, written here without the bullet prefix so the gate does
 not read them before the decision:
@@ -173,7 +189,7 @@ stays for it alone.
 - **The selector.** `--node <runtime name or id>` is the only way to pick a node for `graph`, `tap`,
   `exchange` and `logs`. With no `--node`, the sole live node on this machine is used, as today.
 
-## MODIFIED: §Networking `:3442-3460` and `:3804-3836` — the announcement
+## MODIFIED: §Networking, the announcement entry (`control_plane_urls`) and the `graph` mesh-peers entry — the announcement
 
 - The mesh description drops `control_plane_urls`. So do `graph.mesh.peers[]`, the observe-only
   session, and the `nodes` mesh-peers table.
@@ -183,10 +199,10 @@ stays for it alone.
   `:165`, `:257`, `:283`, `:872`).
 - `graph` still lists peers. No runtime is drivable from another machine through its control plane.
 - The description is a wire contract with no serde default, so an older engine reads a new one as
-  unanswered. Pre-1.0 there is no cross-version wire (§Networking `:3670-3671`), so there is no
-  shim.
+  unanswered. Pre-1.0 there is no cross-version wire (§Networking, the cross-runtime-links entry's
+  "no cross-version wire" clause), so there is no shim.
 
-## MODIFIED: §Control plane & observability `:4127-4176` — the CLI, the rigs, the docs
+## MODIFIED: §Control plane & observability, the bind-posture, CLI and runtime-directory entries — the CLI, the rigs, the docs
 
 - **The CLI.** `run` and `dev` lose `--host` and `--port`. `graph`, `tap`, `exchange` and `logs` lose
   `--url`. `nodes` prints `CONTROL_SOCKET` in place of `CONTROL_URL`.
@@ -201,8 +217,8 @@ stays for it alone.
 - **The README.** Its control-plane section changes:
   - the nodes table;
   - the MCP setup, per decision 2;
-  - `:217-219` ("unauthenticated port … narrow it with `--host`") becomes "the control plane is
-    reachable only on its machine".
+  - `:217-219` ("unauthenticated port … narrow it with `--host`") becomes "control is reachable
+    only on its machine".
 - **Tests pinned to TCP.** Each moves to the socket:
   - `launch_node` and `free_port` (`tests/test_cli_launch.py:110-261`);
   - `test_the_control_plane_binds_every_interface_by_default` (`tests/test_cli.py:413`);
@@ -220,14 +236,14 @@ bullets.
 | Legacy (inventory C) | Build change | Waits on |
 |---|---|---|
 | The native `register_declared_processor_class` at decoration; `GraphSnapshot` with no Python caller; three-part `MeshPortAddress` | graph-description | its resource field: OPEN "how a resource request is spelled" |
-| Per-process `Runner` construction; `rt.run()` owning signals and the watchdog; the `app` and `helper` hook roles | host-daemon | OPENs: `run` with no host; machine or user; cross-graph reach; Apple permission |
-| The engine-default Zenoh session; "any runtime may wire" | host-mesh-and-stream-map | OPEN: peer authentication (the security-pass research) |
+| Per-process `Runner` construction; `rt.run()` owning signals and the watchdog; the `app` and `helper` hook roles | runtime-startup | OPENs: `run` with no runtime; machine or user; cross-stream reach; Apple permission |
+| The engine-default Zenoh session; "any runtime may wire" | runtime-session-and-stream-map | OPEN: the stream map's details, including how a peer authenticates |
 | The `sys.executable` helper spawn; the exact build-id handshake | per-graph-environments | OPENs: how a graph arrives with its environment; build agreement |
-| `apply_thread_priority` with no arbiter | host-resources | OPEN: resource request spelling |
+| `apply_thread_priority` with no arbiter | runtime-resources | OPEN: resource request spelling |
 | `GpuContext::init_for_platform_sync()?` mandatory in `Runner::start` | accelerators-optional | OPEN: the accelerator line |
 | `streamlib` distribution, import and crate names | tatolab-namespace-rename, last | OPEN: the rename's remaining names |
 
-Sharing a surface beyond the host's own children has no change until its OPEN is decided.
+Sharing a surface beyond the runtime's own processor interpreters has no change until its OPEN is decided.
 
 ## Companion operating-model PR (dedicated, per the flow rule)
 

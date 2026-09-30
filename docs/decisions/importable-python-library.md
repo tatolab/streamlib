@@ -7,7 +7,7 @@ in place). This ADR's placement clauses were themselves superseded 2026-08-04 by
 `helper-process-placement-only.md` (annotated below): helper-process placement is the only
 placement; in-process hosting of a Python processor is banned. The distribution decision —
 one wheel, one venv, PyPI — is untouched. Its one-wheel clause was amended 2026-09-30 by
-`one-host-per-machine.md` (annotated below).
+`one-runtime-per-machine.md` (annotated below).
 
 ## Trigger
 
@@ -25,8 +25,8 @@ wheel — so that refusal does not cover it.
    codebase — one uv-managed venv, one Python version, ordinary PyPI dependencies, no manifest,
    no custom module system (`streamlib_modules/`, add/install/link/pkg, and runtime downloading
    are deleted).
-   > Amended 2026-09-30 by `one-host-per-machine.md`: the one wheel becomes a pure-Python stream package and a
-   > native host package in a `tatolab.*` namespace. How they are named, versioned, released and
+   > Amended 2026-09-30 by `one-runtime-per-machine.md`: the one wheel becomes a pure-Python stream package and a
+   > native runtime package in a `tatolab.*` namespace. How they are named, versioned, released and
    > tested apart is OPEN in the plan.
 2. Processors are Python classes — written in the app or imported from pip-installed packages —
    and `rt.add` takes the class.

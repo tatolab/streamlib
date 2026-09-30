@@ -37,7 +37,7 @@ macOS floor to Intel, or before treating macOS as a best-effort target.
 > Rosetta. No `.app` bundle, no launchd service, no installer, under any justification. macOS
 > security prompts are part of the experience; needing a *bundle* to obtain them is not.
 
-Read with `one-host-per-machine.md` (2026-09-30), which keeps this floor whole: streamlib ships no service of its
+Read with `one-runtime-per-machine.md` (2026-09-30), which keeps this floor whole: streamlib ships no service of its
 own. If a separate product app keeps the engine running, how camera and microphone permission is
 attributed is OPEN in the plan.
 
