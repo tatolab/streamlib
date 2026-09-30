@@ -30,8 +30,6 @@ webrtc = "0.17.2"
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "sync", "time", "macros"] }
 bytes = "1.12.1"
 thiserror = "2.0.17"
-# The one clock the whole runtime agrees on, read the same way the wheel reads it.
-libc = "0.2"
 tracing = "0.1.44"
 
 # WHIP/WHEP signalling is plain HTTPS: POST the offer, PATCH trickle ICE,
@@ -41,6 +39,11 @@ hyper-util = { version = "0.1.20", features = ["client", "client-legacy", "http1
 hyper-rustls = { version = "0.27.9", features = ["http1", "http2", "native-tokio", "ring"] }
 http-body-util = "0.1.5"
 rustls = { version = "0.23.43", features = ["ring"] }
+
+# The one clock the whole runtime agrees on, read the same way the engine
+# reads it: `CLOCK_MONOTONIC` here, `mach_absolute_time` from libSystem on macOS.
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "sync", "time", "macros", "net"] }

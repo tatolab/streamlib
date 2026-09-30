@@ -19,12 +19,20 @@ __all__ = [
     "WhepSession",
     "WhipSession",
     "bring_up_the_transport_stack",
+    "monotonic_now_ns",
 ]
 
 def bring_up_the_transport_stack() -> None:
     """Start the tokio runtime and install the TLS provider, once per process.
 
     What `extension.py:load` calls. Cheap and does no I/O.
+    """
+
+def monotonic_now_ns() -> int:
+    """Nanoseconds on the clock this wheel stamps bags with.
+
+    The engine's clock, read here rather than asked of the engine, so a
+    reading compares with `streamlib.monotonic_now_ns()` taken on this machine.
     """
 
 @final

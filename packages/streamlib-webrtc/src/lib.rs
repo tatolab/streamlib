@@ -427,9 +427,17 @@ impl PlayedOpusPacket {
     }
 }
 
+/// Nanoseconds on the clock this wheel stamps bags with, which is the
+/// engine's — so a reading compares with `streamlib.monotonic_now_ns()`.
+#[pyfunction(name = "monotonic_now_ns")]
+fn this_wheels_monotonic_now_ns() -> i64 {
+    monotonic_clock::monotonic_now_ns()
+}
+
 #[pymodule]
 fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(bring_up_the_transport_stack, module)?)?;
+    module.add_function(wrap_pyfunction!(this_wheels_monotonic_now_ns, module)?)?;
     module.add_class::<WhipSession>()?;
     module.add_class::<WhepSession>()?;
     module.add_class::<PlayedVideoAccessUnit>()?;
