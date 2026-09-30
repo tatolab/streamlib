@@ -172,6 +172,8 @@ jobs:
           fi
           echo "the window showed $frames_shown frames"
 
+      # Also what python-wheel.yml's macOS extension lane installs its
+      # extensions into.
       - name: Keep the wheel for a clean-machine run
         uses: actions/upload-artifact@v4
         with:

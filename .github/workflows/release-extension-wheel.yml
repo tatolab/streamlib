@@ -1,8 +1,9 @@
 name: Release Extension Wheel
 
-# One extension wheel, built the way a third party would build one — its own
-# standalone maturin project, its own lockfile, no engine crate linked — and
-# attached to its own release. Called once per released extension by
+# One extension wheel per platform the engine wheel ships for — manylinux and
+# Apple Silicon — built the way a third party would build one: its own
+# standalone maturin project, its own lockfile, no engine crate linked. Both are
+# attached to the extension's own release. Called once per released extension by
 # release-wheel.yml, which owns the PEP 503 simple index that then serves it
 # beside the engine wheel.
 #
@@ -41,11 +42,24 @@ env:
 
 jobs:
   build-extension-wheel:
-    name: manylinux wheel (${{ inputs.extension_distribution_name }})
-    runs-on: ubuntu-latest
+    name: ${{ matrix.platform }} wheel (${{ inputs.extension_distribution_name }})
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     permissions:
       contents: write
+
+    # Not fail-fast: a platform whose build fails attaches nothing and is red on
+    # its own, and it must not withhold the other platform's wheel.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: manylinux
+            runner: ubuntu-latest
+          # Pinned for the reason macos-wheel.yml pins it: the image decides
+          # the SDK the wheel links against.
+          - platform: aarch64-apple-darwin
+            runner: macos-15
 
     steps:
       - uses: actions/checkout@v4
@@ -55,8 +69,10 @@ jobs:
       # abi3-py310 and manylinux_2_28, matching the engine wheel exactly: an
       # extension installs beside it on machines this project never sees, so one
       # built artifact has to cover the same interpreters and the same glibc
-      # floor. A single build rather than a matrix, for the same reason.
-      - name: Build the wheel
+      # floor. A single build per platform rather than an interpreter matrix,
+      # for the same reason.
+      - name: Build the manylinux wheel
+        if: runner.os == 'Linux'
         uses: PyO3/maturin-action@v1
         with:
           working-directory: ${{ inputs.extension_package_directory }}
@@ -98,12 +114,67 @@ jobs:
             install_build_dependencies_with_bounded_retry \
               pkgconfig clang-devel cmake ninja-build
 
+      # The image ships both, which is all `aws-lc-sys` needs here.
+      - name: The build tools the extension's native dependencies assume
+        if: runner.os == 'macOS'
+        run: |
+          cmake --version
+          cc --version
+
+      - name: Install Rust
+        if: runner.os == 'macOS'
+        uses: dtolnay/rust-toolchain@stable
+
+      # Also the interpreter the smoke test below installs into.
+      - name: Install Python
+        if: runner.os == 'macOS'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        if: runner.os == 'macOS'
+        uses: astral-sh/setup-uv@v5
+
+      # abi3-py310 at the engine wheel's macOS 15.0 floor. maturin writes
+      # `macos-deployment-target` into the wheel's tag but does not hand it to
+      # the link, so without this the binary inside claims whatever rustc
+      # defaults to. Read from the one place it is pinned.
+      - name: Export the wheel's deployment target
+        if: runner.os == 'macOS'
+        env:
+          EXTENSION_PYPROJECT: ${{ inputs.extension_package_directory }}/pyproject.toml
+        run: |
+          python3 - >> "$GITHUB_ENV" <<'EOF'
+          import os
+          import tomllib
+          with open(os.environ["EXTENSION_PYPROJECT"], "rb") as pyproject:
+              maturin_target = tomllib.load(pyproject)["tool"]["maturin"]["target"]["aarch64-apple-darwin"]
+          print(f"MACOSX_DEPLOYMENT_TARGET={maturin_target['macos-deployment-target']}")
+          EOF
+
+      - name: Build the aarch64-apple-darwin wheel
+        if: runner.os == 'macOS'
+        working-directory: ${{ inputs.extension_package_directory }}
+        run: uvx maturin@1.9.6 build --release --out dist
+
+      # An arm64 binary whose signature did not survive the zip round-trip
+      # loads nowhere, so it is checked on the artifact rather than assumed.
+      - name: Every binary in the built wheel is still signed
+        if: runner.os == 'macOS'
+        run: |
+          rm -rf /tmp/unzipped-extension-wheel
+          unzip -q "${{ inputs.extension_package_directory }}"/dist/*.whl -d /tmp/unzipped-extension-wheel
+          find /tmp/unzipped-extension-wheel \( -name '*.so' -o -name '*.dylib' \) \
+            -exec codesign --verify --strict --verbose=1 {} +
+
       # A wheel that installs but cannot be imported is not a release artifact,
       # and licence obligations only discharge if the files reach the artifact a
       # user installs. Both are asserted against this build rather than trusted
       # from the test suite: that runs against `maturin develop`, while this is
-      # `maturin-action` inside a manylinux container resolving PEP 639 globs
-      # that are symlinks out of the project root.
+      # a release build resolving PEP 639 globs that are symlinks out of the
+      # project root. On macOS the import is also where the published macOS
+      # engine wheel and this one first meet.
       #
       # `--index-url` is the published index, not PyPI: `streamlib` is not on
       # PyPI, and this is the one place the extension's declared floor meets the
