@@ -1,5 +1,12 @@
 # one-host-per-machine-ripout
 
+> **On hold (2026-09-30).** The plan PR was reworked so that only the owner's confirmed sentences
+> are DECIDED. The entries this change implements (the local API, and the control plane reachable
+> only on its own machine) are now OPEN. So are both of its `[NEEDS DECISION]` blocks: a later
+> owner requirement, a free user seeing and using streams locally, may need a loopback listener. No
+> plan section is flipped to IN-FLIGHT while this waits. The recon below stays valid as a record of
+> the tree at 30fbef3.
+
 The rip-out step of the one-host-per-machine pivot: the control plane leaves the network. After this
 change:
 - every engine process that hosts its control plane serves it — the same router, vocabulary and MCP
