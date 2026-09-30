@@ -25,6 +25,9 @@ from repo releases until the rename; "hot-reload on save" → "a fast edit loop"
 re-running `dev` is the MVP loop; processor-granular reload-on-save is a nicety,
 never module machinery.)
 
+(Amended 2026-09-30 by `one-host-per-machine.md`: the pip-installed packages move under a `tatolab.*`
+namespace. How a machine runs several streams, and whether that changes this sentence, is OPEN.)
+
 Its load-bearing terms:
 
 - **Python consumer.** Python vision/ML developers are the audience for realtime GPU

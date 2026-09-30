@@ -118,6 +118,18 @@ with its description, config schema and ports — served over the control plane.
 on-disk registry. A runtime on the mesh without a control plane is a **mesh peer**, not a
 node. _Avoid_: "instance", "server".
 
+**Graph description**: the serializable form of a graph that apps build and hosts run;
+`setup(rt)` compiles to one (the 2026-09-30 pivot). What it holds is OPEN. _Avoid_: "manifest"
+(the retired pre-pivot concept), "pipeline file".
+
+**Stream map**: the policy a host enforces on what leaves its machine: which ports may be linked
+from outside it, and by which authenticated peers. Links to unexposed ports are refused. It is
+pushed to the host; by whom, and its other details, are OPEN. _Avoid_: "ACL", "firewall".
+
+**Control client**: an external component that plugs into streamlib through the pivot's extension
+point, for example to enrol a machine with a coordination service. streamlib runs complete without
+one; how it plugs in is OPEN. _Avoid_: "connector", "sidecar", "agent".
+
 **Processor**: the unit of pipeline computation — a Python class (`@processor`) or a
 Rust type (`#[processor]`) — wired by ports. Its identity is the class itself, named by
 its fully-qualified import path, which requires the class to live in an importable,
@@ -232,7 +244,8 @@ of architectural decisions.
 ADDED / MODIFIED / REMOVED.
 
 Retired by the 2026-08-02 pivot (see `docs/decisions/importable-python-library.md`):
-**Host** (loads-plugins sense), **Plugin**, **Plugin ABI**, **Package source**,
+**Host** (loads-plugins sense; the 2026-09-30 pivot's sentences use "host" again, for whatever
+runs graph descriptions on a machine, and what that is exactly is OPEN), **Plugin**, **Plugin ABI**, **Package source**,
 **Link** (the CLI verb — the local-dev install path, not the connection above),
 **Lag by design** — these named the deleted plugin-ABI / module-system world; do not
 reuse them.
