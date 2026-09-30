@@ -6,8 +6,8 @@ decided by the owner 2026-08-01, direction confirmed verbatim 2026-08-02. Supers
 in place). This ADR's placement clauses were themselves superseded 2026-08-04 by
 `helper-process-placement-only.md` (annotated below): helper-process placement is the only
 placement; in-process hosting of a Python processor is banned. The distribution decision —
-one wheel, one venv, PyPI — is untouched. Its one-wheel and one-venv clauses were amended
-2026-09-30 by `one-host-per-machine.md` (annotated below).
+one wheel, one venv, PyPI — is untouched. Its one-wheel clause was amended 2026-09-30 by
+`one-host-per-machine.md` (annotated below).
 
 ## Trigger
 
@@ -25,10 +25,9 @@ wheel — so that refusal does not cover it.
    codebase — one uv-managed venv, one Python version, ordinary PyPI dependencies, no manifest,
    no custom module system (`streamlib_modules/`, add/install/link/pkg, and runtime downloading
    are deleted).
-   > Amended 2026-09-30 by `one-host-per-machine.md`: the one wheel becomes two distributions in the PEP 420
-   > `tatolab` namespace — `tatolab-stream`, pure Python, and `tatolab-host`, native — released
-   > together; and in hosted mode each graph may bring its own venv. An app is still a normal
-   > Python codebase with ordinary PyPI dependencies.
+   > Amended 2026-09-30 by `one-host-per-machine.md`: the one wheel becomes a pure-Python stream package and a
+   > native host package in a `tatolab.*` namespace. How they are named, versioned, released and
+   > tested apart is OPEN in the plan.
 2. Processors are Python classes — written in the app or imported from pip-installed packages —
    and `rt.add` takes the class.
    > ~~whether the engine runs a processor in-process or in a helper process spawned from that
@@ -160,8 +159,6 @@ contract satisfies without putting Python in deadline paths.
   camera/display statically linked. Our CI builds our wheel; nothing else is ever compiled by
   streamlib. Initial releases are repo-hosted wheel artifacts; PyPI publication is deferred
   until the project rename (name reservation before then would burn the throwaway name).
-  > Amended 2026-09-30 by `one-host-per-machine.md`: the rename is decided — `tatolab-stream` and
-  > `tatolab-host` on PyPI.
 - Re-authoring the old packages and examples into the new shapes (built-ins absorption aside,
   which is rip-out work) is deferred to its own planning sessions and milestones after the
   wheel exists — dispositions are recorded in the pivot's change file, not ticketed now.
@@ -182,8 +179,6 @@ contract satisfies without putting Python in deadline paths.
   Python is superseded by the app importing the wheel and booting the engine in its own
   process. (The *engine* runs in the app process; a *Python processor* never does — see
   `helper-process-placement-only.md`.)
-  > Amended 2026-09-30 by `one-host-per-machine.md`: in hosted mode the engine runs in the machine's one host
-  > instead, and the app hands it a graph description.
 
 ## The authoring grammar, as built
 

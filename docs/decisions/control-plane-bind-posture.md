@@ -3,12 +3,6 @@
 Rationale for the `[control-plane-bind-posture]` entries in `docs/plan/ARCHITECTURE.md`
 §Control plane & observability, decided 2026-08-04.
 
-> Superseded 2026-09-30 by `one-host-per-machine.md`. The control plane no longer listens on the network: it
-> is one local API on a Unix domain socket limited to the machine's users, so there is no bind
-> to default and no `--host` to narrow. Who may call is whoever the socket admits, and the
-> mesh-facing half of exposure is the host's stream map. The reasoning below stands for what it
-> decided: a bind address was never the lever that scopes exposure.
-
 ## Trigger
 
 Read this before changing what address a node listens on by default, before giving `dev`
@@ -17,9 +11,8 @@ that protects a node.
 
 ## Decision
 
-~~`dev` and `run` bind the control plane identically — all interfaces (`0.0.0.0`) by
-default, narrowed per invocation by `--host`.~~ — Superseded 2026-09-30 by `one-host-per-machine.md`: the
-control plane is a local socket. There is no dev-only exposure posture.
+`dev` and `run` bind the control plane identically — all interfaces (`0.0.0.0`) by
+default, narrowed per invocation by `--host`. There is no dev-only exposure posture.
 
 Scoping exposure down belongs entirely to the OPEN auth and remote-access posture. A
 node another host can reach is bound wide by definition, so the bind address cannot be

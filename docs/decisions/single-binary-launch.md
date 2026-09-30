@@ -29,10 +29,6 @@ is still exactly one CLI, `run`/`dev` still host the runtime in-process as a thi
 runner, and there is no version skew between "the CLI" and "the runtime" — both ship in
 the one wheel.
 
-> Amended 2026-09-30 by `one-host-per-machine.md`: in hosted mode the engine runs in the machine's one
-> host, which the same CLI starts, and the app hands it a graph description. There is still
-> one CLI and no second binary; the native distribution carries both.
-
 > ~~Non-Rust hosts embed by driving a runtime through the client-SDK / control-plane
 > path.~~ — Superseded 2026-08-02 by `importable-python-library.md`. Exactly backwards
 > now: Python is the primary host and embeds the engine in-process by importing the

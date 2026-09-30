@@ -18,17 +18,13 @@ process, announces itself, and discovers other runtimes peer-to-peer by default.
 carries a link on iceoryx2 when both ends share a runtime and on Zenoh when they do not, so a
 processor is unchanged either way.
 
-> Amended 2026-09-30 by `one-host-per-machine.md`: in hosted mode the machine's one session is the host's,
-> built from the host's own configuration — the routers it dials, its peers, listeners,
-> discovery and credentials — rather than from engine defaults. An embedded runtime keeps the
-> shape above. MoQ never carries a link between runtimes.
+> Amended 2026-09-30 by `one-host-per-machine.md`: a host builds its Zenoh session from its own
+> configuration and dials routers, rather than building it from engine defaults, and MoQ never
+> carries a link between runtimes. What a host is exactly is OPEN in the plan.
 
 - **Mesh name.** Everything on the mesh lives under a mesh name, `default` unless a runtime
   names another. There is no switch that turns the mesh off.
-- **Addressing.** ~~A port on the mesh is `<runtime name>/<display name>/<port>`.~~ —
-  Superseded 2026-09-30 by `one-host-per-machine.md`: the address gains a graph level,
-  `<runtime name>/<graph name>/<display name>/<port>`, and in hosted mode the runtime name is
-  the host's. The runtime
+- **Addressing.** A port on the mesh is `<runtime name>/<display name>/<port>`. The runtime
   name belongs to the runtime, defaults to `<hostname>-<app directory name>-<id>` with the id
   hashed from the directory's full path, is never auto-suffixed, and is unique within a mesh.
 - **Surfaces.** A top-level `surface_id` crosses as the frame's pixels and lands as a freshly
@@ -36,8 +32,8 @@ processor is unchanged either way.
   replaces it.
 - **Security.** There is no authentication in this work; that is a separate, later pass.
   > Amended 2026-09-30 by `one-host-per-machine.md`: the pass has its shape. A host enforces a pushed stream
-  > map — which ports another machine may link, and which peers may — refuses any other remote
-  > link, and admits a peer only after it authenticates. How a peer authenticates is OPEN.
+  > map that refuses links to unexposed ports, and authenticates peers. Who pushes the map, what a
+  > host with none exposes, and how a peer authenticates are OPEN.
 - **Remote links.** Any runtime may create one: a receiver pulling, a sender pushing, or a
   third runtime wiring two others. The runtime owning the input applies it with `connect`'s
   own refusals. A missing runtime makes the link wait; a missing port is refused by name.
@@ -183,8 +179,6 @@ engine at `d4ce808f6`.
 
 - A runtime is reachable on its network by default and carries no authentication until the
   security pass. That is accepted for deployments on isolated networks.
-  > Amended 2026-09-30 by `one-host-per-machine.md`: a host with no stream map exposes nothing beyond its
-  > machine.
 - Renaming a processor changes its address, so display names become part of what a mesh
   depends on.
 - The plan's statement that the engine inspects no bag content gains a second, narrow
@@ -196,5 +190,5 @@ engine at `d4ce808f6`.
   machines has to re-anchor explicitly until a common network clock exists.
 - Any runtime on a reachable network can wire links into any other until the security pass
   lands.
-  > Amended 2026-09-30 by `one-host-per-machine.md`: in hosted mode the host's stream map decides who may link
-  > to which of its ports.
+  > Amended 2026-09-30 by `one-host-per-machine.md`: a host's stream map decides who may link to which of its
+  > ports.
