@@ -41,7 +41,7 @@ http-body-util = "0.1.5"
 rustls = { version = "0.23.43", features = ["ring"] }
 
 # The one clock the whole runtime agrees on, read the same way the engine
-# reads it: `CLOCK_MONOTONIC` here, `mach_absolute_time` from libSystem on macOS.
+# reads it: `CLOCK_MONOTONIC` off macOS, `mach_absolute_time` from libSystem on it.
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 libc = "0.2"
 

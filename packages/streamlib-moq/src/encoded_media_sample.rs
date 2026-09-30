@@ -45,7 +45,7 @@ impl EncodedMediaSample {
         }
     }
 
-    /// The producer's stamp, on `CLOCK_MONOTONIC`.
+    /// The producer's stamp, on the engine's `MediaClock`.
     pub(crate) fn timestamp_ns(&self) -> i64 {
         match self {
             EncodedMediaSample::VideoAccessUnit(unit) => unit.timestamp_ns,

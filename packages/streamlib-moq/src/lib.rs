@@ -684,7 +684,7 @@ fn the_clock_a_python_caller_named(
 /// engine's — so a reading compares with `streamlib.monotonic_now_ns()`.
 #[pyfunction(name = "monotonic_now_ns")]
 fn this_wheels_monotonic_now_ns() -> i64 {
-    monotonic_clock::monotonic_now_ns()
+    monotonic_now_ns()
 }
 
 #[pymodule]
