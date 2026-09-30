@@ -23,7 +23,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   experience and do not breach zero ceremony; needing an app bundle to obtain them
   would. Every ticket traces to this sentence or does not exist.
   [importable-python-library — SHIPPED #1683, #1684, #1711; macos-platform-floor —
-  SHIPPED #2357, #2359, #2361, #2362; amended by one-host-per-machine: the distribution names, and a hosted-mode sentence beside this one]
+  SHIPPED #2357, #2359, #2361, #2362; amended by one-host-per-machine: the package names]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_new_writes_a_working_app -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py::test_the_scaffolded_app_reaches_a_running_graph -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py::test_every_helper_interpreter_goes_live_inside_the_startup_budget -->
@@ -36,7 +36,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   `dev`/`run` find `app.py`'s `setup(rt)` by convention, `-f <file>` overrides;
   processors are Python classes written in the app or imported from pip-installed
   packages, and `rt.add` takes the class; the pipeline API is `add`/`connect`.
-  [importable-python-library — SHIPPED #1683, #1707, #1708; amended by one-host-per-machine: two distributions, and an environment per graph in hosted mode]
+  [importable-python-library — SHIPPED #1683, #1707, #1708; amended by one-host-per-machine: a stream package and a host package]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_graph_building.py -->
 - **DECIDED** — The zero-ceremony bar (the sentence is untrue until all hold): no
   manifest authoring; no boilerplate entry; bags/schemas fixed (no engine schema
@@ -89,16 +89,19 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_new_writes_exactly_the_rendered_templates -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_every_scaffolded_python_file_passes_ruff -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cross_floor_check.py::test_the_scaffold_binds_to_no_floor -->
-- **DECIDED** — Hosted mode, the second product sentence: a machine runs one host, and
-  graphs — the developer's own, or premade ones someone else published — load into it and
-  unload from it live, each able to bring its own environment, beside every other graph on
-  the machine; what leaves the machine is the host's to enforce, never a graph's to wire.
-  `streamlib dev` stays the embedded, single-graph loop of the sentence above, and both
-  modes run the same graph description. Every ticket traces to one of the two sentences.
+- **OPEN** — How streams are hosted. The owner confirmed the direction "each machine runs one
+  host daemon that owns the GPU, the shared-memory transport, the machine's single Zenoh session,
+  one local API and the scheduler, and loads many graphs live, while the single-graph embedded
+  mode stays for development", then reopened it the same day.
+  - Candidates: a host daemon beside an embedded single-graph mode; or one kind of runtime that
+    runs one or more streams, started with a stream or run as a service.
+  - Constraints (owner): streams get their own compute; every stream is addressable by URL,
+    somewhat in the manner of Plan 9; there is no second mode unless it solves a real problem;
+    it runs on very low-power devices; every Python processor keeps its own process; agents keep
+    changing live graphs.
+  - Undecided with it: what `streamlib run` does; whether "the engine runs once per process"
+    changes; whether a host serves a machine or a user; how a host is started and kept alive.
   [one-host-per-machine]
-- **OPEN** — What `streamlib run` does in hosted mode. Direction: it builds the app's
-  description and hands it to the machine's host. Undecided: what it does where no host
-  runs — start one, refuse by name, or run embedded. [one-host-per-machine]
 
 ## Packages & extension model — SHIPPED
 
@@ -123,7 +126,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   package: Rust inside, loaded across the CPython ABI, never dlopen'd by the engine
   (extension-model, 2026-09-04).
   [importable-python-library; importable-python-library-ripout — SHIPPED #1715; the clause
-  scoped to the ABI by local-transport-hardening — SHIPPED #2262; the handshake clause reopened by one-host-per-machine for per-graph environments]
+  scoped to the ABI by local-transport-hardening — SHIPPED #2262; the handshake clause reopened by one-host-per-machine]
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-10-importable-python-library-ripout.md -->
 - **DECIDED** — Third-party native code (closed-source included) ships as an ordinary
   Python package whose native internals expose capabilities to Python as handles —
@@ -211,7 +214,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   refuse by name at startup. `graph` carries what loaded, as a third top-level key beside
   `nodes` and `links`: one entry per capability with its name, version and distribution.
   There is no per-app opt-out yet; the first app that needs one gets it as a one-line
-  addition. [extension-model; amended by one-host-per-machine: a host role, and the group name reopened]
+  addition. [extension-model; reopened by one-host-per-machine: how an external control client loads]
 - **DECIDED** — The support hook's contract, as built. A wheel declares
   `[project.entry-points."streamlib.extensions"] <name> = "<module>:load"`; the engine
   reads `importlib.metadata.entry_points(group="streamlib.extensions")` and calls each
@@ -227,7 +230,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   distributions. `GraphResponse` gains `extensions: [{name, version, distribution}]`, a
   third top-level key, in the OpenAPI schema and the MCP `graph` tool alike. No opt-out.
   Discovery and the loop are Python; the runtime-side registry and the `graph` key are the
-  one engine change. [networking-extension-wheels — SHIPPED #2149; amended by one-host-per-machine: `role` gains `"host"`]
+  one engine change. [networking-extension-wheels — SHIPPED #2149; reopened by one-host-per-machine: how an external control client loads]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_capability_extensions.py -->
 - **DECIDED** — The mechanism's own proof is GPU-free and CI-run: a test-only distribution
   under the wheel's tests, installed into the venv, whose entry point registers a capability
@@ -464,14 +467,18 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cross_floor_check.py -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cross_floor_check.py::test_the_wheels_own_python_binds_to_no_floor -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py::test_a_scaffolded_app_with_a_cross_floor_finding_warns_and_starts_anyway -->
-- **DECIDED** — The host takes an engine role for capability extensions: every hook
-  installed in the host's environment runs once as the host starts, with `role` `"host"`,
-  beside an embedded runtime's `"app"` role and each helper's `"helper"` role.
+- **DECIDED** — streamlib offers an extension point for an external control client, and runs
+  complete without one. [one-host-per-machine]
+- **OPEN** — How the stream package and the host package stay independent. Constraint (owner):
+  a change to a stream, or to the stream package, never requires reinstalling the host to run it,
+  and each package, and each stream, is testable on its own as an atomic unit. Undecided: how the
+  two are versioned and released, and how a host and a stream's helpers agree on a build, given
+  that a helper today refuses anything but its parent's exact build. [one-host-per-machine]
+- **OPEN** — How an external control client plugs in (the capability-extension mechanism with a
+  role of its own, or another seam), and which doors it needs, such as pushing the stream map.
   [one-host-per-machine]
-- **DECIDED** — An external control client is a capability extension that loads into the
-  host through that hook. The doors it needs on `host` — the stream map first
-  (§Networking) — arrive with the change that brings it, as the mechanism above states.
-  streamlib runs complete without one and ships none. [one-host-per-machine]
+- **OPEN** — The remaining names under the namespace: the extensions' entry-point group,
+  distributions and imports, the CLI's command, and the Rust crate. [one-host-per-machine]
 
 ## Consumers — examples & packages — SHIPPED
 <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-31-consumer-tree-disposition.md -->
@@ -653,7 +660,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   build id above.
   [opus-mp4-recording-rung — SHIPPED #2124; the timestamped spelling with
   networking-extension-wheels — #2150; the mesh address and the envelope's link name —
-  cross-runtime-links, SHIPPED #2287; amended by one-host-per-machine: the address gains a graph level]
+  cross-runtime-links, SHIPPED #2287; reopened by one-host-per-machine: whether addresses gain a stream level]
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::input::tests::two_inbound_links_hand_a_reader_the_link_each_bag_arrived_on -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::input::tests::naming_the_inbound_link_a_bag_arrived_on_leaves_the_per_link_drop_counts_alone -->
   <!-- verify: cargo test -p streamlib-engine --lib iceoryx2::input::tests::a_port_lists_the_inbound_links_wired_into_it_and_a_port_with_none_lists_none -->
@@ -944,7 +951,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
 - **DECIDED** — Three execution modes (reactive / manual / continuous); one dedicated
   OS thread per processor with descriptor-driven priority (realtime / high / normal);
   synchronous lifecycle traits; Full/Limited capability typestate on the phase axis
-  (setup/teardown vs process). [execution-model; amended by one-host-per-machine: in hosted mode the host arbitrates realtime priority across graphs]
+  (setup/teardown vs process). [execution-model; reopened by one-host-per-machine: scheduling across streams]
 - **DECIDED** — Reactive and continuous execution pace the same on both floors. A reactive
   processor waits on one readiness queue — epoll on Linux, kqueue `EVFILT_READ` on macOS,
   level-triggered on both, with one 500 ms bound — holding its inbound listener and its
@@ -982,7 +989,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   Helper children import the wheel itself — one native artifact. Every processor class
   must be import-addressable from a module whose import is side-effect-safe; there is
   nothing to equalize and nothing to move between, because there is no second
-  placement. [helper-process-placement-only — SHIPPED #1714; amended by one-host-per-machine: in hosted mode the interpreter is the graph's]
+  placement. [helper-process-placement-only — SHIPPED #1714; reopened by one-host-per-machine: environments for streams that share a process]
 - **DECIDED** — A surface crosses to a helper on Apple over raw Mach. The surface-share
   service above the transport does not change: its verbs, its per-slot-not-per-frame shape,
   the checkout lease and the retired-frame refusal are one platform-neutral core both arms
@@ -1131,7 +1138,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   return inside the log-flush grace and exit 0.
   [shutdown-ladder; local-transport-hardening — SHIPPED #2264, #2266; the macOS arm —
   macos-platform-floor, SHIPPED #2357; parent death and ladder coverage on macOS —
-  macos-capability-parity, SHIPPED #2410; amended by one-host-per-machine: in hosted mode the host is the parent, and unloading a graph runs the ladder]
+  macos-capability-parity, SHIPPED #2410; reopened by one-host-per-machine: how streams are hosted]
   <!-- verify: sdk/streamlib-python-wheel/tests/test_helper_placement.py -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_helper_placement.py::test_a_processor_interrupted_while_still_setting_up_still_tears_down -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_helper_placement.py::test_a_worker_a_processor_forked_goes_down_with_the_apps_helper -->
@@ -1172,7 +1179,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   subprocess protocol version number, its minimum, its validator and its environment
   variable retire with it: one check per invariant, and a hand-bumped integer never caught a
   helper built against a different iceoryx2 patch or a stale wheel on the helper's
-  `sys.path`. [local-transport-hardening — SHIPPED #2262; reopened by one-host-per-machine for per-graph environments]
+  `sys.path`. [local-transport-hardening — SHIPPED #2262; reopened by one-host-per-machine: how the packages agree on a build]
   <!-- verify: cargo test -p streamlib-engine --lib core::engine_build_id_composition -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_helper_placement.py::test_a_helper_that_imported_another_engine_build_is_refused_naming_both_builds -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_helper_process.py::test_a_helper_handed_no_engine_build_id_refuses_rather_than_passing -->
@@ -1226,7 +1233,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   decorator before the constructor is installed. A second decoration of one import path
   is refused at import naming `importlib.reload`, and the first registration stands. A
   class decorated with no `description=` registers its docstring, or `""`.
-  [agent-readable-processor-catalog — SHIPPED #2228; amended by one-host-per-machine: the decorator records metadata an engine registers]
+  [agent-readable-processor-catalog — SHIPPED #2228; reopened by one-host-per-machine: declarations readable without an engine]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_declaration_registers.py -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_processor_config_catalog.py::test_a_class_the_app_imported_and_never_added_is_in_the_catalog -->
 - **DECIDED** — An instance's display name is the human-facing label — passed at `add`,
@@ -1242,55 +1249,28 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   the class's short name as its own validated field rather than the engine splitting one
   out of the import path, because splitting re-invents the grammar this change deleted.
   [processor-class-identity — SHIPPED #1838, #1841; the address-chunk refusal —
-  runtime-mesh, SHIPPED #2282; amended by one-host-per-machine: the address gains a graph level]
+  runtime-mesh, SHIPPED #2282; reopened by one-host-per-machine: whether addresses gain a stream level]
   <!-- verify: cargo test -p streamlib-engine --test display_name_disambiguation_test -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh_address_chunk -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_graph_building.py::test_a_duplicate_requested_display_name_is_disambiguated_too -->
 - **OPEN** — Additional execution flavors to scale processor count (lightweight /
   green-thread style): intended, do not build until designed; hard constraint — no new
   configuration dials. [execution-model]
-- **DECIDED** — A graph is data. A graph description names each processor by its import
-  path with its display name and config, the links between their ports, the graph's name
-  and its resource request, and optionally the outputs its author suggests exposing. It
-  extends the round-trippable graph snapshot the engine already loads and saves
-  (`load_graph_snapshot` / `save_graph_snapshot`) rather than standing beside it.
-  `setup(rt)` compiles to a description, and an engine runs one in either mode.
-  [one-host-per-machine]
-- **DECIDED** — A processor's declaration — identity, description, ports, config schema,
-  execution and priority — is metadata recorded on its class and readable without an
-  engine. A description carries the declaration of every processor it names, so a host
-  learns a graph's processors from its description; only the graph's helpers import its
-  classes. [one-host-per-machine]
-- **DECIDED** — In hosted mode the host takes the role this plan gives the app process: it
-  runs the machine's one engine, mesh session and control plane, owns the GPU device and
-  the event pump, and is the parent of every helper. The engine runs once per machine in
-  hosted mode and once per process in embedded mode. [one-host-per-machine]
-- **DECIDED** — Graphs are namespaces inside the host, each named uniquely within it. A
-  graph loads and unloads live through the graph mutations the control plane already
-  carries — `add_processor`, `remove_processor`, `connect`, `disconnect` — and a link
-  between two graphs on one host is a local link. [one-host-per-machine]
-- **OPEN** — What one graph may reach of another on the same host — its ports, its
-  surfaces — and whether the stream map governs links between them. [one-host-per-machine]
-- **DECIDED** — A graph may bring its own Python environment. A hosted graph's helpers are
-  exec'd from that environment's interpreter — never forked — and a graph that brings none
-  runs its helpers from the host's. [one-host-per-machine]
-- **OPEN** — How a graph arrives with its environment — the path of one that exists, or
-  dependencies the host resolves into one — and how a premade graph is packaged: a
-  directory, an archive, or a PyPI or repository reference. [one-host-per-machine]
-- **OPEN** — How a graph's environment and the host agree on the native build: a helper
-  refuses to start unless it imported its parent's exact build, and a graph's own
-  environment installs its own copy of the native distribution. [one-host-per-machine]
-- **DECIDED** — On Apple, surface sharing to helpers carries over to hosted mode
-  unchanged: the host is the engine's process, and every helper is its spawned child,
-  admitted as today. [one-host-per-machine]
-- **OPEN** — Sharing a surface beyond the host's own children, with a process on the
-  machine the host did not spawn. [one-host-per-machine]
-- **DECIDED** — The host owns the machine's resources across graphs. A description's
-  resource request states the graph's requests and limits — cores, threads, GPU memory,
-  priority; one arbiter in the host grants realtime thread priority across every graph;
-  and admission control refuses, by name, a graph the machine cannot fit. [one-host-per-machine]
-- **OPEN** — How a resource request is spelled, and what the host assumes of a graph
-  that states none. [one-host-per-machine]
+- **DECIDED** — A graph is data: a serializable description that apps build and hosts run, and
+  `setup(rt)` compiles to one. [one-host-per-machine]
+- **OPEN** — What a graph description holds and how it is written: processors by import path
+  with their config, the links, a name, resource needs, suggested exposures, and descriptions an
+  agent can read. Undecided too: whether it extends the engine's round-trippable graph snapshot,
+  and whether a processor's declaration becomes metadata readable without an engine. [one-host-per-machine]
+- **OPEN** — Several streams in one engine process, if the hosting answer allows it: how streams
+  are named and linked to each other; what one may reach of another's ports and surfaces; how
+  streams that need conflicting Python packages coexist; and whether surface sharing on Apple
+  carries over to such a process's helpers, and beyond them. [one-host-per-machine]
+- **OPEN** — Resources across streams: requests and limits, realtime priority across streams,
+  admission control, and how a stream states what it needs. [one-host-per-machine]
+- **OPEN** — Failure isolation when one process holds several streams. Its crash takes every
+  stream down. Undecided: whether a hung stream can end it, and who owns the signals and the
+  shutdown watchdog. [one-host-per-machine]
 
 ## Graphics (RHI / GPU) — SHIPPED
 
@@ -1533,7 +1513,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   capabilities of `GpuContext`, reached the same way by every caller. The four bridge
   traits and their installation step are deleted: no kernel capability can be absent at
   runtime, and no application glue supplies one.
-  [python-kernel-api; python-kernel-surface — SHIPPED #1773, #1774, #1777; amended by one-host-per-machine: a host may have no GPU]
+  [python-kernel-api; python-kernel-surface — SHIPPED #1773, #1774, #1777; amended by one-host-per-machine: accelerators are optional]
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-22-python-kernel-surface.md -->
 - **DECIDED** — GLSL is the shader source contract: Python passes GLSL text and the
   engine compiles it at kernel construction, and re-creating an identical kernel is free —
@@ -1721,15 +1701,11 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   caller in every language with the pipeline hardcoded to a single sample. Both are
   unbuilt engine capabilities rather than Python-reach gaps; equalising the construction
   surface with no pass to render against would buy nothing.
-- **DECIDED** — A host may have no GPU: the engine starts without a device and runs every
-  graph that needs none, and refuses at load, by name, a graph that needs one. Where a
-  device exists, `GpuContext` and its capabilities stand as decided above.
-  [one-host-per-machine]
-- **DECIDED** — Accelerators are optional: support beyond the engine's own RHI ships as a
-  capability extension installed where a device is, never as a second core beside the
-  engine. [one-host-per-machine]
-- **OPEN** — Where the accelerator line falls: which adapter crates move into that
-  extension, and whether any `GpuContext` capability moves with them. [one-host-per-machine]
+- **DECIDED** — Accelerators are optional: a stream that needs no GPU runs on a machine without
+  one. [one-host-per-machine]
+- **OPEN** — What optional accelerators mean for the engine: how it starts with no GPU; what a
+  stream that needs one gets on a machine without one; and whether the adapter crates, or any
+  `GpuContext` capability, move into an extension. [one-host-per-machine]
 
 ## Media I/O — camera, display, audio, codecs — SHIPPED
 
@@ -1895,7 +1871,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   access is granted, because binding an input-enabled unit blocks inside coreaudiod's privacy
   check until the user answers. The engine is never daemonised: detaching breaks the
   attribution chain and silently costs device access. [macos-platform-floor — SHIPPED #2359;
-  macos-capability-parity — SHIPPED #2411 for the microphone; the never-daemonised clause superseded by one-host-per-machine in hosted mode]
+  macos-capability-parity — SHIPPED #2411 for the microphone; reopened by one-host-per-machine: how streams are hosted]
   <!-- verify: cargo test -p streamlib-engine --lib a_pending_request_is_made_once_and_never_waited_on -->
   <!-- verify: cargo test -p streamlib-engine --lib a_denial_names_the_responsible_application_and_the_setting_but_not_python -->
   <!-- verify: cargo test -p streamlib-engine --lib a_microphone_denial_names_the_microphone_setting_and_not_the_cameras -->
@@ -3040,10 +3016,9 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   by the app's own project, the shader precedent — never discovered from
   machine-global scan paths; the lane costs nothing when unused (no `DT_NEEDED`
   entries, no import-time work). [audio-subsystem]
-- **OPEN** — How a hosted engine keeps camera and microphone access on Apple when a launch
-  agent starts it: which application the permission is attributed to, and what a refusal
-  names, given the engine finds the responsible application by walking up the process
-  tree. [one-host-per-machine]
+- **OPEN** — Camera and microphone permission on Apple when something other than the user's
+  own application starts the engine, such as a launch agent: which application the permission is
+  attributed to, and what a refusal names. [one-host-per-machine]
 
 ## Networking — transport, runtime mesh, moq, webrtc — SHIPPED
 
@@ -3411,7 +3386,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   whose kernel-closed TCP peers see within milliseconds, and no Zenoh call ever runs on one of
   the engine's current-thread tokio runtimes. And **a helper opens no session**, because it
   never constructs a `Runner` and Zenoh's thread pool starts on first use.
-  [runtime-mesh — SHIPPED #2283; the session's owner and its defaults clause superseded by one-host-per-machine in hosted mode]
+  [runtime-mesh — SHIPPED #2283; the defaults clause superseded by one-host-per-machine for a host: its own configuration]
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::resolved_runtime_mesh_configuration::tests::the_zenoh_configuration_carries_peer_mode_and_exactly_these_endpoints -->
   <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::capability_extension_and_mesh_rendering_tests::a_local_only_runtime_renders_the_reason_its_session_did_not_open -->
   <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::capability_extension_and_mesh_rendering_tests::an_isolated_runtime_renders_an_open_session_with_no_peers_and_no_reason -->
@@ -3435,7 +3410,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   mesh configuration mutable state on a constructed runtime and moves both proofs behind the
   GPU in `start()`; and a `[tool.streamlib]` table in `pyproject.toml`, the first
   streamlib-specific file an app would author, which the zero-ceremony bar rules out. Owner,
-  2026-09-14. [runtime-mesh — SHIPPED #2282, #2283; superseded by one-host-per-machine in hosted mode: the host's configuration]
+  2026-09-14. [runtime-mesh — SHIPPED #2282, #2283; superseded by one-host-per-machine for a host: its own configuration]
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::resolved_runtime_mesh_configuration -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::runtime_name -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_a_mesh_peer_this_build_cannot_dial_is_a_usage_error -->
@@ -3457,7 +3432,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   and never waits. Multicast discovery is proven by the two-process fixture's multicast arm,
   run beside its explicit-peer arms with scouting pinned to loopback — a local end-to-end
   tier, compiled on both CI lanes and never a merge gate.
-  [runtime-mesh — SHIPPED #2283; amended by one-host-per-machine: no control-plane URLs are announced]
+  [runtime-mesh — SHIPPED #2283; reopened by one-host-per-machine: the local API]
   <!-- verify: cargo test -p streamlib-engine --features multi-process-mesh-e2e-tests --test runtime_mesh_two_processes two_runtimes_discovering_by_multicast_each_list_the_other -->
   <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::capability_extension_and_mesh_rendering_tests::a_peer_that_has_not_answered_still_deserializes_beside_one_that_has -->
 - **DECIDED** — Everything a runtime puts on the mesh lives under a mesh name, `default`
@@ -3469,7 +3444,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   and does not buy is worth stating exactly: runtimes in different meshes on one network may
   still connect at the transport and exchange nothing, and unrelated Zenoh traffic — ROS 2's
   `rmw_zenoh`, say — may connect the same way. Separation is of what is announced and read,
-  never of what dials whom. [runtime-mesh — SHIPPED #2283; amended by one-host-per-machine: in hosted mode peers authenticate and the stream map decides what links]
+  never of what dials whom. [runtime-mesh — SHIPPED #2283; amended by one-host-per-machine: a host authenticates peers and enforces the stream map]
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::runtime_mesh_name -->
   <!-- verify: cargo test -p streamlib-engine --features multi-process-mesh-e2e-tests --test runtime_mesh_two_processes -->
 - **DECIDED** — A port on the mesh is addressed `<runtime name>/<display name>/<port>`. The
@@ -3514,7 +3489,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   the link is `error` naming both hosts and carries from neither until one leaves, because a
   link that picked one could feed the wrong machine.
   [runtime-mesh — SHIPPED #2282, #2284; the residual settled by cross-runtime-links #2292;
-  the Apple host identity and native liveness — macos-platform-floor, SHIPPED #2363; amended by one-host-per-machine: the address gains a graph level]
+  the Apple host identity and native liveness — macos-platform-floor, SHIPPED #2363; reopened by one-host-per-machine: whether addresses gain a stream level]
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::runtime_name -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::duplicate_runtime_name_on_the_mesh -->
   <!-- verify: cargo test -p streamlib-engine --features multi-process-mesh-e2e-tests --test runtime_mesh_two_processes -->
@@ -3614,7 +3589,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   `link_request_id` alone to cancel a request still waiting. A runtime name equal to one's own
   is a local reference, resolved by display name.
   [cross-runtime-links — SHIPPED #2292 for the Rust address and #2287 for the Python and MCP
-  spellings; the `to_*` pair with #2289; amended by one-host-per-machine: the address gains a graph level]
+  spellings; the `to_*` pair with #2289; reopened by one-host-per-machine: whether addresses gain a stream level]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_graph_building.py -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh_address_chunk -->
   <!-- verify: cargo test -p streamlib-api-server tools_call_connect_names_a_source_on_another_runtime_by_its_mesh_address -->
@@ -3652,7 +3627,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   `disconnect` over the mesh is the same request carrying `link_id`, and needs no idempotence
   record — it is idempotent by what it asks for. Every link renders `created_by_runtime_name`,
   its own runtime's name for a local link.
-  [runtime-mesh; cross-runtime-links — SHIPPED #2289; the any-runtime-may-wire clause superseded by one-host-per-machine in hosted mode: the stream map decides]
+  [runtime-mesh; cross-runtime-links — SHIPPED #2289; the any-runtime-may-wire clause superseded by one-host-per-machine for a host: the stream map decides]
   <!-- verify: cargo test -p streamlib-engine --features multi-process-mesh-e2e-tests --test cross_runtime_link_requests_two_processes -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::link_requests_applied_into_this_runtimes_graph -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh::link_requests_this_runtime_has_sent -->
@@ -3833,7 +3808,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   node has not had applied, each `awaiting_runtime` while its runtime is absent, `unanswered`
   while it is not replying, or `refused` with that runtime's own words.
   [runtime-mesh — SHIPPED #2283, #2285; the link shape and the two request keys —
-  cross-runtime-links, SHIPPED #2292, #2287, #2289, and the stopped-egress correction #2346; amended by one-host-per-machine: no control-plane URLs]
+  cross-runtime-links, SHIPPED #2292, #2287, #2289, and the stopped-egress correction #2346; reopened by one-host-per-machine: the local API]
   <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::capability_extension_and_mesh_rendering_tests -->
   <!-- verify: cargo test -p streamlib-engine --lib core::json_schema::capability_extension_and_mesh_rendering_tests::a_port_another_runtime_reads_renders_with_the_runtimes_reading_it -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_a_runtime_on_the_mesh_is_listed_once_with_what_it_says_it_is -->
@@ -3846,24 +3821,23 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   a local output renders that link as this machine, confidently and wrongly, so whatever
   closes this has to correct that reading too and not only add a shared epoch.
   [runtime-mesh; the relay gap named by cross-runtime-links]
-- **DECIDED** — In hosted mode the machine's one Zenoh session is the host's, built from the
-  host's own configuration: the routers it dials, its peers and listeners, discovery, and
-  the credentials it presents. An embedded runtime's session is configured as above.
-  [one-host-per-machine]
-- **DECIDED** — A mesh address gains a graph level:
-  `<runtime name>/<graph name>/<display name>/<port>`, the graph name one key chunk under
-  the display name's rules. In hosted mode the runtime name is the host's, and a remote
-  reference names the graph as well as the processor. [one-host-per-machine]
-- **DECIDED** — The host enforces a stream map, pushed to it through the local API or by an
-  external control client: which ports of its graphs another machine may link, and which
-  peers may. A remote link to any other port is refused, and a peer authenticates before
-  it links anything. A host with no stream map exposes nothing beyond the machine. This is
-  the security pass the entries above defer. [one-host-per-machine]
-- **OPEN** — How a peer authenticates: the identity it presents, how the host verifies it,
-  and what carries it on Zenoh's transport. [one-host-per-machine]
-- **DECIDED** — MoQ and WebRTC stay edge I/O, as stated above: MoQ never carries links
-  between runtimes, and a graph never wires a publisher to make its output reachable from
-  another machine — the mesh does that, under the stream map. [one-host-per-machine]
+- **DECIDED** — The host decides what leaves the machine. It builds its Zenoh session from its own
+  configuration, dials routers, and enforces a pushed stream map that refuses links to unexposed
+  ports and authenticates peers. [one-host-per-machine]
+- **DECIDED** — Zenoh stays the transport between machines, and MoQ stays edge I/O. MoQ never
+  carries links between runtimes, and the MoQ-gateway transport change is not happening. [one-host-per-machine]
+- **OPEN** — Whether mesh addresses gain a stream level beside the runtime, display and port
+  names. [one-host-per-machine]
+- **OPEN** — The stream map's details: who pushes it (the local API, an external control
+  client); what a host with no map exposes; how long a map stays valid when its source is
+  unreachable; and how a peer authenticates. [one-host-per-machine]
+- **OPEN** — Agent access by URL.
+  - Direction (owner): every exposed stream is reachable by URL from any tool (a browser, an MCP
+    client, curl, ffmpeg) with a description an agent can read. A user with no account can see and
+    use their own streams locally.
+  - Undecided: where a stream's description comes from (it stays documentation, never a contract
+    at the port); whether the engine serves local URLs, which needs a loopback listener; and how
+    raw streams stay end-to-end encrypted, for example with TLS ending on the machine. [one-host-per-machine]
 
 ## Language SDKs & parity — SHIPPED
 <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py -->
@@ -3918,19 +3892,13 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   thread during interpreter finalization. And signal ownership stays scoped to `run()`:
   a teardown outside it — `shutdown()` before a run, `Drop`, `atexit`, `__exit__` — owns no
   signals, and the watchdog alone bounds it.
-  [shutdown-ladder; local-transport-hardening — SHIPPED #2266; amended by one-host-per-machine: in hosted mode the signals and the watchdog are the host's, and unloading a graph never ends it]
+  [shutdown-ladder; local-transport-hardening — SHIPPED #2266; reopened by one-host-per-machine: how streams are hosted]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_ctrl_c_exits_cleanly -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_sigint_is_handed_back_to_cpython -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_a_second_ctrl_c_forces_the_shutdown_past_a_long_teardown -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_a_third_ctrl_c_kills_every_helper_process_group_and_exits_130 -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_sighup_tears_the_graph_down_gracefully -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_a_runtime_held_by_a_live_thread_is_torn_down_at_exit -->
-- **DECIDED** — Authoring is unchanged: `setup(rt)` with `add` and `connect` builds the
-  graph, embedded or hosted, and there is no second wiring language. [one-host-per-machine]
-- **DECIDED** — In hosted mode a graph never ends the host: the signals and the watchdog
-  are the host's; unloading a graph runs its helpers' shutdown ladder; and a graph whose
-  teardown outlasts the budgets is abandoned and named while every other graph runs on.
-  Embedded mode keeps `rt.run()`'s ladder above. [one-host-per-machine]
 
 ## Distribution & versioning — SHIPPED
 <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_wheel_portability.py -->
@@ -4042,18 +4010,9 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   <!-- verify: cargo test -p streamlib-adapter-vulkan -p streamlib-adapter-cpu-readback -->
   <!-- verify: grep -n "Absent on macOS" adapters/streamlib-adapter-opengl/src/lib.rs adapters/streamlib-adapter-cuda/src/lib.rs -->
   <!-- verify: grep -n "p streamlib-adapter-skia" .github/workflows/test.yml -->
-- **DECIDED** — streamlib's distributions move under one PEP 420 namespace, `tatolab`, on
-  PyPI: `tatolab-stream`, pure Python — the graph description and processor declarations —
-  and `tatolab-host`, native — the engine, the CLI and the local API's client. No
-  distribution ships `tatolab/__init__.py`. The two, and the crate for Rust apps, release
-  together at one version. [one-host-per-machine]
-- **OPEN** — The rename's remaining names: the CLI's command, the Rust crate, and the
-  capability extensions' entry-point group, distributions and imports. [one-host-per-machine]
-- **DECIDED** — streamlib owns no service on either platform. The host runs from the
-  native distribution's CLI as a foreground process that something else keeps alive — a
-  product's launch agent on Apple, a service manager on Linux. Nothing streamlib ships
-  installs a service, a launch agent or an application bundle, and no second binary ships
-  beside the distributions. [one-host-per-machine]
+- **DECIDED** — streamlib ships under a `tatolab.*` namespace, as a pure-Python stream package
+  and a native host package, with support for Linux and Apple Silicon macOS and no
+  streamlib-owned service. [one-host-per-machine]
 
 ## Control plane & observability — SHIPPED
 <!-- verify: cargo test -p streamlib-api-server tools_list_advertises_exactly_the_control_vocabulary -->
@@ -4117,7 +4076,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   local-transport-hardening — SHIPPED #2263, #2265 made the late-joiner sizing clause true
   in the tree and gave a helper's link the `pending` state the instructions now explain;
   cross-runtime-links — SHIPPED #2287, #2289 for the mesh arguments and the states the
-  instructions explain; hosting and transport superseded by one-host-per-machine, vocabulary kept]
+  instructions explain; reopened by one-host-per-machine: the local API]
   <!-- verify: sdk/streamlib-python-wheel/tests/test_cli.py::test_the_wheel_serves_no_mcp_verb -->
   <!-- verify: cargo test -p streamlib-api-server tools_list_advertises_exactly_the_control_vocabulary -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_live_graph_mutation.py -->
@@ -4127,7 +4086,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
 - **DECIDED** — `dev` and `run` bind the control plane identically: all interfaces
   (`0.0.0.0`) by default, narrowed per invocation by `--host`. There is no dev-only
   exposure posture — a node another host can reach is bound wide by definition, so
-  reachability is not the lever that scopes exposure. [control-plane-bind-posture; superseded by one-host-per-machine: the local socket]
+  reachability is not the lever that scopes exposure. [control-plane-bind-posture; reopened by one-host-per-machine: the local API]
 - **DECIDED** — The api-server is engine-side infrastructure and relocates into the
   `runtime/` tree: it is a host — statically linked, never dlopen'd. Its new host is
   the wheel (and the `streamlib` crate for Rust apps); the relocation is a sequencing
@@ -4148,7 +4107,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   embed.
   [importable-python-library — SHIPPED #1683, #1711; importable-python-library-ripout
   — SHIPPED #1715; control-plane-surface-pixel-exchange — SHIPPED #1975 for the
-  `exchange` verb; virtual-camera-sink — SHIPPED #2196 for the setup verb; amended by one-host-per-machine: verbs to run the host and to load and unload graphs]
+  `exchange` verb; virtual-camera-sink — SHIPPED #2196 for the setup verb; reopened by one-host-per-machine: how streams are hosted]
   <!-- verify: sdk/streamlib-python-wheel/tests/test_cli.py::test_this_wheel_is_the_only_streamlib_cli -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_the_channel_form_taps_then_exchanges_each_sampled_id -->
@@ -4248,7 +4207,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   stay deferred until something needs them. The REST spelling joins the bearer-gated set
   beside the tap WebSocket and MCP inherits the gate the whole dispatch already has:
   whatever the auth entry below decides later, it decides for this verb the same as the
-  rest. [control-plane-surface-pixel-exchange — SHIPPED #1972, #1974; amended by one-host-per-machine: local only, gated by the socket's permissions]
+  rest. [control-plane-surface-pixel-exchange — SHIPPED #1972, #1974; reopened by one-host-per-machine: the local API]
   <!-- verify: cargo test -p streamlib-api-server the_exchange_route_answers_the_operation_bytes_verbatim_as_an_image -->
   <!-- verify: cargo test -p streamlib-api-server tools_call_exchange_states_the_true_extent_the_id_and_the_exact_bytes_route -->
   <!-- verify: cargo test -p streamlib-api-server the_exchange_route_rejects_a_missing_token_with_401_when_auth_on -->
@@ -4261,19 +4220,9 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
 - **OPEN** — Auth and remote-access posture: how a node authenticates and authorizes
   control-plane callers, and what it exposes to a mesh. Scoping exposure down is decided
   here and only here — it is a question of who may call, never of what the node listens
-  on, so no narrower bind default is set ahead of it. [control-plane-bind-posture; superseded by one-host-per-machine: the local socket and the stream map, with peer authentication OPEN under §Networking]
-- **DECIDED** — The control plane is served on one local API: a Unix domain socket whose
-  permissions limit it to the machine's users, served by the host in hosted mode and by
-  the runtime itself in embedded mode. It replaces the per-runtime HTTP and WebSocket
-  server and carries the vocabulary above; in hosted mode it also takes a description to
-  load and a graph name to unload. The builders' MCP tools are served from it, and the CLI
-  and any desktop UI are its clients. [one-host-per-machine]
-- **DECIDED** — The control plane is reachable only on its own machine. The bind posture
-  above and the control-plane URLs a runtime announces on the mesh retire; what crosses
-  machines is the mesh, under the stream map. [one-host-per-machine]
-- **OPEN** — How an MCP host on the machine reaches the builders' tools on the local API,
-  MCP's transports being stdio and HTTP: a stdio bridge in the CLI, reversing the
-  no-bridge clause above, or an HTTP listener on loopback beside the socket. [one-host-per-machine]
-- **OPEN** — Whether a host serves a machine or a user: which user it runs as, where its
-  socket and runtime directory live, and what one host per machine means with several
-  users logged in. [one-host-per-machine]
+  on, so no narrower bind default is set ahead of it. [control-plane-bind-posture; see one-host-per-machine's OPEN entries on the local API and the stream map]
+- **OPEN** — The local API. Direction (owner): one local API per machine, which a UI reaches over a
+  local socket. Undecided: its protocol; whether it replaces each runtime's HTTP server; how MCP
+  hosts reach it; whether an agent on one machine can change a stream on another; and the
+  stream-management verbs (load, unload, list, expose) beside the graph-mutation verbs, which
+  stay. [one-host-per-machine]

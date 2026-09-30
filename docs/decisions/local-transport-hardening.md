@@ -46,9 +46,6 @@ Read this before:
 - **The handshake checks the build, not a protocol number.** Parent and helper compare an engine
   build id compiled into the one native artifact: version, git sha, and a per-build nonce. A
   mismatch or an absent id is refused by name before any channel opens.
-  > Reopened 2026-09-30 by `one-host-per-machine.md`: a hosted graph's own environment installs its own copy
-  > of the native distribution, so how that environment and the host agree on the build is
-  > OPEN in the plan.
 
 ## Rejected alternatives
 
