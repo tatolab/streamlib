@@ -3045,7 +3045,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   names, given the engine finds the responsible application by walking up the process
   tree. [one-host-per-machine]
 
-## Networking — transport, runtime mesh, moq, webrtc — SHIPPED
+## Networking — transport, runtime mesh, moq, webrtc — IN-FLIGHT (→ one-host-per-machine-ripout)
 
 - **DECIDED** — Cross-language interop happens on the wire between nodes, as
   self-describing bags — never in-graph. [importable-python-library — SHIPPED #1715]
@@ -4055,7 +4055,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   installs a service, a launch agent or an application bundle, and no second binary ships
   beside the distributions. [one-host-per-machine]
 
-## Control plane & observability — SHIPPED
+## Control plane & observability — IN-FLIGHT (→ one-host-per-machine-ripout)
 <!-- verify: cargo test -p streamlib-api-server tools_list_advertises_exactly_the_control_vocabulary -->
 
 - **DECIDED** — The control plane carries no optional capability's routes natively. A
