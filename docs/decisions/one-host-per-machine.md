@@ -1,6 +1,6 @@
 # One host per machine: graphs as data, a local API, and a mesh the host configures
 
-Rationale for the `[one-host-per-machine]` entries in `docs/plan/ARCHITECTURE.md`, decided by the owner in a pivot on 2026-09-30, direction confirmed verbatim the same day. It supersedes `control-plane-bind-posture.md` and clauses of `runtime-mesh.md`, `control-plane-one-surface.md` and `importable-python-library.md`; it amends `helper-process-placement-only.md`, `product-mvp-sentence.md`, `extension-model.md`, `execution-model.md` and `shutdown-ladder.md`; and it reopens the build-id handshake of `local-transport-hardening.md`. Each is annotated in place. It keeps `macos-platform-floor.md` whole, and confirms §Networking's reading of MoQ as edge I/O.
+Rationale for the `[one-host-per-machine]` entries in `docs/plan/ARCHITECTURE.md`, decided by the owner in a pivot on 2026-09-30, direction confirmed verbatim the same day. It supersedes `control-plane-bind-posture.md` and clauses of `runtime-mesh.md`, `control-plane-one-surface.md` and `importable-python-library.md`; it amends `helper-process-placement-only.md`, `product-mvp-sentence.md`, `single-binary-launch.md`, `extension-model.md`, `execution-model.md`, `shutdown-ladder.md`, `python-kernel-api.md` and `control-plane-pixel-exchange.md`; and it reopens the build-id handshake of `local-transport-hardening.md`. Each is annotated in place. It keeps `macos-platform-floor.md` whole, and confirms §Networking's reading of MoQ as edge I/O.
 
 ## Trigger
 

@@ -39,6 +39,9 @@ SPIR-V, or when someone asks why the four GPU bridge traits were deleted.
    (shaderc / glslang).
 5. **The four bridge traits are deleted.** Compute, graphics, ray tracing and CPU readback
    are always-present capabilities of `GpuContext`.
+   > Amended 2026-09-30 by `one-host-per-machine.md`: a host may run with no GPU at all, and then has no
+   > `GpuContext`. Where a device exists these capabilities stay always present; whether any
+   > of them moves into an accelerator extension is OPEN in the plan.
 6. **Dispatch is synchronous**, with batching for multi-pass work.
 7. **Rust converges on the same spelling** — bindings at dispatch, nothing persisting on the
    kernel — as its own change, sequenced after the Python surface.
