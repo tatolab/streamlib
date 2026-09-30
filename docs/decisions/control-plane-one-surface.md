@@ -19,6 +19,12 @@ operations for programmatic clients. The api-server is engine-side infrastructur
 relocates into the `runtime/` tree: it is a host (statically linked, never dlopen'd) and
 cannot follow the packages tree out of the repo.
 
+> Amended 2026-09-30 by `one-host-per-machine.md`: the one control plane is served on one local API — a Unix
+> domain socket limited to the machine's users, served by the host in hosted mode and by the
+> runtime itself in embedded mode — in place of the HTTP and WebSocket server, and it is
+> reachable only on its machine. The MCP tool set stays the canonical vocabulary and the CLI
+> stays its client. How an MCP host reaches the tools on the socket is OPEN in the plan.
+
 Node discovery is a per-user on-disk registry — one JSON file per live node in the OS's
 standard per-user runtime directory — written only by control-plane-hosting runtimes and
 pruned only when both liveness signals (a control round-trip and a process check) fail.
@@ -27,7 +33,10 @@ Observability: the JSONL log schema is a durable contract; tap forwards bags ver
 (no transcode) and trades completeness for guaranteed non-interference with the
 pipeline; graph and health inspection ride the same control plane.
 
-Auth and remote-access posture remain OPEN — nothing here decides a security model.
+~~Auth and remote-access posture remain OPEN — nothing here decides a security model.~~ —
+Superseded 2026-09-30 by `one-host-per-machine.md`: callers are the machine's users, admitted by the local
+socket's permissions, and what crosses to another machine is the mesh under the host's stream
+map.
 
 ## Rejected alternatives
 

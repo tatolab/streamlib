@@ -25,6 +25,11 @@ will not stop is handled.
 - **Nothing hangs the app.** A native thread that will not return is abandoned and named,
   and a watchdog of about fifteen seconds ends any other hang.
 
+> Amended 2026-09-30 by `one-host-per-machine.md`: in hosted mode the signals and the watchdog belong to the
+> host, and unloading a graph runs this ladder for that graph's helpers. A graph whose teardown
+> outlasts the budgets is abandoned and named while every other graph runs on, so a graph never
+> ends the host. Embedded mode keeps `rt.run()`'s ownership as decided here.
+
 ## Rejected alternatives
 
 - **The old five-second reply deadline alone.** It was a naive guard against apps that

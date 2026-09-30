@@ -199,6 +199,9 @@ primitive writes their own; the surface is what makes writing their own unnecess
 - The support hook runs once per process that takes an engine role — the app process when
   `Runtime()` is constructed, and each helper after the wheel is imported and the log channel
   is up but before the processor's module imports — idempotently, the driver-load shape.
+  > Amended 2026-09-30 by `one-host-per-machine.md`: in hosted mode the host takes the app process's role,
+  > running every hook installed in its environment as it starts, with `role` `"host"`. An
+  > external control client loads this way.
 - The placement rule is unchanged: a processor extension's Python class runs in its own helper.
   Whether its native code may ever be called in the app process is OPEN and is the owner's
   ruling to make, never a session's inference.

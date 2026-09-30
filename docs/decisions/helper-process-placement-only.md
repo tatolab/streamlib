@@ -41,6 +41,11 @@ asks why every Python processor is a child process.
    pixel exchange; and the ban is held by a `.claude/rules/placement.md` stop-work rule,
    hard-fail criteria in both reviewers, and `xtask check-no-in-process-placement`.
 
+> Amended 2026-09-30 by `one-host-per-machine.md`: in hosted mode the host is every helper's parent, and a
+> graph that brings its own environment has its helpers exec'd from that environment's
+> interpreter rather than the app's venv. Never fork stands, and the ban on in-process hosting
+> stands whole.
+
 ## Why
 
 **The owner rejected in-process at discovery and it kept coming back through the plan.** The

@@ -18,6 +18,10 @@ synchronous lifecycle traits (no host async runtime — a processor needing asyn
 its own in setup); and the Full/Limited capability typestate on the phase axis
 (setup/teardown privileged, process limited).
 
+> Amended 2026-09-30 by `one-host-per-machine.md`: in hosted mode many graphs share one host, which holds one
+> arbiter granting realtime thread priority across all of them; a descriptor's priority is the
+> processor's request.
+
 Additional execution flavors — green-thread-style lightweight scheduling and similar —
 are intended so one node can scale to many more processors than one OS thread each
 allows, trading some realtime guarantees; dedicated threads remain the path for

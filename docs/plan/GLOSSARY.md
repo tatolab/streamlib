@@ -61,7 +61,8 @@ never what dials whom. _Avoid_: "namespace" (Zenoh's own config key, which this 
 "cluster", "domain" (that is the iceoryx2 one).
 
 **Remote link**: a link whose output and input ports belong to different runtimes on the
-runtime mesh, addressed by runtime name, display name and port. _Avoid_: "network link",
+runtime mesh, addressed by runtime name, display name and port — decided 2026-09-30:
+runtime name, **graph name**, display name and port. _Avoid_: "network link",
 "bridge", "export".
 
 **Mesh peer**: another runtime on the same runtime mesh, whether or not it hosts a control
@@ -87,7 +88,8 @@ old directory mined for logic only and deleted in the same PR. _Avoid_: "upgrade
 
 **Placement**: settled, not an axis — every Python processor runs in its own helper
 process (own interpreter, own GIL), spawned by the engine as an exec of
-`sys.executable` from the app's venv. There is no second placement and no choice:
+`sys.executable` from the app's venv — decided 2026-09-30: from the graph's own
+environment when the graph carries one. There is no second placement and no choice:
 in-process hosting of a Python processor does not exist. Native built-ins running in
 the app process ("app-process" code) are not a placement decision. _Avoid_:
 "in-process placement", "both placements", "placement policy", "placement heuristic",
@@ -95,7 +97,9 @@ the app process ("app-process" code) are not a placement decision. _Avoid_:
 
 **App-process**: the process that runs the entry file, the engine, the control plane,
 and the native built-ins — and hosts no Python processor. Use this word for the
-legitimate in-that-process senses so "in-process" stops doing double duty.
+legitimate in-that-process senses so "in-process" stops doing double duty. This is
+**embedded mode**'s shape; in **hosted mode** the host daemon holds the engine, the
+control plane and the built-ins, and the entry file only builds a **graph description**.
 
 **Bag**: the self-describing msgpack named map a link carries — the schema-free view of
 a payload; consumers cast it to a type at read time. _Avoid_: "message", "envelope".
@@ -105,8 +109,11 @@ consumer's view of a payload. A cast type that claims its surface is also the
 tensor-protocol producer for that frame. _Avoid_: "typed bag", "frame object" (a cast
 type need not be a frame).
 
-**Control plane**: the HTTP/WebSocket/MCP surface a runtime hosts for observing,
-inspecting and changing the live graph of running nodes; the CLI is its client.
+**Control plane**: the surface for observing, inspecting and changing the live graphs of
+running nodes; the CLI is its client. Decided 2026-09-30: it is served over the **local
+API**, one Unix domain socket — the host's in hosted mode, an embedded runtime's own
+otherwise — in place of each runtime's HTTP/WebSocket server, and is reachable only on its
+machine.
 Embedding happens by importing the wheel, never through the control plane. _Avoid_:
 "API server" as the concept (that is the component hosting it).
 
@@ -116,7 +123,42 @@ with its description, config schema and ports — served over the control plane.
 
 **Node**: a live runtime reachable over its control plane; discovered via the per-user
 on-disk registry. A runtime on the mesh without a control plane is a **mesh peer**, not a
-node. _Avoid_: "instance", "server".
+node. In hosted mode a node is a machine's **host daemon**, and each graph it runs is
+addressed under it (2026-09-30 pivot, `docs/decisions/one-host-per-machine.md`).
+_Avoid_: "instance", "server".
+
+**Graph description**: the serializable form of a graph — its processors by import path
+with their config and declarations, the links between them, the graph's name, a resource
+request, and the outputs its author suggests exposing; it extends the engine's
+round-trippable graph snapshot. Apps build one (`setup(rt)` compiles to one); an engine in
+either mode runs one. _Avoid_: "manifest" (the retired pre-pivot concept), "pipeline file".
+
+**Graph name**: the name a graph is addressed by inside its host — the address level between
+the runtime name and the display name. _Avoid_: "app name", "workload".
+
+**Host daemon** (short: **host**): the one process per machine that, in hosted mode, owns
+the GPU device and surface pools, the iceoryx2 domain, the machine's single Zenoh session,
+the local API and the scheduler, and runs many graphs, loading and unloading them live. It
+is streamlib's, and runs with no streamlib-owned service. The retired loads-plugins sense of
+"host" stays retired. _Avoid_: "orchestrator", "server", "agent", "supervisor".
+
+**Hosted mode** / **Embedded mode**: hosted — graph descriptions submitted to the machine's
+host daemon, the production shape; embedded — one graph run in its own process, as
+`streamlib dev` does, for development and tests. The same description runs in both.
+
+**Local API**: the one Unix domain socket carrying the control plane — the host's in hosted
+mode, an embedded runtime's own otherwise — restricted to the machine's users. The CLI and
+any desktop UI are its clients, and the builders' MCP tools are served from it.
+_Avoid_: "API server" (the retired per-runtime HTTP component), "daemon port".
+
+**Stream map**: the policy a host enforces on what leaves its machine — which ports may be
+linked from outside it, and by which authenticated peers; everything else is refused, and a
+host with none exposes nothing. It is pushed to the host through the local API or by a
+**control client**. _Avoid_: "ACL" (one mechanism under it), "firewall".
+
+**Control client**: an external component loaded into a host through the capability-extension
+mechanism — it enrols the machine with a coordination service and delivers the stream map.
+Optional; a host runs without one. _Avoid_: "connector" (a product's name for its own), "sidecar".
 
 **Processor**: the unit of pipeline computation — a Python class (`@processor`) or a
 Rust type (`#[processor]`) — wired by ports. Its identity is the class itself, named by
@@ -232,7 +274,8 @@ of architectural decisions.
 ADDED / MODIFIED / REMOVED.
 
 Retired by the 2026-08-02 pivot (see `docs/decisions/importable-python-library.md`):
-**Host** (loads-plugins sense), **Plugin**, **Plugin ABI**, **Package source**,
+**Host** (loads-plugins sense — the word returns in a new sense, **host daemon**, by the
+2026-09-30 pivot), **Plugin**, **Plugin ABI**, **Package source**,
 **Link** (the CLI verb — the local-dev install path, not the connection above),
 **Lag by design** — these named the deleted plugin-ABI / module-system world; do not
 reuse them.
