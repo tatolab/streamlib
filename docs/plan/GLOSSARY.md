@@ -83,8 +83,8 @@ two machines is spelled by two addresses. _Avoid_: "channel name", "mesh address
 name", "remote link" (retired).
 
 **Exposed port** _(crosses)_: an output a stream lets leave the machine, readable at its URL by
-peers and relays under the stream map. `expose` is the verb — in `setup` as the author's
-suggestion, at the CLI as the owner's decision. _Avoid_: "export", "publish", "endpoint".
+peers and relays under the stream map. `expose` is the verb — in the stream's function as the
+author's suggestion, at the CLI as the owner's decision. _Avoid_: "export", "publish", "endpoint".
 
 **Form** _(user)_: the shape an exposed port is served in — the URL's child chunk (`ndjson`,
 `png`, `ts`, `hls`, `whep`, `moq`, `page`). _Avoid_: "format" (a pixel format), "transport".

@@ -15,7 +15,7 @@ is the plan's. Until the rename change re-spells older entries, read them throug
 "helper" and "helper process" as **processor interpreter**, "app-process" as **runtime
 process**. Older entries are facts about the shipped tree; the pivot's entries say what changes.
 
-## Product (the MVP sentence) — SHIPPED
+## Product (the MVP sentence) — IN-FLIGHT (→ stream-graph)
 <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py -->
 
 - **DECIDED** — A Python developer on Linux with an NVIDIA GPU, or on Apple Silicon,
@@ -43,7 +43,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   `dev`/`run` find `app.py`'s `setup(rt)` by convention, `-f <file>` overrides;
   processors are Python classes written in the app or imported from pip-installed
   packages, and `rt.add` takes the class; the pipeline API is `add`/`connect`.
-  [importable-python-library — SHIPPED #1683, #1707, #1708; amended by one-runtime-per-machine: a stream package and a runtime package; setup(stream) on a Stream builder; @node]
+  [importable-python-library — SHIPPED #1683, #1707, #1708; amended by one-runtime-per-machine: a stream package and a runtime package; `@stream` functions over a `Stream` builder, `setup` retired; `@node`; stream-graph builds the authoring clauses]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_graph_building.py -->
 - **DECIDED** — The zero-ceremony bar (the sentence is untrue until all hold): no
   manifest authoring; no boilerplate entry; bags/schemas fixed (no engine schema
@@ -90,7 +90,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   (`streamlib/_scaffold_template/`), each placeholder its template's own default value so
   the templates stay importable and checkable; ruff runs over every render, pyright over
   the template tree, and the cross-floor check gates the output.
-  [engine-steps-for-effects-and-model-input; engine-steps — SHIPPED #2434, #2438]
+  [engine-steps-for-effects-and-model-input; engine-steps — SHIPPED #2434, #2438; stream-graph re-spells the entry file and the nodes' directory]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_the_scaffold_models_pixels_on_the_gpu_and_logic_on_the_cpu -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_the_scaffold_depends_on_streamlib_and_numpy_only -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_new_writes_exactly_the_rendered_templates -->
@@ -103,7 +103,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   or teams — behind that machine's single Zenoh session, owns the accelerator when one is
   present, serves the machine's local API, and schedules across streams. Every Python node
   keeps its own process, and agents keep changing live graphs. Owner, 2026-09-30: sentence 2
-  restated after its "daemon" wording was reopened. [one-runtime-per-machine]
+  restated after its "daemon" wording was reopened. [one-runtime-per-machine; stream-graph]
 - **DECIDED** — The runtime is required and always on, installed once per machine by an
   installer — the desktop app, a package manager, a `curl | sh` script or a distro package —
   which ships the runtime, the CLI and the native portion processor interpreters borrow as one
@@ -130,7 +130,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   decided): the name defaults to the function's and its docstring is the description an agent
   reads; `run` with no argument runs the sole `@stream` in `stream.py` and refuses by name when
   there are several; `run stream.py:camera_rig` or `run acme_rover:camera_rig` runs one, a
-  package declaring its streams under an entry-point group. [one-runtime-per-machine]
+  package declaring its streams under an entry-point group. [one-runtime-per-machine; stream-graph]
 - **OPEN** — Composition inside a stream. Direction (review, not decided): plain Python — a
   function that takes the builder, adds nodes, connects them and returns port references is a
   reusable fragment; the graph stays flat and addresses stay `<stream>/<node>/<port>`; a
@@ -664,7 +664,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   [consumer-tree-disposition — SHIPPED; a standing convention, and by the same decision
   the showcase carries no CI check to run]
 
-## Processor model & scheduling — SHIPPED
+## Processor model & scheduling — IN-FLIGHT (→ stream-graph)
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a bag
   (self-describing msgpack named map). The engine has no type layer: ports carry no
@@ -1312,7 +1312,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   the class's short name as its own validated field rather than the engine splitting one
   out of the import path, because splitting re-invents the grammar this change deleted.
   [processor-class-identity — SHIPPED #1838, #1841; the address-chunk refusal —
-  runtime-mesh, SHIPPED #2282; reopened by one-runtime-per-machine: whether addresses gain a stream level]
+  runtime-mesh, SHIPPED #2282; reopened by one-runtime-per-machine: whether addresses gain a stream level; stream-graph builds the typed-duplicate amendment]
   <!-- verify: cargo test -p streamlib-engine --test display_name_disambiguation_test -->
   <!-- verify: cargo test -p streamlib-engine --lib core::runtime::mesh_address_chunk -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_graph_building.py::test_a_duplicate_requested_display_name_is_disambiguated_too -->
@@ -1324,13 +1324,13 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   name, the links, and what the stream exposes. It is one shape with what `graph` renders: the
   engine's existing round-trippable snapshot extended, rendered live with state and counters
   beside the spec, never a second format (sentence 1; the one-shape reading follows engine
-  doctrine). [one-runtime-per-machine]
+  doctrine). [one-runtime-per-machine; stream-graph]
 - **DECIDED** — The graph is emitted, never authored. A stream's function produces it, the
   runtime exports the live one in the same shape, and nobody writes one by hand as the source
   of a stream — a stream's source is its Python, which keeps the retired manifest retired. On
   the next start the function wins: an agent that edits a running stream over the local API
   changes the live graph, and keeps the change only by changing the code (owner, 2026-09-30).
-  [one-runtime-per-machine]
+  [one-runtime-per-machine; stream-graph]
 - **OPEN** — What the graph holds beyond nodes, links and exposures. Direction (review, not
   decided): a stream's needs — a camera, a microphone, a display, the accelerator, network
   exposure — are derived from its nodes' declarations (built-ins carry theirs; a user node that
@@ -3131,7 +3131,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   and only the runtime process opens devices, so only it needs the entitlements, never a
   processor interpreter. [one-runtime-per-machine]
 
-## Networking — transport, runtime mesh, moq, webrtc — SHIPPED
+## Networking — transport, runtime mesh, moq, webrtc — IN-FLIGHT (→ stream-graph)
 
 - **DECIDED** — Cross-language interop happens on the wire between nodes, as
   self-describing bags — never in-graph. [importable-python-library — SHIPPED #1715]
@@ -3990,7 +3990,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   3), so streams on one machine may link to each other's ports without exposing them.
   Discovery is unaffected: a runtime still announces itself and lists the ports it exposes to
   whoever can reach it. Owner, 2026-09-30: closed by default, "as long as we can still do peer
-  to peer". [one-runtime-per-machine]
+  to peer". [one-runtime-per-machine; stream-graph]
 - **OPEN** — Discovery, the Tailscale analogy applied. Direction (review, not decided): on one
   machine the local API lists streams and exposed ports, and the URL namespace is listable; on
   one network, Zenoh scouting finds the other runtimes' routers with nothing configured and
