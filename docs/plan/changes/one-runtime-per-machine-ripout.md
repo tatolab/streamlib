@@ -1,7 +1,7 @@
 # one-runtime-per-machine-ripout
 
 > **On hold (2026-09-30).** The plan PR was reworked so that only the owner's confirmed sentences
-> are DECIDED. The entries this change implements (the local API, and the control plane reachable
+> are DECIDED. The entries this change would implement (the local API, and the control plane reachable
 > only on its own machine) are now OPEN. So are both of its `[NEEDS DECISION]` blocks: a later
 > owner requirement, a free user seeing and using streams locally, may need a loopback listener. No
 > plan section is flipped to IN-FLIGHT while this waits. Decision 2 below carries the plan's current
@@ -18,7 +18,7 @@ change:
 - a runtime stops announcing control-plane URLs on the mesh, and `nodes` stops printing them;
 - an MCP host reaches the tools the way the owner decides below.
 
-The change implements §Control plane & observability's `[one-runtime-per-machine]` local-API OPEN
+The change proposes, against §Control plane & observability's `[one-runtime-per-machine]` local-API OPEN
 (one local API per machine, the socket the authority for control, so control is reachable only on its
 own machine), and the `control_plane_urls` clauses of §Networking's announcement entry and of its
 `graph` mesh-peers entry (`CONTROL_PLANE_URLS`). Rationale:
@@ -167,7 +167,7 @@ stays for it alone.
 
 ---
 
-## ADDED: §Control plane & observability — the local API, as built
+## ADDED: §Control plane & observability — the local API, as proposed
 
 - **The listener.** An engine process that hosts its control plane serves `build_router` on a
   `tokio::net::UnixListener` bound at `<runtime dir>/control-plane-<runtime_id>.sock`.

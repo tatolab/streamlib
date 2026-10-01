@@ -30,7 +30,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   experience and do not breach zero ceremony; needing an app bundle to obtain them
   would. Every ticket traces to this sentence or does not exist.
   [importable-python-library — SHIPPED #1683, #1684, #1711; macos-platform-floor —
-  SHIPPED #2357, #2359, #2361, #2362; amended by one-runtime-per-machine: the package names, the stream vocabulary, and "with an NVIDIA GPU" (accelerators are optional)]
+  SHIPPED #2357, #2359, #2361, #2362; amended by one-runtime-per-machine: the package names, the stream vocabulary, "with an NVIDIA GPU" (accelerators are optional), and the install step — the runtime arrives from an installer that registers it as a per-user service, so the loop is install, then `new`, then `run`]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli.py::test_new_writes_a_working_app -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py::test_the_scaffolded_app_reaches_a_running_graph -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_launch.py::test_every_helper_interpreter_goes_live_inside_the_startup_budget -->
@@ -1199,7 +1199,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   return inside the log-flush grace and exit 0.
   [shutdown-ladder; local-transport-hardening — SHIPPED #2264, #2266; the macOS arm —
   macos-platform-floor, SHIPPED #2357; parent death and ladder coverage on macOS —
-  macos-capability-parity, SHIPPED #2410; reopened by one-runtime-per-machine: how the runtime is started]
+  macos-capability-parity, SHIPPED #2410; amended by one-runtime-per-machine: an installer-registered per-user service starts the runtime, which never detaches itself]
   <!-- verify: sdk/streamlib-python-wheel/tests/test_helper_placement.py -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_helper_placement.py::test_a_processor_interrupted_while_still_setting_up_still_tears_down -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_helper_placement.py::test_a_worker_a_processor_forked_goes_down_with_the_apps_helper -->
@@ -1975,7 +1975,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   access is granted, because binding an input-enabled unit blocks inside coreaudiod's privacy
   check until the user answers. The engine is never daemonised: detaching breaks the
   attribution chain and silently costs device access. [macos-platform-floor — SHIPPED #2359;
-  macos-capability-parity — SHIPPED #2411 for the microphone; reopened by one-runtime-per-machine: how the runtime is started]
+  macos-capability-parity — SHIPPED #2411 for the microphone; amended by one-runtime-per-machine: an installer-registered per-user service starts the runtime, which never detaches itself]
   <!-- verify: cargo test -p streamlib-engine --lib a_pending_request_is_made_once_and_never_waited_on -->
   <!-- verify: cargo test -p streamlib-engine --lib a_denial_names_the_responsible_application_and_the_setting_but_not_python -->
   <!-- verify: cargo test -p streamlib-engine --lib a_microphone_denial_names_the_microphone_setting_and_not_the_cameras -->
@@ -4100,7 +4100,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   thread during interpreter finalization. And signal ownership stays scoped to `run()`:
   a teardown outside it — `shutdown()` before a run, `Drop`, `atexit`, `__exit__` — owns no
   signals, and the watchdog alone bounds it.
-  [shutdown-ladder; local-transport-hardening — SHIPPED #2266; reopened by one-runtime-per-machine: how the runtime is started]
+  [shutdown-ladder; local-transport-hardening — SHIPPED #2266; amended by one-runtime-per-machine: an installer-registered per-user service starts the runtime, which never detaches itself]
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_ctrl_c_exits_cleanly -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_sigint_is_handed_back_to_cpython -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_interpreter_lifecycle.py::test_a_second_ctrl_c_forces_the_shutdown_past_a_long_teardown -->
@@ -4220,9 +4220,10 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   <!-- verify: grep -n "p streamlib-adapter-skia" .github/workflows/test.yml -->
 - **DECIDED** — streamlib ships under a `tatolab.*` namespace, as a pure-Python stream package
   and a native runtime package, with support for Linux and Apple Silicon macOS and no
-  streamlib-owned service (sentence 5, its "host" read as the runtime). The stream package and
-  packs go through the package index; the runtime package ships inside the installer with the
-  CLI and the desktop app, never through pip (owner, 2026-09-30). Known: maturin ships a native
+  streamlib-owned service (sentence 5, its "host" read as the runtime — the per-user service that
+  keeps the runtime alive is registered by the installer, never by a streamlib package). The stream
+  package and packs go through the package index; the runtime package ships inside the installer
+  with the CLI and the desktop app, never through pip (owner, 2026-09-30). Known: maturin ships a native
   portion of a PEP 420 namespace beside a pure one, in wheels and editable installs alike, so no
   custom module system is needed. [one-runtime-per-machine]
 
@@ -4319,7 +4320,7 @@ process**. Older entries are facts about the shipped tree; the pivot's entries s
   embed.
   [importable-python-library — SHIPPED #1683, #1711; importable-python-library-ripout
   — SHIPPED #1715; control-plane-surface-pixel-exchange — SHIPPED #1975 for the
-  `exchange` verb; virtual-camera-sink — SHIPPED #2196 for the setup verb; reopened by one-runtime-per-machine: how the runtime is started]
+  `exchange` verb; virtual-camera-sink — SHIPPED #2196 for the setup verb; amended by one-runtime-per-machine: an installer-registered per-user service starts the runtime, which never detaches itself]
   <!-- verify: sdk/streamlib-python-wheel/tests/test_cli.py::test_this_wheel_is_the_only_streamlib_cli -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py -->
   <!-- verify: pytest sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_the_channel_form_taps_then_exchanges_each_sampled_id -->

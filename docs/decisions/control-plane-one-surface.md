@@ -19,9 +19,10 @@ operations for programmatic clients. The api-server is engine-side infrastructur
 relocates into the `runtime/` tree: it is a host (statically linked, never dlopen'd) and
 cannot follow the packages tree out of the repo.
 
-> Amended 2026-09-30 by `one-runtime-per-machine.md`: one local API per machine, served by the
-> runtime over a local socket, takes the place of one HTTP server per app. Its protocol, how MCP
-> hosts reach it, and whether it is reachable from other machines are OPEN in the plan.
+> Amended 2026-09-30 by `one-runtime-per-machine.md`: the direction is one local API per machine,
+> served by the runtime over a local socket, in place of one HTTP server per app. Its protocol, how
+> MCP hosts reach it, and whether it is reachable from other machines are OPEN in the plan, so the
+> HTTP surface this record describes stands until that entry is decided.
 
 Node discovery is a per-user on-disk registry — one JSON file per live node in the OS's
 standard per-user runtime directory — written only by control-plane-hosting runtimes and
