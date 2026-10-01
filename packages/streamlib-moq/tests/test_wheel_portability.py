@@ -10,11 +10,14 @@ host. A `libssl.so` on the `NEEDED` list would turn `pip install
 streamlib-moq` into an import error on whichever machine happens not to have
 the version it was built against.
 
-The ELF is parsed here rather than shelled out to `readelf`, because a test
-asserting the wheel needs no build tools should not itself need binutils. The
-engine wheel has its own copy of this walk: two standalone projects cannot
-import each other's test helpers, which is the cost of an extension being built
-exactly as a third party would build one.
+On macOS the promise is the one the engine's macOS wheel keeps: every library
+the Mach-O loads is one macOS itself supplies, under `/usr/lib/` or `/System/`.
+
+Binaries are parsed here rather than shelled out to `readelf` or `otool`,
+because a test asserting the wheel needs no build tools should not itself need
+them. The engine wheel has its own copy of these walks: two standalone projects
+cannot import each other's test helpers, which is the cost of an extension being
+built exactly as a third party would build one.
 """
 
 import struct
@@ -40,6 +43,26 @@ LIBRARIES_THE_HOST_MAY_SUPPLY = frozenset(
     }
 )
 
+# The prefix policy maturin and delocate both apply. On macOS 11+ these paths
+# do not exist on disk — the libraries live in the dyld shared cache — so the
+# load-command strings are matched and never `stat`ed.
+MACOS_PATH_PREFIXES_THE_HOST_MAY_SUPPLY = ("/usr/lib/", "/System/")
+
+ELF_MAGIC = b"\x7fELF"
+MACH_O_64_LITTLE_ENDIAN_MAGIC = 0xFEEDFACF
+LC_REQ_DYLD = 0x80000000
+# Every command that makes dyld load another image. `LC_ID_DYLIB` is a dylib's
+# own install name and is deliberately not among them.
+MACH_O_LINKING_LOAD_COMMANDS = frozenset(
+    {
+        0x0C,  # LC_LOAD_DYLIB
+        0x18 | LC_REQ_DYLD,  # LC_LOAD_WEAK_DYLIB
+        0x1F | LC_REQ_DYLD,  # LC_REEXPORT_DYLIB
+        0x20,  # LC_LAZY_LOAD_DYLIB
+        0x23 | LC_REQ_DYLD,  # LC_LOAD_UPWARD_DYLIB
+    }
+)
+
 
 def the_native_extension() -> Path:
     package_directory = Path(streamlib_moq.__file__).parent
@@ -49,18 +72,41 @@ def the_native_extension() -> Path:
     return built[0]
 
 
-def dynamic_libraries_needed_by(elf_path: Path) -> "list[str]":
+def dynamic_libraries_needed_by(native_extension: Path) -> "list[str]":
+    """What the loader must find for the native module to load, ELF or Mach-O."""
+    data = native_extension.read_bytes()
+    if data[:4] == ELF_MAGIC:
+        return _dynamic_libraries_needed_by_elf(data, native_extension)
+    if struct.unpack_from("<I", data, 0)[0] == MACH_O_64_LITTLE_ENDIAN_MAGIC:
+        return _dynamic_libraries_linked_by_mach_o(data)
+    pytest.fail(f"{native_extension} is neither ELF nor a thin 64-bit Mach-O")
+
+
+def _dynamic_libraries_linked_by_mach_o(data: bytes) -> "list[str]":
+    """The library paths a thin 64-bit Mach-O's load commands ask dyld for."""
+    load_command_count, = struct.unpack_from("<I", data, 16)
+    linked_library_paths = []
+    command_offset = 32  # sizeof(mach_header_64)
+    for _ in range(load_command_count):
+        command, command_size = struct.unpack_from("<II", data, command_offset)
+        if command in MACH_O_LINKING_LOAD_COMMANDS:
+            # `dylib_command.dylib.name` is an offset from the command's start.
+            name_offset, = struct.unpack_from("<I", data, command_offset + 8)
+            start = command_offset + name_offset
+            linked_library_paths.append(data[start : data.index(b"\0", start)].decode())
+        command_offset += command_size
+    return linked_library_paths
+
+
+def _dynamic_libraries_needed_by_elf(data: bytes, elf_path: Path) -> "list[str]":
     """The `DT_NEEDED` names in an ELF64 little-endian shared object.
 
     Walks program headers rather than sections: `PT_DYNAMIC` is what the loader
     itself reads, and a stripped object can lose its section table while still
     loading fine.
     """
-    data = elf_path.read_bytes()
-    if data[:4] != b"\x7fELF":
-        pytest.skip(f"{elf_path} is not an ELF object")
     if data[4] != 2 or data[5] != 1:
-        pytest.skip("this check reads ELF64 little-endian only")
+        pytest.fail(f"{elf_path} is not ELF64 little-endian")
 
     program_header_offset, = struct.unpack_from("<Q", data, 0x20)
     entry_size, entry_count = struct.unpack_from("<HH", data, 0x36)
@@ -106,12 +152,21 @@ def dynamic_libraries_needed_by(elf_path: Path) -> "list[str]":
 
 
 def test_the_native_extension_links_nothing_the_host_may_not_supply():
-    needed = dynamic_libraries_needed_by(the_native_extension())
+    native_extension = the_native_extension()
+    needed = dynamic_libraries_needed_by(native_extension)
 
-    assert needed, "an extension module with no NEEDED entries did not parse"
-    assert set(needed) <= LIBRARIES_THE_HOST_MAY_SUPPLY, (
-        f"{sorted(set(needed) - LIBRARIES_THE_HOST_MAY_SUPPLY)} would have to be "
-        "installed on the user's machine for `import streamlib_moq` to work"
+    assert needed, "an extension module that links nothing did not parse"
+    if native_extension.read_bytes()[:4] == ELF_MAGIC:
+        beyond_the_host = sorted(set(needed) - LIBRARIES_THE_HOST_MAY_SUPPLY)
+    else:
+        beyond_the_host = sorted(
+            library
+            for library in needed
+            if not library.startswith(MACOS_PATH_PREFIXES_THE_HOST_MAY_SUPPLY)
+        )
+    assert not beyond_the_host, (
+        f"{beyond_the_host} would have to be installed on the user's machine "
+        "for `import streamlib_moq` to work"
     )
 
 

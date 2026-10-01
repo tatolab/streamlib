@@ -61,9 +61,12 @@ serde_json = "1.0"
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "sync", "time", "macros"] }
 bytes = "1.12.1"
 thiserror = "2.0.17"
-# The one clock the whole runtime agrees on, read the same way the wheel reads it.
-libc = "0.2"
 tracing = "0.1.44"
+
+# The one clock the whole runtime agrees on, read the same way the engine
+# reads it: `CLOCK_MONOTONIC` off macOS, `mach_absolute_time` from libSystem on it.
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "sync", "time", "macros", "net"] }

@@ -304,6 +304,102 @@ jobs:
         run: |
           .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"
 
+  # The extension lane on Apple Silicon, against the macOS engine wheel. An
+  # extension reads the engine's clock itself, per platform, and on Linux the
+  # two candidate clocks agree — so a macOS stamp on the wrong one is visible
+  # only here. Formatting and pyright read no platform and stay on the Linux
+  # lane; clippy stays here too, because the macOS clock is compiled nowhere
+  # else.
+  extension-wheels-macos:
+    name: Extension wheel, macOS (${{ matrix.extension }})
+    runs-on: macos-15
+    timeout-minutes: 30
+    # Compiles and runs PR-authored code, so it gets the read it needs and
+    # nothing else rather than inheriting the workflow's defaults.
+    permissions:
+      contents: read
+    needs: macos-wheel
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - extension: streamlib-webrtc
+            native_module: streamlib_webrtc._native
+          - extension: streamlib-moq
+            native_module: streamlib_moq._native
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Compiles and runs PR-authored code; a persisted checkout token
+          # would be readable by it.
+          persist-credentials: false
+
+      # The image ships both; asserted for the same reason the Linux lane
+      # asserts them.
+      - name: The build tools the extension's native dependencies assume
+        run: |
+          cmake --version
+          cc --version
+
+      # The interpreter the crate's unit tests link, named to pyo3 below: the
+      # image's own `python3` is not one the abi3-py310 floor accepts.
+      - name: Install Python
+        id: setup-python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: extension-macos-${{ matrix.extension }}
+          workspaces: packages/${{ matrix.extension }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: streamlib-macos-wheel
+          path: streamlib-macos-wheel
+
+      - name: Install the engine wheel and build the extension into it
+        working-directory: packages/${{ matrix.extension }}
+        run: |
+          uv venv --python 3.12 .venv
+          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy typing_extensions
+          VIRTUAL_ENV="$PWD/.venv" uv pip install "$GITHUB_WORKSPACE"/streamlib-macos-wheel/*.whl
+          VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
+
+      - name: Extension crate tests
+        working-directory: packages/${{ matrix.extension }}
+        env:
+          PYO3_PYTHON: ${{ steps.setup-python.outputs.python-path }}
+        run: cargo test --locked --workspace --lib
+
+      - name: Clippy
+        working-directory: packages/${{ matrix.extension }}
+        env:
+          PYO3_PYTHON: ${{ steps.setup-python.outputs.python-path }}
+        run: cargo clippy --locked --lib --all-targets -- -D warnings
+
+      - name: Type stubs match the compiled module
+        working-directory: packages/${{ matrix.extension }}
+        run: .venv/bin/python -m mypy.stubtest ${{ matrix.native_module }}
+
+      # Carries the clock-parity test against the engine wheel, and the
+      # portability gate's Mach-O arm over the built `.so`.
+      - name: Extension tests, GPU-free
+        working-directory: packages/${{ matrix.extension }}
+        run: |
+          .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"
+
   # The aarch64-apple-darwin wheel exactly as a release builds it, installed on
   # a runner with no Vulkan SDK and run there.
   macos-wheel:

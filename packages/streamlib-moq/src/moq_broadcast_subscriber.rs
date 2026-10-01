@@ -643,7 +643,7 @@ impl SubscriberMintedOrderingPairCounter {
     }
 }
 
-/// Where one track's decode times are pinned on `CLOCK_MONOTONIC`.
+/// Where one track's decode times are pinned on the engine's `MediaClock`.
 ///
 /// Per track, not per broadcast: a CMAF track's `tfdt` epoch is that track's
 /// own first stamp, so two tracks share no origin and one shared anchor would
